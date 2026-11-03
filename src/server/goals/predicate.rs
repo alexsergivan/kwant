@@ -29,6 +29,10 @@ pub fn metrics(kind: &str) -> &'static [&'static str] {
     }
 }
 
+/// Every operator some metric takes, for the `goal_propose` schema. `contains` is a json_value
+/// operator; the contains metrics (body_contains, stdout_contains) accept it too and ignore it.
+pub const ALL_OPERATORS: [&str; 7] = ["eq", "ne", "lt", "lte", "gt", "gte", "contains"];
+
 /// The operators `metric` takes, its default first. Empty: a contains metric, which matches its
 /// target as written and takes no operator.
 pub fn operators(metric: &str) -> &'static [&'static str] {
@@ -302,9 +306,42 @@ fn json_value(body: Option<&str>, pointer: &str, op: &str, target: &str) -> (&'s
     (verdict(holds), Some(render(v)))
 }
 
+/// Why a body check on a page past the read cap says nothing: the needle may be in the part that
+/// wasn't read.
+pub const TOO_BIG: &str = "The page is larger than 5 MB, so I can't check it";
+
+/// The plain reason a 3xx answer is not met: kwant doesn't follow redirects (a redirect could lead
+/// to an address the check wasn't approved for), so the person points the check at the final one.
+fn redirect_reason(host: Option<&str>) -> String {
+    match host {
+        Some(h) => format!("it redirects to {h}, and kwant doesn't follow redirects: use the final address"),
+        None => "it redirects to another address on the same site, and kwant doesn't follow redirects: use the final address".into(),
+    }
+}
+
 /// One check's verdict on what its run saw, with the value it read. `status` is the run's own
 /// result: `error` (it didn't run, or got no answer) is always unknown.
 pub fn judge(pred: Option<&Predicate>, spec: &Value, status: &str, seen: &Seen, latency_ms: i64) -> (&'static str, Option<String>) {
+    let (verdict, observed) = judge_value(pred, spec, status, seen, latency_ms);
+    let metric = pred.map(|p| p.metric.as_str());
+    // A body past the read cap: a needle that wasn't found may be in the part that wasn't read
+    if seen.body_truncated && verdict != MET && matches!(metric, Some("body_contains" | "json_value")) {
+        return (UNKNOWN, Some(TOO_BIG.into()));
+    }
+    // A 3xx answer that wasn't met: say where it points
+    if verdict == NOT_MET {
+        if let Some(to) = &seen.redirect {
+            let why = redirect_reason(to.as_deref());
+            return (verdict, Some(match observed {
+                Some(o) => format!("{o}: {why}"),
+                None => why,
+            }));
+        }
+    }
+    (verdict, observed)
+}
+
+fn judge_value(pred: Option<&Predicate>, spec: &Value, status: &str, seen: &Seen, latency_ms: i64) -> (&'static str, Option<String>) {
     if status == "error" {
         return (UNKNOWN, None);
     }
@@ -369,7 +406,21 @@ pub async fn run(kind: &str, spec: &Value, pred: Option<&Predicate>, folder: Opt
     let (status, output, seen) = run_spec_seen(kind, spec, folder, person_ok).await;
     let latency = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
     let (verdict, observed) = judge(pred, spec, &status, &seen, latency);
-    Outcome { status, verdict, observed: observed.map(|o| cap(&redact(&o), MAX_OBSERVED_CHARS)), excerpt: redact(&output) }
+    let excerpt = sha256_excerpt(spec, &seen).unwrap_or_else(|| redact(&output));
+    Outcome { status, verdict, observed: observed.map(|o| cap(&redact(&o), MAX_OBSERVED_CHARS)), excerpt }
+}
+
+/// What a `file_sha256` check shows: both hashes, which `redact` would hide as random-looking
+/// words. They are hashes, not file contents, so the person can compare them. None unless both
+/// read as hex.
+fn sha256_excerpt(spec: &Value, seen: &Seen) -> Option<String> {
+    let (got, want) = seen.sha256.as_ref()?;
+    let hex = |h: &str| !h.is_empty() && h.len() <= 64 && h.chars().all(|c| c.is_ascii_hexdigit());
+    if !hex(got) || !hex(want) {
+        return None;
+    }
+    let head = redact(&format!("sha256 of {}", spec["path"].as_str().unwrap_or("the file").trim()));
+    Some(if got == want { format!("{head} is {got}, as expected") } else { format!("{head} changed\nexpected {want}\nactual   {got}") })
 }
 
 /// Plain words for a predicate, as the person reads it before approving ("responds in under
@@ -610,5 +661,69 @@ mod tests {
         assert_eq!(says("command", &json!({ "command": "make test" }), Some(&p("exit_code", Some("eq"), "0"))), "`make test` succeeds (exit code 0)");
         assert_eq!(says("command", &json!({ "command": "wc -l" }), Some(&p("stdout_number", Some("lte"), "10"))), "the first number `wc -l` prints is at most 10");
         assert_eq!(says("file_exists", &json!({ "path": "out.txt" }), None), "out.txt exists");
+    }
+
+    // Post-0.6.5 api-M3: a page past the read cap can't say a needle is missing
+    #[test]
+    fn a_body_past_the_read_cap_is_cant_check_not_not_met() {
+        let cut = Seen { body_truncated: true, ..http(200, "start of a very long page") };
+        let has = p("body_contains", None, "needle");
+        assert_eq!(j(&has, json!({}), &cut), (UNKNOWN, Some(TOO_BIG.into())));
+        assert_eq!(TOO_BIG, "The page is larger than 5 MB, so I can't check it");
+        // Found in the part that was read: that is still true
+        assert_eq!(j(&p("body_contains", None, "start"), json!({}), &cut).0, MET);
+        // A partial document isn't JSON; the reason is the size, not "not JSON"
+        let at = json!({ "pointer": "/ok" });
+        assert_eq!(j(&p("json_value", Some("eq"), "true"), at, &cut), (UNKNOWN, Some(TOO_BIG.into())));
+        // Status and latency don't read the body
+        assert_eq!(j(&p("status", Some("eq"), "200"), json!({}), &cut).0, MET);
+        // Not past the cap: a missing needle is not met, as before
+        assert_eq!(j(&has, json!({}), &http(200, "short")).0, NOT_MET);
+    }
+
+    // api-M4: a redirect is not followed; the reason names where it points
+    #[test]
+    fn a_redirect_says_where_it_points() {
+        let moved = Seen { redirect: Some(Some("www.example.com".into())), ..http(301, "") };
+        let (v, seen) = j(&p("status", Some("eq"), "200"), json!({}), &moved);
+        assert_eq!(v, NOT_MET);
+        let seen = seen.unwrap();
+        assert!(seen.starts_with("301: it redirects to www.example.com"), "{seen}");
+        assert!(seen.contains("use the final address"), "{seen}");
+        let same = Seen { redirect: Some(None), ..http(302, "") };
+        let seen = j(&p("status", Some("eq"), "200"), json!({}), &same).1.unwrap();
+        assert!(seen.contains("another address on the same site"), "{seen}");
+        // A body check on the redirect page is not met with the same reason
+        assert!(j(&p("body_contains", None, "ok"), json!({}), &moved).1.unwrap().contains("www.example.com"));
+        // Met stays plain, and no redirect leaves the value alone
+        assert_eq!(j(&p("status", Some("ne"), "200"), json!({}), &moved), (MET, Some("301".into())));
+        assert_eq!(j(&p("status", Some("eq"), "200"), json!({}), &http(500, "")), (NOT_MET, Some("500".into())));
+    }
+
+    // api-M5: both hashes show, though the excerpt is redacted
+    #[tokio::test]
+    async fn a_sha256_mismatch_shows_both_hashes() {
+        let dir = std::env::temp_dir().join(format!("kwnt-sha-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("release.bin"), "hello").unwrap();
+        let actual = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        let expected = "a".repeat(64);
+        let spec = json!({ "path": "release.bin", "sha256": expected });
+        let out = run("file_sha256", &spec, None, Some(dir.as_path()), true).await;
+        assert_eq!(out.verdict, NOT_MET);
+        assert!(out.excerpt.contains(&format!("expected {expected}")), "{}", out.excerpt);
+        assert!(out.excerpt.contains(&format!("actual   {actual}")), "{}", out.excerpt);
+        assert!(!out.excerpt.contains("••"), "{}", out.excerpt);
+        // A match says so
+        let ok = run("file_sha256", &json!({ "path": "release.bin", "sha256": actual.to_uppercase() }), None, Some(dir.as_path()), true).await;
+        assert_eq!(ok.verdict, MET);
+        assert!(ok.excerpt.contains(actual), "{}", ok.excerpt);
+        // Not a hash: nothing is shown unredacted
+        let odd = run("file_sha256", &json!({ "path": "release.bin", "sha256": "sk-live-not-a-hash-but-a-secret" }), None, Some(dir.as_path()), true).await;
+        assert!(!odd.excerpt.contains("sk-live-not-a-hash-but-a-secret"));
+        // A missing file has no hash to show
+        let gone = run("file_sha256", &json!({ "path": "gone.bin", "sha256": expected }), None, Some(dir.as_path()), true).await;
+        assert!(gone.excerpt.contains("doesn't exist"), "{}", gone.excerpt);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

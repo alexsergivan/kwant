@@ -77,6 +77,13 @@ pub struct Seen {
     pub stdout: Option<String>,
     pub http_status: Option<u16>,
     pub body: Option<String>,
+    /// The body was longer than the read cap, so `body` is only its start.
+    pub body_truncated: bool,
+    /// Where a 3xx answer points: the host only (never the path or query, which may hold a token),
+    /// or `None` inside it when the address stays on the checked host. Not followed.
+    pub redirect: Option<Option<String>>,
+    /// A `file_sha256` check's `(actual, expected)` hashes, both lowercase hex.
+    pub sha256: Option<(String, String)>,
 }
 
 /// Runs one check; returns `(status, output)` with status "passed", "failed" or "error".
@@ -115,7 +122,7 @@ pub async fn run_spec_seen(kind: &str, spec: &Value, folder: Option<&Path>, pers
             None => Err("spec.url is missing".into()),
         },
         "file_exists" | "file_contains" | "file_sha256" => match (s("path"), need_folder()) {
-            (Some(rel), Ok(dir)) => file(kind, rel, spec, dir).await,
+            (Some(rel), Ok(dir)) => file(kind, rel, spec, dir, &mut seen).await,
             (None, _) => Err("spec.path is missing".into()),
             (_, Err(e)) => Err(e),
         },
@@ -147,11 +154,19 @@ async fn http(url: &str, spec: &Value, person_ok: bool, seen: &mut Seen) -> Resu
         Some(want) => u64::from(status) == want,
         None => (200..300).contains(&status),
     };
+    if (300..400).contains(&status) {
+        let from = resp.url().clone();
+        let to = resp.headers().get(reqwest::header::LOCATION).and_then(|l| l.to_str().ok()).and_then(|l| from.join(l).ok());
+        seen.redirect = to.map(|u| u.host_str().filter(|h| Some(*h) != from.host_str()).map(str::to_string));
+    }
     let mut body = Vec::new();
     let mut stream = resp;
     while let Ok(Some(chunk)) = stream.chunk().await {
         body.extend_from_slice(&chunk);
         if body.len() >= MAX_READ_BYTES {
+            // Cut at the cap exactly (a chunk may run past it); it only counts as cut if more follows
+            seen.body_truncated = body.len() > MAX_READ_BYTES || matches!(stream.chunk().await, Ok(Some(c)) if !c.is_empty());
+            body.truncate(MAX_READ_BYTES);
             break;
         }
     }
@@ -161,6 +176,15 @@ async fn http(url: &str, spec: &Value, person_ok: bool, seen: &mut Seen) -> Resu
     let mut out = format!("GET {url} → {status}");
     if let Some(t) = contains {
         out.push_str(&format!("; {} \"{t}\"", if has { "contains" } else { "does not contain" }));
+    }
+    if let Some(to) = &seen.redirect {
+        out.push_str(&format!(
+            "; redirects to {}, which kwant doesn't follow",
+            to.as_deref().unwrap_or("another address on the same site")
+        ));
+    }
+    if seen.body_truncated {
+        out.push_str("; the page is larger than 5 MB, so only its start was read");
     }
     seen.http_status = Some(status);
     seen.body = Some(text.into_owned());
@@ -180,7 +204,7 @@ fn send_error(url: &str, e: &reqwest::Error) -> String {
     format!("GET {url} failed: network error, {why} ({e})")
 }
 
-async fn file(kind: &str, rel: &str, spec: &Value, dir: &Path) -> Result<(bool, String), String> {
+async fn file(kind: &str, rel: &str, spec: &Value, dir: &Path, seen: &mut Seen) -> Result<(bool, String), String> {
     let path = inside(dir, rel)?;
     let meta = tokio::fs::metadata(&path).await;
     match kind {
@@ -197,6 +221,7 @@ async fn file(kind: &str, rel: &str, spec: &Value, dir: &Path) -> Result<(bool, 
             if kind == "file_sha256" {
                 let got = hex(&Sha256::digest(&bytes));
                 let want = spec["sha256"].as_str().unwrap_or("").trim().to_ascii_lowercase();
+                seen.sha256 = Some((got.clone(), want.clone()));
                 Ok((got == want, format!("sha256 of {rel} is {got}")))
             } else {
                 let want = spec["text"].as_str().unwrap_or("");

@@ -12,7 +12,7 @@ use crate::db::goals::{Goal, GoalCheck, GoalEvent, NewGoal, NewGoalCheck, Observ
 use crate::db::missions::now_ms;
 use crate::db::spaces::SpaceId;
 use crate::drivers::events::RuntimeEvent;
-use crate::server::continuity::{notify, Notification};
+use crate::server::continuity::{notify, notify_on, Notification};
 use crate::server::AppState;
 use predicate::Predicate;
 use serde::Deserialize;
@@ -37,6 +37,8 @@ pub const NOTICE_CAP: i64 = 3;
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// Unapproved drafts are deleted silently after this (plan B.0 rule 4).
 pub const DRAFT_TTL_MS: i64 = 7 * DAY_MS;
+/// Runs in a row where every check errored before a met goal is called unknown: one blip is not news.
+pub const ERRORS_TO_UNKNOWN: i64 = 2;
 /// A goal unknown this long gets its one "can't check" notice.
 pub const UNKNOWN_NOTICE_MS: i64 = DAY_MS;
 /// Statuses that mean an incident is open: further failures, or a run that can't check, change nothing.
@@ -254,6 +256,8 @@ pub struct Judged {
 ///   confirm one (G-Q-02; the safer reading of Q14). The goal shows unknown.
 /// - While an incident is open (not_met, fixing, needs_you, waiting), failures and unknown runs
 ///   keep its status, so a goal is never "broken" twice for one incident.
+/// - A met goal whose checks all errored once (a dropped connection, a timeout) stays met; only
+///   [`ERRORS_TO_UNKNOWN`] such runs in a row make it unknown.
 /// - Advisory checks never decide.
 pub fn decide(prior: &str, fail_streak: i64, error_runs: i64, confirm: i64, results: &[Judged]) -> (String, i64, i64, RunSays) {
     let required: Vec<&Judged> = results.iter().filter(|j| j.required).collect();
@@ -274,8 +278,9 @@ pub fn decide(prior: &str, fail_streak: i64, error_runs: i64, confirm: i64, resu
         }
         RunSays::Unknown => {
             let all_errored = !results.is_empty() && results.iter().all(|j| j.errored);
-            let status = if open { prior } else { "unknown" };
-            (status.into(), 0, if all_errored { error_runs + 1 } else { 0 }, says)
+            let errors = if all_errored { error_runs + 1 } else { 0 };
+            let status = if open || (prior == "met" && all_errored && errors < ERRORS_TO_UNKNOWN) { prior } else { "unknown" };
+            (status.into(), 0, errors, says)
         }
     }
 }
@@ -411,8 +416,13 @@ pub fn emit_goal(state: &AppState, g: &Goal) {
 
 /// Sends one goal notice (`kind`: broken, recovered, cant_check, needs_you) unless the goal
 /// already had [`NOTICE_CAP`] in the last 24 hours. A capped notice is logged, never sent: the
-/// cap hides pings, not state. Returns whether it went out.
+/// cap hides pings, not state. Returns whether it went out; a notice the person turned off in
+/// Settings is neither sent nor recorded, so it never counts toward the cap.
 pub async fn notice(state: &AppState, g: &Goal, kind: &str, title: String, body: String) -> bool {
+    // With goal alerts off in Settings nothing is sent, so nothing is recorded or counted
+    if !notify_on(state).await.iter().any(|k| k == "goal_alert") {
+        return false;
+    }
     let now = now_ms();
     let sent = state.db.goal_notices_since(&g.id, now - DAY_MS).await.unwrap_or(0);
     if sent >= NOTICE_CAP {
@@ -498,9 +508,18 @@ mod tests {
         let ok: &[Judged] = &[j(true, MET)];
         let bad: &[Judged] = &[j(true, NOT)];
         let err: &[Judged] = &[j(true, UNK)];
-        // G-T-05, G-V-05, G-Q-02: fail, error, fail doesn't confirm
-        assert_eq!(walk(2, &[ok, bad, err, bad]), ["met", "met", "unknown", "unknown"]);
-        assert_eq!(walk(2, &[ok, err, err]), ["met", "unknown", "unknown"]);
+        // G-T-05, G-V-05, G-Q-02: fail, error, fail doesn't confirm (the one error is a blip on a met goal)
+        assert_eq!(walk(2, &[ok, bad, err, bad]), ["met", "met", "met", "met"]);
+        assert_eq!(walk(2, &[ok, bad, err, err, bad]), ["met", "met", "met", "unknown", "unknown"]);
+        // api-M7: one error on a met goal changes nothing; two in a row are unknown; a pass between resets
+        assert_eq!(walk(2, &[ok, err]), ["met", "met"]);
+        assert_eq!(walk(2, &[ok, err, err]), ["met", "met", "unknown"]);
+        assert_eq!(walk(2, &[ok, err, ok, err]), ["met", "met", "met", "met"]);
+        // A goal that never met has nothing to keep
+        assert_eq!(walk(2, &[err]), ["unknown"]);
+        // Output the predicate couldn't read isn't a dropped connection: unknown at once
+        let unreadable = [Judged { required: true, verdict: UNK, errored: false }];
+        assert_eq!(decide("met", 0, 0, 2, &unreadable).0, "unknown");
         // Once confirmed, an error during the incident keeps it open: no second "broken"
         assert_eq!(walk(2, &[ok, bad, bad, err, bad]), ["met", "met", "not_met", "not_met", "not_met"]);
         // Recovery closes it

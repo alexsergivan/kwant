@@ -264,6 +264,8 @@ pub async fn delete_goal(State(state): State<AppState>, RawQuery(q): RawQuery, P
         Ok(g) => g,
         Err(r) => return r,
     };
+    // Its restore mission is closed first: its link rows go with the goal
+    crate::server::goals_remediation::withdraw_for_delete(&state, &g.id).await;
     match state.db.delete_goal(&g.id, &g.space_id).await {
         Ok(true) => {
             emit(&state, &g.id, "deleted", &g.space_id);
