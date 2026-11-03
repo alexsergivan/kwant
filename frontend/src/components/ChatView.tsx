@@ -1691,15 +1691,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <AtSign size={17} aria-hidden="true" />
           </button>
           {/* "New" sits just above the field's top edge, over the "@" button: never on or inside the border.
-              Each button after "@" (stop, send) is 44px on phones / 36px from sm, plus a 6px gap; 9px is the
-              form's border + padding. Hidden while the mention picker is open, so it never peeks under it. */}
-          <NewTag
-            id="mention"
-            className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''}`}
-            style={{
-              right: `calc(11px + var(--kw-cbtn-step) * ${(isStreaming ? 1 : 0) + (isStreaming && (discussionState?.inProgress || !canSend) ? 0 : 1)})`,
-            }}
-          />
+              Only the send button follows "@" when it shows: 44px on phones / 36px from sm, plus a 6px gap;
+              11px is the form's border + padding. Hidden (not marked as seen) while a reply streams, so it
+              never sits on the working strip's edge and comes back after the turn; hidden while the mention
+              picker is open, so it never peeks under it. */}
+          {!isStreaming && (
+            <NewTag
+              id="mention"
+              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''}`}
+              style={{ right: 'calc(11px + var(--kw-cbtn-step))' }}
+            />
+          )}
 
           {isStreaming && (
             <button

@@ -280,4 +280,6 @@ test('composer: 44 px buttons on phones; "New" on @ clears when the picker opens
   assert.equal((c.match(/w-11 h-11 sm:w-9 sm:h-9/g) || []).length, 4);
   assert.match(c, /if \(isMentionOpen\) markNewSeen\('mention'\)/);
   assert.match(c, /\$\{isMentionOpen \? 'hidden' : ''\}/);
+  // #266 Mira fix 3: hidden (not marked seen) while a reply streams; mounted behaviour is in newOnMentionStreaming.
+  assert.match(c, /\{!isStreaming && \(\s*<NewTag\s+id="mention"/);
 });
