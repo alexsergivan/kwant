@@ -1156,7 +1156,6 @@ fn is_code_request(prompt: &str) -> bool {
     words.iter().take(3).any(|w| VERBS.contains(&w.as_str()))
 }
 
-/// A Direct decision from a pick. A message nobody can take goes to the lead.
 /// The words a route shows as "matched". A route no one's words won (`lead`, `last`) or the
 /// Concierge took shows none: a step-5 tie keeps its words only so [`settle`] asks, and
 /// "No one's role matched this · matched 'macro', 'bread'" read wrong.
@@ -1164,6 +1163,7 @@ pub fn shown_terms(basis: &str, terms: Vec<String>) -> Vec<String> {
     if matches!(basis, "lead" | "last" | "concierge") { Vec::new() } else { terms }
 }
 
+/// A Direct decision from a pick. A message nobody can take goes to the lead.
 fn direct(pick: Option<Pick<'_>>, team: &Team) -> TeamDecision {
     match pick {
         Some(p) => TeamDecision::Direct { kwant_id: p.kwant.id.clone(), reason: p.reason, basis: p.basis.into(), matched_terms: shown_terms(p.basis, p.terms) },
