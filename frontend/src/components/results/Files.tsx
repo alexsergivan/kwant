@@ -134,26 +134,53 @@ const FilePreviewView: React.FC<{ item: FileItem }> = ({ item }) => {
   );
 };
 
+/**
+ * Set by a "Shared a file" card, which already shows each file as a tile with its Download button:
+ * the block then adds only the previews (table or text), so no file is drawn twice.
+ */
+export const FilesPreviewOnly = React.createContext(false);
+
 /** Attached files: name, type, size, and a preview of the data itself when one is available. */
-export const Files: React.FC<RendererProps<FilesBlock>> = ({ block }) => (
-  <div data-smart-result="files" data-block-id={block.id}>
-    <ul role="list" className="my-3.5 space-y-2">
-      {block.items.map((item) => (
-        <li key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 shadow-sm">
-          <div className="flex items-start gap-2">
-            <FileIcon size={14} className="mt-0.5 shrink-0 text-zinc-500" aria-hidden="true" />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-xs font-medium text-zinc-200" title={item.name}>
-                {item.name}
-              </div>
-              <div className="mt-0.5 text-[11px] text-zinc-500">
-                {item.mime} · {humanSize(item.size_bytes)}
+export const Files: React.FC<RendererProps<FilesBlock>> = ({ block }) => {
+  const previewOnly = React.useContext(FilesPreviewOnly);
+  if (previewOnly) {
+    const shown = block.items.filter((i) => i.preview && i.preview.kind !== 'image');
+    if (shown.length === 0) return null;
+    return (
+      <div data-smart-result="files" data-block-id={block.id} data-preview-only="">
+        <ul role="list" className="mt-2 space-y-2">
+          {shown.map((item) => (
+            <li key={item.id} aria-label={`Preview of ${item.name}`} className="min-w-0">
+              <div className="truncate text-[11px] text-zinc-500" title={item.name}>
+                Preview of {item.name}
               </div>
               <FilePreviewView item={item} />
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  return (
+    <div data-smart-result="files" data-block-id={block.id}>
+      <ul role="list" className="my-3.5 space-y-2">
+        {block.items.map((item) => (
+          <li key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 shadow-sm">
+            <div className="flex items-start gap-2">
+              <FileIcon size={14} className="mt-0.5 shrink-0 text-zinc-500" aria-hidden="true" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-medium text-zinc-200" title={item.name}>
+                  {item.name}
+                </div>
+                <div className="mt-0.5 text-[11px] text-zinc-500">
+                  {item.mime} · {humanSize(item.size_bytes)}
+                </div>
+                <FilePreviewView item={item} />
+              </div>
             </div>
-          </div>
-        </li>
-      ))}
-    </ul>
-  </div>
-);
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+};
