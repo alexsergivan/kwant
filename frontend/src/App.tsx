@@ -343,6 +343,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // Mission board: shown in the sidebar only when the server has it switched on.
   const [missionBoard, setMissionBoard] = useState(false);
+  // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [awayCount, setAwayCount] = useState(0);
   const awaySinceRef = useRef<string | null>(null);
   const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -2952,6 +2954,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         if (c.kwantId && c.threadId) return openThread(c.kwantId, c.threadId);
         if (!openTarget({ channel_id: c.channelId, kwant_id: c.kwantId })) pushToast('That chat no longer exists.');
       }}
+      openTaskId={pendingTaskId}
+      onOpenedTaskId={() => setPendingTaskId(null)}
     />
   );
   const loose = <LooseEndsPage onOpenChat={openThread} />;
@@ -3217,6 +3221,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           initialTab={editingTab}
           pendingSkills={editingKwant ? pendingSkillCounts[editingKwant.id] ?? 0 : 0}
           onClose={() => setEditingKwant(null)}
+          onOpenTask={
+            missionBoard
+              ? (id) => {
+                  setEditingKwant(null);
+                  setPendingTaskId(id);
+                  showPage('board');
+                }
+              : undefined
+          }
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
           onRequestDelete={editingKwant ? () => setDeletingKwant(editingKwant) : undefined}
           onApprovalsChanged={refreshRoster}

@@ -545,7 +545,8 @@ test('the board shows Goals on All work only, and there is no setting', () => {
   const board = readFileSync(new URL('../src/components/MissionBoardView.tsx', import.meta.url), 'utf8');
   assert.match(board, /<GoalsStrip[^>]*hidden=\{!!missionId\}/s, 'hidden (drawer only) inside a mission');
   const settings = readFileSync(new URL('../src/components/SettingsModal.tsx', import.meta.url), 'utf8');
-  assert.doesNotMatch(settings, /goals/i, 'Settings has no Goals switch');
+  // The "Learn from earlier work" hint names goals as one thing bots learn from; that is not a Goals switch.
+  assert.doesNotMatch(settings.replace(/goals that stopped holding/g, ''), /goals/i, 'Settings has no Goals switch');
   assert.equal(typeof b.parseGoalsSetting, 'undefined');
   assert.equal(typeof b.GOALS_SETTING_EVENT, 'undefined');
 });

@@ -1459,6 +1459,9 @@ export const safeHttps = (url: string | null | undefined): string | null => {
 // ---------------------------------------------------------------------------
 // Activity
 
+/** Events the Activity list leaves out: they have no text for the person. */
+export const isQuietEvent = (e: Pick<TaskEvent, 'kind'>): boolean => e.kind === 'lessons_held_out';
+
 /** One plain line per event for the activity list. */
 export function eventText(e: TaskEvent, names: Record<string, string> = {}): string {
   const who = actorName(e.actor, e.actor_name, names);
@@ -1541,6 +1544,15 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
       return `No audit: ${str(d.reason) === 'daily_cap' ? 'today’s limit was reached' : str(d.reason) === 'no_challenger' ? 'no other bot could challenge it' : str(d.reason) === 'task_moved' ? 'the task moved on' : 'skipped'}`;
     case 'risk_resolved':
       return `${Who} ${str(d.resolution) === 'dismissed' ? 'dismissed' : 'resolved'} a risk`;
+    case 'self_checked':
+      return 'It ran its checks before hand-in';
+    case 'lessons_shown': {
+      const n = Array.isArray(d.keys) ? d.keys.length : null;
+      return n ? `It started with ${n === 1 ? '1 lesson' : `${n} lessons`} from earlier work` : 'It started with lessons from earlier work';
+    }
+    case 'lessons_held_out':
+      // A measurement holdout. It says nothing the person can use, so the Activity list leaves it out.
+      return '';
     case 'class_changed':
       return `${Who} changed its kind of work${str(d.to) ? ` to ${str(d.to)}` : ''}`;
     default:
@@ -1644,6 +1656,55 @@ export function parseMissionBoardSetting(data: unknown): boolean | null {
   return typeof v === 'boolean' ? v : null;
 }
 
+/** `lessons` from GET /api/settings: whether bots see what went wrong in their last 30 days. Null on a server without it. */
+export function parseLessonsSetting(data: unknown): 'on' | 'off' | null {
+  if (!data || typeof data !== 'object') return null;
+  const v = (data as Record<string, unknown>).lessons;
+  return v === 'on' || v === 'off' ? v : null;
+}
+
+export type LessonSource = 'check' | 'stall' | 'denied' | 'error' | 'review' | 'goal';
+
+/** One line of "Lessons from earlier work": what the bot is shown before similar work. Read-only. */
+export interface LessonLine {
+  key: string;
+  source: LessonSource | null;
+  text: string;
+  count: number;
+  last_at: number | null;
+  task_id: string | null;
+}
+
+const LESSON_SOURCES: readonly string[] = ['check', 'stall', 'denied', 'error', 'review', 'goal'];
+
+/**
+ * The lines from GET /api/kwants/:id/lessons, in the server's order. Null means show nothing: the
+ * answer isn't the expected shape, or `enabled` is false (the setting is off). Lines without text
+ * are dropped; a missing count is 1.
+ */
+export function parseLessons(data: unknown): LessonLine[] | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  if (d.enabled === false || !Array.isArray(d.lines)) return null;
+  const lines: LessonLine[] = [];
+  for (const raw of d.lines) {
+    if (!raw || typeof raw !== 'object') continue;
+    const l = raw as Record<string, unknown>;
+    const text = typeof l.text === 'string' ? l.text.trim() : '';
+    if (!text) continue;
+    const taskId = typeof l.task_id === 'string' && l.task_id ? l.task_id : null;
+    lines.push({
+      key: typeof l.key === 'string' && l.key ? l.key : `${lines.length}:${text.slice(0, 24)}`,
+      source: typeof l.source === 'string' && LESSON_SOURCES.includes(l.source) ? (l.source as LessonSource) : null,
+      text,
+      count: typeof l.count === 'number' && Number.isFinite(l.count) ? Math.max(1, Math.round(l.count)) : 1,
+      last_at: typeof l.last_at === 'number' && Number.isFinite(l.last_at) ? l.last_at : null,
+      task_id: taskId,
+    });
+  }
+  return lines;
+}
+
 // ---------------------------------------------------------------------------
 // API
 
@@ -1714,6 +1775,13 @@ export const missionsApi = {
     await call<Task>(`/api/tasks/${enc(id)}`, 'PATCH', { budget_tokens });
     return call<Task>(`/api/tasks/${enc(id)}/unblock`, 'POST', {});
   },
+  /**
+   * What a bot is shown from its last 30 days. Resolves to the lines, or null when there is nothing to
+   * show: the setting is off, the server is older than the route (404), or the call failed. It is an
+   * extra, so it never raises an error on screen.
+   */
+  lessons: (kwantId: string): Promise<LessonLine[] | null> =>
+    call<unknown>(`/api/kwants/${enc(kwantId)}/lessons`).then(parseLessons, () => null),
   tasks: () => call<{ tasks: Task[] }>('/api/tasks?limit=500').then((r) => r.tasks),
   task: (id: string) => call<TaskDetail>(`/api/tasks/${enc(id)}`),
   approveCheck: (id: string) => call<Check>(`/api/checks/${enc(id)}/approve`, 'POST', {}),

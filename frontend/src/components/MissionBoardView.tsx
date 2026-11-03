@@ -139,6 +139,7 @@ import {
   parseLimit,
   durationText,
   eventText,
+  isQuietEvent,
   formatBytes,
   formatTokens,
   measuresView,
@@ -2015,7 +2016,8 @@ export const TaskDetailBody: React.FC<{
   const actions = actionsFor(t).filter((a) => !(limitHit && a === 'unblock'));
   const chat = sourceChat(t);
   const [showAll, setShowAll] = useState(false);
-  const events = showAll ? detail.events : detail.events.slice(-12);
+  const shownEvents = detail.events.filter((e) => !isQuietEvent(e));
+  const events = showAll ? shownEvents : shownEvents.slice(-12);
 
   useEffect(() => {
     setAsking(null);
@@ -2350,7 +2352,7 @@ export const TaskDetailBody: React.FC<{
 
       <RestoreSection task={t} api={restoreApi} titleOf={(id) => tasksById[id]?.title} now={now} onRestored={onRestored} onError={onRestoreError} />
 
-      {detail.events.length > 0 && (
+      {shownEvents.length > 0 && (
         <section aria-labelledby="ev-h" className="space-y-1.5">
           <h4 id="ev-h" className="text-xs font-semibold text-zinc-200">
             Activity
@@ -2362,9 +2364,9 @@ export const TaskDetailBody: React.FC<{
               </li>
             ))}
           </ol>
-          {!showAll && detail.events.length > events.length && (
+          {!showAll && shownEvents.length > events.length && (
             <button type="button" onClick={() => setShowAll(true)} className={`text-[11px] text-sky-300 hover:underline rounded ${focusRing}`}>
-              Show all {detail.events.length}
+              Show all {shownEvents.length}
             </button>
           )}
         </section>
@@ -2922,7 +2924,10 @@ export const MissionBoardPage: React.FC<{
   threadTitles?: Record<string, string>;
   /** Opens a Live bot's conversation. */
   onOpenPlace?: (place: ChatPlace) => void;
-}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace }) => {
+  /** A task to open as soon as the board has loaded (a link from a bot's Memory tab). `onOpenedTaskId` tells the parent it was used. */
+  openTaskId?: string | null;
+  onOpenedTaskId?: () => void;
+}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace, openTaskId = null, onOpenedTaskId }) => {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [insights, setInsights] = useState<Insights | null>(null);
@@ -3125,6 +3130,17 @@ export const MissionBoardPage: React.FC<{
     setOpenId(null);
     setDetail(null);
   };
+  // A link from elsewhere (a lesson on a bot's Memory tab): open that task once the board has its list.
+  useEffect(() => {
+    if (!openTaskId || tasks === null) return;
+    const t = tasks.find((x) => x.id === openTaskId);
+    const c = t ? columnOfTask(t) : null;
+    if (c) setColumn(c);
+    openTask(openTaskId);
+    onOpenedTaskId?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openTaskId, tasks === null]);
+
   // "Open goal" from a task's "Keep this true": the goal drawer takes the task panel's place.
   useEffect(() => {
     const onGoal = () => {
