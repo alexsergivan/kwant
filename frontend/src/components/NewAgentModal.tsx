@@ -87,6 +87,8 @@ interface NewAgentModalProps {
   onApprovalsChanged?: () => void;
   /** Whether this bot runs tools without asking: the bot's effective value, or the space's for a new bot. */
   approvalsOff?: boolean;
+  /** Opens a task on the Mission board (from a lesson on the Memory tab). Absent when the board is off. */
+  onOpenTask?: (taskId: string) => void;
 }
 
 type ProfileFields = { name: string; title: string; roleStyle: string; model: string; prompt: string; soul: string; profileId: string | null; failover: boolean; covers: string; avoids: string; sites: string };
@@ -111,6 +113,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   pendingSkills = 0,
   onRequestDelete,
   onApprovalsChanged,
+  onOpenTask,
   approvalsOff = false,
 }) => {
   const [tab, setTab] = useState<EditTab>('profile');
@@ -359,7 +362,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
         {isEdit && kwantId && tab === 'memory' && (
           <div role="tabpanel" id="agent-panel-memory" aria-labelledby="agent-tab-memory">
-            <MemoryPanel kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} />
+            <MemoryPanel kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} onOpenTask={onOpenTask} />
           </div>
         )}
         {isEdit && kwantId && tab === 'skills' && (

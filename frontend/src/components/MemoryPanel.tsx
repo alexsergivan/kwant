@@ -5,6 +5,7 @@ import { Bot, Check, Loader2, Pencil, Pin, PinOff, Plus, RefreshCw, Trash2, User
 import { MAX_MEMORIES, MAX_MEMORY, MAX_PINNED, Memory, continuityApi, formatWhen, memoriesForDisplay, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
 import { editorProps } from '../escape';
+import { LessonLine, missionsApi } from '../missions';
 
 const smallBtn =
   'inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
@@ -166,13 +167,65 @@ export const MemoryRow: React.FC<{
   );
 };
 
+/**
+ * "Lessons from earlier work": the short lines a bot sees before similar work, from its last
+ * 30 days. Read-only: no buttons, nothing to decide. Shows nothing when there are no lines.
+ * `onOpenTask` makes the "View task" link; without it (the Mission board is off) the line is text only.
+ */
+export const LessonsGroup: React.FC<{ kwantName: string; lines: LessonLine[] | null; onOpenTask?: (taskId: string) => void }> = ({
+  kwantName,
+  lines,
+  onOpenTask,
+}) => {
+  if (!lines || lines.length === 0) return null;
+  return (
+    <section aria-labelledby="lessons-h" className="space-y-1.5 pt-1" data-testid="lessons-group">
+      <h3 id="lessons-h" className="text-xs font-medium text-zinc-400">
+        Lessons from earlier work
+      </h3>
+      <p className="text-[10px] text-zinc-500 leading-relaxed">
+        {kwantName} sees these before similar work. They come from the last 30 days and update on their own.
+      </p>
+      <ul className="space-y-1.5" aria-labelledby="lessons-h">
+        {lines.map((l) => (
+          <li key={l.key} className="p-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60 space-y-1">
+            <p className="text-xs text-zinc-300 break-words">{l.text}</p>
+            {(l.count > 1 || (l.task_id && onOpenTask)) && (
+              <div className="flex items-center gap-2 text-[11px]">
+                {l.count > 1 && (
+                  <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 tabular-nums" title={`Happened ${l.count} times`}>
+                    <span aria-hidden="true">×{l.count}</span>
+                    <span className="sr-only">{l.count} times</span>
+                  </span>
+                )}
+                {l.task_id && onOpenTask && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenTask(l.task_id as string)}
+                    aria-label={`View task for this lesson: ${l.text.length > 70 ? `${l.text.slice(0, 70)}…` : l.text}`}
+                    className="rounded px-0.5 py-1.5 -my-1.5 text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                  >
+                    View task
+                  </button>
+                )}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+};
+
 /** A kwant's memory: what it keeps between chats. Refreshes live when the kwant changes it. */
-export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ kwantId, kwantName }) => {
+export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string; onOpenTask?: (taskId: string) => void }> = ({ kwantId, kwantName, onOpenTask }) => {
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  // Read-only extra: stays null (and hidden) while loading, when off, on an older server or on any error.
+  const [lessons, setLessons] = useState<LessonLine[] | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -181,6 +234,15 @@ export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load memories.');
     }
+  }, [kwantId]);
+
+  useEffect(() => {
+    let live = true;
+    setLessons(null);
+    missionsApi.lessons(kwantId).then((l) => live && setLessons(l));
+    return () => {
+      live = false;
+    };
   }, [kwantId]);
 
   useEffect(() => {
@@ -298,6 +360,7 @@ export const MemoryPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
           </ul>
         </>
       )}
+      <LessonsGroup kwantName={kwantName} lines={lessons} onOpenTask={onOpenTask} />
     </div>
   );
 };
