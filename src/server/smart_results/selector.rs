@@ -11,7 +11,7 @@
 use std::cell::OnceCell;
 use std::collections::HashSet;
 
-use super::validate::has_html;
+use super::validate::{cell_fits, has_html};
 use super::{chart, items};
 use super::{Block, Column, Comparison, Provenance, Role, Row, Source, Steps, Variant, MAX_REPLY, PICK_REASON};
 
@@ -887,10 +887,11 @@ fn comparison(t: &Table, said: Option<&[String]>) -> Option<Comparison> {
     if !t.clean || !(2..=8).contains(&cols) || !(3..=50).contains(&t.rows.len()) {
         return None;
     }
-    if t.header.iter().any(|h| h.is_empty() || h.chars().count() > 200) {
+    // A cell is measured by what it shows: a source link counts as its text (`cell_fits`)
+    if t.header.iter().any(|h| h.is_empty() || !cell_fits(h)) {
         return None;
     }
-    if t.rows.iter().any(|r| r.len() != cols || r.iter().any(|c| c.chars().count() > 200)) {
+    if t.rows.iter().any(|r| r.len() != cols || r.iter().any(|c| !cell_fits(c))) {
         return None;
     }
     // Cells are shown as text, so a table with HTML in it stays markdown

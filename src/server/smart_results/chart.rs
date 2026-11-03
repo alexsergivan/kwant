@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use super::selector::{currency, is_number, number_parts, plain, Table};
-use super::validate::has_html;
+use super::validate::{cell_fits, has_html};
 use super::{Axis, AxisKind, Chart, ChartKind, Metric, Metrics, Point, Provenance, Series, Source};
 
 /// A table with 4–60 rows whose first column is time-like in every row and whose other 1–4
@@ -110,13 +110,13 @@ fn column_unit(affix: Option<&str>, header: &str) -> Option<String> {
     (!inner.is_empty()).then(|| inner.to_lowercase())
 }
 
-/// Labels and cells a chart can show as they are: none empty in the header, none over 200
-/// characters, no HTML, no repeated label.
+/// Labels and cells a chart can show as they are: none empty in the header, each within
+/// `cell_fits` (200 shown characters), no HTML, no repeated label.
 fn plain_cells(t: &Table) -> bool {
     if t.header.iter().any(|h| h.is_empty()) {
         return false;
     }
-    if t.header.iter().chain(t.rows.iter().flatten()).any(|c| c.chars().count() > 200 || has_html(c)) {
+    if t.header.iter().chain(t.rows.iter().flatten()).any(|c| !cell_fits(c) || has_html(c)) {
         return false;
     }
     let mut seen = HashSet::new();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::server::smart_results::validate::{shown_len, MAX_CELL_RAW};
 use crate::server::smart_results::{compute, validate, Block, ResultSet, MAX_PAYLOAD, PICK_REASON};
 
 fn first(text: &str) -> Option<Block> {
@@ -61,6 +62,76 @@ fn a_two_option_table_with_a_row_per_point_is_a_comparison() {
     assert_eq!(points, ["Prices", "Deals", "App", "Store feel"]);
     assert_eq!(c.rows[0].cells, ["Prices", "Basket €42.07, about 4% less", "Basket €44.02"]);
 }
+
+/// A cell's 200-character cap counts what the reader sees: a source link counts as its text, not its
+/// URL. Oleks's "Compare Aldi with Lidl" table stayed text because two cells were 238 and 221 raw
+/// characters, only because of the URLs in their links.
+#[test]
+fn a_cell_counts_a_source_link_as_its_text() {
+    let prices = "Basket of 20 staples €42.07, about 4% less than Lidl in the latest test; private labels \
+        decide most of it ([Stiftung Warentest 2025](https://www.test.de/Discounter-Preisvergleich-Aldi-Lidl-Penny-Netto-5912345-0/?utm_source=chat))";
+    let app = "Lidl Plus: weekly coupons, digital receipts and a scratch card ([Lidl Plus](https://www.lidl.de/c/lidl-plus/s10007311?utm_source=chatgpt.com&utm_medium=referral&utm_campaign=lidl-plus-coupons-and-digital-receipts-2025))";
+    assert!(prices.chars().count() > 200 && app.chars().count() > 200);
+    assert!(shown_len(prices) < 200 && shown_len(app) < 200);
+    let text = format!(
+        "They're close on price.\n\n| Point | Aldi Süd | Lidl |\n|---|---|---|\n\
+         | Prices | {prices} | Basket €44.02 |\n| Deals | Tighter range | More non-food deals |\n\
+         | App | Nothing comparable | {app} |\n| Store feel | Quicker to shop | Bigger, more variety |\n"
+    );
+    let c = comparison_of(&text);
+    // The cells keep their links: only the count leaves the URL out
+    assert_eq!(c.rows[0].cells[1], prices);
+    assert_eq!(c.rows[2].cells[2], app);
+    validate(&compute(&text).unwrap(), Some(&text)).unwrap();
+
+    let cell = |n: usize, link: &str| {
+        format!("| Plan | Note |\n|---|---|\n| Basic | {}{link} |\n| Team | b |\n| Business | c |\n", "x".repeat(n))
+    };
+    // 200 shown characters with a long link pass; one more shown character is refused
+    let url = format!("https://example.com/{}", "p".repeat(300));
+    assert!(first(&cell(197, &format!(" [ab]({url})"))).is_some());
+    assert_eq!(first(&cell(197, &format!(" [abc]({url})"))), None);
+    // A bare URL is shown, so it counts in full
+    assert_eq!(first(&cell(10, &format!(" {url}"))), None);
+    // The raw ceiling: a link's URL can't make a cell hold more than 1,000 characters
+    let huge = |n: usize| format!(" [ab](https://example.com/{})", "p".repeat(n));
+    let raw = |n: usize| 3 + huge(n).chars().count();
+    assert_eq!(raw(970), MAX_CELL_RAW);
+    assert!(first(&cell(3, &huge(970))).is_some());
+    assert_eq!(first(&cell(3, &huge(971))), None);
+    // validate holds the same lines for a block built any other way
+    let shown = |n: usize| format!("{} [ab]({url})", "x".repeat(n));
+    for (cell, ok) in [(format!("xxx{}", huge(970)), true), (format!("xxx{}", huge(971)), false), (shown(197), true), (shown(198), false)] {
+        let mut set = compute(&text).unwrap();
+        let Block::Comparison(c) = &mut set.blocks[0] else { panic!() };
+        c.rows[0].cells[1] = cell;
+        assert_eq!(validate(&set, None).is_ok(), ok);
+    }
+}
+
+/// The client (`shownLength` in frontend/src/smartResults.ts) counts the same cases the same way;
+/// tests/smartResultsCellLength.test.mjs holds the same table.
+#[test]
+fn shown_length_counts_as_the_client_counts() {
+    for (s, n) in SHOWN_CASES {
+        assert_eq!(shown_len(s), *n, "{s:?}");
+    }
+}
+
+const SHOWN_CASES: &[(&str, usize)] = &[
+    ("plain", 5),
+    ("[Aldi](https://example.com/very/long/path)", 4),
+    ("![logo](https://example.com/l.png) text", 9),
+    ("see https://example.com/a", 25),
+    ("[a [b](u)", 4),
+    ("[a] (u)", 7),
+    ("[x](u", 5),
+    ("!x [y](z)", 4),
+    ("[](https://example.com)", 0),
+    ("😀[😀](https://example.com)", 4),
+    ("[a](b) and [c](d)", 7),
+    ("[a](b(c)d)", 3),
+];
 
 #[test]
 fn small_ragged_wide_or_repeated_tables_stay_text() {

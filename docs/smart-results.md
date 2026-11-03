@@ -93,7 +93,7 @@ parsed from the cell as written, never computed; a cell without one is `null`, n
   value that isn't.
 - Cells are the raw markdown between the pipes, trimmed. Emphasis, code spans, links and escaped
   pipes (`\|`) are kept as written; the chat renders them.
-- Limits: a header or cell is at most 200 characters, a step at most 300, a unit at most 10.
+- Limits: a header or cell is at most 200 characters, a step at most 300, a unit at most 10. A header or cell counts what it shows: a markdown link `[text](url)` counts as its text, a bare URL in full, and a cell holds at most 1,000 characters raw.
   Nothing may contain HTML (`<` followed by a letter, `/`, `!` or `?`).
 - **`numeric`:** at least 80% of the column's cells are a number with the same affix. The affix
   is a prefix of up to 4 letters or currency signs (`EUR 12`, `$12`), or a suffix of up to 10
