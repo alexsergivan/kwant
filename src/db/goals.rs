@@ -973,7 +973,10 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_proposals_never_pass_the_cap() {
-        let (db, _dir) = db().await;
+        // Eight writers queue on SQLite's lock; on a loaded machine the default 5 s wait can run
+        // out ("database is locked"), so this test's connections wait up to a minute
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::init_with_busy_timeout(dir.path(), std::time::Duration::from_secs(60)).await.unwrap();
         let mut handles = Vec::new();
         for _ in 0..8 {
             let db = db.clone();
