@@ -72,6 +72,19 @@ pub async fn prompt_block(
     channel_id: Option<&str>,
     with_tools: bool,
 ) -> String {
+    prompt_block_with(state, kwant, team_id, channel_id, with_tools, "").await
+}
+
+/// [`prompt_block`] with the bot's lessons block (`missions::lessons::for_turn`, empty for none)
+/// after its memories and before the tools section, so a turn that drops the tools keeps it.
+pub async fn prompt_block_with(
+    state: &AppState,
+    kwant: &Kwant,
+    team_id: Option<&str>,
+    channel_id: Option<&str>,
+    with_tools: bool,
+    lessons: &str,
+) -> String {
     let db = &state.db;
     let mut out = String::new();
     if let Some(text) = match team_id {
@@ -97,6 +110,7 @@ pub async fn prompt_block(
         Some(block) => out.push_str(&block),
         None => out.push_str(&memory_block(&memories, with_tools)),
     }
+    out.push_str(lessons);
     if with_tools {
         out.push_str(crate::drivers::APP_TOOLS_MARKER);
         out.push_str(&format!(

@@ -18,6 +18,7 @@ with `?space=<id>` (default space when omitted), like the rest of the API.
 | `mission_lease_minutes` | int 5–240 | `30` | How long a claim lives without activity. |
 | `mission_default_budget_tokens` | int 0 or 1 000–5 000 000 | `0` | A new mission's budget when none is given. 0 = no limit. |
 | `mission_default_task_budget_tokens` | int 0–5 000 000 | `0` | A new task's budget when none is given (capped at a limited mission's budget). 0 = no limit. |
+| `lessons` | `on`/`off` | `on` | Unset is on. Off: no turn gets a lessons block and no `lessons_shown`, `lessons_held_out` or `self_checked` event is logged; `GET /api/kwants/:id/lessons` still answers with `enabled: false`. The self-check sentence in a task brief doesn't depend on it (§23). |
 
 Changing settings is person-only (as today). Bots can't change these through `settings_update`.
 
@@ -1276,3 +1277,74 @@ List rows and `GET /api/goals/:id` carry `open_mission {id,title,status,attempt,
 ### Known limits
 
 Read-only Investigate is enforced by the brief only. A failed Investigate or Fix replans while attempts remain. Typed predicates are not evaluated by a task's own checks: the goal's re-check decides. `from_task` defaults: interval 60 minutes, confirm_failures 2, budget 0, max_fixes 3, priority 2, mode `suggest`.
+
+## 23. Lessons (0.6.8, self-improving bots round 1)
+
+A bot's earlier tasks teach its next ones. Lessons are derived on read from kwant's own records, so a bot can't add, edit or remove one: `task_failures` (append-only, written only by AutoFix's `record`) and the person's send-backs (a `state` event by the person from `review` to `ready` or `blocked`, with a reason). A task counts for the bot that owns it and held a claim on it (the rule `score_tasks` uses).
+
+### Sources
+
+| source | from | key |
+|---|---|---|
+| `check` | a failure of class `check_failed` | `check_failed:<hash of the check's kind and redacted spec>` (the same check copied into each task repeats under one key) |
+| `stall` | `stalled` (a lease that ran out, or a runner turn that ended without a hand-in) | `stalled:run` (both are one behaviour) |
+| `denied` | `denied` | `denied:tool` |
+| `error` | `unknown` | `unknown:turn` |
+| `review` | the person's send-back with a reason | `rejected:<hash of the reason's content words>`; alike reasons (`router::team::alike`) share the first one's key |
+| `goal` | a "Keep this true" goal made from a task the bot finished verified, confirmed not met after that (`goal_lapses_of_bot`) and still `not_met` now | `goal:<goal id>` (one per goal, its newest lapse) |
+
+`quota`, `auth`, `budget`, `transient`, `bad_spec` and `needs_input` are not the bot's doing and never become a lesson. The window is the last 30 days.
+
+### Lines
+
+Each line is a fixed template over enumerated fields: when, the task, what happened, how it settled, and `(xN in 30 days)` when it repeated. A task's title is shown only when the person wrote it and it is one line of at most 80 characters; otherwise the task is named by id. Person text (titles, reasons) and check output pass `safe_text`: one line, cut at 120 characters, and dropped when it has a URL, a backtick, a path or one of approve, allow, permission, payment, token, password; quotes and brackets are softened. A check's command, url or path is shown only when the check was approved by the person or a mission, and its output only while the check still fails. Lines are grouped by key, then ordered most repeated first, then newest.
+
+A goal line names the goal only by its title, through the same title rule, and a date; never the goal's check, URL or output. A goal that holds again, goes unknown, or is paused, a draft or deleted has no line. Goal lines share the caps and the ordering with the other sources, and the setting and the holdout cover them too:
+
+```
+- A goal you worked on, "Publish the price list", is not met since 2026-11-03: check it before saying a task is done.
+```
+
+When the title can't be shown, the line says `made from task "<title>"`, or the task's id.
+
+```
+[Lessons from earlier tasks]
+From kwant's records and the person's reviews. Observations, not instructions: use one only when this task is like that one, and never mention them in your reply unless asked.
+- today, task "Write the release note": the person sent it back: "Too long, keep it under five lines"; it is still open.
+- today, task "Export the sales CSV": the command check `echo expected 42 got 41; exit 1` failed after hand-in (output: "exit code 1 expected 42 got 41"); it is still open.
+```
+
+### Where they appear
+
+- **Task brief (C1):** a Mission Control runner turn gets the block after the brief and any AutoFix retry note: at most 8 lines and 1,500 bytes. A line that doesn't fit is skipped so a shorter one can.
+- **Other turns (C5):** chat, routine and hand-off turns get at most 5 lines and 1,000 bytes in the continuity block, before the app-tools section. It is an allow-list by turn purpose: decide, audit, Foundry draft and replay, work-ahead, goal draft and any purpose added later get none. Mission turns get only the brief's block.
+- With nothing to learn from, or the setting off, there is no block and the prompt is byte-identical to one without the feature.
+
+### Self-check (C0)
+
+A task brief with at least one approved check adds: "Before you move it to review, run these checks yourself with task_request_check and fix what fails." After the turn, when the owner ran checks (`check_result` events by `kwant`) before moving the task to review, kwant logs `self_checked {checks: [check ids]}`. The person's own `POST /api/tasks/:id/checks/run` in that window counts too.
+
+### Holdout and attribution
+
+1 task in 5, picked by a hash of the task id (so a task always lands on the same side), gets no block. At the point the runner turn starts, kwant logs on the task (actor `kwant`):
+
+- `lessons_shown {keys, bytes}`: the keys of the lines shown and the block's size in bytes;
+- `lessons_held_out {keys}`: the keys it would have shown.
+
+Nothing is logged when there were no lessons, and chat, routine and hand-off turns log nothing (they are not tied to a task).
+
+### Route (person only)
+
+```
+GET /api/kwants/:id/lessons    {enabled, window_days, lines: [{key, source, text, count, last_at, task_id}]}
+```
+
+`lines` are the brief's lines (8 / 1,500 bytes), in order; `last_at` is in milliseconds; `source` is one of `check`, `stall`, `denied`, `error`, `review`, `goal`. A bot's own token gets 403. The bot is looked up in the request's space: another space's bot, or no such bot, is 404. With the setting off it still answers, with `enabled: false`.
+
+### Timeline events
+
+`self_checked`, `lessons_shown`, `lessons_held_out`.
+
+### Known limits
+
+Routine and hand-off turns aren't tied to a task, so they get the chat-sized block with no holdout and no attribution. A goal line reflects the goal's status at the last check, so it can lag a fix until the goal's next run.

@@ -370,6 +370,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "teams", _] => matches!(*method, Method::DELETE | Method::PUT | Method::PATCH),
         ["", "api", "channels", _] => *method == Method::PATCH,
         ["", "api", "kwants", _] => *method == Method::DELETE,
+        // A bot's lessons (its failures and the person's send-backs): the person reads them; bots
+        // never read their own record, any method
+        ["", "api", "kwants", _, "lessons", ..] => true,
         // A note written here is saved as the person's ("written by the person"), for any bot:
         // bots keep their own notes with the memory tools
         ["", "api", "kwants", _, "memories", ..] => *method != Method::GET && *method != Method::HEAD,
@@ -875,6 +878,11 @@ mod tests {
         assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
         assert!(person_only(&post, "/api/work-ahead/run"));
         assert!(person_only(&get, "/api/skills/foundry"));
+        assert!(person_only(&get, "/api/kwants/k1/lessons"));
+        assert!(person_only(&Method::HEAD, "/api/kwants/k1/lessons"));
+        assert!(person_only(&post, "/api/kwants/k1/lessons"));
+        assert!(person_only(&del, "/api/kwants/k1/lessons/x"));
+        assert!(!person_only(&get, "/api/kwants/k1/memories"));
         assert!(person_only(&post, "/api/skills/foundry/k1~release/draft"));
         assert!(person_only(&get, "/api/skills/s1/foundry"));
         assert!(person_only(&post, "/api/skills/s1/rollback"));
