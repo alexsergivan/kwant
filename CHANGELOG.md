@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.6] - 2026-11-03
+
+### Changed
+- **Accounts that can't take a turn sit apart in Order to use.** Engines that aren't installed or aren't signed in
+  are listed under "Not in the order", with no number and no arrows. When you move an account, they're placed after
+  the ones you ordered, so an engine you install or sign in later joins at the bottom instead of jumping to the top.
+- **"Out until" names its time zone.** When every account is out, the message reads "Every model is out until
+  09:00 CET; I'll answer then.", in the time zone saved in Settings (else the computer's), with its abbreviation. A
+  zone kwant can't read falls back to UTC.
+- **GitHub releases are named "kwant 0.6.6 for Mac and Linux"**, with separate Mac and Linux sections in the notes.
+
+### Fixed
+- **One notification per failing task.** With AutoFix on, a task that fails and is retried notifies once, for its
+  final outcome, instead of once per attempt.
+- **A wide file preview stays inside its message.** A shared file with a wide table scrolls inside the chat bubble
+  instead of stretching it past the screen.
+- **Goals refuse a latency check that can never pass.** "Latency under 0 ms" is refused with a plain message when you
+  create or edit a goal, or when a bot proposes one.
+
 ## [Mac 0.6.5] - 2026-11-03
 
 ### Added
