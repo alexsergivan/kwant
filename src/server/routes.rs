@@ -2612,7 +2612,7 @@ async fn run_kwant_turn_inner(
                         "to_profile_id": to.id,
                         "to_name": to.name,
                         "class": class,
-                        "retry_at": from.until,
+                        "retry_at": from.until.map(super::profile_turn::rfc3339),
                         "from_engine": from_family,
                         "to_engine": to_family,
                         "from_model": from.model,

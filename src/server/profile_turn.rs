@@ -512,17 +512,25 @@ pub fn engine_label(p: &LlmProfile) -> String {
     }
 }
 
-/// `at` as a wall-clock time in the person's zone ("03:00"), else the server's, else "03:00 UTC".
+/// `at` as a clock time in the person's zone that names it: "09:00 CET". The zone is the saved one,
+/// else this computer's, else UTC (`zombie::settings::local_tz`).
 pub async fn clock_text(state: &AppState, at: chrono::DateTime<chrono::Utc>) -> String {
-    let tz = crate::zombie::settings::local_tz(&state.db).await;
-    match crate::routines::now_in(&tz, at) {
-        Ok(local) => local.format("%H:%M").to_string(),
-        Err(_) => format!("{} UTC", at.format("%H:%M")),
-    }
+    clock_text_in(&crate::zombie::settings::local_tz(&state.db).await, at)
+}
+
+/// [`clock_text`] in `tz`. A zone that cannot be read, or has no abbreviation, gives the time
+/// converted to UTC and labelled "UTC", never a local time under the wrong label.
+pub fn clock_text_in(tz: &str, at: chrono::DateTime<chrono::Utc>) -> String {
+    crate::routines::clock_with_zone(tz, at).unwrap_or_else(|_| format!("{} UTC", at.format("%H:%M")))
+}
+
+/// `at` as RFC 3339 with an explicit offset ("2026-11-03T08:00:00+00:00"), for `meta.failover`.
+pub fn rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 }
 
 /// The quiet line when a turn runs on another engine because its own is out:
-/// "Claude is out until 03:00 · Architect is answering on Codex (gpt-6.1)".
+/// "Claude is out until 03:00 UTC · Architect is answering on Codex (gpt-6.1)".
 pub fn cross_engine_notice(
     from: &LlmProfile,
     until_text: Option<&str>,
@@ -605,6 +613,37 @@ mod tests {
         let wrong_key = give_up_notice("Ann", &p, &auth, 1);
         assert!(wrong_key.contains("Settings › This space › Accounts"), "{wrong_key}");
         assert!(give_up_notice("Ann", &p, &quota, 1).contains("Settings › This space › Accounts"));
+    }
+
+    #[test]
+    fn out_until_text_names_its_zone() {
+        let winter = Utc.with_ymd_and_hms(2026, 11, 3, 8, 0, 0).unwrap();
+        let summer = Utc.with_ymd_and_hms(2026, 7, 3, 8, 0, 0).unwrap();
+        // The person's zone, with its abbreviation at that instant
+        assert_eq!(clock_text_in("Europe/Ljubljana", winter), "09:00 CET");
+        assert_eq!(clock_text_in("Europe/Ljubljana", summer), "10:00 CEST");
+        assert_eq!(clock_text_in("America/New_York", winter), "03:00 EST");
+        assert_eq!(clock_text_in("Europe/Istanbul", winter), "11:00 +03");
+        assert_eq!(clock_text_in("UTC", winter), "08:00 UTC");
+        // Unreadable zones are converted to UTC, not labelled local
+        for bad in ["Not/AZone", "", "../etc/passwd", "Europe/Ljubljana/../x"] {
+            assert_eq!(clock_text_in(bad, winter), "08:00 UTC", "{bad:?}");
+        }
+        let line = all_out_line(&clock_text_in("Europe/Ljubljana", winter));
+        assert_eq!(line, "Every model is out until 09:00 CET; I'll answer then.");
+        let claude = profile("c", "This machine", "system", 0, false);
+        let codex = profile("x", "Codex", "system", 1, false);
+        let line = cross_engine_notice(&claude, Some(&clock_text_in("Europe/Ljubljana", winter)), "Ann", &codex, Some("gpt-6.1"));
+        assert!(line.contains("is out until 09:00 CET · Ann is answering on"), "{line}");
+        let line = cross_engine_notice(&claude, None, "Ann", &codex, None);
+        assert!(line.contains("is unavailable") && !line.contains("until"), "{line}");
+    }
+
+    #[test]
+    fn retry_at_is_rfc3339_with_an_offset() {
+        let at = Utc.with_ymd_and_hms(2026, 11, 3, 8, 0, 5).unwrap();
+        assert_eq!(rfc3339(at), "2026-11-03T08:00:05+00:00");
+        assert_eq!(DateTime::parse_from_rfc3339(&rfc3339(at)).unwrap().with_timezone(&Utc), at);
     }
 
     fn report(id: EngineId, enabled: bool, status: EngineStatus) -> EngineReport {
