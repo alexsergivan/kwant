@@ -248,6 +248,10 @@ mod tests {
                 to_name: s("x"),
                 class: s("quota"),
                 retry_at: None,
+                from_engine: s("claude"),
+                to_engine: s("codex"),
+                from_model: Some(s("opus")),
+                to_model: None,
             },
             E::DiscussionStarted { team_id: s("t"), team_name: s("x"), total_turns: 1, speakers: vec![], plan: vec![], kind: s("x") },
             E::DiscussionTurnStarted {

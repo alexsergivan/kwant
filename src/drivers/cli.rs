@@ -1355,7 +1355,10 @@ impl Driver for CliDriver {
                 } else {
                     match ClaudeResult::parse(&stdout) {
                         Some(result) => {
-                            if result.is_error && result.num_turns <= 1 {
+                            // A result that is nothing but a usage-limit line is a refusal, whether or not
+                            // the CLI flagged it as an error: it is never the reply
+                            let bare_limit = crate::profiles::classify::is_limit_line(&result.result);
+                            if (result.is_error && result.num_turns <= 1) || bare_limit {
                                 if let Some(failure) = refusal(&result.result) {
                                     return Ok(TurnOutput::refused(failure));
                                 }

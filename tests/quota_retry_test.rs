@@ -27,8 +27,8 @@ async fn parked_rows(env: &Env) -> Vec<kwnt::db::parked::ParkedTurn> {
 async fn a_limited_turn_is_retried_once_when_the_limit_resets() {
     let env = setup().await;
     send_direct(&env, &env.a, "do it QUOTAONCE:q1 REPLYTAG:q1done", json!({})).await;
-    let notice = wait_reply(&env, &env.a, "will retry this once").await;
-    assert!(notice.text.contains("UTC"), "{}", notice.text);
+    let notice = wait_reply(&env, &env.a, "I'll answer then").await;
+    assert!(notice.text.contains("Every model is out until"), "{}", notice.text);
     let rows = parked_rows(&env).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, "pending");
@@ -56,29 +56,32 @@ async fn a_limited_turn_is_retried_once_when_the_limit_resets() {
 async fn a_retry_that_hits_the_limit_again_is_not_parked_again() {
     let env = setup().await;
     send_direct(&env, &env.a, "do it QUOTAALWAYS REPLYTAG:never", json!({})).await;
-    wait_reply(&env, &env.a, "will retry this once").await;
+    wait_reply(&env, &env.a, "I'll answer then").await;
     past_reset(&env).await;
     assert_eq!(parked::run_due(&env.state, later()).await, 1);
     wait_for("the retry to fail", || async {
-        messages(&env, &env.a).await.iter().filter(|m| m.sender_role == "kwant" && m.text.contains("out of usage")).count() == 2
+        messages(&env, &env.a).await.iter().filter(|m| m.sender_role == "kwant" && m.text.contains("Every model is out until")).count() == 2
     })
     .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     let rows = parked_rows(&env).await;
     assert_eq!(rows.len(), 1, "no second park");
     let last = messages(&env, &env.a).await.into_iter().rfind(|m| m.sender_role == "kwant").unwrap();
-    assert!(!last.text.contains("will retry"), "{}", last.text);
+    assert!(!last.text.contains("I'll answer then"), "{}", last.text);
 }
 
 #[tokio::test]
 async fn a_later_turn_that_got_through_drops_the_parked_one() {
     let env = setup().await;
     send_direct(&env, &env.b, "first QUOTAONCE:q3 REPLYTAG:q3a", json!({})).await;
-    wait_reply(&env, &env.b, "will retry this once").await;
+    wait_reply(&env, &env.b, "I'll answer then").await;
     past_reset(&env).await;
     // A second limited message in the same chat doesn't add a second retry
     send_direct(&env, &env.b, "second QUOTAONCE:q3c", json!({})).await;
-    wait_reply(&env, &env.b, "already set").await;
+    wait_for("the second limited message to be answered", || async {
+        messages(&env, &env.b).await.iter().filter(|m| m.sender_role == "kwant" && m.text.contains("I'll answer then")).count() == 2
+    })
+    .await;
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert_eq!(parked_rows(&env).await.len(), 1);
 

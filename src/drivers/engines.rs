@@ -778,6 +778,23 @@ impl EngineRegistry {
         report
     }
 
+    /// When a turn's usage-limit refusal says this engine is back, while that is still ahead. Such
+    /// a mark is a limit, not a setup problem: the engine is installed and signed in, just out of
+    /// usage, so it still counts as an account that exists and its reset can be waited for.
+    pub fn quota_until(&self, id: EngineId) -> Option<DateTime<Utc>> {
+        if !self.is_enabled(id) {
+            return None;
+        }
+        let now = Utc::now();
+        self.marks
+            .read()
+            .unwrap()
+            .get(&id)
+            .filter(|m| m.status == EngineStatus::Error)
+            .and_then(|m| m.until)
+            .filter(|u| *u > now)
+    }
+
     pub fn is_enabled(&self, id: EngineId) -> bool {
         !self.disabled.read().unwrap().contains(&id)
     }
@@ -928,6 +945,27 @@ pub fn choose_model(models: &[EngineModel], pinned: Option<&str>, tier: Tier) ->
         return tier_from_name(pin).and_then(of_tier).or(default).map(ModelChoice::of);
     }
     of_tier(tier).or(default).map(ModelChoice::of)
+}
+
+/// [`choose_model`] for a turn that moved here from another engine: the model of the same
+/// tier, else of the nearest tier (Deep → Balanced → Fast), else the engine's default.
+pub fn choose_model_near(models: &[EngineModel], pinned: Option<&str>, tier: Tier) -> Option<ModelChoice> {
+    let rank = |t: Tier| match t {
+        Tier::Fast => 0i32,
+        Tier::Balanced => 1,
+        Tier::Deep => 2,
+    };
+    if pinned.map(str::trim).is_none_or(str::is_empty) && !models.iter().any(|m| m.tier == Some(tier)) {
+        let nearest = models
+            .iter()
+            .filter_map(|m| m.tier.map(|t| ((rank(t) - rank(tier)).abs(), m)))
+            .min_by_key(|(d, _)| *d)
+            .map(|(_, m)| m);
+        if let Some(m) = nearest {
+            return Some(ModelChoice::of(m));
+        }
+    }
+    choose_model(models, pinned, tier)
 }
 
 /// The models a turn on `id` can pick from: the last check's, or for Claude Code (whose aliases
@@ -1134,6 +1172,12 @@ mod tests {
         let r = reg.report(EngineId::Codex);
         assert_eq!(r.status, EngineStatus::Error);
         assert!(r.detail.unwrap().starts_with("Quota exceeded until"));
+        // It is a limit with a known end, which a signed-out mark or a lapsed one is not
+        assert_eq!(reg.quota_until(EngineId::Codex), future.retry_at);
+        reg.record_failure(EngineId::Codex, &past);
+        assert_eq!(reg.quota_until(EngineId::Codex), None);
+        reg.record_failure(EngineId::Codex, &auth);
+        assert_eq!(reg.quota_until(EngineId::Codex), None);
 
         let transient = ProviderFailure { class: FailClass::Transient, retry_at: None, detail: String::new() };
         reg.record_failure(EngineId::Claude, &transient);
@@ -1250,6 +1294,25 @@ mod tests {
         // A CLI whose list couldn't be read runs without --model
         let unknown = cli_default_model("Codex");
         assert_eq!(choose_model(&unknown, None, Tier::Deep).unwrap().run_id(), None);
+    }
+
+    #[test]
+    fn a_turn_moved_from_another_engine_gets_the_nearest_tier() {
+        let near = |models: &[EngineModel], tier| choose_model_near(models, None, tier).map(|c| c.id);
+        let codex = vec![
+            EngineModel::new("gpt-6.1-pro", "pro", true, Some(Tier::Deep)),
+            EngineModel::new("gpt-6.1-mini", "mini", false, Some(Tier::Fast)),
+        ];
+        assert_eq!(near(&codex, Tier::Deep).as_deref(), Some("gpt-6.1-pro"));
+        assert_eq!(near(&codex, Tier::Fast).as_deref(), Some("gpt-6.1-mini"));
+        // Sonnet's tier is missing: the nearest listed, the better one first
+        assert_eq!(near(&codex, Tier::Balanced).as_deref(), Some("gpt-6.1-pro"));
+        let only_fast = vec![EngineModel::new("grok-fast", "fast", true, Some(Tier::Fast))];
+        assert_eq!(near(&only_fast, Tier::Deep).as_deref(), Some("grok-fast"));
+        // Untiered models: the engine's default, and nothing listed: none
+        let grok = vec![EngineModel::new("grok-4.6", "grok-4.6", true, None)];
+        assert_eq!(near(&grok, Tier::Deep).as_deref(), Some("grok-4.6"));
+        assert_eq!(near(&[], Tier::Deep), None);
     }
 
     #[test]

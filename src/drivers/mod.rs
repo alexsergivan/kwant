@@ -590,16 +590,20 @@ pub async fn detect_available_models(
     for (family, api_desc, cli_desc) in families {
         let key = db.get_setting(family.key_setting()).await.ok().flatten();
         let route = engines::system_route(engines, family.as_str(), key, find_cli_binary);
+        let (cli, api) = EngineId::of_family(family);
         let engine = match &route {
             Ok(SystemRoute::Api { engine, .. }) | Ok(SystemRoute::Cli { engine, .. }) if !host_off.contains(&family) => {
                 Some(*engine)
+            }
+            // Out of usage until a known time: still on offer, the failover plan waits for the reset
+            _ if !host_off.contains(&family) && (engines.quota_until(cli).is_some() || engines.quota_until(api).is_some()) => {
+                Some(if engines.quota_until(api).is_some() { api } else { cli })
             }
             _ => None,
         };
         if engine.is_none() && !profile_engines.contains(&family) {
             continue;
         }
-        let (cli, api) = EngineId::of_family(family);
         let report = engines.report(engine.unwrap_or(cli));
         let model = report.default_model().map(|m| m.label.clone());
         let fallback_name = match family {

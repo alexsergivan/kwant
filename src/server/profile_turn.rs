@@ -9,8 +9,8 @@ use crate::drivers::{find_cli_binary, resolve_driver_for_model, ApiDriver, CliDr
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use crate::profiles::{
-    failover_order, preference_order, Availability, Engine, FailClass, ProfileStatus,
-    ProviderFailure, SignInBar,
+    failover_order, global_order, preference_order, Availability, Engine, FailClass, GlobalPlan,
+    OrderRules, ProfileStatus, ProviderFailure, SignInBar,
 };
 
 /// The space's profiles and what decides whether each can take a turn now, from the db and the
@@ -60,6 +60,80 @@ pub async fn plan(state: &AppState, engine: Option<Engine>, kwant_id: &str) -> V
     .into_iter()
     .filter(|p| profile_engine_on(state, p))
     .collect()
+}
+
+/// What a turn of a bot on `engine` may try across all the space's accounts, in order (see
+/// [`crate::profiles::global_order`]). A bot on a model without accounts (Ollama) just runs.
+pub async fn plan_global(state: &AppState, engine: Option<Engine>, kwant_id: &str) -> GlobalPlan {
+    let Some(engine) = engine else {
+        return GlobalPlan { attempts: vec![None], ..Default::default() };
+    };
+    let Ok(Some(space)) = state.db.space_of_kwant(kwant_id).await else {
+        return GlobalPlan { attempts: vec![None], ..Default::default() };
+    };
+    let host_off = host_off(state, &space).await.contains(&engine);
+    let (Some((profiles, mut avail)), Ok(binding)) =
+        (accounts(state, &space).await, state.db.get_kwant_binding(kwant_id).await)
+    else {
+        return GlobalPlan { attempts: if host_off { Vec::new() } else { vec![None] }, ..Default::default() };
+    };
+    let (bound, failover) = binding.unwrap_or((None, true));
+    let reports = state.engines.snapshot();
+    // Another engine's own login (This machine) only counts when that CLI is ready here
+    let host_ready = |family: Engine| {
+        let (cli, _) = EngineId::of_family(family);
+        // An engine out of usage until a known time is limited, not unready: its account stays
+        // in the plan and its own limited-until time decides when it is tried again
+        state.engines.quota_until(cli).is_some()
+            || reports.iter().any(|r| r.id == cli && r.enabled && r.status == EngineStatus::Ready)
+    };
+    // The host's own login is judged by its engine check (ready here), not by an account probe
+    // that may predate it: a "This machine" account never counts as signed out then
+    for p in profiles.iter().filter(|p| p.kind == "system") {
+        if Engine::parse(&p.engine).is_some_and(host_ready) {
+            avail.signed_out.remove(&p.id);
+        }
+    }
+    // An engine the person switched off, or that isn't installed, is a setup matter, not an
+    // outage: a bot on it is told so rather than answered on another engine
+    let own_engine_off = {
+        let (cli, _) = EngineId::of_family(engine);
+        reports.iter().any(|r| r.id == cli && (!r.enabled || r.status == EngineStatus::NotInstalled))
+    };
+    let eligible = |p: &LlmProfile| {
+        profile_engine_on(state, p)
+            && (!own_engine_off || Engine::parse(&p.engine) == Some(engine))
+            && (p.kind != "system" || Engine::parse(&p.engine).is_some_and(|f| f == engine || host_ready(f)))
+    };
+    global_order(
+        &profiles,
+        engine,
+        bound.as_deref(),
+        failover,
+        &avail,
+        chrono::Utc::now(),
+        &OrderRules { host_head: !host_off, eligible: &eligible },
+    )
+}
+
+/// Engines whose every enabled account of `space` is known to be out right now (out of usage,
+/// signed out, no key): Laya never routes a message to one of them. An engine with no account
+/// rows is not listed; the host's own login is judged by its engine check instead.
+pub async fn unusable_engines(state: &AppState, space: &SpaceId) -> HashSet<Engine> {
+    let Some((profiles, avail)) = accounts(state, space).await else {
+        return HashSet::new();
+    };
+    let now = chrono::Utc::now();
+    [Engine::Claude, Engine::Codex, Engine::Grok, Engine::Custom]
+        .into_iter()
+        .filter(|f| {
+            let mine: Vec<&LlmProfile> = profiles
+                .iter()
+                .filter(|p| p.enabled && Engine::parse(&p.engine) == Some(*f) && profile_engine_on(state, p))
+                .collect();
+            !mine.is_empty() && mine.iter().all(|p| !avail.usable(p, now))
+        })
+        .collect()
 }
 
 /// Engines whose This machine profile is off in `space`. A turn on one of them never falls back
@@ -425,6 +499,67 @@ pub fn give_up_notice(
         format!("The {} account \"{}\"", last.engine, last.name)
     };
     format!("⚠️ [{kwant_name}] {which} {}. {fix}", reason(failure))
+}
+
+/// How a person names an account's engine: "Claude", "Codex", "Grok", or a Custom API
+/// account by its own name ("Maestro").
+pub fn engine_label(p: &LlmProfile) -> String {
+    match Engine::parse(&p.engine) {
+        Some(Engine::Claude) => "Claude".into(),
+        Some(Engine::Codex) => "Codex".into(),
+        Some(Engine::Grok) => "Grok".into(),
+        _ => p.name.clone(),
+    }
+}
+
+/// `at` as a wall-clock time in the person's zone ("03:00"), else the server's, else "03:00 UTC".
+pub async fn clock_text(state: &AppState, at: chrono::DateTime<chrono::Utc>) -> String {
+    let tz = crate::zombie::settings::local_tz(&state.db).await;
+    match crate::routines::now_in(&tz, at) {
+        Ok(local) => local.format("%H:%M").to_string(),
+        Err(_) => format!("{} UTC", at.format("%H:%M")),
+    }
+}
+
+/// The quiet line when a turn runs on another engine because its own is out:
+/// "Claude is out until 03:00 · Architect is answering on Codex (gpt-6.1)".
+pub fn cross_engine_notice(
+    from: &LlmProfile,
+    until_text: Option<&str>,
+    kwant_name: &str,
+    to: &LlmProfile,
+    to_model: Option<&str>,
+) -> String {
+    let why = match until_text {
+        Some(t) => format!("is out until {t}"),
+        None => "is unavailable".to_string(),
+    };
+    let model = to_model.map(|m| format!(" ({m})")).unwrap_or_default();
+    format!("🔁 {} {why} · {kwant_name} is answering on {}{model}", engine_label(from), engine_label(to))
+}
+
+/// The one line when no account of the space can answer: the turn waits for the earliest reset.
+pub fn all_out_line(until_text: &str) -> String {
+    format!("Every model is out until {until_text}; I'll answer then.")
+}
+
+/// Outages already announced in a chat: (chat, account that ran out) to when that outage ends.
+static ANNOUNCED: std::sync::Mutex<Vec<(String, String, chrono::DateTime<chrono::Utc>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Whether the notice for `account` running out in `chat` hasn't been shown yet for this outage
+/// (until `until`, else an hour). Marks it shown, so a chat gets one line per outage, however
+/// many turns it takes. A later outage of the same account is announced again.
+pub fn announce_once(chat: &str, account: &str, until: Option<chrono::DateTime<chrono::Utc>>) -> bool {
+    let now = chrono::Utc::now();
+    let end = until.unwrap_or(now + chrono::Duration::hours(1));
+    let Ok(mut seen) = ANNOUNCED.lock() else { return true };
+    seen.retain(|(_, _, t)| *t > now);
+    if seen.iter().any(|(c, a, _)| c == chat && a == account) {
+        return false;
+    }
+    seen.push((chat.to_string(), account.to_string(), end));
+    true
 }
 
 #[cfg(test)]

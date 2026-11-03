@@ -45,7 +45,13 @@ pub const DEFAULT_QUOTA_COOLDOWN_MINS: i64 = 60;
 const QUOTA_PATTERNS: &[&str] = &[
     "usage limit",
     "hit your limit",
+    "hit your session limit",
+    "hit your weekly limit",
+    "hit your opus limit",
+    "session limit",
+    "weekly limit",
     "reached your limit",
+    "limit reached",
     "out of credits",
     "insufficient_quota",
     "exceeded your current quota",
@@ -115,11 +121,155 @@ pub fn classify(
 /// "resets in 45m", else now plus the default cooldown. Never more than 7 days out.
 fn quota_reset(text: &str, lower: &str, now: DateTime<Utc>) -> DateTime<Utc> {
     let fallback = now + Duration::minutes(DEFAULT_QUOTA_COOLDOWN_MINS);
-    let at = epoch_after_pipe(text, now).or_else(|| relative_reset(lower).map(|d| now + d));
+    let at = epoch_after_pipe(text, now)
+        .or_else(|| relative_reset(lower).map(|d| now + d))
+        .or_else(|| clock_reset(text, now, &crate::zombie::settings::host_tz().unwrap_or_else(|| "UTC".into())));
     match at {
         Some(t) if t > now && t <= now + Duration::days(7) => t,
         _ => fallback,
     }
+}
+
+/// Wordings a CLI uses when it has run out of usage, matched against a whole reply to tell a
+/// limit line from an answer. Narrower than [`QUOTA_PATTERNS`]: a bare "quota" is a word a real
+/// answer can contain.
+const LIMIT_LINE_PATTERNS: &[&str] = &[
+    "hit your limit",
+    "hit your session limit",
+    "hit your weekly limit",
+    "hit your opus limit",
+    "session limit",
+    "weekly limit",
+    "usage limit",
+    "reached your limit",
+    "limit reached",
+];
+
+/// Longest reply still treated as "nothing but a limit line".
+const LIMIT_LINE_MAX_CHARS: usize = 300;
+
+/// Whether `text` is nothing but a provider's usage-limit message ("You've hit your session
+/// limit · resets 3am (Europe/Berlin)"): short, one limit wording, no second paragraph. Such a
+/// text is never a reply and never a "While you were away" summary.
+pub fn is_limit_line(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() || t.chars().count() > LIMIT_LINE_MAX_CHARS || t.lines().filter(|l| !l.trim().is_empty()).count() > 2 {
+        return false;
+    }
+    let lower = t.to_lowercase();
+    LIMIT_LINE_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
+/// "resets 3am (Europe/Berlin)", "resets 5pm", "resets Mon 3:30pm (UTC)", "resets Nov 4, 9am",
+/// "reset at 17:00": the next time the wall clock reads that, in the named IANA zone (else
+/// `default_tz`, the server's own). `None` when the time or the zone doesn't parse, so the caller
+/// falls back to the default cooldown.
+fn clock_reset(text: &str, now: DateTime<Utc>, default_tz: &str) -> Option<DateTime<Utc>> {
+    let lower = text.to_lowercase();
+    let start = ["resets at ", "reset at ", "resets ", "reset "]
+        .iter()
+        .find_map(|k| lower.find(k).map(|i| i + k.len()))?;
+    let tail = &text[start..];
+    let zone = tail
+        .split_once('(')
+        .and_then(|(_, z)| z.split_once(')'))
+        .map(|(z, _)| z.trim())
+        .filter(|z| !z.is_empty() && z.len() <= 64 && z.chars().all(|c| c.is_ascii_alphanumeric() || "/_+-".contains(c)))
+        .unwrap_or(default_tz);
+    let head = tail.split('(').next().unwrap_or(tail);
+    let mut weekday: Option<chrono::Weekday> = None;
+    let mut month: Option<u32> = None;
+    let mut day: Option<u32> = None;
+    let mut time: Option<chrono::NaiveTime> = None;
+    for word in head
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '·' || c == '.')
+        .filter(|w| !w.is_empty())
+    {
+        let w = word.to_ascii_lowercase();
+        if let Some(t) = parse_clock(&w) {
+            time = Some(t);
+            break;
+        }
+        if month.is_some() && day.is_none() {
+            day = w.trim_end_matches(|c: char| c.is_ascii_alphabetic()).parse::<u32>().ok();
+            if day.is_some() {
+                continue;
+            }
+        }
+        if let Some(m) = w.get(..3).and_then(month_number).filter(|_| w.chars().all(|c| c.is_ascii_alphabetic())) {
+            month = Some(m);
+            continue;
+        }
+        if weekday.is_none() {
+            weekday = w.get(..3).and_then(|d| match d {
+                "mon" => Some(chrono::Weekday::Mon),
+                "tue" => Some(chrono::Weekday::Tue),
+                "wed" => Some(chrono::Weekday::Wed),
+                "thu" => Some(chrono::Weekday::Thu),
+                "fri" => Some(chrono::Weekday::Fri),
+                "sat" => Some(chrono::Weekday::Sat),
+                "sun" => Some(chrono::Weekday::Sun),
+                _ => None,
+            });
+        }
+    }
+    let time = time?;
+    let today = crate::routines::local_date(zone, now).ok()??;
+    if let (Some(m), Some(d)) = (month, day) {
+        use chrono::Datelike;
+        for year in [today.year(), today.year() + 1] {
+            let date = chrono::NaiveDate::from_ymd_opt(year, m, d)?;
+            if let Some(at) = crate::routines::local_instant(zone, date, time).ok()?.filter(|at| *at > now) {
+                return Some(at);
+            }
+        }
+        return None;
+    }
+    let mut date = today;
+    // Today at that time, else the next day (or the named weekday) when it has already passed.
+    for _ in 0..8 {
+        let day_ok = weekday.is_none_or(|w| chrono::Datelike::weekday(&date) == w);
+        if day_ok {
+            if let Some(at) = crate::routines::local_instant(zone, date, time).ok()?.filter(|at| *at > now) {
+                return Some(at);
+            }
+        }
+        date = date.succ_opt()?;
+    }
+    None
+}
+
+fn month_number(m: &str) -> Option<u32> {
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+        .iter()
+        .position(|n| *n == m)
+        .map(|i| i as u32 + 1)
+}
+
+/// "3am", "3:30pm", "12am", "17:00" (already lower-cased) as a time of day.
+fn parse_clock(word: &str) -> Option<chrono::NaiveTime> {
+    let (body, pm) = if let Some(b) = word.strip_suffix("am") {
+        (b, Some(false))
+    } else if let Some(b) = word.strip_suffix("pm") {
+        (b, Some(true))
+    } else {
+        (word, None)
+    };
+    let (h, m) = match body.split_once(':') {
+        Some((h, m)) => (h.parse::<u32>().ok()?, m.parse::<u32>().ok()?),
+        None if pm.is_some() => (body.parse::<u32>().ok()?, 0),
+        None => return None,
+    };
+    let h = match pm {
+        Some(p) => {
+            if !(1..=12).contains(&h) {
+                return None;
+            }
+            (h % 12) + if p { 12 } else { 0 }
+        }
+        None => h,
+    };
+    chrono::NaiveTime::from_hms_opt(h, m, 0)
 }
 
 fn epoch_after_pipe(text: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -466,6 +616,61 @@ mod tests {
             assert!(at.unwrap() > now(), "{text}");
         }
         assert_eq!(classify(Some(402), "", now()).unwrap().0, FailClass::Quota);
+    }
+
+    #[test]
+    fn session_and_weekly_limit_lines_are_quota() {
+        for text in [
+            "You've hit your session limit · resets 3am (Europe/Berlin)",
+            "You've hit your weekly limit · resets Mon 3am (Europe/Berlin)",
+            "Session limit reached",
+            "You've hit your Opus limit",
+        ] {
+            let (class, at) = classify(None, text, now()).unwrap();
+            assert_eq!(class, FailClass::Quota, "{text}");
+            assert!(at.unwrap() > now(), "{text}");
+            assert!(is_limit_line(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn clock_resets_use_the_named_zone() {
+        // 12:00 UTC on 16 Oct is 14:00 in Berlin (CEST), so 3am there is 01:00 UTC the next day.
+        let (_, at) = classify(None, "You've hit your session limit · resets 3am (Europe/Berlin)", now()).unwrap();
+        assert_eq!(at.unwrap(), Utc.with_ymd_and_hms(2026, 10, 17, 1, 0, 0).unwrap());
+        // No zone: the server's own (UTC here), and a time still ahead today stays today.
+        let at = clock_reset("You've hit your limit · resets 5pm", now(), "UTC");
+        assert_eq!(at.unwrap(), Utc.with_ymd_and_hms(2026, 10, 16, 17, 0, 0).unwrap());
+        let at = clock_reset("You've hit your limit · resets 5pm", now(), "Europe/Berlin");
+        assert_eq!(at.unwrap(), Utc.with_ymd_and_hms(2026, 10, 16, 15, 0, 0).unwrap());
+        let (_, at) = classify(None, "limit reached · resets Oct 20, 9am (UTC)", now()).unwrap();
+        assert_eq!(at.unwrap(), Utc.with_ymd_and_hms(2026, 10, 20, 9, 0, 0).unwrap());
+        // Further than 7 days out is not believed
+        let (_, at) = classify(None, "limit reached · resets Nov 4, 9am (UTC)", now()).unwrap();
+        assert_eq!(at.unwrap(), now() + Duration::minutes(DEFAULT_QUOTA_COOLDOWN_MINS));
+        // A time already past today rolls to tomorrow.
+        let (_, at) = classify(None, "You've hit your limit · resets 9am (UTC)", now()).unwrap();
+        assert_eq!(at.unwrap(), Utc.with_ymd_and_hms(2026, 10, 17, 9, 0, 0).unwrap());
+        let (_, at) = classify(None, "limit reached, resets 3:30pm (America/New_York)", now()).unwrap();
+        assert_eq!(at.unwrap(), Utc.with_ymd_and_hms(2026, 10, 16, 19, 30, 0).unwrap());
+        // A named weekday: Monday 19 Oct.
+        let (_, at) = classify(None, "You've hit your weekly limit · resets Mon 3am (UTC)", now()).unwrap();
+        assert_eq!(at.unwrap(), Utc.with_ymd_and_hms(2026, 10, 19, 3, 0, 0).unwrap());
+        // An unknown zone or a time that doesn't parse falls back to the default cooldown.
+        let (_, at) = classify(None, "hit your session limit · resets 3am (Mars/Base)", now()).unwrap();
+        assert_eq!(at.unwrap(), now() + Duration::minutes(DEFAULT_QUOTA_COOLDOWN_MINS));
+        let (_, at) = classify(None, "hit your session limit · resets soon", now()).unwrap();
+        assert_eq!(at.unwrap(), now() + Duration::minutes(DEFAULT_QUOTA_COOLDOWN_MINS));
+    }
+
+    #[test]
+    fn only_a_bare_limit_message_is_a_limit_line() {
+        assert!(is_limit_line("  You've hit your session limit · resets 3am (Europe/Berlin)\n"));
+        assert!(!is_limit_line("Here is the summary of the weekly limit work."
+            .repeat(10).as_str()));
+        assert!(!is_limit_line("Done. The quota table now has an index."));
+        assert!(!is_limit_line(""));
+        assert!(!is_limit_line("I fixed it.\n\nNote: the session limit message no longer shows.\n\nAlso more text."));
     }
 
     #[test]

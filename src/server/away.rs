@@ -209,7 +209,13 @@ fn item(row: AwayRow) -> Value {
             (clip_title(&row.title), summary)
         }
         _ => {
-            let summary = row.body.as_deref().map(summarize).filter(|s| !s.is_empty());
+            // A usage-limit line is not a summary of anything (also when an older run saved one)
+            let summary = row
+                .body
+                .as_deref()
+                .filter(|b| !crate::profiles::classify::is_limit_line(b))
+                .map(summarize)
+                .filter(|s| !s.is_empty());
             (clip_title(&row.title), summary.unwrap_or_else(|| fallback_summary(&row).into()))
         }
     };
@@ -409,6 +415,28 @@ mod tests {
         assert!(!d["arguments"]["content"].as_str().unwrap().contains("sk-ant"));
         let url = masked_details(json!({"arguments": {"path": "https://bob:hunter2@host/x"}}));
         assert_eq!(url["arguments"]["path"], "https://bob:[redacted]@host/x");
+    }
+
+    #[test]
+    fn a_usage_limit_line_is_never_the_summary() {
+        let row = |body: &str| AwayRow {
+            kind: "task".into(),
+            id: "t1".into(),
+            kwant_id: "k1".into(),
+            kwant_name: Some("Architect".into()),
+            title: "Plan the release".into(),
+            status: "completed".into(),
+            body: Some(body.into()),
+            at: chrono::Utc::now(),
+            thread_id: None,
+            channel_id: None,
+            direct_kwant_id: None,
+            choices: None,
+        };
+        let limit = item(row("You've hit your session limit · resets 3am (Europe/Berlin)"));
+        assert_eq!(limit["summary"], "Finished");
+        let real = item(row("Plan is ready: three steps."));
+        assert_eq!(real["summary"], "Plan is ready: three steps.");
     }
 
     #[test]
