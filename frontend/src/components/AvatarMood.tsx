@@ -17,42 +17,53 @@ export function useKwantNotices(kwantId: string | undefined): number {
 
 const INK = '#1b1033';
 
-/** Pixel marks in the avatar's own 26x26 grid, drawn at its top-right corner. */
-const px = (x: number, y: number, w: number, h: number, fill: string, key: string) => (
-  <rect key={key} x={x} y={y} width={w} height={h} fill={fill} />
+type Cell = [number, number];
+const row = (y: number): Cell[] => [0, 1, 2, 3, 4].map((x) => [x, y] as Cell);
+
+/**
+ * Glyphs on their own 5x5 grid (spec.md §2), drawn on a 7x7 ink plate at whole-pixel cells, so they
+ * stay crisp at 24-28 px. Coordinates are (x, y) in the 5x5 grid.
+ */
+export const MOOD_GLYPHS: Record<'thinking' | 'failed' | 'needs_you' | 'resting', { color: string; cells: Cell[] }> = {
+  thinking: { color: '#e1d6ff', cells: [[0, 2], [2, 2], [4, 2]] },
+  failed: { color: '#ff5d6c', cells: [[0, 0], [4, 0], [1, 1], [3, 1], [2, 2], [1, 3], [3, 3], [0, 4], [4, 4]] },
+  // "!" rather than a raised hand: at 96 px the hand read as a crown (Ada's decision).
+  needs_you: { color: '#ffb020', cells: [[2, 0], [2, 1], [2, 2], [2, 4]] },
+  resting: { color: '#b8adff', cells: [...row(0), [3, 1], [2, 2], [1, 3], ...row(4)] },
+};
+/** Just finished: a sparkle that grows over three frames (0 / 60 / 120 ms), centre white. */
+const SPARK = '#ffe066';
+const F2: Cell[] = [[2, 1], [1, 2], [3, 2], [2, 3]];
+const F3: Cell[] = [[2, 0], [0, 2], [4, 2], [2, 4]];
+
+const cell = ([x, y]: Cell, fill: string, key: string, className?: string) => (
+  <rect key={key} className={className} x={x + 1} y={y + 1} width={1} height={1} fill={fill} />
 );
 
-function marks(mood: Mood): React.ReactNode[] {
+function glyph(mood: Mood): React.ReactNode[] {
   switch (mood) {
     case 'thinking':
-      return [
-        px(14, 0, 11, 5, INK, 'p'),
-        ...[0, 1, 2].map((i) => <rect key={`d${i}`} className={`kw-mood-dot kw-mood-dot-${i}`} x={15.5 + i * 3.2} y={1.5} width={2} height={2} fill="#e1d6ff" />),
-      ];
+      return MOOD_GLYPHS.thinking.cells.map((c, i) => cell(c, MOOD_GLYPHS.thinking.color, `d${i}`, `kw-mood-dot kw-mood-dot-${i}`));
     case 'finished':
       return [
-        px(19, 0, 2, 2, '#ffe066', 's1'), px(17, 2, 2, 2, '#ffe066', 's2'), px(19, 2, 2, 2, '#ffffff', 's3'),
-        px(21, 2, 2, 2, '#ffe066', 's4'), px(19, 4, 2, 2, '#ffe066', 's5'),
+        ...F3.map((c, i) => cell(c, SPARK, `f3${i}`, 'kw-mood-f3')),
+        ...F2.map((c, i) => cell(c, SPARK, `f2${i}`, 'kw-mood-f2')),
+        cell([2, 2], '#ffffff', 'f1'),
       ];
     case 'failed':
-      return [
-        px(16, 0, 9, 8, INK, 'p'),
-        px(17, 1, 2, 2, '#ff5d6c', 'x1'), px(21, 1, 2, 2, '#ff5d6c', 'x2'), px(19, 3, 2, 2, '#ff5d6c', 'x3'),
-        px(17, 5, 2, 2, '#ff5d6c', 'x4'), px(21, 5, 2, 2, '#ff5d6c', 'x5'),
-      ];
     case 'needs_you':
-      // A raised hand: fingers, palm and thumb.
-      return [
-        px(16, 0, 9, 9, INK, 'p'),
-        px(17, 1, 1, 3, '#ffb020', 'f1'), px(19, 0, 1, 4, '#ffb020', 'f2'), px(21, 1, 1, 3, '#ffb020', 'f3'), px(23, 2, 1, 2, '#ffb020', 'f4'),
-        px(17, 4, 7, 3, '#ffb020', 'h'), px(18, 7, 5, 1, '#ffb020', 'h2'), px(16, 5, 1, 2, '#ffb020', 't'),
-      ];
     case 'resting':
-      // A pixel "z".
-      return [px(16, 0, 9, 8, INK, 'p'), px(17, 1, 6, 1, '#b8adff', 'z1'), px(21, 2, 1, 1, '#b8adff', 'z2'), px(20, 3, 1, 1, '#b8adff', 'z3'), px(19, 4, 1, 1, '#b8adff', 'z4'), px(17, 5, 6, 1, '#b8adff', 'z5')];
+      return MOOD_GLYPHS[mood].cells.map((c, i) => cell(c, MOOD_GLYPHS[mood].color, `g${i}`));
     default:
       return [];
   }
+}
+
+/** Badge geometry for an avatar size: 2 px cells up to 40 px, 4 px from 64 px (96 px Bot home). */
+export function moodBadge(size: number): { cellPx: number; px: number; offset: number; radius: number; cut: number } {
+  const big = size >= 64;
+  const cellPx = big ? 4 : 2;
+  return { cellPx, px: cellPx * 7, offset: big ? -6 : -4, radius: big ? 4 : 2, cut: big ? 2 : 1 };
 }
 
 export interface AvatarMoodProps {
@@ -62,24 +73,34 @@ export interface AvatarMoodProps {
 }
 
 /**
- * The mood overlay for a pixel avatar: a small pixel mark at its top-right. "working" and "idle" draw
- * nothing here (the avatar's own bob and ring cover working). Decorative: the text for it lives on the
- * avatar's title and screen-reader label (moodLabel). ModernAvatar renders it for you when it is
- * given a kwantId; use this directly only on a custom avatar.
+ * The mood badge for a pixel avatar: a 7x7 ink plate at its top-right with a 5x5 pixel glyph, cut out
+ * of the surface by a 1-2 px ring (--kw-avatar-cut, default the sidebar #0e0a21). "working" and "idle"
+ * draw nothing here (the avatar's own bob and violet ring cover working). Decorative: the words live on
+ * the avatar's title and screen-reader label (moodLabel). ModernAvatar renders it when given a kwantId;
+ * use this directly only on a custom avatar.
  */
 export const AvatarMood: React.FC<AvatarMoodProps> = ({ mood, size }) => {
-  const drawn = marks(mood);
+  const drawn = glyph(mood);
   if (!drawn.length) return null;
+  const b = moodBadge(size);
   return (
     <svg
-      viewBox="0 0 26 26"
-      width={size}
-      height={size}
-      className={`kw-mood kw-mood-${mood} pointer-events-none absolute inset-0`}
-      style={{ imageRendering: 'pixelated', shapeRendering: 'crispEdges' }}
+      viewBox="0 0 7 7"
+      width={b.px}
+      height={b.px}
+      className={`kw-mood kw-mood-${mood} pointer-events-none absolute`}
+      style={{
+        top: b.offset,
+        right: b.offset,
+        borderRadius: b.radius,
+        boxShadow: `0 0 0 ${b.cut}px var(--kw-avatar-cut, #0e0a21)`,
+        shapeRendering: 'crispEdges',
+        imageRendering: 'pixelated',
+      }}
       aria-hidden="true"
       data-mood={mood}
     >
+      <rect x={0} y={0} width={7} height={7} fill={INK} />
       {drawn}
     </svg>
   );

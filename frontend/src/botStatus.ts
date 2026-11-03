@@ -58,7 +58,7 @@ export const statusText = (name: string | undefined, status: BotStatus): string 
 /** The dot's classes; Working pulses unless the person asked for less motion. */
 export const STATUS_DOT: Record<BotStatus, string> = {
   needs_you: 'bg-amber-400',
-  working: 'bg-sky-400 animate-pulse motion-reduce:animate-none',
+  working: 'bg-[#9d8fff] animate-pulse motion-reduce:animate-none',
   queued: 'bg-zinc-950 border-2 border-zinc-400',
   cant_run: 'bg-zinc-600',
   available: 'bg-emerald-400',

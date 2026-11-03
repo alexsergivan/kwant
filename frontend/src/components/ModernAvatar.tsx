@@ -387,7 +387,6 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
           </g>
         </g>
       </svg>
-      {working && mood !== 'thinking' && <span className="kw-avatar-pip" aria-hidden="true" />}
       <AvatarMood mood={mood} size={size} />
       {shown && (
         <>

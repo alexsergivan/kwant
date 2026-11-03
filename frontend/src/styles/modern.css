@@ -86,11 +86,6 @@
   50% { opacity: 0.95; transform: scale(1.07); }
 }
 
-@keyframes kw-avatar-pip {
-  0%, 100% { opacity: 0.4; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1); }
-}
-
 .kw-avatar-working .kw-avatar-body {
   transform-box: fill-box;
   transform-origin: center bottom;
@@ -101,30 +96,14 @@
   position: absolute;
   inset: -2px;
   border-radius: 30%;
-  box-shadow: 0 0 0 1.5px theme('colors.sky.400'), 0 0 8px 1px rgb(56 189 248 / 0.55);
+  box-shadow: 0 0 0 1.5px #9d8fff, 0 0 8px 1px rgb(157 143 255 / 0.55);
   pointer-events: none;
   animation: kw-avatar-ring 1.4s ease-in-out infinite;
 }
 
-.kw-avatar-pip {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 30%;
-  max-width: 8px;
-  min-width: 4px;
-  aspect-ratio: 1;
-  border-radius: 9999px;
-  background: theme('colors.sky.300');
-  box-shadow: 0 0 0 1.5px theme('colors.zinc.950');
-  pointer-events: none;
-  animation: kw-avatar-pip 0.7s ease-in-out infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .kw-avatar-working .kw-avatar-body,
-  .kw-avatar-ring,
-  .kw-avatar-pip {
+  .kw-avatar-ring {
     animation: none;
   }
   .kw-avatar-ring { opacity: 0.9; }
@@ -327,8 +306,9 @@
     @apply inline-flex items-center gap-1 rounded-full border border-hairline-strong bg-white/[0.04] px-2.5 py-0.5 text-meta font-medium text-zinc-300;
   }
   .kw-chip-ok { @apply border-teal-400/30 bg-teal-400/10 text-ok; }
-  .kw-chip-warn { @apply border-amber-300/35 bg-amber-300/10 text-warn; }
-  .kw-chip-bad { @apply border-rose-300/35 bg-rose-300/10 text-bad; }
+  /* Plain, never holo: needs you / Approvals off (amber), failed (rose). spec.md §1 "Rule". */
+  .kw-chip-warn { @apply border-amber-300/35 text-warn; background-color: rgb(252 211 77 / 0.12); }
+  .kw-chip-bad { @apply border-rose-300/35 text-bad; background-color: rgb(253 164 175 / 0.12); }
   .kw-chip-info { @apply border-sky-300/30 bg-sky-300/10 text-info; }
   .kw-chip-accent { @apply border-transparent bg-accent-soft text-sky-200; }
 
@@ -404,74 +384,116 @@
 }
 
 /* ---------------------------------------------------------------------------------------------
-   Stickers: a die-cut plate with a light edge, a soft shadow and a slight tilt. Pure CSS.
-   tone "holo" is only for earned things (verified, picked, goal kept): a holographic sheen sits over
-   a light plate, ink text stays AA on top of it. tone "ink" is the plain plate (e.g. "New").
-   Warnings, errors and "needs you" never use it. --mx/--my are set by <Sticker> on pointer move.
+   Stickers (Mira's spec.md §1): a die-cut plate, 2px white edge, soft shadow, slight tilt. Pure CSS.
+   tone "holo" is only for earned things (verified, picked, goal kept): a vivid foil sweep multiplied
+   into the light plate plus a soft-light glint and grain, so ink text only gains contrast (worst 7.19:1).
+   tone "ink" is the plain plate (e.g. "New"). Needs you, failed, Approvals off: plain chips, never this.
+   --mx/--my are set by <Sticker> on pointer move and glide through @property.
    --------------------------------------------------------------------------------------------- */
+@property --mx { syntax: '<percentage>'; inherits: true; initial-value: 30%; }
+@property --my { syntax: '<percentage>'; inherits: true; initial-value: 20%; }
 .kw-sticker {
   --mx: 30%;
   --my: 20%;
   --kw-tilt: 0deg;
   position: relative;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 4px;
+  height: 24px;
   max-width: 100%;
-  padding: 0.18rem 0.6rem;
+  padding: 0 10px;
   border: 2px solid #fff;
-  border-radius: 0.7rem 0.45rem 0.7rem 0.45rem;
+  border-radius: 11px 7px 11px 7px;
   background: #f4f1ff;
   color: #1b1033;
-  font: 700 12px/1.25 theme('fontFamily.sans');
+  font: 700 12px/16px theme('fontFamily.sans');
   letter-spacing: 0.01em;
   white-space: nowrap;
+  vertical-align: middle;
   isolation: isolate;
   overflow: hidden;
   box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 5px 12px rgb(0 0 0 / 0.35);
   transform: rotate(var(--kw-tilt));
-  transition: transform 160ms var(--kw-ease), box-shadow 160ms var(--kw-ease);
+  transition: transform 160ms cubic-bezier(.2,.7,.2,1), box-shadow 160ms cubic-bezier(.2,.7,.2,1), --mx 120ms linear, --my 120ms linear;
 }
-button.kw-sticker,
-a.kw-sticker { cursor: pointer; }
-button.kw-sticker:focus-visible,
+.kw-sticker svg { width: 12px; height: 12px; flex-shrink: 0; }
+.kw-sticker-sm {
+  height: 18px;
+  padding: 0 6px;
+  gap: 3px;
+  border-radius: 8px 5px 8px 5px;
+  font: 700 11px/14px theme('fontFamily.sans');
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 3px 8px rgb(0 0 0 / 0.35);
+}
+.kw-sticker-sm svg { width: 10px; height: 10px; }
+.kw-sticker > * { position: relative; z-index: 2; }
+/* A clickable sticker is a span inside this button: a 44x44 target around an 18-24px sticker. */
+.kw-sticker-hit {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 12px;
+}
+.kw-sticker-hit:focus { outline: none; }
+.kw-sticker-hit:focus-visible > .kw-sticker,
 a.kw-sticker:focus-visible { outline: 2px solid #b8adff; outline-offset: 3px; }
-button.kw-sticker:hover,
+.kw-sticker-hit:hover > .kw-sticker,
 a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 8px 16px rgb(0 0 0 / 0.4); }
-.kw-sticker > * { position: relative; z-index: 1; }
 .kw-sticker-holo::before,
 .kw-sticker-holo::after {
   content: '';
   position: absolute;
-  inset: 0 -50%;
-  z-index: 0;
   pointer-events: none;
 }
-/* The holographic layer: a hue sweep multiplied into the light plate, so the text keeps its contrast. */
+/* The foil: a 200%-wide hue sweep; calc(25% + mx/2) puts its centre under the pointer. */
 .kw-sticker-holo::before {
-  background: conic-gradient(from 200deg at var(--mx) var(--my), #ff9ad5, #ffe49a, #b6ff9a, #8fe9ff, #b9a2ff, #ff9ad5);
+  inset: 0 -50%;
+  z-index: 0;
+  background: conic-gradient(from 200deg at calc(25% + var(--mx) / 2) var(--my), #ff6ec7, #ffd36e, #7dffb0, #5ee0ff, #9b7bff, #ff6ec7);
   mix-blend-mode: multiply;
-  opacity: 0.6;
+  opacity: 0.75;
 }
-/* A soft white glint that tracks the pointer. */
+/* Glint that tracks the pointer, plus a fine foil grain. Soft-light white only lightens. */
 .kw-sticker-holo::after {
-  background: radial-gradient(circle at var(--mx) var(--my), rgb(255 255 255 / 0.85), rgb(255 255 255 / 0) 55%);
+  inset: 0;
+  z-index: 1;
+  background:
+    radial-gradient(circle at var(--mx) var(--my), rgb(255 255 255 / 0.85), transparent 55%),
+    repeating-linear-gradient(115deg, transparent 0 3px, rgb(255 255 255 / 0.22) 3px 4px);
   mix-blend-mode: soft-light;
 }
 .kw-sticker-ink { background: #e9e4ff; }
+/* "New" leaving after first use: fade, then NewTag unmounts it. */
+.kw-new-tag { transition: opacity 160ms linear; }
+.kw-new-tag[data-leaving] { opacity: 0; }
 @keyframes kw-sticker-drift {
   from { transform: translateX(-16%); }
   to { transform: translateX(0); }
 }
+@keyframes kw-sticker-press {
+  from { transform: rotate(var(--kw-tilt)) scale(1.08); }
+  to { transform: rotate(var(--kw-tilt)) scale(1); }
+}
+/* S1: the Verified stamp presses in once when it appears. */
+.kw-sticker-press { animation: kw-sticker-press 160ms cubic-bezier(.2,.7,.2,1) 1 both; }
 /* No pointer on a phone: the sheen drifts once when the sticker appears. */
 @media (pointer: coarse) {
-  .kw-sticker-holo::before { animation: kw-sticker-drift 200ms var(--kw-ease) 1 both; }
+  .kw-sticker-holo::before { animation: kw-sticker-drift 200ms cubic-bezier(.2,.7,.2,1) 1 both; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .kw-sticker { transition: none; }
-  .kw-sticker-holo::before { animation: none; }
-  button.kw-sticker:hover,
+  .kw-sticker { --mx: 30% !important; --my: 20% !important; transition: none; }
+  .kw-sticker-holo::before,
+  .kw-sticker-press { animation: none; }
+  .kw-sticker-hit:hover > .kw-sticker,
   a.kw-sticker:hover { transform: rotate(var(--kw-tilt)); }
+  .kw-new-tag { transition: none; }
 }
 
 /* ---------------------------------------------------------------------------------------------
@@ -484,15 +506,20 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-mood-dot-1 { animation-delay: 0.2s; }
 .kw-mood-dot-2 { animation-delay: 0.4s; }
 @keyframes kw-mood-pop { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
-.kw-mood-finished,
 .kw-mood-needs_you,
-.kw-mood-failed { transform-origin: 80% 15%; animation: kw-mood-pop 160ms var(--kw-ease) 1 both; }
+.kw-mood-failed { transform-origin: center; animation: kw-mood-pop 160ms var(--kw-ease) 1 both; }
+/* Just finished: frames at 0 / 60 / 120 ms (steps), held to 3 s, then a 160 ms fade. */
+@keyframes kw-mood-frame { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kw-mood-out { from { opacity: 1; } to { opacity: 0; } }
+.kw-mood-f2 { animation: kw-mood-frame 1ms steps(1) 60ms 1 both; }
+.kw-mood-f3 { animation: kw-mood-frame 1ms steps(1) 120ms 1 both; }
+.kw-mood-finished { animation: kw-mood-out 160ms linear 2840ms 1 forwards; }
 @keyframes kw-avatar-blink { from { opacity: 1; } to { opacity: 0; } }
 .kw-avatar-blink { animation: kw-avatar-blink 1ms linear 160ms 1 both; opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   .kw-mood-dot { animation: none; opacity: 0.8; }
-  .kw-mood-finished, .kw-mood-needs_you, .kw-mood-failed { animation: none; }
+  .kw-mood-finished, .kw-mood-needs_you, .kw-mood-failed,
+  .kw-mood-f2, .kw-mood-f3 { animation: none; }
   .kw-avatar-blink { display: none; }
 }
 
-.kw-sticker-sm { padding: 0.04rem 0.4rem; border-width: 1.5px; font-size: 11px; box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 3px 8px rgb(0 0 0 / 0.35); }

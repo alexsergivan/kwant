@@ -36,12 +36,13 @@ const MAX_CHIP_LEN = 32;
 const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 /**
- * "Good at" chips: the bot's own "Good for" phrases when it has them, otherwise the parts of its
- * role ("Nutrition & Diet Advisor" → "Nutrition", "Diet Advisor"). At most four, short, no repeats.
+ * "Good at" chips: the bot's own "Good for" phrases (covers), at most four, short, no repeats.
+ * Nothing beyond its role means none: the role is already the subtitle, so echoing it adds nothing.
+ * Phrases that only repeat the role are dropped for the same reason.
  */
 export function goodAt(bot: Pick<HomeBot, 'title' | 'covers'>): string[] {
-  const own = (bot.covers ?? []).map(clean).filter(Boolean);
-  const parts = own.length ? own : clean(bot.title || '').split(/\s*(?:&|\/|,|\+|\band\b)\s*/i).map(clean).filter(Boolean);
+  const role = clean(bot.title || '').toLowerCase();
+  const parts = (bot.covers ?? []).map(clean).filter((p) => p && p.toLowerCase() !== role);
   const seen = new Set<string>();
   const out: string[] = [];
   for (const p of parts) {

@@ -19,6 +19,7 @@ const m = await loadBundled(`
   export * from './src/tabSignal';
   export * from './src/whatsNew';
   export { clampTilt } from './src/components/Sticker';
+  export { MOOD_GLYPHS, moodBadge } from './src/components/AvatarMood';
   export { turnStarted, turnEnded, clearAllTurns } from './src/kwantActivity';
   const r = (C, p) => renderToStaticMarkup(React.createElement(C, p));
   export const sticker = (p, kids = 'Verified') => r(Sticker, p, kids);
@@ -29,11 +30,12 @@ const m = await loadBundled(`
 `);
 
 // ---- bot home helpers
-test('goodAt: the bot\'s own phrases, else the parts of its role; four at most, short, no repeats', () => {
-  assert.deepEqual(m.goodAt({ title: 'Nutrition & Diet Advisor' }), ['Nutrition', 'Diet Advisor']);
+test('goodAt: only the bot\'s own covers; none beyond the role means no chips; four at most, short, no repeats', () => {
+  assert.deepEqual(m.goodAt({ title: 'Nutrition & Diet Advisor' }), []);
+  assert.deepEqual(m.goodAt({ title: 'Nutritionist', covers: ['nutritionist', '  '] }), []);
   assert.deepEqual(m.goodAt({ title: 'x', covers: ['meal plans', 'Meal plans', 'macros'] }), ['meal plans', 'macros']);
-  assert.equal(m.goodAt({ title: 'a, b, c, d, e, f' }).length, 4);
-  assert.ok(m.goodAt({ title: 'x'.repeat(80) })[0].length <= 32);
+  assert.equal(m.goodAt({ title: 'x', covers: ['a', 'b', 'c', 'd', 'e', 'f'] }).length, 4);
+  assert.ok(m.goodAt({ title: 'x', covers: ['y'.repeat(80)] })[0].length <= 32);
 });
 
 test('recentWork: newest two chats that are not archived or delegations; undefined until loaded', () => {
@@ -124,6 +126,16 @@ test('AvatarMood draws a mark per mood, nothing for working or idle', () => {
   assert.equal(m.mood({ mood: 'working', size: 32 }), '');
   assert.equal(m.mood({ mood: 'idle', size: 32 }), '');
 });
+test('AvatarMood badge: own 7x7 grid, 2 px cells to 40 px, 4 px at 96 px; "!" for needs you', () => {
+  assert.deepEqual(m.moodBadge(24), { cellPx: 2, px: 14, offset: -4, radius: 2, cut: 1 });
+  assert.deepEqual(m.moodBadge(40), { cellPx: 2, px: 14, offset: -4, radius: 2, cut: 1 });
+  assert.deepEqual(m.moodBadge(96), { cellPx: 4, px: 28, offset: -6, radius: 4, cut: 2 });
+  assert.match(m.mood({ mood: 'failed', size: 96 }), /width="28"/);
+  assert.match(m.mood({ mood: 'failed', size: 28 }), /viewBox="0 0 7 7"/);
+  assert.deepEqual(m.MOOD_GLYPHS.needs_you.cells, [[2, 0], [2, 1], [2, 2], [2, 4]]);
+  assert.equal(m.MOOD_GLYPHS.needs_you.color, '#ffb020');
+  for (const g of Object.values(m.MOOD_GLYPHS)) for (const [x, y] of g.cells) assert.ok(x >= 0 && x < 5 && y >= 0 && y < 5);
+});
 test('ModernAvatar with a kwantId carries the mood and its words', () => {
   m.clearMoods();
   m.setMoodNeedsYou(['kx']);
@@ -188,7 +200,8 @@ test('Sticker: tone, clamped tilt, button only when clickable', () => {
   assert.match(m.sticker({ tilt: -9 }), /--kw-tilt:-3deg/);
   assert.equal(m.clampTilt(Number.NaN, 1), 1);
   assert.match(m.sticker({}), /^<span/);
-  assert.match(m.sticker({ onClick() {} }), /^<button type="button"/);
+  assert.match(m.sticker({ onClick() {} }), /^<button type="button"[^>]*class="kw-sticker-hit"/);
+  assert.match(m.sticker({ size: 'sm' }), /kw-sticker-sm/);
 });
 test('what\'s new: shown until used once, then gone for good; no storage shows nothing', () => {
   const mem = new Map();

@@ -110,7 +110,7 @@ import {
   turnsAwaitingAnswer,
 } from './questions';
 import { AwayItem, affectsAway, awayApi, awayTarget, badgeText } from './away';
-import { Space, eventsUrl, pickInitialChat, spaceColor } from './spaces';
+import { Space, eventsUrl, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { claudeNeedsSignIn } from './claudeLogin';
@@ -3170,9 +3170,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   return (
     <div className="relative flex-1 min-w-0 h-full flex flex-col bg-surface-main text-zinc-100 overflow-hidden" data-space={space.id}>
-      {/* The open space's colour, so it's clear where a message goes */}
-      <div className="h-[3px] shrink-0 opacity-60" style={{ background: spaceColor(space) }} aria-hidden="true" />
-
       <div ref={contentRef} className={`flex-1 min-h-0 flex ${isPhone ? 'flex-col' : 'overflow-hidden'}`}>
         {isPhone ? (
           <>

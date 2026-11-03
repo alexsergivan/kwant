@@ -4,7 +4,6 @@ import { ModernAvatar } from './ModernAvatar';
 import { NewTag } from './NewTag';
 import { markNewSeen } from '../whatsNew';
 import { ChatHome, ago, goodAt, starterCards } from '../botHome';
-import { engineTip } from '../engines';
 
 const ICONS = [Sparkles, ListChecks, Lightbulb, Wand2];
 
@@ -37,13 +36,9 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, spaceName, team = [], pr
       <div className="relative mb-4 flex h-36 w-36 items-center justify-center sm:h-44 sm:w-44">
         <span className="kw-glow absolute inset-0 rounded-full bg-accent-gradient opacity-60 blur-2xl" aria-hidden="true" />
         {bot ? (
-          <span className="kw-float relative">
-            <span className="block sm:hidden">
-              <ModernAvatar role={bot.avatar_sprite} name={bot.name} size={112} kwantId={bot.id} className="rounded-2xl shadow-raised" />
-            </span>
-            <span className="hidden sm:block">
-              <ModernAvatar role={bot.avatar_sprite} name={bot.name} size={136} kwantId={bot.id} className="rounded-2xl shadow-raised" />
-            </span>
+          // 96 px with 4 px mood cells (spec.md §2); the mood badge is cut out of the main surface
+          <span className="kw-float relative" style={{ '--kw-avatar-cut': 'var(--kw-surface-main, #120e26)' } as React.CSSProperties}>
+            <ModernAvatar role={bot.avatar_sprite} name={bot.name} size={96} kwantId={bot.id} className="rounded-2xl shadow-raised" />
           </span>
         ) : (
           <span className="relative flex -space-x-5" aria-hidden="true">
@@ -63,6 +58,7 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, spaceName, team = [], pr
       </p>
 
       {bot ? (
+        chips.length > 0 && (
         <div className="mt-4 flex max-w-xl flex-wrap items-center justify-center gap-1.5" role="list" aria-label={`${bot.name} is good at`}>
           <span className="mr-0.5 text-meta font-medium text-zinc-400">Good at</span>
           {chips.map((c) => (
@@ -70,10 +66,8 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, spaceName, team = [], pr
               {c}
             </span>
           ))}
-          <span role="listitem" className="kw-chip" title={engineTip(bot.preferred_model ?? 'auto')}>
-            {engineTip(bot.preferred_model ?? 'auto')}
-          </span>
         </div>
+        )
       ) : (
         shown.length > 0 && (
           <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5" role="list" aria-label="Bots Laya can pick from">

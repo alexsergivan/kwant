@@ -1759,8 +1759,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
             className="relative w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
           >
             <AtSign size={17} aria-hidden="true" />
-            <NewTag id="mention" className="absolute -top-3 -right-3" />
           </button>
+          {/* "New" sits just above the field's top edge, over the "@" button: never on or inside the border.
+              Each button after "@" (stop, send) is 36px + a 6px gap; 9px is the form's border + padding. */}
+          <NewTag
+            id="mention"
+            className="absolute bottom-full mb-1.5"
+            style={{
+              right: 9 + 42 * ((isStreaming ? 1 : 0) + (isStreaming && (discussionState?.inProgress || !canSend) ? 0 : 1)) + 2,
+            }}
+          />
 
           {isStreaming && (
             <button
