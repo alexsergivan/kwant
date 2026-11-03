@@ -239,6 +239,28 @@ test('the pill under Reduce Motion is marked to fade', () => {
   assert.match(html, /data-motion="fade"/);
 });
 
+test('the pill is always dark, whatever the OS colour scheme', () => {
+  for (const scheme of ['light', 'dark']) {
+    const html = render([a.nudgeFromAway(item('q1'))], (q) => ({ matches: q === `(prefers-color-scheme: ${scheme})` }));
+    assert.doesNotMatch(html, /data-theme/);
+  }
+  const css = readFileSync(`${root}/src/styles/needsYou.css`, 'utf8');
+  assert.doesNotMatch(css, /data-theme|prefers-color-scheme/);
+  assert.doesNotMatch(css, /#ffffff/i);
+  assert.match(css, /--kw-n-bg: #231d4b/);
+  const src = readFileSync(`${root}/src/components/NeedsYouPill.tsx`, 'utf8');
+  assert.doesNotMatch(src, /prefers-color-scheme/);
+});
+
+test('the hold: 5 s from the last arrival, never past 12 s from first showing, 2 s after a hover or focus leaves', () => {
+  assert.equal(a.pillHoldMs(0, false), 5000);
+  assert.equal(a.pillHoldMs(8000, false), 4000);
+  assert.equal(a.pillHoldMs(11000, false), 1000);
+  assert.equal(a.pillHoldMs(13000, false), 0);
+  assert.equal(a.pillHoldMs(13000, true), 2000);
+  assert.equal(a.pillHoldMs(1000, true), 2000);
+});
+
 test('several in the pill read as a count that opens the Inbox', () => {
   const html = render([a.nudgeFromAway(item('q1')), a.nudgeFromAway(item('a2', 'approval'))]);
   assert.match(html, /2 things need you/);

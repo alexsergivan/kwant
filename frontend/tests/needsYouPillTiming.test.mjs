@@ -1,0 +1,131 @@
+// The in-app "needs you" pill's timing (Mira's spec §2, Ada's call on the cap): 5 s from the last arrival,
+// a hard 12 s cap on arrival restarts, and hover or focus holds it past the cap until 2 s after it leaves.
+import assert from 'node:assert/strict';
+import test, { mock } from 'node:test';
+import { JSDOM } from 'jsdom';
+import { loadBundled } from './bundle.mjs';
+
+const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
+for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLButtonElement', 'Element', 'Node', 'Event', 'FocusEvent', 'MouseEvent', 'KeyboardEvent', 'getComputedStyle']) {
+  if (k in dom.window) Object.defineProperty(globalThis, k, { value: dom.window[k], configurable: true, writable: true });
+}
+dom.window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+globalThis.matchMedia = dom.window.matchMedia;
+
+const ui = await loadBundled(`
+  export { NeedsYouPill } from './src/components/NeedsYouPill';
+  export { nudgeFromAway, pillAdd, EMPTY_PILL } from './src/attention';
+  export { createElement } from 'react';
+  export { createRoot } from 'react-dom/client';
+  export { flushSync } from 'react-dom';
+`);
+
+const item = (id) => ({
+  kind: 'question', id, kwant_id: 'k1', kwant_name: 'Juno', title: `Title ${id}`, summary: '', status: 'open',
+  timestamp: '2026-11-03T21:00:00Z', link: { thread_id: null, channel_id: null, direct_kwant_id: 'k1' },
+});
+
+// React runs effects and continuous-priority updates (hover) on its scheduler, which uses setImmediate:
+// the mocked clock leaves that alone, so each step lets it drain.
+const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+
+function mount() {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = ui.createRoot(host);
+  let pill = ui.EMPTY_PILL;
+  let dismissed = false;
+  const draw = () =>
+    ui.flushSync(() => {
+      root.render(ui.createElement(ui.NeedsYouPill, {
+        items: pill.items, rev: pill.rev, spriteOf: () => 'violet', onOpen: () => {},
+        onDismiss: () => { pill = ui.EMPTY_PILL; dismissed = true; },
+      }));
+    });
+  return {
+    async arrive(id) { pill = ui.pillAdd(pill, [ui.nudgeFromAway(item(id))]); draw(); await settle(); },
+    async act(fn) { ui.flushSync(fn); await settle(); },
+    button: () => host.querySelector('button.kw-nudge'),
+    showing() { const b = host.querySelector('button.kw-nudge'); return !!b && !b.classList.contains('is-leaving'); },
+    count: () => host.querySelector('button.kw-nudge')?.dataset.count,
+    async tick(ms) {
+      ui.flushSync(() => mock.timers.tick(ms));
+      await settle();
+      // The app clears its pill state when the pill says it has gone; do the same here.
+      if (dismissed) { dismissed = false; draw(); await settle(); }
+    },
+    unmount() { ui.flushSync(() => root.unmount()); host.remove(); },
+  };
+}
+
+test('arrivals at 0, 4, 8 and 11 s swap in place but the pill is gone by about 12 s', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const p = mount();
+  try {
+    await p.arrive('q0');
+    const first = p.button();
+    await p.tick(4000); await p.arrive('q4');
+    await p.tick(4000); await p.arrive('q8');
+    await p.tick(3000); await p.arrive('q11');
+    assert.ok(p.showing(), 'still up at 11 s');
+    assert.equal(p.button(), first, 'coalescing swaps the content in the same pill');
+    assert.equal(p.count(), '4');
+    await p.tick(900);
+    assert.ok(p.showing(), 'still up at 11.9 s');
+    await p.tick(100);
+    assert.ok(!p.showing(), 'leaving at 12 s, not 16 s');
+    await p.tick(200);
+    assert.equal(p.button(), null, 'gone after the slide out');
+    // An arrival after it has gone springs a fresh pill with a full 5 s.
+    await p.arrive('q13');
+    assert.ok(p.showing());
+    assert.equal(p.count(), '1');
+    await p.tick(4900);
+    assert.ok(p.showing());
+    await p.tick(100);
+    assert.ok(!p.showing());
+  } finally {
+    p.unmount();
+    mock.timers.reset();
+  }
+});
+
+test('with focus inside it stays past the 12 s cap and goes 2 s after blur', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const p = mount();
+  try {
+    await p.arrive('q0');
+    await p.act(() => p.button().focus());
+    await p.tick(4000); await p.arrive('q4');
+    await p.tick(9000);
+    assert.ok(p.showing(), 'still there at 13 s with focus inside');
+    await p.act(() => p.button().blur());
+    await p.tick(1900);
+    assert.ok(p.showing(), 'still there 1.9 s after blur');
+    await p.tick(100);
+    assert.ok(!p.showing(), 'goes 2 s after blur');
+  } finally {
+    p.unmount();
+    mock.timers.reset();
+  }
+});
+
+test('hover holds it past the cap too, and it goes 2 s after the pointer leaves', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const p = mount();
+  try {
+    await p.arrive('q0');
+    // React listens for mouseover/mouseout to synthesize enter and leave.
+    await p.act(() => p.button().dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body })));
+    await p.tick(15000);
+    assert.ok(p.showing(), 'still there at 15 s while hovered');
+    await p.act(() => p.button().dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body })));
+    await p.tick(1900);
+    assert.ok(p.showing());
+    await p.tick(100);
+    assert.ok(!p.showing());
+  } finally {
+    p.unmount();
+    mock.timers.reset();
+  }
+});

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { AvatarMood } from './AvatarMood';
-import { PILL_AFTER_HOVER_MS, PILL_LEAVE_MS, PILL_MS, pillMotion, pillText, type Nudge } from '../attention';
+import { PILL_LEAVE_MS, pillHoldMs, pillMotion, pillText, type Nudge } from '../attention';
 
 export interface NeedsYouPillProps {
   items: Nudge[];
@@ -17,32 +17,30 @@ export interface NeedsYouPillProps {
 
 const AVATAR = 32;
 
-const lightScheme = () => {
-  try {
-    return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: light)').matches;
-  } catch {
-    return false;
-  }
-};
-
 /**
  * The in-app "needs you" pill (0.6.9, Mira's mac-nudge/design/pill): drops from the top of the app for
- * 5 s when a bot needs the person in a chat they aren't looking at. Hover or keyboard focus holds it
- * (2 s more after the pointer leaves), Esc dismisses it, a click goes there. It never decides
- * anything: there is no Allow or Deny here.
+ * 5 s when a bot needs the person in a chat they aren't looking at. More arriving restarts the 5 s, but
+ * never past 12 s after it first appeared. Hover or keyboard focus holds it for as long as it lasts
+ * (WCAG 2.2.1), then it goes 2 s after the pointer or focus leaves. Esc dismisses it, a click goes
+ * there. Always dark: the app is dark only (Mira's spec §2). It never decides anything: there is no
+ * Allow or Deny here.
  */
 export const NeedsYouPill: React.FC<NeedsYouPillProps> = ({ items, rev, spriteOf, onOpen, onDismiss }) => {
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
-  const [hoveredOnce, setHoveredOnce] = useState(false);
+  const [heldOnce, setHeldOnce] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [motion] = useState(pillMotion);
-  const [theme] = useState(() => (lightScheme() ? 'light' : 'dark'));
   const showing = items.length > 0;
   // The rev the current pill opened with: a later rev means more arrived and the text swaps in.
   const firstRev = useRef(rev);
   const wasShowing = useRef(false);
-  if (showing && !wasShowing.current) firstRev.current = rev;
+  // When the current pill first appeared: arrivals restart the hold only up to PILL_CAP_MS after this.
+  const shownAt = useRef(0);
+  if (showing && !wasShowing.current) {
+    firstRev.current = rev;
+    shownAt.current = Date.now();
+  }
   wasShowing.current = showing;
 
   // A new pill starts fresh; more arriving swaps the text in place.
@@ -50,7 +48,7 @@ export const NeedsYouPill: React.FC<NeedsYouPillProps> = ({ items, rev, spriteOf
     if (!showing) {
       setHovered(false);
       setFocused(false);
-      setHoveredOnce(false);
+      setHeldOnce(false);
       setLeaving(false);
     }
   }, [showing]);
@@ -64,9 +62,9 @@ export const NeedsYouPill: React.FC<NeedsYouPillProps> = ({ items, rev, spriteOf
 
   useEffect(() => {
     if (!showing || hovered || focused || leaving) return;
-    const t = setTimeout(leave, hoveredOnce ? PILL_AFTER_HOVER_MS : PILL_MS);
+    const t = setTimeout(leave, pillHoldMs(Date.now() - shownAt.current, heldOnce));
     return () => clearTimeout(t);
-  }, [showing, hovered, focused, leaving, hoveredOnce, rev]);
+  }, [showing, hovered, focused, leaving, heldOnce, rev]);
 
   const text = pillText(items);
   const lead = items[0];
@@ -81,16 +79,18 @@ export const NeedsYouPill: React.FC<NeedsYouPillProps> = ({ items, rev, spriteOf
           className={`kw-nudge${leaving ? ' is-leaving' : ''}${swapping ? ' is-swapping' : ''}`}
           key={firstRev.current}
           data-motion={motion}
-          data-theme={theme}
           data-count={items.length}
           onClick={() => onOpen(items)}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => {
             setHovered(false);
-            setHoveredOnce(true);
+            setHeldOnce(true);
           }}
           onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onBlur={() => {
+            setFocused(false);
+            setHeldOnce(true);
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.stopPropagation();

@@ -1,7 +1,8 @@
 /* The in-app "needs you" pill (0.6.9, NeedsYouPill.tsx). Values from Mira's
    /home/maus/shared/ship-software-safely/mac-nudge/design/pill/pill.css: one design for the Mac
-   menu-bar pill and the in-app pill. Motion: transform and opacity only. Theme follows the OS, like
-   the Mac pill. Own file so Pixel's modern.css stays untouched. */
+   menu-bar pill and the in-app pill. Motion: transform and opacity only. Always dark: the app is dark
+   only, so the light tokens are for Lin's Mac pill webview alone (spec §2). Own file so Pixel's
+   modern.css stays untouched. */
 .kw-nudge-region {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 12px);
@@ -30,11 +31,6 @@
   animation: kw-nudge-rise 200ms cubic-bezier(.34, 1.56, .64, 1) backwards,
              kw-nudge-fade 120ms linear backwards;
   transition: transform 80ms ease-out;
-}
-.kw-nudge[data-theme="light"] {
-  --kw-n-bg: #ffffff; --kw-n-edge: rgb(29 24 64 / .12);
-  --kw-n-t1: #1d1840; --kw-n-t2: #5a5383; --kw-n-chev: #78719f;
-  --kw-n-shadow: 0 10px 28px rgb(29 24 64 / .18), 0 1px 3px rgb(29 24 64 / .12);
 }
 .kw-nudge:active { transform: scale(.98); }
 .kw-nudge:focus-visible { outline: 2px solid #b8adff; outline-offset: 2px; }

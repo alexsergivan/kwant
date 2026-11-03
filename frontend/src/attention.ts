@@ -25,6 +25,18 @@ export interface Nudge {
 /** How long the pill stays when nobody hovers or focuses it (Mira's pill: 5 s, then 2 s after the pointer leaves). */
 export const PILL_MS = 5000;
 export const PILL_AFTER_HOVER_MS = 2000;
+/** Hard cap from when the pill first appeared: a stream of arrivals can't pin it (hover and focus still hold it). */
+export const PILL_CAP_MS = 12000;
+
+/**
+ * How long the pill waits before it goes, counted from now. `elapsed` is the time since it first appeared;
+ * `held` means the pointer or focus has been on it and left. After a hold it goes 2 s later, whatever the
+ * cap says, so nobody is cut off mid-read. Otherwise 5 s from the last arrival, but never past the cap.
+ */
+export function pillHoldMs(elapsed: number, held: boolean): number {
+  if (held) return PILL_AFTER_HOVER_MS;
+  return Math.max(0, Math.min(PILL_MS, PILL_CAP_MS - elapsed));
+}
 /** The leave animation before it unmounts. */
 export const PILL_LEAVE_MS = 160;
 /** The same browser step announced twice within this window is one arrival. */
