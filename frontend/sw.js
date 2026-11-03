@@ -83,6 +83,9 @@ function inFront(client) {
   return client.focused && client.visibilityState === 'visible';
 }
 
+/** Pushes that mean a bot is waiting on the person (src/server/push.rs). */
+const NEEDS_YOU_KINDS = new Set(['approval_needed', 'question_asked', 'human_step']);
+
 self.addEventListener('push', (event) => {
   let p = {};
   try {
@@ -101,6 +104,16 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     windows().then((list) => {
       if (list.some(inFront)) return undefined;
+      // Something needs the person: a dot on the installed app's icon even while it is closed. The
+      // page sets the exact count when it opens. Feature-detected: not every browser badges.
+      if (NEEDS_YOU_KINDS.has(p.kind)) {
+        try {
+          const badged = self.navigator?.setAppBadge?.();
+          if (badged && typeof badged.catch === 'function') badged.catch(() => undefined);
+        } catch {
+          // no badge on this platform
+        }
+      }
       return self.registration.showNotification(title, {
         body: typeof p.body === 'string' ? p.body : '',
         tag: typeof p.tag === 'string' && p.tag ? p.tag : undefined,
