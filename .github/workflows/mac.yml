@@ -335,6 +335,72 @@ jobs:
           path: ${{ runner.temp }}/dmg-window
           if-no-files-found: ignore
           retention-days: 14
+      # The "needs you" nudge (apps/mac/src/nudge*.rs): the built app runs as --demo-nudge, where
+      # made-up items arrive on a timeline (one, one more, two together, one under Reduce Motion),
+      # and each is screenshotted in light or dark mode: the whole screen, the menu bar with the
+      # pill under the icon, mid-animation and after it. A crash or a pill that never shows fails
+      # the job; the screenshots themselves don't.
+      - name: Nudge screenshots (--demo-nudge)
+        run: |
+          set -euo pipefail
+          shots="$RUNNER_TEMP/nudge"
+          mkdir -p "$shots"
+          out="$shots/demo-nudge.txt"
+          app=apps/mac/target/universal-apple-darwin/release/bundle/macos/kwant.app/Contents/MacOS/kwant
+          mode() {
+            osascript -e "tell application \"System Events\" to tell appearance preferences to set dark mode to $1" || true
+          }
+          waitfor() {
+            for _ in $(seq 1 240); do grep -q "$1" "$out" && return 0; sleep 0.5; done
+            echo "never saw: $1"; cat "$out"; return 1
+          }
+          shot() {
+            screencapture -x "$shots/$1-screen.png" || true
+            # the pill line says where it is (points); the crop is the menu bar's right end down to
+            # under the pill
+            local p
+            p=$(grep -o 'demo-nudge: pill [0-9-]*,[0-9-]*' "$out" | tail -1 | sed 's/.* //') || true
+            if [ -n "$p" ]; then
+              local x=${p%,*} y=${p#*,}
+              local rx=$(( x > 60 ? x - 60 : 0 ))
+              screencapture -x -R "$rx,0,500,$(( y + 110 ))" "$shots/$1-menubar.png" || true
+            fi
+          }
+          # Reduce Motion needs accessibility rights on the runner; the demo's step 4 plays as under it
+          defaults write com.apple.universalaccess reduceMotion -bool false 2>/dev/null || true
+          mode false
+          "$app" --demo-nudge > "$out" 2>&1 &
+          pid=$!
+          waitfor "demo-nudge: step 1"
+          sleep 0.4; shot 1-light-animating
+          sleep 1.4; shot 1-light-pill
+          mode true
+          waitfor "demo-nudge: step 2"
+          sleep 0.4; shot 2-dark-animating
+          sleep 1.4; shot 2-dark-pill
+          waitfor "demo-nudge: step 3"
+          sleep 1.8; shot 3-dark-pill-coalesced
+          sleep 6; shot 3-dark-resting
+          mode false
+          waitfor "demo-nudge: step 4"
+          sleep 0.15; shot 4-light-reduce-motion-fading
+          sleep 1.2; shot 4-light-reduce-motion-pill
+          sleep 6; shot 4-light-resting
+          ps -p $pid > /dev/null || { echo "the demo app died"; cat "$out"; exit 1; }
+          kill $pid || true
+          wait $pid 2>/dev/null || true
+          mode false
+          cat "$out"
+          ls -l "$shots"
+          test "$(grep -c 'demo-nudge: pill [0-9-]' "$out")" -ge 3
+          grep -q 'demo-nudge: pill.*items=2' "$out"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nudge
+          path: ${{ runner.temp }}/nudge
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.bundle.outputs.name }}
