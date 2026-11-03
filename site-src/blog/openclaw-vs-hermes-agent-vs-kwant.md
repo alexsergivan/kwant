@@ -64,7 +64,7 @@ kwant also has memory and skills: bots remember what matters, and a skill a bot 
 
 - You want several bots with different roles, working as a team: a lead, @mention hand-offs, and a task board (off until you switch it on) where a task counts as Verified only when its checks pass ([bots and teams](https://kwant.si/docs/bots-and-teams), [mission board](https://kwant.si/docs/mission-board)).
 - You want to decide how much each bot may do without asking: three [approval modes](https://kwant.si/docs/approvals), plus optional [Flight School](https://kwant.si/docs/flight-school) tiers (Observe, Sandbox, Act) per bot and per kind of work on board tasks. Since 0.6, each bot gets a scorecard, and a bot that qualifies can ask for a higher tier, which only you can grant. In every mode, anything that looks like a payment asks first.
-- You want your bots to agree on facts. kwant 0.6 adds an optional Truth Ledger: when two facts disagree, such as "4 GB" and "12 GB" of RAM, they're flagged until you settle them. Like Flight School, it's off by default ([Truth Ledger docs](https://kwant.si/docs/truth-ledger)).
+- You want your bots to agree on facts. kwant 0.6 adds an optional Truth Ledger: when two facts disagree, such as "4 GB" and "12 GB" of RAM, they're flagged until you settle them. Since 0.6.5 it's on from the start, like Flight School ([Truth Ledger docs](https://kwant.si/docs/truth-ledger)).
 - You want your bots to run on the CLIs and accounts you already have, with several accounts per engine and failover ([accounts](https://kwant.si/docs/accounts)).
 - You want routines that run on your own machine ([routines](https://kwant.si/docs/routines)).
 

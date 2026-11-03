@@ -77,9 +77,11 @@ DOC_GROUPS = [
         ("models", "Models & routing"),
         ("approvals", "Approvals & passwords"),
         ("flight-school", "Flight School"),
+        ("smart-results", "Smart Results"),
     ]),
     ("Works on its own", [
         ("mission-board", "Mission board"),
+        ("goals", "Goals"),
         ("routines", "Routines & bot actions"),
         ("memory-skills", "Memory, skills & search"),
         ("truth-ledger", "Truth Ledger"),
@@ -981,6 +983,10 @@ Key facts:
   Cloudflare's cookie-free Web Analytics.
 - Optional Mission board: a task counts as Verified only when a check passes, and the bot that handed out work reviews
   the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
+- Smart Results draw a bot's table or list as a sortable comparison, chart or checklist, copied word for word from the
+  reply. Goals check that a page, command or file stays OK and offer one fix when one breaks.
+- Automatic model failover: when an account runs out of usage, bots move to the next account in your order, across
+  Claude, Codex, Grok and Custom API, and go back after the reset.
 - Bots cite web facts with links that open the page at the exact quote; kwant checks the quote is on the page word for
   word and refuses made-up ones. Browser steps report what changed, and checkouts always ask before paying.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.

@@ -1,14 +1,14 @@
 title: Multiple Claude, Codex & Grok accounts
-description: Add several logins or API keys per engine, plus OpenAI- or Anthropic-compatible servers, with a priority order and failover when one runs out of usage.
+description: Add several logins or API keys per engine, plus OpenAI- or Anthropic-compatible servers, in one order to use, with automatic failover across engines when one runs out of usage.
 card_title: Accounts & profiles
 path: docs/accounts.html
 nav: accounts
-card: Several accounts per engine, with a default, a priority order and failover.
+card: Several accounts per engine, one order to use, and failover across engines.
 card_art: avatar:user
 ---
 <p class="kicker">Docs</p>
 <h1>Multiple Claude, Codex and Grok accounts</h1>
-<p class="intro">Use every account you have. A space can hold several accounts per engine, for example a work Claude subscription, a personal one and an API key. When one runs out of usage, kwant moves the turn to the next.</p>
+<p class="intro">Use every account you have. A space can hold several accounts per engine, for example a work Claude subscription, a personal one and an API key. When one runs out of usage, kwant moves the turn to the next account in your order, on any engine.</p>
 <figure>
   <div class="frame">{{shot:v2-accounts|Settings, This space, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Accounts live under <strong>Settings → This space → Accounts</strong>, and belong to that space.</figcaption>
@@ -30,8 +30,23 @@ card_art: avatar:user
 <h3 id="sign-in">Signing in a CLI profile</h3>
 <p>kwant runs the CLI's own login with the profile's folder. For Claude, open the link and paste the code shown back into kwant. For Codex and Grok, open the link and enter the code. A sign-in expires after 10 minutes.</p>
 
+<h2 id="order">Order to use</h2>
+<p>Settings → This space → Accounts starts with <strong>Order to use</strong>: every account in the space, across Claude, Codex, Grok and Custom API, in one list. When one runs out, kwant bots move to the next that still works, in this order. Use the arrows to move an account earlier or later. Each row shows its engine and whether it's Ready, out until its reset, for example "Out until 03:00", or Signed out.</p>
+<figure>
+  <div class="frame">{{shot:v65-order-to-use|Settings, This space, Accounts: the Order to use list. "When one runs out, kwant bots move to the next that still works, in this order." Work, a Claude login, is out until 03:00. Personal, another Claude login, is ready, then Codex, an Anthropic key, Grok, which is signed out, and a Custom API account, each with up and down buttons.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>One order for the whole space. New in 0.6.5.</figcaption>
+</figure>
+
 <h3 id="failover">Failover</h3>
-<p>A bot can be pinned to a profile; otherwise the engine's default profile runs. When that profile is out of usage or signed out, and nothing has been shown or done yet in the turn, kwant moves the turn to the engine's next enabled profile by priority, up to 3 attempts, and the chat says so. A profile that ran out is skipped until its reset time. Overloads and rate limits are retried, not failed over. Turn failover off for a bot to keep it on its profile.</p>
+<p>A turn starts on its bot's account: the one it's pinned to, or its engine's default. When that account is out of usage or signed out, and nothing has been shown or done yet in the turn, kwant moves the turn to the next account in the order that still works, on any engine, up to 6 attempts. An account known to be out is skipped until its reset, and bots go back to it after the reset on their own.</p>
+<ul>
+  <li><strong>The same kind of model.</strong> On another engine, the turn uses that engine's model of the same tier. A Custom API account uses a model its server offers.</li>
+  <li><strong>One quiet line.</strong> Under the bot's name, the reply says once per outage what happened, for example "Claude is out until 03:00 · answered on Codex (GPT-6.1)".</li>
+  <li><strong>A limit message is never the reply.</strong> A line like "You've hit your session limit · resets 3am (Europe/Berlin)" counts as the account running out, with its reset time. It's never saved as the bot's answer.</li>
+  <li><strong>When every account is out,</strong> the message waits for the earliest reset, and the chat says "Every model is out until 03:00; I'll answer then."</li>
+  <li><strong>Overloads and rate limits</strong> are retried, not failed over.</li>
+</ul>
+<p>Turn failover off for a bot to keep it on its own account.</p>
 
 <h2 id="pin">Pinning a bot</h2>
 <p>In a bot's settings, pick the account it should use, or leave it on the engine's default. Clear <strong>Switch to the engine's next account when this one runs out of usage or is signed out</strong> to keep the bot on its account.</p>
