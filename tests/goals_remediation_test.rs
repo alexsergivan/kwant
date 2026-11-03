@@ -933,3 +933,154 @@ async fn g_r_26_deleting_a_goal_with_no_remediation_changes_no_mission() {
     assert_eq!(e.state.db.get_mission(&lb.mission_id).await.unwrap().unwrap().status, "active", "another goal's mission is untouched");
     assert_ne!(task(&e, &lb.investigate_task_id).await.state, "cancelled");
 }
+
+// Self-improving bots (0.6.8): a goal made from a task that later stops holding is a lesson for the
+// task's owner. `goal_lapses_of_bot` is the reader Lessons uses.
+
+/// Makes the task's "Keep this true" goal through the route and returns it.
+async fn keep_true(e: &Env, task_id: &str) -> Goal {
+    let (s, v) = send(e, "POST", "/api/goals", None, Some(json!({"from_task": task_id})), None).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    e.state.db.get_goal(v["goal"]["id"].as_str().unwrap()).await.unwrap().unwrap()
+}
+
+/// A verified task of `title` owned by `owner`, whose goal is made and has been met once.
+async fn kept_task(e: &Env, owner: &str, title: &str) -> (String, Goal) {
+    let (s, v) = send(e, "POST", "/api/tasks", None, Some(json!({"title": title, "owner_kwant_id": owner, "checks": [{"kind": "file_exists", "spec": {"path": "ok.txt"}}]})), None).await;
+    assert!(s.is_success(), "{v}");
+    let id = v["task"]["id"].as_str().or(v["id"].as_str()).unwrap().to_string();
+    let folder = kwnt::server::missions::task_folder(&e.state, &task(e, &id).await).await.unwrap();
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("ok.txt"), "x").unwrap();
+    if owner != e.bot {
+        // `finish` claims for the default bot; a task for another owner is verified by hand
+        e.state.db.claim_task(&id, owner, None, None, 60_000, false, owner).await.unwrap().unwrap();
+        transition(&e.state, &id, "working", "review", Actor::Owner, owner, TaskChange::default()).await.unwrap();
+        assert_eq!(send(e, "POST", &format!("/api/tasks/{id}/verify"), None, Some(json!({})), None).await.0, StatusCode::OK);
+    } else {
+        assert_eq!(finish(e, &id).await, StatusCode::OK);
+    }
+    let g = keep_true(e, &id).await;
+    assert_eq!(run_now(e, &g.id).await.status, "met");
+    (id, g)
+}
+
+/// The goal's file goes missing and two runs in a row (its confirm count) see it.
+async fn lapse(e: &Env, g: &Goal) -> Goal {
+    let file = std::path::Path::new(&g.folder).join("ok.txt");
+    // Goals made in one space share the folder, so it may already be gone
+    let _ = std::fs::remove_file(&file);
+    let first = run_now(e, &g.id).await;
+    assert_eq!((first.status.as_str(), first.fail_streak), ("met", 1), "one failure is not news");
+    run_now(e, &g.id).await
+}
+
+fn restore(g: &Goal) {
+    std::fs::write(std::path::Path::new(&g.folder).join("ok.txt"), "x").unwrap();
+}
+
+#[tokio::test]
+async fn lapse_1_a_verified_task_whose_goal_goes_met_to_not_met_is_one_lapse() {
+    let e = setup().await;
+    let (task_id, g) = kept_task(&e, &e.bot, "Publish the site").await;
+    assert!(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap().is_empty(), "nothing before it fails");
+    // One failed run is not a lapse
+    std::fs::remove_file(std::path::Path::new(&g.folder).join("ok.txt")).unwrap();
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    assert!(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap().is_empty(), "an unconfirmed failure is not a lapse");
+    assert_eq!(run_now(&e, &g.id).await.status, "not_met");
+    let t = task(&e, &task_id).await;
+    let lapses = e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap();
+    assert_eq!(lapses.len(), 1);
+    let l = &lapses[0];
+    assert_eq!((l.goal_id.as_str(), l.goal_title.as_str()), (g.id.as_str(), "Publish the site"));
+    assert_eq!((l.task_id.as_str(), l.task_title.as_str(), l.task_created_by.as_str()), (task_id.as_str(), "Publish the site", t.created_by.as_str()));
+    assert_eq!(l.check_kind.as_deref(), Some("file_exists"));
+    let finished = t.finished_at.unwrap().timestamp_millis();
+    assert!((l.task_finished_at - finished).abs() <= 1, "{} vs {finished}", l.task_finished_at);
+    assert!(l.lapsed_at >= l.task_finished_at && l.lapsed_at <= now());
+}
+
+#[tokio::test]
+async fn lapse_2_a_goal_that_only_went_unknown_is_no_lapse() {
+    let e = setup().await;
+    let (_, g) = kept_task(&e, &e.bot, "Publish the site").await;
+    e.state.db.set_goal_status(&g.id, "unknown", "cant_check", &["met"], Some(("unknown", json!({"reason": "cant_check"})))).await.unwrap().unwrap();
+    assert!(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap().is_empty());
+    // Nor is the blip a met goal holds through one error
+    let g2 = e.state.db.get_goal(&g.id).await.unwrap().unwrap();
+    assert_eq!(g2.status, "unknown");
+}
+
+#[tokio::test]
+async fn lapse_3_a_lapse_older_than_since_is_left_out() {
+    let e = setup().await;
+    let (_, g) = kept_task(&e, &e.bot, "Publish the site").await;
+    lapse(&e, &g).await;
+    let at = e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap()[0].lapsed_at;
+    assert_eq!(e.state.db.goal_lapses_of_bot(&e.bot, at, 10).await.unwrap().len(), 1, "since is inclusive");
+    assert!(e.state.db.goal_lapses_of_bot(&e.bot, at + 1, 10).await.unwrap().is_empty());
+    assert!(e.state.db.goal_lapses_of_bot(&e.bot, now() + 60_000, 10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn lapse_4_another_bots_task_is_not_this_bots_lapse() {
+    let e = setup().await;
+    let (_, g) = kept_task(&e, &e.bot, "Publish the site").await;
+    lapse(&e, &g).await;
+    assert_eq!(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap().len(), 1);
+    assert!(e.state.db.goal_lapses_of_bot("some-other-bot", 0, 10).await.unwrap().is_empty());
+    assert!(e.state.db.goal_lapses_of_bot("", 0, 10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn lapse_5_the_same_goal_failing_twice_is_one_row_the_newest() {
+    let e = setup().await;
+    let (_, g) = kept_task(&e, &e.bot, "Publish the site").await;
+    lapse(&e, &g).await;
+    let first = e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap()[0].lapsed_at;
+    // It recovers, then breaks again
+    restore(&g);
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    lapse(&e, &g).await;
+    let lapses = e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap();
+    assert_eq!(lapses.len(), 1, "one row per goal");
+    assert!(lapses[0].lapsed_at > first, "the newest lapse");
+    // Asked for from after the first one, the second is still there
+    assert_eq!(e.state.db.goal_lapses_of_bot(&e.bot, first + 1, 10).await.unwrap().len(), 1);
+    assert_eq!(kinds(&e, &g.id).await.iter().filter(|k| *k == "not_met").count(), 2);
+}
+
+#[tokio::test]
+async fn lapse_6_a_goal_not_made_from_a_task_is_no_lapse() {
+    let e = setup().await;
+    // Owned by the same bot, failing for real, but made by hand
+    let g = goal(&e, "Site is up", "suggest").await;
+    run_now(&e, &g.id).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "not_met");
+    assert!(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn lapse_7_deleted_and_paused_goals_are_left_out_and_rows_are_newest_first_up_to_the_limit() {
+    let e = setup().await;
+    let (_, a) = kept_task(&e, &e.bot, "First site").await;
+    let (_, b) = kept_task(&e, &e.bot, "Second site").await;
+    let (_, c) = kept_task(&e, &e.bot, "Third site").await;
+    lapse(&e, &a).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    lapse(&e, &b).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    lapse(&e, &c).await;
+    let titles = |l: Vec<kwnt::db::goal_missions::GoalLapse>| l.into_iter().map(|x| x.goal_title).collect::<Vec<_>>();
+    assert_eq!(titles(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap()), ["Third site", "Second site", "First site"]);
+    assert_eq!(titles(e.state.db.goal_lapses_of_bot(&e.bot, 0, 2).await.unwrap()), ["Third site", "Second site"]);
+    assert!(e.state.db.goal_lapses_of_bot(&e.bot, 0, 0).await.unwrap().is_empty());
+    // The person paused one and deleted another
+    let (s, _) = send(&e, "PATCH", &format!("/api/goals/{}", c.id), None, Some(json!({"paused": true})), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = send(&e, "DELETE", &format!("/api/goals/{}", b.id), None, None, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(titles(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap()), ["First site"]);
+}

@@ -64,6 +64,22 @@ pub struct GoalLink {
     pub declined_at: Option<i64>,
 }
 
+/// A task a bot finished (verified) whose "Keep this true" goal later stopped holding: work marked
+/// done that didn't hold. Times are milliseconds.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow, Serialize)]
+pub struct GoalLapse {
+    pub goal_id: String,
+    pub goal_title: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub task_created_by: String,
+    pub task_finished_at: i64,
+    /// When the goal was confirmed not met (the newest time, if it lapsed more than once).
+    pub lapsed_at: i64,
+    /// The kind of the required check that failed, when kwant still has that observation.
+    pub check_kind: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewLink {
     pub goal_id: String,
@@ -201,6 +217,34 @@ impl Database {
     pub async fn goal_from_task(&self, task_id: &str) -> Result<Option<String>, DbError> {
         let row: Option<(String,)> = sqlx::query_as("SELECT goal_id FROM goal_from_tasks WHERE task_id = ?").bind(task_id).fetch_optional(&self.pool).await?;
         Ok(row.map(|r| r.0))
+    }
+
+    /// The goals made from tasks `kwant_id` owned and finished verified that were later confirmed
+    /// not met: at `since_ms` or after, and after the task finished. Confirmed means the loop's own
+    /// `not_met` event (the goal's fail streak reached its confirm count), so a goal that only went
+    /// unknown, or held a blip, is never a lapse. One row per goal, its newest lapse; newest first,
+    /// at most `limit`. Deleted goals have no rows left, and a draft or paused goal is left out.
+    pub async fn goal_lapses_of_bot(&self, kwant_id: &str, since_ms: i64, limit: i64) -> Result<Vec<GoalLapse>, DbError> {
+        // tasks.finished_at is a TIMESTAMP (UTC text): whole seconds plus the fraction, in milliseconds
+        const FINISHED_MS: &str = "(CAST(strftime('%s', t.finished_at) AS INTEGER) * 1000
+            + CAST(ROUND((CAST(strftime('%f', t.finished_at) AS REAL) - CAST(strftime('%S', t.finished_at) AS INTEGER)) * 1000) AS INTEGER))";
+        let sql = format!(
+            "SELECT g.id AS goal_id, g.title AS goal_title, t.id AS task_id, t.title AS task_title, t.created_by AS task_created_by,
+                    {FINISHED_MS} AS task_finished_at, e.created_at AS lapsed_at,
+                    (SELECT c.kind FROM goal_observations o JOIN goal_checks c ON c.id = o.check_id
+                      WHERE o.goal_id = g.id AND o.verdict = 'not_met' AND c.severity = 'required' AND o.observed_at <= e.created_at
+                      ORDER BY o.id DESC LIMIT 1) AS check_kind
+             FROM goal_from_tasks f
+             JOIN tasks t ON t.id = f.task_id
+             JOIN goals g ON g.id = f.goal_id
+             JOIN goal_events e ON e.id = (
+                 SELECT MAX(x.id) FROM goal_events x
+                 WHERE x.goal_id = g.id AND x.kind = 'not_met' AND x.created_at >= ?2 AND x.created_at > {FINISHED_MS})
+             WHERE t.owner_kwant_id = ?1 AND t.state = 'verified' AND t.finished_at IS NOT NULL
+               AND g.paused_at IS NULL AND g.status NOT IN ('draft', 'paused')
+             ORDER BY e.created_at DESC, e.id DESC LIMIT ?3"
+        );
+        Ok(sqlx::query_as::<_, GoalLapse>(&sql).bind(kwant_id).bind(since_ms).bind(limit.max(0)).fetch_all(&self.pool).await?)
     }
 
     /// Remembers the goal made from a task. False if the task already had one (nothing changed).
