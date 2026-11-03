@@ -12,7 +12,8 @@ export interface NeedsYouPillProps {
   spriteOf: (kwantId: string) => string | undefined;
   /** One item opens its chat; several open the Inbox. */
   onOpen: (items: Nudge[]) => void;
-  onDismiss: () => void;
+  /** The pill has slid out: clear `rev`, unless more arrived since (then the app keeps them). */
+  onDismiss: (rev: number) => void;
 }
 
 const AVATAR = 32;
@@ -53,12 +54,33 @@ export const NeedsYouPill: React.FC<NeedsYouPillProps> = ({ items, rev, spriteOf
     }
   }, [showing]);
 
-  const leave = () => setLeaving(true);
+  // The rev the pill was showing when it began to slide out. If more arrive during the slide-out, that
+  // exit must not take them with it (the race Lin found in the Mac pill, #268): a fresh pill drops in
+  // instead, and the app is only told to clear the rev that actually left.
+  // An item answered elsewhere during the slide-out bumps rev too, but that is not an arrival: keep going.
+  const leavingRev = useRef(rev);
+  const leavingKeys = useRef<ReadonlySet<string>>(new Set());
+  const leave = () => {
+    leavingRev.current = rev;
+    leavingKeys.current = new Set(items.map((n) => n.key));
+    setLeaving(true);
+  };
   useEffect(() => {
     if (!leaving) return;
-    const t = setTimeout(onDismiss, PILL_LEAVE_MS);
+    if (rev !== leavingRev.current) {
+      if (items.some((n) => !leavingKeys.current.has(n.key))) {
+        firstRev.current = rev;
+        shownAt.current = Date.now();
+        setHeldOnce(false);
+        setLeaving(false);
+        return;
+      }
+      leavingRev.current = rev;
+    }
+    const gone = rev;
+    const t = setTimeout(() => onDismiss(gone), PILL_LEAVE_MS);
     return () => clearTimeout(t);
-  }, [leaving, onDismiss]);
+  }, [leaving, rev, items, onDismiss]);
 
   useEffect(() => {
     if (!showing || hovered || focused || leaving) return;

@@ -2740,7 +2740,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   useEffect(() => {
     if (!nudgesOn) setPill(EMPTY_PILL);
   }, [nudgesOn]);
-  const dismissPill = useCallback(() => setPill(EMPTY_PILL), []);
+  const dismissPill = useCallback((rev: number) => setPill((p) => (p.rev === rev ? EMPTY_PILL : p)), []);
   const openPill = (items: Nudge[]) => {
     setPill(EMPTY_PILL);
     const n = items[0];
