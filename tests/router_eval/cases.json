@@ -757,6 +757,23 @@
     ]
    },
    "note": "Multi-role goes to the lead"
+  },
+  {
+   "id": 48,
+   "space": "kitchen",
+   "channel": "general",
+   "message": "Compare lidl and edeka",
+   "expect": {
+    "route": "concierge",
+    "basis": [
+     "concierge"
+    ]
+   },
+   "laya": {
+    "pick": "Community",
+    "confident": true
+   },
+   "note": "2026-11-03: a titles-only Laya guess (Community) against a weak hint (\"compare\" for the Analyst) asked who should answer."
   }
  ]
 }
