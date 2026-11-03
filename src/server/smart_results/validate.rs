@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 
-use super::{Block, ResultSet, ENABLED_TYPES, MAX_PAYLOAD, PICK_REASON, VERSION};
+use super::items::severity_of;
+use super::{AxisKind, Block, ChartKind, ResultSet, Role, Variant, ENABLED_TYPES, MAX_PAYLOAD, PICK_REASON, VERSION};
 
 /// `Ok` when `set` is a block set this build may store and serve. With `reply`, every label, unit,
 /// cell and item must also be text of that reply (values are copied, never made up).
@@ -18,18 +19,19 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
     }
     let mut texts: Vec<&str> = Vec::new();
     for (i, block) in set.blocks.iter().enumerate() {
-        let want = format!("b{i}");
+        if block.id() != format!("b{i}") {
+            return Err(format!("block id {:?}", block.id()));
+        }
+        if let Some(title) = block.title() {
+            check_text(title, 300, "title")?;
+            texts.push(title);
+        }
+        check_source(block)?;
+        if block.provenance().kind != "reply_text" {
+            return Err(format!("{} provenance", block.kind()));
+        }
         match block {
             Block::Comparison(c) => {
-                if c.id != want {
-                    return Err(format!("block id {:?}", c.id));
-                }
-                if c.source.kind != "markdown_table" || c.source.index > 10_000 {
-                    return Err("comparison source".into());
-                }
-                if c.provenance.kind != "reply_text" {
-                    return Err("comparison provenance".into());
-                }
                 if !(2..=8).contains(&c.columns.len()) {
                     return Err(format!("{} columns", c.columns.len()));
                 }
@@ -46,6 +48,9 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                             texts.push(unit);
                         }
                         None => {}
+                    }
+                    if k == 0 && col.role.is_some_and(|r| r != Role::Label) || k > 0 && col.role == Some(Role::Label) {
+                        return Err(format!("column {k} role"));
                     }
                 }
                 if !(3..=50).contains(&c.rows.len()) {
@@ -64,12 +69,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                         return Err(format!("row label {:?} repeats", row.cells[0]));
                     }
                     for cell in &row.cells {
-                        if cell.chars().count() > 200 {
-                            return Err("a cell over 200 characters".into());
-                        }
-                        if has_html(cell) {
-                            return Err("HTML in a cell".into());
-                        }
+                        check_cell(cell)?;
                         texts.push(cell);
                     }
                 }
@@ -86,17 +86,102 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     _ => return Err("highlight_row and highlight_reason come together".into()),
                 }
             }
+            Block::Chart(c) => {
+                check_text(&c.x.label, 200, "axis label")?;
+                texts.push(&c.x.label);
+                let axis_ok = matches!((c.chart_kind, c.x.kind), (ChartKind::Line, AxisKind::Time) | (ChartKind::Bar, AxisKind::Category));
+                if !axis_ok {
+                    return Err("chart axis".into());
+                }
+                if !(1..=4).contains(&c.series.len()) {
+                    return Err(format!("{} series", c.series.len()));
+                }
+                for (k, s) in c.series.iter().enumerate() {
+                    if s.key != format!("s{k}") {
+                        return Err(format!("series key {:?}", s.key));
+                    }
+                    check_text(&s.label, 200, "series label")?;
+                    texts.push(&s.label);
+                    if let Some(unit) = &s.unit {
+                        check_text(unit, 10, "unit")?;
+                        texts.push(unit);
+                    }
+                }
+                if !(3..=60).contains(&c.points.len()) {
+                    return Err(format!("{} points", c.points.len()));
+                }
+                let mut xs = HashSet::new();
+                for (k, p) in c.points.iter().enumerate() {
+                    if p.id != format!("p{k}") {
+                        return Err(format!("point id {:?}", p.id));
+                    }
+                    check_text(&p.x, 200, "point label")?;
+                    if !xs.insert(p.x.as_str()) {
+                        return Err(format!("point {:?} repeats", p.x));
+                    }
+                    texts.push(&p.x);
+                    if p.cells.len() != c.series.len() || p.values.len() != c.series.len() {
+                        return Err(format!("point {k} has {} cells, {} values", p.cells.len(), p.values.len()));
+                    }
+                    if p.values.iter().flatten().any(|v| !v.is_finite()) {
+                        return Err("a value that isn't a number".into());
+                    }
+                    for cell in &p.cells {
+                        check_cell(cell)?;
+                        if !cell.trim().is_empty() {
+                            texts.push(cell);
+                        }
+                    }
+                }
+                if c.points.iter().all(|p| p.values.iter().all(Option::is_none)) {
+                    return Err("a chart with no values".into());
+                }
+                if let Some(summary) = &c.summary {
+                    check_text(summary, 300, "summary")?;
+                    texts.push(summary);
+                }
+            }
+            Block::Metrics(m) => {
+                if !(2..=6).contains(&m.items.len()) {
+                    return Err(format!("{} metrics", m.items.len()));
+                }
+                for (k, x) in m.items.iter().enumerate() {
+                    if x.id != format!("m{k}") {
+                        return Err(format!("metric id {:?}", x.id));
+                    }
+                    check_text(&x.label, 200, "metric label")?;
+                    check_text(&x.value_text, 100, "metric value")?;
+                    if !x.value.is_finite() {
+                        return Err("a value that isn't a number".into());
+                    }
+                    texts.extend([x.label.as_str(), x.value_text.as_str()]);
+                    if let Some(unit) = &x.unit {
+                        check_text(unit, 10, "unit")?;
+                        if !x.value_text.contains(unit.as_str()) {
+                            return Err(format!("unit {unit:?} is not in its value"));
+                        }
+                    }
+                    if let Some(note) = &x.note {
+                        check_text(note, 300, "note")?;
+                        texts.push(note);
+                    }
+                }
+            }
+            Block::Facts(f) => {
+                if !(3..=12).contains(&f.items.len()) {
+                    return Err(format!("{} facts", f.items.len()));
+                }
+                for (k, x) in f.items.iter().enumerate() {
+                    if x.id != format!("f{k}") {
+                        return Err(format!("fact id {:?}", x.id));
+                    }
+                    check_text(&x.label, 200, "fact label")?;
+                    check_text(&x.value, 300, "fact value")?;
+                    texts.extend([x.label.as_str(), x.value.as_str()]);
+                }
+            }
             Block::Steps(s) => {
-                if s.id != want {
-                    return Err(format!("block id {:?}", s.id));
-                }
-                if s.source.kind != "markdown_list" || s.source.index > 10_000 {
-                    return Err("steps source".into());
-                }
-                if s.provenance.kind != "reply_text" {
-                    return Err("steps provenance".into());
-                }
-                if !(3..=15).contains(&s.items.len()) {
+                if !(3..=20).contains(&s.items.len()) {
                     return Err(format!("{} steps", s.items.len()));
                 }
                 for (k, item) in s.items.iter().enumerate() {
@@ -105,6 +190,76 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     }
                     check_text(&item.text, 300, "step")?;
                     texts.push(&item.text);
+                    let shape = match s.variant {
+                        Variant::Steps => item.done.is_none() && item.when.is_none(),
+                        Variant::Checklist => item.done.is_some() && item.when.is_none(),
+                        Variant::Timeline => item.done.is_none() && item.when.is_some(),
+                    };
+                    if !shape {
+                        return Err(format!("step {k} doesn't fit its variant"));
+                    }
+                    for extra in [&item.when, &item.owner].into_iter().flatten() {
+                        check_text(extra, 60, "step label")?;
+                        texts.push(extra);
+                    }
+                }
+            }
+            Block::Cards(c) => {
+                if !(3..=12).contains(&c.items.len()) {
+                    return Err(format!("{} cards", c.items.len()));
+                }
+                for (k, x) in c.items.iter().enumerate() {
+                    if x.id != format!("k{k}") {
+                        return Err(format!("card id {:?}", x.id));
+                    }
+                    check_text(&x.title, 200, "card title")?;
+                    check_text(&x.description, 300, "card description")?;
+                    texts.extend([x.title.as_str(), x.description.as_str()]);
+                    if let Some(url) = &x.url {
+                        let safe = url.starts_with("https://")
+                            && url.len() <= 2048
+                            && !url.contains(|c: char| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '\'' | '`'));
+                        if !safe {
+                            return Err("a card link that isn't a plain https link".into());
+                        }
+                        texts.push(url);
+                    }
+                    if x.meta.len() > 4 {
+                        return Err("card meta".into());
+                    }
+                    for m in &x.meta {
+                        check_text(m, 100, "card meta")?;
+                        texts.push(m);
+                    }
+                }
+            }
+            Block::Findings(f) => {
+                if !(2..=30).contains(&f.items.len()) {
+                    return Err(format!("{} findings", f.items.len()));
+                }
+                for (k, x) in f.items.iter().enumerate() {
+                    if x.id != format!("x{k}") {
+                        return Err(format!("finding id {:?}", x.id));
+                    }
+                    if severity_of(&x.severity_text) != Some(x.severity) {
+                        return Err(format!("severity {:?} for {:?}", x.severity, x.severity_text));
+                    }
+                    check_text(&x.title, 300, "finding title")?;
+                    texts.extend([x.severity_text.as_str(), x.title.as_str()]);
+                    if !x.detail.is_empty() {
+                        check_text(&x.detail, 300, "finding detail")?;
+                        texts.push(&x.detail);
+                    }
+                    if x.refs.len() > 10 {
+                        return Err("too many refs".into());
+                    }
+                    for r in &x.refs {
+                        check_text(&r.path, 300, "ref")?;
+                        if r.path.contains("://") || r.path.contains(char::is_whitespace) {
+                            return Err("a ref that isn't a path".into());
+                        }
+                        texts.push(&r.path);
+                    }
                 }
             }
         }
@@ -117,6 +272,36 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
     let size = serde_json::to_vec(set).map_err(|e| e.to_string())?.len();
     if size > MAX_PAYLOAD {
         return Err(format!("payload of {size} bytes"));
+    }
+    Ok(())
+}
+
+/// Tables (lists) are indexed in their own count; `slot` has no index. A list's `ordered` absent
+/// means numbered (v1).
+fn check_source(block: &Block) -> Result<(), String> {
+    let s = block.source();
+    let kind = block.kind();
+    let table_ok = matches!(kind, "comparison" | "chart" | "metrics");
+    let list_ok = matches!(kind, "steps" | "metrics" | "facts" | "cards" | "findings");
+    let ok = match s.kind.as_str() {
+        "markdown_table" => table_ok && s.ordered.is_none() && s.index.is_some_and(|i| i <= 10_000),
+        "markdown_list" => list_ok && s.index.is_some_and(|i| i <= 10_000),
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("{kind} source"))
+    }
+}
+
+/// A shown cell: at most 200 characters, no HTML; it may be empty (a gap).
+fn check_cell(cell: &str) -> Result<(), String> {
+    if cell.chars().count() > 200 {
+        return Err("a cell over 200 characters".into());
+    }
+    if has_html(cell) {
+        return Err("HTML in a cell".into());
     }
     Ok(())
 }

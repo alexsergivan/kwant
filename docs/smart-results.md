@@ -1,7 +1,8 @@
 # Smart Results (0.6.5)
 
 A bot's final reply can carry one typed block, `results`, that the chat draws in place of a table
-or a list in the reply: a comparison card for a table, a checklist for numbered steps. The reply's
+or a list in the reply: a chart, a comparison, key numbers, findings, cards, steps (plain, checklist
+or timeline) or facts. The reply's
 text is never changed. When there is no block, or the chat can't draw it, the reply shows its
 markdown as it always has.
 
@@ -22,10 +23,16 @@ Code: `src/server/smart_results/` (contract types, selectors, checks) and
 - **When it is worked out:** once, when the message is saved (`insert_message_on`), never while
   the reply is streaming. The selectors are deterministic: no model calls and no network. A reply
   longer than 128 KB stays text.
-- **How the block is chosen:** the candidates are offered in priority order, every comparison
-  table first, then every steps list, each in the order it appears in the text. The first candidate
-  whose type is in `ENABLED_TYPES` and that passes the checks is stored, and only that one: a
-  message has at most one block.
+- **How the block is chosen:** each table gets at most one class (line chart, else bar chart unless
+  the prose names a pick, else metrics, else comparison) and each list at most one (metrics,
+  findings, cards, timeline, checklist, steps, facts). The candidates are then offered in the order
+  of `selector::PRIORITY`: chart > comparison > metrics > findings > cards > timeline > checklist >
+  steps > facts. A tie goes to the earliest in the text. The first candidate whose type is in
+  `ENABLED_TYPES` and that passes the checks is stored, and only that one: a message has at most
+  one block.
+- **The bot prompt line:** every turn's system prompt carries `smart_results::PROMPT_LINE` once
+  (in the cached tail, `drivers::TurnInput::system_prompt_parts`), asking for tables, numbered
+  steps and `**Label:** value` lines.
 - **What it never costs:** the reply. If a selector panics, a block fails its checks, or the write
   fails, kwant logs it and saves the message exactly as before.
 - **Edits:** when a reply's text is replaced (`set_message_text`), its block is deleted, because the
@@ -54,7 +61,8 @@ Code: `src/server/smart_results/` (contract types, selectors, checks) and
 
 ```ts
 type ResultSet = { version: 1, blocks: [Block] }     // exactly one block when there is a row
-type Source = { kind: "markdown_table" | "markdown_list", index: number }
+type Source = { kind: "markdown_table" | "markdown_list" | "slot", index: number | null,
+                ordered: boolean | null }  // lists: ordered or bullet; slot: no index
 type Provenance = { kind: "reply_text" }
 
 type Comparison = {
@@ -69,10 +77,12 @@ type Steps = {
 }
 ```
 
-These are the v1 shapes. Plan v2 (§A.3) adds fields to them: `title`, column `role`, and the
-steps `variant`, `done`, `when` and `owner`. The client reads a missing field with its v1 meaning
-(`title` null, role `label` for the first column and `value` for the rest, variant `steps`).
-`smart-results-more` writes these fields.
+These are the v1 shapes. v2 (plan §A.3) adds fields to them: `title`, column `role`, and the
+steps `variant` (`steps`, `checklist`, `timeline`), `done`, `when` and `owner`. The client reads a
+missing field with its v1 meaning (`title` null, role `label` for the first column and `value` for
+the rest, variant `steps`). v2 also adds `chart`, `metrics`, `facts`, `cards` and `findings`; the
+Rust types in `src/server/smart_results/mod.rs` are the reference. Numbers (`values`, `value`) are
+parsed from the cell as written, never computed; a cell without one is `null`, never 0.
 
 ### Values are copied, never made up
 
@@ -101,6 +111,41 @@ steps `variant`, `done`, `when` and `owner`. The client reads a missing field wi
 
 ## Selectors
 
+Every selector abstains when in doubt.
+
+**Chart** (table, 1–4 series that share one unit, ≥ 80% of each series' cells numbers, the rest
+gap tokens such as `-` or `n/a`):
+- line: 4–60 rows and every first cell time-like (ISO date, `YYYY-MM`, month name, Q1–Q4,
+  Week N, Day N, a year 1900–2100);
+- bar: 5–20 rows, a text first column, 1–2 series, and no pick named in the prose; 2–4 rows stay
+  a comparison.
+- A series' unit is the affix its cells share, or for bare numbers the bracketed end of its
+  header (`Price (EUR)`, `Rating [1-5]`). Series whose units differ are never drawn on one Y
+  axis: the table is not a chart (SR-R-13). Units compare as written, so `€` and `EUR` differ.
+- Numbers are read with both `,` and `.` as the decimal mark; when the readings disagree for the
+  column (`1,299` alone), there is no chart.
+
+**Metrics:** 2–6 list items `**Label:** value` or `Label: value` whose value starts with a number
+(`$4.2M`, `12 ms`, `98%`, `3 of 5`), or a 2-column table of 2–6 rows with at least two different
+units (one shared unit is a comparison, or a bar chart from 5 rows). Not when the list is
+introduced as ingredients, a recipe, packing, a schedule or an agenda, nor for time or date labels.
+
+**Findings:** 2–30 items that each start with a severity token (`**High:**`, `[High]`, `High:`;
+Critical, Blocker, High, Major, Medium, Moderate, Low, Minor, Info, Nit, P0–P3), plus a second
+signal: a lead line or heading saying review, audit, findings, issues, bugs or risks, or a
+`path:line` in a code span. One item whose text starts with a number ("High: 18C") keeps the
+whole list text.
+
+**Cards:** 3–12 items starting with an `https` link or a `**Title**`, then " — ", " – " or " - "
+(or ": " after a link) and a description of at least 10 characters. Link text that looks like a
+different URL keeps the list text. `**Title:** text` reads as facts.
+
+**Steps:** a timeline when every item has a time-like or clock label (3–15 items); a checklist
+when every item is a task (3–20); otherwise the numbered-steps rule below. `owner` comes only from
+a literal "Owner: X" or "(owner: X)".
+
+**Facts:** 3–12 items `**Label:** value`, more than half of them not starting with a number.
+
 **Comparison:**
 - the table is a clean top-level GFM pipe table;
 - it has 2–8 columns and 3–50 rows, every row with as many cells as the header;
@@ -121,12 +166,13 @@ steps `variant`, `done`, `when` and `owner`. The client reads a missing field wi
 
 - **Tables:** every GFM table in document order, from 0. A table inside fenced or indented code,
   or in raw HTML, is not a table and isn't counted.
-- **Lists:** every ordered list in pre-order, nested ones included, from 0; bullet lists aren't
-  counted. An ordered task list counts as an ordered list, but it isn't offered as steps in this
-  version.
+- **Lists:** two counters, each from 0: numbered lists and bullet lists (`ordered: false`), in
+  pre-order, nested ones included. A task list counts in its own kind. A change of marker (`-` to
+  `*`, `.` to `)`) starts a new list. `slot` blocks have no index and shift nothing.
 - **Uncertainty:** the server reads markdown line by line. Some constructs could make its count
-  differ from the chat's: a table or numbered list inside a quote or a bullet item, a list nested
-  in a list, raw HTML, tabs, or a table run straight into a paragraph. From the first such
+  differ from the chat's: a table or list inside a quote or an item, a list nested in a list, raw
+  HTML, tabs, footnotes, a table run straight into a paragraph, or a leftover `[DECISIONS]` tag
+  (the whole reply). From the first such
   construct on, kwant offers no block for that kind, and the reply stays text. Candidates before
   that point are still offered.
 
@@ -136,8 +182,8 @@ The client checks every block again: the labels, the row and item counts, and th
 ## Adding a block type
 
 1. Add a `Block` variant and its `kind()` arm (`mod.rs`).
-2. Add a selector to `candidates()`, in the priority order of plan §A.2.
+2. Add a selector to `candidates()` and the type to `PRIORITY` (plan §A.4).
 3. Add its checks to `validate()`.
 4. Add the type to `ENABLED_TYPES`.
-5. Add tests in `selector_tests.rs`. Each test must cover the cases where the selector abstains,
+5. Add tests in `block_tests.rs`. Each test must cover the cases where the selector abstains,
    not only the ones where it fires.

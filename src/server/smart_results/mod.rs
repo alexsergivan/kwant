@@ -1,5 +1,6 @@
-//! Smart Results (0.6.5): a table or a numbered list in a bot's final reply, kept as a typed
-//! block the chat can draw as a comparison card or a checklist. Contract: docs/smart-results.md.
+//! Smart Results (0.6.5): a table or a list in a bot's final reply, kept as one typed block the
+//! chat can draw as a chart, a comparison, metric tiles, findings, cards, a checklist, a timeline,
+//! steps or facts. Contract: docs/smart-results.md.
 //!
 //! - The reply's text is never changed. The block set lives beside it in `message_results`,
 //!   written when the reply is saved ([`crate::db::Database::insert_message_with`]), and every
@@ -7,13 +8,17 @@
 //! - It always runs; there is no setting. The release fallback is [`ENABLED_TYPES`].
 //! - The selectors are deterministic (no model calls) and conservative: when one isn't sure the
 //!   chat would render the same table or list, it abstains and the reply stays markdown.
+//! - Every value is copied from the reply. The only numbers a block adds are the cells' own
+//!   values, parsed (`chart` points, `metrics` items); nothing is summed, averaged or rounded.
 //! - Nothing here may cost the reply: a panic, an invalid block or a failed write is logged and
 //!   the message is saved as it always was.
 
+mod chart;
+mod items;
 mod selector;
 mod validate;
 
-pub use selector::candidates;
+pub use selector::{candidates, rank, PRIORITY};
 pub use validate::validate;
 
 use serde::{Deserialize, Serialize};
@@ -21,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// The block types this build stores and serves. Taking a type out (a one-line release fallback)
 /// stops new blocks of it and hides stored ones (`results: null`); the chat then shows the
 /// reply's markdown.
-pub const ENABLED_TYPES: &[&str] = &["comparison", "steps"];
+pub const ENABLED_TYPES: &[&str] = &["chart", "comparison", "metrics", "findings", "cards", "steps", "facts"];
 /// The payload version this build writes and reads.
 pub const VERSION: u32 = 1;
 /// Largest stored payload, in bytes of JSON.
@@ -30,9 +35,13 @@ pub const MAX_PAYLOAD: usize = 64 * 1024;
 pub const MAX_REPLY: usize = 128 * 1024;
 /// Why a row is highlighted; the only reason v1 gives.
 pub const PICK_REASON: &str = "named as the pick in this reply";
+/// The one line of the bot system prompt that asks for structure the selectors can read (plan
+/// §A.4). It is in every bot's system prompt once (`drivers::TurnInput::system_prompt_parts`).
+pub const PROMPT_LINE: &str = "When you compare 3 or more options use a table, for steps use a numbered list, and for key \
+    numbers use '**Label:** value' lines; kwant shows them as cards and charts.";
 
-/// The checked block set for a reply: the first candidate, in priority order, whose type is
-/// enabled and that passes [`validate`]; `None` when there isn't one. A selector bug must never
+/// The checked block set for a reply: the first candidate, in priority order ([`rank`]), whose
+/// type is enabled and that passes [`validate`]; `None` when there isn't one. A selector bug must never
 /// cost the reply, so a panic is caught and logged.
 pub fn compute(text: &str) -> Option<ResultSet> {
     let run = std::panic::catch_unwind(|| {
@@ -61,35 +70,120 @@ pub struct ResultSet {
     pub blocks: Vec<Block>,
 }
 
+/// One block; every type has `id`, `title`, `source` and `provenance` (plan §A.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Block {
+    Chart(Chart),
     Comparison(Comparison),
+    Metrics(Metrics),
+    Findings(Findings),
+    Cards(Cards),
     Steps(Steps),
+    Facts(Facts),
 }
 
 impl Block {
     /// The block's `type`.
     pub fn kind(&self) -> &'static str {
         match self {
+            Block::Chart(_) => "chart",
             Block::Comparison(_) => "comparison",
+            Block::Metrics(_) => "metrics",
+            Block::Findings(_) => "findings",
+            Block::Cards(_) => "cards",
             Block::Steps(_) => "steps",
+            Block::Facts(_) => "facts",
         }
+    }
+
+    pub fn id(&self) -> &str {
+        common!(self, b => &b.id)
+    }
+
+    pub fn title(&self) -> Option<&str> {
+        common!(self, b => b.title.as_deref())
+    }
+
+    pub fn source(&self) -> &Source {
+        common!(self, b => &b.source)
+    }
+
+    pub fn provenance(&self) -> &Provenance {
+        common!(self, b => &b.provenance)
     }
 }
 
-/// Which table (`markdown_table`) or ordered list (`markdown_list`) of the reply a block stands
-/// for: `index` counts them in the order the chat renders them, from 0.
+/// `$e` for whichever block type `$block` is, bound as `$b`: the fields every type has.
+macro_rules! common {
+    ($block:expr, $b:ident => $e:expr) => {
+        match $block {
+            Block::Chart($b) => $e,
+            Block::Comparison($b) => $e,
+            Block::Metrics($b) => $e,
+            Block::Findings($b) => $e,
+            Block::Cards($b) => $e,
+            Block::Steps($b) => $e,
+            Block::Facts($b) => $e,
+        }
+    };
+}
+use common;
+
+/// Which table or list of the reply a block stands for, or `slot` (no source in the text: the
+/// chat draws it after the reply). `index` counts in the order the chat renders them, from 0:
+/// tables in one count, numbered lists in another, bullet lists (`ordered: false`) in a third.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Source {
+    /// `markdown_table`, `markdown_list` or `slot`.
     pub kind: String,
-    pub index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    /// Lists only; absent means `true` (v1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordered: Option<bool>,
 }
 
-/// Where the values came from; v1 only copies them from the reply (`reply_text`).
+impl Source {
+    pub fn table(index: usize) -> Self {
+        Source { kind: "markdown_table".into(), index: Some(index), ordered: None }
+    }
+    pub fn list(index: usize, ordered: bool) -> Self {
+        Source { kind: "markdown_list".into(), index: Some(index), ordered: Some(ordered) }
+    }
+    pub fn slot() -> Self {
+        Source { kind: "slot".into(), index: None, ordered: None }
+    }
+}
+
+/// Where the values came from: copied from the reply (`reply_text`), declared by the bot with
+/// `present_result` and grounded against the reply (`bot_declared`, with `tool_call_id`), or typed
+/// kwant data (`kwant_data`, with `ref` "task:<id>" or "attachment:<id>").
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Provenance {
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+}
+
+impl Provenance {
+    pub fn reply_text() -> Self {
+        Provenance { kind: "reply_text".into(), tool_call_id: None, reference: None }
+    }
+}
+
+/// What a comparison column holds; absent (v1) means `label` for the first column and `value`
+/// for the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Label,
+    Value,
+    Pros,
+    Cons,
+    Note,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,6 +192,8 @@ pub struct Column {
     pub label: String,
     pub numeric: bool,
     pub unit: Option<String>,
+    #[serde(default)]
+    pub role: Option<Role>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,9 +202,12 @@ pub struct Row {
     pub cells: Vec<String>,
 }
 
+/// A table: 2–8 columns, 3–50 rows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Comparison {
     pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
     pub source: Source,
     pub columns: Vec<Column>,
     pub rows: Vec<Row>,
@@ -117,16 +216,192 @@ pub struct Comparison {
     pub provenance: Provenance,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartKind {
+    Line,
+    Bar,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AxisKind {
+    Time,
+    Category,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Axis {
+    pub label: String,
+    pub kind: AxisKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Series {
+    pub key: String,
+    pub label: String,
+    pub unit: Option<String>,
+}
+
+/// One table row: `x` is its first cell, `cells` the others (one per series), verbatim, and
+/// `values` the same cells as numbers (`null` where a cell has none: a gap, never a zero).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Point {
+    pub id: String,
+    pub x: String,
+    pub cells: Vec<String>,
+    pub values: Vec<Option<f64>>,
+}
+
+/// A table of numbers: 1–4 series, 3–60 points.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Chart {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub source: Source,
+    pub chart_kind: ChartKind,
+    pub x: Axis,
+    pub series: Vec<Series>,
+    pub points: Vec<Point>,
+    /// Quotes cells only, never a computed number; the selectors leave it `null`.
+    pub summary: Option<String>,
+    pub provenance: Provenance,
+}
+
+/// `value_text` is what the reply says ("$4.2M") and what the chat shows; `value` is its number as
+/// written (4.2), `unit` its one affix when it has exactly one, `note` the rest of the item.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Metric {
+    pub id: String,
+    pub label: String,
+    pub value_text: String,
+    pub value: f64,
+    pub unit: Option<String>,
+    pub note: Option<String>,
+}
+
+/// Key numbers: 2–6 items.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Metrics {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub source: Source,
+    pub items: Vec<Metric>,
+    pub provenance: Provenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Fact {
+    pub id: String,
+    pub label: String,
+    pub value: String,
+}
+
+/// Labelled values: 3–12 items.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Facts {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub source: Source,
+    pub items: Vec<Fact>,
+    pub provenance: Provenance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Variant {
+    #[default]
+    Steps,
+    Checklist,
+    Timeline,
+}
+
+/// `done` is set for a checklist only, `when` for a timeline (every item), `owner` only from a
+/// literal "Owner: X" or "(owner: X)". `text` is the item as written, after any `[ ]` box or time
+/// label.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Step {
     pub id: String,
     pub text: String,
+    #[serde(default)]
+    pub done: Option<bool>,
+    #[serde(default)]
+    pub when: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
 }
 
+/// A list to follow: 3–20 items.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Steps {
     pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
     pub source: Source,
+    #[serde(default)]
+    pub variant: Variant,
     pub items: Vec<Step>,
+    pub provenance: Provenance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Card {
+    pub id: String,
+    pub title: String,
+    /// An http(s) link of the reply, or `null`.
+    pub url: Option<String>,
+    pub description: String,
+    pub meta: Vec<String>,
+}
+
+/// Links or named options with a description: 3–12 items.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Cards {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub source: Source,
+    pub items: Vec<Card>,
+    pub provenance: Provenance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    Critical,
+    High,
+    Medium,
+    Low,
+    Info,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ref {
+    pub path: String,
+    pub line: Option<u32>,
+}
+
+/// `severity_text` is the reply's own token ("Blocker", "P1", "Nit"); `detail` may be empty.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Finding {
+    pub id: String,
+    pub severity: Severity,
+    pub severity_text: String,
+    pub title: String,
+    pub detail: String,
+    pub refs: Vec<Ref>,
+}
+
+/// Review or audit results: 2–30 items, in the reply's order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Findings {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub source: Source,
+    pub items: Vec<Finding>,
     pub provenance: Provenance,
 }

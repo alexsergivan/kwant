@@ -33,7 +33,7 @@ fn highlight(prose: &str) -> Option<String> {
 fn a_pipe_table_is_a_comparison_with_cells_copied_verbatim() {
     let c = comparison_of(PLANS);
     assert_eq!(c.id, "b0");
-    assert_eq!((c.source.kind.as_str(), c.source.index), ("markdown_table", 0));
+    assert_eq!((c.source.kind.as_str(), c.source.index), ("markdown_table", Some(0)));
     assert_eq!(c.provenance.kind, "reply_text");
     let cols: Vec<(&str, &str, bool, Option<&str>)> =
         c.columns.iter().map(|k| (k.key.as_str(), k.label.as_str(), k.numeric, k.unit.as_deref())).collect();
@@ -89,11 +89,11 @@ fn tables_in_code_are_neither_offered_nor_counted() {
     for fence in ["```", "~~~", "````"] {
         let text = format!("{fence}\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |\n{fence}\n\n{PLANS}");
         let c = comparison_of(&text);
-        assert_eq!(c.source.index, 0, "{fence}");
+        assert_eq!(c.source.index, Some(0), "{fence}");
         assert_eq!(c.rows[0].cells[0], "Basic");
     }
     let indented = format!("Code:\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n\n{PLANS}");
-    assert_eq!(comparison_of(&indented).source.index, 0);
+    assert_eq!(comparison_of(&indented).source.index, Some(0));
     // An unclosed fence hides the rest of the reply
     assert_eq!(first(&format!("```\n{PLANS}")), None);
 }
@@ -102,10 +102,10 @@ fn tables_in_code_are_neither_offered_nor_counted() {
 fn the_first_qualifying_table_wins_and_keeps_its_index() {
     let small = "| a | b |\n|---|---|\n| 1 | 2 |\n\n";
     let c = comparison_of(&format!("{small}{PLANS}"));
-    assert_eq!(c.source.index, 1);
+    assert_eq!(c.source.index, Some(1));
     // A table beats a list, wherever the list is
     let text = format!("Steps:\n1. One\n2. Two\n3. Three\n\n{PLANS}");
-    assert_eq!(comparison_of(&text).source.index, 0);
+    assert_eq!(comparison_of(&text).source.index, Some(0));
 }
 
 #[test]
@@ -130,7 +130,24 @@ fn uncertain_structure_before_a_candidate_abstains() {
     assert_eq!(first(&format!("a\tb\n\n{PLANS}")), None);
     // What comes after the uncertain part is out; what comes before is still offered
     let before = format!("{PLANS}\n> | a | b |\n> |---|---|\n> | 1 | 2 |\n");
-    assert_eq!(comparison_of(&before).source.index, 0);
+    assert_eq!(comparison_of(&before).source.index, Some(0));
+}
+
+#[test]
+fn text_the_chat_reads_differently_abstains() {
+    // `- | -` under a pipe line is a bullet item to the chat, not a delimiter row
+    assert_eq!(first(&format!("a | b\n- | -\n1 | 2\n\n{PLANS}")), None);
+    // A one-column table needs no pipe when its delimiter has a colon
+    assert_eq!(first(&format!("Pro\n--:\nrow\n\n{PLANS}")), None);
+    // ... but `---` under a line is a heading, and the table after it is still table 0
+    assert_eq!(comparison_of(&format!("Pro\n---\n\n{PLANS}")).source.index, Some(0));
+    // A footnote definition is rendered at the end, with any table in it
+    let note = format!("Text[^1]\n\n[^1]: Note\n\n    | k | v |\n    |---|---|\n    | a | 1 |\n\n{PLANS}");
+    assert_eq!(first(&note), None);
+    // A [DECISIONS] tag left in the text: the chat hides it and what follows, and trims the rest
+    assert_eq!(first(&format!("Intro [DECISIONS]\n\n{PLANS}")), None);
+    let trimmed = "    1. a\n    2. b\n\nSteps:\n1. One\n2. Two\n3. Three\n\n[DECISIONS] none\n";
+    assert_eq!(first(trimmed), None);
 }
 
 #[test]
@@ -218,7 +235,7 @@ fn numeric_columns_and_units() {
 #[test]
 fn a_numbered_list_introduced_as_steps_is_steps() {
     let s = steps_of("Steps:\n1. Open settings\n2. Pick a bot\n3. Save\n");
-    assert_eq!((s.source.kind.as_str(), s.source.index), ("markdown_list", 0));
+    assert_eq!((s.source.kind.as_str(), s.source.index), ("markdown_list", Some(0)));
     let items: Vec<(&str, &str)> = s.items.iter().map(|i| (i.id.as_str(), i.text.as_str())).collect();
     assert_eq!(items, [("s0", "Open settings"), ("s1", "Pick a bot"), ("s2", "Save")]);
     assert!(first("Here's how to set it up:\n1. One\n2. Two\n3. Three\n").is_some());
@@ -247,19 +264,27 @@ fn other_numbered_lists_stay_text() {
 }
 
 #[test]
-fn a_task_list_is_counted_but_not_offered() {
+fn a_task_list_is_a_checklist_and_counts_among_numbered_lists() {
     let text = "Plan:\n1. [ ] a\n2. [x] b\n3. [ ] c\n\nSteps:\n1. One\n2. Two\n3. Three\n";
-    assert_eq!(steps_of(text).source.index, 1);
+    let c = steps_of(text);
+    assert_eq!((c.variant, c.source.index, c.source.ordered), (Variant::Checklist, Some(0), Some(true)));
+    let done: Vec<_> = c.items.iter().map(|i| (i.text.as_str(), i.done)).collect();
+    assert_eq!(done, [("a", Some(false)), ("b", Some(true)), ("c", Some(false))]);
+    let all = candidates(text);
+    match &all[1] {
+        Block::Steps(s) => assert_eq!((s.variant, s.source.index), (Variant::Steps, Some(1))),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
 fn lists_are_counted_in_order_and_by_delimiter() {
     // `1.` then `1)` is two lists
     let text = "Steps:\n1. a\n2. b\n1) c\n2) d\n3) e\n\nSteps:\n1. One\n2. Two\n3. Three\n";
-    assert_eq!(steps_of(text).source.index, 2);
+    assert_eq!(steps_of(text).source.index, Some(2));
     // A list in a fence isn't counted
     let text = "```\n1. a\n2. b\n3. c\n```\n\nSteps:\n1. One\n2. Two\n3. Three\n";
-    assert_eq!(steps_of(text).source.index, 0);
+    assert_eq!(steps_of(text).source.index, Some(0));
 }
 
 #[test]
@@ -371,4 +396,18 @@ fn a_long_run_of_recommending_prose_names_no_pick() {
     assert_eq!(highlight(&some).as_deref(), Some("r1"));
     let too_much = format!("I recommend Team. {}", "We recommend reading the docs. ".repeat(300));
     assert_eq!(highlight(&too_much), None);
+}
+
+/// Found by the bullet-list cross-check (index-check, Z129 and K20).
+#[test]
+fn bullet_lists_end_where_the_chat_ends_them() {
+    // `3.` after a bullet item: lazy text or a new numbered list; either way no later bullet
+    // list is sure of its number
+    let text = "- a\n- b\n3. c\n4. d\n\n- [ ] x task\n- [ ] y task\n- [ ] z task\n";
+    assert!(candidates(text).iter().all(|b| b.source().ordered != Some(false)), "{:?}", candidates(text));
+    // A fence opened on the marker line belongs to the item, and the list isn't offered
+    let text = "- ```\n  [ ] a\n  ```\n\nLaunch:\n\n- [ ] x task\n- [ ] y task\n- [ ] z task\n";
+    let Some(Block::Steps(s)) = first(text) else { panic!("{:?}", first(text)) };
+    assert_eq!((s.variant, s.source.index), (Variant::Checklist, Some(1)));
+    assert_eq!(first("Steps:\n1. ```\n2. b\n3. c\n"), None);
 }
