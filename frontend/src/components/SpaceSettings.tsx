@@ -25,6 +25,7 @@ import { SPACE_COLORS, SPACE_ICONS, Space, spaceColor, spaceNameError, spacesApi
 import { useEngines } from '../useEngines';
 import { useProfiles } from '../useProfiles';
 import type { Profile } from '../profiles';
+import { AccountPriority } from './AccountPriority';
 import { EnginesPanel } from './EnginesPanel';
 import { ApiKeysPanel } from './ApiKeysPanel';
 import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
@@ -527,6 +528,9 @@ const AccountsTab: React.FC<Props> = ({ space, focusClaudeSignIn, onProfilesChan
   return (
     <div className="space-y-3">
       <p className="text-xs text-zinc-400">What runs your kwant bots in {space.name}: the accounts here, and This machine when it’s on.</p>
+      {accounts.profiles && accounts.profiles.length > 1 && (
+        <AccountPriority profiles={accounts.profiles} engines={engines.engines} onChanged={accounts.reload} />
+      )}
       <EnginesPanel api={engines} accounts={accounts} focusClaudeSignIn={focusClaudeSignIn} />
       <ApiKeysPanel
         onSaved={() => {

@@ -13,6 +13,7 @@ import {
   AwaySection,
   Tone,
   actionFailureNotice,
+  awaySummary,
   awayApi,
   isAwayEmpty,
   itemLabel,
@@ -80,7 +81,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
             </div>
             <p className="mt-0.5 text-sm font-medium text-zinc-100 truncate">{item.title}</p>
             {/* A question's summary just lists its choices, which are buttons below. */}
-            {item.summary && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length) && <p className="text-xs text-zinc-400 truncate">{item.summary}</p>}
+            {awaySummary(item) && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length) && <p className="text-xs text-zinc-400 truncate">{awaySummary(item)}</p>}
           </div>
         </button>
 

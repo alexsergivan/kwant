@@ -14,7 +14,9 @@ import { QuestionMeta, parseQuestionMeta } from '../questions';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
-import { ReplyMeta } from './ReplyMeta';
+import { FailoverNote, ReplyMeta } from './ReplyMeta';
+import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
+import { savedFailoverNotice } from '../failover';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
 import { BotActionMeta, HireMeta, parseBotActionMeta, parseHireMeta } from '../botActions';
 import {
@@ -250,6 +252,8 @@ export interface ChatViewProps {
   deciding?: { botName: string; consulted: string[] } | null;
   /** Change on a decision chip; resolves to an error message on failure. */
   onChangeDecision?: (msg: ChatMessage, index: number, picked: string) => Promise<string | void>;
+  /** Quiet "answered on another account" lines, one per outage; each shows under that bot's name. */
+  switchNotes?: SwitchNote[];
 }
 
 export const renderFormattedText = (text: string): React.ReactNode => {
@@ -524,6 +528,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   queued,
   renderDelegation,
   renderQuestion,
+  switchNotes,
   renderMcpSuggestion,
   renderConnectionSuggestion,
   renderBotAction,
@@ -942,6 +947,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if ((await onSendMessage(target.text, target.attachments)) === false) throw new Error('not sent');
   };
 
+  const switchNoteFor = useMemo(
+    () => assignSwitchNotes(switchNotes ?? [], messages, (m) => (m.sender_id && m.sender_id.length > 20 ? title : m.sender_id)),
+    [switchNotes, messages, title],
+  );
+  const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
+
   const renderMessage = (msg: ChatMessage) => {
     const interruption = parseInterruption(msg);
     if (interruption)
@@ -1064,6 +1075,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               account={account}
               tokens={tokens}
               failed={!!savedActivity?.steps.some((s) => s.status === 'failed')}
+              note={savedFailoverNotice(msg.meta) ?? switchNoteFor.get(msg.id)}
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
@@ -1456,6 +1468,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </span>
                 )}
               </div>
+
+              {liveNote && <FailoverNote text={liveNote} />}
 
               {liveActivity && <LiveActivityList live={liveActivity} idBase={`live-${liveActivity.turnId}`} />}
 

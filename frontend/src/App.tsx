@@ -77,7 +77,9 @@ import {
   turnsIn,
   upsertThread,
 } from './threads';
-import { Profile, describeProfileSwitch, profilesApi } from './profiles';
+import { Profile, profilesApi } from './profiles';
+import { FailoverEvent, createOutageLog, failoverNotice, outageKey } from './failover';
+import type { SwitchNote } from './failoverNotes';
 import {
   NotifyEvent,
   NotifyKind,
@@ -325,6 +327,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [historyWindow, setHistoryWindow] = useState<{ ctx: string; messages: ChatMessage[] } | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [switchNotes, setSwitchNotes] = useState<SwitchNote[]>([]);
+  const switchLogRef = useRef(createOutageLog());
   // What fills the main pane instead of a chat: the Inbox (New or Loose ends), the Mission board
   // or Parallel Universe. The Inbox's unseen count is the sidebar badge.
   const [page, setPage] = useState<'chat' | 'inbox' | 'board' | 'parallel'>(() =>
@@ -905,11 +909,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'profile_switched':
           case 'ProfileSwitched': {
-            const kwantName = kwantsRef.current.find((k) => k.id === event.data?.kwant_id)?.name;
-            const { title, detail } = describeProfileSwitch(event.data, kwantName);
-            const id = ++toastIdRef.current;
-            setToasts((prev) => [...prev.slice(-2), { id, title, detail }]);
-            playSfx('alert');
+            // A quiet line under the bot's name, once per chat per outage; no toast and no sound.
+            const sw = event.data as FailoverEvent | undefined;
+            const botName = kwantName(sw?.kwant_id);
+            if (sw && botName && switchLogRef.current.first(outageKey(sw, sw.context_id))) {
+              const note: SwitchNote = { name: botName, text: failoverNotice(sw), at: Date.now() };
+              setSwitchNotes((prev) => [...prev.filter((n) => Date.now() - n.at < 24 * 3600_000).slice(-19), note]);
+            }
             refreshProfiles();
             break;
           }
@@ -3041,6 +3047,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           queued={queuedHere}
           renderDelegation={renderDelegation}
+          switchNotes={switchNotes}
           renderQuestion={renderQuestion}
           renderMcpSuggestion={renderMcpSuggestion}
           renderConnectionSuggestion={renderConnectionSuggestion}
