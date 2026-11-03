@@ -44,10 +44,10 @@ pub mod smart_results;
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
 /// Default's #general description before the "kwant bots" wording; replaced only if unchanged.
 const OLD_GENERAL_DESCRIPTION: &str = "Main collaboration hub for all agents";
-/// Set once [`Database::migrate_chain_budget_default`] has run.
 /// How long a connection waits for SQLite's write lock (sqlx's default, kept explicit).
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Set once [`Database::migrate_chain_budget_default`] has run.
 const CHAIN_BUDGET_OPT_IN_DONE: &str = "chain_token_budget_opt_in_v1";
 
 use models::*;
