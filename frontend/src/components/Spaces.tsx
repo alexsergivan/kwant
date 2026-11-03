@@ -44,7 +44,7 @@ interface RailProps {
 }
 
 export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, onCreate, onOpenAppSettings }) => (
-  <nav aria-label="Spaces" className="hidden md:flex w-[68px] shrink-0 flex-col items-center gap-2 py-3 border-r border-zinc-800/80 bg-zinc-950 select-none">
+  <nav aria-label="Spaces" className="hidden md:flex w-[68px] shrink-0 flex-col items-center gap-2 py-3 border-r border-hairline bg-surface-rail select-none">
     <ul className="flex flex-col items-center gap-2 flex-1 overflow-y-auto overflow-x-hidden w-full">
       {spaces.map((s, i) => {
         const active = s.id === currentId;

@@ -7,6 +7,8 @@ export interface MentionItem {
   id: string;
   name: string;
   title?: string;
+  /** One-line "good at" phrases (same source as the bot home chips); shown instead of the title. */
+  goodAt?: string[];
   avatar_sprite?: string;
   memberCount?: number;
 }
@@ -40,7 +42,10 @@ export const MentionPopover: React.FC<MentionPopoverProps> = ({
 
   return (
     <div
-      className="absolute bottom-full left-0 mb-2 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl p-1.5 min-w-[240px] max-w-sm max-h-64 overflow-y-auto z-50 backdrop-blur-md"
+      role="listbox"
+      aria-label="Mention a bot"
+      id="kw-mention-list"
+      className="kw-fade-in absolute bottom-full left-0 mb-2 bg-surface-overlay border border-hairline-strong rounded-xl shadow-raised p-1.5 min-w-[260px] w-[min(22rem,calc(100vw-2rem))] max-h-72 overflow-y-auto z-50"
       style={
         position
           ? { top: `${position.top}px`, left: `${position.left}px`, bottom: 'auto' }
@@ -56,30 +61,34 @@ export const MentionPopover: React.FC<MentionPopoverProps> = ({
           return (
             <React.Fragment key={`${item.type}-${item.id}`}>
               {showSectionHeader && (
-                <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-2.5 py-1 select-none">
+                <div className="text-2xs font-semibold text-zinc-400 uppercase tracking-wider px-2.5 py-1 select-none">
                   {item.type === 'kwant' ? 'Bots' : 'Teams'}
                 </div>
               )}
               <button
                 type="button"
+                role="option"
+                id={`kw-mention-${index}`}
+                aria-selected={isSelected}
                 ref={(el) => (itemRefs.current[index] = el)}
                 onClick={() => onSelect(item)}
                 onMouseDown={(e) => {
                   // Prevent input blur before click event fires
                   e.preventDefault();
                 }}
-                className={`w-full flex items-center justify-between gap-3 px-2.5 py-1.5 rounded-lg text-left transition-colors text-xs ${
+                className={`w-full flex items-center justify-between gap-3 px-2.5 py-2 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-lg text-left transition-colors text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
                   isSelected
-                    ? 'bg-zinc-800 text-zinc-100'
-                    : 'text-zinc-300 hover:bg-zinc-800/60 hover:text-zinc-100'
+                    ? 'bg-white/[0.1] text-zinc-50 ring-1 ring-inset ring-sky-400/40'
+                    : 'text-zinc-200 hover:bg-white/[0.06] hover:text-zinc-50'
                 }`}
               >
                 <div className="flex items-center gap-2.5 min-w-0">
                   {item.type === 'kwant' ? (
                     <ModernAvatar
-                      role={item.title || item.name}
+                      role={item.avatar_sprite || item.title || item.name}
                       name={item.name}
-                      size={24}
+                      size={32}
+                      kwantId={item.id}
                     />
                   ) : (
                     <div className="w-6 h-6 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center flex-shrink-0">
@@ -88,12 +97,12 @@ export const MentionPopover: React.FC<MentionPopoverProps> = ({
                   )}
 
                   <div className="min-w-0 truncate">
-                    <div className="font-medium truncate text-zinc-100">
+                    <div className="font-semibold text-body truncate text-zinc-50">
                       @{item.name}
                     </div>
-                    {item.title && (
-                      <div className="text-[10px] text-zinc-400 truncate">
-                        {item.title}
+                    {(item.goodAt?.length || item.title) && (
+                      <div className="text-meta text-zinc-300 truncate" data-good-at>
+                        {item.goodAt?.length ? `Good at ${item.goodAt.slice(0, 3).join(' · ')}` : item.title}
                       </div>
                     )}
                   </div>

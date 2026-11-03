@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, ShieldOff, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, ShieldOff, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -124,9 +124,13 @@ export interface SidebarProps {
   engines?: EnginesApi;
 }
 
+/** A bot's own approvals setting differs from its space's: the only time its row says anything about it. */
+export const approvalsDiffers = (k: { approvals_effective?: string | null }, spaceApprovals: string | undefined): boolean =>
+  !!k.approvals_effective && !!spaceApprovals && k.approvals_effective !== spaceApprovals;
+
 const navRow = (active: boolean) =>
-  `w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-    active ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50' : 'text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50 border border-transparent'
+  `w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-body font-medium transition-colors text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+    active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
   }`;
 
 export const memberIdsOf = (t: Team): string[] =>
@@ -333,7 +337,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const offLine = spaceOffLine(space.approvals, kwants);
   // Phones: section titles stay pinned while their list scrolls, so they are never cut off
-  const sectionHead = `px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-zinc-500 uppercase tracking-wider${
+  const sectionHead = `px-2 py-1 flex items-center justify-between text-2xs font-semibold text-zinc-400 uppercase tracking-wider${
     phone ? ' kw-sticky-head sticky top-0 z-10' : ''
   }`;
   // Phones: "New …" is a plain + icon (44px to tap) instead of a boxed button
@@ -366,8 +370,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         // Only the row's own Enter: Enter on its ✕ or Edit is for that button, not for opening the chat.
         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelectKwant(k)}
         data-bot-row={k.id}
-        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-left cursor-pointer transition-all ${
-          active ? 'bg-zinc-800/90 text-zinc-100 shadow-sm border border-zinc-700/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40 border border-transparent'
+        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+          active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >
         <span className="shrink-0" title={status === 'cant_run' ? "Can't run yet: no account works here" : statusText(k.name, status)}>
@@ -377,25 +381,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Desktop: on hover or focus the name makes room for Edit and Remove instead of sitting under them */}
           <div data-bot-name-line className={`flex items-start gap-1 ${!phone && hasRowActions ? 'group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : ''}`}>
             {/* The full name, on up to two lines (QA a); what it runs on is in the tooltip */}
-            <span data-bot-name className="min-w-0 text-xs font-semibold leading-4 text-zinc-200 line-clamp-2 [overflow-wrap:anywhere]" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
+            <span data-bot-name className="min-w-0 text-body font-semibold leading-5 text-zinc-100 line-clamp-2 [overflow-wrap:anywhere]" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
               {k.name}
             </span>
             {isLead && (
-              <span className="shrink-0 flex items-center gap-0.5 h-4 text-[9px] uppercase tracking-wide text-amber-300/90" title={`Leads @${team!.name}`}>
+              <span className="shrink-0 flex items-center gap-0.5 h-5 text-2xs uppercase tracking-wide text-amber-300" title={`Leads @${team!.name}`}>
                 <Crown size={10} aria-hidden="true" />
                 lead
               </span>
             )}
             {needsYou[k.id] > 0 && (
               <span
-                className="shrink-0 inline-flex items-center gap-1 px-1.5 py-px rounded-full text-[10px] font-medium bg-amber-400/15 text-amber-200 border border-amber-400/30"
+                className="shrink-0 inline-flex items-center gap-1 px-1.5 py-px rounded-full text-2xs font-medium bg-amber-300/10 text-warn border border-amber-300/30"
                 title={`${k.name} needs you in the browser`}
               >
                 <Hand size={10} aria-hidden="true" />
                 Needs you{needsYou[k.id] > 1 ? ` · ${needsYou[k.id]}` : ''}
               </span>
             )}
-            {approvalsOff(k) && <ApprovalsOffBadge compact title={`${k.name} acts without asking. Payments still ask you.`} />}
+            {/* The space header already says when approvals are off for everyone: a bot only gets its own mark when it differs */}
+            {approvalsDiffers(k, space.approvals) &&
+              (approvalsOff(k) ? (
+                <ApprovalsOffBadge compact title={`${k.name} acts without asking. Payments still ask you.`} />
+              ) : (
+                <span className="shrink-0 inline-flex items-center text-teal-300" title={`${k.name} still asks before acting, unlike the rest of ${space.name}.`}>
+                  <ShieldCheck size={12} aria-hidden="true" />
+                  <span className="sr-only">Asks before acting</span>
+                </span>
+              ))}
             {/* Over the row's right edge, so a long name gets the full width until you hover */}
             {!phone && (
               <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-zinc-800/95 opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 empty:hidden">
@@ -434,11 +447,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
           {busyKwants[k.id] ? (
-            <p className="text-[11px] text-sky-300 truncate" title={busyKwants[k.id]}>
-              {busyKwants[k.id]}
+            <p className={`flex items-center gap-1.5 text-meta truncate ${status === 'needs_you' ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-ok'}`} title={busyKwants[k.id]} data-bot-busy>
+              <span className={`kw-status-dot !h-1.5 !w-1.5 ${status === 'needs_you' ? 'kw-status-warn' : status === 'queued' ? 'kw-status-idle' : 'kw-status-ok kw-pulse'}`} aria-hidden="true" />
+              <span className="truncate">{busyKwants[k.id]}</span>
             </p>
           ) : (
-            <p className="text-[11px] text-zinc-500 truncate">{k.title}</p>
+            <p className="text-meta text-zinc-400 truncate">{k.title}</p>
           )}
         </div>
         {/* Phones: one button at the row's end; in a team it opens the member's actions */}
@@ -489,8 +503,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelectTeam(t)}
         data-team-row={t.id}
         title={`Open the @${t.name} team chat`}
-        className={`w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left group cursor-pointer ${
-          active ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50' : 'text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800/50 border border-transparent'
+        className={`w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-body font-medium transition-colors text-left group cursor-pointer ${
+          active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >
         <div className="flex items-center gap-1.5 min-w-0">
@@ -513,7 +527,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {(!expanded || !withMembers) && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full tabular-nums bg-zinc-800/80 text-zinc-400 border border-zinc-800" title={`${count} ${count === 1 ? 'member' : 'members'}`}>
+            <span className="text-2xs px-1.5 py-0.5 rounded-full tabular-nums bg-white/[0.05] text-zinc-300 border border-hairline" title={`${count} ${count === 1 ? 'member' : 'members'}`}>
               {count}
             </span>
           )}
@@ -605,7 +619,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <button
         type="button"
         onClick={onClick}
-        className="flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20 transition-all normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        className="flex items-center gap-1 text-2xs font-medium text-sky-300 hover:text-sky-200 hover:bg-sky-500/10 px-2 py-0.5 rounded-full border border-sky-400/25 transition-all normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
         title={title}
       >
         <Plus size={11} />
@@ -617,7 +631,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside
       ref={asideRef}
       aria-label={`${space.name} chats and kwant bots`}
-      className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-zinc-800/80'} bg-zinc-900/40 flex flex-col select-none flex-shrink-0`}
+      className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-hairline'} bg-surface-side flex flex-col select-none flex-shrink-0`}
     >
       {/* The open space. Desktop switches spaces on the rail, so this is its name and settings;
           phones have no rail, so here it is their one switcher. */}
@@ -636,8 +650,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <SpaceTile space={space} size={32} />
             <span className="flex-1 min-w-0">
-              <span className="block text-sm font-semibold text-zinc-100 truncate">{space.name}</span>
-              <span className="block text-[11px] text-zinc-500 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
+              <span className="block text-body font-semibold text-zinc-50 truncate">{space.name}</span>
+              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
             </span>
             <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
@@ -645,8 +659,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex items-center gap-2.5 px-1.5 py-1.5" data-space-header>
             <SpaceTile space={space} size={32} />
             <span className="flex-1 min-w-0">
-              <h1 className="text-sm font-semibold text-zinc-100 truncate">{space.name}</h1>
-              <span className="block text-[11px] text-zinc-500 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
+              <h1 className="text-body font-semibold text-zinc-50 truncate">{space.name}</h1>
+              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
             </span>
             <button
               type="button"
@@ -668,7 +682,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={onOpenSpaceSettings}
             title="Bots here act without asking, including deletions, publishing and sign-ins. Payments still ask you. Change it in Settings › This space."
-            className="mt-1 w-full flex items-center gap-1.5 px-2 py-1 rounded-md border border-amber-500/30 bg-amber-500/10 text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
+            className="mt-1.5 w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-amber-300/30 bg-amber-300/10 text-meta font-medium text-warn hover:bg-amber-300/15 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-300"
           >
             <ShieldOff size={12} aria-hidden="true" className="shrink-0" />
             <span className="truncate">{offLine}</span>
@@ -694,7 +708,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button type="button" onClick={onOpenSearch} className={navRow(false)}>
             <Search size={15} className="text-zinc-500" aria-hidden="true" />
             <span className="truncate flex-1">Search {space.name}</span>
-            {!phone && <kbd className="shrink-0 text-[10px] font-sans text-zinc-500">{isMac ? '⌘K' : 'Ctrl K'}</kbd>}
+            {!phone && <kbd className="shrink-0 rounded border border-hairline-strong px-1 text-2xs font-sans text-zinc-400">{isMac ? '⌘K' : 'Ctrl K'}</kbd>}
           </button>
           {/* Phones have Inbox as a tab */}
           {onOpenInbox && !phone && (
@@ -746,7 +760,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={() => onSelectChannel(c)}
                   // The channel's header says it too; no pill on every row
                   title={layaRoutes(c, kwants.length) ? 'Laya picks who answers here' : undefined}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all text-left ${
+                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-body font-medium transition-colors text-left ${
                     active
                       ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
                       : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
@@ -825,7 +839,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Footer: what this space's bots run on, from the real checks */}
       {/* On the phone's Chats tab only while nothing can run, so setup is never hidden there */}
       {engines.engines?.length !== 0 && (section !== 'chats' || canRun === false) ? (
-        <div className="p-3 border-t border-zinc-800/60 bg-zinc-950/40 text-[11px] text-zinc-500">
+        <div className="p-3 border-t border-hairline bg-surface-rail/60 text-meta text-zinc-400">
           <button
             type="button"
             onClick={offerClaude ? onSignInClaude : onOpenAccounts}
