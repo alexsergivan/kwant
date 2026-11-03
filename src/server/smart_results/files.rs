@@ -158,9 +158,13 @@ fn utf16(bytes: &[u8], read: fn([u8; 2]) -> u16) -> Option<String> {
 }
 
 /// The first 20 lines (control characters dropped, each at most 300 characters) joined by newlines.
+/// Trailing blank lines are not lines.
 /// When the file has more, `truncated` is set and, if every line was counted, `total_lines` says
 /// how many there are. A file cut at the read cap (`capped`) has `truncated` and no total.
 fn excerpt(text: &str, capped: bool) -> FilePreview {
+    // Lines are counted the way a reader counts them: a final newline and trailing blank lines
+    // add none, so a 20-line file is never "cut" or reported as 22 lines.
+    let text = text.trim_end_matches(|c: char| c.is_whitespace());
     let mut lines = text.lines();
     let shown: Vec<String> = lines.by_ref().take(MAX_LINES).map(|l| safe(l, MAX_CELL)).collect();
     let rest = lines.count();
@@ -254,5 +258,57 @@ impl Iterator for Records<'_> {
                 return Some(fields);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text(p: FilePreview) -> (String, bool, Option<u64>) {
+        match p {
+            FilePreview::Text { excerpt, truncated, total_lines } => (excerpt, truncated, total_lines),
+            _ => panic!("not a text preview"),
+        }
+    }
+
+    fn lines(n: usize) -> String {
+        (1..=n).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn trailing_blank_lines_are_not_lines() {
+        // 20 real lines followed by "\n\n" is a 20-line file that fits: complete, no totals
+        let (shown, truncated, total) = text(excerpt(&format!("{}\n\n", lines(20)), false));
+        assert_eq!(shown.lines().count(), 20);
+        assert!(!truncated, "a file that fits must not be marked truncated");
+        assert_eq!(total, None);
+        // whitespace-only trailing lines and CRLF endings count the same way
+        let (shown, truncated, total) = text(excerpt(&format!("{}\r\n  \r\n\t\r\n", lines(20).replace('\n', "\r\n")), false));
+        assert_eq!((shown.lines().count(), truncated, total), (20, false, None));
+    }
+
+    #[test]
+    fn a_short_file_keeps_no_blank_tail() {
+        let (shown, truncated, total) = text(excerpt("a\nb\n\n\n\n\n", false));
+        assert_eq!((shown.as_str(), truncated, total), ("a\nb", false, None));
+    }
+
+    #[test]
+    fn a_cut_file_counts_only_real_lines() {
+        // 22 real lines plus a blank tail: 20 shown, total 22 (not 24)
+        let (shown, truncated, total) = text(excerpt(&format!("{}\n\n\n", lines(22)), false));
+        assert_eq!(shown.lines().count(), 20);
+        assert!(truncated);
+        assert_eq!(total, Some(22));
+        // a blank line inside the file is still a line
+        let (_, truncated, total) = text(excerpt("a\n\nb\n", false));
+        assert_eq!((truncated, total), (false, None));
+    }
+
+    #[test]
+    fn a_file_cut_at_the_read_cap_stays_truncated_without_a_total() {
+        let (_, truncated, total) = text(excerpt(&lines(5), true));
+        assert_eq!((truncated, total), (true, None));
     }
 }
