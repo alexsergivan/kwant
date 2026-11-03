@@ -45,12 +45,18 @@ pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who an
 /// Default's #general description before the "kwant bots" wording; replaced only if unchanged.
 const OLD_GENERAL_DESCRIPTION: &str = "Main collaboration hub for all agents";
 /// Set once [`Database::migrate_chain_budget_default`] has run.
+/// How long a connection waits for SQLite's write lock (sqlx's default, kept explicit).
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 const CHAIN_BUDGET_OPT_IN_DONE: &str = "chain_token_budget_opt_in_v1";
 
 use models::*;
 use spaces::SpaceId;
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
-use std::path::Path;
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Pool, Sqlite,
+};
+use std::{path::Path, str::FromStr, time::Duration};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -110,16 +116,23 @@ const STARTERS: [(&str, &str, &str, &str, &str); 3] = [
 
 impl Database {
     pub async fn init(data_dir: &Path) -> Result<Self, DbError> {
-        Self::open(data_dir, true).await
+        Self::open(data_dir, true, BUSY_TIMEOUT).await
+    }
+
+    /// `init` with a longer wait for SQLite's write lock, for tests that make many connections
+    /// write at once on a loaded machine (a writer waits this long at `BEGIN IMMEDIATE`).
+    #[doc(hidden)]
+    pub async fn init_with_busy_timeout(data_dir: &Path, busy_timeout: Duration) -> Result<Self, DbError> {
+        Self::open(data_dir, true, busy_timeout).await
     }
 
     /// The database as a release from before spaces leaves it, for migration tests.
     #[doc(hidden)]
     pub async fn init_without_spaces(data_dir: &Path) -> Result<Self, DbError> {
-        Self::open(data_dir, false).await
+        Self::open(data_dir, false, BUSY_TIMEOUT).await
     }
 
-    async fn open(data_dir: &Path, spaces: bool) -> Result<Self, DbError> {
+    async fn open(data_dir: &Path, spaces: bool, busy_timeout: Duration) -> Result<Self, DbError> {
         std::fs::create_dir_all(data_dir)?;
         let db_path = data_dir.join("kwnt.db");
         let fresh = !db_path.exists();
@@ -217,9 +230,12 @@ impl Database {
         db.migrate_truth_ledger().await?;
         db.pool.close().await;
 
+        // Said out loud rather than left to sqlx's default: every writer, a goal proposal
+        // included, waits this long for the lock before "database is locked"
+        let options = SqliteConnectOptions::from_str(&conn_str)?.busy_timeout(busy_timeout);
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
-            .connect(&conn_str)
+            .connect_with(options)
             .await?;
         sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
         Ok(Self { pool, data_dir: data_dir.to_path_buf() })

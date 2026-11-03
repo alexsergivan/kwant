@@ -318,11 +318,22 @@ async fn the_api_creates_edits_pauses_and_deletes_goals() {
     assert_eq!((v["goal"]["status"].as_str(), v["goal"]["mode"].as_str(), v["goal"]["confirm_failures"].as_i64()), (Some("checking"), Some("suggest"), Some(2)));
     assert_eq!(v["goal"]["checks"][0]["says"], format!("{url} answers with status 200"));
     assert_eq!(v["goal"]["checks"][1]["required"], false);
+    // M1: the lowest latency target that can be met (lt 1) is accepted, lt 0 is refused in plain words
+    let edge = json!({"title": "Fast", "checks": [{"kind": "http", "spec": {"url": url}, "metric": "latency_ms", "operator": "lt", "target": 1}]});
+    let (status, v2) = call(&e.app, "POST", "/api/goals", None, Some(edge)).await;
+    assert_eq!(status, StatusCode::OK, "{v2}");
+    assert_eq!(v2["goal"]["checks"][0]["target"], "1");
+    let none = json!({"title": "Fast", "checks": [{"kind": "http", "spec": {"url": url}, "metric": "latency_ms", "operator": "lt", "target": 0}]});
+    let (status, v3) = call(&e.app, "POST", "/api/goals", None, Some(none)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(v3["error"].as_str().unwrap_or("").contains("never be met"), "{v3}");
     // Refusals
     for (bad, code) in [
         (json!({"title": "", "checks": [{"kind": "http", "spec": {"url": url}}]}), StatusCode::BAD_REQUEST),
         (json!({"title": "x", "checks": [{"kind": "http", "spec": {"url": url}, "severity": "advisory"}]}), StatusCode::BAD_REQUEST),
         (json!({"title": "x", "interval_minutes": 5, "checks": [{"kind": "http", "spec": {"url": url}}]}), StatusCode::BAD_REQUEST),
+        // M1: a latency under 0 ms could never be met
+        (json!({"title": "x", "checks": [{"kind": "http", "spec": {"url": url}, "metric": "latency_ms", "operator": "lt", "target": 0}]}), StatusCode::BAD_REQUEST),
         (json!({"from_task": "t1"}), StatusCode::NOT_FOUND), // wired by goals-remediation: an unknown task is a 404
     ] {
         let (status, v) = call(&e.app, "POST", "/api/goals", None, Some(bad.clone())).await;
@@ -384,6 +395,11 @@ async fn propose(e: &Env, token: &str, args: Value) -> (bool, String) {
 async fn a_bot_proposes_drafts_and_only_the_person_approves() {
     let e = setup().await;
     let token = turn(&e, "t-goal").await;
+    // M1: an impossible target is refused with a plain reason and takes no draft slot
+    let impossible = json!({"title": "Fast", "checks": [{"kind": "http", "spec": {"url": "https://example.com"}, "metric": "latency_ms", "operator": "lt", "target": 0}]});
+    let (err, text) = propose(&e, &token, impossible).await;
+    assert!(err && text.contains("never be met"), "{text}");
+    assert_eq!(e.state.db.count_draft_goals(&e.space).await.unwrap(), 0);
     let args = json!({"title": "Report exists", "mode": "fix", "checks": [{"kind": "file_exists", "spec": {"path": "report.md"}}]});
     let (err, text) = propose(&e, &token, args.clone()).await;
     assert!(!err, "{text}");

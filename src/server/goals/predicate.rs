@@ -142,6 +142,10 @@ pub fn normalize(kind: &str, spec: &Value, metric: Option<&str>, operator: Optio
         "exit_code" => whole(target, 0, 255).ok_or("an exit code target is a whole number from 0 to 255")?.to_string(),
         "latency_ms" => {
             let n = number(target).filter(|n| (0.0..=MAX_LATENCY_MS).contains(n)).ok_or("a latency target is a number of milliseconds from 0 to 600000")?;
+            // A latency is never below 0, so "under 0 ms" can never be met
+            if n == 0.0 && operator == Some("lt") {
+                return Err("a latency can't be under 0 ms, so that goal could never be met: use 1 or more with lt, or lte 0".into());
+            }
             plain(n)
         }
         "stdout_number" => plain(number(target).ok_or("stdout_number needs a number target, at most 1e15 either way")?),
@@ -574,6 +578,11 @@ mod tests {
         assert!(n("http", json!({}), Some("latency_ms"), Some("eq"), Some("500")).is_err());
         assert!(n("http", json!({}), Some("latency_ms"), Some("lt"), Some("fast")).is_err());
         assert!(n("http", json!({}), Some("latency_ms"), Some("lt"), Some("-1")).is_err());
+        // M1: nothing is under 0 ms; 1 is the lowest target that can be met
+        assert!(n("http", json!({}), Some("latency_ms"), Some("lt"), Some("0")).unwrap_err().contains("never be met"));
+        assert!(n("http", json!({}), Some("latency_ms"), None, Some("0.0")).is_err());
+        assert_eq!(n("http", json!({}), Some("latency_ms"), Some("lt"), Some("1")), Ok(Some(p("latency_ms", Some("lt"), "1"))));
+        assert_eq!(n("http", json!({}), Some("latency_ms"), Some("lte"), Some("0")), Ok(Some(p("latency_ms", Some("lte"), "0"))));
         assert!(n("command", json!({}), Some("stdout_number"), Some("lt"), Some("NaN")).is_err());
         assert!(n("command", json!({}), Some("stdout_number"), Some("lt"), Some("Infinity")).is_err());
         assert!(n("command", json!({}), Some("stdout_number"), Some("lt"), Some("1e308")).is_err());
