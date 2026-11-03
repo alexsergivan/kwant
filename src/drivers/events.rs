@@ -143,8 +143,9 @@ pub enum RuntimeEvent {
         tag: TurnTag,
         event: Box<RuntimeEvent>,
     },
-    /// A turn moved to another profile of the same engine because the first ran out of quota
-    /// or was signed out. `class` is "quota" or "auth".
+    /// A turn moved to another account because the first ran out of quota or was signed out,
+    /// on the same engine or another one (`from_engine` ≠ `to_engine`). `class` is "quota" or
+    /// "auth". Sent once per chat per outage. Engines are "claude", "codex", "grok" or "custom".
     #[serde(rename = "profile_switched", alias = "ProfileSwitched")]
     ProfileSwitched {
         kwant_id: String,
@@ -155,6 +156,15 @@ pub enum RuntimeEvent {
         class: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_at: Option<chrono::DateTime<chrono::Utc>>,
+        #[serde(default)]
+        from_engine: String,
+        #[serde(default)]
+        to_engine: String,
+        /// The model the turn was on, when it had started one; the one it moved to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to_model: Option<String>,
     },
     #[serde(rename = "discussion_started", alias = "DiscussionStarted")]
     DiscussionStarted {

@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 pub use classify::{classify, FailClass, ProviderFailure};
 pub use status::{ProfileManager, ProfileStatus};
 
-/// Most profiles one turn may try.
-pub const MAX_ATTEMPTS: usize = 3;
+/// Most accounts one turn may try, across every engine of the space (Claude, Claude API key,
+/// Codex, Grok, Custom API, plus a second account on a couple of them).
+pub const MAX_ATTEMPTS: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Engine {
@@ -371,7 +372,9 @@ impl Availability {
                 || self.signed_in.contains(&p.id))
     }
 
-    fn usable(&self, p: &LlmProfile, now: DateTime<Utc>) -> bool {
+    /// Whether `p` could take a turn now: not out of usage, not an API key without its key,
+    /// not known to be signed out.
+    pub fn usable(&self, p: &LlmProfile, now: DateTime<Utc>) -> bool {
         let limited = self
             .states
             .get(&p.id)
@@ -436,6 +439,99 @@ pub fn failover_order(
     order.extend(rest);
     order.truncate(MAX_ATTEMPTS);
     order
+}
+
+/// What a turn on one engine may try across the whole space, and why it started where it did.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct GlobalPlan {
+    /// Accounts to try in order; `None` is the host's own login or Settings key when the bot's
+    /// engine has no account of its own.
+    pub attempts: Vec<Option<LlmProfile>>,
+    /// The bot's own preferred account when it was left out because it is known to be out of
+    /// usage, so the turn can say once why it runs elsewhere.
+    pub skipped: Option<LlmProfile>,
+    /// When the skipped account's limit resets (`None`: it is skipped for another reason).
+    pub skipped_until: Option<DateTime<Utc>>,
+    /// Set when every account that could take a turn is known to be out of usage: the earliest
+    /// reset. The turn then parks instead of trying any of them.
+    pub all_out_until: Option<DateTime<Utc>>,
+}
+
+/// What the caller knows that the profile list doesn't, for [`global_order`].
+pub struct OrderRules<'a> {
+    /// Whether the host's own login or key may serve a bot whose engine has no account of its own.
+    pub host_head: bool,
+    /// Whether an account's engine may run it at all (engine switched off, host login unusable).
+    pub eligible: &'a dyn Fn(&LlmProfile) -> bool,
+}
+
+/// The accounts a turn on `engine` tries: its own preferred account first (`bound`, else the
+/// engine's default), then, with failover on, every other usable account of the space across
+/// all engines in ONE order, by `priority` (ties: oldest first). Accounts
+/// known to be out of usage are skipped up front, the bot's own too, unless nothing else is
+/// usable. With failover off the bot stays pinned to its own account.
+pub fn global_order(
+    profiles: &[LlmProfile],
+    engine: Engine,
+    bound: Option<&str>,
+    failover: bool,
+    avail: &Availability,
+    now: DateTime<Utc>,
+    rules: &OrderRules,
+) -> GlobalPlan {
+    let OrderRules { host_head, eligible } = rules;
+    let host_head = *host_head;
+    let elig: Vec<LlmProfile> = profiles.iter().filter(|p| p.enabled && eligible(p)).cloned().collect();
+    // The Accounts list order (`priority`) is the one truth: `is_default` does not jump the queue
+    // here. A bot explicitly bound to an enabled account of its engine starts on that account;
+    // every other bot starts at the top of its engine's accounts in the list.
+    let mut mine: Vec<&LlmProfile> = elig.iter().filter(|p| p.engine == engine.as_str()).collect();
+    mine.sort_by(|a, b| (a.priority, a.created_at, &a.id).cmp(&(b.priority, b.created_at, &b.id)));
+    if let Some(i) = bound.and_then(|id| mine.iter().position(|p| p.id == id)) {
+        let p = mine.remove(i);
+        mine.insert(0, p);
+    }
+    let first = mine.first().map(|p| (*p).clone());
+    if !failover {
+        let attempts = match first {
+            Some(p) => vec![Some(p)],
+            None if host_head => vec![None],
+            None => Vec::new(),
+        };
+        return GlobalPlan { attempts, ..Default::default() };
+    }
+    let mut rest: Vec<&LlmProfile> = elig
+        .iter()
+        .filter(|p| first.as_ref().is_none_or(|f| f.id != p.id) && avail.usable(p, now))
+        .collect();
+    rest.sort_by(|a, b| (a.priority, a.created_at, &a.id).cmp(&(b.priority, b.created_at, &b.id)));
+    let mut plan = GlobalPlan::default();
+    match first {
+        Some(f) if avail.usable(&f, now) || rest.is_empty() => plan.attempts.push(Some(f)),
+        Some(f) => {
+            plan.skipped_until = avail.states.get(&f.id).and_then(|s| s.limited_until).filter(|t| *t > now);
+            plan.skipped = Some(f);
+        }
+        None if host_head => plan.attempts.push(None),
+        None => {}
+    }
+    plan.attempts.extend(rest.into_iter().map(|p| Some(p.clone())));
+    plan.attempts.truncate(MAX_ATTEMPTS);
+    // Every account that could work, out of usage: nothing to try until the earliest reset
+    if plan.attempts.iter().all(Option::is_some) {
+        let limited_until = |p: &LlmProfile| {
+            avail.states.get(&p.id).and_then(|s| s.limited_until).filter(|t| *t > now)
+        };
+        let live: Vec<&LlmProfile> = elig
+            .iter()
+            .filter(|p| !avail.signed_out.contains(&p.id) && !(p.kind == "api_key" && !avail.with_key.contains(&p.id)))
+            .collect();
+        if !live.is_empty() && live.iter().all(|p| limited_until(p).is_some()) {
+            plan.all_out_until = live.iter().filter_map(|p| limited_until(p)).min();
+            plan.attempts.clear();
+        }
+    }
+    plan
 }
 
 /// Validates a profile name: 1 to 40 printable characters, trimmed.
@@ -694,7 +790,7 @@ mod tests {
 
     #[test]
     fn order_is_capped() {
-        let profiles: Vec<_> = (0..6)
+        let profiles: Vec<_> = (0..9)
             .map(|i| profile(&format!("p{i}"), "codex", "cli_home", i, i == 0))
             .collect();
         assert_eq!(
@@ -709,6 +805,140 @@ mod tests {
             .len(),
             MAX_ATTEMPTS
         );
+    }
+
+    fn limited(ids: &[(&str, i64)]) -> Availability {
+        Availability {
+            states: ids
+                .iter()
+                .map(|(id, hours)| {
+                    (
+                        id.to_string(),
+                        LlmProfileState {
+                            profile_id: id.to_string(),
+                            limited_until: Some(now() + chrono::Duration::hours(*hours)),
+                            last_error: Some("quota".into()),
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn all_on(_: &LlmProfile) -> bool {
+        true
+    }
+
+    fn plan_ids(p: &GlobalPlan) -> Vec<String> {
+        p.attempts.iter().map(|a| a.as_ref().map_or("host".into(), |p| p.id.clone())).collect()
+    }
+
+    /// Claude (default, priority 10), Codex (20), Custom/Maestro (5), Grok (30), one Claude key (40).
+    fn space() -> Vec<LlmProfile> {
+        vec![
+            profile("claude", "claude", "cli_home", 10, true),
+            profile("codex", "codex", "cli_home", 20, true),
+            profile("maestro", "custom", "custom_api", 5, true),
+            profile("grok", "grok", "cli_home", 30, true),
+            profile("ckey", "claude", "api_key", 40, false),
+        ]
+    }
+
+    fn global(engine: Engine, failover: bool, avail: &Availability) -> GlobalPlan {
+        let mut avail_keys = Availability { with_key: HashSet::from(["ckey".to_string()]), ..Default::default() };
+        avail_keys.states = avail.states.clone();
+        avail_keys.signed_out = avail.signed_out.clone();
+        global_order(&space(), engine, None, failover, &avail_keys, now(), &OrderRules { host_head: false, eligible: &all_on })
+    }
+
+    #[test]
+    fn failover_crosses_engines_by_one_priority_order() {
+        // Nothing limited: the bot's own account first, then everything else by priority
+        let p = global(Engine::Claude, true, &Availability::default());
+        assert_eq!(plan_ids(&p), ["claude", "maestro", "codex", "grok", "ckey"]);
+        assert_eq!((p.skipped, p.all_out_until), (None, None));
+        // A Codex bot starts on Codex, then Maestro (5) before Claude (10)
+        assert_eq!(plan_ids(&global(Engine::Codex, true, &Availability::default())), ["codex", "maestro", "claude", "grok", "ckey"]);
+    }
+
+    #[test]
+    fn the_list_order_decides_and_is_default_does_not_jump_the_queue() {
+        let mut profiles = space();
+        // A second Claude account sits above the default one in the Accounts list
+        profiles.push(profile("claude2", "claude", "cli_home", 1, false));
+        let plan = |bound: Option<&str>| {
+            let p = global_order(&profiles, Engine::Claude, bound, true, &Availability::default(), now(), &OrderRules { host_head: false, eligible: &all_on });
+            plan_ids(&p)
+        };
+        // Not bound: the top of the list for its engine, although `claude` is the default
+        assert_eq!(plan(None), ["claude2", "maestro", "claude", "codex", "grok"]);
+        // Bound to an account: that account first, then the list in order
+        assert_eq!(plan(Some("claude")), ["claude", "claude2", "maestro", "codex", "grok"]);
+        // A binding to an account of another engine, or a gone one, is not a binding
+        assert_eq!(plan(Some("codex"))[0], "claude2");
+        assert_eq!(plan(Some("gone"))[0], "claude2");
+    }
+
+    #[test]
+    fn a_limited_account_is_skipped_up_front_and_named() {
+        let p = global(Engine::Claude, true, &limited(&[("claude", 3)]));
+        assert_eq!(plan_ids(&p), ["maestro", "codex", "grok", "ckey"]);
+        assert_eq!(p.skipped_until, Some(now() + chrono::Duration::hours(3)));
+        assert_eq!(p.skipped.map(|s| s.id), Some("claude".into()));
+        // A limit that has already passed doesn't count: back on the preferred account
+        let mut past = limited(&[("claude", 3)]);
+        past.states.get_mut("claude").unwrap().limited_until = Some(now() - chrono::Duration::minutes(1));
+        let p = global(Engine::Claude, true, &past);
+        assert_eq!(plan_ids(&p)[0], "claude");
+        assert!(p.skipped.is_none());
+    }
+
+    #[test]
+    fn signed_out_keyless_and_ineligible_accounts_are_never_tried() {
+        let mut avail = limited(&[]);
+        avail.signed_out.insert("codex".into());
+        let no_grok = |p: &LlmProfile| p.engine != "grok";
+        let mut with_key = Availability { with_key: HashSet::new(), ..Default::default() };
+        with_key.signed_out = avail.signed_out.clone();
+        let p = global_order(&space(), Engine::Claude, None, true, &with_key, now(), &OrderRules { host_head: false, eligible: &no_grok });
+        // codex signed out, grok switched off, the Claude key has no key
+        assert_eq!(plan_ids(&p), ["claude", "maestro"]);
+    }
+
+    #[test]
+    fn failover_off_pins_the_bot_to_its_own_account() {
+        let p = global(Engine::Claude, false, &limited(&[("claude", 3)]));
+        assert_eq!(plan_ids(&p), ["claude"]);
+        assert!(p.skipped.is_none() && p.all_out_until.is_none());
+    }
+
+    #[test]
+    fn everything_out_gives_the_earliest_reset_and_no_attempts() {
+        let p = global(Engine::Claude, true, &limited(&[("claude", 3), ("codex", 5), ("maestro", 4), ("grok", 9), ("ckey", 6)]));
+        assert!(p.attempts.is_empty());
+        assert_eq!(p.all_out_until, Some(now() + chrono::Duration::hours(3)));
+        // One account still usable: not all out
+        let p = global(Engine::Claude, true, &limited(&[("claude", 3), ("codex", 5), ("maestro", 4), ("ckey", 6)]));
+        assert_eq!(plan_ids(&p), ["grok"]);
+        assert!(p.all_out_until.is_none());
+    }
+
+    #[test]
+    fn a_bot_whose_engine_has_no_account_starts_on_the_host() {
+        let profiles = vec![profile("codex", "codex", "cli_home", 20, true)];
+        let rules = OrderRules { host_head: true, eligible: &all_on };
+        let p = global_order(&profiles, Engine::Claude, None, true, &Availability::default(), now(), &rules);
+        assert_eq!(plan_ids(&p), ["host", "codex"]);
+        let rules = OrderRules { host_head: false, eligible: &all_on };
+        let p = global_order(&profiles, Engine::Claude, None, true, &Availability::default(), now(), &rules);
+        assert_eq!(plan_ids(&p), ["codex"]);
+    }
+
+    #[test]
+    fn the_cap_covers_every_engine() {
+        assert_eq!(global(Engine::Claude, true, &Availability::default()).attempts.len(), 5);
+        const { assert!(MAX_ATTEMPTS >= 5) };
     }
 
     #[test]

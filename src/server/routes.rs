@@ -1826,6 +1826,31 @@ async fn run_kwant_turn(
 /// Longest failure reason kept for a routine run's history.
 const MAX_FAILURE_CHARS: usize = 500;
 
+/// The account a turn just left, until the one that takes over shows the "moved" line.
+struct MovedFrom {
+    /// Why it was left; `None` when it was skipped up front as known to be out.
+    failure: Option<crate::profiles::ProviderFailure>,
+    /// When its usage resets, if known.
+    until: Option<chrono::DateTime<chrono::Utc>>,
+    /// The model the turn was on when it left.
+    model: Option<String>,
+    profile: LlmProfile,
+}
+
+/// The refusal a reply stands for when it is nothing but a provider's usage-limit message.
+/// Such a text is never saved as a reply (nor shown as a "While you were away" summary).
+fn limit_line_failure(text: &str) -> Option<crate::profiles::ProviderFailure> {
+    if !crate::profiles::classify::is_limit_line(text) {
+        return None;
+    }
+    let (class, retry_at) = crate::profiles::classify(None, text, chrono::Utc::now())?;
+    class.fails_over().then(|| crate::profiles::ProviderFailure {
+        class,
+        retry_at,
+        detail: crate::profiles::classify::redact_detail(text, 300),
+    })
+}
+
 /// [`run_kwant_turn`], but a failed turn says why: the driver's error or the provider's refusal.
 /// The turn first waits for a slot under the per-agent and server-wide caps (see [`super::turns`]).
 /// A reply that ends by asking the person to choose may be held and decided first (see
@@ -2160,7 +2185,18 @@ async fn run_kwant_turn_inner(
                 model: None,
                 reasoning: "Same agent and effort as the turn that asked for this tool".into(),
             }),
-            None => router.route_prompt_with_models(&prompt, "chat", &available_models).await,
+            None => {
+                // Laya never picks an engine whose accounts are all out right now; when that
+                // would leave nothing, it routes as before and the failover plan parks the turn
+                let out = super::profile_turn::unusable_engines(state, &space).await;
+                let routable: Vec<_> = available_models
+                    .iter()
+                    .filter(|m| crate::profiles::Engine::parse(&m.id).is_none_or(|f| !out.contains(&f)))
+                    .cloned()
+                    .collect();
+                let routable = if routable.is_empty() { &available_models } else { &routable };
+                router.route_prompt_with_models(&prompt, "chat", routable).await
+            }
         };
         let route = match route {
             Ok(r) => r,
@@ -2325,19 +2361,14 @@ async fn run_kwant_turn_inner(
         // straight on this machine's login
         let engine = crate::profiles::Engine::parse(&target_model)
             .or_else(|| crate::profiles::Engine::from_model(&target_model));
-        let candidates = super::profile_turn::plan(state, engine, &target_kwant.id).await;
-        // This machine turned off in the kwant's space: no host fallback, so nothing to try
-        let host_off = match engine {
-            Some(e) => super::profile_turn::host_off(state, &SpaceId::new(&target_kwant.space_id)).await.contains(&e),
-            None => false,
-        };
-        let attempts: Vec<Option<LlmProfile>> = if candidates.is_empty() && host_off {
-            Vec::new()
-        } else if candidates.is_empty() {
-            vec![None]
-        } else {
-            candidates.into_iter().map(Some).collect()
-        };
+        // One order across every engine of the space: the bot's own account first, then the rest by
+        // priority (known-limited ones left out up front). A skill replay stays on its own engine.
+        let mut global = super::profile_turn::plan_global(state, engine, &target_kwant.id).await;
+        if opts.rehearse.is_some() {
+            global.attempts.retain(|a| a.as_ref().is_none_or(|p| crate::profiles::Engine::parse(&p.engine) == engine));
+            global.all_out_until = None;
+        }
+        let attempts: Vec<Option<LlmProfile>> = std::mem::take(&mut global.attempts);
         // The agents' own continuity tools, for engines that can call MCP tools
         let self_scope = (engine.is_some() && super::continuity::agent_tools_enabled(state).await).then(|| {
             super::continuity::SelfScope {
@@ -2432,7 +2463,23 @@ async fn run_kwant_turn_inner(
         let rehearse_blocked = opts.rehearse.is_some()
             && (engine != Some(crate::profiles::Engine::Claude) || mcp_turn.is_none());
         let attempts = if rehearse_blocked { Vec::new() } else { attempts };
-        if attempts.is_empty() {
+        // Every account is known to be out: nothing is tried, the turn waits for the earliest reset
+        if let (Some(until), false) = (global.all_out_until, rehearse_blocked) {
+            let at = super::profile_turn::clock_text(state, until).await;
+            let mut text = super::profile_turn::all_out_line(&at);
+            let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), Some(until)).await;
+            if parked.is_none() {
+                text = format!("Every model is out until {at}.");
+            }
+            event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+            event_broadcast.send(RuntimeEvent::TurnComplete {
+                tokens: 0,
+                duration_ms: turn_start.elapsed().as_millis() as u64,
+                kwant_id: Some(target_kwant.id.clone()),
+                profile_id: None,
+            });
+            gave_up = Some(text);
+        } else if attempts.is_empty() {
             let text = if rehearse_blocked {
                 format!("⚠️ [{}] A skill replay runs only on Claude, with kwant's tool checks on.", target_kwant.name)
             } else {
@@ -2451,13 +2498,38 @@ async fn run_kwant_turn_inner(
             });
             gave_up = Some(text);
         }
+        // Set when a turn leaves an account that ran out (or was skipped as known to be out), and
+        // shown once the attempt that takes over knows its model
+        let mut moved_from: Option<MovedFrom> = global.skipped.take().map(|p| MovedFrom {
+            failure: None,
+            until: global.skipped_until,
+            model: None,
+            profile: p,
+        });
+        // The switches as the reply's `meta.failover` (one object per switch), so they survive a reload
+        let mut switch_meta: Vec<serde_json::Value> = Vec::new();
+        let chat_key = format!("{}|{:?}|{:?}", target_kwant.id, scope.channel_id, scope.thread_id);
         for (i, profile) in attempts.iter().enumerate() {
+            // An account of another engine than the bot's own runs the tier of the bot's model,
+            // not its model id (which no other engine knows)
+            let attempt_family = profile.as_ref().and_then(|p| crate::profiles::Engine::parse(&p.engine));
+            let cross = engine.is_some() && attempt_family.is_some() && attempt_family != engine;
+            let target_model = match (cross, attempt_family) {
+                (true, Some(f)) => f.as_str().to_string(),
+                _ => target_model.clone(),
+            };
+            let (pinned_model, tier) = if cross {
+                (None, pinned_model.as_deref().and_then(crate::drivers::engines::tier_from_name).unwrap_or(tier))
+            } else {
+                (pinned_model.clone(), tier)
+            };
+            let (driver_key, driver_endpoint) = if cross { (None, None) } else { (configured_key.clone(), endpoint.clone()) };
             let (driver, host_engine) = match super::profile_turn::driver_for(
                 state,
                 profile.as_ref(),
                 &target_model,
-                configured_key.clone(),
-                endpoint.clone(),
+                driver_key,
+                driver_endpoint,
             )
             .await
             {
@@ -2486,11 +2558,12 @@ async fn run_kwant_turn_inner(
             let choice = match custom {
                 Some(p) => super::profile_turn::custom_model(state, p, pinned_model.as_deref(), tier).await,
                 None => runs_on.and_then(|e| {
-                    crate::drivers::engines::choose_model(
-                        &crate::drivers::engines::known_models(&state.engines, e),
-                        pinned_model.as_deref(),
-                        tier,
-                    )
+                    let models = crate::drivers::engines::known_models(&state.engines, e);
+                    if cross {
+                        crate::drivers::engines::choose_model_near(&models, pinned_model.as_deref(), tier)
+                    } else {
+                        crate::drivers::engines::choose_model(&models, pinned_model.as_deref(), tier)
+                    }
                 }),
             };
             // An API account whose models weren't listed here picks its own from the tier
@@ -2501,6 +2574,63 @@ async fn run_kwant_turn_inner(
                 });
             let mut input = turn_input.clone();
             input.model = if unlisted_api { None } else { choice.as_ref().and_then(|c| c.run_id()).map(str::to_string) };
+            if cross {
+                input.model_override = Some(target_model.clone());
+            }
+            let model_label = input.model.clone().or_else(|| choice.as_ref().map(|c| c.label.clone()));
+            if let Some(from) = moved_from.take() {
+                let to_family = attempt_family.map_or("", |f| f.as_str());
+                let from_family = crate::profiles::Engine::parse(&from.profile.engine).map_or("", |f| f.as_str());
+                let same_engine = to_family == from_family;
+                // Same engine: today's line, only when it failed just now. Another engine: one
+                // quiet line per chat per outage, also when the account was skipped up front.
+                let notice = match (profile.as_ref(), &from.failure) {
+                    (Some(to), Some(failure)) if same_engine => Some(super::profile_turn::switch_notice(&from.profile, to, failure)),
+                    (Some(to), _) if !same_engine => {
+                        let until = match from.until {
+                            Some(t) => Some(super::profile_turn::clock_text(state, t).await),
+                            None => None,
+                        };
+                        super::profile_turn::announce_once(&chat_key, &from.profile.id, from.until)
+                            .then(|| super::profile_turn::cross_engine_notice(&from.profile, until.as_deref(), &target_kwant.name, to, model_label.as_deref()))
+                    }
+                    _ => None,
+                };
+                if let (Some(to), Some(notice)) = (profile.as_ref(), notice) {
+                    let class: String = from.failure.as_ref().map_or(if from.until.is_some() { "quota" } else { "auth" }, |f| f.class.as_str()).into();
+                    switch_meta.push(serde_json::json!({
+                        "kwant_id": target_kwant.id,
+                        "from_profile_id": from.profile.id,
+                        "from_name": from.profile.name,
+                        "to_profile_id": to.id,
+                        "to_name": to.name,
+                        "class": class,
+                        "retry_at": from.until,
+                        "from_engine": from_family,
+                        "to_engine": to_family,
+                        "from_model": from.model,
+                        "to_model": model_label,
+                        "notice": notice,
+                    }));
+                    event_broadcast.send(RuntimeEvent::ProfileSwitched {
+                        kwant_id: target_kwant.id.clone(),
+                        from_profile_id: from.profile.id.clone(),
+                        from_name: from.profile.name.clone(),
+                        to_profile_id: to.id.clone(),
+                        to_name: to.name.clone(),
+                        class,
+                        retry_at: from.until,
+                        from_engine: from_family.into(),
+                        to_engine: to_family.into(),
+                        from_model: from.model.clone(),
+                        to_model: model_label.clone(),
+                    });
+                    event_broadcast.send(RuntimeEvent::ThinkingDelta(notice.clone()));
+                    tracing::info!(kwant = %target_kwant.id, from = %from.profile.id, to = %to.id, "turn moved to another account");
+                    notices.push(notice);
+                }
+            }
+            let last_model = input.model.clone().or_else(|| choice.as_ref().map(|c| c.label.clone()));
             if let Some(e) = runs_on {
                 event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
                     "Running on {}{} · {}{}",
@@ -2591,7 +2721,7 @@ async fn run_kwant_turn_inner(
                                     }
                                 }
                                 let visible = match &event {
-                                    RuntimeEvent::TextDelta(t) => !t.trim().is_empty(),
+                                    RuntimeEvent::TextDelta(t) => !t.trim().is_empty() && !crate::profiles::classify::is_limit_line(t),
                                     RuntimeEvent::ToolCallPending { .. } | RuntimeEvent::ApprovalRequired { .. } => true,
                                     _ => false,
                                 };
@@ -2633,7 +2763,8 @@ async fn run_kwant_turn_inner(
             }
             let result = driver_task.await;
             let refused = match &result {
-                Ok(Ok(out)) => out.failure.clone(),
+                // A reply that is nothing but a usage-limit line is the provider's refusal, never an answer
+                Ok(Ok(out)) => out.failure.clone().or_else(|| limit_line_failure(&out.text)),
                 _ => None,
             };
             if let Some(failure) = refused {
@@ -2644,21 +2775,34 @@ async fn run_kwant_turn_inner(
                     state.engines.record_failure(engine, &failure);
                 }
                 let next = attempts.get(i + 1).and_then(|n| n.as_ref());
-                if let (Some(from), Some(to), false) = (profile, next, side_effects) {
-                    let notice = super::profile_turn::switch_notice(from, to, &failure);
-                    event_broadcast.send(RuntimeEvent::ProfileSwitched {
-                        kwant_id: target_kwant.id.clone(),
-                        from_profile_id: from.id.clone(),
-                        from_name: from.name.clone(),
-                        to_profile_id: to.id.clone(),
-                        to_name: to.name.clone(),
-                        class: failure.class.as_str().into(),
-                        retry_at: failure.retry_at,
+                if let (Some(from), Some(_), false) = (profile, next, side_effects) {
+                    // The line is shown once the next account knows its model (see `moved_from`)
+                    moved_from = Some(MovedFrom {
+                        failure: Some(failure.clone()),
+                        until: failure.retry_at.filter(|_| failure.class == crate::profiles::classify::FailClass::Quota),
+                        model: last_model.clone(),
+                        profile: from.clone(),
                     });
-                    event_broadcast.send(RuntimeEvent::ThinkingDelta(notice.clone()));
-                    tracing::info!(kwant = %target_kwant.id, from = %from.id, to = %to.id, class = failure.class.as_str(), "turn moved to another profile");
-                    notices.push(notice);
                     continue;
+                }
+                // Nothing left to try and every account of the space is now known to be out: one
+                // line, and the turn waits for the earliest reset
+                if failure.class == crate::profiles::classify::FailClass::Quota && !side_effects && !rehearse_blocked && opts.rehearse.is_none() {
+                    let again = super::profile_turn::plan_global(state, engine, &target_kwant.id).await;
+                    if let Some(until) = again.all_out_until {
+                        let at = super::profile_turn::clock_text(state, until).await;
+                        let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), Some(until)).await;
+                        let text = if parked.is_some() { super::profile_turn::all_out_line(&at) } else { format!("Every model is out until {at}.") };
+                        event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+                        event_broadcast.send(RuntimeEvent::TurnComplete {
+                            tokens: 0,
+                            duration_ms: turn_start.elapsed().as_millis() as u64,
+                            kwant_id: Some(target_kwant.id.clone()),
+                            profile_id: profile.as_ref().map(|p| p.id.clone()),
+                        });
+                        gave_up = Some(text);
+                        break;
+                    }
                 }
                 let text = match profile {
                     Some(p) => {
@@ -2804,6 +2948,9 @@ async fn run_kwant_turn_inner(
                     .map(|r| serde_json::json!({ "ran_on": r.to_json(output.model.as_deref(), pick, &effort_level) }));
                 if let Some(usage) = &output.usage {
                     meta.get_or_insert_with(|| serde_json::json!({}))["usage"] = serde_json::json!(usage);
+                }
+                if !switch_meta.is_empty() {
+                    meta.get_or_insert_with(|| serde_json::json!({}))["failover"] = serde_json::Value::Array(switch_meta.clone());
                 }
                 if let Some(routing) = &opts.routing {
                     meta.get_or_insert_with(|| serde_json::json!({}))["routing"] = routing.clone();
