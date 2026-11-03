@@ -143,12 +143,15 @@ const TRIGGERS: [&str; 7] = [
      BEGIN SELECT RAISE(ABORT, 'capability events are append-only'); END",
     // A bot hired while Flight School is on starts at the person's default for new bots (§3.6, D4).
     // Existing bots have no row, which is `act`: switching the feature on changes nothing for them.
+    // Flight School is on unless saved off, and the default for new bots is `act`, which needs no
+    // row: a new bot gets one only when the person chose a lower start (observe or sandbox).
     "CREATE TRIGGER IF NOT EXISTS kwants_flight_school_default AFTER INSERT ON kwants \
-     WHEN (SELECT value FROM settings WHERE key = 'flight_school') = 'true' \
+     WHEN COALESCE((SELECT trim(value) FROM settings WHERE key = 'flight_school'), 'true') NOT IN ('false', '0', 'off') \
+       AND COALESCE((SELECT value FROM settings WHERE key = 'flight_school_new_bot_tier' AND value IN ('observe', 'sandbox', 'act')), 'act') != 'act' \
      BEGIN \
        INSERT INTO capability_policies (id, kwant_id, task_class, tier, granted_by, granted_at, note) \
        VALUES (lower(hex(randomblob(16))), NEW.id, '*', \
-         COALESCE((SELECT value FROM settings WHERE key = 'flight_school_new_bot_tier' AND value IN ('observe', 'sandbox', 'act')), 'sandbox'), \
+         (SELECT value FROM settings WHERE key = 'flight_school_new_bot_tier'), \
          'person', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 'new bot default'); \
        INSERT INTO capability_events (kwant_id, task_class, kind, tier, actor, detail, created_at) \
        SELECT NEW.id, '*', 'new_bot_default', tier, 'person', NULL, granted_at FROM capability_policies \
@@ -206,8 +209,13 @@ impl Database {
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        // Replaced on every start, so a database made before Flight School was on by default gets
+        // today's rule (the others never change, so `IF NOT EXISTS` keeps them)
+        // (on one connection: another one's cached schema can still list the dropped trigger)
+        let mut conn = self.pool.acquire().await?;
+        sqlx::query("DROP TRIGGER IF EXISTS kwants_flight_school_default").execute(&mut *conn).await?;
         for t in TRIGGERS {
-            sqlx::query(t).execute(&self.pool).await?;
+            sqlx::query(t).execute(&mut *conn).await?;
         }
         Ok(())
     }
@@ -574,11 +582,8 @@ mod tests {
         assert!(db.live_policy("k2", "general").await.unwrap().is_none());
     }
 
-    #[tokio::test]
-    async fn a_bot_hired_with_flight_school_on_starts_at_the_new_bot_tier() {
-        let (_tmp, db) = db().await;
-        let space = crate::db::spaces::SpaceId::new(crate::db::spaces::DEFAULT_SPACE_ID);
-        let new = |name: &str| crate::db::models::NewKwant {
+    fn new_bot(name: &str) -> crate::db::models::NewKwant {
+        crate::db::models::NewKwant {
             name: name.into(),
             title: String::new(),
             persona_prompt: String::new(),
@@ -586,17 +591,59 @@ mod tests {
             avatar_sprite: String::new(),
             driver_type: "api".into(),
             preferred_model: "auto".into(),
-        };
-        let before = db.create_kwant(&space, &new("Before")).await.unwrap();
-        assert!(db.policies_of(&before.id).await.unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bot_hired_with_flight_school_on_starts_at_the_new_bot_tier() {
+        let (_tmp, db) = db().await;
+        let space = crate::db::spaces::SpaceId::new(crate::db::spaces::DEFAULT_SPACE_ID);
+        // Nothing saved: Flight School is on and new bots start at act, which is no row
+        let fresh = db.create_kwant(&space, &new_bot("Fresh")).await.unwrap();
+        assert!(db.policies_of(&fresh.id).await.unwrap().is_empty(), "a fresh install adds no tier for a new bot");
         db.set_setting("flight_school", "true").await.unwrap();
-        let after = db.create_kwant(&space, &new("After")).await.unwrap();
+        db.set_setting("flight_school_new_bot_tier", "act").await.unwrap();
+        let at_act = db.create_kwant(&space, &new_bot("AtAct")).await.unwrap();
+        assert!(db.policies_of(&at_act.id).await.unwrap().is_empty(), "act needs no row");
+        // A lower start the person chose is kept
+        db.set_setting("flight_school_new_bot_tier", "sandbox").await.unwrap();
+        let after = db.create_kwant(&space, &new_bot("After")).await.unwrap();
         let p = db.policies_of(&after.id).await.unwrap();
         assert_eq!((p.len(), p[0].task_class.as_str(), p[0].tier.as_str()), (1, "*", "sandbox"));
         db.set_setting("flight_school_new_bot_tier", "observe").await.unwrap();
-        let third = db.create_kwant(&space, &new("Third")).await.unwrap();
+        let third = db.create_kwant(&space, &new_bot("Third")).await.unwrap();
         assert_eq!(db.policies_of(&third.id).await.unwrap()[0].tier, "observe");
-        assert!(db.policies_of(&before.id).await.unwrap().is_empty(), "existing bots stay at act");
+        // So is Flight School saved off: no row even with a lower start saved
+        for off in ["false", "off", "0"] {
+            db.set_setting("flight_school", off).await.unwrap();
+            let k = db.create_kwant(&space, &new_bot(&format!("Off-{off}"))).await.unwrap();
+            assert!(db.policies_of(&k.id).await.unwrap().is_empty(), "flight_school={off}");
+        }
+        assert!(db.policies_of(&fresh.id).await.unwrap().is_empty(), "existing bots stay at act");
+    }
+
+    #[tokio::test]
+    async fn a_database_with_the_old_hire_rule_gets_the_new_one() {
+        let (_tmp, db) = db().await;
+        let space = crate::db::spaces::SpaceId::new(crate::db::spaces::DEFAULT_SPACE_ID);
+        // The rule 0.6.4 made: it fired only on a saved 'true' and defaulted to sandbox
+        sqlx::raw_sql(
+            "DROP TRIGGER kwants_flight_school_default; \
+             CREATE TRIGGER kwants_flight_school_default AFTER INSERT ON kwants \
+             WHEN (SELECT value FROM settings WHERE key = 'flight_school') = 'true' \
+             BEGIN INSERT INTO capability_policies (id, kwant_id, task_class, tier, granted_by, granted_at, note) \
+             VALUES (lower(hex(randomblob(16))), NEW.id, '*', 'sandbox', 'person', 'x', 'new bot default'); END",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        db.set_setting("flight_school", "true").await.unwrap();
+        let old = db.create_kwant(&space, &new_bot("Old")).await.unwrap();
+        assert_eq!(db.policies_of(&old.id).await.unwrap().len(), 1, "the old rule is in place");
+        db.migrate_flight_school().await.unwrap();
+        let new = db.create_kwant(&space, &new_bot("New")).await.unwrap();
+        assert!(db.policies_of(&new.id).await.unwrap().is_empty(), "after the upgrade a new bot starts at act");
+        assert_eq!(db.policies_of(&old.id).await.unwrap()[0].tier, "sandbox", "a tier already given is kept");
     }
 
     #[tokio::test]

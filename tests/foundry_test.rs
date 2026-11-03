@@ -228,8 +228,12 @@ async fn stored_draft(e: &Env, bot: &Kwant, class: &str, body: &str, examples: &
 }
 
 #[tokio::test]
-async fn the_foundry_is_off_by_default() {
+async fn the_foundry_is_on_by_default_and_a_saved_off_starts_nothing() {
     let e = setup().await;
+    let s = person(&e, "GET", "/api/settings", None).await;
+    assert_eq!(s["skill_foundry"], "on", "a fresh install drafts skills: {s}");
+    // The person switches it off; from here on it is the old off
+    person(&e, "POST", "/api/settings", Some(json!({"skill_foundry": "off"}))).await;
     let s = person(&e, "GET", "/api/settings", None).await;
     assert_eq!(s["skill_foundry"], "off", "{s}");
     assert_eq!(
@@ -659,6 +663,7 @@ async fn reads_of_the_review_queue_are_person_only() {
 #[tokio::test]
 async fn queued_runs_fail_at_startup_when_the_foundry_was_turned_off() {
     let e = setup().await;
+    person(&e, "POST", "/api/settings", Some(json!({"skill_foundry": "off"}))).await;
     let a = bot(&e, "A").await;
     let queued = e.state.db.create_foundry_run("draft", &a.space_id, &a.id, "release", None).await.unwrap();
     foundry::resume_after_restart(&e.state).await;

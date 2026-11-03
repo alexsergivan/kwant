@@ -25,7 +25,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **Linux app (beta)** (0.6.1). A `.deb` and an AppImage for x86_64 that update themselves with signed updates, like the Mac app.
 - **Mission board on by default** (0.6.2). Hand-offs, routine runs and loose ends show up as cards, and a finished hand-off goes to Review.
 - **Insights** (0.6.0). Verified results per week and what each one cost. When a run reports no cost, the board says "Not reported", never $0.
-- **Flight School and Truth Ledger** (0.6.0, off until you turn them on). Bots earn more freedom per kind of work with scorecards, and only you grant it. Facts that disagree show side by side for you to settle.
+- **Flight School and Truth Ledger** (0.6.0, on by default since 0.6.5; every bot starts at Act, and you can switch either off in Settings). Bots earn more freedom per kind of work with scorecards, and only you grant it. Facts that disagree show side by side for you to settle.
 
 Every change is in the [CHANGELOG](CHANGELOG.md).
 

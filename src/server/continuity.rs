@@ -484,10 +484,11 @@ pub async fn browser_act_payment(state: &AppState, target: &str, args: &Value) -
 /// The tools a turn's kwant server lists: `skill_draft` only while the bot has a Skill Foundry
 /// draft run open.
 async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
-    let mut tools = tool_list(scope, super::missions::enabled(state).await);
+    let board = super::missions::enabled(state).await;
+    let mut tools = tool_list(scope, board);
     if super::missions::truth_ledger::on(state).await {
         if let Some(list) = tools.as_array_mut() {
-            list.extend(super::missions::truth_ledger::tools());
+            list.extend(super::missions::truth_ledger::tools(board));
         }
     }
     if super::missions::foundry::enabled(state).await && matches!(state.db.drafting_run_of(&scope.kwant_id).await, Ok(Some(_))) {
@@ -500,10 +501,11 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
 
 /// The names of the kwant tools `scope`'s turns are offered (without `skill_draft`).
 pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<String> {
-    let mut tools = tool_list(scope, super::missions::enabled(state).await);
+    let board = super::missions::enabled(state).await;
+    let mut tools = tool_list(scope, board);
     if super::missions::truth_ledger::on(state).await {
         if let Some(list) = tools.as_array_mut() {
-            list.extend(super::missions::truth_ledger::tools());
+            list.extend(super::missions::truth_ledger::tools(board));
         }
     }
     tools.as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()

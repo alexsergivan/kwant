@@ -48,8 +48,9 @@ pub const HELD_TOOLS: [&str; 5] = ["task_claim", "task_update", "task_attach_evi
 /// One audit runs at a time, server-wide; the others wait their turn.
 static ONE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+/// On unless the person saved `off`: a fresh install audits (within [`daily_cap`]).
 pub async fn enabled(state: &AppState) -> bool {
-    matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("on"))
+    !matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("off"))
 }
 
 pub async fn daily_cap(state: &AppState) -> i64 {

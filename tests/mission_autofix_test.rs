@@ -380,7 +380,8 @@ async fn a_failing_check_is_retried_with_its_diagnostics_until_the_attempts_run_
 #[tokio::test]
 async fn off_records_only_and_suggest_waits_for_the_person() {
     let e = setup().await;
-    // off (the default): Phase A behaviour, the failure is only recorded
+    // off (saved by the person; on is the default): Phase A behaviour, the failure is only recorded
+    autofix(&e, "off", 25).await;
     let off = person_task(&e, failing_check()).await;
     hand_in(&e, &off).await;
     let t = wait_state(&e, &off, "ready").await;

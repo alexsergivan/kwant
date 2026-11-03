@@ -3684,21 +3684,21 @@ pub struct SettingsResponse {
     pub checkpoint_max_mb: i64,
     /// Checkpoints kept per task (1–20), plus its first `before_run`.
     pub checkpoint_keep: i64,
-    /// AutoFix: `off` (record failures only), `suggest` (the person starts each retry) or `on`.
+    /// AutoFix: `on` (the default), `suggest` (the person starts each retry) or `off` (record failures only).
     pub autofix: String,
     /// Share of a task's budget its AutoFix retries may spend (0–100).
     pub recovery_budget_pct: i64,
-    /// Flight School: tiers are enforced for task turns (see `super::missions::flight_school`).
+    /// Flight School: on by default; tiers are enforced for task turns (see `super::missions::flight_school`).
     pub flight_school: bool,
-    /// The tier a bot hired while Flight School is on starts at, for every class.
+    /// The tier a bot hired while Flight School is on starts at, for every class (`act` by default).
     pub flight_school_new_bot_tier: String,
-    /// Swarm Auditor: `off` or `on` (see `super::missions::auditor`).
+    /// Swarm Auditor: `on` (the default) or `off` (see `super::missions::auditor`).
     pub auditor: String,
     /// Audits started per UTC day (1–50).
     pub auditor_daily_cap: i64,
     /// The model tier of audit turns: `fast` (default), `balanced`, `deep` or `bot` (its usual one).
     pub auditor_model: String,
-    /// Skill Foundry: `off` (default) or `on` (see `super::missions::foundry`).
+    /// Skill Foundry: `on` (the default) or `off` (see `super::missions::foundry`).
     pub skill_foundry: String,
     /// The model tier of Foundry draft and replay turns: `balanced` (default), `fast`, `deep` or `bot`.
     pub skill_foundry_model: String,
@@ -3708,11 +3708,11 @@ pub struct SettingsResponse {
     pub skill_foundry_replays: i64,
     /// Fresh tokens one replay turn may use before it is stopped (5,000–500,000).
     pub skill_foundry_replay_tokens: i64,
-    /// Automation Discovery: `off` (default) or `on` (see `super::missions::discovery`).
+    /// Automation Discovery: `on` (the default) or `off` (see `super::missions::discovery`).
     pub automation_discovery: String,
     /// Routines suggested per space per 24 hours (0–10).
     pub automation_discovery_daily_cap: i64,
-    /// Truth Ledger: `off` (default), `shadow` or `on` (see `super::missions::truth_ledger`).
+    /// Truth Ledger: `on` (the default), `shadow` or `off` (see `super::missions::truth_ledger`).
     pub truth_ledger: String,
     /// With the Truth Ledger `on`: the deterministic contradiction scan (default true).
     pub fact_dispute_scan: bool,

@@ -2,7 +2,8 @@
 //! `sandbox`, `act`) is a ceiling on top of its approval mode: it can add a card, never remove one.
 //! [`tier_gate`] is the one function every permission path asks (`BrokerApprover::classified`,
 //! claude's built-in Allow, kwant's own tools, and the API drivers' shell); it reads the policy on
-//! every call, so a revoke holds from the next call on. Off (the default) gates nothing.
+//! every call, so a revoke holds from the next call on. On by default; with every bot at `act`
+//! until the person lowers one, that gates nothing. Off gates nothing either.
 //! Contract: docs/mission-control.md §14.
 
 use super::routes::{bad, conflict, internal, not_found};
@@ -24,12 +25,16 @@ use serde_json::{json, Value};
 
 pub const SETTING: &str = "flight_school";
 pub const NEW_BOT_SETTING: &str = "flight_school_new_bot_tier";
-pub const DEFAULT_NEW_BOT_TIER: &str = "sandbox";
+/// `act`: with Flight School on by default, a new bot starts with today's freedom, like the bots
+/// that were there before it, and only earns proposals. A lower start is the person's choice.
+pub const DEFAULT_NEW_BOT_TIER: &str = "act";
 /// A task's blocked reason when its bot's engine runs tools kwant can't see (D7).
 pub const ENGINE_CANT_SANDBOX: &str = "This engine can't be held to its tier: switch the bot to Claude or grant Act";
 
+/// On unless the person saved it off. With every bot at `act` unless the person lowered it, being
+/// on gates nothing new: it scores tasks and lets bots propose tiers.
 pub async fn enabled(db: &Database) -> bool {
-    matches!(db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("true" | "1" | "on"))
+    !matches!(db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("false" | "0" | "off"))
 }
 
 pub async fn new_bot_tier(db: &Database) -> &'static str {

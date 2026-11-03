@@ -431,7 +431,8 @@ async fn the_scorecard_counts_seeded_rows() {
 #[tokio::test]
 async fn propose_is_refused_until_the_bot_qualifies_then_waits_for_the_person() {
     let e = setup().await;
-    // Off: no tiers to ask for
+    // Saved off: no tiers to ask for (on is the default, so the person switches it off first)
+    flight_school(&e, false).await;
     let (err, text) = propose(&e, "research").await;
     assert!(err && text.contains("Flight School is off"), "{text}");
     flight_school(&e, true).await;

@@ -245,7 +245,7 @@ async fn after_move(state: &AppState, task: &Task, to: &str) {
     if to == "ready" {
         listener::kick_handoff(state, task);
     }
-    // The Swarm Auditor challenges a high-impact or low-confidence task in review (off by default, D2)
+    // The Swarm Auditor challenges a high-impact or low-confidence task in review (on unless the person saved it off; capped per day)
     if to == "review" {
         auditor::on_review(state, task);
     }

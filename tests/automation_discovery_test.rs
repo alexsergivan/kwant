@@ -185,12 +185,13 @@ fn titles(v: &Value, list: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn the_scan_is_off_by_default_and_then_finds_nothing() {
+async fn the_scan_is_on_by_default_and_saved_off_it_finds_nothing() {
     let e = setup().await;
     let a = bot(&e, "Ana").await;
     habit(&e, &a, "Weekly report").await;
     let s = person(&e, "GET", "/api/settings", None).await;
-    assert_eq!((s["automation_discovery"].as_str(), s["automation_discovery_daily_cap"].as_i64()), (Some("off"), Some(2)));
+    assert_eq!((s["automation_discovery"].as_str(), s["automation_discovery_daily_cap"].as_i64()), (Some("on"), Some(2)));
+    person(&e, "POST", "/api/settings", Some(json!({"automation_discovery": "off"}))).await;
     let before = written_rows(&e).await;
     let v = person(&e, "POST", SCAN, None).await;
     assert_eq!(v, json!({"blocked_by": "off", "preview": false, "offered": [], "skipped": [], "expired": [], "superseded": []}));

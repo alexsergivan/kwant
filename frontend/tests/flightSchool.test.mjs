@@ -83,7 +83,10 @@ test('with Flight School off, nothing on screen changes', async () => {
 
 test('Settings: the switch says existing bots stay at Act, payments always ask, and where new bots start', () => {
   assert.deepEqual(fs.parseFlightSchoolSettings({ flight_school: true, flight_school_new_bot_tier: 'observe' }), { flight_school: true, flight_school_new_bot_tier: 'observe' });
-  assert.deepEqual(fs.parseFlightSchoolSettings({ flight_school: false, flight_school_new_bot_tier: 'nonsense' }), { flight_school: false, flight_school_new_bot_tier: 'sandbox' });
+  assert.deepEqual(fs.parseFlightSchoolSettings({ flight_school: false, flight_school_new_bot_tier: 'nonsense' }), { flight_school: false, flight_school_new_bot_tier: 'act' });
+  // The server's defaults (on, new bots at Act) read back as they are, so a save keeps them
+  assert.deepEqual(fs.parseFlightSchoolSettings({ flight_school: true, flight_school_new_bot_tier: 'act' }), { flight_school: true, flight_school_new_bot_tier: 'act' });
+  assert.deepEqual(fs.parseFlightSchoolSettings({ flight_school: true }), { flight_school: true, flight_school_new_bot_tier: 'act' });
   const t = text(ui.setting({ value: { flight_school: true, flight_school_new_bot_tier: 'sandbox' }, onChange: noop }));
   assert.match(t, /Payments always ask you, whatever the tier/);
   assert.match(t, /Bots you already have stay at Act, so nothing changes until you lower one/);
