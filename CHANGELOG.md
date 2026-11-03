@@ -8,11 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.7] - 2026-11-03
+
+### Changed
+- **Comparing two options gets a table.** Bots are asked to answer "Compare A with B" as a table, a column each and a
+  row per point, with every header cell filled, so kwant draws it as a comparison card.
+- **A link in a table cell counts as its text.** The 200-character cell limit counts what you see, so a table with
+  long source links still becomes a card. A cell holds at most 1,000 characters in all.
+
 ### Fixed
+- **Smart Results draws fewer wrong cards.** Phone numbers and version numbers aren't number tiles, and a recap of
+  weekdays isn't steps. `4,100` reads as four thousand one hundred when the whole column groups that way. Two series on
+  very different scales aren't drawn on one axis, values out of range stay text, and a card link with a user name or
+  password is refused.
+- **A table or list a bot points at must match the reply exactly:** every row and step, in order, with the same
+  numbers. Anything else falls back to the reply's own table.
+- **Long table cells end in an ellipsis**, with the full text on hover or focus, and a chart's caption isn't repeated
+  when the reply already says it.
+- **A file preview counts only real lines,** so trailing blank lines no longer mark a short file as truncated.
 - **Goals: clearer checks and fewer false alarms.** A page over 5 MB is "can't check", not "not met". A redirect is
   still not followed, and the reason names where it points. A changed file shows both the expected and the actual
-  hash. One dropped connection no longer flips a met goal that passed last time; two in a row do, and an error right after a failure shows "can't check" at once. A notice you turned off isn't counted
-  against the daily cap. Deleting a goal closes its open "Restore" mission and cancels its tasks, keeping the history.
+  hash. One dropped connection no longer flips a met goal that passed last time; two in a row do, and an error right
+  after a failure shows "can't check" at once. A notice you turned off isn't counted against the daily cap. Deleting a goal closes its open "Restore" mission and cancels its tasks, keeping the history.
   The goal tool's schema now matches what it accepts (`json_value` needs a `pointer`; `contains` is listed).
 
 ## [Mac 0.6.6] - 2026-11-03
