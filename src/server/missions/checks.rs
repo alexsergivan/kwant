@@ -69,10 +69,27 @@ fn excerpt(s: &str) -> String {
     format!("…\n{tail}")
 }
 
+/// What a check run saw beyond passed or failed, for a goal's typed predicate (§22): a command's
+/// exit code and stdout, an http GET's status and body text (up to 5 MB).
+#[derive(Debug, Default, Clone)]
+pub struct Seen {
+    pub exit_code: Option<i64>,
+    pub stdout: Option<String>,
+    pub http_status: Option<u16>,
+    pub body: Option<String>,
+}
+
 /// Runs one check; returns `(status, output)` with status "passed", "failed" or "error".
 /// `person_ok`: the person added or approved it, so an `http` check may reach this computer or a
 /// private network; otherwise the URL must resolve to public addresses only, and is fetched from them.
 pub async fn run_spec(kind: &str, spec: &Value, folder: Option<&Path>, person_ok: bool) -> (String, String) {
+    let (status, output, _) = run_spec_seen(kind, spec, folder, person_ok).await;
+    (status, output)
+}
+
+/// [`run_spec`], also returning what the run saw.
+pub async fn run_spec_seen(kind: &str, spec: &Value, folder: Option<&Path>, person_ok: bool) -> (String, String, Seen) {
+    let mut seen = Seen::default();
     let s = |k: &str| spec[k].as_str().map(str::trim).filter(|v| !v.is_empty());
     let need_folder = || folder.ok_or_else(|| "this task has no folder to check in".to_string());
     let r: Result<(bool, String), String> = match kind {
@@ -83,6 +100,8 @@ pub async fn run_spec(kind: &str, spec: &Value, folder: Option<&Path>, person_ok
                     Ok(v) => {
                         let code = v["exit_code"].as_i64().unwrap_or(-1);
                         let out = format!("exit code {code}\n{}{}", v["stdout"].as_str().unwrap_or(""), v["stderr"].as_str().unwrap_or(""));
+                        seen.exit_code = Some(code);
+                        seen.stdout = Some(v["stdout"].as_str().unwrap_or("").to_string());
                         Ok((code == 0, out))
                     }
                     Err(e) => Err(e.to_string()),
@@ -92,7 +111,7 @@ pub async fn run_spec(kind: &str, spec: &Value, folder: Option<&Path>, person_ok
             (_, Err(e)) => Err(e),
         },
         "http" => match s("url") {
-            Some(url) => http(url, spec, person_ok).await,
+            Some(url) => http(url, spec, person_ok, &mut seen).await,
             None => Err("spec.url is missing".into()),
         },
         "file_exists" | "file_contains" | "file_sha256" => match (s("path"), need_folder()) {
@@ -103,13 +122,13 @@ pub async fn run_spec(kind: &str, spec: &Value, folder: Option<&Path>, person_ok
         other => Err(format!("kwant doesn't run {other} checks")),
     };
     match r {
-        Ok((true, out)) => ("passed".into(), excerpt(&out)),
-        Ok((false, out)) => ("failed".into(), excerpt(&out)),
-        Err(e) => ("error".into(), excerpt(&e)),
+        Ok((true, out)) => ("passed".into(), excerpt(&out), seen),
+        Ok((false, out)) => ("failed".into(), excerpt(&out), seen),
+        Err(e) => ("error".into(), excerpt(&e), seen),
     }
 }
 
-async fn http(url: &str, spec: &Value, person_ok: bool) -> Result<(bool, String), String> {
+async fn http(url: &str, spec: &Value, person_ok: bool, seen: &mut Seen) -> Result<(bool, String), String> {
     let mut builder = reqwest::Client::builder();
     if !person_ok {
         let (host, addrs) = crate::mcp::fetch_risk::public_only(url).map_err(|why| format!("not fetched: {why}; the person can approve it"))?;
@@ -143,6 +162,8 @@ async fn http(url: &str, spec: &Value, person_ok: bool) -> Result<(bool, String)
     if let Some(t) = contains {
         out.push_str(&format!("; {} \"{t}\"", if has { "contains" } else { "does not contain" }));
     }
+    seen.http_status = Some(status);
+    seen.body = Some(text.into_owned());
     Ok((ok_status && has, out))
 }
 

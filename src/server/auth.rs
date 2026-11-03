@@ -340,6 +340,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // Mission Control: approving plans, verifying, rejecting, retrying and approving checks are
         // the person's calls; bots act on tasks only through their task tools
         ["", "api", "missions" | "tasks" | "checks", ..] => *method != Method::GET && *method != Method::HEAD,
+        // Goals: creating, approving, editing, pausing, deleting and Check now are the person's;
+        // bots only propose drafts (the `goal_propose` tool)
+        ["", "api", "goals", ..] => *method != Method::GET && *method != Method::HEAD,
         // AutoFix's proposed changes to routines, checks and tasks: only the person reads, approves
         // or rejects them; bots only propose (the `workflow_propose` tool)
         ["", "api", "workflow-changes", ..] => true,
@@ -907,6 +910,13 @@ mod tests {
         assert!(!person_only(&get, "/api/tasks/t1/flags"));
         assert!(!person_only(&get, "/api/tasks"));
         assert!(!person_only(&get, "/api/missions/insights"));
+        assert!(person_only(&post, "/api/goals"));
+        assert!(person_only(&post, "/api/goals/g1/approve"));
+        assert!(person_only(&post, "/api/goals/g1/check"));
+        assert!(person_only(&Method::PATCH, "/api/goals/g1"));
+        assert!(person_only(&del, "/api/goals/g1"));
+        assert!(!person_only(&get, "/api/goals"));
+        assert!(!person_only(&get, "/api/goals/g1"));
         assert!(person_only(&get, "/api/performance"));
         assert!(person_only(&post, "/api/passwords/bitwarden/unlock"));
         assert!(person_only(&del, "/api/passwords/bitwarden"));
