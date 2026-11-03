@@ -136,3 +136,24 @@ test('the notice sits under the name and wraps, so it fits at 390 px', () => {
   assert.ok(html.indexOf('Architect') < html.indexOf('data-failover-note'));
   assert.doesNotMatch(m.renderToStaticMarkup(h(m.ReplyMeta, { name: 'Architect' })), /data-failover-note/);
 });
+
+test('a saved reply reads its notice from meta.failover, so it survives a reload', () => {
+  const sw = { kwant_id: 'k', from_profile_id: 'c1', to_profile_id: 'x1', from_name: 'Work', to_name: 'Personal', class: 'quota', retry_at: '2026-11-03T02:00:00Z', from_engine: 'claude', to_engine: 'codex', to_model: 'gpt-6.1' };
+  const now = Date.parse('2026-11-02T20:00:00Z');
+  const line = m.savedFailoverNotice(JSON.stringify({ failover: [sw] }), now);
+  assert.match(line, /^Claude is out until .*\d\d:\d\d · answered on Codex \(gpt-6\.1\)$/);
+  // Already parsed, and a single object, read the same.
+  assert.equal(m.savedFailoverNotice({ failover: sw }, now), line);
+  // Two switches in one reply: first account out, last one answered.
+  const two = m.savedFailoverNotice({ failover: [sw, { ...sw, from_engine: 'codex', to_engine: 'grok', to_model: 'grok-4.7' }] }, now);
+  assert.match(two, /^Claude is out until .* · answered on Grok \(grok-4\.7\)$/);
+  // Auth, and a reset already past.
+  assert.equal(m.savedFailoverNotice({ failover: [{ ...sw, class: 'auth' }] }, now), 'Claude is signed out · answered on Codex (gpt-6.1)');
+  assert.equal(m.savedFailoverNotice({ failover: [{ ...sw, retry_at: '2026-11-01T00:00:00Z' }] }, now), 'Claude is out of usage · answered on Codex (gpt-6.1)');
+});
+
+test('a reply with no or malformed failover meta shows no notice', () => {
+  for (const meta of [null, undefined, '', 'not json', '{"ran_on":{}}', { failover: [] }, { failover: 'x' }, { failover: [null, 3, {}] }, { failover: [{ from_name: 'A' }] }]) {
+    assert.equal(m.savedFailoverNotice(meta), null);
+  }
+});

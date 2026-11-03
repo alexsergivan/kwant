@@ -5,6 +5,7 @@
 import type { EngineInfo } from './engines';
 import { accountStatus } from './components/EngineAccounts';
 import { Engine, Profile, ProfileSwitchedEvent, accountState, activeLimit } from './profiles';
+import { parseMetaObject } from './questions';
 
 export const FAILOVER_CAPTION = 'When one runs out, kwant bots move to the next that still works, in this order.';
 
@@ -125,4 +126,47 @@ export function createOutageLog() {
     },
     size: () => seen.size,
   };
+}
+
+// ---- The saved notice (survives a reload) ----
+
+const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
+
+/** One saved switch, tolerant of anything else in the array. */
+function savedSwitch(v: unknown): FailoverEvent | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = v as Record<string, unknown>;
+  const from_name = text(r.from_name);
+  const to_name = text(r.to_name);
+  if (!from_name && !text(r.from_engine)) return null;
+  if (!to_name && !text(r.to_engine)) return null;
+  return {
+    kwant_id: text(r.kwant_id) ?? '',
+    from_profile_id: text(r.from_profile_id) ?? '',
+    from_name: from_name ?? '',
+    to_profile_id: text(r.to_profile_id) ?? '',
+    to_name: to_name ?? '',
+    class: text(r.class) ?? 'quota',
+    retry_at: text(r.retry_at) ?? undefined,
+    from_engine: text(r.from_engine),
+    from_model: text(r.from_model),
+    to_engine: text(r.to_engine),
+    to_model: text(r.to_model),
+    to_model_label: text(r.to_model_label),
+  };
+}
+
+/**
+ * The notice a saved reply carries in `meta.failover` (an array of switches, or one object), as one
+ * line. A reply that moved twice reads from the first account that ran out to the one that answered.
+ * Null for anything missing or malformed, so the reply simply shows no notice.
+ */
+export function savedFailoverNotice(meta: unknown, now = Date.now()): string | null {
+  const m = parseMetaObject(meta);
+  const raw = m?.failover;
+  const list = (Array.isArray(raw) ? raw : raw ? [raw] : []).map(savedSwitch).filter((s): s is FailoverEvent => !!s);
+  if (list.length === 0) return null;
+  const first = list[0];
+  const last = list[list.length - 1];
+  return failoverNotice({ ...first, to_name: last.to_name, to_engine: last.to_engine, to_model: last.to_model, to_model_label: last.to_model_label }, now);
 }

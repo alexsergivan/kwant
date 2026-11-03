@@ -16,6 +16,7 @@ import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { FailoverNote, ReplyMeta } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
+import { savedFailoverNotice } from '../failover';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
 import { BotActionMeta, HireMeta, parseBotActionMeta, parseHireMeta } from '../botActions';
 import {
@@ -1073,7 +1074,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               account={account}
               tokens={tokens}
               failed={!!savedActivity?.steps.some((s) => s.status === 'failed')}
-              note={switchNoteFor.get(msg.id)}
+              note={savedFailoverNotice(msg.meta) ?? switchNoteFor.get(msg.id)}
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
