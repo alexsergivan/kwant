@@ -12,6 +12,7 @@ pub mod engine_login;
 pub mod auth;
 pub mod signin;
 pub mod continuity;
+pub mod goals_remediation;
 pub mod model_usage;
 pub mod budget;
 pub mod scheduler;
@@ -370,9 +371,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
         .route("/api/work-ahead/run", post(work_ahead::run_now))
         .route("/api/goals", get(goals::routes::list_goals).post(goals::routes::create_goal))
+        .route("/api/goals/draft", post(goals_remediation::draft))
         .route("/api/goals/:id", get(goals::routes::get_goal).patch(goals::routes::patch_goal).delete(goals::routes::delete_goal))
         .route("/api/goals/:id/approve", post(goals::routes::approve_goal))
         .route("/api/goals/:id/check", post(goals::routes::check_goal))
+        .route("/api/goals/:id/remediation", get(goals_remediation::get_remediation))
+        .route("/api/goals/:id/remediation/not-now", post(goals_remediation::not_now))
+        .route("/api/goals/:id/remediation/always-fix", post(goals_remediation::always_fix))
         .route("/api/missions", get(missions::routes::list_missions).post(missions::routes::create_mission))
         .route("/api/missions/insights", get(missions::routes::insights))
         .route("/api/performance", get(missions::performance::report))

@@ -387,6 +387,12 @@ pub async fn goal_json(state: &AppState, g: &Goal, excerpt_chars: usize) -> Valu
     let (status, reason) = shown_status(g, &checks, &latest, now);
     let mut v = goal_fields(g, &status, &reason);
     v["checks"] = checks.iter().map(|c| check_json(c, latest.iter().find(|o| o.check_id == c.id), now, excerpt_chars)).collect();
+    // What remediation adds: `waiting_for`, `diagnosis`, `open_mission`
+    if let (Some(obj), Some(more)) = (v.as_object_mut(), crate::server::goals_remediation::extras(state, g).await.as_object()) {
+        for (k, val) in more {
+            obj.insert(k.clone(), val.clone());
+        }
+    }
     v
 }
 
@@ -431,9 +437,14 @@ fn clock(ms: i64) -> String {
 
 /// The notices a run's change of state earns (plan B.0 rule 1): broken when an incident opens,
 /// recovered when a goal the person was told about is met again. `owed_recovery` is read before
-/// the run wrote its `met` event. Remediation (B.2) may send broken later, with the diagnosis.
+/// the run wrote its `met` event. Remediation (B.2) adds one decision notice once the diagnosis is in.
 pub async fn on_change(state: &AppState, before: &str, after: &Goal, failing: &[String], owed_recovery: bool) {
     if after.status == "not_met" && !INCIDENT.contains(&before) {
+        // Goals of one folder that break together are one incident: the first one's notice is the notice
+        if crate::server::goals_remediation::grouped_with_told(state, after).await {
+            let _ = state.db.add_goal_event(&after.id, "grouped", "kwant", &json!({})).await;
+            return;
+        }
         let what = failing.first().cloned().unwrap_or_else(|| "a check".into());
         let body = format!("Since {}, this isn't true: {what}. kwant checked {} times in a row. Open the Mission board to see what it saw.", clock(now_ms()), after.confirm_failures.max(1));
         notice(state, after, "broken", format!("{} is failing", after.title), body).await;

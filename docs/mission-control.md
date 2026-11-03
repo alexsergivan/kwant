@@ -1230,3 +1230,46 @@ SSE: `fact_changed {fact: {id, status, space_id, scope, scope_id, kwant_id}}` an
 
 **Not in C2:** reopening a dismissed pair, a chat line when evidence settles a dispute, and LLM
 (semantic) contradiction detection.
+
+## 22. Goal remediation (0.6.5, B.2)
+
+A goal that stops being met opens a **remediation mission** on the Mission Control board, so the person sees one incident with one decision instead of a stream of alerts. Nothing runs that the goal's mode does not allow, and the engine never raises a goal's autonomy: only the person's tap does (`mode` stays `watch`/`suggest`/`fix` as set).
+
+### What happens when a goal breaks
+
+- The goal loop (`goals::on_change`) sends one `broken` notice through `goals::notice`. Notices are counted from `goal_events`: at most 3 per goal per rolling 24 hours, and a held-back one is logged as `notice_capped`.
+- The remediation tick (`goals_remediation::tick_at`, run by the scheduler) settles open links, settles re-checks, sweeps orphans, then opens remediations.
+- Goals in the same folder that break within 10 minutes (`GROUP_MS`) join one mission: one `broken` notice, one mission, one decision, one `recovered`. The folder of a goal with no folder is its bot's workspace.
+- The mission is "Restore: <goal title>" with two tasks, "Investigate: <check label> failing" and "Fix: <goal title>". Investigate starts on its own (not in `watch` mode), is read-only by its brief, and never raises an approval card. The Fix is held in `suggest` mode and ready in `fix` mode.
+- `goal_mission_links` holds one open link per goal. Mission objects carry `goal_link {id, title}` or `null`. Verified remediation missions leave the board (they stay in the goal timeline).
+- If the goal recovers by itself, a held Fix is withdrawn (outcome `not_needed`, mission `done`). A `recovered` notice goes out only if the person was told it broke.
+
+### Bounds
+
+At most 2 attempts per incident (`MAX_ATTEMPTS`), a 10 minute cooldown between them (`COOLDOWN_MS`), `max_fixes_per_day` (default 3; an Investigate plus its Fix counts as one) and the goal's token budget. Past any bound the goal goes `needs_you` with a reason: `budget`, `max_fixes`, `max_attempts`, `fix_failed`, `conflict`, `declined` or `fix_ready` (diagnosis ready, Fix held). A replan logs `replanned`.
+
+### Priority and conflicts
+
+Priority 1/2/3. One remediation per folder runs at a time; a goal that waits is `waiting` with `status_reason` set to the other goal's id. After a verified fix, the folder's other approved goals are re-checked; a goal that flips met to not_met logs `conflict`, goes `needs_you` and gets no automatic fix (so two goals cannot undo each other).
+
+### Routes (person only)
+
+```
+GET  /api/goals/:id                         + missions[] (the goal's remediation history), spent_tokens
+GET  /api/goals/:id/remediation             open mission, diagnosis, waiting_for
+POST /api/goals/:id/remediation/not-now     silent; keeps the held Fix; reads as Failing (reason declined)
+POST /api/goals/:id/remediation/always-fix  sets mode fix
+POST /api/goals {from_task}                 ACTIVE goal from a verified task whose checks pass;
+                                            201 first time, 200 for the same task again
+POST /api/goals/draft {space_id,kwant_id,text}   202; the bot calls goal_propose and a draft appears
+```
+
+List rows and `GET /api/goals/:id` carry `open_mission {id,title,status,attempt,opened_at,run_task_id,diagnosis}`, `waiting_for` and `diagnosis`. `run_task_id` is the held Fix: "Fix it" is `POST /api/tasks/:run_task_id/run`.
+
+### Timeline events
+
+`investigated`, `fix_approved`, `replanned`, `conflict`, `waiting`, `grouped`, `notice_capped`.
+
+### Known limits
+
+Read-only Investigate is enforced by the brief only. A failed Investigate or Fix replans while attempts remain. Typed predicates are not evaluated by a task's own checks: the goal's re-check decides. `from_task` defaults: interval 60 minutes, confirm_failures 2, budget 0, max_fixes 3, priority 2, mode `suggest`.

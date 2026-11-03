@@ -572,9 +572,10 @@ impl Database {
             tx.rollback().await?;
             return Ok(false);
         }
-        for table in ["goal_checks", "goal_observations", "goal_events", "goal_fix_tasks"] {
+        for table in ["goal_checks", "goal_observations", "goal_events", "goal_fix_tasks", "goal_mission_links", "goal_from_tasks"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE goal_id = ?")).bind(id).execute(&mut *tx).await?;
         }
+        sqlx::query("DELETE FROM goal_rechecks WHERE goal_id = ? OR after_goal_id = ?").bind(id).bind(id).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -809,11 +810,25 @@ impl Database {
         Ok(row.map(|r| r.0))
     }
 
-    /// Goals with a fix task that is ready, not held and not running: the fix runner's work.
+    /// Approved goals that are not met and may be remediated (suggest or fix mode; watch mode
+    /// never investigates), highest priority first, then the longest broken.
+    pub async fn remediation_candidates(&self) -> Result<Vec<Goal>, DbError> {
+        Ok(sqlx::query_as::<_, Goal>(&format!(
+            "{GOAL_SELECT} WHERE status IN ('not_met', 'fixing', 'waiting') AND approved_at IS NOT NULL AND paused_at IS NULL
+             AND mode IN ('suggest', 'fix') AND NOT EXISTS (SELECT 1 FROM goal_mission_links l WHERE l.goal_id = goals.id AND l.closed_at IS NULL)
+             ORDER BY priority, updated_at, id"
+        ))
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Goals with a fix task that is ready, not held and not running: the fix runner's work. A
+    /// remediation mission's tasks are the mission runner's, so they are left out.
     pub async fn goals_with_ready_fix(&self) -> Result<Vec<(String, String)>, DbError> {
         Ok(sqlx::query_as(
             "SELECT f.goal_id, f.task_id FROM goal_fix_tasks f JOIN tasks t ON t.id = f.task_id JOIN goals g ON g.id = f.goal_id
-             WHERE t.state = 'ready' AND t.held_at IS NULL AND g.status != 'paused' ORDER BY f.created_at",
+             WHERE t.state = 'ready' AND t.held_at IS NULL AND g.status != 'paused'
+             AND NOT EXISTS (SELECT 1 FROM goal_mission_links l WHERE l.fix_task_id = f.task_id) ORDER BY f.created_at",
         )
         .fetch_all(&self.pool)
         .await?)
@@ -861,7 +876,7 @@ impl Database {
     /// met (so a recovery is worth a notice).
     pub async fn told_broken(&self, goal_id: &str) -> Result<bool, DbError> {
         let row: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND json_extract(detail, '$.kind') IN ('broken', 'cant_check')
+            "SELECT 1 FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND json_extract(detail, '$.kind') IN ('broken', 'cant_check', 'decision', 'needs_you')
              AND id > COALESCE((SELECT MAX(id) FROM goal_events WHERE goal_id = ? AND kind = 'met'), 0) LIMIT 1",
         )
         .bind(goal_id)

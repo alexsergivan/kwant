@@ -323,7 +323,7 @@ async fn the_api_creates_edits_pauses_and_deletes_goals() {
         (json!({"title": "", "checks": [{"kind": "http", "spec": {"url": url}}]}), StatusCode::BAD_REQUEST),
         (json!({"title": "x", "checks": [{"kind": "http", "spec": {"url": url}, "severity": "advisory"}]}), StatusCode::BAD_REQUEST),
         (json!({"title": "x", "interval_minutes": 5, "checks": [{"kind": "http", "spec": {"url": url}}]}), StatusCode::BAD_REQUEST),
-        (json!({"from_task": "t1"}), StatusCode::UNPROCESSABLE_ENTITY),
+        (json!({"from_task": "t1"}), StatusCode::NOT_FOUND), // wired by goals-remediation: an unknown task is a 404
     ] {
         let (status, v) = call(&e.app, "POST", "/api/goals", None, Some(bad.clone())).await;
         assert_eq!(status, code, "{bad}: {v}");

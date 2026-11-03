@@ -93,6 +93,9 @@ async fn event_json(state: &AppState, e: &TaskEvent) -> Value {
 #[derive(Deserialize)]
 pub struct MissionQuery {
     status: Option<String>,
+    /// Verified remediation missions leave the board; they stay in the goal's timeline
+    #[serde(default)]
+    include_archived: bool,
 }
 
 pub async fn list_missions(State(state): State<AppState>, Scope(space): Scope, Query(q): Query<MissionQuery>) -> Response {
@@ -101,8 +104,9 @@ pub async fn list_missions(State(state): State<AppState>, Scope(space): Scope, Q
     }
     match state.db.list_missions(&space, q.status.as_deref()).await {
         Ok(ms) => {
+            let archived = if q.include_archived { Vec::new() } else { state.db.archived_mission_ids().await.unwrap_or_default() };
             let mut out = Vec::new();
-            for m in &ms {
+            for m in ms.iter().filter(|m| !archived.contains(&m.id)) {
                 out.push(mission_json(&state, m).await);
             }
             Json(json!({"missions": out})).into_response()
