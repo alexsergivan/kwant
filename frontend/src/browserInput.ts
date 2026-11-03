@@ -44,6 +44,26 @@ export function resizeFor(stage: Size, devicePixelRatio = 1): { action: 'resize'
 }
 
 /**
+ * What the person sees for a live view error, or null for none. Running off either end of the
+ * history is expected (the buttons don't know the history), so it's silent; the rest lose the
+ * server's "Protocol error: " prefix.
+ */
+export function streamErrorText(action: string | undefined, raw: unknown): string | null {
+  const text = String(raw ?? '').replace(/^\s*protocol error:\s*/i, '').trim();
+  if (action === 'history' && /no page to go/i.test(text)) return null;
+  return text || 'Something went wrong in the browser.';
+}
+
+/**
+ * Whether the page has drifted from the size the stage asked for (a cross-site navigation can
+ * drop the override), so the resize should be sent again.
+ */
+export function sizeDrifted(requested: { width: number; height: number } | null, page: Size): boolean {
+  if (!requested || !(page.width > 0) || !(page.height > 0)) return false;
+  return Math.abs(page.width - requested.width) > 1 || Math.abs(page.height - requested.height) > 1;
+}
+
+/**
  * Where the page image sits in the stage: 1:1 when it fits, scaled down to fit when it doesn't
  * (a resize still on its way, or a stage smaller than the smallest viewport), centred either way.
  */

@@ -11,6 +11,7 @@ import {
   mouseModifiers,
   pagePoint,
   resizeFor,
+  sizeDrifted,
   stageLayout,
   typeMessages,
   wheelPixels,
@@ -25,6 +26,9 @@ import { sendPageInput } from './BrowserControlOverlay';
 
 /** How long the stage waits for its size to settle before asking the page to match it. */
 export const RESIZE_DEBOUNCE_MS = 150;
+/** How long a page may differ from the asked-for size before the stage asks again, and how often. */
+export const SIZE_DRIFT_MS = 600;
+const SIZE_RESENDS = 3;
 /** "Relaying…" shows only for a discrete action still waiting after this long, so quick ones never flash. */
 export const RELAYING_DELAY_MS = 300;
 
@@ -132,9 +136,13 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
 
   // Ask the page to be exactly the stage's size, once it stops changing
   const lastResize = useRef('');
+  const requested = useRef<{ width: number; height: number } | null>(null);
+  const resends = useRef(0);
   useEffect(() => {
     if (!controlling) {
       lastResize.current = '';
+      requested.current = null;
+      resends.current = 0;
       return;
     }
     const msg = resizeFor(stage, window.devicePixelRatio);
@@ -143,10 +151,28 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
     if (key === lastResize.current) return;
     const t = window.setTimeout(() => {
       lastResize.current = key;
+      requested.current = { width: msg.width, height: msg.height };
+      resends.current = 0;
       sendRef.current(msg);
     }, lastResize.current ? RESIZE_DEBOUNCE_MS : 0);
     return () => window.clearTimeout(t);
   }, [controlling, stage.width, stage.height]);
+
+  // A cross-site navigation can put the page back to its own size: ask again, a few times at most
+  useEffect(() => {
+    if (!controlling || !sizeDrifted(requested.current, page)) {
+      if (controlling && requested.current) resends.current = 0;
+      return;
+    }
+    if (resends.current >= SIZE_RESENDS) return;
+    const t = window.setTimeout(() => {
+      const msg = resizeFor(stage, window.devicePixelRatio);
+      if (!msg || !sizeDrifted(requested.current, pageRef.current)) return;
+      resends.current += 1;
+      sendRef.current(msg);
+    }, SIZE_DRIFT_MS);
+    return () => window.clearTimeout(t);
+  }, [controlling, page.width, page.height, pageUrl]);
 
   const focusPage = useCallback(() => sinkRef.current?.focus({ preventScroll: true }), []);
   useEffect(() => {

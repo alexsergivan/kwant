@@ -179,3 +179,18 @@ test('busy retry is every second for ten seconds; step copy per kind', () => {
   assert.equal(vm.STEP_DONE.sign_in, 'Done, I’m signed in');
   assert.equal(vm.STEP_NEED.captcha, 'needs you to solve a puzzle');
 });
+
+test('live view errors: end of history is silent, the server prefix is dropped', () => {
+  assert.equal(b.streamErrorText('history', 'Protocol error: No page to go forward to'), null);
+  assert.equal(b.streamErrorText('history', 'Protocol error: No page to go back to'), null);
+  assert.equal(b.streamErrorText('navigate', 'Protocol error: Navigation timed out'), 'Navigation timed out');
+  assert.equal(b.streamErrorText('click', 'No page to go back to'), 'No page to go back to');
+  assert.equal(b.streamErrorText(undefined, ''), 'Something went wrong in the browser.');
+});
+
+test('size drift: a cross-site navigation that drops the override is noticed, a pixel of rounding is not', () => {
+  assert.equal(b.sizeDrifted({ width: 1408, height: 812 }, { width: 1408, height: 783 }), true);
+  assert.equal(b.sizeDrifted({ width: 1408, height: 812 }, { width: 1409, height: 812 }), false);
+  assert.equal(b.sizeDrifted(null, { width: 1280, height: 713 }), false);
+  assert.equal(b.sizeDrifted({ width: 1408, height: 812 }, { width: 0, height: 0 }), false);
+});

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { browserStreamUrl } from './browserViewport';
-import { PageDialog, SelectRequest, Size, parseDialog, parseSelect } from './browserInput';
+import { PageDialog, SelectRequest, Size, parseDialog, parseSelect, streamErrorText } from './browserInput';
 
 export interface BrowserFrame {
   id: number;
@@ -84,7 +84,8 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
               takingControl.current = false;
               setError(BOT_BUSY_TEXT);
             } else {
-              setError(message.error);
+              const text = streamErrorText(action, message.error);
+              if (text) setError(text);
             }
             if (typeof message.id === 'number') { pending.current.delete(message.id); actionsById.current.delete(message.id); }
             setBusy(pending.current.size > 0);
