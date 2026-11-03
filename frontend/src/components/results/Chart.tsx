@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChartBlock, ChartPoint, ChartSeries, inRange, isNum, isObj, isText, optText, parseCommon, repeatsReply, uniqueIds } from '../../smartResults';
+import { ChartBlock, ChartPoint, ChartSeries, inRange, isCell, isNum, isObj, isText, optText, parseCommon, repeatsReply, uniqueIds } from '../../smartResults';
 import type { RendererProps } from './registry';
 import { ReplyText } from './ReplyText';
 
@@ -11,12 +11,12 @@ export function validChart(raw: unknown): ChartBlock | null {
   if (!b) return null;
   if (b.chart_kind !== 'line' && b.chart_kind !== 'bar') return null;
   const x = b.x;
-  if (!isObj(x) || !isText(x.label) || (x.kind !== 'time' && x.kind !== 'category')) return null;
+  if (!isObj(x) || !isCell(x.label) || (x.kind !== 'time' && x.kind !== 'category')) return null;
   if (!inRange(b.series, 1, 4)) return null;
   const series: ChartSeries[] = [];
   const keys = new Set<string>();
   for (const s of b.series as Record<string, unknown>[]) {
-    if (!isObj(s) || !isText(s.key, 60) || keys.has(s.key) || !isText(s.label)) return null;
+    if (!isObj(s) || !isText(s.key, 60) || keys.has(s.key) || !isCell(s.label)) return null;
     const unit = optText(s.unit, 40);
     if (unit === undefined) return null;
     keys.add(s.key);
@@ -30,8 +30,8 @@ export function validChart(raw: unknown): ChartBlock | null {
   if (b.chart_kind === 'bar' && (b.points as unknown[]).length < 5) return null;
   const points: ChartPoint[] = [];
   for (const p of b.points as Record<string, unknown>[]) {
-    if (!isText(p.x)) return null;
-    if (!Array.isArray(p.cells) || p.cells.length !== series.length || !p.cells.every((c) => isText(c, 300, true))) return null;
+    if (!isCell(p.x)) return null;
+    if (!Array.isArray(p.cells) || p.cells.length !== series.length || !p.cells.every((c) => isCell(c, true))) return null;
     // Finite and within what an SVG coordinate can carry: 1e308 turns every scaled y into NaN.
     if (!Array.isArray(p.values) || p.values.length !== series.length || !p.values.every((v) => v === null || (isNum(v) && Math.abs(v) <= MAX_VALUE))) return null;
     points.push({ id: p.id as string, x: p.x, cells: p.cells as string[], values: p.values as (number | null)[] });

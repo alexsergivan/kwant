@@ -50,7 +50,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     if col.key != format!("c{k}") {
                         return Err(format!("column key {:?}", col.key));
                     }
-                    check_text(&col.label, 200, "column label")?;
+                    check_label(&col.label, "column label")?;
                     if strict {
                         texts.push(&col.label);
                     }
@@ -79,7 +79,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     if row.cells.len() != c.columns.len() {
                         return Err(format!("row {r} has {} cells", row.cells.len()));
                     }
-                    check_text(&row.cells[0], 200, "row label")?;
+                    check_label(&row.cells[0], "row label")?;
                     if !labels.insert(label_key(&row.cells[0])) {
                         return Err(format!("row label {:?} repeats", row.cells[0]));
                     }
@@ -104,7 +104,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                 }
             }
             Block::Chart(c) => {
-                check_text(&c.x.label, 200, "axis label")?;
+                check_label(&c.x.label, "axis label")?;
                 texts.push(&c.x.label);
                 let axis_ok = matches!((c.chart_kind, c.x.kind), (ChartKind::Line, AxisKind::Time) | (ChartKind::Bar, AxisKind::Category));
                 if !axis_ok {
@@ -117,7 +117,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     if s.key != format!("s{k}") {
                         return Err(format!("series key {:?}", s.key));
                     }
-                    check_text(&s.label, 200, "series label")?;
+                    check_label(&s.label, "series label")?;
                     texts.push(&s.label);
                     if let Some(unit) = &s.unit {
                         check_text(unit, 10, "unit")?;
@@ -136,7 +136,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     if p.id != format!("p{k}") {
                         return Err(format!("point id {:?}", p.id));
                     }
-                    check_text(&p.x, 200, "point label")?;
+                    check_label(&p.x, "point label")?;
                     if !xs.insert(p.x.as_str()) {
                         return Err(format!("point {:?} repeats", p.x));
                     }
@@ -419,15 +419,71 @@ fn check_source(block: &Block) -> Result<(), String> {
     }
 }
 
-/// A shown cell: at most 200 characters, no HTML; it may be empty (a gap).
+/// A shown cell: no HTML, within [`cell_fits`]; it may be empty (a gap).
 fn check_cell(cell: &str) -> Result<(), String> {
-    if utf16_len(cell) > 200 {
-        return Err("a cell over 200 characters".into());
+    if !cell_fits(cell) {
+        return Err(format!("a cell over {MAX_CELL} characters"));
     }
     if has_html(cell) {
         return Err("HTML in a cell".into());
     }
     Ok(())
+}
+
+/// A table label (a header or a row's first cell): a cell that isn't blank.
+fn check_label(s: &str, what: &str) -> Result<(), String> {
+    if s.trim().is_empty() {
+        return Err(format!("an empty {what}"));
+    }
+    check_cell(s).map_err(|e| e.replace("cell", what))
+}
+
+/// The most a table cell may show, in characters.
+pub(super) const MAX_CELL: usize = 200;
+/// The most a table cell may hold raw, URLs included, so a long link can't bloat a stored block.
+pub(super) const MAX_CELL_RAW: usize = 1000;
+
+/// A table cell short enough to store: at most [`MAX_CELL`] shown characters ([`shown_len`]) and
+/// [`MAX_CELL_RAW`] raw ones. Lengths are UTF-16 units, as the client counts (`isCell`).
+pub(super) fn cell_fits(cell: &str) -> bool {
+    cell.encode_utf16().count() <= MAX_CELL_RAW && shown_len(cell) <= MAX_CELL
+}
+
+/// A cell's length as the reader sees it: a markdown link `[text](url)` (or image `![text](url)`)
+/// counts as its text, since a source link's URL isn't shown. A bare URL is shown, so it counts.
+/// The client's `shownLength` does the same (`/!?\[([^\]]*)\]\([^)]*\)/g` → `$1`).
+pub(super) fn shown_len(s: &str) -> usize {
+    let mut n = 0;
+    let mut rest = s;
+    while !rest.is_empty() {
+        let at = rest.find('[').unwrap_or(rest.len());
+        let (before, from) = rest.split_at(at);
+        // The `!` of an image goes with its link
+        let link = link_text(from);
+        let bang = link.is_some() && before.ends_with('!');
+        n += before.encode_utf16().count() - usize::from(bang);
+        match link {
+            Some((text, len)) => {
+                n += text.encode_utf16().count();
+                rest = &from[len..];
+            }
+            None if from.is_empty() => break,
+            None => {
+                n += 1;
+                rest = &from[1..];
+            }
+        }
+    }
+    n
+}
+
+/// `[text](url)` at the start of `s`: the text and the link's length in bytes.
+fn link_text(s: &str) -> Option<(&str, usize)> {
+    let body = s.strip_prefix('[')?;
+    let close = body.find(']')?;
+    let after = body[close + 1..].strip_prefix('(')?;
+    let end = after.find(')')?;
+    Some((&body[..close], 1 + close + 2 + end + 1))
 }
 
 fn check_text(s: &str, max: usize, what: &str) -> Result<(), String> {

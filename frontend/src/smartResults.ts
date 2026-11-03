@@ -252,6 +252,22 @@ export const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 
 /** A string of at most `max` chars with no HTML tag; blank only when `empty`. */
 export const isText = (v: unknown, max = MAX_TEXT, empty = false): v is string =>
   typeof v === 'string' && v.length <= max && (empty || v.trim() !== '') && !HTML_TAG.test(v);
+/** The most a table cell or label may show (the server's `MAX_CELL`). */
+export const MAX_CELL = 200;
+/** The most a table cell may hold raw, URLs included (the server's `MAX_CELL_RAW`). */
+export const MAX_CELL_RAW = 1000;
+const MD_LINK = /!?\[([^\]]*)\]\([^)]*\)/g;
+/**
+ * A text's length as the reader sees it: a markdown link `[text](url)` counts as its text, since a
+ * source link's URL isn't shown; a bare URL is shown, so it counts. The server's `shown_len` agrees.
+ */
+export const shownLength = (s: string): number => s.replace(MD_LINK, '$1').length;
+/**
+ * A table cell or label, as the server's `cell_fits` takes it: at most `MAX_CELL` shown characters
+ * (`shownLength`) and `MAX_CELL_RAW` raw ones, no HTML tag; blank only when `empty`.
+ */
+export const isCell = (v: unknown, empty = false): v is string =>
+  typeof v === 'string' && v.length <= MAX_CELL_RAW && shownLength(v) <= MAX_CELL && (empty || v.trim() !== '') && !HTML_TAG.test(v);
 /** isText, or null/absent (returned as null). `undefined` means invalid. */
 export const optText = (v: unknown, max = MAX_TEXT): string | null | undefined => (v === null || v === undefined ? null : isText(v, max) ? v : undefined);
 export const isIndex = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
@@ -345,7 +361,7 @@ export function validComparison(raw: unknown): ComparisonBlock | null {
   if (!inRange(cols, 2, 8) || !inRange(rows, 3, 50)) return null;
   const columns: ComparisonColumn[] = [];
   for (const [j, c] of cols.entries()) {
-    if (!isObj(c) || typeof c.key !== 'string' || !isText(c.label) || typeof c.numeric !== 'boolean') return null;
+    if (!isObj(c) || typeof c.key !== 'string' || !isCell(c.label) || typeof c.numeric !== 'boolean') return null;
     const unit = optText(c.unit, 40);
     if (unit === undefined) return null;
     const role = c.role === undefined || c.role === null ? (j === 0 ? 'label' : 'value') : c.role;
@@ -353,7 +369,7 @@ export function validComparison(raw: unknown): ComparisonBlock | null {
     columns.push({ key: c.key, label: c.label, numeric: c.numeric, unit, role: role as ColumnRole });
   }
   if (new Set(columns.map((c) => c.key)).size !== columns.length) return null;
-  const rowsOk = rows.every((r) => isObj(r) && inRange(r.cells, columns.length, columns.length) && r.cells.every((c) => isText(c, MAX_TEXT, true)));
+  const rowsOk = rows.every((r) => isObj(r) && inRange(r.cells, columns.length, columns.length) && r.cells.every((c) => isCell(c, true)));
   if (!rowsOk || !uniqueIds(rows)) return null;
   const typed = rows as unknown as ComparisonRow[];
   const labels = typed.map((r) => plainText(r.cells[0]).toLowerCase());
