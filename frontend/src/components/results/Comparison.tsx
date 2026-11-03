@@ -206,9 +206,12 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                 className={`relative rounded-xl border px-3 py-2.5 text-xs ${picked ? 'border-sky-500/40 bg-sky-500/[0.07]' : 'border-zinc-800 bg-zinc-900/60'}`}
               >
                 {picked && (
-                  <Sticker tone="holo" tilt={3} icon={<Award size={10} aria-hidden="true" />} title={block.highlight_reason ?? 'Pick in this reply'} className="kw-sticker-sm absolute -top-2 -right-1.5">
-                    Pick<span className="sr-only"> in this reply{block.highlight_reason ? `: ${block.highlight_reason}` : ''}</span>
-                  </Sticker>
+                  // The wrapper places it (spec S2: top -8, right -6); .kw-sticker keeps its own position: relative.
+                  <span className="absolute -top-2 -right-1.5 z-10 flex">
+                    <Sticker tone="holo" tilt={3} icon={<Award size={10} aria-hidden="true" />} title={block.highlight_reason ?? 'Pick in this reply'} className="kw-sticker-sm">
+                      Pick<span className="sr-only"> in this reply{block.highlight_reason ? `: ${block.highlight_reason}` : ''}</span>
+                    </Sticker>
+                  </span>
                 )}
                 <div className={`text-[13px] font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere] ${picked ? 'pr-16' : ''}`}>
                   {body[i][0]}

@@ -161,12 +161,16 @@
   font-weight: 400;
   white-space: normal;
   pointer-events: none;
-  opacity: 0;
-  transform: translateY(-2px);
+  /* Out of layout until shown, so a hidden tip never widens the page at 390 px. */
+  display: none;
   transition: opacity 120ms var(--kw-ease), transform 120ms var(--kw-ease);
 }
 .kws-tip:hover::after,
-.kws-tip:focus-visible::after { opacity: 1; transform: translateY(0); }
+.kws-tip:focus-visible::after { display: block; opacity: 1; transform: translateY(0); }
+@starting-style {
+  .kws-tip:hover::after,
+  .kws-tip:focus-visible::after { opacity: 0; transform: translateY(-2px); }
+}
 
 /* ---- Goal heartbeat (spec §3) ---- */
 .kws-heartbeat { container-type: inline-size; display: block; min-width: 0; }
