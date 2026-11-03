@@ -18,6 +18,23 @@ export interface NeedsYouPillProps {
 
 const AVATAR = 32;
 
+/** Where the main pane starts on desktop (the sidebar's right edge), measured while the pill shows. 0 on a phone. */
+function useMainPaneLeft(showing: boolean): number {
+  const [left, setLeft] = useState(0);
+  useEffect(() => {
+    if (!showing || typeof window === 'undefined') return;
+    const measure = () => {
+      const side = window.innerWidth >= 640 ? document.querySelector('[data-kw-sidebar]') : null;
+      const r = side?.getBoundingClientRect();
+      setLeft(r && r.width > 0 ? Math.round(r.right) : 0);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [showing]);
+  return left;
+}
+
 /**
  * The in-app "needs you" pill (0.6.9, Mira's mac-nudge/design/pill): drops from the top of the app for
  * 5 s when a bot needs the person in a chat they aren't looking at. More arriving restarts the 5 s, but
@@ -88,13 +105,22 @@ export const NeedsYouPill: React.FC<NeedsYouPillProps> = ({ items, rev, spriteOf
     return () => clearTimeout(t);
   }, [showing, hovered, focused, leaving, heldOnce, rev]);
 
+  // Desktop: centred on the main pane, not the window (Mira's spec §4), so it starts where the sidebar ends.
+  const paneLeft = useMainPaneLeft(showing);
+
   const text = pillText(items);
   const lead = items[0];
   const many = items.length > 1;
   const swapping = showing && rev !== firstRev.current;
 
   return (
-    <div className="kw-nudge-region" role="status" aria-live="polite" aria-atomic="true">
+    <div
+      className="kw-nudge-region"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      style={paneLeft ? ({ '--kw-nudge-left': `${paneLeft}px` } as React.CSSProperties) : undefined}
+    >
       {showing && lead && (
         <button
           type="button"

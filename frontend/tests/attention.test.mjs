@@ -198,6 +198,20 @@ test('the "!" favicon goes on while something waits and gives the icon back afte
   assert.equal(link.href, 'data:image/png;base64,DOT');
 });
 
+test('the "!" favicon comes back off when the link reads its href back absolute, like a real <link>', async () => {
+  // A browser's HTMLLinkElement.href always returns the resolved URL, whatever was set.
+  const base = 'https://kwant.example/chat/abc';
+  let raw = '/icon.svg';
+  const link = { type: 'image/svg+xml', get href() { return new URL(raw, base).href; }, set href(v) { raw = v; } };
+  const icon = a.createNudgeIcon({ iconLink: () => link, drawMarked: async () => '/icon-needs-you.svg' });
+  await icon.set(true);
+  assert.equal(link.href, 'https://kwant.example/icon-needs-you.svg');
+  await icon.set(false);
+  assert.equal(link.href, 'https://kwant.example/icon.svg', 'the last answer gives the normal icon back');
+  assert.ok(a.sameUrl('/x.svg', '/x.svg'));
+  assert.ok(!a.sameUrl('/x.svg', '/y.svg'));
+});
+
 test('the favicon draw resolving after nothing waits any more leaves the icon alone', async () => {
   const link = { href: '/icon.svg' };
   let release;

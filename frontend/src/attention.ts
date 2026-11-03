@@ -242,6 +242,22 @@ export interface IconDoc {
   drawMarked(originalHref: string): Promise<string | null>;
 }
 
+/**
+ * Whether two icon hrefs are the same address. A real <link>'s href reads back absolute
+ * ("https://host/icon-needs-you.svg") while the one set may be relative, so compare them resolved.
+ */
+export function sameUrl(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    // Resolve against the page, then the set href against the link's own (absolute) address.
+    const base = typeof location !== 'undefined' && location.href ? location.href : 'http://localhost/';
+    const abs = new URL(a, base).href;
+    return new URL(b, abs).href === abs;
+  } catch {
+    return false;
+  }
+}
+
 export function createNudgeIcon(doc: IconDoc) {
   const first = doc.iconLink();
   const original = first ? { href: first.href, type: first.type } : null;
@@ -261,7 +277,7 @@ export function createNudgeIcon(doc: IconDoc) {
           link.href = url;
           link.type = /\.svg(\?|$)/.test(url) ? 'image/svg+xml' : 'image/png';
         }
-      } else if (marked && link.href === marked) {
+      } else if (marked && sameUrl(link.href, marked)) {
         link.href = original.href;
         if (original.type !== undefined) link.type = original.type;
       }

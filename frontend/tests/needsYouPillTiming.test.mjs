@@ -129,3 +129,25 @@ test('hover holds it past the cap too, and it goes 2 s after the pointer leaves'
     mock.timers.reset();
   }
 });
+
+test('desktop: the pill is centred on the main pane, starting where the sidebar ends; phone: the whole width', async () => {
+  const side = document.createElement('aside');
+  side.setAttribute('data-kw-sidebar', '');
+  side.getBoundingClientRect = () => ({ left: 56, right: 312, width: 256, top: 0, bottom: 900, height: 900 });
+  document.body.appendChild(side);
+  const region = () => document.querySelector('.kw-nudge-region');
+  try {
+    for (const [w, want] of [[1440, '312px'], [390, '']]) {
+      window.innerWidth = w;
+      const p = mount();
+      try {
+        await p.arrive('q' + w);
+        assert.equal(region().style.getPropertyValue('--kw-nudge-left'), want);
+      } finally {
+        p.unmount();
+      }
+    }
+  } finally {
+    side.remove();
+  }
+});

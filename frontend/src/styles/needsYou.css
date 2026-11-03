@@ -6,7 +6,8 @@
 .kw-nudge-region {
   position: fixed;
   top: calc(env(safe-area-inset-top, 0px) + 12px);
-  left: 0;
+  /* Centred on the main pane: NeedsYouPill sets --kw-nudge-left to where the sidebar ends (desktop only). */
+  left: var(--kw-nudge-left, 0px);
   right: 0;
   z-index: 70;
   display: flex;
@@ -60,7 +61,7 @@
 
 /* Phone (viewport < 640 px): full width less 12 px a side, 56 px tall. */
 @media (max-width: 639px) {
-  .kw-nudge-region { top: calc(env(safe-area-inset-top, 0px) + 8px); }
+  .kw-nudge-region { top: calc(env(safe-area-inset-top, 0px) + 8px); left: 0; }
   .kw-nudge { width: calc(100vw - 24px); max-width: 420px; height: 56px; border-radius: 28px; padding-left: 12px; }
 }
 
