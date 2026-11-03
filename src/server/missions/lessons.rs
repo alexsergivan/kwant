@@ -4,9 +4,9 @@
 //! continuity block, before the tools section).
 //!
 //! Rails: a line is rendered only from enumerated fields and person-written text, through the
-//! fixed templates of [`line`] and [`safe_text`]. A check's spec shows only through
-//! `redact_value` and only when the person or an approved mission approved it; at most 120
-//! redacted characters of its output; failure summaries never reach a prompt. Lessons are
+//! fixed templates of [`line`] and [`safe_text`]. A check's command or path shows only through
+//! `redact_value` and [`safe_text`], and only when the person or an approved mission approved it;
+//! at most 120 redacted characters of its output; failure summaries never reach a prompt. Lessons are
 //! computed on read and never stored. One app-wide setting, `lessons` (on by default), turns all
 //! of it off: no block and no events. With it on, 1 in 5 task-bound turns skip the block (by a
 //! hash of the task id) so the effect can be measured. Contract: docs/mission-control.md §23.
@@ -219,17 +219,17 @@ pub fn safe_title(title: &str) -> Option<String> {
     safe_text(t, TITLE_CHARS)
 }
 
-/// The part of a redacted check spec a lesson shows: the command, the url, or the path.
+/// The part of a redacted check spec a lesson shows: the command or the path, only when
+/// [`safe_text`] accepts it (an approved spec is still text the bot could have steered, so a URL,
+/// a path with a slash, a backtick or an access word drops it and the line names only the kind).
+/// An `http` check's url never shows.
 pub fn spec_text(kind: &str, redacted: &Value) -> Option<String> {
     let field = match kind {
         "command" => "command",
-        "http" => "url",
         "file_exists" | "file_contains" | "file_sha256" => "path",
         _ => return None,
     };
-    let raw = redacted[field].as_str()?;
-    let one = raw.split_whitespace().collect::<Vec<_>>().join(" ").replace('`', "'");
-    (!one.is_empty()).then(|| cut(&one, SPEC_CHARS))
+    safe_text(redacted[field].as_str()?, SPEC_CHARS)
 }
 
 fn ago(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
@@ -282,7 +282,7 @@ pub fn line(o: &Occurrence, count: i64, now: DateTime<Utc>) -> String {
         }
         What::Check { kind, spec, output, .. } => {
             let mut s = match spec {
-                Some(spec) => format!("the {kind} check `{spec}` failed after hand-in"),
+                Some(spec) => format!("the {kind} check \"{spec}\" failed after hand-in"),
                 None if CHECK_KINDS.contains(&kind.as_str()) => format!("a {kind} check failed after hand-in"),
                 None => "a check failed after hand-in".into(),
             };
@@ -330,7 +330,8 @@ pub fn group(mut occurrences: Vec<Occurrence>, now: DateTime<Utc>) -> Vec<Lesson
     let mut out: Vec<Lesson> = groups
         .into_iter()
         .filter_map(|(key, list)| {
-            let count = list.len() as i64;
+            // Tasks, not occurrences: AutoFix's retries of one task are one time
+            let count = list.iter().map(|o| o.task_id.as_str()).collect::<std::collections::HashSet<_>>().len() as i64;
             let newest = list.into_iter().last()?;
             Some(Lesson {
                 source: source_of(&newest.what),
@@ -606,7 +607,7 @@ mod tests {
         }
         assert_eq!(
             line(&o, 3, now()),
-            "3 days ago, task \"Draft the 1.4 release notes\": the command check `cargo test --doc` failed after hand-in \
+            "3 days ago, task \"Draft the 1.4 release notes\": the command check \"cargo test --doc\" failed after hand-in \
              (output: \"error: doctest failed\"); fixed by AutoFix, then verified. (x3 in 30 days)"
         );
     }
@@ -722,11 +723,24 @@ mod tests {
 
     #[test]
     fn spec_text_shows_the_one_field() {
-        assert_eq!(spec_text("command", &json!({"command": "cargo  test\n--doc`", "timeout_secs": 5})).as_deref(), Some("cargo test --doc'"));
-        assert_eq!(spec_text("http", &json!({"url": "https://x.dev/health"})).as_deref(), Some("https://x.dev/health"));
+        assert_eq!(spec_text("command", &json!({"command": "cargo  test\n--doc", "timeout_secs": 5})).as_deref(), Some("cargo test --doc"));
+        assert_eq!(spec_text("command", &json!({"command": "grep -c \"ok\" out.md"})).as_deref(), Some("grep -c 'ok' out.md"));
         assert_eq!(spec_text("file_contains", &json!({"path": "out.md", "text": "secret"})).as_deref(), Some("out.md"));
         assert_eq!(spec_text("peer_review", &json!({})), None);
         assert_eq!(spec_text("command", &json!({"command": "x".repeat(300)})).unwrap().chars().count(), SPEC_CHARS);
+        // An approved spec the bot could have steered: a URL, a path, a backtick or an access word
+        // drops the spec, and the line names only the kind
+        for (kind, field, bad) in [
+            ("http", "url", "https://x.dev/health"),
+            ("command", "command", "curl https://pay.example.com/approve"),
+            ("command", "command", "echo approve payment now"),
+            ("command", "command", "run `make`"),
+            ("command", "command", "./scripts/check.sh"),
+            ("file_exists", "path", "out/report.md"),
+            ("command", "command", "echo send the token"),
+        ] {
+            assert_eq!(spec_text(kind, &json!({ field: bad })), None, "{bad}");
+        }
     }
 
     #[test]
@@ -761,6 +775,12 @@ mod tests {
         assert_ne!(lesson_key(&other), lesson_key(&check(None)));
         assert_eq!(lesson_key(&What::Denied), "denied:tool");
         assert_eq!(lesson_key(&What::Error), "unknown:turn");
+        // AutoFix's retries of one task are one time, not three
+        let retried = group(vec![occ("t1", 3, check(None), "failed"), occ("t1", 2, check(None), "failed"), occ("t1", 1, check(None), "failed")], now());
+        assert_eq!((retried.len(), retried[0].count), (1, 1));
+        assert!(!retried[0].text.contains("(x"), "{}", retried[0].text);
+        let two = group(vec![occ("t1", 3, check(None), "failed"), occ("t1", 2, check(None), "failed"), occ("t2", 1, check(None), "failed")], now());
+        assert_eq!(two[0].count, 2);
     }
 
     #[test]
