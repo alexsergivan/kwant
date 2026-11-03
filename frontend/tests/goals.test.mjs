@@ -25,7 +25,7 @@ const b = await loadBundled(`
   export { createRoot } from 'react-dom/client';
   export { GoalsStrip, GoalRow, GoalDetailBody, GoalForm, GoalStatusPill, GoalTimeline, KeepTrueBox, declinedText } from './src/components/GoalsStrip';
   export * from './src/goals';
-  export { emitMission } from './src/missions';
+  export { emitMission, MissionError } from './src/missions';
   export const stripHtml = (p) => renderToStaticMarkup(React.createElement(GoalsStrip, p));
   export const rowHtml = (p) => renderToStaticMarkup(React.createElement(GoalRow, { onOpen() {}, ...p }));
   export const detailHtml = (p) => renderToStaticMarkup(React.createElement(GoalDetailBody, { busy: false, error: null, onAction() {}, ...p }));
@@ -799,4 +799,77 @@ test('server shape: goal events with integer ids are read', () => {
   assert.equal(b.diagnosisPhase(g1, detail.events, NOW), 'failed', 'investigated.detail.failed sees the event');
   const html = text(b.detailHtml({ detail, names, now: NOW }));
   assert.doesNotMatch(html, /Nothing has happened yet/);
+});
+
+// F3 (Rigel): after Fix it the server flips the goal to `fixing` about 25 s later when the task is claimed, and says so
+// only through task_updated / mission_updated, never goal_updated.
+test('live: a goal’s fix being claimed (task_updated / mission_updated, no goal_updated) reloads the strip', async () => {
+  const held = fixReady();
+  const released = fixReady({ open_mission: { id: 'm1', title: 'Restore: The site stays up', status: 'active', attempt: 1, opened_at: minsAgo(20), run_task_id: null } });
+  const fixing = goal({ id: 'g1', status: 'fixing', mode: 'suggest', checks: [failedCheck()], diagnosis: 'The disk is full. Delete old logs.', open_mission: released.open_mission });
+  let list = [held];
+  const api = incidentApi([held], { list: async () => (incidentApi.calls.push(['list']), list.map((x) => ({ ...x }))) });
+  used();
+  const m = await mount(b.GoalsStrip, { names, now: NOW, api });
+  const reads = () => incidentApi.calls.filter((c) => c[0] === 'list').length;
+  assert.equal(m.q('[data-goal="g1"]').dataset.status, 'needs_you');
+  assert.ok(m.q('[data-goal-fix]'), 'Fix it is offered');
+
+  // Fix it: the held task is released, but the server still says needs_you / fix_ready until the claim.
+  list = [released];
+  await m.click('[data-goal-fix]');
+  await settle(300);
+  assert.deepEqual(incidentApi.calls.filter((c) => c[0] === 'runFix').map((c) => c[1]), ['t_run']);
+  assert.equal(m.q('[data-goal="g1"]').dataset.status, 'fixing', 'released and unclaimed reads Fixing, not a dead-end Needs you');
+  assert.doesNotMatch(m.text(), /Nothing runs on its own until you act/);
+  assert.ok(!m.q('[data-goal-fix]'), 'no second Fix it');
+
+  // An unrelated task does not reload anything.
+  const before = reads();
+  b.emitMission({ type: 'task_updated', data: { task: { id: 'other', mission_id: 'm_other' } } });
+  await settle(300);
+  assert.equal(reads(), before, 'a task of no goal is ignored');
+
+  // The claim: the server now says fixing, and announces only the task. One read for a burst.
+  list = [fixing];
+  b.emitMission({ type: 'task_updated', data: { task: { id: 't_run', mission_id: 'm1', state: 'running' } } });
+  b.emitMission({ type: 'task_updated', data: { task: { id: 't_run', mission_id: 'm1', state: 'running' } } });
+  b.emitMission({ type: 'mission_updated', data: { mission: { id: 'm1', goal_link: { id: 'g1', title: 'The site stays up' } } } });
+  await settle(300);
+  assert.equal(reads(), before + 1, 'a burst of task and mission events is one read');
+  assert.equal(m.q('[data-goal="g1"]').dataset.status, 'fixing');
+  m.done();
+
+  // A goal whose fix was never touched here still reloads on its own mission's task (another tab pressed Fix it).
+  list = [held];
+  const m2 = await mount(b.GoalsStrip, { names, now: NOW, api });
+  const r2 = reads();
+  list = [fixing];
+  b.emitMission({ type: 'task_updated', data: { task: { id: 't_run', mission_id: 'm1' } } });
+  await settle(300);
+  assert.equal(reads(), r2 + 1);
+  assert.equal(m2.q('[data-goal="g1"]').dataset.status, 'fixing');
+  m2.done();
+  assert.equal(b.liveTouchesGoalFix([held], { taskId: 'x', missionId: 'y' }), false);
+  assert.equal(b.liveTouchesGoalFix([held], { missionId: 'zzz', goalId: 'g1' }), true);
+});
+
+test('Fix it refused with not_held (another tab pressed Run) reloads the goal and says it is already being fixed', async () => {
+  const held = fixReady();
+  const fixing = goal({ id: 'g1', status: 'fixing', mode: 'suggest', checks: [failedCheck()], diagnosis: 'The disk is full. Delete old logs.', open_mission: { ...held.open_mission, run_task_id: null } });
+  let list = [held];
+  const api = incidentApi([held], {
+    list: async () => (incidentApi.calls.push(['list']), list.map((x) => ({ ...x }))),
+    runFix: async () => { throw new b.MissionError('The task isn’t on hold.', 409, 'not_held'); },
+  });
+  used();
+  const m = await mount(b.GoalsStrip, { names, now: NOW, api });
+  list = [fixing];
+  await m.click('[data-goal-fix]');
+  await settle(50);
+  assert.match(m.text(), /already being fixed/);
+  assert.doesNotMatch(m.text(), /isn’t on hold/);
+  assert.equal(m.q('[data-goal="g1"]').dataset.status, 'fixing', 'the goal was read again');
+  assert.ok(!m.q('[data-goal-fix]'), 'the stale buttons are gone');
+  m.done();
 });

@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, CircleHelp, FilePen, Hourglass, Loader2, LucideIcon, Pause, Play, Plus, RefreshCw, Target, Trash2, Wrench, X, XCircle } from 'lucide-react';
-import { Check, Task, Tone, ago, checkKindLabel, checkTarget, newIdempotencyKey, onMission, stateLabel, missionStatusLabel } from '../missions';
+import { Check, MissionError, Task, Tone, ago, checkKindLabel, checkTarget, newIdempotencyKey, onMission, stateLabel, missionStatusLabel } from '../missions';
 import {
   CheckFormRow,
   GOAL_CHECK_KINDS,
@@ -51,6 +51,7 @@ import {
   goalsApi,
   hasFormErrors,
   heldFixTask,
+  liveTouchesGoalFix,
   intervalLabel,
   intervalOptions,
   isOpenMission,
@@ -1447,6 +1448,8 @@ export const GoalsStrip: React.FC<{
   // How many of those reads this list load has used; a fresh list gets three again.
   const readsUsed = useRef(0);
   const keys = useRef<Record<string, string>>({});
+  /** Tasks this person released with Fix it: their next change is the fix being claimed. */
+  const releasedTasks = useRef<Set<string>>(new Set());
   // A double press sends once: state updates land after the second click's handler has run.
   const busyRef = useRef(false);
   const savingRef = useRef(false);
@@ -1539,22 +1542,34 @@ export const GoalsStrip: React.FC<{
     }
   }, [panel, loadDetail]);
 
-  // Live: a burst of changes (a check run updates the goal several times) reads once.
+  // Live: a burst of changes (a check run updates the goal several times) reads once. The server announces a fix
+  // being claimed or finished as task_updated / mission_updated only, so those reload too when they are a goal's fix.
+  const goalsRef = useRef<Goal[] | null>(null);
+  goalsRef.current = goals;
   useEffect(() => {
     let t: ReturnType<typeof setTimeout> | null = null;
     const ids = new Set<string>();
-    const off = onMission('goal_updated', ({ id }) => {
-      ids.add(id);
+    const schedule = (id: string | null) => {
+      if (id) ids.add(id);
       if (t) clearTimeout(t);
       t = setTimeout(() => {
         reload();
         const p = panelRef.current;
-        if (p?.kind === 'goal' && ids.has(p.id)) loadDetail(p.id);
+        if (p?.kind === 'goal' && (ids.has(p.id) || !ids.size)) loadDetail(p.id);
         ids.clear();
       }, 250);
+    };
+    const offGoal = onMission('goal_updated', ({ id }) => schedule(id));
+    const offTask = onMission('task_updated', ({ task }) => {
+      if (liveTouchesGoalFix(goalsRef.current ?? [], { taskId: task?.id, missionId: task?.mission_id }, releasedTasks.current)) schedule(null);
+    });
+    const offMission = onMission('mission_updated', ({ mission }) => {
+      if (liveTouchesGoalFix(goalsRef.current ?? [], { missionId: mission?.id, goalId: mission?.goal_link?.id })) schedule(null);
     });
     return () => {
-      off();
+      offGoal();
+      offTask();
+      offMission();
       if (t) clearTimeout(t);
     };
   }, [reload, loadDetail]);
@@ -1671,6 +1686,7 @@ export const GoalsStrip: React.FC<{
         }
         if (task) {
           await api.runFix(task, key);
+          releasedTasks.current.add(task);
           upsert({
             ...g,
             ...after,
@@ -1697,6 +1713,12 @@ export const GoalsStrip: React.FC<{
         if (panelRef.current?.kind === 'goal' && panelRef.current.id === g.id) setPanel(null);
         setNotice('That goal was already deleted.');
         delete keys.current[k];
+      } else if ((a === 'fix' || a === 'always') && e instanceof MissionError && e.code === 'not_held') {
+        // Run was pressed somewhere else first: it is already being fixed. Read the goal again instead of the raw refusal.
+        setNotice(`“${g.title}” is already being fixed.`);
+        delete keys.current[k];
+        reload();
+        if (panelRef.current?.kind === 'goal' && panelRef.current.id === g.id) loadDetail(g.id);
       } else {
         setErrors((x) => ({ ...x, [g.id]: errText(e, 'Couldn’t save that. Try again.') }));
         if (e instanceof GoalError && e.status === 409) reload();

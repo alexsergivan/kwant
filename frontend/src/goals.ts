@@ -1026,6 +1026,29 @@ export function heldFixTask(g: Pick<Goal, 'open_mission' | 'open_fix_task'>): st
 export const serverStatus = (g: Pick<Goal, 'status' | 'raw_status'>): string => g.raw_status ?? g.status;
 
 /**
+ * Does a live task or mission change belong to the fix of one of these goals? The server announces a fix being
+ * claimed or finished as `task_updated` / `mission_updated` only, never `goal_updated`, so the strip reloads on these.
+ * `released`: tasks this person just pressed Fix it on (the goal no longer lists them as held).
+ */
+export function liveTouchesGoalFix(
+  goals: Pick<Goal, 'id' | 'open_mission' | 'open_fix_task'>[],
+  ev: { taskId?: string | null; missionId?: string | null; goalId?: string | null },
+  released: ReadonlySet<string> = new Set(),
+): boolean {
+  if (ev.taskId && released.has(ev.taskId)) return true;
+  return goals.some((g) => {
+    if (ev.goalId && g.id === ev.goalId) return true;
+    const m = g.open_mission;
+    if (m && (ev.taskId && m.run_task_id === ev.taskId || ev.missionId && m.id === ev.missionId)) return true;
+    return !!ev.taskId && g.open_fix_task?.id === ev.taskId;
+  });
+}
+
+/** needs_you / fix_ready, a remediation mission is open, and its run task is no longer held: Fix it was pressed. */
+const fixReleased = (g: Goal): boolean =>
+  serverStatus(g) === 'needs_you' && (g.status_reason ?? '').trim().toLowerCase() === 'fix_ready' && !!g.open_mission && isOpenMission(g.open_mission) && !heldFixTask(g);
+
+/**
  * What the person is asked, if anything. One per goal: approve a draft, decide on the incident, or the Needs
  * you reason. A decision the person already made (Not now) is `declined`: shown, but not a request.
  * `notNowTask`: the held task this person already said Not now to on this device.
@@ -1044,6 +1067,8 @@ export function goalDecision(g: Goal, events: GoalEvent[] = [], now: number = Da
     const failed = !!inv && (inv.detail.failed === true || inv.detail.failed === 'true' || inv.detail.status === 'failed');
     return { kind: 'run', taskId: task, phase: failed ? 'failed' : 'ready', diagnosis: goalDiagnosis(g, events, now) };
   }
+  // fix_ready with the task no longer held: it was released (Fix it) and waits to be claimed. Nothing to ask.
+  if (fixReleased(g)) return null;
   if (status === 'needs_you') return { kind: 'needs_you', text: needsYouText(g.status_reason) };
   if (status !== 'not_met' && status !== 'fixing') return null;
   // A fix that actually runs has no decision: fix mode (kwant fixes on its own) or a task already released.
@@ -1066,6 +1091,7 @@ export function displayStatus(g: Goal, events: GoalEvent[] = [], now: number = D
   if (shown !== 'needs_you' && shown !== 'not_met' && shown !== 'fixing') return shown;
   const d = goalDecision({ ...g, status: shown, raw_status: undefined }, events, now, notNowTask);
   if (d?.kind === 'declined') return 'not_met';
+  if (fixReleased({ ...g, raw_status: undefined, status: shown })) return 'fixing';
   if (d?.kind === 'run' && g.mode === 'suggest') return d.taskId && d.phase !== 'looking' ? 'needs_you' : 'not_met';
   return shown;
 }
