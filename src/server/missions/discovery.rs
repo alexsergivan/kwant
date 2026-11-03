@@ -42,8 +42,9 @@ const SCAN_EVERY: Duration = Duration::hours(1);
 /// Statuses `GET ?status=` takes; `all` lists every one.
 const STATUSES: [&str; 6] = ["offered", "accepted", "dismissed", "expired", "superseded", "all"];
 
+/// On unless the person saved `off`: a fresh install suggests routines (within [`daily_cap`]).
 pub async fn enabled(state: &AppState) -> bool {
-    matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("on"))
+    !matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("off"))
 }
 
 /// Offers made per space per 24 hours (0–10; 0 offers none).

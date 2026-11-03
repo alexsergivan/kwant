@@ -1,6 +1,6 @@
 // Flight School (Mission Control Phase C3, docs/mission-control.md §14): a bot's tier per kind of
-// work. A tier only adds approval cards, never removes one, and payments always ask. Off by default;
-// with it off nothing here shows.
+// work. A tier only adds approval cards, never removes one, and payments always ask. On by default,
+// with every bot at Act until the person lowers one; with it switched off nothing here shows.
 
 export type Tier = 'observe' | 'sandbox' | 'act';
 export const TIERS: Tier[] = ['observe', 'sandbox', 'act'];
@@ -123,7 +123,7 @@ export function parseFlightSchoolSettings(data: unknown): FlightSchoolSettings |
   if (!data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
   if (typeof d.flight_school !== 'boolean') return null;
-  return { flight_school: d.flight_school, flight_school_new_bot_tier: isTier(d.flight_school_new_bot_tier) ? d.flight_school_new_bot_tier : 'sandbox' };
+  return { flight_school: d.flight_school, flight_school_new_bot_tier: isTier(d.flight_school_new_bot_tier) ? d.flight_school_new_bot_tier : 'act' };
 }
 
 /** Why the bot's tier asked, from an approval card's details, or null. Never set on a payment card. */

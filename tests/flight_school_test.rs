@@ -14,7 +14,11 @@ use chrono::Utc;
 use kwnt::{
     broker::{ApprovalDecision, PermissionBroker},
     config::Config,
-    db::{models::Kwant, spaces::SpaceId, Database},
+    db::{
+        models::{Kwant, NewKwant},
+        spaces::SpaceId,
+        Database,
+    },
     drivers::events::RuntimeEvent,
     mcp::{ApprovalOutcome, SmartVerdict, ToolApprovalRequest, ToolApprover, SELF_SERVER_NAME},
     router::LayaRouter,
@@ -254,6 +258,8 @@ async fn outcomes(e: &Env, dir: &Path) -> Vec<Result<String, Value>> {
 #[tokio::test]
 async fn flight_school_off_gates_nothing_even_with_a_lower_tier_saved() {
     let e = setup().await;
+    // It is on by default now; the person switched it off
+    flight_school(&e, false).await;
     set_approvals(&e, "off").await;
     let (_tid, dir) = claimed_task(&e, "general", false).await;
     let before = outcomes(&e, &dir).await;
@@ -274,6 +280,65 @@ async fn flight_school_off_gates_nothing_even_with_a_lower_tier_saved() {
     set_approvals(&e, "ask").await;
     let Err(details) = claude_asks(&e, &dir, "Bash", json!({"command": "touch x"})).await else { panic!("ask mode cards Bash") };
     assert!(details.get("tier_reason").is_none(), "{details}");
+}
+
+async fn hire(e: &Env, name: &str) -> Kwant {
+    let input = NewKwant {
+        name: name.into(),
+        title: "Helper".into(),
+        persona_prompt: String::new(),
+        soul: String::new(),
+        avatar_sprite: String::new(),
+        driver_type: "cli".into(),
+        preferred_model: "claude".into(),
+    };
+    e.state.db.create_kwant(&SpaceId::default_space(), &input).await.unwrap()
+}
+
+#[tokio::test]
+async fn on_by_default_a_new_bot_starts_at_act_and_gets_no_new_card() {
+    let mut e = setup().await;
+    let s = person(&e, "GET", "/api/settings", json!(null)).await;
+    assert_eq!((s["flight_school"].clone(), s["flight_school_new_bot_tier"].clone()), (json!(true), json!("act")), "{s}");
+    let seeded = e.bot.clone();
+    let hired = hire(&e, "Newcomer").await;
+    assert!(e.state.db.policies_of(&hired.id).await.unwrap().is_empty(), "a new bot gets no tier row");
+    assert!(e.state.db.policies_of(&seeded.id).await.unwrap().is_empty(), "an existing bot gets none either");
+    e.bot = hired;
+    set_approvals(&e, "off").await;
+    let (_tid, dir) = claimed_task(&e, "general", false).await;
+    // Ordinary calls of a task turn: nothing asks, exactly as with Flight School off
+    let on = outcomes(&e, &dir).await;
+    assert!(on.iter().all(|o| o == &Ok("allow".to_string())), "{on:?}");
+    let a = SelfToolsApprover { inner: Arc::new(approver(&e)), always_ask: false, browser: None };
+    assert_eq!(a.decide(request(&e, SELF_SERVER_NAME, "bot_update", json!({}))).await, ApprovalOutcome::Allowed);
+    assert!(kwnt::server::computer::approve_local_shell(&e.state, &e.bot.id, "touch x", &dir).await);
+    flight_school(&e, false).await;
+    assert_eq!(outcomes(&e, &dir).await, on, "on and off answer the same for a bot at act");
+    flight_school(&e, true).await;
+    // Under ask, the cards are the approval mode's own: no tier_reason
+    set_approvals(&e, "ask").await;
+    let Err(details) = claude_asks(&e, &dir, "Bash", json!({"command": "touch x"})).await else { panic!("ask mode cards Bash") };
+    assert!(details.get("tier_reason").is_none(), "{details}");
+    assert!(e.state.db.policies_of(&e.bot.id).await.unwrap().is_empty(), "nothing lowered the bot on its own");
+}
+
+#[tokio::test]
+async fn a_lower_start_the_person_saved_is_kept_for_new_bots() {
+    let mut e = setup().await;
+    person(&e, "POST", "/api/settings", json!({"flight_school_new_bot_tier": "sandbox"})).await;
+    let hired = hire(&e, "Careful").await;
+    let p = e.state.db.policies_of(&hired.id).await.unwrap();
+    assert_eq!((p.len(), p[0].task_class.as_str(), p[0].tier.as_str()), (1, "*", "sandbox"));
+    e.bot = hired;
+    set_approvals(&e, "off").await;
+    let (_tid, dir) = claimed_task(&e, "general", true).await;
+    let Err(d) = claude_asks(&e, &dir, "Bash", json!({"command": "touch x"})).await else { panic!("sandbox: a command asks") };
+    assert_eq!(reason(&d), "Sandbox: commands that can change things ask");
+    // Switched off: no row for the next hire, whatever start is saved
+    flight_school(&e, false).await;
+    let later = hire(&e, "Later").await;
+    assert!(e.state.db.policies_of(&later.id).await.unwrap().is_empty());
 }
 
 #[tokio::test]

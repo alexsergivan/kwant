@@ -33,12 +33,12 @@ pub const MODES: [&str; 3] = ["off", "shadow", "on"];
 const STATUSES: [&str; 4] = ["proposed", "accepted", "superseded", "disputed"];
 const SCOPES: [&str; 3] = ["bot", "team", "space"];
 
-/// The saved mode; anything unreadable is `off`.
+/// The saved mode; unset (a fresh install) is `on`. Only a saved `off` or `shadow` holds it back.
 pub async fn mode(state: &AppState) -> &'static str {
     match state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim) {
         Some("shadow") => "shadow",
-        Some("on") => "on",
-        _ => "off",
+        Some("off") => "off",
+        _ => "on",
     }
 }
 

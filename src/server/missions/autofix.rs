@@ -34,11 +34,12 @@ pub const BACKOFF_MINUTES: [i64; 3] = [1, 5, 25];
 /// Largest diagnostics file kept per failure.
 const DIAGNOSTICS_MAX: usize = 256 * 1024;
 
+/// The saved mode; unset (a fresh install) is `on`. Only a saved `off` or `suggest` holds it back.
 pub async fn mode(state: &AppState) -> &'static str {
     match state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim) {
-        Some("on") => "on",
+        Some("off") => "off",
         Some("suggest") => "suggest",
-        _ => "off",
+        _ => "on",
     }
 }
 

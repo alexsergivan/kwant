@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- **Everything is on for a fresh install.** AutoFix, the Swarm Auditor, Flight School, Skill Foundry, Automation
+  Discovery and the Truth Ledger now start on (the Ledger in full, not shadow). Nothing you saved changes: if you
+  switched one off, or picked "suggest" or "shadow", it stays that way. The caps are the same as before (AutoFix
+  25% recovery budget, 5 audits a day, the Foundry and Discovery daily caps), and token and task limits stay off.
+- **Flight School starts every bot at Act.** New bots no longer start in Sandbox, so turning Flight School on adds
+  no approval cards: it keeps scorecards and proposes tiers, and only you lower or raise a bot. You can still pick a
+  lower start for new bots in Settings.
+
 ## [Mac 0.6.4] - 2026-11-02
 
 ### Added

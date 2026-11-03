@@ -491,7 +491,7 @@ acceptance, a routine) is only ever proposed; it applies when the person approve
 
 ### Settings
 
-- `autofix`: `off` (default), `suggest` or `on`. `off` records failures only (Phase A behaviour: a failed check sends the task back to `ready`). `suggest` plans one attempt and waits for the person (`autofix_suggested` Needs-you item). `on` runs the attempt.
+- `autofix`: `off`, `suggest` or `on` (default since 0.6.5; unset reads as `on`, and a saved `off` or `suggest` is kept). The recovery budget (`recovery_budget_pct`, default 25) still caps every attempt. `off` records failures only (Phase A behaviour: a failed check sends the task back to `ready`). `suggest` plans one attempt and waits for the person (`autofix_suggested` Needs-you item). `on` runs the attempt.
 - `recovery_budget_pct` (0–100, default 25): the share of the task's budget that AutoFix retries may spend.
 
 ### Failures
@@ -535,12 +535,14 @@ mode: it can add a card, never remove one. Scorecards and tier proposals are C4,
 
 ### Settings
 
-- `flight_school` (bool, default `false`). Off, nothing is gated, whatever tiers are saved: every call
+- `flight_school` (bool, default `true` since 0.6.5; unset reads as on, a saved `false` is kept). Off, nothing is gated, whatever tiers are saved: every call
   takes exactly today's path. On, tiers apply to turns that work a task (a chat turn of a bot with no open
   claim is never gated).
-- `flight_school_new_bot_tier` (`observe`, `sandbox` or `act`, default `sandbox`): the `'*'` tier a bot hired
-  while Flight School is on starts at (a trigger on `kwants`). Bots that were there before have no row,
-  which is `act` (D4), so switching the feature on changes nothing until the person lowers a bot.
+- `flight_school_new_bot_tier` (`observe`, `sandbox` or `act`, default `act` since 0.6.5): the `'*'` tier a bot hired
+  while Flight School is on starts at (a trigger on `kwants`, recreated on every start). At `act` the trigger writes
+  no row, so a new bot is exactly like one that was there before: no row is `act` (D4). With the defaults, Flight
+  School only keeps scorecards and proposes tiers; nothing is gated and no card is added until the person lowers a
+  bot or saves a lower start for new bots.
 
 ### Tables
 
@@ -816,7 +818,7 @@ and the risks left unresolved are listed on the task. **An audit never changes v
 never moves a task, never adds or runs a check and never writes a peer review; "no risks raised" is not
 a pass. Design note: `phase-d/auditor.md`.
 
-**Settings** (app-wide, like the other Mission Control settings): `auditor` = `off` (default) | `on`;
+**Settings** (app-wide, like the other Mission Control settings): `auditor` = `off` | `on` (default since 0.6.5; a saved `off` is kept);
 `auditor_daily_cap` 1–50 (default 5) audits started per UTC day; `auditor_model` = `fast` (default) |
 `balanced` | `deep` | `bot`: the model tier both audit turns run on. A tier keeps the engine Laya picks
 and uses that engine's model of the tier (a pinned model of another known tier gives way; effort is at
@@ -880,7 +882,7 @@ to the person, who enables, edits or rejects it. **A Foundry skill is text only,
 tools it lists are shown, never granted, and enabling it changes no tool, server or approval. Design
 note: `phase-d/skill-foundry.md`.
 
-**Settings** (app-wide): `skill_foundry` = `off` (default) | `on`; `skill_foundry_model` = `balanced`
+**Settings** (app-wide): `skill_foundry` = `off` | `on` (default since 0.6.5; a saved `off` is kept); `skill_foundry_model` = `balanced`
 (default) | `fast` | `deep` | `bot` (as `auditor_model`); `skill_foundry_daily_drafts` 1–20 (default
 2) draft runs started per UTC day; `skill_foundry_replays` 0–5 (default 3) examples each draft is
 replayed on (0: no replays); `skill_foundry_replay_tokens` 5,000–500,000 (default 60,000) fresh tokens
@@ -1012,7 +1014,7 @@ end go too, as do empty or unpaired brackets ("Pay supplier invoices for October
 it is. Skipped habits are titled the same way. Each source is one matched ask: `local_date`
 (`YYYY-MM-DD`) and `local_time` (`HH:MM`) in the person's time zone.
 
-**Settings:** `automation_discovery` `off` (default) or `on`, `automation_discovery_daily_cap` 0–10
+**Settings:** `automation_discovery` `off` or `on` (default since 0.6.5; a saved `off` is kept), `automation_discovery_daily_cap` 0–10
 (default 2; anything else, a non-number too, is refused). Every `/api/automation-discovery` route is the
 person's only: a bot's token gets 403. Nothing is created without Accept.
 
@@ -1101,7 +1103,7 @@ Contract: `phase-c/contract.md`. **C1 ships the ledger in shadow mode only: it r
 read and decide, and nothing the bots see changes.** Memory stays the write path; C2 makes it a view of
 the ledger.
 
-**Setting.** `truth_ledger`: `off` (default), `shadow` or `on`, set by the person in `POST /api/settings`
+**Setting.** `truth_ledger`: `off`, `shadow` or `on` (default since 0.6.5; a saved `off` or `shadow` is kept), set by the person in `POST /api/settings`
 (a bot's token gets a 403, and the bots' own settings tool refuses it). `off` and `shadow` leave every
 prompt, tool list and memory reply byte-identical to a build without the ledger; `on` is C2 (below). The mirror below runs in every mode, so turning the ledger on later shows the whole history;
 the setting only gates the routes.

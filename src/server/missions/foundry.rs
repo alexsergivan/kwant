@@ -68,8 +68,9 @@ const MAX_ORIGINAL_ACTIONS: usize = 20;
 /// One Foundry turn at a time, server-wide.
 static ONE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+/// On unless the person saved `off`: a fresh install drafts skills (within [`daily_drafts`]).
 pub async fn enabled(state: &AppState) -> bool {
-    matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("on"))
+    !matches!(state.db.get_setting(SETTING).await.ok().flatten().as_deref().map(str::trim), Some("off"))
 }
 
 pub async fn model_mode(state: &AppState) -> &'static str {

@@ -209,10 +209,13 @@ async fn open_audit(e: &Env, t: &Task) -> kwnt::db::auditor::Audit {
 }
 
 #[tokio::test]
-async fn the_auditor_is_off_by_default() {
+async fn the_auditor_is_on_by_default_and_a_saved_off_holds_it() {
     let e = setup().await;
     let s = person(&e, "GET", "/api/settings", None).await;
-    assert_eq!((s["auditor"].as_str(), s["auditor_daily_cap"].as_i64()), (Some("off"), Some(5)), "{s}");
+    assert_eq!((s["auditor"].as_str(), s["auditor_daily_cap"].as_i64()), (Some("on"), Some(5)), "{s}");
+    assert!(auditor::enabled(&e.state).await);
+    person(&e, "POST", "/api/settings", Some(json!({"auditor": "off"}))).await;
+    assert_eq!(person(&e, "GET", "/api/settings", None).await["auditor"], "off");
     let (owner, other) = (bot(&e, "Owner").await, bot(&e, "Other").await);
 
     // A high-impact task reaching review gets no audit while it is off
