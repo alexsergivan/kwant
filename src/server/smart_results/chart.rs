@@ -42,8 +42,14 @@ fn chart(t: &Table, kind: ChartKind, series: std::ops::RangeInclusive<usize>) ->
     if units.windows(2).any(|w| w[0] != w[1]) {
         return None;
     }
+    if units[0].is_none() && scales_differ(&columns) {
+        return None;
+    }
+    // The one unit as the cells write it (a column whose unit is only in its header takes it from
+    // the others), so every series carries the same `unit` the client compares
+    let unit = columns.iter().find_map(|(u, _)| *u).map(str::to_string);
     let series = (1..cols)
-        .map(|c| Series { key: format!("s{}", c - 1), label: t.header[c].to_string(), unit: columns[c - 1].0.map(str::to_string) })
+        .map(|c| Series { key: format!("s{}", c - 1), label: t.header[c].to_string(), unit: unit.clone() })
         .collect();
     let points = t
         .rows
@@ -71,6 +77,20 @@ fn chart(t: &Table, kind: ChartKind, series: std::ops::RangeInclusive<usize>) ->
         summary: None,
         provenance: Provenance::reply_text(),
     })
+}
+
+/// How many times larger one series' biggest value may be than another's before they stop sharing
+/// an axis: past it the smaller series is a flat line at the bottom.
+const MAX_SCALE_RATIO: f64 = 10.0;
+
+/// Series with no unit of their own whose largest values differ by more than [`MAX_SCALE_RATIO`]
+/// (Revenue ~120000 beside Orders ~400). A unit in the cells or the header says the series are
+/// the same kind of quantity, so they keep sharing an axis. A series of zeros has no scale.
+fn scales_differ(columns: &[(Option<&str>, Vec<Option<f64>>)]) -> bool {
+    let tops: Vec<f64> =
+        columns.iter().map(|(_, v)| v.iter().flatten().fold(0.0_f64, |m, x| m.max(x.abs()))).filter(|m| *m > 0.0).collect();
+    let (min, max) = tops.iter().fold((f64::MAX, 0.0_f64), |(lo, hi), t| (lo.min(*t), hi.max(*t)));
+    tops.len() > 1 && max > min * MAX_SCALE_RATIO
 }
 
 /// The unit a column's numbers are in: the affix its cells share (`$`, `%`, `ms`), or for bare
@@ -141,12 +161,14 @@ fn series_values<'a>(cells: impl Iterator<Item = &'a str>) -> Option<(Option<&'a
 
 /// The numbers of one column as values, read with one locale for the whole column (`1,299.00`
 /// says `,` groups and `.` is the decimal point). `None` when the two readings both fit and
-/// disagree (`1,299` alone: 1299 or 1.299).
+/// disagree (`1,299` beside `1.299`), unless every number that has a separator is grouped with
+/// commas in threes (`4,100`, `1,204`, `980`): then the column has one reading, and `1,204` is 1204.
 pub(super) fn column_values(numbers: &[&str]) -> Option<Vec<f64>> {
     let dot: Option<Vec<f64>> = numbers.iter().map(|n| reading(n, ',', '.')).collect();
     let comma: Option<Vec<f64>> = numbers.iter().map(|n| reading(n, '.', ',')).collect();
     match (dot, comma) {
-        (Some(d), Some(c)) => (d == c).then_some(d),
+        (Some(d), Some(c)) if d == c => Some(d),
+        (Some(d), Some(_)) => numbers.iter().all(|n| !n.contains('.')).then_some(d),
         (Some(d), None) => Some(d),
         (None, Some(c)) => Some(c),
         (None, None) => None,
@@ -203,7 +225,7 @@ pub(super) fn metrics_table(t: &Table) -> Option<Metrics> {
     let mut items = Vec::new();
     let mut units = HashSet::new();
     for (i, r) in t.rows.iter().enumerate() {
-        if when_like(r[0]) || !r[0].chars().any(char::is_alphabetic) {
+        if when_like(r[0]) || version_label(r[0]) || !r[0].chars().any(char::is_alphabetic) {
             return None;
         }
         let v = metric_value(r[1])?;
@@ -233,6 +255,14 @@ pub(super) struct MetricValue<'a> {
     pub affixes: (Option<&'a str>, Option<&'a str>),
     /// The rest of the text after the value, verbatim.
     pub note: Option<&'a str>,
+}
+
+/// Words after a number that make it a version (`20.11 LTS`, `1.76 nightly`), not a quantity.
+const VERSION_WORDS: [&str; 10] = ["lts", "stable", "beta", "alpha", "nightly", "rc", "preview", "canary", "snapshot", "latest"];
+
+/// A label that says its value is a version (`Version`, `Node version`).
+pub(super) fn version_label(label: &str) -> bool {
+    label.split(|c: char| !c.is_alphanumeric()).any(|w| w.eq_ignore_ascii_case("version") || w.eq_ignore_ascii_case("versions"))
 }
 
 /// A value that starts `s`: an optional currency prefix (`$`, `EUR `), a number, an optional unit
@@ -306,7 +336,11 @@ pub(super) fn metric_value(s: &str) -> Option<MetricValue<'_>> {
         let unit = &rest[lead..lead + word];
         let ends = rest[lead + word..].chars().next().is_none_or(|c| !c.is_alphanumeric());
         let time = ["am", "pm", "a.m", "p.m"].contains(&unit.to_lowercase().as_str());
-        if time {
+        if time || VERSION_WORDS.contains(&unit.to_lowercase().as_str()) {
+            return None;
+        }
+        // Digits in groups (`555 0100`, `555 123 4567`) are a phone number, not a quantity
+        if word == 0 && lead == 1 && rest[1..].starts_with(|c: char| c.is_ascii_digit()) {
             return None;
         }
         if word > 0 && unit.chars().count() <= 8 && ends && (lead == 0 || word <= 8) {
@@ -405,6 +439,12 @@ pub(super) fn when_like(label: &str) -> bool {
         [m, d, y] => month(m) && d.trim_end_matches(',').parse::<u32>().is_ok_and(|n| (1..=31).contains(&n)) && year(y),
         _ => false,
     }
+}
+
+/// A weekday on its own (`Mon`, `**Friday**`): it says when, but not whether it is ahead or done.
+pub(super) fn bare_weekday(label: &str) -> bool {
+    let mut words = label.trim().trim_matches(['*', '_']).split_whitespace();
+    matches!((words.next(), words.next()), (Some(w), None) if weekday(w))
 }
 
 fn year(w: &str) -> bool {

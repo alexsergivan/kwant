@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use super::items::severity_of;
+use super::selector::plain;
 use super::{AxisKind, Block, ChartKind, ResultSet, Role, Variant, ENABLED_TYPES, MAX_PAYLOAD, PICK_REASON, VERSION};
 
 /// `Ok` when `set` is a block set this build may store and serve. With `reply`, every label, unit,
@@ -79,7 +80,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                         return Err(format!("row {r} has {} cells", row.cells.len()));
                     }
                     check_text(&row.cells[0], 200, "row label")?;
-                    if !labels.insert(row.cells[0].as_str()) {
+                    if !labels.insert(label_key(&row.cells[0])) {
                         return Err(format!("row label {:?} repeats", row.cells[0]));
                     }
                     for cell in &row.cells {
@@ -123,7 +124,11 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                         texts.push(unit);
                     }
                 }
-                if !(3..=60).contains(&c.points.len()) {
+                // One shared axis means one unit; the client draws no chart whose series differ
+                if c.series.iter().any(|s| s.unit != c.series[0].unit) {
+                    return Err("series in more than one unit".into());
+                }
+                if !(3..=60).contains(&c.points.len()) || c.chart_kind == ChartKind::Bar && c.points.len() < 5 {
                     return Err(format!("{} points", c.points.len()));
                 }
                 let mut xs = HashSet::new();
@@ -139,8 +144,8 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     if p.cells.len() != c.series.len() || p.values.len() != c.series.len() {
                         return Err(format!("point {k} has {} cells, {} values", p.cells.len(), p.values.len()));
                     }
-                    if p.values.iter().flatten().any(|v| !v.is_finite()) {
-                        return Err("a value that isn't a number".into());
+                    if p.values.iter().flatten().any(|v| !in_range(*v)) {
+                        return Err("a value that isn't a number or is out of range".into());
                     }
                     for cell in &p.cells {
                         check_cell(cell)?;
@@ -167,8 +172,8 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     }
                     check_text(&x.label, 200, "metric label")?;
                     check_text(&x.value_text, 100, "metric value")?;
-                    if !x.value.is_finite() {
-                        return Err("a value that isn't a number".into());
+                    if !in_range(x.value) {
+                        return Err("a value that isn't a number or is out of range".into());
                     }
                     texts.extend([x.label.as_str(), x.value_text.as_str()]);
                     if let Some(unit) = &x.unit {
@@ -238,7 +243,8 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     if let Some(url) = &x.url {
                         let safe = url.starts_with("https://")
                             && url.len() <= 2048
-                            && !url.contains(|c: char| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '\'' | '`'));
+                            && !url.contains(|c: char| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '\'' | '`'))
+                            && has_plain_host(url);
                         if !safe {
                             return Err("a card link that isn't a plain https link".into());
                         }
@@ -248,7 +254,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                         return Err("card meta".into());
                     }
                     for m in &x.meta {
-                        check_text(m, 100, "card meta")?;
+                        check_text(m, 40, "card meta")?;
                         texts.push(m);
                     }
                 }
@@ -415,7 +421,7 @@ fn check_source(block: &Block) -> Result<(), String> {
 
 /// A shown cell: at most 200 characters, no HTML; it may be empty (a gap).
 fn check_cell(cell: &str) -> Result<(), String> {
-    if cell.chars().count() > 200 {
+    if utf16_len(cell) > 200 {
         return Err("a cell over 200 characters".into());
     }
     if has_html(cell) {
@@ -428,13 +434,42 @@ fn check_text(s: &str, max: usize, what: &str) -> Result<(), String> {
     if s.trim().is_empty() {
         return Err(format!("an empty {what}"));
     }
-    if s.chars().count() > max {
+    if utf16_len(s) > max {
         return Err(format!("a {what} over {max} characters"));
     }
     if has_html(s) {
         return Err(format!("HTML in a {what}"));
     }
     Ok(())
+}
+
+/// A text's length as the client counts it (UTF-16 units: an emoji is two), so a text the server
+/// stores is one the client's own limit lets through.
+fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// The largest number a value may be: what an SVG coordinate carries without turning every scaled
+/// position into NaN (the client's own bound, `MAX_VALUE` in `Chart.tsx`); below
+/// `Number.MAX_SAFE_INTEGER`.
+const MAX_VALUE: f64 = 1e15;
+
+fn in_range(v: f64) -> bool {
+    v.is_finite() && v.abs() <= MAX_VALUE
+}
+
+/// A row label as the client compares them: markdown out, whitespace collapsed, lowercase.
+fn label_key(label: &str) -> String {
+    plain(label).split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// A URL (already `https://`) with a host of its own and no login in front of it
+/// (`https://user:pw@host/`, `https://host@evil/`): an `@` after the host is part of the path.
+pub(super) fn has_plain_host(url: &str) -> bool {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or(url);
+    let authority = rest.split(['/', '?', '#', '\\']).next().unwrap_or("");
+    let host = authority.split(':').next().unwrap_or("");
+    !authority.contains('@') && !host.is_empty() && !url.contains('\\')
 }
 
 /// Anything that could open an HTML tag, comment or declaration (`<b`, `</`, `<!`, `<?`).

@@ -13,8 +13,8 @@ fn comparison_args() -> Value {
             "columns": [{"label": "Plan"}, {"label": "Price", "numeric": true}, {"label": "Seats", "numeric": true}],
             "rows": [
                 {"cells": ["Basic", "EUR 12", "1"]},
-                {"cells": ["Team", "EUR 1800", "5"]},
-                {"cells": ["Business", "EUR 26.5", "20"]},
+                {"cells": ["Team", "EUR 1,800", "5"]},
+                {"cells": ["Business", "EUR 26.50", "20"]},
             ],
         },
     })
@@ -76,7 +76,7 @@ fn a_matching_comparison_is_kept_as_bot_declared() {
     let Block::Comparison(c) = &b else { panic!() };
     assert_eq!(c.provenance, Provenance::bot_declared("t1".into()));
     assert_eq!(c.source.index, Some(0));
-    assert_eq!(rows(&b)[1], ["Team", "EUR 1800", "5"], "number formats may differ, values may not");
+    assert_eq!(rows(&b)[1], ["Team", "EUR 1,800", "5"]);
     let set = ResultSet { version: VERSION, blocks: vec![b] };
     assert!(super::super::validate(&set, None).is_ok());
 }
@@ -115,21 +115,22 @@ fn an_invented_number_or_label_is_refused() {
 }
 
 #[test]
-fn numbers_compare_by_value_with_separators() {
-    for cell in ["EUR 1,800", "1800", "1800.0"] {
+fn a_number_is_the_cell_s_own_text_not_another_format_of_it() {
+    // The client matches a cell by its text, so "1800" is not the table's "EUR 1,800"
+    for cell in ["1800", "1800.0", "EUR 18,000"] {
+        let args = with(comparison_args(), |a| a["data"]["rows"][1]["cells"][1] = json!(cell));
+        assert!(pick(REPLY, args).is_none(), "{cell}");
+    }
+    // Case and the thousands comma are not a difference to the client (letters and digits only)
+    for cell in ["eur 1,800", "EUR 1800"] {
         let args = with(comparison_args(), |a| a["data"]["rows"][1]["cells"][1] = json!(cell));
         assert!(pick(REPLY, args).is_some(), "{cell}");
     }
-    assert_eq!(string_numbers("1,234,567 and 1,5 and -3.5 and 12%"), vec![1234567.0, 1.0, 5.0, -3.5, 12.0]);
-    assert!(same(26.5, 26.50));
-    assert!(!same(26.5, 26.51));
-    assert_eq!(parse_number("$9"), Some(9.0));
-    assert_eq!(parse_number("Team 5"), None);
 }
 
 #[test]
 fn urls_must_be_links_in_the_reply() {
-    let args = with(comparison_args(), |a| a["data"]["rows"][2]["cells"][0] = json!("Business https://example.com/biz"));
+    let args = with(comparison_args(), |a| a["data"]["rows"][2]["cells"][0] = json!("Business"));
     assert!(pick(REPLY, args).is_some(), "the reply links it");
     let plain = "| Plan | Price |\n|---|---|\n| A | 1 |\n| B | 2 |\n| C | https://example.com/c |\n";
     let args = json!({"type": "comparison", "source": {"kind": "markdown_table", "index": 0},
@@ -196,21 +197,23 @@ fn injection_text_in_the_reply_cannot_widen_the_call() {
 
 #[test]
 fn steps_must_quote_the_list_they_name() {
+    let reply = "Do this:\n\n1. Install the tool\n2. Run `kwant init`\n3. See [the guide](https://example.com/guide)\n";
     let ok = ["Install the tool", "Run `kwant init`", "See [the guide](https://example.com/guide)"];
-    let b = pick(STEPS_REPLY, steps_args(&ok, Some(0))).expect("grounded in list 0");
+    let b = pick(reply, steps_args(&ok, Some(0))).expect("grounded in list 0");
     let Block::Steps(s) = &b else { panic!() };
     assert_eq!(s.provenance, Provenance::bot_declared("t1".into()));
     assert_eq!(s.source.index, Some(0));
-    assert!(pick(STEPS_REPLY, steps_args(&ok, None)).is_none(), "steps need a source");
+    assert!(pick(reply, steps_args(&ok, None)).is_none(), "steps need a source");
     assert!(declared(&steps_args(&ok, None)).is_err());
-    assert!(pick(STEPS_REPLY, steps_args(&ok, Some(1))).is_none(), "no list at index 1");
+    assert!(pick(reply, steps_args(&ok, Some(1))).is_none(), "no list at index 1");
     let invented = ["Install the tool", "Run `kwant init`", "Delete the database"];
-    assert!(pick(STEPS_REPLY, steps_args(&invented, Some(0))).is_none());
-    let plain_url = ["Install the tool", "Run `kwant init`", "Open https://example.com/start and sign in"];
-    assert!(pick(STEPS_REPLY, steps_args(&plain_url, Some(0))).is_none(), "the start URL is plain text in the reply");
-    assert!(pick(STEPS_REPLY, steps_args(&ok[..2], Some(0))).is_none(), "fewer than 3 steps");
+    assert!(pick(reply, steps_args(&invented, Some(0))).is_none());
+    assert!(pick(reply, steps_args(&ok[..2], Some(0))).is_none(), "fewer than 3 steps");
     let wrong_table = with(steps_args(&ok, Some(0)), |a| a["source"]["kind"] = json!("markdown_table"));
     assert!(declared(&wrong_table).is_err());
+    // STEPS_REPLY has a fourth item with the start URL as plain text
+    let three = ["Install the tool", "Run `kwant init`", "Open https://example.com/start and sign in"];
+    assert!(pick(STEPS_REPLY, steps_args(&three, Some(0))).is_none(), "not all four items, and a plain-text URL");
     let numbered = "1. Pay 5 now\n2. Pay 6 later\n3. Done\n";
     assert!(pick(numbered, steps_args(&["Pay 5 now", "Pay 6 later", "Done"], Some(0))).is_some());
     assert!(pick(numbered, steps_args(&["Pay 7 now", "Pay 6 later", "Done"], Some(0))).is_none());
@@ -272,4 +275,142 @@ fn the_tool_result_says_what_was_wrong() {
     assert!(ok.is_ok());
     let why = declared(&json!({"type": "comparison", "data": {}})).err().unwrap();
     assert!(why.contains("source"), "{why}");
+}
+
+// --- typed-M1 (Rigel): a declared block is held to what the client checks before it draws one
+
+const SEATS: &str = "| Plan | Price | Seats |\n|---|---|---|\n| Basic | 12 EUR | 1 |\n| Team | EUR 29 | 5 |\n| Business | EUR 49 | 20 |\n";
+
+fn seats_args(f: impl FnOnce(&mut Value)) -> Value {
+    with(
+        json!({"type": "comparison", "source": {"kind": "markdown_table", "index": 0},
+            "data": {"columns": [{"label": "Plan"}, {"label": "Price", "numeric": true}, {"label": "Seats", "numeric": true}],
+                "rows": [{"cells": ["Basic", "12 EUR", "1"]}, {"cells": ["Team", "EUR 29", "5"]}, {"cells": ["Business", "EUR 49", "20"]}]}}),
+        f,
+    )
+}
+
+#[test]
+fn a_comparison_is_the_whole_table_cell_for_cell() {
+    assert!(pick(SEATS, seats_args(|_| {})).is_some());
+    // The Seats case: the value reads "29 EUR" where the table says "EUR 29"; the client would refuse it
+    assert!(pick(SEATS, seats_args(|a| a["data"]["rows"][1]["cells"][1] = json!("29 EUR"))).is_none());
+    // A number in another format is another cell
+    assert!(pick(REPLY, with(comparison_args(), |a| a["data"]["rows"][2]["cells"][1] = json!("EUR 26.5"))).is_none(), "26.5 is not 26.50");
+    // Fewer rows or columns than the table
+    assert!(pick(SEATS, seats_args(|a| a["data"]["rows"] = json!([{"cells": ["Basic", "12 EUR", "1"]}, {"cells": ["Team", "EUR 29", "5"]}]))).is_none());
+    let two_cols = seats_args(|a| {
+        a["data"]["columns"] = json!([{"label": "Plan"}, {"label": "Seats", "numeric": true}]);
+        a["data"]["rows"] = json!([{"cells": ["Basic", "1"]}, {"cells": ["Team", "5"]}, {"cells": ["Business", "20"]}]);
+    });
+    assert!(pick(SEATS, two_cols).is_none(), "a column left out");
+    // Rows or columns in another order
+    let swapped = seats_args(|a| a["data"]["rows"] = json!([{"cells": ["Team", "EUR 29", "5"]}, {"cells": ["Basic", "12 EUR", "1"]}, {"cells": ["Business", "EUR 49", "20"]}]));
+    assert!(pick(SEATS, swapped).is_none(), "rows out of order");
+    let cols = seats_args(|a| {
+        a["data"]["columns"] = json!([{"label": "Plan"}, {"label": "Seats", "numeric": true}, {"label": "Price", "numeric": true}]);
+        a["data"]["rows"] = json!([{"cells": ["Basic", "1", "12 EUR"]}, {"cells": ["Team", "5", "EUR 29"]}, {"cells": ["Business", "20", "EUR 49"]}]);
+    });
+    assert!(pick(SEATS, cols).is_none(), "columns out of order");
+    // A header that only contains the label
+    assert!(pick(SEATS, seats_args(|a| a["data"]["columns"][1]["label"] = json!("Pric"))).is_none());
+}
+
+#[test]
+fn markdown_and_separators_do_not_make_a_cell_another_cell() {
+    let ok = with(comparison_args(), |a| {
+        a["data"]["rows"][1]["cells"][1] = json!("EUR 1,800");
+        a["data"]["rows"][2]["cells"][0] = json!("**Business**");
+        a["data"]["rows"][2]["cells"][1] = json!("EUR 26.50");
+    });
+    assert!(pick(REPLY, ok).is_some(), "the client matches letters and digits only");
+    let b = pick(REPLY, with(comparison_args(), |a| a["data"]["rows"][2]["cells"][1] = json!("EUR 26.50"))).expect("grounded");
+    let set = ResultSet { version: VERSION, blocks: vec![b] };
+    assert!(super::super::validate(&set, None).is_ok());
+}
+
+#[test]
+fn steps_are_the_whole_numbered_list_in_order() {
+    let reply = "Do this:\n\n1. Install the tool\n2. Run `kwant init`\n3. See [the guide](https://example.com/guide)\n";
+    let all = ["Install the tool", "Run `kwant init`", "See [the guide](https://example.com/guide)"];
+    assert!(pick(reply, steps_args(&all, Some(0))).is_some());
+    assert!(pick(reply, steps_args(&all[..2], Some(0))).is_none(), "fewer than the list");
+    assert!(pick(reply, steps_args(&[all[1], all[0], all[2]], Some(0))).is_none(), "out of order");
+    assert!(pick(reply, steps_args(&[all[0], all[1], all[1]], Some(0))).is_none(), "an item twice");
+    let part = ["Install", "Run `kwant init`", "See [the guide](https://example.com/guide)"];
+    assert!(pick(reply, steps_args(&part, Some(0))).is_none(), "half an item is not the item");
+    let four = "1. One\n2. Two\n3. Three\n4. Four\n";
+    assert!(pick(four, steps_args(&["One", "Two", "Three"], Some(0))).is_none(), "the list has four");
+    assert!(pick(four, steps_args(&["One", "Two", "Three", "Four"], Some(0))).is_some());
+    // A task list is a checklist: it never becomes numbered steps
+    let tasks = "1. [ ] One\n2. [x] Two\n3. [ ] Three\n";
+    assert!(pick(tasks, steps_args(&["[ ] One", "[x] Two", "[ ] Three"], Some(0))).is_none());
+    assert!(pick(tasks, steps_args(&["One", "Two", "Three"], Some(0))).is_none());
+}
+
+// --- Rigel on #251: punctuation inside a number is not aside. The words match by letters and
+// digits, and the numbers in each cell must also be the reply's, in order, sign and separator.
+
+fn price_table(cell: &str) -> String {
+    format!("| Plan | Price |\n|---|---|\n| Basic | {cell} |\n| Team | 9 |\n| Business | 7 |\n")
+}
+
+fn price_args(cell: &str) -> Value {
+    json!({"type": "comparison", "source": {"kind": "markdown_table", "index": 0},
+        "data": {"columns": [{"label": "Plan"}, {"label": "Price", "numeric": true}],
+            "rows": [{"cells": ["Basic", cell]}, {"cells": ["Team", "9"]}, {"cells": ["Business", "7"]}]}})
+}
+
+fn refused(reply_cell: &str, declared_cell: &str) -> bool {
+    pick(&price_table(reply_cell), price_args(declared_cell)).is_none()
+}
+
+#[test]
+fn t11_a_moved_decimal_point_in_a_price_is_refused() {
+    assert!(refused("EUR 26.50", "EUR 2650"));
+}
+
+#[test]
+fn t11b_a_moved_thousands_comma_is_refused() {
+    assert!(refused("EUR 1,800", "EUR 18,00"));
+}
+
+#[test]
+fn t11c_a_lost_minus_sign_is_refused() {
+    assert!(refused("-3", "3"));
+}
+
+#[test]
+fn t11d_an_added_decimal_point_is_refused() {
+    assert!(refused("12", "1.2"));
+}
+
+#[test]
+fn x04_a_lost_sign_on_a_percent_is_refused() {
+    assert!(refused("-3%", "3%"));
+}
+
+#[test]
+fn t08e_steps_with_a_changed_number_are_refused() {
+    let reply = "Do this:\n\n1. Install the tool\n2. Wait 1.5 hours\n3. Sign in\n";
+    assert!(pick(reply, steps_args(&["Install the tool", "Wait 15 hours", "Sign in"], Some(0))).is_none());
+    // control: the exact list is still drawn
+    assert!(pick(reply, steps_args(&["Install the tool", "Wait 1.5 hours", "Sign in"], Some(0))).is_some());
+}
+
+#[test]
+fn a_declaration_with_the_replys_exact_numbers_is_still_accepted() {
+    assert!(!refused("EUR 26.50", "EUR 26.50"));
+    assert!(!refused("EUR 1,800", "EUR 1,800"));
+    assert!(!refused("-3", "-3"));
+    assert!(!refused("12", "12"));
+    assert!(!refused("-3%", "-3%"));
+    // a thousands comma and plain digits are the same number, as the client reads them
+    assert!(!refused("EUR 1,800", "EUR 1800"));
+    // a link's target is not part of the cell's numbers
+    let reply = "| Plan | Price |\n|---|---|\n| [Basic](https://example.com/v2) | 5 |\n| Team | 9 |\n| Business | 7 |\n";
+    let args = json!({"type": "comparison", "source": {"kind": "markdown_table", "index": 0},
+        "data": {"columns": [{"label": "Plan"}, {"label": "Price", "numeric": true}],
+            "rows": [{"cells": ["Basic", "5"]}, {"cells": ["Team", "9"]}, {"cells": ["Business", "7"]}]}});
+    assert!(pick(reply, args).is_some());
 }

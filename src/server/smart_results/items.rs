@@ -1,9 +1,9 @@
 //! Top-level lists: metrics, findings, cards, timeline, checklist and facts, and the steps block
 //! every steps variant shares (plan §A.4). Every value is a slice of the item as written.
 
-use super::chart::{metric_value, when_like};
+use super::chart::{bare_weekday, metric_value, version_label, when_like};
 use super::selector::{is_task, words, List};
-use super::validate::has_html;
+use super::validate::{has_html, has_plain_host};
 use super::{
     Card, Cards, Fact, Facts, Finding, Findings, Metric, Metrics, Provenance, Ref, Severity, Source, Step, Steps,
     Variant,
@@ -81,7 +81,7 @@ pub(super) fn metrics(l: &List) -> Option<Metrics> {
     let mut items = Vec::new();
     for (i, t) in l.items.iter().enumerate() {
         let x = labeled(t).filter(|x| x.sep == ':')?;
-        if when_like(x.label) || x.label.starts_with(|c: char| c.is_ascii_digit()) {
+        if when_like(x.label) || version_label(x.label) || x.label.starts_with(|c: char| c.is_ascii_digit()) {
             return None;
         }
         let v = metric_value(x.rest)?;
@@ -172,7 +172,7 @@ fn card_head(t: &str) -> Option<(&str, Option<&str>, &str)> {
         if title.contains(['[', ']']) || !url.starts_with("https://") || url.len() <= 8 {
             return None;
         }
-        if url.contains(|c: char| c.is_whitespace() || matches!(c, '(' | '<' | '>' | '"' | '\'' | '`')) {
+        if url.contains(|c: char| c.is_whitespace() || matches!(c, '(' | '<' | '>' | '"' | '\'' | '`')) || !has_plain_host(url) {
             return None;
         }
         // Link text that looks like another address would hide where the link goes
@@ -343,6 +343,10 @@ pub(super) fn timeline(l: &List) -> Option<Steps> {
             return None;
         }
         items.push((x.rest.to_string(), None, Some(x.label.to_string())));
+    }
+    // "Monday: wrote tests" may be a recap as well as a plan: weekdays alone don't make a timeline
+    if items.iter().all(|(_, _, when)| when.as_deref().is_some_and(bare_weekday)) {
+        return None;
     }
     Some(steps_block(l, Variant::Timeline, items))
 }
