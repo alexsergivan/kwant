@@ -2,13 +2,17 @@
 //! deserves. Nothing it declares is shown unless it is grounded in the final reply, checked when
 //! the message is stored (after any re-prompt), never when the tool is called:
 //!
-//! - a `comparison` must name the table of the reply it stands for (`source`), and every row it
-//!   declares must be a row of that table: each cell found in the same row, so a value moved under
-//!   another label is refused (a call without `source` is refused);
-//! - `steps` must name the numbered list of the reply they stand for (`source`), and every item must
-//!   quote an item of that list;
-//! - every number equals a number in the reply, every URL is a link in the reply (never plain text,
-//!   never with a login in it), and nothing is HTML.
+//! - a `comparison` must name the table of the reply it stands for (`source`) and be all of it:
+//!   the same columns and rows, every header and cell the same text at the same position (markdown,
+//!   case and punctuation aside), so a value moved under another label is refused (a call without
+//!   `source` is refused);
+//! - `steps` must name the numbered list of the reply they stand for (`source`) and be all of it:
+//!   the same items in the same order (a task list is never declared as steps);
+//! - every URL is a link in the reply (never plain text, never with a login in it), and nothing is
+//!   HTML.
+//!
+//! That is what the client checks before it draws a declared block in place of the reply's own, so
+//! a block that grounds here is one that is drawn.
 //!
 //! Only the last call that was valid when made counts. If it doesn't ground, the block is dropped
 //! (logged) and the deterministic selectors run on the reply as if the tool had never been called.
@@ -22,7 +26,7 @@ use crate::mcp::SELF_SERVER_NAME;
 use crate::server::continuity::SelfScope;
 use crate::server::AppState;
 
-use super::selector::{lists_of, tables_of};
+use super::selector::{is_task, lists_of, plain, tables_of};
 use super::{Block, Column, Comparison, Provenance, ResultSet, Row, Source, Step, Steps, VERSION};
 
 const NAME: &str = "present_result";
@@ -36,7 +40,7 @@ pub fn handles(name: &str) -> bool {
 pub fn tools() -> Vec<Value> {
     vec![json!({
         "name": NAME,
-        "description": "Optional. Declare the one block kwant should draw for your final reply (a comparison table, a numbered-steps list), only when the answer's data reads better that way than as plain text; never for a simple answer, and never instead of writing the reply. The data must match your reply text exactly: every label, number and link is checked against it, and a call that doesn't match is dropped and the plain reply is shown. For a comparison, `source` is required: the index (from 0) of the table in your reply that it describes. Call it once, just before your final reply. Types today: comparison and steps; kwant draws charts, metrics, facts, cards and findings from your reply's own structure (use '**Label:** value' lines for key numbers).",
+        "description": "Optional. Declare the one block kwant should draw for your final reply (a comparison table, a numbered-steps list), only when the answer's data reads better that way than as plain text; never for a simple answer, and never instead of writing the reply. The data must match your reply text exactly: every label, cell, item and link is checked against it, and a call that doesn't match is dropped and the plain reply is shown. For a comparison, `source` is required: the index (from 0) of the table in your reply that it describes. Call it once, just before your final reply. Types today: comparison and steps; kwant draws charts, metrics, facts, cards and findings from your reply's own structure (use '**Label:** value' lines for key numbers).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -50,7 +54,7 @@ pub fn tools() -> Vec<Value> {
                 },
                 "data": {
                     "type": "object",
-                    "description": "comparison: {columns: [{label, numeric?, unit?}], rows: [{cells: [string, ...]}]}, 3-50 rows and 2-8 columns, cells exactly as in your table. steps: {items: [string, ...]}, 3-15 items, each quoting an item of that list.",
+                    "description": "comparison: {columns: [{label, numeric?, unit?}], rows: [{cells: [string, ...]}]}, 3-50 rows and 2-8 columns, every header and cell exactly as in your table: all of its rows and columns, in its order. steps: {items: [string, ...]}, 3-15 items: all the items of that list, in its order.",
                 },
             },
             "required": ["type", "data"],
@@ -204,28 +208,40 @@ fn steps(data: &Value, source: Option<(bool, usize)>) -> Result<Block, String> {
 }
 
 /// `declared` held to `reply`, as a block with `bot_declared` provenance, or the reason it isn't.
+///
+/// A declaration is the whole table (or numbered list) it names, in the same order, because that
+/// is what the client checks before it draws the block in place of the reply's own: same number of
+/// columns, rows and items, every header, cell and item the same text (markdown, case and
+/// punctuation aside) with the same numbers in the same order, so punctuation inside a number is
+/// never aside: "26.50" is not "2650" and "-3" is not "3". A declaration the client would refuse
+/// is refused here, so a stored block is always one that is drawn.
 fn ground(declared: Declared, reply: &str, tool_call_id: String) -> Result<Block, String> {
     let Declared { mut block, source } = declared;
     let links = reply_links(reply);
-    let numbers = reply_numbers(reply);
     match &mut block {
         Block::Comparison(c) => {
             let (_, index) = source.ok_or("a comparison without a source")?;
             let table = tables_of(reply).into_iter().find(|t| t.index == index).ok_or("no table at that index")?;
-            if c.columns.iter().any(|col| !has_label(&table.header, &col.label)) {
-                return Err("a column label isn't in that table's header".into());
+            if c.columns.len() != table.header.len() {
+                return Err("the columns aren't all of that table's columns".into());
+            }
+            if c.rows.len() != table.rows.len() {
+                return Err("the rows aren't all of that table's rows".into());
+            }
+            if c.columns.iter().zip(&table.header).any(|(col, h)| !same_cell(&col.label, h)) {
+                return Err("a column label isn't the table's header at that position".into());
             }
             for col in &c.columns {
                 if col.unit.as_deref().is_some_and(|u| !normalize(reply).contains(&normalize(u))) {
                     return Err("a unit isn't in the reply".into());
                 }
             }
-            for row in &c.rows {
+            for (row, table_row) in c.rows.iter().zip(&table.rows) {
                 for cell in &row.cells {
                     check_urls(cell, &links)?;
                 }
-                if !table.rows.iter().any(|t| row.cells.iter().all(|cell| table_row_has(t, cell))) {
-                    return Err("a row doesn't match any row of that table".into());
+                if row.cells.len() != table_row.len() || row.cells.iter().zip(table_row).any(|(a, b)| !same_cell(a, b)) {
+                    return Err("a row doesn't match the table's row at that position".into());
                 }
             }
             c.provenance = Provenance::bot_declared(tool_call_id);
@@ -233,14 +249,17 @@ fn ground(declared: Declared, reply: &str, tool_call_id: String) -> Result<Block
         Block::Steps(s) => {
             let (_, index) = source.ok_or("steps without a source")?;
             let list = lists_of(reply).into_iter().find(|l| l.index == index).ok_or("no list at that index")?;
-            for item in &s.items {
+            if s.items.len() != list.items.len() {
+                return Err("the steps aren't all of that list's items".into());
+            }
+            // A task list is drawn as one (with its done marks) or not at all, never as plain steps
+            if list.items.iter().any(|t| is_task(t)) {
+                return Err("that list is a task list".into());
+            }
+            for (item, listed) in s.items.iter().zip(&list.items) {
                 check_urls(&item.text, &links)?;
-                let wanted = normalize(&item.text);
-                if wanted.is_empty() || !list.items.iter().any(|t| normalize(t).contains(&wanted)) {
-                    return Err("a step isn't an item of that list".into());
-                }
-                if !string_numbers(&item.text).iter().all(|n| numbers.iter().any(|r| same(*r, *n))) {
-                    return Err("a number isn't in the reply".into());
+                if !same_cell(&item.text, listed) {
+                    return Err("a step isn't the list's item at that position".into());
                 }
             }
             s.provenance = Provenance::bot_declared(tool_call_id);
@@ -250,27 +269,57 @@ fn ground(declared: Declared, reply: &str, tool_call_id: String) -> Result<Block
     Ok(block)
 }
 
-fn has_label(header: &[String], label: &str) -> bool {
-    let want = normalize(label);
-    !want.is_empty() && header.iter().any(|h| normalize(h).contains(&want))
+/// The text the client compares by: markdown out, lowercase, letters and digits only.
+fn match_key(s: &str) -> String {
+    plain(s).to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
 }
 
-/// `cell` is found in one cell of the reply's table row `row`: every word of it is in that table
-/// cell (markdown and case aside), and a number in it equals a number there, however the reply
-/// formats it ("1800" is "1,800", "26.5" is "26.50"; "5" is never "15").
-fn table_row_has(row: &[String], cell: &str) -> bool {
-    let words: Vec<String> = normalize(cell).split_whitespace().map(str::to_string).collect();
-    if words.is_empty() {
-        return false;
+/// `a` and `b` read as the same text, and not as nothing.
+fn same_text(a: &str, b: &str) -> bool {
+    let key = match_key(a);
+    !key.is_empty() && key == match_key(b)
+}
+
+/// `a` and `b` are the same text (letters and digits, as the client compares) and carry the same
+/// numbers in the same order: same values, same signs, same decimal separators ("1.5" is not "15",
+/// "1,5" is not "1.5", "-3" is not "3"). A thousands comma is not a difference ("1,800" is 1800).
+fn same_cell(a: &str, b: &str) -> bool {
+    same_text(a, b) && same_numbers(&string_numbers(&plain(a)), &string_numbers(&plain(b)))
+}
+
+fn same_numbers(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= x.abs().max(y.abs()) * 1e-9 + 1e-9)
+}
+
+/// Every number in `s`: digits with an optional leading `-` and a decimal point; `1,234,567` with
+/// thousands separators is one number, `1,5` is two.
+fn string_numbers(s: &str) -> Vec<f64> {
+    let mut nums = Vec::new();
+    let mut cur = String::new();
+    let flush = |cur: &mut String, nums: &mut Vec<f64>| {
+        let negative = cur.starts_with('-');
+        let token = cur.trim_matches(|c| matches!(c, '.' | ',' | '-')).to_string();
+        cur.clear();
+        if token.is_empty() || !token.chars().any(|c| c.is_ascii_digit()) {
+            return;
+        }
+        let groups: Vec<&str> = token.split(',').collect();
+        let thousands = groups.len() > 1 && !groups[0].is_empty() && groups[0].len() <= 3 && groups[1..].iter().all(|g| g.len() >= 3 && g.chars().take(3).all(|c| c.is_ascii_digit()));
+        let parts: Vec<String> = if thousands { vec![groups.join("")] } else { groups.iter().map(|g| g.to_string()).collect() };
+        for p in parts {
+            if let Ok(n) = p.parse::<f64>() {
+                nums.push(if negative { -n } else { n });
+            }
+        }
+    };
+    for c in s.chars().chain(std::iter::once(' ')) {
+        if c.is_ascii_digit() || matches!(c, '.' | ',') || (c == '-' && cur.is_empty()) {
+            cur.push(c);
+        } else {
+            flush(&mut cur, &mut nums);
+        }
     }
-    row.iter().any(|c| {
-        let text = normalize(c);
-        let numbers = string_numbers(&text);
-        words.iter().all(|w| match parse_number(w) {
-            Some(n) => numbers.iter().any(|r| same(*r, n)),
-            None => text.contains(w.as_str()),
-        })
-    })
+    nums
 }
 
 /// Refuses a URL that isn't a link in the reply (a markdown link or `<autolink>`; the same URL as
@@ -325,56 +374,6 @@ fn reply_links(reply: &str) -> Vec<String> {
 fn normalize(s: &str) -> String {
     let stripped: String = s.chars().filter(|c| !matches!(c, '*' | '_' | '`')).collect();
     stripped.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
-}
-
-fn same(a: f64, b: f64) -> bool {
-    (a - b).abs() <= a.abs().max(b.abs()) * 1e-9 + 1e-9
-}
-
-/// `s` as a number when all of it is one ("12.50", "1,000", "$9", "-3"); a currency or percent
-/// sign around it is allowed.
-fn parse_number(s: &str) -> Option<f64> {
-    let t = s.trim().trim_matches(|c: char| matches!(c, '$' | '€' | '£' | '%' | ' '));
-    let nums = string_numbers(t);
-    let digits = t.chars().filter(char::is_ascii_digit).count();
-    let shaped = t.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '-'));
-    (nums.len() == 1 && digits > 0 && shaped).then(|| nums[0])
-}
-
-/// Every number in `s`: digits with an optional leading `-` and a decimal point; `1,234,567` with
-/// thousands separators is one number, `1,5` is two.
-fn string_numbers(s: &str) -> Vec<f64> {
-    let mut nums = Vec::new();
-    let mut cur = String::new();
-    let flush = |cur: &mut String, nums: &mut Vec<f64>| {
-        let negative = cur.starts_with('-');
-        let token = cur.trim_matches(|c| matches!(c, '.' | ',' | '-')).to_string();
-        cur.clear();
-        if token.is_empty() || !token.chars().any(|c| c.is_ascii_digit()) {
-            return;
-        }
-        let body = token.as_str();
-        let groups: Vec<&str> = body.split(',').collect();
-        let thousands = groups.len() > 1 && !groups[0].is_empty() && groups[0].len() <= 3 && groups[1..].iter().all(|g| g.len() >= 3 && g.chars().take(3).all(|c| c.is_ascii_digit()));
-        let parts: Vec<String> = if thousands { vec![groups.join("")] } else { groups.iter().map(|g| g.to_string()).collect() };
-        for p in parts {
-            if let Ok(n) = p.parse::<f64>() {
-                nums.push(if negative { -n } else { n });
-            }
-        }
-    };
-    for c in s.chars().chain(std::iter::once(' ')) {
-        if c.is_ascii_digit() || matches!(c, '.' | ',') || (c == '-' && cur.is_empty()) {
-            cur.push(c);
-        } else {
-            flush(&mut cur, &mut nums);
-        }
-    }
-    nums
-}
-
-fn reply_numbers(reply: &str) -> Vec<f64> {
-    string_numbers(reply)
 }
 
 #[cfg(test)]

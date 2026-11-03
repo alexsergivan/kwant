@@ -61,6 +61,8 @@ fn gaps_are_null_never_zero_and_mixed_units_never_chart() {
 fn series_in_different_units_never_share_one_axis() {
     // SR-R-13: bare numbers whose headers name two units stay off one Y axis
     let line = |h: &str| table(h, &rows(5, |i| format!("| {} 2025 | 1{i}0 | {}.{i} |", MONTHS[i], 3 + i % 2)));
+    // (the unitless pair below has values of one scale, so it still charts)
+    let same_scale = |h: &str| table(h, &rows(5, |i| format!("| {} 2025 | 1{i}0 | 9{i} |", MONTHS[i])));
     assert_ne!(kind(&line("| Month | Price (EUR) | Rating (1-5) |")), Some("chart"));
     assert_ne!(kind(&line("| Month | Price [EUR] | Rating |")), Some("chart"));
     assert_ne!(kind(&line("| Month | Price (€) | Cost (EUR) |")), Some("chart"));
@@ -70,8 +72,9 @@ fn series_in_different_units_never_share_one_axis() {
     let bar = table("| Shop | Price (EUR) | Rating (1-5) |", &rows(5, |i| format!("| Shop{} | 1{i}0 | 4.{i} |", MONTHS[i])));
     assert_ne!(kind(&bar), Some("chart"));
     // One unit, named in the headers or the cells, still charts
-    for h in ["| Month | Revenue (EUR) | Cost (eur) |", "| Month | Signups | Paid |"] {
-        let Some(Block::Chart(c)) = first(&line(h)) else { panic!("{h}: {:?}", first(&line(h))) };
+    for h in ["| Month | Revenue (EUR) | Cost (eur) |", "| Month | Signups | Orders |"] {
+        let t = if h.contains("Orders") { same_scale(h) } else { line(h) };
+        let Some(Block::Chart(c)) = first(&t) else { panic!("{h}: {:?}", first(&t)) };
         assert_eq!(c.series.len(), 2, "{h}");
     }
     let t = table("| Month | Revenue (€) | Cost |", &rows(5, |i| format!("| {} 2025 | 1{i}0 | €2{i} |", MONTHS[i])));
@@ -81,9 +84,10 @@ fn series_in_different_units_never_share_one_axis() {
 
 #[test]
 fn ambiguous_locale_numbers_abstain() {
-    // `1,299` alone is 1299 or 1.299: no chart, and never a misread scale
+    // `1,299` alone: every number of the column groups its thousands the same way, so one reading
     let t = table("| Month | Cost |", &rows(5, |i| format!("| {} 2025 | 1,2{i}9 |", MONTHS[i])));
-    assert_ne!(kind(&t), Some("chart"));
+    let Some(Block::Chart(c)) = first(&t) else { panic!("{:?}", first(&t)) };
+    assert_eq!(c.points[0].values, [Some(1209.0)]);
     // With `1,299.00` beside it the column has one reading
     let t = table("| Month | Cost |", &rows(5, |i| format!("| {} 2025 | 1,2{i}9.50 |", MONTHS[i])));
     let Some(Block::Chart(c)) = first(&t) else { panic!("{:?}", first(&t)) };
@@ -370,4 +374,204 @@ fn a_bare_weather_list_is_two_metric_tiles() {
     assert!(candidates(text).iter().all(|b| b.kind() != "findings"));
     let set = compute(text).unwrap();
     validate(&set, Some(text)).unwrap();
+}
+
+// --- QA minors from 0.6.5 (Rigel, qa/pr-smart-results-more.md and -typed.md, -renderers.md)
+
+fn metric_tiles(text: &str) -> Option<Vec<(String, String, f64)>> {
+    match first(text) {
+        Some(Block::Metrics(m)) => Some(m.items.into_iter().map(|i| (i.label, i.value_text, i.value)).collect()),
+        _ => None,
+    }
+}
+
+/// more-M1: a phone number is digits in groups, not a quantity.
+#[test]
+fn a_phone_number_is_not_a_metric_tile() {
+    for text in [
+        "- **Call us:** 555 0100 any time\n- **Open:** 24 hours\n",
+        "- **Call us:** 555 123 4567\n- **Open:** 24 hours\n",
+        "- **Open:** 24 hours\n- **Fax:** 555 0101\n",
+    ] {
+        assert_ne!(kind(text), Some("metrics"), "{text}");
+    }
+    // A number with a unit and a note stays a tile
+    let tiles = metric_tiles("- **Open:** 24 hours a day\n- **Staff:** 12 people\n").expect("tiles");
+    assert_eq!(tiles[0].1, "24 hours");
+    assert_eq!(tiles[1].2, 12.0);
+}
+
+/// more-M2: a version is a name, not a quantity.
+#[test]
+fn a_version_number_is_not_a_metric_tile() {
+    for text in [
+        "- **Node:** 20.11 LTS\n- **npm:** 10.2 stable\n",
+        "- **Node:** 20.11 LTS\n- **Uptime:** 98%\n",
+        "- **Rust:** 1.76 nightly\n- **Cargo:** 1.76 beta\n",
+        "- **Version:** 3.12\n- **Uptime:** 98%\n",
+    ] {
+        assert_ne!(kind(text), Some("metrics"), "{text}");
+    }
+    let tiles = metric_tiles("- **Latency:** 12.5 ms\n- **Size:** 4.2 GB\n").expect("tiles");
+    assert_eq!((tiles[0].1.as_str(), tiles[1].1.as_str()), ("12.5 ms", "4.2 GB"));
+}
+
+/// more-M3: a recap by weekday says what happened, it isn't a plan to follow.
+#[test]
+fn a_weekday_recap_is_not_steps() {
+    for text in [
+        "This week:\n- Monday: wrote tests for the parser\n- Tuesday: fixed the build\n- Wednesday: reviewed the pull requests\n",
+        "- Mon: wrote tests\n- Tue: fixed the build\n- Wed: reviewed the PRs\n",
+    ] {
+        assert_ne!(kind(text), Some("steps"), "{text}");
+    }
+    // A weekday among clock times is still an agenda
+    assert_eq!(kind("Agenda:\n- 9:00 – Intro\n- 10:30 – Demo\n- Mon: kickoff\n"), Some("steps"));
+}
+
+/// more-M5: a column that groups thousands with commas throughout has one reading.
+#[test]
+fn comma_grouped_numbers_with_one_grouping_are_read_as_thousands() {
+    let visits = ["4,100", "1,204", "980", "12,350", "7,002"];
+    let t = table("| Page | Visits |", &rows(5, |i| format!("| Page{} | {} |", (b'A' + i as u8) as char, visits[i])));
+    let Some(Block::Chart(c)) = first(&t) else { panic!("{:?}", first(&t)) };
+    assert_eq!(c.chart_kind, ChartKind::Bar);
+    let got: Vec<_> = c.points.iter().map(|p| (p.cells[0].as_str(), p.values[0])).collect();
+    assert_eq!(got[0], ("4,100", Some(4100.0)));
+    assert_eq!(got[3], ("12,350", Some(12350.0)));
+    let set = compute(&t).unwrap();
+    validate(&set, Some(&t)).unwrap();
+    // The same in a line chart and a metric
+    let t = table("| Month | Cost |", &rows(5, |i| format!("| {} 2025 | 1,2{i}9 |", MONTHS[i])));
+    let Some(Block::Chart(c)) = first(&t) else { panic!("{:?}", first(&t)) };
+    assert_eq!(c.points[0].values, [Some(1209.0)]);
+    let tiles = metric_tiles("- **Reviews:** 1,204\n- **Rating:** 4.8/5\n").expect("tiles");
+    assert_eq!((tiles[0].1.as_str(), tiles[0].2), ("1,204", 1204.0));
+}
+
+#[test]
+fn mixed_or_unsure_groupings_still_abstain() {
+    // `1,299` and `1.299` in one column: a comma and a dot grouping, so no reading
+    let t = table("| Month | Cost |", &rows(5, |i| format!("| {} 2025 | {} |", MONTHS[i], if i == 2 { "1.299" } else { "1,299" })));
+    assert_ne!(kind(&t), Some("chart"));
+    let t = table("| Page | Visits |", &rows(5, |i| format!("| P{} | {} |", (b'A' + i as u8) as char, ["1.299", "2.450", "3.100", "4.800", "5.001"][i])));
+    assert_ne!(kind(&t), Some("chart"), "dot groups are not read as thousands");
+    // Comma and dot together, as `1,299.50`, still read as before
+    let t = table("| Month | Cost |", &rows(5, |i| format!("| {} 2025 | 1,2{i}9.50 |", MONTHS[i])));
+    let Some(Block::Chart(c)) = first(&t) else { panic!("{:?}", first(&t)) };
+    assert_eq!(c.points[0].values, [Some(1209.5)]);
+}
+
+/// more-M6: unitless series on very different scales don't share one axis.
+#[test]
+fn unitless_series_on_very_different_scales_are_not_one_line_chart() {
+    let t = table("| Month | Revenue | Orders |", &rows(5, |i| format!("| {} 2025 | {} | {} |", MONTHS[i], 120_000 + i * 1_000, 400 + i * 10)));
+    assert_ne!(kind(&t), Some("chart"), "Revenue ~120000 beside Orders ~400");
+    // Nothing is computed or dropped: the table is still a block of its own cells
+    if let Some(Block::Comparison(c)) = first(&t) {
+        assert_eq!(c.rows[0].cells, ["Jan 2025", "120000", "400"]);
+    }
+    // Similar scales share an axis; so do series in one stated unit
+    let t = table("| Month | Revenue | Orders |", &rows(5, |i| format!("| {} 2025 | {} | {} |", MONTHS[i], 1_200 + i * 100, 400 + i * 10)));
+    assert_eq!(kind(&t), Some("chart"));
+    let t = table("| Month | Revenue (EUR) | Refunds (EUR) |", &rows(5, |i| format!("| {} 2025 | {} | {} |", MONTHS[i], 120_000 + i * 1_000, 400 + i * 10)));
+    assert_eq!(kind(&t), Some("chart"));
+    // A series of zeros has no scale of its own
+    let t = table("| Month | Revenue | Refunds |", &rows(5, |i| format!("| {} 2025 | {} | 0 |", MONTHS[i], 120_000 + i * 1_000)));
+    assert_eq!(kind(&t), Some("chart"));
+}
+
+/// more-M4: a link with a login in it is never a card.
+#[test]
+fn a_card_link_with_credentials_is_refused() {
+    let text = "Resources:\n- [Docs](https://user:pw@example.com/docs) — the documentation for the project\n- [Tokio](https://tokio.rs) — an async runtime for network services\n- [Serde](https://serde.rs) — serialization for Rust data structures\n";
+    assert_ne!(kind(text), Some("cards"));
+    for url in ["https://user@example.com/docs", "https://example.com@evil.example/x", "https://:pw@example.com/"] {
+        assert_ne!(kind(&text.replace("https://user:pw@example.com/docs", url)), Some("cards"), "{url}");
+    }
+    // An @ after the host is a path or a query, not a login
+    for url in ["https://example.com/@user", "https://example.com/p?mail=a@b.c", "https://example.com/#a@b"] {
+        assert_eq!(kind(&text.replace("https://user:pw@example.com/docs", url)), Some("cards"), "{url}");
+    }
+    // The validator holds a stored card to the same rule
+    let mut set = compute(&text.replace("https://user:pw@example.com/docs", "https://example.com/docs")).unwrap();
+    validate(&set, None).unwrap();
+    for bad in ["https://user:pw@example.com/docs", "https://example.com@evil.example", "https://", "https:///x"] {
+        let Block::Cards(c) = &mut set.blocks[0] else { panic!() };
+        c.items[0].url = Some(bad.to_string());
+        assert!(validate(&set, None).is_err(), "{bad}");
+    }
+    let Block::Cards(c) = &mut set.blocks[0] else { panic!() };
+    c.items[0].url = Some("https://example.com/docs".into());
+    c.items[0].meta = vec!["x".repeat(41)];
+    assert!(validate(&set, None).is_err(), "card meta over the client's 40");
+}
+
+/// typed-M1, server side: what the validator stores, the client can draw.
+#[test]
+fn a_stored_block_is_one_the_client_validators_accept() {
+    let line = compute(&table("| Month | Visits |", &rows(6, |i| format!("| {} 2025 | {} |", MONTHS[i], 100 + i)))).unwrap();
+    validate(&line, None).unwrap();
+    // Series that differ in unit share no axis
+    let mut set = line.clone();
+    let Block::Chart(c) = &mut set.blocks[0] else { panic!() };
+    c.series.push(super::super::Series { key: "s1".into(), label: "Rating".into(), unit: Some("stars".into()) });
+    for p in &mut c.points {
+        p.cells.push("4".into());
+        p.values.push(Some(4.0));
+    }
+    assert!(validate(&set, None).is_err(), "two units on one axis");
+    // A bar chart needs five points
+    let mut set = line.clone();
+    let Block::Chart(c) = &mut set.blocks[0] else { panic!() };
+    c.chart_kind = ChartKind::Bar;
+    c.x.kind = AxisKind::Category;
+    validate(&set, None).unwrap();
+    let Block::Chart(c) = &mut set.blocks[0] else { panic!() };
+    c.points.truncate(4);
+    assert!(validate(&set, None).is_err(), "a bar chart of four points");
+}
+
+#[test]
+fn comparison_row_labels_repeat_as_the_client_reads_them() {
+    let plans = "| Plan | Price |\n|---|---|\n| Basic | 12 |\n| Team | 18 |\n| Business | 26 |\n";
+    let mut set = compute(plans).unwrap();
+    validate(&set, None).unwrap();
+    let Block::Comparison(c) = &mut set.blocks[0] else { panic!() };
+    c.rows[2].cells[0] = "**team**".into();
+    assert!(validate(&set, None).is_err(), "`Team` and `**team**` read as one label");
+    let Block::Comparison(c) = &mut set.blocks[0] else { panic!() };
+    c.rows[2].cells[0] = "[TEAM](https://example.com/t)".into();
+    assert!(validate(&set, None).is_err());
+}
+
+#[test]
+fn text_limits_count_as_the_client_counts() {
+    // The client counts UTF-16 units: 160 emoji are 320 of them, over its 300
+    let item = "😀".repeat(160);
+    let mut set = compute("Steps:\n1. First do this\n2. Then do that\n3. Finally this\n").unwrap();
+    validate(&set, None).unwrap();
+    let Block::Steps(s) = &mut set.blocks[0] else { panic!() };
+    s.items[0].text = item;
+    assert!(validate(&set, None).is_err());
+}
+
+/// renderers-D3: a value the chart can't scale never reaches it.
+#[test]
+fn values_out_of_range_are_refused_in_charts_and_metrics() {
+    let mut set = compute(&table("| Month | Visits |", &rows(6, |i| format!("| {} 2025 | {} |", MONTHS[i], 100 + i)))).unwrap();
+    for (v, ok) in [(1e15, true), (-1e15, true), (1e15 + 2.0, false), (9.0e15, false), (1e308, false), (f64::INFINITY, false), (f64::NAN, false), (-1e308, false)] {
+        let Block::Chart(c) = &mut set.blocks[0] else { panic!() };
+        c.points[1].values[0] = Some(v);
+        assert_eq!(validate(&set, None).is_ok(), ok, "{v}");
+    }
+    let mut set = compute("- **Revenue:** $4.2M\n- **Uptime:** 98%\n").unwrap();
+    for (v, ok) in [(4.2e6, true), (1e15, true), (1e16, false), (1e308, false), (f64::NAN, false), (f64::NEG_INFINITY, false)] {
+        let Block::Metrics(m) = &mut set.blocks[0] else { panic!() };
+        m.items[0].value = v;
+        assert_eq!(validate(&set, None).is_ok(), ok, "{v}");
+    }
+    // A reply that writes a number that long stays text
+    let big = table("| Month | Visits |", &rows(5, |i| format!("| {} 2025 | {}000 |", MONTHS[i], 100_000_000_000_000u64 + i as u64)));
+    assert_ne!(kind(&big), Some("chart"));
 }
