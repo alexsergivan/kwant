@@ -1153,9 +1153,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
           {/* A shared-file card has no bubble, so the files block (the table or text preview) is mounted here, after the tiles. */}
           {filesOnly && !isUser && msg.results != null && (
-            <FilesPreviewOnly.Provider value={true}>
-              <MarkdownRenderer content="" results={msg.results} messageId={msg.id} />
-            </FilesPreviewOnly.Provider>
+            // The column is `items-start`, so without a width cap a long cell stretches the preview past the message.
+            <div className="w-full min-w-0 max-w-full">
+              <FilesPreviewOnly.Provider value={true}>
+                <MarkdownRenderer content="" results={msg.results} messageId={msg.id} />
+              </FilesPreviewOnly.Provider>
+            </div>
           )}
 
           {decisions.length > 0 && (

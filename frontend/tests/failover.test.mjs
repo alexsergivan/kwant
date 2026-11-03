@@ -157,3 +157,44 @@ test('a reply with no or malformed failover meta shows no notice', () => {
     assert.equal(m.savedFailoverNotice(meta), null);
   }
 });
+
+// ---- Not-installed and signed-out engines are listed apart, unranked ----
+
+const sys = (id, eng, priority) => profile({ id, engine: eng, kind: 'system', name: 'This machine', priority });
+const sysList = [sys('s-claude', 'claude', 10), sys('s-codex', 'codex', 20), sys('s-grok', 'grok', 30)];
+const sysEngines = [engine('claude'), engine('codex'), engine('grok', { status: 'not_installed', ready: false })];
+const engineOf = (p) => sysEngines.find((e) => e.id === p.engine);
+
+test('a not-installed engine is not ranked, a signed-out one is not ranked, an out one still is', () => {
+  const { ranked, unranked } = m.splitRanked(m.failoverOrder(sysList), engineOf, NOW);
+  assert.deepEqual(ranked.map((p) => p.id), ['s-claude', 's-codex']);
+  assert.deepEqual(unranked.map((p) => p.id), ['s-grok']);
+  const signedOut = m.splitRanked(m.failoverOrder(list), (p) => engine(p.engine), NOW);
+  assert.deepEqual(signedOut.unranked.map((p) => p.id), ['g1'], 'Grok signed out');
+  assert.ok(signedOut.ranked.some((p) => p.id === 'c1'), 'Out until 03:00 stays ranked');
+  const off = m.splitRanked([profile({ id: 'o', enabled: false })], () => engine('claude'), NOW);
+  assert.equal(off.ranked.length, 1, 'switched off stays ranked');
+});
+
+test('ranks are written for the ranked list only: an unranked account keeps its saved priority', () => {
+  const { ranked, unranked } = m.splitRanked(m.failoverOrder(sysList), engineOf, NOW);
+  const next = m.moveAccount(ranked, 1, 0);
+  const updates = m.priorityUpdates(next);
+  assert.deepEqual(updates, [{ id: 's-codex', priority: 10 }, { id: 's-claude', priority: 20 }]);
+  assert.ok(!updates.some((u) => unranked.some((p) => p.id === u.id)), 'no update for Grok');
+  assert.equal(unranked[0].priority, 30);
+});
+
+test('the list shows Grok under the ranked rows, with its status, no number and no arrows', () => {
+  const html = m.renderToStaticMarkup(h(m.AccountPriority, { profiles: sysList, engines: sysEngines, onChanged: async () => {}, now: NOW }));
+  assert.equal((html.match(/<ol /g) ?? []).length, 1);
+  const ranked = html.slice(html.indexOf('<ol '), html.indexOf('</ol>'));
+  assert.equal((ranked.match(/<li /g) ?? []).length, 2, 'two ranked rows');
+  assert.doesNotMatch(ranked, /Grok|Not installed/);
+  const rest = html.slice(html.indexOf('</ol>'));
+  assert.match(rest, /Not in the order/);
+  assert.match(rest, /Grok/);
+  assert.match(rest, /Not installed/);
+  assert.doesNotMatch(rest, /aria-label="Move /, 'not reorderable');
+  assert.doesNotMatch(rest, /draggable/);
+});

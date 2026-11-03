@@ -142,3 +142,14 @@ test('a files block on an ordinary reply is still drawn as full cards (no previe
   assert.match(html, /text\/csv · 357 B/);
   assert.doesNotMatch(html, /data-preview-only/);
 });
+
+test('a long cell cannot stretch the shared-file preview past the message (it scrolls in its wrapper)', () => {
+  const card = fileCard();
+  card.results.blocks[0].items[0].preview = { kind: 'table', columns: ['url'], rows: [['x'.repeat(280)]] };
+  const html = m.chat(chatProps([card]));
+  // The column is items-start, so the preview, its frame, list and scroll wrapper each cap at the column width.
+  assert.match(html, /class="w-full min-w-0 max-w-full"/);
+  assert.match(html, /data-smart-frame="files"[^>]*class="[^"]*min-w-0 max-w-full/);
+  assert.match(html, /data-smart-result="files"[^>]*class="min-w-0 max-w-full"/);
+  assert.match(html, /class="mt-2 min-w-0 max-w-full overflow-x-auto /);
+});

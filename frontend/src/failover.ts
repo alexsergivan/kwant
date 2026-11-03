@@ -55,6 +55,26 @@ export function priorityStatus(p: Profile, engine: EngineInfo | undefined, now =
   return { tone: s.tone, label: s.label === 'Needs sign-in' ? 'Signed out' : s.label };
 }
 
+/** Not-installed and signed-out accounts can't take a turn, so they sit outside the ranked order. A saved
+ * limit ("Out until 03:00") or "Off" is the person's or the provider's state, so those stay ranked. */
+export function isRanked(p: Profile, engine: EngineInfo | undefined, now = Date.now()): boolean {
+  const { label } = priorityStatus(p, engine, now);
+  return label !== 'Not installed' && label !== 'Signed out';
+}
+
+/** The order split for display: the ranked list (reorderable) and the rest, each in failover order.
+ * Display only: nothing here changes an account's saved priority. */
+export function splitRanked(
+  order: Profile[],
+  engineOf: (p: Profile) => EngineInfo | undefined,
+  now = Date.now(),
+): { ranked: Profile[]; unranked: Profile[] } {
+  const ranked: Profile[] = [];
+  const unranked: Profile[] = [];
+  for (const p of order) (isRanked(p, engineOf(p), now) ? ranked : unranked).push(p);
+  return { ranked, unranked };
+}
+
 /** Where a drag or an arrow press puts an account: the new order, or null when nothing moves. */
 export function moveAccount(order: Profile[], from: number, to: number): Profile[] | null {
   if (from === to || from < 0 || to < 0 || from >= order.length || to >= order.length) return null;
