@@ -1,6 +1,7 @@
 pub mod discussion;
 pub mod routes;
 pub mod sse;
+pub mod browser_input;
 pub mod browser_stream;
 pub mod mcp_oauth;
 pub mod mcp_routes;

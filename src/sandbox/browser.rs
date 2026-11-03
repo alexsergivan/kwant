@@ -13,7 +13,7 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// The DevTools WebSocket request for `url`. Chrome refuses a DevTools connection whose Host is a
 /// name other than localhost (500 on the upgrade), so a plain-ws name such as the compose service
@@ -438,7 +438,7 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
-const FOCUSED_EDITABLE_JS: &str = r#"(() => {
+pub(crate) const FOCUSED_EDITABLE_JS: &str = r#"(() => {
   let el = document.activeElement;
   for (let i = 0; el && i < 8; i++) {
     if (el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; }
@@ -786,6 +786,18 @@ const COLLECT_SCRIPT: &str = r#"
 })()
 "#;
 
+/// Mouse buttons held down by the person's live-view input: a CDP `buttons` bitmask (left 1,
+/// right 2, middle 4, back 8, forward 16) and where the pointer was last seen.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeldPointer {
+    pub x: f64,
+    pub y: f64,
+    pub buttons: u8,
+}
+
+/// CDP button names for each bit of a `buttons` mask, in bit order.
+pub const MOUSE_BUTTON_BITS: [(u8, &str); 5] = [(1, "left"), (2, "right"), (4, "middle"), (8, "back"), (16, "forward")];
+
 #[derive(Clone)]
 pub struct BrowserController {
     pub cdp_port: u16,
@@ -806,8 +818,8 @@ pub struct BrowserController {
     /// Held while a human step (sign in, CAPTCHA) waits on the person: bot actions get
     /// `HumanControl` and the person's live-view input goes through without taking control.
     held_for_person: Arc<std::sync::Mutex<Option<OwnedRwLockWriteGuard<()>>>>,
-    /// Where the left button is held down from live-view pointer input, if it is.
-    pointer_held: Arc<std::sync::Mutex<Option<(f64, f64)>>>,
+    /// Which mouse buttons live-view input holds down, and where, if any.
+    pointer_held: Arc<std::sync::Mutex<Option<HeldPointer>>>,
     /// VM mode: this bot's cookies, saved outside the throwaway browser context.
     cookie_jar: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
     /// The fixed viewport set for a windowless browser, restored after a bot's sized screenshot.
@@ -937,7 +949,13 @@ impl BrowserController {
 
     pub fn is_managed_session(&self) -> bool { self.target_id.is_some() }
 
-    pub(crate) fn pointer_held_slot(&self) -> &std::sync::Mutex<Option<(f64, f64)>> { &self.pointer_held }
+    pub(crate) fn pointer_held_slot(&self) -> &std::sync::Mutex<Option<HeldPointer>> { &self.pointer_held }
+
+    /// The fixed viewport of a windowless browser (normally 1280x800), or `None` when the page
+    /// follows a real window. The live view restores it when the person hands back.
+    pub fn fixed_viewport(&self) -> Option<(u32, u32)> {
+        *self.viewport.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     pub async fn refresh_location(&self) -> Result<(), BrowserError> {
         let result = self.send_cdp_command("Runtime.evaluate", json!({
