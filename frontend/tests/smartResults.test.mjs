@@ -156,7 +156,7 @@ test('a valid comparison replaces table #0 and shows the reply’s own cells', a
   assert.match(v.host.textContent, /Here are the three plans\..*I recommend B for a team of five\./s);
   // Wide view keeps the markdown table's classes, so the swap from the streamed table moves nothing.
   const wrap = block.querySelector('.overflow-x-auto');
-  assert.equal(wrap.className, 'overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950/70 shadow-sm');
+  assert.equal(wrap.className, 'overflow-x-auto rounded-xl border border-zinc-700/60 bg-zinc-900/60 shadow-[var(--kws-shadow)]');
   assert.equal(wrap.querySelector('table').className, 'w-full text-left border-collapse text-xs font-sans');
 });
 

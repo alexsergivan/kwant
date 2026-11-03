@@ -74,9 +74,9 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
 
       {/* 640 px and up: the reply's table with header sort buttons. */}
       <div className="my-3.5 hidden sm:block">
-        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950/70 shadow-sm">
+        <div className="overflow-x-auto rounded-xl border border-zinc-700/60 bg-zinc-900/60 shadow-[var(--kws-shadow)]">
           <table className="w-full text-left border-collapse text-xs font-sans">
-            <thead className="bg-zinc-900/90 text-zinc-200 border-b border-zinc-800 font-medium">
+            <thead className="bg-zinc-800/70 text-zinc-100 border-b border-zinc-700/60 font-medium">
               <tr>
                 {block.columns.map((col, j) => {
                   const dir = sort?.col === j ? sort.dir : null;
@@ -98,7 +98,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                         <span className="inline-block w-0 align-[-1px]" aria-hidden="true">
                           <Icon
                             size={10}
-                            className={`ml-1 ${dir ? 'text-sky-400' : 'text-zinc-600 group-hover:text-zinc-400 group-focus-visible:text-zinc-400'}`}
+                            className={`ml-1 ${dir ? 'text-sky-400' : 'text-zinc-400 group-hover:text-zinc-200 group-focus-visible:text-zinc-400'}`}
                           />
                         </span>
                       </button>
@@ -107,7 +107,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                 })}
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/60 font-normal text-zinc-300">
+            <tbody className="divide-y divide-zinc-700/40 font-normal text-zinc-300">
               {order.map((i) => {
                 const row = block.rows[i];
                 const picked = row.id === block.highlight_row;
@@ -115,7 +115,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                   <tr
                     key={row.id}
                     data-pick={picked ? '' : undefined}
-                    className={`group/row transition-colors ${picked ? 'bg-sky-500/[0.07] hover:bg-sky-500/10' : 'hover:bg-zinc-900/50'}`}
+                    className={`group/row transition-colors ${picked ? 'bg-sky-500/[0.07] hover:bg-sky-500/10' : 'hover:bg-zinc-800/40'}`}
                   >
                     {block.columns.map((col, j) => (
                       <td
@@ -165,7 +165,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
       {/* Below 640 px: one card per row, label: value pairs, nothing clipped. */}
       <div className="my-3.5 space-y-2 sm:hidden">
         <div className="flex items-center gap-2">
-          <label htmlFor={`${uid}-sort`} className="shrink-0 text-[11px] text-zinc-500">
+          <label htmlFor={`${uid}-sort`} className="shrink-0 text-[11px] text-zinc-400">
             Sort by
           </label>
           <select
@@ -198,7 +198,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
               <li
                 key={row.id}
                 data-pick={picked ? '' : undefined}
-                className={`rounded-xl border px-3 py-2.5 text-xs ${picked ? 'border-sky-500/40 bg-sky-500/[0.07]' : 'border-zinc-800 bg-zinc-950/70'}`}
+                className={`rounded-xl border px-3 py-2.5 text-xs ${picked ? 'border-sky-500/40 bg-sky-500/[0.07]' : 'border-zinc-800 bg-zinc-900/60'}`}
               >
                 <div className="text-[13px] font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere]">
                   {body[i][0]}
@@ -207,7 +207,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                 <dl className="mt-1.5 grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 gap-y-1">
                   {block.columns.slice(1).map((col, k) => (
                     <React.Fragment key={col.key}>
-                      <dt className="text-zinc-500 [overflow-wrap:anywhere]">{head[k + 1]}</dt>
+                      <dt className="text-zinc-400 [overflow-wrap:anywhere]">{head[k + 1]}</dt>
                       <dd className="text-zinc-300 leading-relaxed [overflow-wrap:anywhere]">
                         <Cell role={col.role} text={row.cells[k + 1]} node={body[i][k + 1]} />
                       </dd>
@@ -217,7 +217,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                 <button
                   type="button"
                   onClick={() => askRow(i)}
-                  className="-mx-1 mt-1.5 flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] text-zinc-500 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70"
+                  className="-mx-1 mt-1.5 flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] text-zinc-400 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70"
                 >
                   <MessageSquare size={12} aria-hidden="true" />
                   Ask about this

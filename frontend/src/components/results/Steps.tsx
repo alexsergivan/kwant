@@ -42,7 +42,7 @@ export const Steps: React.FC<RendererProps<StepsBlock>> = ({ block, messageId, r
                   <span className="font-medium text-zinc-200">{it.when}</span>
                   {': '}
                   {items[i]}
-                  {it.owner && <span className="text-zinc-500"> (owner: {it.owner})</span>}
+                  {it.owner && <span className="text-zinc-400"> (owner: {it.owner})</span>}
                 </>
               )}
             </li>
@@ -65,9 +65,9 @@ export const Steps: React.FC<RendererProps<StepsBlock>> = ({ block, messageId, r
               <input id={id} type="checkbox" checked={on} onChange={() => toggle(item.id)} className={boxClass} />
               <label
                 htmlFor={id}
-                className={`min-w-0 cursor-pointer [overflow-wrap:anywhere] motion-safe:transition-colors ${on ? 'text-zinc-500 line-through decoration-zinc-600' : ''}`}
+                className={`min-w-0 cursor-pointer [overflow-wrap:anywhere] motion-safe:transition-colors ${on ? 'text-zinc-400 line-through decoration-zinc-600' : ''}`}
               >
-                {numbered && <span className="mr-1 tabular-nums text-zinc-500">{start + i}.</span>}
+                {numbered && <span className="mr-1 tabular-nums text-zinc-400">{start + i}.</span>}
                 {items[i]}
               </label>
             </li>

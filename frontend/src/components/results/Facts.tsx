@@ -17,10 +17,10 @@ export function validFacts(raw: unknown): FactsBlock | null {
 /** A definition-list card for 3-12 label/value facts, mostly non-numeric. */
 export const Facts: React.FC<RendererProps<FactsBlock>> = ({ block }) => (
   <div data-smart-result="facts" data-block-id={block.id}>
-    <dl className="my-3.5 divide-y divide-zinc-800/60 rounded-xl border border-zinc-800 bg-zinc-950/70 px-3.5 shadow-sm">
+    <dl className="my-3.5 divide-y divide-zinc-800/60 rounded-xl border border-zinc-700/60 bg-zinc-900/60 px-4 shadow-[var(--kws-shadow)]">
       {block.items.map((item) => (
         <div key={item.id} className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 gap-y-0.5 py-2.5 text-xs">
-          <dt className="text-zinc-500 [overflow-wrap:anywhere]">{item.label}</dt>
+          <dt className="font-medium text-zinc-400 [overflow-wrap:anywhere]">{item.label}</dt>
           <dd className="text-zinc-200 leading-relaxed [overflow-wrap:anywhere]">{item.value || '—'}</dd>
         </div>
       ))}

@@ -113,7 +113,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
 
   if (step.kind === 'note')
     return (
-      <li className="flex items-start gap-2 px-3 py-1.5 text-[11px] text-zinc-400">
+      <li className="flex items-start gap-2 px-3 py-1.5 text-xs text-zinc-400">
         <Info size={13} className="mt-px flex-shrink-0 text-zinc-400" aria-hidden="true" />
         <span className="min-w-0 break-words">{step.title}</span>
       </li>
@@ -133,7 +133,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   if (step.kind === 'thinking') {
     const boxId = `${listId}-${step.id}-text`;
     return (
-      <li className="px-3 py-1.5 text-[12px]">
+      <li className="px-3 py-1.5 text-xs">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
@@ -153,7 +153,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
   }
 
   return (
-    <li className={`px-3 py-1.5 text-[12px] ${waiting ? 'bg-amber-500/[0.06]' : ''}`}>
+    <li className={`px-3 py-1.5 text-xs ${waiting ? 'bg-amber-500/[0.06]' : ''}`}>
       {step.detail ? (
         <details className="group">
           <summary className="flex items-start gap-2 cursor-pointer list-none rounded [&::-webkit-details-marker]:hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
@@ -178,12 +178,12 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
 const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string }> = ({ steps, live, dropped = 0, id }) => {
   const now = useNow(steps.some(isOpenStep));
   return (
-    <ol id={id} aria-label="Steps" className="divide-y divide-zinc-800/60">
+    <ol id={id} aria-label="Steps" className="divide-y divide-zinc-700/40">
       {steps.map((s) => (
         <StepRow key={s.id} step={s} live={live} now={now} listId={id} />
       ))}
       {dropped > 0 && (
-        <li className="px-3 py-1.5 text-[11px] text-zinc-400">
+        <li className="px-3 py-1.5 text-xs text-zinc-400">
           {dropped} more {dropped === 1 ? 'step' : 'steps'} not kept
         </li>
       )}
@@ -199,8 +199,8 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string }> 
   const current = [...steps].reverse().find(isOpenStep);
   const span = activitySpan(steps);
   return (
-    <section aria-label="What the bot is doing" className="mb-2 w-full max-w-2xl rounded-xl border border-zinc-800 bg-zinc-950/50 overflow-hidden">
-      <p className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+    <section aria-label="What the bot is doing" className="mb-2 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]">
+      <p className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
         <ListTree size={11} className="text-sky-400/80" aria-hidden="true" />
         Working
         <span className="normal-case tracking-normal font-normal">
@@ -231,14 +231,14 @@ export const SavedActivityList: React.FC<{ activity: SavedActivity; idBase: stri
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+        className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/70 hover:bg-zinc-800/70 border border-zinc-700/60 hover:border-zinc-600/80 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
       >
         <ListTree size={13} className={failed ? 'text-rose-300' : 'text-sky-400/80'} aria-hidden="true" />
         <span className="truncate min-w-0">{activitySummary(activity)}</span>
         <ChevronRight size={13} className={`flex-shrink-0 text-zinc-400 transition-transform motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
       </button>
       {open && (
-        <div className="mt-1.5 w-full max-w-2xl rounded-xl border border-zinc-800 bg-zinc-950/50 overflow-hidden">
+        <div className="mt-1.5 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]">
           <Steps steps={activity.steps} dropped={activity.dropped} id={listId} />
           {children}
         </div>

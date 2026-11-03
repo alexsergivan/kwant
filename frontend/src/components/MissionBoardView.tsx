@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { ModernAvatar } from './ModernAvatar';
+import { CheckBurst } from './CheckBurst';
 import { PerformancePanel } from './PerformancePanel';
 import { TierRequests } from './TierProposals';
 import { FactNeedsYouAction, FactsLedger } from './FactsLedger';
@@ -181,7 +182,7 @@ const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40';
 // Card-sized buttons: compact on desktop, a full 40px tap target on the phone.
 const cardBtn =
-  'inline-flex items-center justify-center gap-1 min-h-[40px] sm:min-h-[28px] px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
+  'relative inline-flex items-center justify-center gap-1 min-h-[40px] sm:min-h-[28px] px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const cardGoodBtn = 'bg-emerald-600/90 text-white hover:bg-emerald-500';
 const cardPlainBtn = 'border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700';
 const cardQuietBtn = 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800';
@@ -621,6 +622,7 @@ export const TaskCard: React.FC<{
   const autofixLive = !!autofixCardText(t, now);
   const quick = onQuick && columnOfTask(t) === 'review' ? quickActionsFor(t) : [];
   const [sending, setSending] = useState(false);
+  const [burst, setBurst] = useState(0);
   const [note, setNote] = useState('');
   const noteId = useId();
   return (
@@ -726,12 +728,17 @@ export const TaskCard: React.FC<{
               key={a}
               type="button"
               disabled={busy}
-              onClick={() => (a === 'reject' ? setSending(true) : onQuick!(t, a))}
+              onClick={() => {
+                if (a === 'verify') setBurst((n) => n + 1);
+                if (a === 'reject') setSending(true);
+                else onQuick!(t, a);
+              }}
               className={`${cardBtn} ${a === 'verify' || a === 'retry' ? cardGoodBtn : a === 'cancel' ? cardQuietBtn : cardPlainBtn}`}
               data-card-action={a}
             >
               {a === 'verify' ? <CheckCircle2 size={12} aria-hidden="true" /> : a === 'reject' ? <Undo2 size={12} aria-hidden="true" /> : a === 'retry' ? <RotateCcw size={12} aria-hidden="true" /> : <X size={12} aria-hidden="true" />}
               {QUICK_LABELS[a]}
+              {a === 'verify' && <CheckBurst n={burst} />}
             </button>
           ))}
           {older.length > 0 && onDismissMany && (
@@ -2008,6 +2015,7 @@ export const TaskDetailBody: React.FC<{
   const forkId = useId();
   const receipt = useMemo(() => buildReceipt(detail, names), [detail, names]);
   const [asking, setAsking] = useState<TaskAction | null>(null);
+  const [burst, setBurst] = useState(0);
   const [reason, setReason] = useState('');
   const reasonId = useId();
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
@@ -2031,6 +2039,7 @@ export const TaskDetailBody: React.FC<{
       setAsking(a);
       return;
     }
+    if (a === 'verify') setBurst((n) => n + 1);
     onAction(a);
   };
 
@@ -2056,10 +2065,11 @@ export const TaskDetailBody: React.FC<{
                 type="button"
                 disabled={busy}
                 onClick={() => press(a)}
-                className={a === 'verify' ? goodBtn : a === 'retry' || a === 'unblock' ? mainBtn : a === 'cancel' ? dangerBtn : quietBtn}
+                className={`relative ${a === 'verify' ? goodBtn : a === 'retry' || a === 'unblock' ? mainBtn : a === 'cancel' ? dangerBtn : quietBtn}`}
               >
                 {a === 'verify' && <CheckCircle2 size={13} aria-hidden="true" />}
                 {ACTION_LABELS[a]}
+                {a === 'verify' && <CheckBurst n={burst} />}
               </button>
             ))}
             {busy && <Loader2 size={14} className="self-center animate-spin motion-reduce:animate-none text-zinc-400" aria-label="Working" />}

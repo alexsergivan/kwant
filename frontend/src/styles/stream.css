@@ -1,0 +1,88 @@
+/* Conversation stream (reply header, working strip, decision cards, action row, results).
+   Everything here moves with transform and opacity only, lasts 120-200 ms, and is off under
+   prefers-reduced-motion. Colours are Tailwind's; the --kws-* variables are the only tokens. */
+:root {
+  --kws-accent: theme('colors.sky.400');
+  --kws-accent-soft: theme('colors.sky.500 / 14%');
+  --kws-ok: theme('colors.emerald.400');
+  --kws-warn: theme('colors.amber.300');
+  --kws-hairline: theme('colors.zinc.700 / 70%');
+  --kws-raised: theme('colors.zinc.900 / 70%');
+  --kws-shadow: 0 1px 2px rgb(0 0 0 / 0.28), 0 4px 14px -6px rgb(0 0 0 / 0.5);
+}
+
+/* New replies fade and slide in. */
+@keyframes kws-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kws-in { animation: kws-in 180ms ease-out both; }
+
+/* The working strip rises into place above the composer. */
+@keyframes kws-strip-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kws-strip { animation: kws-strip-in 160ms ease-out both; }
+
+/* Skeleton lines while a reply has no words yet (opacity only). */
+@keyframes kws-skel {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.75; }
+}
+.kws-skel {
+  height: 0.7rem;
+  border-radius: 9999px;
+  background: theme('colors.zinc.700');
+  animation: kws-skel 1.3s ease-in-out infinite;
+}
+
+/* A small burst on "Mark verified": a ring and six dots, 200 ms. */
+.kws-burst {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.kws-burst-ring {
+  position: absolute;
+  left: -11px;
+  top: -11px;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 2px solid theme('colors.emerald.300');
+  animation: kws-burst-ring 200ms ease-out both;
+}
+.kws-burst-dot {
+  position: absolute;
+  left: -2px;
+  top: -2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: theme('colors.emerald.300');
+  animation: kws-burst-dot 200ms ease-out both;
+}
+@keyframes kws-burst-ring {
+  from { opacity: 0.9; transform: scale(0.3); }
+  to { opacity: 0; transform: scale(1.7); }
+}
+@keyframes kws-burst-dot {
+  from { opacity: 1; transform: rotate(var(--kws-a)) translateY(-6px) scale(1); }
+  to { opacity: 0; transform: rotate(var(--kws-a)) translateY(-17px) scale(0.4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kws-in,
+  .kws-strip,
+  .kws-skel,
+  .kws-burst-ring,
+  .kws-burst-dot {
+    animation: none;
+  }
+  .kws-skel { opacity: 0.55; }
+  .kws-burst { display: none; }
+}
