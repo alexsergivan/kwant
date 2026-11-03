@@ -113,7 +113,8 @@ html.kw-reduce .kw-nudge__av, html.kw-reduce .kw-nudge__badge, html.kw-reduce .k
     }
     return { av: items.length > 9 ? '9+' : String(items.length), l1: items.length + ' things need you', l2: esc(names(items)) };
   };
-  const arm = ms => { clearTimeout(timer); timer = setTimeout(leave, Math.max(0, Math.min(ms, CAP - (Date.now() - firstShown)))); };
+  // The 12 s cap only limits arrival restarts; after the pointer leaves it always waits the full 2 s.
+  const arm = (ms, capped) => { clearTimeout(timer); timer = setTimeout(leave, capped ? Math.max(0, Math.min(ms, CAP - (Date.now() - firstShown))) : ms); };
   function leave() {
     if (!el || hovered) return;
     el.classList.add('is-leaving');
@@ -141,7 +142,7 @@ html.kw-reduce .kw-nudge__av, html.kw-reduce .kw-nudge__badge, html.kw-reduce .k
         document.getElementById('slot').appendChild(el);
       }
       el.setAttribute('aria-label', (c.l1 + '. ' + c.l2).replace(/&[a-z]+;/g, ' '));
-      arm(HOLD);
+      arm(HOLD, true);
     },
     hide() { hovered = false; leave(); },
   };
