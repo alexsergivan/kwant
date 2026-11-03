@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChartBlock, ChartPoint, ChartSeries, inRange, isNum, isObj, isText, optText, parseCommon, uniqueIds } from '../../smartResults';
+import { ChartBlock, ChartPoint, ChartSeries, inRange, isNum, isObj, isText, optText, parseCommon, repeatsReply, uniqueIds } from '../../smartResults';
 import type { RendererProps } from './registry';
+import { ReplyText } from './ReplyText';
 
 const MAX_VALUE = 1e15;
 
@@ -120,6 +121,7 @@ const BarPattern: React.FC<{ id: string; variant: number; color: string }> = ({ 
  */
 export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   const uid = useId();
+  const replyText = React.useContext(ReplyText);
   const [view, setView] = useState<'chart' | 'table'>('chart');
   const [active, setActive] = useState<{ seriesIdx: number; pointIdx: number } | null>(null);
   // Drawn at the card's real width (1 SVG unit = 1 px) so axis text stays readable on a 390 px phone.
@@ -380,7 +382,7 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
         </div>
       )}
 
-      {block.summary && <p className="mt-2 text-xs leading-relaxed text-zinc-400">{block.summary}</p>}
+      {block.summary && !repeatsReply(block.summary, replyText) && <p className="mt-2 text-xs leading-relaxed text-zinc-400">{block.summary}</p>}
     </div>
   );
 };
