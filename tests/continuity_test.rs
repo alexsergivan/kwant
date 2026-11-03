@@ -1725,6 +1725,7 @@ async fn notifications_are_filtered_and_content_free() {
         outcome: "completed".into(),
         turn_id: None,
         thread_id: None,
+        quiet: false,
     });
     let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
         kwant_id: k.id.clone(),
@@ -1732,6 +1733,16 @@ async fn notifications_are_filtered_and_content_free() {
         outcome: "failed".into(),
         turn_id: None,
         thread_id: None,
+        quiet: false,
+    });
+    // A quiet turn (a mission runner turn) leaves its notification to the runner
+    let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
+        kwant_id: k.id.clone(),
+        context_id: Some(general.id.clone()),
+        outcome: "completed".into(),
+        turn_id: None,
+        thread_id: None,
+        quiet: true,
     });
     let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
         id: "a1".into(),

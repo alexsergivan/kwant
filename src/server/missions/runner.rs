@@ -179,6 +179,8 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
         Ok(scope) => {
             let mut opts = TurnOpts::default();
             (opts.unsaved, opts.quiet_failure, opts.purpose) = (true, true, Some(PURPOSE.into()));
+            // One notification per task outcome, sent below, not one per attempt
+            opts.quiet_finish = true;
             let mut p = prompt(state, m, task).await;
             if let Some(note) = super::autofix::retry_note(state, task).await {
                 p.push_str(&note);
@@ -192,6 +194,28 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
     }
     let err = reply.as_ref().err().map(ToString::to_string);
     after_turn(state, &task.id, err.as_deref(), started).await;
+    notify_outcome(state, &task.id, &bot.id, &context, reply.is_ok()).await;
+}
+
+/// The runner turn's one `turn_finished` notification: none while AutoFix has a retry of the task
+/// scheduled (that retry's turn notifies, or the one after it), so a failing task gives one for
+/// its final outcome. A turn that failed notifies only when the task ended `failed` or `blocked`.
+async fn notify_outcome(state: &AppState, task_id: &str, kwant_id: &str, context: &str, replied: bool) {
+    let Ok(Some(t)) = state.db.get_task(task_id).await else { return };
+    if retry_coming(state, task_id).await {
+        return;
+    }
+    if !replied && !matches!(t.state.as_str(), "failed" | "blocked") {
+        return;
+    }
+    let n = crate::server::continuity::turn_finished(state, kwant_id, Some(context)).await;
+    crate::server::continuity::notify(state, n).await;
+}
+
+/// Whether an AutoFix attempt of the task is scheduled. It can't have started yet: it waits for
+/// this mission's runner slot, which the caller still holds.
+async fn retry_coming(state: &AppState, task_id: &str) -> bool {
+    state.db.attempts_of(task_id).await.unwrap_or_default().iter().any(|a| a.status == "scheduled")
 }
 
 /// After a runner turn of `task_id`: still `working` means the bot didn't finish or let go, so the

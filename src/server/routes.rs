@@ -1783,6 +1783,9 @@ pub(super) struct TurnOpts {
     pub(super) unsaved: bool,
     /// A failed turn saves no `turn_failed` note (the caller posts something else).
     pub(super) quiet_failure: bool,
+    /// The turn sends no `turn_finished` notification when it ends (the caller notifies, see
+    /// [`super::missions::runner`]).
+    pub(super) quiet_finish: bool,
     /// Shown as the turn's `purpose` in `GET /api/turns` (`turns[]`).
     pub(super) purpose: Option<String>,
     /// The model tier this turn runs on whatever Laya's effort says (see [`crate::router::with_tier`]).
@@ -1903,6 +1906,7 @@ pub(super) async fn turn_once(
         tag: tag.clone(),
         outcome: "cancelled",
         running_row: None,
+        quiet: opts.quiet_finish,
     };
     let Some(_slot) = turns.acquire(&tag, &scope.cancel_token, &scope.state.event_sender).await else {
         return Err("stopped by the user".into());
@@ -2033,6 +2037,8 @@ struct TurnEndedGuard {
     outcome: &'static str,
     /// Set once the turn is recorded as running; the record is removed when the turn ends.
     running_row: Option<crate::db::Database>,
+    /// See [`TurnOpts::quiet_finish`].
+    quiet: bool,
 }
 
 impl Drop for TurnEndedGuard {
@@ -2053,6 +2059,7 @@ impl Drop for TurnEndedGuard {
             outcome: self.outcome.to_string(),
             turn_id: Some(tag.turn_id),
             thread_id: tag.thread_id,
+            quiet: self.quiet,
         });
     }
 }

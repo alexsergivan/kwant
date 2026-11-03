@@ -510,6 +510,7 @@ acceptance, a routine) is only ever proposed; it applies when the person approve
 - The retry prompt (runner and `task_claim`) says which attempt it is and why, the failing check and its redacted output, `KWANT_IDEMPOTENCY_KEY=<key>`, and the external tool calls earlier attempts already made. Calls in an attempt's turns record the key in `turn_tool_calls.idempotency_key`.
 - An attempt ends `succeeded` when its task is verified, `skipped` when it is cancelled, `failed` at the next failure.
 - Scheduled attempts live in the table; the scheduler tick runs the due ones, so a restart loses nothing.
+- Notifications: a mission runner turn sends no `turn_finished` of its own (`turn_ended` carries `quiet: true`). After the turn the runner sends one, unless an AutoFix attempt of the task is `scheduled`, so a failing task notifies once, for its final outcome, and a passing one once as before. A runner turn that errored notifies only when its task ended `failed` or `blocked`. Routine retries are new routine runs and notify as routines do.
 
 ### Workflow changes (person only)
 
