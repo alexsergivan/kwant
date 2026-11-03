@@ -393,6 +393,13 @@ jobs:
           cp "$appimage.sig" kwant_x86_64.AppImage.sig
           for f in kwant_amd64.deb kwant_x86_64.AppImage; do sha256sum "$f" > "$f.sha256"; done
           assets+=(kwant_amd64.deb kwant_amd64.deb.sig kwant_amd64.deb.sha256 kwant_x86_64.AppImage kwant_x86_64.AppImage.sig kwant_x86_64.AppImage.sha256)
+          # The AppImage's update information points AppImageUpdate at this file in the latest
+          # release; linux.yml made it over the same bytes, under this name
+          zsync_file=$(find dist -type f -name 'kwant_x86_64.AppImage.zsync' | head -1)
+          test -n "$zsync_file"
+          cp "$zsync_file" kwant_x86_64.AppImage.zsync
+          test "$(sed -n 's/^SHA-1: //p' kwant_x86_64.AppImage.zsync | head -1)" = "$(sha1sum kwant_x86_64.AppImage | cut -d' ' -f1)"
+          assets+=(kwant_x86_64.AppImage.zsync)
           dl="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           # Installed apps read releases/latest/download/latest.json, which only ever resolves to the
           # newest full release; a prerelease gets no latest.json, so it's never offered as an update
