@@ -9,6 +9,12 @@ import { SmartActions, actionClass } from './SmartActions';
 
 /** "Ask about this": ChatView puts `text` in the composer and focuses it. Nothing is sent. */
 export const COMPOSE_PREFILL_EVENT = 'kwnt:compose-prefill';
+/** The composer's text after "Ask about this": the line goes on a new line, and asking again for the same line changes nothing. */
+export const withPrefill = (prev: string, text: string): string => {
+  if (!prev.trim()) return text;
+  const last = prev.trimEnd().split('\n').pop() ?? '';
+  return last.trim() === text.trim() ? prev : `${prev.trimEnd()}\n${text}`;
+};
 export const askAbout = (text: string) => window.dispatchEvent(new CustomEvent(COMPOSE_PREFILL_EVENT, { detail: { text } }));
 
 const textKey = (messageId: string) => `kwnt:smart-text:${messageId}`;
@@ -190,7 +196,7 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
 /** The footer every block shares, in the message's action row: Evidence, Show as text, Copy data. */
 const Footer: React.FC<{ block: SmartBlock; messageId: string; asText: boolean; onToggle: () => void }> = ({ block, messageId, asText, onToggle }) => (
   <SmartActions messageId={messageId}>
-    <span className="min-w-0 px-1 text-[11px] text-zinc-500" data-evidence>
+    <span className="min-w-0 max-w-full truncate px-1 text-[11px] text-zinc-500" data-evidence title={evidenceText(block)}>
       {evidenceText(block)}
     </span>
     <button type="button" aria-pressed={asText} onClick={onToggle} className={`${actionClass} ${asText ? 'bg-zinc-900 text-zinc-300' : ''}`}>
