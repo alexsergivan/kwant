@@ -339,6 +339,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/channels/:id", get(continuity::get_channel).patch(continuity::patch_channel))
         .route("/api/search", get(continuity::search))
         .route("/api/kwants/:id/memories", get(continuity::list_memories).post(continuity::add_memory))
+        .route("/api/kwants/:id/lessons", get(missions::lessons::get_lessons))
         .route("/api/kwants/:id/model-usage", get(model_usage::get_usage))
         .route("/api/usage/daily", get(model_usage::get_daily))
         .route("/api/chains/:id/continue", post(budget::continue_chain))

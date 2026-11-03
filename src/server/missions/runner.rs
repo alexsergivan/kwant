@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 
 pub const MAX_RUNNING: usize = 2;
 pub const PURPOSE: &str = "mission";
+/// C0: the brief's sentence when the task has an approved check.
+pub const SELF_CHECK: &str = "Before you move it to review, run these checks yourself with task_request_check and fix what fails.\n";
 
 /// Missions with a runner turn going, one set per server (`AppState::mission_runs`), so two
 /// servers in one process (as tests run them) never take each other's slots.
@@ -154,7 +156,7 @@ async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
     let deps = state.db.dependencies_of(&t.id).await.unwrap_or_default();
     format!(
         "[Mission Control] You hold task {id} of the mission \"{mt}\" (goal: {goal}).\n\
-         Task: {title}\nAcceptance: {acc}\nChecks kwant will run when you're done:\n{checks}\n{deps}\
+         Task: {title}\nAcceptance: {acc}\nChecks kwant will run when you're done:\n{checks}\n{self_check}{deps}\
          Work on it now. Attach what you produced with task_attach_evidence, then call task_update with \
          task_id {id} and status \"review\": kwant runs the checks and only they (or a teammate's review, \
          or the person) can verify it. If you can't finish, call task_update with status \"blocked\" and a \
@@ -165,6 +167,8 @@ async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
         title = t.title,
         acc = if t.acceptance.is_empty() { "(none given)" } else { &t.acceptance },
         checks = if list.is_empty() { "- none: a teammate or the person reviews it".into() } else { list.join("\n") },
+        // C0: only a task with an approved check can be checked before hand-in
+        self_check = if list.is_empty() { "" } else { SELF_CHECK },
         deps = if deps.is_empty() { String::new() } else { format!("It builds on tasks {} (verified).\n", deps.iter().map(|d| d.0.as_str()).collect::<Vec<_>>().join(", ")) },
         budget = if t.budget_tokens > super::NO_LIMIT { format!(" Budget: {} tokens.", t.budget_tokens - t.spent_tokens) } else { String::new() },
     )
@@ -184,6 +188,14 @@ async fn run_one(state: &AppState, m: &Mission, task: &Task, bot: &crate::db::mo
             let mut p = prompt(state, m, task).await;
             if let Some(note) = super::autofix::retry_note(state, task).await {
                 p.push_str(&note);
+            }
+            // C1: lessons from the bot's earlier tasks; held out for 1 in 5 tasks (still logged)
+            if let Some((block, hint)) = super::lessons::for_brief(state, &bot.id, &task.id).await {
+                if !block.is_empty() {
+                    p.truncate(p.trim_end().len());
+                    p.push_str(&block);
+                }
+                opts.task = Some(hint);
             }
             turn_once(&scope, bot, p, opts).await
         }
@@ -223,6 +235,7 @@ async fn retry_coming(state: &AppState, task_id: &str) -> bool {
 /// `failed` for it (§13), and the failure is recorded: the turn's error, a denied action since
 /// `started`, or a stall; a task left waiting on the person records `needs_input`.
 pub async fn after_turn(state: &AppState, task_id: &str, err: Option<&str>, started: chrono::DateTime<chrono::Utc>) {
+    super::lessons::note_self_check(state, task_id, started).await;
     // Waiting on nothing (its cards were answered or withdrawn) is still working: release it
     let Some(t) = super::listener::settle_needs_you(state, task_id).await else { return };
     if t.state == "needs_you" {

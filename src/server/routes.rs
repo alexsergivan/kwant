@@ -1793,6 +1793,10 @@ pub(super) struct TurnOpts {
     /// A Skill Foundry replay (a dry run, see [`super::mcp_runtime::RehearseApprover`]): runs only
     /// on Claude with kwant's permission hook, opens no page, and logs refused calls here.
     pub(super) rehearse: Option<super::mcp_runtime::RehearseLog>,
+    /// The task this turn works on and its lessons (set by the mission runner): the turn logs
+    /// `lessons_shown` or `lessons_held_out` once it reaches the driver, and gets no second
+    /// lessons block in its continuity section.
+    pub(super) task: Option<super::missions::lessons::TaskHint>,
 }
 
 impl TurnOpts {
@@ -2417,12 +2421,20 @@ async fn run_kwant_turn_inner(
         let with_tools = mcp_ctx
             .as_ref()
             .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME));
-        let continuity = super::continuity::prompt_block(
+        // C5: chat, routine and hand-off turns get the bot's lessons; a task turn has them in its
+        // brief already (or is held out), and hidden purposes get none
+        let lessons = if opts.task.is_none() && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
+            super::missions::lessons::for_turn(state, &target_kwant.id).await
+        } else {
+            String::new()
+        };
+        let continuity = super::continuity::prompt_block_with(
             state,
             target_kwant,
             scope.team_context.as_ref().map(|t| t.id.as_str()),
             channel_id.as_deref(),
             with_tools,
+            &lessons,
         )
         .await;
         let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
@@ -2516,6 +2528,11 @@ async fn run_kwant_turn_inner(
         // The switches as the reply's `meta.failover` (one object per switch), so they survive a reload
         let mut switch_meta: Vec<serde_json::Value> = Vec::new();
         let chat_key = format!("{}|{:?}|{:?}", target_kwant.id, scope.channel_id, scope.thread_id);
+        // The attribution point: past the refusal and engine checks, before the driver, once
+        // across the failover loop, so a refused or parked turn never counts as shown
+        if let (None, Some(hint)) = (&gave_up, &opts.task) {
+            super::missions::lessons::log_attribution(state, hint).await;
+        }
         for (i, profile) in attempts.iter().enumerate() {
             // An account of another engine than the bot's own runs the tier of the bot's model,
             // not its model id (which no other engine knows)
@@ -3840,6 +3857,8 @@ pub struct SettingsResponse {
     pub checkpoint_keep: i64,
     /// AutoFix: `on` (the default), `suggest` (the person starts each retry) or `off` (record failures only).
     pub autofix: String,
+    /// Lessons from a bot's earlier tasks in its brief and turns: `on` (the default) or `off`.
+    pub lessons: String,
     /// Share of a task's budget its AutoFix retries may spend (0–100).
     pub recovery_budget_pct: i64,
     /// Flight School: on by default; tiers are enforced for task turns (see `super::missions::flight_school`).
@@ -3910,6 +3929,7 @@ pub struct SaveSettingsPayload {
     pub checkpoint_max_mb: Option<i64>,
     pub checkpoint_keep: Option<i64>,
     pub autofix: Option<String>,
+    pub lessons: Option<String>,
     pub recovery_budget_pct: Option<i64>,
     pub flight_school: Option<bool>,
     pub flight_school_new_bot_tier: Option<String>,
@@ -3974,6 +3994,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         checkpoint_max_mb: super::missions::checkpoints::max_mb(&state).await,
         checkpoint_keep: super::missions::checkpoints::keep(&state).await,
         autofix: super::missions::autofix::mode(&state).await.into(),
+        lessons: super::missions::lessons::mode(&state).await.into(),
         recovery_budget_pct: super::missions::autofix::recovery_pct(&state).await,
         flight_school: super::missions::flight_school::enabled(&state.db).await,
         flight_school_new_bot_tier: super::missions::flight_school::new_bot_tier(&state.db).await.into(),
@@ -4042,6 +4063,9 @@ pub async fn save_settings(
         return bad(e);
     }
     if let Some(e) = super::missions::autofix::settings_error(payload.autofix.as_deref(), payload.recovery_budget_pct) {
+        return bad(e);
+    }
+    if let Some(e) = super::missions::lessons::settings_error(payload.lessons.as_deref()) {
         return bad(e);
     }
     if let Some(e) = super::missions::flight_school::settings_error(payload.flight_school_new_bot_tier.as_deref()) {
@@ -4174,6 +4198,9 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.checkpoint_keep {
         let _ = state.db.set_setting(super::missions::checkpoints::KEEP_SETTING, &n.to_string()).await;
+    }
+    if let Some(m) = &payload.lessons {
+        let _ = state.db.set_setting(super::missions::lessons::SETTING, m).await;
     }
     if let Some(m) = &payload.autofix {
         let _ = state.db.set_setting(super::missions::autofix::SETTING, m).await;

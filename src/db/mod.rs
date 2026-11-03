@@ -37,6 +37,7 @@ pub mod automation;
 pub mod truth_ledger;
 pub mod goals;
 pub mod goal_missions;
+pub mod lessons;
 pub mod routing;
 pub mod smart_results;
 
@@ -225,6 +226,8 @@ impl Database {
         db.migrate_goals().await?;
         // 0.6.5: the missions a goal opened to restore itself, notices and re-checks (add-only)
         db.migrate_goal_missions().await?;
+        // 0.6.8: the indexes the lesson readers use (add-only)
+        db.migrate_lessons().await?;
         // Phase C1: the Truth Ledger mirrors memory (add-only). Last, so no later step rebuilds
         // a table its triggers or lookups depend on
         db.migrate_truth_ledger().await?;
