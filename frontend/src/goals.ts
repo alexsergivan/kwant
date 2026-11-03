@@ -360,7 +360,8 @@ export function parseGoal(v: unknown): Goal | null {
 
 function parseEvent(v: unknown): GoalEvent | null {
   const e = rec(v);
-  const id = s(e.id);
+  // The server's goal event ids are integers ("id": 6); older shapes send strings.
+  const id = typeof e.id === 'number' && Number.isFinite(e.id) ? String(e.id) : s(e.id);
   const kind = s(e.kind);
   if (!id || !kind) return null;
   const detail = typeof e.detail === 'string' ? rec(safeJson(e.detail)) : rec(e.detail);
@@ -584,6 +585,7 @@ const NEEDS_YOU_REASONS: Record<string, string> = {
   max_attempts: 'the fixes so far didn’t bring it back',
   conflict: 'fixing another goal broke it, so nothing runs on its own',
   declined: 'you chose Not now',
+  fix_ready: 'a fix is ready for your OK',
   unknown_24h: 'it couldn’t be checked for a day',
 };
 
@@ -1033,6 +1035,15 @@ export function goalDecision(g: Goal, events: GoalEvent[] = [], now: number = Da
   if (status === 'draft') return { kind: 'approve' };
   const task = heldFixTask(g);
   if (status === 'needs_you' && (g.status_reason ?? '').trim().toLowerCase() === 'declined') return { kind: 'declined', taskId: task, at: g.updated_at || null };
+  // The server reports a held fix as needs_you / fix_ready (suggest mode, the look is done): that is the
+  // same decision as a failing goal with a held fix, so it gets Fix it / Not now / Always fix.
+  if (status === 'needs_you' && (g.status_reason ?? '').trim().toLowerCase() === 'fix_ready' && task) {
+    if (notNowTask === task) return { kind: 'declined', taskId: task, at: null };
+    // The server says the look is over, so the 30-minute timeout doesn't apply; only an event that says it failed does.
+    const inv = [...events].reverse().find((e) => e.kind === 'investigated');
+    const failed = !!inv && (inv.detail.failed === true || inv.detail.failed === 'true' || inv.detail.status === 'failed');
+    return { kind: 'run', taskId: task, phase: failed ? 'failed' : 'ready', diagnosis: goalDiagnosis(g, events, now) };
+  }
   if (status === 'needs_you') return { kind: 'needs_you', text: needsYouText(g.status_reason) };
   if (status !== 'not_met' && status !== 'fixing') return null;
   // A fix that actually runs has no decision: fix mode (kwant fixes on its own) or a task already released.

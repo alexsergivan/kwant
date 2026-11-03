@@ -750,3 +750,53 @@ test('D9: Keep this true shows once per task; a repeat says Already kept true, a
   assert.match(board, /!inGoalMission && <KeepTrueBox/, 'no Keep this true on a task inside a goal’s remediation mission');
   assert.match(board, /inGoalMission=\{!!missionGoalLink\(/);
 });
+
+// The real server's shapes (Rigel, #229 on #234 + #231): a goal in suggest mode whose Investigate finished comes back
+// as status needs_you / status_reason fix_ready, with open_mission.run_task_id set and `diagnosis` a plain string;
+// its events carry integer ids.
+const fixReady = (over = {}) =>
+  goal({
+    id: 'g1', status: 'needs_you', status_reason: 'fix_ready', mode: 'suggest', checks: [failedCheck()],
+    diagnosis: 'The disk is full. Delete old logs.',
+    open_mission: { id: 'm1', title: 'Restore: The site stays up', status: 'active', attempt: 1, opened_at: minsAgo(20), run_task_id: 't_run' },
+    ...over,
+  });
+
+test('server shape: needs_you / fix_ready with a held task is the Fix it decision, not a dead end', () => {
+  const g1 = fixReady();
+  const d = b.goalDecision(g1, [], NOW, null);
+  assert.equal(d.kind, 'run');
+  assert.equal(d.taskId, 't_run');
+  assert.equal(d.phase, 'ready');
+  assert.equal(b.displayStatus(g1, [], NOW), 'needs_you', 'still drawn as Needs you');
+  assert.match(b.stripSummary([g1], NOW), /1 needs you/);
+  const row = b.rowHtml({ goal: g1, names, now: NOW, onAction() {}, decision: d });
+  for (const a of ['data-goal-fix', 'data-goal-not-now', 'data-goal-always']) assert.match(row, new RegExp(a), `row ${a}`);
+  const full = b.detailHtml({ detail: b.parseGoalDetail({ goal: g1, checks: g1.checks, events: [], fix_tasks: [], missions: [] }), names, now: NOW });
+  for (const a of ['data-goal-fix', 'data-goal-not-now', 'data-goal-always']) assert.match(full, new RegExp(a), `drawer ${a}`);
+  assert.match(text(full), /The disk is full\. Delete old logs\./);
+  assert.doesNotMatch(text(full), /Nothing runs on its own until you act/);
+  // Not now on this device: declined, not a request. A failed look is still named.
+  assert.equal(b.goalDecision(g1, [], NOW, 't_run').kind, 'declined');
+  const failed = [{ id: '7', kind: 'investigated', actor: 'kwant', detail: { failed: true }, created_at: minsAgo(3) }];
+  assert.equal(b.goalDecision(g1, failed, NOW, null).phase, 'failed');
+  // No held task: nothing to release, so it stays a plain Needs you with the reason in words.
+  const none = fixReady({ open_mission: null });
+  assert.equal(b.goalDecision(none, [], NOW, null).kind, 'needs_you');
+  assert.match(b.needsYouText('fix_ready'), /^Needs you: a fix is ready/);
+  // The other Needs you reasons are unchanged.
+  assert.equal(b.goalDecision(fixReady({ status_reason: 'budget_spent' }), [], NOW, null).kind, 'needs_you');
+});
+
+test('server shape: goal events with integer ids are read', () => {
+  const ev = (id, kind, detail) => ({ id, kind, actor: 'kwant', detail, created_at: minsAgo(30 - id) });
+  const g1 = fixReady();
+  const detail = b.parseGoalDetail({
+    goal: g1, checks: g1.checks, fix_tasks: [], missions: [],
+    events: [ev(6, 'investigated', { failed: true }), ev(5, 'not_met', {}), { id: 4.5, kind: 'checked', actor: 'kwant', detail: '{"x":1}', created_at: minsAgo(40) }, { id: null, kind: 'bad' }],
+  });
+  assert.deepEqual(detail.events.map((e) => e.id), ['4.5', '5', '6'], 'integer ids kept as strings; ones with no id still dropped');
+  assert.equal(b.diagnosisPhase(g1, detail.events, NOW), 'failed', 'investigated.detail.failed sees the event');
+  const html = text(b.detailHtml({ detail, names, now: NOW }));
+  assert.doesNotMatch(html, /Nothing has happened yet/);
+});
