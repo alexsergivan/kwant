@@ -157,3 +157,62 @@ test('a reply with no or malformed failover meta shows no notice', () => {
     assert.equal(m.savedFailoverNotice(meta), null);
   }
 });
+
+// ---- Not-installed and signed-out engines are listed apart, unranked ----
+
+const sys = (id, eng, priority) => profile({ id, engine: eng, kind: 'system', name: 'This machine', priority });
+const sysList = [sys('s-claude', 'claude', 10), sys('s-codex', 'codex', 20), sys('s-grok', 'grok', 30)];
+const sysEngines = [engine('claude'), engine('codex'), engine('grok', { status: 'not_installed', ready: false })];
+const engineOf = (p) => sysEngines.find((e) => e.id === p.engine);
+
+test('a not-installed engine is not ranked, a signed-out one is not ranked, an out one still is', () => {
+  const { ranked, unranked } = m.splitRanked(m.failoverOrder(sysList), engineOf, NOW);
+  assert.deepEqual(ranked.map((p) => p.id), ['s-claude', 's-codex']);
+  assert.deepEqual(unranked.map((p) => p.id), ['s-grok']);
+  const signedOut = m.splitRanked(m.failoverOrder(list), (p) => engine(p.engine), NOW);
+  assert.deepEqual(signedOut.unranked.map((p) => p.id), ['g1'], 'Grok signed out');
+  assert.ok(signedOut.ranked.some((p) => p.id === 'c1'), 'Out until 03:00 stays ranked');
+  const off = m.splitRanked([profile({ id: 'o', enabled: false })], () => engine('claude'), NOW);
+  assert.equal(off.ranked.length, 1, 'switched off stays ranked');
+});
+
+test('a move numbers the whole order: ranked first, then the unranked ones in their current order', () => {
+  // Fresh install: all three system accounts at 0, Grok not installed.
+  const fresh = [sys('s-claude', 'claude', 0), sys('s-codex', 'codex', 0), sys('s-grok', 'grok', 0)];
+  const { ranked, unranked } = m.splitRanked(m.failoverOrder(fresh), engineOf, NOW);
+  assert.deepEqual(ranked.map((p) => p.id), ['s-claude', 's-codex']);
+  const next = m.moveAccount(ranked, 0, 1);
+  const updates = m.priorityUpdates(next, unranked);
+  assert.deepEqual(updates, [{ id: 's-codex', priority: 10 }, { id: 's-claude', priority: 20 }, { id: 's-grok', priority: 30 }]);
+  // Once Grok is installed, it sorts after both.
+  const after = fresh.map((p) => ({ ...p, priority: updates.find((u) => u.id === p.id)?.priority ?? p.priority }));
+  assert.deepEqual(m.failoverOrder(after).map((p) => p.id), ['s-codex', 's-claude', 's-grok']);
+  // Without the unranked list, only the ranked ones are numbered.
+  assert.deepEqual(m.priorityUpdates(next), [{ id: 's-codex', priority: 10 }, { id: 's-claude', priority: 20 }]);
+});
+
+test('a signed-out account between ranked ones ends up after all of them once anything moves', () => {
+  const three = [profile({ id: 'a', priority: 10 }), profile({ id: 'b', engine: 'codex', priority: 20 }), profile({ id: 'c', engine: 'grok', priority: 30 })];
+  const next = m.moveAccount([three[0], three[2]], 0, 1); // c, a
+  const updates = m.priorityUpdates(next, [three[1]]);
+  assert.deepEqual(updates, [{ id: 'c', priority: 10 }, { id: 'a', priority: 20 }, { id: 'b', priority: 30 }]);
+  const after = three.map((p) => ({ ...p, priority: updates.find((u) => u.id === p.id)?.priority ?? p.priority }));
+  assert.deepEqual(m.failoverOrder(after).map((p) => p.id), ['c', 'a', 'b']);
+  // Only numbers that change are sent, capped at 10000.
+  const many = Array.from({ length: 1100 }, (_, i) => profile({ id: `p${i}`, priority: 0 }));
+  assert.equal(m.priorityUpdates(many.slice(0, 1000), many.slice(1000)).at(-1).priority, 10_000);
+});
+
+test('the list shows Grok under the ranked rows, with its status, no number and no arrows', () => {
+  const html = m.renderToStaticMarkup(h(m.AccountPriority, { profiles: sysList, engines: sysEngines, onChanged: async () => {}, now: NOW }));
+  assert.equal((html.match(/<ol /g) ?? []).length, 1);
+  const ranked = html.slice(html.indexOf('<ol '), html.indexOf('</ol>'));
+  assert.equal((ranked.match(/<li /g) ?? []).length, 2, 'two ranked rows');
+  assert.doesNotMatch(ranked, /Grok|Not installed/);
+  const rest = html.slice(html.indexOf('</ol>'));
+  assert.match(rest, /Not in the order/);
+  assert.match(rest, /Grok/);
+  assert.match(rest, /Not installed/);
+  assert.doesNotMatch(rest, /aria-label="Move /, 'not reorderable');
+  assert.doesNotMatch(rest, /draggable/);
+});

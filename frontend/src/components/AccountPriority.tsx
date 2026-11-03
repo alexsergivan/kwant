@@ -10,6 +10,7 @@ import {
   moveAnnouncement,
   priorityStatus,
   priorityUpdates,
+  splitRanked,
 } from '../failover';
 import { Profile, cardOf, profilesApi } from '../profiles';
 import { StatusPill } from './EngineAccounts';
@@ -37,8 +38,15 @@ export const AccountPriority: React.FC<{
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const listRef = useRef<HTMLOListElement>(null);
 
-  const served = useMemo(() => failoverOrder(profiles), [profiles]);
-  const order = pending ?? served;
+  const engineOf = (p: Profile) => engines?.find((e) => e.id === cardOf(p));
+  // Accounts that aren't installed or aren't signed in can't take a turn: they are listed apart, unranked
+  // and not movable. A move numbers them after the ranked ones, so they join at the bottom later.
+  const { ranked: servedRanked, unranked } = useMemo(
+    () => splitRanked(failoverOrder(profiles), (p) => engines?.find((e) => e.id === cardOf(p)), now),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [profiles, engines],
+  );
+  const order = pending ?? servedRanked;
 
   // Put keyboard focus back on the button that was used, once the row has moved.
   useEffect(() => {
@@ -49,7 +57,7 @@ export const AccountPriority: React.FC<{
   }, [focusKey, order]);
 
   const save = async (next: Profile[], moved: Profile, to: number) => {
-    const updates = priorityUpdates(next);
+    const updates = priorityUpdates(next, unranked);
     if (updates.length === 0) return;
     setError(null);
     // Show the new order at once, with the numbers it will have, so a late reload can't flip it back.
@@ -87,12 +95,11 @@ export const AccountPriority: React.FC<{
         {FAILOVER_CAPTION}
       </p>
       {order.length === 0 ? (
-        <p className="mt-2 text-zinc-500">No accounts yet. Add one below.</p>
+        <p className="mt-2 text-zinc-500">{unranked.length === 0 ? 'No accounts yet. Add one below.' : 'No account is ready to use yet.'}</p>
       ) : (
         <ol ref={listRef} aria-describedby="account-priority-caption" className="mt-2.5 space-y-1.5">
           {order.map((p, i) => {
-            const engine = engines?.find((e) => e.id === cardOf(p));
-            const status = priorityStatus(p, engine, now);
+            const status = priorityStatus(p, engineOf(p), now);
             const dragging = dragId === p.id;
             const over = overId === p.id && dragId !== p.id;
             return (
@@ -165,6 +172,30 @@ export const AccountPriority: React.FC<{
             );
           })}
         </ol>
+      )}
+      {unranked.length > 0 && (
+        <div data-unranked className="mt-3">
+          <h4 id="account-unranked-title" className="text-[11px] font-medium text-zinc-400">
+            Not in the order
+          </h4>
+          <p className="mt-0.5 text-[11px] text-zinc-500">These can't run turns until they are installed or signed in.</p>
+          <ul aria-labelledby="account-unranked-title" className="mt-1.5 space-y-1.5">
+            {unranked.map((p) => {
+              const status = priorityStatus(p, engineOf(p), now);
+              return (
+                <li key={p.id} data-account={p.id} data-unranked-account className="flex items-center gap-2 rounded-lg border border-dashed border-zinc-800 bg-zinc-950/20 px-2 py-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-zinc-300 font-medium truncate">{nameOf(p)}</p>
+                    <div className="mt-0.5 flex items-center gap-x-1.5 gap-y-1 flex-wrap">
+                      <span className="text-[11px] text-zinc-500">{engineLabel(p)}</span>
+                      <StatusPill tone={status.tone}>{status.label}</StatusPill>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
       <p role="status" aria-live="polite" className="sr-only">
         {announce}

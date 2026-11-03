@@ -68,7 +68,7 @@ function humanSize(bytes: number): string {
 }
 
 const TablePreview: React.FC<{ columns: string[]; rows: string[][] }> = ({ columns, rows }) => (
-  <div className="mt-2 overflow-x-auto rounded-lg border border-zinc-800">
+  <div className="mt-2 min-w-0 max-w-full overflow-x-auto rounded-lg border border-zinc-800">
     <table className="w-full min-w-max border-collapse text-left text-[11px]">
       <thead>
         <tr className="border-b border-zinc-800 bg-zinc-900/60">
@@ -147,8 +147,8 @@ export const Files: React.FC<RendererProps<FilesBlock>> = ({ block }) => {
     const shown = block.items.filter((i) => i.preview && i.preview.kind !== 'image');
     if (shown.length === 0) return null;
     return (
-      <div data-smart-result="files" data-block-id={block.id} data-preview-only="">
-        <ul role="list" className="mt-2 space-y-2">
+      <div data-smart-result="files" data-block-id={block.id} data-preview-only="" className="min-w-0 max-w-full">
+        <ul role="list" className="mt-2 min-w-0 max-w-full space-y-2">
           {shown.map((item) => (
             <li key={item.id} aria-label={`Preview of ${item.name}`} className="min-w-0">
               <div className="truncate text-[11px] text-zinc-500" title={item.name}>
@@ -162,10 +162,10 @@ export const Files: React.FC<RendererProps<FilesBlock>> = ({ block }) => {
     );
   }
   return (
-    <div data-smart-result="files" data-block-id={block.id}>
-      <ul role="list" className="my-3.5 space-y-2">
+    <div data-smart-result="files" data-block-id={block.id} className="min-w-0 max-w-full">
+      <ul role="list" className="my-3.5 min-w-0 max-w-full space-y-2">
         {block.items.map((item) => (
-          <li key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 shadow-sm">
+          <li key={item.id} className="min-w-0 max-w-full rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 shadow-sm">
             <div className="flex items-start gap-2">
               <FileIcon size={14} className="mt-0.5 shrink-0 text-zinc-500" aria-hidden="true" />
               <div className="min-w-0 flex-1">

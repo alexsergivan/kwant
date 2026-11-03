@@ -237,7 +237,7 @@ export const SmartResult: React.FC<SmartResultProps> = ({ raw, reply, messageId,
   const name = block.title ?? TYPE_LABEL[block.type];
 
   return (
-    <div role="group" aria-label={name} data-smart-frame={block.type} className={slot ? 'mt-3' : undefined}>
+    <div role="group" aria-label={name} data-smart-frame={block.type} className={slot ? 'mt-3 min-w-0 max-w-full' : 'min-w-0 max-w-full'}>
       {slot && block.title && <div className="mb-1.5 text-xs font-semibold text-zinc-300">{block.title}</div>}
       {asText ? (
         text
