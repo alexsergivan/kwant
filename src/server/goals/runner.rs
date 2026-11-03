@@ -123,7 +123,7 @@ pub async fn run_goal(state: &AppState, g: Goal) -> Option<Goal> {
     }
     let (status, fail_streak, error_runs, says) = decide(&g.status, g.fail_streak, g.error_runs, g.confirm_failures, &judged);
     // A met goal that had one blip stays as it was: nothing about it changed
-    let held_blip = status == "met" && g.status == "met" && says == RunSays::Unknown;
+    let held_blip = status == "met" && g.status == "met" && says == RunSays::Unknown && g.fail_streak == 0;
     let status_reason = if held_blip || (status == g.status && status != "met") {
         g.status_reason.clone()
     } else {

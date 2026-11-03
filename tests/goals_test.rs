@@ -207,12 +207,12 @@ async fn an_error_between_failures_is_unknown_and_never_confirms() {
     // The edit doesn't touch the streak: only runs do
     assert_eq!(edited.fail_streak, 1);
     let after = run_now(&e, &g.id).await;
-    // One blip on a met goal keeps it met (api-M7); it still breaks the run of failures
-    assert_eq!((after.status.as_str(), after.fail_streak, after.error_runs), ("met", 0, 1));
-    assert!(after.unknown_since.is_none());
+    // An error right after a failure shows unknown (a blip is held only after a pass) and breaks the run of failures
+    assert_eq!((after.status.as_str(), after.fail_streak, after.error_runs), ("unknown", 0, 1));
+    assert!(after.unknown_since.is_some());
     e.state.db.edit_goal(&g.id, &e.space, "person", now_ms(), swap(flaky)).await.unwrap().unwrap().unwrap();
     let after = run_now(&e, &g.id).await;
-    assert_eq!((after.status.as_str(), after.fail_streak), ("met", 1), "fail, error, fail is not two failures in a row");
+    assert_eq!((after.status.as_str(), after.fail_streak), ("unknown", 1), "fail, error, fail is not two failures in a row");
     assert!(notices(&e, &g.id).await.is_empty());
 }
 
@@ -509,6 +509,29 @@ async fn a_notice_the_person_turned_off_is_not_recorded_or_counted() {
     }
     assert!(!goals::notice(&e.state, &g, "recovered", "t".into(), "b".into()).await);
     assert_eq!(notices(&e, &g.id).await, ["broken", "broken", "broken"]);
+}
+
+// A "can't check" notice with goal_alert off sends nothing and records nothing, and runs still update the status
+#[tokio::test]
+async fn cant_check_with_alerts_off_sends_nothing_and_the_status_still_moves() {
+    let e = setup().await;
+    let up = server(vec![200]).await;
+    let g = create(&e, &new_goal(&e, &closed_port(), 2)).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "unknown");
+    e.state.db.set_setting("notify_on", r#"["turn_finished"]"#).await.unwrap();
+    e.state.db.set_setting("notify_known", r#"["turn_finished","goal_alert"]"#).await.unwrap();
+    let stuck = e.state.db.goals_unknown_since(now_ms() + goals::UNKNOWN_NOTICE_MS).await.unwrap().into_iter().find(|x| x.id == g.id).unwrap();
+    for _ in 0..3 {
+        assert!(!goals::notice(&e.state, &stuck, "cant_check", "t".into(), "b".into()).await);
+        runner::tick(&e.state).await;
+    }
+    assert!(notices(&e, &g.id).await.is_empty());
+    assert!(!kinds(&e, &g.id).await.contains(&"notice_capped".to_string()));
+    // Still unknown, and the next good run moves it to met all the same
+    assert_eq!(e.state.db.get_goal(&g.id).await.unwrap().unwrap().status, "unknown");
+    point(&e, &g.id, &up).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    assert!(notices(&e, &g.id).await.is_empty());
 }
 
 /// A server for one path answering with `status`, `headers` and `body`.

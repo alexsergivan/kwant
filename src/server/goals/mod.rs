@@ -256,8 +256,9 @@ pub struct Judged {
 ///   confirm one (G-Q-02; the safer reading of Q14). The goal shows unknown.
 /// - While an incident is open (not_met, fixing, needs_you, waiting), failures and unknown runs
 ///   keep its status, so a goal is never "broken" twice for one incident.
-/// - A met goal whose checks all errored once (a dropped connection, a timeout) stays met; only
-///   [`ERRORS_TO_UNKNOWN`] such runs in a row make it unknown.
+/// - A met goal whose checks all errored once (a dropped connection, a timeout) stays met if the run
+///   before passed; only [`ERRORS_TO_UNKNOWN`] such runs in a row make it unknown. An error right
+///   after a failure shows unknown at once.
 /// - Advisory checks never decide.
 pub fn decide(prior: &str, fail_streak: i64, error_runs: i64, confirm: i64, results: &[Judged]) -> (String, i64, i64, RunSays) {
     let required: Vec<&Judged> = results.iter().filter(|j| j.required).collect();
@@ -279,10 +280,17 @@ pub fn decide(prior: &str, fail_streak: i64, error_runs: i64, confirm: i64, resu
         RunSays::Unknown => {
             let all_errored = !results.is_empty() && results.iter().all(|j| j.errored);
             let errors = if all_errored { error_runs + 1 } else { 0 };
-            let status = if open || (prior == "met" && all_errored && errors < ERRORS_TO_UNKNOWN) { prior } else { "unknown" };
+            let status = if open || holds_blip(prior, fail_streak, all_errored, errors) { prior } else { "unknown" };
             (status.into(), 0, errors, says)
         }
     }
+}
+
+/// Whether a run where every check errored leaves a met goal met: only when the run before passed
+/// (no failure streak) and it is not yet [`ERRORS_TO_UNKNOWN`] errors in a row. After a failure an
+/// error shows unknown, so fail, error, fail, error... can't keep a goal met for ever.
+pub fn holds_blip(prior: &str, fail_streak: i64, all_errored: bool, errors: i64) -> bool {
+    prior == "met" && fail_streak == 0 && all_errored && errors < ERRORS_TO_UNKNOWN
 }
 
 /// Minutes to the next check: the interval, doubled for each run past the third where every check
@@ -508,9 +516,9 @@ mod tests {
         let ok: &[Judged] = &[j(true, MET)];
         let bad: &[Judged] = &[j(true, NOT)];
         let err: &[Judged] = &[j(true, UNK)];
-        // G-T-05, G-V-05, G-Q-02: fail, error, fail doesn't confirm (the one error is a blip on a met goal)
-        assert_eq!(walk(2, &[ok, bad, err, bad]), ["met", "met", "met", "met"]);
-        assert_eq!(walk(2, &[ok, bad, err, err, bad]), ["met", "met", "met", "unknown", "unknown"]);
+        // G-T-05, G-V-05, G-Q-02: fail, error, fail doesn't confirm (the error after a failure shows unknown)
+        assert_eq!(walk(2, &[ok, bad, err, bad]), ["met", "met", "unknown", "unknown"]);
+        assert_eq!(walk(2, &[ok, bad, err, err, bad]), ["met", "met", "unknown", "unknown", "unknown"]);
         // api-M7: one error on a met goal changes nothing; two in a row are unknown; a pass between resets
         assert_eq!(walk(2, &[ok, err]), ["met", "met"]);
         assert_eq!(walk(2, &[ok, err, err]), ["met", "met", "unknown"]);
@@ -524,6 +532,24 @@ mod tests {
         assert_eq!(walk(2, &[ok, bad, bad, err, bad]), ["met", "met", "not_met", "not_met", "not_met"]);
         // Recovery closes it
         assert_eq!(walk(2, &[bad, bad, ok]), ["checking", "not_met", "met"]);
+    }
+
+    #[test]
+    fn alternating_fail_and_error_never_leaves_a_goal_met() {
+        let ok: &[Judged] = &[j(true, MET)];
+        let bad: &[Judged] = &[j(true, NOT)];
+        let err: &[Judged] = &[j(true, UNK)];
+        // A blip is held only when the run before passed. After a failure the error shows unknown,
+        // and the fail/error pattern can't keep the goal met for ever.
+        for confirm in [2, 3] {
+            let seq: Vec<&[Judged]> = std::iter::once(ok).chain((0..4).flat_map(|_| [bad, err])).collect();
+            let seen = walk(confirm, &seq);
+            assert_eq!(seen[0], "met");
+            assert_eq!(seen[1], "met", "one failure is not news");
+            assert!(seen[2..].iter().all(|s| s == "unknown"), "confirm {confirm}: fail, error, fail, error... gave {seen:?}");
+        }
+        // A pass between the failures does hold a blip: fail, pass, error, fail is still met
+        assert_eq!(walk(2, &[ok, bad, ok, err, bad]), ["met", "met", "met", "met", "met"]);
     }
 
     #[test]
