@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   a reason. They come from kwant's own records, so a bot can't write its own. Chats get a shorter list. 1 task in 5
   goes without, so you can see whether it helps. Turn it off with the `lessons` setting; see what a bot carries at
   `GET /api/kwants/:id/lessons`.
+- **Goals that stopped holding are lessons too.** When a "Keep this true" goal made from a bot's finished task is
+  confirmed not met, that bot's briefs and chats say so until the goal holds again.
 - **Bots check their work before hand-in.** A task with an approved check asks its bot to run the checks itself and
   fix what fails before moving it to review.
 

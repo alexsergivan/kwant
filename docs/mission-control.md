@@ -1291,13 +1291,21 @@ A bot's earlier tasks teach its next ones. Lessons are derived on read from kwan
 | `denied` | `denied` | `denied:tool` |
 | `error` | `unknown` | `unknown:turn` |
 | `review` | the person's send-back with a reason | `rejected:<hash of the reason's content words>`; alike reasons (`router::team::alike`) share the first one's key |
-| `goal` | a goal that stopped holding after the bot's task (waits on `goal_lapses_of_bot`, PR B) | `goal:<goal id>` |
+| `goal` | a "Keep this true" goal made from a task the bot finished verified, confirmed not met after that (`goal_lapses_of_bot`) and still `not_met` now | `goal:<goal id>` (one per goal, its newest lapse) |
 
 `quota`, `auth`, `budget`, `transient`, `bad_spec` and `needs_input` are not the bot's doing and never become a lesson. The window is the last 30 days.
 
 ### Lines
 
 Each line is a fixed template over enumerated fields: when, the task, what happened, how it settled, and `(xN in 30 days)` when it repeated. A task's title is shown only when the person wrote it and it is one line of at most 80 characters; otherwise the task is named by id. Person text (titles, reasons) and check output pass `safe_text`: one line, cut at 120 characters, and dropped when it has a URL, a backtick, a path or one of approve, allow, permission, payment, token, password; quotes and brackets are softened. A check's command, url or path is shown only when the check was approved by the person or a mission, and its output only while the check still fails. Lines are grouped by key, then ordered most repeated first, then newest.
+
+A goal line names the goal only by its title, through the same title rule, and a date; never the goal's check, URL or output. A goal that holds again, goes unknown, or is paused, a draft or deleted has no line. Goal lines share the caps and the ordering with the other sources, and the setting and the holdout cover them too:
+
+```
+- A goal you worked on, "Publish the price list", is not met since 2026-11-03: check it before saying a task is done.
+```
+
+When the title can't be shown, the line says `made from task "<title>"`, or the task's id.
 
 ```
 [Lessons from earlier tasks]
@@ -1339,4 +1347,4 @@ GET /api/kwants/:id/lessons    {enabled, window_days, lines: [{key, source, text
 
 ### Known limits
 
-Routine and hand-off turns aren't tied to a task, so they get the chat-sized block with no holdout and no attribution. `goal` lines need `goal_lapses_of_bot` (PR B) and don't appear until it lands.
+Routine and hand-off turns aren't tied to a task, so they get the chat-sized block with no holdout and no attribution. A goal line reflects the goal's status at the last check, so it can lag a fix until the goal's next run.

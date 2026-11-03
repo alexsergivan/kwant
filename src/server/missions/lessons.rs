@@ -96,8 +96,9 @@ pub enum What {
     Error,
     /// The person sent it back from review (to ready, or `blocked`), with their reason.
     Review { blocked: bool, reason: String },
-    /// A goal made from the task stopped holding `days_after` days after the task finished.
-    Goal { goal_id: String, goal: Option<String>, check_kind: String, days_after: i64 },
+    /// A "Keep this true" goal made from the task was confirmed not met after the task finished,
+    /// and still is. `goal` is the goal's title; [`line`] shows it only through [`safe_title`].
+    Goal { goal_id: String, goal: Option<String> },
 }
 
 /// How it settled.
@@ -271,14 +272,13 @@ pub fn line(o: &Occurrence, count: i64, now: DateTime<Utc>) -> String {
     let times = if count > 1 { format!(" (x{count} in {WINDOW_DAYS} days)") } else { String::new() };
     let task = task_name(&o.task_id, o.title.as_deref());
     let what = match &o.what {
-        What::Goal { goal, check_kind, days_after, .. } => {
+        What::Goal { goal, .. } => {
+            // Only the title (through safe_title) and a date: never the check's spec, URL or output
             let g = match goal.as_deref().and_then(safe_title) {
-                Some(g) => format!("its goal \"{g}\""),
-                None => "its goal".into(),
+                Some(g) => format!("A goal you worked on, \"{g}\","),
+                None => format!("A goal you worked on, made from {task},"),
             };
-            let kind = if CHECK_KINDS.contains(&check_kind.as_str()) || check_kind == "url" { check_kind.as_str() } else { "goal" };
-            let days = if *days_after == 1 { "1 day".to_string() } else { format!("{days_after} days") };
-            return format!("{days} after you finished {task}, {g} stopped holding (the {kind} check failed).{times}");
+            return format!("{g} is not met since {}: check it before saying a task is done.{times}", o.at.format("%Y-%m-%d"));
         }
         What::Check { kind, spec, output, .. } => {
             let mut s = match spec {
@@ -446,7 +446,32 @@ async fn occurrences(state: &AppState, kwant_id: &str, since: DateTime<Utc>) -> 
     for c in corrections.iter().filter_map(correction) {
         out.push(c);
     }
+    out.extend(goal_lapses(state, kwant_id, since).await);
     out
+}
+
+/// The bot's goal lapses in the window (`goal_lapses_of_bot`), only for goals that are still not
+/// met: a goal that holds again, or that kwant can't check right now, is no lesson.
+async fn goal_lapses(state: &AppState, kwant_id: &str, since: DateTime<Utc>) -> Vec<Occurrence> {
+    let lapses = state.db.goal_lapses_of_bot(kwant_id, since.timestamp_millis(), READ_LIMIT).await.unwrap_or_default();
+    let mut out = Vec::with_capacity(lapses.len());
+    for l in lapses {
+        let still = matches!(state.db.get_goal(&l.goal_id).await, Ok(Some(g)) if g.status == "not_met");
+        if let (true, Some(at)) = (still, DateTime::from_timestamp_millis(l.lapsed_at)) {
+            out.push(goal_occurrence(l, at));
+        }
+    }
+    out
+}
+
+fn goal_occurrence(l: crate::db::goal_missions::GoalLapse, at: DateTime<Utc>) -> Occurrence {
+    Occurrence {
+        title: person_title(&l.task_title, &l.task_created_by),
+        task_id: l.task_id,
+        at,
+        what: What::Goal { goal_id: l.goal_id, goal: Some(l.goal_title) },
+        settled: Settled { state: "verified".into(), ..Default::default() },
+    }
 }
 
 fn correction(c: &CorrectionOfBot) -> Option<Occurrence> {
@@ -486,7 +511,10 @@ pub async fn for_turn(state: &AppState, kwant_id: &str) -> String {
         return String::new();
     }
     let since = Utc::now() - Duration::days(WINDOW_DAYS);
-    if !state.db.has_lessons_since(kwant_id, since).await.unwrap_or(false) {
+    // A cheap gate before reading: a failure or send-back, or a goal lapse (one row is enough)
+    let any = state.db.has_lessons_since(kwant_id, since).await.unwrap_or(false)
+        || !state.db.goal_lapses_of_bot(kwant_id, since.timestamp_millis(), 1).await.unwrap_or_default().is_empty();
+    if !any {
         return String::new();
     }
     block(&select(of_bot(state, kwant_id).await, TURN_LINES, TURN_BYTES))
@@ -649,10 +677,17 @@ mod tests {
         let mut o = occ("t9", 0, What::Error, "failed");
         o.settled.autofix = true;
         assert_eq!(line(&o, 1, now()), "today, task t9: the turn failed with an error before a hand-in; AutoFix retried it; it ended failed.");
-        let mut o = occ("t9", 0, What::Goal { goal_id: "g1".into(), goal: Some("Pricing page is up".into()), check_kind: "http".into(), days_after: 12 }, "verified");
+        let mut o = occ("t9", 12, What::Goal { goal_id: "g1".into(), goal: Some("Pricing page is up".into()) }, "verified");
         o.title = Some("X".into());
-        assert_eq!(line(&o, 1, now()), "12 days after you finished task \"X\", its goal \"Pricing page is up\" stopped holding (the http check failed).");
+        assert_eq!(line(&o, 1, now()), "A goal you worked on, \"Pricing page is up\", is not met since 2026-10-22: check it before saying a task is done.");
         assert_eq!(lesson_key(&o.what), "goal:g1");
+        assert_eq!(source_of(&o.what), Source::Goal);
+        // An unsafe goal title (a URL, a path, an access word) names the task instead, or its id
+        o.what = What::Goal { goal_id: "g1".into(), goal: Some("Keep https://x.dev/pricing up".into()) };
+        assert_eq!(line(&o, 1, now()), "A goal you worked on, made from task \"X\", is not met since 2026-10-22: check it before saying a task is done.");
+        o.title = None;
+        o.what = What::Goal { goal_id: "g1".into(), goal: Some("Approve the deploy".into()) };
+        assert_eq!(line(&o, 1, now()), "A goal you worked on, made from task t9, is not met since 2026-10-22: check it before saying a task is done.");
     }
 
     #[test]
@@ -751,6 +786,37 @@ mod tests {
         // Nothing to learn from: no block at all
         assert_eq!(block(&[]), "");
         assert!(block(&fit).starts_with("\n\n[Lessons from earlier tasks]\nFrom kwant's records"));
+    }
+
+    #[test]
+    fn caps_hold_with_all_three_sources() {
+        // Failures, send-backs and goal lapses rank together (repeats first, then newest) and
+        // share one budget: 8 lines and 1,500 bytes in a brief, 5 and 1,000 in a turn
+        let mut list: Vec<Occurrence> = Vec::new();
+        for i in 0..6 {
+            list.push(occ(&format!("c{i}"), i, What::Check { kind: "command".into(), ident: format!("command {{\"command\":\"make t{i}\"}}"), spec: None, output: None }, "ready"));
+            list.push(occ(&format!("r{i}"), i, What::Review { blocked: false, reason: format!("{} is wrong", ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"][i as usize]) }, "ready"));
+            let mut g = occ(&format!("g{i}"), i, What::Goal { goal_id: format!("goal{i}"), goal: Some(format!("Site {i} keeps its pricing page up to date for every region and every plan")) }, "verified");
+            g.title = Some(format!("Site {i}"));
+            list.push(g);
+        }
+        let all = group(list, now());
+        assert_eq!(all.len(), 18);
+        for (lines, bytes) in [(BRIEF_LINES, BRIEF_BYTES), (TURN_LINES, TURN_BYTES)] {
+            let fit = select(all.clone(), lines, bytes);
+            assert!(fit.len() <= lines && !fit.is_empty());
+            assert!(block(&fit).len() <= bytes, "{} > {bytes}", block(&fit).len());
+            assert!(fit.iter().take(3).all(|l| l.text.contains("today") || l.text.contains("2026-11-03")), "{fit:#?}");
+        }
+        let brief = select(all.clone(), BRIEF_LINES, BRIEF_BYTES);
+        for src in [Source::Check, Source::Review, Source::Goal] {
+            assert!(brief.iter().any(|l| l.source == src), "{src:?}");
+        }
+        // A repeated failure outranks a newer one-off goal lapse
+        let mut list = vec![occ("g0", 0, What::Goal { goal_id: "goal0".into(), goal: Some("Up".into()) }, "verified")];
+        list.extend((3..5).map(|d| occ(&format!("s{d}"), d, What::Stall { lease: true }, "verified")));
+        let out = group(list, now());
+        assert_eq!((out[0].source, out[1].source), (Source::Stall, Source::Goal));
     }
 
     #[test]

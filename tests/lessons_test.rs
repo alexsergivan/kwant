@@ -381,3 +381,101 @@ async fn a_bot_with_nothing_to_learn_gets_the_same_brief_byte_for_byte() {
     let v = person(&e, "GET", &format!("/api/kwants/{}/lessons", bob.id), None).await;
     assert_eq!(v["lines"], json!([]), "{v}");
 }
+
+/// A verified task of `bot` with a file check, its "Keep this true" goal made and met once.
+async fn kept(e: &Env, bot: &Kwant, title: &str) -> kwnt::db::goals::Goal {
+    let body = json!({"title": title, "acceptance": "the file is there", "owner_kwant_id": bot.id,
+                      "checks": [{"kind": "file_exists", "spec": {"path": "ok.txt"}}]});
+    let tid = id(&person(e, "POST", "/api/tasks", Some(body)).await);
+    let row = e.state.db.get_task(&tid).await.unwrap().unwrap();
+    let folder = kwnt::server::missions::task_folder(&e.state, &row).await.unwrap();
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("ok.txt"), "x").unwrap();
+    let token = turn(e, bot).await;
+    ok(e, &token, "task_claim", json!({"task_id": tid})).await;
+    ok(e, &token, "task_update", json!({"task_id": tid, "status": "review"})).await;
+    for _ in 0..300 {
+        let t = task(e, &tid).await;
+        if t["state"] == "verified" {
+            break;
+        }
+        if t["state"] == "review" && e.state.db.list_checks(&tid).await.unwrap().iter().all(|c| c.status == "passed") {
+            person(e, "POST", &format!("/api/tasks/{tid}/verify"), Some(json!({}))).await;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    wait_state(e, &tid, "verified").await;
+    let v = person(e, "POST", "/api/goals", Some(json!({"from_task": tid}))).await;
+    let g = e.state.db.get_goal(v["goal"]["id"].as_str().unwrap()).await.unwrap().unwrap();
+    assert_eq!(run_goal(e, &g.id).await.status, "met");
+    g
+}
+
+async fn run_goal(e: &Env, gid: &str) -> kwnt::db::goals::Goal {
+    let g = e.state.db.lease_goal(gid, chrono::Utc::now().timestamp_millis(), false).await.unwrap().expect("a lease");
+    kwnt::server::goals::runner::run_goal(&e.state, g).await.expect("a finished run")
+}
+
+/// The goal's file goes missing and the loop confirms it (two runs in a row).
+async fn lapse(e: &Env, g: &kwnt::db::goals::Goal) {
+    let _ = std::fs::remove_file(std::path::Path::new(&g.folder).join("ok.txt"));
+    run_goal(e, &g.id).await;
+    assert_eq!(run_goal(e, &g.id).await.status, "not_met");
+}
+
+async fn route_lines(e: &Env, bot: &Kwant) -> Vec<Value> {
+    person(e, "GET", &format!("/api/kwants/{}/lessons", bot.id), None).await["lines"].as_array().unwrap().clone()
+}
+
+#[tokio::test]
+async fn a_goal_that_stopped_holding_reaches_the_brief_and_the_route_until_it_holds_again() {
+    let e = setup().await;
+    let ann = cli_bot(&e, "Ann").await;
+    let cid = cli_bot(&e, "Cid").await;
+    let g = kept(&e, &ann, "Publish the price list").await;
+    let theirs = kept(&e, &cid, "Refresh the store hours").await;
+    assert!(route_lines(&e, &ann).await.is_empty(), "a goal that holds is no lesson");
+    lapse(&e, &g).await;
+    lapse(&e, &theirs).await;
+
+    // The route: one goal line, only the bot's own
+    let lines = route_lines(&e, &ann).await;
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let l = &lines[0];
+    assert_eq!((l["source"].as_str(), l["key"].as_str()), (Some("goal"), Some(format!("goal:{}", g.id).as_str())), "{l}");
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    assert_eq!(
+        l["text"].as_str().unwrap(),
+        format!("A goal you worked on, \"Publish the price list\", is not met since {today}: check it before saying a task is done.")
+    );
+    assert!(!l["text"].as_str().unwrap().contains("ok.txt"), "no check spec: {l}");
+    let mine = route_lines(&e, &cid).await;
+    assert_eq!(mine.len(), 1, "{mine:?}");
+    assert!(mine[0]["text"].as_str().unwrap().contains("Refresh the store hours"), "{mine:?}");
+
+    // Every turn and the next task's brief carry it, attributed by its key
+    let turn_block = lessons::for_turn(&e.state, &ann.id).await;
+    assert!(turn_block.contains("\"Publish the price list\", is not met since"), "{turn_block}");
+    assert!(!turn_block.contains("Refresh the store hours"), "{turn_block}");
+    let (mid, t) = mission(&e, &ann, false).await;
+    let p = run(&e, &mid, &t).await;
+    let block = block_of(&p).unwrap_or_else(|| panic!("no lessons block: {p}"));
+    println!("GOAL BLOCK >>>\n{block}\n<<< GOAL BLOCK");
+    assert!(block.contains(l["text"].as_str().unwrap()), "{block}");
+    assert!(!block.contains("Refresh the store hours"), "another bot's lapse: {block}");
+    let shown = events(&e, &t, "lessons_shown").await;
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!(shown[0]["keys"], json!([format!("goal:{}", g.id)]), "{shown:?}");
+
+    // Met again: no line anywhere
+    std::fs::write(std::path::Path::new(&g.folder).join("ok.txt"), "x").unwrap();
+    assert_eq!(run_goal(&e, &g.id).await.status, "met");
+    assert!(route_lines(&e, &ann).await.is_empty());
+    assert_eq!(lessons::for_turn(&e.state, &ann.id).await, "");
+    let (mid, t) = mission(&e, &ann, false).await;
+    assert!(block_of(&run(&e, &mid, &t).await).is_none());
+    assert!(events(&e, &t, "lessons_shown").await.is_empty());
+    // The other bot's goal still hasn't recovered
+    assert_eq!(route_lines(&e, &cid).await.len(), 1);
+}
