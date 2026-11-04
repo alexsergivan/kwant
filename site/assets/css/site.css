@@ -184,6 +184,20 @@ section { padding: 104px 0; }
 .row-copy h2 + p { font-size: 18px; }
 .frame { overflow: hidden; background: #fff; border: 1px solid var(--line-2); border-radius: 12px; box-shadow: var(--shadow); }
 .frame img, .frame video { width: 100%; height: auto; }
+/* A desktop capture starts right at the app's top edge, which looks cut off under a rounded corner.
+   A thin window bar (class="app" from build_site.py) shows where the window starts: the app's own dark,
+   three dots and a hairline. The bar is padding, so the picture keeps its own aspect ratio. */
+img.app, video.app {
+  --bar: 20px;
+  --dot: radial-gradient(circle closest-side, rgba(255, 255, 255, 0.26) 70%, transparent 80%);
+  padding-top: var(--bar);
+  background:
+    var(--dot) calc(var(--bar) * 0.45) calc(var(--bar) * 0.3) / calc(var(--bar) * 0.4) calc(var(--bar) * 0.4) no-repeat,
+    var(--dot) calc(var(--bar) * 1.05) calc(var(--bar) * 0.3) / calc(var(--bar) * 0.4) calc(var(--bar) * 0.4) no-repeat,
+    var(--dot) calc(var(--bar) * 1.65) calc(var(--bar) * 0.3) / calc(var(--bar) * 0.4) calc(var(--bar) * 0.4) no-repeat,
+    linear-gradient(rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.08)) 0 calc(var(--bar) - 1px) / 100% 1px no-repeat,
+    #17132f;
+}
 .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 32px; }
 .tiles.three { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 72px; }
 .row + .tiles { margin-top: 72px; }
@@ -196,6 +210,7 @@ section { padding: 104px 0; }
 .gcard { padding: 10px 10px 20px; background: #fff; border: 1px solid var(--line); border-radius: 16px; }
 .gcard .frame { border-radius: 9px; box-shadow: none; border-color: var(--line); }
 .gcard .frame img { aspect-ratio: 16 / 10; object-fit: cover; object-position: top left; }
+.gcard img.app, .card .shot img.app, .tiles.three img.app { --bar: 14px; }
 .gcard h3 { margin: 16px 8px 0; font-size: 17px; }
 .gcard p { margin: 4px 8px 0; color: var(--muted); font-size: 15px; }
 .phone-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 56px; align-items: center; }

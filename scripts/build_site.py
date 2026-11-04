@@ -11,8 +11,9 @@ active (header link to mark current on non-docs pages), faq (yes: FAQPage JSON-L
 social card (see scripts/build_og.py).
 Shortcodes in the HTML:
   {{root}}                                relative path back to site/
-  {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*)
-  {{video:NAME|LABEL}}                    a muted looping demo clip with its poster
+  {{shot:NAME|ALT|SIZES}}                 a zoomable responsive screenshot (desktop-* or phone-*); desktop ones not in
+                                          CLOSEUPS get class="app", the window bar in site.css
+  {{video:NAME|LABEL}}                    a muted looping demo clip with its poster (class="app", window bar too)
   {{install:ID}}                          the install command box with macOS/Linux and Docker tabs
   {{CONTACT_EMAIL}}                       the contact address, from OPERATOR below (marked placeholder while empty)
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
@@ -181,15 +182,20 @@ def parse(path):
     return meta, body
 
 
+# Desktop shots that are close-ups, not the whole app window, so they get no window bar (see img.app in site.css).
+CLOSEUPS = {"v69-signin-card", "v69-working-card"}
+
+
 def shot(root, name, alt, sizes):
     phone = name.startswith("phone-")
     small, big, w, h = (390, 780, 390, 844) if phone else (1440, 2880, 1440, 900)
     base = f"{root}assets/media/{name}"
     sizes = sizes or "(max-width: 1024px) 100vw, 680px"
     a = html.escape(alt, quote=True)
+    app = "" if phone or name in CLOSEUPS else ' class="app"'
     return (
         f'<a class="zoom" href="{base}-{big}.webp" data-caption="{a}">'
-        f'<img src="{base}-{small}.webp" srcset="{base}-{small}.webp {small}w, {base}-{big}.webp {big}w" '
+        f'<img{app} src="{base}-{small}.webp" srcset="{base}-{small}.webp {small}w, {base}-{big}.webp {big}w" '
         f'sizes="{sizes}" width="{w}" height="{h}" loading="lazy" decoding="async" alt="{a}"></a>'
     )
 
@@ -198,7 +204,7 @@ def video(root, name, label, eager=False):
     base = f"{root}assets/media/{name}"
     lbl = html.escape(label, quote=True)
     return (
-        f'<video data-autoplay controls muted playsinline loop preload="{"metadata" if eager else "none"}" '
+        f'<video class="app" data-autoplay controls muted playsinline loop preload="{"metadata" if eager else "none"}" '
         f'poster="{base}-poster.webp" width="1280" height="800" aria-label="{lbl}">'
         f'<source src="{base}.mp4" type="video/mp4"></video>'
     )
