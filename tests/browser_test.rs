@@ -914,3 +914,119 @@ async fn a_bots_sized_screenshot_puts_the_viewport_back_as_it_was() {
     drop(control);
     assert!(log.lock().await.is_empty());
 }
+
+/// A fake Chrome that behaves like the real one for the page size: an `Emulation` override lives
+/// on the DevTools connection that set it, and the page is 1280×713 (a 1280×800 headless window
+/// minus its top bar) without one. The first page read after each navigate gets "Execution context
+/// was destroyed", as a cross-site navigate does while the old document goes away. With
+/// `close_after_navigate`, the fake also drops the connection once a navigate is answered.
+async fn resizing_browser(close_after_navigate: bool) -> (BrowserController, Arc<AtomicUsize>, Arc<tokio::sync::Mutex<Vec<(usize, String)>>>) {
+    let http_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_port = http_listener.local_addr().unwrap().port();
+    let ws_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_port = ws_listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = http_listener.accept().await {
+            let mut buf = vec![0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let body = json!({"webSocketDebuggerUrl": format!("ws://127.0.0.1:{ws_port}/devtools/page/test")}).to_string();
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = stream.write_all(reply.as_bytes()).await;
+        }
+    });
+    let connections = Arc::new(AtomicUsize::new(0));
+    let log = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let (count, rec) = (connections.clone(), log.clone());
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = ws_listener.accept().await {
+            let conn = count.fetch_add(1, Ordering::SeqCst) + 1;
+            let rec = rec.clone();
+            tokio::spawn(async move {
+                let Ok(mut ws) = accept_async(stream).await else { return };
+                let mut size: Option<(u64, u64)> = None;
+                let mut navigating = false;
+                while let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(txt))) = ws.next().await {
+                    let msg: Value = serde_json::from_str(&txt).unwrap();
+                    let method = msg["method"].as_str().unwrap().to_string();
+                    rec.lock().await.push((conn, method.clone()));
+                    let p = &msg["params"];
+                    let reply = match method.as_str() {
+                        "Emulation.setDeviceMetricsOverride" => {
+                            size = Some((p["width"].as_u64().unwrap(), p["height"].as_u64().unwrap()));
+                            json!({"id": msg["id"], "result": {}})
+                        }
+                        "Page.navigate" => {
+                            navigating = true;
+                            json!({"id": msg["id"], "result": {"frameId": "F1"}})
+                        }
+                        "Runtime.evaluate" if navigating => {
+                            navigating = false;
+                            json!({"id": msg["id"], "error": {"code": -32000, "message": "Execution context was destroyed."}})
+                        }
+                        "Runtime.evaluate" if p["expression"] == "innerWidth + 'x' + innerHeight" => {
+                            let (w, h) = size.unwrap_or((1280, 713));
+                            json!({"id": msg["id"], "result": {"result": {"type": "string", "value": format!("{w}x{h}")}}})
+                        }
+                        "Page.captureScreenshot" => json!({"id": msg["id"], "result": {"data": "/9j/4AAQ"}}),
+                        _ => json!({"id": msg["id"], "result": {}}),
+                    };
+                    let _ = ws.send(tokio_tungstenite::tungstenite::Message::Text(reply.to_string())).await;
+                    if close_after_navigate && method == "Page.navigate" {
+                        let _ = ws.close(None).await;
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    (BrowserController::new(http_port), connections, log)
+}
+
+async fn page_size(ctrl: &BrowserController) -> String {
+    let r = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": "innerWidth + 'x' + innerHeight", "returnByValue": true})).await.unwrap();
+    r["result"]["value"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a_cross_site_navigate_keeps_the_fixed_viewport() {
+    let (ctrl, connections, _) = resizing_browser(false).await;
+    ctrl.set_viewport(1280, 800).await.unwrap();
+    assert_eq!(page_size(&ctrl).await, "1280x800");
+    for url in ["https://example.com/", "https://www.wikipedia.org/", "https://www.iana.org/"] {
+        let _ = ctrl.navigate(url).await;
+        assert_eq!(page_size(&ctrl).await, "1280x800", "after navigating to {url}");
+    }
+    // Chrome's error reply leaves the connection healthy, so it is kept, and with it the override
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+    // An error reply still reaches the caller
+    assert!(ctrl.send_cdp_command("Page.navigate", json!({"url": "https://example.org/"})).await.is_ok());
+    assert!(matches!(ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": "1"})).await, Err(BrowserError::Protocol(m)) if m.contains("context was destroyed")));
+}
+
+#[tokio::test]
+async fn a_new_devtools_connection_gets_the_fixed_viewport_back_first() {
+    let (ctrl, connections, log) = resizing_browser(true).await;
+    ctrl.set_viewport(1280, 800).await.unwrap();
+    for url in ["https://example.com/", "https://www.wikipedia.org/", "https://www.iana.org/"] {
+        let _ = ctrl.navigate(url).await;
+        assert_eq!(page_size(&ctrl).await, "1280x800", "after navigating to {url}");
+    }
+    let n = connections.load(Ordering::SeqCst);
+    assert!(n >= 4, "the fake dropped the connection after each navigate ({n} connections)");
+    // On every connection after the first, the override is the first thing sent
+    let log = log.lock().await;
+    for conn in 2..=n {
+        let first = log.iter().find(|(c, _)| *c == conn).map(|(_, m)| m.as_str());
+        assert_eq!(first, Some("Emulation.setDeviceMetricsOverride"), "connection {conn}");
+    }
+}
+
+#[tokio::test]
+async fn a_browser_without_a_fixed_viewport_gets_no_override_on_reconnect() {
+    // A real window (local mode) keeps following its own size
+    let (ctrl, connections, log) = resizing_browser(true).await;
+    let _ = ctrl.navigate("https://example.com/").await;
+    assert_eq!(page_size(&ctrl).await, "1280x713");
+    assert!(connections.load(Ordering::SeqCst) >= 2);
+    assert!(!log.lock().await.iter().any(|(_, m)| m.starts_with("Emulation.")));
+}
