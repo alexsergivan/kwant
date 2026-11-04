@@ -94,7 +94,15 @@ touched.
 
 So that a secret split across two `ThinkingDelta` chunks is matched whole, each chunk goes out
 without its last two words (at most 256 characters); they are joined to the next chunk and
-redacted with it. Held text is per turn (and per delegated turn), and it is all sent, redacted,
+redacted with it. A credential whose value has not fully arrived is held with it: `password:` or
+`password =` until the next word, `Authorization: Basic` / `Bearer` until the credential after
+it, a bare `Bearer` before a word that is not all lowercase, and a quoted value
+(`password = "two words"`) until its closing quote, all within the same 256-character cap. A
+credential word in prose ("the password field is empty", "Bearer tokens expire") is held no
+longer than any other word. By design, a bare `Bearer` before an all-lowercase word
+(`Bearer abcdefghij`) is not held, so that word shows live. The saved text treats it as prose
+too and leaves it unmasked, so the two match; `Authorization: Bearer` masks any word. This
+keeps prose such as "Bearer tokens expire" or "bearer of bad news" from stalling the stream. Held text is per turn (and per delegated turn), and it is all sent, redacted,
 before the thinking step ends: on the next reply text or tool call, an approval or human step, and
 when the turn finishes, fails or is cancelled. Chunks therefore split at spaces, a word or two
 behind the model. The thinking text saved on the reply is redacted again as a whole when the step
