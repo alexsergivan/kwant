@@ -305,6 +305,8 @@ html:has(.jump-bar) { scroll-padding-top: 76px; }
 .flist p { margin-top: 6px; color: var(--muted); font-size: 15.5px; }
 .flist .span2 { grid-column: span 2; }
 #tab-count .frame, #linux-tray .frame { margin: 12px 0 2px; }
+#tab-count .frame { width: fit-content; max-width: 100%; }
+#tab-count .frame img { width: 320px; max-width: 100%; }
 #linux-tray .frame { width: fit-content; }
 #linux-tray .frame img { width: 116px; }
 :not(pre) > code { font-size: 0.86em; padding: 1px 5px; background: var(--v9); border: 1px solid var(--line); border-radius: 5px; color: var(--v2); overflow-wrap: anywhere; }
