@@ -14,6 +14,8 @@ struct Mock {
     contexts: Arc<AtomicUsize>,
     /// What the page answers for `location.href`; empty means https://example.com.
     page_url: Arc<Mutex<String>>,
+    /// Reading the page's address fails, the way Chromium answers between two documents.
+    between_documents: Arc<std::sync::atomic::AtomicBool>,
     /// Every open DevTools socket, to push page events the way Chromium does.
     sockets: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<String>>>>,
 }
@@ -36,6 +38,12 @@ async fn cdp(State(mock): State<Mock>, Path(_id): Path<String>, ws: WebSocketUpg
             let cmd: Value = serde_json::from_str(&text).unwrap();
             mock.commands.lock().await.push(cmd.clone());
             let method = cmd["method"].as_str().unwrap();
+            if method == "Runtime.evaluate" && mock.between_documents.load(Ordering::SeqCst)
+                && cmd["params"]["expression"].as_str().unwrap_or_default().contains("location.href") {
+                let error = json!({"id":cmd["id"],"error":{"code":-32000,"message":"Cannot find context with specified id"}});
+                if socket.send(Message::Text(error.to_string())).await.is_err() { break; }
+                continue;
+            }
             let result = match method {
                 "Target.createBrowserContext" => json!({"browserContextId":format!("context-{}",mock.contexts.fetch_add(1,Ordering::SeqCst))}),
                 "Target.createTarget" => {
@@ -455,6 +463,20 @@ async fn the_address_follows_navigation_at_once_and_the_cursor_follows_where_the
     *mock.page_url.lock().await = "https://example.org/next#b".into();
     push_event(&mock, "Page.navigatedWithinDocument", json!({"frameId":"main","url":"https://example.org/next#b"})).await;
     assert!(location_for(&mut ws, "https://example.org/next#b", Duration::from_millis(1500)).await.is_some());
+
+    // the title: a new document clears the old one at once, even while the page can't be read
+    // yet, and a failed read never puts the previous page's address or title back
+    mock.between_documents.store(true, Ordering::SeqCst);
+    *mock.page_url.lock().await = "https://example.net/".into();
+    push_event(&mock, "Page.frameNavigated", json!({"frame":{"id":"main","url":"https://example.net/"},"type":"Navigation"})).await;
+    let cleared = location_for(&mut ws, "https://example.net/", Duration::from_millis(1500)).await.expect("the new address at once");
+    assert_eq!(cleared["title"], "", "the previous page's title must not linger");
+    assert!(location_for(&mut ws, "https://example.org/next#b", Duration::from_millis(2500)).await.is_none(), "a failed read resent the previous page");
+    // once the document is parsed its title arrives
+    mock.between_documents.store(false, Ordering::SeqCst);
+    push_event(&mock, "Page.domContentEventFired", json!({"timestamp":1.0})).await;
+    let titled = location_for(&mut ws, "https://example.net/", Duration::from_millis(1500)).await.expect("the new title");
+    assert_eq!(titled["title"], "Example");
 
     // D3: a move onto a link right after one that was looked up still gets its cursor
     ws.send(WsMessage::Text(json!({"action":"take_control"}).to_string())).await.unwrap();

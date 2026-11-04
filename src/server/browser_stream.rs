@@ -350,23 +350,33 @@ fn moves_location(method: &str, params: &Value) -> bool {
     }
 }
 
+/// The address a top-level page navigation lands on. A new document has no title yet, so the
+/// person sees the new address with an empty title at once instead of the last page's title until
+/// the new one is parsed.
+fn navigated_to(method: &str, params: &Value) -> Option<String> {
+    if method != "Page.frameNavigated" || !params["frame"]["parentId"].is_null() { return None; }
+    let url = params["frame"]["url"].as_str()?;
+    Some(format!("{url}{}", params["frame"]["urlFragment"].as_str().unwrap_or_default()))
+}
+
 /// The error for input from a live view that has not taken control.
 fn not_in_control(someone_has_control: bool) -> BrowserError {
     if someone_has_control { BrowserError::HumanControl } else { BrowserError::NotInControl }
 }
 
 /// Reads the page's address and title on the stream's socket, off the caller, and sends them
-/// to the person. Requests while a read is running are folded into one more read.
+/// to the person. Requests while a read is running are folded into one more read. A read that
+/// fails (the page is between documents) sends nothing: the next page event or tick reads again,
+/// and resending what kwant last knew would put the previous page's title back on screen.
 fn refresh_location(cdp: &Cdp, ctrl: &BrowserController, shared: &Arc<Shared>, client: &mpsc::UnboundedSender<Value>) {
     if !shared.location.offer(()) { return; }
     let (cdp, ctrl, shared, client) = (cdp.clone(), ctrl.clone(), shared.clone(), client.clone());
     tokio::spawn(async move {
         while shared.location.next().is_some() {
             // blocks while a dialog is open, so never on the stream loop
-            if let Ok(result) = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await {
-                if let Some(url) = result["result"]["value"]["url"].as_str() { *ctrl.current_url.lock().await = Some(url.to_string()); }
-                if let Some(title) = result["result"]["value"]["title"].as_str() { *ctrl.current_title.lock().await = Some(title.to_string()); }
-            }
+            let Ok(result) = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await else { continue };
+            if let Some(url) = result["result"]["value"]["url"].as_str() { *ctrl.current_url.lock().await = Some(url.to_string()); }
+            if let Some(title) = result["result"]["value"]["title"].as_str() { *ctrl.current_title.lock().await = Some(title.to_string()); }
             let _ = client.send(json!({"type":"location","url":ctrl.current_url.lock().await.clone(),"title":ctrl.current_title.lock().await.clone()}));
         }
     });
@@ -839,6 +849,10 @@ async fn stream(
                     let method = event["method"].as_str().unwrap_or_default();
                     // the person's own clicks, back/forward/reload and a bot's navigate all land
                     // here: the address follows at once instead of on the next tick
+                    // a new document: the old title goes now, the new one follows on DOMContentLoaded
+                    if let Some(url) = navigated_to(method, params) {
+                        let _ = client_tx.send(json!({"type":"location","url":url,"title":""}));
+                    }
                     if moves_location(method, params) { refresh_location(cdp, ctrl, shared, client_tx); }
                     match method {
                         "Page.screencastFrame" => {
@@ -1094,6 +1108,15 @@ mod tests {
         for other in ["Page.screencastFrame", "Page.javascriptDialogOpening", "Page.loadEventFired", ""] {
             assert!(!moves_location(other, &json!({})), "{other}");
         }
+    }
+
+    #[test]
+    fn a_new_top_level_document_clears_the_title_and_keeps_the_fragment() {
+        assert_eq!(navigated_to("Page.frameNavigated", &json!({"frame":{"id":"A","url":"https://b.test/"}})).as_deref(), Some("https://b.test/"));
+        assert_eq!(navigated_to("Page.frameNavigated", &json!({"frame":{"id":"A","url":"https://b.test/","urlFragment":"#top"}})).as_deref(), Some("https://b.test/#top"));
+        assert_eq!(navigated_to("Page.frameNavigated", &json!({"frame":{"id":"B","parentId":"A","url":"https://ads.test/"}})), None, "an iframe keeps the page's title");
+        assert_eq!(navigated_to("Page.navigatedWithinDocument", &json!({"frameId":"A","url":"https://b.test/#x"})), None, "same document, same title");
+        assert_eq!(navigated_to("Page.domContentEventFired", &json!({"timestamp":1.0})), None);
     }
 
     #[test]
