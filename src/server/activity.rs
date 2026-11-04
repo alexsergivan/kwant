@@ -319,4 +319,91 @@ mod tests {
         assert!(!saved.to_string().contains("hunter2"));
         drop(turn);
     }
+
+    /// Every thinking chunk the turn streamed live (its own, not delegated), in order.
+    fn live_thinking(events: &[RuntimeEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                RuntimeEvent::Scoped { event, .. } => match event.as_ref() {
+                    RuntimeEvent::ThinkingDelta(t) => Some(t.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Streams `chunks` as one thinking step that a tool call ends; returns the live thinking
+    /// chunks and, after each input chunk, how much of the text had streamed.
+    fn stream_thinking(chunks: &[&str]) -> (Vec<String>, Vec<String>) {
+        let (tx, mut rx) = broadcast::channel(8192);
+        let tag = TurnTag { turn_id: "turn-n3".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        let mut events = Vec::new();
+        let mut so_far = Vec::new();
+        for c in chunks {
+            turn.relay(&RuntimeEvent::ThinkingDelta((*c).into()));
+            events.extend(std::iter::from_fn(|| rx.try_recv().ok()));
+            so_far.push(live_thinking(&events).concat());
+        }
+        turn.relay(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Bash".into(), args: json!({"command": "ls"}) });
+        let _ = turn.finish();
+        events.extend(std::iter::from_fn(|| rx.try_recv().ok()));
+        drop(turn);
+        (live_thinking(&events), so_far)
+    }
+
+    /// Rigel's N3 on #288: `key: value` credentials with a space between the key and the value
+    /// never stream raw, wherever the thinking text is cut: the key is held until its value is
+    /// whole (a quoted one until its closing quote), then both go out masked.
+    #[test]
+    fn spaced_credentials_never_stream_raw() {
+        let lines = [
+            ("password: FAKEPW1secretvalue", ["FAKEPW1", "secretvalue"]),
+            ("Authorization: Basic dXNlcjpwYXNzFAKEBASIC1", ["dXNl", "FAKEBASIC1"]),
+            ("Authorization: Bearer FAKEBEARER1234567890abcdef", ["FAKEBEARER", "567890abcdef"]),
+            ("password = \"FAKEPW2 with spaces inside\"", ["FAKEPW2", "spaces inside"]),
+        ];
+        for (line, raws) in lines {
+            let text = format!("First I check the setup. Then I send {line} to the server and wait for it.");
+            let masked = crate::drivers::activity::redact(&text, &[]);
+            assert!(raws.iter().all(|r| !masked.contains(r)), "not masked as a whole: {masked}");
+            // cuts at every space and right after it, so at every word boundary and after
+            // `:`, `=`, `Bearer` and `Basic`
+            let mut cuts: Vec<usize> = text.match_indices(' ').flat_map(|(i, _)| [i, i + 1]).collect();
+            cuts.dedup();
+            let mut ways: Vec<Vec<String>> = cuts.iter().map(|&k| vec![text[..k].to_string(), text[k..].to_string()]).collect();
+            // and all at once: one word, one character and three characters per chunk
+            ways.push(text.split_inclusive(' ').map(String::from).collect());
+            ways.push(text.chars().map(String::from).collect());
+            ways.push(text.chars().collect::<Vec<_>>().chunks(3).map(|c| c.iter().collect()).collect());
+            for chunks in ways {
+                let chunks: Vec<&str> = chunks.iter().map(String::as_str).collect();
+                let (live, _) = stream_thinking(&chunks);
+                for delta in &live {
+                    for raw in raws {
+                        assert!(!delta.contains(raw), "{raw} streamed live in {delta:?}, chunks {chunks:?}");
+                    }
+                }
+                // nothing lost, nothing twice: the live text is the masked text
+                assert_eq!(live.concat(), masked, "chunks {chunks:?}");
+            }
+        }
+    }
+
+    /// Prose that only names a credential ("the password field", "Bearer tokens") is held back
+    /// no more than the usual last two words.
+    #[test]
+    fn credential_words_in_prose_are_not_held_longer() {
+        let text = "the password field is empty, Bearer tokens expire and my token was old so the secret key rotates now ";
+        let words: Vec<&str> = text.split_inclusive(' ').collect();
+        let (live, so_far) = stream_thinking(&words);
+        for (i, streamed) in so_far.iter().enumerate() {
+            let expected: String = words[..(i + 1).saturating_sub(2)].concat();
+            assert_eq!(streamed, &expected, "after word {i} ({:?})", words[i]);
+        }
+        assert_eq!(live.concat(), text);
+    }
+
 }
