@@ -8,9 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-### Added
+## [Mac 0.6.9] - 2026-11-04
 
+### Added
+- **You can use a bot's browser when you take it over.** Click the bot's page, or press **Take over**, and it opens on
+  a large stage at its real size, with back, forward, reload, the address and **Hand back**. Clicks, double-clicks,
+  right-clicks, hover, scrolling and the full keyboard work, with copy, paste and input methods; on a Mac, Cmd
+  shortcuts reach the page as Ctrl. Drop-down lists open as kwant's own menu and page dialogs as a card you answer.
+  A sign-in card's **Open browser** goes straight into control. On a phone the page fills the screen. (#270, #274)
+- **Bots open a website's sign-in page instead of refusing.** Asked to log in to an account of yours, a bot opens the
+  site's sign-in page, carries on if you're already signed in, and otherwise posts a card so you sign in yourself.
+  Bots never ask for a password or one-time code in chat. One card per site: a second turn waits on the open card,
+  and after Decline the bot says what it couldn't do instead of asking again. (#269, #273)
+- **A "needs you" nudge.** When a question or approval waits in a chat you aren't looking at, a pill drops from the
+  top of the web app (Esc dismisses it, a click opens the chat), the tab shows the count and a "!" icon, and an
+  installed app gets a badge. The Mac menu-bar icon plays a short animation once per new item and shows a small note
+  under it; the Linux app changes its tray icon and shows a notification. **Show nudges** in the tray menu turns the
+  app's nudges off. (#267, #268)
 - **The Linux AppImage updates with AppImage tools and lists in software centers.** The AppImage carries update information for AppImageUpdate, and the release ships `kwant_x86_64.AppImage.zsync` next to it. The AppImage and the .deb carry AppStream metainfo (`si.kwant.kwant`). These were the two warnings from the AppImage catalog's test. The in-app updater is unchanged.
+
+### Changed
+- **A refreshed look.** A new app shell, sidebar and Bot home, avatar moods and stickers, and a new conversation
+  stream: each reply's header shows the bot's avatar, who picked it and the engine, a live strip shows a bot at work,
+  reply actions share one style, and decision cards say "Decided: …" with the reason. (#264, #266)
+
+### Fixed
+- **The bot's page stays 1280×800 after a navigate.** An error reply from Chrome no longer drops the page's
+  connection, which shrank the page to 1280×713 until kwant restarted. (#272)
 
 ## [Mac 0.6.8] - 2026-11-03
 

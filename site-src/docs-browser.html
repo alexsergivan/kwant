@@ -8,21 +8,36 @@ card_art: avatar:user
 ---
 <p class="kicker">Docs</p>
 <h1>AI agent browser: your Chrome or Docker</h1>
-<p class="intro">Bots can browse the web, read pages and look at screenshots of them, and you watch it live in the app's browser panel. Take control at any time to sign in or solve a CAPTCHA yourself.</p>
+<p class="intro">Bots can browse the web, read pages and look at screenshots of them, and you watch it live in the app's browser panel. Take over at any time to sign in, solve a CAPTCHA or click around yourself.</p>
 
 <h2 id="how">How it works</h2>
 <p>kwant runs one long-lived Chromium per installation, with a separate browser context for each bot, channel or team. The app connects to kwant over a same-origin WebSocket. kwant relays the screen frames and your input, so your browser never talks to Chromium directly.</p>
 <ul>
-  <li><strong>Take Control</strong> gives you an exclusive hold. Bot navigation waits until you hand it back, close the panel or disconnect.</li>
+  <li><strong>Take over</strong> gives you an exclusive hold. Bot navigation waits until you hand it back, close the panel or disconnect.</li>
   <li>Closing the panel stops its stream. Slow viewers don't build up a backlog of frames.</li>
   <li>Restarting kwant reconnects to the existing sessions while Chromium keeps running.</li>
+</ul>
+
+<h2 id="take-over">Take over the page</h2>
+<p>Click the bot's page in the browser panel, or press <strong>Take over</strong>, and the page opens on a large stage at its real size, with back, forward, reload, the address and <strong>Hand back</strong>.</p>
+<ul>
+  <li><strong>Everything works:</strong> clicks, double-clicks, right-clicks, hover, scrolling and the full keyboard, with copy, paste and input methods. On a Mac, Cmd shortcuts reach the page as Ctrl. F6 moves between the page and the top bar.</li>
+  <li><strong>Menus and dialogs:</strong> a drop-down list on the page opens as kwant's own menu (a sheet on a phone), and a page's alert, confirm or prompt shows as a card you answer in kwant.</li>
+  <li><strong>On a phone</strong> the page fills the screen, with Hand back, and Done while a sign-in step is open.</li>
+</ul>
+
+<h2 id="sign-in">Bots ask you to sign in</h2>
+<p>Ask a bot to log in to one of your accounts and it opens the site's sign-in page in its browser. If you're already signed in, it carries on. Otherwise it posts a sign-in card: <strong>Open browser</strong> takes you straight to the page with control, you sign in yourself, and <strong>Done</strong> lets the bot look again. Bots never ask for a password or one-time code in chat.</p>
+<ul>
+  <li><strong>One card per site:</strong> while a sign-in for a site is open, another turn of the same bot in that chat waits on the same card instead of posting a second one.</li>
+  <li><strong>Decline stays declined:</strong> after you decline, the bot says what it couldn't do and doesn't ask again for that request.</li>
 </ul>
 
 <h2 id="screenshots">Bots can see the page</h2>
 <p>Besides reading a page's text, a bot can take a screenshot with <code>browser_screenshot</code> and look at the picture, to check layout, colours, spacing and images that text can't show.</p>
 <ul>
   <li><strong>A set width:</strong> the bot can take the shot at a width from 320 to 1280 pixels, such as 390 for a phone or 1280 for a desktop. The browser goes back to its own size afterwards, and the picture you see in the panel isn't changed.</li>
-  <li><strong>Waits for you:</strong> like the other browser tools, it won't take a shot while you're signing in, solving a CAPTCHA or holding the browser with Take Control.</li>
+  <li><strong>Waits for you:</strong> like the other browser tools, it won't take a shot while you're signing in, solving a CAPTCHA or holding the browser with Take over.</li>
   <li><strong>Which bots:</strong> Claude and Codex bots get the picture. Bots on other engines get a short text note in its place for now.</li>
 </ul>
 
@@ -50,7 +65,7 @@ card_art: avatar:user
   <li><strong>Blocked sites:</strong> never opened, even if they're also allowed.</li>
   <li><strong>Block local and private network addresses:</strong> refuses localhost, 192.168.x.x, 10.x.x.x and names that point to them, such as your router.</li>
 </ul>
-<p>Each list holds up to 200 entries. With both lists empty and the switch off, which is the default, nothing is checked. The rules hold in Local and VM mode for every page a bot's actions load: a page it opens, a link it clicks, a redirect, a form it submits and a new tab its page opens. A refused page isn't opened, and the bot is told which rule stopped it, for example "Not opened: tiktok.com is on this bot's blocked sites". Your own browsing, with Take Control, isn't limited.</p>
+<p>Each list holds up to 200 entries. With both lists empty and the switch off, which is the default, nothing is checked. The rules hold in Local and VM mode for every page a bot's actions load: a page it opens, a link it clicks, a redirect, a form it submits and a new tab its page opens. A refused page isn't opened, and the bot is told which rule stopped it, for example "Not opened: tiktok.com is on this bot's blocked sites". Your own browsing, after Take over, isn't limited.</p>
 <ul>
   <li><strong>Only you set them:</strong> kwant takes a change to Browser sites from you, in the app or with your API token. A change sent with a bot's key is refused, for its own sites and for any other bot's. A bot that can run commands on the computer kwant runs on can still reach kwant directly, as it can for any setting only you may change. This lock covers Browser sites, not Good for and Not for.</li>
   <li><strong>Whole pages only:</strong> the rules check the pages a bot loads, not what those pages load. A frame inside an allowed page, and a page's own images, scripts and requests, can come from anywhere.</li>
