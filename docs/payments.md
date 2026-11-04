@@ -79,8 +79,9 @@ rules in `payment_floor::page_reason`), so the bot's own words never decide:
   address, or anywhere on a page with a payment provider's card frame. Either key on a focused
   button or link presses it, so the click rules above apply to it, by the text it shows.
 
-The shell bots' browser API (`POST /api/sandbox/:id/act`) can't show a card, so it doesn't do an
-action that looks like a payment: the page comes back with `error` ("Not done: this looks like a
+The shell bots' browser API (`POST /api/sandbox/:id/bot/:kwant_id/chat/:chat_id/act`, the address
+in each bot's prompt; the older `/bot/:kwant_id/act` and the person's plain `/api/sandbox/:id/act`
+behave the same here) can't show a card, so it doesn't do an action that looks like a payment: the page comes back with `error` ("Not done: this looks like a
 payment …") and `payment` (why), and the bot is told to leave that step to the person in the live
 browser panel. Clicks by position (`/api/sandbox/:id/interact`) are the person's live view only.
 

@@ -169,12 +169,22 @@ kwnt also raises the step where no tool call can wait on it. It does not wait; t
   and the page is a wall, the card is up before the bot runs. The bot's prompt says the person was
   asked and tells it to end its turn in one line.
 - **The shell browser API.** A bot without kwnt's tools (agent tools off, or the tools didn't
-  start) drives the browser with curl. `POST /navigate`, `GET /page` and `POST /act` on
-  `/api/sandbox/:id/` raise the step in the chat of the turn running on that browser. The answer
-  gets `"human_step": "asked"` and a `notice` telling the bot to end its turn. While the step is
-  open, `navigate` and `act` answer **409** ("The browser is waiting on the person …"). With no
-  turn on the browser (someone curling it by hand), nobody is asked and the answer keeps the plain
-  `blocked` notice.
+  start) drives the browser with curl, on the address its prompt gives it:
+  `/api/sandbox/:id/bot/:kwant_id/chat/:chat_id/` (the bot, and its turn's thread, channel or DM;
+  see [bot-browser.md](bot-browser.md#the-shell-apis-addresses)). `POST /navigate`, `GET /page`
+  and `POST /act` there raise the step in the chat of that bot's turn in that thread, even when
+  other bots, or the same bot in another thread, run newer turns on the same team browser. The
+  answer gets `"human_step": "asked"` and a `notice` telling the bot to end its turn. While the
+  step is open, `navigate` and `act` answer **409** with `HELD_FOR_BOT` ("The browser is waiting
+  on the person … end your turn"). An address that matches no live turn there asks nobody, never
+  another chat.
+  - The older address without `/chat/:chat_id` still works and asks in that bot's newest turn on
+    the browser.
+  - The plain `/api/sandbox/:id/` address is the person's browser panel: a wall met there is asked
+    in the newest turn on the browser, and while the step is open it answers **409** with
+    `HELD_FOR_PERSON` ("Take control in the browser panel … or press Done or Decline on the card").
+  - With no turn on the browser (someone curling it by hand), nobody is asked and the answer keeps
+    the plain `blocked` notice.
 
 Every bot's prompt says that a CAPTCHA met by the engine's own web fetch, search or built-in
 browser goes to the person too. The bot opens that address in kwnt's browser, where the card comes

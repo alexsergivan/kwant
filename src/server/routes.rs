@@ -2475,11 +2475,10 @@ async fn run_kwant_turn_inner(
         .await;
         let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
         let turn_input = TurnInput {
-            // The bot's own copy of the browser API: a CAPTCHA it meets is asked in its chat
-            browser_api_url: Some(format!(
-                "http://127.0.0.1:{}/api/sandbox/{}/bot/{}",
-                state.config.port, sandbox_target, target_kwant.id
-            )),
+            // The bot's own copy of the browser API, naming this chat (thread, channel or DM): a
+            // CAPTCHA it meets is asked in the thread whose call met it. The same for every turn
+            // of the thread, so the cached prompt tail doesn't change.
+            browser_api_url: Some(bot_browser_api(state.config.port, &sandbox_target, &turn_scope)),
             thread_id: context_id,
             kwant: target_kwant.clone(),
             prompt: final_prompt,
@@ -4893,9 +4892,9 @@ pub fn bot_wall_notice(kind: &str, url: &str) -> String {
 /// calls them: like the handlers, and a page that shows a CAPTCHA (or a failed action over one)
 /// asks the person to solve it in the chat of the newest turn running on that browser, with a
 /// "Human check needed" card. Bots get their own copy of these routes
-/// (`/api/sandbox/:id/bot/:kwant_id/...`, [`navigate_sandbox_bot`]) in their prompt, so a CAPTCHA
-/// one bot meets on a team's shared browser is asked in that bot's chat, not in whichever bot's
-/// turn started last. Nothing waits on the card there, so the bot is told to end its turn; the
+/// (`/api/sandbox/:id/bot/:kwant_id/chat/:chat/...`, [`navigate_sandbox_bot_chat`]) in their
+/// prompt, so a CAPTCHA one bot meets on a team's shared browser is asked in that bot's thread
+/// that met it, not in whichever turn started last. Nothing waits on the card there, so the bot is told to end its turn; the
 /// answer starts a new one. The `browser_*` tools call the handlers directly and ask themselves.
 pub async fn navigate_sandbox_api(
     State(state): State<AppState>,
@@ -4921,31 +4920,56 @@ pub async fn act_sandbox_api(
     act_as(state, team_id, None, payload).await
 }
 
-/// `POST /api/sandbox/:id/bot/:kwant_id/navigate`: the browser API a bot's prompt gives it.
+/// The browser API address a bot's prompt gives it for one turn:
+/// `…/api/sandbox/:id/bot/:kwant_id/chat/:chat`, or without the chat segment when the turn has
+/// no chat to name.
+pub fn bot_browser_api(port: u16, sandbox_target: &str, turn: &super::continuity::SelfScope) -> String {
+    let bot = format!("http://127.0.0.1:{port}/api/sandbox/{sandbox_target}/bot/{}", turn.kwant_id);
+    match super::human_steps::chat_key(turn) {
+        Some(chat) => format!("{bot}/chat/{chat}"),
+        None => bot,
+    }
+}
+
+/// The bot (and its chat, when the address names one) that called a bot's own browser route.
+pub struct BotCall {
+    kwant: String,
+    chat: Option<String>,
+}
+
+impl BotCall {
+    fn caller(&self) -> super::human_steps::Caller<'_> {
+        super::human_steps::Caller { kwant: &self.kwant, chat: self.chat.as_deref() }
+    }
+}
+
+/// `POST /api/sandbox/:id/bot/:kwant_id/navigate`: the browser API a bot's prompt gave it before
+/// the address named its chat. Still served: a bot copying it out of history is asked in its
+/// newest turn on the browser.
 pub async fn navigate_sandbox_bot(
     State(state): State<AppState>,
-    Path((team_id, kwant_id)): Path<(String, String)>,
+    Path((team_id, kwant)): Path<(String, String)>,
     payload: Json<NavigatePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    navigate_as(state, team_id, Some(kwant_id), payload).await
+    navigate_as(state, team_id, Some(BotCall { kwant, chat: None }), payload).await
 }
 
 /// `GET /api/sandbox/:id/bot/:kwant_id/page`.
 pub async fn get_sandbox_page_bot(
     State(state): State<AppState>,
-    Path((team_id, kwant_id)): Path<(String, String)>,
+    Path((team_id, kwant)): Path<(String, String)>,
     query: Query<PageQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    page_as(state, team_id, Some(kwant_id), query).await
+    page_as(state, team_id, Some(BotCall { kwant, chat: None }), query).await
 }
 
 /// `POST /api/sandbox/:id/bot/:kwant_id/act`.
 pub async fn act_sandbox_bot(
     State(state): State<AppState>,
-    Path((team_id, kwant_id)): Path<(String, String)>,
+    Path((team_id, kwant)): Path<(String, String)>,
     payload: Json<InteractPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    act_as(state, team_id, Some(kwant_id), payload).await
+    act_as(state, team_id, Some(BotCall { kwant, chat: None }), payload).await
 }
 
 /// `POST /api/sandbox/:id/bot/:kwant_id/cite`.
@@ -4957,22 +4981,59 @@ pub async fn cite_sandbox_bot(
     cite_sandbox(State(state), Path(team_id), payload).await
 }
 
+/// `POST /api/sandbox/:id/bot/:kwant_id/chat/:chat/navigate`: the browser API a bot's prompt
+/// gives it now. A CAPTCHA it meets is asked in that chat's turn of that bot, and nowhere else.
+pub async fn navigate_sandbox_bot_chat(
+    State(state): State<AppState>,
+    Path((team_id, kwant, chat)): Path<(String, String, String)>,
+    payload: Json<NavigatePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    navigate_as(state, team_id, Some(BotCall { kwant, chat: Some(chat) }), payload).await
+}
+
+/// `GET /api/sandbox/:id/bot/:kwant_id/chat/:chat/page`.
+pub async fn get_sandbox_page_bot_chat(
+    State(state): State<AppState>,
+    Path((team_id, kwant, chat)): Path<(String, String, String)>,
+    query: Query<PageQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    page_as(state, team_id, Some(BotCall { kwant, chat: Some(chat) }), query).await
+}
+
+/// `POST /api/sandbox/:id/bot/:kwant_id/chat/:chat/act`.
+pub async fn act_sandbox_bot_chat(
+    State(state): State<AppState>,
+    Path((team_id, kwant, chat)): Path<(String, String, String)>,
+    payload: Json<InteractPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    act_as(state, team_id, Some(BotCall { kwant, chat: Some(chat) }), payload).await
+}
+
+/// `POST /api/sandbox/:id/bot/:kwant_id/chat/:chat/cite`.
+pub async fn cite_sandbox_bot_chat(
+    State(state): State<AppState>,
+    Path((team_id, _kwant_id, _chat)): Path<(String, String, String)>,
+    payload: Json<CitePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    cite_sandbox(State(state), Path(team_id), payload).await
+}
+
 /// `by`: the bot that made the call (its own route), `None` on the plain route.
 async fn navigate_as(
     state: AppState,
     team_id: String,
-    by: Option<String>,
+    by: Option<BotCall>,
     payload: Json<NavigatePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     refuse_while_held(&state, &team_id, by.is_some()).await?;
     let result = navigate_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
-    ask_on_wall(&state, &team_id, by.as_deref(), result).await
+    ask_on_wall(&state, &team_id, by.as_ref().map(BotCall::caller), result).await
 }
 
 async fn page_as(
     state: AppState,
     team_id: String,
-    by: Option<String>,
+    by: Option<BotCall>,
     query: Query<PageQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let result = get_sandbox_page(State(state.clone()), Path(team_id.clone()), query).await;
@@ -4980,18 +5041,18 @@ async fn page_as(
     if super::human_steps::browser_is_held(&state, &team_id).await {
         return result;
     }
-    ask_on_wall(&state, &team_id, by.as_deref(), result).await
+    ask_on_wall(&state, &team_id, by.as_ref().map(BotCall::caller), result).await
 }
 
 async fn act_as(
     state: AppState,
     team_id: String,
-    by: Option<String>,
+    by: Option<BotCall>,
     payload: Json<InteractPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     refuse_while_held(&state, &team_id, by.is_some()).await?;
     let result = act_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
-    ask_on_wall(&state, &team_id, by.as_deref(), result).await
+    ask_on_wall(&state, &team_id, by.as_ref().map(BotCall::caller), result).await
 }
 
 /// What a browser call is told while the browser is held for the person's step: a bot (its own
@@ -5010,12 +5071,12 @@ async fn refuse_while_held(state: &AppState, team_id: &str, bot: bool) -> Result
 
 /// Asks the person when the answer shows a CAPTCHA, or when a failed request left one on the
 /// page, and tells the bot so in place of the plain notice.
-/// The card goes to the chat of the calling bot's turn on this browser (`by`); only when the
-/// caller isn't known (the plain route) does it fall back to the newest turn there.
+/// The card goes to the calling bot's turn on this browser (`by`), in the chat its address names;
+/// only when the caller isn't known (the plain route) does it fall back to the newest turn there.
 async fn ask_on_wall(
     state: &AppState,
     team_id: &str,
-    by: Option<&str>,
+    by: Option<super::human_steps::Caller<'_>>,
     result: Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let Some(turn) = state.human_steps.turn_of(team_id, by) else { return result };

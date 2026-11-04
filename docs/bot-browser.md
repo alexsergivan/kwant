@@ -1,9 +1,38 @@
 # How bots use their browser
 
 Bots drive the browser in their side panel through `browser_open`, `browser_page` and `browser_act`
-(kwnt's own tools) or the shell API (`/api/sandbox/:id/{navigate,page,act}`). Both return the same
-compact page state: `url`, `title`, `text`, `clickable`. Payments are covered in
-[payments.md](payments.md); the person's live view uses `/interact`, which bots can't call.
+(kwnt's own tools) or the shell API. Both return the same compact page state: `url`, `title`,
+`text`, `clickable`. Payments are covered in [payments.md](payments.md); the person's live view
+uses `/interact`, which bots can't call.
+
+## The shell API's addresses
+
+Each turn's prompt gives the bot its own address for the browser API, naming the bot and the chat
+the turn runs in:
+
+    /api/sandbox/:id/bot/:kwant_id/chat/:chat_id/{navigate,page,act,cite}
+
+`:id` is the browser (a team's, a channel's or the bot's own), `:kwant_id` the bot, and `:chat_id`
+the turn's thread, else its channel, else its DM (`human_steps::chat_key`). The address is the
+same for every turn of one thread, so it doesn't change the cached prompt. A team's bots and
+threads share one browser; the address is how kwnt knows whose call met a CAPTCHA, so the "Human
+check needed" card goes to the chat of exactly that turn ([live-activity.md](live-activity.md)).
+
+- `/api/sandbox/:id/bot/:kwant_id/{navigate,page,act,cite}` (no chat) is the address prompts gave
+  before the chat was added. It still works: a bot copying it out of old history is asked in its
+  newest turn on that browser.
+- `/api/sandbox/:id/{navigate,page,act,cite}` (no bot) is the person's browser panel. A CAPTCHA
+  met there is asked in the newest turn on that browser. While the browser is held for a person's
+  step it answers 409 with `HELD_FOR_PERSON` ("Take control in the browser panel … or press Done
+  or Decline on the card"), where a bot's address gets `HELD_FOR_BOT` ("Stop browser actions and
+  end your turn").
+- If a bot's address matches no live turn on that browser (its turn ended, or a wrong id), nobody
+  is asked: the card never goes to another bot or another thread.
+- Known limit: the `kwant_id` and `chat_id` in the path are trusted. Any caller that can already
+  drive the browser could name another bot's turn; binding the address to the turn's token would
+  close that.
+
+Below, `/page`, `/act`, `/navigate` and `/cite` mean any of these addresses.
 
 ## Clicking by ref
 
@@ -85,7 +114,8 @@ A bot backs facts it read on the web with links that open the page at the words 
 them against the page open now (`sandbox::cite`, plain text matching, no model call).
 - MCP: `browser_cite` with `text` (the exact words) or `block` (an id from a read with blocks). It
   only reads, so it is free in always-ask turns (`READ_ONLY_SELF_TOOLS`) and is a core tool.
-- HTTP: `POST /api/sandbox/:id/cite` with `{"text": …}` or `{"block": …}`.
+- HTTP: `POST <browser API>/cite` with `{"text": …}` or `{"block": …}` (the bot's own address
+  from its prompt; see [The shell API's addresses](#the-shell-apis-addresses)).
 
 The answer is `{quote, url, link}`; `quote` is the page's own text and `url` the address it is on.
 The words must be on the page word for word: runs of spaces and line breaks count as one space,
