@@ -101,6 +101,36 @@ test('captcha card after the turn ended: one line, carries on by itself, not "st
   assert.match(ui.render(props({ waiting: false, meta: h.parseHumanStepMeta(meta({ step_kind: 'sign_in' })) })), /stopped waiting\. Press Done any time/);
 });
 
+test('card icons never shrink when a line wraps on a phone (shrink-0 on every icon)', () => {
+  const cap = (over = {}) => h.parseHumanStepMeta(meta({ step_kind: 'captcha', source: 'auto', ...over }));
+  const cards = {
+    'captcha, turn ended': props({ waiting: false, meta: cap() }),
+    'captcha, paused': props({ meta: cap() }),
+    'captcha, solved': props({ meta: cap({ status: 'resolved_auto' }) }),
+    'captcha, timed out': props({ meta: cap({ status: 'timed_out' }) }),
+    'sign-in, stopped waiting': props({ waiting: false }),
+    'sign-in, paused': props(),
+    'done': props({ live: rec({ status: 'done' }) }),
+    'skipped': props({ live: rec({ status: 'declined' }) }),
+    'cancelled': props({ live: rec({ status: 'cancelled' }) }),
+  };
+  const seen = new Set();
+  for (const [name, p] of Object.entries(cards)) {
+    const html = ui.render(p);
+    const icons = [...html.matchAll(/<svg[^>]*class="([^"]*\blucide\b[^"]*)"/g)].map((m) => m[1]);
+    assert.ok(icons.length > 0, `${name}: has icons`);
+    for (const cls of icons) {
+      assert.match(cls, /(^|\s)shrink-0(\s|$)/, `${name}: ${cls}`);
+      seen.add(cls.match(/lucide-[a-z0-9-]+/g).pop());
+    }
+    // The status line icon is a flex child of a wrapping line: the one Rigel saw shrink to a dot
+    assert.match(html, /role="status"[^>]*><span class="inline-flex[^"]*"><svg[^>]*class="[^"]*\bshrink-0\b/, `${name}: status icon`);
+  }
+  for (const icon of ['lucide-clock', 'lucide-hand', 'lucide-globe', 'lucide-puzzle', 'lucide-monitor-play', 'lucide-circle-check', 'lucide-circle-minus']) {
+    assert.ok(seen.has(icon), `covered ${icon} (saw ${[...seen].join(', ')})`);
+  }
+});
+
 test('captcha target: finite box only, kind defaults to puzzle', () => {
   assert.deepEqual(h.parseCaptchaTarget({ x: 460, y: 180, width: 360, height: 380 }), { kind: 'puzzle', x: 460, y: 180, width: 360, height: 380 });
   assert.equal(h.parseCaptchaTarget({ x: 1, y: 1, width: 0, height: 5 }), null);
