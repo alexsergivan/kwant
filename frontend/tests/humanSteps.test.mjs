@@ -78,9 +78,24 @@ test('closed and stale cards', () => {
   assert.match(ui.render(props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })) })), /spotted automatically/);
 });
 
-test('captcha card after the turn ended: continues by itself, not "stopped waiting"', () => {
+test('meta line is one inline text run that wraps like a sentence', () => {
+  const html = ui.render(props({ meta: h.parseHumanStepMeta(meta({ source: 'auto' })) }));
+  const m = html.match(/<p data-hs-meta=""([^>]*)>([^]*?)<\/p>/);
+  assert.ok(m, 'meta paragraph');
+  // Not a flex row of columns
+  assert.doesNotMatch(m[1], /\bflex\b|inline-flex/);
+  // Icon inline, then name, then the rest as plain text in the same run
+  assert.match(m[2], /^<svg[^>]*class="[^"]*inline-block[^"]*"[^]*?<\/svg><span class="text-zinc-200">Pixel<\/span> needs you in the browser · spotted automatically$/);
+  const bot = ui.render(props()).match(/<p data-hs-meta=""[^>]*>([^]*?)<\/p>/)[1];
+  assert.match(bot, /<span class="text-zinc-200">Pixel<\/span> needs you in the browser$/);
+});
+
+test('captcha card after the turn ended: one line, carries on by itself, not "stopped waiting"', () => {
   const html = ui.render(props({ waiting: false, meta: h.parseHumanStepMeta(meta({ step_kind: 'captcha' })) }));
-  assert.match(html, /Pixel’s turn ended\. It continues by itself once the puzzle is solved\./);
+  assert.match(html, /role="status" aria-live="polite"[^>]*><span[^>]*><svg[^]*?<\/svg> Pixel carries on by itself once it’s solved\. Nothing you do there is passed to Pixel\.<\/span><\/p>/);
+  // The near-duplicate footer is gone: the privacy note is said once, and nothing else sits under the line
+  assert.equal((html.match(/Nothing you do there is passed/g) || []).length, 1);
+  assert.doesNotMatch(html, /turn ended|Solve the puzzle and|continues by itself/);
   assert.doesNotMatch(html, /stopped waiting|instantly/);
   // Other kinds keep the pick-it-up-later copy
   assert.match(ui.render(props({ waiting: false, meta: h.parseHumanStepMeta(meta({ step_kind: 'sign_in' })) })), /stopped waiting\. Press Done any time/);

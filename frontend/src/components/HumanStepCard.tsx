@@ -75,8 +75,9 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
       </span>
     ) : captcha ? (
       // The turn ended, but the step's watcher still resumes the bot once the puzzle clears.
+      // This one line also carries the privacy note, so there is no footer under it.
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
-        <Clock size={13} aria-hidden="true" /> {kwantName}’s turn ended. It continues by itself once the puzzle is solved.
+        <Clock size={13} aria-hidden="true" /> {kwantName} carries on by itself once it’s solved. Nothing you do there is passed to {kwantName}.
       </span>
     ) : (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
@@ -95,11 +96,12 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
       <ModernAvatar role={kwantName} name={kwantName} size={34} kwantId={kwantId} />
       <div className={`flex-1 min-w-0 max-w-2xl rounded-2xl rounded-tl-sm border bg-zinc-900/60 shadow-sm ${open ? 'border-amber-500/40' : 'border-zinc-800'}`}>
         <div className="px-4 pt-3 pb-2 space-y-1">
-          <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-            <Hand size={12} className="text-amber-300" aria-hidden="true" />
+          {/* One run of text, so on a phone it wraps like a sentence instead of into columns. */}
+          <p data-hs-meta="" className="text-[11px] font-medium text-zinc-400 leading-snug break-words">
+            <Hand size={12} className="inline-block align-[-2px] mr-1.5 text-amber-300" aria-hidden="true" />
             <span className="text-zinc-200">{kwantName}</span> needs you in the browser
-            {view.source === 'auto' && <span className="text-zinc-400">· spotted automatically</span>}
-          </span>
+            {view.source === 'auto' && ' · spotted automatically'}
+          </p>
           <h3 id={headingId} className="text-sm font-semibold text-zinc-100">
             {text.heading}
           </h3>
@@ -160,7 +162,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
           <p role="status" aria-live="polite" className="min-w-0">
             {line}
           </p>
-          {open && captcha && (
+          {open && captcha && waiting && (
             <p className="basis-full text-zinc-400">Solve the puzzle and {kwantName} continues by itself. Nothing you do there is passed to {kwantName}.</p>
           )}
           {open && !captcha && <p className="basis-full text-zinc-400">Open the browser and do it there, then press Done. What you type into fields there isn’t passed to {kwantName}.</p>}
