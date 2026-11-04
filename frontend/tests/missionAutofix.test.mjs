@@ -327,3 +327,18 @@ test('AutoFix settings parse safely from GET /api/settings', () => {
   assert.deepEqual(m.parseAutofixSettings({ autofix: 'on', recovery_budget_pct: 140 }), { autofix: 'on', recovery_budget_pct: 100 });
   assert.deepEqual(m.parseAutofixSettings({ autofix: 'suggest' }), { autofix: 'suggest', recovery_budget_pct: 25 });
 });
+
+test('a line about a pending retry goes once the task is verified or otherwise settled', () => {
+  const retrying = { text: 'AutoFix retries it now.', error: false, pending: true };
+  // While the retry is still to come, the line stays.
+  for (const state of ['failed', 'ready', 'working']) {
+    assert.match(ui.detail(detailProps(task({ state }), { notice: retrying })), /AutoFix retries it now/, state);
+  }
+  // Verified, waiting on a check, or cancelled: the retry is over, so the line is stale.
+  for (const state of ['verified', 'review', 'cancelled']) {
+    assert.doesNotMatch(ui.detail(detailProps(task({ state, finished_at: '2026-10-27T11:58:00Z' }), { notice: retrying })), /AutoFix retries it now/, state);
+  }
+  // Errors and lines that report something already done stay, whatever the state.
+  assert.match(ui.detail(detailProps(task({ state: 'verified' }), { notice: { text: 'Could not retry it.', error: true } })), /Could not retry it/);
+  assert.match(ui.detail(detailProps(task({ state: 'verified' }), { notice: { text: 'Marked still valid.', error: false } })), /Marked still valid/);
+});
