@@ -191,3 +191,52 @@ test('R-1: the pill CSS switches to its full-width phone style at the same break
   assert.ok(phone, 'the phone block resets the region to the full width');
   assert.equal(phone[1], ui.PHONE_QUERY);
 });
+
+// Rigel's R-2: widening from the phone layout while the pill shows fires `resize` before React swaps the layout,
+// so the full-width chat list still sits where the sidebar goes. The pill must measure again once the layout
+// has settled, and never be placed at the window's right edge.
+test('R-2: widening 700 -> 900 and 767 -> 768 while the pill shows keeps it on the main pane, not off-screen', async () => {
+  const side = document.createElement('aside');
+  side.setAttribute('data-kw-sidebar', '');
+  document.body.appendChild(side);
+  const region = () => document.querySelector('.kw-nudge-region');
+  // Animation frames run when the test says so, as a browser paints after React commits.
+  let frames = [];
+  const origRaf = window.requestAnimationFrame;
+  const origCaf = window.cancelAnimationFrame;
+  window.requestAnimationFrame = (f) => { frames.push(f); return frames.length; };
+  window.cancelAnimationFrame = () => {};
+  const paint = async () => {
+    for (let i = 0; i < 4 && frames.length; i++) { const run = frames; frames = []; ui.flushSync(() => run.forEach((f) => f(0))); }
+    await settle();
+  };
+  try {
+    for (const [from, to] of [[700, 900], [767, 768]]) {
+      window.innerWidth = from;
+      // Phone layout: the chat list fills the window where the sidebar goes.
+      side.getBoundingClientRect = () => ({ left: 0, right: from, width: from, top: 0, bottom: 900, height: 900 });
+      const p = mount();
+      try {
+        await p.arrive(`r2-${from}`);
+        assert.equal(region().style.getPropertyValue('--kw-nudge-left'), '', `at ${from} px`);
+        // Widen: resize fires while the phone layout is still on screen.
+        window.innerWidth = to;
+        side.getBoundingClientRect = () => ({ left: 0, right: to, width: to, top: 0, bottom: 900, height: 900 });
+        await p.act(() => window.dispatchEvent(new window.Event('resize')));
+        const early = region().style.getPropertyValue('--kw-nudge-left');
+        assert.ok(early === '' || parseInt(early, 10) < to, `${from} -> ${to}: not at the right edge right after resize (got ${early})`);
+        // React swaps in the desktop layout: a 256 px sidebar after the 56 px rail.
+        side.getBoundingClientRect = () => ({ left: 56, right: 312, width: 256, top: 0, bottom: 900, height: 900 });
+        await paint();
+        assert.equal(region().style.getPropertyValue('--kw-nudge-left'), '312px', `${from} -> ${to}: centred on the main pane`);
+        assert.ok(p.showing(), 'still showing');
+      } finally {
+        p.unmount();
+      }
+    }
+  } finally {
+    window.requestAnimationFrame = origRaf;
+    window.cancelAnimationFrame = origCaf;
+    side.remove();
+  }
+});

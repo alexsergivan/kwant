@@ -23,6 +23,11 @@ const AVATAR = 32;
  * Where the main pane starts on desktop (the sidebar's right edge), measured while the pill shows. 0 in the
  * phone layout (below 768 px, App's PHONE_QUERY), where there is no sidebar: measuring one there put the pill
  * off-screen between 640 and 767 px (Rigel's R-1).
+ *
+ * A resize is measured again two frames later, once React has swapped the layout: widening from the phone
+ * layout fires `resize` while the full-width chat list is still in the sidebar's place, and measuring only
+ * then left the pill at the window's right edge (Rigel's R-2). A "sidebar" that spans the window is that
+ * list, never the desktop sidebar, so it does not count either.
  */
 function useMainPaneLeft(showing: boolean): number {
   const [left, setLeft] = useState(0);
@@ -31,11 +36,22 @@ function useMainPaneLeft(showing: boolean): number {
     const measure = () => {
       const side = isPhoneLayout() ? null : document.querySelector('[data-kw-sidebar]');
       const r = side?.getBoundingClientRect();
-      setLeft(r && r.width > 0 ? Math.round(r.right) : 0);
+      setLeft(r && r.width > 0 && r.right < window.innerWidth - 1 ? Math.round(r.right) : 0);
+    };
+    const raf = window.requestAnimationFrame?.bind(window) ?? ((f: FrameRequestCallback) => window.setTimeout(() => f(0), 16));
+    const caf = window.cancelAnimationFrame?.bind(window) ?? window.clearTimeout.bind(window);
+    let frame = 0;
+    const onResize = () => {
+      measure();
+      caf(frame);
+      frame = raf(() => { frame = raf(measure); });
     };
     measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      caf(frame);
+    };
   }, [showing]);
   return left;
 }
