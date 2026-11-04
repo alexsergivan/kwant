@@ -517,3 +517,88 @@ td code { white-space: nowrap; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
   .btn:active { transform: none; }
 }
+
+/* Stickers, ported from the app (frontend/src/styles/modern.css, main c8132cb; Mira's site-069-holo/spec.md).
+   A die-cut plate with a 2px white edge and a slight tilt. tone "holo" is only for earned things: verified, picked,
+   goal kept. tone "ink" is the plain plate, e.g. "New". Warnings, needs you, failed and links are never stickers.
+   The foil is the app's: a 105deg two-cycle sweep multiplied into the light plate, slid with transform only, plus a
+   soft-light glint and grain, so the ink text only gains contrast (worst pixel 6.74:1 across the whole sweep, measured).
+   Site changes: sized for the 17px body, a 1px violet hairline so the white edge reads on white and violet cards,
+   a violet shadow instead of the app's black one. --mx/--my are set by site.js; touch and reduced motion stay 30%/20%. */
+@property --mx { syntax: '<percentage>'; inherits: true; initial-value: 30%; }
+@property --my { syntax: '<percentage>'; inherits: true; initial-value: 20%; }
+.kw-sticker {
+  --mx: 30%;
+  --my: 20%;
+  --kw-tilt: 0deg;
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  max-width: 100%;
+  padding: 0 12px;
+  border: 2px solid #fff;
+  border-radius: 12px 8px 12px 8px;
+  background: var(--v9);
+  color: var(--ink);
+  font: 700 13px/16px var(--sans);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  vertical-align: middle;
+  isolation: isolate;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--line-2), 0 1px 0 rgba(27, 16, 51, 0.12), 0 6px 14px -4px rgba(64, 36, 168, 0.45);
+  transform: rotate(var(--kw-tilt));
+  transition: --mx 120ms linear, --my 120ms linear;
+}
+.kw-sticker svg { width: 14px; height: 14px; flex-shrink: 0; }
+.kw-sticker-sm {
+  height: 22px;
+  padding: 0 8px;
+  gap: 4px;
+  border-radius: 9px 6px 9px 6px;
+  font: 700 12px/14px var(--sans);
+  box-shadow: 0 0 0 1px var(--line-2), 0 1px 0 rgba(27, 16, 51, 0.12), 0 4px 10px -3px rgba(64, 36, 168, 0.4);
+}
+.kw-sticker-sm svg { width: 12px; height: 12px; }
+.kw-sticker > * { position: relative; z-index: 2; }
+.kw-sticker-holo::before,
+.kw-sticker-holo::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+.kw-sticker-holo::before {
+  inset: 0 -50%;
+  z-index: 0;
+  background: linear-gradient(105deg,
+    #ff6ec7 0%, #ffd36e 10%, #7dffb0 20%, #5ee0ff 30%, #9b7bff 40%,
+    #ff6ec7 50%, #ffd36e 60%, #7dffb0 70%, #5ee0ff 80%, #9b7bff 90%, #ff6ec7 100%);
+  mix-blend-mode: multiply;
+  opacity: 0.8;
+  transform: translateX(calc((50% - var(--mx)) / 4));
+}
+.kw-sticker-holo::after {
+  inset: 0;
+  z-index: 1;
+  background:
+    linear-gradient(105deg, transparent calc(var(--mx) - 14%), rgba(255, 255, 255, 0.7) var(--mx), transparent calc(var(--mx) + 14%)),
+    repeating-linear-gradient(115deg, transparent 0 3px, rgba(255, 255, 255, 0.22) 3px 4px);
+  mix-blend-mode: soft-light;
+}
+.kw-sticker-ink { background: #e9e4ff; }
+/* Placement helpers */
+.kw-seam { position: absolute; top: -15px; right: 20px; z-index: 1; display: flex; }
+.card-body:has(> .kw-seam) { position: relative; }
+.mock-foot:has(.kw-sticker) { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.new-title.kw-sticker { align-self: flex-start; margin-left: 2px; }
+.prose .kw-sticker-sm { margin: 0 2px; }
+/* Touch: no pointer, so the foil is static at 30%/20% (site.js ignores touch). */
+@media (pointer: coarse) {
+  .kw-sticker { transition: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kw-sticker { --mx: 30% !important; --my: 20% !important; transition: none; }
+}
