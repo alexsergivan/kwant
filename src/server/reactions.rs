@@ -202,11 +202,15 @@ pub async fn reply_block(db: &Database, current: Option<&Message>, bot_name: &st
 }
 
 /// The note for `bot_name`'s turn in chat `context_id` about the 👍/👎 the person gave its
-/// messages there since its last reply (reactions that answered a question excluded).
+/// messages there since its last reply (reactions that answered a question excluded). Each
+/// reaction goes into one turn's note: the ones in it are marked told.
 pub async fn feedback_note(db: &Database, context_id: &str, bot_name: &str) -> Option<String> {
     let new = db.reactions_since_last_reply(context_id, bot_name).await.ok()?;
     if new.is_empty() {
         return None;
+    }
+    if let Err(e) = db.mark_told(&new).await {
+        tracing::warn!("reactions: couldn't mark the feedback told: {e}");
     }
     let mut out = String::from("\n\n[The person's reactions to your messages here since your last reply]");
     for r in &new {

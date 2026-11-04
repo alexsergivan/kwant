@@ -168,6 +168,32 @@ async fn other_reactions_are_feedback_the_bots_next_turn_hears_about() {
 }
 
 #[tokio::test]
+async fn feedback_made_in_the_same_second_as_the_bots_reply_is_told_once() {
+    let env = setup().await;
+    let a = bot(&env, &env.a).await;
+    let plain = say(&env, Some(&a.id), None, "kwant", &a.name, "Ship on Friday. MARKsame0").await;
+    assert_eq!(react(&env, &plain.id, json!("down")).await.1["answered"], false);
+    send_direct(&env, &a.id, "what now? REPLYTAG:same1", json!({})).await;
+    let reply = wait_reply(&env, &a.id, "answer same1").await;
+    idle(&env, &a.id).await;
+    let p = invocations_with("REPLYTAG:same1").pop().unwrap();
+    assert!(p.contains("The person reacted 👎 to your message \"Ship on Friday. MARKsame0\""), "{p}");
+    // The 👎 and the bot's reply in the same second (timestamps have 1-second precision)
+    let db = &env.state.db;
+    let same = "2030-01-01 12:00:00";
+    db.exec_raw_for_test(&format!("UPDATE message_reactions SET created_at = '{same}' WHERE message_id = '{}'", plain.id)).await.unwrap();
+    db.exec_raw_for_test(&format!("UPDATE messages SET created_at = '{same}' WHERE id = '{}'", reply.id)).await.unwrap();
+
+    send_direct(&env, &a.id, "and then? REPLYTAG:same2", json!({})).await;
+    wait_reply(&env, &a.id, "answer same2").await;
+    let p = invocations_with("REPLYTAG:same2").pop().unwrap();
+    assert!(!p.contains("since your last reply]"), "told twice: {p}");
+    // The history mark stays
+    assert!(p.contains("(The person reacted 👎 to this message.)"), "{p}");
+    idle(&env, &a.id).await;
+}
+
+#[tokio::test]
 async fn a_running_turn_clearing_or_changing_a_reaction_starts_no_second_turn() {
     let env = setup().await;
     let a = bot(&env, &env.a).await;

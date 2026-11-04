@@ -60,12 +60,21 @@ impl Database {
         if !has_reply {
             sqlx::query("ALTER TABLE messages ADD COLUMN reply_to_message_id TEXT").execute(&self.pool).await?;
         }
+        // `told`: 1 once a turn's prompt carried the reaction as feedback, so it's told once.
+        // Added here for every database, new or from before it
+        let has_told: bool =
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info('message_reactions') WHERE name = 'told'")
+                .fetch_one(&self.pool)
+                .await?;
+        if !has_told {
+            sqlx::query("ALTER TABLE message_reactions ADD COLUMN told INTEGER NOT NULL DEFAULT 0").execute(&self.pool).await?;
+        }
         Ok(())
     }
 
     /// Sets (`Some("up" | "down")`) or clears (`None`) the reaction on `message_id`. A new or
     /// changed reaction gets a fresh `created_at` (so the bot hears about it on its next turn) and
-    /// counts as feedback until [`Self::mark_answered`].
+    /// counts as feedback until [`Self::mark_answered`] or [`Self::mark_told`].
     pub async fn set_reaction(&self, message_id: &str, reaction: Option<&str>) -> Result<ReactionChange, DbError> {
         let Some(r) = reaction else {
             let gone = sqlx::query("DELETE FROM message_reactions WHERE message_id = ?").bind(message_id).execute(&self.pool).await?;
@@ -81,7 +90,7 @@ impl Database {
             return Ok(ReactionChange::Fresh);
         }
         let changed = sqlx::query(
-            "UPDATE message_reactions SET reaction = ?1, created_at = CURRENT_TIMESTAMP, answered = 0 \
+            "UPDATE message_reactions SET reaction = ?1, created_at = CURRENT_TIMESTAMP, answered = 0, told = 0 \
              WHERE message_id = ?2 AND reaction <> ?1",
         )
         .bind(r)
@@ -94,6 +103,19 @@ impl Database {
     /// The reaction on `message_id` started a turn that answers it: it isn't feedback any more.
     pub async fn mark_answered(&self, message_id: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE message_reactions SET answered = 1 WHERE message_id = ?").bind(message_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// `reactions` went into a turn's prompt as feedback: later turns aren't told them again. A
+    /// reaction changed meanwhile (to the other one) is news and stays untold.
+    pub async fn mark_told(&self, reactions: &[NewReaction]) -> Result<(), DbError> {
+        for r in reactions {
+            sqlx::query("UPDATE message_reactions SET told = 1 WHERE message_id = ? AND reaction = ?")
+                .bind(&r.message_id)
+                .bind(&r.reaction)
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 
@@ -204,7 +226,9 @@ impl Database {
     }
 
     /// The reactions in chat `context_id` on `bot_name`'s messages made since its newest message
-    /// there, oldest first: what the person said about its replies since its last turn.
+    /// there, oldest first: what the person said about its replies since its last turn. One
+    /// already told to a turn ([`Self::mark_told`]) isn't new, even when it was made in the same
+    /// second as the bot's reply (timestamps here have 1-second precision).
     pub async fn reactions_since_last_reply(&self, context_id: &str, bot_name: &str) -> Result<Vec<NewReaction>, DbError> {
         let rows: Vec<(String, String, String)> = sqlx::query_as(
             r#"
@@ -216,7 +240,7 @@ impl Database {
             last AS (SELECT MAX(julianday(created_at)) AS at FROM chat)
             SELECT c.id, r.reaction, c.text
             FROM message_reactions r JOIN chat c ON c.id = r.message_id, last
-            WHERE julianday(r.created_at) >= last.at AND r.answered = 0
+            WHERE julianday(r.created_at) >= last.at AND r.answered = 0 AND r.told = 0
             ORDER BY julianday(r.created_at), r.rowid
             "#,
         )
@@ -486,6 +510,70 @@ mod tests {
         assert!(db.reactions_since_last_reply("k3", "Ada").await.unwrap().is_empty());
         db.set_reaction(&ask.id, Some("down")).await.unwrap();
         assert_eq!(db.reactions_since_last_reply("k3", "Ada").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_reaction_told_once_is_not_new_even_in_the_same_second_as_the_reply() {
+        let (_tmp, db) = db().await;
+        let m = say(&db, "k1", "kwant", "Ada", "Ship on Friday.").await;
+        db.set_reaction(&m.id, Some("down")).await.unwrap();
+        let new = db.reactions_since_last_reply("k1", "Ada").await.unwrap();
+        assert_eq!(new.len(), 1);
+        db.mark_told(&new).await.unwrap();
+        // The bot's reply and the reaction in the same second
+        let reply = say(&db, "k1", "kwant", "Ada", "Noted.").await;
+        let same = "2030-01-01 12:00:00";
+        sqlx::query("UPDATE message_reactions SET created_at = ?").bind(same).execute(&db.pool).await.unwrap();
+        sqlx::query("UPDATE messages SET created_at = ? WHERE id = ?").bind(same).bind(&reply.id).execute(&db.pool).await.unwrap();
+        assert!(db.reactions_since_last_reply("k1", "Ada").await.unwrap().is_empty(), "told once");
+        // The same one again isn't news; the other one is
+        db.set_reaction(&m.id, Some("down")).await.unwrap();
+        assert!(db.reactions_since_last_reply("k1", "Ada").await.unwrap().is_empty());
+        db.set_reaction(&m.id, Some("up")).await.unwrap();
+        sqlx::query("UPDATE message_reactions SET created_at = ?").bind(same).execute(&db.pool).await.unwrap();
+        let changed = db.reactions_since_last_reply("k1", "Ada").await.unwrap();
+        assert_eq!(changed.iter().map(|r| r.reaction.as_str()).collect::<Vec<_>>(), ["up"]);
+        // Telling a reaction that changed meanwhile leaves the new one untold
+        db.mark_told(&new).await.unwrap();
+        assert_eq!(db.reactions_since_last_reply("k1", "Ada").await.unwrap().len(), 1);
+        // Cleared and set again: news
+        db.mark_told(&changed).await.unwrap();
+        db.set_reaction(&m.id, None).await.unwrap();
+        db.set_reaction(&m.id, Some("up")).await.unwrap();
+        sqlx::query("UPDATE message_reactions SET created_at = ?").bind(same).execute(&db.pool).await.unwrap();
+        assert_eq!(db.reactions_since_last_reply("k1", "Ada").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_database_from_before_told_gets_the_column_and_keeps_its_reactions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let m = say(&db, "k1", "kwant", "Ada", "hello").await;
+        db.set_reaction(&m.id, Some("down")).await.unwrap();
+        // The table as #296 made it, without `told`
+        for sql in [
+            "ALTER TABLE message_reactions RENAME TO r_old",
+            "CREATE TABLE message_reactions (message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, \
+             reaction TEXT NOT NULL CHECK (reaction IN ('up','down')), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, \
+             answered INTEGER NOT NULL DEFAULT 0)",
+            "INSERT INTO message_reactions SELECT message_id, reaction, created_at, answered FROM r_old",
+            "DROP TABLE r_old",
+        ] {
+            sqlx::query(sql).execute(&db.pool).await.unwrap();
+        }
+        let has_told: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM pragma_table_info('message_reactions') WHERE name = 'told'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert!(!has_told);
+        drop(db);
+        let db = Database::init(tmp.path()).await.unwrap();
+        db.migrate_reactions().await.unwrap();
+        assert_eq!(db.get_reaction(&m.id).await.unwrap().as_deref(), Some("down"));
+        let new = db.reactions_since_last_reply("k1", "Ada").await.unwrap();
+        assert_eq!(new.len(), 1, "an untold reaction stays news");
+        db.mark_told(&new).await.unwrap();
+        assert!(db.reactions_since_last_reply("k1", "Ada").await.unwrap().is_empty());
     }
 
     #[tokio::test]
