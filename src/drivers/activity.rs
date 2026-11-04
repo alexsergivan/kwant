@@ -8,7 +8,7 @@
 //! redacted: known secret values, `key=value` credentials, bearer tokens and provider-looking keys
 //! never leave this module.
 
-use super::events::RuntimeEvent;
+use super::events::{RuntimeEvent, TurnTag};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -22,6 +22,9 @@ pub const MAX_THINKING_CHARS: usize = 16_000;
 pub const MAX_TITLE: usize = 160;
 /// Longest step detail (characters).
 pub const MAX_DETAIL: usize = 500;
+/// Most thinking text held back from the live stream at once (characters): the last two words of
+/// what streamed so far, so a secret split across two chunks is masked once it is whole.
+pub const MAX_HELD_THINKING: usize = 256;
 
 /// One thing the bot did, or is doing, in a turn.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -75,6 +78,9 @@ pub struct ActivityLog {
     thinking_chars: usize,
     dropped: usize,
     secrets: Vec<String>,
+    /// Thinking text not yet streamed, per scope (the `Scoped` tags around it; none for the turn
+    /// itself), sent with that scope's next chunk or when the thinking step ends.
+    held: Vec<(Vec<TurnTag>, String)>,
 }
 
 fn now() -> String {
@@ -276,7 +282,9 @@ impl ActivityLog {
     }
 
     /// Masks secrets in every string of a JSON value; a field named like a credential
-    /// (`api_key`, `password`, `token`, …) loses its value whole, the way `api_key=…` does.
+    /// (`api_key`, `password`, `token`, …) loses its value whole, whatever its type, the way
+    /// `api_key=…` does (`true` and `null` stay). A plural one (`tokens`, `secrets`) loses it when
+    /// it holds any text, so counts like `max_tokens: 100` stay readable.
     fn redact_value(&self, value: &Value) -> Value {
         match value {
             Value::String(s) => Value::String(self.redact(s)),
@@ -284,9 +292,11 @@ impl ActivityLog {
             Value::Object(map) => Value::Object(
                 map.iter()
                     .map(|(k, v)| {
-                        let secret_key = crate::profiles::classify::is_credential_key(&k.to_ascii_lowercase());
-                        let v = match v {
-                            Value::String(_) | Value::Number(_) if secret_key => Value::String("[redacted]".into()),
+                        let v = match credential_field(k) {
+                            // `"token": {"value": …}`, `"password": ["…"]`: the whole value
+                            Some(Field::Single) if !matches!(v, Value::Bool(_) | Value::Null) => Value::String("[redacted]".into()),
+                            // `"tokens": ["…"]`, but `"max_tokens": 100` and `{"input_tokens": 3}` stay
+                            Some(Field::Plural) if has_string(v) => Value::String("[redacted]".into()),
                             _ => self.redact_value(v),
                         };
                         (k.clone(), v)
@@ -297,6 +307,64 @@ impl ActivityLog {
         }
     }
 
+    /// Takes one driver event and returns, in the order to broadcast them: thinking text held
+    /// back for the live stream that is due now, the steps the event started or changed, and the
+    /// event itself as it may go out (redacted; a thinking chunk without its last two words, which
+    /// are held until the next chunk, so a secret split across chunks is masked whole).
+    pub fn relay(&mut self, event: &RuntimeEvent) -> (Vec<RuntimeEvent>, Vec<Step>, Vec<RuntimeEvent>) {
+        let thinking = matches!(event.unscoped(), RuntimeEvent::ThinkingDelta(_));
+        let flushed = if thinking { Vec::new() } else { self.flush_held() };
+        let steps = self.observe(event);
+        // With no thinking step open (all steps used), a chunk is a status line: sent whole
+        let out = if thinking && self.thinking.is_some() {
+            self.hold_thinking(Vec::new(), event).into_iter().collect()
+        } else {
+            vec![self.redact_event(event)]
+        };
+        (flushed, steps, out)
+    }
+
+    /// A thinking chunk joined to what its scope held back, minus the new tail it holds back,
+    /// redacted; `None` when all of it is held. `scope` is the chain of `Scoped` tags around it.
+    fn hold_thinking(&mut self, scope: Vec<TurnTag>, event: &RuntimeEvent) -> Option<RuntimeEvent> {
+        match event {
+            RuntimeEvent::Scoped { tag, event } => {
+                let mut inner_scope = scope;
+                inner_scope.push(tag.clone());
+                let inner = self.hold_thinking(inner_scope, event)?;
+                Some(RuntimeEvent::Scoped { tag: tag.clone(), event: Box::new(inner) })
+            }
+            RuntimeEvent::ThinkingDelta(text) => {
+                let at = match self.held.iter().position(|(s, _)| *s == scope) {
+                    Some(at) => at,
+                    None => {
+                        self.held.push((scope, String::new()));
+                        self.held.len() - 1
+                    }
+                };
+                let buf = &mut self.held[at].1;
+                buf.push_str(text);
+                let cut = hold_from(buf);
+                let ready: String = buf.drain(..cut).collect();
+                (!ready.is_empty()).then(|| RuntimeEvent::ThinkingDelta(self.redact(&ready)))
+            }
+            other => Some(self.redact_event(other)),
+        }
+    }
+
+    /// Everything held back, redacted, as thinking chunks of their own scope; nothing stays held.
+    pub fn flush_held(&mut self) -> Vec<RuntimeEvent> {
+        std::mem::take(&mut self.held)
+            .into_iter()
+            .filter(|(_, text)| !text.is_empty())
+            .map(|(scope, text)| {
+                scope.into_iter().rev().fold(RuntimeEvent::ThinkingDelta(self.redact(&text)), |event, tag| {
+                    RuntimeEvent::Scoped { tag, event: Box::new(event) }
+                })
+            })
+            .collect()
+    }
+
     /// What is saved on the reply as `meta.activity`.
     pub fn to_json(&self) -> Value {
         let mut v = json!({ "steps": self.steps.iter().map(Step::to_json).collect::<Vec<_>>() });
@@ -304,6 +372,46 @@ impl ActivityLog {
             v["dropped"] = json!(self.dropped);
         }
         v
+    }
+}
+
+/// Byte index where the held-back tail of streamed thinking starts: the last two
+/// whitespace-separated words (so `Bearer <token>` and `password: <value>` stay together), at most
+/// [`MAX_HELD_THINKING`] characters.
+fn hold_from(text: &str) -> usize {
+    let mut at = text.len();
+    for _ in 0..2 {
+        at = text[..at].trim_end().len();
+        at = text[..at].rfind(char::is_whitespace).map_or(0, |i| i + text[i..].chars().next().map_or(1, char::len_utf8));
+    }
+    let longest = text.char_indices().rev().nth(MAX_HELD_THINKING.saturating_sub(1)).map_or(0, |(i, _)| i);
+    at.max(longest)
+}
+
+enum Field {
+    Single,
+    Plural,
+}
+
+/// Whether a JSON field is named like a credential: `api_key`, `password`, `token` (`Single`), or
+/// a plural of one, `tokens`, `passwords` (`Plural`). `key` and `max_tokens` are neither.
+fn credential_field(name: &str) -> Option<Field> {
+    let name = name.to_ascii_lowercase();
+    if crate::profiles::classify::is_credential_key(&name) {
+        return Some(Field::Single);
+    }
+    name.strip_suffix('s')
+        .filter(|stem| crate::profiles::classify::is_credential_key(stem))
+        .map(|_| Field::Plural)
+}
+
+/// Whether any string is inside a JSON value.
+fn has_string(value: &Value) -> bool {
+    match value {
+        Value::String(_) => true,
+        Value::Array(items) => items.iter().any(has_string),
+        Value::Object(map) => map.values().any(has_string),
+        _ => false,
     }
 }
 
@@ -567,6 +675,42 @@ mod tests {
 
     fn done(id: &str, status: &str) -> RuntimeEvent {
         RuntimeEvent::ToolCallCompleted { id: id.into(), result: json!({ "status": status }) }
+    }
+
+    /// Rigel's N1 on #286: a credential-named field holding an object or a list goes out masked
+    /// whole, while `key`, `max_tokens` and flags stay readable.
+    #[test]
+    fn credential_fields_lose_objects_and_lists_whole() {
+        let log = ActivityLog::default();
+        let args = json!({
+            "token": {"value": "objsecret111"},
+            "tokens": ["arrsecret222"],
+            "password": ["pw-in-array-333"],
+            "auth": {"api_key": {"nested": ["deepsecret444"]}},
+            "key": "Enter",
+            "max_tokens": 100,
+            "usage": {"input_tokens": 3, "output_tokens": 4},
+            "secret": true,
+            "api_key": null,
+        });
+        let RuntimeEvent::ToolCallPending { args: out, .. } = log.redact_event(&pending("1", "mcp__x__y", args)) else {
+            panic!("not a tool call")
+        };
+        let wire = out.to_string();
+        for secret in ["objsecret111", "arrsecret222", "pw-in-array-333", "deepsecret444"] {
+            assert!(!wire.contains(secret), "{secret} in {wire}");
+        }
+        assert_eq!(out["token"], "[redacted]");
+        assert_eq!(out["tokens"], "[redacted]");
+        assert_eq!(out["password"], "[redacted]");
+        assert_eq!(out["auth"]["api_key"], "[redacted]");
+        assert_eq!(out["key"], "Enter");
+        assert_eq!(out["max_tokens"], 100);
+        assert_eq!(out["usage"], json!({"input_tokens": 3, "output_tokens": 4}));
+        assert_eq!(out["secret"], true);
+        assert_eq!(out["api_key"], Value::Null);
+        assert!(!crate::profiles::classify::is_credential_key("key"));
+        assert!(!crate::profiles::classify::is_credential_key("max_tokens"));
     }
 
     #[test]
