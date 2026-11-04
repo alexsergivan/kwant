@@ -50,8 +50,8 @@ See every feature, with screenshots, on [kwant.si/features](https://kwant.si/fea
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/who-answers.webp" alt="In #general, a customer wore her new boots on one muddy trail and wants to return them. Support answers, and the line under its name says why: it shares words with the message (customer, refunds, returns), Laya picked the same bot, chosen from 7 bots. Wrong bot? is open, listing Lead, Frontend, Backend, QA, Researcher and Marketer."><br><sub><b>Who answers</b>: the bot that fits, and why. <b>Wrong bot?</b> teaches it.</sub></td>
-    <td width="50%"><img src="docs/media/mission-board.webp" alt="The Mission board: 8 verified this week, 0 false successes, a cost of $0.23 per verified result and a chart of verified results per week. Below, two facts disagree (16 GB and 4 GB of RAM) with a Keep this one button on each, and QA asks for the Act tier on release notes, with Grant and Decline."><br><sub><b>Mission board</b>: verified results, their cost and what needs you (with Truth Ledger and Flight School on).</sub></td>
+    <td width="50%"><img src="docs/media/who-answers.webp" alt="In #general, a customer wore her new boots on one muddy trail and wants to return them. Support answers, with a Matched skills chip next to its name that shows why it was picked, from 7 bots. Wrong bot? is open, listing Lead, Frontend, Backend, QA, Researcher and Marketer."><br><sub><b>Who answers</b>: the bot that fits, and why. <b>Wrong bot?</b> teaches it.</sub></td>
+    <td width="50%"><img src="docs/media/mission-board.webp" alt="The Mission board: 8 verified this week, 0 false successes, 2 needing you, a cost of $0.30 per verified result and a chart of verified results per active week. Below, two facts disagree (16 GB and 4 GB of RAM) with a Keep this one button on each, and QA asks for the Act tier on release notes, with Grant and Decline."><br><sub><b>Mission board</b>: verified results, their cost and what needs you (with Truth Ledger and Flight School on).</sub></td>
   </tr>
   <tr>
     <td><img src="docs/media/verified.webp" alt="A task, Weekly load-test report, with its Evidence receipt: Verified: file contains passed, checked by kwant. The check: load-test/report.md has p95. Below are the files the team attached, which never mark a task verified on their own, and the activity log."><br><sub><b>Verified</b>: only when kwant runs the check, with a receipt.</sub></td>
@@ -59,11 +59,11 @@ See every feature, with screenshots, on [kwant.si/features](https://kwant.si/fea
   </tr>
   <tr>
     <td><img src="docs/media/bot-rules.webp" alt="A bot's settings. Good for: competitor pricing, gear reviews, market sizing. Not for: customer emails, refunds. Browser sites: only 3 sites, never 2 sites, no local network."><br><sub><b>Rules per bot</b>: Good for, Not for and Browser sites.</sub></td>
-    <td><img src="docs/media/inbox.webp" alt="The Inbox, with New and Loose ends tabs. Waiting on you: Designer asks which hero image should ship on the landing page, with two answer buttons. Nothing finished, failed or got stuck since you last looked."><br><sub><b>Inbox</b>: what's waiting on you, what finished and what failed.</sub></td>
+    <td><img src="docs/media/inbox.webp" alt="The Inbox, with New and Loose ends tabs. Waiting on you: Designer asks which hero image should ship on the landing page, with two answer buttons. Finished: a handoff and a Monday metrics digest. Failed or stuck: a competitor price scan and a smoke test."><br><sub><b>Inbox</b>: what's waiting on you, what finished and what failed.</sub></td>
   </tr>
   <tr>
     <td><img src="docs/media/spaces.webp" alt="The space rail with three spaces, Trailhead, Pixel Quest and Home, each with its own icon and colour. Trailhead is open on #general with a weekly digest posted by a routine."><br><sub><b>Spaces</b>: each with its own bots, channels and routines.</sub></td>
-    <td><img src="docs/media/accounts.webp" alt="Settings, This space, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in."><br><sub><b>Accounts</b>: several per engine, with a default and fallbacks.</sub></td>
+    <td><img src="docs/media/accounts.webp" alt="Settings, This space, Accounts: the Order to use list. Work, a Claude login, is out until Thu 03:00; Personal, Codex and a Team gateway are ready. Under Not in the order, This machine's Claude, Codex and Grok and a Grok login are signed out."><br><sub><b>Accounts</b>: several per engine, with a default and fallbacks.</sub></td>
   </tr>
   <tr>
     <td><img src="docs/media/routine.webp" alt="QA set up a routine when asked to check overnight checkout errors every morning: weekdays at 08:30, posting in the direct chat, with Undo, Edit and Pause buttons."><br><sub><b>Routines</b>: ask for "every morning" and get one, with Undo.</sub></td>

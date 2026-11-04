@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-069">New in 0.6.9</a></li>
         <li><a href="#new-065">New in 0.6.5</a></li>
         <li><a href="#new-064">New in 0.6.4</a></li>
         <li><a href="#new-06">New in 0.6</a></li>
@@ -42,6 +43,53 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-069" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.6.9</p>
+      <h2>Know when a bot needs you, and take over its browser</h2>
+      <p>A pill tells you when a bot is waiting on you in another chat, wherever you are. When a bot needs you to sign in, you take over its browser, sign in yourself and hand it back.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="needs-you">
+        <span class="shot">{{shot:v69-pill|#design-review open while TechLead, in another chat, asks to create a pull request. A pill at the top reads TechLead needs your OK, Use create_pull_request (github).|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A pill when a bot needs you</h3><p>An approval, a question or a sign-in in another chat slides in at the top for a few seconds. Click it to go there. The tab title counts what's waiting, like (2).</p></div>
+      </article>
+      <article class="card" id="sign-in-card">
+        <span class="shot">{{shot:v69-signin-step|In #launch-waitlist, asked to check how the waitlist teaser did on TikTok, Designer posts a Sign in needed card for @trailhead.trips on tiktok.com, with Open browser, Done, I'm signed in and Skip, and the line Designer is paused and waiting for you.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Bots ask you to sign in</h3><p>Ask a bot to use one of your accounts and it posts a sign-in card. Open browser takes you to the page, and Done, I'm signed in lets the bot look again. It never asks for a password in chat.</p></div>
+      </article>
+      <article class="card" id="take-over">
+        <span class="shot">{{shot:v69-takeover-stage|The take-over stage for Rook's browser: You're in control, a Northwind sign-in page with sam@example.com and a hidden password typed in, and Hand back and Done, I'm signed in at the top.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Take over the page</h3><p>The bot's page opens on a large stage at its real size. Click, type and scroll as in your own browser, then Hand back. The bot waits while you're in control.</p></div>
+      </article>
+      <article class="card" id="working-strip">
+        <span class="shot">{{shot:v69-working-strip|TechLead's chat with an open approval card for create pull request, and above the message box the working line: TechLead is using create_pull_request (github), 0:13.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>See what a bot is doing</h3><p>A line above the message box says what the bot is using right now and for how long.</p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>A pill, then one click to the approval</h3>
+        <p>You're reading one channel when TechLead needs your OK in another. The pill shows who and what for a few seconds.</p>
+      </div>
+      <div class="frame">{{video:clip-v69-pill|Demo: you're reading #design-review when TechLead, in another chat, needs your OK. A Needs you pill slides in at the top; clicking it opens TechLead's chat at the approval card.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>On the Mac app and on Linux</h3>
+        <p>The Mac app shows the same pill under its menu-bar icon, in light and dark mode, and two at once become one. On Linux, the tray icon gets a badge and you get a desktop notification.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v69-mac-menubar.webp" data-caption="Three menu-bar captures from the Mac app: in light mode, Juno needs your OK to deploy the site; in dark mode, Mira asked you something; and two things need you from Rigel and Pixel, coalesced into one pill."><img src="assets/media/v69-mac-menubar.webp" width="1503" height="122" loading="lazy" decoding="async" alt="Three menu-bar captures from the Mac app: in light mode, Juno needs your OK to deploy the site; in dark mode, Mira asked you something; and two things need you from Rigel and Pixel, coalesced into one pill."></a></div>
+    </div>
+    <ul class="flist">
+      <li id="tab-count"><h3>A count in the tab title</h3><div class="frame"><a class="zoom" href="assets/media/v69-tab-title-640.webp" data-caption="A dark browser tab titled (1) kwant bots: your team of AI bots, with an amber badge on the tab icon."><img src="assets/media/v69-tab-title-320.webp" srcset="assets/media/v69-tab-title-320.webp 320w, assets/media/v69-tab-title-640.webp 640w" sizes="320px" width="320" height="42" loading="lazy" decoding="async" alt="A dark browser tab titled (1) kwant bots: your team of AI bots, with an amber badge on the tab icon."></a></div><p>The tab reads (1) kwant bots while one thing waits on you, and the number goes up with each one, so you see it from any other tab.</p></li>
+      <li id="phone-pill"><h3>On your phone too</h3><p>The pill shows at the top of the screen on a phone, and a tap opens the chat.</p></li>
+      <li id="linux-tray"><h3>Linux tray</h3><div class="frame"><a class="zoom" href="assets/media/v69-linux-tray.webp" data-caption="The Linux tray icon with an exclamation badge on a dark panel."><img src="assets/media/v69-linux-tray.webp" width="116" height="96" loading="lazy" decoding="async" alt="The Linux tray icon with an exclamation badge on a dark panel."></a></div><p>The Linux tray icon gets a badge. The notification itself uses your desktop's own style.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-065" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
@@ -55,7 +103,7 @@ card_art: team
         <div class="card-body"><h3>Smart Results: replies you can sort and copy</h3><p>A table or list in a bot's reply shows as a comparison, chart, key numbers, findings or a checklist. Every value is copied from the reply, never worked out, and the line under it says where it came from. Show as text brings back the words, and Copy data gives Markdown, CSV or JSON.</p></div>
       </article>
       <article class="card" id="ask-about-this">
-        <span class="shot">{{shot:v65-ask-about-this|The same comparison with the Northdeck row hovered and its Ask about this button showing. The message box at the bottom reads "About Northdeck in your Host table:".|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v65-ask-about-this|The same comparison with the Northdeck row hovered and its Ask about this icon button showing. The message box at the bottom reads "About Northdeck in your Host table:".|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Ask about one row</h3><p>On a comparison, Ask about this puts a line about that row into your message box, and nothing is sent until you send it. Cards are worked out once, without a model call, and anything kwant can't draw stays as text.</p></div>
       </article>
       <article class="card" id="goals">
@@ -63,7 +111,7 @@ card_art: team
         <div class="card-body"><h3>Goals: what should stay true</h3><p>Say it in a sentence and a bot drafts the checks: a page answers, a command succeeds, a file exists. One quiet line while all is OK. When a goal breaks, a bot looks into it and you get one decision: Fix it, Not now or Always fix this goal. Nothing runs until you create or approve a goal.</p></div>
       </article>
       <article class="card" id="failover">
-        <span class="shot">{{shot:v65-order-to-use|Settings, This space, Accounts: the Order to use list. "When one runs out, kwant bots move to the next that still works, in this order." Two Claude logins, Work out until 03:00 and Personal ready, then Codex, an Anthropic key, Grok, signed out, and a Custom API account, each with up and down buttons.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v65-order-to-use|Settings, This space, Accounts: the Order to use list. "When one runs out, kwant bots move to the next that still works, in this order." Two Claude logins (Work out until 03:00, Personal ready), then Codex, an Anthropic key and a Custom API account, each with up and down buttons. Under Not in the order: This machine's Claude, Codex and Grok, and a Grok login, all signed out.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Automatic model failover</h3><p>Put every account in one order under Settings → This space → Accounts → Order to use: Claude, Codex, Grok and Custom API. When one runs out, bots move to the next that still works, the chat says so in one quiet line, and they go back after the reset.</p></div>
       </article>
     </div>
@@ -87,7 +135,7 @@ card_art: team
     </div>
     <div class="grid two">
       <article class="card" id="reason-line">
-        <span class="shot">{{shot:v64-wrong-bot|In #general, a message about refunding boots that a customer wore once. Support answers, and its reason line reads "Support (Customer Support Lead) shares words with your message: customer, refunds, returns; Laya picked the same bot. Chosen from 7 bots in Trailhead Outfitters." Wrong bot? is open below it, listing Lead, Frontend, Backend, QA, Researcher and Marketer, with "Messages like this will go to the bot you pick from now on."|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v64-wrong-bot|In #general, a message about refunding boots that a customer wore once. Support answers, with a Matched skills chip next to its name that shows why it was picked, from the 7 bots in Trailhead Outfitters. Wrong bot? is open below it, listing Lead, Frontend, Backend, QA, Researcher and Marketer, with "Messages like this will go to the bot you pick from now on."|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Every answer says why, and Wrong bot? learns</h3><p>A reason line under the answer says why that bot took it. Wrong bot? lists the other bots: pick one and your message goes to it, and messages like it in that space go there from now on. Only you can make a correction.</p></div>
       </article>
       <article class="card" id="close-call">
@@ -133,7 +181,7 @@ card_art: team
         <div class="card-body"><h3>Truth Ledger: conflicts wait for you</h3><p>When two facts disagree, both are flagged Disputed until you pick Keep this one or Not a conflict. Facts show their evidence and the tasks that rely on them. On from 0.6.5, and with it off bots see exactly what they saw in 0.5.</p></div>
       </article>
       <article class="card" id="insights-06">
-        <span class="shot">{{shot:v6-board|The top of the Mission board: the week's numbers (8 verified, 0 false successes), then verified per active week, 5.8 on average over the last 8 weeks, as a bar chart, and cost per verified result, $0.23, from $1.36 over 8 settled tasks this week, failed runs included, with a note that it is based on 6 verified results that reported a cost and 2 runs reported none. Below, a fact dispute and a bot's request for a higher Flight School tier.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v6-board|The top of the Mission board: the week's numbers (8 verified, 0 false successes, 2 need you), then verified per active week, 1.9 on average over 8 active weeks, as a bar chart, and cost per verified result, $0.30, from $2.71 over 15 settled tasks this week, failed runs included, with a note that it is based on 9 verified results that reported a cost and 4 runs reported none. Below, a fact dispute and a bot's request for a higher Flight School tier.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Insights: verified per week, and the cost</h3><p>Verified results per active week over the last 8 weeks, and the cost of each one, failed runs included. A missing cost is said plainly, never shown as $0.</p></div>
       </article>
     </div>
@@ -241,7 +289,7 @@ card_art: team
         <div class="card-body"><span class="kw-seam"><span class="kw-sticker kw-sticker-holo" style="--kw-tilt: -2deg" role="img" aria-label="Verified, 1 of 1 check passed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg><span>Verified · 1/1</span></span></span><h3>Verified outcomes, with evidence</h3><p>A check proves it: a command that passes, a page that answers, a file that holds the right text, a teammate's review or your OK. Each task keeps the receipt.</p></div>
       </article>
       <article class="card" id="checkpoints">
-        <span class="shot">{{shot:v3-checkpoints|A task's checkpoints before and after each run, and a restore preview listing the files it would write back and what the bot did outside the folder that a restore can't undo.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v3-checkpoints|A task's checkpoints and the restore preview: the two files that change, each marked Remove, with Restore, Restore and run again, and Never mind.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Checkpoints and restore</h3><p>kwant snapshots a task's folder before and after every run. Preview a checkpoint and restore it: only that task's files go back, and you can undo the restore.</p></div>
       </article>
       <article class="card" id="autofix">
@@ -333,7 +381,7 @@ card_art: team
         <div class="card-body"><h3>Reads what a page hides</h3><p>A new <code>page_source</code> tool reads a public page's tags: description, canonical, robots, Open Graph, headings, alt text and structured data.</p></div>
       </article>
       <article class="card" id="connect-card">
-        <span class="shot">{{shot:v3-connect-card|A connection card from TechLead suggesting Google Search Console, with the reason, the Connect button and a note that nothing connects until you sign in, above the bot's reply.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v3-connect-card|A connection card from TechLead suggesting Google Search Console, with the reason, a Connect button and a note that you sign in on Google Search Console's own page through Composio and nothing connects until you do, above the bot's reply.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>A card, not a dead end</h3><p>Without access to an app, a bot offers a connection card and carries on with what it can do. Without a ready Composio connector, the card says what's missing.</p></div>
       </article>
     </div>
@@ -382,8 +430,8 @@ card_art: team
         <div class="card-body"><h3>Rules per space</h3><p>Each space has its own approval rule and hiring rule.</p></div>
       </article>
       <article class="card">
-        <span class="shot">{{shot:v2-accounts|Settings, This space, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
-        <div class="card-body"><h3>Accounts per space</h3><p>See every account at a glance: which is the default, which is in use, and which ran out and when it's back.</p></div>
+        <span class="shot">{{shot:v2-accounts|Settings, This space, Accounts: the Order to use list. Work login (Claude) and ChatGPT Plus (Codex) are ready, Personal Max is out until 15:03, a spare Claude API key is off, Ollama on the Mac can't connect and a Team gateway is ready. Below, under Not in the order, This machine's Claude and Codex are signed out and Grok is not installed.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Accounts per space</h3><p>Every account in one order: which is ready, which ran out and until when, and which still needs a sign-in.</p></div>
       </article>
     </div>
     <ul class="flist">
@@ -409,7 +457,7 @@ card_art: team
     </div>
     <div class="grid two">
       <article class="card">
-        <span class="shot">{{shot:v2-routines|The routines panel: a Monday metrics digest, a paused competitor price scan whose last run failed, a weekday morning release check and a follow-up, each with Run now, History, Edit and Delete.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v2-routines|Settings, Routines: suggested routines, with none right now, then a Monday metrics digest, a paused competitor price scan whose last run failed and a weekday morning release check, each with Run now, History, Edit and Delete.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Routines</h3><p>Once, daily, weekly, monthly, every few minutes or hours, or a cron rule. Run now, history and pause for each.</p></div>
       </article>
       <article class="card">

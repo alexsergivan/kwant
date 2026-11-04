@@ -303,6 +303,12 @@ html:has(.jump-bar) { scroll-padding-top: 76px; }
 .flist li { padding: 18px 20px 20px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
 .flist h3 { font-size: 17px; }
 .flist p { margin-top: 6px; color: var(--muted); font-size: 15.5px; }
+.flist .span2 { grid-column: span 2; }
+#tab-count .frame, #linux-tray .frame { margin: 12px 0 2px; }
+#tab-count .frame { width: fit-content; max-width: 100%; }
+#tab-count .frame img { width: 320px; max-width: 100%; }
+#linux-tray .frame { width: fit-content; }
+#linux-tray .frame img { width: 116px; }
 :not(pre) > code { font-size: 0.86em; padding: 1px 5px; background: var(--v9); border: 1px solid var(--line); border-radius: 5px; color: var(--v2); overflow-wrap: anywhere; }
 .cmd code { background: none; border: 0; color: inherit; padding: 0; }
 
@@ -492,6 +498,7 @@ td code { white-space: nowrap; }
   .page-features .outro { padding-top: 72px; }
   .site-footer .wrap { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .flist { grid-template-columns: minmax(0, 1fr); }
+  .flist .span2 { grid-column: auto; }
   .fgroup { padding: 72px 0; }
   .page-head { padding: 40px 0 24px; }
   .notfound { padding: 48px 0 80px; }
