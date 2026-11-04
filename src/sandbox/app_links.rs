@@ -66,9 +66,9 @@ pub fn app_scheme(url: &str) -> Option<String> {
 
 /// The scheme of `url` when it is a link to another app a bot must not open: Chrome would hand it
 /// to the operating system or freeze the tab behind an "Open <app>?" prompt. `host:port` without
-/// a scheme (`localhost:8080`) isn't one.
+/// a scheme (`localhost:8080`) isn't one, and neither is a Windows drive (`C:\…`, `c:/…`).
 pub fn refused_scheme(url: &str) -> Option<String> {
-    let scheme = app_scheme(url)?;
+    let scheme = app_scheme(url).filter(|s| s.len() > 1)?;
     let rest = url.trim_start()[scheme.len() + 1..].trim_start_matches('/');
     (!rest.starts_with(|c: char| c.is_ascii_digit())).then_some(scheme)
 }
@@ -300,7 +300,7 @@ mod tests {
             assert_eq!(refused_scheme(url).as_deref(), Some(scheme), "{url}");
         }
         for url in ["https://www.tiktok.com/login", "http://a", "about:blank", "data:text/html,x", "javascript:void(0)", "chrome://version",
-            "localhost:8080", "example.com:443/x", "127.0.0.1:9381", "www.tiktok.com", "", "/relative"] {
+            "localhost:8080", "example.com:443/x", "127.0.0.1:9381", "www.tiktok.com", "", "/relative", "C:\\Users\\me\\file.txt", "c:/Users/me/file.txt"] {
             assert_eq!(refused_scheme(url), None, "{url}");
         }
         let text = refused_text("tiktok://open", "tiktok");

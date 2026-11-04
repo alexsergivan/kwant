@@ -1312,6 +1312,8 @@ impl BrowserController {
     /// fails the same way. The person's own navigation is [`Self::navigate_unlocked`].
     pub async fn navigate(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
         let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
+        // a path first: `C:\Users\…` would otherwise read as a link to an app called `c:`
+        refuse_file_path(target_url)?;
         refuse_app_link(target_url)?;
         self.site_guard.set_actor(super::site_guard::Actor::Bot);
         self.site_guard.check(target_url).await.map_err(BrowserError::SiteRule)?;
