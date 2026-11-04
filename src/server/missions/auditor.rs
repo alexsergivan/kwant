@@ -901,7 +901,10 @@ mod tests {
 
     #[test]
     fn a_stage_without_its_call_says_why() {
-        assert_eq!(ended_without("challenge", None), "the challenger's turn ended without a challenge");
-        assert!(ended_without("rebuttal", Some("boom\nmore")).ends_with(": boom"));
+        assert_eq!(ended_without("challenge", None, &[]), "the challenger's turn ended without a challenge");
+        assert!(ended_without("rebuttal", Some("boom\nmore"), &[]).ends_with(": boom"));
+        let late = ended_without("challenge", Some("boom"), &["audit_challenge".to_string()]);
+        assert!(late.starts_with("the challenger's turn ended without a challenge: nobody answered its approval card for audit_challenge within "), "{late}");
+        assert!(!late.contains("boom"), "{late}");
     }
 }
