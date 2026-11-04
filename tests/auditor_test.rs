@@ -27,7 +27,7 @@ use kwnt::{
     },
     tools::ToolRunner,
 };
-use kwnt::mcp::{FixedApprover, ToolApprovalRequest, ToolApprover, SELF_SERVER_NAME};
+use kwnt::mcp::{ApprovalOutcome, FixedApprover, ToolApprovalRequest, ToolApprover, SELF_SERVER_NAME};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tempfile::{tempdir, TempDir};
@@ -803,6 +803,85 @@ async fn one_challenge_is_one_card() {
     let (_, err, _) = tool(&e, &owner, "audit_rebut", json!({"audit_id": a.id, "answers": [{"risk_id": "nope", "stance": "accepted", "answer": "ok"}]})).await;
     assert!(err);
     assert!(free_in_audit_turn(&owner, "audit_rebut", rebut).await);
+}
+
+/// What an audit turn's approvers (kwnt's own tools first, then the card broker, both always
+/// asking, as `run_stage` sets them up) make of `bot`'s call; a card is left unanswered.
+async fn in_audit_turn(e: &Env, bot: &Kwant, tool: &str, args: Value) -> ApprovalOutcome {
+    let broker = mcp_runtime::BrokerApprover {
+        db: e.state.db.clone(),
+        data_dir: e.state.config.data_dir.clone(),
+        broker: e.state.broker.clone(),
+        events: e.state.event_sender.clone(),
+        timeout: Duration::from_millis(200),
+        conversation: e.general.clone(),
+        chat: None,
+        always_ask: true,
+    };
+    let approver = SelfToolsApprover { inner: std::sync::Arc::new(broker), always_ask: true, browser: None };
+    let req = ToolApprovalRequest {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        turn_id: format!("t-{}", uuid::Uuid::new_v4()),
+        tool_name: format!("mcp__{SELF_SERVER_NAME}__{tool}"),
+        server: SELF_SERVER_NAME.into(),
+        tool: tool.into(),
+        arguments: args,
+        builtin: None,
+        smart: None,
+        payment: None,
+    };
+    approver.decide(req).await
+}
+
+/// The approvals rows of the default space as (tool, status), oldest first.
+async fn approval_rows(e: &Env) -> Vec<(String, String)> {
+    let rows = e.state.db.list_approvals(&SpaceId::default_space(), None, None).await.unwrap();
+    rows.into_iter().rev().map(|a| (a.tool_name.rsplit("__").next().unwrap().to_string(), a.status)).collect()
+}
+
+/// With Approvals off, `audit_challenge` and `audit_rebut` run without a card (logged
+/// `auto_allowed`); every other tool of an audit turn still asks. With approvals on or "Ask only
+/// when risky", each audit call asks.
+#[tokio::test]
+async fn audit_calls_follow_the_approval_mode() {
+    let e = setup().await;
+    let owner = bot(&e, "Owner").await;
+    auditor_on(&e, 5).await;
+    let t = task(&e, Some(&owner), 2, "review").await;
+    person_check(&e, &t).await;
+    let space = SpaceId::default_space();
+    e.state.db.set_space_approvals(&space, "off").await.unwrap();
+    let a = open_audit(&e, &t).await;
+    let challenger = e.state.db.get_kwant(&a.challenger_kwant_id).await.unwrap().unwrap();
+
+    // Approvals off: challenge → rebuttal → done, and nobody is shown a card
+    let challenge = json!({"audit_id": a.id, "risks": [{"risk": "No draft was saved", "evidence": "The folder has only the inputs."}]});
+    assert_eq!(in_audit_turn(&e, &challenger, "audit_challenge", challenge.clone()).await, ApprovalOutcome::Allowed);
+    let (v, err, text) = tool(&e, &challenger, "audit_challenge", challenge).await;
+    assert!(!err, "{text}");
+    let risk = v["risks"][0]["id"].as_str().unwrap().to_string();
+    let rebut = json!({"audit_id": a.id, "answers": [{"risk_id": risk, "stance": "accepted", "answer": "Saving it now"}]});
+    assert_eq!(in_audit_turn(&e, &owner, "audit_rebut", rebut.clone()).await, ApprovalOutcome::Allowed);
+    let (_, err, text) = tool(&e, &owner, "audit_rebut", rebut).await;
+    assert!(!err, "{text}");
+    let r = person(&e, "GET", &format!("/api/tasks/{}/risks", t.id), None).await;
+    assert_eq!(r["audits"][0]["status"], "done", "{r}");
+    let auto = |tool: &str| (tool.to_string(), "auto_allowed".to_string());
+    assert_eq!(approval_rows(&e).await, vec![auto("audit_challenge"), auto("audit_rebut")], "no card, both on record");
+
+    // Every other tool of an audit turn still asks, approvals off or not
+    assert_eq!(in_audit_turn(&e, &challenger, "memory_add", json!({"text": "x"})).await, ApprovalOutcome::Unanswered);
+
+    // Approvals on, or "Ask only when risky": one card per audit call, as before
+    for mode in ["ask", "smart"] {
+        e.state.db.set_space_approvals(&space, mode).await.unwrap();
+        let call = json!({"audit_id": a.id, "risks": []});
+        assert_eq!(in_audit_turn(&e, &challenger, "audit_challenge", call).await, ApprovalOutcome::Unanswered, "{mode} asks");
+    }
+    let rows = approval_rows(&e).await;
+    let cards: Vec<&str> = rows.iter().filter(|(_, s)| s != "auto_allowed").map(|(t, _)| t.as_str()).collect();
+    assert_eq!(cards, ["memory_add", "audit_challenge", "audit_challenge"], "{rows:?}");
 }
 
 #[tokio::test]

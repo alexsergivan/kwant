@@ -846,8 +846,9 @@ the task's class (Performance Market), then fewest challenges in the last 7 days
 `audit_started` names the pool (`pool`).
 
 **Exchange.** Two hidden turns, each in the task folder (§12; where the owner wrote the files, not the
-challenger's own folder), each `always_ask` (any call that could change something asks the
+challenger's own folder), each `always_ask` (any other call that could change something asks the
 person, **even with Approvals off**; payments ask in every mode, D8), each capped at 20 minutes.
+`audit_challenge` and `audit_rebut` are the exception: they follow the bot's approval mode (below).
 Hidden means never saved in the bot's chat: nothing an audit turn says, and no turn after it, ever
 shows as a message in the challenger's or the owner's chat; what the person needs to know is on the
 task's audit.
@@ -871,7 +872,12 @@ audit's reason ("nobody answered its approval card for audit_challenge within 5 
 answer to an audit card, marked or an `audit_challenge` / `audit_rebut` card from before cards were
 marked, is closed with `resumed: false` and runs nothing; no turn starts.
 
-**One card per call.** Each audit call asks the person once. If the person allows it and the tool then
+**One card per call.** `audit_challenge` and `audit_rebut` only record the audit in kwnt (risks on the
+task that the person closes), so they follow the person's approval mode like the Skill Foundry draft:
+with Approvals `off` they run without a card and are logged `auto_allowed`; with `ask` or "Ask only
+when risky" each audit call asks the person once. The payment floor (D8) and the Flight School tier
+gate (§14) still add a card in every mode, and every other tool in an audit turn keeps `always_ask`.
+If the person allows an audit call and the tool then
 refuses its input (an evidence id that isn't the task's, a risk too long), the same bot's corrected
 call for that audit stage goes through without a new card, at most twice per stage; the tool checks it
 again as usual. The task's own id in `evidence_ids` is dropped rather than refused. Refused audit calls

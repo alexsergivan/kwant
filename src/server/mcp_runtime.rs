@@ -199,7 +199,10 @@ impl BrokerApprover {
             None => self.tier_gate(&req).await,
         };
         let forced = payment.is_some() || tier.is_some();
-        let off = !forced && !self.always_ask && mode.as_ref().is_some_and(|m| m.is_off());
+        // The two audit calls only record the audit in kwnt (risks the person closes), so they
+        // follow approvals off even in an always-asking audit turn; its other tools still ask
+        let audit_call = req.server == mcp::SELF_SERVER_NAME && super::missions::auditor::TOOL_NAMES.contains(&req.tool.as_str());
+        let off = !forced && (!self.always_ask || audit_call) && mode.as_ref().is_some_and(|m| m.is_off());
         // "Ask only when risky": what the caller made of this call; nothing known asks. A turn that
         // always asks (it read outside text) still lets claude's plain read tools through.
         let smart = mode
