@@ -159,3 +159,26 @@
     });
   });
 })();
+
+// Holo stickers: the sheen follows a mouse or pen (ported from the app's Sticker.tsx). It tracks across the
+// sticker's card ([data-holo-area]), or the sticker itself when it has none. Touch and reduced motion keep 30% / 20%.
+(() => {
+  const stickers = document.querySelectorAll(".kw-sticker-holo");
+  if (!stickers.length) return;
+  const still = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const clamp = (v) => Math.max(0, Math.min(100, Math.round(v)));
+  stickers.forEach((el) => {
+    const area = el.closest("[data-holo-area]") || el;
+    area.addEventListener("pointermove", (e) => {
+      if (e.pointerType === "touch" || still.matches) return;
+      const r = area.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      el.style.setProperty("--mx", clamp(((e.clientX - r.left) / r.width) * 100) + "%");
+      el.style.setProperty("--my", clamp(((e.clientY - r.top) / r.height) * 100) + "%");
+    });
+    area.addEventListener("pointerleave", () => {
+      el.style.removeProperty("--mx");
+      el.style.removeProperty("--my");
+    });
+  });
+})();
