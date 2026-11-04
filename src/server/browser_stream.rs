@@ -886,6 +886,10 @@ async fn stream(
     let mut lease: Option<OwnedRwLockWriteGuard<()>> = None;
     let result = async {
         cdp.call("Page.enable", json!({}), Duration::from_secs(10)).await?;
+        // A windowless Chrome on a Mac never has the OS's focus, so the page can act unfocused
+        // and drop typed keys. While someone controls it, the page behaves as focused (as
+        // Playwright does for every page). It ends with this connection.
+        let _ = cdp.call("Emulation.setFocusEmulationEnabled", json!({"enabled": true}), PROBE_WAIT).await;
         guard_app_links(cdp).await;
         let (w, h) = shared.view();
         cdp.call("Page.startScreencast", screencast_params(w as u32, h as u32), Duration::from_secs(10)).await?;
