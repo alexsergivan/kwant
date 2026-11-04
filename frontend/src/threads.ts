@@ -31,6 +31,8 @@ export interface ActiveTurn {
   since?: string;
   /** "decide": a consult or decide turn of the decide-first gate. */
   purpose?: string;
+  /** A running turn's steps so far (like `meta.activity`), so a page opened mid-turn can show them. */
+  activity?: unknown;
 }
 
 export interface Thread {

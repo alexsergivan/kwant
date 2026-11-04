@@ -17,7 +17,7 @@ import { QuestionCard } from './components/QuestionCard';
 import { HumanStepCard } from './components/HumanStepCard';
 import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
-import { LiveActivity, appendThinking, applyActivity, parseStep } from './activity';
+import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
 import {
   HumanStep,
   HumanStepMeta,
@@ -636,6 +636,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       turnsRef.current = map;
       setTurns(map);
       resetTurns(Object.values(map).filter((t) => t.state === 'running'));
+      // A page opened (or back) mid-turn: what each running bot is doing now, not "getting started".
+      let seeded = activityRef.current;
+      for (const t of Object.values(map)) {
+        const next = t.state === 'running' ? seedActivity(seeded[t.turn_id], t.turn_id, t.activity) : null;
+        if (next) seeded = { ...seeded, [t.turn_id]: { ...next, ctx: t.context_id } };
+      }
+      if (seeded !== activityRef.current) setActivityMap(seeded);
       const busy = new Set(Object.values(map).map((t) => t.context_id));
       for (const ctx of Object.keys(liveRef.current)) {
         if (!busy.has(ctx) && !discussionInProgressRef.current) clearLive(ctx);

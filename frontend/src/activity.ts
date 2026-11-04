@@ -81,6 +81,17 @@ export function applyActivity(prev: LiveActivity | undefined, turnId: string, st
   return { ...base, steps };
 }
 
+/**
+ * After a load or reconnect: a running turn's steps so far, from `GET /api/turns` (its `activity`,
+ * shaped like `meta.activity`). Each goes through `applyActivity`, so steps that already came live
+ * keep their place and a settled step never goes back to running. Null when there is nothing to add.
+ */
+export function seedActivity(prev: LiveActivity | undefined, turnId: string, raw: unknown): LiveActivity | null {
+  const saved = parseActivityMeta({ activity: raw });
+  if (!saved?.steps.length) return null;
+  return saved.steps.reduce<LiveActivity>((acc, step) => applyActivity(acc, turnId, step), prev?.turnId === turnId ? prev : { turnId, steps: [], thinking: {} });
+}
+
 /** The thinking step text is streaming into right now, if any. */
 export function runningThinking(live: LiveActivity | undefined, turnId?: string): ActivityStep | null {
   if (!live || (turnId && live.turnId !== turnId)) return null;

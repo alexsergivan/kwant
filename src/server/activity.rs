@@ -106,6 +106,18 @@ pub fn approval_settled(turn_id: &str, ticket: &str, status: &'static str) {
     }
 }
 
+/// A running turn as `GET /api/turns` lists it, with its steps so far under `activity` (as
+/// `meta.activity`), so a page that loads or reconnects mid-turn shows what the bot is doing now
+/// instead of starting from no steps. Queued turns and turns with no steps yet have none.
+pub fn turn_view(turn: &super::turns::ActiveTurn) -> Value {
+    let mut v = serde_json::to_value(turn).unwrap_or(Value::Null);
+    let steps = TurnActivity::find(&turn.turn_id).and_then(|t| t.with_log(|log| (!log.is_empty()).then(|| log.to_json())));
+    if let (Some(steps), Some(obj)) = (steps, v.as_object_mut()) {
+        obj.insert("activity".into(), steps);
+    }
+    v
+}
+
 /// Adds `meta.activity` to a reply's meta.
 pub fn with_activity(meta: Option<Value>, activity: Option<Value>) -> Option<Value> {
     let Some(activity) = activity else { return meta };
@@ -142,5 +154,30 @@ mod tests {
         drop(turn);
         assert!(TurnActivity::find("turn-activity-test").is_none());
         assert_eq!(with_activity(None, Some(json!({"steps": []}))).unwrap()["activity"]["steps"], json!([]));
+    }
+
+    /// Ticket 4: a page that loads mid-turn gets the open step from `GET /api/turns`.
+    #[test]
+    fn listed_turn_carries_its_steps_so_far() {
+        let active = |turn_id: &str| super::super::turns::ActiveTurn {
+            turn_id: turn_id.into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+        };
+        let tag = TurnTag { turn_id: "turn-view-test".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(broadcast::channel(16).0, tag);
+        assert!(turn_view(&active("turn-view-test")).get("activity").is_none(), "no steps yet: no activity");
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Bash".into(), args: json!({"command": "ls"}) });
+        let v = turn_view(&active("turn-view-test"));
+        assert_eq!(v["turn_id"], "turn-view-test");
+        assert_eq!(v["state"], "running");
+        assert_eq!(v["activity"]["steps"][0]["title"], "Running `ls`");
+        assert_eq!(v["activity"]["steps"][0]["status"], "running");
+        assert!(turn_view(&active("some-other-turn")).get("activity").is_none());
+        drop(turn);
     }
 }
