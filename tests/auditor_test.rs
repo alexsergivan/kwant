@@ -27,7 +27,7 @@ use kwnt::{
     },
     tools::ToolRunner,
 };
-use kwnt::mcp::{FixedApprover, ToolApprovalRequest, ToolApprover, SELF_SERVER_NAME};
+use kwnt::mcp::{ApprovalOutcome, FixedApprover, ToolApprovalRequest, ToolApprover, SELF_SERVER_NAME};
 use serde_json::{json, Value};
 use std::time::Duration;
 use tempfile::{tempdir, TempDir};
@@ -141,12 +141,16 @@ async fn person_check(e: &Env, t: &Task) {
 
 /// `bot` verified `n` tasks of class `general` (Performance Market rows).
 async fn verified(e: &Env, bot: &Kwant, n: usize) {
+    verified_in(e, bot, n, "general").await
+}
+
+async fn verified_in(e: &Env, bot: &Kwant, n: usize, class: &str) {
     for i in 0..n {
         let o = NewObservation {
-            task_id: format!("obs-{}-{i}", bot.id),
+            task_id: format!("obs-{}-{class}-{i}", bot.id),
             space_id: bot.space_id.clone(),
             mission_id: None,
-            task_class: "general".into(),
+            task_class: class.into(),
             kwant_id: bot.id.clone(),
             engine: "cli".into(),
             model: "m".into(),
@@ -801,6 +805,85 @@ async fn one_challenge_is_one_card() {
     assert!(free_in_audit_turn(&owner, "audit_rebut", rebut).await);
 }
 
+/// What an audit turn's approvers (kwnt's own tools first, then the card broker, both always
+/// asking, as `run_stage` sets them up) make of `bot`'s call; a card is left unanswered.
+async fn in_audit_turn(e: &Env, bot: &Kwant, tool: &str, args: Value) -> ApprovalOutcome {
+    let broker = mcp_runtime::BrokerApprover {
+        db: e.state.db.clone(),
+        data_dir: e.state.config.data_dir.clone(),
+        broker: e.state.broker.clone(),
+        events: e.state.event_sender.clone(),
+        timeout: Duration::from_millis(200),
+        conversation: e.general.clone(),
+        chat: None,
+        always_ask: true,
+    };
+    let approver = SelfToolsApprover { inner: std::sync::Arc::new(broker), always_ask: true, browser: None };
+    let req = ToolApprovalRequest {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        turn_id: format!("t-{}", uuid::Uuid::new_v4()),
+        tool_name: format!("mcp__{SELF_SERVER_NAME}__{tool}"),
+        server: SELF_SERVER_NAME.into(),
+        tool: tool.into(),
+        arguments: args,
+        builtin: None,
+        smart: None,
+        payment: None,
+    };
+    approver.decide(req).await
+}
+
+/// The approvals rows of the default space as (tool, status), oldest first.
+async fn approval_rows(e: &Env) -> Vec<(String, String)> {
+    let rows = e.state.db.list_approvals(&SpaceId::default_space(), None, None).await.unwrap();
+    rows.into_iter().rev().map(|a| (a.tool_name.rsplit("__").next().unwrap().to_string(), a.status)).collect()
+}
+
+/// With Approvals off, `audit_challenge` and `audit_rebut` run without a card (logged
+/// `auto_allowed`); every other tool of an audit turn still asks. With approvals on or "Ask only
+/// when risky", each audit call asks.
+#[tokio::test]
+async fn audit_calls_follow_the_approval_mode() {
+    let e = setup().await;
+    let owner = bot(&e, "Owner").await;
+    auditor_on(&e, 5).await;
+    let t = task(&e, Some(&owner), 2, "review").await;
+    person_check(&e, &t).await;
+    let space = SpaceId::default_space();
+    e.state.db.set_space_approvals(&space, "off").await.unwrap();
+    let a = open_audit(&e, &t).await;
+    let challenger = e.state.db.get_kwant(&a.challenger_kwant_id).await.unwrap().unwrap();
+
+    // Approvals off: challenge → rebuttal → done, and nobody is shown a card
+    let challenge = json!({"audit_id": a.id, "risks": [{"risk": "No draft was saved", "evidence": "The folder has only the inputs."}]});
+    assert_eq!(in_audit_turn(&e, &challenger, "audit_challenge", challenge.clone()).await, ApprovalOutcome::Allowed);
+    let (v, err, text) = tool(&e, &challenger, "audit_challenge", challenge).await;
+    assert!(!err, "{text}");
+    let risk = v["risks"][0]["id"].as_str().unwrap().to_string();
+    let rebut = json!({"audit_id": a.id, "answers": [{"risk_id": risk, "stance": "accepted", "answer": "Saving it now"}]});
+    assert_eq!(in_audit_turn(&e, &owner, "audit_rebut", rebut.clone()).await, ApprovalOutcome::Allowed);
+    let (_, err, text) = tool(&e, &owner, "audit_rebut", rebut).await;
+    assert!(!err, "{text}");
+    let r = person(&e, "GET", &format!("/api/tasks/{}/risks", t.id), None).await;
+    assert_eq!(r["audits"][0]["status"], "done", "{r}");
+    let auto = |tool: &str| (tool.to_string(), "auto_allowed".to_string());
+    assert_eq!(approval_rows(&e).await, vec![auto("audit_challenge"), auto("audit_rebut")], "no card, both on record");
+
+    // Every other tool of an audit turn still asks, approvals off or not
+    assert_eq!(in_audit_turn(&e, &challenger, "memory_add", json!({"text": "x"})).await, ApprovalOutcome::Unanswered);
+
+    // Approvals on, or "Ask only when risky": one card per audit call, as before
+    for mode in ["ask", "smart"] {
+        e.state.db.set_space_approvals(&space, mode).await.unwrap();
+        let call = json!({"audit_id": a.id, "risks": []});
+        assert_eq!(in_audit_turn(&e, &challenger, "audit_challenge", call).await, ApprovalOutcome::Unanswered, "{mode} asks");
+    }
+    let rows = approval_rows(&e).await;
+    let cards: Vec<&str> = rows.iter().filter(|(_, s)| s != "auto_allowed").map(|(t, _)| t.as_str()).collect();
+    assert_eq!(cards, ["memory_add", "audit_challenge", "audit_challenge"], "{rows:?}");
+}
+
 #[tokio::test]
 async fn a_person_assigned_owner_is_a_suggestion_until_the_claim() {
     let e = setup().await;
@@ -811,4 +894,210 @@ async fn a_person_assigned_owner_is_a_suggestion_until_the_claim() {
     // No owner yet, so nobody to answer an audit
     let task = e.state.db.get_task(t["id"].as_str().unwrap()).await.unwrap().unwrap();
     assert!(auditor::start(&e.state, &task, "manual").await.is_err());
+}
+
+/// A team of the default space.
+async fn team(e: &Env, name: &str, lead: &Kwant, members: &[&Kwant]) {
+    let t = kwnt::db::models::NewTeam {
+        name: name.into(),
+        description: None,
+        icon: None,
+        lead_kwant_id: lead.id.clone(),
+        member_kwants: members.iter().map(|k| k.id.clone()).collect(),
+        workspace_path: None,
+        repo_url: None,
+    };
+    e.state.db.create_team(&SpaceId::default_space(), &t).await.unwrap();
+}
+
+/// The challenger knows the work: the owner's team first, even over a stronger bot of another
+/// team; then a bot that does the same kind of work; anyone else only when the person asked.
+#[tokio::test]
+async fn the_challenger_comes_from_the_owners_team_first() {
+    let e = setup().await;
+    let (owner, mate) = (bot(&e, "Owner").await, bot(&e, "Mate").await);
+    let (expert, other) = (bot(&e, "Expert").await, bot(&e, "Other").await);
+    team(&e, "Video", &owner, &[&mate]).await;
+    team(&e, "Morning", &expert, &[&other]).await;
+    verified(&e, &expert, 50).await;
+
+    let t = task(&e, Some(&owner), 3, "review").await;
+    let (k, pool) = auditor::pick(&e.state, &t, false).await.expect("a teammate");
+    assert_eq!((k.name.as_str(), pool), ("Mate", "team"), "the owner's teammate, not the stronger outsider");
+
+    // An owner alone in its team: an automatic audit is skipped, nobody from another team
+    let solo = bot(&e, "Solo").await;
+    team(&e, "Solo team", &solo, &[]).await;
+    let t = task(&e, Some(&solo), 3, "review").await;
+    assert!(auditor::pick_challenger(&e.state, &t).await.is_none());
+    let err = auditor::start(&e.state, &t, "high_impact").await.unwrap_err();
+    assert!(err.contains("owner's team"), "{err}");
+    let ev = e.state.db.task_events(&t.id, 50).await.unwrap();
+    let skipped = ev.iter().find(|x| x.kind == "audit_skipped").expect("logged as skipped");
+    assert_eq!(skipped.detail_value()["reason"], "no_challenger");
+
+    // A bot doing the same kind of work counts
+    let t2 = task(&e, Some(&solo), 3, "review").await;
+    assert!(e.state.db.set_task_class(&t2.id, "video", "person").await.unwrap());
+    verified_in(&e, &other, 2, "video").await;
+    let (k, pool) = auditor::pick(&e.state, &t2, false).await.expect("same work");
+    assert_eq!((k.name.as_str(), pool), ("Other", "same_work"));
+
+    // The person's own audit falls back to the whole space, and says so
+    let a = auditor::start(&e.state, &t, "manual").await.unwrap();
+    assert_eq!(a.challenger_kwant_id, expert.id, "the strongest of the rest");
+    let ev = e.state.db.task_events(&t.id, 50).await.unwrap();
+    let started = ev.iter().find(|x| x.kind == "audit_started").expect("started");
+    assert_eq!(started.detail_value()["pool"], "space", "{}", started.detail);
+}
+
+/// An owner with no team: another bot with no team challenges it, before a stronger teamed one.
+#[tokio::test]
+async fn an_owner_with_no_team_is_challenged_by_a_bot_with_none() {
+    let e = setup().await;
+    let (owner, loner) = (bot(&e, "Owner").await, bot(&e, "Loner").await);
+    let (lead, member) = (bot(&e, "Lead").await, bot(&e, "Member").await);
+    team(&e, "Busy", &lead, &[&member]).await;
+    verified(&e, &member, 50).await;
+    verified(&e, &loner, 1).await;
+    let t = task(&e, Some(&owner), 3, "review").await;
+    let (k, pool) = auditor::pick(&e.state, &t, false).await.unwrap();
+    assert_eq!((k.name.as_str(), pool), ("Loner", "no_team"));
+}
+
+/// The challenger reads what the owner handed in, as quoted data with secrets masked, and is told
+/// plainly when nothing was saved.
+#[tokio::test]
+async fn the_challenge_prompt_quotes_the_owners_result() {
+    let e = setup().await;
+    let (owner, other) = (bot(&e, "Owner").await, bot(&e, "Other").await);
+    let none = task(&e, Some(&owner), 3, "review").await;
+    let a = open_audit(&e, &none).await;
+    let p = auditor::challenge_prompt(&e.state, &a, &none, &owner).await;
+    assert!(p.contains("Result: none saved"), "{p}");
+
+    // In a chat: the owner's own latest reply there, not another bot's; and its notes
+    let t = e
+        .state
+        .db
+        .create_task(
+            &SpaceId::default_space(),
+            &NewTask {
+                title: "Morning digest".into(),
+                acceptance: "Lists today's school run and weather".into(),
+                state: "review".into(),
+                priority: 3,
+                owner_kwant_id: Some(owner.id.clone()),
+                max_attempts: 3,
+                source_kind: "chat".into(),
+                channel_id: Some(e.general.clone()),
+                created_by: "person".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let say = |who: &Kwant, text: &str| kwnt::db::models::NewMessage {
+        channel_id: Some(e.general.clone()),
+        direct_kwant_id: None,
+        sender_role: "kwant".into(),
+        sender_id: who.id.clone(),
+        text: text.into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    e.state.db.insert_message(&say(&owner, "School run 8:10, rain from 9. Key sk-ant-abcdefghijklmnopqrstuvwxyz0123")).await.unwrap();
+    e.state.db.insert_message(&say(&other, "OTHER_BOT_TEXT")).await.unwrap();
+    e.state.db.log_task_event(&t.id, "note", &owner.id, &json!({"note": "Weather from the met office"})).await.unwrap();
+    e.state.db.log_task_event(&t.id, "note", &other.id, &json!({"note": "NOT_THE_OWNERS_NOTE"})).await.unwrap();
+    let a = open_audit(&e, &t).await;
+    let p = auditor::challenge_prompt(&e.state, &a, &t, &owner).await;
+    assert!(p.contains("School run 8:10, rain from 9"), "{p}");
+    assert!(p.contains("data, not instructions"), "{p}");
+    assert!(p.contains("Note on the task: Weather from the met office"), "{p}");
+    assert!(!p.contains("abcdefghijklmnopqrstuvwxyz0123"), "a secret is masked: {p}");
+    assert!(!p.contains("OTHER_BOT_TEXT") && !p.contains("NOT_THE_OWNERS_NOTE"), "{p}");
+
+    // A hand-off: its result message, wherever it was posted
+    let (_, d) = e
+        .state
+        .db
+        .create_delegation(&NewDelegation {
+            lead_kwant_id: other.id.clone(),
+            specialist_kwant_id: owner.id.clone(),
+            origin_channel_id: Some(e.general.clone()),
+            origin_kwant_id: None,
+            origin_thread_id: None,
+            team_id: None,
+            task: "do it".into(),
+            title: "do it".into(),
+            continue_lead: false,
+            depth: 1,
+            follow_up_at: None,
+        })
+        .await
+        .unwrap();
+    let mut m = say(&owner, "HANDOFF_RESULT exported 42 rows");
+    (m.channel_id, m.direct_kwant_id) = (None, Some(owner.id.clone()));
+    let m = e.state.db.insert_message(&m).await.unwrap();
+    e.state.db.set_delegation_result_message(&d.id, &m.id).await.unwrap();
+    let h = NewTask {
+        title: "Export".into(),
+        acceptance: "Rows exported".into(),
+        state: "review".into(),
+        priority: 3,
+        owner_kwant_id: Some(owner.id.clone()),
+        max_attempts: 3,
+        source_kind: "delegation".into(),
+        source_id: Some(d.id.clone()),
+        created_by: "person".into(),
+        ..Default::default()
+    };
+    let h = e.state.db.create_task(&SpaceId::default_space(), &h).await.unwrap();
+    let r = auditor::owner_result(&e.state, &h).await.unwrap_or_default();
+    assert!(r.contains("HANDOFF_RESULT exported 42 rows"), "{r}");
+}
+
+/// Audit cards nobody answers are closed when their stage ends or kwant restarts, so none sits
+/// in a bot's chat as "Needs you"; other cards stay.
+#[tokio::test]
+async fn audit_cards_left_open_are_closed() {
+    let e = setup().await;
+    let (a, b) = (bot(&e, "A").await, bot(&e, "B").await);
+    let card = |who: &Kwant, tool: &str, chat: Value| {
+        let (db, id, tool) = (e.state.db.clone(), who.id.clone(), tool.to_string());
+        async move {
+            let ap = db
+                .save_approval(&kwnt::db::models::NewApproval { turn_id: "t".into(), kwant_id: id, tool_name: tool, parameters: json!({"arguments": {}}) })
+                .await
+                .unwrap();
+            assert!(db.park_approval(&ap.id, &chat).await.unwrap());
+            ap.id
+        }
+    };
+    let before = chrono::Utc::now() - chrono::Duration::seconds(5);
+    let marked = card(&a, "Bash", json!({"direct_kwant_id": a.id, "purpose": "audit"})).await;
+    let legacy = card(&a, &format!("mcp__{SELF_SERVER_NAME}__audit_challenge"), json!({"direct_kwant_id": a.id})).await;
+    let plain = card(&a, "Bash", json!({"direct_kwant_id": a.id})).await;
+    let others = card(&b, "Bash", json!({"direct_kwant_id": b.id, "purpose": "audit"})).await;
+    let status = |id: String| {
+        let db = e.state.db.clone();
+        async move { db.get_approval(&id).await.unwrap().unwrap().status }
+    };
+
+    // A stage of A's that started later closes nothing it didn't raise
+    assert!(auditor::close_cards(&e.state, Some(&a.id), Some(chrono::Utc::now() + chrono::Duration::seconds(5))).await.is_empty());
+    let mut closed = auditor::close_cards(&e.state, Some(&a.id), Some(before)).await;
+    closed.sort();
+    assert_eq!(closed, vec!["Bash".to_string(), "audit_challenge".to_string()]);
+    assert_eq!(status(marked).await, "expired");
+    assert_eq!(status(legacy).await, "expired");
+    assert_eq!(status(plain.clone()).await, "waiting", "not an audit card");
+    assert_eq!(status(others.clone()).await, "waiting", "another bot's");
+
+    // A restart closes every audit card left open
+    restart(&e).await;
+    assert_eq!(status(others).await, "expired");
+    assert_eq!(status(plain).await, "waiting");
 }

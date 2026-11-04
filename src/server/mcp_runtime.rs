@@ -199,7 +199,10 @@ impl BrokerApprover {
             None => self.tier_gate(&req).await,
         };
         let forced = payment.is_some() || tier.is_some();
-        let off = !forced && !self.always_ask && mode.as_ref().is_some_and(|m| m.is_off());
+        // The two audit calls only record the audit in kwnt (risks the person closes), so they
+        // follow approvals off even in an always-asking audit turn; its other tools still ask
+        let audit_call = req.server == mcp::SELF_SERVER_NAME && super::missions::auditor::TOOL_NAMES.contains(&req.tool.as_str());
+        let off = !forced && (!self.always_ask || audit_call) && mode.as_ref().is_some_and(|m| m.is_off());
         // "Ask only when risky": what the caller made of this call; nothing known asks. A turn that
         // always asks (it read outside text) still lets claude's plain read tools through.
         let smart = mode
@@ -417,6 +420,12 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
         return Some(json!({"ticket_id": ticket_id, "resolved": true, "status": status, "resumed": false}));
     }
     let not_resumed = |why: &str| Some(json!({"ticket_id": ticket_id, "resolved": true, "status": status, "resumed": false, "reason": why}));
+    // An audit turn is hidden and its stage is over: nothing runs, and no turn starts in the
+    // bot's chat (its outcome is on the task's audit)
+    if super::missions::auditor::is_audit_card(&chat, &approval.tool_name) {
+        tracing::info!(ticket_id, kwant = %approval.kwant_id, tool = %approval.tool_name, "closed a late answer to an audit card");
+        return not_resumed(super::missions::auditor::LATE_CARD);
+    }
     let Ok(Some(kwant)) = state.db.get_kwant(&approval.kwant_id).await else {
         return not_resumed("the bot no longer exists");
     };
@@ -514,6 +523,9 @@ pub struct TurnApprovalOpts {
     /// runs, and every such call is logged here as what the bot would have done (see
     /// [`RehearseApprover`]).
     pub rehearse: Option<RehearseLog>,
+    /// The turn's purpose (`TurnOpts::purpose`), kept on its cards as `purpose`: a late answer to
+    /// a card of a hidden audit turn is closed, never resumed (see [`resume_late_approval`]).
+    pub purpose: Option<String>,
 }
 
 /// The "would have…" lines of a replay turn.
@@ -600,6 +612,9 @@ pub async fn prepare_turn_with_opts(
         let chat = chat.get_or_insert_with(|| json!({"direct_kwant_id": kwant.id}));
         chat["agent"] = json!(agent);
         chat["effort"] = json!(effort);
+    }
+    if let Some(purpose) = &opts.purpose {
+        chat.get_or_insert_with(|| json!({"direct_kwant_id": kwant.id}))["purpose"] = json!(purpose);
     }
     let broker_approver: Arc<dyn ToolApprover> = Arc::new(BrokerApprover {
         db: state.db.clone(),

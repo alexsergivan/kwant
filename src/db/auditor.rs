@@ -354,6 +354,72 @@ impl Database {
         Ok(r.rows_affected() == 1)
     }
 
+    /// Approval cards of audit turns still open (`pending` or `waiting`), as (id, tool name): the
+    /// ones marked with the audit purpose, and audit tool calls from before cards were marked.
+    /// Only `kwant_id`'s, and only those raised at or after `since`, when given.
+    pub async fn open_audit_cards(&self, kwant_id: Option<&str>, purpose: &str, since: Option<chrono::DateTime<chrono::Utc>>) -> Result<Vec<(String, String)>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT id, tool_name FROM approvals WHERE status IN ('pending', 'waiting') AND (?1 IS NULL OR kwant_id = ?1) \
+             AND ((CASE WHEN json_valid(resume) THEN json_extract(resume, '$.purpose') END) = ?2 \
+                  OR tool_name LIKE '%audit_challenge' OR tool_name LIKE '%audit_rebut') \
+             AND (?3 IS NULL OR julianday(created_at) >= julianday(?3)) \
+             ORDER BY created_at, id",
+        )
+        .bind(kwant_id)
+        .bind(purpose)
+        .bind(since.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string()))
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Closes an open card (`expired`); false when it was answered or closed already.
+    pub async fn expire_open_approval(&self, id: &str) -> Result<bool, DbError> {
+        let r = sqlx::query("UPDATE approvals SET status = 'expired' WHERE id = ? AND status IN ('pending', 'waiting')").bind(id).execute(&self.pool).await?;
+        Ok(r.rows_affected() == 1)
+    }
+
+    /// The reply a routine run posted, or a hand-off's result message (`kind` `routine` or
+    /// `delegation`, `source_id` the run or the delegation).
+    pub async fn source_result(&self, kind: &str, source_id: &str) -> Result<Option<super::models::Message>, DbError> {
+        let sql = match kind {
+            "routine" => "SELECT m.* FROM routine_runs r JOIN messages m ON m.id = r.message_id WHERE r.id = ?",
+            "delegation" => "SELECT m.* FROM delegations d JOIN messages m ON m.id = d.result_message_id WHERE d.id = ?",
+            _ => return Ok(None),
+        };
+        Ok(sqlx::query_as::<_, super::models::Message>(sql).bind(source_id).fetch_optional(&self.pool).await?)
+    }
+
+    /// `kwant_id`'s latest replies in a chat (a thread, else a channel, else a direct chat), newest
+    /// first.
+    pub async fn latest_replies(
+        &self,
+        kwant_id: &str,
+        thread_id: Option<&str>,
+        channel_id: Option<&str>,
+        direct_kwant_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<super::models::Message>, DbError> {
+        let place = if thread_id.is_some() {
+            "thread_id = ?2"
+        } else if channel_id.is_some() {
+            "thread_id IS NULL AND channel_id = ?3"
+        } else if direct_kwant_id.is_some() {
+            "thread_id IS NULL AND channel_id IS NULL AND direct_kwant_id = ?4"
+        } else {
+            return Ok(Vec::new());
+        };
+        Ok(sqlx::query_as::<_, super::models::Message>(&format!(
+            "SELECT * FROM messages WHERE sender_role = 'kwant' AND sender_id = ?1 AND {place} ORDER BY rowid DESC LIMIT ?5"
+        ))
+        .bind(kwant_id)
+        .bind(thread_id)
+        .bind(channel_id)
+        .bind(direct_kwant_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Fresh input + output of `kwant_id`'s model calls between `from` and `to`.
     pub async fn tokens_between(&self, kwant_id: &str, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<i64, DbError> {
         let (n,): (Option<i64>,) = sqlx::query_as("SELECT SUM(fresh_input + output) FROM model_usage WHERE kwant_id = ? AND created_at >= ? AND created_at <= ?")
