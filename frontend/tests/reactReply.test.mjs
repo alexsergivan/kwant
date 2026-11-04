@@ -103,12 +103,6 @@ test('bot names for quotes: from the list, else the short id, else "a bot"', () 
   assert.equal(m.botNameOf(undefined, bots), 'a bot');
 });
 
-test('a live reaction update is read by message id', () => {
-  assert.deepEqual(m.reactionEventOf({ message_id: 'a', reaction: 'down' }), { id: 'a', reaction: 'down' });
-  assert.deepEqual(m.reactionEventOf({ message_id: 'a', reaction: null }), { id: 'a', reaction: null });
-  assert.equal(m.reactionEventOf({ message_id: 'a' }), null);
-});
-
 const bot = { id: 'b1', sender_role: 'kwant', sender_id: 'Ada', text: '**Plan**: ship the fix today' };
 const mine = { id: 'u1', sender_role: 'user', sender_id: 'PlayerHero', text: 'Do it', reply_to: { id: 'b1', sender_role: 'kwant', sender_id: 'Ada', excerpt: 'Plan: ship the fix today' } };
 const older = { id: 'u0', sender_role: 'user', sender_id: 'PlayerHero', text: 'Old', reply_to: { id: 'gone', missing: true } };
@@ -282,5 +276,25 @@ test('ChatView: a send that fails keeps the reply chip', async () => {
   await settle();
   await settle();
   assert.ok(v.host.querySelector('[data-reply-chip]'));
+  v.root.unmount();
+});
+
+test('a message_added for a known bot message updates its thumbs (the backend sends reactions this way)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  // No invented reaction events: the full updated message arrives as message_added and replaces by id.
+  assert.doesNotMatch(app, /case '(reaction_updated|ReactionUpdated|message_reaction|MessageReaction|message_reaction_updated|MessageReactionUpdated)'/);
+  assert.match(app, /case 'message_added':[\s\S]*?if \(list\.some\(\(x\) => x\.id === m\.id\)\) \{\s*const replaced = list\.map\(\(x\) => \(x\.id === m\.id \? m : x\)\)/);
+  const v = mount({});
+  await settle();
+  assert.equal(v.host.querySelector('[data-reaction="down"]').getAttribute('aria-pressed'), 'false');
+  // What App does with the event: the same id is replaced by the server's copy.
+  const event = { type: 'message_added', data: { message: { ...bot, reaction: 'down' } } };
+  const list = [older, bot, mine, sys].map((x) => (x.id === event.data.message.id ? event.data.message : x));
+  v.render({ messages: list });
+  assert.equal(v.host.querySelector('[data-reaction="down"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(v.host.querySelector('[data-reaction="up"]').getAttribute('aria-pressed'), 'false');
+  v.render({ messages: list.map((x) => (x.id === 'b1' ? { ...x, reaction: null } : x)) });
+  assert.equal(v.host.querySelector('[data-reaction="down"]').getAttribute('aria-pressed'), 'false', 'a cleared reaction from another window clears here');
   v.root.unmount();
 });

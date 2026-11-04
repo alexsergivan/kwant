@@ -9,7 +9,7 @@ import { useSettingsCover } from './settingsFocus';
 import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState, SendOptions } from './components/ChatView';
-import { ReactResult, Reaction, optimisticReplyRef, reactionEventOf, reactionOf, saveReaction, senderLabel } from './reactReply';
+import { ReactResult, Reaction, optimisticReplyRef, reactionOf, saveReaction, senderLabel } from './reactReply';
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
 import { ApprovalsOffBadge } from './components/ApprovalsSetting';
@@ -938,17 +938,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const updated = [...base, m];
             messagesCacheRef.current[ctx] = updated;
             if (ctx === openCtxRef.current) setMessages(updated);
-            break;
-          }
-          case 'reaction_updated':
-          case 'ReactionUpdated':
-          case 'message_reaction':
-          case 'MessageReaction':
-          case 'message_reaction_updated':
-          case 'MessageReactionUpdated': {
-            // Another window (or this one) saved a reaction.
-            const r = reactionEventOf(event.data);
-            if (r) applyReactionRef.current?.(r.id, r.reaction);
             break;
           }
           case 'decide_updated':

@@ -143,12 +143,3 @@ export function botNameOf(senderId: string | undefined, bots: ReadonlyArray<{ id
   if (known) return known.name;
   return senderId.length > 20 ? 'a bot' : senderId;
 }
-
-/** The message id and reaction a live update carries, whatever the event names them. */
-export function reactionEventOf(data: unknown): { id: string; reaction: Reaction | null } | null {
-  if (!data || typeof data !== 'object') return null;
-  const d = data as Record<string, unknown>;
-  const id = typeof d.message_id === 'string' ? d.message_id : typeof d.id === 'string' ? d.id : null;
-  if (!id || !('reaction' in d)) return null;
-  return { id, reaction: reactionOf(d.reaction) };
-}
