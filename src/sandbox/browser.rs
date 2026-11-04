@@ -470,19 +470,80 @@ pub fn web_address(target: &str) -> Result<std::borrow::Cow<'_, str>, BrowserErr
     })
 }
 
+/// Longest page text a wall phrase counts on: a check page is short (Cloudflare, Amazon,
+/// PerimeterX and Google's "sorry" page are all well under this), while an article or a help page
+/// that only quotes "verify you are human" is not a wall.
+pub const WALL_TEXT_MAX_CHARS: usize = 3000;
+
+/// Phrases a human-check page shows (lower case, straight apostrophes). Each one names the check
+/// itself, never a passing mention: "press and hold" alone is a power button, "captcha" alone is
+/// an article.
+const WALL_PHRASES: &[&str] = &[
+    "i'm not a robot",
+    "i am not a robot",
+    "are you a robot",
+    "make sure you're not a robot",
+    "confirm you're not a robot",
+    "verify you're not a robot",
+    "prove you're not a robot",
+    "confirm you are not a robot",
+    "confirm that you are not a robot",
+    "verify you are not a robot",
+    "verify that you are not a robot",
+    "verify you are human",
+    "verify you are a human",
+    "verify that you are human",
+    "verify that you are a human",
+    "verify you're human",
+    "verifying you are human",
+    "confirm you are human",
+    "confirm you are a human",
+    "confirm that you are human",
+    "prove you're human",
+    "prove you are human",
+    "complete the captcha",
+    "solve the captcha",
+    "complete the security check",
+    "complete the following challenge",
+    "enter the characters you see",
+    "type the characters you see",
+    "press & hold to confirm",
+    "press and hold to confirm",
+    "performing security verification",
+    "bots use duckduckgo too",
+];
+
+/// Whether a page address is a CAPTCHA page by itself: a host or a path segment about one
+/// (`geo.captcha-delivery.com`, `/errors/validateCaptcha`, `/showcaptcha`), not a query that only
+/// mentions it.
+fn captcha_url(url: &str) -> bool {
+    let Ok(u) = url::Url::parse(url) else { return false };
+    u.host_str().is_some_and(|h| h.contains("captcha")) || u.path().to_lowercase().split('/').any(|seg| seg.contains("captcha"))
+}
+
 /// Recognises CAPTCHA / anti-bot interstitials that replace the requested content.
+///
+/// Phrases count only on a short page (or in the title): a check page carries little else. A
+/// widget on an otherwise normal page is the job of [`CAPTCHA_PROBE_JS`].
 pub fn detect_bot_wall(url: &str, title: &str, text: &str) -> Option<&'static str> {
-    let url = url.to_lowercase();
-    let title = title.to_lowercase();
-    let text = text.to_lowercase();
-    if url.contains("google.") && url.contains("/sorry/") || text.contains("unusual traffic from your computer network") {
+    // Curly apostrophes ("you’re") read as straight ones
+    let norm = |s: &str| s.to_lowercase().replace(['\u{2019}', '\u{2018}'], "'");
+    let title = norm(title);
+    let text = norm(text);
+    let lower_url = url.to_lowercase();
+    let short = text.chars().count() <= WALL_TEXT_MAX_CHARS;
+    if lower_url.contains("google.") && lower_url.contains("/sorry/") || text.contains("unusual traffic from your computer network") {
         return Some("Google \"unusual traffic\" CAPTCHA");
     }
-    if title.starts_with("just a moment") || text.contains("checking your browser") || text.contains("checking if the site connection is secure") {
+    if title.starts_with("just a moment")
+        || title.starts_with("attention required! | cloudflare")
+        || title.starts_with("checking your browser")
+        || title.starts_with("checking if the site connection is secure")
+        || short && (text.contains("checking your browser") || text.contains("checking if the site connection is secure"))
+    {
         return Some("Cloudflare bot check");
     }
-    let captcha_markers = ["i'm not a robot", "i am not a robot", "are you a robot", "verify you are human", "verifying you are human", "prove you're human", "complete the captcha"];
-    if captcha_markers.iter().any(|m| text.contains(m) || title.contains(m)) || url.contains("captcha") {
+    if WALL_PHRASES.iter().any(|m| title.contains(m) || short && text.contains(m)) || short && captcha_url(url) {
         return Some("CAPTCHA / human verification");
     }
     None
@@ -638,6 +699,19 @@ pub const CAPTCHA_PROBE_JS: &str = r##"(function () {
     }
   }
   if (!found && anchor && wallPage()) found = box('recaptcha', anchor);
+  // Turnstile now draws its iframe inside a closed shadow root, so on Cloudflare's own check page
+  // (or a bare Turnstile form) only its host box is visible. On a page with fields to fill, a
+  // Turnstile box is part of a form the person submits, not a wall.
+  if (!found && wallPage()) {
+    // the widget's own box first, then the stage Cloudflare wraps it in
+    var TS = ['.cf-turnstile, #cf-turnstile', '#turnstile-wrapper, #challenge-stage'];
+    for (var q = 0; q < TS.length && !found; q++) {
+      for (var rt = 0; rt < roots.length && !found; rt++) {
+        var ts = roots[rt].querySelectorAll(TS[q]);
+        for (var t = 0; t < ts.length && !found; t++) found = box('turnstile', ts[t]);
+      }
+    }
+  }
   for (var ri2 = 0; ri2 < roots.length && !found; ri2++) {
     for (var s = 0; s < SELECTORS.length && !found; s++) {
       var els = roots[ri2].querySelectorAll(SELECTORS[s][1]);

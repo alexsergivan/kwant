@@ -435,7 +435,8 @@ impl TurnInput {
         });
         let control_rules = "A 409 / \"taken control\" answer means the user is using the browser: stop browser actions and wait for the user to hand it back. Never bypass the control API or connect to CDP directly.\n\
             Report browser errors honestly. Never claim a page opened unless navigation succeeded, and only describe content that appears in the returned page text. If a response has \"blocked\": true (CAPTCHA / bot check), follow its \"notice\" instead of claiming results.\n\
-            On a CAPTCHA, stop and wait for the person to solve it: never try to solve, bypass or click through it yourself. Prefer sites you are already signed in to and official APIs over scraping pages that challenge bots.";
+            On a CAPTCHA, stop and wait for the person to solve it: never try to solve, bypass or click through it yourself. Prefer sites you are already signed in to and official APIs over scraping pages that challenge bots.\n\
+            CAPTCHAs anywhere else go to the person too: if your own web fetch, web search or built-in browser meets a CAPTCHA, an \"unusual traffic\" page or another human check, don't give up on the site, don't only describe the block and don't switch sites to get around it. Open that same address in this bot browser: when the check shows there, the person gets a \"Human check needed\" card to solve it and you continue after they do.";
         let browser_block = match browser {
             BrowserAccess::Tools => format!(
                 "\n\n[Bot Browser]\n\
@@ -470,7 +471,8 @@ impl TurnInput {
             ),
             BrowserAccess::Unavailable => "\n\n[Bot Browser]\n\
                 You have no way to use the browser in the user's side panel this turn. If the user asks you to browse, say so plainly and \
-                suggest they open the page themselves (Take Control in the panel); never claim you opened or read a page."
+                suggest they open the page themselves (Take Control in the panel); never claim you opened or read a page. \
+                If anything you read was stopped by a CAPTCHA or another human check, never try to solve or bypass it: tell the person which page asked for the check, so they can solve it themselves."
                 .to_string(),
         };
         let sandbox_rules = format!(
@@ -875,6 +877,23 @@ pub(crate) mod tests {
             assert_eq!(prompt.contains("`routine_create`"), with_tools, "{access:?}");
             assert_eq!(prompt.contains("Routines in kwant's sidebar"), !with_tools, "{access:?}");
         }
+    }
+
+    /// A CAPTCHA the engine's own web tools meet is the person's to solve too, for every engine:
+    /// a bot with kwnt's browser opens the address there (which raises the card), one without it
+    /// tells the person; none is told to solve, bypass or route around it.
+    #[test]
+    fn every_turn_hands_a_captcha_from_the_engines_own_web_tools_to_the_person() {
+        for access in [BrowserAccess::Tools, BrowserAccess::Shell] {
+            let prompt = input().format_system_prompt_with(access);
+            assert!(prompt.contains("your own web fetch, web search or built-in browser meets a CAPTCHA"), "{access:?}");
+            assert!(prompt.contains("Open that same address in this bot browser"), "{access:?}");
+            assert!(prompt.contains("\"Human check needed\" card"), "{access:?}");
+            assert!(prompt.contains("don't switch sites to get around it"), "{access:?}");
+            assert!(prompt.contains("never try to solve, bypass or click through it yourself"), "{access:?}");
+        }
+        let prompt = input().format_system_prompt_with(BrowserAccess::Unavailable);
+        assert!(prompt.contains("never try to solve or bypass it: tell the person which page asked for the check"), "{prompt}");
     }
 
     /// Plan §A.4: one line asks for structure the Smart Results selectors can read, once per turn.

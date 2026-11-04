@@ -718,6 +718,48 @@ fn detects_captcha_and_bot_check_pages() {
     assert!(detect_bot_wall("https://www.bing.com/images/search?q=cat", "cat - Bing images", "Cat pictures, kittens").is_none());
 }
 
+/// The walls a bot meets in the wild, each with the text it actually shows, and pages that only
+/// talk about CAPTCHAs, which must not raise a check.
+#[test]
+fn detects_the_common_walls_and_not_pages_about_them() {
+    use kwnt::sandbox::detect_bot_wall;
+    let walls = [
+        ("Cloudflare Turnstile", "https://site.example/", "Just a moment...", "site.example Verify you are human by completing the action below. site.example needs to review the security of your connection before proceeding."),
+        ("Cloudflare new wording", "https://site.example/", "site.example", "Performing security verification. This website uses a security service to protect against malicious bots."),
+        ("Cloudflare block page", "https://site.example/", "Attention Required! | Cloudflare", "Please enable cookies. One more step. Please complete the security check to access site.example"),
+        ("Cloudflare curly apostrophe", "https://site.example/", "site.example", "Let\u{2019}s confirm you are human. Complete the security check before continuing."),
+        ("DataDome", "https://geo.captcha-delivery.com/captcha/?initialCid=abc", "", ""),
+        ("DataDome text", "https://shop.example/p/1", "shop.example", "We want to make sure it is actually you we are dealing with and not a robot. Please slide to the right. Verify you are a human."),
+        ("PerimeterX", "https://store.example/", "Access to this page has been denied", "Press & Hold to confirm you are a human (and not a bot). Reference ID 1234"),
+        ("PerimeterX spelled out", "https://store.example/", "store.example", "Press and hold to confirm you are human"),
+        ("Amazon", "https://www.amazon.com/errors/validateCaptcha", "Amazon.com", "Enter the characters you see below. Sorry, we just need to make sure you're not a robot. For best results, please make sure your browser is accepting cookies."),
+        ("Amazon curly", "https://www.amazon.de/", "Amazon.de", "Sorry, we just need to make sure you\u{2019}re not a robot."),
+        ("generic robot", "https://news.example/", "news.example", "Please confirm you're not a robot to continue reading."),
+        ("hCaptcha form", "https://forum.example/login", "Security check", "Please solve the CAPTCHA below to continue."),
+        ("DuckDuckGo", "https://duckduckgo.com/html/?q=cats", "DuckDuckGo", "Unfortunately, bots use DuckDuckGo too. Please complete the following challenge to confirm this search was made by a human."),
+        ("Yandex", "https://yandex.com/showcaptcha?cc=1", "Are you not a robot?", "Confirm that you are not a robot"),
+    ];
+    for (name, url, title, text) in walls {
+        assert!(detect_bot_wall(url, title, text).is_some(), "{name} should read as a wall");
+    }
+
+    let article = format!(
+        "A CAPTCHA is a test to tell computers and humans apart. Sites ask you to verify you are human, \
+         or show a box saying I'm not a robot. {}",
+        "Researchers have studied the usability of these tests for many years. ".repeat(60)
+    );
+    let not_walls = [
+        ("Wikipedia article", "https://en.wikipedia.org/wiki/CAPTCHA", "CAPTCHA - Wikipedia", article.as_str()),
+        ("search for captcha", "https://www.bing.com/search?q=captcha+solver", "captcha solver - Search", "Results"),
+        ("long help page", "https://help.example/robots", "Help", article.as_str()),
+        ("power button", "https://phone.example/manual", "Manual", "Press and hold the power button to restart."),
+        ("Bing images", "https://www.bing.com/images/search?q=cat", "cat - Bing images", "Cat pictures, kittens"),
+    ];
+    for (name, url, title, text) in not_walls {
+        assert!(detect_bot_wall(url, title, text).is_none(), "{name} should not read as a wall");
+    }
+}
+
 /// A fake Chrome whose main frame is at `url` and whose capture returns `captured`; records every
 /// CDP call.
 async fn fake_page(
