@@ -188,6 +188,8 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
 
   // Mouse: moves once a frame, presses and releases as they happen, wheel steps summed per frame
   const heldButtons = useRef(0);
+  // Where the pointer last was on the page, for releases that happen off the stage
+  const lastPoint = useRef<{ x: number; y: number } | null>(null);
   const lastTouch = useRef(-Infinity);
   const raf = useCallback((fn: () => void) => {
     requestAnimationFrame(fn);
@@ -226,6 +228,7 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
       const p = toPage(e.clientX, e.clientY, false);
       if (!p) return;
       moves.flush();
+      lastPoint.current = p;
       heldButtons.current |= BUTTON_BIT[e.button] ?? 0;
       sendRef.current({ action: 'mouse', type: 'down', x: p.x, y: p.y, button: buttonName(e.button), buttons: e.buttons || heldButtons.current, click_count: Math.max(1, e.detail || 1), modifiers: mouseModifiers(e, mac) });
     };
@@ -236,6 +239,7 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
       if (!held && !el.contains(e.target as Node)) return;
       const p = toPage(e.clientX, e.clientY, held);
       if (!p) return;
+      lastPoint.current = p;
       moves.push({ ...p, buttons: held ? e.buttons || heldButtons.current : 0, modifiers: mouseModifiers(e, mac) });
     };
     const onUp = (e: MouseEvent) => {
@@ -244,6 +248,7 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
       heldButtons.current &= ~bit;
       const p = toPage(e.clientX, e.clientY, true);
       if (!p) return;
+      lastPoint.current = p;
       moves.flush();
       sendRef.current({ action: 'mouse', type: 'up', x: p.x, y: p.y, button: buttonName(e.button), buttons: heldButtons.current, click_count: Math.max(1, e.detail || 1), modifiers: mouseModifiers(e, mac) });
     };
@@ -259,9 +264,20 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
       wheel.add(p, wheelPixels(e, pageRef.current.height), mouseModifiers(e, mac));
     };
     const onBlurWindow = () => {
-      // Released outside the window: the page shouldn't think a button is still down
-      if (!heldButtons.current) return;
+      // Released outside the window: this window never sees that release, so send it now, or the
+      // page still holds the button and the next press gives it an extra mouseup and click
+      const held = heldButtons.current;
+      if (!held) return;
       heldButtons.current = 0;
+      const p = lastPoint.current;
+      if (!controllingRef.current || !p) return;
+      moves.flush();
+      let left = held;
+      for (const [button, bit] of Object.entries(BUTTON_BIT)) {
+        if (!(held & bit)) continue;
+        left &= ~bit;
+        sendRef.current({ action: 'mouse', type: 'up', x: p.x, y: p.y, button: buttonName(Number(button)), buttons: left, click_count: 1, modifiers: 0 });
+      }
     };
     el.addEventListener('mousedown', onDown);
     window.addEventListener('mousemove', onMove);

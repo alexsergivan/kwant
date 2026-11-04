@@ -1,3 +1,4 @@
+pub mod app_links;
 pub mod bitwarden;
 pub mod browser;
 pub mod browser_history;

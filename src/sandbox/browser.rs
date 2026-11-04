@@ -31,6 +31,24 @@ pub(crate) fn cdp_ws_request(url: &str) -> Result<tokio_tungstenite::tungstenite
 }
 
 /// Opens a DevTools WebSocket (see [`cdp_ws_request`]).
+/// Keeps every document of the page from opening another app (see [`super::app_links`]), for as
+/// long as this DevTools connection lasts. Nobody listens for the guard's binding here.
+async fn guard_app_links(ws: &mut WsStream, msg_id: &AtomicU64) {
+    let id = msg_id.fetch_add(1, Ordering::SeqCst);
+    let request = json!({
+        "id": id,
+        "method": "Page.addScriptToEvaluateOnNewDocument",
+        "params": {"source": super::app_links::guard_js(), "worldName": super::app_links::WORLD, "runImmediately": true},
+    });
+    let sent = match ws.send(Message::Text(request.to_string())).await {
+        Ok(()) => timeout(Duration::from_secs(5), await_reply(ws, id)).await.map_err(|_| BrowserError::Timeout).and_then(|r| r.and_then(|r| r)),
+        Err(e) => Err(BrowserError::Ws(e.to_string())),
+    };
+    if let Err(e) = sent {
+        tracing::warn!(error = %e, "couldn't guard the browser against links to other apps");
+    }
+}
+
 pub(crate) async fn connect_cdp(url: &str) -> Result<WsStream, BrowserError> {
     let (ws, _) = connect_async(cdp_ws_request(url)?).await.map_err(|e| BrowserError::Ws(e.to_string()))?;
     Ok(ws)
@@ -426,6 +444,16 @@ pub fn refuse_file_path(target: &str) -> Result<(), BrowserError> {
         )));
     }
     Ok(())
+}
+
+/// A link to another app (`tiktok://`, `snssdk1233://`, `intent:`) is refused before it reaches
+/// Chrome: Chrome would put up an "Open <app>?" prompt the bot can't see or answer, and the tab
+/// ignores every click and key until a cross-site navigation (see [`super::app_links`]).
+pub fn refuse_app_link(target: &str) -> Result<(), BrowserError> {
+    match super::app_links::refused_scheme(target) {
+        Some(scheme) => Err(BrowserError::NotWebAddress(super::app_links::refused_text(target, &scheme))),
+        None => Ok(()),
+    }
 }
 
 /// Recognises CAPTCHA / anti-bot interstitials that replace the requested content.
@@ -1106,6 +1134,10 @@ impl BrowserController {
             let mut ws = connect_cdp(&ws_url).await?;
             tracing::debug!(target_id = ?self.target_id, "opened a DevTools connection");
             self.reapply_viewport(&mut ws).await;
+            // the browser-level endpoint has no page to guard (Page.* isn't found there)
+            if ws_url.contains("/devtools/page/") {
+                guard_app_links(&mut ws, &self.msg_id).await;
+            }
             **guard = Some(ws);
         }
         Ok(())
@@ -1280,6 +1312,9 @@ impl BrowserController {
     /// fails the same way. The person's own navigation is [`Self::navigate_unlocked`].
     pub async fn navigate(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
         let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
+        // a path first: `C:\Users\…` would otherwise read as a link to an app called `c:`
+        refuse_file_path(target_url)?;
+        refuse_app_link(target_url)?;
         self.site_guard.set_actor(super::site_guard::Actor::Bot);
         self.site_guard.check(target_url).await.map_err(BrowserError::SiteRule)?;
         let _ = self.site_guard.take_refusal();
@@ -1330,6 +1365,7 @@ impl BrowserController {
 
     pub async fn navigate_unlocked(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
         refuse_file_path(target_url)?;
+        refuse_app_link(target_url)?;
         self.progress.lock().unwrap_or_else(|e| e.into_inner()).reset();
         let _ = self.collect_captured_credentials().await;
         let _ = self.send_cdp_command("Page.enable", json!({})).await;
