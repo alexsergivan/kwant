@@ -214,9 +214,12 @@ fn build_pill(handle: &AppHandle, opener: Sender<PillCmd>) -> Option<tauri::Webv
 /// How often the pill checks that it is still under the icon while it shows (a backup for
 /// shifts after it showed; a fresh pill first waits for the icon to settle).
 const FOLLOW_EVERY: Duration = Duration::from_millis(100);
-/// A fresh pill re-reads the icon this often until two reads agree, for at most `SETTLE_CAP`.
+/// A fresh pill re-reads the icon this often until `SETTLE_READS` reads in a row agree (so 60 ms
+/// at least), for at most `SETTLE_CAP` of wall clock. A read waits for the main thread and can
+/// take tens of ms; the cap counts that, and leaves room for a stale read and three slow ones.
 const SETTLE_EVERY: Duration = Duration::from_millis(30);
-const SETTLE_CAP: Duration = Duration::from_millis(150);
+const SETTLE_READS: usize = 3;
+const SETTLE_CAP: Duration = Duration::from_millis(250);
 
 /// Where the pill window goes for the menu-bar icon as it is now: centred on it, 2 pt below it,
 /// kept 8 pt inside the screen (at the top right when macOS won't say where the icon is). Also
@@ -267,7 +270,8 @@ fn place(
 /// A fresh pill shows only once the icon has settled. Its first item comes with the icon's count
 /// changing from none to "1", and AppKit lays the status item out again for the wider title a
 /// moment after the title is set; read at once, the rect is ~11 pt off and the pill would jump
-/// mid-entrance. So the pill waits until two reads 30 ms apart agree (150 ms at most), and
+/// mid-entrance; the bar can also settle in two steps (width first, then x). So the pill waits
+/// until three reads 30 ms apart agree (250 ms of wall clock at most), and
 /// while it shows it still follows the icon every 100 ms in case it moves later.
 fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: Sender<PillCmd>) {
     // Made ahead, hidden, so the first nudge doesn't wait for a page load
@@ -315,9 +319,11 @@ fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: S
                 );
                 if fresh {
                     let started = Instant::now();
-                    let _ = nudge::settle(|| spot(&handle, &tray).map(|(p, _)| p), SETTLE_EVERY, SETTLE_CAP, std::thread::sleep);
+                    let read = || spot(&handle, &tray).map(|(p, _)| p);
+                    let (_, reads) =
+                        nudge::settle(read, SETTLE_EVERY, SETTLE_READS, SETTLE_CAP, || started.elapsed(), std::thread::sleep);
                     if demo {
-                        println!("demo-nudge: pill settled after {} ms", started.elapsed().as_millis());
+                        println!("demo-nudge: pill settled after {} ms ({reads} reads)", started.elapsed().as_millis());
                     }
                 }
                 let moved = if fresh { place(&handle, &tray, w, None) } else { None };

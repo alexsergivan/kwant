@@ -287,34 +287,36 @@ pub fn same_spot(a: (f64, f64), b: (f64, f64)) -> bool {
 }
 
 /// Waits for the menu-bar icon to stop moving before a fresh pill shows: reads where the pill
-/// would go, then again every `every`, until two reads in a row agree or `cap` has been waited.
-/// The 0 -> 1 nudge sets the icon's count and AppKit lays the icon out again a moment later, so
-/// the first read alone would put the pill ~11 pt off and it would jump mid-entrance. Returns
-/// the last read (`None`: the screen couldn't be read) and how long it slept.
+/// would go, then again every `every`, until `need` reads in a row agree or `cap` has passed on
+/// `elapsed` (the wall clock since the wait began, so slow reads count too; the last read can end
+/// up to one read past it). The 0 -> 1 nudge sets the icon's count and AppKit lays the bar out
+/// again a moment later, sometimes in two steps (width first, then x), so the first read alone
+/// would put the pill ~11 pt off, and two early reads can agree on a spot that still moves.
+/// Returns the last read (`None`: the screen couldn't be read) and how many reads it took.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn settle(
     mut read: impl FnMut() -> Option<(f64, f64)>,
     every: Duration,
+    need: usize,
     cap: Duration,
+    mut elapsed: impl FnMut() -> Duration,
     mut sleep: impl FnMut(Duration),
-) -> (Option<(f64, f64)>, Duration) {
+) -> (Option<(f64, f64)>, usize) {
     let mut last = read();
-    let mut slept = Duration::ZERO;
-    while slept + every <= cap {
+    let (mut reads, mut same) = (1, 1);
+    while same < need && elapsed() + every <= cap {
         sleep(every);
-        slept += every;
         let now = read();
+        reads += 1;
         let agree = match (last, now) {
             (Some(a), Some(b)) => same_spot(a, b),
             (None, None) => true,
             _ => false,
         };
+        same = if agree { same + 1 } else { 1 };
         last = now;
-        if agree {
-            break;
-        }
     }
-    (last, slept)
+    (last, reads)
 }
 
 /// The app's own settings, kept in [`PREFS_FILE`] in the data dir.
@@ -600,25 +602,36 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_pill_waits_until_the_icon_reads_the_same_twice() {
+    fn a_fresh_pill_waits_until_the_icon_reads_the_same_three_times() {
         let every = Duration::from_millis(30);
-        let cap = Duration::from_millis(150);
-        let run = |reads: Vec<Option<(f64, f64)>>| {
+        let cap = Duration::from_millis(250);
+        // each read costs `cost` ms of wall clock and each sleep its length; (spot, reads, ms)
+        let run = |reads: Vec<Option<(f64, f64)>>, cost: u64| {
             let mut it = reads.into_iter();
-            let mut n = 0;
-            let (spot, slept) = settle(|| { n += 1; it.next().flatten() }, every, cap, |_| {});
-            (spot, slept, n)
+            let clock = std::cell::Cell::new(Duration::ZERO);
+            let read = || {
+                clock.set(clock.get() + Duration::from_millis(cost));
+                it.next().flatten()
+            };
+            let (spot, n) = settle(read, every, 3, cap, || clock.get(), |d| clock.set(clock.get() + d));
+            (spot, n, clock.get().as_millis())
         };
-        // already settled: one extra read, 30 ms
-        assert_eq!(run(vec![Some((785.0, 26.0)); 9]), (Some((785.0, 26.0)), every, 2));
-        // the 0 -> 1 case: the stale rect, then the settled one twice
-        let moved = vec![Some((795.5, 26.0)), Some((784.0, 26.0)), Some((784.2, 26.0))];
-        assert_eq!(run(moved), (Some((784.2, 26.0)), every * 2, 3));
-        // never settles: gives up at the cap (150 ms, 6 reads) with the newest place
-        let drifting: Vec<_> = (0..20).map(|i| Some((700.0 + i as f64, 26.0))).collect();
-        assert_eq!(run(drifting), (Some((705.0, 26.0)), cap, 6));
-        // no screen to read: settles at once on None
-        assert_eq!(run(vec![None, None]), (None, every, 2));
+        let at = |x: f64| Some((x, 26.0));
+        // already settled: three reads, 60 ms, never sooner
+        assert_eq!(run(vec![at(785.0); 9], 0), (at(785.0), 3, 60));
+        // the 0 -> 1 case: the stale rect, then the settled one three times
+        assert_eq!(run(vec![at(795.5), at(784.0), at(784.2), at(784.1)], 0), (at(784.1), 4, 90));
+        // step 3 on CI: two early reads agree, then macOS moves the item 2 pt; two equal reads
+        // are not enough, so it doesn't settle at 30 or 60 ms but on the moved spot at 120 ms
+        let late = vec![at(616.0), at(616.0), at(614.0), at(614.0), at(614.0), at(612.0)];
+        assert_eq!(run(late, 0), (at(614.0), 5, 120));
+        // never settles: gives up at the cap (240 ms, 9 reads) with the newest place
+        let drifting: Vec<_> = (0..20).map(|i| at(700.0 + i as f64)).collect();
+        assert_eq!(run(drifting.clone(), 0), (at(708.0), 9, 240));
+        // slow reads (40 ms each: a read waits for the main thread) count against the cap too
+        assert_eq!(run(drifting, 40), (at(703.0), 4, 250));
+        // no screen to read: settles on None after three reads
+        assert_eq!(run(vec![None; 3], 0), (None, 3, 60));
         assert!(same_spot((1.0, 2.0), (1.4, 1.6)) && !same_spot((1.0, 2.0), (1.5, 2.0)));
     }
 
