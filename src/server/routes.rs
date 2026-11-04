@@ -2405,6 +2405,7 @@ async fn run_kwant_turn_inner(
             routed: Some((target_model.clone(), effort_level.clone())),
             always_ask: opts.always_ask,
             rehearse: opts.rehearse.clone(),
+            purpose: opts.purpose.clone(),
         };
         let mcp_turn = super::mcp_runtime::prepare_turn_with_opts(
             state,

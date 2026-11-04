@@ -833,18 +833,43 @@ urgent (`high_impact`) or no check that counts and isn't the owner's will judge 
 no challenger) logs `audit_skipped`.
 
 **Challenger.** A bot of the task's space other than the owner, the mission's lead and the lead that
-handed the task off. Ranked by verified tasks of the task's class (Performance Market), then fewest
-challenges in the last 7 days, then name and id.
+handed the task off, that knows the kind of work. Pools, best first:
+
+1. `team`: shares a team with the owner (as lead or member);
+2. `no_team`: when the owner is in no team, another bot in no team;
+3. `same_work`: has verified tasks of the task's class (a class other than `general`);
+4. `space`: any other bot of the space, **only** for an audit the person started (`manual`).
+
+An automatic audit with nobody in pools 1–3 is skipped (`audit_skipped`, reason `no_challenger`):
+a bot of another team would challenge work it knows nothing about. Within a pool: verified tasks of
+the task's class (Performance Market), then fewest challenges in the last 7 days, then name and id.
+`audit_started` names the pool (`pool`).
 
 **Exchange.** Two hidden turns, each in the task folder (§12; where the owner wrote the files, not the
 challenger's own folder), each `always_ask` (any call that could change something asks the
-person; payments ask in every mode, D8), each capped at 20 minutes:
+person, **even with Approvals off**; payments ask in every mode, D8), each capped at 20 minutes.
+Hidden means never saved in the bot's chat: nothing an audit turn says, and no turn after it, ever
+shows as a message in the challenger's or the owner's chat; what the person needs to know is on the
+task's audit.
+
+The challenger's prompt has the task's acceptance, **the owner's result**, its evidence and checks.
+The result is the routine run's reply or the hand-off's result message; otherwise the owner's latest
+reply in the task's chat since the task began. The owner's last two `task_update` notes are added.
+It is quoted as data, secrets masked, at most 3000 characters. With none, the prompt says no result
+was saved.
 
 1. The challenger calls `audit_challenge {audit_id, risks: [{risk, evidence, evidence_ids?}]}` once:
    at most 5 risks, each with evidence (≤1000 chars); `evidence_ids` must be ids of the task's evidence. An empty list
    ends the audit `done` with "no risks raised". No call → the audit ends `failed`.
 2. With risks, the owner calls `audit_rebut {audit_id, answers: [{risk_id, stance, answer, evidence?}]}`
    once; `disputed` needs evidence. Unanswered risks stay `open`.
+
+**Cards of an audit turn** carry the audit purpose (`resume.purpose = "audit"`). When a stage ends,
+every card its turn left open (pending or `waiting`) is closed (`expired`, `ApprovalWithdrawn`), so
+none stays in the bot's chat or keeps it in "Needs you". A stage that ends that way says so in the
+audit's reason ("nobody answered its approval card for audit_challenge within 5 minutes"). A late
+answer to an audit card, marked or an `audit_challenge` / `audit_rebut` card from before cards were
+marked, is closed with `resumed: false` and runs nothing; no turn starts.
 
 **One card per call.** Each audit call asks the person once. If the person allows it and the tool then
 refuses its input (an evidence id that isn't the task's, a risk too long), the same bot's corrected
@@ -861,7 +886,8 @@ While an audit of a task is `queued`, `challenge` or `rebuttal`, its challenger 
 **Ledger** (`task_events`): `audit_started`, `audit_challenge`, `audit_rebuttal`, `audit_done`,
 `audit_skipped`, `risk_resolved`.
 
-**Restarts.** An audit is never left running. At startup, one in `challenge` or `rebuttal` becomes
+**Restarts.** An audit is never left running. At startup every audit card still open is closed
+first (no audit turn is running yet); then one in `challenge` or `rebuttal` becomes
 `interrupted` ("kwant restarted during the audit", logged as `audit_done`; risks already raised stay
 listed); a `queued` one runs now, or is `skipped` ("the auditor was turned off") when the auditor is
 off. A driver that stops early (a panic) ends its audit `failed`.

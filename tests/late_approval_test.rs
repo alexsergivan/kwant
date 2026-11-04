@@ -179,3 +179,43 @@ fn the_bot_is_told_the_card_stays_open_not_that_it_was_denied() {
     assert!(UNANSWERED_TEXT.contains("stays open"));
     assert_eq!(ApprovalOutcome::Unanswered.refusal_text(), UNANSWERED_TEXT);
 }
+
+/// A card of a hidden audit turn: a late Allow closes it and runs nothing. No turn starts in the
+/// bot's chat and no message appears there, because the audit stage that asked is over. This
+/// covers a card marked with the audit purpose and an audit tool card from before cards were
+/// marked.
+#[tokio::test]
+async fn a_late_allow_on_an_audit_card_runs_nothing() {
+    let env = setup().await;
+    let cases = [
+        ("Bash", json!({"direct_kwant_id": env.a, "purpose": "audit"})),
+        ("mcp__kwnt_tools__audit_challenge", json!({"direct_kwant_id": env.a})),
+    ];
+    for (tool, chat) in cases {
+        let a = Arc::new(BrokerApprover {
+            db: env.state.db.clone(),
+            data_dir: env.state.config.data_dir.clone(),
+            broker: env.state.broker.clone(),
+            events: env.state.event_sender.clone(),
+            timeout: Duration::from_millis(200),
+            conversation: env.a.clone(),
+            chat: Some(chat),
+            always_ask: true,
+        });
+        let mut req = request(&env, json!({"command": "ls AUDIT_LATE_MARK", "description": "list"}));
+        (req.tool_name, req.tool) = (tool.into(), tool.into());
+        assert_eq!(a.decide(req).await, ApprovalOutcome::Unanswered);
+        let rows = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("waiting"), Some(&env.a)).await.unwrap();
+        let ticket = rows.iter().find(|r| r.tool_name == tool).expect("a waiting card").id.clone();
+
+        let (s, v) = call(&env.app, "POST", &format!("/api/approvals/{ticket}/resolve"), Some(json!({"decision": "allow_once"}))).await;
+        assert_eq!(s.as_u16(), 200, "{v}");
+        assert_eq!(v["resumed"], false, "{v}");
+        assert!(v["reason"].as_str().unwrap_or("").contains("audit"), "{v}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(env.state.turns.active_turns().is_empty(), "no turn started");
+        assert!(invocations_with("AUDIT_LATE_MARK").is_empty(), "nothing ran");
+        assert!(messages(&env, &env.a).await.iter().all(|m| m.sender_role != "kwant"), "nothing in the bot's chat");
+        assert!(!env.state.broker.drop_grant(&env.a, &env.a, tool, &json!({"command": "ls AUDIT_LATE_MARK", "description": "list"})).await, "no grant left");
+    }
+}
