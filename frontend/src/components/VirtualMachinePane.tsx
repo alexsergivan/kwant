@@ -161,6 +161,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
   // Once the stream reports where the tab is, trust it; before that, the last URL the app heard of.
   const pageUrl = stream.location ? stream.location.url : activeUrl;
+  // The same for the title: a new page's empty title must not fall back to the previous page's.
+  const shownTitle = stream.location ? stream.location.title : pageTitle;
   const currentScreenshot = isBlankPage(pageUrl) ? null : stream.frame?.image || screenshotBase64;
   const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
@@ -489,9 +491,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               )}
             </div>
 
-            {(stream.location?.title || pageTitle) && (
+            {shownTitle && (
               <div className="text-[11px] text-zinc-400 truncate px-1 font-medium">
-                {stream.location?.title || pageTitle}
+                {shownTitle}
               </div>
             )}
 
@@ -715,7 +717,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
         <BrowserTakeoverStage
           botName={teamName}
           pageUrl={pageUrl}
-          pageTitle={stream.location?.title || pageTitle}
+          pageTitle={shownTitle}
           stream={stream}
           image={frameSrc}
           step={stepForStage}

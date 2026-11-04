@@ -335,6 +335,9 @@ pub enum BrowserError {
     Timeout,
     #[error("Browser is controlled by a person. Retry after control is returned.")]
     HumanControl,
+    /// The person's live view sent input without taking control, and nobody else has it.
+    #[error("Take control of the browser first.")]
+    NotInControl,
     /// The browser works, but the page itself could not be loaded (DNS, TLS, refused, ...).
     #[error("Page could not be loaded: {0}")]
     Navigation(String),
