@@ -111,6 +111,10 @@ test('a page opened mid-turn seeds the open step from /api/turns (ticket 4)', as
   const merged = a.seedActivity(live, 't1', fromServer);
   assert.deepEqual(merged.steps.map((s) => [s.id, s.status]), [['b', 'ok'], ['a', 'ok']]);
   assert.equal(merged.thinking.x, 'hm');
+  // `/api/turns` sends no thinking text: a thinking step that ended live keeps the text it had.
+  const ended = { turnId: 't1', thinking: {}, steps: [step({ id: 'th', kind: 'thinking', status: 'ok', title: 'Thinking', text: 'saw it' })] };
+  const reseeded = a.seedActivity(ended, 't1', { steps: [step({ id: 'th', kind: 'thinking', status: 'ok', title: 'Thinking' })] });
+  assert.equal(reseeded.steps[0].text, 'saw it');
   // Nothing to add: no activity, junk, or no steps.
   assert.equal(a.seedActivity(undefined, 't1', undefined), null);
   assert.equal(a.seedActivity(undefined, 't1', { steps: [] }), null);

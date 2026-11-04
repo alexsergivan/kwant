@@ -59,6 +59,12 @@ impl TurnActivity {
         crate::drivers::activity::hide_home_paths(&self.with_log(|log| log.redact(text)))
     }
 
+    /// `event` as it may be broadcast: thinking text, tool arguments and tool results with the
+    /// turn's secrets and credentials masked (see [`ActivityLog::redact_event`]).
+    pub fn redact_event(&self, event: &RuntimeEvent) -> RuntimeEvent {
+        self.with_log(|log| log.redact_event(event))
+    }
+
     pub fn observe(&self, event: &RuntimeEvent) {
         let steps = self.with_log(|log| log.observe(event));
         self.send(steps);
@@ -108,10 +114,11 @@ pub fn approval_settled(turn_id: &str, ticket: &str, status: &'static str) {
 
 /// A running turn as `GET /api/turns` lists it, with its steps so far under `activity` (as
 /// `meta.activity`), so a page that loads or reconnects mid-turn shows what the bot is doing now
-/// instead of starting from no steps. Queued turns and turns with no steps yet have none.
+/// instead of starting from no steps. Queued turns and turns with no steps yet have none. Thinking
+/// text is left out: a running thinking step's text isn't redacted until it ends.
 pub fn turn_view(turn: &super::turns::ActiveTurn) -> Value {
     let mut v = serde_json::to_value(turn).unwrap_or(Value::Null);
-    let steps = TurnActivity::find(&turn.turn_id).and_then(|t| t.with_log(|log| (!log.is_empty()).then(|| log.to_json())));
+    let steps = TurnActivity::find(&turn.turn_id).and_then(|t| t.with_log(|log| (!log.is_empty()).then(|| log.to_view_json())));
     if let (Some(steps), Some(obj)) = (steps, v.as_object_mut()) {
         obj.insert("activity".into(), steps);
     }
@@ -178,6 +185,56 @@ mod tests {
         assert_eq!(v["activity"]["steps"][0]["title"], "Running `ls`");
         assert_eq!(v["activity"]["steps"][0]["status"], "running");
         assert!(turn_view(&active("some-other-turn")).get("activity").is_none());
+        drop(turn);
+    }
+
+    /// Rigel's N1 on #284: a running turn's `GET /api/turns` view carries no thinking text and no
+    /// secret from a tool call's arguments, and the live stream masks them too.
+    #[test]
+    fn listed_turn_has_no_thinking_text_or_raw_secrets() {
+        let active = super::super::turns::ActiveTurn {
+            turn_id: "turn-view-redact".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+        };
+        let token = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        let (tx, mut rx) = broadcast::channel(16);
+        let tag = TurnTag { turn_id: "turn-view-redact".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        turn.add_secrets(vec!["hunter2-mcp-value".into()]);
+        let thinking = RuntimeEvent::ThinkingDelta(format!("I'll use {token} and hunter2-mcp-value"));
+        turn.observe(&thinking);
+        let v = turn_view(&active);
+        let step = &v["activity"]["steps"][0];
+        assert_eq!((step["kind"].as_str(), step["status"].as_str(), step["title"].as_str()), (Some("thinking"), Some("running"), Some("Thinking")));
+        assert!(step.get("text").is_none(), "no thinking text on /api/turns: {step}");
+
+        let call = RuntimeEvent::ToolCallPending {
+            id: "1".into(),
+            name: "Bash".into(),
+            args: json!({"command": format!("curl -H 'Authorization: Bearer {token}' https://x.dev"), "api_key": "plainvalue123", "env": ["PASSWORD=hunter2-mcp-value"]}),
+        };
+        turn.observe(&call);
+        let v = turn_view(&active).to_string();
+        for secret in [token, "hunter2-mcp-value", "plainvalue123"] {
+            assert!(!v.contains(secret), "{secret} in {v}");
+        }
+        assert!(v.contains("\"title\":\"Running `curl"), "the tool step still reads right: {v}");
+        assert!(!v.contains("I'll use"), "thinking that ended on the tool call stays out too: {v}");
+
+        // The live stream: thinking, tool args and tool results go out masked
+        for event in [&thinking, &call, &RuntimeEvent::ToolCallCompleted { id: "1".into(), result: json!({"status": "ok", "content": format!("token={token}")}) }] {
+            let wire = turn.redact_event(event).to_wire().to_string();
+            for secret in [token, "hunter2-mcp-value", "plainvalue123"] {
+                assert!(!wire.contains(secret), "{secret} streamed live: {wire}");
+            }
+        }
+        assert_eq!(turn.redact_event(&RuntimeEvent::TextDelta("reply".into())), RuntimeEvent::TextDelta("reply".into()));
+        while rx.try_recv().is_ok() {}
         drop(turn);
     }
 }

@@ -2753,7 +2753,7 @@ async fn run_kwant_turn_inner(
                                 };
                                 side_effects |= visible;
                                 event_broadcast.activity.observe(&event);
-                                event_broadcast.send(event);
+                                event_broadcast.send(event_broadcast.activity.redact_event(&event));
                             }
                             None => break,
                         }
