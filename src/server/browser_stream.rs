@@ -285,6 +285,63 @@ async fn settle(reply: Reply, wait: Duration) -> Result<Value, BrowserError> {
     }
 }
 
+/// The one frame out with the client, and the newest picture Chrome drew while it was out.
+/// Chrome sends a frame only when the page changes, so a picture dropped while the client
+/// was busy would never come again on a page that then stays still.
+#[derive(Default)]
+struct FrameGate {
+    next_id: u64,
+    /// The id the client must ack, when a frame is out.
+    out: Option<u64>,
+    /// Chrome's screencast session to ack with it; a resent picture was acked on arrival.
+    session: Option<i64>,
+    sent_at: Option<Instant>,
+    /// The newest frame message that arrived while one was out (already acked to Chrome).
+    missed: Option<Value>,
+}
+
+impl FrameGate {
+    /// A frame from Chrome: the message to send the client now, if none is out, and the session
+    /// to ack at once, if the picture waits (Chrome keeps drawing while the client catches up).
+    fn arrive(&mut self, session: i64, image: &Value, width: f64, height: f64, now: Instant) -> (Option<Value>, Option<i64>) {
+        if self.out.is_some() {
+            self.missed = Some(json!({"type":"frame","image":image,"width":width,"height":height}));
+            return (None, Some(session));
+        }
+        (Some(self.send(Some(session), json!({"type":"frame","image":image,"width":width,"height":height}), now)), None)
+    }
+
+    fn send(&mut self, session: Option<i64>, mut frame: Value, now: Instant) -> Value {
+        self.next_id += 1;
+        frame["id"] = json!(self.next_id);
+        self.out = Some(self.next_id);
+        self.session = session;
+        self.sent_at = Some(now);
+        frame
+    }
+
+    /// The client acked `id`: the session to ack to Chrome, and the missed picture to send next.
+    fn ack(&mut self, id: Option<u64>, now: Instant) -> (Option<i64>, Option<Value>) {
+        if id.is_none() || id != self.out { return (None, None); }
+        self.release(now)
+    }
+
+    /// A frame out for longer than `FRAME_STALL` is let go the same way, so a lost ack costs
+    /// one stale picture for a few seconds instead of the stream, and never the newest picture.
+    fn stall(&mut self, now: Instant) -> (Option<i64>, Option<Value>) {
+        let stalled = self.out.is_some() && self.sent_at.is_some_and(|t| now.saturating_duration_since(t) > FRAME_STALL);
+        if !stalled { return (None, None); }
+        self.release(now)
+    }
+
+    fn release(&mut self, now: Instant) -> (Option<i64>, Option<Value>) {
+        let session = self.session.take();
+        self.out = None;
+        let next = self.missed.take().map(|frame| self.send(None, frame, now));
+        (session, next)
+    }
+}
+
 /// State the stream and its worker share.
 struct Shared {
     /// The page viewport in CSS px, from frame metadata or the last resize.
@@ -814,10 +871,7 @@ async fn stream(
         cdp.call("Page.startScreencast", screencast_params(w as u32, h as u32), Duration::from_secs(10)).await?;
         let mut last_client = Instant::now();
         let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
-        let mut pending_frame: Option<i64> = None;
-        let mut frame_sent = Instant::now();
-        let mut next_frame = 0u64;
-        let mut pending_token = 0u64;
+        let mut frames = FrameGate::default();
         let mut location_tick = tokio::time::interval(Duration::from_secs(2));
         let mut moves = RateLimit::new(bi::MOVES_PER_SECOND, 10.0, std::time::Instant::now());
         let mut dialog_open = false;
@@ -833,12 +887,11 @@ async fn stream(
                         let _ = jobs.send(Job::HandBack(None));
                     }
                     // a client that never acks the last frame (an identical picture fires no
-                    // load) gets the next one anyway instead of a frozen view and a dropped stream
-                    if pending_frame.is_some() && frame_sent.elapsed() > FRAME_STALL {
-                        if let Some(session) = pending_frame.take() {
-                            cdp.fire("Page.screencastFrameAck", json!({"sessionId":session}));
-                        }
-                    }
+                    // load) gets the next one anyway instead of a frozen view and a dropped stream,
+                    // and the newest picture it missed meanwhile at once
+                    let (session, next) = frames.stall(Instant::now());
+                    if let Some(session) = session { cdp.fire("Page.screencastFrameAck", json!({"sessionId":session})); }
+                    if let Some(next) = next { send(socket, next).await?; }
                     // a fallback for title changes no page event announces
                     refresh_location(cdp, ctrl, shared, client_tx);
                 }
@@ -859,16 +912,10 @@ async fn stream(
                             let session = params["sessionId"].as_i64().unwrap_or_default();
                             let (dw, dh) = (params["metadata"]["deviceWidth"].as_f64().unwrap_or(0.0), params["metadata"]["deviceHeight"].as_f64().unwrap_or(0.0));
                             if dw >= 1.0 && dh >= 1.0 { shared.set_view(dw, dh); }
-                            if pending_frame.is_some() {
-                                cdp.fire("Page.screencastFrameAck", json!({"sessionId":session}));
-                                continue;
-                            }
-                            next_frame += 1;
-                            pending_token = next_frame;
-                            pending_frame = Some(session);
-                            frame_sent = Instant::now();
                             let (fw, fh) = shared.view();
-                            send(socket, json!({"type":"frame","id":next_frame,"image":params["data"],"width":fw,"height":fh})).await?;
+                            let (now, ack_now) = frames.arrive(session, &params["data"], fw, fh, Instant::now());
+                            if let Some(session) = ack_now { cdp.fire("Page.screencastFrameAck", json!({"sessionId":session})); }
+                            if let Some(frame) = now { send(socket, frame).await?; }
                         }
                         "Page.javascriptDialogOpening" => {
                             dialog_open = true;
@@ -895,11 +942,9 @@ async fn stream(
                     match value["action"].as_str().unwrap_or("") {
                         "pong" => {},
                         "frame_ack" => {
-                            if value["id"].as_u64() == Some(pending_token) {
-                                if let Some(session) = pending_frame.take() {
-                                    cdp.fire("Page.screencastFrameAck", json!({"sessionId":session}));
-                                }
-                            }
+                            let (session, next) = frames.ack(value["id"].as_u64(), Instant::now());
+                            if let Some(session) = session { cdp.fire("Page.screencastFrameAck", json!({"sessionId":session})); }
+                            if let Some(next) = next { send(socket, next).await?; }
                         }
                         "take_control" => {
                             // A pending human step already holds the browser for the person
@@ -1123,6 +1168,42 @@ mod tests {
     fn input_without_control_says_to_take_control_unless_someone_has_it() {
         assert_eq!(not_in_control(false).to_string(), "Take control of the browser first.");
         assert!(matches!(not_in_control(true), BrowserError::HumanControl));
+    }
+
+    #[test]
+    fn a_picture_drawn_while_one_is_out_is_sent_next_on_ack_or_stall() {
+        let t0 = Instant::now();
+        let mut gate = FrameGate::default();
+        let (first, ack_now) = gate.arrive(7, &json!("red"), 800.0, 600.0, t0);
+        assert_eq!((first.unwrap()["id"].clone(), ack_now), (json!(1), None));
+        // two more pictures while the first is out: Chrome gets its ack at once, the newest is kept
+        assert_eq!(gate.arrive(8, &json!("green"), 800.0, 600.0, t0), (None, Some(8)));
+        assert_eq!(gate.arrive(9, &json!("blue"), 800.0, 600.0, t0), (None, Some(9)));
+        // a stale or unknown ack changes nothing
+        assert_eq!(gate.ack(Some(5), t0), (None, None));
+        assert_eq!(gate.ack(None, t0), (None, None));
+        // the ack lets the first go and sends the newest picture with a new id
+        let (session, next) = gate.ack(Some(1), t0);
+        let next = next.expect("the missed picture");
+        assert_eq!((session, next["id"].clone(), next["image"].clone(), next["width"].clone()), (Some(7), json!(2), json!("blue"), json!(800.0)));
+        // its ack has nothing left to ack to Chrome or send
+        assert_eq!(gate.ack(Some(2), t0), (None, None));
+
+        // the same after a lost ack: nothing before the stall, the missed picture after it
+        let (out, _) = gate.arrive(10, &json!("red"), 800.0, 600.0, t0);
+        assert_eq!(out.unwrap()["id"], 3);
+        assert_eq!(gate.arrive(11, &json!("blue"), 800.0, 600.0, t0), (None, Some(11)));
+        assert_eq!(gate.stall(t0 + FRAME_STALL), (None, None));
+        let (session, next) = gate.stall(t0 + FRAME_STALL + Duration::from_millis(1));
+        let next = next.expect("the missed picture after the stall");
+        assert_eq!((session, next["id"].clone(), next["image"].clone()), (Some(10), json!(4), json!("blue")));
+        // a late ack of the stalled frame is ignored; a resend that is never acked is let go too
+        assert_eq!(gate.ack(Some(3), t0), (None, None));
+        assert_eq!(gate.stall(t0 + FRAME_STALL * 3), (None, None));
+        let (out, _) = gate.arrive(12, &json!("still"), 800.0, 600.0, t0 + FRAME_STALL * 3);
+        assert_eq!(out.unwrap()["id"], 5, "a new picture goes out once the resend is let go");
+        // a frame out with nothing missed: the stall only lets it go
+        assert_eq!(gate.stall(t0 + FRAME_STALL * 5), (Some(12), None));
     }
 
     #[test]

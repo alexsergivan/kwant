@@ -522,6 +522,62 @@ async fn a_watcher_is_told_to_take_control_and_a_lost_frame_ack_does_not_drop_th
     app_task.abort(); cdp_task.abort();
 }
 
+/// The next frame, answering pings on the way; `None` when none comes `within`.
+async fn next_frame(ws: &mut Client, within: Duration) -> Option<Value> {
+    timeout(within, async {
+        loop {
+            if let WsMessage::Text(text) = ws.next().await.unwrap().unwrap() {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                match value["type"].as_str().unwrap_or_default() {
+                    "ping" => ws.send(WsMessage::Text(json!({"action":"pong"}).to_string())).await.unwrap(),
+                    "frame" => return value,
+                    _ => {}
+                }
+            }
+        }
+    }).await.ok()
+}
+
+#[tokio::test]
+async fn a_picture_drawn_while_the_client_was_busy_is_sent_next_even_on_a_page_that_stays_still() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, _ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    let red = next_frame(&mut ws, Duration::from_secs(5)).await.expect("the first picture");
+    assert_eq!(red["image"], "streamed-frame");
+
+    // N1: the ack of the red picture is lost and the page turns blue 0.6 s later, then stays
+    // still, so Chrome never draws it again. After the 4-6 s stall the client must get the blue
+    // picture instead of showing red until the page next changes.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    push_event(&mock, "Page.screencastFrame", json!({"sessionId":8,"data":"blue"})).await;
+    let blue = next_frame(&mut ws, Duration::from_secs(8)).await.expect("the page's current picture after the stall");
+    assert_eq!(blue["image"], "blue");
+    assert_ne!(blue["id"], red["id"]);
+
+    // the same when the client is only slow: the page changes while it decodes, and its ack
+    // brings the newer picture at once
+    ws.send(WsMessage::Text(json!({"action":"frame_ack","id":blue["id"]}).to_string())).await.unwrap();
+    push_event(&mock, "Page.screencastFrame", json!({"sessionId":9,"data":"white"})).await;
+    let white = next_frame(&mut ws, Duration::from_secs(1)).await.expect("a fresh picture");
+    push_event(&mock, "Page.screencastFrame", json!({"sessionId":10,"data":"green"})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    ws.send(WsMessage::Text(json!({"action":"frame_ack","id":white["id"]}).to_string())).await.unwrap();
+    let green = next_frame(&mut ws, Duration::from_secs(1)).await.expect("the picture drawn while the client was busy");
+    assert_eq!(green["image"], "green");
+
+    // Chrome had its ack for every picture, so its screencast never stalls either
+    let acked = || async { mock.commands.lock().await.iter()
+        .filter(|c| c["method"] == "Page.screencastFrameAck").map(|c| c["params"]["sessionId"].clone()).collect::<Vec<_>>() };
+    let all = timeout(Duration::from_secs(2), async { loop {
+        let seen = acked().await;
+        if [7, 8, 9, 10].iter().all(|s| seen.contains(&json!(s))) { break; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }}).await;
+    assert!(all.is_ok(), "every session acked: {:?}", acked().await);
+    app_task.abort(); cdp_task.abort();
+}
+
 /// Opt in after building docker/browser.Dockerfile. Uses disposable data and a local HTML page.
 #[tokio::test]
 #[ignore = "requires Docker and the kwnt-browser:v2 image"]
