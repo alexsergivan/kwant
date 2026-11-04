@@ -240,6 +240,143 @@ async fn pointer_drags_press_move_release_in_order_and_let_go_on_release_or_disc
     app_task.abort(); cdp_task.abort();
 }
 
+/// Messages up to and including the ack or error for `id`, skipping frames, pings and locations.
+async fn until_reply(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, id: &str) -> Vec<Value> {
+    timeout(Duration::from_secs(5), async {
+        let mut seen = vec![];
+        loop {
+            if let WsMessage::Text(text) = ws.next().await.unwrap().unwrap() {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                match value["type"].as_str().unwrap_or_default() {
+                    "ping" => ws.send(WsMessage::Text(json!({"action":"pong"}).to_string())).await.unwrap(),
+                    "frame" => ws.send(WsMessage::Text(json!({"action":"frame_ack","id":value["id"]}).to_string())).await.unwrap(),
+                    "location" => {}
+                    _ => {
+                        let done = value["id"] == id && matches!(value["type"].as_str(), Some("ack" | "error"));
+                        seen.push(value);
+                        if done { return seen; }
+                    }
+                }
+            }
+        }
+    }).await.unwrap()
+}
+
+#[tokio::test]
+async fn protocol_v2_mouse_keys_wheel_and_resize_reach_the_page_in_order_and_restore() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {data_dir:tmp.path().into(),browser_cdp_url:Some(format!("http://127.0.0.1:{}",mock.port)),..Config::default()};
+    let db = Database::init(tmp.path()).await.unwrap();
+    let id=db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
+    let state=AppState::new(config.clone(),db,ToolRunner::new(tmp.path().join("workspace")),PermissionBroker::new(),LayaRouter::new(config.laya_url));
+    let ctrl=kwnt::server::routes::get_or_create_browser_controller(&state,&id).await.unwrap();
+    let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port=listener.local_addr().unwrap().port();
+    let app_task=tokio::spawn(async move {axum::serve(listener,create_router(state)).await.unwrap();});
+    let mut request=format!("ws://127.0.0.1:{port}/api/sandbox/{id}/stream").into_client_request().unwrap();
+    request.headers_mut().insert("Origin",format!("http://127.0.0.1:{port}").parse().unwrap());
+    let (mut ws,_)=connect_async(request).await.unwrap();
+    let frame = receive(&mut ws,"frame").await;
+    assert_eq!((frame["width"].as_f64(), frame["height"].as_f64()), (Some(1280.0), Some(800.0)));
+    let send = |payload: Value| WsMessage::Text(payload.to_string());
+
+    // input needs control first
+    ws.send(send(json!({"action":"mouse","type":"down","x":5,"y":5,"button":"left","id":"early"}))).await.unwrap();
+    assert!(until_reply(&mut ws,"early").await.last().unwrap()["error"].as_str().unwrap().contains("controlled"));
+    ws.send(send(json!({"action":"take_control"}))).await.unwrap();
+    let control = receive(&mut ws,"control").await;
+    assert_eq!((control["active"].clone(), control["viewport"]["width"].as_f64()), (json!(true), Some(1280.0)));
+    mock.commands.lock().await.clear();
+
+    // a hover move is never acked; a right press with Shift and its release are, in order
+    ws.send(send(json!({"action":"mouse","type":"move","x":10,"y":20,"id":"m"}))).await.unwrap();
+    ws.send(send(json!({"action":"mouse","type":"down","x":10,"y":20,"button":"right","modifiers":8,"id":"d"}))).await.unwrap();
+    ws.send(send(json!({"action":"mouse","type":"up","x":10,"y":20,"button":"right","modifiers":8,"id":"u"}))).await.unwrap();
+    let seen = until_reply(&mut ws,"u").await;
+    assert!(!seen.iter().any(|m| m["id"]=="m"), "moves are fire-and-forget: {seen:?}");
+    // a double click: the second press carries clickCount 2
+    for (i, (kind, count)) in [("down",1),("up",1),("down",2),("up",2)].into_iter().enumerate() {
+        ws.send(send(json!({"action":"mouse","type":kind,"x":30,"y":40,"button":"left","click_count":count,"id":format!("c{i}")}))).await.unwrap();
+    }
+    until_reply(&mut ws,"c3").await;
+    let mouse: Vec<_> = mock.commands.lock().await.iter().filter(|c| c["method"]=="Input.dispatchMouseEvent").map(|c| c["params"].clone()).collect();
+    let shape: Vec<_> = mouse.iter().map(|p| (p["type"].as_str().unwrap().to_string(), p["button"].as_str().unwrap().to_string(), p["buttons"].as_i64().unwrap(), p["clickCount"].as_i64().unwrap_or(0), p["modifiers"].as_i64().unwrap())).collect();
+    assert_eq!(shape, vec![
+        ("mouseMoved".into(),"none".into(),0,0,0),
+        ("mousePressed".into(),"right".into(),2,1,8),
+        ("mouseReleased".into(),"right".into(),0,1,8),
+        ("mousePressed".into(),"left".into(),1,1,0),
+        ("mouseReleased".into(),"left".into(),0,1,0),
+        ("mousePressed".into(),"left".into(),1,2,0),
+        ("mouseReleased".into(),"left".into(),0,2,0),
+    ]);
+    mock.commands.lock().await.clear();
+
+    // keys: Ctrl+A is a raw key down with the selectAll command, a letter types its text,
+    // Shift+Tab is a raw key with Shift, an unknown code is refused
+    for (i, (key, code, modifiers)) in [("a","KeyA",2),("b","KeyB",0),("Tab","Tab",8)].into_iter().enumerate() {
+        ws.send(send(json!({"action":"key","type":"down","key":key,"code":code,"modifiers":modifiers,"id":format!("k{i}")}))).await.unwrap();
+        assert_eq!(until_reply(&mut ws,&format!("k{i}")).await.last().unwrap()["type"],"ack");
+    }
+    ws.send(send(json!({"action":"key","type":"down","key":"x","code":"Bogus","id":"bad"}))).await.unwrap();
+    assert!(until_reply(&mut ws,"bad").await.last().unwrap()["error"].as_str().unwrap().contains("Unsupported key code"));
+    let keys: Vec<_> = mock.commands.lock().await.iter().filter(|c| c["method"]=="Input.dispatchKeyEvent").map(|c| c["params"].clone()).collect();
+    assert_eq!(keys.len(), 3);
+    assert_eq!((keys[0]["type"].clone(), keys[0]["windowsVirtualKeyCode"].clone(), keys[0]["commands"].clone(), keys[0].get("text")), (json!("rawKeyDown"), json!(65), json!(["selectAll"]), None));
+    assert_eq!((keys[1]["type"].clone(), keys[1]["text"].clone()), (json!("keyDown"), json!("b")));
+    assert_eq!((keys[2]["type"].clone(), keys[2]["windowsVirtualKeyCode"].clone(), keys[2]["modifiers"].clone()), (json!("rawKeyDown"), json!(9), json!(8)));
+    mock.commands.lock().await.clear();
+
+    // wheel carries modifiers and is not acked
+    ws.send(send(json!({"action":"wheel","x":100,"y":100,"delta_y":120,"modifiers":2,"id":"w"}))).await.unwrap();
+    ws.send(send(json!({"action":"type","text":"z","id":"t"}))).await.unwrap();
+    assert!(!until_reply(&mut ws,"t").await.iter().any(|m| m["id"]=="w"));
+    let wheel = mock.commands.lock().await.iter().find(|c| c["params"]["type"]=="mouseWheel").cloned().unwrap();
+    assert_eq!((wheel["params"]["deltaY"].as_f64(), wheel["params"]["modifiers"].as_i64()), (Some(120.0), Some(2)));
+
+    // resize: applied, screencast restarted at device pixels, bounds follow the new viewport
+    mock.commands.lock().await.clear();
+    ws.send(send(json!({"action":"resize","width":900,"height":5000,"dpr":2,"id":"r"}))).await.unwrap();
+    let resized = until_reply(&mut ws,"r").await.pop().unwrap();
+    assert_eq!(resized["viewport"], json!({"width":900,"height":1200,"dpr":2.0}), "height clamps to 1200");
+    let commands = mock.commands.lock().await.clone();
+    let metrics = commands.iter().find(|c| c["method"]=="Emulation.setDeviceMetricsOverride").unwrap();
+    assert_eq!((metrics["params"]["width"].clone(), metrics["params"]["height"].clone(), metrics["params"]["deviceScaleFactor"].clone()), (json!(900), json!(1200), json!(2.0)));
+    let cast = commands.iter().find(|c| c["method"]=="Page.startScreencast").unwrap();
+    assert_eq!((cast["params"]["maxWidth"].clone(), cast["params"]["maxHeight"].clone()), (json!(1800), json!(2400)));
+    ws.send(send(json!({"action":"mouse","type":"down","x":950,"y":10,"button":"left","id":"o"}))).await.unwrap();
+    assert!(until_reply(&mut ws,"o").await.last().unwrap()["error"].as_str().unwrap().contains("outside"));
+    ws.send(send(json!({"action":"mouse","type":"down","x":850,"y":1100,"button":"left","id":"in"}))).await.unwrap();
+    assert_eq!(until_reply(&mut ws,"in").await.last().unwrap()["type"],"ack");
+
+    // release: the held button is let go and the bot's 1280x800 comes back
+    mock.commands.lock().await.clear();
+    ws.send(send(json!({"action":"release_control"}))).await.unwrap();
+    let released = receive(&mut ws,"control").await;
+    assert_eq!((released["active"].clone(), released["viewport"]["width"].as_f64()), (json!(false), Some(1280.0)));
+    let commands = mock.commands.lock().await.clone();
+    assert!(commands.iter().any(|c| c["params"]["type"]=="mouseReleased" && c["params"]["button"]=="left"));
+    let metrics = commands.iter().find(|c| c["method"]=="Emulation.setDeviceMetricsOverride").unwrap();
+    assert_eq!((metrics["params"]["width"].clone(), metrics["params"]["height"].clone(), metrics["params"]["deviceScaleFactor"].clone()), (json!(1280), json!(800), json!(1)));
+    assert_eq!(commands.iter().find(|c| c["method"]=="Page.startScreencast").unwrap()["params"]["maxWidth"], 1280);
+    assert!(ctrl.pointer_held().is_none());
+
+    // a resize then a dropped socket: restored as well
+    ws.send(send(json!({"action":"take_control"}))).await.unwrap();
+    receive(&mut ws,"control").await;
+    ws.send(send(json!({"action":"resize","width":700,"height":500,"id":"r2"}))).await.unwrap();
+    until_reply(&mut ws,"r2").await;
+    mock.commands.lock().await.clear();
+    drop(ws);
+    timeout(Duration::from_secs(5),async {loop {
+        let restored = mock.commands.lock().await.iter().any(|c| c["method"]=="Emulation.setDeviceMetricsOverride" && c["params"]["width"]==1280);
+        if restored && ctrl.control.try_read().is_ok() {break;}
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }}).await.unwrap();
+    app_task.abort(); cdp_task.abort();
+}
+
 /// Opt in after building docker/browser.Dockerfile. Uses disposable data and a local HTML page.
 #[tokio::test]
 #[ignore = "requires Docker and the kwnt-browser:v2 image"]
