@@ -1503,7 +1503,7 @@ pub async fn list_turns(State(state): State<AppState>, super::spaces::Scope(spac
     for t in state.turns.active_turns() {
         let of = state.db.space_of_kwant(&t.kwant_id).await.ok().flatten().unwrap_or_else(crate::db::spaces::SpaceId::default_space);
         if of == space {
-            turns.push(t);
+            turns.push(super::activity::turn_view(&t));
         }
     }
     Json(json!({ "turns": turns, "max_turns_per_agent": per_agent, "max_turns_global": global })).into_response()

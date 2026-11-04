@@ -71,6 +71,14 @@ The saved bot reply (message `meta`, a JSON string in the message row) gets:
 16,000 thinking characters per reply (the rest is cut with "…"). Titles are cut at 160 characters
 and details at 500. Steps still open when the turn ended are saved as `stopped`.
 
+### Loading mid-turn: `activity` on `GET /api/turns`
+
+A turn that is still running has no saved reply yet. `GET /api/turns` lists each running turn with
+its steps so far under `activity`, in the same shape (`{ "steps": [ <step>, … ] }`). Queued turns
+and turns with no steps yet have no `activity`. Clients seed their live steps from it on load and
+on every reconnect, so the working line shows the open step instead of "getting started". Thinking
+text that streamed before the load is not included; the thinking step's title still shows.
+
 ### Redaction
 
 Titles, details and thinking text pass through redaction before they leave the server:

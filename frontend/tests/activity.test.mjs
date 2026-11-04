@@ -98,3 +98,21 @@ test('saved list starts collapsed to the summary; the engine note waits inside t
   assert.equal(a.hasThinkingText(activity), false);
   assert.equal(a.hasThinkingText({ steps: [step({ kind: 'thinking', status: 'done', text: 'hm' })], dropped: 0 }), true);
 });
+
+test('a page opened mid-turn seeds the open step from /api/turns (ticket 4)', async () => {
+  const w = await loadBundled(`export * from './src/workingStrip';`);
+  const fromServer = { steps: [step({ id: 'a', status: 'ok', title: 'Running `ls`' }), step({ id: 'b', title: 'Using `web_search`' })] };
+  // Fresh load: nothing came live yet.
+  const seeded = a.seedActivity(undefined, 't1', fromServer);
+  assert.deepEqual(seeded.steps.map((s) => s.id), ['a', 'b']);
+  assert.equal(w.workingLabel({ live: seeded }), 'using web_search');
+  // Reconnect: a step that already settled live stays settled; live order is kept.
+  const live = { turnId: 't1', thinking: { x: 'hm' }, steps: [step({ id: 'b', status: 'ok', title: 'Using `web_search`' })] };
+  const merged = a.seedActivity(live, 't1', fromServer);
+  assert.deepEqual(merged.steps.map((s) => [s.id, s.status]), [['b', 'ok'], ['a', 'ok']]);
+  assert.equal(merged.thinking.x, 'hm');
+  // Nothing to add: no activity, junk, or no steps.
+  assert.equal(a.seedActivity(undefined, 't1', undefined), null);
+  assert.equal(a.seedActivity(undefined, 't1', { steps: [] }), null);
+  assert.equal(a.seedActivity(undefined, 't1', 'nope'), null);
+});
