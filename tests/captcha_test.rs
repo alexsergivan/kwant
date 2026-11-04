@@ -111,13 +111,16 @@ async fn the_probe_finds_each_vendor_with_its_box_and_ignores_lookalikes() {
     let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[0].id.clone();
     let ctrl = kwnt::server::routes::get_or_create_browser_controller(&state, &bot).await.expect("browser");
     let base = serve_fixtures().await;
-    let cases: [(&str, Option<Expected>); 20] = [
+    let cases: [(&str, Option<Expected>); 22] = [
         // a bare sign-up form with nothing but the checkbox counts as a wall
         ("recaptcha.html", Some(("recaptcha", 304.0, 78.0))),
         // an open image challenge counts on any page, with the challenge's box
         ("recaptcha_challenge.html", Some(("recaptcha", 400.0, 580.0))),
         ("hcaptcha.html", Some(("hcaptcha", 303.0, 78.0))),
         ("turnstile.html", Some(("turnstile", 300.0, 65.0))),
+        // Cloudflare's own check page: Turnstile's iframe is in a closed shadow root, only its
+        // host box shows
+        ("turnstile_closed_shadow.html", Some(("turnstile", 300.0, 65.0))),
         ("arkose.html", Some(("arkose", 400.0, 400.0))),
         ("datadome.html", Some(("datadome", 400.0, 500.0))),
         ("geetest.html", Some(("geetest", 342.0, 382.0))),
@@ -137,6 +140,8 @@ async fn the_probe_finds_each_vendor_with_its_box_and_ignores_lookalikes() {
         // newsletter dialog or a sticky cookie bar isn't a CAPTCHA
         ("contact_recaptcha.html", None),
         ("footer_recaptcha.html", None),
+        // a Turnstile box on a login form is ticked when logging in, not a wall
+        ("login_turnstile.html", None),
         ("recaptcha_challenge_closed.html", None),
         ("consent_dialog_phrases.html", None),
         // below the fold: found, but without a box, and the page isn't scrolled
@@ -350,6 +355,53 @@ async fn a_bot_landing_on_a_slider_gets_a_step_with_its_box_that_closes_once_sol
     // Done after the fact is refused, the step is settled
     let resp = app.clone().oneshot(Request::builder().method("POST").uri(format!("/api/human-steps/{}/done", step.id)).body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn a_check_that_slides_in_after_a_click_asks_the_person_even_when_the_call_fails() {
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return };
+    let state = state_with(&tmp, Some(endpoint)).await;
+    state.human_steps.set_captcha_timing(Duration::from_secs(60), Duration::from_millis(200));
+    let app = create_router(state.clone());
+    let base = serve_fixtures().await;
+    let decline = |id: String| {
+        let app = app.clone();
+        async move {
+            let req = Request::builder().method("POST").uri(format!("/api/human-steps/{id}/decline")).body(Body::empty()).unwrap();
+            assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
+        }
+    };
+
+    // A plain shop page: nothing to ask
+    let token = turn(&state, "turn-click").await;
+    let (text, is_error) = call(&app, &token, "browser_open", json!({"url": format!("{base}reveal_wall.html")})).await.unwrap();
+    assert!(!is_error, "{text}");
+    assert!(state.db.list_human_steps(Some("open"), None, None).await.unwrap().is_empty(), "no wall, no card");
+
+    // Its search button swaps in PerimeterX's Press & Hold wall: the click lands on a check
+    let task = call(&app, &token, "browser_act", json!({"action": "click_text", "text": "Search"}));
+    let step = open_step(&state).await;
+    assert_eq!((step.kind.as_str(), step.source.as_str()), ("captcha", "auto"));
+    let json = serde_json::to_value(&step).unwrap();
+    assert_eq!(json["target"]["kind"], "perimeterx", "{json}");
+    assert!(step.message_id.is_some(), "a card in the chat");
+    decline(step.id.clone()).await;
+    let (text, _) = tokio::time::timeout(Duration::from_secs(20), task).await.expect("the turn resumes").unwrap();
+    assert!(text.contains("declined"), "{text}");
+
+    // A later turn's click fails on the wall (nothing called Checkout is left): the failed call
+    // still hands the check to the person instead of ending in an error
+    let token = turn(&state, "turn-failed-click").await;
+    let task = call(&app, &token, "browser_act", json!({"action": "click_text", "text": "Checkout"}));
+    let again = open_step(&state).await;
+    assert_ne!(again.id, step.id);
+    assert_eq!((again.kind.as_str(), again.source.as_str(), again.turn_id.as_deref()), ("captcha", "auto", Some("turn-failed-click")));
+    assert!(again.message_id.is_some(), "a card in the chat");
+    decline(again.id.clone()).await;
+    let (text, is_error) = tokio::time::timeout(Duration::from_secs(20), task).await.expect("the turn resumes").unwrap();
+    assert!(!is_error, "the bot hears about the check, not a failed click: {text}");
+    assert!(text.contains("A CAPTCHA blocked the page") && text.contains("declined"), "{text}");
 }
 
 #[tokio::test]

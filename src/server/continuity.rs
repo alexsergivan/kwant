@@ -757,21 +757,37 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
         ctrl.site_guard.set_driver(&scope.kwant_id);
     }
     let (text, is_error) = run_browser_tool(state, target, &reader, name, args).await;
-    // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left
-    if !is_error {
-        if let Ok(page) = serde_json::from_str::<Value>(&text) {
-            if page["blocked"] == json!(true) {
-                if let Some(note) = super::human_steps::raise_for_bot_wall(state, scope, &page).await {
-                    if super::human_steps::browser_is_held(state, target).await {
-                        return (note, false);
-                    }
-                    let (after, _) = run_browser_tool(state, target, &reader, BROWSER_PAGE, &json!({"full": true})).await;
-                    return (format!("{note}\n\nThe page now:\n{after}"), false);
-                }
+    // A CAPTCHA wall: ask the person to solve it, then show the agent the page they left. Also
+    // when the call itself failed: a click that stalled, was covered or timed out because a
+    // check slid over the page is still a check for the person
+    let page = serde_json::from_str::<Value>(&text).ok().filter(Value::is_object);
+    let blocked = match &page {
+        Some(page) if page["blocked"] == json!(true) => Some(page.clone()),
+        _ if is_error && wall_check_helps(&text, page.as_ref()) => {
+            let (now, failed) = run_browser_tool(state, target, "", BROWSER_PAGE, &json!({"full": true})).await;
+            serde_json::from_str::<Value>(&now).ok().filter(|p| !failed && p["blocked"] == json!(true))
+        }
+        _ => None,
+    };
+    if let Some(page) = blocked {
+        if let Some(note) = super::human_steps::raise_for_bot_wall(state, scope, &page).await {
+            if super::human_steps::browser_is_held(state, target).await {
+                return (note, false);
             }
+            let (after, _) = run_browser_tool(state, target, &reader, BROWSER_PAGE, &json!({"full": true})).await;
+            return (format!("{note}\n\nThe page now:\n{after}"), false);
         }
     }
     (text, is_error)
+}
+
+/// Whether a failed browser call is worth a look for a CAPTCHA: not when the person holds the
+/// browser, the call was malformed, or the answer already carries the page (and it isn't blocked).
+fn wall_check_helps(text: &str, page: Option<&Value>) -> bool {
+    if page.is_some_and(|p| p.get("url").is_some()) {
+        return false;
+    }
+    !(text.starts_with("The user has taken control") || text.ends_with(" is required") || text.starts_with("action is required"))
 }
 
 /// `reader` names who reads (empty: nobody known), for `browser_page` to answer "unchanged" when

@@ -157,8 +157,43 @@ fragment.
 
 **Auto-raise:** when a `browser_open`, `browser_page` or `browser_act` tool lands on a CAPTCHA or
 anti-bot wall (`detect_bot_wall`), kwnt raises a `captcha` step itself (`source: "auto"`), waits
-the same way, and after Done shows the agent the page again. Login pages are **not**
+the same way, and after Done shows the agent the page again. This also happens when the tool call
+itself fails (a click that stalls, is covered or times out because a check slid over the page):
+kwnt reads the page and raises the step if it shows a wall. Login pages are **not**
 auto-detected. Agents ask for those with the tool.
+
+kwnt also raises the step where no tool call can wait on it. It does not wait; the person's answer
+(Done, Skip, solved or timed out) starts a **new turn** in the same chat:
+
+- **The person's link.** When kwnt opens a link from the person's message before the turn starts
+  and the page is a wall, the card is up before the bot runs. The bot's prompt says the person was
+  asked and tells it to end its turn in one line.
+- **The shell browser API.** A bot without kwnt's tools (agent tools off, or the tools didn't
+  start) drives the browser with curl. `POST /navigate`, `GET /page` and `POST /act` on
+  `/api/sandbox/:id/` raise the step in the chat of the turn running on that browser. The answer
+  gets `"human_step": "asked"` and a `notice` telling the bot to end its turn. While the step is
+  open, `navigate` and `act` answer **409** ("The browser is waiting on the person …"). With no
+  turn on the browser (someone curling it by hand), nobody is asked and the answer keeps the plain
+  `blocked` notice.
+
+Every bot's prompt says that a CAPTCHA met by the engine's own web fetch, search or built-in
+browser goes to the person too. The bot opens that address in kwnt's browser, where the card comes
+up, and never solves, bypasses or routes around the check. A bot with no browser at all is told to
+name the page to the person.
+
+**What counts as a wall** (`detect_bot_wall`, plus the in-page probe):
+
+- Google's "unusual traffic" page.
+- Cloudflare's "Just a moment", "Attention Required!" and "Checking your browser" pages, including
+  Turnstile drawn in a closed shadow root.
+- Pages that ask you to verify, confirm or prove you are human or not a robot (curly apostrophes
+  included). This covers Amazon's "Enter the characters you see", PerimeterX "Press & Hold",
+  DataDome, DuckDuckGo's "bots use DuckDuckGo too" and "solve the CAPTCHA" forms.
+- An address whose host or path names a CAPTCHA.
+- Widgets from reCAPTCHA, hCaptcha, Turnstile, Arkose, DataDome, GeeTest, PerimeterX and TikTok.
+
+Phrases and addresses count only on a short page (at most 3000 characters of text) or in the
+title. An article or a search about CAPTCHAs is not a wall.
 
 While a step is open in a bot browser:
 

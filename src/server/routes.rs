@@ -2270,6 +2270,28 @@ async fn run_kwant_turn_inner(
             .or_else(|| kwant_id.clone())
             .unwrap_or_else(|| target_kwant.id.clone());
 
+        // This turn, as the person's chat sees it: what a CAPTCHA step is asked in, whether kwnt
+        // meets it opening the person's link below, through the browser tools or the shell API
+        let turn_scope = super::continuity::SelfScope {
+            kwant_id: target_kwant.id.clone(),
+            kwant_name: target_kwant.name.clone(),
+            origin: Some(super::continuity::TurnOrigin {
+                channel_id: channel_id.clone(),
+                direct_kwant_id: kwant_id.clone(),
+                thread_id: scope.thread_id.clone(),
+                team_id: scope.team_context.as_ref().map(|t| t.id.clone()),
+                member_ids: scope.teammates.iter().map(|k| k.id.clone()).collect(),
+                depth: scope.delegation_depth,
+                message_id: opts.routing.as_ref().and_then(|r| r["message_id"].as_str()).map(str::to_string),
+            }),
+            cancel: Some(cancel_token.clone()),
+            turn_id: Some(tag.turn_id.clone()),
+            workspace: workspace_dir.clone(),
+            sandbox_target: Some(sandbox_target.clone()),
+        };
+        // A replay works in its own scratch browser and asks nobody
+        let _turn_on_browser = opts.rehearse.is_none().then(|| state.human_steps.track_turn(&sandbox_target, turn_scope.clone()));
+
         let active_ctrl = state.browser_controllers.lock().await.get(&sandbox_target).cloned();
         // The user may have browsed in the live viewer since the last turn; read the real location
         let active_browser_url = if let Some(ref ctrl) = active_ctrl {
@@ -2314,7 +2336,17 @@ async fn run_kwant_turn_inner(
                     }
                     let captcha = ctrl.probe_captcha().await.ok().flatten();
                     let wall = crate::sandbox::detect_bot_wall(&nav.url, &nav.title, &page_text).or(captcha.as_ref().map(|c| c.label()));
-                    final_prompt = if let Some(kind) = wall {
+                    // The person is asked at once; the bot hears it was, instead of a block to report
+                    let asked = match wall {
+                        Some(_) => super::human_steps::ask_for_bot_wall(state, &turn_scope, &json!({"url": nav.url, "captcha": captcha})).await,
+                        None => None,
+                    };
+                    final_prompt = if let (Some(kind), Some(note)) = (wall, asked) {
+                        format!(
+                            "{}\n\n[Sandbox Browser State: Tried to open {} in the right-panel bot browser, but it showed a {} instead of the page. {}]",
+                            prompt, target_url, kind, note
+                        )
+                    } else if let Some(kind) = wall {
                         format!(
                             "{}\n\n[Sandbox Browser State: Tried to open {} in the right-panel bot browser. {}]",
                             prompt, target_url, bot_wall_notice(kind, &nav.url)
@@ -2381,25 +2413,7 @@ async fn run_kwant_turn_inner(
         }
         let attempts: Vec<Option<LlmProfile>> = std::mem::take(&mut global.attempts);
         // The agents' own continuity tools, for engines that can call MCP tools
-        let self_scope = (engine.is_some() && super::continuity::agent_tools_enabled(state).await).then(|| {
-            super::continuity::SelfScope {
-                kwant_id: target_kwant.id.clone(),
-                kwant_name: target_kwant.name.clone(),
-                origin: Some(super::continuity::TurnOrigin {
-                    channel_id: channel_id.clone(),
-                    direct_kwant_id: kwant_id.clone(),
-                    thread_id: scope.thread_id.clone(),
-                    team_id: scope.team_context.as_ref().map(|t| t.id.clone()),
-                    member_ids: scope.teammates.iter().map(|k| k.id.clone()).collect(),
-                    depth: scope.delegation_depth,
-                    message_id: opts.routing.as_ref().and_then(|r| r["message_id"].as_str()).map(str::to_string),
-                }),
-                cancel: Some(cancel_token.clone()),
-                turn_id: Some(tag.turn_id.clone()),
-                workspace: workspace_dir.clone(),
-                sandbox_target: Some(sandbox_target.clone()),
-            }
-        });
+        let self_scope = (engine.is_some() && super::continuity::agent_tools_enabled(state).await).then(|| turn_scope.clone());
         let browser_sign_in = self_scope.as_ref().is_some_and(super::continuity::offers_browser_sign_in);
         let card_opts = super::mcp_runtime::TurnApprovalOpts {
             routed: Some((target_model.clone(), effort_level.clone())),
@@ -4829,11 +4843,96 @@ async fn page_state_from(
 pub fn bot_wall_notice(kind: &str, url: &str) -> String {
     format!(
         "BLOCKED: the site answered with a {} ({}) instead of the requested content. \
-         Do NOT describe results you have not seen. Tell the user plainly that the site blocked the automated browser, then either \
-         retry once on another engine via the browser API and say you switched (web: https://www.bing.com/search?q=<query>, images: https://www.bing.com/images/search?q=<query>), \
-         or offer that they solve the check themselves in the live browser panel.",
+         Do NOT describe results you have not seen, and never try to solve, bypass or click through the check yourself. \
+         It is the person's to solve: if you have request_human_step, call it (kind captcha, this url) and wait; otherwise tell the person \
+         plainly that a human check is waiting in the browser panel and ask them to solve it there, then end your turn. \
+         Only if the person declines or nobody solves it in time, use another source and say you switched.",
         kind, url
     )
+}
+
+/// The browser API's own routes (`/api/sandbox/:id/navigate|page|act`), for bots that drive the
+/// browser with curl: like the handlers, and a page that shows a CAPTCHA (or a failed action
+/// over one) asks the person to solve it in the chat of the turn running on that browser, with a
+/// "Human check needed" card. Nothing waits on it there, so the bot is told to end its turn; the
+/// answer starts a new one. The `browser_*` tools call the handlers directly and ask themselves.
+pub async fn navigate_sandbox_api(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    payload: Json<NavigatePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    refuse_while_held(&state, &team_id).await?;
+    let result = navigate_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
+    ask_on_wall(&state, &team_id, result).await
+}
+
+pub async fn get_sandbox_page_api(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    query: Query<PageQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let result = get_sandbox_page(State(state.clone()), Path(team_id.clone()), query).await;
+    // A page held for the person's step was already asked about
+    if super::human_steps::browser_is_held(&state, &team_id).await {
+        return result;
+    }
+    ask_on_wall(&state, &team_id, result).await
+}
+
+pub async fn act_sandbox_api(
+    State(state): State<AppState>,
+    Path(team_id): Path<String>,
+    payload: Json<InteractPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    refuse_while_held(&state, &team_id).await?;
+    let result = act_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
+    ask_on_wall(&state, &team_id, result).await
+}
+
+/// A bot action on a browser the person was handed for a step waits until they finish it.
+async fn refuse_while_held(state: &AppState, team_id: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if super::human_steps::browser_is_held(state, team_id).await {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions and end your turn; you get a new one when they finish."})),
+        ));
+    }
+    Ok(())
+}
+
+/// Asks the person when the answer shows a CAPTCHA, or when a failed request left one on the
+/// page, and tells the bot so in place of the plain notice.
+async fn ask_on_wall(
+    state: &AppState,
+    team_id: &str,
+    result: Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let Some(turn) = state.human_steps.turn_on(team_id) else { return result };
+    match result {
+        Ok(Json(mut page)) => {
+            if page["blocked"] == json!(true) {
+                if let Some(note) = super::human_steps::ask_for_bot_wall(state, &turn, &page).await {
+                    page["notice"] = json!(note);
+                    page["human_step"] = json!("asked");
+                }
+            }
+            Ok(Json(page))
+        }
+        Err((status, Json(mut body))) if status != StatusCode::CONFLICT && status != StatusCode::BAD_REQUEST => {
+            let page = match state.browser_controllers.lock().await.get(team_id).cloned() {
+                Some(ctrl) => Some(sandbox_page_state(&ctrl).await),
+                None => None,
+            };
+            if let Some(page) = page.filter(|p| p["blocked"] == json!(true)) {
+                if let Some(note) = super::human_steps::ask_for_bot_wall(state, &turn, &page).await {
+                    body["notice"] = json!(note);
+                    body["human_step"] = json!("asked");
+                }
+            }
+            Err((status, Json(body)))
+        }
+        other => other,
+    }
 }
 
 async fn broadcast_sandbox_screenshot(state: &AppState, team_id: &str, ctrl: &crate::sandbox::BrowserController) {

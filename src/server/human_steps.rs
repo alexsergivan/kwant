@@ -28,7 +28,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -74,6 +74,11 @@ pub struct HumanStepHub {
     /// Tests only: CAPTCHA time limit and probe interval in ms (0 = setting / default).
     captcha_timeout_ms: AtomicU64,
     probe_ms: AtomicU64,
+    /// The turn running on each bot browser (by sandbox target), so a CAPTCHA met through the
+    /// shell browser API, which carries no turn of its own, is still asked of the person in that
+    /// turn's chat.
+    turns: Mutex<HashMap<String, (u64, SelfScope)>>,
+    next_turn: AtomicU64,
 }
 
 impl Default for HumanStepHub {
@@ -84,6 +89,8 @@ impl Default for HumanStepHub {
             wait_ms: AtomicU64::new((crate::mcp::APPROVAL_TIMEOUT_SECS - 10) * 1000),
             captcha_timeout_ms: AtomicU64::new(0),
             probe_ms: AtomicU64::new(0),
+            turns: Mutex::default(),
+            next_turn: AtomicU64::new(1),
         }
     }
 }
@@ -129,6 +136,36 @@ impl HumanStepHub {
     /// Whether a live turn is waiting on this step.
     pub fn is_waiting(&self, id: &str) -> bool {
         self.waiters.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id)
+    }
+
+    /// Records the turn now running on a bot browser until the guard drops (the turn ends). The
+    /// newest turn on a browser wins; an older one ending leaves it be.
+    pub fn track_turn(self: &Arc<Self>, target: &str, scope: SelfScope) -> TurnOnBrowser {
+        let token = self.next_turn.fetch_add(1, Ordering::Relaxed);
+        self.turns.lock().unwrap_or_else(|e| e.into_inner()).insert(target.to_string(), (token, scope));
+        TurnOnBrowser { hub: self.clone(), target: target.to_string(), token }
+    }
+
+    /// The turn running on this bot browser, if one is (and can ask in a chat).
+    pub fn turn_on(&self, target: &str) -> Option<SelfScope> {
+        let turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+        turns.get(target).map(|(_, s)| s.clone()).filter(|s| s.origin.is_some() && !s.cancel.as_ref().is_some_and(|c| c.is_cancelled()))
+    }
+}
+
+/// Keeps a turn recorded on its bot browser while it runs ([`HumanStepHub::track_turn`]).
+pub struct TurnOnBrowser {
+    hub: Arc<HumanStepHub>,
+    target: String,
+    token: u64,
+}
+
+impl Drop for TurnOnBrowser {
+    fn drop(&mut self) {
+        let mut turns = self.hub.turns.lock().unwrap_or_else(|e| e.into_inner());
+        if turns.get(&self.target).is_some_and(|(t, _)| *t == self.token) {
+            turns.remove(&self.target);
+        }
     }
 }
 
@@ -331,8 +368,31 @@ pub async fn raise(
     target: Option<&CaptchaHit>,
     source: &str,
 ) -> Result<Option<Outcome>, String> {
-    let (Some(origin), Some(cancel)) = (&scope.origin, &scope.cancel) else {
+    raise_step(state, scope, kind, reason, url, target, source, true).await
+}
+
+/// [`raise`]; `wait: false` only asks (card, notification, held browser, CAPTCHA watcher) and
+/// returns at once with `Ok(None)`: no turn waits, so the answer starts a new turn in the chat
+/// ([`resume`]). For a CAPTCHA kwnt meets where nothing can wait on it (before the bot's turn
+/// starts, or through the shell browser API).
+#[allow(clippy::too_many_arguments)]
+async fn raise_step(
+    state: &AppState,
+    scope: &SelfScope,
+    kind: &str,
+    reason: &str,
+    url: Option<&str>,
+    target: Option<&CaptchaHit>,
+    source: &str,
+    wait_for_it: bool,
+) -> Result<Option<Outcome>, String> {
+    let Some(origin) = &scope.origin else {
         return Err("You can only ask the person for a step from a chat.".into());
+    };
+    let cancel = match (&scope.cancel, wait_for_it) {
+        (Some(c), _) => c.clone(),
+        (None, false) => tokio_util::sync::CancellationToken::new(),
+        (None, true) => return Err("You can only ask the person for a step from a chat.".into()),
     };
     let place = HumanStepPlace {
         kwant_id: scope.kwant_id.clone(),
@@ -353,7 +413,9 @@ pub async fn raise(
     let created = state
         .db
         .create_human_step_with_card(&place, kind, reason, url, target_json.as_deref(), source, |s| {
-            waiter = Some((s.id.clone(), hub.register(&s.id)));
+            if wait_for_it {
+                waiter = Some((s.id.clone(), hub.register(&s.id)));
+            }
             let mut text = format!("{}: {}", kind_label(&s.kind), s.reason);
             if let Some(u) = &s.url {
                 text.push_str(&format!("\n{u}"));
@@ -387,13 +449,18 @@ pub async fn raise(
         tracing::info!(human_step_id = %step.id, kwant_id = %scope.kwant_id, "sign-in already asked for in another turn");
         return Ok(Some(Outcome::AlreadyAsked));
     }
+    if !wait_for_it && !is_new {
+        // Already asked (the card is up): nothing new to show
+        return Ok(None);
+    }
     // The turn asked again for a step it already has open (or one no turn waits on any more):
     // wait on that one
-    let mut rx = match waiter {
-        Some((_, rx)) => rx,
-        None => hub.register(&step.id),
+    let rx = match waiter {
+        Some((_, rx)) => Some(rx),
+        None if wait_for_it => Some(hub.register(&step.id)),
+        None => None,
     };
-    let _guard = WaiterGuard { hub, id: step.id.clone() };
+    let _guard = rx.is_some().then(|| WaiterGuard { hub, id: step.id.clone() });
     let mut wait = hub.wait();
     let mut captcha_deadline = None;
     if step.kind == "captcha" {
@@ -410,7 +477,7 @@ pub async fn raise(
         hold_browser(state, step.sandbox_target.as_deref()).await;
         if step.kind == "captcha" && step.sandbox_target.is_some() {
             // a CAPTCHA kwnt saw is on the page already; one the bot named must show up first
-            tokio::spawn(watch_captcha(state.clone(), step.id.clone(), source == "auto"));
+            spawn_watch_captcha(state.clone(), step.id.clone(), source == "auto");
         }
         if let Some(card) = card {
             if let Some(t) = &step.thread_id {
@@ -419,7 +486,8 @@ pub async fn raise(
             let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&card).unwrap_or(Value::Null) });
         }
         changed(state, &step).await;
-        if let Some(turn) = step.turn_id.as_deref().and_then(super::activity::TurnActivity::find) {
+        // A turn that doesn't wait on the step isn't shown as waiting
+        if let Some(turn) = step.turn_id.as_deref().and_then(super::activity::TurnActivity::find).filter(|_| wait_for_it) {
             let title = format!("Waiting for you: {}", step.reason);
             turn.wait("human_step", &step.id, &title, Some(TOOL));
         }
@@ -435,9 +503,10 @@ pub async fn raise(
             },
         )
         .await;
-        tracing::info!(human_step_id = %step.id, kwant_id = %scope.kwant_id, source, "agent asked the person for a browser step");
+        tracing::info!(human_step_id = %step.id, kwant_id = %scope.kwant_id, source, wait_for_it, "agent asked the person for a browser step");
     }
 
+    let Some(mut rx) = rx else { return Ok(None) };
     tokio::select! {
         r = &mut rx => Ok(r.ok()),
         _ = cancel.cancelled() => {
@@ -445,17 +514,26 @@ pub async fn raise(
             Err("The user stopped this turn. End it now.".into())
         }
         _ = tokio::time::sleep(wait) => {
-            hub.take(&step.id);
-            // An answer that arrived just as the wait ran out still counts
-            if let Ok(outcome) = rx.try_recv() {
-                return Ok(Some(outcome));
-            }
             // A CAPTCHA past its time limit has timed out, whoever notices first: the watcher can
             // lag behind this wait on a busy machine, and the bot would be told to wait for a step
             // that is already over (as CI saw once on c185fc9)
             if captcha_deadline.is_some_and(|d| chrono::Utc::now() >= d) && close(state, &step.id, Outcome::TimedOut.status()).await.is_some() {
+                hub.take(&step.id);
                 tracing::info!(human_step_id = %step.id, "CAPTCHA step timed out at the end of the turn's wait");
                 return Ok(Some(Outcome::TimedOut));
+            }
+            // Closed by someone else just now (the watcher, or the person): the answer is on its
+            // way to this turn's waiter, which is still registered, so it reaches this turn
+            // instead of starting a new one
+            if state.db.get_human_step(&step.id).await.ok().flatten().is_some_and(|s| s.status != "open") {
+                if let Ok(Ok(outcome)) = tokio::time::timeout(Duration::from_secs(5), &mut rx).await {
+                    return Ok(Some(outcome));
+                }
+            }
+            hub.take(&step.id);
+            // An answer that arrived just as the wait ran out still counts
+            if let Ok(outcome) = rx.try_recv() {
+                return Ok(Some(outcome));
             }
             Ok(None)
         }
@@ -467,6 +545,38 @@ pub async fn raise(
 pub async fn raise_for_bot_wall(state: &AppState, scope: &SelfScope, page: &Value) -> Option<String> {
     scope.origin.as_ref()?;
     scope.cancel.as_ref()?;
+    let (reason, url, target) = wall_request(page);
+    Some(match raise(state, scope, "captcha", &reason, url.as_deref(), target.as_ref(), "auto").await {
+        Ok(outcome) => format!("A CAPTCHA blocked the page, so the person was asked to solve it. {}", outcome_text(outcome, true)),
+        Err(e) => e,
+    })
+}
+
+/// What the bot hears after kwnt asked the person for a CAPTCHA it can't wait on.
+pub const ASKED_NOTE: &str = "A CAPTCHA / human check blocked the page, so kwnt showed the person a \"Human check needed\" card \
+    and handed them the browser. Don't try to solve, bypass or click through it, don't use the browser until it is solved, and don't \
+    switch to another site to get around it. End your turn now with one short line saying you're waiting for the person to solve \
+    the check. You get a new turn when it is solved, or if nobody solves it in time.";
+
+/// [`raise_for_bot_wall`] for a CAPTCHA no tool call can wait on: kwnt opened the page before
+/// the bot's turn, or the bot met it through the shell browser API. The person gets the card and
+/// the notification at once; the answer starts a new turn. `None` when there's no chat to ask in
+/// (the note for the bot otherwise).
+pub async fn ask_for_bot_wall(state: &AppState, scope: &SelfScope, page: &Value) -> Option<String> {
+    scope.origin.as_ref()?;
+    let (reason, url, target) = wall_request(page);
+    match raise_step(state, scope, "captcha", &reason, url.as_deref(), target.as_ref(), "auto", false).await {
+        Ok(Some(outcome)) => Some(format!("A CAPTCHA blocked the page, so the person was asked to solve it. {}", outcome_text(Some(outcome), true))),
+        Ok(None) => Some(ASKED_NOTE.to_string()),
+        Err(e) => {
+            tracing::warn!(kwant_id = %scope.kwant_id, error = %e, "couldn't ask the person for a CAPTCHA");
+            None
+        }
+    }
+}
+
+/// The step to ask for on a blocked page: reason, address and the widget's box.
+fn wall_request(page: &Value) -> (String, Option<String>, Option<CaptchaHit>) {
     let target = CaptchaHit::parse(&page["captcha"]).and_then(CaptchaHit::on_screen);
     let url = page["url"].as_str().and_then(crate::db::human_steps::clean_url);
     let host = url.as_deref().and_then(|u| url::Url::parse(u).ok()).and_then(|u| u.host_str().map(str::to_string));
@@ -474,10 +584,7 @@ pub async fn raise_for_bot_wall(state: &AppState, scope: &SelfScope, page: &Valu
         Some(h) => format!("{h} is showing a CAPTCHA / human check to the bot browser. Please solve it."),
         None => "The page is showing a CAPTCHA / human check to the bot browser. Please solve it.".into(),
     };
-    Some(match raise(state, scope, "captcha", &reason, url.as_deref(), target.as_ref(), "auto").await {
-        Ok(outcome) => format!("A CAPTCHA blocked the page, so the person was asked to solve it. {}", outcome_text(outcome, true)),
-        Err(e) => e,
-    })
+    (reason, url, target)
 }
 
 /// Whether the page still shows a human check: a CAPTCHA widget, or a bot-wall page (Cloudflare's
@@ -493,6 +600,12 @@ async fn wall_on_page(ctrl: &BrowserController) -> Option<(bool, Option<CaptchaH
 
 /// Watches an open CAPTCHA step until it closes: keeps its box current, closes it as
 /// `resolved_auto` once the check is gone, or as `timed_out` at the time limit, and tells the bot.
+/// Spawns [`watch_captcha`] from a plain fn, so `raise_step`'s future type doesn't depend on the
+/// watcher's (watcher → resume → a new turn → raise_step would be a type cycle).
+fn spawn_watch_captcha(state: AppState, id: String, seen: bool) {
+    tokio::spawn(watch_captcha(state, id, seen));
+}
+
 async fn watch_captcha(state: AppState, id: String, mut seen: bool) {
     let limit = captcha_timeout(&state).await;
     let started = tokio::time::Instant::now();
