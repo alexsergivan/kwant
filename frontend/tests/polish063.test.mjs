@@ -134,16 +134,30 @@ test('2: Back after a switch inside Settings steps back to the old space, then o
 // ---------------------------------------------------------------------------
 // 3. Room for Edit and Remove
 
-test('3: on desktop the name line makes room for the hover buttons; phone rows are unchanged', () => {
+test('3: on desktop the one-line status makes room for the hover buttons, never the name line; phone rows are unchanged', () => {
   const desk = m.renderToStaticMarkup(React.createElement(m.Sidebar, sidebarProps({ onUpdateTeamMembers: noop })));
+  // Padding the name line on hover squeezed the name onto a second line, so the row grew and flickered.
   const lines = [...desk.matchAll(/<div data-bot-name-line="[^"]*" class="([^"]*)"/g)].map((x) => x[1]);
   assert.ok(lines.length >= 3);
-  for (const cls of lines) {
+  for (const cls of lines) assert.doesNotMatch(cls, /group-hover|group-focus-within|pr-9/, 'the name line looks the same with and without hover');
+  // The buttons sit at the end of the status line, which is one line and only loses a few letters.
+  const actions = [...desk.matchAll(/<span data-bot-row-actions="[^"]*" class="([^"]*)"/g)].map((x) => x[1]);
+  assert.equal(actions.length, lines.length);
+  for (const cls of actions) {
+    assert.match(cls, /\babsolute\b/);
+    assert.match(cls, /\bbottom-2\b/);
+    assert.doesNotMatch(cls, /\btop-/);
+  }
+  const status = [...desk.matchAll(/<div data-bot-name-line[\s\S]*?<\/div><p class="([^"]*)"/g)].map((x) => x[1]);
+  assert.equal(status.length, lines.length);
+  for (const cls of status) {
+    assert.match(cls, /\btruncate\b/, 'one line, so its padding never changes the row height');
     assert.match(cls, /group-hover\/fleet:pr-9/);
     assert.match(cls, /group-focus-within\/fleet:pr-9/);
   }
   const phone = m.renderToStaticMarkup(React.createElement(m.Sidebar, sidebarProps({ onUpdateTeamMembers: noop, phone: true })));
-  for (const [, cls] of phone.matchAll(/<div data-bot-name-line="[^"]*" class="([^"]*)"/g)) assert.doesNotMatch(cls, /pr-9/);
+  assert.doesNotMatch(phone, /pr-9/);
+  assert.doesNotMatch(phone, /data-bot-row-actions/);
 });
 
 // ---------------------------------------------------------------------------

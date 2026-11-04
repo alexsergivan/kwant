@@ -362,6 +362,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const isLead = !!team && k.id === team.lead_kwant_id;
     const canRemove = !!team && !isLead && !!onUpdateTeamMembers;
     const hasRowActions = !!onEditKwant || canRemove;
+    // Desktop: the one-line status under the name makes room for Edit and Remove on hover or focus.
+    // It never wraps, so the room costs a few letters of the status, never the row's height.
+    const actionRoom = !phone && hasRowActions ? ' group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : '';
     return (
       <div
         key={`${team?.id ?? 'none'}:${k.id}`}
@@ -379,8 +382,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <ModernAvatar role={k.avatar_sprite} name={k.name} size={28} status={status} kwantId={k.id} />
         </span>
         <div className="flex-1 min-w-0">
-          {/* Desktop: on hover or focus the name makes room for Edit and Remove instead of sitting under them */}
-          <div data-bot-name-line className={`flex items-start gap-1 ${!phone && hasRowActions ? 'group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : ''}`}>
+          {/* The name line never changes on hover: padding it here made the name wrap and the row jump */}
+          <div data-bot-name-line className="flex items-start gap-1">
             {/* The full name, on up to two lines (QA a); what it runs on is in the tooltip */}
             <span data-bot-name className="min-w-0 text-body font-semibold leading-5 text-zinc-100 line-clamp-2 [overflow-wrap:anywhere]" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
               {k.name}
@@ -410,9 +413,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span className="sr-only">Asks before acting</span>
                 </span>
               ))}
-            {/* Over the row's right edge, so a long name gets the full width until you hover */}
+            {/* Edit and Remove sit at the right end of the one-line status below the name, which makes room
+                for them on hover: the name keeps its width and the row its height */}
             {!phone && (
-              <span className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-zinc-800/95 opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 empty:hidden">
+              <span data-bot-row-actions className="absolute right-1.5 bottom-2 flex items-center gap-0.5 rounded-md bg-zinc-800/95 opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 empty:hidden">
                 {onEditKwant && (
                   <button
                     type="button"
@@ -448,12 +452,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </div>
           {busyKwants[k.id] ? (
-            <p className={`flex items-center gap-1.5 text-meta truncate ${status === 'needs_you' ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'}`} title={busyKwants[k.id]} data-bot-busy>
+            <p className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${status === 'needs_you' ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'}`} title={busyKwants[k.id]} data-bot-busy>
               <span className={`kw-status-dot !h-1.5 !w-1.5 ${status === 'needs_you' ? 'kw-status-warn' : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'}`} aria-hidden="true" />
               <span className="truncate">{busyKwants[k.id]}</span>
             </p>
           ) : (
-            <p className="text-meta text-zinc-400 truncate">{k.title}</p>
+            <p className={`text-meta text-zinc-400 truncate${actionRoom}`}>{k.title}</p>
           )}
         </div>
         {/* Phones: one button at the row's end; in a team it opens the member's actions */}
