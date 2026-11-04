@@ -86,10 +86,19 @@ shows. Thinking that streams after the load arrives as `ThinkingDelta` as usual.
 Titles, details and thinking text pass through redaction before they leave the server. That
 includes the live stream: each `ThinkingDelta` chunk, every string in a `ToolCallPending`'s `args`
 and in a `ToolCallCompleted`'s `result` is masked before it is broadcast, and an `args`/`result`
-field named like a credential (`api_key`, `password`, `token`, …) loses its value whole. Reply text
-(`TextDelta`) is not touched. A secret split across two `ThinkingDelta` chunks can't be matched in
-either one; the thinking text saved on the reply is redacted again as a whole when the step ends.
-Masked:
+field named like a credential (`api_key`, `password`, `token`, …) loses its value whole, whatever
+its type: a string, a number, an object or a list becomes `"[redacted]"` (`true` and `null` stay).
+A plural name (`tokens`, `passwords`) loses its value when it holds any text, so counts such as
+`"max_tokens": 100` stay readable, as does `"key": "Enter"`. Reply text (`TextDelta`) is not
+touched.
+
+So that a secret split across two `ThinkingDelta` chunks is matched whole, each chunk goes out
+without its last two words (at most 256 characters); they are joined to the next chunk and
+redacted with it. Held text is per turn (and per delegated turn), and it is all sent, redacted,
+before the thinking step ends: on the next reply text or tool call, an approval or human step, and
+when the turn finishes, fails or is cancelled. Chunks therefore split at spaces, a word or two
+behind the model. The thinking text saved on the reply is redacted again as a whole when the step
+ends. Masked:
 
 - the turn's MCP secret values are masked as `********`
 - `key=value` / `"key": "value"` credentials (password, token, secret, api_key, …)

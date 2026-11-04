@@ -65,6 +65,22 @@ impl TurnActivity {
         self.with_log(|log| log.redact_event(event))
     }
 
+    fn send_events(&self, events: impl IntoIterator<Item = RuntimeEvent>) {
+        for event in events {
+            let _ = self.sender.send(RuntimeEvent::Scoped { tag: self.tag.clone(), event: Box::new(event) });
+        }
+    }
+
+    /// Feeds a driver event to the log and broadcasts it, masked, with the steps it changed: any
+    /// thinking text held back is sent before the step it belongs to ends, and a thinking chunk
+    /// goes out without its last two words until the next chunk (see [`ActivityLog::relay`]).
+    pub fn relay(&self, event: &RuntimeEvent) {
+        let (held, steps, out) = self.with_log(|log| log.relay(event));
+        self.send_events(held);
+        self.send(steps);
+        self.send_events(out);
+    }
+
     pub fn observe(&self, event: &RuntimeEvent) {
         let steps = self.with_log(|log| log.observe(event));
         self.send(steps);
@@ -76,7 +92,8 @@ impl TurnActivity {
     }
 
     pub fn wait(&self, kind: &'static str, ref_id: &str, title: &str, tool: Option<&str>) {
-        let steps = self.with_log(|log| log.wait(kind, ref_id, title, tool));
+        let (held, steps) = self.with_log(|log| (log.flush_held(), log.wait(kind, ref_id, title, tool)));
+        self.send_events(held);
         self.send(steps);
     }
 
@@ -85,13 +102,15 @@ impl TurnActivity {
         self.send(step);
     }
 
-    /// Ends the turn's open steps and returns what to save on the reply as `meta.activity`
+    /// Sends any thinking text still held back, ends the turn's open steps and returns what to save on the reply as `meta.activity`
     /// (`None` when nothing happened).
     pub fn finish(&self) -> Option<Value> {
-        let (steps, saved) = self.with_log(|log| {
+        let (held, steps, saved) = self.with_log(|log| {
+            let held = log.flush_held();
             let steps = log.finish();
-            (steps, (!log.is_empty()).then(|| log.to_json()))
+            (held, steps, (!log.is_empty()).then(|| log.to_json()))
         });
+        self.send_events(held);
         self.send(steps);
         saved
     }
@@ -235,6 +254,69 @@ mod tests {
         }
         assert_eq!(turn.redact_event(&RuntimeEvent::TextDelta("reply".into())), RuntimeEvent::TextDelta("reply".into()));
         while rx.try_recv().is_ok() {}
+        drop(turn);
+    }
+
+    /// Rigel's N2 on #286: a secret split across two thinking chunks never streams raw, not even
+    /// its tail, and the text held back is all sent when the step ends, for the turn and for a
+    /// delegated turn alike, and when the turn ends while thinking.
+    #[test]
+    fn split_thinking_secrets_never_stream_raw() {
+        let (tx, mut rx) = broadcast::channel(64);
+        let tag = TurnTag { turn_id: "turn-split-redact".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        turn.add_secrets(vec!["hunter2-QA-mcp-value".into()]);
+        let sub = TurnTag { turn_id: "turn-split-sub".into(), ..Default::default() };
+        let scoped = |e: RuntimeEvent| RuntimeEvent::Scoped { tag: sub.clone(), event: Box::new(e) };
+        let chunks = [
+            "key one: ghp_FAKEFAKEFAKE",
+            "FAKEFAKE0123456789abcd and the MCP one is hunter2-",
+            "QA-mcp-value, done.",
+        ];
+        for c in chunks {
+            turn.relay(&RuntimeEvent::ThinkingDelta(c.into()));
+        }
+        for c in chunks {
+            turn.relay(&scoped(RuntimeEvent::ThinkingDelta(c.into())));
+        }
+        turn.relay(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Bash".into(), args: json!({"command": "ls"}) });
+        // a second thinking step the turn ends in the middle of
+        turn.relay(&RuntimeEvent::ThinkingDelta("then hunter2-QA".into()));
+        turn.relay(&RuntimeEvent::ThinkingDelta("-mcp-value end".into()));
+        let saved = turn.finish().unwrap();
+
+        let events: Vec<RuntimeEvent> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let wire: Vec<Value> = events.iter().map(RuntimeEvent::to_wire).collect();
+        // what streamed as thinking for the turn itself (`None`) or for a delegated turn
+        let streamed = |inner: Option<&str>| -> String {
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    RuntimeEvent::Scoped { event, .. } => match (event.as_ref(), inner) {
+                        (RuntimeEvent::ThinkingDelta(t), None) => Some(t.clone()),
+                        (RuntimeEvent::Scoped { tag, event }, Some(id)) if tag.turn_id == id => match event.as_ref() {
+                            RuntimeEvent::ThinkingDelta(t) => Some(t.clone()),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect()
+        };
+        let all = serde_json::to_string(&wire).unwrap();
+        for raw in ["FAKEFAKE0123456789abcd", "ghp_FAKE", "hunter2-", "QA-mcp-value", "hunter2-QA"] {
+            assert!(!all.contains(raw), "{raw} streamed live: {all}");
+        }
+        // nothing is lost: the turn's and the delegated turn's text each arrive whole, masked
+        let whole = "key one: [redacted] and the MCP one is ********, done.";
+        assert_eq!(streamed(Some("turn-split-sub")), whole);
+        assert_eq!(streamed(None), format!("{whole}then ******** end"));
+        // the held text goes out before the thinking step's end, not after it
+        let first_end = wire.iter().position(|w| w["type"] == "activity" && w["data"]["step"]["kind"] == "thinking" && w["data"]["step"]["status"] == "ok").unwrap();
+        let last_chunk = wire.iter().rposition(|w| w["type"] == "ThinkingDelta" && w["data"].as_str().is_some_and(|d| d.contains("done."))).unwrap();
+        assert!(last_chunk < first_end, "held text sent after the step ended: {all}");
+        assert!(!saved.to_string().contains("hunter2"));
         drop(turn);
     }
 }
