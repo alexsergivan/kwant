@@ -431,7 +431,7 @@ impl TurnInput {
             .or_else(|| self.team_context.as_ref().map(|t| t.id.clone()))
             .unwrap_or_else(|| self.kwant.id.clone());
         let api = self.browser_api_url.clone().unwrap_or_else(|| {
-            format!("http://127.0.0.1:{}/api/sandbox/{}", crate::config::DEFAULT_PORT, sandbox_target)
+            format!("http://127.0.0.1:{}/api/sandbox/{}/bot/{}", crate::config::DEFAULT_PORT, sandbox_target, self.kwant.id)
         });
         let control_rules = "A 409 / \"taken control\" answer means the user is using the browser: stop browser actions and wait for the user to hand it back. Never bypass the control API or connect to CDP directly.\n\
             Report browser errors honestly. Never claim a page opened unless navigation succeeded, and only describe content that appears in the returned page text. If a response has \"blocked\": true (CAPTCHA / bot check), follow its \"notice\" instead of claiming results.\n\
