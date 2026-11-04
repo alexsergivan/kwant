@@ -59,8 +59,8 @@
 .kw-nudge.is-swapping .kw-nudge__text { animation: kw-nudge-fade 120ms linear backwards; }
 .kw-nudge.is-swapping .kw-nudge__av { animation: kw-nudge-hop 200ms backwards; }
 
-/* Phone (viewport < 640 px): full width less 12 px a side, 56 px tall. */
-@media (max-width: 639px) {
+/* Phone layout (viewport < 768 px, App's PHONE_QUERY): full width less 12 px a side, 56 px tall. */
+@media (max-width: 767px) {
   .kw-nudge-region { top: calc(env(safe-area-inset-top, 0px) + 8px); left: 0; }
   .kw-nudge { width: calc(100vw - 24px); max-width: 420px; height: 56px; border-radius: 28px; padding-left: 12px; }
 }

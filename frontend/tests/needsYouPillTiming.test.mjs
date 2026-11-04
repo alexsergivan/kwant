@@ -2,6 +2,7 @@
 // a hard 12 s cap on arrival restarts, and hover or focus holds it past the cap until 2 s after it leaves.
 import assert from 'node:assert/strict';
 import test, { mock } from 'node:test';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
 
@@ -9,12 +10,19 @@ const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http:
 for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLButtonElement', 'Element', 'Node', 'Event', 'FocusEvent', 'MouseEvent', 'KeyboardEvent', 'getComputedStyle']) {
   if (k in dom.window) Object.defineProperty(globalThis, k, { value: dom.window[k], configurable: true, writable: true });
 }
-dom.window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+// Width queries answer against window.innerWidth, the way a browser does; anything else (reduced motion) is off.
+dom.window.matchMedia = (q) => {
+  const max = /\(max-width:\s*(\d+)px\)/.exec(q);
+  const min = /\(min-width:\s*(\d+)px\)/.exec(q);
+  const matches = max ? dom.window.innerWidth <= Number(max[1]) : min ? dom.window.innerWidth >= Number(min[1]) : false;
+  return { matches, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} };
+};
 globalThis.matchMedia = dom.window.matchMedia;
 
 const ui = await loadBundled(`
   export { NeedsYouPill } from './src/components/NeedsYouPill';
   export { nudgeFromAway, pillAdd, EMPTY_PILL } from './src/attention';
+  export { PHONE_QUERY } from './src/layout';
   export { createElement } from 'react';
   export { createRoot } from 'react-dom/client';
   export { flushSync } from 'react-dom';
@@ -150,4 +158,36 @@ test('desktop: the pill is centred on the main pane, starting where the sidebar 
   } finally {
     side.remove();
   }
+});
+
+// Rigel's R-1: between 640 and 767 px the app is in its phone layout (no sidebar shown), but the pill still
+// measured the sidebar and slid off-screen. The pill and its CSS now switch at the app's own breakpoint.
+test('R-1: at 700 px (phone layout) the pill is full width, not placed from the sidebar; at 768 px it is centred on the main pane', async () => {
+  const side = document.createElement('aside');
+  side.setAttribute('data-kw-sidebar', '');
+  // In the phone layout the sidebar can still be in the DOM with a size (an off-canvas drawer): it must not count.
+  side.getBoundingClientRect = () => ({ left: 56, right: 312, width: 256, top: 0, bottom: 900, height: 900 });
+  document.body.appendChild(side);
+  const region = () => document.querySelector('.kw-nudge-region');
+  try {
+    for (const [w, want] of [[700, ''], [767, ''], [768, '312px']]) {
+      window.innerWidth = w;
+      const p = mount();
+      try {
+        await p.arrive('r1-' + w);
+        assert.equal(region().style.getPropertyValue('--kw-nudge-left'), want, `at ${w} px`);
+      } finally {
+        p.unmount();
+      }
+    }
+  } finally {
+    side.remove();
+  }
+});
+
+test('R-1: the pill CSS switches to its full-width phone style at the same breakpoint as the app layout', () => {
+  const css = readFileSync(new URL('../src/styles/needsYou.css', import.meta.url), 'utf8');
+  const phone = /@media\s*(\(max-width:\s*\d+px\))\s*\{\s*\.kw-nudge-region\s*\{[^}]*left:\s*0/.exec(css);
+  assert.ok(phone, 'the phone block resets the region to the full width');
+  assert.equal(phone[1], ui.PHONE_QUERY);
 });

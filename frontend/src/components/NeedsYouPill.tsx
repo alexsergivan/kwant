@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { AvatarMood } from './AvatarMood';
+import { isPhoneLayout } from '../layout';
 import { PILL_LEAVE_MS, pillHoldMs, pillMotion, pillText, type Nudge } from '../attention';
 
 export interface NeedsYouPillProps {
@@ -18,13 +19,17 @@ export interface NeedsYouPillProps {
 
 const AVATAR = 32;
 
-/** Where the main pane starts on desktop (the sidebar's right edge), measured while the pill shows. 0 on a phone. */
+/**
+ * Where the main pane starts on desktop (the sidebar's right edge), measured while the pill shows. 0 in the
+ * phone layout (below 768 px, App's PHONE_QUERY), where there is no sidebar: measuring one there put the pill
+ * off-screen between 640 and 767 px (Rigel's R-1).
+ */
 function useMainPaneLeft(showing: boolean): number {
   const [left, setLeft] = useState(0);
   useEffect(() => {
     if (!showing || typeof window === 'undefined') return;
     const measure = () => {
-      const side = window.innerWidth >= 640 ? document.querySelector('[data-kw-sidebar]') : null;
+      const side = isPhoneLayout() ? null : document.querySelector('[data-kw-sidebar]');
       const r = side?.getBoundingClientRect();
       setLeft(r && r.width > 0 ? Math.round(r.right) : 0);
     };

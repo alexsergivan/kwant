@@ -4,6 +4,7 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
+import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
@@ -159,8 +160,6 @@ export interface SpaceAppProps {
   /** The open chat changed, for the address bar and reopening it later. */
   onChatChange: (target: SpaceTarget) => void;
 }
-
-const PHONE_QUERY = '(max-width: 767px)';
 
 /** Below 768px the space is one column: a list or a chat, with a tab bar. */
 function useIsPhone(): boolean {
