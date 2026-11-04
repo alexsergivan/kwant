@@ -19,6 +19,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
   const sequence = useRef(0);
   const pending = useRef(new Set<number>());
   const takingControl = useRef(false);
+  const lastImage = useRef<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [controlling, setControlling] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -59,6 +60,9 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
             setConnected(true);
             const width = Number(message.width) > 0 ? Number(message.width) : 1280;
             const height = Number(message.height) > 0 ? Number(message.height) : 800;
+            // An identical picture leaves <img src> unchanged, so no load event comes to acknowledge it
+            if (message.image === lastImage.current) ws.send(JSON.stringify({ action: 'frame_ack', id: message.id }));
+            lastImage.current = message.image;
             setFrame({ id: message.id, image: message.image, width, height });
             break;
           }
@@ -109,6 +113,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
         setControlling(false);
         setBusy(false);
         setFrame(null);
+        lastImage.current = null;
         setSelect(null);
         setDialog(null);
         setError((current) => current || 'Browser disconnected. Reconnecting…');

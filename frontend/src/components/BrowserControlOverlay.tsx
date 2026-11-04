@@ -363,7 +363,7 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
               onClick={answerStep}
               disabled={stepBusy}
               data-primary
-              className="shrink-0 inline-flex items-center gap-1.5 h-11 px-[14px] rounded-xl bg-[#6c58e0] hover:bg-[#5845bd] text-white text-[15px] font-semibold disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+              className="shrink-0 inline-flex items-center gap-1.5 h-11 px-[14px] rounded-[12px] bg-[#6c58e0] hover:bg-[#5845bd] text-white text-[15px] font-semibold disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
             >
               {stepBusy ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
               {step.doneLabel}
