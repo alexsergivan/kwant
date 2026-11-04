@@ -22,6 +22,8 @@ export function workingLabel(s: WorkingState): string {
     if (t) return lower(t);
   }
   if (s.writing) return 'writing the reply';
+  // Steps already ran (a tool finished, the next one isn't open yet): still working, not starting.
+  if (s.live?.steps.length) return 'working on it';
   return 'getting started';
 }
 

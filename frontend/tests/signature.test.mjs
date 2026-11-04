@@ -126,6 +126,18 @@ test('working strip: the label follows the open step, then falls back', () => {
   assert.equal(w.workingLabel({ awaitingAnswer: true, awaitingBrowser: true }), 'waiting for you in the browser');
 });
 
+test('working strip: never "getting started" once the turn has steps (ticket 2)', () => {
+  const step = (over = {}) => ({ id: 's1', kind: 'tool', status: 'ok', title: 'Running `ls`', started_at: '2026-11-04T10:00:00Z', ...over });
+  const done = { turnId: 't', thinking: {}, steps: [step(), step({ id: 's2', kind: 'thinking', title: 'Thinking' })] };
+  // Between steps (a finished tool, nothing open yet) the bot is still working, not starting.
+  assert.equal(w.workingLabel({ live: done }), 'working on it');
+  // An open step still wins, and so does the reply once it streams.
+  assert.equal(w.workingLabel({ live: { ...done, steps: [...done.steps, step({ id: 's3', status: 'running', title: 'Using `web_search`' })] } }), 'using web_search');
+  assert.equal(w.workingLabel({ live: done, writing: true }), 'writing the reply');
+  // No steps at all: the turn really is just starting.
+  assert.equal(w.workingLabel({ live: { turnId: 't', thinking: {}, steps: [] } }), 'getting started');
+});
+
 test('elapsed time reads m:ss and h:mm:ss, never negative', () => {
   assert.equal(w.formatElapsed(0), '0:00');
   assert.equal(w.formatElapsed(42_900), '0:42');
