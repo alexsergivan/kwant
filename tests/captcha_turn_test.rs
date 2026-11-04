@@ -35,14 +35,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
 /// Records its arguments to `$KWNT_TEST_BEHAVE/<bot>.prompt`; with `<bot>.wait` holding seconds,
-/// sleeps that long first (so two bots' turns overlap); with `<bot>.curl` holding a page
-/// address, opens it twice through the browser API from the system prompt, saving each answer
-/// (and its HTTP status) to `<bot>.curl1` / `<bot>.curl2`.
+/// sleeps that long first (so two turns overlap); with `<bot>.curl` holding a page address,
+/// opens it twice through the browser API from the system prompt, saving each answer (and its
+/// HTTP status) to `<bot>.curl1` / `<bot>.curl2`. A message saying `(task-<x>)` uses
+/// `<bot>-<x>.*` instead, so one bot can behave differently in two threads.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
   auth) echo '{"loggedIn":true}'; exit 0 ;;
 esac
 me=$(printf '%s\n' "$@" | sed -n 's/.*You are \([A-Za-z0-9]*\), .*/\1/p' | head -n 1)
+task=$(printf '%s\n' "$@" | sed -n 's/.*(task-\([a-z]*\)).*/\1/p' | head -n 1)
+me="$me${task:+-$task}"
 dir="$KWNT_TEST_BEHAVE"
 printf '%s\n' "$@" > "$dir/$me.prompt"
 if [ -f "$dir/$me.wait" ]; then sleep "$(cat "$dir/$me.wait")"; fi
@@ -249,7 +252,7 @@ async fn a_captcha_met_through_the_shell_browser_api_asks_the_person() {
 
     let prompt = read("Ossi", "prompt");
     assert!(prompt.contains("Browser API: http://127.0.0.1:"), "the bot drives the browser with curl: {prompt}");
-    assert!(prompt.contains(&format!("/api/sandbox/{bot}/bot/{bot}")), "its own copy of the API names it: {prompt}");
+    assert!(prompt.contains(&format!("/api/sandbox/{bot}/bot/{bot}/chat/{bot}")), "its own copy of the API names it and its chat: {prompt}");
     assert_eq!(read("Ossi", "status1"), "200");
     let first: Value = serde_json::from_str(&read("Ossi", "curl1")).unwrap();
     assert_eq!(first["blocked"], true, "{first}");
@@ -306,11 +309,11 @@ async fn a_captcha_one_bot_meets_on_a_shared_team_browser_is_asked_in_that_bots_
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert_eq!(env.state.human_steps.turn_on(&team_id).map(|t| t.kwant_id), Some(newer.clone()), "Ulla's turn is the newest on the team browser");
-    assert_eq!(env.state.human_steps.turn_of(&team_id, Some(&older)).map(|t| t.kwant_id), Some(older.clone()), "Tove's turn is still running");
+    assert_eq!(env.state.human_steps.turn_of(&team_id, Some(kwnt::server::human_steps::Caller { kwant: &older, chat: None })).map(|t| t.kwant_id), Some(older.clone()), "Tove's turn is still running");
     settle(&env).await;
 
-    assert!(read("Tove", "prompt").contains(&format!("/api/sandbox/{team_id}/bot/{older}")), "{}", read("Tove", "prompt"));
-    assert!(read("Ulla", "prompt").contains(&format!("/api/sandbox/{team_id}/bot/{newer}")), "both drive the team's browser");
+    assert!(read("Tove", "prompt").contains(&format!("/api/sandbox/{team_id}/bot/{older}/chat/{tove}")), "{}", read("Tove", "prompt"));
+    assert!(read("Ulla", "prompt").contains(&format!("/api/sandbox/{team_id}/bot/{newer}/chat/{ulla}")), "both drive the team's browser");
     let first: Value = serde_json::from_str(&read("Tove", "curl1")).unwrap();
     assert_eq!((first["blocked"].clone(), first["human_step"].clone()), (json!(true), json!("asked")), "{first}");
     let step = assert_asked_in(&env, &older, &tove, &mut events).await;
@@ -321,6 +324,65 @@ async fn a_captcha_one_bot_meets_on_a_shared_team_browser_is_asked_in_that_bots_
     for chat in [&ulla, &newer] {
         let msgs = env.state.db.list_messages(chat, 50).await.unwrap();
         assert!(!msgs.iter().any(|m| m.text.starts_with("Human check needed")), "no card in Ulla's chats: {msgs:?}");
+    }
+}
+
+/// One bot runs two team threads on the team's browser at once (Rigel's N3 on #298): thread A's
+/// curl meets the CAPTCHA while the same bot's turn in thread B, started later, is still running.
+/// The card, its notification and the step are thread A's; thread B and the bot's DM get nothing.
+/// Before the address named the thread, the card went to thread B (the bot's newest turn).
+#[tokio::test]
+async fn a_captcha_met_in_one_of_a_bots_two_threads_on_a_team_browser_is_asked_in_that_thread() {
+    let Some(env) = setup().await else { return };
+    let (s, v) = call(&env.app, "POST", "/api/settings", Some(json!({"agent_tools": false}))).await;
+    assert!(s.is_success(), "{s} {v}");
+    let bot = add_bot(&env, "Vesa").await;
+    let (s, team) = call(&env.app, "POST", "/api/teams", Some(json!({"name": "checkers", "lead_kwant_id": bot, "member_kwants": [bot]}))).await;
+    assert!(s.is_success(), "{s} {team}");
+    let team_id = team["id"].as_str().or(team["team"]["id"].as_str()).unwrap().to_string();
+    let thread_a = env.state.db.create_thread(&bot, "Store check", "chat", Some(&team_id), "user").await.unwrap().id;
+    let thread_b = env.state.db.create_thread(&bot, "Price list", "chat", Some(&team_id), "user").await.unwrap().id;
+    // Thread A starts first and curls the wall after 3 s; thread B starts later and is still running then
+    std::fs::write(behave_dir().join("Vesa-a.wait"), "3").unwrap();
+    std::fs::write(behave_dir().join("Vesa-a.curl"), format!("{}px_wall.html", env.fixtures)).unwrap();
+    std::fs::write(behave_dir().join("Vesa-b.wait"), "8").unwrap();
+    let mut events = env.state.event_sender.subscribe();
+    let send = |thread: &str, task: &str| json!({"thread_id": thread, "prompt": format!("check the store page for me (task-{task})"), "sender_id": "user"});
+    let newest = |env: &Env| env.state.human_steps.turn_on(&team_id).and_then(|t| t.origin).and_then(|o| o.thread_id);
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(send(&thread_a, "a"))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    for _ in 0..50 {
+        if newest(&env).is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(send(&thread_b, "b"))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    for _ in 0..50 {
+        if newest(&env).as_deref() == Some(thread_b.as_str()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(newest(&env).as_deref(), Some(thread_b.as_str()), "thread B's turn is the newest on the team browser");
+    let running: Vec<_> = env.state.turns.active_turns().into_iter().filter(|t| t.state == "running").filter_map(|t| t.thread_id).collect();
+    assert!(running.contains(&thread_a) && running.contains(&thread_b), "both threads' turns are running: {running:?}");
+    settle(&env).await;
+
+    // Each thread's turn was given an address naming its own thread, the same bot in both
+    assert!(read("Vesa-a", "prompt").contains(&format!("/api/sandbox/{team_id}/bot/{bot}/chat/{thread_a}")), "{}", read("Vesa-a", "prompt"));
+    assert!(read("Vesa-b", "prompt").contains(&format!("/api/sandbox/{team_id}/bot/{bot}/chat/{thread_b}")), "{}", read("Vesa-b", "prompt"));
+    assert_eq!(read("Vesa-a", "status1"), "200");
+    let first: Value = serde_json::from_str(&read("Vesa-a", "curl1")).unwrap();
+    assert_eq!((first["blocked"].clone(), first["human_step"].clone()), (json!(true), json!("asked")), "{first}");
+    assert_eq!(read("Vesa-a", "status2"), "409", "the held browser waits for the person");
+    let step = assert_asked_in(&env, &bot, &thread_a, &mut events).await;
+    assert_eq!(step.sandbox_target.as_deref(), Some(team_id.as_str()));
+    assert_eq!(step.thread_id.as_deref(), Some(thread_a.as_str()), "the step is thread A's");
+    for chat in [&thread_b, &bot] {
+        let msgs = env.state.db.list_messages(chat, 50).await.unwrap();
+        assert!(!msgs.iter().any(|m| m.text.starts_with("Human check needed")), "no card in thread B or the DM: {msgs:?}");
     }
 }
 

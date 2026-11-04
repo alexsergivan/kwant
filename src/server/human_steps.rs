@@ -153,11 +153,17 @@ impl HumanStepHub {
         self.newest_on(target, |_| true)
     }
 
-    /// The live turn on this bot browser that the call came from: `by` (the bot that made it)
-    /// picks that bot's newest turn there, and no other bot's; without `by`, [`Self::turn_on`].
-    pub fn turn_of(&self, target: &str, by: Option<&str>) -> Option<SelfScope> {
+    /// The live turn on this bot browser that the call came from. `by` (the bot that made it)
+    /// picks that bot's newest turn there, and no other bot's; with its chat as well (the turn's
+    /// thread, channel or DM, [`chat_key`]), only that bot's turn in that chat, so one bot running
+    /// two threads on a team browser is asked in the thread that met the wall. Without `by`,
+    /// [`Self::turn_on`]. A caller that matches no turn gets `None`: it is never asked elsewhere.
+    pub fn turn_of(&self, target: &str, by: Option<Caller<'_>>) -> Option<SelfScope> {
         match by {
-            Some(kwant) => self.newest_on(target, |s| s.kwant_id == kwant),
+            Some(Caller { kwant, chat: Some(chat) }) => {
+                self.newest_on(target, |s| s.kwant_id == kwant && chat_key(s).as_deref() == Some(chat))
+            }
+            Some(Caller { kwant, chat: None }) => self.newest_on(target, |s| s.kwant_id == kwant),
             None => self.turn_on(target),
         }
     }
@@ -168,6 +174,22 @@ impl HumanStepHub {
             pick(s) && s.origin.is_some() && !s.cancel.as_ref().is_some_and(|c| c.is_cancelled())
         }).cloned()
     }
+}
+
+/// Who made a call on a bot's own browser API (`/api/sandbox/:id/bot/:kwant_id[/chat/:chat]/...`):
+/// the bot, and the chat its turn runs in when the address names one.
+#[derive(Clone, Copy, Debug)]
+pub struct Caller<'a> {
+    pub kwant: &'a str,
+    pub chat: Option<&'a str>,
+}
+
+/// The chat a turn runs in, as its browser address names it: its thread, else its channel, else
+/// its DM (the bot it talks to). The same for every turn of one thread, so the address in the
+/// bot's prompt never changes within a thread.
+pub fn chat_key(scope: &SelfScope) -> Option<String> {
+    let o = scope.origin.as_ref()?;
+    o.thread_id.clone().or_else(|| o.channel_id.clone()).or_else(|| o.direct_kwant_id.clone())
 }
 
 /// Keeps a turn recorded on its bot browser while it runs ([`HumanStepHub::track_turn`]).
@@ -854,7 +876,7 @@ mod tests {
         let hub = Arc::new(HumanStepHub::default());
         let older = hub.track_turn("team", turn("ann"));
         let newer = hub.track_turn("team", turn("bob"));
-        let of = |by: Option<&str>| hub.turn_of("team", by).map(|s| s.kwant_id);
+        let of = |by: Option<&str>| hub.turn_of("team", by.map(|kwant| Caller { kwant, chat: None })).map(|s| s.kwant_id);
         assert_eq!(of(Some("ann")).as_deref(), Some("ann"));
         assert_eq!(of(Some("bob")).as_deref(), Some("bob"));
         assert_eq!(of(None).as_deref(), Some("bob"), "an unknown caller: the newest turn");
@@ -865,10 +887,39 @@ mod tests {
         let cancelled = tokio_util::sync::CancellationToken::new();
         let stopped = hub.track_turn("team", SelfScope { cancel: Some(cancelled.clone()), ..turn("ann") });
         cancelled.cancel();
-        assert_eq!(hub.turn_of("team", Some("ann")).and_then(|s| s.cancel), None, "a stopped turn asks nobody; the live one does");
+        assert_eq!(hub.turn_of("team", Some(Caller { kwant: "ann", chat: None })).and_then(|s| s.cancel), None, "a stopped turn asks nobody; the live one does");
         drop((older, stopped));
         assert!(hub.turn_on("team").is_none());
         assert!(hub.turns.lock().unwrap().is_empty());
+    }
+
+    fn turn_in(kwant: &str, thread: &str) -> SelfScope {
+        let mut t = turn(kwant);
+        t.origin = Some(super::super::continuity::TurnOrigin { thread_id: Some(thread.into()), ..Default::default() });
+        t.turn_id = Some(format!("turn-{kwant}-{thread}"));
+        t
+    }
+
+    /// One bot running two threads on one team browser: an address naming the thread gets that
+    /// thread's turn, even while the other thread's turn is newer; a thread with no turn there is
+    /// asked nowhere; the bot-only address (an old prompt) keeps the bot's newest turn.
+    #[test]
+    fn a_shared_browser_knows_each_threads_turn() {
+        let hub = Arc::new(HumanStepHub::default());
+        let a = hub.track_turn("team", turn_in("ann", "thread-a"));
+        let _b = hub.track_turn("team", turn_in("ann", "thread-b"));
+        let _other = hub.track_turn("team", turn_in("bob", "thread-c"));
+        let of = |kwant: &str, chat: Option<&str>| hub.turn_of("team", Some(Caller { kwant, chat })).and_then(|s| s.turn_id);
+        assert_eq!(of("ann", Some("thread-a")).as_deref(), Some("turn-ann-thread-a"), "the thread that called, not the newer one");
+        assert_eq!(of("ann", Some("thread-b")).as_deref(), Some("turn-ann-thread-b"));
+        assert_eq!(of("ann", None).as_deref(), Some("turn-ann-thread-b"), "no chat in the address: the bot's newest turn");
+        assert_eq!(of("ann", Some("thread-c")), None, "another bot's thread is never this bot's");
+        assert_eq!(of("ann", Some("thread-x")), None, "a thread with no turn here asks nobody");
+        drop(a);
+        assert_eq!(of("ann", Some("thread-a")), None, "thread A's turn ended: nobody, never thread B");
+        assert_eq!(chat_key(&turn("ann")), None, "no thread, channel or DM: no chat to name");
+        let dm = SelfScope { origin: Some(super::super::continuity::TurnOrigin { direct_kwant_id: Some("ann".into()), ..Default::default() }), ..turn("ann") };
+        assert_eq!(chat_key(&dm).as_deref(), Some("ann"));
     }
 
     #[test]
