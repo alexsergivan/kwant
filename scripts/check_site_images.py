@@ -38,8 +38,11 @@ async function measure(page, width) {
   imgs.forEach(i => { i.loading = 'eager'; });
   await Promise.all(imgs.map(i => i.decode().catch(() => {})));
   for (const i of imgs) {
-    const r = i.getBoundingClientRect(), fit = f.contentWindow.getComputedStyle(i).objectFit;
-    if (!r.width || !r.height || !i.naturalWidth || fit !== 'fill') continue;
+    // Measure the content box: padding and borders (like the window bar on img.app) aren't the picture.
+    const cs = f.contentWindow.getComputedStyle(i), fit = cs.objectFit, b = i.getBoundingClientRect(), px = v => parseFloat(v) || 0;
+    const r = {width: b.width - px(cs.paddingLeft) - px(cs.paddingRight) - px(cs.borderLeftWidth) - px(cs.borderRightWidth),
+               height: b.height - px(cs.paddingTop) - px(cs.paddingBottom) - px(cs.borderTopWidth) - px(cs.borderBottomWidth)};
+    if (!(r.width > 0) || !(r.height > 0) || !i.naturalWidth || fit !== 'fill') continue;
     const shown = r.height / r.width, real = i.naturalHeight / i.naturalWidth;
     if (Math.abs(shown / real - 1) > %(tol)s)
       results.push({page, width, src: i.getAttribute('src'), rendered: [Math.round(r.width), Math.round(r.height)],
