@@ -57,6 +57,8 @@ import { SmartActionsSlot, actionClass } from './results/SmartActions';
 import { WorkingStrip } from './WorkingStrip';
 import { COMPOSE_PREFILL_EVENT, withPrefill } from './results/SmartResult';
 import { FilesPreviewOnly } from './results/Files';
+import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
+import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
 
 /** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
  *  it is scrolled to the end, or when everything already fits. */
@@ -102,6 +104,16 @@ export interface ChatMessage {
   created_at?: string | null;
   /** Smart Results blocks for a bot reply; null or absent while the setting is off. */
   results?: unknown;
+  /** The person's thumbs on a bot reply; absent on servers before reactions (read as none). */
+  reaction?: Reaction | null;
+  /** The message the person replied to; absent or null when it isn't a reply. */
+  reply_to?: ReplyRef | null;
+}
+
+/** Extra details of a message being sent. */
+export interface SendOptions {
+  /** The bot message this one replies to. */
+  replyTo?: ChatMessage;
 }
 
 /** The open chat's turn is waiting for a free slot. */
@@ -166,7 +178,9 @@ export interface ChatViewProps {
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
   /** Resolves to false when the message couldn't be sent. */
-  onSendMessage: (text: string, attachments: AttachmentRef[]) => void | Promise<boolean | void>;
+  onSendMessage: (text: string, attachments: AttachmentRef[], opts?: SendOptions) => void | Promise<boolean | void>;
+  /** Saves the person's thumbs on a bot reply; absent hides the thumbs. */
+  onReact?: (msg: ChatMessage, reaction: Reaction | null) => Promise<ReactResult> | void;
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
   kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
@@ -388,6 +402,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   isStreaming,
   streamingSpeakerName,
   onSendMessage,
+  onReact,
   onResolveApproval,
   kwants: kwantsProp,
   teams: teamsProp,
@@ -661,6 +676,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Jump to a search hit: open its folded discussion if needed, then centre and flash it.
   // Runs after the auto-scroll above, so it wins.
   const [flashId, setFlashId] = useState<string | null>(null);
+  // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
+  const [flashKind, setFlashKind] = useState<'search' | 'quote'>('search');
   useEffect(() => {
     if (!highlightMessageId || !messages.some((m) => m.id === highlightMessageId)) return;
     const thread = groupDiscussionThreads(messages).find(
@@ -674,14 +691,77 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!el) return;
     const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    setFlashKind('search');
     setFlashId(highlightMessageId);
     onHighlightDone?.();
   }, [highlightMessageId, messages, openThoughts, onHighlightDone]);
   useEffect(() => {
     if (!flashId) return;
-    const t = setTimeout(() => setFlashId(null), 2400);
+    const t = setTimeout(() => setFlashId(null), flashKind === 'quote' ? 1600 : 2400);
     return () => clearTimeout(t);
-  }, [flashId]);
+  }, [flashId, flashKind]);
+
+  // Reply: the bot message the next send answers. Cleared on send and when the chat changes.
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  useEffect(() => {
+    setReplyTo(null);
+  }, [contextKey]);
+  const focusComposer = () => {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  };
+  const startReply = (msg: ChatMessage) => {
+    setReplyTo(msg);
+    focusComposer();
+  };
+  /** The chip's name: the bot by id or name, else this chat's title. */
+  const replyBotName = (msg: ChatMessage) => {
+    const name = botNameOf(msg.sender_id, activeKwants);
+    return name === 'a bot' ? title : name;
+  };
+  const cancelReply = () => {
+    setReplyTo(null);
+    focusComposer();
+  };
+  /**
+   * Jumps to a quote's original: opens its folded discussion if needed, centres it, moves focus there
+   * and rings it. False when it isn't loaded in this chat.
+   */
+  const [quoteJump, setQuoteJump] = useState<{ id: string; n: number } | null>(null);
+  const showOriginal = (id: string): boolean => {
+    if (!messages.some((m) => m.id === id)) return false;
+    stickRef.current = false;
+    setQuoteJump((p) => ({ id, n: (p?.n ?? 0) + 1 }));
+    return true;
+  };
+  useEffect(() => {
+    if (!quoteJump) return;
+    const thread = groupDiscussionThreads(messages).find((item) => item.kind === 'thread' && item.turns.some((t) => t.id === quoteJump.id));
+    if (thread && thread.kind === 'thread' && !openThoughts[`thread:${thread.id}`]) {
+      setOpenThoughts((prev) => ({ ...prev, [`thread:${thread.id}`]: true }));
+      return;
+    }
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(quoteJump.id)}"]`);
+    setQuoteJump(null);
+    if (!el) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    if (el.tabIndex < 0 || el.hasAttribute('tabindex')) el.focus({ preventScroll: true });
+    setFlashId(null);
+    setFlashKind('quote');
+    requestAnimationFrame(() => setFlashId(quoteJump.id));
+  }, [quoteJump, messages, openThoughts]);
+
+  // Thumbs on the bot's newest question are a yes or no; once one has answered it, they're feedback again.
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
+  const questionId = questionMessageId(messages, isStreaming);
+  const react = async (msg: ChatMessage, reaction: Reaction | null): Promise<boolean> => {
+    const result = await onReact?.(msg, reaction);
+    if (result?.answered) setAnswered((prev) => new Set(prev).add(msg.id));
+    return result ? result.ok : true;
+  };
 
   const toggleThought = (id: string) => {
     setOpenThoughts((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -781,7 +861,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!canSend || (isStreaming && discussionState?.inProgress)) return;
     playSfx('click');
     stickRef.current = true;
-    onSendMessage(inputVal.trim(), readyAttachments(uploads));
+    const replying = replyTo;
+    const sent = onSendMessage(inputVal.trim(), readyAttachments(uploads), replying ? { replyTo: replying } : undefined);
+    setReplyTo(null);
+    // A send that fails keeps the reply, unless the person has moved on to another one.
+    if (replying && sent && typeof (sent as Promise<unknown>).then === 'function')
+      void (sent as Promise<boolean | void>).then((ok) => {
+        if (ok === false) setReplyTo((now) => now ?? replying);
+      });
     // The bots this goes to blink once, so you see who received it.
     recipientsOf(inputVal, activeKwants, home?.kind === 'bot' ? home.bot?.id : undefined).forEach(moodNoticed);
     setInputVal('');
@@ -819,6 +906,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
         setMentionQuery(null);
         return;
       }
+    }
+
+    if (e.key === 'Escape' && replyTo) {
+      e.preventDefault();
+      setReplyTo(null);
+      return;
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -983,6 +1076,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const text = shownDecisions ? shownDecisions.text : msg.text;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
+    const replyQuote = isUser ? replyRefOf(msg.reply_to) : null;
     // Whose mood the reply header shows (Pixel's AvatarMood, drawn by ModernAvatar given a kwantId):
     // Laya's pick, else this bot chat's bot, else the team member with that name. Unknown: no mood.
     const replyKwantId = isUser
@@ -993,8 +1087,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
       <div
         key={msg.id}
         data-message-id={msg.id}
-        className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
-          flashId === msg.id ? 'kw-flash' : ''
+        tabIndex={-1}
+        className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+          flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
         {/* Phones show the avatar inside the name line instead, so the bubble gets the full width */}
@@ -1094,7 +1189,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             data-work-ahead={workAhead ? '' : undefined}
           >
             {isUser ? (
-              <div className="whitespace-pre-wrap break-words">{renderFormattedText(msg.text)}</div>
+              <>
+                {replyQuote && (
+                  <ReplyQuote reply={replyQuote} botName={botNameOf(replyQuote.sender_id, activeKwants)} onOpen={() => showOriginal(replyQuote.id)} />
+                )}
+                <div className="whitespace-pre-wrap break-words">{renderFormattedText(msg.text)}</div>
+              </>
             ) : workAhead ? (
               <WorkAheadBody messageId={msg.id} text={text} />
             ) : (
@@ -1146,6 +1246,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </>
                 )}
               </button>
+              {msg.sender_role === 'kwant' && !workAhead && !msg.id.startsWith('temp-') && (
+                <>
+                  {onReact && (
+                    <ReactionButtons
+                      messageId={msg.id}
+                      reaction={reactionOf(msg.reaction)}
+                      asks={msg.id === questionId && !answered.has(msg.id)}
+                      onReact={(r) => react(msg, r)}
+                    />
+                  )}
+                  <ReplyButton botName={displayName} active={replyTo?.id === msg.id} onReply={() => startReply(msg)} />
+                </>
+              )}
               {msg.results != null && <SmartActionsSlot messageId={msg.id} />}
             </div>
           )}
@@ -1596,6 +1709,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <div className="absolute inset-0 z-10 rounded-2xl border-2 border-dashed border-sky-400/70 bg-zinc-950/80 flex items-center justify-center gap-2 text-sm font-medium text-sky-200 pointer-events-none">
               <Paperclip size={15} aria-hidden="true" /> Drop files to attach
             </div>
+          )}
+          {replyTo && (
+            <ReplyChip
+              key={replyTo.id}
+              botName={replyBotName(replyTo)}
+              excerpt={excerptOf(replyTo.text, 200)}
+              onOpen={() => showOriginal(replyTo.id)}
+              onCancel={cancelReply}
+            />
           )}
           {(uploads.length > 0 || uploadNote) && (
             <div className="basis-full min-w-0 px-1 pt-0.5 space-y-1.5">
