@@ -8,7 +8,7 @@
 use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit};
 use super::{routes::get_or_create_browser_controller, AppState};
 use crate::sandbox::app_links::{self, AppLinkWatch, Verdict};
-use crate::sandbox::browser::{BrowserController, BrowserError, HeldPointer, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
+use crate::sandbox::browser::{web_address, BrowserController, BrowserError, HeldPointer, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
 use crate::sandbox::browser_history::HistoryDirection;
 use axum::{extract::{Path, State, WebSocketUpgrade, ws::{Message, WebSocket}}, http::{HeaderMap, StatusCode}, response::Response};
 use futures::{SinkExt, StreamExt};
@@ -184,9 +184,11 @@ impl BrowserController {
                 }
             }
             BrowserInput::Navigate { url } => {
-                let parsed = reqwest::Url::parse(&url).map_err(|e| BrowserError::Protocol(e.to_string()))?;
+                // told apart as a bot's navigate tells them: a path, another app, then the scheme
+                let address = web_address(&url)?;
+                let parsed = reqwest::Url::parse(&address).map_err(|e| BrowserError::Protocol(e.to_string()))?;
                 if !matches!(parsed.scheme(), "http"|"https") { return Err(protocol("Use an HTTP or HTTPS URL")); }
-                self.navigate_unlocked(&url).await?;
+                self.navigate_unlocked(&address).await?;
             }
             BrowserInput::History { direction } => self.navigate_history(direction).await?,
             _ => return Err(protocol("This action needs the live view")),
@@ -596,9 +598,11 @@ impl Worker {
                 self.cdp.fire("Input.dispatchMouseEvent", json!({"type":"mouseWheel","x":x,"y":y,"deltaX":delta_x,"deltaY":delta_y,"modifiers":modifiers,"buttons":buttons}));
             }
             BrowserInput::Navigate { url } => {
-                let parsed = reqwest::Url::parse(&url).map_err(|e| BrowserError::Protocol(e.to_string()))?;
+                // told apart as a bot's navigate tells them: a path, another app, then the scheme
+                let address = web_address(&url)?;
+                let parsed = reqwest::Url::parse(&address).map_err(|e| BrowserError::Protocol(e.to_string()))?;
                 if !matches!(parsed.scheme(), "http"|"https") { return Err(protocol("Use an HTTP or HTTPS URL")); }
-                self.ctrl.navigate_unlocked(&url).await?;
+                self.ctrl.navigate_unlocked(&address).await?;
                 refresh_location(&self.cdp, &self.ctrl, &self.shared, &self.client);
                 let _ = self.client.send(ack(id, json!({})));
             }

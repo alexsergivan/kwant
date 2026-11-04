@@ -64,13 +64,30 @@ pub fn app_scheme(url: &str) -> Option<String> {
     (!IN_BROWSER.contains(&scheme.as_str())).then_some(scheme)
 }
 
+/// Schemes that take a phone number (`tel:+38640123456`, `sms:5551234`): digits after the colon
+/// are the number, never a port, so `tel:555` is a call, not a host called `tel`.
+const NUMBERS: &[&str] = &["tel", "sms", "mms", "callto", "facetime", "facetime-audio", "fax", "sip", "sips"];
+
+/// The port of `url` when it is a web address written without its scheme, `host:port` with an
+/// optional path (`localhost:8080/x`, `127.0.0.1:9381`, `example.com:443`). Chrome would read the
+/// host as a scheme (`localhost:`) and hand it to the operating system.
+pub fn host_port(url: &str) -> Option<u16> {
+    let (host, rest) = url.trim().split_once(':')?;
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || "-.".contains(c)) { return None; }
+    if NUMBERS.iter().any(|n| host.eq_ignore_ascii_case(n)) { return None; }
+    let digits = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    let (port, after) = rest.split_at(digits);
+    if !(after.is_empty() || after.starts_with(['/', '?', '#'])) { return None; }
+    port.parse::<u16>().ok().filter(|p| *p > 0)
+}
+
 /// The scheme of `url` when it is a link to another app a bot must not open: Chrome would hand it
 /// to the operating system or freeze the tab behind an "Open <app>?" prompt. `host:port` without
-/// a scheme (`localhost:8080`) isn't one, and neither is a Windows drive (`C:\…`, `c:/…`).
+/// a scheme (`localhost:8080`, see [`host_port`]) isn't one, and neither is a Windows drive
+/// (`C:\…`, `c:/…`). A phone number is (`tel:5551234`), digits or not.
 pub fn refused_scheme(url: &str) -> Option<String> {
-    let scheme = app_scheme(url).filter(|s| s.len() > 1)?;
-    let rest = url.trim_start()[scheme.len() + 1..].trim_start_matches('/');
-    (!rest.starts_with(|c: char| c.is_ascii_digit())).then_some(scheme)
+    if host_port(url).is_some() { return None; }
+    app_scheme(url).filter(|s| s.len() > 1)
 }
 
 /// Why a bot's browser didn't open `url`, a link to another app.
@@ -112,12 +129,23 @@ pub enum Verdict {
 
 /// Marks where a mouse move should land in the page and starts counting the moves that reach
 /// it: `[x, y]`, or `null` when there is no point to probe (the page is all frames, or has no
-/// size). Runs in the page's main world; the probe removes itself in [`PROBE_READ_JS`].
+/// size, or no one sees it). Runs in the page's main world; the probe removes itself in
+/// [`PROBE_READ_JS`]. A frame in a closed shadow root can't be seen from the page, so a point
+/// over one is still probed.
 pub const PROBE_ARM_JS: &str = r#"(() => {
   const w = innerWidth, h = innerHeight, key = Symbol.for('kwnt.inputProbe');
+  // Chrome holds mouse moves for a page no one sees until its next frame, which a hidden page
+  // doesn't draw: they would never arrive, and a live background tab would look stuck
+  if (document.visibilityState !== 'visible') return null;
   if (!(w > 32 && h > 32)) return null;
   for (const [x, y] of [[8, 8], [w - 9, h - 9], [8, h - 9], [w - 9, 8], [w >> 1, h >> 1]]) {
-    const el = document.elementFromPoint(x, y);
+    let el = document.elementFromPoint(x, y);
+    // a frame inside a web component: the page sees its host, the move goes to the frame
+    for (let i = 0; el && el.shadowRoot && i < 16; i++) {
+      const inner = el.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === el) break;
+      el = inner;
+    }
     if (!el || /^(IFRAME|FRAME|EMBED|OBJECT|FENCEDFRAME|PORTAL)$/.test(el.tagName)) continue;
     if (self[key]) removeEventListener('mousemove', self[key].on, true);
     const probe = { n: 0, on: () => { probe.n++; } };
@@ -306,6 +334,58 @@ mod tests {
         let text = refused_text("tiktok://open", "tiktok");
         assert!(text.contains("another app (tiktok:)") && text.contains("only opens web pages"), "{text}");
         assert!(refused_text(&"x".repeat(500), "x").len() < 400, "a long link is cut short");
+    }
+
+    #[test]
+    fn a_phone_number_opens_another_app_and_host_port_is_a_web_address() {
+        // digits after the colon are a number to call or text, not a port
+        for (url, scheme) in [("tel:5551234", "tel"), ("tel:+38640123456", "tel"), ("TEL:555", "tel"), ("sms:5551234", "sms"), ("sms:+38640123456?body=hi", "sms"),
+            ("tel:555/1", "tel"), ("callto:5551234", "callto"), ("facetime:5551234", "facetime"), ("zoommtg:123456789", "zoommtg"), ("tiktok:12x", "tiktok")] {
+            assert_eq!(refused_scheme(url).as_deref(), Some(scheme), "{url}");
+            assert_eq!(host_port(url), None, "{url}");
+        }
+        // a host and a port with no scheme: Chrome must not read the host as one
+        for (url, port) in [("localhost:8080", 8080), ("localhost:8080/target.html", 8080), (" LocalHost:3000?x=1", 3000), ("127.0.0.1:9411/a", 9411),
+            ("example.com:443/x", 443), ("dev-box:5173#top", 5173)] {
+            assert_eq!(host_port(url), Some(port), "{url}");
+            assert_eq!(refused_scheme(url), None, "{url}");
+        }
+        for url in ["localhost", "localhost:", "localhost:0", "localhost:70000", "localhost:80abc", "http://localhost:8080", "a b:80", ":80", "C:\\x"] {
+            assert_eq!(host_port(url), None, "{url}");
+        }
+    }
+
+    /// Runs [`PROBE_ARM_JS`] in Node against a stand-in page: `page` sets `visibilityState` and
+    /// what `elementFromPoint` finds. Gives the probe's answer as JSON.
+    fn arm_probe_in(page: &str) -> String {
+        let script = format!(r#"
+          globalThis.self = globalThis; globalThis.innerWidth = 800; globalThis.innerHeight = 600;
+          globalThis.addEventListener = () => {{}}; globalThis.removeEventListener = () => {{}};
+          const el = (tagName, shadow) => ({{ tagName, shadowRoot: shadow ? {{ elementFromPoint: () => shadow }} : null }});
+          globalThis.document = {{ visibilityState: 'visible', elementFromPoint: () => el('DIV') }};
+          {page}
+          console.log(JSON.stringify({PROBE_ARM_JS}));"#);
+        let out = std::process::Command::new("node").args(["-e", &script]).output().expect("node runs the probe (CI and dev machines have it)");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn the_input_probe_leaves_a_page_no_one_sees_alone() {
+        assert_eq!(arm_probe_in(""), "[8,8]", "a page on screen is probed");
+        // a background tab gets no mouse moves until it is shown, so it would read as stuck
+        assert_eq!(arm_probe_in("document.visibilityState = 'hidden';"), "null");
+        assert_eq!(arm_probe_in("document.visibilityState = 'prerender';"), "null");
+    }
+
+    #[test]
+    fn the_input_probe_skips_a_frame_inside_a_web_component() {
+        // the page sees the component's host; the move goes to the frame inside it
+        assert_eq!(arm_probe_in("document.elementFromPoint = () => el('EMBED-WIDGET', el('IFRAME'));"), "null");
+        assert_eq!(arm_probe_in("document.elementFromPoint = () => el('OUTER-X', el('INNER-Y', el('IFRAME')));"), "null", "nested components");
+        // a component with ordinary content is still probed, and one whose root finds itself ends the walk
+        assert_eq!(arm_probe_in("document.elementFromPoint = () => el('MY-APP', el('DIV'));"), "[8,8]");
+        assert_eq!(arm_probe_in("const host = el('MY-APP'); host.shadowRoot = { elementFromPoint: () => host }; document.elementFromPoint = () => host;"), "[8,8]");
     }
 
     #[test]

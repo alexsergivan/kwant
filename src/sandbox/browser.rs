@@ -456,6 +456,20 @@ pub fn refuse_app_link(target: &str) -> Result<(), BrowserError> {
     }
 }
 
+/// The address a navigate hands Chrome, the same for a bot and for the live view. A file path is
+/// refused first (`C:\Users\…` would otherwise read as a link to an app called `c:`), then a
+/// link to another app; a web address written as `host:port` (`localhost:8080/x`) gets its
+/// scheme, because Chrome would read `localhost:` as one and hand it to the operating system.
+pub fn web_address(target: &str) -> Result<std::borrow::Cow<'_, str>, BrowserError> {
+    refuse_file_path(target)?;
+    refuse_app_link(target)?;
+    Ok(match super::app_links::host_port(target) {
+        Some(443) => format!("https://{}", target.trim()).into(),
+        Some(_) => format!("http://{}", target.trim()).into(),
+        None => target.into(),
+    })
+}
+
 /// Recognises CAPTCHA / anti-bot interstitials that replace the requested content.
 pub fn detect_bot_wall(url: &str, title: &str, text: &str) -> Option<&'static str> {
     let url = url.to_lowercase();
@@ -1312,13 +1326,11 @@ impl BrowserController {
     /// fails the same way. The person's own navigation is [`Self::navigate_unlocked`].
     pub async fn navigate(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
         let _permit = self.control.try_read().map_err(|_| BrowserError::HumanControl)?;
-        // a path first: `C:\Users\…` would otherwise read as a link to an app called `c:`
-        refuse_file_path(target_url)?;
-        refuse_app_link(target_url)?;
+        let address = web_address(target_url)?;
         self.site_guard.set_actor(super::site_guard::Actor::Bot);
-        self.site_guard.check(target_url).await.map_err(BrowserError::SiteRule)?;
+        self.site_guard.check(&address).await.map_err(BrowserError::SiteRule)?;
         let _ = self.site_guard.take_refusal();
-        let navigated = self.navigate_unlocked(target_url).await;
+        let navigated = self.navigate_unlocked(&address).await;
         if let Some(refusal) = self.site_guard.take_refusal() {
             self.leave_refused_page().await;
             return Err(BrowserError::SiteRule(refusal));
@@ -1364,8 +1376,8 @@ impl BrowserController {
     }
 
     pub async fn navigate_unlocked(&self, target_url: &str) -> Result<NavigationResult, BrowserError> {
-        refuse_file_path(target_url)?;
-        refuse_app_link(target_url)?;
+        let address = web_address(target_url)?;
+        let target_url: &str = &address;
         self.progress.lock().unwrap_or_else(|e| e.into_inner()).reset();
         let _ = self.collect_captured_credentials().await;
         let _ = self.send_cdp_command("Page.enable", json!({})).await;
