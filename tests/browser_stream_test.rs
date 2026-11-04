@@ -18,6 +18,11 @@ struct Mock {
     between_documents: Arc<std::sync::atomic::AtomicBool>,
     /// Every open DevTools socket, to push page events the way Chromium does.
     sockets: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<String>>>>,
+    /// Console lines the page logged at load, replayed when Runtime or Log is turned on.
+    console_lines: Arc<AtomicUsize>,
+    /// How the page answers the live view's input check: 0 not at all, 1 a live tab, 2 a tab
+    /// behind Chrome's "Open app?" prompt (scripts run, input never arrives).
+    input: Arc<std::sync::atomic::AtomicU8>,
 }
 
 /// Sends a page event on every open DevTools socket.
@@ -44,7 +49,27 @@ async fn cdp(State(mock): State<Mock>, Path(_id): Path<String>, ws: WebSocketUpg
                 if socket.send(Message::Text(error.to_string())).await.is_err() { break; }
                 continue;
             }
+            // Chromium replays what the page already logged before it answers
+            let replay = |event: &str, n: usize| (0..n).map(|i| match event {
+                "Runtime.consoleAPICalled" => json!({"method":event,"params":{"type":"log","args":[{"type":"string","value":format!("line {i}")}],"executionContextId":1,"timestamp":i}}),
+                _ => json!({"method":event,"params":{"entry":{"source":"javascript","level":"info","text":format!("line {i}"),"timestamp":i}}}),
+            }).collect::<Vec<_>>();
+            let lines = mock.console_lines.load(Ordering::SeqCst);
+            let replayed = match method {
+                "Runtime.enable" => [replay("Runtime.consoleAPICalled", lines), (1..=3).map(|i| json!({"method":"Runtime.executionContextCreated","params":{"context":{"id":i}}})).collect()].concat(),
+                "Log.enable" => replay("Log.entryAdded", lines),
+                _ => vec![],
+            };
+            let mut gone = false;
+            for event in replayed { if socket.send(Message::Text(event.to_string())).await.is_err() { gone = true; break; } }
+            if gone { break; }
+            let probe = cmd["params"]["expression"].as_str().is_some_and(|e| e.contains("kwnt.inputProbe")) && mock.input.load(Ordering::SeqCst) != 0;
             let result = match method {
+                "Runtime.evaluate" if probe => {
+                    let stuck = mock.input.load(Ordering::SeqCst) == 2;
+                    let arming = cmd["params"]["expression"].as_str().unwrap().contains("elementFromPoint");
+                    json!({"result":{"value": if arming { json!([8, 8]) } else if stuck { json!(0) } else { json!(2) }}})
+                }
                 "Target.createBrowserContext" => json!({"browserContextId":format!("context-{}",mock.contexts.fetch_add(1,Ordering::SeqCst))}),
                 "Target.createTarget" => {
                     assert!(cmd["params"].get("width").is_none(), "viewport dimensions belong in Emulation, not createTarget without newWindow");
@@ -745,4 +770,79 @@ async fn a_browser_container_from_an_older_image_is_replaced() {
     assert_eq!(image(), kwnt::sandbox::service::BROWSER_IMAGE);
     let agent = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": "navigator.userAgent", "returnByValue": true})).await.unwrap();
     assert!(agent.to_string().contains("Chrome/") && !agent.to_string().contains("Headless"), "{agent}");
+}
+
+/// F1: turning on Runtime and Log makes Chromium replay everything the page logged. A page
+/// that logged 200 lines at load (the TikTok QR page logs ~70) must still start the live view.
+#[tokio::test]
+async fn a_page_that_logged_hundreds_of_lines_still_starts_the_live_view() {
+    let (mock, cdp_task) = mock().await;
+    mock.console_lines.store(200, Ordering::SeqCst);
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, _ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    let first = next_frame(&mut ws, Duration::from_secs(5)).await.expect("the first picture of a noisy page");
+    assert_eq!(first["image"], "streamed-frame");
+    let commands = mock.commands.lock().await.clone();
+    assert!(commands.iter().any(|c| c["method"] == "Runtime.enable") && commands.iter().any(|c| c["method"] == "Log.enable"), "the guard is still on");
+    // and the stream is live: the guard's notices and Chrome's refusals still get through
+    push_event(&mock, "Runtime.bindingCalled", json!({"name":"kwntAppLink","payload":"snssdk1233","executionContextId":9})).await;
+    assert!(app_link_notice(&mut ws, Duration::from_secs(2)).await.expect("told the link was stopped").contains("(snssdk1233:)"));
+    app_task.abort(); cdp_task.abort();
+}
+
+/// F2: the link fired while no live view was open (the bot opened the sign-in page; the person
+/// takes over later). Opening the view finds the tab ignoring input and steps it off and back.
+#[tokio::test]
+async fn a_tab_frozen_before_the_live_view_opened_is_recovered_when_it_opens() {
+    let (mock, cdp_task) = mock().await;
+    mock.input.store(2, Ordering::SeqCst);
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, _ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    let recovered = app_link_notice(&mut ws, Duration::from_secs(5)).await.expect("told the page was reloaded");
+    assert!(recovered.contains("reloaded the page"), "{recovered}");
+    let commands = mock.commands.lock().await.clone();
+    let moves: Vec<&Value> = commands.iter().filter(|c| c["method"] == "Input.dispatchMouseEvent").collect();
+    assert!(!moves.is_empty() && moves.iter().all(|c| c["params"]["type"] == "mouseMoved" && c["params"]["buttons"] == 0), "the check only moves the pointer: {moves:?}");
+    let steps: Vec<Value> = commands.iter()
+        .filter(|c| matches!(c["method"].as_str(), Some("Page.navigate" | "Page.navigateToHistoryEntry"))).map(|c| c["params"].clone()).collect();
+    assert_eq!(steps, vec![json!({"url":"about:blank"}), json!({"entryId":2})]);
+    app_task.abort(); cdp_task.abort();
+}
+
+/// F2: a tab that takes input is left alone when the live view opens: no reload, no banner.
+#[tokio::test]
+async fn a_live_tab_is_left_alone_when_the_live_view_opens() {
+    let (mock, cdp_task) = mock().await;
+    mock.input.store(1, Ordering::SeqCst);
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, _ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    next_frame(&mut ws, Duration::from_secs(5)).await.expect("the stream is up");
+    let checked = timeout(Duration::from_secs(3), async { loop {
+        if mock.commands.lock().await.iter().filter(|c| c["params"]["expression"].as_str().is_some_and(|e| e.contains("kwnt.inputProbe"))).count() >= 2 { break; }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }}).await;
+    assert!(checked.is_ok(), "the view checked the tab");
+    assert_eq!(app_link_notice(&mut ws, Duration::from_millis(1500)).await, None, "no banner");
+    assert!(!mock.commands.lock().await.iter().any(|c| c["method"] == "Page.navigate"), "no reload");
+    app_task.abort(); cdp_task.abort();
+}
+
+/// F3: a bot's own navigate to a link that opens another app never reaches Chromium, whose
+/// "Open app?" prompt would leave the tab ignoring every click and key. The bot is told why.
+#[tokio::test]
+async fn a_bot_navigating_to_another_app_is_refused_before_the_browser_sees_it() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (_ws, ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    for url in ["tiktok://open", "snssdk1233://login", "intent://scan/#Intent;scheme=zxing;end"] {
+        let error = ctrl.navigate(url).await.expect_err(url);
+        assert!(matches!(error, kwnt::sandbox::BrowserError::NotWebAddress(_)), "{url}: {error:?}");
+        let text = error.to_string();
+        assert!(text.contains("opens another app") && text.contains("only opens web pages"), "{text}");
+    }
+    let navigated: Vec<Value> = mock.commands.lock().await.iter().filter(|c| c["method"] == "Page.navigate").map(|c| c["params"]["url"].clone()).collect();
+    assert!(navigated.is_empty(), "nothing reached the browser: {navigated:?}");
+    // the bot carries on with web pages
+    ctrl.navigate("https://www.tiktok.com/login").await.expect("a web page still opens");
+    app_task.abort(); cdp_task.abort();
 }

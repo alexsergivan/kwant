@@ -9,6 +9,9 @@
 //! document and cancels a navigation to such a link before it reaches Chrome. What it can't
 //! cancel (a frame whose first address is the link) is caught by [`AppLinkWatch`], which tells
 //! the live view to step the tab off the page and back, the one thing that closes the prompt.
+//! A link that fired while no live view was open is found when one opens: [`PROBE_ARM_JS`] and
+//! [`PROBE_READ_JS`] check that the page still gets a mouse move, and a tab that doesn't is
+//! stepped off and back the same way.
 use std::{collections::VecDeque, time::Duration};
 use tokio::time::Instant;
 
@@ -61,6 +64,22 @@ pub fn app_scheme(url: &str) -> Option<String> {
     (!IN_BROWSER.contains(&scheme.as_str())).then_some(scheme)
 }
 
+/// The scheme of `url` when it is a link to another app a bot must not open: Chrome would hand it
+/// to the operating system or freeze the tab behind an "Open <app>?" prompt. `host:port` without
+/// a scheme (`localhost:8080`) isn't one.
+pub fn refused_scheme(url: &str) -> Option<String> {
+    let scheme = app_scheme(url)?;
+    let rest = url.trim_start()[scheme.len() + 1..].trim_start_matches('/');
+    (!rest.starts_with(|c: char| c.is_ascii_digit())).then_some(scheme)
+}
+
+/// Why a bot's browser didn't open `url`, a link to another app.
+pub fn refused_text(url: &str, scheme: &str) -> String {
+    let shown: String = url.trim().chars().take(120).collect();
+    format!("{shown} opens another app ({scheme}:), not a web page, so the browser didn't open it: kwnt only opens web pages (http:// and https://). \
+             Use a web address instead, or another way on the page such as signing in with a password or code.")
+}
+
 /// The scheme of `url` when following it makes Chrome ask whether to open another app.
 pub fn prompting_scheme(url: &str) -> Option<String> {
     app_scheme(url).filter(|s| !NO_PROMPT.contains(&s.as_str()))
@@ -81,14 +100,42 @@ pub const WINDOW: Duration = Duration::from_secs(60);
 /// The person is told about a stopped link at most this often.
 pub const NOTICE_GAP: Duration = Duration::from_secs(5);
 
-/// What the live view should do about a link to another app.
+/// What the live view should do about a link to another app. The scheme is `None` when the
+/// tab was found ignoring input without the live view seeing the link (it fired before it opened).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     /// Chrome is asking: step the tab off the page and back, then tell the person.
-    Recover(String),
+    Recover(Option<String>),
     /// Chrome is asking again too often: leave the page as it is and tell the person why.
-    GiveUp(String),
+    GiveUp(Option<String>),
 }
+
+/// Marks where a mouse move should land in the page and starts counting the moves that reach
+/// it: `[x, y]`, or `null` when there is no point to probe (the page is all frames, or has no
+/// size). Runs in the page's main world; the probe removes itself in [`PROBE_READ_JS`].
+pub const PROBE_ARM_JS: &str = r#"(() => {
+  const w = innerWidth, h = innerHeight, key = Symbol.for('kwnt.inputProbe');
+  if (!(w > 32 && h > 32)) return null;
+  for (const [x, y] of [[8, 8], [w - 9, h - 9], [8, h - 9], [w - 9, 8], [w >> 1, h >> 1]]) {
+    const el = document.elementFromPoint(x, y);
+    if (!el || /^(IFRAME|FRAME|EMBED|OBJECT|FENCEDFRAME|PORTAL)$/.test(el.tagName)) continue;
+    if (self[key]) removeEventListener('mousemove', self[key].on, true);
+    const probe = { n: 0, on: () => { probe.n++; } };
+    self[key] = probe;
+    addEventListener('mousemove', probe.on, true);
+    return [x, y];
+  }
+  return null;
+})()"#;
+
+/// How many probe moves reached the page, or -1 when the probe is gone (a new document).
+pub const PROBE_READ_JS: &str = r#"(() => {
+  const key = Symbol.for('kwnt.inputProbe'), probe = self[key];
+  if (!probe) return -1;
+  removeEventListener('mousemove', probe.on, true);
+  delete self[key];
+  return probe.n;
+})()"#;
 
 /// Watches the page's navigations for a link to another app that got past the guard.
 #[derive(Debug, Default)]
@@ -120,10 +167,20 @@ impl AppLinkWatch {
         let (_, at) = self.pending.as_ref()?;
         if now < *at { return None; }
         let (scheme, _) = self.pending.take()?;
+        Some(self.verdict(Some(scheme), now))
+    }
+
+    /// The tab was found ignoring input when the live view opened: a link fired before it did.
+    /// Counts against the same cap as a link the live view saw.
+    pub fn stuck(&mut self, now: Instant) -> Verdict {
+        self.verdict(None, now)
+    }
+
+    fn verdict(&mut self, scheme: Option<String>, now: Instant) -> Verdict {
         while self.recoveries.front().is_some_and(|t| now.duration_since(*t) >= WINDOW) { self.recoveries.pop_front(); }
-        if self.recoveries.len() >= MAX_RECOVERIES { return Some(Verdict::GiveUp(scheme)); }
+        if self.recoveries.len() >= MAX_RECOVERIES { return Verdict::GiveUp(scheme); }
         self.recoveries.push_back(now);
-        Some(Verdict::Recover(scheme))
+        Verdict::Recover(scheme)
     }
 
     /// Whether the person may be told about another stopped link now.
@@ -140,13 +197,19 @@ pub fn stopped_text(scheme: &str) -> String {
 }
 
 /// Said after kwnt stepped the tab off the page and back to close Chrome's prompt.
-pub fn recovered_text(scheme: &str) -> String {
-    format!("This page tried to open another app ({scheme}:), and the browser stopped taking clicks and keys while it waited. kwnt reloaded the page so you can use it again.")
+pub fn recovered_text(scheme: Option<&str>) -> String {
+    match scheme {
+        Some(scheme) => format!("This page tried to open another app ({scheme}:), and the browser stopped taking clicks and keys while it waited. kwnt reloaded the page so you can use it again."),
+        None => "This page had stopped taking clicks and keys, most likely because it tried to open another app before you opened the view. kwnt reloaded the page so you can use it again.".into(),
+    }
 }
 
 /// Said when the page keeps opening its app and kwnt stopped reloading it.
-pub fn gave_up_text(scheme: &str) -> String {
-    format!("This page keeps trying to open another app ({scheme}:), and the browser ignores clicks and keys while it does. Open another page from the address bar to carry on.")
+pub fn gave_up_text(scheme: Option<&str>) -> String {
+    match scheme {
+        Some(scheme) => format!("This page keeps trying to open another app ({scheme}:), and the browser ignores clicks and keys while it does. Open another page from the address bar to carry on."),
+        None => "This page keeps ignoring clicks and keys, most likely because it keeps trying to open another app. Open another page from the address bar to carry on.".into(),
+    }
 }
 
 #[cfg(test)]
@@ -205,14 +268,51 @@ mod tests {
             watch.started("snssdk1233://login", at);
             watch.started("tiktok://second-in-the-same-burst", at);
             assert_eq!(watch.due(at + SETTLE / 2), None, "Chrome may still refuse it");
-            assert_eq!(watch.due(at + SETTLE), Some(Verdict::Recover("snssdk1233".into())));
+            assert_eq!(watch.due(at + SETTLE), Some(Verdict::Recover(Some("snssdk1233".into()))));
             assert_eq!(watch.due(at + SETTLE), None, "once per link");
         }
         watch.started("snssdk1233://login", t + Duration::from_secs(10));
-        assert_eq!(watch.due(t + Duration::from_secs(11)), Some(Verdict::GiveUp("snssdk1233".into())));
+        assert_eq!(watch.due(t + Duration::from_secs(11)), Some(Verdict::GiveUp(Some("snssdk1233".into()))));
         // a minute after the first, one may run again
         watch.started("snssdk1233://login", t + WINDOW);
-        assert_eq!(watch.due(t + WINDOW + SETTLE), Some(Verdict::Recover("snssdk1233".into())));
+        assert_eq!(watch.due(t + WINDOW + SETTLE), Some(Verdict::Recover(Some("snssdk1233".into()))));
+    }
+
+    #[test]
+    fn a_tab_found_stuck_is_recovered_under_the_same_cap() {
+        let mut watch = AppLinkWatch::default();
+        let t = Instant::now();
+        assert_eq!(watch.stuck(t), Verdict::Recover(None));
+        for i in 1..MAX_RECOVERIES as u64 {
+            watch.started("snssdk1233://login", t + Duration::from_secs(i));
+            assert!(matches!(watch.due(t + Duration::from_secs(i) + SETTLE), Some(Verdict::Recover(_))));
+        }
+        assert_eq!(watch.stuck(t + Duration::from_secs(10)), Verdict::GiveUp(None));
+        assert_eq!(watch.stuck(t + WINDOW), Verdict::Recover(None));
+        assert!(recovered_text(None).contains("reloaded the page"));
+        assert!(!gave_up_text(None).contains("reloaded"));
+    }
+
+    #[test]
+    fn a_bot_is_refused_links_to_other_apps_but_not_web_pages() {
+        for (url, scheme) in [("tiktok://open", "tiktok"), ("snssdk1233://login", "snssdk1233"), ("intent://scan/#Intent;scheme=zxing;end", "intent"),
+            ("intent:#Intent;end", "intent"), (" TikTok://x", "tiktok"), ("mailto:a@b.c", "mailto"), ("itms-apps://a", "itms-apps"), ("zoommtg:join", "zoommtg")] {
+            assert_eq!(refused_scheme(url).as_deref(), Some(scheme), "{url}");
+        }
+        for url in ["https://www.tiktok.com/login", "http://a", "about:blank", "data:text/html,x", "javascript:void(0)", "chrome://version",
+            "localhost:8080", "example.com:443/x", "127.0.0.1:9381", "www.tiktok.com", "", "/relative"] {
+            assert_eq!(refused_scheme(url), None, "{url}");
+        }
+        let text = refused_text("tiktok://open", "tiktok");
+        assert!(text.contains("another app (tiktok:)") && text.contains("only opens web pages"), "{text}");
+        assert!(refused_text(&"x".repeat(500), "x").len() < 400, "a long link is cut short");
+    }
+
+    #[test]
+    fn the_input_probe_skips_frames_and_cleans_up() {
+        assert!(PROBE_ARM_JS.contains("elementFromPoint") && PROBE_ARM_JS.contains("IFRAME"));
+        assert!(PROBE_ARM_JS.contains("addEventListener('mousemove'") && PROBE_READ_JS.contains("removeEventListener('mousemove'"));
+        assert!(PROBE_READ_JS.contains("return -1"), "a new document is no proof the tab is stuck");
     }
 
     #[test]
