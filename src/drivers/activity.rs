@@ -403,7 +403,11 @@ fn value_pending(head: &str, next: &str) -> Option<usize> {
     let is_key = |word: &str| -> bool {
         // `"password"` and `X-Api-Key` count; the name is the trailing run of name characters
         let word = word.strip_suffix(['"', '\'']).unwrap_or(word);
-        let start = word.rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).map_or(0, |i| i + 1);
+        let start = word
+            .char_indices()
+            .rev()
+            .find(|&(_, c)| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+            .map_or(0, |(i, c)| i + c.len_utf8());
         start < word.len() && is_credential_key(&word[start..].to_ascii_lowercase())
     };
     // the last words of `head` with their byte offsets; a held key is held from its word start
@@ -448,7 +452,7 @@ fn value_pending(head: &str, next: &str) -> Option<usize> {
         let before = trimmed[..q].trim_end();
         let Some(key) = before.strip_suffix([':', '=']) else { continue };
         let key = key.trim_end();
-        let word_at = key.rfind(char::is_whitespace).map_or(0, |i| i + 1);
+        let word_at = key.char_indices().rev().find(|&(_, c)| c.is_whitespace()).map_or(0, |(i, c)| i + c.len_utf8());
         if is_key(&key[word_at..]) {
             return Some(word_at);
         }
@@ -736,6 +740,38 @@ pub fn thinking_note(engine: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rigel's B1 on #294: the hold is cut on char boundaries for any script. Every prefix of
+    /// mixed CJK, accented Latin, emoji, NBSP and U+3000 text around `key:`, `password = "a b"`
+    /// and `Authorization: Bearer X` gets a hold index without a panic, on a char boundary.
+    #[test]
+    fn hold_from_cuts_multibyte_text_on_char_boundaries() {
+        let samples = [
+            "Plan: 例: see résumé: then password: FAKEMB1value and 日本語: done",
+            "例:\u{a0}password:\u{3000}FAKEMB3 résumé\u{a0}token=😀x 日本語\u{3000}secret: 値",
+            "résumé\u{a0}password = \"a b 😀\" then 例\u{3000}password = \"日本 語\" ok",
+            "😀 Authorization: Bearer X 例\u{3000}Authorization:\u{a0}Bearer\u{a0}Ünïcode 日本語",
+            "\u{3000}é:\u{a0}例= 😀: \u{a0}Bearer 日本 \"例 api_key:é\u{3000}",
+        ];
+        for text in samples {
+            for (k, _) in text.char_indices().chain([(text.len(), ' ')]) {
+                let head = &text[..k];
+                let at = hold_from(head);
+                assert!(at <= head.len() && head.is_char_boundary(at), "{at} in {head:?}");
+            }
+        }
+    }
+
+    /// The documented trade-off: a bare `Bearer` before an all-lowercase word is prose to the
+    /// masker ("Bearer tokens expire"), so it is neither held live nor masked when saved, and the
+    /// live text still equals the saved text. `Authorization: Bearer` masks any word.
+    #[test]
+    fn bare_lowercase_bearer_is_prose_live_and_saved() {
+        assert_eq!(value_pending("I send Bearer", "abcdefghij now"), None);
+        assert_eq!(redact("I send Bearer abcdefghij now", &[]), "I send Bearer abcdefghij now");
+        assert!(value_pending("send Authorization: Bearer", "abcdefghij now").is_some());
+        assert!(!redact("send Authorization: Bearer abcdefghij now", &[]).contains("abcdefghij"));
+    }
 
     fn pending(id: &str, name: &str, args: Value) -> RuntimeEvent {
         RuntimeEvent::ToolCallPending { id: id.into(), name: name.into(), args }

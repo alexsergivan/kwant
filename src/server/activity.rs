@@ -364,6 +364,8 @@ mod tests {
             ("Authorization: Basic dXNlcjpwYXNzFAKEBASIC1", ["dXNl", "FAKEBASIC1"]),
             ("Authorization: Bearer FAKEBEARER1234567890abcdef", ["FAKEBEARER", "567890abcdef"]),
             ("password = \"FAKEPW2 with spaces inside\"", ["FAKEPW2", "spaces inside"]),
+            // B1 on #294: multibyte names and words before the key
+            ("例: résumé: password: FAKEMB2value 日本語", ["FAKEMB2", "MB2value"]),
         ];
         for (line, raws) in lines {
             let text = format!("First I check the setup. Then I send {line} to the server and wait for it.");
