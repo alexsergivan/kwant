@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.10] - 2026-11-04
+
+### Fixed
+- **Taking over a bot's browser works again after a page tries to open another app.** A link to an app, such as
+  TikTok's QR sign-in or an app-store link, made Chrome wait on a hidden "Open this app?" prompt, so your clicks and
+  keys did nothing, even after a reload. kwant now stops those links before Chrome asks and tells you so in a banner.
+  If a tab is already stuck when you open it, kwant steps it to a blank page and straight back, at most 3 times a
+  minute, and says the page was reloaded. A bot asked to open such a link is told it opens another app. (#280)
+- **No extra click after you switch windows during a take-over.** A mouse button held while the window lost focus
+  is now let go, so the next press doesn't give the page an extra click. (#280)
+- **The take-over picture keeps up.** A picture Chrome drew while your connection was busy is sent as soon as it's
+  free, so a page that then stays still no longer shows an old picture. The address and title follow the page as
+  soon as it navigates, the cursor shape matches where the pointer stops, and input sent before you take control
+  says "Take control of the browser first." (#275, #277)
+- **A one-off follow-up card shows its date in your local time** ("once on Fri, Nov 6 at 03:00 PM"), not the raw
+  ISO time. **"AutoFix retries it now." goes away** once the task is verified, waiting on a check or cancelled. (#283)
+- **The working line no longer says "getting started" between steps,** and after a reload it still shows what the
+  bot is using, with steps that ran before the reload. (#284)
+
 ## [Mac 0.6.9] - 2026-11-04
 
 ### Added
