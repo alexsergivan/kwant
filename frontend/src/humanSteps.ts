@@ -135,6 +135,14 @@ export function openStepsByKwant(map: Record<string, HumanStep>): Record<string,
 }
 
 /** The newest open step a bot raised, e.g. to open from a notification. */
+/** The newest open step of any kind that holds this browser, for the stage's Done and the pane's "needs you". */
+export function openStepFor(map: Record<string, HumanStep>, sandboxId: string | undefined): HumanStep | null {
+  if (!sandboxId) return null;
+  let best: HumanStep | null = null;
+  for (const s of Object.values(map)) if (s.sandbox_target === sandboxId && s.status === 'open' && (!best || s.created_at > best.created_at)) best = s;
+  return best;
+}
+
 export function latestOpenStep(map: Record<string, HumanStep>, kwantId: string): HumanStep | null {
   let best: HumanStep | null = null;
   for (const s of Object.values(map)) if (s.kwant_id === kwantId && s.status === 'open' && (!best || s.created_at > best.created_at)) best = s;

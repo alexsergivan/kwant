@@ -8,25 +8,44 @@ import {
   Cpu,
   Key,
   MousePointerClick,
-  Keyboard,
   Loader2,
   Laptop,
   Puzzle,
   CheckCircle2,
+  Eye,
+  Hand,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
-import { mapBrowserPoint } from '../browserViewport';
-import { useBrowserStream } from '../useBrowserStream';
+import { BOT_BUSY_TEXT, useBrowserStream } from '../useBrowserStream';
 import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, useComputerMode } from './ComputerModeSwitch';
 import { browserFooterLabel, isBlankPage, showsLocalWindow } from '../computerMode';
 import { loginMatchesPage } from '../savedPasswords';
 import { PendingLoginPrompt, SavedPasswordsPanel, useSavedPasswords } from './SavedPasswordsPanel';
 import { usePasswordStore } from './PasswordStorePanel';
-import { BrowserControlOverlay, sendPageInput } from './BrowserControlOverlay';
-import { PAGE_H, PAGE_W, PageInput, Pt, createGestureTracker, stageToPage, stageToPageClamped } from '../browserGestures';
-import { HumanStep } from '../humanSteps';
+import { BrowserControlOverlay } from './BrowserControlOverlay';
+import { BrowserTakeoverStage } from './BrowserTakeoverStage';
+import { HumanStep, HumanStepKind } from '../humanSteps';
 
 const PHONE_QUERY = '(max-width: 639px)';
+
+/** While the bot finishes a step, taking over is retried this often, for this long (no backend change). */
+export const TAKEOVER_RETRY_MS = 1000;
+export const TAKEOVER_RETRY_FOR_MS = 10_000;
+
+/** "@Bot needs you …" for a step holding this browser (Mira's spec §3 C). */
+export const STEP_NEED: Record<HumanStepKind, string> = {
+  sign_in: 'needs you to sign in',
+  two_factor: 'needs you to enter a code',
+  captcha: 'needs you to solve a puzzle',
+  other: 'needs you in the browser',
+};
+
+/** The stage's primary "Done" for each kind (captcha keeps its auto-continue, so it has none). */
+export const STEP_DONE: Record<Exclude<HumanStepKind, 'captcha'>, string> = {
+  sign_in: 'Done, I’m signed in',
+  two_factor: 'Done, I’m in',
+  other: 'Done',
+};
 
 /** Below 640px taking control opens the page full screen. */
 function useNarrow(): boolean {
@@ -67,6 +86,10 @@ export interface VirtualMachinePaneProps {
   captchaStep?: HumanStep | null;
   /** Goes up each time the person asks to solve it: take control and, on a phone, go full screen. */
   solveRequest?: number;
+  /** An open sign-in, code or other step this browser is held for: the stage offers its Done. */
+  humanStep?: HumanStep | null;
+  /** Answers that step as done; resolves to an error message on failure. */
+  onStepDone?: (id: string) => Promise<string | void> | void;
 }
 
 type PaneTab = 'browser' | 'terminal' | 'vault';
@@ -104,6 +127,8 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   approvalsOff = false,
   captchaStep = null,
   solveRequest = 0,
+  humanStep = null,
+  onStepDone,
 }) => {
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
@@ -124,14 +149,12 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const stream = useBrowserStream(teamId, isOpen && activeTab === 'browser' && !isWindow && !computer.windowPending);
   const isControlMode = stream.controlling;
   const isInteracting = stream.busy;
-  const [quickTypeText, setQuickTypeText] = useState('');
-  const [clickRipples, setClickRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
-  const lastWheelTimeRef = useRef<number>(0);
-  const imageRef = useRef<HTMLImageElement>(null);
-  const viewportRef = useRef<HTMLDivElement>(null);
   const narrow = useNarrow();
+  // Wanted open (asked for, control on its way) or in control: the page takes over the screen
   const [fullScreen, setFullScreen] = useState(false);
-  const showFullScreen = fullScreen && narrow && activeTab === 'browser' && !isWindow;
+  const takeover = (fullScreen || isControlMode) && activeTab === 'browser' && !isWindow && isOpen;
+  const showFullScreen = takeover && narrow;
+  const showStage = takeover && !narrow;
   const captchaOpen = captchaStep?.status === 'open';
   // Shown for a moment after the CAPTCHA closes by itself, before control goes back to the bot
   const [solvedNote, setSolvedNote] = useState(false);
@@ -139,6 +162,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   // Once the stream reports where the tab is, trust it; before that, the last URL the app heard of.
   const pageUrl = stream.location ? stream.location.url : activeUrl;
   const currentScreenshot = isBlankPage(pageUrl) ? null : stream.frame?.image || screenshotBase64;
+  const frameSrc = currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null;
   // A hidden frame never loads, so acknowledge it here or the stream stalls waiting for the ack.
   const blankFrameId = isBlankPage(pageUrl) ? stream.frame?.id : undefined;
   const { acknowledgeFrame } = stream;
@@ -197,111 +221,64 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
   const handBack = () => {
     playSfx('click');
+    setWaitBot(null);
     setFullScreen(false);
+    setWantsControl(false);
     if (isControlMode) send({ action: 'release_control' });
   };
 
-  // Mouse or finger in the side panel: a click clicks, a drag presses, moves and releases (sliders)
-  const lastDownRef = useRef<{ x: number; y: number } | null>(null);
-  const pageFromClient = useCallback((p: Pt, clamp: boolean) => {
-    const img = imageRef.current;
-    if (!img) return clamp ? { x: 0, y: 0 } : null;
-    const rect = img.getBoundingClientRect();
-    const page = { width: img.naturalWidth || PAGE_W, height: img.naturalHeight || PAGE_H };
-    const scale = Math.min(rect.width / page.width, rect.height / page.height);
-    const view = { scale, tx: (rect.width - page.width * scale) / 2, ty: (rect.height - page.height * scale) / 2 };
-    const x = p.x - rect.left;
-    const y = p.y - rect.top;
-    return clamp ? stageToPageClamped(x, y, view, page) : stageToPage(x, y, view, page);
-  }, []);
-  const sendRef = useRef(stream.send);
-  sendRef.current = stream.send;
-  const tracker = useMemo(
-    () =>
-      createGestureTracker({
-        toPage: (p) => pageFromClient(p, false),
-        toPageClamped: (p) => pageFromClient(p, true) as Pt,
-        send: (input: PageInput) => {
-          if (input.action === 'click') {
-            playSfx('click');
-            const frame = viewportRef.current?.getBoundingClientRect();
-            const at = lastDownRef.current;
-            if (frame && at) {
-              const rippleId = Date.now();
-              setClickRipples((prev) => [...prev, { id: rippleId, x: at.x - frame.left, y: at.y - frame.top }]);
-              setTimeout(() => setClickRipples((prev) => prev.filter((r) => r.id !== rippleId)), 600);
-            }
-          }
-          sendPageInput(sendRef.current, input);
-        },
-        now: () => performance.now(),
-        later: (fn, ms) => {
-          const t = window.setTimeout(fn, ms);
-          return () => window.clearTimeout(t);
-        },
-      }),
-    [pageFromClient]
-  );
+  // Take the browser now (a click on the watch view, Take over, or Try again)
+  const takeOver = useCallback(() => {
+    playSfx('click');
+    setWaitBot(null);
+    setActiveTab('browser');
+    setFullScreen(true);
+    if (connected) send({ action: 'take_control' });
+    else setWantsControl(true);
+  }, [connected, send]);
+
+  // The server let go (timeout, the bot's turn ended it, another tab): the stage closes with it
+  const wasControlling = useRef(false);
+  useEffect(() => {
+    if (wasControlling.current && !controlling) setFullScreen(false);
+    wasControlling.current = controlling;
+  }, [controlling]);
+
+  // Opening a sign-in or code step's browser takes control the same way Solve it does
+  const stepForStage = humanStep && humanStep.status === 'open' && humanStep.kind !== 'captcha' && onStepDone
+    ? { doneLabel: STEP_DONE[humanStep.kind], need: STEP_NEED[humanStep.kind], onDone: () => onStepDone(humanStep.id) }
+    : null;
+  // Any open step holding this browser, the CAPTCHA included: the watch view says so without a hover
+  const needsYou = humanStep?.status === 'open' ? STEP_NEED[humanStep.kind] : captchaOpen ? STEP_NEED.captcha : null;
+
+  // The bot is finishing a step: keep asking every second for ten seconds, then offer Try again
+  const [waitBot, setWaitBot] = useState<{ since: number; gaveUp: boolean } | null>(null);
+  const botBusy = stream.error === BOT_BUSY_TEXT;
+  useEffect(() => {
+    if (controlling) {
+      setWaitBot(null);
+      return;
+    }
+    if (!botBusy) return;
+    if (!narrow) setFullScreen(false);
+    setWaitBot((w) => w ?? { since: Date.now(), gaveUp: false });
+  }, [botBusy, controlling, narrow]);
+  useEffect(() => {
+    if (!waitBot || waitBot.gaveUp || !botBusy) return;
+    if (Date.now() - waitBot.since >= TAKEOVER_RETRY_FOR_MS) {
+      setWaitBot({ ...waitBot, gaveUp: true });
+      return;
+    }
+    const t = window.setTimeout(() => send({ action: 'take_control' }), TAKEOVER_RETRY_MS);
+    return () => window.clearTimeout(t);
+  }, [waitBot, botBusy, send]);
+  const waitingForBot = !!waitBot && !waitBot.gaveUp;
+
+  // The frame the side pane shows is acknowledged once drawn; one image, its source swapped
+  const paneFrameId = useRef<number | null>(null);
+  paneFrameId.current = stream.frame?.id ?? null;
 
   const loginsOnThisPage = useMemo(() => passwords.logins.filter((l) => loginMatchesPage(l, pageUrl)).length, [passwords.logins, pageUrl]);
-
-  // Dispatch interactive action to backend
-  const sendInteraction = useCallback(
-    (payload: {
-      action: 'click' | 'type' | 'key' | 'scroll';
-      x?: number;
-      y?: number;
-      text?: string;
-      key?: string;
-      code?: string;
-      delta_x?: number;
-      delta_y?: number;
-    }) => {
-      stream.send({ ...payload, delta_x: payload.delta_x || 0, delta_y: payload.delta_y || 0 }, true);
-    },
-    [stream.send]
-  );
-
-  // Viewport Wheel / Scroll Handler
-  const handleViewportWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    if (!isControlMode || !imageRef.current) return;
-    const now = Date.now();
-    if (now - lastWheelTimeRef.current < 120) return;
-    lastWheelTimeRef.current = now;
-
-    const img = imageRef.current;
-    const rect = img.getBoundingClientRect();
-    const point = mapBrowserPoint(e.clientX, e.clientY, rect, img.naturalWidth, img.naturalHeight);
-    if (!point) return;
-
-    sendInteraction({ action: 'scroll', ...point, delta_x: e.deltaX, delta_y: e.deltaY });
-  };
-
-  // Viewport Keydown Handler
-  const handleViewportKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!isControlMode) return;
-    const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-    if (targetTag === 'input' || targetTag === 'textarea') return;
-
-    if (['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-      e.preventDefault();
-      playSfx('blip');
-      sendInteraction({ action: 'key', key: e.key, code: e.code });
-    } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault();
-      playSfx('blip');
-      sendInteraction({ action: 'type', text: e.key });
-    }
-  };
-
-  // Quick Type Submit
-  const handleQuickTypeSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!quickTypeText.trim()) return;
-    playSfx('coin');
-    sendInteraction({ action: 'type', text: quickTypeText });
-    setQuickTypeText('');
-  };
 
   if (!isOpen) return null;
 
@@ -321,26 +298,20 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           <ComputerModeChip api={computer} />
           <OpenWindowButton api={computer} />
 
-          {/* Interactive Control Toggle */}
+          {/* Take over: always there while a browser exists, so keyboard users have a way in */}
           {!isWindow && (
             <button
               type="button"
-              onClick={() => {
-                playSfx('click');
-                stream.send({ action: isControlMode ? 'release_control' : 'take_control' });
-                if (!isControlMode) setActiveTab('browser');
-                setFullScreen(!isControlMode);
-              }}
-              disabled={!stream.connected}
-              title={isControlMode ? 'Exit Control Mode' : 'Take Control of Bot Browser'}
-              className={`p-1.5 rounded-md transition-colors cursor-pointer flex items-center gap-1 ${
-                isControlMode
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-500/20 animate-pulse'
-                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+              onClick={() => (isControlMode ? handBack() : takeOver())}
+              disabled={!stream.connected || waitingForBot}
+              title={isControlMode ? 'Hand the browser back to the bot' : `Take over @${teamName}'s browser`}
+              data-takeover-button
+              className={`h-[30px] px-2.5 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${
+                isControlMode ? 'border border-[#3f3868] bg-[rgb(44_37_82/0.8)] text-zinc-100' : 'bg-control text-control-ink hover:brightness-110'
               }`}
             >
-              <MousePointerClick size={13} className={isControlMode ? 'text-cyan-400' : ''} />
-              <span className="text-[10px] font-semibold whitespace-nowrap">{isControlMode ? 'Controlling' : 'Take Control'}</span>
+              {isControlMode ? <Hand size={14} aria-hidden="true" /> : <MousePointerClick size={14} aria-hidden="true" />}
+              {isControlMode ? 'Hand back' : 'Take over'}
             </button>
           )}
 
@@ -524,41 +495,6 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               </div>
             )}
 
-            {/* Interactive Control Mode Banner */}
-            {isControlMode && (
-              <div className="flex items-center justify-between px-2.5 py-1 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-[11px] text-cyan-300 animate-in fade-in duration-150">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-                  <span className="font-medium">Direct Control Active</span>
-                </div>
-                <span className="text-[10px] text-cyan-400/80">Click & type on screen</span>
-              </div>
-            )}
-
-            {/* Quick Type Input Bar (When in Control Mode) */}
-            {isControlMode && (
-              <form
-                onSubmit={handleQuickTypeSubmit}
-                className="hidden sm:flex items-center gap-1.5 p-1 bg-zinc-900 border border-cyan-500/40 rounded-lg text-xs"
-              >
-                <Keyboard size={12} className="text-cyan-400 flex-shrink-0 ml-1" />
-                <input
-                  type="text"
-                  value={quickTypeText}
-                  onChange={(e) => setQuickTypeText(e.target.value)}
-                  placeholder="Type into focused field (e.g. search, input)..."
-                  className="flex-1 bg-transparent text-zinc-100 text-[11px] font-mono focus:outline-none"
-                />
-                <button
-                  type="submit"
-                  disabled={!quickTypeText.trim()}
-                  className="px-2 py-0.5 rounded bg-cyan-500 hover:bg-cyan-400 text-zinc-950 font-semibold text-[10px] cursor-pointer disabled:opacity-40"
-                >
-                  Send
-                </button>
-              </form>
-            )}
-
             {(captchaOpen || solvedNote) && (
               <div
                 role="status"
@@ -585,74 +521,119 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               </div>
             )}
 
-            {/* Viewport Frame */}
-            {controlError && (
+            {/* D: the bot is finishing a step; taking over follows as soon as it's done */}
+            {waitBot && !isControlMode && (
+              <div role="status" aria-live="polite" data-takeover-wait className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl border border-[rgb(157_143_255/0.35)] bg-[#1a1538]">
+                {waitBot.gaveUp ? (
+                  <Hand size={16} className="shrink-0 mt-0.5 text-[#9d8fff]" aria-hidden="true" />
+                ) : (
+                  <Loader2 size={16} className="shrink-0 mt-0.5 text-[#9d8fff] animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                )}
+                <div className="flex-1 min-w-0">
+                  {waitBot.gaveUp ? (
+                    <p className="text-[13px] leading-[18px] text-zinc-100">@{teamName} is finishing a step, try again in a moment.</p>
+                  ) : (
+                    <>
+                      <p className="text-[13px] leading-[18px] text-zinc-100">
+                        <span className="font-semibold">@{teamName} is finishing a step.</span> Taking over as soon as it’s done.
+                      </p>
+                      <p className="mt-0.5 text-xs text-[#a39dcc]">Trying every second for 10 seconds.</p>
+                    </>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWaitBot(null);
+                    stream.clearError();
+                  }}
+                  aria-label="Close"
+                  className="shrink-0 -mr-1 -mt-0.5 w-6 h-6 inline-flex items-center justify-center rounded-md text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06]"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              </div>
+            )}
+
+            {controlError && !botBusy && (
               <div role="alert" className="px-2.5 py-2 rounded-lg border border-red-500/30 bg-red-950/40 text-xs text-red-300">
                 {controlError}
               </div>
             )}
             <div
-              ref={viewportRef}
-              tabIndex={0}
-              onKeyDown={handleViewportKeyDown}
-              onPointerDown={(e) => {
-                if (!isControlMode || (e.pointerType === 'mouse' && e.button !== 0)) return;
-                viewportRef.current?.focus({ preventScroll: true });
-                e.currentTarget.setPointerCapture?.(e.pointerId);
-                lastDownRef.current = { x: e.clientX, y: e.clientY };
-                tracker.down(e.pointerId, { x: e.clientX, y: e.clientY }, e.isPrimary);
-              }}
-              onPointerMove={(e) => {
-                if (isControlMode) tracker.move(e.pointerId, { x: e.clientX, y: e.clientY });
-              }}
-              onPointerUp={(e) => {
-                if (isControlMode) tracker.up(e.pointerId, { x: e.clientX, y: e.clientY });
-              }}
-              onPointerCancel={(e) => tracker.cancel(e.pointerId)}
-              onWheel={handleViewportWheel}
-              style={isControlMode ? { touchAction: 'none' } : undefined}
-              className={`flex-1 border rounded-xl bg-zinc-950 overflow-hidden flex items-center justify-center relative shadow-inner focus:outline-none ${
-                isControlMode
-                  ? 'border-cyan-500/60 ring-2 ring-cyan-500/20 cursor-crosshair'
-                  : 'border-zinc-800'
-              }`}
+              data-browser-watch
+              data-watch-state={takeover ? 'stage' : waitingForBot ? 'busy' : needsYou ? 'needs-you' : 'watching'}
+              className="group relative w-full aspect-[16/10] shrink-0 border border-white/[0.07] rounded-xl bg-[#0a0719] overflow-hidden flex items-center justify-center"
             >
-              {/* Relaying feedback pill */}
-              {isInteracting && (
-                <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-zinc-950/90 border border-cyan-500/40 text-cyan-300 text-[10px] font-mono flex items-center gap-1.5 z-20 shadow-md pointer-events-none">
-                  <Loader2 size={10} className="animate-spin text-cyan-400" />
-                  <span>Relaying...</span>
+              {/* Relaying: a discrete action (a navigate from the address bar) */}
+              {isInteracting && !takeover && (
+                <div className="absolute top-2 right-2 h-6 px-2.5 rounded-full bg-[rgb(14_10_33/0.9)] border border-white/[0.14] text-zinc-200 text-xs flex items-center gap-1.5 z-20 pointer-events-none">
+                  <Loader2 size={12} className="animate-spin motion-reduce:animate-none text-[#9d8fff]" aria-hidden="true" />
+                  <span>Relaying…</span>
                 </div>
               )}
 
-              {/* Click Ripple Animations */}
-              {clickRipples.map((r) => (
-                <span
-                  key={r.id}
-                  style={{ left: r.x, top: r.y }}
-                  className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full border-2 border-cyan-400 bg-cyan-400/30 animate-ping pointer-events-none z-30"
-                />
-              ))}
-
-              {showFullScreen ? (
-                <p className="text-center p-6 text-zinc-500 text-xs">Showing full screen</p>
-              ) : currentScreenshot ? (
-                <img
-                  key={stream.frame?.id}
-                  ref={imageRef}
-                  src={
-                    currentScreenshot.startsWith('data:')
-                      ? currentScreenshot
-                      : `data:image/jpeg;base64,${currentScreenshot}`
-                  }
-                  alt="Browser Viewport"
-                  onLoad={() => { if (stream.frame) stream.acknowledgeFrame(stream.frame.id); }}
-                  onError={() => { if (stream.frame) stream.acknowledgeFrame(stream.frame.id); }}
-                  draggable={false}
-                  className="w-full h-full object-contain pointer-events-auto"
-                />
+              {takeover ? (
+                <div className="text-center p-6 text-[#a39dcc] text-xs space-y-2">
+                  <p>{showFullScreen ? 'Showing full screen' : isControlMode ? 'You’re in control in the large view' : 'Taking control…'}</p>
+                  <button type="button" onClick={handBack} className="px-2.5 h-8 rounded-[10px] border border-[#3f3868] bg-[rgb(44_37_82/0.8)] text-zinc-100 hover:bg-[#2c2552]">
+                    Hand back
+                  </button>
+                </div>
+              ) : frameSrc ? (
+                <>
+                  <img
+                    src={frameSrc}
+                    alt={`${teamName}'s browser`}
+                    onLoad={() => { if (paneFrameId.current !== null) stream.acknowledgeFrame(paneFrameId.current); }}
+                    onError={() => { if (paneFrameId.current !== null) stream.acknowledgeFrame(paneFrameId.current); }}
+                    draggable={false}
+                    className="w-full h-full object-contain"
+                  />
+                  {!needsYou && !waitingForBot && !waitBot?.gaveUp && (
+                    <span className="absolute top-2 left-2 h-[22px] px-2 inline-flex items-center gap-1 rounded-full bg-[rgb(14_10_33/0.88)] text-[11px] text-zinc-200 pointer-events-none group-hover:opacity-0 group-focus-within:opacity-0 kw-veil-in">
+                      <Eye size={12} aria-hidden="true" /> Watching
+                    </span>
+                  )}
+                  {!isWindow && stream.connected && (
+                    /* B / C: one click anywhere on the page takes it over (that click isn't passed on) */
+                    <button
+                      type="button"
+                      onClick={waitingForBot ? undefined : takeOver}
+                      aria-disabled={waitingForBot || undefined}
+                      aria-label={waitingForBot ? `Waiting for ${teamName}` : `Take over ${teamName}'s browser`}
+                      className={`absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sky-300 rounded-xl kw-veil-in ${
+                        waitingForBot
+                          ? 'bg-[rgb(10_7_25/0.8)] cursor-default'
+                          : needsYou || waitBot?.gaveUp
+                            ? 'bg-[rgb(10_7_25/0.84)] cursor-pointer'
+                            : 'bg-[rgb(10_7_25/0.8)] opacity-0 hover:opacity-100 focus-visible:opacity-100 cursor-pointer'
+                      }`}
+                    >
+                      {needsYou && !waitingForBot && (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#fcd34d]">
+                          <Hand size={14} aria-hidden="true" /> @{teamName} {needsYou}
+                        </span>
+                      )}
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-3.5 h-9 rounded-[10px] text-sm font-semibold ${
+                          waitingForBot ? 'bg-[#2c2552] text-[#a39dcc]' : 'bg-control text-control-ink'
+                        }`}
+                      >
+                        {waitingForBot ? (
+                          <>Waiting for @{teamName}…</>
+                        ) : (
+                          <>
+                            <MousePointerClick size={15} aria-hidden="true" /> {waitBot?.gaveUp ? 'Try again' : 'Take over'}
+                          </>
+                        )}
+                      </span>
+                      {!needsYou && !waitingForBot && !waitBot?.gaveUp && <span className="text-xs text-zinc-200">Click anywhere to take over. @{teamName} pauses.</span>}
+                    </button>
+                  )}
+                </>
               ) : (
-                <div className="text-center p-6 text-zinc-600 text-xs">
+                <div className="text-center p-6 text-zinc-500 text-xs">
                   <Globe size={32} className="mx-auto mb-2 opacity-40 text-zinc-500" />
                   <p>{browserReady ? 'Browser idle' : 'Browser unavailable'}</p>
                   <p className="text-[10px] text-zinc-500 mt-1">{browserReady ? 'Enter a URL above to open a page' : isLocal ? 'Check that Chrome is installed, then use Restart Browser below' : 'Start Docker, then use Restart Browser below'}</p>
@@ -713,9 +694,10 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
         <BrowserControlOverlay
           botName={teamName}
           pageUrl={pageUrl}
-          image={currentScreenshot ? (currentScreenshot.startsWith('data:') ? currentScreenshot : `data:image/jpeg;base64,${currentScreenshot}`) : null}
+          image={frameSrc}
+          page={stream.frame ? { width: stream.frame.width, height: stream.frame.height } : undefined}
           onFrameDone={() => {
-            if (stream.frame) stream.acknowledgeFrame(stream.frame.id);
+            if (paneFrameId.current !== null) stream.acknowledgeFrame(paneFrameId.current);
           }}
           send={stream.send}
           busy={isInteracting}
@@ -724,6 +706,29 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           captcha={captchaOpen ? { target: captchaStep?.target ?? null } : null}
           solved={solvedNote}
           onHandBack={handBack}
+          stream={stream}
+          step={stepForStage}
+        />
+      )}
+
+      {showStage && (
+        <BrowserTakeoverStage
+          botName={teamName}
+          pageUrl={pageUrl}
+          pageTitle={stream.location?.title || pageTitle}
+          stream={stream}
+          image={frameSrc}
+          step={stepForStage}
+          notice={
+            solvedNote
+              ? { tone: 'success', text: `Solved, ${teamName} continues` }
+              : captchaOpen
+                ? { tone: 'warn', text: `Solve the puzzle, ${teamName} continues by itself` }
+                : null
+          }
+          onNavigate={onNavigate}
+          onHandBack={handBack}
+          onRetryControl={takeOver}
         />
       )}
 

@@ -18,6 +18,8 @@ import {
 } from '../browserGestures';
 import { domainOf } from '../humanSteps';
 import { haptic } from '../haptics';
+import type { BrowserStream } from '../useBrowserStream';
+import { PageDialogModal, SelectPopover } from './BrowserPopups';
 
 /** Sends one gesture to the page: presses, releases, taps and text wait for an ack, moves don't. */
 export function sendPageInput(send: (payload: Record<string, unknown>, input?: boolean) => void, input: PageInput) {
@@ -32,7 +34,9 @@ function ZoomStage({
   target,
   onTap,
   label,
+  page = { width: PAGE_W, height: PAGE_H },
 }: {
+  page?: Size;
   image: string | null;
   onFrameDone: () => void;
   send: (input: PageInput) => void;
@@ -69,11 +73,13 @@ function ZoomStage({
 
   useLayoutEffect(() => {
     if (!stage.width || !stage.height) return;
-    if (mode === 'box' && target) setView(zoomToBox(target, stage));
-    else if (mode === 'fit' || (mode === 'box' && !target)) setView(fitView(stage));
-    else setView((v) => clampView(v, stage));
+    if (mode === 'box' && target) setView(zoomToBox(target, stage, page));
+    else if (mode === 'fit' || (mode === 'box' && !target)) setView(fitView(stage, page));
+    else setView((v) => clampView(v, stage, page));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage.width, stage.height, mode, targetKey]);
+  }, [stage.width, stage.height, mode, targetKey, page.width, page.height]);
+  const pageRef = useRef(page);
+  pageRef.current = page;
 
   const sendRef = useRef(send);
   sendRef.current = send;
@@ -82,8 +88,8 @@ function ZoomStage({
   const tracker = useMemo(
     () =>
       createGestureTracker({
-        toPage: (p) => stageToPage(p.x, p.y, viewRef.current),
-        toPageClamped: (p) => stageToPageClamped(p.x, p.y, viewRef.current),
+        toPage: (p) => stageToPage(p.x, p.y, viewRef.current, pageRef.current),
+        toPageClamped: (p) => stageToPageClamped(p.x, p.y, viewRef.current, pageRef.current),
         send: (input) => {
           if (input.action === 'click') onTapRef.current?.();
           sendRef.current(input);
@@ -92,9 +98,9 @@ function ZoomStage({
           get: () => viewRef.current,
           set: (v) => {
             setMode('free');
-            setView(clampView(v, stageSize.current));
+            setView(clampView(v, stageSize.current, pageRef.current));
           },
-          zoomed: () => viewRef.current.scale > fitView(stageSize.current).scale * 1.02,
+          zoomed: () => viewRef.current.scale > fitView(stageSize.current, pageRef.current).scale * 1.02,
         },
         now: () => performance.now(),
         later: (fn, ms) => {
@@ -115,7 +121,7 @@ function ZoomStage({
       ref={stageRef}
       data-browser-stage
       aria-label={label}
-      className="relative flex-1 min-h-0 overflow-hidden bg-black select-none"
+      className="relative flex-1 min-h-0 overflow-hidden bg-[#0a0719] select-none"
       style={{ touchAction: 'none' }}
       onPointerDown={(e) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -135,7 +141,7 @@ function ZoomStage({
           onLoad={onFrameDone}
           onError={onFrameDone}
           className="absolute left-0 top-0 max-w-none pointer-events-none"
-          style={{ width: PAGE_W, height: PAGE_H, transformOrigin: '0 0', transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})` }}
+          style={{ width: page.width, height: page.height, transformOrigin: '0 0', transform: `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})` }}
         />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center text-zinc-500">
@@ -197,6 +203,12 @@ export interface BrowserControlOverlayProps {
   /** The CAPTCHA closed by itself: say so, then the parent closes this. */
   solved: boolean;
   onHandBack: () => void;
+  /** The page's viewport size in CSS px (1280×800 unless the desktop stage resized it). */
+  page?: Size;
+  /** For the page's own <select> lists and alert/confirm/prompt, which the screencast can't show. */
+  stream?: Pick<BrowserStream, 'select' | 'dialog' | 'clearSelect' | 'clearDialog'>;
+  /** An open sign-in, code or other step for this browser: its Done sits on the status line. */
+  step?: { need: string; doneLabel: string; onDone: () => Promise<string | void> | void } | null;
 }
 
 /**
@@ -216,8 +228,25 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
   captcha,
   solved,
   onHandBack,
+  page,
+  stream,
+  step = null,
 }) => {
   const keys = useRef<HTMLInputElement>(null);
+  const [stepBusy, setStepBusy] = useState(false);
+  const [stepError, setStepError] = useState<string | null>(null);
+  const answerStep = async () => {
+    if (!step || stepBusy) return;
+    setStepBusy(true);
+    setStepError(null);
+    try {
+      const err = await step.onDone();
+      if (err) setStepError(err);
+      else onHandBack();
+    } finally {
+      setStepBusy(false);
+    }
+  };
   const typed = useRef('');
   const [keyboard, setKeyboard] = useState(false);
 
@@ -256,6 +285,19 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
 
   const domain = domainOf(pageUrl) || pageUrl || 'Browser';
   const pageInput = useCallback((input: PageInput) => sendPageInput(send, input), [send]);
+  // A page dialog dims the page only: Hand back and Done stay usable above it
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barHeight, setBarHeight] = useState(48);
+  useLayoutEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const measure = () => setBarHeight(el.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   return createPortal(
     <div
@@ -263,12 +305,12 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
       aria-modal="true"
       aria-label={`${botName}'s browser`}
       data-browser-fullscreen
-      className="fixed inset-0 z-[70] flex flex-col bg-black text-zinc-100"
+      className="fixed inset-0 z-[70] flex flex-col bg-[#0a0719] text-zinc-100"
       style={{ paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }}
     >
-      <div className="shrink-0 bg-zinc-950/95 border-b border-zinc-800" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+      <div ref={barRef} className="shrink-0 bg-[#0e0a21] border-b border-white/[0.07]" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <div className="h-12 px-2 flex items-center gap-2">
-          <span className={`shrink-0 w-2 h-2 rounded-full ${busy ? 'bg-cyan-300 animate-pulse motion-reduce:animate-none' : 'bg-cyan-500'}`} aria-hidden="true" />
+          <span className={`shrink-0 w-2 h-2 rounded-full bg-control ${busy ? 'animate-pulse motion-reduce:animate-none' : ''}`} aria-hidden="true" />
           <span className="flex-1 min-w-0 truncate font-mono text-xs text-zinc-300" title={pageUrl}>
             {domain}
           </span>
@@ -277,7 +319,7 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
             onClick={openKeyboard}
             aria-pressed={keyboard}
             aria-label="Keyboard"
-            className="shrink-0 inline-flex items-center justify-center w-11 h-10 rounded-lg text-zinc-300 hover:bg-zinc-800"
+            className="shrink-0 inline-flex items-center justify-center w-11 h-11 rounded-lg text-zinc-200 hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
           >
             <Keyboard size={18} aria-hidden="true" />
           </button>
@@ -287,28 +329,47 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
               haptic('tap');
               onHandBack();
             }}
-            className="shrink-0 inline-flex items-center gap-1.5 h-10 px-3 rounded-lg bg-cyan-500 text-zinc-950 text-sm font-semibold"
+            data-primary={step ? undefined : true}
+            className={`shrink-0 inline-flex items-center gap-1.5 h-11 px-3 rounded-[10px] text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${
+              step ? 'bg-[rgb(44_37_82/0.8)] border border-[#3f3868] text-[#ecebfa] hover:bg-[#2c2552]' : 'bg-[#6c58e0] hover:bg-[#5845bd] text-white'
+            }`}
           >
             <Hand size={15} aria-hidden="true" /> Hand back
           </button>
         </div>
-        {(solved || captcha || error) && (
+        {(solved || captcha || error || stepError) ? (
           <p
             role="status"
             aria-live="polite"
-            className={`px-3 pb-2 text-xs ${solved ? 'text-emerald-300' : error ? 'text-rose-300' : 'text-amber-200'}`}
+            className={`px-3 pb-2 text-xs ${solved ? 'text-[#5eead4]' : error || stepError ? 'text-rose-300' : 'text-[#fcd34d]'}`}
           >
             {solved ? (
               <span className="inline-flex items-center gap-1.5">
                 <CheckCircle2 size={13} aria-hidden="true" /> Solved, {botName} continues
               </span>
-            ) : error ? (
-              error
+            ) : error || stepError ? (
+              stepError || error
             ) : (
               <>Solve the puzzle, {botName} continues by itself</>
             )}
           </p>
-        )}
+        ) : step ? (
+          <div className="min-h-[52px] pl-3 pr-2 pb-2 flex items-center gap-2 text-xs">
+            <span role="status" aria-live="polite" className="flex-1 min-w-0 truncate font-semibold text-[#fcd34d]">
+              @{botName} {step.need}
+            </span>
+            <button
+              type="button"
+              onClick={answerStep}
+              disabled={stepBusy}
+              data-primary
+              className="shrink-0 inline-flex items-center gap-1.5 h-11 px-[14px] rounded-[12px] bg-[#6c58e0] hover:bg-[#5845bd] text-white text-[15px] font-semibold disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
+            >
+              {stepBusy ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <CheckCircle2 size={14} aria-hidden="true" />}
+              {step.doneLabel}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <ZoomStage
@@ -317,7 +378,35 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
         send={pageInput}
         target={captcha?.target ?? null}
         label={`${botName}'s page. Tap to click, drag with one finger, pinch to zoom.`}
+        page={page}
       />
+
+      {stream?.select && (
+        <SelectPopover
+          request={stream.select}
+          anchor={null}
+          stage={{ width: 0, height: 0 }}
+          onPick={(indexes) => {
+            send(stream.select!.multiple ? { action: 'select_option', indexes } : { action: 'select_option', index: indexes[0] }, true);
+            stream.clearSelect();
+          }}
+          onClose={stream.clearSelect}
+        />
+      )}
+      {stream?.dialog && (
+        <div className="absolute inset-x-0 bottom-0 z-50" style={{ top: barHeight }} data-dialog-area>
+          <PageDialogModal
+            key={`${stream.dialog.kind}:${stream.dialog.message}`}
+            dialog={stream.dialog}
+            host={domain}
+            compact
+            onAnswer={(accept, text) => {
+              send(text !== undefined ? { action: 'dialog', accept, prompt_text: text } : { action: 'dialog', accept }, true);
+              stream.clearDialog();
+            }}
+          />
+        </div>
+      )}
 
       <div className="shrink-0" style={{ height: 'env(safe-area-inset-bottom)' }} />
 

@@ -31,13 +31,13 @@ test('before the bot opens a page the panel says "Browser idle" instead of the b
   for (const activeUrl of ['', 'about:blank']) {
     const html = pane({ activeUrl });
     assert.match(html, /Browser idle/);
-    assert.doesNotMatch(html, /alt="Browser Viewport"/);
+    assert.doesNotMatch(html, /data-browser-watch[^>]*>\s*<img [^>]*alt="Team&#x27;s browser"/);
   }
 });
 
 test('once the bot has opened a page the live frame shows', () => {
   const html = pane({ activeUrl: 'https://www.google.com/maps' });
-  assert.match(html, /alt="Browser Viewport"/);
+  assert.match(html, /data-browser-watch[^>]*>\s*<img [^>]*alt="Team&#x27;s browser"/);
   assert.match(html, /data:image\/jpeg;base64,AAAA/);
   assert.doesNotMatch(html, /Browser idle/);
 });

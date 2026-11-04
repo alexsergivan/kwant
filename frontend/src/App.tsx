@@ -25,6 +25,7 @@ import {
   captchaStepFor,
   humanStepsApi,
   latestOpenStep,
+  openStepFor,
   openStepsByKwant,
   turnsAwaitingStep,
 } from './humanSteps';
@@ -3124,6 +3125,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onNavigateVm={handleNavigateVm}
           vmApprovalsOff={space.approvals === 'off' || kwants.some(approvalsOff)}
           vmCaptchaStep={captchaStepFor(humanSteps, activeSandboxId)}
+          vmHumanStep={openStepFor(humanSteps, activeSandboxId)}
+          onVmStepDone={(id) => answerHumanStep(id, 'done')}
           vmSolveRequest={solveRequest}
           pinned={pinned}
           onEditInstructions={
