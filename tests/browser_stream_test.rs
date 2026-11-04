@@ -12,14 +12,38 @@ struct Mock {
     targets: Arc<Mutex<Vec<Value>>>,
     commands: Arc<Mutex<Vec<Value>>>,
     contexts: Arc<AtomicUsize>,
+    /// What the page answers for `location.href`; empty means https://example.com.
+    page_url: Arc<Mutex<String>>,
+    /// Reading the page's address fails, the way Chromium answers between two documents.
+    between_documents: Arc<std::sync::atomic::AtomicBool>,
+    /// Every open DevTools socket, to push page events the way Chromium does.
+    sockets: Arc<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<String>>>>,
+}
+
+/// Sends a page event on every open DevTools socket.
+async fn push_event(mock: &Mock, method: &str, params: Value) {
+    let event = json!({"method":method,"params":params}).to_string();
+    for socket in mock.sockets.lock().await.iter() { let _ = socket.send(event.clone()); }
 }
 
 async fn cdp(State(mock): State<Mock>, Path(_id): Path<String>, ws: WebSocketUpgrade) -> impl axum::response::IntoResponse {
     ws.on_upgrade(move |mut socket| async move {
-        while let Some(Ok(Message::Text(text))) = socket.next().await {
+        let (push, mut pushed) = tokio::sync::mpsc::unbounded_channel::<String>();
+        mock.sockets.lock().await.push(push);
+        loop {
+            let text = tokio::select! {
+                Some(event) = pushed.recv() => { if socket.send(Message::Text(event)).await.is_err() { break; } continue; }
+                message = socket.next() => match message { Some(Ok(Message::Text(text))) => text, _ => break },
+            };
             let cmd: Value = serde_json::from_str(&text).unwrap();
             mock.commands.lock().await.push(cmd.clone());
             let method = cmd["method"].as_str().unwrap();
+            if method == "Runtime.evaluate" && mock.between_documents.load(Ordering::SeqCst)
+                && cmd["params"]["expression"].as_str().unwrap_or_default().contains("location.href") {
+                let error = json!({"id":cmd["id"],"error":{"code":-32000,"message":"Cannot find context with specified id"}});
+                if socket.send(Message::Text(error.to_string())).await.is_err() { break; }
+                continue;
+            }
             let result = match method {
                 "Target.createBrowserContext" => json!({"browserContextId":format!("context-{}",mock.contexts.fetch_add(1,Ordering::SeqCst))}),
                 "Target.createTarget" => {
@@ -35,7 +59,16 @@ async fn cdp(State(mock): State<Mock>, Path(_id): Path<String>, ws: WebSocketUpg
                     mock.targets.lock().await.retain(|target| target["browserContextId"] != cmd["params"]["browserContextId"]);
                     json!({})
                 }
-                "Runtime.evaluate" => json!({"result":{"value":{"url":"https://example.com","title":"Example"}}}),
+                // the page has a link at (300, 300); everything else has the default cursor
+                "Runtime.evaluate" if cmd["params"]["expression"].as_str().unwrap_or_default().contains("getComputedStyle") => {
+                    let link = cmd["params"]["expression"].as_str().unwrap().contains("elementFromPoint(300, 300)");
+                    json!({"result":{"value": if link {"pointer"} else {"auto"}}})
+                }
+                "Runtime.evaluate" => {
+                    let url = mock.page_url.lock().await.clone();
+                    let url = if url.is_empty() { "https://example.com".to_string() } else { url };
+                    json!({"result":{"value":{"url":url,"title":"Example"}}})
+                }
                 "Page.captureScreenshot" => json!({"data":"fresh-frame"}),
                 _ => json!({}),
             };
@@ -283,7 +316,7 @@ async fn protocol_v2_mouse_keys_wheel_and_resize_reach_the_page_in_order_and_res
 
     // input needs control first
     ws.send(send(json!({"action":"mouse","type":"down","x":5,"y":5,"button":"left","id":"early"}))).await.unwrap();
-    assert!(until_reply(&mut ws,"early").await.last().unwrap()["error"].as_str().unwrap().contains("controlled"));
+    assert_eq!(until_reply(&mut ws,"early").await.last().unwrap()["error"], "Take control of the browser first.");
     ws.send(send(json!({"action":"take_control"}))).await.unwrap();
     let control = receive(&mut ws,"control").await;
     assert_eq!((control["active"].clone(), control["viewport"]["width"].as_f64()), (json!(true), Some(1280.0)));
@@ -374,6 +407,118 @@ async fn protocol_v2_mouse_keys_wheel_and_resize_reach_the_page_in_order_and_res
         if restored && ctrl.control.try_read().is_ok() {break;}
         tokio::time::sleep(Duration::from_millis(20)).await;
     }}).await.unwrap();
+    app_task.abort(); cdp_task.abort();
+}
+
+type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// A kwant server on a mock browser with one live view open on it.
+async fn open_stream(mock: &Mock, tmp: &std::path::Path) -> (Client, kwnt::sandbox::BrowserController, tokio::task::JoinHandle<()>) {
+    let config = Config {data_dir:tmp.into(),browser_cdp_url:Some(format!("http://127.0.0.1:{}",mock.port)),..Config::default()};
+    let db = Database::init(tmp).await.unwrap();
+    let id=db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
+    let state=AppState::new(config.clone(),db,ToolRunner::new(tmp.join("workspace")),PermissionBroker::new(),LayaRouter::new(config.laya_url));
+    let ctrl=kwnt::server::routes::get_or_create_browser_controller(&state,&id).await.unwrap();
+    let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port=listener.local_addr().unwrap().port();
+    let app_task=tokio::spawn(async move {axum::serve(listener,create_router(state)).await.unwrap();});
+    let mut request=format!("ws://127.0.0.1:{port}/api/sandbox/{id}/stream").into_client_request().unwrap();
+    request.headers_mut().insert("Origin",format!("http://127.0.0.1:{port}").parse().unwrap());
+    let (ws,_)=connect_async(request).await.unwrap();
+    (ws, ctrl, app_task)
+}
+
+/// The next `location` whose url is `url`, acking frames on the way.
+async fn location_for(ws: &mut Client, url: &str, within: Duration) -> Option<Value> {
+    timeout(within, async {
+        loop {
+            if let WsMessage::Text(text) = ws.next().await.unwrap().unwrap() {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                match value["type"].as_str().unwrap_or_default() {
+                    "ping" => ws.send(WsMessage::Text(json!({"action":"pong"}).to_string())).await.unwrap(),
+                    "frame" => ws.send(WsMessage::Text(json!({"action":"frame_ack","id":value["id"]}).to_string())).await.unwrap(),
+                    "location" if value["url"] == url => return value,
+                    _ => {}
+                }
+            }
+        }
+    }).await.ok()
+}
+
+#[tokio::test]
+async fn the_address_follows_navigation_at_once_and_the_cursor_follows_where_the_pointer_rests() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, _ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    // the first location comes from the 2 s tick, which fires at once; the next tick is 2 s away
+    location_for(&mut ws, "https://example.com", Duration::from_secs(5)).await.expect("first location");
+    let tick = tokio::time::Instant::now();
+
+    // a top-level navigation (a link, back/forward/reload or a bot's navigate) is sent at once
+    *mock.page_url.lock().await = "https://example.org/next".into();
+    push_event(&mock, "Page.frameNavigated", json!({"frame":{"id":"main","url":"https://example.org/next"},"type":"Navigation"})).await;
+    let next = location_for(&mut ws, "https://example.org/next", Duration::from_millis(1500)).await;
+    assert!(next.is_some() && tick.elapsed() < Duration::from_millis(1900), "the address must not wait for the 2 s tick");
+    // pushState and #fragment changes too
+    *mock.page_url.lock().await = "https://example.org/next#b".into();
+    push_event(&mock, "Page.navigatedWithinDocument", json!({"frameId":"main","url":"https://example.org/next#b"})).await;
+    assert!(location_for(&mut ws, "https://example.org/next#b", Duration::from_millis(1500)).await.is_some());
+
+    // the title: a new document clears the old one at once, even while the page can't be read
+    // yet, and a failed read never puts the previous page's address or title back
+    mock.between_documents.store(true, Ordering::SeqCst);
+    *mock.page_url.lock().await = "https://example.net/".into();
+    push_event(&mock, "Page.frameNavigated", json!({"frame":{"id":"main","url":"https://example.net/"},"type":"Navigation"})).await;
+    let cleared = location_for(&mut ws, "https://example.net/", Duration::from_millis(1500)).await.expect("the new address at once");
+    assert_eq!(cleared["title"], "", "the previous page's title must not linger");
+    assert!(location_for(&mut ws, "https://example.org/next#b", Duration::from_millis(2500)).await.is_none(), "a failed read resent the previous page");
+    // once the document is parsed its title arrives
+    mock.between_documents.store(false, Ordering::SeqCst);
+    push_event(&mock, "Page.domContentEventFired", json!({"timestamp":1.0})).await;
+    let titled = location_for(&mut ws, "https://example.net/", Duration::from_millis(1500)).await.expect("the new title");
+    assert_eq!(titled["title"], "Example");
+
+    // D3: a move onto a link right after one that was looked up still gets its cursor
+    ws.send(WsMessage::Text(json!({"action":"take_control"}).to_string())).await.unwrap();
+    receive(&mut ws,"control").await;
+    ws.send(WsMessage::Text(json!({"action":"mouse","type":"move","x":10,"y":10}).to_string())).await.unwrap();
+    ws.send(WsMessage::Text(json!({"action":"mouse","type":"move","x":300,"y":300}).to_string())).await.unwrap();
+    let cursor = timeout(Duration::from_secs(2), receive(&mut ws,"cursor")).await.expect("a trailing lookup at the resting point");
+    assert_eq!(cursor["cursor"], "pointer");
+    let probes: Vec<_> = mock.commands.lock().await.iter()
+        .filter(|c| c["params"]["expression"].as_str().is_some_and(|e| e.contains("getComputedStyle")))
+        .map(|c| c["params"]["expression"].as_str().unwrap().contains("elementFromPoint(300, 300)")).collect();
+    assert_eq!(probes, vec![false, true], "one lookup at once, one trailing at the newest point");
+    app_task.abort(); cdp_task.abort();
+}
+
+#[tokio::test]
+async fn a_watcher_is_told_to_take_control_and_a_lost_frame_ack_does_not_drop_the_stream() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    // the frame is never acked, like an identical picture that fires no load event
+    receive(&mut ws,"frame").await;
+
+    // D4: history without control gets the same refusal as any other input
+    for (id, payload) in [("h", json!({"action":"history","direction":"back"})), ("c", json!({"action":"click","x":5,"y":5}))] {
+        let mut payload = payload; payload["id"] = json!(id);
+        ws.send(WsMessage::Text(payload.to_string())).await.unwrap();
+        assert_eq!(receive(&mut ws,"error").await, json!({"type":"error","id":id,"error":"Take control of the browser first."}));
+    }
+    // another viewer holds control: then it is theirs
+    let other = ctrl.take_control().await.unwrap();
+    ws.send(WsMessage::Text(json!({"action":"history","direction":"reload","id":"o"}).to_string())).await.unwrap();
+    assert!(receive(&mut ws,"error").await["error"].as_str().unwrap().contains("controlled by a person"));
+    drop(other);
+
+    // the server stops waiting for the lost ack and keeps the stream (and control) alive
+    timeout(Duration::from_secs(9), async { loop {
+        if mock.commands.lock().await.iter().any(|c| c["method"]=="Page.screencastFrameAck") { break; }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }}).await.expect("the stalled frame is let go");
+    ws.send(WsMessage::Text(json!({"action":"take_control"}).to_string())).await.unwrap();
+    assert_eq!(receive(&mut ws,"control").await["active"], true, "the stream is still up");
     app_task.abort(); cdp_task.abort();
 }
 
