@@ -1,0 +1,196 @@
+/* Conversation stream (reply header, working strip, decision cards, action row, results).
+   Everything here moves with transform and opacity only, lasts 120-200 ms, and is off under
+   prefers-reduced-motion. The --kws-* variables alias Pixel's --kw-* tokens (modern.css). */
+:root {
+  --kws-accent: theme('colors.sky.400');
+  --kws-accent-soft: rgb(122 98 240 / 0.16);
+  --kws-ok: var(--kw-ok);
+  --kws-warn: var(--kw-warn);
+  --kws-hairline: var(--kw-hairline-strong);
+  --kws-raised: var(--kw-surface-raised);
+  --kws-shadow: theme('boxShadow.raised');
+}
+
+/* New replies fade and slide in. */
+@keyframes kws-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kws-in { animation: kws-in 180ms ease-out both; }
+
+/* The working strip rises into place above the composer. */
+@keyframes kws-strip-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kws-strip { animation: kws-strip-in 160ms ease-out both; }
+
+/* Skeleton lines while a reply has no words yet (opacity only). */
+@keyframes kws-skel {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.75; }
+}
+.kws-skel {
+  height: 0.7rem;
+  border-radius: 9999px;
+  background: theme('colors.zinc.700');
+  animation: kws-skel 1.3s ease-in-out infinite;
+}
+
+/* A small burst on "Mark verified": a ring and six dots, 200 ms. */
+.kws-burst {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.kws-burst-ring {
+  position: absolute;
+  left: -11px;
+  top: -11px;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 2px solid theme('colors.emerald.300');
+  animation: kws-burst-ring 200ms ease-out both;
+}
+.kws-burst-dot {
+  position: absolute;
+  left: -2px;
+  top: -2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: theme('colors.emerald.300');
+  animation: kws-burst-dot 200ms ease-out both;
+}
+@keyframes kws-burst-ring {
+  from { opacity: 0.9; transform: scale(0.3); }
+  to { opacity: 0; transform: scale(1.7); }
+}
+@keyframes kws-burst-dot {
+  from { opacity: 1; transform: rotate(var(--kws-a)) translateY(-6px) scale(1); }
+  to { opacity: 0; transform: rotate(var(--kws-a)) translateY(-17px) scale(0.4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kws-in,
+  .kws-strip,
+  .kws-skel,
+  .kws-burst-ring,
+  .kws-burst-dot {
+    animation: none;
+  }
+  .kws-skel { opacity: 0.55; }
+  .kws-burst { display: none; }
+}
+
+/* ---- Earned moments (the sticker itself is Pixel's .kw-sticker). ---- */
+/* Presses in once when it appears: transform and opacity, 160 ms. */
+.kws-stamp {
+  animation: kws-stamp 160ms ease-out both;
+}
+@keyframes kws-stamp {
+  from { transform: scale(1.08); }
+  to { transform: scale(1); }
+}
+
+/* Laya hand-off: the answering bot's avatar rises into the reply header. */
+.kws-handoff {
+  animation: kws-handoff 200ms ease-out both;
+}
+@keyframes kws-handoff {
+  from { opacity: 0; transform: translateY(28px) scale(0.85); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kws-stamp,
+  .kws-handoff {
+    animation: none;
+  }
+}
+
+/* ---- Chips (spec §4): 20 px tall, 0 8 px, full radius, 500 12/16, 12 px icon, gap 4 px. Information, never holo. ---- */
+.kws-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 9999px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.kws-chip:focus-visible { outline: 2px solid #b8adff; outline-offset: 2px; }
+.kws-chip-engine { background: #231d4b; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.07); color: #d9d6f0; }
+.kws-chip-failover { background: #2b2360; box-shadow: inset 0 0 0 1px #46379a; color: #e8e4ff; }
+.kws-chip-learned { background: #231d4b; color: #d3ccff; }
+
+/* A styled tooltip from data-tip, on hover and keyboard focus (spec §4). The aria-label carries the same words. */
+.kws-tip { position: relative; }
+.kws-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  width: max-content;
+  max-width: min(280px, 80vw);
+  padding: 4px 8px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 8px;
+  background: #2c2552;
+  color: #ecebfa;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+  white-space: normal;
+  pointer-events: none;
+  /* Out of layout until shown, so a hidden tip never widens the page at 390 px. */
+  display: none;
+  transition: opacity 120ms var(--kw-ease), transform 120ms var(--kw-ease);
+}
+.kws-tip:hover::after,
+.kws-tip:focus-visible::after { display: block; opacity: 1; transform: translateY(0); }
+@starting-style {
+  .kws-tip:hover::after,
+  .kws-tip:focus-visible::after { opacity: 0; transform: translateY(-2px); }
+}
+
+/* ---- Goal heartbeat (spec §3) ---- */
+.kws-heartbeat { container-type: inline-size; display: block; min-width: 0; }
+.kws-heartbeat-full,
+.kws-heartbeat-tight { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.kws-heartbeat-tight { display: none; }
+.kws-beats { display: inline-flex; align-items: center; gap: 3px; }
+.kws-beat { width: 6px; height: 6px; border-radius: 1px; flex: none; }
+.kws-beat-ok { background: #5eead4; }
+.kws-beat-fixing { background: #fcd34d; }
+.kws-beat-failing { background: #fb7185; }
+.kws-beat-unknown { box-shadow: inset 0 0 0 1.5px #8f88bb; }
+.kws-beat-newest { outline: 1px solid rgb(255 255 255 / 0.55); outline-offset: 1px; }
+.kws-beat-count { font-size: 12px; line-height: 16px; color: #d9d6f0; font-variant-numeric: tabular-nums; }
+.kws-beat-word { font-size: 12px; line-height: 16px; font-weight: 600; }
+/* Phones: the last 5 squares and the word. */
+@media (max-width: 639px) {
+  .kws-beat-desk,
+  .kws-beat-count-desk { display: none; }
+}
+/* Under 64 px free, or under 360 px wide: only the newest square and "1/5 ok". */
+@container (max-width: 63px) {
+  .kws-heartbeat-full { display: none; }
+  .kws-heartbeat-tight { display: inline-flex; }
+}
+@media (max-width: 359px) {
+  .kws-heartbeat-full { display: none; }
+  .kws-heartbeat-tight { display: inline-flex; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kws-tip::after { transition: none; transform: none; }
+}

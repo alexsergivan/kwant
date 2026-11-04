@@ -43,7 +43,7 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # A tag that doesn't match the app's version fails here, before the 20-minute Mac build.
+  # A tag that doesn't match the app's version fails here, before the ~30-minute Mac build.
   version:
     name: version
     if: startsWith(github.ref, 'refs/tags/mac-v')
@@ -83,7 +83,8 @@ jobs:
     # runs on PRs and manual runs (version skipped), and on tags only after the version check passed
     if: ${{ !failure() && !cancelled() }}
     runs-on: macos-15
-    timeout-minutes: 60
+    # the build step alone has taken 21-30 min (0.6.6's tag build: 29 min; #268's first run hit 30)
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -130,7 +131,7 @@ jobs:
         run: python3 -c 'import json; print(json.load(open("apps/mac/tauri.conf.json"))["plugins"]["updater"]["pubkey"])' > "$RUNNER_TEMP/updater.pub"
       - name: Build the universal app and .dmg
         working-directory: apps/mac
-        timeout-minutes: 30
+        timeout-minutes: 45
         env:
           # Tauri skips the Finder AppleScript that lays out the install window (background,
           # icon positions, hidden files moved out of view) when CI=true; run it anyway
@@ -393,6 +394,13 @@ jobs:
           cp "$appimage.sig" kwant_x86_64.AppImage.sig
           for f in kwant_amd64.deb kwant_x86_64.AppImage; do sha256sum "$f" > "$f.sha256"; done
           assets+=(kwant_amd64.deb kwant_amd64.deb.sig kwant_amd64.deb.sha256 kwant_x86_64.AppImage kwant_x86_64.AppImage.sig kwant_x86_64.AppImage.sha256)
+          # The AppImage's update information points AppImageUpdate at this file in the latest
+          # release; linux.yml made it over the same bytes, under this name
+          zsync_file=$(find dist -type f -name 'kwant_x86_64.AppImage.zsync' | head -1)
+          test -n "$zsync_file"
+          cp "$zsync_file" kwant_x86_64.AppImage.zsync
+          test "$(sed -n 's/^SHA-1: //p' kwant_x86_64.AppImage.zsync | head -1)" = "$(sha1sum kwant_x86_64.AppImage | cut -d' ' -f1)"
+          assets+=(kwant_x86_64.AppImage.zsync)
           dl="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           # Installed apps read releases/latest/download/latest.json, which only ever resolves to the
           # newest full release; a prerelease gets no latest.json, so it's never offered as an update

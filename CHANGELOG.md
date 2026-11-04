@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- **The Linux AppImage updates with AppImage tools and lists in software centers.** The AppImage carries update information for AppImageUpdate, and the release ships `kwant_x86_64.AppImage.zsync` next to it. The AppImage and the .deb carry AppStream metainfo (`si.kwant.kwant`). These were the two warnings from the AppImage catalog's test. The in-app updater is unchanged.
+
 ## [Mac 0.6.8] - 2026-11-03
 
 ### Added

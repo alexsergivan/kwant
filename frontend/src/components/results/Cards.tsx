@@ -38,17 +38,17 @@ export const Cards: React.FC<RendererProps<CardsBlock>> = ({ block }) => (
           <li key={item.id} className="min-w-0">
             <Wrapper
               {...wrapperProps}
-              className="block h-full rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 shadow-sm transition-colors motion-reduce:transition-none hover:border-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70"
+              className="block h-full rounded-xl border border-zinc-700/60 bg-zinc-900/60 p-3.5 shadow-[var(--kws-shadow)] transition duration-150 motion-reduce:transition-none motion-safe:hover:-translate-y-0.5 hover:border-sky-500/50 hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70"
             >
               <div className="flex items-start justify-between gap-2">
-                <h4 className="text-[13px] font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere]">{item.title}</h4>
-                {item.url && <ExternalLink size={12} className="mt-0.5 shrink-0 text-zinc-600" aria-hidden="true" />}
+                <h4 className="text-sm font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere]">{item.title}</h4>
+                {item.url && <ExternalLink size={12} className="mt-0.5 shrink-0 text-zinc-400" aria-hidden="true" />}
               </div>
               <p className="mt-1 text-xs leading-relaxed text-zinc-400 [overflow-wrap:anywhere]">{item.description}</p>
-              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
+              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-400">
                 {item.url && <span className="truncate">{urlDomain(item.url)}</span>}
                 {item.meta.map((m, i) => (
-                  <span key={i} className="rounded border border-zinc-800 px-1.5 py-0.5">
+                  <span key={i} className="rounded-full border border-zinc-700 px-2 py-0.5">
                     {m}
                   </span>
                 ))}

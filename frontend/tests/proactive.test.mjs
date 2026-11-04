@@ -145,7 +145,7 @@ test('chips: question, pick, why, who was asked, and a Change button', () => {
   assert.match(html, /Decided: B: Wax seal/);
   assert.match(html, /Why: Matches the wax-seal hero/);
   assert.match(html, /Asked Designer first\./);
-  assert.match(html, /aria-expanded="false"[^>]*>Change</);
+  assert.match(html, /aria-expanded="false"[^>]*>(<svg[^>]*>.*?<\/svg>)?Change</);
   // Without a handler, or once changed, there's nothing to press
   assert.doesNotMatch(ui.chips({ messageId: 'm1', decisions: [DESIGN] }), />Change</);
   const changed = ui.chips({ messageId: 'm1', decisions: [{ ...DESIGN, status: 'changed', changed_to: 'A: Classic' }], onChange: async () => {} });
