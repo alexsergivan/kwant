@@ -16,6 +16,10 @@ const NORMAL_LIGHT: &[u8] = include_bytes!("../icons/linux/tray-normal-light.png
 const NEEDS_YOU_DARK: &[u8] = include_bytes!("../icons/linux/tray-needs-you-dark.png");
 const NEEDS_YOU_LIGHT: &[u8] = include_bytes!("../icons/linux/tray-needs-you-light.png");
 
+/// The app icon, sent with each notification: an AppImage installs no themed "kwant" icon, so a
+/// name alone shows no picture (dunst: "No icon found in path: 'kwant'").
+const APP_ICON: &[u8] = include_bytes!("../icons/128x128.png");
+
 const BUS_NAME: &str = "org.freedesktop.Notifications";
 const BUS_PATH: &str = "/org/freedesktop/Notifications";
 
@@ -67,6 +71,15 @@ pub fn tray_icon(needs_you: bool, dark_panel: bool) -> &'static [u8] {
 /// Notification bodies may be read as markup; titles are the person's own text.
 pub fn escape_markup(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// The `image-data` hint (`(iiibiiay)`: width, height, rowstride, has alpha, bits per sample,
+/// channels, RGBA bytes) for a PNG.
+pub fn image_data(png: &[u8]) -> Option<(i32, i32, i32, bool, i32, i32, Vec<u8>)> {
+    let img = Image::from_bytes(png).ok()?;
+    let (w, h) = (i32::try_from(img.width()).ok()?, i32::try_from(img.height()).ok()?);
+    let rgba = img.rgba().to_vec();
+    (rgba.len() == (w as usize) * (h as usize) * 4).then_some((w, h, w * 4, true, 8, 4, rgba))
 }
 
 pub struct Nudger {
@@ -134,6 +147,7 @@ fn notify_loop(handle: AppHandle, rx: mpsc::Receiver<nudge::Pill>) {
     let caps: Vec<String> = proxy.call("GetCapabilities", &()).unwrap_or_default();
     let actions = caps.iter().any(|c| c == "actions");
     let body_markup = caps.iter().any(|c| c == "body-markup");
+    let icon = image_data(APP_ICON);
     let targets: Targets = Arc::default();
     if actions {
         listen_for_clicks(handle.clone(), proxy.clone(), targets.clone());
@@ -145,9 +159,13 @@ fn notify_loop(handle: AppHandle, rx: mpsc::Receiver<nudge::Pill>) {
         let mut hints: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
         hints.insert("desktop-entry", zbus::zvariant::Value::from("kwant"));
         hints.insert("urgency", zbus::zvariant::Value::from(1u8));
+        if let Some(i) = &icon {
+            hints.insert("image-data", zbus::zvariant::Value::from(zbus::zvariant::Structure::from(i.clone())));
+        }
+        // no app_icon name: the picture travels in image-data
         let sent = proxy.call::<_, _, u32>(
             "Notify",
-            &("kwant", 0u32, "kwant", p.headline.as_str(), body.as_str(), acts, hints, -1i32),
+            &("kwant", 0u32, "", p.headline.as_str(), body.as_str(), acts, hints, -1i32),
         );
         match sent {
             Ok(id) => {
@@ -207,6 +225,17 @@ mod tests {
             let img = Image::from_bytes(tray_icon(n, d)).expect("decodes");
             assert_eq!((img.width(), img.height()), (44, 44));
         }
+    }
+
+    #[test]
+    fn notifications_carry_the_app_icon_as_image_data() {
+        let (w, h, stride, alpha, bits, channels, data) = image_data(APP_ICON).expect("the icon decodes");
+        assert_eq!((w, h, stride, alpha, bits, channels), (128, 128, 512, true, 8, 4));
+        assert_eq!(data.len(), 128 * 128 * 4);
+        assert!(data.chunks(4).any(|px| px[3] > 0), "not a blank picture");
+        let v = zbus::zvariant::Value::from(zbus::zvariant::Structure::from((w, h, stride, alpha, bits, channels, data)));
+        assert_eq!(v.value_signature().to_string(), "(iiibiiay)");
+        assert!(image_data(b"not a png").is_none());
     }
 
     #[test]

@@ -106,12 +106,14 @@ html.kw-reduce .kw-nudge__av, html.kw-reduce .kw-nudge__badge, html.kw-reduce .k
   const theme = () => matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   let el = null, timer = 0, firstShown = 0, hovered = false;
   const go = what => { location.href = 'kwant-nudge://' + what; };
+  // Plain text: escaped where it goes into HTML, as it is in the aria-label (an attribute set
+  // through the DOM, never parsed), so "R&D" is read as "R&D".
   const content = items => {
     if (items.length === 1) {
       const i = items[0];
-      return { av: esc(initial(i.name)), l1: esc(i.name || 'A bot') + ' ' + (VERB[i.kind] || 'needs you'), l2: esc(i.title) };
+      return { av: initial(i.name), l1: (i.name || 'A bot') + ' ' + (VERB[i.kind] || 'needs you'), l2: String(i.title ?? '') };
     }
-    return { av: items.length > 9 ? '9+' : String(items.length), l1: items.length + ' things need you', l2: esc(names(items)) };
+    return { av: items.length > 9 ? '9+' : String(items.length), l1: items.length + ' things need you', l2: names(items) };
   };
   // The 12 s cap only limits arrival restarts; after the pointer leaves it always waits the full 2 s.
   const arm = (ms, capped) => { clearTimeout(timer); timer = setTimeout(leave, capped ? Math.max(0, Math.min(ms, CAP - (Date.now() - firstShown))) : ms); };
@@ -127,8 +129,8 @@ html.kw-reduce .kw-nudge__av, html.kw-reduce .kw-nudge__badge, html.kw-reduce .k
     show(items) {
       if (!items || !items.length) return;
       const c = content(items);
-      const html = `<span class="kw-nudge__av">${c.av}${BADGE}</span>
-        <span class="kw-nudge__text"><span class="kw-nudge__l1">${c.l1}</span><span class="kw-nudge__l2">${c.l2}</span></span>${CHEV}`;
+      const html = `<span class="kw-nudge__av">${esc(c.av)}${BADGE}</span>
+        <span class="kw-nudge__text"><span class="kw-nudge__l1">${esc(c.l1)}</span><span class="kw-nudge__l2">${esc(c.l2)}</span></span>${CHEV}`;
       if (el && !el.classList.contains('is-leaving')) {
         el.innerHTML = html; el.classList.remove('is-swapping'); void el.offsetWidth; el.classList.add('is-swapping');
       } else {
@@ -141,7 +143,7 @@ html.kw-reduce .kw-nudge__av, html.kw-reduce .kw-nudge__badge, html.kw-reduce .k
         el.addEventListener('click', () => { clearTimeout(timer); hovered = false; go('open'); const gone = el; gone.classList.add('is-leaving'); setTimeout(() => { gone.remove(); if (el === gone) el = null; }, 120); });
         document.getElementById('slot').appendChild(el);
       }
-      el.setAttribute('aria-label', (c.l1 + '. ' + c.l2).replace(/&[a-z]+;/g, ' '));
+      el.setAttribute('aria-label', c.l1 + '. ' + c.l2);
       arm(HOLD, true);
     },
     hide() { hovered = false; leave(); },

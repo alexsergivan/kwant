@@ -211,26 +211,47 @@ fn build_pill(handle: &AppHandle, opener: Sender<PillCmd>) -> Option<tauri::Webv
     }
 }
 
-/// Puts the pill window under the menu-bar icon: centred on it, 2 pt below it, kept 8 pt inside
-/// the screen (at the top right when macOS won't say where the icon is).
-fn place(handle: &AppHandle, tray: &TrayIcon, pill: &tauri::WebviewWindow) -> Option<(f64, f64)> {
+/// How often the pill checks that it is still under the icon while it shows.
+const FOLLOW_EVERY: Duration = Duration::from_millis(100);
+
+/// Where the pill window goes for the menu-bar icon as it is now: centred on it, 2 pt below it,
+/// kept 8 pt inside the screen (at the top right when macOS won't say where the icon is). Also
+/// the icon's rect it went by, in points.
+fn spot(handle: &AppHandle, tray: &TrayIcon) -> Option<((f64, f64), Option<[f64; 4]>)> {
     let monitor = handle.primary_monitor().ok().flatten()?;
     let scale = monitor.scale_factor();
     let screen = monitor.size().to_logical::<f64>(scale);
     let origin = monitor.position().to_logical::<f64>(scale);
-    let (cx, bottom) = match tray.rect().ok().flatten() {
-        Some(r) => {
-            let pos = r.position.to_logical::<f64>(scale);
-            let size = r.size.to_logical::<f64>(scale);
-            if crate::DEMO.get().is_some() {
-                println!("demo-nudge: tray {:.0},{:.0},{:.0},{:.0}", pos.x, pos.y, size.width, size.height);
-            }
-            (pos.x + size.width / 2.0, pos.y + size.height)
-        }
+    let rect = tray.rect().ok().flatten().map(|r| {
+        let pos = r.position.to_logical::<f64>(scale);
+        let size = r.size.to_logical::<f64>(scale);
+        [pos.x, pos.y, size.width, size.height]
+    });
+    let (cx, bottom) = match rect {
+        Some([x, y, w, h]) => (x + w / 2.0, y + h),
         None => (origin.x + screen.width - 8.0 - PILL_W / 2.0, origin.y + 24.0),
     };
     let x = (cx - PILL_W / 2.0).clamp(origin.x + 8.0, origin.x + screen.width - 8.0 - PILL_W);
-    let y = bottom + 2.0;
+    Some(((x, bottom + 2.0), rect))
+}
+
+/// Moves the pill window under the icon. `None` when it is already there (or the screen can't
+/// be read). With --demo-nudge it logs the icon rect it went by, for CI.
+fn place(
+    handle: &AppHandle,
+    tray: &TrayIcon,
+    pill: &tauri::WebviewWindow,
+    now_at: Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let ((x, y), rect) = spot(handle, tray)?;
+    if now_at.is_some_and(|(px, py)| (px - x).abs() < 0.5 && (py - y).abs() < 0.5) {
+        return None;
+    }
+    if crate::DEMO.get().is_some() {
+        if let Some([rx, ry, rw, rh]) = rect {
+            println!("demo-nudge: tray {rx:.0},{ry:.0},{rw:.0},{rh:.0}");
+        }
+    }
     let _ = pill.set_position(LogicalPosition::new(x, y));
     Some((x, y))
 }
@@ -238,6 +259,11 @@ fn place(handle: &AppHandle, tray: &TrayIcon, pill: &tauri::WebviewWindow) -> Op
 /// Drives the pill page: shows and coalesces arrivals, drops what was answered meanwhile, hides it
 /// when the person turns to kwant, and opens the item on a click. The page owns the timing (5 s,
 /// held while the pointer is on it, 12 s at most) and says when the pill has gone.
+///
+/// The pill follows the icon while it shows. The first item of a pill comes with the icon's
+/// count changing from none to "1", and AppKit lays the status item out again for the wider
+/// title only after this has read its rect; so the first place is often ~11 pt off, and the
+/// next check (100 ms later) moves the pill under the icon where it settled.
 fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: Sender<PillCmd>) {
     // Made ahead, hidden, so the first nudge doesn't wait for a page load
     let mut window = build_pill(&handle, opener.clone());
@@ -245,6 +271,9 @@ fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: S
     let mut shown: Vec<Item> = Vec::new();
     let mut last_show: Option<Instant> = None;
     let mut hide_by: Option<Instant> = None;
+    // Where the pill window is while a pill shows, and when that was last checked
+    let mut placed: Option<(f64, f64)> = None;
+    let mut checked = Instant::now();
     let demo = crate::DEMO.get().is_some();
     let hide_window = |w: &Option<tauri::WebviewWindow>| {
         if let Some(w) = w {
@@ -279,13 +308,17 @@ fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: S
                     "document.documentElement.classList.toggle('kw-reduce', {reduce}); window.kwantNudge && kwantNudge.show({})",
                     payload(&shown)
                 );
-                let spot = if fresh { place(&handle, &tray, w) } else { None };
+                let moved = if fresh { place(&handle, &tray, w, None) } else { None };
+                if moved.is_some() {
+                    placed = moved;
+                    checked = Instant::now();
+                }
                 let _ = w.eval(&script);
                 let _ = w.show();
                 last_show = Some(Instant::now());
                 hide_by = None;
                 if demo {
-                    match spot {
+                    match moved {
                         Some((x, y)) => println!("demo-nudge: pill {x:.0},{y:.0},{PILL_W:.0},{PILL_H:.0} items={}", shown.len()),
                         None => println!("demo-nudge: pill coalesced items={}", shown.len()),
                     }
@@ -327,6 +360,19 @@ fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: S
         if hide_by.is_some_and(|t| Instant::now() >= t) {
             hide_window(&window);
             hide_by = None;
+        }
+        if shown.is_empty() {
+            placed = None;
+        } else if placed.is_some() && checked.elapsed() >= FOLLOW_EVERY {
+            checked = Instant::now();
+            if let Some(w) = &window {
+                if let Some((x, y)) = place(&handle, &tray, w, placed) {
+                    placed = Some((x, y));
+                    if demo {
+                        println!("demo-nudge: pill {x:.0},{y:.0},{PILL_W:.0},{PILL_H:.0} items={} moved", shown.len());
+                    }
+                }
+            }
         }
     }
 }

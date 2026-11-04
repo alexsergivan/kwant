@@ -198,7 +198,7 @@ jobs:
           cat > "$RUNNER_TEMP/nudge-run.sh" <<'SH'
           #!/bin/bash
           out="$1"; app="$2"
-          stalonetray --geometry 6x1+0+0 --icon-size 32 --background '#e8e6ef' > "$out/stalonetray.txt" 2>&1 &
+          stalonetray --geometry 6x1+0+0 --icon-size 32 --background '#1e1e1e' > "$out/stalonetray.txt" 2>&1 &
           dunst > "$out/dunst.txt" 2>&1 &
           sleep 2
           "$app" --demo-nudge > "$out/demo-nudge.txt" 2>&1 &
