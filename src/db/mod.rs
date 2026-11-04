@@ -38,6 +38,7 @@ pub mod truth_ledger;
 pub mod goals;
 pub mod goal_missions;
 pub mod lessons;
+pub mod reactions;
 pub mod routing;
 pub mod smart_results;
 
@@ -196,6 +197,7 @@ impl Database {
         db.migrate_autofix().await?;
         db.migrate_routing().await?;
         db.migrate_smart_results().await?;
+        db.migrate_reactions().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;
