@@ -70,6 +70,13 @@ async fn cdp(State(mock): State<Mock>, Path(_id): Path<String>, ws: WebSocketUpg
                     json!({"result":{"value":{"url":url,"title":"Example"}}})
                 }
                 "Page.captureScreenshot" => json!({"data":"fresh-frame"}),
+                // the tab is on a sign-in page; it steps to about:blank when told to
+                "Page.getNavigationHistory" => {
+                    let blank = mock.commands.lock().await.iter().any(|c| c["method"] == "Page.navigate" && c["params"]["url"] == "about:blank");
+                    let mut entries = vec![json!({"id":1,"url":"https://example.com/"}), json!({"id":2,"url":"https://www.tiktok.com/login/qrcode"})];
+                    if blank { entries.push(json!({"id":3,"url":"about:blank"})); }
+                    json!({"currentIndex": entries.len() - 1, "entries": entries})
+                }
                 _ => json!({}),
             };
             if socket.send(Message::Text(json!({"id":cmd["id"],"result":result}).to_string())).await.is_err() { break; }
@@ -575,6 +582,67 @@ async fn a_picture_drawn_while_the_client_was_busy_is_sent_next_even_on_a_page_t
         tokio::time::sleep(Duration::from_millis(20)).await;
     }}).await;
     assert!(all.is_ok(), "every session acked: {:?}", acked().await);
+    app_task.abort(); cdp_task.abort();
+}
+
+/// The next banner about a link to another app, acking frames on the way.
+async fn app_link_notice(ws: &mut Client, within: Duration) -> Option<String> {
+    timeout(within, async {
+        loop {
+            if let WsMessage::Text(text) = ws.next().await.unwrap().unwrap() {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                match value["type"].as_str().unwrap_or_default() {
+                    "ping" => ws.send(WsMessage::Text(json!({"action":"pong"}).to_string())).await.unwrap(),
+                    "frame" => ws.send(WsMessage::Text(json!({"action":"frame_ack","id":value["id"]}).to_string())).await.unwrap(),
+                    "error" if value["notice"] == "app_link" => {
+                        assert!(value.get("id").is_none(), "a banner, not the answer to an action");
+                        return value["error"].as_str().unwrap().to_string();
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }).await.ok()
+}
+
+#[tokio::test]
+async fn a_link_to_another_app_is_stopped_or_its_prompt_closed_so_the_tab_keeps_taking_input() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, _ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    next_frame(&mut ws, Duration::from_secs(5)).await.expect("the stream is up");
+
+    // Chrome answers a link like snssdk1233:// with an "Open app?" prompt that a headless tab
+    // never shows and that makes it ignore every click and key, even after a reload. The live
+    // view cancels such links in every document, in a world the page can't reach.
+    let commands = mock.commands.lock().await.clone();
+    let guard = commands.iter().find(|c| c["method"] == "Page.addScriptToEvaluateOnNewDocument" && c["params"]["worldName"] == "kwnt-applinks")
+        .expect("the live view guards against links to other apps");
+    assert_eq!(guard["params"]["runImmediately"], true, "the page already open is guarded too");
+    assert!(guard["params"]["source"].as_str().unwrap().contains("preventDefault"));
+    assert!(commands.iter().any(|c| c["method"] == "Runtime.addBinding" && c["params"]["executionContextName"] == "kwnt-applinks"));
+
+    // the guard stopped one: the person learns why their tap did nothing
+    push_event(&mock, "Runtime.bindingCalled", json!({"name":"kwntAppLink","payload":"snssdk1233","executionContextId":9})).await;
+    let stopped = app_link_notice(&mut ws, Duration::from_secs(2)).await.expect("told the link was stopped");
+    assert!(stopped.contains("(snssdk1233:)"), "{stopped}");
+    // the page's own script can't put words on the banner
+    push_event(&mock, "Runtime.bindingCalled", json!({"name":"kwntAppLink","payload":"<img src=x>","executionContextId":9})).await;
+
+    // Chrome refused one outright (no gesture): no prompt, so nothing to undo
+    push_event(&mock, "Page.frameStartedNavigating", json!({"frameId":"F1","url":"snssdk1233://login?a=1","loaderId":"L1","navigationType":"differentDocument"})).await;
+    push_event(&mock, "Log.entryAdded", json!({"entry":{"source":"other","level":"error","text":"Not allowed to launch 'snssdk1233://login?a=1' because a user gesture is required."}})).await;
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert!(!mock.commands.lock().await.iter().any(|c| c["method"] == "Page.navigate"), "the page was left alone");
+
+    // one got past the guard (a frame whose first address is the link): Chrome is asking, so the
+    // tab steps off to about:blank and straight back to the sign-in page, which closes the prompt
+    push_event(&mock, "Page.frameStartedNavigating", json!({"frameId":"F2","url":"snssdk1233://login?b=1","loaderId":"L2","navigationType":"differentDocument"})).await;
+    let recovered = app_link_notice(&mut ws, Duration::from_secs(5)).await.expect("told the page was reloaded");
+    assert!(recovered.contains("reloaded"), "{recovered}");
+    let steps: Vec<Value> = mock.commands.lock().await.iter()
+        .filter(|c| matches!(c["method"].as_str(), Some("Page.navigate" | "Page.navigateToHistoryEntry"))).map(|c| c["params"].clone()).collect();
+    assert_eq!(steps, vec![json!({"url":"about:blank"}), json!({"entryId":2})]);
     app_task.abort(); cdp_task.abort();
 }
 

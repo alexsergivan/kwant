@@ -7,6 +7,7 @@
 //! wait behind a bot's command.
 use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit};
 use super::{routes::get_or_create_browser_controller, AppState};
+use crate::sandbox::app_links::{self, AppLinkWatch, Verdict};
 use crate::sandbox::browser::{BrowserController, BrowserError, HeldPointer, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
 use crate::sandbox::browser_history::HistoryDirection;
 use axum::{extract::{Path, State, WebSocketUpgrade, ws::{Message, WebSocket}}, http::{HeaderMap, StatusCode}, response::Response};
@@ -867,6 +868,7 @@ async fn stream(
     let mut lease: Option<OwnedRwLockWriteGuard<()>> = None;
     let result = async {
         cdp.call("Page.enable", json!({}), Duration::from_secs(10)).await?;
+        guard_app_links(cdp).await;
         let (w, h) = shared.view();
         cdp.call("Page.startScreencast", screencast_params(w as u32, h as u32), Duration::from_secs(10)).await?;
         let mut last_client = Instant::now();
@@ -875,8 +877,26 @@ async fn stream(
         let mut location_tick = tokio::time::interval(Duration::from_secs(2));
         let mut moves = RateLimit::new(bi::MOVES_PER_SECOND, 10.0, std::time::Instant::now());
         let mut dialog_open = false;
+        let mut app_links = AppLinkWatch::default();
         loop {
+            let app_link_due = app_links.deadline();
             tokio::select! {
+                _ = async { match app_link_due { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => {
+                    match app_links.due(Instant::now()) {
+                        Some(Verdict::Recover(scheme)) => {
+                            let (cdp, client) = (cdp.clone(), client_tx.clone());
+                            tokio::spawn(async move {
+                                let text = match leave_app_prompt(&cdp).await {
+                                    Ok(()) => app_links::recovered_text(&scheme),
+                                    Err(e) => { tracing::debug!("couldn't close an app prompt: {}", e); app_links::gave_up_text(&scheme) }
+                                };
+                                let _ = client.send(app_link_notice(&text));
+                            });
+                        }
+                        Some(Verdict::GiveUp(scheme)) => send(socket, app_link_notice(&app_links::gave_up_text(&scheme))).await?,
+                        None => {}
+                    }
+                }
                 _ = heartbeat.tick() => {
                     if last_client.elapsed() > Duration::from_secs(35) { break; }
                     send(socket, json!({"type":"ping"})).await?;
@@ -908,6 +928,17 @@ async fn stream(
                     }
                     if moves_location(method, params) { refresh_location(cdp, ctrl, shared, client_tx); }
                     match method {
+                        // a link to another app the guard couldn't cancel (a frame's first address)
+                        "Page.frameStartedNavigating" | "Page.frameRequestedNavigation" => {
+                            app_links.started(params["url"].as_str().unwrap_or_default(), Instant::now());
+                        }
+                        "Log.entryAdded" => app_links.logged(params["entry"]["text"].as_str().unwrap_or_default()),
+                        "Runtime.bindingCalled" if params["name"] == app_links::BINDING => {
+                            let scheme = app_links::shown_scheme(params["payload"].as_str().unwrap_or_default());
+                            if let Some(scheme) = scheme.filter(|_| app_links.may_notice(Instant::now())) {
+                                send(socket, app_link_notice(&app_links::stopped_text(&scheme))).await?;
+                            }
+                        }
                         "Page.screencastFrame" => {
                             let session = params["sessionId"].as_i64().unwrap_or_default();
                             let (dw, dh) = (params["metadata"]["deviceWidth"].as_f64().unwrap_or(0.0), params["metadata"]["deviceHeight"].as_f64().unwrap_or(0.0));
@@ -950,7 +981,13 @@ async fn stream(
                             // A pending human step already holds the browser for the person
                             if lease.is_none() && !ctrl.is_held_for_person() {
                                 match ctrl.take_control().await {
-                                    Ok(guard) => lease = Some(guard),
+                                    Ok(guard) => {
+                                        lease = Some(guard);
+                                        // a button left down by an earlier view would turn the
+                                        // person's first click into a drag
+                                        let held = ctrl.pointer_held_slot().lock().unwrap_or_else(|e| e.into_inner()).take();
+                                        release_on(cdp, held).await;
+                                    }
                                     Err(error) => { send(socket, json!({"type":"error","error":error.to_string()})).await?; continue; }
                                 }
                             }
@@ -1004,6 +1041,49 @@ async fn stream(
         Ok(())
     }.await;
     (result, lease)
+}
+
+/// Keeps links to another app from freezing the tab while the live view is open (see
+/// [`app_links`]), and has the guard say when it stopped one. Runtime is enabled for that call
+/// and Log for Chrome's own refusals.
+async fn guard_app_links(cdp: &Cdp) {
+    for (method, params) in [
+        ("Runtime.addBinding", json!({"name": app_links::BINDING, "executionContextName": app_links::WORLD})),
+        ("Page.addScriptToEvaluateOnNewDocument", json!({"source": app_links::guard_js(), "worldName": app_links::WORLD, "runImmediately": true})),
+        ("Runtime.enable", json!({})),
+        ("Log.enable", json!({})),
+    ] {
+        if let Err(e) = cdp.call(method, params, PROBE_WAIT).await { tracing::debug!(method, "app link guard: {}", e); }
+    }
+}
+
+/// Closes Chrome's "Open <app>?" prompt. Only a cross-site navigation does, so the tab steps to
+/// about:blank and straight back to the entry it was on: the page loads again, as on a reload.
+async fn leave_app_prompt(cdp: &Cdp) -> Result<(), BrowserError> {
+    let current = |history: &Value| {
+        let index = history["currentIndex"].as_u64()? as usize;
+        let entry = history["entries"].get(index)?;
+        Some((entry["id"].as_i64()?, entry["url"].as_str().unwrap_or_default().to_string()))
+    };
+    let history = cdp.call("Page.getNavigationHistory", json!({}), PROBE_WAIT).await?;
+    let (entry, _) = current(&history).ok_or_else(|| protocol("No page to go back to"))?;
+    cdp.call("Page.navigate", json!({"url": "about:blank"}), Duration::from_secs(10)).await?;
+    // Chrome swaps the page's renderer on the way: until it's done, commands on this socket fail
+    // with "Not attached to an active page"
+    let mut last = Err(protocol("The page didn't come back"));
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let Ok(history) = cdp.call("Page.getNavigationHistory", json!({}), PROBE_WAIT).await else { continue };
+        if !current(&history).is_some_and(|(id, url)| id != entry && url == "about:blank") { continue; }
+        last = cdp.call("Page.navigateToHistoryEntry", json!({"entryId": entry}), Duration::from_secs(10)).await;
+        if last.is_ok() { break; }
+    }
+    last.map(|_| ())
+}
+
+/// Tells the person about a link to another app. It has no id, so it shows as a banner.
+fn app_link_notice(text: &str) -> Value {
+    json!({"type":"error","notice":"app_link","error":text})
 }
 
 async fn send(socket: &mut WebSocket, value: Value) -> Result<(), BrowserError> {

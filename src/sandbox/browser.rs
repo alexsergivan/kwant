@@ -31,6 +31,24 @@ pub(crate) fn cdp_ws_request(url: &str) -> Result<tokio_tungstenite::tungstenite
 }
 
 /// Opens a DevTools WebSocket (see [`cdp_ws_request`]).
+/// Keeps every document of the page from opening another app (see [`super::app_links`]), for as
+/// long as this DevTools connection lasts. Nobody listens for the guard's binding here.
+async fn guard_app_links(ws: &mut WsStream, msg_id: &AtomicU64) {
+    let id = msg_id.fetch_add(1, Ordering::SeqCst);
+    let request = json!({
+        "id": id,
+        "method": "Page.addScriptToEvaluateOnNewDocument",
+        "params": {"source": super::app_links::guard_js(), "worldName": super::app_links::WORLD, "runImmediately": true},
+    });
+    let sent = match ws.send(Message::Text(request.to_string())).await {
+        Ok(()) => timeout(Duration::from_secs(5), await_reply(ws, id)).await.map_err(|_| BrowserError::Timeout).and_then(|r| r.and_then(|r| r)),
+        Err(e) => Err(BrowserError::Ws(e.to_string())),
+    };
+    if let Err(e) = sent {
+        tracing::warn!(error = %e, "couldn't guard the browser against links to other apps");
+    }
+}
+
 pub(crate) async fn connect_cdp(url: &str) -> Result<WsStream, BrowserError> {
     let (ws, _) = connect_async(cdp_ws_request(url)?).await.map_err(|e| BrowserError::Ws(e.to_string()))?;
     Ok(ws)
@@ -1106,6 +1124,7 @@ impl BrowserController {
             let mut ws = connect_cdp(&ws_url).await?;
             tracing::debug!(target_id = ?self.target_id, "opened a DevTools connection");
             self.reapply_viewport(&mut ws).await;
+            guard_app_links(&mut ws, &self.msg_id).await;
             **guard = Some(ws);
         }
         Ok(())
