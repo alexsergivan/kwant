@@ -275,3 +275,42 @@ async fn a_late_decline_tells_the_new_turn_not_to_ask_again() {
     let prompt = invocations_with("Step: LATE_DECLINE log in").remove(0);
     assert!(prompt.contains("declined the browser step") && prompt.contains("Don't ask for it again unless the person brings it up"), "{prompt}");
 }
+
+/// Rigel's QA of #273: the dedupe is per site. While the bot's Instagram sign-in is open and
+/// waited on, another turn of the same bot in the same chat asking for TikTok gets its own step
+/// and card, waits on it, and neither answer reaches the other turn.
+#[tokio::test]
+async fn a_sign_in_for_another_site_gets_its_own_step_while_one_is_open() {
+    let env = setup().await;
+    let instagram = ask_sign_in(&env, &turn_token(&env, "turn-person").await, "https://www.instagram.com/accounts/login/");
+    let s = open_step(&env, &env.a).await;
+    let ig = s["id"].as_str().unwrap().to_string();
+    wait_for("the Instagram turn waiting", || async { step(&env, &ig).await["waiting"] == true }).await;
+
+    let tiktok = ask_sign_in(&env, &turn_token(&env, "turn-resumed").await, "https://www.tiktok.com/login");
+    let open_steps = || async {
+        let (_, open) = call(&env.app, "GET", &format!("/api/human-steps?status=open&context_id={}", env.a), None).await;
+        open.as_array().unwrap().clone()
+    };
+    wait_for("a second open step", || async { open_steps().await.len() == 2 }).await;
+    let tt = open_steps().await.into_iter().find(|s| s["id"] != ig.as_str()).unwrap();
+    let tt_id = tt["id"].as_str().unwrap().to_string();
+    assert!(tt["url"].as_str().unwrap_or("").starts_with("https://www.tiktok.com/"), "{tt}");
+    wait_for("the TikTok turn waiting", || async { step(&env, &tt_id).await["waiting"] == true }).await;
+    assert!(!tiktok.is_finished(), "the TikTok ask was not stepped aside as AlreadyAsked");
+    assert_eq!(sign_in_cards(&env).await, 2, "one card per site");
+
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{tt_id}/done"), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "turn");
+    let (text, is_error) = finished(tiktok).await;
+    assert!(!is_error && text.contains("The person says the step is done"), "{text}");
+    assert!(!text.contains("already asked"), "{text}");
+    assert_eq!(step(&env, &ig).await["step"]["status"], "open", "Instagram is still open");
+    assert!(!instagram.is_finished(), "the TikTok answer did not reach the Instagram turn");
+
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{ig}/decline"), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    let (text, is_error) = finished(instagram).await;
+    assert!(!is_error && text.contains("declined the step"), "{text}");
+}
