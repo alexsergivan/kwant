@@ -44,8 +44,11 @@ interface RailProps {
 }
 
 export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, onCreate, onOpenAppSettings }) => (
-  <nav aria-label="Spaces" className="hidden md:flex w-[68px] shrink-0 flex-col items-center gap-2 py-3 border-r border-hairline bg-surface-rail select-none">
-    <ul className="flex flex-col items-center gap-2 flex-1 overflow-y-auto overflow-x-hidden w-full">
+  <nav aria-label="Spaces" className="hidden md:flex w-[68px] shrink-0 flex-col items-center gap-2 pt-1.5 pb-3 border-r border-hairline bg-surface-rail select-none">
+    {/* The list scrolls, so it clips whatever sticks out of it. pt-1.5/pb-1.5 leave room for the
+        active tile's ring (2px + 2px offset) and the unread badge (-6px); the nav's pt-1.5 keeps the
+        first tile where it was. */}
+    <ul className="flex flex-col items-center gap-2 flex-1 overflow-y-auto overflow-x-hidden w-full py-1.5">
       {spaces.map((s, i) => {
         const active = s.id === currentId;
         const unread = active ? 0 : s.counts?.unread ?? 0;
