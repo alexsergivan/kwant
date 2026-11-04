@@ -45,7 +45,7 @@ card_art: scene
       <li><a href="docs/accounts.html#order"><img src="assets/media/thumb-failover-640.webp" srcset="assets/media/thumb-failover-640.webp 640w, assets/media/thumb-failover-1280.webp 1280w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Model failover</b><span>When one account runs out, bots move to the next in your order, across Claude, Codex, Grok and Custom API.</span></a></li>
       <li><a href="docs/flight-school.html"><img src="assets/media/thumb-flight-school-640.webp" srcset="assets/media/thumb-flight-school-640.webp 640w, assets/media/thumb-flight-school-1280.webp 1280w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>On from the start</b><span>AutoFix, audits, Flight School and the Truth Ledger run without setup. New bots start at Act, and payments always ask.</span></a></li>
     </ul>
-    <p class="new-note">Saved choices are kept, and a limit message is never shown as a reply. <a href="features.html#new-065">What's new in 0.6.5</a> · <a href="features.html#new-064">in 0.6.4</a> · <a href="features.html#new-06">in 0.6</a></p>
+    <p class="new-note">Saved choices are kept, and a limit message is never shown as a reply. <a href="features.html#new-069">What's new in 0.6.9</a> · <a href="features.html#new-065">in 0.6.5</a> · <a href="features.html#new-064">in 0.6.4</a> · <a href="features.html#new-06">in 0.6</a></p>
   </div>
 </section>
 
@@ -114,7 +114,7 @@ card_art: scene
         <p>Claude, Codex or Grok logins, API keys and your own server. When one runs out of usage, the turn moves to the next and the chat says so.</p>
         <a class="more-link" href="docs/accounts.html">Accounts &amp; profiles →</a>
       </div>
-      <div class="frame">{{shot:v2-accounts|Settings, This space, Accounts tab. The Work login is the default, in use and ready. Personal Max is out of usage and back in 3 hours. This machine needs a sign-in.}}</div>
+      <div class="frame">{{shot:v2-accounts|Settings, This space, Accounts: the Order to use list. Work login (Claude) and ChatGPT Plus (Codex) are ready, Personal Max is out until 15:03, a spare Claude API key is off, Ollama on the Mac can't connect and a Team gateway is ready. Below, under Not in the order, This machine's Claude and Codex are signed out and Grok is not installed.}}</div>
     </div>
   </div>
 </section>
@@ -163,7 +163,7 @@ card_art: scene
 <tr><th scope="row">Facts open at the exact quote</th><td data-label="kwant"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(no quote on the page, no claim)</span></span></td><td data-label="Chat assistant apps"><span><span class="mark mark-partial" aria-hidden="true">~</span> Partly <span class="cmp-note">(a link to the page, rarely the words)</span></span></td><td data-label="Agent frameworks"><span><span class="mark mark-partial" aria-hidden="true">~</span> You build it</span></td></tr>
 <tr><th scope="row">Conflicting facts wait for you</th><td data-label="kwant"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(Truth Ledger shows both; you keep one)</span></span></td><td data-label="Chat assistant apps"><span><span class="mark mark-no" aria-hidden="true">✗</span> No <span class="cmp-note">(one answer, picked for you)</span></span></td><td data-label="Agent frameworks"><span><span class="mark mark-partial" aria-hidden="true">~</span> You build it</span></td></tr>
 <tr><th scope="row">Payments always ask</th><td data-label="kwant"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(even behind a plain "Continue")</span></span></td><td data-label="Chat assistant apps"><span><span class="mark mark-partial" aria-hidden="true">~</span> Varies <span class="cmp-note">(depends on the app and mode)</span></span></td><td data-label="Agent frameworks"><span><span class="mark mark-partial" aria-hidden="true">~</span> You build it</span></td></tr>
-<tr><th scope="row">Keeps working while you're away</th><td data-label="kwant"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(routines, follow-ups and a "While you were away" page)</span></span></td><td data-label="Chat assistant apps"><span><span class="mark mark-partial" aria-hidden="true">~</span> Partly <span class="cmp-note">(some have scheduled tasks)</span></span></td><td data-label="Agent frameworks"><span><span class="mark mark-partial" aria-hidden="true">~</span> Partly <span class="cmp-note">(you host and schedule it)</span></span></td></tr>
+<tr><th scope="row">Keeps working while you're away</th><td data-label="kwant"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(routines, follow-ups and an Inbox of what happened)</span></span></td><td data-label="Chat assistant apps"><span><span class="mark mark-partial" aria-hidden="true">~</span> Partly <span class="cmp-note">(some have scheduled tasks)</span></span></td><td data-label="Agent frameworks"><span><span class="mark mark-partial" aria-hidden="true">~</span> Partly <span class="cmp-note">(you host and schedule it)</span></span></td></tr>
 <tr><th scope="row">Autonomy you can dial up</th><td data-label="kwant"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(Flight School: bots earn tiers per kind of work, only you grant them)</span></span></td><td data-label="Chat assistant apps"><span><span class="mark mark-no" aria-hidden="true">✗</span> No <span class="cmp-note">(one setting for everything)</span></span></td><td data-label="Agent frameworks"><span><span class="mark mark-partial" aria-hidden="true">~</span> You build it</span></td></tr>
 <tr><th scope="row">The right bot answers, and says why</th><td data-label="kwant"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(picks the bot, model and effort)</span></span></td><td data-label="Chat assistant apps"><span><span class="mark mark-no" aria-hidden="true">✗</span> No <span class="cmp-note">(one assistant per chat)</span></span></td><td data-label="Agent frameworks"><span><span class="mark mark-partial" aria-hidden="true">~</span> You build it <span class="cmp-note">(you write the routing)</span></span></td></tr>
 <tr><th scope="row">Any model, with failover</th><td data-label="kwant"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(Claude, Codex or Grok logins you already pay for, API keys, Ollama or any OpenAI-compatible server)</span></span></td><td data-label="Chat assistant apps"><span><span class="mark mark-no" aria-hidden="true">✗</span> No <span class="cmp-note">(their own models)</span></span></td><td data-label="Agent frameworks"><span><span class="mark mark-yes" aria-hidden="true">✓</span> Yes <span class="cmp-note">(you wire up each provider)</span></span></td></tr>
@@ -195,7 +195,7 @@ card_art: scene
     </div>
     <div class="tiles three">
       <figure class="tile">
-        <div class="frame">{{shot:v2-away|While you were away. Waiting on you: Designer's question about a hero image, with answer buttons. Finished: a handoff and a weekly digest. Failed or stuck: a price scan blocked with a 403 and a smoke test that stopped at 9 of 22.|(max-width: 860px) 100vw, 380px}}</div>
+        <div class="frame">{{shot:v2-away|The Inbox, since you last looked. Waiting on you: Designer's question about a hero image, with answer buttons. Finished: a handoff and a weekly digest. Failed or stuck: a price scan blocked with a 403 and a smoke test that stopped at 9 of 22.|(max-width: 860px) 100vw, 380px}}</div>
         <figcaption><h3>Inbox</h3><p>What happened while you were away: what's waiting on you, what finished and what got stuck, on one page.</p></figcaption>
       </figure>
       <figure class="tile">
@@ -208,6 +208,46 @@ card_art: scene
       </figure>
     </div>
     <p class="section-foot"><a class="more-link" href="docs/loose-ends.html">Loose ends &amp; letters →</a></p>
+  </div>
+</section>
+
+<section class="tour tint" id="needs-you" aria-labelledby="needs-you-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="kicker">New in 0.6.9</p>
+      <h2 id="needs-you-title">You'll know when a bot needs you</h2>
+      <p>A pill slides in when a bot in another chat waits on you, and the tab title counts what's waiting. When a bot needs a sign-in, you take over its browser.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>A pill, wherever you are</h3>
+        <p>An approval, a question or a sign-in slides in at the top for a few seconds. Click it to go there. On a phone too, and under the Mac app's menu-bar icon.</p>
+        <a class="more-link" href="features.html#new-069">What's new in 0.6.9 →</a>
+      </div>
+      <div class="frame">{{video:clip-v69-pill|Demo: you're reading #design-review when TechLead, in another chat, needs your OK. A Needs you pill slides in at the top, the tab title gains a count, and the pill slides out after a few seconds.}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Take over to sign in</h3>
+        <p>The bot posts a sign-in card. Open the page, sign in yourself, and Done hands the browser back. Bots never ask for a password in chat.</p>
+        <a class="more-link" href="docs/browser.html#sign-in">Sign-in &amp; take over →</a>
+      </div>
+      <div class="frame">{{video:clip-v69-takeover|Demo: Rook needs a sign-in. Take over opens the page on a large stage, the email sam@example.com and a password are typed in, and Done, I'm signed in hands the browser back to Rook.}}</div>
+    </div>
+    <div class="tiles three">
+      <figure class="tile">
+        <div class="frame">{{shot:v69-signin-step|In #launch-waitlist, asked to check how the waitlist teaser did on TikTok, Designer posts a Sign in needed card for @trailhead.trips on tiktok.com, with Open browser, Done, I'm signed in and Skip.|(max-width: 860px) 100vw, 380px}}</div>
+        <figcaption><h3>Sign-in card</h3><p>One card per site. Skip, and the bot says what it couldn't do.</p></figcaption>
+      </figure>
+      <figure class="tile">
+        <div class="frame">{{shot:phone-v69-pill|The same Needs you pill on a phone, at the top of the #design-review channel.|(max-width: 860px) 100vw, 380px}}</div>
+        <figcaption><h3>On your phone</h3><p>The same pill at the top of the screen.</p></figcaption>
+      </figure>
+      <figure class="tile">
+        <div class="frame">{{shot:v69-working-strip|TechLead's chat with an open approval card for create pull request, and above the message box the working line: TechLead is using create_pull_request (github), 0:06.|(max-width: 860px) 100vw, 380px}}</div>
+        <figcaption><h3>What it's doing</h3><p>A line above the message box says what the bot is using right now.</p></figcaption>
+      </figure>
+    </div>
   </div>
 </section>
 

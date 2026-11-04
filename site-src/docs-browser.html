@@ -25,6 +25,14 @@ card_art: avatar:user
   <li><strong>Menus and dialogs:</strong> a drop-down list on the page opens as kwant's own menu (a sheet on a phone), and a page's alert, confirm or prompt shows as a card you answer in kwant.</li>
   <li><strong>On a phone</strong> the page fills the screen, with Hand back, and Done while a sign-in step is open.</li>
 </ul>
+<figure>
+  <div class="frame">{{shot:v69-takeover-stage|The take-over stage for Rook's browser: You're in control, a Northwind sign-in page with sam@example.com and a hidden password typed in, and Hand back and Done, I'm signed in at the top.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>You're in control: the bot waits until you hand it back or press Done.</figcaption>
+</figure>
+<figure>
+  <div class="frame">{{video:clip-v69-takeover|Demo: Rook needs a sign-in. Take over opens the page on a large stage, the email sam@example.com and a password are typed in, and Done, I'm signed in hands the browser back to Rook.}}</div>
+  <figcaption>Take over, sign in on the page, then Done.</figcaption>
+</figure>
 
 <h2 id="sign-in">Bots ask you to sign in</h2>
 <p>Ask a bot to log in to one of your accounts and it opens the site's sign-in page in its browser. If you're already signed in, it carries on. Otherwise it posts a sign-in card: <strong>Open browser</strong> takes you straight to the page with control, you sign in yourself, and <strong>Done</strong> lets the bot look again. Bots never ask for a password or one-time code in chat.</p>
@@ -32,6 +40,10 @@ card_art: avatar:user
   <li><strong>One card per site:</strong> while a sign-in for a site is open, another turn of the same bot in that chat waits on the same card instead of posting a second one.</li>
   <li><strong>Decline stays declined:</strong> after you decline, the bot says what it couldn't do and doesn't ask again for that request.</li>
 </ul>
+<figure>
+  <div class="frame">{{shot:v69-signin-step|In #launch-waitlist, asked to check how the waitlist teaser did on TikTok, Designer posts a Sign in needed card for @trailhead.trips on tiktok.com, with Open browser, Done, I'm signed in and Skip.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A sign-in card. Open browser takes you to the page with control.</figcaption>
+</figure>
 
 <h2 id="screenshots">Bots can see the page</h2>
 <p>Besides reading a page's text, a bot can take a screenshot with <code>browser_screenshot</code> and look at the picture, to check layout, colours, spacing and images that text can't show.</p>
