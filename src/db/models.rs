@@ -127,6 +127,20 @@ pub struct Message {
     #[serde(default)]
     #[sqlx(skip)]
     pub results: Option<serde_json::Value>,
+    /// The message this one replies to (see `crate::db::reactions`).
+    #[serde(default)]
+    #[sqlx(default)]
+    pub reply_to_message_id: Option<String>,
+    /// The person's 👍 (`"up"`) or 👎 (`"down"`) on a bot message, or `null`. Stored in
+    /// `message_reactions`, not in this row.
+    #[serde(default)]
+    #[sqlx(skip)]
+    pub reaction: Option<String>,
+    /// `{id, sender_role, sender_id, excerpt}` of the message this one replies to,
+    /// `{id, missing: true}` once that one is deleted, or `null`.
+    #[serde(default)]
+    #[sqlx(skip)]
+    pub reply_to: Option<serde_json::Value>,
 }
 
 /// Where a message goes besides [`NewMessage`]'s channel or direct chat.

@@ -200,6 +200,9 @@ mod tests {
             thread_id: None,
             meta: None,
             results: None,
+            reply_to_message_id: None,
+            reaction: None,
+            reply_to: None,
         }
     }
 

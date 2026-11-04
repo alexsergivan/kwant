@@ -540,7 +540,7 @@ pub async fn list_messages(
     };
     match rows {
         Ok(Some(mut rows)) => {
-            db.attach_results(&mut rows).await;
+            db.attach_chat_fields(&mut rows).await;
             Ok(Json(rows))
         }
         Ok(None) => Err(err(StatusCode::NOT_FOUND, "That message isn't in this chat.")),
@@ -690,6 +690,10 @@ pub struct SendChatPayload {
     /// Uploaded files (`POST /api/attachments`) sent with this message, at most 10.
     #[serde(default)]
     pub attachment_ids: Vec<String>,
+    /// The earlier message in this same chat the person is replying to (see
+    /// `docs/reactions-and-replies.md`); checked by [`send_chat`].
+    #[serde(default)]
+    pub reply_to_message_id: Option<String>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -2258,7 +2262,13 @@ async fn run_kwant_turn_inner(
         let context_id = tag.context_id.clone();
 
         let mut history = db.list_messages(&context_id, 20).await.unwrap_or_default();
+        let last_before_drop = history.last().cloned();
+        let had = history.len();
         crate::drivers::drop_current_message(&mut history, &prompt);
+        // The person's message this turn answers, when the prompt is that message
+        let current_message = last_before_drop.filter(|_| history.len() < had);
+        // Replies and reactions show in the history the bot reads
+        db.mark_history(&mut history).await;
 
         let configured_key = get_configured_key(&db, &target_model).await;
         let endpoint = get_configured_endpoint(&db, &target_model).await;
@@ -2398,6 +2408,15 @@ async fn run_kwant_turn_inner(
                     prompt, curr_url, title, clickable.join(" | "), truncate_chars(&page_text, 3000)
                 );
             }
+        }
+
+        // The message the person replies to, quoted above their words; and what they said with
+        // 👍/👎 about this bot's messages since its last reply here
+        if let Some(block) = super::reactions::reply_block(&db, current_message.as_ref(), &target_kwant.name).await {
+            final_prompt = format!("{block}{final_prompt}");
+        }
+        if let Some(note) = super::reactions::feedback_note(&db, &context_id, &target_kwant.name).await {
+            final_prompt.push_str(&note);
         }
 
         // A routed model id like "claude-sonnet" still runs on Claude's accounts, never
@@ -3094,6 +3113,9 @@ pub async fn send_chat(
     if let Err(r) = super::spaces::ids_guard(&state, query.as_deref(), &rows).await {
         return r;
     }
+    if let Err((status, msg)) = super::reactions::check_reply_target(&state, &payload).await {
+        return super::reactions::error(status, msg);
+    }
     let from_person = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "").await.is_ok();
     match send_chat_inner(state, payload, from_person).await {
         Ok(json) => json.into_response(),
@@ -3154,6 +3176,14 @@ async fn send_chat_inner(
         }
     });
 
+    // A reply to a bot's message in a channel or team chat goes to that bot, as if @mentioned,
+    // unless the person @mentions someone else
+    let reply_bot = match (kwant_mention, team_mention, payload.kwant_id.as_ref()) {
+        (None, None, None) => super::reactions::reply_bot(&state, payload.reply_to_message_id.as_deref(), &all_kwants).await,
+        _ => None,
+    };
+    let kwant_mention = kwant_mention.or(reply_bot.as_deref());
+
     // A reply with no @mention to a bot that just asked the person something goes back to that bot
     let mut awaiting: Option<(Kwant, Option<String>)> = None;
     // Set when that is the lead of a gathered list of questions (see `super::asks`)
@@ -3202,7 +3232,7 @@ async fn send_chat_inner(
     }
 
     // Detect if a team is targeted
-    let target_team = if let Some(tid) = &payload.team_id {
+    let target_team = if let Some(tid) = payload.team_id.as_ref().filter(|_| reply_bot.is_none()) {
         all_teams
             .iter()
             .find(|t| &t.id == tid || t.name.eq_ignore_ascii_case(tid))
@@ -3319,6 +3349,9 @@ async fn send_chat_inner(
         .insert_message_with(&user_msg, &user_extra)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(target) = &payload.reply_to_message_id {
+        state.db.set_reply_to(&saved_user_msg.id, target).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     // The person wrote here: the bots waiting on them in this chat don't need to remind them
     super::waiting::person_wrote(&state, payload.channel_id.as_deref(), payload.kwant_id.as_deref(), None).await;
     let note = super::attachments::attach_to_message(
@@ -3737,6 +3770,9 @@ async fn send_to_thread(
     let meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
     let extra = MessageExtra { thread_id: Some(thread.id.clone()), meta };
     let saved = state.db.insert_message_with(&user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(target) = &payload.reply_to_message_id {
+        state.db.set_reply_to(&saved.id, target).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     let _ = state.db.touch_thread(&thread.id).await;
     super::waiting::person_wrote(&state, None, None, Some(&thread.id)).await;
     let note = super::attachments::attach_to_message(&state, &uploads, &saved.id, None, None, Some(&thread.id)).await;

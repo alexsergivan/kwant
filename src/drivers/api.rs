@@ -997,9 +997,11 @@ impl ApiDriver {
             return fallback();
         };
         let (kwant_id, context_id) = (&input.kwant.id, &input.thread_id);
-        let Ok(recent) = db.list_messages(context_id, HISTORY_LOOKBACK).await else {
+        let Ok(mut recent) = db.list_messages(context_id, HISTORY_LOOKBACK).await else {
             return fallback();
         };
+        // The same reply and reaction marks as the turn's own history
+        db.mark_history(&mut recent).await;
         let saved = db.api_summary(kwant_id, context_id).await.ok().flatten();
         let (earlier, pending) = match saved.as_ref().and_then(|s| Some((s, after_summary(&recent, &s.through_id)?))) {
             Some((s, pending)) => (Some(s.summary.as_str()), pending),
@@ -1766,6 +1768,9 @@ mod tests {
             thread_id: None,
             meta: None,
             results: None,
+            reply_to_message_id: None,
+            reaction: None,
+            reply_to: None,
         }
     }
 

@@ -98,6 +98,7 @@ const ITEM_ROUTES: &[(&[&str], RowKind)] = &[
     (&["threads"], RowKind::Thread),
     (&["delegations"], RowKind::Delegation),
     (&["approvals"], RowKind::Approval),
+    (&["messages"], RowKind::Message),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -113,6 +114,8 @@ pub enum RowKind {
     Thread,
     Delegation,
     Approval,
+    /// A message, by the chat it is in (channel, thread or direct chat).
+    Message,
     /// A browser's owner: a team, channel or bot id, in that order (`/api/sandbox/:id`).
     SandboxTarget,
 }
@@ -141,6 +144,13 @@ async fn space_of_row(state: &AppState, kind: RowKind, id: &str) -> Result<Optio
         RowKind::Thread => db.space_of_thread(id).await,
         RowKind::Delegation => db.space_of_delegation(id).await,
         RowKind::Approval => db.space_of_approval(id).await,
+        RowKind::Message => match db.get_message(id).await? {
+            Some(m) => match m.thread_id.as_deref().or(m.channel_id.as_deref()).or(m.direct_kwant_id.as_deref()) {
+                Some(chat) => db.space_of_context(chat).await,
+                None => Ok(None),
+            },
+            None => Ok(None),
+        },
         RowKind::SandboxTarget => {
             if let Some(space) = db.space_of_team(id).await? {
                 return Ok(Some(space));

@@ -283,6 +283,9 @@ mod tests {
             thread_id: None,
             meta: meta.map(str::to_string),
             results: None,
+            reply_to_message_id: None,
+            reaction: None,
+            reply_to: None,
         }
     }
 

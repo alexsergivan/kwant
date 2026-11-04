@@ -48,6 +48,7 @@ pub mod setup_routes;
 pub mod push;
 pub mod waiting;
 pub mod decide;
+pub mod reactions;
 pub mod work_ahead;
 pub mod missions;
 pub mod goals;
@@ -371,6 +372,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/questions/:id", get(questions::get))
         .route("/api/questions/:id/answer", post(questions::answer))
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
+        .route("/api/messages/:id/reaction", put(reactions::put_reaction))
         .route("/api/work-ahead/run", post(work_ahead::run_now))
         .route("/api/goals", get(goals::routes::list_goals).post(goals::routes::create_goal))
         .route("/api/goals/draft", post(goals_remediation::draft))

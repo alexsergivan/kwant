@@ -822,7 +822,7 @@ pub async fn change(
         return error(StatusCode::INTERNAL_SERVER_ERROR, "could not load the message");
     };
     // The broadcast replaces the chat's copy, so it carries the reply's block too
-    state.db.attach_results(std::slice::from_mut(&mut updated)).await;
+    state.db.attach_chat_fields(std::slice::from_mut(&mut updated)).await;
     let context = msg.thread_id.as_deref().or(msg.channel_id.as_deref()).or(msg.direct_kwant_id.as_deref()).unwrap_or("");
     if let Ok(Some(space)) = state.db.space_of_context(context).await {
         let kwant_id = meta["decide_first"]["kwant_id"].as_str().map(str::to_string);
