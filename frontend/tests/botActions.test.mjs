@@ -331,3 +331,24 @@ test('a card whose bot has since been deleted settles: no Undo, says so', () => 
   assert.match(text(gone), /Hired Ledger\. It's since been deleted\./);
   assert.deepEqual(buttons(gone), ['Show its instructions']);
 });
+
+test('a follow-up card says when it runs in local words, never the raw ISO time', () => {
+  const at = '2026-11-06T14:00:00Z';
+  const meta = routineMeta({
+    action: 'follow_up_create',
+    summary: `scheduled a follow-up 'Follow-up: check the deploy', once at ${at}, in the thread "Deploy"`,
+    details: { ...routineMeta().details, schedule: { type: 'once', at }, schedule_text: `once at ${at}`, follow_up: true, next_run_at: at, delivers_to: 'the thread "Deploy"' },
+  });
+  const shown = text(ui.action(actionProps(meta)));
+  assert.doesNotMatch(shown, /2026-11-06T|14:00:00Z/, shown);
+  const d = new Date(at);
+  const day = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  assert.match(shown, new RegExp(`once on ${day} at ${time}`), shown);
+  assert.equal(b.summaryText(b.parseBotActionMeta(meta)), `scheduled a follow-up 'Follow-up: check the deploy', once on ${day} at ${time}, in the thread "Deploy"`);
+  // A summary whose schedule we can't read stays as the server wrote it.
+  const odd = routineMeta({ summary: 'created routine x, sometimes', details: { ...routineMeta().details, schedule: null, schedule_text: 'sometimes' } });
+  assert.equal(b.summaryText(b.parseBotActionMeta(odd)), 'created routine x, sometimes');
+  // Other schedules keep the server's words.
+  assert.equal(b.summaryText(b.parseBotActionMeta(routineMeta())), "created routine 'Morning motivation', daily 07:00 Europe/Berlin, delivering to #general");
+});
