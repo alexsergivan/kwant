@@ -77,6 +77,14 @@ throwaway key and checks them, installs the .deb and opens the app and the AppIm
 display. Linux isn't released yet: it will ship in the same `mac-v*` GitHub release as the Mac app,
 so the one `latest.json` serves both.
 
+Both packages carry AppStream metainfo, `linux/si.kwant.kwant.appdata.xml`, installed as
+`/usr/share/metainfo/si.kwant.kwant.appdata.xml`. linux.yml stamps its `<release>` entry with the
+version it builds. The AppImage carries the update information
+`gh-releases-zsync|alexsergivan|kwant|latest|kwant_x86_64.AppImage.zsync`, set through
+`LDAI_UPDATE_INFORMATION` before Tauri signs it. The release ships that `.zsync`, which linux.yml
+makes over the AppImage's exact bytes. linux.yml's "catalog checks" job validates the metainfo, the
+desktop file, the update information and the `.zsync`, the same checks the AppImage catalog runs.
+
 ## Releases and the updater key
 
 `mac.yml` signs the updater bundle on `mac-v*` tags with the repository secrets

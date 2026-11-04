@@ -7,10 +7,16 @@
       "deb": {
         "depends": ["python3", "python3-venv", "xdg-utils"],
         "recommends": ["zenity"],
-        "section": "devel"
+        "section": "devel",
+        "files": {
+          "/usr/share/metainfo/si.kwant.kwant.appdata.xml": "linux/si.kwant.kwant.appdata.xml"
+        }
       },
       "appimage": {
-        "bundleMediaFramework": false
+        "bundleMediaFramework": false,
+        "files": {
+          "/usr/share/metainfo/si.kwant.kwant.appdata.xml": "linux/si.kwant.kwant.appdata.xml"
+        }
       }
     }
   }
