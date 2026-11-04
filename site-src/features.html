@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-0611">New in 0.6.11</a></li>
         <li><a href="#new-069">New in 0.6.9</a></li>
         <li><a href="#new-065">New in 0.6.5</a></li>
         <li><a href="#new-064">New in 0.6.4</a></li>
@@ -42,6 +43,41 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-0611" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.6.11</p>
+      <h2>Answer with a tap, reply to a message, solve the human check</h2>
+      <p>Every finished bot message has 👍, 👎 and Reply next to Copy markdown. When a site asks if the bot is human, the check comes to you.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="reactions">
+        <span class="shot">{{shot:v611-react|Lead's release notes for Trailhead 2.4 end with Shall I publish them now? The pointer is on the thumbs-up, labelled Yes, go ahead. An earlier message above has its thumbs-up selected.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>👍 and 👎 answer a question</h3><p>When the bot's newest message asks you something, the thumbs read Yes, go ahead and No, and picking one answers it. Anywhere else a reaction is feedback the bot reads on its next turn; after a 👎 it says what it would change. A 👍 never approves an approval card, a payment or a decision card.</p></div>
+      </article>
+      <article class="card" id="reply">
+        <span class="shot">{{shot:v611-reply-sent|The sent reply Put the waitlist first in the email version, with a one-line quote of Lead's release notes above it, and Lead's answer: Done, the waitlist now leads the notes.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Reply to a message</h3><p>Reply puts the message in a "Replying to" chip in the box, and the bot is told which message you mean. Your message shows a one-line quote; click it to jump to the original. In a room, the reply goes to the bot that wrote it unless you @mention another.</p></div>
+      </article>
+      <article class="card" id="human-check">
+        <span class="shot">{{shot:v611-human-check|Researcher's chat after a link to a tent on gearhub.example: a Human check needed card, spotted automatically, says the site is showing a CAPTCHA to the bot browser, with Solve it, Done, I solved it and Skip.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Every CAPTCHA comes to you</h3><p>A Human check needed card comes up wherever a check stops a bot: a page from a link you sent, the bot's own web tools or a browser step. You solve it, and the bot carries on. kwant never solves or bypasses a check itself.</p></div>
+      </article>
+      <article class="card" id="human-check-browser">
+        <span class="shot">{{shot:v611-human-check-browser|The bot browser panel open on gearhub.example's Verify you are human page, next to the card's Done, I solved it button.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Solve it in the bot's browser</h3><p>Solve it opens the page in the browser panel. While you're solving it, the bot stays off that browser.</p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Yes, go ahead, and the bot carries on</h3>
+        <p>Lead asks whether to publish the release notes. One tap answers it, and the reply comes back with nothing typed.</p>
+      </div>
+      <div class="frame">{{video:clip-v611-react|Demo: Lead's release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, labelled Yes, go ahead, answers it: the working line appears and Lead replies that the notes are published, with nothing typed.}}</div>
+    </div>
+  </div>
+</section>
 
 <section id="new-069" class="fgroup">
   <div class="wrap">
