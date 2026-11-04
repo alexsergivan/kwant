@@ -236,8 +236,13 @@ test('every approvals-off hover hint says payments still ask: badge, sidebar row
   assert.match(m.badge({}), /title="[^"]*Payments still ask you\.[^"]*"/);
   const html = m.sidebar({ space: space('off'), kwants: [bot('k1', 'Dev', 'inherit', 'off')] });
   const tips = [...html.matchAll(/title="([^"]*without asking[^"]*)"/g)].map((x) => x[1]);
-  assert.equal(tips.length, 2, 'the space header line and the bot row');
+  assert.equal(tips.length, 1, 'said once, on the space header line: a bot that matches the space adds no icon');
   for (const t of tips) assert.match(t, /Payments still ask you\./);
+  const differing = m.sidebar({ space: space('ask'), kwants: [bot('k1', 'Dev', 'off', 'off')] });
+  const botTips = [...differing.matchAll(/title="([^"]*without asking[^"]*)"/g)].map((x) => x[1]);
+  assert.equal(botTips.length, 2, 'the space header summary and the bot that differs from the space');
+  assert.ok(botTips.some((t) => /^Dev acts without asking/.test(t)), 'a bot that differs from the space still shows its own icon');
+  for (const t of botTips) assert.match(t, /Payments still ask you\./);
   assert.match(m.spaceSetting({ value: 'off' }), /title="Approvals are off in Work\. Payments still ask you\."/);
   // The chat header badge lives in App.tsx, which doesn't render here: check every title passed to the marker.
   const { readFile } = await import('node:fs/promises');

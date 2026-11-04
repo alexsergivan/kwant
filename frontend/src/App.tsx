@@ -55,6 +55,10 @@ import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
+import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
+import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
+import { recentWork, type ChatHome } from './botHome';
+import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
 import {
   ChatLoads,
@@ -106,7 +110,7 @@ import {
   turnsAwaitingAnswer,
 } from './questions';
 import { AwayItem, affectsAway, awayApi, awayTarget, badgeText } from './away';
-import { Space, eventsUrl, pickInitialChat, spaceColor } from './spaces';
+import { Space, eventsUrl, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { claudeNeedsSignIn } from './claudeLogin';
@@ -827,13 +831,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const key = d.turn_id ?? d.context_id;
             if (event.type === 'turn_ended' || event.type === 'TurnEnded') {
               turnEnded(d.kwant_id, key);
+              moodTurnEnded(d.kwant_id, d.outcome);
               starAskStore().turnFinished();
               if (d.turn_id) completed.delete(d.turn_id);
               // The reply is saved by now; TurnComplete's load may have come back without it
               if (reloadOnTurnEnd(d.turn_id)) refreshContext(ctx).then(() => settle(ctx));
               else settle(ctx);
             } else {
-              if (event.type === 'turn_started' || event.type === 'TurnStarted') turnStarted(d.kwant_id, key);
+              if (event.type === 'turn_started' || event.type === 'TurnStarted') {
+                turnStarted(d.kwant_id, key);
+                moodTurnStarted(d.kwant_id);
+              }
               if (!discussionInProgressRef.current || ctx !== streamingContextIdRef.current) markLive(ctx, kwantName(d.kwant_id));
             }
             break;
@@ -1002,6 +1010,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             break;
           case 'TextDelta':
           case 'ThinkingDelta': {
+            moodOutput(event.kwant_id);
             // Each chat streams into its own buffer; only the open chat's is drawn.
             const ctx = streamTarget(event, streamingContextIdRef.current);
             if (!ctx) break;
@@ -1028,6 +1037,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'activity':
           case 'Activity': {
+            moodOutput(event.kwant_id);
             const step = parseStep(event.data?.step);
             const ctx = streamTarget(event, streamingContextIdRef.current);
             const turnId: string | undefined = typeof event.turn_id === 'string' ? event.turn_id : undefined;
@@ -1282,6 +1292,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     return () => {
       sse.close();
       clearAllTurns();
+      clearMoods();
     };
   }, [refreshProfiles]);
 
@@ -2633,7 +2644,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     ) : null;
   const pendingSkillCounts = pendingByKwant(pendingSkills);
   const pendingHere = currentKwant ? pendingSkillCounts[currentKwant.id] ?? 0 : 0;
-  const approvalsBadge = approvalsOff(currentKwant) ? (
+  // "Approvals off" is said once in the sidebar for the whole space; here only a bot that differs says it.
+  const approvalsBadge = approvalsOff(currentKwant) && approvalsDiffers(currentKwant!, space.approvals) ? (
     <ApprovalsOffBadge onClick={() => currentKwant && openAgentSettings(currentKwant)} title={`${currentKwant?.name} acts without asking, including deletions, publishing and sign-ins. Payments still ask you. Open its settings to change it.`} />
   ) : null;
   const skillsBadge =
@@ -2650,6 +2662,45 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
+
+  // Avatar moods and the background-tab signal come from the same state as the sidebar's dots.
+  const needsYouNow = Object.entries(botStatus).filter(([, st]) => st === 'needs_you').map(([id]) => id);
+  const needsYouKey = needsYouNow.join(',');
+  useEffect(() => setMoodNeedsYou(needsYouKey ? needsYouKey.split(',') : []), [needsYouKey]);
+  useEffect(() => {
+    const apply = () => {
+      const now = Date.now();
+      setMoodResting(Object.fromEntries(kwants.map((k) => [k.id, restingUntil(k.preferred_model, profiles, now)])));
+    };
+    apply();
+    const t = setInterval(apply, 30_000);
+    return () => clearInterval(t);
+  }, [kwants, profiles]);
+  const tabSignal = useMemo(() => createTabSignal(browserTabDoc()), []);
+  const tabNeedsYou = needsYouCount(botStatus, pendingApprovals.length);
+  const anyRunning = Object.values(turns).some((t) => t.state === 'running');
+  useEffect(() => {
+    tabSignal.setNeedsYou(tabNeedsYou);
+    // Something else (the sandbox viewer) may set the title later: put the count back in front.
+    const el = document.querySelector('title');
+    if (!el || typeof MutationObserver === 'undefined') return;
+    const mo = new MutationObserver(() => tabSignal.setNeedsYou(tabNeedsYou));
+    mo.observe(el, { childList: true, characterData: true, subtree: true });
+    return () => mo.disconnect();
+  }, [tabSignal, tabNeedsYou]);
+  useEffect(() => {
+    void tabSignal.setWorking(anyRunning);
+  }, [tabSignal, anyRunning]);
+
+  // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
+  const chatHome: ChatHome = currentKwant
+    ? {
+        kind: 'bot',
+        bot: currentKwant,
+        recent: recentWork(threadsByKwant[currentKwant.id]),
+        onOpenRecent: (id: string) => openThread(currentKwant.id, id),
+      }
+    : { kind: isGeneral ? 'general' : currentTeam ? 'team' : 'channel' };
 
   // Delete is off while the bot runs anywhere, the open chat included.
   const workingKwants = new Set(Object.values(turns).map((t) => t.kwant_id));
@@ -2972,6 +3023,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           streamingText={isCurrentContextStreaming ? streamingText : ''}
           streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
           pendingApprovals={approvalsHere}
+          home={chatHome}
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}
           onSendMessage={handleSendMessage}
@@ -3117,10 +3169,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
 
   return (
-    <div className="relative flex-1 min-w-0 h-full flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden" data-space={space.id}>
-      {/* The open space's colour, so it's clear where a message goes */}
-      <div className="h-[3px] shrink-0 opacity-60" style={{ background: spaceColor(space) }} aria-hidden="true" />
-
+    <div className="relative flex-1 min-w-0 h-full flex flex-col bg-surface-main text-zinc-100 overflow-hidden" data-space={space.id}>
       <div ref={contentRef} className={`flex-1 min-h-0 flex ${isPhone ? 'flex-col' : 'overflow-hidden'}`}>
         {isPhone ? (
           <>
