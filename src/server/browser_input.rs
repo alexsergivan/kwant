@@ -197,8 +197,11 @@ pub fn key_params(event: &KeyEvent<'_>) -> Result<Value, &'static str> {
         "type": kind,
         "key": event.key,
         "code": event.code,
+        // No `nativeVirtualKeyCode`: Chrome reads it as the OS's own key number, and on a Mac
+        // builds a real key event from it. A Windows number there is a different Mac key (65,
+        // "A", is the keypad's "."), so nothing typed on a Mac Chrome. Puppeteer and Playwright
+        // leave it out too.
         "windowsVirtualKeyCode": vk,
-        "nativeVirtualKeyCode": vk,
         "modifiers": event.modifiers,
         "location": location,
         "autoRepeat": event.auto_repeat,
@@ -462,6 +465,18 @@ mod tests {
         assert!(key_params(&KeyEvent { text: Some("\u{7}"), ..down("a", "KeyA", 0) }).is_err());
         let auto = key_params(&KeyEvent { auto_repeat: true, ..down("ArrowDown", "ArrowDown", 0) }).unwrap();
         assert_eq!(auto["autoRepeat"], true);
+    }
+
+    #[test]
+    fn keys_never_carry_a_native_key_code() {
+        // Chrome on a Mac turns nativeVirtualKeyCode into a real Mac key event, and a Windows
+        // number there is another key: typing did nothing in the Mac app
+        for (key, code, mods) in [("a", "KeyA", 0), ("Backspace", "Backspace", 0), ("Enter", "Enter", 0), ("a", "KeyA", CTRL), ("1", "Numpad1", 0)] {
+            let p = key_params(&down(key, code, mods)).unwrap();
+            assert!(p.get("nativeVirtualKeyCode").is_none(), "{code}");
+            let up = key_params(&KeyEvent { kind: KeyKind::Up, ..down(key, code, mods) }).unwrap();
+            assert!(up.get("nativeVirtualKeyCode").is_none(), "{code} up");
+        }
     }
 
     #[test]
