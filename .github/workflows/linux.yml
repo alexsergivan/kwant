@@ -225,6 +225,53 @@ jobs:
           cat "$KWNT_DATA_DIR/desktop-app.log" || true
           test -n "$ok"
           echo "$body" | grep -q '"app":"kwnt"'
+      # The "needs you" nudge on Linux: the tray icon swaps to the "!" mark and a system notification
+      # names who needs you. Runs the built app's --demo-nudge (its own temp data dir and a free port)
+      # on a virtual display with a tray (stalonetray) and a notification daemon (dunst), and keeps
+      # screenshots as the nudge-linux artifact. Pictures never fail the job; the app crashing does.
+      - name: Nudge screenshots (--demo-nudge)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        timeout-minutes: 8
+        working-directory: apps/mac/target/release
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/nudge-linux"
+          mkdir -p "$out"
+          sudo apt-get install -y --no-install-recommends dunst stalonetray imagemagick x11-utils > /dev/null || true
+          cat > "$RUNNER_TEMP/nudge-run.sh" <<'SH'
+          #!/bin/bash
+          out="$1"; app="$2"
+          stalonetray --geometry 6x1+0+0 --icon-size 32 --background '#1e1e1e' > "$out/stalonetray.txt" 2>&1 &
+          dunst > "$out/dunst.txt" 2>&1 &
+          sleep 2
+          "$app" --demo-nudge > "$out/demo-nudge.txt" 2>&1 &
+          pid=$!
+          shot() { sleep "$2"; command -v import > /dev/null && import -window root "$out/$1.png" || true; }
+          waitfor() { for _ in $(seq 1 240); do grep -q "$1" "$out/demo-nudge.txt" && return 0; kill -0 $pid 2> /dev/null || return 1; sleep 0.5; done; return 1; }
+          waitfor 'demo-nudge: step 1' && shot 01-tray-and-notification 2
+          waitfor 'demo-nudge: step 3' && shot 02-three-waiting 2
+          waitfor 'demo-nudge: step 4' && shot 03-four-waiting 2
+          if ! kill -0 $pid 2> /dev/null; then
+            wait $pid; echo "kwant --demo-nudge exited early with $?" >> "$out/demo-nudge.txt"; exit 1
+          fi
+          waitfor 'demo-nudge: done'
+          wait $pid
+          SH
+          chmod +x "$RUNNER_TEMP/nudge-run.sh"
+          xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- "$RUNNER_TEMP/nudge-run.sh" "$out" "$PWD/kwant"
+          status=$?
+          cat "$out/demo-nudge.txt" || true
+          ls -l "$out"
+          test $status -eq 0 || { echo "::error::kwant --demo-nudge crashed or stopped early"; exit 1; }
+          grep -q 'demo-nudge: step 4' "$out/demo-nudge.txt" || { echo "::error::the demo never reached step 4"; exit 1; }
+          grep -q 'demo-nudge: notification' "$out/demo-nudge.txt" || echo "::warning::no notification was shown (no notification service on the virtual display?)"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          name: nudge-linux
+          path: ${{ runner.temp }}/nudge-linux
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Collect the packages
         env:
           DEB: ${{ steps.bundle.outputs.deb }}
