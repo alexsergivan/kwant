@@ -249,7 +249,7 @@ async fn off_and_shadow_prompts_are_byte_identical_and_switching_off_restores_th
     let off = prompt(&e, &a).await;
     // Off is today's prompt, not just this build's: the fixture is this exact setup's prompt (with
     // ids as {id}), first taken on main 895a96c before C2 and updated only when the prompt itself
-    // changes on main. It last changed for the chat-correction sentence (0.6.8, after c9d5cd7).
+    // changes on main. It last changed for the narrowed key and sign-in sentence (0.6.9, browser sign-in).
     // The off == shadow == fixture check proves the ledger setting adds nothing to the prompt.
     let golden = include_str!("fixtures/truth_ledger_off_prompt.txt");
     assert_eq!(without_ids(&off), golden, "off differs from today's prompt");

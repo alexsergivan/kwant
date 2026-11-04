@@ -73,7 +73,7 @@ impl ComposioReady {
     }
 }
 
-async fn composio_ready(state: &AppState, space: &SpaceId) -> ComposioReady {
+pub(crate) async fn composio_ready(state: &AppState, space: &SpaceId) -> ComposioReady {
     let servers = state.db.list_mcp_servers(space).await.unwrap_or_default();
     let Some(server) = servers.iter().find(|s| super::connections::is_composio(s)) else {
         return ComposioReady::NotAdded;

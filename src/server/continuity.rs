@@ -85,6 +85,21 @@ pub async fn prompt_block_with(
     with_tools: bool,
     lessons: &str,
 ) -> String {
+    prompt_block_full(state, kwant, team_id, channel_id, with_tools, false, lessons).await
+}
+
+/// [`prompt_block_with`] for a turn that may also have the bot browser and `request_human_step`
+/// ([`offers_browser_sign_in`]): then the tools section says to use a website the person has an
+/// account on through a browser sign-in ([`browser_sign_in_rule`]).
+pub async fn prompt_block_full(
+    state: &AppState,
+    kwant: &Kwant,
+    team_id: Option<&str>,
+    channel_id: Option<&str>,
+    with_tools: bool,
+    browser_sign_in: bool,
+    lessons: &str,
+) -> String {
     let db = &state.db;
     let mut out = String::new();
     if let Some(text) = match team_id {
@@ -113,6 +128,12 @@ pub async fn prompt_block_with(
     out.push_str(lessons);
     if with_tools {
         out.push_str(crate::drivers::APP_TOOLS_MARKER);
+        let sign_in = if browser_sign_in {
+            let space = crate::db::spaces::SpaceId::new(&kwant.space_id);
+            browser_sign_in_rule(super::connection_suggest::composio_ready(state, &space).await)
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
             "\n\
             If you have the `{SELF_SERVER_NAME}` tools:\n\
@@ -129,6 +150,7 @@ pub async fn prompt_block_with(
             - `page_source` reads a public page's HTML source: the <head> (title, meta description, canonical, robots, \
             hreflang, Open Graph), headings, image alt text, links and structured data, none of which WebFetch or the browser \
             shows. It never needs the user's approval.\n\
+            {sign_in}\
             - When a request needs an app you can't reach (Google Search Console, Google Analytics, a CRM…), \
             `connection_suggest` posts a one-tap connection card. Post it in the same turn rather than asking whether to: \
             it connects nothing until the user signs in. Never end with an offer to post one (\"I can suggest a connection if \
@@ -147,8 +169,9 @@ pub async fn prompt_block_with(
             and `space_*` and `channel_*` manage your space and its channels. Each change applies at once and the user sees a card \
             with Undo; afterwards say in one sentence what will happen. The user may undo a change later, so check with the list tools \
             before relying on an earlier one. Deleting a bot, a space or an account only asks the user to confirm. \
-            Never handle keys, passwords or sign-ins, answer approvals, install tool servers, switch bots' tools on or off or change the computer: those tools \
-            tell you where in Settings the user does it. Bots' own tools are the user's switch in Settings › All spaces → \
+            Never handle kwant's own keys and engine sign-ins (API keys, AI accounts, connector keys), answer approvals, install tool servers, \
+            switch bots' tools on or off or change the computer: those tools tell you where in Settings the user does it. \
+            Never ask for a password or one-time code in chat. Bots' own tools are the user's switch in Settings › All spaces → \
             \"Bots can use their own tools\"; say that outright.\n\
             - `propose_hire` proposes a new bot for work a specialist would do better; the person decides. `hire_status` shows \
             the space's hire policy and decisions.\n\n\
@@ -181,6 +204,33 @@ pub async fn prompt_block_with(
     }
     out.push_str(&super::decide::prompt_block(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await);
     out
+}
+
+/// Whether `scope`'s turns get the bot browser and `request_human_step` together (see
+/// [`tool_list`]): only then may the prompt send the bot to a website's own sign-in page.
+pub fn offers_browser_sign_in(scope: &SelfScope) -> bool {
+    scope.sandbox_target.is_some() && scope.origin.is_some() && scope.cancel.is_some()
+}
+
+/// The tools-section bullet for a turn with the bot browser and `request_human_step`: a website
+/// or account of the person's (TikTok, a shop, a dashboard) is reached by opening its sign-in
+/// page and handing the person a sign_in step, not refused and not sent through Composio setup.
+/// A connection card is an extra only when the space's Composio is `ready`. Ends in a newline.
+pub fn browser_sign_in_rule(composio: super::connection_suggest::ComposioReady) -> String {
+    let extra = if composio == super::connection_suggest::ComposioReady::Ready {
+        "If the app also has a Composio integration, you may add a `connection_suggest` card as an extra, after the sign-in step."
+    } else {
+        "Composio isn't set up in this space, so don't post a `connection_suggest` card or Composio setup steps for a website you can open in the browser."
+    };
+    format!(
+        "- When the person wants you to log in to or use a website or an account of theirs (TikTok, Instagram, a shop, \
+        a dashboard), use your browser: never refuse and never send them elsewhere first. In the same turn, open its \
+        sign-in page with `{BROWSER_OPEN}`; if the page shows they're already signed in, carry on. Otherwise call `{step}` \
+        with kind sign_in and a one-line reason. They sign in themselves in the live browser (a password they saved in kwant for \
+        that exact site is filled in by the browser, never shown to you), and the sign-in is kept for next time. After Done, \
+        look at the page again and carry on with the task; after Decline, say what you couldn't do. {extra}\n",
+        step = super::human_steps::TOOL,
+    )
 }
 
 /// Whether turns get the agents' own tools; the `agent_tools` setting "off" turns them off.
@@ -553,9 +603,9 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
             list.extend(super::connection_suggest::tools());
             if scope.cancel.is_some() {
                 list.extend(super::questions::tools());
-                if scope.sandbox_target.is_some() {
-                    list.extend(super::human_steps::tools());
-                }
+            }
+            if offers_browser_sign_in(scope) {
+                list.extend(super::human_steps::tools());
             }
         }
     }
@@ -1920,5 +1970,72 @@ mod tests {
             clip(&"é".repeat(300), NOTIFY_BODY_CHARS).chars().count(),
             NOTIFY_BODY_CHARS
         );
+    }
+
+    fn sign_in_scope(origin: bool, cancel: bool, browser: bool) -> SelfScope {
+        SelfScope {
+            kwant_id: "k".into(),
+            kwant_name: "TikTokLead".into(),
+            origin: origin.then(|| TurnOrigin {
+                channel_id: Some("c".into()),
+                direct_kwant_id: None,
+                thread_id: None,
+                team_id: Some("t".into()),
+                member_ids: vec!["k".into()],
+                depth: 0,
+                message_id: None,
+            }),
+            cancel: cancel.then(tokio_util::sync::CancellationToken::new),
+            turn_id: Some("turn".into()),
+            workspace: None,
+            sandbox_target: browser.then(|| "t".into()),
+        }
+    }
+
+    fn names(scope: &SelfScope) -> Vec<String> {
+        tool_list(scope, false)
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(String::from))
+            .collect()
+    }
+
+    #[test]
+    fn browser_sign_in_is_offered_with_both_tools_in_a_chat_turn() {
+        // A chat turn, team lead included (routes.rs sets origin, cancel and the browser for every one)
+        let chat = sign_in_scope(true, true, true);
+        assert!(offers_browser_sign_in(&chat));
+        let list = names(&chat);
+        assert!(list.iter().any(|n| n == BROWSER_OPEN), "{list:?}");
+        assert!(list.iter().any(|n| n == super::super::human_steps::TOOL), "{list:?}");
+        // No browser, no chat or no stop button: no sign-in step, so the prompt keeps quiet about it
+        for scope in [sign_in_scope(true, true, false), sign_in_scope(false, true, true), sign_in_scope(true, false, true)] {
+            assert!(!offers_browser_sign_in(&scope));
+            assert!(!names(&scope).iter().any(|n| n == super::super::human_steps::TOOL));
+        }
+    }
+
+    #[test]
+    fn browser_sign_in_rule_opens_the_login_page_and_asks_for_a_sign_in_step() {
+        use super::super::connection_suggest::ComposioReady;
+        for ready in [ComposioReady::Ready, ComposioReady::NotAdded, ComposioReady::NeedsKey, ComposioReady::Off] {
+            let rule = browser_sign_in_rule(ready);
+            assert!(rule.starts_with("- When the person wants you to log in to or use a website"), "{rule}");
+            assert!(rule.contains("TikTok"));
+            assert!(rule.contains("never refuse"));
+            assert!(rule.contains("open its sign-in page with `browser_open`"), "{rule}");
+            assert!(rule.contains("call `request_human_step` with kind sign_in"), "{rule}");
+            assert!(rule.contains("kept for next time"));
+            assert!(rule.ends_with('\n'));
+            assert!(!rule.contains("  "), "no stray continuation spaces: {rule}");
+        }
+        // A connection card is only an extra, and only when Composio can start a sign-in
+        assert!(browser_sign_in_rule(ComposioReady::Ready).contains("may add a `connection_suggest` card as an extra, after the sign-in step"));
+        for ready in [ComposioReady::NotAdded, ComposioReady::NeedsKey, ComposioReady::Off] {
+            let rule = browser_sign_in_rule(ready);
+            assert!(rule.contains("don't post a `connection_suggest` card or Composio setup steps"), "{rule}");
+            assert!(!rule.contains("as an extra"));
+        }
     }
 }
