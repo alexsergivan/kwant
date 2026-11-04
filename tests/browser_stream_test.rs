@@ -846,3 +846,41 @@ async fn a_bot_navigating_to_another_app_is_refused_before_the_browser_sees_it()
     ctrl.navigate("https://www.tiktok.com/login").await.expect("a web page still opens");
     app_task.abort(); cdp_task.abort();
 }
+
+/// F3: a bot and the live view tell addresses apart the same way. `localhost:8080` is a web
+/// address without its scheme (Chromium would read `localhost:` as a scheme and freeze the tab
+/// behind its "Open app?" prompt), so it opens over http; `tel:` and `sms:` with a number open
+/// another app, so neither reaches the browser.
+#[tokio::test]
+async fn a_host_and_port_open_as_a_web_page_and_a_phone_number_is_refused_by_both_navigates() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    let navigated = || async { mock.commands.lock().await.iter().filter(|c| c["method"] == "Page.navigate").map(|c| c["params"]["url"].clone()).collect::<Vec<_>>() };
+
+    for url in ["tel:5551234", "tel:+38640123456", "sms:5551234"] {
+        let error = ctrl.navigate(url).await.expect_err(url);
+        assert!(matches!(error, kwnt::sandbox::BrowserError::NotWebAddress(_)), "{url}: {error:?}");
+        assert!(error.to_string().contains("opens another app ("), "{url}: {error}");
+    }
+    assert!(navigated().await.is_empty(), "no number reached the browser");
+    ctrl.navigate("localhost:9411/target.html").await.expect("a host and port opens");
+    ctrl.navigate("127.0.0.1:9411").await.expect("an address and port opens");
+    assert_eq!(navigated().await, vec![json!("http://localhost:9411/target.html"), json!("http://127.0.0.1:9411")]);
+
+    // the person's live view: the same addresses, the same answers
+    ws.send(WsMessage::Text(json!({"action":"take_control"}).to_string())).await.unwrap();
+    assert_eq!(receive(&mut ws, "control").await["active"], true);
+    for (i, url) in ["tel:5551234", "sms:+38640123456"].into_iter().enumerate() {
+        let id = format!("n{i}");
+        ws.send(WsMessage::Text(json!({"action":"navigate","url":url,"id":id}).to_string())).await.unwrap();
+        let reply = until_reply(&mut ws, &id).await.pop().unwrap();
+        assert_eq!(reply["type"], "error", "{url}: {reply}");
+        assert!(reply["error"].as_str().unwrap().contains("opens another app ("), "{url}: {reply}");
+    }
+    assert_eq!(navigated().await.len(), 2, "no number reached the browser from the live view");
+    ws.send(WsMessage::Text(json!({"action":"navigate","url":"localhost:9411/target.html","id":"n9"}).to_string())).await.unwrap();
+    assert_eq!(until_reply(&mut ws, "n9").await.pop().unwrap()["type"], "ack");
+    assert_eq!(navigated().await.last(), Some(&json!("http://localhost:9411/target.html")));
+    app_task.abort(); cdp_task.abort();
+}
