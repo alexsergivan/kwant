@@ -40,7 +40,7 @@ card_art: scene
   <div class="wrap">
     <h2 id="new-title" class="new-title">Added in 0.6.11 and 0.6.9</h2>
     <ul class="new-list">
-      <li><a href="features.html#reactions"><img src="assets/media/thumb-v611-react-640.webp" srcset="assets/media/thumb-v611-react-640.webp 640w, assets/media/thumb-v611-react-1280.webp 1280w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Answer with a tap</b><span>When a bot asks you something, 👍 reads Yes, go ahead and 👎 reads No. The bot carries on without you typing.</span></a></li>
+      <li><a href="features.html#reactions"><img src="assets/media/thumb-v611-react-640.webp" srcset="assets/media/thumb-v611-react-640.webp 640w, assets/media/thumb-v611-react-1280.webp 1280w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Answer with a tap</b><span>When a bot asks you something, 👍 means Yes, go ahead and 👎 means No (hover to see it). The bot carries on without you typing.</span></a></li>
       <li><a href="features.html#reply"><img src="assets/media/thumb-v611-reply-640.webp" srcset="assets/media/thumb-v611-reply-640.webp 640w, assets/media/thumb-v611-reply-1280.webp 1280w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Reply to a message</b><span>Reply puts the message in a chip above the box, so the bot knows which one you mean.</span></a></li>
       <li><a href="docs/browser.html#human-check"><img src="assets/media/thumb-v611-human-check-640.webp" srcset="assets/media/thumb-v611-human-check-640.webp 640w, assets/media/thumb-v611-human-check-1280.webp 1280w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Human checks come to you</b><span>When a site asks if the bot is human, you get a card and solve it yourself.</span></a></li>
       <li><a href="features.html#needs-you"><img src="assets/media/thumb-v69-pill-640.webp" srcset="assets/media/thumb-v69-pill-640.webp 640w, assets/media/thumb-v69-pill-1280.webp 1280w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Needs you</b><span>An approval, a question or a sign-in in another chat slides in at the top. Click it to go there.</span></a></li>
@@ -140,7 +140,7 @@ card_art: scene
         <figcaption><h3>Approvals</h3><p>Allow once, always allow or deny, with the full arguments in front of you.</p></figcaption>
       </figure>
       <figure class="tile">
-        <div class="frame">{{video:clip-new-bot|Demo: New bot, the Security preset is picked, the name, role and avatar fill in, and the new SecurityAuditor bot opens ready to chat.}}</div>
+        <div class="frame">{{video:clip-new-bot|Demo: + Bot opens New kwant bot, the Security preset is picked, the name, role and avatar fill in, and the new SecurityAuditor bot opens ready to chat.}}</div>
         <figcaption><h3>New teammates</h3><p>Pick a preset like Security, Research or Chef. Name, role, avatar and voice fill in.</p></figcaption>
       </figure>
     </div>
@@ -214,7 +214,7 @@ card_art: scene
 <section class="tour tint" id="needs-you" aria-labelledby="needs-you-title">
   <div class="wrap">
     <div class="sec-head">
-      <p class="kicker kw-sticker kw-sticker-ink" style="--kw-tilt: 2deg">New in 0.6.9</p>
+      <p class="kicker">New in 0.6.9</p>
       <h2 id="needs-you-title">You'll know when a bot needs you</h2>
       <p>A pill slides in when a bot in another chat waits on you, and the tab title counts what's waiting. When a bot needs a sign-in, you take over its browser.</p>
     </div>
@@ -255,24 +255,24 @@ card_art: scene
   <div class="wrap">
     <div class="sec-head">
       <p class="kicker kw-sticker kw-sticker-ink" style="--kw-tilt: -2deg">New in 0.6.11</p>
-      <h2 id="react-reply-title">Answer with a tap, reply to a message</h2>
+      <h2 id="react-reply-title">Answer with a tap, reply, solve the human check</h2>
       <p>Every finished bot message has 👍, 👎 and Reply. When a bot asks you something, the thumbs answer it. When a site asks if you're human, the bot hands the check to you.</p>
     </div>
     <div class="row">
       <div class="row-copy">
         <h3>Yes, go ahead</h3>
-        <p>When the bot's newest message asks you something, the thumbs read Yes, go ahead and No. Pick one and the bot carries on without you typing. Anywhere else, a 👍 or 👎 is feedback the bot reads next time.</p>
+        <p>When the bot's newest message asks you something, 👍 means Yes, go ahead and 👎 means No; hover a thumb to see which. Pick one and the bot carries on without you typing. Anywhere else, a 👍 or 👎 is feedback the bot reads next time.</p>
         <a class="more-link" href="features.html#new-0611">What's new in 0.6.11 →</a>
       </div>
-      <div class="frame">{{video:clip-v611-react|Demo: Lead's release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, labelled Yes, go ahead, answers it: the working line appears and Lead replies that the notes are published, with nothing typed.}}</div>
+      <div class="frame">{{video:clip-v611-react|Demo: Lead's release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and Lead replies that the notes are published, with nothing typed.}}</div>
     </div>
     <div class="tiles three">
       <figure class="tile">
-        <div class="frame">{{shot:v611-reply|Lead's release notes with Reply pressed: the message box shows a Replying to Lead chip quoting Here are the release notes, and the reply Put the waitlist first in the email version is typed below it.|(max-width: 860px) 100vw, 380px}}</div>
+        <div class="frame">{{shot:v611-reply-close|Lead's release notes with Reply pressed: the message box shows a Replying to Lead chip quoting Here are the release notes, and the reply Put the waitlist first in the email version is typed below it.|(max-width: 860px) 100vw, 380px}}</div>
         <figcaption><h3>Reply</h3><p>Reply quotes the message in the box, so the bot knows which one you mean.</p></figcaption>
       </figure>
       <figure class="tile">
-        <div class="frame">{{shot:v611-human-check|Researcher's chat after a link to a tent on gearhub.example: a Human check needed card says the site is showing a CAPTCHA to the bot browser, with Solve it, Done, I solved it and Skip.|(max-width: 860px) 100vw, 380px}}</div>
+        <div class="frame">{{shot:v611-human-check-card|Close-up of a Human check needed card from Researcher: gearhub.example is showing a CAPTCHA to the bot browser, with Solve it, Done, I solved it and Skip. Below it, Researcher says it will carry on once you press Done.|(max-width: 860px) 100vw, 380px}}</div>
         <figcaption><h3>Human checks come to you</h3><p>A CAPTCHA stops the bot and a card asks you to solve it. kwant never solves one itself.</p></figcaption>
       </figure>
       <figure class="tile">
