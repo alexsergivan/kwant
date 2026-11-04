@@ -8,6 +8,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.11] - 2026-11-04
+
+### Added
+- **👍 and 👎 on a bot's messages, and Reply.** Every finished bot message has 👍, 👎 and **Reply** next to
+  **Copy markdown**. When the bot's newest message asks you something, the thumbs read **Yes, go ahead** and **No**,
+  and picking one answers it: the bot carries on without you typing. Anywhere else a reaction is feedback the bot
+  reads on its next turn in that chat; after a 👎 it says what it would change. A 👍 or 👎 never approves an approval
+  card, a payment, a human step or a decision card, which keep their own buttons. **Reply** puts the message in a
+  "Replying to" chip in the composer, and the bot is told which message you mean. Your message shows a one-line
+  quote; click it to jump to the original. In a room, a reply goes to the bot that wrote the message unless you
+  @mention another. (#296, #292)
+- **Every CAPTCHA a bot meets is handed to you.** A **Human check needed** card now comes up wherever a check stops a
+  bot, including a page it opened from a link you sent, a bot using its own web tools (it reopens the page in its
+  browser so you get the card) and a browser step that failed on the check. Detection catches more walls (Amazon,
+  "make sure you're not a robot", new Cloudflare pages, DuckDuckGo, Turnstile) and no longer fires on articles or
+  addresses that merely mention a CAPTCHA. While you're solving it, the bot stays off that browser. kwant never
+  solves or bypasses a check itself. (#295)
+
+### Fixed
+- **An audit no longer shows up in a bot's own chat.** An audit's challenge and rebuttal follow your Approvals setting,
+  an unanswered audit card closes after 5 minutes, and answering it late no longer starts an ordinary turn in that
+  bot's chat. The challenger is picked from the owner's team and sees the owner's result. (#291)
+- **Typing during a browser take-over in the Mac app.** Keys no longer carry a Windows-only key code, and the page is
+  told it has focus while you're in control. If typing still does nothing for you on a Mac, please tell us. (#293)
+- **Live thinking and the activity list keep secrets masked.** A running step's thinking text and raw tool arguments
+  stay out of the activity list and the live stream, credential objects and lists are masked whole, and a secret
+  split across chunks, or written with a space between the key and the value, is held back until it can be masked.
+  Saved text was already masked. (#286, #288, #294)
+- **Hovering a bot in the sidebar no longer wraps its name or makes the row jump.** The edit and remove buttons sit
+  over the status line instead of pushing the name. (#290)
+- **The selected space's ring and its unread badge are no longer cut off** at the top of the spaces rail. (#289)
+- **Taking over a browser:** a background tab is no longer mistaken for a stuck one and reloaded, a frame inside a web
+  component is checked like any other, an address like `localhost:5173` opens as a web page, and `tel:` and `sms:`
+  links are refused as links to another app. (#287)
+
 ## [Mac 0.6.10] - 2026-11-04
 
 ### Fixed
