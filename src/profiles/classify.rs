@@ -397,7 +397,7 @@ fn is_aws_access_key_id(word: &str) -> bool {
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
 
-fn is_credential_key(name: &str) -> bool {
+pub(crate) fn is_credential_key(name: &str) -> bool {
     let after_separator = |k: &&str, whole: bool| {
         name.strip_suffix(*k)
             .is_some_and(|rest| (whole && rest.is_empty()) || rest.ends_with(['_', '-']))

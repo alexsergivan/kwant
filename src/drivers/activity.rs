@@ -244,6 +244,59 @@ impl ActivityLog {
         changed
     }
 
+    /// The steps so far as `GET /api/turns` lists them for a running turn: the same shape as
+    /// `meta.activity`, but with no thinking `text`. A running thinking step's text isn't redacted
+    /// until the step ends, and the text that streamed before a load isn't shown anyway.
+    pub fn to_view_json(&self) -> Value {
+        let mut v = self.to_json();
+        if let Some(steps) = v["steps"].as_array_mut() {
+            for step in steps.iter_mut().filter_map(Value::as_object_mut) {
+                step.remove("text");
+            }
+        }
+        v
+    }
+
+    /// Masks secrets in a driver event before it is broadcast: thinking text, a tool call's
+    /// arguments and a finished tool's result (every string in them). Reply text passes as is.
+    pub fn redact_event(&self, event: &RuntimeEvent) -> RuntimeEvent {
+        match event {
+            RuntimeEvent::ThinkingDelta(text) => RuntimeEvent::ThinkingDelta(self.redact(text)),
+            RuntimeEvent::ToolCallPending { id, name, args } => {
+                RuntimeEvent::ToolCallPending { id: id.clone(), name: name.clone(), args: self.redact_value(args) }
+            }
+            RuntimeEvent::ToolCallCompleted { id, result } => {
+                RuntimeEvent::ToolCallCompleted { id: id.clone(), result: self.redact_value(result) }
+            }
+            RuntimeEvent::Scoped { tag, event } => {
+                RuntimeEvent::Scoped { tag: tag.clone(), event: Box::new(self.redact_event(event)) }
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Masks secrets in every string of a JSON value; a field named like a credential
+    /// (`api_key`, `password`, `token`, …) loses its value whole, the way `api_key=…` does.
+    fn redact_value(&self, value: &Value) -> Value {
+        match value {
+            Value::String(s) => Value::String(self.redact(s)),
+            Value::Array(items) => Value::Array(items.iter().map(|v| self.redact_value(v)).collect()),
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(k, v)| {
+                        let secret_key = crate::profiles::classify::is_credential_key(&k.to_ascii_lowercase());
+                        let v = match v {
+                            Value::String(_) | Value::Number(_) if secret_key => Value::String("[redacted]".into()),
+                            _ => self.redact_value(v),
+                        };
+                        (k.clone(), v)
+                    })
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
     /// What is saved on the reply as `meta.activity`.
     pub fn to_json(&self) -> Value {
         let mut v = json!({ "steps": self.steps.iter().map(Step::to_json).collect::<Vec<_>>() });

@@ -76,12 +76,20 @@ and details at 500. Steps still open when the turn ended are saved as `stopped`.
 A turn that is still running has no saved reply yet. `GET /api/turns` lists each running turn with
 its steps so far under `activity`, in the same shape (`{ "steps": [ <step>, … ] }`). Queued turns
 and turns with no steps yet have no `activity`. Clients seed their live steps from it on load and
-on every reconnect, so the working line shows the open step instead of "getting started". Thinking
-text that streamed before the load is not included; the thinking step's title still shows.
+on every reconnect, so the working line shows the open step instead of "getting started". Steps
+here never carry `text`: thinking text that streamed before the load is not included (a running
+thinking step's text isn't redacted until the step ends), and the thinking step's title still
+shows. Thinking that streams after the load arrives as `ThinkingDelta` as usual.
 
 ### Redaction
 
-Titles, details and thinking text pass through redaction before they leave the server:
+Titles, details and thinking text pass through redaction before they leave the server. That
+includes the live stream: each `ThinkingDelta` chunk, every string in a `ToolCallPending`'s `args`
+and in a `ToolCallCompleted`'s `result` is masked before it is broadcast, and an `args`/`result`
+field named like a credential (`api_key`, `password`, `token`, …) loses its value whole. Reply text
+(`TextDelta`) is not touched. A secret split across two `ThinkingDelta` chunks can't be matched in
+either one; the thinking text saved on the reply is redacted again as a whole when the step ends.
+Masked:
 
 - the turn's MCP secret values are masked as `********`
 - `key=value` / `"key": "value"` credentials (password, token, secret, api_key, …)
