@@ -468,6 +468,23 @@ export const COLUMNS: Array<{ key: Column; label: string; hint: string; empty: s
  * carry the state before it, so a blocked task waits in Ready (it can't start) and a failed one in
  * Review (its checks failed; you decide whether to retry). Cancelled tasks are hidden (null).
  */
+/** A line the task panel shows after the person acts. `pending` marks a line about work still to come
+ *  ("AutoFix retries it now."), which is stale once the task has settled. */
+export interface TaskNotice {
+  text: string;
+  error: boolean;
+  pending?: boolean;
+}
+
+/** States after which a retry or a pickup is over: verified, waiting on a check, or cancelled. */
+const SETTLED: TaskState[] = ['verified', 'review', 'cancelled'];
+
+/** The notice to show for a task in `state`: a pending line goes once the task has settled. */
+export function noticeFor(notice: TaskNotice | null | undefined, state: TaskState): TaskNotice | null {
+  if (!notice) return null;
+  return notice.pending && !notice.error && SETTLED.includes(state) ? null : notice;
+}
+
 export function columnOf(state: TaskState): Column | null {
   switch (state) {
     case 'backlog':

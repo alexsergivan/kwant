@@ -162,6 +162,8 @@ import {
   untilText,
   upsertMission,
   upsertTask,
+  noticeFor,
+  type TaskNotice,
 } from '../missions';
 import { DEFAULT_CLASS, ENGINE_CANT_SANDBOX, TIER_HINTS, classLabel, engineCantSandboxText, showsTier, tierLabel, toClass, validClass } from '../flightSchool';
 
@@ -1945,7 +1947,7 @@ export const TaskDetailBody: React.FC<{
   tasksById?: Record<string, Task>;
   now?: number;
   busy?: boolean;
-  notice?: { text: string; error: boolean } | null;
+  notice?: TaskNotice | null;
   onAction: (a: TaskAction, reason?: string) => void;
   onApproveCheck: (c: Check) => void;
   onOpenChat?: (t: Task, place?: ChatPlace | null) => void;
@@ -2013,6 +2015,7 @@ export const TaskDetailBody: React.FC<{
   onOpenAuditCard,
 }) => {
   const t = detail.task;
+  const shownNotice = noticeFor(notice, t.state);
   const limitHit = outOfBudget(t);
   const flags = openFlags(t);
   const others = t.needs_you.filter((n) => !OWN_SECTION.has(n.kind));
@@ -2082,7 +2085,7 @@ export const TaskDetailBody: React.FC<{
         {((t.state === 'blocked' && !limitHit) || t.state === 'failed') && (
           <p className="px-3 py-2 rounded-lg border border-rose-500/30 bg-rose-500/10 text-xs text-rose-200">{cardStatus(t, names, now)}</p>
         )}
-        {notice && <Notice text={notice.text} error={notice.error} />}
+        {shownNotice && <Notice text={shownNotice.text} error={shownNotice.error} />}
         {held && <HeldBox task={t} busy={busy} now={now} onRun={onRunHeld} />}
         {actions.length > 0 && !asking && (
           <div className="flex flex-wrap gap-2" data-actions>
@@ -2984,7 +2987,7 @@ export const MissionBoardPage: React.FC<{
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
-  const [detailNotice, setDetailNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [detailNotice, setDetailNotice] = useState<TaskNotice | null>(null);
   const [failures, setFailures] = useState<TaskFailure[]>([]);
   const [changes, setChanges] = useState<WorkflowChange[]>([]);
   const [busy, setBusy] = useState(false);
@@ -3376,7 +3379,13 @@ export const MissionBoardPage: React.FC<{
   };
 
   /** One person action on the open task: keyed, one at a time, 401 asks for the token, 409 shows what it is now. */
-  const personAction = async (what: string, run: (taskId: string, key: string) => Promise<string>, errorText: (e: unknown) => string, key?: string) => {
+  const personAction = async (
+    what: string,
+    run: (taskId: string, key: string) => Promise<string>,
+    errorText: (e: unknown) => string,
+    key?: string,
+    pending = false,
+  ) => {
     if (!openId || inFlight.current) return;
     const taskId = openId;
     inFlight.current = true;
@@ -3386,7 +3395,7 @@ export const MissionBoardPage: React.FC<{
       const text = await run(taskId, key ?? keyFor(what));
       pendingKey.current = null;
       if (!alive.current) return;
-      setDetailNotice({ text, error: false });
+      setDetailNotice({ text, error: false, pending });
       playSfx('click');
       await afterChange([], taskId);
       load();
@@ -3414,6 +3423,7 @@ export const MissionBoardPage: React.FC<{
       },
       restoreErrorText,
       runKeys.current[hold],
+      true,
     );
   };
   const retryAutofix = (failureId?: string) =>
@@ -3424,6 +3434,8 @@ export const MissionBoardPage: React.FC<{
         return 'AutoFix retries it now.';
       },
       autofixErrorText,
+      undefined,
+      true,
     );
   const skipAutofix = (a: AutofixAttempt) =>
     personAction(
@@ -3433,6 +3445,8 @@ export const MissionBoardPage: React.FC<{
         return 'AutoFix won’t retry it. It stays failed until you try again.';
       },
       autofixErrorText,
+      undefined,
+      true,
     );
   const resolveRisk = async (r: Risk, resolution: RiskResolution) => {
     if (!openId || inFlight.current) return;

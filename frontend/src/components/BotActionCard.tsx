@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, CalendarClock, CheckCircle2, Loader2, MinusCircle, Pause, Pencil, ShieldQuestion, Undo2, Wrench } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { BotActionMeta, actionStateText, botGone, actionVerb, botActionView, routineButtons, routineFacts, sentence } from '../botActions';
+import { BotActionMeta, actionStateText, botGone, actionVerb, botActionView, routineButtons, routineFacts, sentence, summaryText } from '../botActions';
 
 export type BotActionDecision = 'undo' | 'confirm' | 'decline';
 
@@ -70,7 +70,7 @@ export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, k
             </span>
           </span>
           <p className={`text-sm break-words leading-relaxed ${resolved ? 'text-zinc-400 line-through decoration-zinc-600' : 'text-zinc-100'}`}>
-            {sentence(view.summary) || 'A change in the app.'}
+            {sentence(summaryText(view)) || 'A change in the app.'}
           </p>
           {reason && (
             <p className="text-sm text-zinc-300 break-words leading-relaxed">

@@ -186,6 +186,25 @@ export function scheduleWords(schedule: unknown, scheduleText?: unknown): string
   return typeof scheduleText === 'string' && scheduleText ? sentence(scheduleText) : 'Unknown schedule';
 }
 
+/** "once on Fri, Nov 6 at 03:00 PM" in the viewer's own time zone, the way `formatWhen` writes it. */
+export function onceWords(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const day = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return `once on ${day} at ${time}`;
+}
+
+/** The card's one line. The server writes a one-off schedule as "once at <RFC 3339 UTC>"; that part is
+ *  put in the viewer's local time. Anything else stays as the server wrote it. */
+export function summaryText(m: BotActionMeta): string {
+  const s = asSchedule(m.details.schedule);
+  const raw = m.details.schedule_text;
+  if (s?.type !== 'once' || typeof raw !== 'string' || !raw || !m.summary.includes(raw)) return m.summary;
+  const words = onceWords(s.at);
+  return words ? m.summary.replace(raw, words) : m.summary;
+}
+
 /** The facts a routine card lists: when, as whom, where, and the next run. */
 export function routineFacts(m: BotActionMeta): Array<{ label: string; value: string }> {
   if (m.target_kind !== 'routine') return [];
