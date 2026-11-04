@@ -365,6 +365,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // Desktop: the one-line status under the name makes room for Edit and Remove on hover or focus.
     // It never wraps, so the room costs a few letters of the status, never the row's height.
     const actionRoom = !phone && hasRowActions ? ' group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : '';
+    // An open browser step: the status line says so in words while it is open (the name line only has the hand)
+    const needs = needsYou[k.id] ?? 0;
+    const needsTip = `${k.name} needs you in the browser`;
+    const warn = needs > 0 || status === 'needs_you';
+    const busyLine = needs > 0 && !busyKwants[k.id]?.startsWith('Needs you in the browser') ? 'Needs you in the browser' : busyKwants[k.id];
     return (
       <div
         key={`${team?.id ?? 'none'}:${k.id}`}
@@ -384,8 +389,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex-1 min-w-0">
           {/* The name line never changes on hover: padding it here made the name wrap and the row jump */}
           <div data-bot-name-line className="flex items-start gap-1">
-            {/* The full name, on up to two lines (QA a); what it runs on is in the tooltip */}
-            <span data-bot-name className="min-w-0 text-body font-semibold leading-5 text-zinc-100 line-clamp-2 [overflow-wrap:anywhere]" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
+            {/* The full name, on up to two lines (QA a), wrapping only between words or after a hyphen:
+                never inside a word ("Researche / r"). A word too long for the line ends in "…"; the
+                whole name and what it runs on are in the tooltip */}
+            <span data-bot-name className="min-w-0 text-body font-semibold leading-5 text-zinc-100 line-clamp-2 [overflow-wrap:normal] [word-break:normal] text-ellipsis" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
               {k.name}
             </span>
             {isLead && (
@@ -394,13 +401,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 lead
               </span>
             )}
-            {needsYou[k.id] > 0 && (
+            {/* Compact on the name line (the hand, and a count past one), so it never squeezes the name;
+                the words "Needs you in the browser" are on the status line below */}
+            {needs > 0 && (
               <span
-                className="shrink-0 inline-flex items-center gap-1 px-1.5 py-px rounded-full text-2xs font-medium bg-amber-300/10 text-warn border border-amber-300/30"
-                title={`${k.name} needs you in the browser`}
+                data-bot-needs-you={needs}
+                role="img"
+                // Mira's compact pill: 20 px high, hand 14 px, count 12 px/600 in tabular figures; flat amber, never holographic
+                className="shrink-0 inline-flex items-center gap-1 h-5 px-1.5 rounded-full text-[12px] font-semibold tabular-nums leading-none text-[#fbbf24] bg-[rgba(251,191,36,0.12)] border border-[rgba(251,191,36,0.35)]"
+                title={needsTip}
+                aria-label={`Needs you (${needs})`}
               >
-                <Hand size={10} aria-hidden="true" />
-                Needs you{needsYou[k.id] > 1 ? ` · ${needsYou[k.id]}` : ''}
+                <Hand size={14} aria-hidden="true" />
+                <span aria-hidden="true">{needs}</span>
               </span>
             )}
             {/* The space header already says when approvals are off for everyone: a bot only gets its own mark when it differs */}
@@ -451,13 +464,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             )}
           </div>
-          {busyKwants[k.id] ? (
-            <p className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${status === 'needs_you' ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'}`} title={busyKwants[k.id]} data-bot-busy>
-              <span className={`kw-status-dot !h-1.5 !w-1.5 ${status === 'needs_you' ? 'kw-status-warn' : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'}`} aria-hidden="true" />
-              <span className="truncate">{busyKwants[k.id]}</span>
+          {busyLine ? (
+            <p className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${warn ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'}`} title={busyLine} data-bot-busy>
+              <span className={`kw-status-dot !h-1.5 !w-1.5 ${warn ? 'kw-status-warn' : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'}`} aria-hidden="true" />
+              <span className="truncate">{busyLine}</span>
             </p>
           ) : (
-            <p className={`text-meta text-zinc-400 truncate${actionRoom}`}>{k.title}</p>
+            // Keeps its one line even with no title, so Edit and Remove sit under the name, never on it (#290 N1)
+            <p className={`text-meta text-zinc-400 truncate${actionRoom}${!phone && hasRowActions ? ' min-h-[1.125rem]' : ''}`}>{k.title}</p>
           )}
         </div>
         {/* Phones: one button at the row's end; in a team it opens the member's actions */}
