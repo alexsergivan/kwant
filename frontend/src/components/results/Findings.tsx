@@ -35,6 +35,14 @@ const DOT: Record<Severity, string> = {
   info: 'bg-zinc-500',
 };
 
+const STRIPE: Record<Severity, string> = {
+  critical: 'border-l-rose-500',
+  high: 'border-l-orange-500',
+  medium: 'border-l-amber-500',
+  low: 'border-l-sky-500',
+  info: 'border-l-zinc-500',
+};
+
 const refLabel = (r: FindingItem['refs'][number]) => `${r.path}${r.line !== null ? `:${r.line}` : ''}`;
 
 /** Findings grouped by severity, with counts; severity is text, refs are code. */
@@ -43,7 +51,7 @@ export const Findings: React.FC<RendererProps<FindingsBlock>> = ({ block }) => {
 
   return (
     <div data-smart-result="findings" data-block-id={block.id} className="my-3.5 space-y-3">
-      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-400">
         {groups.map((g) => (
           <span key={g.sev} className="flex items-center gap-1.5">
             <span className={`h-1.5 w-1.5 rounded-full ${DOT[g.sev]}`} aria-hidden="true" />
@@ -53,13 +61,13 @@ export const Findings: React.FC<RendererProps<FindingsBlock>> = ({ block }) => {
       </div>
       {groups.map((g) => (
         <div key={g.sev}>
-          <h4 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+          <h4 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
             <span className={`h-1.5 w-1.5 rounded-full ${DOT[g.sev]}`} aria-hidden="true" />
             {g.items[0].severity_text} ({g.items.length})
           </h4>
           <ul role="list" className="space-y-1.5">
             {g.items.map((item) => (
-              <li key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 text-xs shadow-sm">
+              <li key={item.id} className={`rounded-xl border border-zinc-700/60 border-l-[3px] bg-zinc-900/60 p-3 text-xs shadow-[var(--kws-shadow)] ${STRIPE[g.sev]}`}>
                 <div className="font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere]">{item.title}</div>
                 {item.detail.trim() !== '' && <p className="mt-1 leading-relaxed text-zinc-400 [overflow-wrap:anywhere]">{item.detail}</p>}
                 {item.refs.length > 0 && (

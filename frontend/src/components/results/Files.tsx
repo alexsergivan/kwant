@@ -120,7 +120,7 @@ const TablePreview: React.FC<{ columns: string[]; rows: string[][] }> = ({ colum
 const CutNote: React.FC<{ preview: FilePreview }> = ({ preview }) => {
   const note = previewNote(preview);
   return note ? (
-    <p className="mt-1 text-[11px] text-zinc-500" data-preview-note>
+    <p className="mt-1 text-[11px] text-zinc-400" data-preview-note>
       {note}
     </p>
   ) : null;
@@ -149,7 +149,7 @@ const FilePreviewView: React.FC<{ item: FileItem }> = ({ item }) => {
   // image previews have no renderable source in this contract yet; show a labelled placeholder
   // rather than guessing at a URL (the attachment route isn't built — see the PR notes).
   return (
-    <div className="mt-2 flex items-center gap-2 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-3 py-4 text-[11px] text-zinc-500">
+    <div className="mt-2 flex items-center gap-2 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/40 px-3 py-4 text-[11px] text-zinc-400">
       <ImageIcon size={14} aria-hidden="true" />
       Image preview not available yet
     </div>
@@ -173,7 +173,7 @@ export const Files: React.FC<RendererProps<FilesBlock>> = ({ block }) => {
         <ul role="list" className="mt-2 min-w-0 max-w-full space-y-2">
           {shown.map((item) => (
             <li key={item.id} aria-label={`Preview of ${item.name}`} className="min-w-0">
-              <div className="truncate text-[11px] text-zinc-500" title={item.name}>
+              <div className="truncate text-[11px] text-zinc-400" title={item.name}>
                 Preview of {item.name}
               </div>
               <FilePreviewView item={item} />
@@ -187,14 +187,14 @@ export const Files: React.FC<RendererProps<FilesBlock>> = ({ block }) => {
     <div data-smart-result="files" data-block-id={block.id} className="min-w-0 max-w-full">
       <ul role="list" className="my-3.5 min-w-0 max-w-full space-y-2">
         {block.items.map((item) => (
-          <li key={item.id} className="min-w-0 max-w-full rounded-xl border border-zinc-800 bg-zinc-950/70 p-3 shadow-sm">
+          <li key={item.id} className="min-w-0 max-w-full rounded-xl border border-zinc-700/60 bg-zinc-900/60 p-3 shadow-[var(--kws-shadow)]">
             <div className="flex items-start gap-2">
-              <FileIcon size={14} className="mt-0.5 shrink-0 text-zinc-500" aria-hidden="true" />
+              <FileIcon size={14} className="mt-0.5 shrink-0 text-zinc-400" aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs font-medium text-zinc-200" title={item.name}>
                   {item.name}
                 </div>
-                <div className="mt-0.5 text-[11px] text-zinc-500">
+                <div className="mt-0.5 text-[11px] text-zinc-400">
                   {item.mime} · {humanSize(item.size_bytes)}
                 </div>
                 <FilePreviewView item={item} />

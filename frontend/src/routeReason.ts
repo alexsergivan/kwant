@@ -76,3 +76,37 @@ export function routeReasonText(r: RouteReasonInput): string | null {
       return r.reason || null;
   }
 }
+
+/** The two or three words on the chip beside a reply's name: how this bot was picked. The full
+ *  sentence (routeReasonText / routingLine) opens when the chip is tapped. */
+export function routeChipLabel(r: { basis?: string; fallback?: boolean }): string {
+  if (r.fallback) return 'By keywords';
+  switch (r.basis) {
+    case 'skills':
+      return 'Matched skills';
+    case 'keywords':
+      return 'Matched words';
+    case 'lead':
+    case 'team':
+      return 'Team lead';
+    case 'only':
+      return 'Only bot here';
+    case 'several':
+      return 'Best of several';
+    case 'discuss':
+      return 'Team discussion';
+    case 'asked':
+    case 'ask':
+      return 'You chose';
+    case 'last':
+      return 'Same as last time';
+    case 'concierge':
+      return 'General answer';
+    case 'handback':
+      return 'Handed over';
+    case 'learned':
+      return 'Learned from you';
+    default:
+      return 'Picked by Laya';
+  }
+}

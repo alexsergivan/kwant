@@ -1,7 +1,8 @@
 import React, { useId, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronsUpDown, MessageSquare, Minus, Plus } from 'lucide-react';
+import { Award, ArrowDown, ArrowUp, ChevronsUpDown, MessageSquare, Minus, Plus } from 'lucide-react';
 import { ColumnRole, ComparisonBlock, Sort, nextSort, plainText, sortRows } from '../../smartResults';
 import type { RendererProps } from './registry';
+import { Sticker } from '../Sticker';
 
 // Pros and cons cells: split on ";", "•", "·" or a line break, else on commas when every part is short.
 export function shortList(text: string): string[] | null {
@@ -16,13 +17,11 @@ export function shortList(text: string): string[] | null {
 
 const ROLE_TINT: Partial<Record<ColumnRole, string>> = { pros: 'text-emerald-300', cons: 'text-rose-300' };
 
-const PickLabel: React.FC<{ reason: string | null; inline?: boolean; className?: string }> = ({ reason, inline, className = '' }) => (
-  <span
-    className={`${className} ${inline ? 'ml-1.5 ' : ''}rounded border border-sky-500/30 bg-sky-500/10 px-1 py-px align-[1px] text-[10px] font-medium leading-none text-sky-300 [box-decoration-break:clone]`}
-    title={reason ?? undefined}
-  >
-    Pick in this reply
-  </span>
+/** S2: the small holo Pick sticker (spec §1, tilt +3), the same in the table and on the phone card. Not interactive. */
+const PickSticker: React.FC<{ reason: string | null }> = ({ reason }) => (
+  <Sticker tone="holo" tilt={3} icon={<Award size={10} aria-hidden="true" />} title={reason ?? 'Pick in this reply'} className="kw-sticker-sm pointer-events-none">
+    Pick<span className="sr-only"> in this reply{reason ? `: ${reason}` : ''}</span>
+  </Sticker>
 );
 
 /** A pros or cons cell in a stacked card: a short list with + or −, else the reply's cell. */
@@ -74,9 +73,9 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
 
       {/* 640 px and up: the reply's table with header sort buttons. */}
       <div className="my-3.5 hidden sm:block">
-        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950/70 shadow-sm">
+        <div className="overflow-x-auto rounded-xl border border-zinc-700/60 bg-zinc-900/60 shadow-[var(--kws-shadow)]">
           <table className="w-full text-left border-collapse text-xs font-sans">
-            <thead className="bg-zinc-900/90 text-zinc-200 border-b border-zinc-800 font-medium">
+            <thead className="bg-zinc-800/70 text-zinc-100 border-b border-zinc-700/60 font-medium">
               <tr>
                 {block.columns.map((col, j) => {
                   const dir = sort?.col === j ? sort.dir : null;
@@ -98,7 +97,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                         <span className="inline-block w-0 align-[-1px]" aria-hidden="true">
                           <Icon
                             size={10}
-                            className={`ml-1 ${dir ? 'text-sky-400' : 'text-zinc-600 group-hover:text-zinc-400 group-focus-visible:text-zinc-400'}`}
+                            className={`ml-1 ${dir ? 'text-sky-400' : 'text-zinc-400 group-hover:text-zinc-200 group-focus-visible:text-zinc-400'}`}
                           />
                         </span>
                       </button>
@@ -107,7 +106,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                 })}
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-800/60 font-normal text-zinc-300">
+            <tbody className="divide-y divide-zinc-700/40 font-normal text-zinc-300">
               {order.map((i) => {
                 const row = block.rows[i];
                 const picked = row.id === block.highlight_row;
@@ -115,7 +114,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                   <tr
                     key={row.id}
                     data-pick={picked ? '' : undefined}
-                    className={`group/row transition-colors ${picked ? 'bg-sky-500/[0.07] hover:bg-sky-500/10' : 'hover:bg-zinc-900/50'}`}
+                    className={`group/row transition-colors ${picked ? 'bg-sky-500/[0.07] hover:bg-sky-500/10' : 'hover:bg-zinc-800/40'}`}
                   >
                     {block.columns.map((col, j) => (
                       <td
@@ -135,18 +134,12 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                           </button>
                         )}
                         {picked && j === 0 ? (
-                          // The label only takes room left on the cell's first line, so the table keeps the
-                          // streamed reply's exact size (see .smart-pick in modern.css).
-                          <div className="flex items-baseline">
-                            <span>{body[i][j]}</span>
-                            <span className="smart-pick min-w-0 flex-1">
-                              <PickLabel reason={block.highlight_reason} inline className="smart-pick-full" />
-                              <span
-                                aria-hidden="true"
-                                title={block.highlight_reason ? `Pick in this reply: ${block.highlight_reason}` : 'Pick in this reply'}
-                                className="smart-pick-short ml-1.5 rounded border border-sky-500/30 bg-sky-500/10 px-1 py-px align-[1px] text-[10px] font-medium leading-none text-sky-300">
-                                Pick
-                              </span>
+                          // 6 px after the name, centred on its line; in a narrow column it wraps under the name.
+                          // Inside the cell padding, so it never touches the table border or the sky bar.
+                          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                            <span className="min-w-0">{body[i][j]}</span>
+                            <span className="inline-flex shrink-0">
+                              <PickSticker reason={block.highlight_reason} />
                             </span>
                           </div>
                         ) : (
@@ -165,7 +158,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
       {/* Below 640 px: one card per row, label: value pairs, nothing clipped. */}
       <div className="my-3.5 space-y-2 sm:hidden">
         <div className="flex items-center gap-2">
-          <label htmlFor={`${uid}-sort`} className="shrink-0 text-[11px] text-zinc-500">
+          <label htmlFor={`${uid}-sort`} className="shrink-0 text-[11px] text-zinc-400">
             Sort by
           </label>
           <select
@@ -198,16 +191,21 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
               <li
                 key={row.id}
                 data-pick={picked ? '' : undefined}
-                className={`rounded-xl border px-3 py-2.5 text-xs ${picked ? 'border-sky-500/40 bg-sky-500/[0.07]' : 'border-zinc-800 bg-zinc-950/70'}`}
+                className={`relative rounded-xl border px-3 py-2.5 text-xs ${picked ? 'border-sky-500/40 bg-sky-500/[0.07]' : 'border-zinc-800 bg-zinc-900/60'}`}
               >
-                <div className="text-[13px] font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere]">
+                {picked && (
+                  // The wrapper places it (spec S2: top -8, right -6); .kw-sticker keeps its own position: relative.
+                  <span className="absolute -top-2 -right-1.5 z-10 flex">
+                    <PickSticker reason={block.highlight_reason} />
+                  </span>
+                )}
+                <div className={`text-[13px] font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere] ${picked ? 'pr-16' : ''}`}>
                   {body[i][0]}
-                  {picked && <PickLabel reason={block.highlight_reason} inline />}
                 </div>
                 <dl className="mt-1.5 grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-3 gap-y-1">
                   {block.columns.slice(1).map((col, k) => (
                     <React.Fragment key={col.key}>
-                      <dt className="text-zinc-500 [overflow-wrap:anywhere]">{head[k + 1]}</dt>
+                      <dt className="text-zinc-400 [overflow-wrap:anywhere]">{head[k + 1]}</dt>
                       <dd className="text-zinc-300 leading-relaxed [overflow-wrap:anywhere]">
                         <Cell role={col.role} text={row.cells[k + 1]} node={body[i][k + 1]} />
                       </dd>
@@ -217,7 +215,7 @@ export const Comparison: React.FC<RendererProps<ComparisonBlock>> = ({ block, re
                 <button
                   type="button"
                   onClick={() => askRow(i)}
-                  className="-mx-1 mt-1.5 flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] text-zinc-500 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70"
+                  className="-mx-1 mt-1.5 flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] text-zinc-400 hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/70"
                 >
                   <MessageSquare size={12} aria-hidden="true" />
                   Ask about this

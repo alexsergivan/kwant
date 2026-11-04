@@ -1,11 +1,13 @@
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Copy } from 'lucide-react';
+import { Check, ChevronDown, FileText, ListChecks, Paperclip, Quote, Table2 } from 'lucide-react';
 import type { SmartBlock } from '../../smartResults';
 import { readDoneSteps } from '../../smartResults';
 import { playSfx } from '../../audio/chiptune';
 import { ReplySource, resolveBlock } from './registry';
 import { blockCsv, blockJson, blockMarkdown } from './exporters';
-import { SmartActions, actionClass } from './SmartActions';
+import { SmartActions, actionClass, actionOnClass, evidenceClass } from './SmartActions';
+import { VerifiedStamp } from '../Signature';
+import { stampText } from '../../signature';
 
 /** "Ask about this": ChatView puts `text` in the composer and focuses it. Nothing is sent. */
 export const COMPOSE_PREFILL_EVENT = 'kwnt:compose-prefill';
@@ -158,9 +160,9 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
         }}
         className={actionClass}
       >
-        {said?.ok ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+        {said?.ok ? <Check size={14} className="text-emerald-400" aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}
         <span className={said?.ok ? 'font-medium text-emerald-400' : said ? 'text-rose-300' : ''}>{said?.ok ? 'Copied' : said ? 'Copy failed' : 'Copy data'}</span>
-        <ChevronDown size={11} aria-hidden="true" />
+        <ChevronDown size={12} aria-hidden="true" />
       </button>
       <span className="sr-only" aria-live="polite">
         {said?.text ?? ''}
@@ -172,7 +174,7 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
           role="menu"
           aria-label="Copy data as"
           onKeyDown={onMenuKey}
-          className={`absolute bottom-full ${flip ? 'right-0' : 'left-0'} z-20 mb-1 flex min-w-[8rem] flex-col rounded-lg border border-zinc-800 bg-zinc-900 p-1 shadow-lg`}
+          className={`absolute bottom-full ${flip ? 'right-0' : 'left-0'} z-20 mb-1 flex min-w-[8rem] flex-col rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-[var(--kws-shadow)]`}
         >
           {FORMATS.map((f, i) => (
             <button
@@ -182,7 +184,7 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
               role="menuitem"
               tabIndex={-1}
               onClick={() => copy(f)}
-              className="rounded-md px-2.5 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 focus:bg-zinc-800 focus:text-zinc-100 focus:outline-none"
+              className="rounded-md px-3 py-2 text-left text-xs text-zinc-200 hover:bg-zinc-800 hover:text-zinc-100 focus:bg-zinc-800 focus:text-zinc-100 focus:outline-none"
             >
               {f}
             </button>
@@ -193,18 +195,45 @@ const CopyData: React.FC<{ block: SmartBlock; messageId: string }> = ({ block, m
   );
 };
 
-/** The footer every block shares, in the message's action row: Evidence, Show as text, Copy data. */
-const Footer: React.FC<{ block: SmartBlock; messageId: string; asText: boolean; onToggle: () => void }> = ({ block, messageId, asText, onToggle }) => (
-  <SmartActions messageId={messageId}>
-    <span className="min-w-0 max-w-full truncate px-1 text-[11px] text-zinc-500" data-evidence title={evidenceText(block)}>
-      {evidenceText(block)}
-    </span>
-    <button type="button" aria-pressed={asText} onClick={onToggle} className={`${actionClass} ${asText ? 'bg-zinc-900 text-zinc-300' : ''}`}>
-      Show as text
-    </button>
-    <CopyData block={block} messageId={messageId} />
-  </SmartActions>
-);
+/** The icon for where the data came from: the reply itself, a task's checks, or an attachment. */
+const EvidenceIcon: React.FC<{ block: SmartBlock }> = ({ block }) => {
+  const p = block.provenance;
+  const Icon = p.kind !== 'kwant_data' ? Quote : p.ref.startsWith('task:') ? ListChecks : Paperclip;
+  return <Icon size={14} className="shrink-0" aria-hidden="true" />;
+};
+
+/** S1: a Checks block whose every check passed earns the holo "Verified · 3/3" at the head of the action row. */
+export function verifiedCounts(block: SmartBlock): { passed: number; total: number } | null {
+  if (block.type !== 'verification') return null;
+  const total = block.checks.length;
+  return total > 0 && block.checks.every((c) => c.status === 'passed') ? { passed: total, total } : null;
+}
+
+/** The footer every block shares, in the message's action row: (Verified), Show as text, Copy data, Evidence. */
+const Footer: React.FC<{ block: SmartBlock; messageId: string; asText: boolean; onToggle: () => void }> = ({ block, messageId, asText, onToggle }) => {
+  const verified = verifiedCounts(block);
+  return (
+    <SmartActions messageId={messageId}>
+      {verified && (
+        <VerifiedStamp
+          className="order-first"
+          text={stampText(verified)}
+          label={`All ${verified.total} ${verified.total === 1 ? 'check' : 'checks'} passed`}
+        />
+      )}
+      <button type="button" aria-pressed={asText} onClick={onToggle} className={`${actionClass} ${asText ? actionOnClass : ''}`}>
+        <FileText size={14} aria-hidden="true" />
+        Show as text
+      </button>
+      <CopyData block={block} messageId={messageId} />
+      {/* Where the numbers come from: a chip in the row's style, a fact rather than a button. */}
+      <span className={evidenceClass} data-evidence title={evidenceText(block)}>
+        <EvidenceIcon block={block} />
+        <span className="truncate">{evidenceText(block)}</span>
+      </span>
+    </SmartActions>
+  );
+};
 
 export interface SmartResultProps {
   /** The message's block for this place, unchecked. */
