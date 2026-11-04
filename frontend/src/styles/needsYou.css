@@ -1,0 +1,89 @@
+/* The in-app "needs you" pill (0.6.9, NeedsYouPill.tsx). Values from Mira's
+   /home/maus/shared/ship-software-safely/mac-nudge/design/pill/pill.css: one design for the Mac
+   menu-bar pill and the in-app pill. Motion: transform and opacity only. Always dark: the app is dark
+   only, so the light tokens are for Lin's Mac pill webview alone (spec §2). Own file so Pixel's
+   modern.css stays untouched. */
+.kw-nudge-region {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  /* Centred on the main pane: NeedsYouPill sets --kw-nudge-left to where the sidebar ends (desktop only). */
+  left: var(--kw-nudge-left, 0px);
+  right: 0;
+  z-index: 70;
+  display: flex;
+  justify-content: center;
+  padding: 0 12px;
+  pointer-events: none;
+}
+
+.kw-nudge {
+  --kw-n-bg: #231d4b; --kw-n-edge: rgb(255 255 255 / .10);
+  --kw-n-t1: #f7f6ff; --kw-n-t2: #bcb7de; --kw-n-chev: #9a94c4;
+  --kw-n-shadow: 0 10px 28px rgb(0 0 0 / .45), 0 1px 3px rgb(0 0 0 / .35);
+  pointer-events: auto;
+  position: relative; box-sizing: border-box;
+  display: flex; align-items: center; gap: 10px;
+  width: 320px; max-width: 100%; height: 52px; padding: 0 12px 0 10px; margin: 0;
+  border: 0; border-radius: 26px;
+  background: var(--kw-n-bg); color: var(--kw-n-t1);
+  box-shadow: inset 0 0 0 1px var(--kw-n-edge), var(--kw-n-shadow);
+  text-align: left; cursor: pointer; user-select: none; -webkit-user-select: none;
+  transform-origin: 50% 0;
+  animation: kw-nudge-rise 200ms cubic-bezier(.34, 1.56, .64, 1) backwards,
+             kw-nudge-fade 120ms linear backwards;
+  transition: transform 80ms ease-out;
+}
+.kw-nudge:active { transform: scale(.98); }
+.kw-nudge:focus-visible { outline: 2px solid #b8adff; outline-offset: 2px; }
+.kw-nudge.is-leaving { animation: kw-nudge-leave 160ms cubic-bezier(.4, 0, 1, 1) forwards; pointer-events: none; }
+
+/* Avatar: ModernAvatar size 32 in Mira's 32 px box; several = the count on her lavender disc. */
+.kw-nudge__av {
+  position: relative; flex: none; width: 32px; height: 32px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  --kw-avatar-cut: var(--kw-n-bg);
+  animation: kw-nudge-hop 200ms 200ms backwards;
+}
+.kw-nudge__count {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: #b8adff; color: #1b1033;
+  font-size: 15px; line-height: 32px; font-weight: 700; text-align: center;
+}
+/* AvatarMood "needs you" badge (7x7 plate, 2 px cells, "!" #ffb020) pops in after the drop. */
+.kw-nudge__av .kw-mood { animation: kw-nudge-pop 160ms 200ms cubic-bezier(.34, 1.56, .64, 1) backwards; }
+.kw-nudge__text { flex: 1; min-width: 0; }
+.kw-nudge__l1, .kw-nudge__l2 { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kw-nudge__l1 { font-size: 13px; line-height: 16px; font-weight: 600; letter-spacing: -.08px; }
+.kw-nudge__l2 { font-size: 12px; line-height: 16px; font-weight: 400; color: var(--kw-n-t2); }
+.kw-nudge__chev { flex: none; width: 14px; height: 14px; color: var(--kw-n-chev); }
+.kw-nudge.is-swapping .kw-nudge__text { animation: kw-nudge-fade 120ms linear backwards; }
+.kw-nudge.is-swapping .kw-nudge__av { animation: kw-nudge-hop 200ms backwards; }
+
+/* Phone layout (viewport < 768 px, App's PHONE_QUERY): full width less 12 px a side, 56 px tall. */
+@media (max-width: 767px) {
+  .kw-nudge-region { top: calc(env(safe-area-inset-top, 0px) + 8px); left: 0; }
+  .kw-nudge { width: calc(100vw - 24px); max-width: 420px; height: 56px; border-radius: 28px; padding-left: 12px; }
+}
+
+@keyframes kw-nudge-rise  { from { transform: translateY(-16px) scale(.94); } to { transform: none; } }
+@keyframes kw-nudge-fade  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kw-nudge-leave { to { transform: translateY(-8px); opacity: 0; } }
+@keyframes kw-nudge-hop {
+  0%   { transform: none;             animation-timing-function: cubic-bezier(.2, 0, .4, 1); }
+  50%  { transform: translateY(-4px); animation-timing-function: cubic-bezier(.6, 0, .8, 1); }
+  100% { transform: none; }
+}
+@keyframes kw-nudge-pop { from { transform: scale(.4); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes kw-nudge-fadeout { to { opacity: 0; } }
+
+/* Reduce Motion: fade in and out only. data-motion="fade" is the same for browsers that report it to JS only. */
+@media (prefers-reduced-motion: reduce) {
+  .kw-nudge { animation: kw-nudge-fade 160ms linear backwards; transition: none; }
+  .kw-nudge:active { transform: none; }
+  .kw-nudge.is-leaving { animation: kw-nudge-fadeout 160ms linear forwards; }
+  .kw-nudge__av, .kw-nudge__av .kw-mood, .kw-nudge.is-swapping .kw-nudge__av { animation: none; }
+}
+.kw-nudge[data-motion="fade"] { animation: kw-nudge-fade 160ms linear backwards; transition: none; }
+.kw-nudge[data-motion="fade"].is-leaving { animation: kw-nudge-fadeout 160ms linear forwards; }
+.kw-nudge[data-motion="fade"] .kw-nudge__av,
+.kw-nudge[data-motion="fade"] .kw-nudge__av .kw-mood { animation: none; }

@@ -4,6 +4,7 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf } from './components/Sidebar
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
+import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
@@ -118,6 +119,8 @@ import { personFetch } from './auth';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, showDeviceNotification } from './push';
+import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
+import { NeedsYouPill } from './components/NeedsYouPill';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
@@ -157,8 +160,6 @@ export interface SpaceAppProps {
   /** The open chat changed, for the address bar and reopening it later. */
   onChatChange: (target: SpaceTarget) => void;
 }
-
-const PHONE_QUERY = '(max-width: 767px)';
 
 /** Below 768px the space is one column: a list or a chat, with a tab bar. */
 function useIsPhone(): boolean {
@@ -350,6 +351,22 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [awayCount, setAwayCount] = useState(0);
+  // "Needs you" nudges (attention.ts): what waits on the person, the pill, and the "Show nudges" setting.
+  const [awayWaiting, setAwayWaiting] = useState(0);
+  const [pill, setPill] = useState<PillState>(EMPTY_PILL);
+  const [nudgesOn, setNudgesOn] = useState(nudgesEnabled);
+  const nudgesOnRef = useRef(nudgesOn);
+  nudgesOnRef.current = nudgesOn;
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const arrivalsRef = useRef(createArrivals());
+  const offerNudges = (arrivals: Nudge[]) => {
+    const view = { openCtx: pageRef.current === 'chat' ? openCtxRef.current : null, onInbox: pageRef.current === 'inbox', hidden: document.hidden, enabled: nudgesOnRef.current };
+    const shown = arrivals.filter((n) => shouldPill(n, view));
+    if (!shown.length) return;
+    setPill((prev) => pillAdd(prev, shown));
+    haptic('warning');
+  };
   const awaySinceRef = useRef<string | null>(null);
   const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const refreshAwayCount = (delay = 0) => {
@@ -357,6 +374,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     awayTimerRef.current = setTimeout(() => {
       awayApi.get().then((r) => {
         setAwayCount(r.unseen.total);
+        setAwayWaiting(r.unseen.waiting);
+        const fresh = arrivalsRef.current.fromAway(r.waiting);
+        setPill((prev) => pillPrune(prev, new Set(r.waiting.map((i) => `${i.kind}:${i.id}`))));
+        offerNudges(fresh);
         const fromServer = approvalsFromAway(r.waiting);
         const live = liveApprovalIdsRef.current;
         setPendingApprovals((prev) => syncApprovals(prev, fromServer, live));
@@ -382,6 +403,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (n.kind === 'automation_suggested') emitContinuity({ type: 'automation_suggested', data: n });
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     // Failed routines and finished or slow delegations show in the app; the OS notification is for a hidden tab.
+    // A question or browser step gets the "needs you" pill instead of a toast (approvals get it from the away list too).
+    if (!document.hidden && nudgesOnRef.current && (n.kind === 'question_asked' || n.kind === 'human_step')) {
+      if (pageRef.current === 'chat' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
+      if (n.kind === 'human_step') {
+        const nudge = arrivalsRef.current.fromHumanStep(n);
+        if (nudge) offerNudges([nudge]);
+      } else refreshAwayCount(300);
+      playSfx('alert');
+      return;
+    }
     if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
       if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && n.kind !== 'automation_suggested' && n.kind !== 'tier_proposed' && n.kind !== 'fact_disputed' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
       const id = ++toastIdRef.current;
@@ -2677,7 +2708,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     return () => clearInterval(t);
   }, [kwants, profiles]);
   const tabSignal = useMemo(() => createTabSignal(browserTabDoc()), []);
-  const tabNeedsYou = needsYouCount(botStatus, pendingApprovals.length);
+  // The title counts what /api/away says waits (questions + approvals) or Pixel's bot count, whichever is
+  // higher (browser steps are only in the latter); "Show nudges" off keeps the plain title.
+  const tabNeedsYou = nudgesOn ? Math.max(needsYouCount(botStatus, pendingApprovals.length), awayWaiting) : 0;
   const anyRunning = Object.values(turns).some((t) => t.state === 'running');
   useEffect(() => {
     tabSignal.setNeedsYou(tabNeedsYou);
@@ -2688,9 +2721,33 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     mo.observe(el, { childList: true, characterData: true, subtree: true });
     return () => mo.disconnect();
   }, [tabSignal, tabNeedsYou]);
+  // While something waits the "!" favicon wins over the working dot; the app icon badge always shows the count.
+  const nudgeIcon = useMemo(() => createNudgeIcon(browserIconDoc()), []);
+  const markIcon = nudgesOn && awayWaiting > 0;
   useEffect(() => {
-    void tabSignal.setWorking(anyRunning);
-  }, [tabSignal, anyRunning]);
+    void nudgeIcon.set(markIcon);
+    void tabSignal.setWorking(anyRunning && !markIcon);
+  }, [nudgeIcon, tabSignal, anyRunning, markIcon]);
+  useEffect(() => {
+    setAppBadgeCount(awayWaiting);
+  }, [awayWaiting]);
+  useEffect(() => {
+    const on = (e: Event) => setNudgesOn(Boolean((e as CustomEvent<boolean>).detail));
+    window.addEventListener(NUDGES_SETTING_EVENT, on);
+    return () => window.removeEventListener(NUDGES_SETTING_EVENT, on);
+  }, []);
+  useEffect(() => {
+    if (!nudgesOn) setPill(EMPTY_PILL);
+  }, [nudgesOn]);
+  const dismissPill = useCallback((rev: number) => setPill((p) => (p.rev === rev ? EMPTY_PILL : p)), []);
+  const openPill = (items: Nudge[]) => {
+    setPill(EMPTY_PILL);
+    const n = items[0];
+    if (items.length > 1 || !n) return showPage('inbox');
+    if (n.away) return openAwayItem(n.away);
+    openNotified({ kind: 'human_step', kwant_id: n.kwantId, channel_id: n.channelId ?? null });
+  };
+  const spriteOf = useCallback((id: string) => kwants.find((k) => k.id === id)?.avatar_sprite, [kwants]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
@@ -3406,6 +3463,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+      <NeedsYouPill items={pill.items} rev={pill.rev} spriteOf={spriteOf} onOpen={openPill} onDismiss={dismissPill} />
     </div>
   );
 };

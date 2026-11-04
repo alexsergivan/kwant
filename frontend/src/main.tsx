@@ -7,6 +7,7 @@ import { captureInstallPrompt, registerServiceWorker, trackAppHeight } from './p
 import './styles/fonts.css';
 import './styles/modern.css';
 import './styles/stream.css';
+import './styles/needsYou.css';
 
 registerServiceWorker();
 captureInstallPrompt();

@@ -634,6 +634,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside
       ref={asideRef}
       aria-label={`${space.name} chats and kwant bots`}
+      data-kw-sidebar
       className={`${phone ? 'w-full flex-1 min-h-0' : 'w-64 h-full border-r border-hairline'} bg-surface-side flex flex-col select-none flex-shrink-0`}
     >
       {/* The open space. Desktop switches spaces on the rail, so this is its name and settings;
