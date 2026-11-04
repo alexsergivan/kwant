@@ -8,7 +8,8 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
-import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState } from './components/ChatView';
+import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState, SendOptions } from './components/ChatView';
+import { ReactResult, Reaction, optimisticReplyRef, reactionEventOf, reactionOf, saveReaction, senderLabel } from './reactReply';
 import { ThreadBar, ThreadHeader } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
 import { ApprovalsOffBadge } from './components/ApprovalsSetting';
@@ -387,6 +388,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }, delay);
   };
   const toastIdRef = useRef(0);
+  const applyReactionRef = useRef<((id: string, reaction: Reaction | null) => void) | null>(null);
   const dismissToast = useCallback((id: number) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
   // Set each render once the select handlers exist; the SSE handler and notification clicks go through it.
   // Opens a bot's settings on the Skills tab (set once the bots are known).
@@ -938,6 +940,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (ctx === openCtxRef.current) setMessages(updated);
             break;
           }
+          case 'reaction_updated':
+          case 'ReactionUpdated':
+          case 'message_reaction':
+          case 'MessageReaction':
+          case 'message_reaction_updated':
+          case 'MessageReactionUpdated': {
+            // Another window (or this one) saved a reaction.
+            const r = reactionEventOf(event.data);
+            if (r) applyReactionRef.current?.(r.id, r.reaction);
+            break;
+          }
           case 'decide_updated':
           case 'DecideUpdated': {
             const d = event.data ?? {};
@@ -1372,7 +1385,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     });
   };
 
-  const handleSendMessage = async (text: string, attachments: AttachmentRef[] = []): Promise<boolean> => {
+  const handleSendMessage = async (text: string, attachments: AttachmentRef[] = [], opts: SendOptions = {}): Promise<boolean> => {
     haptic('tap');
     setHistoryWindow(null);
     const targetId = openCtx;
@@ -1402,7 +1415,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       sender_id: 'PlayerHero',
       text,
       meta: attachments.length ? JSON.stringify({ attachments }) : null,
+      reply_to: opts.replyTo ? optimisticReplyRef(opts.replyTo) : null,
     };
+    const reply_to_message_id = opts.replyTo?.id;
     const cached = messagesCacheRef.current[targetId] || messages;
     const updated = [...cached, userMsg];
     messagesCacheRef.current[targetId] = updated;
@@ -1417,7 +1432,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
           threadId
-            ? { thread_id: threadId, prompt: text, sender_id: 'PlayerHero', attachment_ids }
+            ? { thread_id: threadId, prompt: text, sender_id: 'PlayerHero', attachment_ids, ...(reply_to_message_id ? { reply_to_message_id } : {}) }
             : {
                 channel_id: isTargetChannel ? targetId : null,
                 kwant_id: !isTargetChannel ? targetId : null,
@@ -1425,6 +1440,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 prompt: text,
                 sender_id: 'PlayerHero',
                 attachment_ids,
+                ...(reply_to_message_id ? { reply_to_message_id } : {}),
               },
         ),
       });
@@ -1636,6 +1652,60 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const pushToast = (title: string, detail?: string) => {
     const id = ++toastIdRef.current;
     setToasts((prev) => [...prev.slice(-2), { id, title, detail }]);
+  };
+
+  /** Sets one message's reaction wherever it is shown: every cached chat and the open history window. */
+  const applyReaction = (messageId: string, reaction: Reaction | null) => {
+    const patch = (list: ChatMessage[]) =>
+      list.some((m) => m.id === messageId) ? list.map((m) => (m.id === messageId ? { ...m, reaction } : m)) : list;
+    for (const ctx of Object.keys(messagesCacheRef.current)) {
+      const list = messagesCacheRef.current[ctx];
+      const next = patch(list);
+      if (next !== list) {
+        messagesCacheRef.current[ctx] = next;
+        if (ctx === openCtxRef.current) setMessages(next);
+      }
+    }
+    setHistoryWindow((w) => {
+      if (!w) return w;
+      const next = patch(w.messages);
+      return next === w.messages ? w : { ...w, messages: next };
+    });
+  };
+  applyReactionRef.current = applyReaction;
+
+  /**
+   * Shows the new reaction at once; if the save fails, puts the old one back (ChatView says so).
+   * A thumb on the bot's newest question is the person's yes or no: the server starts a turn, and the
+   * chat shows the bot working exactly as after a send.
+   */
+  const handleReact = async (msg: ChatMessage, reaction: Reaction | null): Promise<ReactResult> => {
+    const before = reactionOf(msg.reaction);
+    applyReaction(msg.id, reaction);
+    try {
+      const saved = await saveReaction(fetch, msg.id, reaction);
+      if (saved.reaction !== reaction) applyReaction(msg.id, saved.reaction);
+      if (saved.answered) {
+        const ctx = messageContextId(msg) ?? openCtxRef.current;
+        if (ctx) {
+          haptic('tap');
+          streamingContextIdRef.current = ctx;
+          if (!(ctx in liveRef.current)) {
+            streamsRef.current[ctx] = { text: '', thinking: '' };
+            if (ctx === openCtxRef.current) {
+              setStreamingText('');
+              setStreamingThinking('');
+            }
+          }
+          markLive(ctx, senderLabel(msg.sender_role, msg.sender_id, liveRef.current[ctx] || 'Bot'));
+        }
+      }
+      return { ok: true, answered: saved.answered };
+    } catch (err) {
+      applyReaction(msg.id, before);
+      haptic('warning');
+      return { ok: false, answered: false, error: err instanceof Error ? err.message : undefined };
+    }
   };
 
   /** Opens one of a bot's threads (from the thread list, a delegation card or a badge). */
@@ -3092,6 +3162,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}
           onSendMessage={handleSendMessage}
+          onReact={handleReact}
           onResolveApproval={handleResolveApproval}
           kwants={kwants}
           teams={teams}
