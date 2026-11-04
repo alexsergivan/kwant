@@ -2475,9 +2475,10 @@ async fn run_kwant_turn_inner(
         .await;
         let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
         let turn_input = TurnInput {
+            // The bot's own copy of the browser API: a CAPTCHA it meets is asked in its chat
             browser_api_url: Some(format!(
-                "http://127.0.0.1:{}/api/sandbox/{}",
-                state.config.port, sandbox_target
+                "http://127.0.0.1:{}/api/sandbox/{}/bot/{}",
+                state.config.port, sandbox_target, target_kwant.id
             )),
             thread_id: context_id,
             kwant: target_kwant.clone(),
@@ -4888,19 +4889,20 @@ pub fn bot_wall_notice(kind: &str, url: &str) -> String {
     )
 }
 
-/// The browser API's own routes (`/api/sandbox/:id/navigate|page|act`), for bots that drive the
-/// browser with curl: like the handlers, and a page that shows a CAPTCHA (or a failed action
-/// over one) asks the person to solve it in the chat of the turn running on that browser, with a
-/// "Human check needed" card. Nothing waits on it there, so the bot is told to end its turn; the
+/// The browser API's own routes (`/api/sandbox/:id/navigate|page|act`), as the person's panel
+/// calls them: like the handlers, and a page that shows a CAPTCHA (or a failed action over one)
+/// asks the person to solve it in the chat of the newest turn running on that browser, with a
+/// "Human check needed" card. Bots get their own copy of these routes
+/// (`/api/sandbox/:id/bot/:kwant_id/...`, [`navigate_sandbox_bot`]) in their prompt, so a CAPTCHA
+/// one bot meets on a team's shared browser is asked in that bot's chat, not in whichever bot's
+/// turn started last. Nothing waits on the card there, so the bot is told to end its turn; the
 /// answer starts a new one. The `browser_*` tools call the handlers directly and ask themselves.
 pub async fn navigate_sandbox_api(
     State(state): State<AppState>,
     Path(team_id): Path<String>,
     payload: Json<NavigatePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    refuse_while_held(&state, &team_id).await?;
-    let result = navigate_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
-    ask_on_wall(&state, &team_id, result).await
+    navigate_as(state, team_id, None, payload).await
 }
 
 pub async fn get_sandbox_page_api(
@@ -4908,12 +4910,7 @@ pub async fn get_sandbox_page_api(
     Path(team_id): Path<String>,
     query: Query<PageQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let result = get_sandbox_page(State(state.clone()), Path(team_id.clone()), query).await;
-    // A page held for the person's step was already asked about
-    if super::human_steps::browser_is_held(&state, &team_id).await {
-        return result;
-    }
-    ask_on_wall(&state, &team_id, result).await
+    page_as(state, team_id, None, query).await
 }
 
 pub async fn act_sandbox_api(
@@ -4921,30 +4918,107 @@ pub async fn act_sandbox_api(
     Path(team_id): Path<String>,
     payload: Json<InteractPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    refuse_while_held(&state, &team_id).await?;
-    let result = act_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
-    ask_on_wall(&state, &team_id, result).await
+    act_as(state, team_id, None, payload).await
 }
 
+/// `POST /api/sandbox/:id/bot/:kwant_id/navigate`: the browser API a bot's prompt gives it.
+pub async fn navigate_sandbox_bot(
+    State(state): State<AppState>,
+    Path((team_id, kwant_id)): Path<(String, String)>,
+    payload: Json<NavigatePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    navigate_as(state, team_id, Some(kwant_id), payload).await
+}
+
+/// `GET /api/sandbox/:id/bot/:kwant_id/page`.
+pub async fn get_sandbox_page_bot(
+    State(state): State<AppState>,
+    Path((team_id, kwant_id)): Path<(String, String)>,
+    query: Query<PageQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    page_as(state, team_id, Some(kwant_id), query).await
+}
+
+/// `POST /api/sandbox/:id/bot/:kwant_id/act`.
+pub async fn act_sandbox_bot(
+    State(state): State<AppState>,
+    Path((team_id, kwant_id)): Path<(String, String)>,
+    payload: Json<InteractPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    act_as(state, team_id, Some(kwant_id), payload).await
+}
+
+/// `POST /api/sandbox/:id/bot/:kwant_id/cite`.
+pub async fn cite_sandbox_bot(
+    State(state): State<AppState>,
+    Path((team_id, _kwant_id)): Path<(String, String)>,
+    payload: Json<CitePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    cite_sandbox(State(state), Path(team_id), payload).await
+}
+
+/// `by`: the bot that made the call (its own route), `None` on the plain route.
+async fn navigate_as(
+    state: AppState,
+    team_id: String,
+    by: Option<String>,
+    payload: Json<NavigatePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    refuse_while_held(&state, &team_id, by.is_some()).await?;
+    let result = navigate_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
+    ask_on_wall(&state, &team_id, by.as_deref(), result).await
+}
+
+async fn page_as(
+    state: AppState,
+    team_id: String,
+    by: Option<String>,
+    query: Query<PageQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let result = get_sandbox_page(State(state.clone()), Path(team_id.clone()), query).await;
+    // A page held for the person's step was already asked about
+    if super::human_steps::browser_is_held(&state, &team_id).await {
+        return result;
+    }
+    ask_on_wall(&state, &team_id, by.as_deref(), result).await
+}
+
+async fn act_as(
+    state: AppState,
+    team_id: String,
+    by: Option<String>,
+    payload: Json<InteractPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    refuse_while_held(&state, &team_id, by.is_some()).await?;
+    let result = act_sandbox(State(state.clone()), Path(team_id.clone()), payload).await;
+    ask_on_wall(&state, &team_id, by.as_deref(), result).await
+}
+
+/// What a browser call is told while the browser is held for the person's step: a bot (its own
+/// route) is told to stop and end its turn; the plain route is the person's panel, so it says
+/// where their step is instead.
+pub const HELD_FOR_BOT: &str = "The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions and end your turn; you get a new one when they finish.";
+pub const HELD_FOR_PERSON: &str = "This browser is set aside for the step a bot asked you to do (a sign-in or human check). Take control in the browser panel to use it, or press Done or Decline on the card in the chat first.";
+
 /// A bot action on a browser the person was handed for a step waits until they finish it.
-async fn refuse_while_held(state: &AppState, team_id: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+async fn refuse_while_held(state: &AppState, team_id: &str, bot: bool) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     if super::human_steps::browser_is_held(state, team_id).await {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(json!({"error": "The browser is waiting on the person (a sign-in or CAPTCHA step). Stop browser actions and end your turn; you get a new one when they finish."})),
-        ));
+        return Err((StatusCode::CONFLICT, Json(json!({"error": if bot { HELD_FOR_BOT } else { HELD_FOR_PERSON }}))));
     }
     Ok(())
 }
 
 /// Asks the person when the answer shows a CAPTCHA, or when a failed request left one on the
 /// page, and tells the bot so in place of the plain notice.
+/// The card goes to the chat of the calling bot's turn on this browser (`by`); only when the
+/// caller isn't known (the plain route) does it fall back to the newest turn there.
 async fn ask_on_wall(
     state: &AppState,
     team_id: &str,
+    by: Option<&str>,
     result: Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let Some(turn) = state.human_steps.turn_on(team_id) else { return result };
+    let Some(turn) = state.human_steps.turn_of(team_id, by) else { return result };
     match result {
         Ok(Json(mut page)) => {
             if page["blocked"] == json!(true) {

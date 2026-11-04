@@ -74,10 +74,11 @@ pub struct HumanStepHub {
     /// Tests only: CAPTCHA time limit and probe interval in ms (0 = setting / default).
     captcha_timeout_ms: AtomicU64,
     probe_ms: AtomicU64,
-    /// The turn running on each bot browser (by sandbox target), so a CAPTCHA met through the
-    /// shell browser API, which carries no turn of its own, is still asked of the person in that
-    /// turn's chat.
-    turns: Mutex<HashMap<String, (u64, SelfScope)>>,
+    /// The turns running on each bot browser (by sandbox target), oldest first, so a CAPTCHA met
+    /// through the shell browser API, which carries no turn of its own, is still asked of the
+    /// person in the chat of the turn that met it. A team's browser is shared, so several bots'
+    /// turns can run on one at once.
+    turns: Mutex<HashMap<String, Vec<(u64, SelfScope)>>>,
     next_turn: AtomicU64,
 }
 
@@ -138,18 +139,34 @@ impl HumanStepHub {
         self.waiters.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id)
     }
 
-    /// Records the turn now running on a bot browser until the guard drops (the turn ends). The
-    /// newest turn on a browser wins; an older one ending leaves it be.
+    /// Records a turn now running on a bot browser until the guard drops (the turn ends). Other
+    /// turns on the same browser stay recorded.
     pub fn track_turn(self: &Arc<Self>, target: &str, scope: SelfScope) -> TurnOnBrowser {
         let token = self.next_turn.fetch_add(1, Ordering::Relaxed);
-        self.turns.lock().unwrap_or_else(|e| e.into_inner()).insert(target.to_string(), (token, scope));
+        self.turns.lock().unwrap_or_else(|e| e.into_inner()).entry(target.to_string()).or_default().push((token, scope));
         TurnOnBrowser { hub: self.clone(), target: target.to_string(), token }
     }
 
-    /// The turn running on this bot browser, if one is (and can ask in a chat).
+    /// The newest live turn on this bot browser that can ask in a chat, if one runs. Only for a
+    /// caller kwnt doesn't know: with two bots on a team browser it may be the other bot's.
     pub fn turn_on(&self, target: &str) -> Option<SelfScope> {
+        self.newest_on(target, |_| true)
+    }
+
+    /// The live turn on this bot browser that the call came from: `by` (the bot that made it)
+    /// picks that bot's newest turn there, and no other bot's; without `by`, [`Self::turn_on`].
+    pub fn turn_of(&self, target: &str, by: Option<&str>) -> Option<SelfScope> {
+        match by {
+            Some(kwant) => self.newest_on(target, |s| s.kwant_id == kwant),
+            None => self.turn_on(target),
+        }
+    }
+
+    fn newest_on(&self, target: &str, pick: impl Fn(&SelfScope) -> bool) -> Option<SelfScope> {
         let turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
-        turns.get(target).map(|(_, s)| s.clone()).filter(|s| s.origin.is_some() && !s.cancel.as_ref().is_some_and(|c| c.is_cancelled()))
+        turns.get(target)?.iter().rev().map(|(_, s)| s).find(|s| {
+            pick(s) && s.origin.is_some() && !s.cancel.as_ref().is_some_and(|c| c.is_cancelled())
+        }).cloned()
     }
 }
 
@@ -163,8 +180,11 @@ pub struct TurnOnBrowser {
 impl Drop for TurnOnBrowser {
     fn drop(&mut self) {
         let mut turns = self.hub.turns.lock().unwrap_or_else(|e| e.into_inner());
-        if turns.get(&self.target).is_some_and(|(t, _)| *t == self.token) {
-            turns.remove(&self.target);
+        if let Some(on) = turns.get_mut(&self.target) {
+            on.retain(|(t, _)| *t != self.token);
+            if on.is_empty() {
+                turns.remove(&self.target);
+            }
         }
     }
 }
@@ -812,6 +832,43 @@ mod tests {
         let rx = hub.register("s2");
         drop(rx);
         assert!(!hub.wake("s2", Outcome::Done), "the tool call already ended");
+    }
+
+    fn turn(kwant: &str) -> SelfScope {
+        SelfScope {
+            kwant_id: kwant.into(),
+            kwant_name: kwant.into(),
+            origin: Some(Default::default()),
+            cancel: None,
+            turn_id: Some(format!("turn-{kwant}")),
+            workspace: None,
+            sandbox_target: Some("team".into()),
+        }
+    }
+
+    /// Two bots on one team browser: the bot that made the call gets its own turn, never the
+    /// other bot's; only an unknown caller falls back to the newest turn, and each turn ending
+    /// leaves the other recorded.
+    #[test]
+    fn a_shared_browser_knows_each_bots_turn() {
+        let hub = Arc::new(HumanStepHub::default());
+        let older = hub.track_turn("team", turn("ann"));
+        let newer = hub.track_turn("team", turn("bob"));
+        let of = |by: Option<&str>| hub.turn_of("team", by).map(|s| s.kwant_id);
+        assert_eq!(of(Some("ann")).as_deref(), Some("ann"));
+        assert_eq!(of(Some("bob")).as_deref(), Some("bob"));
+        assert_eq!(of(None).as_deref(), Some("bob"), "an unknown caller: the newest turn");
+        assert_eq!(of(Some("cy")), None, "a bot with no turn here is never asked in another bot's chat");
+        drop(newer);
+        assert_eq!(of(None).as_deref(), Some("ann"));
+        assert_eq!(of(Some("bob")), None);
+        let cancelled = tokio_util::sync::CancellationToken::new();
+        let stopped = hub.track_turn("team", SelfScope { cancel: Some(cancelled.clone()), ..turn("ann") });
+        cancelled.cancel();
+        assert_eq!(hub.turn_of("team", Some("ann")).and_then(|s| s.cancel), None, "a stopped turn asks nobody; the live one does");
+        drop((older, stopped));
+        assert!(hub.turn_on("team").is_none());
+        assert!(hub.turns.lock().unwrap().is_empty());
     }
 
     #[test]
