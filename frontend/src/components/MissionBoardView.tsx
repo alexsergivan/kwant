@@ -33,6 +33,10 @@ import {
 } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { ModernAvatar } from './ModernAvatar';
+import { CheckBurst } from './CheckBurst';
+import { LessonsChip, VerifiedStamp } from './Signature';
+import { FirstMomentLine, useFirstMoment } from './FirstMoment';
+import { firstHolder, lessonsChip, stampLabel, stampText } from '../signature';
 import { PerformancePanel } from './PerformancePanel';
 import { TierRequests } from './TierProposals';
 import { FactNeedsYouAction, FactsLedger } from './FactsLedger';
@@ -181,7 +185,7 @@ const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40';
 // Card-sized buttons: compact on desktop, a full 40px tap target on the phone.
 const cardBtn =
-  'inline-flex items-center justify-center gap-1 min-h-[40px] sm:min-h-[28px] px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
+  'relative inline-flex items-center justify-center gap-1 min-h-[40px] sm:min-h-[28px] px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const cardGoodBtn = 'bg-emerald-600/90 text-white hover:bg-emerald-500';
 const cardPlainBtn = 'border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700';
 const cardQuietBtn = 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800';
@@ -621,6 +625,7 @@ export const TaskCard: React.FC<{
   const autofixLive = !!autofixCardText(t, now);
   const quick = onQuick && columnOfTask(t) === 'review' ? quickActionsFor(t) : [];
   const [sending, setSending] = useState(false);
+  const [burst, setBurst] = useState(0);
   const [note, setNote] = useState('');
   const noteId = useId();
   return (
@@ -656,6 +661,14 @@ export const TaskCard: React.FC<{
             </span>
           )}
           {t.state === 'verified' && flags.length > 0 && <Badge tone="emerald">Verified</Badge>}
+          {t.state === 'verified' && flags.length === 0 && (
+            <VerifiedStamp
+              text={stampText(t.checks_summary)}
+              label={stampLabel(t.checks_summary)}
+              first={firstHolder('verified', t.space_id) === t.id}
+              press={false}
+            />
+          )}
           {t.priority >= 2 && <Badge tone={t.priority >= 3 ? 'rose' : 'amber'}>{priorityLabel(t.priority)}</Badge>}
           {showsTier(t) && t.owner_tier !== 'act' && (
             <span data-tier-badge={t.owner_tier} title={`Flight School: ${classLabel(t.task_class ?? DEFAULT_CLASS).toLowerCase()} work at ${tierLabel(t.owner_tier)}`}>
@@ -726,12 +739,17 @@ export const TaskCard: React.FC<{
               key={a}
               type="button"
               disabled={busy}
-              onClick={() => (a === 'reject' ? setSending(true) : onQuick!(t, a))}
+              onClick={() => {
+                if (a === 'verify') setBurst((n) => n + 1);
+                if (a === 'reject') setSending(true);
+                else onQuick!(t, a);
+              }}
               className={`${cardBtn} ${a === 'verify' || a === 'retry' ? cardGoodBtn : a === 'cancel' ? cardQuietBtn : cardPlainBtn}`}
               data-card-action={a}
             >
               {a === 'verify' ? <CheckCircle2 size={12} aria-hidden="true" /> : a === 'reject' ? <Undo2 size={12} aria-hidden="true" /> : a === 'retry' ? <RotateCcw size={12} aria-hidden="true" /> : <X size={12} aria-hidden="true" />}
               {QUICK_LABELS[a]}
+              {a === 'verify' && <CheckBurst n={burst} />}
             </button>
           ))}
           {older.length > 0 && onDismissMany && (
@@ -1224,7 +1242,7 @@ export const EvidenceReceipt: React.FC<{
   onApproveCheck?: (c: Check) => void;
 }> = ({ receipt, names, busy = false, onApproveCheck }) => (
   <section aria-labelledby="receipt-h" className="space-y-3" data-receipt>
-    <h4 id="receipt-h" className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
+    <h4 id="receipt-h" tabIndex={-1} className="flex items-center focus:outline-none gap-1.5 text-xs font-semibold text-zinc-200">
       <ShieldCheck size={14} className="text-emerald-400" aria-hidden="true" /> Evidence receipt
     </h4>
     {receipt.verifiedBy && (
@@ -2007,7 +2025,9 @@ export const TaskDetailBody: React.FC<{
   const [forkReason, setForkReason] = useState('');
   const forkId = useId();
   const receipt = useMemo(() => buildReceipt(detail, names), [detail, names]);
+  const learned = useMemo(() => lessonsChip(detail.events), [detail.events]);
   const [asking, setAsking] = useState<TaskAction | null>(null);
+  const [burst, setBurst] = useState(0);
   const [reason, setReason] = useState('');
   const reasonId = useId();
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
@@ -2031,6 +2051,7 @@ export const TaskDetailBody: React.FC<{
       setAsking(a);
       return;
     }
+    if (a === 'verify') setBurst((n) => n + 1);
     onAction(a);
   };
 
@@ -2038,7 +2059,22 @@ export const TaskDetailBody: React.FC<{
     <div className="space-y-5">
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge tone={st.tone}>{st.label}</Badge>
+          {t.state === 'verified' ? (
+            <VerifiedStamp
+              text={stampText(t.checks_summary)}
+              label={stampLabel(t.checks_summary)}
+              first={firstHolder('verified', t.space_id) === t.id}
+              burst={burst}
+              onOpen={() => {
+                const h = document.getElementById('receipt-h');
+                h?.scrollIntoView?.({ block: 'center', behavior: 'auto' });
+                h?.focus?.({ preventScroll: true });
+              }}
+            />
+          ) : (
+            <Badge tone={st.tone}>{st.label}</Badge>
+          )}
+          {learned && <LessonsChip text={learned.text} title={learned.title} />}
           {t.priority >= 2 && <Badge tone={t.priority >= 3 ? 'rose' : 'amber'}>{priorityLabel(t.priority)}</Badge>}
           {t.mission_title && <span className="text-[11px] text-zinc-500 break-words">{t.mission_title}</span>}
         </div>
@@ -2056,10 +2092,11 @@ export const TaskDetailBody: React.FC<{
                 type="button"
                 disabled={busy}
                 onClick={() => press(a)}
-                className={a === 'verify' ? goodBtn : a === 'retry' || a === 'unblock' ? mainBtn : a === 'cancel' ? dangerBtn : quietBtn}
+                className={`relative ${a === 'verify' ? goodBtn : a === 'retry' || a === 'unblock' ? mainBtn : a === 'cancel' ? dangerBtn : quietBtn}`}
               >
                 {a === 'verify' && <CheckCircle2 size={13} aria-hidden="true" />}
                 {ACTION_LABELS[a]}
+                {a === 'verify' && <CheckBurst n={burst} />}
               </button>
             ))}
             {busy && <Loader2 size={14} className="self-center animate-spin motion-reduce:animate-none text-zinc-400" aria-label="Working" />}
@@ -2648,6 +2685,9 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   onCloseUndo,
 }) => {
   const selectId = useId();
+  // The first Verified task in a space: a one-line moment, once
+  const [firstDone, setFirstDone] = useState(false);
+  const firstVerified = useFirstMoment('verified', spaceId ?? '', tasks ? tasks.map((x) => ({ id: x.id, reached: x.state === 'verified' })) : null);
   const [confirmClear, setConfirmClear] = useState(false);
   const visibleMissions = missions.filter((m) => m.status !== 'cancelled');
   const mission = missionId ? missions.find((m) => m.id === missionId) ?? null : null;
@@ -2741,6 +2781,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
             <>
               {liveShown && <LiveStrip bots={liveShown} teams={teams} workingCards={workingCards} now={now} onOpen={onOpenLive} />}
 
+              {firstVerified && !firstDone && <FirstMomentLine kind="verified" onDone={() => setFirstDone(true)} />}
               <InsightsStrip insights={insights} needsYou={needsYouCount(tasks)} />
               <MeasuresPanel insights={insights} />
               <FactsLedger names={names} taskTitles={taskTitles} onOpenTask={openTaskById} now={now} />

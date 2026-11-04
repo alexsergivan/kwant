@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, Loader2, Moon, Users } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, Loader2, Moon, Pencil, Users } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { Decision, changeOptions, consultedLine, decidingDetail, decisionLabel, workAheadSummary } from '../decideFirst';
@@ -37,7 +37,7 @@ export const DecisionChips: React.FC<DecisionChipsProps> = ({ messageId, decisio
   return (
     <div role="group" aria-label="Decided by the team" data-decisions className="mt-2 w-full max-w-2xl space-y-2">
       {consulted.length > 0 && (
-        <p className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+        <p className="flex items-center gap-1.5 text-xs text-zinc-400">
           <Users size={12} aria-hidden="true" />
           {consultedLine(consulted)}
         </p>
@@ -48,12 +48,12 @@ export const DecisionChips: React.FC<DecisionChipsProps> = ({ messageId, decisio
         const panelId = `dec-${messageId}-${d.index}`;
         const changed = d.status === 'changed';
         return (
-          <div key={d.index} className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-3 py-2">
+          <div key={d.index} className={`relative overflow-hidden rounded-xl border border-zinc-700/60 bg-zinc-900/60 py-2.5 pl-4 pr-3 shadow-[var(--kws-shadow)] before:absolute before:inset-y-0 before:left-0 before:w-1 ${changed ? 'before:bg-sky-400' : 'before:bg-emerald-400'}`}>
             <div className="flex items-start gap-2 min-w-0">
               <div className="flex flex-1 flex-wrap items-center gap-x-2 gap-y-1.5 min-w-0">
-                {d.question && <span className="text-[11px] text-zinc-400 break-words min-w-0">{d.question}</span>}
+                {d.question && <span className="text-xs text-zinc-300 break-words min-w-0">{d.question}</span>}
                 <span
-                  className={`inline-flex items-center gap-1 max-w-full px-2 py-0.5 rounded-full border text-[11px] font-medium ${
+                  className={`inline-flex items-center gap-1 max-w-full px-2.5 py-0.5 rounded-full border text-xs font-semibold ${
                     changed ? 'border-sky-500/40 bg-sky-500/10 text-sky-200' : 'border-emerald-500/35 bg-emerald-500/10 text-emerald-200'
                   }`}
                 >
@@ -70,16 +70,17 @@ export const DecisionChips: React.FC<DecisionChipsProps> = ({ messageId, decisio
                     setError(null);
                     setOpen(changing ? null : d.index);
                   }}
-                  className="shrink-0 -my-1 px-2.5 py-1.5 min-h-8 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 border border-zinc-700/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                  className="shrink-0 -my-1 inline-flex items-center gap-1.5 px-2.5 py-1.5 min-h-9 rounded-lg text-xs font-medium text-zinc-200 hover:text-zinc-50 hover:bg-zinc-800 border border-zinc-700/70 active:scale-[0.97] motion-reduce:active:scale-100 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
                 >
+                  {!changing && <Pencil size={12} aria-hidden="true" />}
                   {changing ? 'Keep it' : 'Change'}
                 </button>
               )}
             </div>
-            {d.why && <p className="mt-1 text-[11px] text-zinc-500 break-words">Why: {d.why}</p>}
+            {d.why && <p className="mt-1 text-xs text-zinc-400 break-words">Why: {d.why}</p>}
             {changing && (
-              <div id={panelId} className="mt-2 pt-2 border-t border-zinc-800 space-y-1.5">
-                <p className="text-[11px] text-zinc-400">Pick another one. The bot redoes what depended on it.</p>
+              <div id={panelId} className="mt-2 pt-2 border-t border-zinc-700/50 space-y-1.5">
+                <p className="text-xs text-zinc-400">Pick another one. The bot redoes what depended on it.</p>
                 <div role="group" aria-label={`Other choices for: ${d.question || d.picked}`} className="flex flex-col sm:flex-row sm:flex-wrap gap-1.5">
                   {others.map((o) => (
                     <button
@@ -95,7 +96,7 @@ export const DecisionChips: React.FC<DecisionChipsProps> = ({ messageId, decisio
                   ))}
                 </div>
                 {error && (
-                  <p role="alert" className="text-[11px] text-rose-300">
+                  <p role="alert" className="text-xs text-rose-300">
                     {error}
                   </p>
                 )}

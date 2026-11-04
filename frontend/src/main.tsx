@@ -6,6 +6,8 @@ import { AuthGate } from './components/AuthGate';
 import { captureInstallPrompt, registerServiceWorker, trackAppHeight } from './pwa';
 import './styles/fonts.css';
 import './styles/modern.css';
+import './styles/stream.css';
+import './styles/needsYou.css';
 
 registerServiceWorker();
 captureInstallPrompt();

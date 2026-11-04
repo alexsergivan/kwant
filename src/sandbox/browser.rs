@@ -36,6 +36,29 @@ pub(crate) async fn connect_cdp(url: &str) -> Result<WsStream, BrowserError> {
     Ok(ws)
 }
 
+/// Reads `ws` until the reply to command `id`. The outer `Err` means the connection broke (closed
+/// or a socket error); the inner one is Chrome's own error reply on a healthy connection.
+async fn await_reply(ws: &mut WsStream, id: u64) -> Result<Result<Value, BrowserError>, BrowserError> {
+    while let Some(msg) = ws.next().await {
+        match msg {
+            Ok(Message::Text(txt)) => {
+                let Ok(parsed) = serde_json::from_str::<Value>(&txt) else { continue };
+                if parsed.get("id").and_then(|v| v.as_u64()) != Some(id) {
+                    continue;
+                }
+                if let Some(err) = parsed.get("error") {
+                    return Ok(Err(BrowserError::Protocol(err.to_string())));
+                }
+                return Ok(Ok(parsed.get("result").cloned().unwrap_or(Value::Null)));
+            }
+            Ok(Message::Close(_)) => return Err(BrowserError::Protocol("Connection closed before response".into())),
+            Err(e) => return Err(BrowserError::Ws(e.to_string())),
+            _ => continue,
+        }
+    }
+    Err(BrowserError::Protocol("Connection closed before response".into()))
+}
+
 /// `function(needle)` evaluated in the page. Collects visible interactive elements (incl. open
 /// shadow roots and same-origin iframes), topmost first. With a needle, picks the best label match
 /// and either returns its viewport center (when nothing covers it) or clicks it directly. With
@@ -1077,9 +1100,32 @@ impl BrowserController {
     ) -> Result<(), BrowserError> {
         if guard.is_none() {
             let ws_url = self.get_ws_url().await?;
-            **guard = Some(connect_cdp(&ws_url).await?);
+            let mut ws = connect_cdp(&ws_url).await?;
+            tracing::debug!(target_id = ?self.target_id, "opened a DevTools connection");
+            self.reapply_viewport(&mut ws).await;
+            **guard = Some(ws);
         }
         Ok(())
+    }
+
+    /// Chrome drops a session's `Emulation` overrides when its DevTools connection closes, so a
+    /// new connection would show the page at the window's own size (1280×713 in a 1280×800
+    /// headless window). Puts the fixed viewport back on it before anything else is sent.
+    async fn reapply_viewport(&self, ws: &mut WsStream) {
+        let Some((width, height)) = *self.viewport.lock().unwrap_or_else(|e| e.into_inner()) else { return };
+        let id = self.msg_id.fetch_add(1, Ordering::SeqCst);
+        let request = json!({
+            "id": id,
+            "method": "Emulation.setDeviceMetricsOverride",
+            "params": {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": false},
+        });
+        let sent = match ws.send(Message::Text(request.to_string())).await {
+            Ok(()) => timeout(Duration::from_secs(5), await_reply(ws, id)).await.map_err(|_| BrowserError::Timeout).and_then(|r| r.and_then(|r| r)),
+            Err(e) => Err(BrowserError::Ws(e.to_string())),
+        };
+        if let Err(e) = sent {
+            tracing::warn!(error = %e, "couldn't put the browser viewport back on a new DevTools connection");
+        }
     }
 
     pub async fn send_cdp_command(
@@ -1110,39 +1156,22 @@ impl BrowserController {
 
         let deadline = Duration::from_secs(15);
         let ws = guard.as_mut().unwrap();
-        let timeout_res = timeout(deadline, async {
-            while let Some(msg) = ws.next().await {
-                match msg {
-                    Ok(Message::Text(txt)) => {
-                        if let Ok(parsed) = serde_json::from_str::<Value>(&txt) {
-                            if parsed.get("id").and_then(|v| v.as_u64()) == Some(id) {
-                                if let Some(err) = parsed.get("error") {
-                                    return Err(BrowserError::Protocol(err.to_string()));
-                                }
-                                return Ok(parsed.get("result").cloned().unwrap_or(Value::Null));
-                            }
-                        }
-                    }
-                    Ok(Message::Close(_)) => {
-                        return Err(BrowserError::Protocol("Connection closed before response".into()));
-                    }
-                    Err(e) => {
-                        return Err(BrowserError::Ws(e.to_string()));
-                    }
-                    _ => continue,
+        match timeout(deadline, await_reply(ws, id)).await {
+            // Chrome answered with an error: the connection is fine, and replacing it would
+            // drop the session's overrides (the fixed viewport), so keep it
+            Ok(Ok(reply)) => {
+                if let Err(e) = &reply {
+                    tracing::debug!(method, error = %e, "DevTools error reply; keeping the connection");
                 }
+                reply
             }
-            Err(BrowserError::Protocol("Connection closed before response".into()))
-        })
-        .await;
-
-        match timeout_res {
-            Ok(Ok(val)) => Ok(val),
             Ok(Err(e)) => {
+                tracing::debug!(method, error = %e, "DevTools connection lost; the next command opens a new one");
                 *guard = None;
                 Err(e)
             }
             Err(_) => {
+                tracing::debug!(method, "DevTools command timed out; the next command opens a new one");
                 *guard = None;
                 Err(BrowserError::Timeout)
             }

@@ -43,6 +43,9 @@ pub enum Outcome {
     ResolvedAuto,
     /// Nobody solved the CAPTCHA within the time limit.
     TimedOut,
+    /// Not an answer: another turn of the bot in this chat already asked for the same sign-in and
+    /// is waiting on it, so this turn steps aside. The step stays open.
+    AlreadyAsked,
 }
 
 impl Outcome {
@@ -52,6 +55,7 @@ impl Outcome {
             Outcome::Declined => "declined",
             Outcome::ResolvedAuto => "resolved_auto",
             Outcome::TimedOut => "timed_out",
+            Outcome::AlreadyAsked => "open",
         }
     }
 }
@@ -292,8 +296,8 @@ fn outcome_text(outcome: Option<Outcome>, captcha: bool) -> String {
         Some(Outcome::Done) => "The person says the step is done and handed the browser back. Look at the page \
             again (browser_page) before you continue."
             .into(),
-        Some(Outcome::Declined) => "The person declined the step. Don't ask again: carry on without it if you can, or \
-            end your turn and say plainly what is blocked."
+        Some(Outcome::Declined) => "The person declined the step. Don't ask for it again in this turn unless the person \
+            brings it up: carry on without it if you can, or end your turn and say plainly what is blocked."
             .into(),
         Some(Outcome::ResolvedAuto) => "The human check is gone from the page (solved or passed), and the browser is \
             yours again. Look at the page again (browser_page) and continue."
@@ -301,6 +305,10 @@ fn outcome_text(outcome: Option<Outcome>, captcha: bool) -> String {
         Some(Outcome::TimedOut) => "The person didn't solve the CAPTCHA in time, so the step was closed. Don't wait for \
             it or ask again now: skip this site and use another source (an official API or a site you're signed in to), \
             or tell the person you'll try this site later."
+            .into(),
+        Some(Outcome::AlreadyAsked) => "You already asked the person for this sign-in in another turn in this chat, and \
+            that turn is waiting for their answer, so no new card was made. Don't ask again: end your turn now, at most \
+            with one line saying you're waiting for them to sign in. The other turn carries on once they answer."
             .into(),
         None if captcha => "The person hasn't solved the CAPTCHA yet. Don't ask again: end your turn now with a short \
             note on what you're waiting for. The step closes by itself once the check is gone or the time runs out, \
@@ -373,7 +381,14 @@ pub async fn raise(
             });
         }
     };
-    // The turn asked again for a step it already has open: wait on that one
+    // Another turn of this bot asked for the same sign-in and still waits on it: one card and one
+    // waiter, and this turn steps aside instead of the person being asked twice
+    if !is_new && step.turn_id != place.turn_id && hub.is_waiting(&step.id) {
+        tracing::info!(human_step_id = %step.id, kwant_id = %scope.kwant_id, "sign-in already asked for in another turn");
+        return Ok(Some(Outcome::AlreadyAsked));
+    }
+    // The turn asked again for a step it already has open (or one no turn waits on any more):
+    // wait on that one
     let mut rx = match waiter {
         Some((_, rx)) => rx,
         None => hub.register(&step.id),
@@ -639,7 +654,7 @@ async fn resume(state: &AppState, s: &HumanStep, outcome: Outcome) {
             s.reason
         ),
         Outcome::Declined => format!(
-            "[The person declined the browser step you asked for earlier]\nStep: {}\n\nDon't ask again. Carry on without it if you can, or say plainly what is blocked.",
+            "[The person declined the browser step you asked for earlier]\nStep: {}\n\nDon't ask for it again unless the person brings it up. Carry on without it if you can, or say plainly what is blocked.",
             s.reason
         ),
         Outcome::ResolvedAuto => format!(
@@ -651,6 +666,8 @@ async fn resume(state: &AppState, s: &HumanStep, outcome: Outcome) {
              continue with another source (an official API or a site you're signed in to), or tell the person you'll try this site later.",
             s.reason
         ),
+        // Not an answer: nothing to tell a new turn.
+        Outcome::AlreadyAsked => return,
     };
     tokio::spawn(async move {
         let _job = job;
@@ -687,7 +704,11 @@ mod tests {
     #[test]
     fn the_agent_hears_each_outcome_plainly() {
         assert!(outcome_text(Some(Outcome::Done), false).contains("Look at the page"));
-        assert!(outcome_text(Some(Outcome::Declined), false).contains("declined"));
+        let declined = outcome_text(Some(Outcome::Declined), false);
+        assert!(declined.contains("declined") && declined.contains("Don't ask for it again in this turn unless the person brings it up"));
+        let asked = outcome_text(Some(Outcome::AlreadyAsked), false);
+        assert!(asked.contains("already asked") && asked.contains("Don't ask again") && asked.contains("end your turn"));
+        assert_eq!(Outcome::AlreadyAsked.status(), "open", "the step stays open for the turn that waits on it");
         assert!(outcome_text(None, false).contains("end your turn"));
         assert!(outcome_text(Some(Outcome::ResolvedAuto), true).contains("continue"));
         let timed_out = outcome_text(Some(Outcome::TimedOut), true);

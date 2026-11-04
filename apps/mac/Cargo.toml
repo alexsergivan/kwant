@@ -16,7 +16,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 kwnt = { path = "../.." }
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# macos-private-api: the "needs you" pill is a transparent window (macOSPrivateApi in tauri.conf.json)
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-updater = "2"
 tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "macros", "time"] }
 serde_json = "1.0"
@@ -27,6 +28,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # A second launch focuses the running app (macOS does this itself)
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 tauri-plugin-single-instance = "2"
+
+# Reads System Settings › Accessibility › Reduce motion for the nudge (already in the tree via Tauri)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
+
+# Desktop notifications for the nudge over D-Bus (already in the tree via the single-instance plugin)
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
 
 [profile.release]
 codegen-units = 4

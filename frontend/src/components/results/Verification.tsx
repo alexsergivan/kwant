@@ -40,7 +40,14 @@ const STATUS_COLOR: Record<CheckStatus, string> = {
   passed: 'text-emerald-400',
   failed: 'text-rose-400',
   error: 'text-amber-400',
-  pending: 'text-zinc-500',
+  pending: 'text-zinc-400',
+};
+
+const STATUS_PILL: Record<CheckStatus, string> = {
+  passed: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+  failed: 'border-rose-500/40 bg-rose-500/10 text-rose-300',
+  error: 'border-amber-500/40 bg-amber-500/10 text-amber-300',
+  pending: 'border-zinc-600 bg-zinc-800/60 text-zinc-300',
 };
 
 function formatWhen(s: string | null): string | null {
@@ -51,14 +58,14 @@ function formatWhen(s: string | null): string | null {
 
 /** A task's outcome checks: the summary line, then each check with status, an expandable excerpt, and time. */
 export const Verification: React.FC<RendererProps<VerificationBlock>> = ({ block }) => (
-  <div data-smart-result="verification" data-block-id={block.id} className="my-3.5 rounded-xl border border-zinc-800 bg-zinc-950/70 shadow-sm">
-    <div className="border-b border-zinc-800 px-3.5 py-2.5">
-      <p className="text-xs font-medium text-zinc-200">{block.summary}</p>
-      <p className="mt-0.5 truncate text-[11px] text-zinc-500" title={block.target.title}>
+  <div data-smart-result="verification" data-block-id={block.id} className="my-3.5 rounded-xl border border-zinc-700/60 bg-zinc-900/60 shadow-[var(--kws-shadow)]">
+    <div className="border-b border-zinc-700/60 px-3.5 py-3">
+      <p className="text-sm font-semibold text-zinc-100">{block.summary}</p>
+      <p className="mt-0.5 truncate text-[11px] text-zinc-400" title={block.target.title}>
         {block.target.title}
       </p>
     </div>
-    <ul role="list" className="divide-y divide-zinc-800/60">
+    <ul role="list" className="divide-y divide-zinc-700/40">
       {block.checks.map((check) => {
         const Icon = STATUS_ICON[check.status];
         const when = formatWhen(check.checked_at);
@@ -68,12 +75,12 @@ export const Verification: React.FC<RendererProps<VerificationBlock>> = ({ block
               <Icon size={14} className={`mt-0.5 shrink-0 ${STATUS_COLOR[check.status]}`} aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                  <span className="text-xs font-medium text-zinc-200 [overflow-wrap:anywhere]">{check.label}</span>
-                  <span className={`text-[11px] font-medium ${STATUS_COLOR[check.status]}`}>{STATUS_TEXT[check.status]}</span>
-                  <span className="text-[11px] text-zinc-600">{check.kind}</span>
+                  <span className="text-xs font-medium text-zinc-100 [overflow-wrap:anywhere]">{check.label}</span>
+                  <span className={`rounded-full border px-2 py-px text-[11px] font-medium ${STATUS_PILL[check.status]}`}>{STATUS_TEXT[check.status]}</span>
+                  <span className="text-[11px] text-zinc-400">{check.kind}</span>
                 </div>
                 {when && (
-                  <div className="mt-0.5 flex items-center gap-1 text-[11px] text-zinc-500">
+                  <div className="mt-0.5 flex items-center gap-1 text-[11px] text-zinc-400">
                     <Clock size={10} aria-hidden="true" />
                     {when}
                   </div>

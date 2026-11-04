@@ -10,6 +10,12 @@ name: linux
 # Built on ubuntu-22.04 so the AppImage runs on distros with glibc 2.35 or newer. The updater
 # artifacts (.AppImage.sig, .deb.sig) are signed with a throwaway key on pull requests and manual
 # runs; only tag builds get the release key, so no PR code ever runs with it.
+#
+# For AppImage tools and the AppImage catalog (appimage.github.io), the AppImage carries update
+# information that points at kwant_x86_64.AppImage.zsync in the latest GitHub release, and both
+# packages carry AppStream metainfo (apps/mac/linux/si.kwant.kwant.appdata.xml). The .zsync is made
+# here, under the release file name, so pull requests exercise it too; the "catalog checks" job
+# validates all of it from the uploaded artifact, the way the catalog's own test does.
 on:
   workflow_call:
   workflow_dispatch:
@@ -30,6 +36,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # AppImageUpdate and the catalog read this from the AppImage's .upd_info section
+  APPIMAGE_UPDATE_INFORMATION: "gh-releases-zsync|alexsergivan|kwant|latest|kwant_x86_64.AppImage.zsync"
 
 jobs:
   appimage-deb:
@@ -42,7 +50,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf xvfb xauth
+            libayatana-appindicator3-dev librsvg2-dev patchelf xvfb xauth zsync
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -69,10 +77,31 @@ jobs:
       - name: Release updater key
         if: startsWith(github.ref, 'refs/tags/mac-v')
         run: python3 -c 'import json; print(json.load(open("apps/mac/tauri.conf.json"))["plugins"]["updater"]["pubkey"])' > "$RUNNER_TEMP/updater.pub"
+      # The packaged metainfo names the version being built, dated by its CHANGELOG section
+      # (today on pull requests that come before one).
+      - name: AppStream release entry
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import json; print(json.load(open("apps/mac/tauri.conf.json"))["version"])')
+          date=$(sed -n "s/^## \[Mac ${version//./\\.}\] - \([0-9-]*\).*/\1/p" CHANGELOG.md | head -1)
+          [ -n "$date" ] || date=$(date -u +%F)
+          python3 - "$version" "$date" apps/mac/linux/si.kwant.kwant.appdata.xml <<'PY'
+          import re, sys
+          version, date, path = sys.argv[1:]
+          text = open(path).read()
+          text, n = re.subn(r'<release version="[^"]*" date="[^"]*"/>', f'<release version="{version}" date="{date}"/>', text, count=1)
+          if n != 1:
+              sys.exit(f"no <release> entry in {path}")
+          open(path, "w").write(text)
+          PY
+          grep -n '<release ' apps/mac/linux/si.kwant.kwant.appdata.xml
       - name: Build the .deb and AppImage
         working-directory: apps/mac
         timeout-minutes: 30
         env:
+          # linuxdeploy-plugin-appimage embeds it before Tauri signs the AppImage, so the .sig stays valid
+          LDAI_UPDATE_INFORMATION: ${{ env.APPIMAGE_UPDATE_INFORMATION }}
+          UPDATE_INFORMATION: ${{ env.APPIMAGE_UPDATE_INFORMATION }}
           IS_TAG: ${{ startsWith(github.ref, 'refs/tags/mac-v') }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ startsWith(github.ref, 'refs/tags/mac-v') && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/mac-v') && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
@@ -109,6 +138,19 @@ jobs:
           done
           echo "deb=$PWD/$deb" >> "$GITHUB_OUTPUT"
           echo "appimage=$PWD/$appimage" >> "$GITHUB_OUTPUT"
+      # The static AppImage runtime answers this without FUSE
+      - name: AppImage update information
+        env:
+          APPIMAGE: ${{ steps.bundle.outputs.appimage }}
+        run: |
+          set -euo pipefail
+          chmod +x "$APPIMAGE"
+          info=$("$APPIMAGE" --appimage-updateinformation | tr -d '\000' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+          echo "update information: $info"
+          if [ "$info" != "$APPIMAGE_UPDATE_INFORMATION" ]; then
+            echo "::error::the AppImage's update information is \"$info\", expected \"$APPIMAGE_UPDATE_INFORMATION\""
+            exit 1
+          fi
       - name: Inspect the packages
         env:
           DEB: ${{ steps.bundle.outputs.deb }}
@@ -120,6 +162,7 @@ jobs:
           grep -Eq ' (\./)?usr/bin/kwant$' "$RUNNER_TEMP/deb-files.txt"
           grep -Eq ' (\./)?usr/share/applications/kwant\.desktop$' "$RUNNER_TEMP/deb-files.txt"
           grep -Eq ' (\./)?usr/share/icons/hicolor/[^/]+/apps/kwant\.png$' "$RUNNER_TEMP/deb-files.txt"
+          grep -Eq ' (\./)?usr/share/metainfo/si\.kwant\.kwant\.appdata\.xml$' "$RUNNER_TEMP/deb-files.txt"
           depends=$(dpkg-deb -f "$DEB" Depends)
           echo "Depends: $depends"
           for dep in libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 python3-venv xdg-utils; do
@@ -182,6 +225,53 @@ jobs:
           cat "$KWNT_DATA_DIR/desktop-app.log" || true
           test -n "$ok"
           echo "$body" | grep -q '"app":"kwnt"'
+      # The "needs you" nudge on Linux: the tray icon swaps to the "!" mark and a system notification
+      # names who needs you. Runs the built app's --demo-nudge (its own temp data dir and a free port)
+      # on a virtual display with a tray (stalonetray) and a notification daemon (dunst), and keeps
+      # screenshots as the nudge-linux artifact. Pictures never fail the job; the app crashing does.
+      - name: Nudge screenshots (--demo-nudge)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        timeout-minutes: 8
+        working-directory: apps/mac/target/release
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/nudge-linux"
+          mkdir -p "$out"
+          sudo apt-get install -y --no-install-recommends dunst stalonetray imagemagick x11-utils > /dev/null || true
+          cat > "$RUNNER_TEMP/nudge-run.sh" <<'SH'
+          #!/bin/bash
+          out="$1"; app="$2"
+          stalonetray --geometry 6x1+0+0 --icon-size 32 --background '#1e1e1e' > "$out/stalonetray.txt" 2>&1 &
+          dunst > "$out/dunst.txt" 2>&1 &
+          sleep 2
+          "$app" --demo-nudge > "$out/demo-nudge.txt" 2>&1 &
+          pid=$!
+          shot() { sleep "$2"; command -v import > /dev/null && import -window root "$out/$1.png" || true; }
+          waitfor() { for _ in $(seq 1 240); do grep -q "$1" "$out/demo-nudge.txt" && return 0; kill -0 $pid 2> /dev/null || return 1; sleep 0.5; done; return 1; }
+          waitfor 'demo-nudge: step 1' && shot 01-tray-and-notification 2
+          waitfor 'demo-nudge: step 3' && shot 02-three-waiting 2
+          waitfor 'demo-nudge: step 4' && shot 03-four-waiting 2
+          if ! kill -0 $pid 2> /dev/null; then
+            wait $pid; echo "kwant --demo-nudge exited early with $?" >> "$out/demo-nudge.txt"; exit 1
+          fi
+          waitfor 'demo-nudge: done'
+          wait $pid
+          SH
+          chmod +x "$RUNNER_TEMP/nudge-run.sh"
+          xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- "$RUNNER_TEMP/nudge-run.sh" "$out" "$PWD/kwant"
+          status=$?
+          cat "$out/demo-nudge.txt" || true
+          ls -l "$out"
+          test $status -eq 0 || { echo "::error::kwant --demo-nudge crashed or stopped early"; exit 1; }
+          grep -q 'demo-nudge: step 4' "$out/demo-nudge.txt" || { echo "::error::the demo never reached step 4"; exit 1; }
+          grep -q 'demo-nudge: notification' "$out/demo-nudge.txt" || echo "::warning::no notification was shown (no notification service on the virtual display?)"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          name: nudge-linux
+          path: ${{ runner.temp }}/nudge-linux
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Collect the packages
         env:
           DEB: ${{ steps.bundle.outputs.deb }}
@@ -191,6 +281,18 @@ jobs:
           out="$RUNNER_TEMP/linux"
           mkdir -p "$out"
           cp "$DEB" "$DEB.sig" "$APPIMAGE" "$APPIMAGE.sig" "$out/"
+          # The .zsync AppImageUpdate fetches, made over these exact bytes under the name the release
+          # gives them (any .zsync the bundler wrote has the old name and is ignored)
+          zs="$RUNNER_TEMP/zsync"
+          mkdir -p "$zs"
+          cp "$APPIMAGE" "$zs/kwant_x86_64.AppImage"
+          (cd "$zs" && zsyncmake -u kwant_x86_64.AppImage -o "$out/kwant_x86_64.AppImage.zsync" kwant_x86_64.AppImage)
+          head -c 400 "$out/kwant_x86_64.AppImage.zsync" | sed -n '/^$/q;p'
+          want=$(sha1sum "$APPIMAGE" | cut -d' ' -f1)
+          got=$(sed -n 's/^SHA-1: //p' "$out/kwant_x86_64.AppImage.zsync" | head -1)
+          [ "$got" = "$want" ] || { echo "::error::the .zsync's SHA-1 $got doesn't match the AppImage's $want"; exit 1; }
+          grep -qx 'Filename: kwant_x86_64.AppImage' "$out/kwant_x86_64.AppImage.zsync"
+          grep -qx 'URL: kwant_x86_64.AppImage' "$out/kwant_x86_64.AppImage.zsync"
           cd "$out"
           for f in *.deb *.AppImage; do sha256sum "$f" > "$f.sha256"; done
           ls -l
@@ -200,3 +302,63 @@ jobs:
           path: ${{ runner.temp }}/linux
           if-no-files-found: error
           retention-days: 14
+
+  # What the AppImage catalog's test checks, on the packages as uploaded: AppStream metainfo
+  # (appstreamcli validate-tree, as the catalog runs it on ubuntu-latest), the desktop file, the
+  # update information and the .zsync next to it.
+  catalog-checks:
+    name: catalog checks
+    needs: appimage-deb
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends appstream desktop-file-utils
+          appstreamcli --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: linux
+      - name: Unpack the packages
+        working-directory: linux
+        run: |
+          set -euo pipefail
+          appimage=$(ls *_amd64.AppImage)
+          deb=$(ls *_amd64.deb)
+          chmod +x "$appimage"
+          "./$appimage" --appimage-extract > /dev/null
+          mv squashfs-root "$RUNNER_TEMP/appdir"
+          dpkg-deb -x "$deb" "$RUNNER_TEMP/debroot"
+          echo "APPIMAGE=$PWD/$appimage" >> "$GITHUB_ENV"
+      - name: AppStream metainfo
+        run: |
+          set -euo pipefail
+          for root in "$RUNNER_TEMP/appdir" "$RUNNER_TEMP/debroot"; do
+            f="$root/usr/share/metainfo/si.kwant.kwant.appdata.xml"
+            test -f "$f"
+            grep -n '<release ' "$f"
+            appstreamcli validate --no-net --pedantic "$f"
+            appstreamcli validate-tree --pedantic "$root"
+          done
+      - name: Desktop file
+        run: |
+          set -euo pipefail
+          for f in "$RUNNER_TEMP/appdir/usr/share/applications/kwant.desktop" "$RUNNER_TEMP/debroot/usr/share/applications/kwant.desktop"; do
+            cat "$f"
+            desktop-file-validate "$f"
+          done
+      - name: Update information and .zsync
+        working-directory: linux
+        run: |
+          set -euo pipefail
+          info=$("$APPIMAGE" --appimage-updateinformation | tr -d '\000' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+          echo "update information: $info"
+          [ "$info" = "$APPIMAGE_UPDATE_INFORMATION" ] || { echo "::error::expected \"$APPIMAGE_UPDATE_INFORMATION\""; exit 1; }
+          zsync_file=$(echo "$info" | cut -d'|' -f5)
+          test -f "$zsync_file"
+          want=$(sha1sum "$APPIMAGE" | cut -d' ' -f1)
+          got=$(sed -n 's/^SHA-1: //p' "$zsync_file" | head -1)
+          echo "SHA-1: AppImage $want, .zsync $got"
+          [ "$got" = "$want" ] || { echo "::error::the .zsync's SHA-1 doesn't match the AppImage"; exit 1; }

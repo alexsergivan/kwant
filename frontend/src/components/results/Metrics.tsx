@@ -22,15 +22,15 @@ export const Metrics: React.FC<RendererProps<MetricsBlock>> = ({ block }) => (
   <div data-smart-result="metrics" data-block-id={block.id}>
     <ul role="list" className="my-3.5 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
       {block.items.map((item) => (
-        <li key={item.id} className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2.5 shadow-sm min-w-0">
-          <div className="truncate text-[11px] text-zinc-500" title={item.label}>
+        <li key={item.id} className="relative overflow-hidden rounded-xl border border-zinc-700/60 bg-zinc-900/60 px-3.5 py-3 shadow-[var(--kws-shadow)] min-w-0 before:absolute before:inset-x-0 before:top-0 before:h-0.5 before:bg-gradient-to-r before:from-sky-400/80 before:to-sky-400/0">
+          <div className="truncate text-xs text-zinc-400" title={item.label}>
             {item.label}
           </div>
-          <div className="mt-0.5 flex items-baseline gap-1 text-lg font-semibold text-zinc-100 [overflow-wrap:anywhere]">
+          <div className="mt-1 flex items-baseline gap-1 text-xl font-semibold tracking-tight text-zinc-100 [overflow-wrap:anywhere]">
             <span>{item.value_text}</span>
-            {item.unit && !item.value_text.includes(item.unit) && <span className="text-xs font-normal text-zinc-500">{item.unit}</span>}
+            {item.unit && !item.value_text.includes(item.unit) && <span className="text-xs font-normal text-zinc-400">{item.unit}</span>}
           </div>
-          {item.note && <div className="mt-0.5 text-[11px] leading-snug text-zinc-500 [overflow-wrap:anywhere]">{item.note}</div>}
+          {item.note && <div className="mt-1 text-xs leading-snug text-zinc-400 [overflow-wrap:anywhere]">{item.note}</div>}
         </li>
       ))}
     </ul>

@@ -1,6 +1,11 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { ArrowDown, ArrowUp, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, Loader2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { BotHome } from './BotHome';
+import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
+import { moodNoticed } from '../kwantMood';
+import { NewTag } from './NewTag';
+import { markNewSeen } from '../whatsNew';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
@@ -16,7 +21,7 @@ import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
 import { FailoverNote, ReplyMeta } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
-import { savedFailoverNotice } from '../failover';
+import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
 import { BotActionMeta, HireMeta, parseBotActionMeta, parseHireMeta } from '../botActions';
 import {
@@ -40,7 +45,7 @@ import { replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
-import { routeReasonText } from '../routeReason';
+import { routeChipLabel, routeReasonText } from '../routeReason';
 import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
@@ -48,7 +53,8 @@ import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhea
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
-import { SmartActionsSlot } from './results/SmartActions';
+import { SmartActionsSlot, actionClass } from './results/SmartActions';
+import { WorkingStrip } from './WorkingStrip';
 import { COMPOSE_PREFILL_EVENT, withPrefill } from './results/SmartResult';
 import { FilesPreviewOnly } from './results/Files';
 
@@ -166,6 +172,8 @@ export interface ChatViewProps {
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   /** Prompts offered above an empty chat, made from who is in it; none hides the bar. */
   suggestions?: string[];
+  /** What kind of chat this is, for the empty-chat home and the composer's "who answers" pill. */
+  home?: ChatHome;
   discussionState?: DiscussionState;
   routingState?: RoutingState | null;
   onCancelDiscussion?: () => void;
@@ -278,117 +286,6 @@ export const renderFormattedText = (text: string): React.ReactNode => {
   });
 };
 
-interface Reroute {
-  /** The reply's id, for element ids. */
-  key: string;
-  targets: Array<{ id: string; name: string; title: string }>;
-  onPick: (kwantId: string) => Promise<string | void>;
-}
-
-/** Why Laya picked this bot. Phones show one line and open the rest on a tap. With `reroute`, a
- *  "Wrong bot?" link opens the other bots here; picking one teaches routing and asks that bot. */
-const RoutingLine: React.FC<{ text: string; fallback: boolean; reroute?: Reroute }> = ({ text, fallback, reroute }) => {
-  const [open, setOpen] = useState(false);
-  const [picking, setPicking] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [sentTo, setSentTo] = useState<string | null>(null);
-  const tone = fallback ? 'text-amber-300/80' : 'text-violet-300/80';
-  const icon = <Sparkles size={10} className="inline -mt-0.5 mr-1" aria-hidden="true" />;
-  const panelId = reroute ? `reroute-${reroute.key}` : undefined;
-  const canReroute = !!reroute && reroute.targets.length > 0;
-
-  const pick = async (k: { id: string; name: string }) => {
-    if (!reroute || busy) return;
-    setBusy(k.id);
-    setError(null);
-    const err = await reroute.onPick(k.id);
-    setBusy(null);
-    if (err) setError(err);
-    else {
-      setSentTo(k.name);
-      setPicking(false);
-    }
-  };
-
-  const wrongBot = canReroute && !sentTo && (
-    <button
-      type="button"
-      onClick={() => setPicking((v) => !v)}
-      aria-expanded={picking}
-      aria-controls={panelId}
-      className="shrink-0 py-1 sm:py-0 text-[11px] text-zinc-500 hover:text-zinc-200 underline decoration-dotted underline-offset-2 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-    >
-      Wrong bot?
-    </button>
-  );
-
-  return (
-    <>
-      <div className="hidden sm:flex items-baseline gap-2 -mt-1 mb-1.5 max-w-full min-w-0" data-routing-line>
-        <p className={`text-[11px] ${tone} break-words min-w-0`}>
-          {icon}
-          {text}
-        </p>
-        {wrongBot}
-      </div>
-      <div className="sm:hidden flex items-center gap-2 -mt-3.5 -mb-1.5 max-w-full min-w-0">
-        <button
-          type="button"
-          data-compact
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          title={open ? undefined : text}
-          className={`py-3.5 min-w-0 flex-1 text-left text-[11px] ${tone} ${open ? 'break-words' : 'truncate'} rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500`}
-        >
-          {icon}
-          {text}
-        </button>
-        {wrongBot}
-      </div>
-      {picking && reroute && (
-        <div id={panelId} role="group" aria-label="Send to another bot" className="mt-1 sm:mt-0 mb-2 max-w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2">
-          <p className="text-[11px] text-zinc-400 mb-1.5">Send your message to:</p>
-          <div className="flex flex-wrap gap-1.5">
-            {reroute.targets.map((k) => (
-              <button
-                key={k.id}
-                type="button"
-                disabled={busy !== null}
-                onClick={() => pick(k)}
-                title={k.title}
-                className="inline-flex items-center gap-1.5 min-h-[36px] sm:min-h-[28px] px-2.5 rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-100 hover:bg-zinc-800 disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-              >
-                {busy === k.id && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
-                <span>{k.name}</span>
-                {k.title && <span className="hidden sm:inline text-zinc-500">· {k.title}</span>}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setPicking(false)}
-              className="min-h-[36px] sm:min-h-[28px] px-2.5 rounded-lg text-xs text-zinc-400 hover:text-zinc-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-            >
-              Cancel
-            </button>
-          </div>
-          <p className="mt-1.5 text-[11px] text-zinc-500">Messages like this will go to the bot you pick from now on.</p>
-          {error && (
-            <p role="alert" className="mt-1 text-[11px] text-rose-400 break-words">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
-      {sentTo && (
-        <p role="status" className="-mt-0.5 mb-1.5 text-[11px] text-emerald-300/90">
-          Sent to {sentTo}. Messages like this will go to {sentTo} from now on.
-        </p>
-      )}
-    </>
-  );
-};
-
 const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> = ({ routing, spaceName }) => {
   const deciding = routing.phase === 'deciding';
   const isDiscuss = routing.mode === 'discuss';
@@ -495,6 +392,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   kwants: kwantsProp,
   teams: teamsProp,
   suggestions = [],
+  home,
   discussionState,
   routingState,
   onCancelDiscussion,
@@ -613,6 +511,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       id: k.id,
       name: k.name,
       title: k.title,
+      goodAt: goodAt(k),
       avatar_sprite: k.avatar_sprite,
     })),
     ...activeTeams.map((t) => ({
@@ -652,7 +551,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         const q = mentionQuery.toLowerCase();
         return (
           item.name.toLowerCase().includes(q) ||
-          (item.title && item.title.toLowerCase().includes(q))
+          (item.title && item.title.toLowerCase().includes(q)) ||
+          (item.goodAt?.some((g) => g.toLowerCase().includes(q)) ?? false)
         );
       })
     : [];
@@ -666,12 +566,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     setSelectedIndex(0);
   }, [mentionQuery]);
+  // The picker opening by any route (typing "@" or the button) counts as using the new mention: "New" goes.
+  useEffect(() => {
+    if (isMentionOpen) markNewSeen('mention');
+  }, [isMentionOpen]);
 
   const handleSelectMention = (item: MentionItem) => {
     if (mentionStartIndex < 0) return;
     const cursorPos = textareaRef.current?.selectionStart ?? inputVal.length;
     const textBefore = inputVal.slice(0, mentionStartIndex);
     const textAfter = inputVal.slice(cursorPos);
+    markNewSeen('mention');
     const mentionText = `@${item.name} `;
     const newVal = `${textBefore}${mentionText}${textAfter}`;
     setInputVal(newVal);
@@ -877,6 +782,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     playSfx('click');
     stickRef.current = true;
     onSendMessage(inputVal.trim(), readyAttachments(uploads));
+    // The bots this goes to blink once, so you see who received it.
+    recipientsOf(inputVal, activeKwants, home?.kind === 'bot' ? home.bot?.id : undefined).forEach(moodNoticed);
     setInputVal('');
     setUploads([]);
     setUploadNote(null);
@@ -958,6 +865,34 @@ export const ChatView: React.FC<ChatViewProps> = ({
     [switchNotes, messages, title],
   );
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
+
+  // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
+  const freshTrack = useRef<{ key: string | undefined; seen: Set<string> | null; fresh: Set<string>; streamEnded: number; wasStreaming: boolean }>({
+    key: undefined,
+    seen: null,
+    fresh: new Set(),
+    streamEnded: 0,
+    wasStreaming: false,
+  });
+  {
+    const t = freshTrack.current;
+    if (isStreaming) t.wasStreaming = true;
+    else if (t.wasStreaming) {
+      t.wasStreaming = false;
+      t.streamEnded = Date.now();
+    }
+    if (t.key !== contextKey || t.seen === null) {
+      t.key = contextKey;
+      t.seen = new Set(messages.map((m) => m.id));
+      t.fresh = new Set();
+    } else {
+      for (const m of messages) {
+        if (t.seen.has(m.id)) continue;
+        t.seen.add(m.id);
+        if (!isStreaming && Date.now() - t.streamEnded > 2500) t.fresh.add(m.id);
+      }
+    }
+  }
 
   const renderMessage = (msg: ChatMessage) => {
     const interruption = parseInterruption(msg);
@@ -1048,6 +983,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const text = shownDecisions ? shownDecisions.text : msg.text;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
     const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
+    // Whose mood the reply header shows (Pixel's AvatarMood, drawn by ModernAvatar given a kwantId):
+    // Laya's pick, else this bot chat's bot, else the team member with that name. Unknown: no mood.
+    const replyKwantId = isUser
+      ? undefined
+      : routed?.kwant_id ?? (home?.kind === 'bot' ? home.bot?.id : undefined) ?? activeKwants.find((k) => k.name === displayName)?.id;
 
     return (
       <div
@@ -1055,15 +995,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
         data-message-id={msg.id}
         className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? 'kw-flash' : ''
-        }`}
+        } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
         {/* Phones show the avatar inside the name line instead, so the bubble gets the full width */}
         <span className="hidden sm:contents">
-          <ModernAvatar
-            role={isUser ? 'user' : title}
-            name={displayName}
-            size={34}
-          />
+          {/* Laya hand-off: a reply she just routed brings the chosen bot's avatar up into the header */}
+          <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
+            <ModernAvatar
+              role={isUser ? 'user' : title}
+              name={displayName}
+              size={36}
+              kwantId={replyKwantId}
+            />
+          </span>
         </span>
 
         <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-[85%] sm:max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
@@ -1076,12 +1020,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <ReplyMeta
               name={displayName}
               at={msg.created_at}
-              avatar={<ModernAvatar role={title} name={displayName} size={20} />}
+              avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={20} kwantId={replyKwantId} /></span>}
               ranOn={ranOn}
               account={account}
               tokens={tokens}
               failed={!!savedActivity?.steps.some((s) => s.status === 'failed')}
               note={savedFailoverNotice(msg.meta) ?? switchNoteFor.get(msg.id)}
+              handoff={savedFailoverHandoff(msg.meta)}
+              route={
+                routed
+                  ? {
+                      label: routeChipLabel({ basis: routed.basis, fallback: routed.fallback }),
+                      text: routingLine(routed, spaceName ?? 'this space', (id) => activeKwants.find((k) => k.id === id)?.name),
+                      fallback: !!routed.fallback,
+                      reroute:
+                        onSendToOtherBot && questionOf.get(msg.id)
+                          ? {
+                              key: msg.id,
+                              targets: rerouteTargets.filter((k) => k.id !== routed.kwant_id && k.name !== displayName),
+                              onPick: (kwantId) => onSendToOtherBot(questionOf.get(msg.id)!, kwantId),
+                            }
+                          : undefined,
+                    }
+                  : undefined
+              }
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
@@ -1117,22 +1079,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
               )}
             </ReplyMeta>
-          )}
-
-          {routed && (
-            <RoutingLine
-              text={routingLine(routed, spaceName ?? 'this space', (id) => activeKwants.find((k) => k.id === id)?.name)}
-              fallback={!!routed.fallback}
-              reroute={
-                onSendToOtherBot && questionOf.get(msg.id)
-                  ? {
-                      key: msg.id,
-                      targets: rerouteTargets.filter((k) => k.id !== routed.kwant_id && k.name !== displayName),
-                      onPick: (kwantId) => onSendToOtherBot(questionOf.get(msg.id)!, kwantId),
-                    }
-                  : undefined
-              }
-            />
           )}
 
           {/* Message Body Bubble */}
@@ -1178,23 +1124,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
           {!isUser && msg.tool_calls && !savedActivity && <ToolCallsList raw={msg.tool_calls} />}
 
-          {/* Copy action */}
+          {/* Action row: icon chips; the smart-result actions portal in after Copy */}
           {!isUser && !filesOnly && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-zinc-500 text-xs max-w-full min-w-0">
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-zinc-400 text-xs max-w-full min-w-0">
               <button
                 type="button"
                 onClick={() => handleCopy(text, msg.id)}
-                className="px-2 py-1 rounded-md hover:bg-zinc-900 hover:text-zinc-300 transition-colors flex items-center gap-1.5 text-[11px] cursor-pointer"
+                className={actionClass}
                 title="Copy response"
               >
                 {copiedId === msg.id ? (
                   <>
-                    <Check size={12} className="text-emerald-400" />
-                    <span className="text-emerald-400 font-medium">Copied</span>
+                    <Check size={14} className="text-emerald-400" aria-hidden="true" />
+                    <span className="text-emerald-400">Copied</span>
                   </>
                 ) : (
                   <>
-                    <Copy size={12} />
+                    <Copy size={14} aria-hidden="true" />
                     <span className="sm:hidden">Copy</span>
                     <span className="hidden sm:inline">Copy markdown</span>
                   </>
@@ -1208,10 +1154,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
     );
   };
 
+  // The empty chat shows the bot home (a bot's own chat, or #general) instead of a bare pane and a row of chips
+  const showHome =
+    !!home && (home.kind === 'bot' || home.kind === 'general') && !welcome && messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
+  // Who answers what's typed: the chat decides, an @mention overrides
+  const target = answerTarget({
+    kind: home?.kind ?? 'channel',
+    text: inputVal,
+    botName: home?.bot?.name ?? title,
+    teamName,
+    names: activeKwants.map((k) => k.name).concat(activeTeams.map((t) => t.name)),
+  });
+  const insertAt = () => {
+    playSfx('click');
+    const el = textareaRef.current;
+    const next = inputVal && !/\s$/.test(inputVal) ? `${inputVal} @` : `${inputVal}@`;
+    setInputVal(next);
+    el?.focus();
+    requestAnimationFrame(() => checkMention(next, next.length));
+  };
+
   return (
-    <div className="flex-1 flex flex-col h-full bg-zinc-950 overflow-hidden">
+    <div className="flex-1 flex flex-col h-full bg-surface-main overflow-hidden">
       {/* Channel / bot header */}
-      <div className="h-14 shrink-0 border-b border-zinc-800/80 px-2 sm:px-6 gap-2 flex items-center justify-between bg-zinc-900/30 backdrop-blur-sm select-none">
+      <div className="h-14 shrink-0 border-b border-hairline px-2 sm:px-6 gap-2 flex items-center justify-between bg-surface-main/80 backdrop-blur-md select-none">
         {onBack && (
           <button
             type="button"
@@ -1222,12 +1188,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <ChevronLeft size={18} />
           </button>
         )}
+        {home?.kind === 'bot' && home.bot && (
+          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={34} kwantId={home.bot.id} className="rounded-xl" />
+        )}
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-zinc-100 flex items-center gap-2 min-w-0">
+          <h2 className="text-body font-semibold text-zinc-50 flex items-center gap-2 min-w-0">
             <span className="truncate">{title}</span>
             {titleExtra}
           </h2>
-          <p className="text-[11px] text-zinc-400 truncate max-w-lg mt-0.5">{subtitle}</p>
+          <p className="text-meta text-zinc-400 truncate max-w-lg">{subtitle}</p>
         </div>
 
         <div className="flex items-center gap-0.5 sm:gap-3 shrink-0">
@@ -1267,7 +1236,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <button
                   type="button"
                   onClick={onManageTeam}
-                  className="kw-head-btn flex items-center justify-center gap-1.5 max-sm:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+                  className="kw-head-btn flex items-center justify-center gap-1.5 max-sm:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
                   title="Team members and settings"
                   aria-label="Manage team"
                 >
@@ -1282,7 +1251,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onEditInstructions}
-              className="kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+              className="kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
               title="Pin instructions every bot reads in this channel"
               aria-label="Pin instructions"
             >
@@ -1295,7 +1264,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <button
               type="button"
               onClick={onEditKwant}
-              className="kw-head-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-300 bg-zinc-800/80 hover:bg-zinc-700/80 hover:text-zinc-100 border border-zinc-700/60 transition-colors shadow-sm cursor-pointer"
+              className="kw-head-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] hover:text-zinc-50 border border-hairline-strong transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
               title={`Edit ${title}'s name, avatar, model and persona`}
               aria-label={`Edit ${title}`}
             >
@@ -1304,17 +1273,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </button>
           )}
 
-          {isStreaming && !discussionState?.inProgress && onCancelDiscussion && (
-            <button
-              type="button"
-              onClick={onCancelDiscussion}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 transition-colors shadow-sm cursor-pointer"
-              title="Stop generation"
-            >
-              <Square size={10} fill="currentColor" />
-              <span>Stop</span>
-            </button>
-          )}
+          {/* No header Stop while the working strip shows (always, when a reply runs): the composer's stop square is the one Stop. */}
           {/* Sandbox VM & Live Browser Toggle Button */}
           <button
             type="button"
@@ -1322,10 +1281,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
               playSfx('click');
               toggleVm();
             }}
-            className={`kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border shadow-sm cursor-pointer ${
+            className={`kw-head-btn flex items-center justify-center gap-1.5 max-md:min-w-11 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
               vmOpen
-                ? 'text-sky-300 bg-sky-500/20 border-sky-500/40'
-                : 'text-zinc-300 bg-zinc-900 hover:bg-zinc-800 border-zinc-700/60 hover:text-zinc-100'
+                ? 'text-sky-200 bg-sky-400/15 border-sky-300/40'
+                : 'text-zinc-200 bg-white/[0.04] hover:bg-white/[0.09] border-hairline-strong hover:text-zinc-50'
             }`}
             title="Show or hide the bot's browser"
             aria-label="Bot browser"
@@ -1399,6 +1358,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-busy={isStreaming}
           >
         {welcome && messages.length === 0 && welcome}
+        {showHome && home && (
+          <div className="flex min-h-full items-center justify-center">
+            <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
+          </div>
+        )}
         {groupDiscussionThreads(messages).map((item) => {
           if (item.kind === 'message') return renderMessage(item.message);
           const threadKey = `thread:${item.id}`;
@@ -1470,12 +1434,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
                     {awaitingBrowser ? 'Waiting for you in the browser' : 'Waiting for your answer'}
                   </span>
-                ) : (
+                ) : discussionState?.inProgress ? (
                   <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping motion-reduce:animate-none" aria-hidden="true" />
-                    {discussionState?.inProgress ? 'Speaking...' : 'Generating...'}
+                    Speaking...
                   </span>
-                )}
+                ) : null /* "Generating" would repeat the working strip */}
               </div>
 
               {liveNote && <FailoverNote text={liveNote} />}
@@ -1506,15 +1470,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                       : 'Paused on the question above. Answer it there; this reply carries on from it.'}
                   </p>
                 ) : (
-                  <span className="inline-flex gap-1 py-1.5" aria-label="Waiting for the first words">
-                    {[0, 1, 2].map((i) => (
-                      <span
-                        key={i}
-                        className="w-1.5 h-1.5 rounded-full bg-zinc-500 animate-bounce motion-reduce:animate-none"
-                        style={{ animationDelay: `${i * 150}ms` }}
-                      />
-                    ))}
-                  </span>
+                  <div className="space-y-2.5 py-1" role="status" aria-label="Waiting for the first words">
+                    <div className="kws-skel h-3 w-11/12 rounded-full bg-zinc-700/60" />
+                    <div className="kws-skel h-3 w-9/12 rounded-full bg-zinc-700/60" style={{ animationDelay: '120ms' }} />
+                    <div className="kws-skel h-3 w-6/12 rounded-full bg-zinc-700/60" style={{ animationDelay: '240ms' }} />
+                  </div>
                 )}
               </div>
             </div>
@@ -1528,7 +1488,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
-      {messages.length <= 1 && suggestions.length > 0 && (
+      {messages.length <= 1 && suggestions.length > 0 && !showHome && (
         <ScrollRow
           className="kw-scroll-row px-3 sm:px-6 py-2 flex flex-nowrap sm:flex-wrap items-center gap-2 overflow-x-auto sm:overflow-visible select-none"
           role="group"
@@ -1550,8 +1510,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </ScrollRow>
       )}
 
+      <WorkingStrip
+        active={isStreaming}
+        name={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : streamingSpeakerName || title}
+        title={title}
+        live={liveActivity}
+        queued={!!queued}
+        awaitingAnswer={!!awaitingAnswer}
+        awaitingBrowser={!!awaitingBrowser}
+        writing={!!streamingText}
+      />
+
       {/* Modern Composer Input Bar */}
-      <div className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4 border-t border-zinc-800/80 bg-zinc-900/30">
+      <div className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4 border-t border-hairline bg-surface-side/60">
         {teamMembers && teamMembers.length > 0 && (
           <ScrollRow className="kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none" role="group" aria-label="Ask a member">
             <span className="shrink-0 text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
@@ -1617,8 +1588,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           onSubmit={handleSubmit}
           {...dropHandlers}
           aria-label={`Message ${title}`}
-          className={`relative max-w-4xl mx-auto flex flex-wrap items-end gap-2 bg-zinc-900 border rounded-2xl p-2 shadow-sm transition-all ${
-            dragOver ? 'border-sky-500/70 bg-sky-950/30' : 'border-zinc-800 focus-within:border-zinc-700'
+          className={`relative max-w-4xl mx-auto flex flex-wrap items-end gap-1.5 bg-surface-raised border rounded-2xl p-2 shadow-raised transition-colors ${
+            dragOver ? 'border-sky-500/70 bg-sky-950/30' : 'border-hairline-strong focus-within:border-sky-400/50'
           }`}
         >
           {dragOver && (
@@ -1656,6 +1627,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <textarea
             ref={textareaRef}
             data-composer
+            role="combobox"
+            aria-expanded={isMentionOpen}
+            aria-controls={isMentionOpen ? 'kw-mention-list' : undefined}
+            aria-activedescendant={isMentionOpen ? `kw-mention-${safeSelectedIndex}` : undefined}
+            aria-autocomplete="list"
             rows={1}
             value={inputVal}
             onChange={(e) => {
@@ -1685,7 +1661,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             placeholder={spaceName && !narrow ? `Message ${title} in ${spaceName}` : `Message ${title}`}
             title="Enter to send, Shift+Enter for a new line, @ to mention"
 
-            className="flex-1 min-w-0 bg-transparent px-3 py-1.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none max-h-40 leading-relaxed font-sans"
+            className="flex-1 min-w-0 bg-transparent px-3 py-1.5 text-body text-zinc-50 placeholder-zinc-400 focus:outline-none resize-none max-h-40 font-sans"
           />
           <input
             ref={fileInputRef}
@@ -1704,18 +1680,42 @@ export const ChatView: React.FC<ChatViewProps> = ({
             disabled={uploadSlotsLeft(uploads) === 0}
             title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : 'Attach files (or drop / paste them here). Max 20 MB each.'}
             aria-label="Attach files"
-            className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+            className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
           >
-            <Paperclip size={16} aria-hidden="true" />
+            <Paperclip size={17} aria-hidden="true" />
           </button>
+          <button
+            type="button"
+            onClick={() => {
+              markNewSeen('mention');
+              insertAt();
+            }}
+            title="Mention a bot: it answers instead of the default"
+            aria-label="Mention a bot"
+            className="relative w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+          >
+            <AtSign size={17} aria-hidden="true" />
+          </button>
+          {/* "New" sits just above the field's top edge, over the "@" button: never on or inside the border.
+              Only the send button follows "@" when it shows: 44px on phones / 36px from sm, plus a 6px gap;
+              11px is the form's border + padding. Hidden (not marked as seen) while a reply streams, so it
+              never sits on the working strip's edge and comes back after the turn; hidden while the mention
+              picker is open, so it never peeks under it. */}
+          {!isStreaming && (
+            <NewTag
+              id="mention"
+              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''}`}
+              style={{ right: 'calc(11px + var(--kw-cbtn-step))' }}
+            />
+          )}
 
           {isStreaming && (
             <button
               type="button"
               onClick={onCancelDiscussion}
-              className="w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 shadow-sm cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500"
-              title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop generation'}
-              aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop the reply'}
+              className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
+              title={discussionState?.inProgress ? 'Stop Discussion' : 'Stop'}
+              aria-label={discussionState?.inProgress ? 'Stop discussion' : 'Stop'}
             >
               <Square size={12} fill="currentColor" aria-hidden="true" />
             </button>
@@ -1726,16 +1726,34 @@ export const ChatView: React.FC<ChatViewProps> = ({
               aria-label={stillUploading ? 'Send (waiting for uploads)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
               title={stillUploading ? 'Waiting for uploads to finish' : undefined}
               disabled={!canSend}
-              className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all flex-shrink-0 ${
+              data-send-ready={canSend ? 'true' : 'false'}
+              className={`w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,filter,box-shadow,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300 ${
                 canSend
-                  ? 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm'
-                  : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
+                  ? 'bg-accent-gradient text-white shadow-glow hover:brightness-110 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
+                  : 'bg-surface-overlay text-zinc-400 cursor-not-allowed'
               }`}
             >
-              <ArrowUp size={16} strokeWidth={2.4} />
+              <ArrowUp size={17} strokeWidth={2.4} aria-hidden="true" />
             </button>
           )}
         </form>
+        {/* Under the field: who will answer, and what the field understands */}
+        <div className="max-w-4xl mx-auto mt-1.5 px-1 flex items-center justify-between gap-3 text-meta text-zinc-400" data-composer-hints>
+          <span
+            className={`kw-chip shrink-0 ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''}`}
+            title={target.detail}
+            data-answer-target={target.kind}
+          >
+            {target.kind === 'laya' ? <Sparkles size={12} aria-hidden="true" /> : <AtSign size={12} aria-hidden="true" />}
+            <span className="text-zinc-400 font-normal">Answers:</span> {target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}
+          </span>
+          <span className="min-w-0 truncate text-right">
+            <span className="sm:hidden">@ mention · attach files</span>
+            <span className="hidden sm:inline">
+              <kbd className="font-sans text-zinc-300">@</kbd> mention a bot · <kbd className="font-sans text-zinc-300">Enter</kbd> send · <kbd className="font-sans text-zinc-300">Shift+Enter</kbd> new line · drop or paste files
+            </span>
+          </span>
+        </div>
       </div>
     </div>
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AuditorSettings, DAILY_CAPS, SETTING_HINT as AUDITOR_HINT, isAuditorModelError, MODEL_ERROR_TEXT as AUDITOR_MODEL_ERROR, parseAuditorSettings } from '../auditor';
 import { AuditorModelSetting } from './AuditorModelSetting';
-import { Key, X, Settings, Check, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare } from 'lucide-react';
+import { Key, X, Settings, Check, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare, BellRing } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { DailyUsagePanel } from './DailyUsage';
 import {
@@ -23,6 +23,7 @@ import { deviceNotifyHint, deviceNotifySupport, isAndroid, notifyEnv as browserN
 const readNotifyEnv = () => ({ ...browserNotifyEnv(), android: isAndroid(navigator) });
 import { isSfxMuted, playSfx, toggleSfxMute } from '../audio/chiptune';
 import { haptic, hapticsAvailable, hapticsEnabled, setHapticsEnabled } from '../haptics';
+import { nudgesEnabled, setNudgesEnabled } from '../attention';
 import { useAuth } from './AuthGate';
 import { SignedInDevices } from './DeviceSignIn';
 import { signedInDevicesVisible } from '../deviceSignIn';
@@ -297,6 +298,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const computer = useComputerMode(isOpen);
   const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
   const [vibration, setVibration] = useState(hapticsEnabled);
+  const [nudges, setNudges] = useState(nudgesEnabled);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -587,6 +589,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               </span>
             </div>
           )}
+          <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+            <span className="flex-1 text-xs font-medium text-zinc-200 flex items-center gap-2">
+              <BellRing size={15} className={nudges ? 'text-amber-400' : 'text-zinc-500'} aria-hidden="true" />
+              <span id="nudges-label">Show nudges</span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={nudges}
+              aria-labelledby="nudges-label"
+              aria-describedby="nudges-hint"
+              onClick={() => {
+                setNudgesEnabled(!nudges);
+                setNudges(!nudges);
+              }}
+              className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                nudges ? 'bg-sky-600' : 'bg-zinc-700'
+              }`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${nudges ? 'translate-x-4' : ''}`} />
+            </button>
+            <span id="nudges-hint" className="sr-only">
+              A short note at the top of the app when a bot needs you in another chat, and a mark on the tab. The app icon count stays.
+            </span>
+          </div>
           <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
             <Gauge size={15} className="text-zinc-500" aria-hidden="true" />
             <span className="flex-1 text-xs font-medium text-zinc-200">Token usage, open chat</span>

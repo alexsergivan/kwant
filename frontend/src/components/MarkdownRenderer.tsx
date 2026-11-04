@@ -210,7 +210,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           // Tables
           table: ({ node, children }) => {
             const plain = (
-              <div className="my-3.5 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950/70 shadow-sm">
+              <div className="my-3.5 overflow-x-auto rounded-xl border border-zinc-700/60 bg-zinc-900/60 shadow-[var(--kws-shadow)]">
                 <table className="w-full text-left border-collapse text-xs font-sans">
                   {children}
                 </table>
@@ -222,12 +222,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
             return raw && reply ? <SmartResult raw={raw} reply={reply} messageId={messageId as string} fallback={plain} /> : plain;
           },
           thead: ({ children }) => (
-            <thead className="bg-zinc-900/90 text-zinc-200 border-b border-zinc-800 font-medium">
+            <thead className="bg-zinc-800/70 text-zinc-100 border-b border-zinc-700/60 font-medium">
               {children}
             </thead>
           ),
           tbody: ({ children }) => (
-            <tbody className="divide-y divide-zinc-800/60 font-normal text-zinc-300">
+            <tbody className="divide-y divide-zinc-700/40 font-normal text-zinc-300">
               {children}
             </tbody>
           ),

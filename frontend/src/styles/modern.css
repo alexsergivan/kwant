@@ -2,13 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Design tokens (UI refresh, 0.6.9). Surfaces get lighter as they rise; hairlines are white at low
+   alpha so they work on every surface. Tailwind names for these: bg-surface-*, border-hairline,
+   text-ok / warn / bad / info / muted, bg-accent-gradient, shadow-card / raised / glow. */
+:root {
+  --kw-surface-rail: #0a0719;
+  --kw-surface-side: #0e0a21;
+  --kw-surface-main: #120e26;
+  --kw-surface-raised: #1a1538;
+  --kw-surface-overlay: #231d4b;
+  --kw-hairline: rgb(255 255 255 / 0.07);
+  --kw-hairline-strong: rgb(255 255 255 / 0.14);
+  --kw-ok: #5eead4;
+  --kw-warn: #fcd34d;
+  --kw-bad: #fda4af;
+  --kw-info: #b8adff;
+  --kw-muted: #a39dcc;
+  --kw-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
 @layer base {
   * {
     border-color: theme('colors.zinc.800');
   }
 
   body {
-    background-color: theme('colors.zinc.950');
+    background-color: var(--kw-surface-main);
     color: theme('colors.zinc.100');
     font-family: theme('fontFamily.sans');
   }
@@ -67,11 +86,6 @@
   50% { opacity: 0.95; transform: scale(1.07); }
 }
 
-@keyframes kw-avatar-pip {
-  0%, 100% { opacity: 0.4; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1); }
-}
-
 .kw-avatar-working .kw-avatar-body {
   transform-box: fill-box;
   transform-origin: center bottom;
@@ -82,30 +96,14 @@
   position: absolute;
   inset: -2px;
   border-radius: 30%;
-  box-shadow: 0 0 0 1.5px theme('colors.sky.400'), 0 0 8px 1px rgb(56 189 248 / 0.55);
+  box-shadow: 0 0 0 1.5px #9d8fff, 0 0 8px 1px rgb(157 143 255 / 0.55);
   pointer-events: none;
   animation: kw-avatar-ring 1.4s ease-in-out infinite;
 }
 
-.kw-avatar-pip {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 30%;
-  max-width: 8px;
-  min-width: 4px;
-  aspect-ratio: 1;
-  border-radius: 9999px;
-  background: theme('colors.sky.300');
-  box-shadow: 0 0 0 1.5px theme('colors.zinc.950');
-  pointer-events: none;
-  animation: kw-avatar-pip 0.7s ease-in-out infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .kw-avatar-working .kw-avatar-body,
-  .kw-avatar-ring,
-  .kw-avatar-pip {
+  .kw-avatar-ring {
     animation: none;
   }
   .kw-avatar-ring { opacity: 0.9; }
@@ -239,34 +237,264 @@
   }
 }
 
-/* Smart results: the "Pick in this reply" label in a table row. It sits in whatever room is left on the
-   first cell's first line and adds no width (inline-size containment), so the table keeps the streamed
-   reply's exact geometry. Short of room it says "Pick"; with almost none, the row's tint and bar show
-   the pick and the full label stays for screen readers. */
-.smart-pick {
-  container-type: inline-size;
-  overflow: clip;
+/* ------------------------------------------------------------------------------------------------
+   Semantic classes (UI refresh). Use these rather than repeating long utility strings.
+   .kw-card            a raised surface: hairline, 12px corners, soft shadow
+   .kw-card-interactive  the same, tappable: lifts 1px and brightens its hairline on hover/focus
+   .kw-chip            a pill label; add .kw-chip-ok / -warn / -bad / -info / -accent for a status colour
+   .kw-btn-primary     the accent gradient button (one per view); .kw-btn-ghost a quiet button
+   .kw-status-dot      a 8px dot; .kw-status-ok / -warn / -bad / -idle, .kw-pulse while something is live
+   .kw-focus           the focus ring (2px accent, 2px offset); already on every .kw-card-interactive
+   .kw-fade-in         enters in 160ms (opacity + 6px slide); .kw-stagger delays children by --i * 40ms
+   Motion is 120-200ms, transform and opacity only, and off under prefers-reduced-motion.
+   ------------------------------------------------------------------------------------------------ */
+@layer components {
+  .kw-card {
+    @apply rounded-2xl border border-hairline bg-surface-raised shadow-card;
+  }
+  .kw-card-interactive {
+    @apply kw-card text-left cursor-pointer;
+    transition: transform 160ms var(--kw-ease), border-color 160ms var(--kw-ease), background-color 160ms var(--kw-ease);
+  }
+  .kw-card-interactive:hover:not(:disabled) {
+    transform: translateY(-1px);
+    border-color: rgb(157 143 255 / 0.45);
+    background-color: var(--kw-surface-overlay);
+  }
+  .kw-card-interactive:active:not(:disabled) {
+    transform: translateY(0) scale(0.995);
+  }
+  .kw-card-interactive:disabled {
+    @apply opacity-50 cursor-not-allowed;
+  }
+  .kw-card-interactive,
+  .kw-focus {
+    @apply focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400;
+  }
+
+  .kw-chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-hairline-strong bg-white/[0.04] px-2.5 py-0.5 text-meta font-medium text-zinc-300;
+  }
+  .kw-chip-ok { @apply border-teal-400/30 bg-teal-400/10 text-ok; }
+  /* Plain, never holo: needs you / Approvals off (amber), failed (rose). spec.md §1 "Rule". */
+  .kw-chip-warn { @apply border-amber-300/35 text-warn; background-color: rgb(252 211 77 / 0.12); }
+  .kw-chip-bad { @apply border-rose-300/35 text-bad; background-color: rgb(253 164 175 / 0.12); }
+  .kw-chip-info { @apply border-sky-300/30 bg-sky-300/10 text-info; }
+  .kw-chip-accent { @apply border-transparent bg-accent-soft text-sky-200; }
+
+  .kw-btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-xl bg-accent-gradient px-3.5 py-1.5 text-body font-semibold text-white shadow-card;
+    transition: transform 140ms var(--kw-ease), filter 140ms var(--kw-ease), box-shadow 140ms var(--kw-ease);
+  }
+  .kw-btn-primary:hover:not(:disabled) { filter: brightness(1.12); box-shadow: theme('boxShadow.glow'); }
+  .kw-btn-primary:active:not(:disabled) { transform: scale(0.97); }
+  .kw-btn-primary:disabled { @apply cursor-not-allowed; background-image: none; background-color: var(--kw-surface-overlay); color: theme('colors.zinc.400'); box-shadow: none; }
+  .kw-btn-ghost {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-xl border border-hairline-strong bg-white/[0.03] px-3 py-1.5 text-meta font-medium text-zinc-200 transition-colors hover:bg-white/[0.08] hover:text-zinc-50;
+  }
+  .kw-btn-primary,
+  .kw-btn-ghost {
+    @apply focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400;
+  }
+
+  .kw-status-dot { @apply inline-block h-2 w-2 shrink-0 rounded-full; }
+  .kw-status-ok { @apply bg-teal-300; }
+  .kw-status-warn { @apply bg-amber-300; }
+  .kw-status-bad { @apply bg-rose-300; }
+  .kw-status-idle { @apply bg-zinc-500; }
+}
+
+@keyframes kw-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}
+.kw-pulse { animation: kw-pulse 1.4s ease-in-out infinite; }
+
+@keyframes kw-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kw-fade-in { animation: kw-fade-in 160ms var(--kw-ease) both; }
+.kw-stagger > * { animation: kw-fade-in 180ms var(--kw-ease) both; animation-delay: calc(var(--i, 0) * 40ms); }
+
+/* Bot home: the avatar floats and the glow breathes. Transform and opacity only. */
+@keyframes kw-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@keyframes kw-glow-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 0.9; transform: scale(1.08); }
+}
+@keyframes kw-home-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.kw-float { animation: kw-float 3.2s ease-in-out infinite; }
+.kw-glow { animation: kw-glow-breathe 3.6s ease-in-out infinite; }
+/* The home waits 220ms before it shows, so a chat whose messages are still loading never flashes it */
+.kw-home { animation: kw-home-in 180ms var(--kw-ease) 220ms both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-pulse,
+  .kw-float,
+  .kw-glow { animation: none; }
+  .kw-fade-in,
+  .kw-stagger > * { animation: none; }
+  .kw-home { animation: kw-home-fade 1ms linear 220ms both; }
+  .kw-card-interactive,
+  .kw-btn-primary { transition: none; }
+  .kw-card-interactive:hover:not(:disabled),
+  .kw-card-interactive:active:not(:disabled),
+  .kw-btn-primary:active:not(:disabled) { transform: none; }
+}
+@keyframes kw-home-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Stickers (Mira's spec.md §1): a die-cut plate, 2px white edge, soft shadow, slight tilt. Pure CSS.
+   tone "holo" is only for earned things (verified, picked, goal kept): a vivid foil sweep multiplied
+   into the light plate plus a soft-light glint and grain, so ink text only gains contrast (worst 7.19:1).
+   tone "ink" is the plain plate (e.g. "New"). Needs you, failed, Approvals off: plain chips, never this.
+   --mx/--my are set by <Sticker> on pointer move and glide through @property.
+   --------------------------------------------------------------------------------------------- */
+@property --mx { syntax: '<percentage>'; inherits: true; initial-value: 30%; }
+@property --my { syntax: '<percentage>'; inherits: true; initial-value: 20%; }
+.kw-sticker {
+  --mx: 30%;
+  --my: 20%;
+  --kw-tilt: 0deg;
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  max-width: 100%;
+  padding: 0 10px;
+  border: 2px solid #fff;
+  border-radius: 11px 7px 11px 7px;
+  background: #f4f1ff;
+  color: #1b1033;
+  font: 700 12px/16px theme('fontFamily.sans');
+  letter-spacing: 0.01em;
   white-space: nowrap;
+  vertical-align: middle;
+  isolation: isolate;
+  overflow: hidden;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 5px 12px rgb(0 0 0 / 0.35);
+  transform: rotate(var(--kw-tilt));
+  transition: transform 160ms cubic-bezier(.2,.7,.2,1), box-shadow 160ms cubic-bezier(.2,.7,.2,1), --mx 120ms linear, --my 120ms linear;
 }
-.smart-pick-short {
-  display: none;
+.kw-sticker svg { width: 12px; height: 12px; flex-shrink: 0; }
+.kw-sticker-sm {
+  height: 18px;
+  padding: 0 6px;
+  gap: 3px;
+  border-radius: 8px 5px 8px 5px;
+  font: 700 11px/14px theme('fontFamily.sans');
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 3px 8px rgb(0 0 0 / 0.35);
 }
-@container (max-width: 7rem) {
-  .smart-pick-full {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    border-width: 0;
-  }
+.kw-sticker-sm svg { width: 10px; height: 10px; }
+.kw-sticker > * { position: relative; z-index: 2; }
+/* A clickable sticker is a span inside this button: a 44x44 target around an 18-24px sticker. */
+.kw-sticker-hit {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 12px;
 }
-@container (min-width: 2.5rem) and (max-width: 7rem) {
-  .smart-pick-short {
-    display: inline-block;
-  }
+.kw-sticker-hit:focus { outline: none; }
+.kw-sticker-hit:focus-visible > .kw-sticker,
+a.kw-sticker:focus-visible { outline: 2px solid #b8adff; outline-offset: 3px; }
+.kw-sticker-hit:hover > .kw-sticker,
+a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 8px 16px rgb(0 0 0 / 0.4); }
+.kw-sticker-holo::before,
+.kw-sticker-holo::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+}
+/* The foil (review-pr264 §2, v2): a 105deg two-cycle linear sweep, 200% wide, slid with transform only,
+   so a flat pill always shows the full rainbow. --my is no longer read; the pointer code still sets it. */
+.kw-sticker-holo::before {
+  inset: 0 -50%;
+  z-index: 0;
+  background: linear-gradient(105deg,
+    #ff6ec7 0%, #ffd36e 10%, #7dffb0 20%, #5ee0ff 30%, #9b7bff 40%,
+    #ff6ec7 50%, #ffd36e 60%, #7dffb0 70%, #5ee0ff 80%, #9b7bff 90%, #ff6ec7 100%);
+  mix-blend-mode: multiply;
+  opacity: 0.8;
+  transform: translateX(calc((50% - var(--mx)) / 4));
+}
+/* A glint band that follows --mx, plus a fine foil grain. Soft-light white only lightens. */
+.kw-sticker-holo::after {
+  inset: 0;
+  z-index: 1;
+  background:
+    linear-gradient(105deg, transparent calc(var(--mx) - 14%), rgb(255 255 255 / 0.7) var(--mx), transparent calc(var(--mx) + 14%)),
+    repeating-linear-gradient(115deg, transparent 0 3px, rgb(255 255 255 / 0.22) 3px 4px);
+  mix-blend-mode: soft-light;
+}
+.kw-sticker-ink { background: #e9e4ff; }
+/* "New" leaving after first use: fade, then NewTag unmounts it. */
+.kw-new-tag { transition: opacity 160ms linear; }
+.kw-new-tag[data-leaving] { opacity: 0; }
+@keyframes kw-sticker-drift {
+  from { transform: translateX(calc((50% - var(--mx)) / 4 - 8%)); }
+  to { transform: translateX(calc((50% - var(--mx)) / 4)); }
+}
+@keyframes kw-sticker-press {
+  from { transform: rotate(var(--kw-tilt)) scale(1.08); }
+  to { transform: rotate(var(--kw-tilt)) scale(1); }
+}
+/* S1: the Verified stamp presses in once when it appears. */
+.kw-sticker-press { animation: kw-sticker-press 160ms cubic-bezier(.2,.7,.2,1) 1 both; }
+/* No pointer on a phone: the sheen drifts once when the sticker appears. */
+@media (pointer: coarse) {
+  .kw-sticker-holo::before { animation: kw-sticker-drift 160ms cubic-bezier(.2,.7,.2,1) 1 both; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kw-sticker { --mx: 30% !important; --my: 20% !important; transition: none; }
+  .kw-sticker-holo::before,
+  .kw-sticker-press { animation: none; }
+  .kw-sticker-hit:hover > .kw-sticker,
+  a.kw-sticker:hover { transform: rotate(var(--kw-tilt)); }
+  .kw-new-tag { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   Avatar moods (AvatarMood / ModernAvatar). Opacity and transform only, 120-200ms or a slow loop;
+   static under prefers-reduced-motion.
+   --------------------------------------------------------------------------------------------- */
+.kw-avatar-resting > svg:not(.kw-mood) { opacity: 0.55; filter: saturate(0.5); }
+@keyframes kw-mood-dot { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+.kw-mood-dot { animation: kw-mood-dot 1.2s ease-in-out infinite; }
+.kw-mood-dot-1 { animation-delay: 0.2s; }
+.kw-mood-dot-2 { animation-delay: 0.4s; }
+@keyframes kw-mood-pop { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+.kw-mood-needs_you,
+.kw-mood-failed { transform-origin: center; animation: kw-mood-pop 160ms var(--kw-ease) 1 both; }
+/* Just finished: frames at 0 / 60 / 120 ms (steps), held to 3 s, then a 160 ms fade. */
+@keyframes kw-mood-frame { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kw-mood-out { from { opacity: 1; } to { opacity: 0; } }
+.kw-mood-f2 { animation: kw-mood-frame 1ms steps(1) 60ms 1 both; }
+.kw-mood-f3 { animation: kw-mood-frame 1ms steps(1) 120ms 1 both; }
+.kw-mood-finished { animation: kw-mood-out 160ms linear 2840ms 1 forwards; }
+@keyframes kw-avatar-blink { from { opacity: 1; } to { opacity: 0; } }
+.kw-avatar-blink { animation: kw-avatar-blink 1ms linear 160ms 1 both; opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .kw-mood-dot { animation: none; opacity: 0.8; }
+  .kw-mood-finished, .kw-mood-needs_you, .kw-mood-failed,
+  .kw-mood-f2, .kw-mood-f3 { animation: none; }
+  .kw-avatar-blink { display: none; }
 }
 
 /* Browser takeover stage (Mira's spec §2, §4, §5): enters with a fade and a slight scale; nothing loops */

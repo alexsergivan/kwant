@@ -170,7 +170,7 @@ export const Chart: React.FC<RendererProps<ChartBlock>> = ({ block }) => {
   const barWidth = isBar ? groupWidth / block.series.length : 0;
 
   return (
-    <div data-smart-result="chart" data-block-id={block.id} className="my-3.5 rounded-xl border border-zinc-800 bg-zinc-950/70 p-3.5 shadow-sm">
+    <div data-smart-result="chart" data-block-id={block.id} className="my-3.5 rounded-xl border border-zinc-700/60 bg-zinc-900/60 p-3.5 shadow-[var(--kws-shadow)]">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-3 text-[11px]">
           {block.series.map((s, i) => (

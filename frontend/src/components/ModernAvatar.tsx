@@ -1,5 +1,7 @@
 import React, { useCallback, useSyncExternalStore } from 'react';
 import { isKwantWorking, subscribeKwant } from '../kwantActivity';
+import { AvatarMood, useKwantMood, useKwantNotices } from './AvatarMood';
+import { moodLabel, restingUntilOf } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
 
 interface ModernAvatarProps {
@@ -336,7 +338,11 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   const working = useKwantWorking(kwantId);
   // Never green (or idle grey) while a turn runs: the turn stream wins over a stale status.
   const shown = status && working && STATUS_PRIORITY.indexOf(status) > STATUS_PRIORITY.indexOf('working') ? 'working' : status;
-  const label = shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined;
+  // The mood (thinking, finished, failed, needs you, resting) adds a pixel mark and its own words.
+  const mood = useKwantMood(kwantId);
+  const notices = useKwantNotices(kwantId);
+  const moodText = moodLabel(mood, name, restingUntilOf(kwantId));
+  const label = moodText ?? (shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined);
   const creature = pickCreature(role, name);
   // At tiny sizes the frame would dominate, so zoom in on the creature alone
   const framed = size > 20;
@@ -345,11 +351,12 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
 
   return (
     <div
-      className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${working ? 'kw-avatar-working' : ''} ${className}`}
+      className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${working ? 'kw-avatar-working' : ''} ${mood === 'resting' ? 'kw-avatar-resting' : ''} ${className}`}
       style={{ width: size, height: size }}
       title={label}
       data-working={working || undefined}
       data-status={shown}
+      data-mood={mood === 'idle' ? undefined : mood}
     >
       {working && <span className="kw-avatar-ring" aria-hidden="true" />}
       <svg
@@ -368,10 +375,19 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
         <g transform={compact ? 'translate(13 13.2) scale(1.2) translate(-13 -12)' : undefined}>
           <g className="kw-avatar-body">
             {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
+            {/* One blink when the person sends this bot a message: the eyes close for 160 ms. */}
+            {notices > 0 && (
+              <g key={notices} className="kw-avatar-blink">
+                {px(10, 10, 2, 3, creature.body, 'bl1')}
+                {px(14, 10, 2, 3, creature.body, 'bl2')}
+                {px(10, 12, 2, 1, creature.shade, 'bl3')}
+                {px(14, 12, 2, 1, creature.shade, 'bl4')}
+              </g>
+            )}
           </g>
         </g>
       </svg>
-      {working && <span className="kw-avatar-pip" aria-hidden="true" />}
+      <AvatarMood mood={mood} size={size} />
       {shown && (
         <>
           <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${STATUS_DOT[shown]}`} aria-hidden="true" />

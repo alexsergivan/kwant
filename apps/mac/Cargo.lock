@@ -2711,6 +2711,7 @@ version = "0.6.8"
 dependencies = [
  "dirs 5.0.1",
  "kwnt",
+ "objc2-app-kit",
  "serde_json",
  "tauri",
  "tauri-build",
@@ -2719,6 +2720,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zbus",
 ]
 
 [[package]]

@@ -2400,6 +2400,7 @@ async fn run_kwant_turn_inner(
                 sandbox_target: Some(sandbox_target.clone()),
             }
         });
+        let browser_sign_in = self_scope.as_ref().is_some_and(super::continuity::offers_browser_sign_in);
         let card_opts = super::mcp_runtime::TurnApprovalOpts {
             routed: Some((target_model.clone(), effort_level.clone())),
             always_ask: opts.always_ask,
@@ -2428,12 +2429,13 @@ async fn run_kwant_turn_inner(
         } else {
             String::new()
         };
-        let continuity = super::continuity::prompt_block_with(
+        let continuity = super::continuity::prompt_block_full(
             state,
             target_kwant,
             scope.team_context.as_ref().map(|t| t.id.as_str()),
             channel_id.as_deref(),
             with_tools,
+            browser_sign_in,
             &lessons,
         )
         .await;

@@ -1812,3 +1812,34 @@ async fn notifications_are_filtered_and_content_free() {
     }
     assert!(rx.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn prompt_sends_website_logins_to_a_browser_sign_in_only_with_the_browser() {
+    let (_app, state, _tmp) = setup().await;
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let k = &kwants[0];
+    let rule = "- When the person wants you to log in to or use a website or an account of theirs";
+
+    // A chat turn with the bot browser and request_human_step: the rule, before connection_suggest
+    let with = continuity::prompt_block_full(&state, k, None, None, true, true, "").await;
+    let at = with.find(rule).expect("browser sign-in rule");
+    assert!(at < with.find("`connection_suggest` posts a one-tap connection card").unwrap(), "browser sign-in comes first");
+    assert!(with.contains("open its sign-in page with `browser_open`"));
+    assert!(with.contains("call `request_human_step` with kind sign_in"));
+    // No Composio in this space: no Composio setup for a website the browser can open
+    assert!(with.contains("Composio isn't set up in this space"));
+
+    // Tools but no browser (a routine, a task), and no tools at all: no rule
+    let tools_only = continuity::prompt_block_full(&state, k, None, None, true, false, "").await;
+    assert!(!tools_only.contains(rule));
+    assert!(!tools_only.contains("request_human_step"));
+    assert_eq!(tools_only, continuity::prompt_block(&state, k, None, None, true).await);
+    assert!(!continuity::prompt_block_full(&state, k, None, None, false, true, "").await.contains(rule));
+
+    // The settings rule is about kwant's own keys and engine sign-ins, not the person's websites
+    for block in [&with, &tools_only] {
+        assert!(block.contains("Never handle kwant's own keys and engine sign-ins (API keys, AI accounts, connector keys)"));
+        assert!(block.contains("Never ask for a password or one-time code in chat."));
+        assert!(!block.contains("Never handle keys, passwords or sign-ins"));
+    }
+}
