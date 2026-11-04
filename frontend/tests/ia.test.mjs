@@ -249,7 +249,8 @@ test('QA a: a long bot name wraps to two lines instead of cutting off at ~20 cha
     assert.ok(names.length >= 4, `every bot row has a name (phone=${phone})`);
     for (const [, cls, name] of names) {
       assert.match(cls, /\bline-clamp-2\b/, name);
-      assert.match(cls, /overflow-wrap:anywhere/, `${name}: a name with no spaces still breaks`);
+      assert.doesNotMatch(cls, /overflow-wrap:anywhere|break-all|break-words/, `${name}: wraps between words, never inside one`);
+      assert.match(cls, /\btext-ellipsis\b/, `${name}: a word too long for the line ends in …`);
       assert.doesNotMatch(cls, /\btruncate\b/, name);
     }
     assert.ok(names.some(([, , n]) => n === long), 'the team member row shows the whole name');
