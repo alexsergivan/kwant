@@ -211,8 +211,12 @@ fn build_pill(handle: &AppHandle, opener: Sender<PillCmd>) -> Option<tauri::Webv
     }
 }
 
-/// How often the pill checks that it is still under the icon while it shows.
+/// How often the pill checks that it is still under the icon while it shows (a backup for
+/// shifts after it showed; a fresh pill first waits for the icon to settle).
 const FOLLOW_EVERY: Duration = Duration::from_millis(100);
+/// A fresh pill re-reads the icon this often until two reads agree, for at most `SETTLE_CAP`.
+const SETTLE_EVERY: Duration = Duration::from_millis(30);
+const SETTLE_CAP: Duration = Duration::from_millis(150);
 
 /// Where the pill window goes for the menu-bar icon as it is now: centred on it, 2 pt below it,
 /// kept 8 pt inside the screen (at the top right when macOS won't say where the icon is). Also
@@ -244,7 +248,7 @@ fn place(
     now_at: Option<(f64, f64)>,
 ) -> Option<(f64, f64)> {
     let ((x, y), rect) = spot(handle, tray)?;
-    if now_at.is_some_and(|(px, py)| (px - x).abs() < 0.5 && (py - y).abs() < 0.5) {
+    if now_at.is_some_and(|p| nudge::same_spot(p, (x, y))) {
         return None;
     }
     if crate::DEMO.get().is_some() {
@@ -260,10 +264,11 @@ fn place(
 /// when the person turns to kwant, and opens the item on a click. The page owns the timing (5 s,
 /// held while the pointer is on it, 12 s at most) and says when the pill has gone.
 ///
-/// The pill follows the icon while it shows. The first item of a pill comes with the icon's
-/// count changing from none to "1", and AppKit lays the status item out again for the wider
-/// title only after this has read its rect; so the first place is often ~11 pt off, and the
-/// next check (100 ms later) moves the pill under the icon where it settled.
+/// A fresh pill shows only once the icon has settled. Its first item comes with the icon's count
+/// changing from none to "1", and AppKit lays the status item out again for the wider title a
+/// moment after the title is set; read at once, the rect is ~11 pt off and the pill would jump
+/// mid-entrance. So the pill waits until two reads 30 ms apart agree (150 ms at most), and
+/// while it shows it still follows the icon every 100 ms in case it moves later.
 fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: Sender<PillCmd>) {
     // Made ahead, hidden, so the first nudge doesn't wait for a page load
     let mut window = build_pill(&handle, opener.clone());
@@ -308,6 +313,13 @@ fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: S
                     "document.documentElement.classList.toggle('kw-reduce', {reduce}); window.kwantNudge && kwantNudge.show({})",
                     payload(&shown)
                 );
+                if fresh {
+                    let started = Instant::now();
+                    let _ = nudge::settle(|| spot(&handle, &tray).map(|(p, _)| p), SETTLE_EVERY, SETTLE_CAP, std::thread::sleep);
+                    if demo {
+                        println!("demo-nudge: pill settled after {} ms", started.elapsed().as_millis());
+                    }
+                }
                 let moved = if fresh { place(&handle, &tray, w, None) } else { None };
                 if moved.is_some() {
                     placed = moved;

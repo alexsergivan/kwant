@@ -280,6 +280,43 @@ pub fn encode(s: &str) -> String {
     out
 }
 
+/// Two places of the pill window (points) count as the same within half a point.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // only the macOS pill is placed
+pub fn same_spot(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() < 0.5 && (a.1 - b.1).abs() < 0.5
+}
+
+/// Waits for the menu-bar icon to stop moving before a fresh pill shows: reads where the pill
+/// would go, then again every `every`, until two reads in a row agree or `cap` has been waited.
+/// The 0 -> 1 nudge sets the icon's count and AppKit lays the icon out again a moment later, so
+/// the first read alone would put the pill ~11 pt off and it would jump mid-entrance. Returns
+/// the last read (`None`: the screen couldn't be read) and how long it slept.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn settle(
+    mut read: impl FnMut() -> Option<(f64, f64)>,
+    every: Duration,
+    cap: Duration,
+    mut sleep: impl FnMut(Duration),
+) -> (Option<(f64, f64)>, Duration) {
+    let mut last = read();
+    let mut slept = Duration::ZERO;
+    while slept + every <= cap {
+        sleep(every);
+        slept += every;
+        let now = read();
+        let agree = match (last, now) {
+            (Some(a), Some(b)) => same_spot(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        last = now;
+        if agree {
+            break;
+        }
+    }
+    (last, slept)
+}
+
 /// The app's own settings, kept in [`PREFS_FILE`] in the data dir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Prefs {
@@ -560,6 +597,29 @@ mod tests {
         assert_eq!(target_path(&none), "/s/spc_default/inbox");
         // nothing a title can carry reaches the path
         assert_eq!(encode("../../x?y#z"), "..%2F..%2Fx%3Fy%23z");
+    }
+
+    #[test]
+    fn a_fresh_pill_waits_until_the_icon_reads_the_same_twice() {
+        let every = Duration::from_millis(30);
+        let cap = Duration::from_millis(150);
+        let run = |reads: Vec<Option<(f64, f64)>>| {
+            let mut it = reads.into_iter();
+            let mut n = 0;
+            let (spot, slept) = settle(|| { n += 1; it.next().flatten() }, every, cap, |_| {});
+            (spot, slept, n)
+        };
+        // already settled: one extra read, 30 ms
+        assert_eq!(run(vec![Some((785.0, 26.0)); 9]), (Some((785.0, 26.0)), every, 2));
+        // the 0 -> 1 case: the stale rect, then the settled one twice
+        let moved = vec![Some((795.5, 26.0)), Some((784.0, 26.0)), Some((784.2, 26.0))];
+        assert_eq!(run(moved), (Some((784.2, 26.0)), every * 2, 3));
+        // never settles: gives up at the cap (150 ms, 6 reads) with the newest place
+        let drifting: Vec<_> = (0..20).map(|i| Some((700.0 + i as f64, 26.0))).collect();
+        assert_eq!(run(drifting), (Some((705.0, 26.0)), cap, 6));
+        // no screen to read: settles at once on None
+        assert_eq!(run(vec![None, None]), (None, every, 2));
+        assert!(same_spot((1.0, 2.0), (1.4, 1.6)) && !same_spot((1.0, 2.0), (1.5, 2.0)));
     }
 
     #[test]
