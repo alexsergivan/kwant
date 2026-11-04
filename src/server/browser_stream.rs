@@ -26,6 +26,9 @@ const ACTION_WAIT: Duration = Duration::from_secs(30);
 /// dialog is open.
 const PROBE_WAIT: Duration = Duration::from_secs(2);
 const SELECT_GROUP: &str = "kwnt-select";
+/// A frame the client has not acked for this long is let go, so a lost ack costs one stale
+/// picture instead of the stream (and the person's control).
+const FRAME_STALL: Duration = Duration::from_secs(4);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -289,8 +292,84 @@ struct Shared {
     /// A `resize` is applied and must be put back on hand back.
     resized: AtomicBool,
     cursor: std::sync::Mutex<String>,
-    cursor_busy: AtomicBool,
+    /// The newest point a move asked to look the cursor up at.
+    cursor_moves: Latest<(f64, f64)>,
     cursor_at: std::sync::Mutex<Option<Instant>>,
+    /// Asks to read the page's address and title again.
+    location: Latest<()>,
+}
+
+/// Keeps only the newest value offered and makes sure exactly one runner drains it, so a value
+/// offered while the runner is busy is never lost (the trailing probe) and never doubled.
+struct Latest<T> {
+    slot: std::sync::Mutex<Option<T>>,
+    busy: AtomicBool,
+}
+
+impl<T> Latest<T> {
+    fn new() -> Self {
+        Self { slot: std::sync::Mutex::new(None), busy: AtomicBool::new(false) }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<T>> {
+        self.slot.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Stores `value`; true when the caller must start the runner.
+    fn offer(&self, value: T) -> bool {
+        *self.lock() = Some(value);
+        !self.busy.swap(true, Ordering::SeqCst)
+    }
+
+    /// The runner's next value, or `None` when it should stop.
+    fn next(&self) -> Option<T> {
+        loop {
+            if let Some(value) = self.lock().take() { return Some(value); }
+            self.busy.store(false, Ordering::SeqCst);
+            // an offer that landed after the take: keep going unless its own runner started
+            if self.lock().is_none() || self.busy.swap(true, Ordering::SeqCst) { return None; }
+        }
+    }
+}
+
+/// How long to wait before the next cursor lookup, so lookups stay `CURSOR_EVERY` apart.
+fn cursor_wait(last: Option<Instant>, now: Instant) -> Duration {
+    last.map(|t| bi::CURSOR_EVERY.saturating_sub(now.saturating_duration_since(t))).unwrap_or_default()
+}
+
+/// Whether a page event can change the address or title the person sees.
+fn moves_location(method: &str, params: &Value) -> bool {
+    match method {
+        // the top document only; a subframe navigating changes nothing in the address bar
+        "Page.frameNavigated" => params["frame"]["parentId"].is_null(),
+        // pushState, replaceState and #fragment changes
+        "Page.navigatedWithinDocument" => true,
+        // the new page's title is parsed by now
+        "Page.domContentEventFired" => true,
+        _ => false,
+    }
+}
+
+/// The error for input from a live view that has not taken control.
+fn not_in_control(someone_has_control: bool) -> BrowserError {
+    if someone_has_control { BrowserError::HumanControl } else { BrowserError::NotInControl }
+}
+
+/// Reads the page's address and title on the stream's socket, off the caller, and sends them
+/// to the person. Requests while a read is running are folded into one more read.
+fn refresh_location(cdp: &Cdp, ctrl: &BrowserController, shared: &Arc<Shared>, client: &mpsc::UnboundedSender<Value>) {
+    if !shared.location.offer(()) { return; }
+    let (cdp, ctrl, shared, client) = (cdp.clone(), ctrl.clone(), shared.clone(), client.clone());
+    tokio::spawn(async move {
+        while shared.location.next().is_some() {
+            // blocks while a dialog is open, so never on the stream loop
+            if let Ok(result) = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await {
+                if let Some(url) = result["result"]["value"]["url"].as_str() { *ctrl.current_url.lock().await = Some(url.to_string()); }
+                if let Some(title) = result["result"]["value"]["title"].as_str() { *ctrl.current_title.lock().await = Some(title.to_string()); }
+            }
+            let _ = client.send(json!({"type":"location","url":ctrl.current_url.lock().await.clone(),"title":ctrl.current_title.lock().await.clone()}));
+        }
+    });
 }
 
 impl Shared {
@@ -438,11 +517,13 @@ impl Worker {
                 let parsed = reqwest::Url::parse(&url).map_err(|e| BrowserError::Protocol(e.to_string()))?;
                 if !matches!(parsed.scheme(), "http"|"https") { return Err(protocol("Use an HTTP or HTTPS URL")); }
                 self.ctrl.navigate_unlocked(&url).await?;
+                refresh_location(&self.cdp, &self.ctrl, &self.shared, &self.client);
                 let _ = self.client.send(ack(id, json!({})));
             }
             BrowserInput::History { direction } => {
                 self.close_select();
                 self.ctrl.navigate_history(direction).await?;
+                refresh_location(&self.cdp, &self.ctrl, &self.shared, &self.client);
                 let _ = self.client.send(ack(id, json!({})));
             }
             BrowserInput::PointerDown { x, y } => {
@@ -589,27 +670,29 @@ impl Worker {
     }
 
     /// After a move, looks up the cursor at most every 125 ms and tells the person when it
-    /// changes.
+    /// changes. The first move is looked up at once; moves inside the window end in one
+    /// trailing lookup at the newest point, so where the pointer comes to rest always counts.
     fn check_cursor(&self, x: f64, y: f64) {
-        {
-            let mut at = self.shared.cursor_at.lock().unwrap_or_else(|e| e.into_inner());
-            if at.is_some_and(|t| t.elapsed() < bi::CURSOR_EVERY) { return; }
-            if self.shared.cursor_busy.swap(true, Ordering::SeqCst) { return; }
-            *at = Some(Instant::now());
-        }
+        if !self.shared.cursor_moves.offer((x, y)) { return; }
         let (cdp, shared, client) = (self.cdp.clone(), self.shared.clone(), self.client.clone());
         tokio::spawn(async move {
-            if let Ok(result) = cdp.call("Runtime.evaluate", json!({"expression": bi::cursor_js(x, y), "returnByValue": true}), PROBE_WAIT).await {
-                let cursor = bi::sanitize_cursor(result["result"]["value"].as_str().unwrap_or("auto"));
-                let changed = {
-                    let mut last = shared.cursor.lock().unwrap_or_else(|e| e.into_inner());
-                    let changed = *last != cursor;
-                    *last = cursor.clone();
-                    changed
-                };
-                if changed { let _ = client.send(json!({"type":"cursor","cursor":cursor})); }
+            loop {
+                // wait out the window first, so the lookup takes the newest point in it
+                let wait = cursor_wait(*shared.cursor_at.lock().unwrap_or_else(|e| e.into_inner()), Instant::now());
+                if !wait.is_zero() { tokio::time::sleep(wait).await; }
+                let Some((x, y)) = shared.cursor_moves.next() else { break };
+                *shared.cursor_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+                if let Ok(result) = cdp.call("Runtime.evaluate", json!({"expression": bi::cursor_js(x, y), "returnByValue": true}), PROBE_WAIT).await {
+                    let cursor = bi::sanitize_cursor(result["result"]["value"].as_str().unwrap_or("auto"));
+                    let changed = {
+                        let mut last = shared.cursor.lock().unwrap_or_else(|e| e.into_inner());
+                        let changed = *last != cursor;
+                        *last = cursor.clone();
+                        changed
+                    };
+                    if changed { let _ = client.send(json!({"type":"cursor","cursor":cursor})); }
+                }
             }
-            shared.cursor_busy.store(false, Ordering::SeqCst);
         });
     }
 
@@ -683,8 +766,9 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
         view: std::sync::Mutex::new((w as f64, h as f64)),
         resized: AtomicBool::new(false),
         cursor: std::sync::Mutex::new("auto".into()),
-        cursor_busy: AtomicBool::new(false),
+        cursor_moves: Latest::new(),
         cursor_at: std::sync::Mutex::new(None),
+        location: Latest::new(),
     });
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<Value>();
     let (jobs, jobs_rx) = mpsc::unbounded_channel::<Job>();
@@ -725,14 +809,12 @@ async fn stream(
         let mut next_frame = 0u64;
         let mut pending_token = 0u64;
         let mut location_tick = tokio::time::interval(Duration::from_secs(2));
-        let location_busy = Arc::new(AtomicBool::new(false));
         let mut moves = RateLimit::new(bi::MOVES_PER_SECOND, 10.0, std::time::Instant::now());
         let mut dialog_open = false;
         loop {
             tokio::select! {
                 _ = heartbeat.tick() => {
                     if last_client.elapsed() > Duration::from_secs(35) { break; }
-                    if pending_frame.is_some() && frame_sent.elapsed() > Duration::from_secs(15) { break; }
                     send(socket, json!({"type":"ping"})).await?;
                 }
                 _ = location_tick.tick() => {
@@ -740,24 +822,25 @@ async fn stream(
                     if lease.is_none() && !ctrl.is_held_for_person() && shared.resized.load(Ordering::SeqCst) {
                         let _ = jobs.send(Job::HandBack(None));
                     }
-                    // read on the stream's socket, off the loop: it blocks while a dialog is open
-                    if !location_busy.swap(true, Ordering::SeqCst) {
-                        let (cdp, ctrl, client, busy) = (cdp.clone(), ctrl.clone(), client_tx.clone(), location_busy.clone());
-                        tokio::spawn(async move {
-                            if let Ok(result) = cdp.call("Runtime.evaluate", json!({"expression": "({url: location.href, title: document.title})", "returnByValue": true}), PROBE_WAIT).await {
-                                if let Some(url) = result["result"]["value"]["url"].as_str() { *ctrl.current_url.lock().await = Some(url.to_string()); }
-                                if let Some(title) = result["result"]["value"]["title"].as_str() { *ctrl.current_title.lock().await = Some(title.to_string()); }
-                            }
-                            let _ = client.send(json!({"type":"location","url":ctrl.current_url.lock().await.clone(),"title":ctrl.current_title.lock().await.clone()}));
-                            busy.store(false, Ordering::SeqCst);
-                        });
+                    // a client that never acks the last frame (an identical picture fires no
+                    // load) gets the next one anyway instead of a frozen view and a dropped stream
+                    if pending_frame.is_some() && frame_sent.elapsed() > FRAME_STALL {
+                        if let Some(session) = pending_frame.take() {
+                            cdp.fire("Page.screencastFrameAck", json!({"sessionId":session}));
+                        }
                     }
+                    // a fallback for title changes no page event announces
+                    refresh_location(cdp, ctrl, shared, client_tx);
                 }
                 Some(value) = client_rx.recv() => send(socket, value).await?,
                 event = events.recv() => {
                     let Some(event) = event else { break };
                     let params = &event["params"];
-                    match event["method"].as_str().unwrap_or_default() {
+                    let method = event["method"].as_str().unwrap_or_default();
+                    // the person's own clicks, back/forward/reload and a bot's navigate all land
+                    // here: the address follows at once instead of on the next tick
+                    if moves_location(method, params) { refresh_location(cdp, ctrl, shared, client_tx); }
+                    match method {
                         "Page.screencastFrame" => {
                             let session = params["sessionId"].as_i64().unwrap_or_default();
                             let (dw, dh) = (params["metadata"]["deviceWidth"].as_f64().unwrap_or(0.0), params["metadata"]["deviceHeight"].as_f64().unwrap_or(0.0));
@@ -826,7 +909,7 @@ async fn stream(
                         }
                         _ => {
                             if lease.is_none() && !ctrl.is_held_for_person() {
-                                send(socket, error(&id, BrowserError::HumanControl)).await?;
+                                send(socket, error(&id, not_in_control(ctrl.control.try_read().is_err()))).await?;
                                 continue;
                             }
                             let input = match BrowserInput::parse(&value) {
@@ -943,6 +1026,80 @@ mod tests {
         ] {
             assert!(BrowserInput::parse(&value).is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn latest_keeps_only_the_newest_value_for_one_runner() {
+        let latest = Latest::new();
+        assert!(latest.offer(1), "the first offer starts the runner");
+        assert!(!latest.offer(2), "a busy runner is not started twice");
+        assert!(!latest.offer(3));
+        assert_eq!(latest.next(), Some(3), "moves inside the window collapse to the newest");
+        // an offer while the runner works is its trailing value, not a second runner
+        assert!(!latest.offer(4));
+        assert_eq!(latest.next(), Some(4));
+        assert_eq!(latest.next(), None, "nothing left: the runner stops");
+        assert!(latest.offer(5), "after it stopped the next offer starts a new runner");
+        assert_eq!(latest.next(), Some(5));
+        assert_eq!(latest.next(), None);
+    }
+
+    #[test]
+    fn latest_never_loses_an_offer_or_runs_twice_under_contention() {
+        use std::sync::atomic::AtomicUsize;
+        let latest = Arc::new(Latest::new());
+        let (running, most, drained) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let mut runners = vec![];
+        let offerers: Vec<_> = (0..4).map(|t| {
+            let (latest, running, most, drained) = (latest.clone(), running.clone(), most.clone(), drained.clone());
+            std::thread::spawn(move || {
+                let mut started = vec![];
+                for i in 0..2000 {
+                    if latest.offer(t * 10_000 + i) {
+                        let (latest, running, most, drained) = (latest.clone(), running.clone(), most.clone(), drained.clone());
+                        started.push(std::thread::spawn(move || {
+                            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                            most.fetch_max(now, Ordering::SeqCst);
+                            while latest.next().is_some() { drained.fetch_add(1, Ordering::SeqCst); }
+                            running.fetch_sub(1, Ordering::SeqCst);
+                        }));
+                    }
+                }
+                started
+            })
+        }).collect();
+        for offerer in offerers { runners.extend(offerer.join().unwrap()); }
+        for runner in runners { runner.join().unwrap(); }
+        assert_eq!(most.load(Ordering::SeqCst), 1, "never two runners at once");
+        assert!(drained.load(Ordering::SeqCst) >= 1);
+        assert!(latest.lock().is_none(), "the last offer was taken by a runner");
+        assert!(!latest.busy.load(Ordering::SeqCst), "and the runner stopped");
+    }
+
+    #[test]
+    fn cursor_lookups_wait_out_the_window_after_the_last_one() {
+        let t0 = Instant::now();
+        assert_eq!(cursor_wait(None, t0), Duration::ZERO, "the first move is looked up at once");
+        assert_eq!(cursor_wait(Some(t0), t0 + Duration::from_millis(40)), Duration::from_millis(85));
+        assert_eq!(cursor_wait(Some(t0), t0 + bi::CURSOR_EVERY), Duration::ZERO);
+        assert_eq!(cursor_wait(Some(t0), t0 + Duration::from_secs(5)), Duration::ZERO);
+    }
+
+    #[test]
+    fn the_address_follows_top_level_navigation_and_title() {
+        assert!(moves_location("Page.frameNavigated", &json!({"frame":{"id":"A","url":"https://b.test/"}})));
+        assert!(!moves_location("Page.frameNavigated", &json!({"frame":{"id":"B","parentId":"A","url":"https://ads.test/"}})), "an iframe moving is not the page moving");
+        assert!(moves_location("Page.navigatedWithinDocument", &json!({"frameId":"A","url":"https://b.test/#x"})));
+        assert!(moves_location("Page.domContentEventFired", &json!({"timestamp":1.0})));
+        for other in ["Page.screencastFrame", "Page.javascriptDialogOpening", "Page.loadEventFired", ""] {
+            assert!(!moves_location(other, &json!({})), "{other}");
+        }
+    }
+
+    #[test]
+    fn input_without_control_says_to_take_control_unless_someone_has_it() {
+        assert_eq!(not_in_control(false).to_string(), "Take control of the browser first.");
+        assert!(matches!(not_in_control(true), BrowserError::HumanControl));
     }
 
     #[test]
