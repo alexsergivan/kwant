@@ -121,6 +121,13 @@ pub fn clean_request(kind: &str, reason: &str, url: Option<&str>) -> Result<(Str
     Ok((kind.to_string(), reason, url))
 }
 
+/// The site a sign-in is for, as the prefix its kept URLs start with (`https://host[:port]/`).
+/// `None` when the URL has no usable origin.
+pub fn sign_in_site(url: &str) -> Option<String> {
+    let origin = url::Url::parse(url).ok()?.origin();
+    origin.is_tuple().then(|| format!("{}/", origin.ascii_serialization()))
+}
+
 /// Where a step is asked.
 #[derive(Debug, Clone, Default)]
 pub struct HumanStepPlace {
@@ -132,8 +139,19 @@ pub struct HumanStepPlace {
     pub sandbox_target: Option<String>,
 }
 
-/// A new step (with `true`), or the turn's step that is already open (with `false`).
+/// A new step (with `true`), or one already open that the ask gets back (with `false`): the
+/// turn's own, or the bot's open sign-in for the same site in the same chat.
 pub type Created = (HumanStep, bool, Option<Message>);
+
+/// SQL matching the bot's open sign-in for a site in one chat, from the placeholders of the bot,
+/// channel, direct chat, thread, bot browser and site (`sign_in_site`; NULL matches nothing).
+fn same_sign_in([kwant, channel, direct, thread, browser, site]: [&str; 6]) -> String {
+    format!(
+        "status = 'open' AND {site} IS NOT NULL AND kind = 'sign_in' AND kwant_id = {kwant} AND channel_id IS {channel} \
+         AND direct_kwant_id IS {direct} AND thread_id IS {thread} AND sandbox_target IS {browser} \
+         AND substr(url, 1, length({site})) = {site}"
+    )
+}
 
 const CREATE_HUMAN_STEPS: &str = "CREATE TABLE IF NOT EXISTS human_steps (
     id TEXT PRIMARY KEY,
@@ -180,7 +198,10 @@ impl Database {
 
     /// Saves a step together with the chat message that shows it (built by `card`), in one
     /// transaction. A turn that asks again while its step is open gets that step back, so a
-    /// retrying agent (or the CAPTCHA check firing on every page) doesn't pile up cards.
+    /// retrying agent (or the CAPTCHA check firing on every page) doesn't pile up cards. A sign-in
+    /// also comes back to another turn of the same bot in the same chat while it is open for the
+    /// same site (scheme, host and port): two turns running at once (the person's, and one a
+    /// closed CAPTCHA step started) would otherwise show the person two identical cards.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_human_step_with_card(
         &self,
@@ -194,14 +215,17 @@ impl Database {
     ) -> Result<Created, HumanStepError> {
         let mut tx = self.pool.begin().await?;
         let get = "SELECT * FROM human_steps WHERE id = ?";
+        let site = if kind == "sign_in" { url.and_then(sign_in_site) } else { None };
         // Writes first so the transaction holds SQLite's write lock before it reads
         let id = Uuid::new_v4().to_string();
-        let inserted = sqlx::query(
+        let inserted = sqlx::query(&format!(
             "INSERT INTO human_steps (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, created_at, target)
              SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12, ?14
              WHERE (SELECT COUNT(*) FROM human_steps WHERE kwant_id = ?2 AND status = 'open') < ?13
-               AND NOT EXISTS (SELECT 1 FROM human_steps WHERE status = 'open' AND ?6 IS NOT NULL AND turn_id = ?6)",
-        )
+               AND NOT EXISTS (SELECT 1 FROM human_steps WHERE status = 'open' AND ?6 IS NOT NULL AND turn_id = ?6)
+               AND NOT EXISTS (SELECT 1 FROM human_steps WHERE {})",
+            same_sign_in(["?2", "?3", "?4", "?5", "?10", "?15"])
+        ))
         .bind(&id)
         .bind(&place.kwant_id)
         .bind(&place.channel_id)
@@ -216,10 +240,11 @@ impl Database {
         .bind(Utc::now())
         .bind(MAX_OPEN_PER_KWANT)
         .bind(target)
+        .bind(&site)
         .execute(&mut *tx)
         .await?;
         if inserted.rows_affected() == 0 {
-            let existing = match &place.turn_id {
+            let mut existing = match &place.turn_id {
                 Some(t) => {
                     sqlx::query_as::<_, HumanStep>("SELECT * FROM human_steps WHERE status = 'open' AND turn_id = ? LIMIT 1")
                         .bind(t)
@@ -228,6 +253,20 @@ impl Database {
                 }
                 None => None,
             };
+            if existing.is_none() && site.is_some() {
+                existing = sqlx::query_as::<_, HumanStep>(&format!(
+                    "SELECT * FROM human_steps WHERE {} ORDER BY created_at LIMIT 1",
+                    same_sign_in(["?1", "?2", "?3", "?4", "?5", "?6"])
+                ))
+                .bind(&place.kwant_id)
+                .bind(&place.channel_id)
+                .bind(&place.direct_kwant_id)
+                .bind(&place.thread_id)
+                .bind(&place.sandbox_target)
+                .bind(&site)
+                .fetch_optional(&mut *tx)
+                .await?;
+            }
             tx.commit().await?;
             return match existing {
                 Some(step) => Ok((step, false, None)),
@@ -363,6 +402,59 @@ mod tests {
         let full = db.create_human_step_with_card(&place("t99"), "other", "Do it", None, None, "bot", |_| None).await;
         assert_eq!(full.err(), Some(HumanStepError::TooManyOpen));
         assert_eq!(db.list_human_steps(Some("open"), Some("k"), None).await.unwrap().len() as i64, MAX_OPEN_PER_KWANT);
+    }
+
+    #[test]
+    fn a_sign_in_site_is_its_scheme_host_and_port() {
+        assert_eq!(sign_in_site("https://www.instagram.com/accounts/login/").as_deref(), Some("https://www.instagram.com/"));
+        assert_eq!(sign_in_site("https://example.com:8443/login").as_deref(), Some("https://example.com:8443/"));
+        assert_eq!(sign_in_site("https://example.com:443/login").as_deref(), Some("https://example.com/"));
+        assert_eq!(sign_in_site("not a url"), None);
+    }
+
+    #[tokio::test]
+    async fn an_open_sign_in_comes_back_to_another_turn_of_the_bot_in_the_same_chat_for_the_same_site() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let in_chat = |kwant: &str, channel: &str, turn: &str| HumanStepPlace {
+            kwant_id: kwant.into(),
+            channel_id: Some(channel.into()),
+            turn_id: Some(turn.into()),
+            sandbox_target: Some(channel.into()),
+            ..Default::default()
+        };
+        let ask = |place: HumanStepPlace, kind: &'static str, url: Option<&'static str>| {
+            let db = db.clone();
+            async move { db.create_human_step_with_card(&place, kind, "Sign in", url, None, "bot", |_| None).await.unwrap() }
+        };
+        let login = Some("https://www.instagram.com/accounts/login/");
+        let (first, new, _) = ask(in_chat("k", "c", "t1"), "sign_in", login).await;
+        assert!(new);
+        // Another turn, same bot, chat and site (another page of it): the same step, no new card
+        let (again, new, card) = ask(in_chat("k", "c", "t2"), "sign_in", Some("https://www.instagram.com/")).await;
+        assert!(!new && card.is_none());
+        assert_eq!(again.id, first.id);
+        assert_eq!(again.turn_id.as_deref(), Some("t1"), "it stays the first turn's step");
+        // Anything else is its own step: another site, scheme or port, another chat, another bot,
+        // another kind, or a sign-in without a URL
+        for (place, kind, url) in [
+            (in_chat("k", "c", "t3"), "sign_in", Some("https://www.tiktok.com/login")),
+            (in_chat("k", "c", "t4"), "sign_in", Some("http://www.instagram.com/accounts/login/")),
+            (in_chat("k", "c", "t5"), "sign_in", Some("https://www.instagram.com:8443/accounts/login/")),
+            (in_chat("k", "c2", "t6"), "sign_in", login),
+            (in_chat("k2", "c", "t7"), "sign_in", login),
+            (in_chat("k2", "c", "t8"), "two_factor", login),
+            (in_chat("k3", "c", "t9"), "sign_in", None),
+            (in_chat("k3", "c", "t10"), "sign_in", None),
+        ] {
+            let (s, new, _) = ask(place, kind, url).await;
+            assert!(new, "{kind} {url:?} in {:?} for {}", s.channel_id, s.kwant_id);
+        }
+        // Once the person declined it, a later ask is a new step (the bot was told not to ask)
+        assert!(db.close_human_step(&first.id, "declined").await.unwrap());
+        let (after, new, _) = ask(in_chat("k", "c", "t11"), "sign_in", login).await;
+        assert!(new);
+        assert_ne!(after.id, first.id);
     }
 
     #[tokio::test]

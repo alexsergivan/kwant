@@ -1,11 +1,14 @@
 //! Human steps: `request_human_step` pauses the turn with a card and a `human_step`
 //! notification, Done or Decline resumes it with that outcome, Stop cancels it, a late answer
-//! starts a new turn, and the bot's browser tools are refused while a step is open.
+//! starts a new turn, and the bot's browser tools are refused while a step is open. Two turns of
+//! a bot in one chat asking for the same sign-in share one step.
 
 mod common;
 
 use axum::http::StatusCode;
 use common::*;
+use kwnt::server::continuity::{SelfScope, TurnOrigin};
+use kwnt::server::mcp_runtime;
 use kwnt::RuntimeEvent;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -168,4 +171,107 @@ async fn input_and_routes_are_checked() {
     ] {
         assert_eq!(call_remote(&env.app, m, u).await, StatusCode::UNAUTHORIZED, "{m} {u}");
     }
+}
+
+/// A turn of bot `a` in its direct chat (the person's, or one a closed step started), as the CLI
+/// sees it: its token for kwnt's self tools.
+async fn turn_token(env: &Env, turn_id: &str) -> String {
+    let bot = env.state.db.get_kwant(&env.a).await.unwrap().unwrap();
+    let scope = SelfScope {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        origin: Some(TurnOrigin { direct_kwant_id: Some(bot.id.clone()), ..Default::default() }),
+        cancel: Some(tokio_util::sync::CancellationToken::new()),
+        turn_id: Some(turn_id.into()),
+        sandbox_target: Some(bot.id.clone()),
+        ..Default::default()
+    };
+    mcp_runtime::prepare_turn_with_self(&env.state, &bot, Some(turn_id.into()), None, Some(scope)).await.unwrap().1
+}
+
+/// The turn asks for a sign-in at `url`, in the background as the CLI would while it waits;
+/// gives the tool's text and whether it was an error.
+fn ask_sign_in(env: &Env, token: &str, url: &str) -> tokio::task::JoinHandle<(String, bool)> {
+    let (app, auth) = (env.app.clone(), format!("Bearer {token}"));
+    let args = json!({"kind": "sign_in", "reason": "Please sign in to Instagram in the browser panel", "url": url});
+    tokio::spawn(async move {
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "request_human_step", "arguments": args}});
+        let (code, v) = call_with(&app, "POST", "/api/mcp/self", Some(body), &[("authorization", auth.as_str())]).await;
+        assert_eq!(code, StatusCode::OK, "{v}");
+        (v["result"]["content"][0]["text"].as_str().unwrap_or("").to_string(), v["result"]["isError"].as_bool().unwrap_or(false))
+    })
+}
+
+async fn finished(task: tokio::task::JoinHandle<(String, bool)>) -> (String, bool) {
+    tokio::time::timeout(Duration::from_secs(20), task).await.expect("the tool call never hangs").unwrap()
+}
+
+async fn sign_in_cards(env: &Env) -> usize {
+    messages(env, &env.a).await.iter().filter(|m| m.text.starts_with("Sign in needed")).count()
+}
+
+/// Rigel's QA of #269: the person's turn and a turn a closed CAPTCHA step started both asked for
+/// the Instagram sign-in, and the person got two identical cards.
+#[tokio::test]
+async fn a_second_turn_asking_for_the_same_sign_in_steps_aside_and_the_first_hears_the_answer() {
+    let env = setup().await;
+    let first = ask_sign_in(&env, &turn_token(&env, "turn-person").await, "https://www.instagram.com/accounts/login/");
+    let s = open_step(&env, &env.a).await;
+    let id = s["id"].as_str().unwrap().to_string();
+    wait_for("the first turn waiting", || async { step(&env, &id).await["waiting"] == true }).await;
+
+    // Same site, another page of it, another turn of the same bot in the same chat
+    let second = ask_sign_in(&env, &turn_token(&env, "turn-resumed").await, "https://www.instagram.com/?next=x");
+    let (text, is_error) = finished(second).await;
+    assert!(!is_error, "{text}");
+    assert!(text.contains("already asked the person for this sign-in") && text.contains("Don't ask again"), "{text}");
+    let (_, open) = call(&env.app, "GET", &format!("/api/human-steps?status=open&context_id={}", env.a), None).await;
+    assert_eq!(open.as_array().unwrap().len(), 1, "one step: {open}");
+    assert_eq!(sign_in_cards(&env).await, 1, "one card");
+    assert_eq!(step(&env, &id).await["waiting"], true, "the first turn still waits on it");
+
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{id}/decline"), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "turn");
+    let (text, is_error) = finished(first).await;
+    assert!(!is_error, "{text}");
+    assert!(text.contains("declined the step") && text.contains("Don't ask for it again in this turn unless the person brings it up"), "{text}");
+}
+
+/// A sign-in no turn waits on any more (the asking turn's wait ran out) is picked up by the next
+/// turn that asks for the same site: it waits on that step and hears the answer.
+#[tokio::test]
+async fn a_turn_asking_for_a_sign_in_nobody_waits_on_any_more_waits_on_that_step() {
+    let env = setup().await;
+    env.state.human_steps.set_wait(Duration::from_millis(300));
+    let (text, _) = finished(ask_sign_in(&env, &turn_token(&env, "turn-early").await, "https://www.instagram.com/accounts/login/")).await;
+    assert!(text.contains("hasn't done the step yet"), "{text}");
+    let s = open_step(&env, &env.a).await;
+    let id = s["id"].as_str().unwrap().to_string();
+    assert_eq!(step(&env, &id).await["waiting"], false);
+
+    env.state.human_steps.set_wait(Duration::from_secs(30));
+    let later = ask_sign_in(&env, &turn_token(&env, "turn-later").await, "https://www.instagram.com/accounts/login/");
+    wait_for("the later turn waiting", || async { step(&env, &id).await["waiting"] == true }).await;
+    assert_eq!(sign_in_cards(&env).await, 1, "no second card");
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{id}/done"), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "turn");
+    let (text, is_error) = finished(later).await;
+    assert!(!is_error && text.contains("The person says the step is done"), "{text}");
+}
+
+#[tokio::test]
+async fn a_late_decline_tells_the_new_turn_not_to_ask_again() {
+    let env = setup().await;
+    env.state.human_steps.set_wait(Duration::from_millis(300));
+    send_direct(&env, &env.a, &format!("{} REPLYTAG:h5", step_marker("sign_in", "LATE_DECLINE log in")), json!({})).await;
+    wait_reply(&env, &env.a, "answer h5").await;
+    let s = open_step(&env, &env.a).await;
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{}/decline", s["id"].as_str().unwrap()), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "new_turn");
+    wait_for("the resumed turn", || async { !invocations_with("Step: LATE_DECLINE log in").is_empty() }).await;
+    let prompt = invocations_with("Step: LATE_DECLINE log in").remove(0);
+    assert!(prompt.contains("declined the browser step") && prompt.contains("Don't ask for it again unless the person brings it up"), "{prompt}");
 }
