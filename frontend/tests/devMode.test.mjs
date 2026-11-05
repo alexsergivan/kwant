@@ -399,7 +399,7 @@ test('DOM: the setup sheet’s chips for not found and not connected, and Esc ca
   reset();
   let cancelled = 0;
   for (const [state, chip, text] of [
-    ['not_found', 'not_found', /kwant can’t see demo-org\/demo-app with your GitHub connection/],
+    ['not_found', 'not_found', /Bots can’t see demo-org\/demo-app with your GitHub connection/],
     ['not_connected', 'not_connected', /Connect GitHub to read this repo/],
   ]) {
     const { root } = await mount(

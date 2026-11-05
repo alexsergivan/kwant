@@ -160,7 +160,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
         (err: unknown) =>
           setNotesError(
             err && typeof err === 'object' && 'status' in err && ((err as { status: number }).status === 404 || (err as { status: number }).status === 405)
-              ? 'The draft is ready, but this server can’t send it to the app yet. Update kwant.'
+              ? 'The draft is ready, but this server can’t send it to the app yet. Update the server.'
               : err instanceof Error
                 ? err.message
                 : 'The draft couldn’t load.',

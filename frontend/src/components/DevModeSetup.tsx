@@ -215,7 +215,7 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
         <footer className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
           <p className="flex-1 flex items-start gap-1.5 text-meta text-zinc-500">
             <Lock size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
-            Only you can turn this on or off. kwant never posts to GitHub without asking.
+            Only you can turn this on or off. Bots never post to GitHub without asking.
           </p>
           <div className="flex gap-2 justify-end">
             <button

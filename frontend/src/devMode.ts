@@ -273,13 +273,13 @@ export function fieldView(state: FieldState, repo: string | null, error: string 
     case 'not_found':
       return {
         chip: { tone: 'bad', text: 'Can’t see it' },
-        help: 'kwant can’t see {repo} with your GitHub connection. Check the name, or give Loose ends access to it.',
+        help: 'Bots can’t see {repo} with your GitHub connection. Check the name, or give Loose ends access to it.',
         helpRepo: repo,
         connect: false,
         canTurnOn: false,
       };
     case 'not_connected':
-      return { chip: { tone: 'warn', text: 'Not connected' }, help: 'Connect GitHub to read this repo. kwant only reads.', helpRepo: null, connect: true, canTurnOn: false };
+      return { chip: { tone: 'warn', text: 'Not connected' }, help: 'Connect GitHub to read this repo. Bots only read it.', helpRepo: null, connect: true, canTurnOn: false };
     case 'invalid':
       return { chip: { tone: 'bad', text: 'Not a repo' }, help: EMPTY_HELP, helpRepo: null, connect: false, canTurnOn: false };
     case 'error':
