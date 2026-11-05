@@ -8,6 +8,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.7.0] - 2026-11-05
+
+### Added
+- **Dev mode.** Point a space at one GitHub repo and branch with the switch in the space header. It has a safety
+  cover, so turning it on takes two presses, and the first time it opens a short setup. kwant reads the repo
+  **read only** and writes nothing to GitHub. The space gets a **Dev desk** at the top of the sidebar with two tabs:
+  - **What landed**: one plain-words card per merge to the watched branch, a **Since you last looked** roll-up,
+    **Mark all seen**, and **Draft release notes** from everything since the last tag.
+    A commit that reached the branch without a pull request gets a normal card with a link to the commit. (#331)
+  - **Reviews**: one card per open pull request, written by a bot that didn't write the code (on a different
+    engine when the space has one). It shows a rule-based risk badge with its reasons, whether the PR does what
+    its task asked, whether tests were weakened, and findings you can **Fix it** (sent to the bot that wrote the
+    PR) or **Dismiss**. A merge gets the **Verified** sticker only when CI is green, another bot reviewed it in
+    kwant, and every finding is fixed or dismissed. (#313, #312, #314, #315, #321, #333)
+  - **Before you turn it on:** Dev mode reads GitHub through the Loose ends GitHub connection. kwant's built-in
+    password store only saves that token while every space and bot is on **Ask before running commands** (new
+    installs start on **Ask only when risky**). Switch them to Ask, or connect Bitwarden. While the token is
+    saved, approvals can't go back to Off or Ask only when risky. (docs/dev-mode.md, #329)
+- **Secret and package checks on reviews.** Each review runs Gitleaks over the PR (pinned and checksum-verified)
+  and checks that every new package really exists in its registry. A found secret or a made-up package always
+  makes the card High risk, and the secret itself is never shown. (#316)
+- **The production floor.** In a Dev mode space, pushes to the watched or a protected branch, force pushes,
+  deleting branches or tags, deploy commands, destructive data commands and using a connection you marked
+  **production** always ask first. There's no "always allow". A step that can change production data can't be
+  allowed until the space has a backup from the last 10 minutes: the card's **Back up first** takes one. (#313,
+  #314)
+- **The Idea jar.** Drop an idea in from the sidebar's **+**, the phone's **Jar** tab or `/idea` in any composer.
+  When a bot is free, it peeks at one idea and writes its take: a verdict, why, the effort, the risks, a short plan
+  and its questions. **Do it** turns a take into a draft mission that still waits for your OK. **Later**,
+  **Edit**, **Look now** and **Delete** (with Undo) are on every idea. Bots look at up to 3 ideas per space a day
+  by default (Settings changes it, 0 turns it off). (#320, #324, #323, #330)
+  Guide: docs/idea-jar.md. (#329)
+
+### Changed
+- **Bots can't act on text from a pull request or an idea.** Dev mode cards and idea takes run with no tools at
+  all, on every engine: no MCP servers, no browser, none of the engine's own tools. A turn that can't run that way
+  fails instead. (#319, #322)
+- **The board's Live now row fades at the edge on a phone** while there's more to scroll. (#318)
+
+### Fixed
+- **The phone's Undo pop-up no longer covers the tab bar** in the Idea jar, and the jar's Settings row always
+  shows. (#330) Screen readers hear "Undo" once on that pop-up, not twice. (#332)
+- **Ideas sent with `?space_id=` land in that space.** (#329)
+- **Small links on the phone Dev desk are easier to tap.** (#331)
+- **codex runs at the reasoning effort you chose.** kwant passed the effort under a key codex ignores, so every
+  codex turn ran at codex's default. (#325)
+
 ## [Mac 0.6.13] - 2026-11-05
 
 ### Changed
