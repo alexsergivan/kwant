@@ -18,7 +18,7 @@ use std::sync::{Mutex, OnceLock};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-/// How often each Dev mode space is read.
+/// How often each Dev mode space is read, unless `KWANT_DEV_POLL_SECS` says otherwise ([`super::poll_every`]).
 pub const EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 /// Merges a space's first poll back-fills, so the desk isn't empty on day one.
 pub const BACKFILL: usize = 5;
@@ -86,7 +86,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) {
             let now = Utc::now();
             let all = now >= next_all;
             if all {
-                next_all = now + Duration::from_std(EVERY).unwrap_or(Duration::minutes(5));
+                next_all = now + Duration::from_std(super::poll_every()).unwrap_or(Duration::minutes(5));
             }
             let soon = std::mem::take(&mut shared().lock().unwrap().soon);
             match state.db.dev_mode_on_spaces().await {
@@ -139,7 +139,9 @@ async fn recover(state: &AppState) {
     }
 }
 
-async fn poll_logged(state: &AppState, row: DevModeRow) {
+/// [`poll`] with its outcome recorded: the poll error on the settings, and a back-off after a
+/// rate limit. Public for the leak tests (`tests/dev_github_test.rs`).
+pub async fn poll_logged(state: &AppState, row: DevModeRow) {
     let space = row.space_id.clone();
     if shared().lock().unwrap().resume_at.get(&space).is_some_and(|t| *t > Utc::now()) {
         return;

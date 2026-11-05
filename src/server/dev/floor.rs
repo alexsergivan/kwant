@@ -11,7 +11,11 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 /// The Dev mode context of a bot's space, or `None` when Dev mode is off there (no floor).
+/// With Dev mode off in every space it reads nothing.
 pub async fn ctx_for_kwant(db: &Database, kwant_id: &str, cwd: Option<&Path>) -> Option<(String, DevCtx)> {
+    if !db.any_dev_mode_on() {
+        return None;
+    }
     let kwant = db.get_kwant(kwant_id).await.ok().flatten()?;
     let mode = db.dev_mode(&kwant.space_id).await.ok().flatten().filter(|m| m.on)?;
     let marked = db.prod_connections(&kwant.space_id).await.unwrap_or_default();
@@ -105,7 +109,7 @@ pub async fn allow_refusal(db: &Database, details: &Value) -> Option<Value> {
     }
     let space_id = f["space_id"].as_str()?;
     let (_, ok) = db.latest_dev_backups(space_id).await.unwrap_or((None, None));
-    if super::backup::is_fresh(ok.as_ref(), chrono::Utc::now()) {
+    if super::backup::is_fresh(ok.as_ref(), super::now()) {
         return None;
     }
     let backup = super::backup::state_of(db, space_id, false).await;
@@ -200,5 +204,19 @@ mod tests {
         assert_eq!(db.prod_connections("s1").await.unwrap(), ["mcp:srv_1"]);
         // Off: no context, so no floor
         assert!(ctx_for_kwant(&db, "no-such-bot", None).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_dev_mode_flag_is_read_at_startup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        assert!(!db.any_dev_mode_on());
+        db.put_dev_mode("s1", true, "demo-org/demo-app", "main", None, None).await.unwrap();
+        drop(db);
+        let db = Database::init(tmp.path()).await.unwrap();
+        assert!(db.any_dev_mode_on(), "a restart with a space on starts with the floor on");
+        db.put_dev_mode("s1", false, "demo-org/demo-app", "main", None, None).await.unwrap();
+        drop(db);
+        assert!(!Database::init(tmp.path()).await.unwrap().any_dev_mode_on());
     }
 }

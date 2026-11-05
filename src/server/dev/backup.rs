@@ -71,7 +71,7 @@ pub async fn run(state: &AppState, space: &SpaceId, kwant_id: Option<&str>) -> R
     let cwd = folder(state, space, kwant_id);
     let out = crate::tools::shell::execute_shell(&cwd, &json!({"command": command, "timeout_secs": TIMEOUT_SECS})).await;
     release(space.as_str());
-    let taken_at = Utc::now();
+    let taken_at = super::now();
     let (ok, path, bytes, error) = match out {
         Ok(v) => judge(&v, &cwd),
         Err(e) => (false, None, None, Some(e.to_string())),
@@ -260,7 +260,7 @@ pub fn card_state(no_data: bool, has_command: bool, taking: bool, last: Option<&
 pub async fn state_of(db: &crate::db::Database, space_id: &str, no_data: bool) -> Value {
     let has_command = db.dev_mode(space_id).await.ok().flatten().and_then(|m| m.backup_command).is_some_and(|c| !c.trim().is_empty());
     let (last, ok) = db.latest_dev_backups(space_id).await.unwrap_or((None, None));
-    card_state(no_data, has_command, is_running(space_id), last.as_ref(), ok.as_ref(), Utc::now())
+    card_state(no_data, has_command, is_running(space_id), last.as_ref(), ok.as_ref(), super::now())
 }
 
 #[cfg(test)]

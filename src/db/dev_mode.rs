@@ -20,6 +20,15 @@ pub const READY: &str = "ready";
 pub const FAILED: &str = "failed";
 pub const STALE: &str = "stale";
 
+/// "Some space has Dev mode on", kept in memory so the production floor skips its reads while
+/// Dev mode is off everywhere. Read at open and re-read after every write to `dev_mode_spaces`,
+/// under `writes`, so two toggles can't leave it stale. A failed read counts as on (the floor runs).
+#[derive(Debug, Default)]
+pub struct DevOn {
+    on: std::sync::atomic::AtomicBool,
+    writes: tokio::sync::Mutex<()>,
+}
+
 const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS dev_mode_spaces (
         space_id TEXT PRIMARY KEY,
@@ -134,6 +143,16 @@ impl Database {
         Ok(())
     }
 
+    /// False only when no space has Dev mode on: then there is no production floor anywhere.
+    pub fn any_dev_mode_on(&self) -> bool {
+        self.dev_on.on.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(super) async fn refresh_dev_on(&self) {
+        let on = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM dev_mode_spaces WHERE on_ = 1)").fetch_one(&self.pool).await;
+        self.dev_on.on.store(on.unwrap_or(true), std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub async fn dev_mode(&self, space_id: &str) -> Result<Option<DevModeRow>, DbError> {
         Ok(sqlx::query_as("SELECT * FROM dev_mode_spaces WHERE space_id = ?").bind(space_id).fetch_optional(&self.pool).await?)
     }
@@ -154,8 +173,13 @@ impl Database {
         deploy_hint: Option<&str>,
         backup_command: Option<&str>,
     ) -> Result<DevModeRow, DbError> {
+        let _writes = self.dev_on.writes.lock().await;
+        if on {
+            // Before the row, so no call slips between the write and the flag
+            self.dev_on.on.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         let now = Utc::now();
-        sqlx::query(
+        let done = sqlx::query(
             "INSERT INTO dev_mode_spaces (space_id, on_, repo, branch, deploy_hint, backup_command, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(space_id) DO UPDATE SET
@@ -173,7 +197,9 @@ impl Database {
         .bind(backup_command)
         .bind(now)
         .execute(&self.pool)
-        .await?;
+        .await;
+        self.refresh_dev_on().await;
+        done?;
         Ok(self.dev_mode(space_id).await?.expect("just written"))
     }
 
@@ -194,6 +220,13 @@ impl Database {
     }
 
     pub async fn delete_dev_mode_of_space(&self, space_id: &str) -> Result<(), DbError> {
+        let _writes = self.dev_on.writes.lock().await;
+        let done = self.delete_dev_rows(space_id).await;
+        self.refresh_dev_on().await;
+        done
+    }
+
+    async fn delete_dev_rows(&self, space_id: &str) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
         for t in ["dev_mode_spaces", "dev_cards", "dev_backups", "dev_model_calls", "dev_prod_connections"] {
             sqlx::query(&format!("DELETE FROM {t} WHERE space_id = ?")).bind(space_id).execute(&mut *tx).await?;
@@ -335,9 +368,12 @@ impl Database {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
-    /// Model calls Dev mode made in a space today (UTC).
+    /// Model calls Dev mode made in a space today (the UTC day of `dev::now()`).
     pub async fn dev_calls_today(&self, space_id: &str) -> Result<i64, DbError> {
-        let day = Utc::now().format("%Y-%m-%d").to_string();
+        self.dev_calls_on(space_id, &crate::server::dev::utc_day(crate::server::dev::now())).await
+    }
+
+    pub async fn dev_calls_on(&self, space_id: &str, day: &str) -> Result<i64, DbError> {
         let row: Option<(i64,)> = sqlx::query_as("SELECT calls FROM dev_model_calls WHERE space_id = ? AND day = ?")
             .bind(space_id)
             .bind(day)
@@ -346,16 +382,24 @@ impl Database {
         Ok(row.map(|r| r.0).unwrap_or(0))
     }
 
-    /// Takes one model call from today's [`CALLS_CAP`]: false (and nothing counted) once it's used up.
+    /// Takes one model call from today's cap (`dev::call_cap()`, default [`CALLS_CAP`]): false (and
+    /// nothing counted) once it's used up.
     pub async fn take_dev_call(&self, space_id: &str) -> Result<bool, DbError> {
-        let day = Utc::now().format("%Y-%m-%d").to_string();
+        self.take_dev_call_at(space_id, crate::server::dev::now(), crate::server::dev::call_cap()).await
+    }
+
+    /// [`Self::take_dev_call`] on the UTC day of `now`, against `cap`.
+    pub async fn take_dev_call_at(&self, space_id: &str, now: DateTime<Utc>, cap: i64) -> Result<bool, DbError> {
+        if cap <= 0 {
+            return Ok(false);
+        }
         let done = sqlx::query(
             "INSERT INTO dev_model_calls (space_id, day, calls) VALUES (?1, ?2, 1)
              ON CONFLICT(space_id, day) DO UPDATE SET calls = calls + 1 WHERE calls < ?3",
         )
         .bind(space_id)
-        .bind(day)
-        .bind(CALLS_CAP)
+        .bind(crate::server::dev::utc_day(now))
+        .bind(cap)
         .execute(&self.pool)
         .await?;
         Ok(done.rows_affected() == 1)

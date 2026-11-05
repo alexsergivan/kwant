@@ -90,6 +90,8 @@ pub struct Database {
     pool: Pool<Sqlite>,
     /// Where attachments live (`<data_dir>/attachments`), for file previews in Smart Results.
     data_dir: std::path::PathBuf,
+    /// Whether any space has Dev mode on (see `dev_mode::DevOn`), shared by every clone.
+    dev_on: std::sync::Arc<dev_mode::DevOn>,
 }
 
 /// Built-in kwants: (name, title, persona, soul, avatar).
@@ -172,7 +174,7 @@ impl Database {
         // The chat a card that outlived its turn resumes in (see `park_approval`)
         let _ = sqlx::query("ALTER TABLE approvals ADD COLUMN resume TEXT;").execute(&pool).await;
 
-        let db = Self { pool, data_dir: data_dir.to_path_buf() };
+        let db = Self { pool, data_dir: data_dir.to_path_buf(), dev_on: Default::default() };
         db.migrate_profiles().await?;
         db.migrate_browser_sites().await?;
         db.migrate_continuity().await?;
@@ -246,7 +248,9 @@ impl Database {
             .connect_with(options)
             .await?;
         sqlx::query("PRAGMA synchronous = NORMAL;").execute(&pool).await?;
-        Ok(Self { pool, data_dir: data_dir.to_path_buf() })
+        let db = Self { pool, data_dir: data_dir.to_path_buf(), dev_on: Default::default() };
+        db.refresh_dev_on().await;
+        Ok(db)
     }
 
     /// A transaction that holds SQLite's write lock from the start, for one that reads before it

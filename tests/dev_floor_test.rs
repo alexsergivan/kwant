@@ -117,3 +117,46 @@ async fn deny_is_always_accepted_on_a_floor_card() {
     assert_eq!(s.as_u16(), 200, "{v}");
     assert_eq!(env.state.db.get_approval(&ticket).await.unwrap().unwrap().status, "denied");
 }
+
+/// The floor skips its reads while no space has Dev mode on (an in-memory flag). Turning it on
+/// anywhere applies the floor to the very next call, and turning it off in one space leaves the
+/// others' floor in place: the flag is never stale.
+#[tokio::test]
+async fn turning_dev_mode_on_applies_the_floor_at_once() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    let db = &env.state.db;
+    let floor_of = |n: u32| {
+        let env = &env;
+        async move { unanswered(env, &format!("sqlite3 demo.db 'DROP TABLE demo_{n}'")).await.1.get("prod_floor").cloned() }
+    };
+    assert!(!db.any_dev_mode_on());
+    assert!(floor_of(1).await.is_none());
+
+    // On in another space only: the flag is up, but A's space still has no floor
+    db.put_dev_mode("spc_other", true, "demo-org/other", "main", None, None).await.unwrap();
+    assert!(db.any_dev_mode_on());
+    assert!(floor_of(2).await.is_none());
+
+    // On in A's space: the next call gets the floor, with no wait
+    db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    assert_eq!(floor_of(3).await.expect("the floor applies at once")["kind"], "destructive");
+
+    // Off in the other space: A's floor stays
+    db.put_dev_mode("spc_other", false, "demo-org/other", "main", None, None).await.unwrap();
+    assert!(db.any_dev_mode_on());
+    assert!(floor_of(4).await.is_some());
+
+    // Off everywhere: no floor, flag down; on again (a clone shares the flag), floor back
+    db.put_dev_mode(&space, false, "demo-org/demo-app", "main", None, None).await.unwrap();
+    assert!(!db.any_dev_mode_on());
+    assert!(floor_of(5).await.is_none());
+    db.clone().put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+    assert!(db.any_dev_mode_on());
+    assert!(floor_of(6).await.is_some());
+
+    // Deleting the space's Dev mode rows takes the flag down too
+    db.delete_dev_mode_of_space(&space).await.unwrap();
+    assert!(!db.any_dev_mode_on());
+    assert!(floor_of(7).await.is_none());
+}

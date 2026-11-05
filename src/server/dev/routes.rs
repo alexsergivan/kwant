@@ -4,7 +4,7 @@
 
 use super::facts::{CiState, DevFacts, ReleaseFacts};
 use super::{backup, notify_card, notify_mode, poller, repo};
-use crate::db::dev_mode::{DevCardRow, DevModeRow, CALLS_CAP, LANDED, PENDING, READY, RELEASE_NOTES, REVIEW, STALE};
+use crate::db::dev_mode::{DevCardRow, DevModeRow, LANDED, PENDING, READY, RELEASE_NOTES, REVIEW, STALE};
 use crate::db::spaces::SpaceId;
 use crate::server::spaces::active_space;
 use crate::server::AppState;
@@ -58,7 +58,7 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             "polled_at": null,
             "poll_error": null,
             "calls_today": calls,
-            "calls_cap": CALLS_CAP,
+            "calls_cap": super::call_cap(),
         }),
     })
 }
@@ -74,7 +74,7 @@ fn row_json(r: &DevModeRow, calls: i64) -> Value {
         "polled_at": r.polled_at,
         "poll_error": r.poll_error,
         "calls_today": calls,
-        "calls_cap": CALLS_CAP,
+        "calls_cap": super::call_cap(),
     })
 }
 
