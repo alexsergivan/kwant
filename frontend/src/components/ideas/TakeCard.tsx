@@ -117,7 +117,7 @@ export const TakeCard: React.FC<TakeCardProps> = (p) => {
   const titleId = `take-${idea.id}-title`;
   const steps = take.plan;
   return (
-    <article aria-labelledby={titleId} className="rounded-2xl border border-[rgb(157_143_255/.28)] bg-[#1a1538] min-w-0 overflow-hidden kw-jar-arrive" data-take-card={idea.id} data-status={idea.status}>
+    <article aria-labelledby={titleId} className="rounded-2xl border border-[rgb(157_143_255/.28)] bg-[#1a1538] min-w-0 overflow-clip kw-jar-arrive" data-take-card={idea.id} data-status={idea.status}>
       <div className="flex flex-col gap-3 px-4 pt-4 pb-3">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1 flex flex-col gap-1">
@@ -211,7 +211,7 @@ export const TakeCard: React.FC<TakeCardProps> = (p) => {
       {done ? (
         <PickedPanel result={done} bot={take.bot} onOpen={() => p.onOpenMission?.(done.mission_id)} openRef={p.openRef} />
       ) : (
-        <div className={`flex flex-col gap-2 px-4 py-3 border-t border-white/[0.08] bg-[rgb(10_7_25/.35)] ${phone ? 'sticky bottom-0 z-10 bg-[#130f2a]' : ''}`} data-action-bar>
+        <div className={`flex flex-col gap-2 px-4 py-3 border-t border-white/[0.08] ${phone ? 'sticky bottom-0 z-10 bg-[#130f2a]' : 'bg-[rgb(10_7_25/.35)]'}`} data-action-bar>
           {pick?.kind === 'error' && idea.status === 'ready' && <InfoLine tone="rose">Couldn’t make the draft. Nothing was created. Try again.</InfoLine>}
           <div className={phone ? 'flex flex-col gap-2' : 'flex flex-wrap items-center gap-2'}>
             <button ref={p.firstRef} type="button" onClick={p.onDoIt} disabled={locked} className={`${btn.primary} ${phone ? '!min-h-[48px] w-full text-[14px]' : ''}`} data-action="do-it">

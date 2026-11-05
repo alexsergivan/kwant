@@ -550,6 +550,9 @@ test('the view scrolls itself inside a flex-1 min-h-0 pane (list and phone take 
   const screen = phone.querySelector(`[data-take-screen="${ID.ready}"]`);
   assert.ok(screen.className.includes('min-h-0') && screen.className.includes('flex-1'));
   assert.ok(screen.querySelector('[data-jar-scroll] [data-action-bar]'), 'sticky Do it bar sits inside the scroller');
+  const card = screen.querySelector('[data-take-card]');
+  assert.ok(!/\boverflow-(hidden|auto|scroll)\b/.test(card.className), 'the card clips without becoming a scroll box, so the bar can stick');
+  assert.ok(/\bsticky\b/.test(screen.querySelector('[data-action-bar]').className));
 });
 
 // ---------------------------------------------------------------------------------------------------
