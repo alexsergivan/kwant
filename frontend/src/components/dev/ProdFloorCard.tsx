@@ -83,9 +83,12 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
       const result = await onBackup(floor.space_id);
       send({ type: 'backup_done', result, now: Date.now() });
       setTick(Date.now());
-      if (fromSecondary) window.setTimeout(() => mainRef.current?.focus(), 0);
     } catch (e) {
       send({ type: 'backup_error', error: e instanceof Error ? e.message : 'no reason given' });
+    } finally {
+      // Done or failed, the secondary button is gone (or disabled) by now; the main button is Allow on
+      // success and "Try the backup again" on failure, so focus lands on the next thing to press.
+      if (fromSecondary) window.setTimeout(() => mainRef.current?.focus(), 0);
     }
   };
 

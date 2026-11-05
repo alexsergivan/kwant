@@ -1,6 +1,6 @@
 // The Dev desk: a row pinned at the top of the sidebar in a Dev space, and its page with two tabs,
 // What landed and Reviews. The page fetches plan §3.2's routes, updates live on the `dev_card`
-// SSE (App re-sends it as DEV_CARD_EVENT) and mounts Iris's renderers through DevDeskSlots.
+// SSE (App re-sends it as DEV_CARD_EVENT) and mounts Iris's cards (#314) through DevDeskSlots.
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, Loader2, RefreshCw } from 'lucide-react';
@@ -153,7 +153,33 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
   const [actionError, setActionError] = useState<string | null>(null);
   const tabsId = useId();
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const panelRef = useRef<HTMLDivElement>(null);
   const notesId = notes?.id ?? null;
+  // "Open review" on a landed card: the PR whose review card gets scrolled to and focused once the
+  // Reviews tab has rendered.
+  const [openPr, setOpenPr] = useState<number | null>(null);
+
+  const openReview = useCallback((pr: number) => {
+    setTab('reviews');
+    setOpenPr(pr);
+  }, []);
+
+  useEffect(() => {
+    if (openPr === null || tab !== 'reviews') return;
+    const panel = panelRef.current;
+    const card = panel?.querySelector<HTMLElement>(`[data-dev-card="review"][data-pr="${openPr}"]`);
+    const heading = card?.querySelector<HTMLElement>('h3');
+    setOpenPr(null);
+    if (!card || !heading) {
+      // Not on the desk (closed since, or not reviewed yet): focus the Reviews tab so the move is still visible.
+      tabRefs.current[1]?.focus();
+      return;
+    }
+    if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+    const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    card.scrollIntoView?.({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+    heading.focus({ preventScroll: true });
+  }, [openPr, tab, desk.reviews]);
 
   // The release-notes draft: 202 gives the pending card; its ready card comes after the SSE.
   useEffect(() => {
@@ -312,7 +338,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
             </div>
           )}
 
-          <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${tab}`} className="space-y-3">
+          <div ref={panelRef} role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${tab}`} className="space-y-3">
             {first && desk.loading ? (
               <p className="flex items-center gap-2 py-8 justify-center text-meta text-zinc-400" data-dev-loading>
                 <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
@@ -325,13 +351,16 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
                     rollup={landed.rollup}
                     last_tag={landed.last_tag}
                     last_merge={lastMerge}
+                    cards={landedCards}
+                    branch={dev?.branch || 'main'}
                     onMarkSeen={markSeen}
                     onDraftNotes={draftNotes}
                     drafting={!!notes && notes.status === 'pending'}
+                    marking={marking}
                   />
                 )}
                 {landedCards.length ? (
-                  <LandedList cards={landedCards} reviews={reviews} now={now} />
+                  <LandedList cards={landedCards} reviews={reviews} now={now} onOpenReview={openReview} />
                 ) : (
                   landed && (
                     <Empty title="Nothing has landed yet" line="Each merge to main shows up here as a short card in plain words. kwant checks every 5 minutes." />
