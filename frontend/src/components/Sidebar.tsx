@@ -17,6 +17,8 @@ import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
 import { type NeedsYouRow, workingIds, directIds } from '../chatsTab';
+import { DevModeSwitch, DevOffNote, useDevMode } from './DevModeSwitch';
+import { DevDeskRow } from './DevDesk';
 
 export interface Kwant {
   id: string;
@@ -119,6 +121,9 @@ export interface SidebarProps {
   missionBoard?: boolean;
   missionsActive?: boolean;
   onOpenMissions?: () => void;
+  /** Dev mode (0.7): the Dev desk row's page is open, and how to open it. */
+  devDeskActive?: boolean;
+  onOpenDevDesk?: () => void;
   /** Opens Space settings → Accounts from the footer. */
   onOpenAccounts?: () => void;
   /** Opens Accounts at "Sign in with Claude", when Claude being signed out is why nothing runs. */
@@ -274,6 +279,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenParallel,
   missionBoard = false,
   missionsActive = false,
+  devDeskActive = false,
+  onOpenDevDesk,
   onOpenMissions,
   onOpenAccounts,
   onSignInClaude,
@@ -356,6 +363,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const offLine = spaceOffLine(space.approvals, kwants);
+  // Dev mode: the switch sits between the name and the gear; on, the meta line says the branch.
+  const dev = useDevMode(space.id);
+  const devOn = !!dev?.on;
+  const [devOffNote, setDevOffNote] = useState(false);
+  const dismissDevOff = useCallback(() => setDevOffNote(false), []);
+  useEffect(() => setDevOffNote(false), [space.id]);
+  const devSwitch = <DevModeSwitch key={space.id} space={space} phone={phone} onTurnedOff={() => setDevOffNote(true)} />;
+  const devMeta = devOn ? (
+    <span className="block text-meta text-zinc-400 truncate" data-dev-meta>
+      Dev · <span className="font-mono text-sky-300">{dev?.branch ?? 'main'}</span>
+    </span>
+  ) : null;
   // Phones: section titles stay pinned while their list scrolls, so they are never cut off
   const sectionHead = `px-2 py-1 min-w-0 flex items-center justify-between gap-2 text-2xs font-semibold text-zinc-400 uppercase tracking-wider${
     phone ? ' kw-sticky-head sticky top-0 z-10' : ''
@@ -678,6 +697,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           phones have no rail, so here it is their one switcher. */}
       <div className="relative p-2 border-b border-zinc-800/60">
         {phone ? (
+          <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => {
@@ -689,20 +709,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             aria-expanded={switcherOpen}
             className="w-full flex items-center gap-2.5 px-1.5 py-1.5 rounded-lg text-left hover:bg-zinc-800/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
           >
-            <SpaceTile space={space} size={32} />
+            <SpaceTile space={space} size={32} dev={devOn} devBehind="var(--kw-surface-side)" />
             <span className="flex-1 min-w-0">
               <span className="block text-body font-semibold text-zinc-50 truncate">{space.name}</span>
-              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
+              {devMeta ?? <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>}
             </span>
             <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
+          {devSwitch}
+          </div>
         ) : (
           <div className="flex items-center gap-2.5 px-1.5 py-1.5" data-space-header>
-            <SpaceTile space={space} size={32} />
+            <SpaceTile space={space} size={32} dev={devOn} devBehind="var(--kw-surface-side)" />
             <span className="flex-1 min-w-0">
               <h1 className="text-body font-semibold text-zinc-50 truncate">{space.name}</h1>
-              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
+              {devMeta ?? <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>}
             </span>
+            {devSwitch}
             <button
               type="button"
               onClick={() => {
@@ -718,6 +741,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
         )}
+        {devOffNote && <DevOffNote approvals={space.approvals} onDismiss={dismissDevOff} />}
         {offLine && (
           <button
             type="button"
@@ -801,6 +825,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <h2 id="chats-working-head" className={sectionHead}>Working</h2>
             <div className="mt-1 space-y-0.5">{workingBots.map((k) => botRow(k, undefined, {}))}</div>
           </section>
+        )}
+        {devOn && onOpenDevDesk && showChats && (
+          <div data-dev-desk-pin>
+            <DevDeskRow spaceId={space.id} active={devDeskActive} onOpen={onOpenDevDesk} className={navRow(devDeskActive)} />
+          </div>
         )}
 
         {/* Channels Section */}

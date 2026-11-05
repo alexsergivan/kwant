@@ -561,3 +561,102 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
     animation: none;
   }
 }
+/* ---- Dev mode (0.7): the switch's safety cover, the </> badge, the hard hat and the blueprint grid.
+   design.md §1–§2. Motion is transform and opacity only; under reduced motion nothing animates and
+   the switch is a plain labelled track with a lock glyph (DevModeSwitch renders that variant). */
+.kw-dv { position: relative; width: 44px; height: 32px; border-radius: 10px; flex-shrink: 0; }
+.kw-dv:disabled { opacity: 0.5; cursor: not-allowed; }
+.kw-dv-track {
+  position: absolute; left: 5px; top: 7px; width: 34px; height: 18px; border-radius: 9999px;
+  background: #2c2552; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
+}
+.kw-dv-fill {
+  position: absolute; inset: 0; border-radius: 9999px;
+  background: linear-gradient(135deg, #7a62f0 0%, #5b47d6 100%);
+  opacity: var(--kw-dv-fill, 0); transition: opacity 160ms var(--kw-ease);
+}
+.kw-dv-ring {
+  position: absolute; inset: -3px; border-radius: 12px; pointer-events: none; opacity: 0;
+  box-shadow: 0 0 0 1.5px rgb(157 143 255 / 0.7), 0 0 10px rgb(157 143 255 / 0.35);
+  transition: opacity 150ms var(--kw-ease);
+}
+.kw-dv[data-ring] .kw-dv-ring { opacity: 1; }
+.kw-dv-knob {
+  position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 9999px;
+  display: flex; align-items: center; justify-content: center;
+  background: #ecebfa; box-shadow: 0 1px 2px rgb(6 3 20 / 0.5);
+  transition: transform 160ms var(--kw-ease);
+}
+.kw-dv[data-knob='right'] .kw-dv-knob { transform: translateX(16px); }
+.kw-dv-cover {
+  position: absolute; left: 1px; top: 3px; width: 42px; height: 26px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  background: rgb(236 235 250 / 0.11); border: 1px solid rgb(255 255 255 / 0.24);
+  -webkit-backdrop-filter: blur(1.6px) saturate(1.2); backdrop-filter: blur(1.6px) saturate(1.2);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 2px 6px rgb(6 3 20 / 0.35);
+  font: 700 9px/1 'JetBrains Mono', ui-monospace, monospace; color: rgb(154 148 196 / 0.85);
+  transform-origin: top; transition: transform 150ms var(--kw-ease), opacity 150ms var(--kw-ease), background-color 150ms var(--kw-ease);
+}
+.kw-dv:not(:disabled):hover[data-cover='closed'] .kw-dv-cover { background: rgb(255 255 255 / 0.16); }
+.kw-dv[data-cover='open'] .kw-dv-cover { transform: perspective(220px) rotateX(112deg); opacity: 0.9; }
+.kw-dv-hinge { position: absolute; left: 12px; top: 1px; width: 20px; height: 3px; pointer-events: none; }
+.kw-dv-hinge::before, .kw-dv-hinge::after { content: ''; position: absolute; top: 0; width: 5px; height: 3px; border-radius: 1px; background: #8d87b8; }
+.kw-dv-hinge::before { left: 0; }
+.kw-dv-hinge::after { right: 0; }
+/* Reduced motion: "Dev" label, track, lock glyph in the knob; every change instant */
+.kw-dv-rm { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px; border-radius: 10px; flex-shrink: 0; }
+.kw-dv-rm:disabled { opacity: 0.5; cursor: not-allowed; }
+.kw-dv-rm .kw-dv-track { position: relative; left: auto; top: auto; display: block; }
+.kw-dv-rm[data-ring] .kw-dv-track { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14), 0 0 0 1.5px rgb(157 143 255 / 0.7), 0 0 10px rgb(157 143 255 / 0.35); }
+.kw-dv-rm[data-knob='right'] .kw-dv-knob { transform: translateX(16px); }
+.kw-dv-hint { animation: kw-dv-hint 150ms var(--kw-ease) both; }
+@keyframes kw-dv-hint { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+/* The </> badge on a space tile: bottom-right, mirroring the unread badge top-right */
+.kw-dev-badge {
+  position: absolute; right: -6px; bottom: -5px; height: 15px; padding: 0 3px; border-radius: 5px;
+  display: inline-flex; align-items: center; gap: 1px; pointer-events: none;
+  background: #1a1538; box-shadow: 0 0 0 1.5px var(--kw-dev-behind, #0a0719), inset 0 0 0 1px rgb(157 143 255 / 0.6);
+  font: 700 10px/1 'JetBrains Mono', ui-monospace, monospace; color: #b8adff;
+  animation: kw-dv-pop 160ms var(--kw-ease) both;
+}
+.kw-dev-caret { display: inline-block; width: 1.5px; height: 8px; background: currentColor; animation: kw-dv-caret 900ms steps(1) 4; }
+@keyframes kw-dv-pop { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: none; } }
+@keyframes kw-dv-caret { 0% { opacity: 1; } 50% { opacity: 0; } }
+
+/* The hard hat: top-left on avatars of 28 px and up, so it never covers the status dot */
+.kw-dev-hat {
+  position: absolute; left: -4px; top: -4px; width: 14px; height: 14px; border-radius: 9999px; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  background: #0a0719; box-shadow: 0 0 0 1.5px #0e0a21;
+  animation: kw-dv-pop 160ms var(--kw-ease) both;
+}
+
+/* The blueprint grid: only the main pane, fading down it; cards stay opaque on top. The pane's own
+   root background goes transparent so the grid sits between the surface and the content. */
+.kw-blueprint { position: relative; isolation: isolate; background-color: var(--kw-surface-main); }
+.kw-blueprint > * { background-color: transparent !important; }
+.kw-blueprint::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgb(157 143 255 / 0.085) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(157 143 255 / 0.085) 1px, transparent 1px),
+    linear-gradient(to right, rgb(157 143 255 / 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(157 143 255 / 0.045) 1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%);
+  animation: kw-dv-grid 200ms var(--kw-ease) both;
+}
+@keyframes kw-dv-grid { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-dv-fill, .kw-dv-ring, .kw-dv-knob, .kw-dv-cover { transition: none; }
+  .kw-dv-hint, .kw-dev-badge, .kw-dev-hat, .kw-blueprint::before { animation: none; }
+  .kw-dev-caret { animation: none; }
+}
+
+/* Dev mode setup sheet: 180 ms entry (design §3). */
+.kw-dv-sheet { animation: kw-dv-sheet-in 180ms var(--kw-ease) both; }
+@keyframes kw-dv-sheet-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .kw-dv-sheet { animation: none; } }

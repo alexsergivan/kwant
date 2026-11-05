@@ -4,6 +4,8 @@ import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { relativeTime } from '../away';
 import { quotaLine } from '../clock';
 import { UnlockDialog, usePasswordStore } from './PasswordStorePanel';
+import { devApi, devStore } from '../devMode';
+import { useDevModeOn } from './DevModeSwitch';
 import {
   CatalogEntry,
   ComposioApp,
@@ -17,6 +19,7 @@ import {
   countsLine,
   groupConnections,
   isRawCommand,
+  canMarkProduction,
   mcpServerId,
   statusBadge,
   storedLabel,
@@ -68,9 +71,12 @@ export interface ConnectionRowProps {
   checking?: boolean;
   links?: ManageLinks;
   onCheck?: (c: Connection) => void;
+  /** Dev mode is on in this space: MCP servers and Composio apps get a Production mark (D10). */
+  onProduction?: (c: Connection, production: boolean) => void;
+  markingProduction?: boolean;
 }
 
-export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(), checking = false, links = {}, onCheck }) => {
+export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(), checking = false, links = {}, onCheck, onProduction, markingProduction = false }) => {
   const id = useId();
   const badge = statusBadge(c.status);
   const manage = manageFor(c.kind, links);
@@ -89,6 +95,11 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
             <span className={`inline-flex items-center px-1.5 py-px rounded border text-[11px] font-medium ${TONES[badge.tone]}`} data-status={c.status}>
               {badge.label}
             </span>
+            {c.production && (
+              <span className="inline-flex items-center px-1.5 py-px rounded border border-amber-400/40 bg-amber-500/10 text-[11px] font-medium text-amber-200" data-production-badge>
+                Production
+              </span>
+            )}
           </div>
           {c.detail &&
             (isRawCommand(c) ? (
@@ -123,8 +134,22 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
             </div>
           </dl>
         </div>
-        {(canCheck || manage) && (
-          <div className="flex gap-2 shrink-0">
+        {(canCheck || manage || (onProduction && canMarkProduction(c))) && (
+          <div className="flex flex-wrap gap-2 shrink-0">
+            {onProduction && canMarkProduction(c) && (
+              <label className={`${quietBtn} cursor-pointer has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-sky-500`} title="Steps that use a production connection always ask you while Dev mode is on.">
+                <input
+                  type="checkbox"
+                  className="accent-amber-400"
+                  checked={!!c.production}
+                  disabled={markingProduction}
+                  onChange={(e) => onProduction(c, e.target.checked)}
+                  aria-label={`${c.name} is production`}
+                  data-production-toggle={c.id}
+                />
+                Production
+              </label>
+            )}
             {canCheck && (
               <button type="button" className={quietBtn} disabled={checking} onClick={() => onCheck!(c)} aria-label={`Check ${c.name} now`}>
                 <RefreshCw size={12} className={checking ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden="true" />
@@ -530,6 +555,8 @@ export interface ConnectionsViewProps extends ManageLinks {
   onBack?: () => void;
   /** Inside Settings › This space: the screen has the heading and the scrolling. */
   embedded?: boolean;
+  onProduction?: (c: Connection, production: boolean) => void;
+  marking?: string | null;
   /** Tests open the Composio form. */
   composioOpen?: boolean;
   /** Tests and screenshots open the "+ Add connection" list. */
@@ -550,6 +577,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   onAddComposio,
   onBack,
   embedded = false,
+  onProduction,
+  marking = null,
   composioOpen = false,
   addMenuOpen = false,
   ...links
@@ -660,7 +689,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   {g.items.length > 0 ? (
                     <ul className="rounded-xl border border-zinc-800 bg-zinc-900/60 divide-y divide-zinc-800">
                       {g.items.map((c) => (
-                        <ConnectionRow key={c.id} c={c} now={now} checking={checking === c.id} links={links} onCheck={onCheck} />
+                        <ConnectionRow key={c.id} c={c} now={now} checking={checking === c.id} links={links} onCheck={onCheck} onProduction={onProduction} markingProduction={marking === c.id} />
                       ))}
                     </ul>
                   ) : (
@@ -764,6 +793,24 @@ export const ConnectionsPage: React.FC<ManageLinks & { onBack?: () => void; embe
     }
   };
 
+  // Dev mode D10: the open space's production marks. Shown only while Dev mode is on there.
+  const devOn = useDevModeOn();
+  const [marking, setMarking] = useState<string | null>(null);
+  const markProduction = async (c: Connection, production: boolean) => {
+    const space = devStore.current();
+    if (!space || marking) return;
+    setMarking(c.id);
+    setNotice(null);
+    try {
+      await devApi.production(c.id, space, production);
+      if (alive.current) setData((d) => (d ? { ...d, connections: d.connections.map((x) => (x.id === c.id ? { ...x, production } : x)) } : d));
+    } catch (e) {
+      if (alive.current) setNotice({ text: `Couldn’t change ${c.name}: ${e instanceof Error ? e.message : 'something went wrong.'}`, error: true });
+    } finally {
+      if (alive.current) setMarking(null);
+    }
+  };
+
   const addComposio = async (url: string, apiKey: string, enabled: boolean): Promise<string | null> => {
     try {
       await connectionsApi.addComposio(apiKey ? { url, api_key: apiKey, enabled } : { url, enabled });
@@ -790,6 +837,8 @@ export const ConnectionsPage: React.FC<ManageLinks & { onBack?: () => void; embe
         onAddComposio={addComposio}
         onBack={onBack}
         embedded={embedded}
+        onProduction={devOn ? markProduction : undefined}
+        marking={marking}
         {...links}
       />
       {unlocking && (

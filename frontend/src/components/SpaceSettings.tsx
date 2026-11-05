@@ -37,6 +37,7 @@ import { ImportDialog, RecentImports } from './ImportDialog';
 import { ImportError, ImportRecord, downloadExport, importApi, importErrorText } from '../imports';
 import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
 import { SpaceApprovalsSetting } from './ApprovalsSetting';
+import { DevModeSettings } from './DevModeSettings';
 
 import type { SettingsScope, SpaceSettingsTab } from '../nav';
 import { InstallAppButton } from './InstallAppButton';
@@ -483,6 +484,8 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, onSpaceSaved, onAr
         }}
         onChanged={() => onApprovalsChanged?.()}
       />
+
+      <DevModeSettings key={`dev-${space.id}`} spaceId={space.id} spaceName={space.name} approvals={space.approvals} />
 
       <div className={`${card} p-4 space-y-3`}>
         <p className="flex items-center gap-2 text-xs font-medium text-zinc-200">
