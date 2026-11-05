@@ -8,6 +8,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.13] - 2026-11-05
+
+### Changed
+- **More room to read on a phone.** While you type, the thread bar, pins and hints step aside and the header shrinks
+  to one line. The composer is a single row, **Message {name}**, that opens up when you tap it. The header's second
+  line is a thread picker (**Direct chat ▾**) that opens a sheet with the bot's threads and **New thread**. The hint
+  row under the composer is gone on touch screens. (#307)
+- **The phone Chats tab lists everything you talk to.** **Needs you** comes first, in amber, saying what each bot
+  wants (**Wants to open a pull request**, **Asked you a question**, **Needs you in the browser**). Then come
+  Working, Channels, Team chats and Direct chats, in taller rows. Each bot row has one **⋯** that opens its member
+  sheet. (#308)
+- **Approval and question cards fit a phone.** The approval card says **Approval needed** in one sentence, with a
+  full-width **Allow**. Tool names are written in words, and a bot's steps fold to **Steps · N**. Question cards
+  have larger choices and **Your own answer…**. Inbox titles wrap, the engine chip shows only the model, and inline
+  code wraps instead of running off the screen. (#309)
+- **The mission board on a phone.** **Live now** comes first, then the lanes as tabs, then **This week** folded to
+  one line. The **Needs you now** tile is now **Board tasks waiting on you**. (#311)
+
+### Fixed
+- **Taking over a bot's browser on a phone.** The page takes the size of the overlay, with a **Pinch to zoom · drag
+  to move** hint. The bot gets its own page size back however you close it: hand back, Back, tapping outside, or a
+  dropped connection. With two views open, the last resize wins. (#310)
+
 ## [Mac 0.6.12] - 2026-11-05
 
 ### Fixed
