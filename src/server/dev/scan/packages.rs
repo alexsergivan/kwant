@@ -9,7 +9,7 @@
 //! a registry, with GET and no body: never source, paths or versions.
 
 use super::super::facts::FileDiff;
-use super::{Finding, Tile};
+use super::{as_data, Finding, Tile};
 use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -139,7 +139,7 @@ fn cargo(text: &str) -> Option<Declared> {
                         d.own.insert(norm(key));
                         d.own.insert(norm(real));
                     } else if let Some(r) = t.get("registry").or_else(|| t.get("registry-index")).and_then(|r| r.as_str()) {
-                        d.custom.insert(norm(real), format!("{real} comes from the custom registry \"{}\"", clip(r, 60)));
+                        d.custom.insert(norm(real), format!("{} comes from the custom registry {}", as_data(real), as_data(r)));
                     } else {
                         d.deps.insert(norm(real), real.to_string());
                     }
@@ -231,7 +231,7 @@ fn requirements(text: &str) -> Declared {
     for n in names {
         match &index {
             Some(opt) => {
-                d.custom.insert(Eco::PyPi.norm(&n), format!("{n} may come from a custom index ({opt} in the requirements file)"));
+                d.custom.insert(Eco::PyPi.norm(&n), format!("{} may come from a custom index ({} in the requirements file)", as_data(&n), as_data(opt)));
             }
             None => {
                 d.deps.insert(Eco::PyPi.norm(&n), n);
@@ -264,7 +264,7 @@ fn pyproject(text: &str) -> Option<Declared> {
         }
         if let Some(src) = uv_sources.and_then(|s| s.get(name).or_else(|| s.get(&n))) {
             if src.get("index").is_some() {
-                d.custom.insert(n, format!("{name} comes from a custom index (tool.uv.sources)"));
+                d.custom.insert(n, format!("{} comes from a custom index (tool.uv.sources)", as_data(name)));
             } else {
                 d.own.insert(n);
             }
@@ -272,10 +272,10 @@ fn pyproject(text: &str) -> Option<Declared> {
         }
         match how {
             Some(why) => {
-                d.custom.insert(n, format!("{name} {why}"));
+                d.custom.insert(n, format!("{} {why}", as_data(name)));
             }
             None if uv_default => {
-                d.custom.insert(n, format!("{name} comes from a custom default index (tool.uv.index)"));
+                d.custom.insert(n, format!("{} comes from a custom default index (tool.uv.index)", as_data(name)));
             }
             None => {
                 d.deps.insert(n, name.to_string());
@@ -312,21 +312,13 @@ fn pyproject(text: &str) -> Option<Declared> {
                 }
                 toml::Value::Table(spec) if spec.contains_key("source") => {
                     let src = spec.get("source").and_then(|s| s.as_str()).unwrap_or("");
-                    add(&mut d, name, Some(&format!("comes from the custom source \"{}\"", clip(src, 60))));
+                    add(&mut d, name, Some(&format!("comes from the custom source {}", as_data(src))));
                 }
                 _ => add(&mut d, name, None),
             }
         }
     }
     Some(d)
-}
-
-fn clip(s: &str, n: usize) -> String {
-    let mut out: String = s.chars().filter(|c| !c.is_control()).take(n).collect();
-    if s.chars().count() > n {
-        out.push('…');
-    }
-    out
 }
 
 /// The file before the PR: `head` with the patch undone. `None` when the patch doesn't fit.
@@ -773,7 +765,7 @@ pub async fn run(r: &Registries, files: &[FileDiff], contents: &BTreeMap<String,
                 why.push(format!("doesn't exist on {}", dep.eco.label()));
             }
             Looked::Found { created, downloads } => why.extend(concerns(dep.eco, *created, *downloads, now)),
-            Looked::Unchecked(e) => unchecked.push(format!("{} ({e})", dep.name)),
+            Looked::Unchecked(e) => unchecked.push(format!("{} ({e})", as_data(&dep.name))),
         }
         if odd {
             sev = if sev == "critical" { sev } else { "high" };
@@ -797,10 +789,10 @@ pub async fn run(r: &Registries, files: &[FileDiff], contents: &BTreeMap<String,
         .map(|(i, (d, sev, why))| Finding {
             id: format!("p{}", i + 1),
             severity: (*sev).into(),
-            title: format!("New {} package {}: {}", d.eco.label(), clip(&d.name, 80), first_reason(why)),
+            title: format!("New {} package {}: {}", d.eco.label(), as_data(&d.name), first_reason(why)),
             file: d.file.clone(),
             line: d.line,
-            detail: format!("The PR adds {} from {}, which {why}.", clip(&d.name, 80), d.eco.label()),
+            detail: format!("The PR adds {} from {}, which {why}.", as_data(&d.name), d.eco.label()),
             fix: if *sev == "critical" {
                 "Check the name against the package you meant; a package that doesn't exist yet can be registered by anyone.".into()
             } else {

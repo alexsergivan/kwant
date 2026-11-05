@@ -584,10 +584,12 @@ pub fn fix_task(space: &SpaceId, kwant_id: &str, card_id: &str, fid: &str, f: &V
     if let Some(l) = f["line"].as_u64() {
         where_ = format!("{where_}:{l}");
     }
+    // The path and branch come from the PR: quoted as data, like the names in scan findings.
+    let where_ = if where_.is_empty() { where_ } else { crate::server::dev::scan::as_data_up_to(&where_, 200) };
     let pr = facts.and_then(|x| x.pr.map(|n| format!("PR #{n}"))).unwrap_or_else(|| "the PR".into());
-    let branch = facts.and_then(|x| x.head_branch.clone()).map(|b| format!(" on branch {b}")).unwrap_or_default();
+    let branch = facts.and_then(|x| x.head_branch.clone()).map(|b| format!(" on branch {}", crate::server::dev::scan::as_data_up_to(&b, 120))).unwrap_or_default();
     let repo = facts.map(|x| format!(" in {}", x.repo)).unwrap_or_default();
-    let mut acceptance = format!("A Dev mode review of {pr}{repo}{branch} found this ({} severity).\n", s("severity"));
+    let mut acceptance = format!("A Dev mode review of {pr}{repo}{branch} found this ({} severity).\n{}\n", s("severity"), crate::server::dev::scan::PR_DATA_NOTE);
     if !where_.is_empty() {
         acceptance.push_str(&format!("Where: {where_}\n"));
     }
