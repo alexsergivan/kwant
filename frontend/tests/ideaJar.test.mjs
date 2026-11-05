@@ -816,3 +816,36 @@ test('M5: Undo of a deleted take: no New chip, no arrival announcement, it comes
   assert.equal(document.activeElement, tc().querySelector('[data-action="do-it"]'), 'focus on its Do it');
   assert.ok(!calls.some((c) => c.method === 'DELETE'));
 });
+
+for (const [name, id, label] of [
+  ['Look again on the open take', ID.ready, 'Look again'],
+  ['Look now on a failed slip', ID.failed, 'Look now'],
+]) {
+  test(`M6: ${name}: when it succeeds, focus is not dropped to body`, async () => {
+    reset();
+    routes[`POST /api/ideas/${id}/look`] = [202, FIX._examples['POST /api/ideas/:id/look 202']];
+    const host = await jar();
+    const look = button(card(host, id), label);
+    await focusOn(look);
+    await click(look);
+    await settle();
+    assert.equal(sectionOfCard(host, id), 'peeking', 'it moved to Being peeked at');
+    assert.ok(document.activeElement && document.activeElement !== document.body, `focus is on ${document.activeElement?.outerHTML?.slice(0, 80)}`);
+    assert.ok(host.contains(document.activeElement), 'focus stays in the jar');
+  });
+}
+
+test('M6: phone take screen: Look again that succeeds keeps focus off body', async () => {
+  phoneQuery = true;
+  reset();
+  routes[`POST /api/ideas/${ID.ready}/look`] = [202, FIX._examples['POST /api/ideas/:id/look 202']];
+  const host = await jar();
+  await click(card(host, ID.ready).querySelector('button'));
+  assert.ok(host.querySelector('[data-take-screen]'), 'take screen open');
+  const look = button(host.querySelector('[data-take-screen]'), 'Look again');
+  await focusOn(look);
+  await click(look);
+  await settle();
+  assert.ok(document.activeElement && document.activeElement !== document.body, 'focus is not body');
+  assert.ok(host.contains(document.activeElement));
+});

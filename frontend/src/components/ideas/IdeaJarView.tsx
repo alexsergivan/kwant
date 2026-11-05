@@ -288,6 +288,7 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
       const r = await ideasApi.look(idea.id);
       if (r.kwant_id && r.kwant_name) setLearned((m) => ({ ...m, [r.kwant_id as string]: r.kwant_name as string }));
       if (kept[idea.id]) return;
+      leaving(idea.id); // focus goes where Later, Delete and Restore send it (M6)
       replace({ ...idea, status: 'peeking', kwant_id: r.kwant_id, peeked_at: new Date().toISOString(), take: null, error: null });
       emitIdeaUpdated({ id: idea.id, status: 'peeking', space_id: spaceId });
     } catch (e) {
