@@ -167,6 +167,7 @@ import {
   type TaskNotice,
 } from '../missions';
 import { DEFAULT_CLASS, ENGINE_CANT_SANDBOX, TIER_HINTS, classLabel, engineCantSandboxText, showsTier, tierLabel, toClass, validClass } from '../flightSchool';
+import { ScrollRow } from './ScrollRow';
 
 const TONES: Record<Tone, string> = {
   emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
@@ -1099,7 +1100,12 @@ export const LiveStrip: React.FC<{
         </span>
       </div>
       {!idle && (
-        <div className="mt-2 flex gap-4 overflow-x-auto -mx-3 px-3 scroll-px-3 pb-1 snap-x lg:snap-none [scrollbar-width:thin] lg:flex-wrap lg:overflow-visible">
+        <ScrollRow
+          className="kw-scroll-row mt-2 flex gap-4 overflow-x-auto -mx-3 px-3 scroll-px-3 pb-1 snap-x lg:snap-none [scrollbar-width:thin] lg:flex-wrap lg:overflow-visible"
+          role="group"
+          aria-label="Bots working now"
+          data-live-row
+        >
           {groups.map((g) => (
             <div key={g.teamId} className="shrink-0 snap-start min-w-0" data-live-team={g.teamId}>
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{g.teamName}</p>
@@ -1140,7 +1146,7 @@ export const LiveStrip: React.FC<{
               </ul>
             </div>
           ))}
-        </div>
+        </ScrollRow>
       )}
     </section>
   );
