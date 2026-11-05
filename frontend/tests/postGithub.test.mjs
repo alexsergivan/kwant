@@ -305,23 +305,20 @@ test('the desk posts to /api/dev/cards/:id/post and passes forge and forge_login
 // ---------------------------------------------------------------------------------------------------
 // Any forge (amendment, 21:50): the contract names the forge; posting is GitHub-only in 0.7.1
 
-test('forge null: no Post button and no lock line, in every state that would have one', async () => {
+test('F7: forge null shows neither the Post button nor the Open link, in every state that would have one', async () => {
   for (const over of [{}, { post_error: { kind: 'read_only', message: null } }, { post_error: { kind: 'failed', message: 'x' } }]) {
     const card = { ...base(), ...over };
     const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: null, forgeLogin: LOGIN, now: NOW });
-    const f = footer(host);
-    assert.equal(f.dataset.postState, 'none');
-    assert.equal(f.querySelector('[data-post-button], [data-post-read-only]'), null, 'no Post button');
-    assert.equal(button(f, 'Post to'), undefined);
-    assert.equal(button(f, 'Try again'), undefined);
-    assert.equal(f.querySelector('svg.lucide-lock'), null, 'no lock icon');
-    assert.doesNotMatch(flat(f), /Nothing is posted|Posts as|GitHub/, 'no lock line, no GitHub wording');
-    assert.match(flat(f), /Open pull request/);
+    assert.equal(host.querySelector('[data-post-button], [data-post-read-only], [data-forge-link]'), null, 'no Post button, no link');
+    assert.equal(button(host, 'Post to'), undefined);
+    assert.equal(button(host, 'Try again'), undefined);
+    assert.equal(host.querySelector('a[href="' + card.links.pr + '"]'), null, 'the PR link is not drawn anywhere on the card');
+    assert.doesNotMatch(host.textContent, /Nothing is posted|Posts as|Open on|Open pull request|GitHub/, 'no lock line, no forge wording');
+    assert.equal(host.querySelector('[data-review-footer]'), null, 'nothing to show: no empty footer rule');
   }
   // Leaving forge out is the same as null.
   const out = html(m.ReviewCard, { card: base(), onFinding: async () => base(), onPost: async () => base(), now: NOW });
-  assert.match(out, /data-post-state="none"/);
-  assert.doesNotMatch(out, /Post to|Nothing is posted/);
+  assert.doesNotMatch(out, /data-review-footer|Post to|Nothing is posted|Open on/);
   assert.equal(m.postState({ status: 'ready', posted: null, post_error: null }, { canPost: true, posting: false, forge: null }).kind, 'none');
 });
 
@@ -346,6 +343,25 @@ test('the label, tooltip and links come from a map on forge (GitLab, Gitea)', as
   assert.equal(b.getAttribute('title'), 'Your GitLab connection is read only');
   assert.match(f.innerHTML, /Open on GitLab/);
   assert.doesNotMatch(flat(f), /GitHub/);
+});
+
+test('F7: the footer reads Post to {Forge} first, then the link Open on {Forge}', async () => {
+  for (const [forge, name] of [['github', 'GitHub'], ['gitlab', 'GitLab'], ['gitea', 'Gitea']]) {
+    for (const over of [{}, { post_error: { kind: 'read_only', message: null } }]) {
+      const card = { ...base(), ...over };
+      const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge, forgeLogin: LOGIN, now: NOW });
+      const f = footer(host);
+      const b = button(f, `Post to ${name}`);
+      const a = f.querySelector('[data-forge-link] a');
+      assert.ok(b, `Post to ${name}`);
+      assert.ok(a, 'Open link');
+      assert.equal(a.getAttribute('href'), card.links.pr);
+      assert.match(flat(a), new RegExp(`^Open on ${name}`));
+      assert.ok(b.compareDocumentPosition(a) & 4, 'Post comes before Open, in DOM (and so Tab) order');
+    }
+  }
+  assert.equal(m.forgeOpen('gitea'), 'Open on Gitea');
+  assert.equal(m.forgeOpen(null, 'commit'), 'Open commit');
 });
 
 test('no github_login or githubLogin is left in the frontend source', async () => {

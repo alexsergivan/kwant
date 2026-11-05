@@ -31,6 +31,8 @@ export interface LandedListProps {
   reviews: ShellCard[];
   now?: number;
   onOpenReview?: (pr: number) => void;
+  /** `forge` from GET dev_mode: names the "Open on {Forge}" link. */
+  forge?: Forge | null;
 }
 
 export interface ReviewCardProps {
@@ -61,14 +63,14 @@ export const Rollup: React.FC<RollupProps> = ({ cards = [], ...rest }) => {
   return <IrisRollup {...rest} needsYouAreas={needs} />;
 };
 
-export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onOpenReview }) => {
+export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onOpenReview, forge = null }) => {
   const parsed = useMemo(() => parseLandedCards(cards), [cards]);
   const parsedReviews = useMemo(() => parseReviewCards(reviews), [reviews]);
   // Cards Iris's parser refuses (no PR number and no commit, wrong kind) still show, as the plain fallback row.
   const refused = useMemo(() => cards.filter((c) => parseLanded(c) === null), [cards]);
   return (
     <>
-      {parsed.length > 0 && <IrisLandedList cards={parsed} reviews={parsedReviews} now={now} onOpenReview={onOpenReview} />}
+      {parsed.length > 0 && <IrisLandedList cards={parsed} reviews={parsedReviews} now={now} onOpenReview={onOpenReview} forge={forge} />}
       {refused.map((c) => (
         <CardFallback key={c.id} raw={c} />
       ))}

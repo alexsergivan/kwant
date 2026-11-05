@@ -155,7 +155,7 @@ test('B1: a direct commit (pr null) parses and draws as a normal landed card nam
   assert.equal(c.verified, false, 'no PR review, so never verified, whatever the server says');
   assert.equal(m.showVerified({ ...c, verified: true }), false, 'the sticker rule refuses a pr-less card too');
   assert.equal(m.parseLanded({ ...fx.LANDED_DIRECT, headline: null }).headline, 'Commit c0ffee1', 'headline falls back to the commit');
-  const out = html(m.LandedCard, { card: c, reviews: [{ ...m.parseReview(fx.REVIEW_289), pr: 0 }], onOpenReview: () => {} });
+  const out = html(m.LandedCard, { card: c, reviews: [{ ...m.parseReview(fx.REVIEW_289), pr: 0 }], onOpenReview: () => {}, forge: 'github' });
   assert.match(out, /data-dev-card="landed"/);
   assert.match(out, /data-commit="c0ffee1"/);
   assert.doesNotMatch(out, /data-pr=/);
@@ -169,6 +169,12 @@ test('B1: a direct commit (pr null) parses and draws as a normal landed card nam
   assert.match(out, /Fix typo in README/);
   assert.match(out, /What changes for you/);
   assert.match(out, /Open on GitHub/, 'GitHub link goes to the commit');
+  assert.match(html(m.LandedCard, { card: c, forge: 'gitlab' }), /Open on GitLab/, 'F7: named from forge');
+  const bare = html(m.LandedCard, { card: c, forge: null });
+  assert.doesNotMatch(bare, /Open on/, 'no forge: no forge name');
+  assert.match(bare, /Open commit/, 'the commit link stays, named plainly');
+  assert.match(html(m.LandedCard, { card: landed(fx.LANDED_289) }), /Open pull request/);
+  assert.match(html(m.LandedList, { cards: [landed(fx.LANDED_289)], reviews: [], now: NOW, forge: 'gitea' }), /Open on Gitea/, 'the list passes forge on');
   assert.doesNotMatch(out, />Diff</, 'no second link to the same commit');
   assert.doesNotMatch(out, /This card couldn/);
   const list = html(m.LandedList, { cards: [landed(fx.LANDED_DIRECT), landed(fx.LANDED_288)], reviews: [], now: NOW });

@@ -376,15 +376,19 @@ const PostFooter: React.FC<{
         );
       }
   }
+  const link = !!(prLink && name && state.kind !== 'posted');
+  // Nothing to post and nowhere to open (no forge): no empty footer rule either.
+  if (!line && !action && !link) return null;
   return (
     <footer data-review-footer data-post-state={state.kind} className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3">
       <div className="min-w-0 flex-1 basis-full sm:basis-0">{line}</div>
-      {prLink && state.kind !== 'posted' && (
-        <span className="text-meta">
-          <OutLink href={prLink}>{name ? `Open on ${name}` : 'Open pull request'}</OutLink>
+      {/* F7 (user-flow.md): Post to {Forge} first, then "Open on {Forge}". With no forge, neither. */}
+      {action && <div className="basis-full sm:basis-auto">{action}</div>}
+      {link && (
+        <span data-forge-link className="text-meta">
+          <OutLink href={prLink!} className="min-h-[44px] sm:min-h-0">{`Open on ${name}`}</OutLink>
         </span>
       )}
-      {action && <div className="basis-full sm:basis-auto">{action}</div>}
       {extra}
       <span role="status" aria-live="polite" className="sr-only">
         {state.kind === 'posted' ? postedLine(state.at) : state.kind === 'failed' ? `Couldn’t post: ${state.message}` : state.kind === 'stale' ? STALE_LINE : ''}

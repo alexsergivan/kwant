@@ -225,6 +225,8 @@ export interface LandedListProps {
   now?: number;
   /** Opens the PR's review card ("1 finding open in the review · Open review"); the link hides without it. */
   onOpenReview?: (pr: number) => void;
+  /** `forge` from GET dev_mode: names the link ("Open on GitHub"). */
+  forge?: Forge | null;
 }
 
 export interface ReviewCardProps {

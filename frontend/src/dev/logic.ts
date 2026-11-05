@@ -357,6 +357,11 @@ export const postCount = (findings: Pick<DevFinding, 'state'>[]): number => find
 export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
 
 /** "Post to GitHub · 3 comments"; no count when nothing is open (the review is then its body only). */
+/** The link to the PR (or a direct commit) on its forge: "Open on GitHub". Landed cards keep the link with no
+ *  forge (the URL is in the card), named plainly; the review footer hides it instead (user-flow.md F7). */
+export const forgeOpen = (forge: Forge | null, what: 'pr' | 'commit' = 'pr'): string =>
+  forge ? `Open on ${FORGE_NAME[forge]}` : what === 'pr' ? 'Open pull request' : 'Open commit';
+
 export function postLabel(n: number, forge: Forge): string {
   const to = `Post to ${FORGE_NAME[forge]}`;
   return n === 0 ? to : `${to} · ${n} ${n === 1 ? 'comment' : 'comments'}`;

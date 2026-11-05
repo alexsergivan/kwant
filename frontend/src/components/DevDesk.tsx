@@ -371,7 +371,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
                   />
                 )}
                 {landedCards.length ? (
-                  <LandedList cards={landedCards} reviews={reviews} now={now} onOpenReview={openReview} />
+                  <LandedList cards={landedCards} reviews={reviews} now={now} onOpenReview={openReview} forge={dev?.forge ?? null} />
                 ) : (
                   landed && (
                     <Empty title="Nothing has landed yet" line="Each merge to main shows up here as a short card in plain words. kwant checks every 5 minutes." />
