@@ -121,6 +121,11 @@ deploy can cost a site.
   code that uses its SDK, doesn't ask unless it goes through a connection marked production.
 - **Tools and providers missing from the lists**, and MCP tools whose names don't say what they
   do. Mark such a connection production to make every one of its tools ask.
+- **Git writes through a connection.** A GitHub MCP server or Composio app that isn't marked
+  production can write to the repo with no card: `push_files`, `create_or_update_file` on `main`,
+  `merge_pull_request`, `delete_branch` and the like reach the watched branch directly. The floor
+  reads git commands and deploy tools, not these tool names. Mark that connection production
+  (Connections → Production) to make every one of its tools ask.
 - **Where a command runs.** The floor can't tell a production database from a local copy unless
   the command says so (a remote URL, `--prod`, `RAILS_ENV=production`, …). So a plain
   `sqlx migrate run` doesn't ask, but `DROP TABLE` does, wherever it runs.
