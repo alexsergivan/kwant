@@ -140,4 +140,6 @@ cargo test --lib -- server::dev:: prod_floor auth::tests::person_only zombie::gi
 
 The poller runs against a mock GitHub on a private `127.0.0.1` port. There are table tests for each
 floor kind in `src/mcp/prod_floor.rs`. The backup checks and the Allow refusal are tested in
-`src/server/dev/backup.rs` and `src/server/dev/floor.rs`.
+`src/server/dev/backup.rs` and `src/server/dev/floor.rs`. `tests/dev_floor_test.rs` drives the refusal
+through `POST /api/approvals/:id/resolve`: a 409 with no backup or an old one, then a 200 once a
+fresh one exists, and Deny always accepted.
