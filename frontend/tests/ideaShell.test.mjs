@@ -22,6 +22,8 @@ const m = await loadBundled(`
   export { PhoneTabBar } from './src/components/PhoneTabBar';
   export { IdeaJarRow } from './src/components/IdeaJarRow';
   export { IdeaDropToast } from './src/components/IdeaDropToast';
+  export { isIdeaCommand } from './src/ideas';
+  export { UndoToast } from './src/components/MissionBoardView';
 `);
 const h = m.React.createElement;
 const settle = async () => { for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0)); };
@@ -210,4 +212,39 @@ test('Wiring: App catches idea_updated, skips the bubble for /idea; ChatView dre
   assert.match(chat, /Drop an idea in the jar/);
   const settings = readFileSync(new URL('../src/components/SettingsModal.tsx', import.meta.url), 'utf8');
   assert.match(settings, /idea_jar_daily_cap/);
+});
+
+test('/idea in any case (Rigel #320 N2): the composer catches /IDEA and /Idea, not /ideas or /ideal', () => {
+  for (const t of ['/idea x', '/IDEA x', '/Idea x', '  /iDeA\nx', '/IDEA']) assert.equal(m.isIdeaCommand(t), true, t);
+  for (const t of ['/ideas x', '/IDEAS x', '/ideal x', 'x /idea', 'idea x']) assert.equal(m.isIdeaCommand(t), false, t);
+  assert.equal(m.ideaLength('/IDEA  a dark mode '), 11);
+});
+
+test('Settings (Mira #323 S3): the jar row renders without decide_first; the proactive rows stay behind it', () => {
+  const settings = readFileSync(new URL('../src/components/SettingsModal.tsx', import.meta.url), 'utf8');
+  assert.match(settings, /\{\(proactive \|\| ideaCap !== null\) && \(\s*<fieldset[^>]*data-testid="proactive-settings"/);
+  const inner = settings.slice(settings.indexOf('data-testid="proactive-settings"'), settings.indexOf('id="idea-jar"'));
+  assert.match(inner, /\{proactive && \(\s*<>\s*<SwitchRow\s+id="decide-first"/);
+  assert.match(inner, /<\/SwitchRow>\s*<\/>\s*\)\}\s*\{ideaCap !== null && \(/);
+});
+
+test('Undo toast (Mira S7): one shared offset clears the phone tab bar; 16px without one', async () => {
+  const css = readFileSync(new URL('../src/styles/ideaShell.css', import.meta.url), 'utf8');
+  assert.match(css, /--kw-tabbar-h: calc\(57px \+ env\(safe-area-inset-bottom, 0px\)\);/);
+  assert.match(css, /:root \{[^}]*--kw-toast-bottom: 1rem;/);
+  assert.match(css, /:root:has\(\[data-tab-bar\]\) \{\s*--kw-toast-bottom: calc\(var\(--kw-tabbar-h\) \+ 8px\);/);
+  assert.match(css, /\.kw-undo-toast \{\s*bottom: var\(--kw-toast-bottom\);/);
+  const { host, done } = await mount(h(m.UndoToast, { text: 'Deleted', onUndo() {}, onClose() {} }));
+  const wrap = host.querySelector('[data-undo-toast]');
+  assert.ok(wrap.classList.contains('kw-undo-toast'));
+  assert.ok(!wrap.className.split(/\s+/).some((c) => /^bottom-/.test(c)), 'no fixed Tailwind bottom-* left to fight the variable');
+  done();
+  for (const f of ['MissionBoardView.tsx', 'ideas/IdeaJarView.tsx']) {
+    const src = readFileSync(new URL(`../src/components/${f}`, import.meta.url), 'utf8');
+    assert.match(src, /<UndoToast /, `${f} uses the shared toast`);
+  }
+  const tabs = readFileSync(new URL('../src/components/PhoneTabBar.tsx', import.meta.url), 'utf8');
+  assert.match(tabs, /data-tab-bar/);
+  assert.match(tabs, /border-t /, 'the 1px top border is the 57th pixel');
+  assert.match(tabs, /h-14/);
 });

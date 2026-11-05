@@ -21,3 +21,18 @@
     animation: none;
   }
 }
+
+/* Floating toasts and the phone tab bar (0.7 polish, Mira S7). One value for every view: the tab bar is
+   57px (56px tabs and a 1px top border, PhoneTabBar) plus the home-indicator inset. While it is on
+   screen, the Undo toast sits 8px above it instead of covering Jar, Inbox and Space. Without a tab bar
+   (desktop, a phone chat or the board) it stays 16px from the bottom, as before. */
+:root {
+  --kw-tabbar-h: calc(57px + env(safe-area-inset-bottom, 0px));
+  --kw-toast-bottom: 1rem;
+}
+:root:has([data-tab-bar]) {
+  --kw-toast-bottom: calc(var(--kw-tabbar-h) + 8px);
+}
+.kw-undo-toast {
+  bottom: var(--kw-toast-bottom);
+}
