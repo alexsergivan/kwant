@@ -9,6 +9,7 @@ pub mod echo_server;
 pub mod fetch_risk;
 pub mod oauth;
 pub mod payment_floor;
+pub mod prod_floor;
 pub mod oauth_mock;
 pub mod registry;
 pub mod session;
