@@ -47,7 +47,7 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
     if (method === 'PUT') server.state = { ...server.state, ...body, status: 'watching' };
     return json(server.state);
   }
-  if (u.includes('/dev/landed')) return json({ cards: [], rollup: { count: 0, areas: [] }, last_tag: null, last_merge: null });
+  if (u.includes('/dev/landed')) return json(server.landed ?? { cards: [], rollup: { count: 0, areas: [] }, last_tag: null, last_merge: null });
   if (u.includes('/dev/reviews')) return json({ cards: [] });
   return json({});
 };
@@ -64,6 +64,8 @@ const m = await loadBundled(`
   export { saveGate, SAVE_FIRST } from './src/passwordStore';
   export { nextTabStop } from './src/components/DevOnToast';
   export { lastOn } from './src/components/DevModeSwitch';
+  export { Rollup as IrisRollup } from './src/components/dev/Rollup';
+  export * as fx from './src/dev/fixtures';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;
@@ -876,5 +878,77 @@ test('F8-R3-1: a space never seen in this browser shows the switch as loading (n
   assert.equal(sw().querySelector('.kw-dv-node').hasAttribute('visibility'), false);
   assert.equal(m.lastOn.get('spc_demo'), true, 'the next load starts on');
   g.fetch = g.window.fetch = realFetch;
+  root.unmount();
+});
+
+// ---------------------------------------------------------------------------
+// Style-v2 review fixes (Mira, 23:30): the rollup, the tab count and the list agree
+
+const landedDesk = async (landed, { later = true } = {}) => {
+  reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]], polled_at: '2026-11-05T09:00:00Z' });
+  server.landed = landed;
+  if (later) localStorage.setItem('kwnt.dev.intro.spc_demo', '1');
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
+  return mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+};
+const ZERO = { since: '2026-11-05T18:00:00Z', until: '2026-11-05T21:00:00Z', count: 0, needs_you: 0, main_green: true, areas: [] };
+
+test('fix 2: a first visit has no "Since you last looked" rollup, only the first-run block and "No merges on main yet."', async () => {
+  const { root } = await landedDesk({ cards: [], rollup: ZERO, last_tag: null }, { later: false });
+  assert.equal(!!document.querySelector('[data-dev-intro]'), true);
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), false, 'no rollup on a first visit');
+  assert.doesNotMatch(document.body.textContent, /Since you last looked|Nothing landed since/);
+  assert.match(document.querySelector('[data-dev-empty-term]').textContent, /No merges on main yet\./);
+  root.unmount();
+});
+
+test('fix 2: a first visit with merges still has no rollup, but shows the cards', async () => {
+  const { root } = await landedDesk({ cards: m.fx.LANDED_ROUTE.cards, rollup: { ...m.fx.ROLLUP_QUIET }, last_tag: null }, { later: false });
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), false);
+  assert.equal(!!document.querySelector('[data-dev-empty-term]'), false);
+  root.unmount();
+});
+
+test('fix 3: "Nothing new on main" shows only with a zero rollup, and then without a repeating rollup card', async () => {
+  const zero = await landedDesk({ cards: [], rollup: ZERO, last_tag: null });
+  assert.match(document.querySelector('[data-dev-empty-term]').textContent, /Nothing new on main/);
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), false, 'the empty card alone says it');
+  zero.root.unmount();
+  const odd = await landedDesk({ cards: [], rollup: { ...ZERO, count: 3, areas: [] }, last_tag: null });
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), false, 'no "3 changes landed" with no cards to show');
+  assert.equal(!!document.querySelector('[data-dev-empty-term]'), false, 'and no "Nothing new on main" either');
+  odd.root.unmount();
+  const real = await landedDesk({ cards: m.fx.LANDED_ROUTE.cards, rollup: { ...m.fx.ROLLUP_QUIET }, last_tag: null });
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), true, 'later visit with cards: the rollup is back');
+  assert.equal(!!document.querySelector('[data-dev-empty-term]'), false);
+  real.root.unmount();
+});
+
+test('fix 4: rollup actions stack full width on one line below 640 px, Draft release notes first; no count caption', () => {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  root.render(h(m.IrisRollup, { rollup: m.fx.ROLLUP_QUIET, last_tag: 'v0.7.0', branch: 'main', onDraftNotes() {}, onMarkSeen() {} }));
+  return settle().then(() => {
+    const row = host.querySelector('[data-dev-rollup-actions]');
+    assert.match(row.className, /(^| )flex-col( |$)/);
+    assert.match(row.className, /sm:flex-row/);
+    const btns = [...row.querySelectorAll('button')];
+    assert.deepEqual(btns.map((b) => b.textContent.trim()), ['Draft release notes', 'Mark all seen']);
+    for (const b of btns) {
+      assert.match(b.className, /max-sm:w-full/);
+      assert.match(b.className, /whitespace-nowrap/);
+      assert.match(b.className, /min-h-\[44px\]/);
+    }
+    assert.equal(row.querySelectorAll('p').length, 0, 'no "N changes" caption');
+    assert.doesNotMatch(host.textContent, /\d+ changes? since|v0\.7\.0/);
+    root.unmount();
+  });
+});
+
+test('first-run Got it: the same ghost style as the off note\'s Turn back on, 44 px on phone', async () => {
+  const { root } = await landedDesk({ cards: [], rollup: ZERO, last_tag: null }, { later: false });
+  const b = document.querySelector('[data-dev-intro-close]');
+  for (const c of ['min-h-[44px]', 'sm:min-h-[28px]', 'text-sky-300', 'hover:bg-sky-500/10', 'rounded-lg', 'font-semibold']) assert.ok(b.className.includes(c), c);
   root.unmount();
 });

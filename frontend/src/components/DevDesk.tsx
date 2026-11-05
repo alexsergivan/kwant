@@ -309,6 +309,13 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   const newest = landedCards[0];
   const lastMerge = newest && typeof newest.pr === 'number' ? { pr: newest.pr, merged_at: newest.merged_at ?? null } : null;
   const unseen = landed?.rollup?.count ?? 0;
+  // Style-v2 review (Mira, 23:30): the rollup, the tab count and the list must agree.
+  // No cards and a zero rollup: the empty card alone says it (no merges yet, or nothing new); a
+  // "Nothing landed since you last looked" rollup above it would only repeat it.
+  const nothingLanded = !landedCards.length && unseen === 0;
+  const rollupSaysLanded = unseen > 0 && !landedCards.length;
+  const showRollup =
+    dev?.status !== 'not_connected' && dev?.status !== 'no_repo' && !firstVisit && !nothingLanded && !rollupSaysLanded;
   const open = openReviews(desk.reviews);
   const first = !landed && !desk.reviews;
   const polling = firstPolling(dev, landedCards.length);
@@ -422,8 +429,10 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
               firstVisit ? <SkeletonCards /> : <SkeletonCards line="Reading main" n={2} />
             ) : tab === 'landed' ? (
               <>
-                {/* No repo or no connection: the empty below says why; a "nothing landed" rollup would contradict it. */}
-                {landed?.rollup && landedCards.length > 0 && dev?.status !== 'not_connected' && dev?.status !== 'no_repo' && (
+                {/* No repo or no connection: the empty below says why; a "nothing landed" rollup would contradict it.
+                    First visit: there is no "last look" yet; the first-run block and the empty say it all.
+                    A non-zero rollup only shows with the cards it counts. */}
+                {showRollup && landed?.rollup && (
                   <Rollup
                     rollup={landed.rollup}
                     last_tag={landed.last_tag}
@@ -444,6 +453,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                   <TermEmpty out="(no repo yet)" title="Cards show up once there’s a repo." line="The production floor already works." />
                 ) : (
                   landed &&
+                  !rollupSaysLanded &&
                   (firstVisit ? (
                     <TermEmpty out="(no merges yet)" title="No merges on main yet." line="They show up here as short cards in plain words." />
                   ) : (
@@ -569,7 +579,7 @@ const DevIntro: React.FC<{ repo: string | null; onClose: () => void; cmd: string
       type="button"
       onClick={onClose}
       data-dev-intro-close
-      className={`mt-2.5 -ml-2 inline-flex items-center min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-meta font-semibold text-zinc-200 hover:bg-white/5 ${focusRing}`}
+      className={`mt-2.5 -ml-1 inline-flex items-center min-h-[44px] sm:min-h-[28px] px-2 rounded-lg text-meta font-semibold text-sky-300 hover:bg-sky-500/10 ${focusRing}`}
     >
       Got it
     </button>

@@ -338,7 +338,7 @@ test('DOM: off → on is one press: PUT {on:true}, onTurnedOn, and a double-clic
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, onTurnedOn: () => turnedOn++ }));
   const b = switchEl(host);
   assert.equal(b.dataset.covered, undefined, 'off: no cover');
-  assert.equal(b.querySelector('[data-dv-glyph]'), null, 'off: no lock');
+  assert.equal(!!b.querySelector('[data-dv-glyph]'), false, 'off: no lock');
   assert.equal(b.title, 'Dev mode: plain-words merges, code reviews, production floor');
   await click(b);
   await click(b);
@@ -413,7 +413,7 @@ test('0.7.1 look (style v2 §10): the Branch switch; label dev → (one press) d
   assert.ok(b.classList.contains('kw-dv') && !b.classList.contains('kw-dv-rm'));
   assert.ok(b.classList.contains('h-11'), 'the phone target is 44 px tall');
   assert.ok(host.querySelector('[data-dev-switch-wrap]').className.includes('min-w-[44px]'));
-  for (const gone of ['.kw-dv-cover', '.kw-dv-hinge', '.kw-dv-ring', '.kw-dv-knob', '.kw-dv-track']) assert.equal(b.querySelector(gone), null, gone);
+  for (const gone of ['.kw-dv-cover', '.kw-dv-hinge', '.kw-dv-ring', '.kw-dv-knob', '.kw-dv-track']) assert.equal(!!b.querySelector(gone), false, gone);
   const svg = b.querySelector('svg[data-dv-graph]');
   assert.equal(svg.getAttribute('viewBox'), '0 0 44 24');
   assert.equal(svg.querySelector('.kw-dv-base').getAttribute('d'), 'M2 17H42');
@@ -461,8 +461,8 @@ test('DOM 0.7.1: the first switch-on turns Dev mode on with no dialog and sends 
   await click(b); // flow F1: one press
   await settle();
   assert.equal(turnedOn?.on, true, 'onTurnedOn gets the saved state, for the toast');
-  assert.equal(document.querySelector('[role="dialog"]'), null, 'no setup sheet');
-  assert.equal(document.querySelector('[data-dev-setup]'), null);
+  assert.equal(!!document.querySelector('[role="dialog"]'), false, 'no setup sheet');
+  assert.equal(!!document.querySelector('[data-dev-setup]'), false);
   assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: true }]);
   assert.equal(server.calls.filter(([, u]) => u.endsWith('/check')).length, 0, 'no repo check');
   assert.equal(b.dataset.on, 'true');
@@ -529,7 +529,7 @@ test('DOM: a failed Turn on keeps the sheet open with the server’s reason', as
 test('Settings › Dev mode: hidden before the first switch-on; saves repo, branch, backup command; Turn off', async () => {
   reset();
   let v = await mount(h(m.DevModeSettings, { spaceId: 'spc_demo', spaceName: 'Demo' }));
-  assert.equal(v.host.querySelector('[data-dev-settings]'), null);
+  assert.equal(!!v.host.querySelector('[data-dev-settings]'), false);
   v.root.unmount();
 
   reset({ ...off, on: true, repo: 'demo-org/demo-app', branch: 'main', polled_at: 'x' });
@@ -599,7 +599,7 @@ test('Dev desk: empty What landed, then the Reviews tab by keyboard', async () =
   await settle();
   const now = [...host.querySelectorAll('[role="tab"]')];
   assert.equal(now[1].getAttribute('aria-selected'), 'true');
-  assert.equal(document.activeElement, now[1]);
+  assert.equal(document.activeElement === now[1], true);
   root.unmount();
 });
 
@@ -647,6 +647,6 @@ test('round 2: the Dev desk header shows the repo chip and when it was checked; 
   m.deskStore._reset();
   const again = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
   await settle(20);
-  assert.equal(again.host.querySelector('[data-dev-repo-chip]'), null, 'no repo known: no chip');
+  assert.equal(!!again.host.querySelector('[data-dev-repo-chip]'), false, 'no repo known: no chip');
   again.root.unmount();
 });

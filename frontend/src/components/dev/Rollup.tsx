@@ -24,7 +24,7 @@ export function rollupTiles<T extends { area: string }>(areas: T[], needsYou: st
 }
 
 /** The "Since you last looked" card at the top of What landed. */
-export const Rollup: React.FC<RollupProps> = ({ rollup, last_tag, last_merge, branch = 'main', needsYouAreas = [], onDraftNotes, onMarkSeen, drafting = false, marking = false }) => {
+export const Rollup: React.FC<RollupProps> = ({ rollup, last_merge, branch = 'main', needsYouAreas = [], onDraftNotes, onMarkSeen, drafting = false, marking = false }) => {
   const since = clock(rollup.since);
   const until = clock(rollup.until);
   const range = since && until ? `Since you last looked · ${since} → ${until}` : until ? `Everything so far · up to ${until}` : 'Since you last looked';
@@ -93,23 +93,16 @@ export const Rollup: React.FC<RollupProps> = ({ rollup, last_tag, last_merge, br
         )}
       </ul>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button type="button" onClick={onDraftNotes} disabled={drafting} aria-busy={drafting || undefined} className="kw-btn-primary min-h-[44px] sm:min-h-0 max-sm:flex-1">
+      {/* Phones: both actions full width, one line each, Draft release notes first. The count is in the title. */}
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center" data-dev-rollup-actions>
+        <button type="button" onClick={onDraftNotes} disabled={drafting} aria-busy={drafting || undefined} className="kw-btn-primary min-h-[44px] sm:min-h-0 max-sm:w-full max-sm:justify-center whitespace-nowrap">
           <Sparkles size={14} aria-hidden="true" />
           {drafting ? 'Drafting…' : 'Draft release notes'}
         </button>
-        <button type="button" onClick={onMarkSeen} disabled={marking} aria-busy={marking || undefined} className="kw-btn-ghost min-h-[44px] sm:min-h-0 max-sm:flex-1">
+        <button type="button" onClick={onMarkSeen} disabled={marking} aria-busy={marking || undefined} className="kw-btn-ghost min-h-[44px] sm:min-h-0 max-sm:w-full max-sm:justify-center whitespace-nowrap">
           {marking ? 'Marking…' : 'Mark all seen'}
         </button>
         {/* The "Send me this every morning" link is 0.7.x (plan §1): hidden. */}
-        <p className="w-full text-meta text-zinc-400 sm:ml-auto sm:w-auto">
-          {plural(rollup.count, 'change', 'changes')}
-          {last_tag && (
-            <>
-              {' '}since <code className="font-mono text-zinc-300">{last_tag}</code>
-            </>
-          )}
-        </p>
       </div>
     </section>
   );
