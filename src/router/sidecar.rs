@@ -599,6 +599,8 @@ async fn run_vega(
     let finder = match &opts.vega_python {
         VegaPython::Missing => None,
         VegaPython::Use(_) => Some((None, None)),
+        // the given commands bring their own Python
+        VegaPython::Detect if opts.vega_install.is_some() => Some((None, None)),
         VegaPython::Detect if vega_installed(&venv) => Some((None, None)),
         VegaPython::Detect => {
             let home = dirs::home_dir();
@@ -632,7 +634,7 @@ async fn run_vega(
                     Ok(Ok(())) if venv_py.exists() => None,
                     Ok(Ok(())) => Some(format!("{} is missing after the install", venv_py.display())),
                     Ok(Err(e)) => Some(e),
-                    Err(_) => Some(format!("it took longer than {} minutes", t.vega_install.as_secs() / 60)),
+                    Err(_) => Some(format!("it took longer than {}", human(t.vega_install))),
                 };
                 if let Some(e) = failed {
                     let _ = std::fs::remove_dir_all(&venv);
@@ -669,14 +671,11 @@ async fn run_vega(
             }
             VegaExit::NeverHealthy => {
                 let _ = child.kill().await;
-                return VegaRun::Fallback(format!(
-                    "vega didn't answer within {} minutes of starting",
-                    t.vega_health.as_secs().div_ceil(60)
-                ));
+                return VegaRun::Fallback(format!("vega didn't answer within {} of starting", human(t.vega_health)));
             }
             VegaExit::Unresponsive => {
                 let _ = child.kill().await;
-                format!("it stopped answering for {} s", t.vega_unhealthy.as_secs())
+                format!("it stopped answering for {}", human(t.vega_unhealthy))
             }
             VegaExit::Crashed(status) => {
                 let _ = child.kill().await;
@@ -905,6 +904,15 @@ fn venv_bin(venv: &Path, name: &str) -> PathBuf {
     }
 }
 
+/// "40 minutes", "90 seconds".
+fn human(d: Duration) -> String {
+    match d.as_secs() {
+        s if s >= 120 => format!("{} minutes", s / 60),
+        1 => "1 second".to_string(),
+        s => format!("{s} seconds"),
+    }
+}
+
 /// Whether `venv-vega` finished installing [`VEGA_PACKAGE`] (an older pin installs again).
 fn vega_installed(venv: &Path) -> bool {
     venv_bin(venv, "python").exists()
@@ -1019,4 +1027,450 @@ fn start_vega(python: &Path, script: &Path, dir: &Path, port: u16) -> Result<Chi
         .stderr(Stdio::from(err))
         .kill_on_drop(true);
     cmd.spawn().map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn engine_defaults_to_vega_and_standard_turns_it_off() {
+        assert_eq!(LayaEngine::default(), LayaEngine::Vega);
+        assert_eq!(LayaEngine::from_setting(None), LayaEngine::Vega);
+        assert_eq!(LayaEngine::from_setting(Some("vega")), LayaEngine::Vega);
+        assert_eq!(LayaEngine::from_setting(Some(" Standard ")), LayaEngine::Standard);
+        assert_eq!(LayaEngine::from_setting(Some("something-else")), LayaEngine::Vega);
+        assert_eq!(LayaEngine::parse("standard"), Some(LayaEngine::Standard));
+        assert_eq!(LayaEngine::parse("vega"), Some(LayaEngine::Vega));
+        assert_eq!(LayaEngine::parse("vegaml"), None);
+        assert_eq!(LayaEngine::parse(""), None);
+        assert_eq!(serde_json::to_value(LayaEngine::Vega).unwrap(), "vega");
+        assert_eq!(super::super::LayaRouter::new("http://127.0.0.1:1".into()).engine(), LayaEngine::Vega);
+    }
+
+    #[test]
+    fn preflight_needs_8_gb_and_a_python() {
+        assert_eq!(vega_preflight(Some(16.0), true), None);
+        assert_eq!(vega_preflight(Some(8.0), true), None);
+        // unknown memory doesn't block
+        assert_eq!(vega_preflight(None, true), None);
+        let low = vega_preflight(Some(7.6), true).unwrap();
+        assert!(low.contains("8 GB") && low.contains("7.6 GB"), "{low}");
+        let nopy = vega_preflight(Some(16.0), false).unwrap();
+        assert!(nopy.contains("Python 3.10"), "{nopy}");
+        let meminfo = "MemTotal:       16314276 kB\nMemFree:          123 kB\n";
+        let gb = parse_meminfo(meminfo).unwrap();
+        assert!((gb - 15.56).abs() < 0.01, "{gb}");
+        assert_eq!(parse_meminfo("MemFree: 1 kB"), None);
+    }
+
+    #[test]
+    fn a_fallback_holds_until_kwant_is_updated() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(FallbackRecord::read(dir.path()).is_none());
+        FallbackRecord::write(dir.path(), "vega needs 8 GB of memory");
+        let rec = FallbackRecord::read(dir.path()).unwrap();
+        assert_eq!(rec.reason, "vega needs 8 GB of memory");
+        assert!(rec.holds_for(VERSION));
+        assert!(!rec.holds_for("0.0.1"));
+        FallbackRecord::clear(dir.path());
+        assert!(FallbackRecord::read(dir.path()).is_none());
+        // a damaged file means no fallback (vega is tried)
+        std::fs::write(dir.path().join(FALLBACK_FILE), "{not json").unwrap();
+        assert!(FallbackRecord::read(dir.path()).is_none());
+    }
+
+    #[test]
+    fn model_cache_counts_the_vega_model_without_following_links() {
+        let hf = tempfile::tempdir().unwrap();
+        assert_eq!(model_cache(hf.path()), (None, None));
+        let model = hf.path().join("hub/models--nandakishorm--vega-U");
+        std::fs::create_dir_all(model.join("blobs")).unwrap();
+        std::fs::create_dir_all(model.join("snapshots/abc")).unwrap();
+        std::fs::write(model.join("blobs/w"), vec![0u8; 3 * 1024 * 1024]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(model.join("blobs/w"), model.join("snapshots/abc/model.safetensors")).unwrap();
+        // laya's own model isn't counted
+        std::fs::create_dir_all(hf.path().join("hub/models--other--modernbert/blobs")).unwrap();
+        std::fs::write(hf.path().join("hub/models--other--modernbert/blobs/w"), vec![0u8; 1024 * 1024]).unwrap();
+        assert_eq!(model_cache(hf.path()), (Some(3), Some(model.display().to_string())));
+    }
+
+    // ---- the supervisor, with fake 0.4.8 and vega servers (needs python3) ----
+
+    /// One at a time: they bind ports and start processes. `KWNT_SIDECAR_TEST_PORT` pins the pair.
+    static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn python3() -> bool {
+        let ok = std::process::Command::new("python3")
+            .args(["-c", "import http.server"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            eprintln!("skipped: no python3");
+        }
+        ok
+    }
+
+    fn ports() -> (u16, u16) {
+        if let Some(base) = std::env::var("KWNT_SIDECAR_TEST_PORT").ok().and_then(|p| p.parse::<u16>().ok()) {
+            return (base, base + 1);
+        }
+        let a = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let b = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        (a.local_addr().unwrap().port(), b.local_addr().unwrap().port())
+    }
+
+    const FAKE_SERVER: &str = r#"
+import http.server, json
+class H(http.server.BaseHTTPRequestHandler):
+    def _send(self, body):
+        b = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.end_headers()
+        self.wfile.write(b)
+    def do_GET(self):
+        self._send({"status": "ok", "engine": ENGINE})
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self._send({"model": ENGINE, "engine": ENGINE, "answers": {}, "usage": {"input_tokens": 0, "output_tokens": 0}})
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer((os.environ.get("LAYA_HOST", "127.0.0.1"), int(os.environ["LAYA_PORT"])), H).serve_forever()
+"#;
+
+    /// laya-serve 0.4.8's stand-in: an executable that answers at once.
+    fn fake_standard(dir: &Path) -> PathBuf {
+        let bin = dir.join("fake-laya-serve");
+        std::fs::write(&bin, format!("#!/usr/bin/env python3\nimport os\nENGINE = 'standard'\n{FAKE_SERVER}")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        bin
+    }
+
+    /// vega_serve.py's stand-in. `mode`: `ok` (answers once `gate` exists), `crash`, `crash-once`, `hang`.
+    /// Writes the env it got to `<dir>/vega-env.json`.
+    fn fake_vega(dir: &Path, mode: &str, gate: Option<&Path>) -> String {
+        let gate = gate.map(|g| g.display().to_string()).unwrap_or_default();
+        let envout = dir.join("vega-env.json").display().to_string();
+        let once = dir.join("crashed-once").display().to_string();
+        format!(
+            r#"import json, os, sys, time
+MODE, GATE, ONCE = {mode:?}, {gate:?}, {once:?}
+with open({envout:?}, "w") as f:
+    json.dump({{k: os.environ.get(k) for k in ("LAYA_HOST", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "KWNT_VEGA_THREADS", "HF_HOME")}}, f)
+if MODE == "crash" or (MODE == "crash-once" and not os.path.exists(ONCE)):
+    open(ONCE, "w").close()
+    print("ERROR: fake vega crashed", file=sys.stderr, flush=True)
+    sys.exit(3)
+if MODE == "hang":
+    time.sleep(3600)
+while GATE and not os.path.exists(GATE):
+    time.sleep(0.05)
+ENGINE = "vega"
+{FAKE_SERVER}"#
+        )
+    }
+
+    struct Rig {
+        router: LayaRouter,
+        cancel: CancellationToken,
+        handle: tokio::task::JoinHandle<()>,
+        laya: PathBuf,
+        std_url: String,
+        vega_url: String,
+    }
+
+    impl Rig {
+        fn start(data: &Path, (std_port, vega_port): (u16, u16), engine: LayaEngine, tweak: impl FnOnce(&mut SidecarOptions)) -> Self {
+            let std_url = format!("http://127.0.0.1:{std_port}");
+            let router = LayaRouter::new(std_url.clone());
+            router.set_engine(engine);
+            let laya = data.join("laya");
+            std::fs::create_dir_all(&laya).unwrap();
+            let mut opts = SidecarOptions {
+                data_dir: data.to_path_buf(),
+                managed: true,
+                models: "english".into(),
+                vega_port: Some(vega_port),
+                standard_bin: Some(fake_standard(data)),
+                vega_python: VegaPython::Use("python3".into()),
+                vega_script: Some(fake_vega(data, "ok", None)),
+                memory_gb: Some(16.0),
+                timings: SidecarTimings {
+                    tick: Duration::from_millis(50),
+                    online_tick: Duration::from_millis(100),
+                    settle: Duration::from_secs(10),
+                    vega_install: Duration::from_secs(10),
+                    vega_health: Duration::from_secs(20),
+                    vega_unhealthy: Duration::from_secs(1),
+                    vega_restart: Duration::from_millis(50),
+                },
+                ..Default::default()
+            };
+            tweak(&mut opts);
+            let cancel = CancellationToken::new();
+            let handle = spawn(router.clone(), opts, cancel.clone());
+            Self { router, cancel, handle, laya, std_url, vega_url: format!("http://127.0.0.1:{vega_port}") }
+        }
+
+        async fn until(&self, what: &str, f: impl Fn(&LayaStatus) -> bool) {
+            let end = Instant::now() + Duration::from_secs(20);
+            while !f(&self.router.status()) {
+                assert!(Instant::now() < end, "timed out waiting for {what}: {:?}", self.router.status());
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }
+
+        async fn stop(self) {
+            self.cancel.cancel();
+            let _ = tokio::time::timeout(Duration::from_secs(5), self.handle).await;
+        }
+    }
+
+    fn standard_online(s: &LayaStatus) -> bool {
+        s.state == LayaState::Online && s.engine == LayaEngine::Standard
+    }
+
+    #[tokio::test]
+    async fn standard_serves_until_vega_is_healthy_then_hands_over() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let gate = data.path().join("gate");
+        let venv = data.path().join("laya").join(VEGA_VENV);
+        // the install path, with a "venv" whose python is this machine's python3
+        let install = crate::setup::Cmd {
+            label: "fake install".into(),
+            argv: vec!["sh".into(), "-c".into(), format!("mkdir -p {0}/bin && ln -s \"$(command -v python3)\" {0}/bin/python", venv.display())],
+            env: vec![],
+        };
+        let hub = crate::router::sidecar::hf_dir(&data.path().join("laya")).join("hub/models--nandakishorm--vega-U/blobs");
+        std::fs::create_dir_all(&hub).unwrap();
+        std::fs::write(hub.join("w"), vec![0u8; 2 * 1024 * 1024]).unwrap();
+        let script = fake_vega(data.path(), "ok", Some(&gate));
+        let rig = Rig::start(data.path(), ports(), LayaEngine::default(), |o| {
+            o.vega_python = VegaPython::Detect;
+            o.vega_install = Some(vec![install]);
+            o.vega_script = Some(script);
+        });
+
+        // 0.4.8 first, and it keeps answering while vega isn't healthy
+        rig.until("0.4.8 online, vega starting", |s| standard_online(s) && s.vega.state == VegaState::Starting).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let s = rig.router.status();
+        assert!(standard_online(&s), "{s:?}");
+        assert_eq!(rig.router.url(), rig.std_url);
+        assert!(rig.router.is_reachable().await);
+        assert!(s.detail.contains("while vega gets ready"), "{}", s.detail);
+        assert_eq!(std::fs::read_to_string(venv.join(INSTALLED_FILE)).unwrap(), VEGA_PACKAGE);
+        // started on loopback with torch held to 4 threads
+        let env: serde_json::Value = serde_json::from_slice(&std::fs::read(data.path().join("vega-env.json")).unwrap()).unwrap();
+        assert_eq!(env["LAYA_HOST"], "127.0.0.1");
+        assert_eq!(env["OMP_NUM_THREADS"], "4");
+        assert_eq!(env["MKL_NUM_THREADS"], "4");
+        assert_eq!(env["KWNT_VEGA_THREADS"], "4");
+
+        // healthy: routing moves to vega and 0.4.8 stops
+        std::fs::write(&gate, "").unwrap();
+        rig.until("vega active", |s| s.engine == LayaEngine::Vega && s.vega.state == VegaState::Active).await;
+        assert_eq!(rig.router.url(), rig.vega_url);
+        let s = rig.router.status();
+        assert_eq!(s.state, LayaState::Online);
+        assert_eq!(s.url, rig.vega_url);
+        assert_eq!(s.detail, "Model-based routing is active (vega engine)");
+        let end = Instant::now() + Duration::from_secs(10);
+        while rig.router.is_reachable_at(&rig.std_url).await {
+            assert!(Instant::now() < end, "0.4.8 still running after the handover");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        rig.until("model size", |s| s.vega.model_mb.is_some()).await;
+        let s = rig.router.status();
+        assert_eq!(s.vega.model_mb, Some(2));
+        assert!(s.vega.model_cache.as_deref().unwrap().ends_with("models--nandakishorm--vega-U"));
+        rig.stop().await;
+    }
+
+    #[tokio::test]
+    async fn low_memory_falls_back_once_and_only_an_update_retries() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let ports = ports();
+        let rig = Rig::start(data.path(), ports, LayaEngine::Vega, |o| o.memory_gb = Some(4.0));
+        rig.until("fallback", |s| s.vega.state == VegaState::Fallback && standard_online(s)).await;
+        let s = rig.router.status();
+        assert!(s.vega.detail.contains("8 GB") && s.vega.detail.contains("4.0 GB"), "{}", s.vega.detail);
+        // the plain status line says why
+        assert!(s.detail.starts_with("Model-based routing is active (standard engine; vega needs 8 GB"), "{}", s.detail);
+        assert_eq!(rig.router.url(), rig.std_url);
+        assert!(!data.path().join("vega-env.json").exists(), "vega must not start");
+        let rec = FallbackRecord::read(&rig.laya).unwrap();
+        assert_eq!(rec.version, VERSION);
+        rig.stop().await;
+
+        // the next start (now with enough memory) doesn't try again
+        let rig = Rig::start(data.path(), ports, LayaEngine::Vega, |_| {});
+        rig.until("0.4.8 online", standard_online).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let s = rig.router.status();
+        assert_eq!(s.vega.state, VegaState::Fallback, "{s:?}");
+        assert!(!data.path().join("vega-env.json").exists(), "vega must not start again");
+        rig.stop().await;
+
+        // after a kwant update it does
+        let mut rec = FallbackRecord::read(&data.path().join("laya")).unwrap();
+        rec.version = "0.0.1".into();
+        std::fs::write(data.path().join("laya").join(FALLBACK_FILE), serde_json::to_vec(&rec).unwrap()).unwrap();
+        let rig = Rig::start(data.path(), ports, LayaEngine::Vega, |_| {});
+        rig.until("vega active after the update", |s| s.vega.state == VegaState::Active).await;
+        assert!(FallbackRecord::read(&rig.laya).is_none());
+        rig.stop().await;
+    }
+
+    #[tokio::test]
+    async fn no_python_falls_back() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let rig = Rig::start(data.path(), ports(), LayaEngine::Vega, |o| o.vega_python = VegaPython::Missing);
+        rig.until("fallback", |s| s.vega.state == VegaState::Fallback && standard_online(s)).await;
+        assert!(rig.router.status().vega.detail.contains("Python 3.10"));
+        assert_eq!(rig.router.url(), rig.std_url);
+        assert!(FallbackRecord::read(&rig.laya).is_some());
+        rig.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_install_falls_back_and_removes_the_half_venv() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let venv = data.path().join("laya").join(VEGA_VENV);
+        let install = crate::setup::Cmd {
+            label: "fake install".into(),
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                format!("mkdir -p {} && echo 'ERROR: No matching distribution found for laya' >&2 && exit 1", venv.display()),
+            ],
+            env: vec![],
+        };
+        let rig = Rig::start(data.path(), ports(), LayaEngine::Vega, |o| {
+            o.vega_python = VegaPython::Detect;
+            o.vega_install = Some(vec![install]);
+        });
+        rig.until("fallback", |s| s.vega.state == VegaState::Fallback && standard_online(s)).await;
+        let why = rig.router.status().vega.detail;
+        assert!(why.starts_with("the vega install failed: ERROR: No matching distribution"), "{why}");
+        assert!(!venv.exists());
+        assert!(rig.laya.join("install-vega.log").exists());
+        assert_eq!(rig.router.url(), rig.std_url);
+        rig.stop().await;
+    }
+
+    #[tokio::test]
+    async fn vega_that_never_answers_falls_back_in_time() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let script = fake_vega(data.path(), "hang", None);
+        let rig = Rig::start(data.path(), ports(), LayaEngine::Vega, |o| {
+            o.vega_script = Some(script);
+            o.timings.vega_health = Duration::from_secs(1);
+        });
+        rig.until("fallback", |s| s.vega.state == VegaState::Fallback).await;
+        let s = rig.router.status();
+        assert_eq!(s.vega.detail, "vega didn't answer within 1 second of starting");
+        assert!(standard_online(&s) || s.state == LayaState::Starting, "{s:?}");
+        assert_eq!(rig.router.url(), rig.std_url);
+        assert!(!rig.router.is_reachable_at(&rig.vega_url).await);
+        rig.stop().await;
+    }
+
+    #[tokio::test]
+    async fn two_crashes_fall_back() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let script = fake_vega(data.path(), "crash", None);
+        let rig = Rig::start(data.path(), ports(), LayaEngine::Vega, |o| o.vega_script = Some(script));
+        rig.until("fallback", |s| s.vega.state == VegaState::Fallback).await;
+        let s = rig.router.status();
+        assert_eq!(s.vega.crashes, 2);
+        assert_eq!(s.vega.detail, "vega stopped 2 times; last: ERROR: fake vega crashed");
+        assert_eq!(rig.router.url(), rig.std_url);
+        rig.until("0.4.8 online", standard_online).await;
+        rig.stop().await;
+    }
+
+    #[tokio::test]
+    async fn one_crash_restarts_vega() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let script = fake_vega(data.path(), "crash-once", None);
+        let rig = Rig::start(data.path(), ports(), LayaEngine::Vega, |o| o.vega_script = Some(script));
+        rig.until("vega active", |s| s.vega.state == VegaState::Active).await;
+        assert_eq!(rig.router.status().vega.crashes, 1);
+        assert_eq!(rig.router.url(), rig.vega_url);
+        assert!(FallbackRecord::read(&rig.laya).is_none());
+        rig.stop().await;
+    }
+
+    #[tokio::test]
+    async fn the_setting_switches_engines_live_and_retries_a_fallback() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let ports = ports();
+        std::fs::create_dir_all(data.path().join("laya")).unwrap();
+        FallbackRecord::write(&data.path().join("laya"), "vega stopped 2 times; last: boom");
+        let rig = Rig::start(data.path(), ports, LayaEngine::Standard, |_| {});
+        rig.until("standard only", |s| standard_online(s) && s.vega.state == VegaState::Off).await;
+        assert_eq!(rig.router.status().detail, "Model-based routing is active");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!data.path().join("vega-env.json").exists(), "vega must not start on standard");
+
+        // choosing vega again gives the earlier fallback one more try
+        rig.router.set_engine(LayaEngine::Vega);
+        rig.until("vega active", |s| s.vega.state == VegaState::Active && s.engine == LayaEngine::Vega).await;
+        assert_eq!(rig.router.url(), rig.vega_url);
+        assert!(FallbackRecord::read(&rig.laya).is_none());
+
+        // and standard hands routing back to 0.4.8 and stops vega
+        rig.router.set_engine(LayaEngine::Standard);
+        rig.until("back on 0.4.8", |s| standard_online(s) && s.vega.state == VegaState::Off).await;
+        assert_eq!(rig.router.url(), rig.std_url);
+        let end = Instant::now() + Duration::from_secs(10);
+        while rig.router.is_reachable_at(&rig.vega_url).await {
+            assert!(Instant::now() < end, "vega still running on standard");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        rig.stop().await;
+    }
 }

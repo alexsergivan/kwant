@@ -2025,4 +2025,33 @@ mod fit_tests {
         crate::drivers::drop_current_message(&mut history, &format!("{asked}\n\n{TEAM_BUILDING_NOTE}"));
         assert!(history.is_empty(), "the prompt carries the message once");
     }
+
+    #[test]
+    fn laya_guess_gates_on_vegas_route_when_present() {
+        let (_, members) = super::tests::make_test_fixture();
+        let lead = |extra: serde_json::Value| {
+            let mut lk = json!({"choice": "kwant-1", "probabilities": {"a": 0.51, "b": 0.49}});
+            for (k, v) in extra.as_object().unwrap() {
+                lk[k] = v.clone();
+            }
+            json!({"answers": {"lead_kwant": lk}})
+        };
+        // without vega's fields the margin rule decides: 0.02 apart is a guess
+        let g = laya_guess(&lead(json!({})), &members).unwrap();
+        assert_eq!(g.kwant.id, "kwant-1");
+        assert!(!g.confident);
+        let clear = json!({"answers": {"lead_kwant": {"choice": "kwant-1", "probabilities": {"a": 0.8, "b": 0.2}}}});
+        assert!(laya_guess(&clear, &members).unwrap().confident);
+        // with them, route decides, whatever the margin
+        let auto = lead(json!({"route": "auto", "unbound": false, "prediction_set": ["a"], "abstain": false}));
+        assert!(laya_guess(&auto, &members).unwrap().confident);
+        let review = json!({"answers": {"lead_kwant": {"choice": "kwant-1", "probabilities": {"a": 0.9, "b": 0.1},
+            "route": "review", "unbound": false}}});
+        assert!(!laya_guess(&review, &members).unwrap().confident);
+        // out of distribution is never confident, even on auto
+        let unbound = lead(json!({"route": "auto", "unbound": true}));
+        assert!(!laya_guess(&unbound, &members).unwrap().confident);
+        // a missing unbound flag counts as bound
+        assert!(laya_guess(&lead(json!({"route": "auto"})), &members).unwrap().confident);
+    }
 }

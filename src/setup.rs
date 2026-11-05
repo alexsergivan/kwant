@@ -1238,4 +1238,24 @@ mod tests {
         assert_eq!(ItemId::parse(" Laya "), Some(ItemId::Laya));
         assert_eq!(ItemId::parse("chrome"), None);
     }
+
+    #[test]
+    fn vega_installs_into_its_own_venv_and_leaves_the_standard_one_alone() {
+        let data = Path::new("/home/u/.kwnt");
+        let uv = Path::new("/home/u/.local/bin/uv");
+        let show = |cmds: Vec<Cmd>| cmds.iter().map(Cmd::display).collect::<Vec<_>>();
+        let vega = show(vega_commands(data, Some(uv), None, true));
+        assert_eq!(vega[0], "/home/u/.local/bin/uv venv --python 3.12 /home/u/.kwnt/laya/venv-vega");
+        assert_eq!(vega[1], format!("/home/u/.local/bin/uv pip install --python /home/u/.kwnt/laya/venv-vega/bin/python --index-url {TORCH_CPU_INDEX} torch"));
+        assert_eq!(vega[2], "/home/u/.local/bin/uv pip install --python /home/u/.kwnt/laya/venv-vega/bin/python 'laya[serve]==0.4.24'");
+        // a Mac takes the normal wheels: no CPU index
+        let mac = show(vega_commands(data, Some(uv), None, false));
+        assert_eq!(mac.len(), 2, "{mac:?}");
+        assert!(!mac.iter().any(|c| c.contains(TORCH_CPU_INDEX)), "{mac:?}");
+        // the standard engine's steps are what they were
+        let std = show(laya_commands(data, Some(uv), None, true));
+        assert_eq!(std[0], "/home/u/.local/bin/uv venv --python 3.12 /home/u/.kwnt/laya/venv");
+        assert!(std[2].ends_with("/home/u/.kwnt/laya/venv/bin/python 'laya[serve]==0.4.8'"), "{std:?}");
+        assert!(!std.iter().any(|c| c.contains("venv-vega")));
+    }
 }
