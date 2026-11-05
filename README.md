@@ -261,6 +261,8 @@ The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwa
   - [Loose ends (zombie hunter)](docs/zombie-hunter.md)
   - [Letters (camera to completed)](docs/camera-to-completed.md)
   - [Parallel Universe](docs/parallel-universe.md)
+  - [Dev mode](docs/dev-mode.md)
+  - [Idea jar](docs/idea-jar.md)
 
 ---
 
