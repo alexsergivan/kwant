@@ -235,7 +235,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Da
       <section key={day.label} aria-label={day.label} className="space-y-3">
         <h3 className="-ml-[30px] flex items-center gap-2 pt-2 font-mono text-[10.5px] font-semibold uppercase leading-none tracking-[0.06em] text-zinc-400">
           <span data-rail-day className="relative rounded bg-surface-main py-1 pl-0.5 pr-2">{day.label}</span>
-          <span aria-hidden="true" className="h-px flex-1 bg-hairline" />
+          <span aria-hidden="true" className="h-px flex-1 bg-[var(--kw-hairline)]" />
         </h3>
         {day.cards.map((c) => (
           <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} onRail />
