@@ -412,7 +412,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
               </p>
             ) : tab === 'landed' ? (
               <>
-                {landed?.rollup && (
+                {landed?.rollup && landedCards.length > 0 && (
                   <Rollup
                     rollup={landed.rollup}
                     last_tag={landed.last_tag}

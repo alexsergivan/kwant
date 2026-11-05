@@ -495,6 +495,7 @@ test('F4 DOM: first-visit empty states speak git and never say "Nothing has land
     assert.ok(e.textContent.includes(out), over.status);
     assert.ok(e.textContent.includes(title), over.status);
     assert.doesNotMatch(document.body.textContent, /Nothing has landed yet/);
+    assert.equal(document.querySelector('[data-dev-rollup]'), null, 'no "since you last looked" line with no cards');
     root.unmount();
   }
   reset({ status: 'watching', repo: 'demo-org/demo-web', sources: [SOURCES[0]], new_reviews: 12 });
@@ -536,4 +537,20 @@ test('F5 DOM: Connect opens Loose ends’ add form on GitHub, and a GitHub sourc
   assert.equal(m.devConnect.finish(), 'spc_demo');
   assert.equal(m.devConnect.finish(), null, 'returns once');
   assert.equal(added, null);
+});
+
+test('F3 DOM: on desktop the toast starts 16 px inside the main pane, never over the sidebar', async () => {
+  const over = { status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] };
+  reset(over);
+  const pane = document.createElement('div');
+  pane.setAttribute('data-main-pane', '');
+  pane.getBoundingClientRect = () => ({ left: 323, top: 0, right: 1440, bottom: 900, width: 1117, height: 900 });
+  document.body.appendChild(pane);
+  const st = m.parseDevMode(server.state);
+  const { root } = await mount(h(m.DevOnToast, { state: st, onOpenDesk: noop, onTypeRepo: noop, onUndo: async () => {}, onClose: noop }));
+  assert.equal(document.querySelector('[data-dev-on-toast]').style.left, '339px');
+  root.unmount();
+  const again = await toast({ status: 'no_repo', sources: [] });
+  assert.equal(document.querySelector('[data-dev-on-toast]').style.left, '16px', 'no pane: 16 px');
+  again.root.unmount();
 });

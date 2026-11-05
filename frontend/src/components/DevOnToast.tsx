@@ -35,14 +35,25 @@ function composerGap(): string | null {
   return `${Math.max(16, Math.round(h - r.top + 8))}px`;
 }
 
+/** Desktop left edge (flow copy §3): 16 px inside the main pane, never over the sidebar. */
+function paneLeft(): number {
+  if (typeof document === 'undefined') return 16;
+  const r = document.querySelector('[data-main-pane]')?.getBoundingClientRect();
+  return r && r.width ? Math.round(r.left + 16) : 16;
+}
+
 export const DevOnToast: React.FC<DevOnToastProps> = ({ state, onOpenDesk, onConnect, onTypeRepo, onUndo, onClose, phone = false, timeout = 8000 }) => {
   const t = onToast(state);
   const [undo, setUndo] = useState<'idle' | 'busy' | 'failed'>('idle');
   const [bottom, setBottom] = useState<string | null>(null);
   const [held, setHeld] = useState(false);
+  const [left, setLeft] = useState(16);
 
   useLayoutEffect(() => {
-    const place = () => setBottom(composerGap());
+    const place = () => {
+      setBottom(composerGap());
+      setLeft(paneLeft());
+    };
     place();
     window.addEventListener('resize', place);
     window.visualViewport?.addEventListener?.('resize', place);
@@ -83,8 +94,8 @@ export const DevOnToast: React.FC<DevOnToastProps> = ({ state, onOpenDesk, onCon
 
   const toast = (
     <div
-      className={`kw-dv-ontoast-wrap fixed z-40 pointer-events-none ${phone ? 'inset-x-[6px]' : 'left-[272px]'}`}
-      style={{ bottom: bottom ?? (phone ? 'calc(var(--kw-tabbar-h, 64px) + 8px)' : '16px') }}
+      className={`kw-dv-ontoast-wrap fixed z-40 pointer-events-none ${phone ? 'inset-x-[6px]' : ''}`}
+      style={{ bottom: bottom ?? (phone ? 'calc(var(--kw-tabbar-h, 64px) + 8px)' : '16px'), ...(phone ? {} : { left: `${left}px` }) }}
       data-dev-on-toast={state.status ?? 'checking'}
       data-phone={phone || undefined}
     >
