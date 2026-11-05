@@ -114,6 +114,7 @@ import {
   turnsAwaitingAnswer,
 } from './questions';
 import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
+import { needsYouRows } from './chatsTab';
 import { Space, eventsUrl, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
@@ -356,6 +357,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [awayCount, setAwayCount] = useState(0);
   // "Needs you" nudges (attention.ts): what waits on the person, the pill, and the "Show nudges" setting.
   const [awayWaiting, setAwayWaiting] = useState(0);
+  /** What waits on you right now (approvals, questions), for the phone Chats tab's Needs you. */
+  const [awayItems, setAwayItems] = useState<AwayItem[]>([]);
   const [pill, setPill] = useState<PillState>(EMPTY_PILL);
   const [nudgesOn, setNudgesOn] = useState(nudgesEnabled);
   const nudgesOnRef = useRef(nudgesOn);
@@ -378,6 +381,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       awayApi.get().then((r) => {
         setAwayCount(r.unseen.total);
         setAwayWaiting(r.unseen.waiting);
+        setAwayItems(r.waiting);
         const fresh = arrivalsRef.current.fromAway(r.waiting);
         setPill((prev) => pillPrune(prev, new Set(r.waiting.map((i) => `${i.kind}:${i.id}`))));
         offerNudges(fresh);
@@ -3046,6 +3050,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       busyKwants={busyKwants}
       botStatus={botStatus}
       needsYou={needsYouByKwant}
+      needsYouRows={isPhone && section === 'chats' ? needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))) : undefined}
+      onOpenNeedsYou={(row) => {
+        // A question or approval opens its chat (or thread) on the card; a browser step, the bot's chat.
+        if (row.item) openAwayItem(row.item);
+        else {
+          const k = kwants.find((x) => x.id === row.kwant_id);
+          if (k) handleSelectKwant(k);
+        }
+        setPhoneView('chat');
+      }}
       onSelectKwant={handleSelectKwant}
       onSelectChannel={handleSelectChannel}
       onSelectTeam={handleSelectTeam}
