@@ -73,8 +73,8 @@ approvals say (`ask`, `smart` or `off`), and whatever "always allow" was given b
 | `push_main` | pushing to the watched branch or a protected one (`main`, `master`, `production`, `prod`, `live`, `stable`, `trunk`, `gh-pages`), or `gh pr merge` | no |
 | `force_push` | `git push --force`, `-f`, `--force-with-lease` or `+ref` to a protected branch | no |
 | `delete_ref` | deleting a protected branch or a release tag | no |
-| `deploy` | wrangler, fly, vercel `--prod`, netlify `--prod`, firebase, railway, kamal, serverless, kubectl, helm, terraform or pulumi apply, `docker compose up`, a push to a deploy remote (heroku, dokku, …), `make`, `npm` or `just` targets named deploy, ship or release, deploy tools on infrastructure MCP servers | no |
-| `deploy_migration` | a migration run against production: sqlx, diesel, prisma `migrate deploy`, rails `db:migrate`, alembic, `manage.py migrate` and others, when the command names a production database or environment | **yes** |
+| `deploy` | wrangler, fly, vercel `--prod`, netlify `--prod`, firebase, railway, kamal, serverless, kubectl, helm, terraform or pulumi apply, `docker compose up` or `restart` when the space deploys with Docker (or on another host, or over `ssh`), a push to a deploy remote (heroku, dokku, …), `make`, `npm` or `just` targets and scripts (`./deploy.sh`, `python release.py`, `node deploy.js`) named deploy, ship or release, deploy tools on infrastructure MCP servers | no |
+| `deploy_migration` | a migration run against production: sqlx, diesel, prisma `migrate deploy`, rails `db:migrate`, alembic, `manage.py migrate` and others, when the command names a production database or environment (before or after it: `RAILS_ENV=production`, `--settings=app.prod`) | **yes** |
 | `destructive` | `DROP`, `TRUNCATE`, or `DELETE`/`UPDATE` with no `WHERE` through a database client, `rm -r` on data folders or database files, `docker volume rm`, `compose down -v`, `terraform destroy`, delete tools on infrastructure apps | **yes** |
 | `prod_key` | any tool on a connection the person marked **production** (D10) | no |
 
@@ -89,11 +89,20 @@ approvals say (`ask`, `smart` or `off`), and whatever "always allow" was given b
   until the space has an `ok` backup at most 10 minutes old. This is checked when the person
   answers, so a backup taken while the card waits counts.
 - `POST /api/spaces/:id/dev/backup` runs the backup command in the bot's workspace, with a
-  10-minute limit and one run at a time per space. kwnt then records what it can tell:
+  10-minute limit and one run at a time per space. The run finishes and is recorded even if the
+  request goes away (the browser closes), and the space is free for the next one either way.
+  kwnt then records what it can tell:
   - the exit code;
-  - the file the output names, its size, and whether it is empty;
+  - the file or folder the output names (a bare name is looked up in the bot's workspace), its
+    size, and whether it is empty;
+  - whether that file was written by this run: one older than the run's start (with 5 seconds of
+    slack) isn't counted, so an old dump can't stand in for a new one;
   - a remote target (`s3://`, `gs://`, `r2://`, …), which counts as ok on exit 0 because its size
     can't be checked.
+
+  Exit 0 with no file or remote target named in the output is **not** a backup: the reply is
+  `ok: false` with "kwant couldn't find a backup file in the output". Make the command print
+  where it wrote, for example `… && echo "Backup saved to backups/app.sql"`.
 - **Marking a connection production** (D10): `PUT /api/connections/:id/production?space=` with
   `{production: true|false}`. Only an MCP server in the space (`mcp:<id>`) or a Composio app
   (`composio:<slug>`) can be marked. `GET /api/connections` shows `production` on each one.
@@ -105,8 +114,10 @@ the call and the space's Dev mode settings, never anything the bot says about th
   permission prompt) and every MCP tool;
 - in `approve_local_shell_in`, which covers the API drivers' `execute_shell`.
 
-It asks for some things that never reach production, such as a `docker compose up` on a laptop
-or `npm run release` in a test repo. That is accepted: an extra card costs a tap, and a missed
+It asks for some things that never reach production, such as `npm run release` in a test repo.
+Compose is only read as a deploy where the space's deploy hint is Docker, or when it runs on
+another host (`-H`, `--context`) or over `ssh`; `compose down`, `stop`, `pull`, `rm` and `create`
+never ask, and `compose down -v` always does because it deletes volumes. That is accepted: an extra card costs a tap, and a missed
 deploy can cost a site.
 
 ### What the floor can't see
@@ -114,13 +125,16 @@ deploy can cost a site.
 - **Codex's own shell.** kwnt never sees Codex's commands, only the MCP tools Codex calls. Its
   sandbox has no network, so it can't push or deploy. It can still delete files inside its
   workspace, a local database file included.
-- **Commands hidden in scripts.** Running a script, or `bash script.sh`, is read by the script's
-  *name* only, for example `deploy.sh` or `release.py`. A script called `run.sh` that deploys
+- **Commands hidden in scripts.** Running a script (`./deploy.sh`, `bash script.sh`,
+  `python release.py`, `node deploy.js`, `ruby ship.rb`) is read by the script's *name* only. A script called `run.sh` that deploys
   doesn't ask. The same goes for Makefile targets, npm scripts and CI workflows named for
   something else, and for git hooks and aliases.
-- **Indirection.** A command built from variables (`$CMD`, `eval`), loaded from a file, or run
-  through another language (`python -c "subprocess…"`) isn't seen. Nesting deeper than 3 levels of
-  `ssh` or `sh -c` isn't read either.
+- **Indirection.** A command built from variables (`$CMD`, `git push origin $BRANCH`), piped into
+  a shell (`curl … | sh`, `echo … | bash`), loaded from a file, or run through another language
+  (`python -c "subprocess…"`) isn't seen. `eval '…'` with literal text is read, and so are
+  wrappers that run the rest of the line with their own flags (`sudo -u`, `env`, `timeout 60`,
+  `nice -n 10`, `ionice`, `stdbuf`, `setsid`, `nohup`, `watch -n1`, `xargs`). Nesting deeper than
+  3 levels of `ssh` or `sh -c` isn't read, and neither are quotes nested inside quotes.
 - **SDKs and HTTP calls.** A deploy or delete made with `curl` against a provider's API, or from
   code that uses its SDK, doesn't ask unless it goes through a connection marked production.
 - **Tools and providers missing from the lists**, and MCP tools whose names don't say what they
@@ -136,7 +150,10 @@ deploy can cost a site.
 - **What CI does after a push.** A push to the watched branch asks, because it may deploy. A push
   to another branch that CI deploys from doesn't ask, unless that branch is protected.
 - **The checked-out branch** is read from `.git/HEAD` in the bot's folder, or the folder above it.
-  A `cd other-repo && git push` is judged by the first repo's branch. A bare `git push` from a
+  A `git checkout` or `git switch` earlier in the same command is followed: `git switch main &&
+  git push` asks. `git checkout x` could restore a file `x`, so unless `x` is protected the branch
+  then counts as unknown, and a bare push after it asks. A `cd other-repo && git push` is judged by
+  the first repo's branch. A bare `git push` from a
   detached head, or from a folder that isn't a repo, counts as a push to a protected branch.
 
 ## Tests

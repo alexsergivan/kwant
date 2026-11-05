@@ -312,8 +312,9 @@ fn words(name: &str) -> Vec<String> {
     out
 }
 
-/// SQL that drops or empties data: `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE`, `DELETE FROM` with
-/// no `WHERE`, `ALTER TABLE … DROP`, and the Redis/Mongo equivalents.
+/// SQL that drops, empties or rewrites data: `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE`,
+/// `DELETE FROM` or `UPDATE … SET` with no `WHERE`, `ALTER TABLE … DROP`, and the Redis/Mongo
+/// equivalents.
 pub fn destructive_sql(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
     let flat: String = lower.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -339,15 +340,34 @@ pub fn destructive_sql(text: &str) -> Option<String> {
     if starts_sql(&flat, "truncate ") {
         return Some("TRUNCATE".into());
     }
-    // DELETE FROM x with no WHERE, statement by statement
+    // DELETE FROM x and UPDATE x SET with no WHERE, statement by statement
     for stmt in flat.split(';') {
         if let Some(i) = stmt.find("delete from ") {
             if !stmt[i..].contains(" where ") {
                 return Some("DELETE FROM with no WHERE".into());
             }
         }
+        if update_without_where(stmt) {
+            return Some("UPDATE with no WHERE".into());
+        }
     }
     None
+}
+
+/// `UPDATE t SET …` with no `WHERE`. `UPDATE` must start the statement or a quoted argument
+/// (`psql -c 'UPDATE t SET x=1'`) and `SET` follow the table, so prose such as "update the docs
+/// and set a date" in a message doesn't count.
+fn update_without_where(stmt: &str) -> bool {
+    stmt.match_indices("update ").any(|(i, _)| {
+        let before = stmt[..i].trim_end();
+        let starts = before.is_empty() || matches!(before.as_bytes().last(), Some(b'\'' | b'"' | b'(' | b'`'));
+        let mut rest = stmt[i + 7..].split_whitespace();
+        let table = match rest.next() {
+            Some("only") => rest.next(),
+            t => t,
+        };
+        starts && table.is_some() && rest.next() == Some("set") && !stmt[i..].contains(" where ")
+    })
 }
 
 fn starts_sql(flat: &str, kw: &str) -> bool {
@@ -357,10 +377,12 @@ fn starts_sql(flat: &str, kw: &str) -> bool {
 
 /// Why a shell command hits the floor, or `None`.
 pub fn shell_reason(command: &str, ctx: &DevCtx) -> Option<Floor> {
-    shell_reason_at(command, ctx, 0)
+    shell_reason_at(command, ctx, 0, false)
 }
 
-fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize) -> Option<Floor> {
+/// `over_ssh`: the command runs on another machine (`ssh host '…'`), where a compose `up` is a
+/// deploy whatever the space's hint says.
+fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize, over_ssh: bool) -> Option<Floor> {
     if depth > 3 {
         return None;
     }
@@ -374,13 +396,25 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize) -> Option<Floor> {
         }
     }
     let mut ssh_host: Option<String> = None;
+    // A `git checkout`/`git switch` earlier in the chain changes what a bare `git push` pushes
+    let mut cur = ctx.clone();
+    // `ssh host 'cd /srv && docker compose up -d'`: the quoted remote command spans segments;
+    // the quote still open after `ssh`, until it closes
+    let mut ssh_quote: Option<char> = None;
     for segment in command.split([';', '&', '|', '\n', '(', ')', '`']) {
+        let remote = ssh_quote.is_some();
+        if let Some(q) = ssh_quote {
+            if segment.matches(q).count() % 2 == 1 {
+                ssh_quote = None;
+            }
+        }
+        let over_ssh = over_ssh || remote;
         let words: Vec<String> = segment
             .split_whitespace()
             .map(|w| w.trim_matches(|c| c == '\'' || c == '"').to_string())
             .filter(|w| !w.is_empty())
             .collect();
-        // Env assignments and wrappers that run the next word
+        // Env assignments, and wrappers that run the rest of the line (with their own flags)
         let mut i = 0;
         let mut env_prod = false;
         while i < words.len() {
@@ -388,13 +422,15 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize) -> Option<Floor> {
             if w.contains('=') && !w.starts_with('-') {
                 env_prod |= prod_env(w);
                 i += 1;
-            } else if matches!(w, "sudo" | "env" | "command" | "exec" | "nohup" | "time" | "npx" | "bunx" | "pnpx" | "-E" | "doas") {
-                i += 1;
+            } else if let Some(n) = wrapper_len(w.trim_start_matches('\\'), &words[i + 1..]) {
+                i = (i + n).min(words.len());
             } else {
                 break;
             }
         }
         let Some((program, args)) = words[i..].split_first() else { continue };
+        // `\git` skips aliases and still runs git
+        let program = program.trim_start_matches('\\');
         let program = program.rsplit('/').next().unwrap_or(program).to_lowercase();
         let args: Vec<String> = args.to_vec();
         let a: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -403,8 +439,9 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize) -> Option<Floor> {
             "ssh" => {
                 if let Some((host, rest)) = ssh_target(&a) {
                     ssh_host = Some(host.clone());
+                    ssh_quote = ['\'', '"'].into_iter().find(|q| segment.matches(*q).count() % 2 == 1);
                     if !rest.is_empty() {
-                        if let Some(f) = shell_reason_at(&rest.join(" "), ctx, depth + 1) {
+                        if let Some(f) = shell_reason_at(&rest.join(" "), ctx, depth + 1, true) {
                             add(f.row("Where", host));
                         }
                     }
@@ -413,19 +450,25 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize) -> Option<Floor> {
             }
             "bash" | "sh" | "zsh" | "dash" => {
                 if let Some(p) = a.iter().position(|x| *x == "-c" || *x == "-lc") {
-                    if let Some(f) = shell_reason_at(&a[p + 1..].join(" "), ctx, depth + 1) {
+                    if let Some(f) = shell_reason_at(&a[p + 1..].join(" "), &cur, depth + 1, over_ssh) {
                         add(f);
                     }
-                } else if let Some(script) = a.first() {
-                    if let Some(f) = script_reason(script, ctx) {
+                } else if let Some(script) = first_operand(&a, &["-o", "+o", "-O", "+O"]) {
+                    if let Some(f) = script_reason(script, &cur) {
                         add(f);
                     }
                 }
                 continue;
             }
+            "git" => {
+                if let Some(head) = git_switches_to(&a, &cur) {
+                    cur.head_branch = head;
+                    continue;
+                }
+            }
             _ => {}
         }
-        if let Some(f) = program_reason(&program, &a, ctx, env_prod) {
+        if let Some(f) = program_reason(&program, &a, &cur, env_prod, over_ssh) {
             add(f);
         }
     }
@@ -433,6 +476,101 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize) -> Option<Floor> {
         Some(h) => f.row("Where", h),
         None => f,
     })
+}
+
+/// How many words a wrapper that runs the rest of the line takes (itself, its flags and their
+/// values, and `timeout`'s duration), or `None` when `w` isn't one: `timeout 60 git push`,
+/// `nice -n 10 …`, `sudo -u deploy …`, `watch -n1 '…'`, `eval '…'`.
+fn wrapper_len(w: &str, rest: &[String]) -> Option<usize> {
+    // Flags that take the next word as their value
+    let takes: &[&str] = match w {
+        "sudo" => &["-u", "-g", "-h", "-p", "-C", "-U", "-r", "-t", "-D", "--user", "--group", "--host", "--prompt", "--chdir"],
+        "doas" => &["-u", "-C"],
+        "env" => &["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+        "timeout" => &["-s", "-k", "--signal", "--kill-after"],
+        "nice" => &["-n", "--adjustment"],
+        "ionice" => &["-c", "-n", "-t", "--class", "--classdata"],
+        "stdbuf" => &["-i", "-o", "-e", "--input", "--output", "--error"],
+        "watch" => &["-n", "-q", "--interval", "--equexit"],
+        "xargs" => &["-I", "-i", "-n", "-P", "-L", "-l", "-d", "-E", "-e", "-a", "-s", "--max-args", "--max-procs", "--max-lines", "--delimiter", "--arg-file", "--max-chars", "--replace"],
+        "npx" | "pnpx" | "bunx" => &["-p", "--package", "-c", "--call"],
+        "exec" => &["-a"],
+        "time" => &["-f", "-o", "--format", "--output"],
+        "setsid" | "nohup" | "command" | "eval" => &[],
+        _ => return None,
+    };
+    let mut n = 1;
+    while let Some(x) = rest.get(n - 1) {
+        if !x.starts_with('-') || x == "-" {
+            break;
+        }
+        n += if takes.contains(&x.as_str()) { 2 } else { 1 };
+        if x == "--" {
+            break;
+        }
+    }
+    // `timeout [flags] DURATION command`
+    if w == "timeout" && rest.get(n - 1).is_some_and(|d| d.starts_with(|c: char| c.is_ascii_digit() || c == '.')) {
+        n += 1;
+    }
+    Some(n)
+}
+
+/// The first word that isn't a flag or a flag's value.
+fn first_operand<'a>(a: &[&'a str], takes: &[&str]) -> Option<&'a str> {
+    let mut i = 0;
+    while let Some(x) = a.get(i) {
+        if takes.contains(x) {
+            i += 2;
+        } else if x.starts_with('-') || x.starts_with('+') {
+            i += 1;
+        } else {
+            return Some(x);
+        }
+    }
+    None
+}
+
+/// The branch `git checkout`/`git switch` leaves checked out: `Some(Some(b))` when that's
+/// certain, `Some(None)` when it can't be told (a bare `git push` then counts as protected), and
+/// `None` when the command doesn't change branches. `git checkout x` may restore a file `x`, so it
+/// only counts as a switch to `x` when `x` is protected; otherwise the branch becomes unknown.
+fn git_switches_to(a: &[&str], ctx: &DevCtx) -> Option<Option<String>> {
+    let mut i = 0;
+    while i < a.len() && a[i].starts_with('-') {
+        i += if matches!(a[i], "-C" | "-c" | "--git-dir" | "--work-tree") { 2 } else { 1 };
+    }
+    let sub = *a.get(i)?;
+    if sub != "checkout" && sub != "switch" {
+        return None;
+    }
+    let args = &a[i + 1..];
+    let create: &[&str] = if sub == "checkout" { &["-b", "-B", "--orphan"] } else { &["-c", "-C", "--create", "--force-create", "--orphan"] };
+    let mut pos: Vec<&str> = Vec::new();
+    let mut j = 0;
+    while let Some(x) = args.get(j) {
+        if create.contains(x) {
+            return Some(args.get(j + 1).map(|b| b.to_string()));
+        }
+        match *x {
+            "--" => return Some(if sub == "checkout" { ctx.head_branch.clone() } else { None }),
+            "--detach" | "-d" if sub == "switch" || *x == "--detach" => return Some(None),
+            "-" => return Some(None),
+            _ if x.starts_with('-') => {}
+            _ => pos.push(x),
+        }
+        j += 1;
+    }
+    match (sub, pos.as_slice()) {
+        // `git checkout`, `git switch` alone change nothing
+        (_, []) => None,
+        ("switch", [b, ..]) => Some(Some(b.to_string())),
+        // `git checkout .` restores files
+        ("checkout", ["."]) => None,
+        ("checkout", [b]) if ctx.is_protected(b) => Some(Some(b.to_string())),
+        // `git checkout x` (a branch or a file) or `git checkout ref -- paths`
+        _ => Some(None),
+    }
 }
 
 /// Database clients whose arguments may hold SQL.
@@ -498,7 +636,7 @@ fn positional<'a>(args: &[&'a str]) -> Vec<&'a str> {
     args.iter().copied().filter(|a| !a.starts_with('-')).collect()
 }
 
-fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool) -> Option<Floor> {
+fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool, over_ssh: bool) -> Option<Floor> {
     let pos = positional(a);
     let sub = pos.first().copied().unwrap_or("");
     let sub2 = pos.get(1).copied().unwrap_or("");
@@ -506,6 +644,10 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool) -> Op
     // A script run by path
     if program.ends_with(".sh") || program.ends_with(".py") || program.ends_with(".rb") || program.ends_with(".js") {
         return script_reason(program, ctx);
+    }
+    // A script run by an interpreter is read by its name too: `python release.py`, `node deploy.js`
+    if let Some(f) = interpreter_script(program, a).and_then(|s| script_reason(s, ctx)) {
+        return Some(f);
     }
     match program {
         "git" => git_reason(a, ctx),
@@ -559,7 +701,7 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool) -> Op
                 _ => None,
             }
         }
-        "docker" | "docker-compose" | "podman" => docker_reason(program, a, ctx),
+        "docker" | "docker-compose" | "podman" => docker_reason(program, a, ctx, over_ssh),
         "kubectl" | "oc" => match sub {
             "apply" | "rollout" | "set" | "replace" | "patch" | "scale" | "create" => Some(ctx.deploy(format!("{program} {sub} changes the cluster"))),
             "delete" | "drain" => Some(destroy(format!("{program} {sub} removes it from the cluster"))),
@@ -614,10 +756,47 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool) -> Op
         "dropdb" | "dropuser" => Some(destroy(format!("{program} deletes a database"))),
         "redis-cli" => a.iter().any(|x| x.eq_ignore_ascii_case("flushall") || x.eq_ignore_ascii_case("flushdb")).then(|| destroy("redis-cli empties the store".into())),
         // Migrations run against production
-        _ if migrate_cmd(program, a) => (env_prod || a.iter().any(|x| is_prod_flag(x)))
+        _ if migrate_cmd(program, a) => (env_prod || a.iter().any(|x| is_prod_flag(x) || prod_env(x)) || flag_value(a, &["--settings"]).is_some_and(prod_settings))
             .then(|| Floor::new(FloorKind::DeployMigration, format!("{program} migrates a production database")).row("Migration", "Runs database migrations on production.")),
         _ => None,
     }
+}
+
+/// The script `python|node|ruby [flags] script.py …` runs (`python -m pkg` runs `pkg`); `None`
+/// for `-c`/`-e` code or another program.
+fn interpreter_script<'a>(program: &str, a: &[&'a str]) -> Option<&'a str> {
+    let (takes, code): (&[&str], &[&str]) = if program.starts_with("python") && !program.contains('-') {
+        (&["-W", "-X", "-Q"], &["-c"])
+    } else if matches!(program, "node" | "nodejs") {
+        (&["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "--conditions", "-C"], &["-e", "--eval", "-p", "--print"])
+    } else if program == "ruby" {
+        (&["-r", "-I", "-C", "-E", "--encoding"], &["-e"])
+    } else {
+        return None;
+    };
+    let mut i = 0;
+    while let Some(x) = a.get(i) {
+        if code.contains(x) {
+            return None;
+        }
+        if *x == "-m" {
+            return a.get(i + 1).copied();
+        }
+        if takes.contains(x) {
+            i += 2;
+        } else if x.starts_with('-') {
+            i += 1;
+        } else {
+            return Some(x);
+        }
+    }
+    None
+}
+
+/// A Django settings module for production: `app.settings.prod`, `settings_production`.
+fn prod_settings(v: &str) -> bool {
+    let last = v.rsplit(['.', '_', '-']).next().unwrap_or("").to_lowercase();
+    matches!(last.as_str(), "prod" | "production" | "live")
 }
 
 fn ship_name(name: &str) -> bool {
@@ -690,8 +869,25 @@ fn rm_reason(program: &str, a: &[&str]) -> Option<Floor> {
     None
 }
 
-fn docker_reason(program: &str, a: &[&str], ctx: &DevCtx) -> Option<Floor> {
-    let pos = positional(a);
+/// `over_ssh`: run on another machine through `ssh`.
+fn docker_reason(program: &str, a: &[&str], ctx: &DevCtx, over_ssh: bool) -> Option<Floor> {
+    // docker's and compose's options that take a value: `--context prod`, `-f compose.prod.yml`
+    const TAKES: &[&str] = &[
+        "-H", "--host", "--context", "-c", "--config", "-l", "--log-level", "-f", "--file", "-p", "--project-name", "--profile", "--env-file",
+        "--project-directory", "--ansi",
+    ];
+    let mut pos: Vec<&str> = Vec::new();
+    let mut k = 0;
+    while let Some(x) = a.get(k) {
+        if TAKES.contains(x) {
+            k += 2;
+            continue;
+        }
+        if !x.starts_with('-') {
+            pos.push(x);
+        }
+        k += 1;
+    }
     let compose = program == "docker-compose" || pos.first() == Some(&"compose");
     let cmd: Vec<&str> = if compose && program != "docker-compose" { pos[1..].to_vec() } else { pos.clone() };
     let sub = cmd.first().copied().unwrap_or("");
@@ -700,7 +896,12 @@ fn docker_reason(program: &str, a: &[&str], ctx: &DevCtx) -> Option<Floor> {
     let f = if compose {
         match sub {
             "down" if has(a, "-v") || has(a, "--volumes") => Some(destroy("docker compose down -v deletes the volumes".into())),
-            "up" | "restart" | "pull" | "down" | "stop" | "rm" | "create" => Some(ctx.deploy(format!("docker compose {sub} changes running containers")).row("Downtime", "While the containers restart.")),
+            // On a laptop compose is local dev: it ships only where the space deploys with Docker,
+            // on another host (`-H`, `--context`) or over ssh (plan §3). down, stop, pull, rm and
+            // create don't ship anything.
+            "up" | "restart" if ctx.deploy_hint.as_deref() == Some("docker") || remote.is_some() || over_ssh => {
+                Some(ctx.deploy(format!("docker compose {sub} changes running containers")).row("Downtime", "While the containers restart."))
+            }
             _ => None,
         }
     } else {
@@ -1058,7 +1259,8 @@ mod tests {
             ("sqlx migrate run", None),
             ("DATABASE_URL=sqlite://./dev.db sqlx migrate run", None),
             ("cargo test -j 3 db::dev_mode", None),
-            ("docker compose down", Some(DeployMigration)),
+            // F8: down only stops local containers
+            ("docker compose down", None),
         ];
         for (cmd, want) in table {
             assert_eq!(kind(cmd, &c), *want, "{cmd}");
@@ -1151,5 +1353,162 @@ mod tests {
         assert!(destructive_sql("select * from drops").is_none());
         assert!(destructive_sql("db.users.deleteMany({})").is_some());
         assert!(destructive_sql("insert into t values (1)").is_none());
+    }
+
+    /// F4 (Rigel, #313): `UPDATE … SET` with no `WHERE` rewrites every row.
+    #[test]
+    fn update_with_no_where_is_destructive() {
+        use FloorKind::*;
+        let c = ctx();
+        for (cmd, want) in [
+            ("psql -c 'UPDATE users SET admin=1'", Some(Destructive)),
+            ("sqlite3 app.db \"UPDATE t SET x=1\"", Some(Destructive)),
+            ("psql -c 'BEGIN; update only accounts set balance = 0; COMMIT'", Some(Destructive)),
+            ("mysql -e \"UPDATE users SET admin=1 WHERE id=7\"", None),
+            ("sqlite3 app.db \"update t set x='a b' where id = 1\"", None),
+            ("psql -c 'select last_update from t'", None),
+        ] {
+            assert_eq!(kind(cmd, &c), want, "{cmd}");
+        }
+        assert_eq!(destructive_sql("UPDATE users SET plan = 'free'").as_deref(), Some("UPDATE with no WHERE"));
+        // Prose in a message an MCP tool sends isn't SQL
+        assert!(destructive_sql("Please update the docs and set a date for the release").is_none());
+        assert!(destructive_sql("We'll update everything set up last week").is_none());
+    }
+
+    /// F5: a `git checkout`/`git switch` earlier in the chain changes what a bare push pushes.
+    #[test]
+    fn a_checkout_earlier_in_the_chain_moves_the_head() {
+        use FloorKind::*;
+        let c = DevCtx { head_branch: Some("feature/x".into()), ..ctx() };
+        for (cmd, want) in [
+            ("git checkout main && git merge feature/x && git push", Some(PushMain)),
+            ("git switch main; git push", Some(PushMain)),
+            ("git -C . checkout release/1.2 && git push origin", Some(PushMain)),
+            ("git checkout -b feature/deploy && git push", None),
+            ("git switch -c feature/y && git push", None),
+            ("git checkout -- src/main.rs && git push", None),
+            ("git checkout . && git push", None),
+            // A branch or a file: can't be told, so the push counts as protected
+            ("git checkout other && git push", Some(PushMain)),
+            ("git switch --detach v1.0 && git push", Some(PushMain)),
+            ("git checkout - && git push", Some(PushMain)),
+            ("git push && git checkout main", None),
+        ] {
+            assert_eq!(kind(cmd, &c), want, "{cmd}");
+        }
+    }
+
+    /// F6: wrappers that run the rest of the line, with their own flags and values.
+    #[test]
+    fn wrappers_with_flags_are_read_through() {
+        use FloorKind::*;
+        let c = DevCtx { head_branch: Some("feature/x".into()), ..ctx() };
+        for cmd in [
+            "timeout 60 git push origin main",
+            "timeout 10 git push origin main",
+            "timeout -k 5 -s TERM 1m git push origin main",
+            "nice git push origin main",
+            "nice -n 10 git push origin main",
+            "ionice -c3 git push origin main",
+            "ionice -c 2 -n 7 git push origin main",
+            "stdbuf -oL git push origin main",
+            "setsid git push origin main",
+            "watch -n1 'git push origin main'",
+            "xargs -n 1 git push origin main",
+            "eval 'git push origin main'",
+            "eval \"git push origin main\"",
+            "sudo -u deploy -E git push origin main",
+            "env -u GIT_DIR git push origin main",
+            "\\git push origin main",
+            "nohup nice -n 5 timeout 30 git push origin main",
+        ] {
+            assert_eq!(kind(cmd, &c), Some(PushMain), "{cmd}");
+        }
+        assert_eq!(kind("timeout 60 fly deploy", &c), Some(DeployMigration));
+        assert_eq!(kind("timeout 60 git push origin feature/x", &c), None);
+        assert_eq!(kind("nice -n 10 cargo -j 2 test", &c), None);
+        // A wrapper with nothing after it
+        assert_eq!(kind("sudo -u", &c), None);
+        assert_eq!(kind("timeout", &c), None);
+    }
+
+    /// F7: a script an interpreter runs is read by its name, like `./deploy.sh`.
+    #[test]
+    fn interpreter_scripts_are_read_by_name() {
+        use FloorKind::*;
+        let c = ctx();
+        for (cmd, want) in [
+            ("python release.py", Some(DeployMigration)),
+            ("python3 deploy.py --env prod", Some(DeployMigration)),
+            ("python3 -u scripts/ship_it.py", Some(DeployMigration)),
+            ("node deploy.js", Some(DeployMigration)),
+            ("node --require dotenv/config scripts/release.mjs", Some(DeployMigration)),
+            ("ruby deploy.rb", Some(DeployMigration)),
+            ("bash -x deploy.sh", Some(DeployMigration)),
+            ("sh -o errexit scripts/release.sh", Some(DeployMigration)),
+            ("python3 script.py", None),
+            ("node build.js", None),
+            ("python -c 'import sys' deploy.py", None),
+            ("node -e 'console.log(1)'", None),
+            ("python3 -m http.server 9481", None),
+            ("python3 manage.py runserver", None),
+            ("bash -x build.sh", None),
+        ] {
+            assert_eq!(kind(cmd, &c), want, "{cmd}");
+        }
+        // Not a deploy script: the migration rules still read it
+        assert_eq!(kind("python manage.py migrate --settings=app.prod", &c), Some(DeployMigration));
+    }
+
+    /// F8: compose ships only where the space deploys with Docker, on another host, or over ssh.
+    #[test]
+    fn compose_ships_only_where_the_space_deploys_with_docker() {
+        use FloorKind::*;
+        let docker = ctx();
+        let none = DevCtx { deploy_hint: None, ..ctx() };
+        let fly = DevCtx { deploy_hint: Some("fly".into()), ..ctx() };
+        for sub in ["down", "stop", "pull", "rm -f", "create", "build", "logs -f", "ps"] {
+            for c in [&docker, &none] {
+                assert_eq!(kind(&format!("docker compose {sub}"), c), None, "compose {sub} {:?}", c.deploy_hint);
+                assert_eq!(kind(&format!("docker-compose {sub}"), c), None, "docker-compose {sub}");
+            }
+        }
+        for cmd in ["docker compose up -d", "docker-compose up -d", "docker compose restart web"] {
+            assert_eq!(kind(cmd, &docker), Some(DeployMigration), "{cmd}");
+            assert_eq!(kind(cmd, &none), None, "{cmd}");
+            assert_eq!(kind(cmd, &fly), None, "{cmd}");
+        }
+        // Another host or over ssh ships whatever the hint
+        assert_eq!(kind("docker --context prod compose up -d", &none), Some(DeployMigration));
+        assert_eq!(kind("ssh prod 'docker compose up -d'", &none), Some(DeployMigration));
+        assert_eq!(kind("ssh deploy@app.example.com 'cd /srv/app && docker compose up -d'", &none), Some(DeployMigration));
+        // Deleting volumes is destructive anywhere
+        for c in [&docker, &none] {
+            assert_eq!(kind("docker compose down -v", c), Some(Destructive));
+            assert_eq!(kind("docker-compose down --volumes", c), Some(Destructive));
+        }
+    }
+
+    /// F9: `RAILS_ENV=production` and `--settings=…prod` after the command.
+    #[test]
+    fn trailing_production_env_and_settings_migrate_production() {
+        use FloorKind::*;
+        let c = ctx();
+        for (cmd, want) in [
+            ("rails db:migrate RAILS_ENV=production", Some(DeployMigration)),
+            ("bin/rails db:migrate RAILS_ENV=production", Some(DeployMigration)),
+            ("RAILS_ENV=production rails db:migrate", Some(DeployMigration)),
+            ("python manage.py migrate --settings=app.prod", Some(DeployMigration)),
+            ("python3 manage.py migrate --settings app.settings.production", Some(DeployMigration)),
+            ("python manage.py migrate --settings=config.settings_production", Some(DeployMigration)),
+            ("rails db:migrate", None),
+            ("rails db:migrate RAILS_ENV=development", None),
+            ("python manage.py migrate", None),
+            ("python manage.py migrate --settings=app.dev", None),
+            ("python manage.py migrate --settings=app.products", None),
+        ] {
+            assert_eq!(kind(cmd, &c), want, "{cmd}");
+        }
     }
 }
