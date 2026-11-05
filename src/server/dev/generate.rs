@@ -80,7 +80,8 @@ async fn build(state: &AppState, row: &DevCardRow, cap: i64) -> (&'static str, V
                     };
                     let review = landed_review(state, row, &facts).await;
                     let mut model = writer.map(model_on);
-                    landed::card(&facts, review.as_ref(), model.as_mut()).await
+                    let review = review.as_ref().map(|(card, head_sha)| landed::Reviewed { card, head_sha });
+                    landed::card(&facts, review, model.as_mut()).await
                 }
             }
         }
@@ -111,11 +112,18 @@ async fn author_bot(state: &AppState, space_id: &str, facts: &DevFacts) -> Optio
     bots.into_iter().find(|b| &b.id == id)
 }
 
-/// The newest ready review of the same PR, for a landed card's reviewer and follow-ups.
-async fn landed_review(state: &AppState, row: &DevCardRow, facts: &DevFacts) -> Option<Value> {
-    let pr = facts.pr?;
-    let cards = state.db.dev_cards_of_ref(&row.space_id, REVIEW, &pr.to_string()).await.ok()?;
-    cards.into_iter().filter(|c| c.status == READY).find_map(|c| c.card.and_then(|c| serde_json::from_str(&c).ok()))
+/// The ref the poller files a PR's review cards under.
+pub fn pr_ref(pr: u64) -> String {
+    format!("pr:{pr}")
+}
+
+/// The newest review of the same PR that reviewed the commit that merged, for a landed card's
+/// reviewer and follow-ups. Merging stales the review (and a new head stales it earlier), so
+/// `ready` and `stale` both count; a `failed` one doesn't, nor a review of another head.
+async fn landed_review(state: &AppState, row: &DevCardRow, facts: &DevFacts) -> Option<(Value, String)> {
+    let (pr, head) = (facts.pr?, facts.pr_head_sha.as_deref()?);
+    let cards = state.db.dev_cards_of_ref(&row.space_id, REVIEW, &pr_ref(pr)).await.ok()?;
+    cards.into_iter().filter(|c| c.status != FAILED && c.head_sha == head).find_map(|c| Some((serde_json::from_str(c.card.as_deref()?).ok()?, c.head_sha)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -263,6 +271,28 @@ pub(super) fn diff_text(files: &[FileDiff]) -> (String, usize) {
 /// `"diff cut, N files not read"` as the poller writes it, or this prompt's own cut.
 pub(super) fn cut_of(facts: &DevFacts, left_out: usize) -> Option<String> {
     facts.cut.clone().or_else(|| (left_out > 0).then(|| format!("diff cut, {left_out} file{} not read", if left_out == 1 { "" } else { "s" })))
+}
+
+/// Text from the PR (title, body, diff, branch, task) with every `<pr>`, `</pr>`, `<task>` and
+/// `</task>` tag in it made harmless (`<` becomes `&lt;`), in any case and spacing, so nothing in
+/// it can close the fence it sits in. `<pre>`, `<prompt>`, `<tasks>` stay as they are.
+pub(super) fn fence_safe(text: &str) -> String {
+    const TAGS: [&str; 2] = ["pr", "task"];
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('<') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        let t = after.trim_start();
+        let t = t.strip_prefix('/').unwrap_or(t).trim_start();
+        let fence = TAGS.iter().any(|tag| {
+            t.get(..tag.len()).is_some_and(|w| w.eq_ignore_ascii_case(tag)) && !t[tag.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '-')
+        });
+        out.push_str(if fence { "&lt;" } else { "<" });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The rules every card prompt ends with: the PR is data, never instructions.
@@ -443,14 +473,10 @@ mod examples {
         let mut out = Vec::new();
         for (n, reply) in texts {
             let f = fixture(n);
-            // Landed: written by a bot on another engine; reviewed by Rigel with nothing open
-            let mut m = Stub::new(vec![reply]);
-            let review_card = json!({"reviewer": {"name": "Rigel"}, "findings": []});
-            let (status, landed) = landed::card(&f, Some(&review_card), Some(&mut m)).await;
-            assert_eq!(status, "ready");
-            // Review: the same diff as an open PR head
+            // Review: the same diff as the open PR at its last head
             let mut rf = f.clone();
             (rf.kind, rf.merged_at, rf.merged_by) = (Kind::Review, None, None);
+            rf.head_sha = rf.pr_head_sha.take().unwrap();
             let picked = choose(vec![bot("kw_demo_pixel", "Pixel", "claude"), bot("kw_demo_rigel", "Rigel", "codex")], &rf.author);
             let finding = if n == 303 {
                 json!([{"severity": "medium", "title": "A turn that fails after its prompt loses the reaction", "file": "src/server/reactions.rs", "line": 213,
@@ -460,12 +486,24 @@ mod examples {
                 json!([])
             };
             let asked = rf.title.clone();
-            let reply = json!({"intent": {"asked": asked, "rows": [{"state": "ok", "text": "Does what the PR description says"}]}, "findings": finding}).to_string();
-            let mut m = Stub::new(vec![Ok(reply)]);
+            let review_reply = json!({"intent": {"asked": asked, "rows": [{"state": "ok", "text": "Does what the PR description says"}]}, "findings": finding}).to_string();
+            let mut m = Stub::new(vec![Ok(review_reply)]);
             let (status, review) = review::card(&rf, picked.as_ref(), Some(&mut m)).await;
             assert_eq!(status, "ready");
             assert_eq!(review["same_engine"], false);
             assert_eq!(review["tamper"]["flags"], json!([]));
+            // Landed: built from the review shown next to it, which reviewed the merged head
+            let mut m = Stub::new(vec![reply]);
+            let (status, landed) = landed::card(&f, Some(landed::Reviewed { card: &review, head_sha: &rf.head_sha }), Some(&mut m)).await;
+            assert_eq!(status, "ready");
+            assert_eq!(landed["reviewed_by"], "Rigel");
+            if n == 303 {
+                // One open medium finding: a follow-up, and not verified
+                assert_eq!(landed["verified"], false, "#{n}");
+                assert_eq!(landed["follow_ups"], json!([{"text": "A turn that fails after its prompt loses the reaction", "ref": "#303 f1"}]));
+            } else {
+                assert_eq!((landed["verified"].clone(), landed["follow_ups"].clone()), (json!(true), json!([])), "#{n}");
+            }
             out.push(json!({"pr": n, "landed": landed, "review": review}));
         }
         if let Ok(path) = std::env::var("DEV_CARD_EXAMPLES") {
