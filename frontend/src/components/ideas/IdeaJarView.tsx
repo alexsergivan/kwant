@@ -592,14 +592,14 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
   if (phoneIdea) {
     return (
       <AvatarsContext.Provider value={avatars ?? {}}>
-        <div ref={root} className="flex flex-col min-h-full bg-[#120e26] text-[#ecebfa]" data-idea-jar data-take-screen={phoneIdea.id}>
+        <div ref={root} className="flex flex-col flex-1 min-h-0 min-w-0 w-full bg-[#120e26] text-[#ecebfa]" data-idea-jar data-take-screen={phoneIdea.id}>
           <div className="flex items-center gap-2 px-2 py-1.5 border-b border-white/[0.08]">
             <button type="button" onClick={() => setPhoneTake(null)} className={`${btn.quiet} !px-2`} data-action="back" autoFocus>
               <ArrowLeft size={16} aria-hidden="true" />
               Idea jar
             </button>
           </div>
-          <div className="p-3 pb-0 flex-1">{takeCard(phoneIdea, true)}</div>
+          <div className="p-3 pb-0 flex-1 min-h-0 overflow-y-auto" data-jar-scroll>{takeCard(phoneIdea, true)}</div>
           <div aria-live="polite" className="sr-only" data-live>
             {live}
           </div>
@@ -610,6 +610,8 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
 
   return (
     <AvatarsContext.Provider value={avatars ?? {}}>
+      {/* Its own scroller: App mounts it in a flex-1 min-h-0 pane that doesn't scroll. */}
+      <div className="flex-1 min-h-0 min-w-0 w-full overflow-y-auto" data-jar-scroll>
       <div ref={root} className="flex flex-col gap-5 min-h-full w-full max-w-[920px] mx-auto px-3 sm:px-6 py-4 sm:py-6 text-[#ecebfa] min-w-0" data-idea-jar>
         <header className="flex flex-wrap items-center gap-2">
           <h2 className="flex items-center gap-2 text-[17px] font-semibold text-[#f7f6ff] m-0">
@@ -737,6 +739,7 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
           {live}
         </div>
         {toast && <UndoToast text={toast.text} onUndo={undoToast} onClose={closeToast} />}
+      </div>
       </div>
     </AvatarsContext.Provider>
   );

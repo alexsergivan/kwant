@@ -531,6 +531,27 @@ test('phone: ready takes are rows that open their own screen with a back button 
   assert.ok(host.querySelector('[data-sections]'));
 });
 
+test('the view scrolls itself inside a flex-1 min-h-0 pane (list and phone take screen)', async () => {
+  const scroller = (host) => {
+    const el = host.firstElementChild;
+    assert.ok(el, 'mounted');
+    const sc = el.matches('[data-jar-scroll]') ? el : el.querySelector('[data-jar-scroll]');
+    assert.ok(sc, 'has a scroller');
+    for (const c of ['overflow-y-auto', 'min-h-0', 'flex-1']) assert.ok(sc.className.includes(c), `scroller has ${c}`);
+    return sc;
+  };
+  reset();
+  const host = await jar();
+  assert.ok(scroller(host).querySelector('[data-sections]'));
+  phoneQuery = true;
+  reset();
+  const phone = await jar();
+  await click(phone.querySelector(`[data-take-row="${ID.ready}"] [data-action="open"]`));
+  const screen = phone.querySelector(`[data-take-screen="${ID.ready}"]`);
+  assert.ok(screen.className.includes('min-h-0') && screen.className.includes('flex-1'));
+  assert.ok(screen.querySelector('[data-jar-scroll] [data-action-bar]'), 'sticky Do it bar sits inside the scroller');
+});
+
 // ---------------------------------------------------------------------------------------------------
 // Reduced motion
 
