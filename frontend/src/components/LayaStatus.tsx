@@ -6,11 +6,24 @@ export const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(
 
 type LayaState = 'unknown' | 'external' | 'installing' | 'starting' | 'online' | 'offline' | 'failed';
 
+interface VegaStatus {
+  state: 'off' | 'waiting' | 'installing' | 'starting' | 'active' | 'fallback';
+  detail: string;
+  /** Size of the downloaded vega model, once it ran. */
+  model_mb?: number | null;
+  /** Where that model is cached. */
+  model_cache?: string | null;
+  crashes?: number;
+}
+
 interface LayaStatus {
   state: LayaState;
   detail: string;
   url: string;
   managed: boolean;
+  /** The engine answering routing questions now (absent on older servers). */
+  engine?: 'standard' | 'vega';
+  vega?: VegaStatus;
 }
 
 export const useLayaStatus = (): LayaStatus | null => {
@@ -77,6 +90,12 @@ export const LayaStatusRow: React.FC = () => {
             {laya.url}
             {laya.managed ? ' (started by the app)' : ''}
             {laya.detail ? ` · ${laya.detail}` : ''}
+          </p>
+        )}
+        {laya?.vega?.model_mb != null && (
+          <p className="mt-0.5 text-[11px] text-zinc-500 break-all">
+            vega model: {(laya.vega.model_mb / 1024).toFixed(1)} GB
+            {laya.vega.model_cache ? ` in ${laya.vega.model_cache}` : ''}
           </p>
         )}
       </div>
