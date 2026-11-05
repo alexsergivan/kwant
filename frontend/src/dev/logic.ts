@@ -412,3 +412,30 @@ export const postedLine = (at: string | null): string => {
   const t = clock(at);
   return t ? `Posted ${t}` : 'Posted';
 };
+// Style v2 parts (Mira, style-v2.md §2): pure helpers behind <Led>, <DiffStat> and <Sha>
+
+export type LedState = 'ok' | 'run' | 'warn' | 'bad' | 'off';
+
+/**
+ * The 32×4 split bar: px for the add part and the del part (1 px gap between them when both show).
+ * Add share = round(31·a/(a+d)), at least 3 px when a > 0 and at least 3 px left for del when d > 0.
+ */
+export function diffBar(add: number, del: number): { add: number; del: number } {
+  const a = Math.max(0, add);
+  const d = Math.max(0, del);
+  if (a + d === 0) return { add: 0, del: 0 };
+  if (d === 0) return { add: 32, del: 0 };
+  if (a === 0) return { add: 0, del: 32 };
+  const ap = Math.min(28, Math.max(3, Math.round((31 * a) / (a + d))));
+  return { add: ap, del: 31 - ap };
+}
+
+/** "157 lines added, 15 removed" (one line / no lines read right). */
+export function diffLabel(add: number, del: number): string {
+  const l = (n: number) => (n === 1 ? 'line' : 'lines');
+  return `${add} ${l(add)} added, ${del} removed`;
+}
+
+/** The first 7 characters of a commit sha. */
+export const shortSha = (sha: string): string => sha.trim().slice(0, 7);
+

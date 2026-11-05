@@ -2,7 +2,8 @@ import React from 'react';
 import { ExternalLink } from 'lucide-react';
 import { ModernAvatar } from '../ModernAvatar';
 import type { DevPerson, RiskLevel } from '../../dev/types';
-import { RISK_WORD } from '../../dev/logic';
+import { RISK_WORD, diffBar, diffLabel, shortSha } from '../../dev/logic';
+import type { LedState } from '../../dev/logic';
 
 /** "Claude Opus" from a label, or a model id like claude-opus-5-5, else the engine's name. */
 export function modelLabel(engine: string | null, model: string | null): string | null {
@@ -79,3 +80,36 @@ export const CardFallback: React.FC<{ raw: unknown }> = ({ raw }) => {
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------------------------------
+// Style v2 parts (style-v2.md §2). Classes live in styles/modern.css (the shared .dv-* block).
+
+/** An 8 px status light. Decoration: it always sits next to words that say the same thing. `run` pings
+ *  only while something is running; reduced motion keeps a static ring. */
+export const Led: React.FC<{ s: LedState; className?: string }> = ({ s, className = '' }) => (
+  <span aria-hidden="true" data-s={s} className={className ? `dv-led ${className}` : 'dv-led'} />
+);
+
+/** `+157 −15` in mono with the 32×4 split bar; read as "157 lines added, 15 removed". */
+export const DiffStat: React.FC<{ add: number; del: number; className?: string }> = ({ add, del, className = '' }) => {
+  const bar = diffBar(add, del);
+  return (
+    <span role="img" aria-label={diffLabel(add, del)} data-diffstat={`${add},${del}`} className={className ? `dv-stat ${className}` : 'dv-stat'}>
+      <span aria-hidden="true">
+        <span className="a">+{add}</span> <span className="d">−{del}</span>
+      </span>
+      <span aria-hidden="true" className="dv-bar">
+        {bar.add > 0 && <i className="a" style={{ width: bar.add }} />}
+        {bar.del > 0 && <i className="d" style={{ width: bar.del }} />}
+      </span>
+    </span>
+  );
+};
+
+/** A 7-character commit sha chip in mono. */
+export const Sha: React.FC<{ sha: string; className?: string }> = ({ sha, className = '' }) => (
+  <span data-sha className={className ? `dv-sha ${className}` : 'dv-sha'}>
+    <span className="sr-only">Commit </span>
+    {shortSha(sha)}
+  </span>
+);
