@@ -353,7 +353,18 @@ test('Do it error: rose alert, nothing created, the button comes back', async ()
 // ---------------------------------------------------------------------------------------------------
 // Later, Restore, Edit, Delete
 
-test('Later is optimistic with "Moved to Later · Undo"; Undo calls restore', async () => {
+/** The toast's live text is just the message, and "Undo" is said once: by the button (S8). */
+const assertOneUndo = (toast, message) => {
+  assert.ok(toast, 'the Undo toast shows');
+  const live = toast.querySelector('[role="status"]');
+  assert.equal(text(live.querySelector('span')), message);
+  assert.equal((live.textContent.match(/Undo/g) || []).length, 1, 'Undo is announced once');
+  const undo = toast.querySelector('[data-undo]');
+  assert.equal(text(undo), 'Undo', 'sighted users still see the one Undo button');
+  assert.equal(undo.tagName, 'BUTTON');
+};
+
+test('Later is optimistic with "Moved to Later" and one Undo; Undo calls restore', async () => {
   reset();
   const readyIdea = FIX.ideas.find((i) => i.status === 'ready');
   routes[`POST /api/ideas/${ID.ready}/later`] = [200, { idea: { ...readyIdea, status: 'later' } }];
@@ -363,7 +374,7 @@ test('Later is optimistic with "Moved to Later · Undo"; Undo calls restore', as
   assert.equal(sectionOfCard(host, ID.ready), null, 'Later is folded, so the card is out of view');
   assert.ok(!host.querySelector('[data-section="ready"]'));
   const toast = host.querySelector('[data-undo-toast]');
-  assert.match(text(toast), /^Moved to Later · Undo/);
+  assertOneUndo(toast, 'Moved to Later');
   assert.ok(document.activeElement && document.activeElement !== document.body, 'focus never drops to body');
   await click(toast.querySelector('[data-undo]'));
   assert.ok(calls.some((c) => c.method === 'POST' && c.path.endsWith('/restore')));
@@ -413,7 +424,7 @@ test('Edit opens in place; Save and put back PATCHes and the idea is back in the
   assert.equal(sectionOfCard(host, ID.ready), 'jar');
 });
 
-test('Delete hides it with "Idea deleted · Undo" and only calls DELETE when the toast ends; Undo keeps it', async () => {
+test('Delete hides it with "Idea deleted" and one Undo, and only calls DELETE when the toast ends; Undo keeps it', async () => {
   reset();
   routes[`DELETE /api/ideas/${ID.fresh}`] = () => new Response(null, { status: 204 });
   const host = await jar();
@@ -421,7 +432,7 @@ test('Delete hides it with "Idea deleted · Undo" and only calls DELETE when the
   await click(card(host, ID.fresh).querySelector('[data-menu-item="delete"]'));
   assert.equal(card(host, ID.fresh), null);
   let toast = host.querySelector('[data-undo-toast]');
-  assert.match(text(toast), /^Idea deleted · Undo/);
+  assertOneUndo(toast, 'Idea deleted');
   assert.ok(!calls.some((c) => c.method === 'DELETE'), 'not yet');
   await click(toast.querySelector('[data-undo]'));
   assert.ok(card(host, ID.fresh), 'Undo brings it back');

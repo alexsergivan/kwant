@@ -326,7 +326,7 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     leaving(idea.id);
     setN(idea.id, null);
     replace({ ...idea, status: 'later', updated_at: new Date().toISOString() });
-    setToast({ kind: 'later', id: idea.id, text: 'Moved to Later · Undo' });
+    setToast({ kind: 'later', id: idea.id, text: 'Moved to Later' });
     try {
       const r = await ideasApi.later(idea.id);
       replace(r);
@@ -386,7 +386,7 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     leaving(idea.id);
     if (toastRef.current?.kind === 'delete') commitDelete(toastRef.current.id);
     setHidden((h) => new Set(h).add(idea.id));
-    setToast({ kind: 'delete', id: idea.id, text: 'Idea deleted · Undo' });
+    setToast({ kind: 'delete', id: idea.id, text: 'Idea deleted' });
     if (phoneTake === idea.id) setPhoneTake(null);
   };
 
