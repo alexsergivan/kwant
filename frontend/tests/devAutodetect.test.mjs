@@ -214,6 +214,35 @@ test('DOM: each status renders one status line under the header; an older server
   root.unmount();
 });
 
+test('PX-2 (style-v2 §3/§4): header chip and subtitle, LED per status, Checked in the status line, Refresh 44 px on phone', async () => {
+  const want = { watching: 'ok', not_connected: 'warn', other_host: 'off', no_repo: 'off' };
+  for (const [st, extra] of [
+    ['watching', { repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] }],
+    ['not_connected', { repo: 'demo-org/demo-web', sources: [SOURCES[0]] }],
+    ['other_host', { repo: 'https://gitlab.example.test/demo/app', sources: [{ team: 'Web', repo: 'https://gitlab.example.test/demo/app', host: 'gitlab.example.test', from: 'folder' }] }],
+    ['no_repo', { sources: [] }],
+  ]) {
+    const { root } = await desk({ status: st, ...extra }, { onOpenLooseEnds() {} });
+    const line = document.querySelector('[data-dv-status]');
+    assert.equal(line.querySelector('[data-dv-led]').dataset.s, want[st], `${st}: LED`);
+    assert.match(line.querySelector('[data-dev-checked]').textContent, /^Checked \d\d:\d\d$/, `${st}: Checked lives in the status line`);
+    assert.equal(document.querySelectorAll('[data-dev-checked]').length, 1, `${st}: not in the header too`);
+    root.unmount();
+  }
+  const { root } = await desk({ status: 'watching', repo: 'demo-org/demo-web', branch: 'trunk', sources: [SOURCES[0]] });
+  const glyph = document.querySelector('.kw-dv-glyph');
+  assert.equal(glyph.textContent.trim(), '</>');
+  const sub = [...document.querySelectorAll('[data-dev-desk] p')].find((p) => p.textContent === 'What landed and what needs a look');
+  assert.ok(sub && sub.classList.contains('hidden') && sub.classList.contains('sm:block'), 'subtitle hides under 640');
+  const refresh = document.querySelector('[data-dev-refresh]');
+  assert.equal(refresh.getAttribute('aria-label'), 'Refresh');
+  assert.ok(refresh.classList.contains('max-sm:w-11') && refresh.classList.contains('max-sm:h-11'), 'icon-only 44x44 on phone');
+  const text = document.querySelector('[data-dv-status-text]');
+  assert.equal(text.querySelector('b').textContent, 'demo-org/demo-web', 'repo reads as a bold name');
+  assert.equal(text.querySelector('code.dv-code').textContent, 'trunk', 'branch is code');
+  root.unmount();
+});
+
 test('DOM: Connect opens Loose ends; it hides when the app gives no way there', async () => {
   let opened = 0;
   const { root } = await desk({ status: 'not_connected', repo: 'demo-org/demo-web', sources: [SOURCES[0]] }, { onOpenLooseEnds: () => opened++ });
@@ -480,6 +509,28 @@ test('F4 DOM: the first-run block shows on the first visit only, and Got it hide
   const two = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
   assert.equal(document.querySelector('[data-dev-intro]'), null, 'second visit: gone');
   two.root.unmount();
+});
+
+test('PX-3 (style-v2 §9): later visits say "Nothing new on main" and "No open changes to review"; the first run reads $ kwant dev --on', async () => {
+  reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]], polled_at: '2026-11-05T09:00:00Z' });
+  localStorage.setItem('kwnt.dev.intro.spc_demo', '1');
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
+  const later = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+  assert.equal(document.querySelector('[data-dev-intro]'), null);
+  const e = document.querySelector('[data-dev-empty-term]');
+  assert.ok(e.textContent.includes('$ git log main --since="your last look"'));
+  assert.ok(e.textContent.includes('(nothing new)'));
+  assert.ok(e.textContent.includes('Nothing new on main'));
+  assert.doesNotMatch(document.body.textContent, /No merges on main yet|Nothing has landed yet/);
+  await click(document.querySelector('[data-dev-tab="reviews"]'));
+  const r = document.querySelector('[data-dev-empty-term]');
+  assert.ok(r.textContent.includes('$ kwant reviews --open'));
+  assert.ok(r.textContent.includes('0 open changes'));
+  assert.ok(r.textContent.includes('No open changes to review'));
+  later.root.unmount();
+  const first = await desk({ status: 'no_repo', sources: [] });
+  assert.match(document.querySelector('[data-dev-intro]').textContent, /\$ kwant dev --on/);
+  first.root.unmount();
 });
 
 test('F4 DOM: first-visit empty states speak git and never say "Nothing has landed yet"; 9+ caps the badge', async () => {

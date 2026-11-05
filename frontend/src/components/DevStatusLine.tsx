@@ -4,17 +4,17 @@
 // blocks anything: the production floor and the command guards are on in every status.
 
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { Check, FolderGit2, FolderSearch, Hourglass, Link2, Loader2, LucideIcon, PlugZap, Radar } from 'lucide-react';
+import { Check, ChevronDown, FolderGit2, Link2, Loader2 } from 'lucide-react';
 import { DevModeState, DevSource, StatusLine, deskIntent, devApi, devStore, statusLine, typedRepo, watchedSource } from '../devMode';
 
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 
-const ICON: Record<StatusLine['status'], LucideIcon> = {
-  watching: Radar,
-  not_connected: PlugZap,
-  other_host: Hourglass,
-  no_repo: FolderSearch,
-};
+/** style-v2 §4: the LED mirrors the status. ok only while a remote repo is really watched. */
+export function statusLed(line: StatusLine, state: DevModeState): 'ok' | 'warn' | 'off' {
+  if (line.status === 'not_connected') return 'warn';
+  if (line.status === 'watching') return watchedSource(state)?.from === 'local' ? 'off' : 'ok';
+  return 'off';
+}
 
 export const sourceWhere = (s: DevSource): string => (s.from === 'repo' ? `${s.team}’s repo link` : s.from === 'local' ? `${s.team}’s folder, no remote` : `${s.team}’s folder`);
 
@@ -23,17 +23,23 @@ export interface DevStatusLineProps {
   state: DevModeState | null;
   /** Opens Loose ends (Connect GitHub). Connect hides without it. */
   onConnect?: () => void;
+  /** "Checked 19:58" at the right (style-v2 §4); the LED pings once each time it changes. */
+  checked?: string | null;
+  checkedAt?: number | null;
   /** Test hook. */
   save?: typeof devApi.put;
 }
 
-export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, onConnect, save = devApi.put }) => {
+export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, onConnect, checked = null, checkedAt = null, save = devApi.put }) => {
   const line = statusLine(state);
   // The toast's "Type a repo" lands here with the list open and its input focused.
   const [open, setOpen] = useState<false | 'list' | 'type'>(() => (deskIntent.take(spaceId) ? 'type' : false));
   const switchBtn = useRef<HTMLButtonElement>(null);
+  // One 200 ms ping when a check lands, not on first paint.
+  const firstCheck = useRef(checkedAt);
+  const ping = checkedAt != null && checkedAt !== firstCheck.current;
   if (!line || !state) return null;
-  const Icon = ICON[line.status];
+  const led = statusLed(line, state);
   const action =
     line.action === 'switch' || line.action === 'type' ? (
       <button
@@ -43,34 +49,46 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, on
         aria-expanded={!!open}
         aria-haspopup="true"
         data-dv-status-action={line.action}
-        className={`kw-dv-status-btn ${line.action === 'type' ? 'kw-dv-status-btn-primary' : ''} ${focusRing}`}
+        className={`act kw-dv-status-act ${focusRing}`}
       >
         {line.action === 'type' ? 'Type a repo' : 'Switch'}
+        {line.action === 'switch' && <ChevronDown size={12} aria-hidden="true" className={open ? 'rotate-180' : ''} />}
       </button>
     ) : line.action === 'connect' && onConnect ? (
-      <button type="button" onClick={onConnect} data-dv-status-action="connect" className={`kw-dv-status-btn kw-dv-status-btn-primary ${focusRing}`}>
+      <button type="button" onClick={onConnect} data-dv-status-action="connect" className={`act kw-dv-status-act ${focusRing}`}>
         Connect GitHub
       </button>
     ) : null;
   return (
     <div className="relative" data-dv-status-wrap>
-      <div role="status" className="kw-dv-status" data-dv-status={line.status}>
-        <span className="kw-dv-status-icon" aria-hidden="true">
-          <Icon size={13} aria-hidden="true" />
-          {line.status === 'watching' && <span className="kw-dv-status-ping" />}
-        </span>
-        <p className="min-w-0 flex-1 text-meta text-zinc-300 leading-snug" data-dv-status-text>
-          {line.parts.map((p, i) =>
-            p.mono ? (
-              <code key={i} className="font-mono text-[12px] text-zinc-100 break-all">
-                {p.text}
-              </code>
-            ) : (
-              <React.Fragment key={i}>{p.text}</React.Fragment>
-            ),
-          )}
+      <div role="status" className="dv-statusline kw-dv-statusline" data-dv-status={line.status}>
+        <p className="txt" data-dv-status-text>
+          <span key={checkedAt ?? 0} className="dv-led" data-s={led} data-ping={ping || undefined} data-dv-led={led} aria-hidden="true" />
+          <span>
+            {line.parts.map((p, i) =>
+              p.mono ? (
+                // The branch follows " on "; the repo and host read as names.
+                /\bon $/.test(line.parts[i - 1]?.text ?? '') ? (
+                  <code key={i} className="dv-code">
+                    {p.text}
+                  </code>
+                ) : (
+                  <b key={i} className="font-mono text-[12px] break-all">
+                    {p.text}
+                  </b>
+                )
+              ) : (
+                <React.Fragment key={i}>{p.text}</React.Fragment>
+              ),
+            )}
+          </span>
         </p>
         {action}
+        {checked && (
+          <span className="checked" data-dev-checked>
+            Checked {checked}
+          </span>
+        )}
       </div>
       {open && (
         <SourcePicker
@@ -179,7 +197,7 @@ const SourcePicker: React.FC<{ spaceId: string; state: DevModeState; save: typeo
               {busy === s.repo ? (
                 <Loader2 size={13} className="shrink-0 animate-spin motion-reduce:animate-none text-zinc-300" aria-hidden="true" />
               ) : on ? (
-                <Check size={14} className="shrink-0 text-ok" aria-hidden="true" />
+                <Check size={14} className="shrink-0 text-sky-300" aria-hidden="true" />
               ) : null}
             </button>
           );

@@ -4,48 +4,16 @@
    next update and no repo violet/zinc (nothing to do). Text is zinc-300 or brighter on the raised
    surface, so every line passes AA. */
 
-.kw-dv-status {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 44px;
-  padding: 7px 8px 7px 10px;
-  border-radius: 14px;
-  border: 1px solid rgb(255 255 255 / 0.1);
-  background:
-    linear-gradient(90deg, rgb(var(--kw-dv-tint) / 0.1), transparent 55%),
-    rgb(255 255 255 / 0.025);
-  box-shadow: inset 2px 0 0 rgb(var(--kw-dv-tint) / 0.75);
-  --kw-dv-tint: 157 143 255;
+/* style-v2 §4: the row itself is .dv-statusline (tokens). Phone: px-3, 44 px action. The LED's ping is
+   .dv-led[data-ping] (one 200 ms ring when a check lands), static under reduced motion. */
+@media (max-width: 639px) {
+  .kw-dv-statusline { padding-left: 12px; padding-right: 12px; }
+  .kw-dv-statusline .act { min-height: 44px; padding: 0 12px; }
+  .kw-dv-statusline .checked { margin-left: 0; }
 }
-.kw-dv-status[data-dv-status='watching'] { --kw-dv-tint: 45 212 191; }
-.kw-dv-status[data-dv-status='not_connected'] { --kw-dv-tint: 251 191 36; }
-.kw-dv-status[data-dv-status='no_repo'] { --kw-dv-tint: 161 161 170; }
-
-.kw-dv-status-icon {
-  position: relative;
-  flex: none;
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 9px;
-  color: rgb(var(--kw-dv-tint));
-  background: rgb(var(--kw-dv-tint) / 0.12);
-  box-shadow: inset 0 0 0 1px rgb(var(--kw-dv-tint) / 0.25);
-}
-.kw-dv-status-ping {
-  position: absolute;
-  inset: 0;
-  border-radius: 9px;
-  box-shadow: 0 0 0 1px rgb(var(--kw-dv-tint) / 0.55);
-  animation: kw-dv-ping 2.4s var(--kw-ease) 3;
-  opacity: 0;
-}
-@keyframes kw-dv-ping {
-  0% { transform: scale(1); opacity: 0.9; }
-  70%, 100% { transform: scale(1.55); opacity: 0; }
-}
+.kw-dv-statusline .act:hover { background: rgb(157 143 255 / 0.1); }
+.kw-dv-statusline .act[aria-expanded='true'] { background: rgb(157 143 255 / 0.14); }
+.kw-dv-statusline .act svg { transition: transform 140ms var(--kw-ease); }
 
 .kw-dv-status-btn {
   flex: none;
@@ -68,10 +36,10 @@
 
 .kw-dv-picker {
   position: absolute;
-  right: 0;
+  right: 16px;
   top: calc(100% + 6px);
   z-index: 30;
-  width: min(360px, calc(100vw - 32px));
+  width: min(340px, calc(100vw - 32px));
   padding: 10px 8px 6px;
   border-radius: 16px;
   border: 1px solid rgb(255 255 255 / 0.14);
@@ -95,7 +63,8 @@
   transition: background-color 140ms var(--kw-ease), border-color 140ms var(--kw-ease);
 }
 .kw-dv-pick:hover:not(:disabled) { background: rgb(255 255 255 / 0.05); }
-.kw-dv-pick[aria-checked='true'] { background: rgb(45 212 191 / 0.07); border-color: rgb(45 212 191 / 0.25); }
+.kw-dv-pick[aria-checked='true'] { background: linear-gradient(135deg, rgb(122 98 240 / 0.22) 0%, rgb(91 71 214 / 0.10) 100%); border-color: rgb(184 173 255 / 0.25); }
+@media (max-width: 639px) { .kw-dv-picker { left: 12px; right: 12px; width: auto; } }
 .kw-dv-pick-icon {
   flex: none;
   width: 26px;
@@ -198,10 +167,64 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .kw-dv-status-ping, .kw-dv-intro-caret, .kw-dv-picker, .kw-dv-ontoast, .kw-dv-row-badge-pop { animation: none; }
+  .kw-dv-intro-caret, .kw-dv-picker, .kw-dv-ontoast, .kw-dv-row-badge-pop { animation: none; }
   /* Reduced motion: the highlight shows for 2.8 s with no fades. */
   .kw-dv-row-fresh { animation: kw-dv-row-fresh-rm 2800ms steps(1, end) 1; }
   @keyframes kw-dv-row-fresh-rm { 0% { background-color: var(--kw-accent-soft, rgb(157 143 255 / 0.14)); } 100% { background-color: transparent; } }
-  .kw-dv-status-ping { opacity: 0; }
   .kw-dv-status-btn, .kw-dv-pick { transition: none; }
 }
+
+/* style-v2 §3: the desk header's `</>` chip (mono 12, accent on accent-soft, radius 6). */
+.kw-dv-glyph {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font: 600 12px/1 'JetBrains Mono', monospace;
+  color: var(--dv-accent);
+  background: linear-gradient(135deg, rgb(122 98 240 / 0.22) 0%, rgb(91 71 214 / 0.10) 100%);
+}
+
+/* style-v2 §3 tabs: a hairline under the row; the active tab is zinc-50 with a 2 px sky-400 underline
+   inset 8 px. The count is a mono 10.5 chip on surface-overlay, radius 5. Phone: 44 px tall. */
+.kw-dv-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--kw-hairline); }
+.kw-dv-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 8px 8px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dv-t4);
+  transition: color 140ms var(--kw-ease);
+}
+.kw-dv-tab:hover { color: var(--dv-t2); }
+.kw-dv-tab[aria-selected='true'] { color: var(--dv-t1); }
+.kw-dv-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: #9d8fff;
+}
+.kw-dv-tab-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  font: 600 10.5px/1 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--dv-t2);
+  background: var(--kw-surface-overlay);
+}
+@media (max-width: 639px) { .kw-dv-tab { min-height: 44px; } }

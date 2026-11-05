@@ -3,8 +3,8 @@
 // SSE (App re-sends it as DEV_CARD_EVENT) and mounts Iris's cards (#314) through DevDeskSlots.
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
-import { ChevronLeft, Code, Loader2, RefreshCw } from 'lucide-react';
-import { DevModeState, devApi, devStore, deskStatus, firstRun } from '../devMode';
+import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
+import { DevModeState, devApi, devStore, deskStatus, firstRun, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
@@ -178,7 +178,7 @@ export interface DevDeskViewProps {
   onOpenLooseEnds?: () => void;
 }
 
-export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds }) => {
+export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds }) => {
   const desk = useDesk(spaceId, true);
   const dev = useDevMode(spaceId);
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -299,6 +299,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
   const open = openReviews(desk.reviews);
   const first = !landed && !desk.reviews;
   const polling = firstPolling(dev, landedCards.length);
+  const statusShown = statusLine(dev) !== null;
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: 'landed', label: 'What landed', count: unseen },
@@ -321,16 +322,20 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
             <ChevronLeft size={18} />
           </button>
         )}
+        <span className="kw-dv-glyph" aria-hidden="true">
+          &lt;/&gt;
+        </span>
         <div className="min-w-0 flex-1">
-          <h2 className="text-sm font-semibold text-zinc-100 truncate">Dev desk</h2>
-          <p className="text-[11px] text-zinc-400 truncate mt-0.5">What landed in {spaceName}, and the open pull requests</p>
+          <h2 className="text-[17px] leading-6 font-semibold text-zinc-50 truncate">Dev desk</h2>
+          <p className="hidden sm:block text-meta text-zinc-400 truncate">What landed and what needs a look</p>
         </div>
         {dev?.repo && !dev.status && (
           <span className="hidden sm:inline-flex shrink-0 font-mono text-[11px] text-zinc-300 px-2 py-0.5 rounded-md bg-white/[0.04] border border-zinc-700/60" data-dev-repo-chip>
             {dev.repo} · {dev.branch || 'main'}
           </span>
         )}
-        {desk.checkedAt != null && (
+        {/* An older server has no status line, so "Checked" stays up here for it. */}
+        {desk.checkedAt != null && !statusShown && (
           <span className="shrink-0 text-[11px] text-zinc-500 tabular-nums" data-dev-checked>
             Checked {checkedLabel(desk.checkedAt)}
           </span>
@@ -340,20 +345,27 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
           onClick={() => void deskStore.load(spaceId)}
           disabled={desk.loading}
           aria-label="Refresh"
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-zinc-300 border border-zinc-700/60 hover:bg-zinc-800 disabled:opacity-60 ${focusRing}`}
+          data-dev-refresh
+          className="kw-btn-ghost shrink-0 max-sm:w-11 max-sm:h-11 max-sm:px-0 disabled:opacity-60"
         >
-          <RefreshCw size={12} className={desk.loading ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden="true" />
+          <RefreshCw size={14} className={desk.loading ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden="true" />
           <span className="hidden sm:inline">Refresh</span>
         </button>
       </div>
+      <DevStatusLine
+        spaceId={spaceId}
+        state={dev}
+        onConnect={onOpenLooseEnds}
+        checked={desk.checkedAt != null ? checkedLabel(desk.checkedAt) : null}
+        checkedAt={desk.checkedAt ?? null}
+      />
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6" aria-busy={desk.loading}>
         <div className="max-w-[760px] mx-auto space-y-4">
-          <DevStatusLine spaceId={spaceId} state={dev} onConnect={onOpenLooseEnds} />
           {intro && dev?.on && (
-            <DevIntro repo={(dev.status ?? (dev.repo ? 'watching' : 'no_repo')) === 'watching' ? dev.repo : null} onClose={() => setIntro(false)} />
+            <DevIntro cmd="kwant dev --on" repo={(dev.status ?? (dev.repo ? 'watching' : 'no_repo')) === 'watching' ? dev.repo : null} onClose={() => setIntro(false)} />
           )}
-          <div role="tablist" aria-label="Dev desk" className="flex gap-1">
+          <div role="tablist" aria-label="Dev desk" className="kw-dv-tabs">
             {tabs.map((t, i) => {
               const on = t.key === tab;
               return (
@@ -369,12 +381,10 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
                   onKeyDown={(e) => onTabKey(e, i)}
                   onClick={() => setTab(t.key)}
                   data-dev-tab={t.key}
-                  className={`inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg text-xs font-medium ${focusRing} ${
-                    on ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-400 border border-transparent hover:text-zinc-200'
-                  }`}
+                  className={`kw-dv-tab ${focusRing}`}
                 >
                   {t.label}
-                  {t.count > 0 && <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-zinc-700 text-2xs text-zinc-100 flex items-center justify-center tabular-nums">{t.count}</span>}
+                  {t.count > 0 && <span className="kw-dv-tab-count">{t.count}</span>}
                 </button>
               );
             })}
@@ -395,10 +405,8 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
             {tab === 'landed' && polling ? (
               <SkeletonCards />
             ) : first && desk.loading ? (
-              <p className="flex items-center gap-2 py-8 justify-center text-meta text-zinc-400" data-dev-loading>
-                <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                Loading the Dev desk…
-              </p>
+              // Flow copy §6 on the first visit; style-v2 §9 "Reading main" with 2 cards on later loads.
+              firstVisit ? <SkeletonCards /> : <SkeletonCards line="Reading main" n={2} />
             ) : tab === 'landed' ? (
               <>
                 {landed?.rollup && (
@@ -425,14 +433,26 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
                   (firstVisit ? (
                     <TermEmpty out="(no merges yet)" title="No merges on main yet." line="They show up here as short cards in plain words." />
                   ) : (
-                    <Empty title="Nothing has landed yet" line="Each merge to main shows up here as a short card in plain words. kwant checks every 5 minutes." />
+                    <TermEmpty
+                      cmd='git log main --since="your last look"'
+                      out="(nothing new)"
+                      title="Nothing new on main"
+                      line="Merges show up here as short cards in plain words. kwant checks every 5 minutes."
+                    />
                   ))
                 )}
               </>
             ) : reviews.length ? (
               reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} now={now} />)
             ) : (
-              desk.reviews && <Empty title="No open pull requests" line="Each open PR gets a review here from a bot that didn’t write it." />
+              desk.reviews && (
+                <TermEmpty
+                  cmd="kwant reviews --open"
+                  out="0 open changes"
+                  title="No open changes to review"
+                  line="When a bot opens a pull request, a second bot reads it and the card lands here."
+                />
+              )
             )}
           </div>
         </div>
@@ -461,14 +481,15 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
 };
 
 /** Still placeholders (no shimmer, style v2 §9) while the first poll reads the last 5 merges. */
-const SkeletonCards: React.FC = () => (
-  <div data-dev-skeleton>
+const SkeletonCards: React.FC<{ line?: string; n?: number }> = ({ line = 'Reading the last 5 merges…', n = 3 }) => (
+  <div data-dev-skeleton data-dev-loading>
     <p role="status" className="flex items-center gap-2 pb-1 font-mono text-[12px] text-zinc-300">
       <span className="dv-led" data-s="run" aria-hidden="true" />
-      Reading the last 5 merges…<span className="kw-dv-intro-caret" aria-hidden="true" />
+      {line}
+      <span className="kw-dv-intro-caret" aria-hidden="true" />
     </p>
     <div className="space-y-3" aria-hidden="true">
-      {[0, 1, 2].map((i) => (
+      {[0, 1, 2].slice(0, n).map((i) => (
         <div key={i} className="kw-dv-skel rounded-2xl border border-hairline px-4 py-3.5">
           <div className="flex items-center gap-2">
             <span className="kw-dv-skel-bar w-12 h-3" />
@@ -483,22 +504,15 @@ const SkeletonCards: React.FC = () => (
 );
 
 /** Flow copy §6: a first-visit empty state as a tiny terminal, `$ git log main -5` and its output. */
-const TermEmpty: React.FC<{ out: string; title: string; line: string }> = ({ out, title, line }) => (
+const TermEmpty: React.FC<{ cmd?: string; out: string; title: string; line: string }> = ({ cmd = 'git log main -5', out, title, line }) => (
   <div className="rounded-2xl border border-dashed border-hairline-strong px-5 py-6" data-dev-empty data-dev-empty-term>
-    <p className="font-mono text-[12px] text-zinc-500" aria-hidden="true">
-      <span className="text-sky-300">$</span> git log main -5
+    <p className="font-mono text-[12px] text-zinc-500 break-words" aria-hidden="true">
+      <span className="text-sky-300">$</span> {cmd}
       <br />
       {out}
       <span className="kw-dv-intro-caret" />
     </p>
     <p className="mt-3 text-body font-medium text-zinc-200">{title}</p>
-    <p className="mt-1 text-meta text-zinc-400">{line}</p>
-  </div>
-);
-
-const Empty: React.FC<{ title: string; line: string }> = ({ title, line }) => (
-  <div className="rounded-2xl border border-dashed border-hairline-strong px-5 py-8 text-center" data-dev-empty>
-    <p className="text-body font-medium text-zinc-200">{title}</p>
     <p className="mt-1 text-meta text-zinc-400">{line}</p>
   </div>
 );
@@ -513,10 +527,11 @@ export const DEV_FEATURES = [
   { key: 'floor', n: '03', title: 'Production floor.', line: 'Deploys and live-database commands wait for your OK.' },
 ] as const;
 
-const DevIntro: React.FC<{ repo: string | null; onClose: () => void }> = ({ repo, onClose }) => (
+// cmd is the terminal line the intro types out (copy.md §5), not prose.
+const DevIntro: React.FC<{ repo: string | null; onClose: () => void; cmd: string }> = ({ repo, onClose, cmd }) => (
   <section className="kw-dv-intro relative" aria-labelledby="dv-intro-h" data-dev-intro>
     <p className="font-mono text-[11px] leading-relaxed text-zinc-500" aria-hidden="true">
-      <span className="text-sky-300">$</span> dev --on
+      <span className="text-sky-300">$</span> {cmd}
       <br />
       <span className="text-sky-300">HEAD → dev</span> · {repo ? `watching ${repo}` : 'guards up'}
       <span className="kw-dv-intro-caret" />
