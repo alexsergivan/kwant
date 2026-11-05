@@ -6,9 +6,7 @@ import {
   GitPullRequest,
   KeyRound,
   Loader2,
-  Lock,
   Package,
-  Send,
   ShieldAlert,
   ShieldCheck,
   Target,
@@ -26,19 +24,19 @@ import {
   dismissedLine,
   findingsSummary,
   FORGE_NAME,
-  readOnlyHint,
+  readOnlyFix,
+  commentsWord,
   readOnlyTip,
   STALE_LINE,
   postCount,
   postLabel,
-  postLine,
   postState,
   postedLine,
   riskReasons,
   undoLeft,
 } from '../../dev/logic';
-import type { PostState } from '../../dev/logic';
-import { OutLink, SectionHead, Who, modelLabel, personText } from './parts';
+import type { LedState, PostState } from '../../dev/logic';
+import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
 const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
@@ -272,126 +270,127 @@ const PostFooter: React.FC<{
   login: string | null;
   prLink: string | null;
   onPost: () => void;
-}> = ({
-  id,
-  state,
-  forge,
-  count,
-  login,
-  prLink,
-  onPost,
-}) => {
-  const hintId = `${id}-post-hint`;
-  const name = forge ? FORGE_NAME[forge] : null;
-  const label = forge ? postLabel(count, forge) : '';
-  // One row: the lock line (or the result) on the left, the button on the right. Under 640 px the button
-  // wraps under the text and keeps a 44 px touch target.
-  const btn = 'kw-btn-ghost min-h-[44px] w-full px-3 py-1 text-xs sm:min-h-0 sm:w-auto';
+}> = ({ id, state, forge, count, login, prLink, onPost }) => {
+  // Style v2 §7: forge null means no footer at all (nothing to post, nowhere named to open).
+  if (!forge) return null;
+  const name = FORGE_NAME[forge];
+  const label = postLabel(count, forge);
+  const lineId = `${id}-post-line`;
+  const At = ({ who }: { who: string }) => <span className="font-mono text-zinc-100">@{who}</span>;
+  const withLed = (s: LedState, body: React.ReactNode, attr: Record<string, string>) => (
+    <span {...attr} className="inline-flex min-w-0 items-start gap-[7px]">
+      <Led s={s} className="mt-[5px] shrink-0" />
+      <span className="min-w-0 [overflow-wrap:anywhere]">{body}</span>
+    </span>
+  );
+  // Phone: the button gets its own full-width row at 44 px; from 640 px it sits on the right of the line.
+  const btn = 'min-h-[44px] w-full justify-center px-3 py-1 text-xs sm:min-h-[32px] sm:w-auto';
   let line: React.ReactNode;
   let action: React.ReactNode = null;
-  let extra: React.ReactNode = null;
+  const lockLine = (who: string | null) => (
+    <span>
+      Nothing is posted until you press it.
+      {who && (
+        <>
+          {' '}Posts as <At who={who} />.
+        </>
+      )}
+    </span>
+  );
+  // A disabled Post button (read only, stale): aria-disabled so it stays focusable and its title is reachable.
+  const off = (title?: string) => (
+    <button
+      type="button"
+      aria-disabled="true"
+      aria-describedby={lineId}
+      title={title}
+      data-post-disabled
+      onClick={(e) => e.preventDefault()}
+      className={`kw-btn-ghost ${btn} cursor-not-allowed opacity-60 hover:bg-white/[0.03] hover:text-zinc-200`}
+    >
+      {label}
+    </button>
+  );
   switch (state.kind) {
     case 'none':
-      line = forge && (
-        <span className="inline-flex min-w-0 items-start gap-1.5 text-xs text-zinc-400">
-          <Lock size={13} aria-hidden="true" className="mt-px shrink-0" />
-          {postLine(null)}
-        </span>
-      );
+      line = lockLine(null);
       break;
     case 'posted':
-      line = (
-        <span data-post-done className="inline-flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-ok">
-          <Check size={13} aria-hidden="true" className="shrink-0" />
-          {postedLine(state.at)}
-          {state.url && (
+      line = withLed(
+        'ok',
+        <>
+          Posted{clock(state.at) ? ` ${clock(state.at)}` : ''}
+          {state.login && (
             <>
-              <span aria-hidden="true" className="text-zinc-500">·</span>
-              <OutLink href={state.url}>{name ? `View on ${name}` : 'View review'}</OutLink>
+              {' '}as <At who={state.login} />
             </>
           )}
-        </span>
+          {commentsWord(state.comments) && <> · {commentsWord(state.comments)}</>}
+        </>,
+        { 'data-post-done': '' },
       );
+      if (state.url) action = <OutLink href={state.url} className="min-h-[44px] sm:min-h-0">{`View on ${name}`}</OutLink>;
+      break;
+    case 'read_only':
+      line = withLed(
+        'warn',
+        <>
+          {readOnlyTip(forge)}. Give the token <code className="dv-code">{readOnlyFix(forge)}</code> to post.
+        </>,
+        { 'data-post-read-only': '' },
+      );
+      action = off(readOnlyTip(forge));
       break;
     case 'stale':
-      line = (
-        <span data-post-stale className="inline-flex min-w-0 items-start gap-1.5 text-xs text-warn">
-          <AlertTriangle size={13} aria-hidden="true" className="mt-px shrink-0" />
-          {STALE_LINE}
-        </span>
-      );
+      line = withLed('run', STALE_LINE, { 'data-post-stale': '' });
+      action = off();
       break;
     case 'failed':
-      line = (
-        <span data-post-failed className="inline-flex min-w-0 items-start gap-1.5 text-xs text-bad [overflow-wrap:anywhere]">
-          <AlertTriangle size={13} aria-hidden="true" className="mt-px shrink-0" />
-          Couldn’t post: {state.message}
-        </span>
-      );
+      line = withLed('bad', <>Couldn’t post: {state.message}</>, { 'data-post-failed': '' });
       action = (
-        <button type="button" onClick={onPost} className={btn}>
-          <Send size={13} aria-hidden="true" />
+        <button type="button" onClick={onPost} data-post-retry className={`kw-btn-ghost ${btn}`}>
           Try again
         </button>
       );
       break;
-    default:
-      line = (
-        <span className="inline-flex min-w-0 items-start gap-1.5 text-xs text-zinc-400">
-          <Lock size={13} aria-hidden="true" className="mt-px shrink-0" />
-          {postLine(login)}
-        </span>
+    default: {
+      const busy = state.kind === 'posting';
+      line = lockLine(login);
+      action = (
+        <button type="button" disabled={busy} aria-busy={busy || undefined} onClick={onPost} data-post-button className={`kw-btn-primary ${btn} disabled:cursor-wait`}>
+          {busy ? (
+            <>
+              <Loader2 size={12} aria-hidden="true" className="motion-safe:animate-spin" />
+              Posting…
+            </>
+          ) : (
+            label
+          )}
+        </button>
       );
-      if (state.kind === 'read_only' && forge) {
-        // aria-disabled, not disabled: it stays focusable, so keyboard and screen-reader users reach the
-        // tooltip's words (also tied on with aria-describedby) and the hint line below.
-        action = (
-          <button
-            type="button"
-            aria-disabled="true"
-            aria-describedby={hintId}
-            title={readOnlyTip(forge)}
-            data-post-read-only
-            onClick={(e) => e.preventDefault()}
-            className={`${btn} cursor-not-allowed opacity-60 hover:bg-white/[0.03] hover:text-zinc-200`}
-          >
-            <Send size={13} aria-hidden="true" />
-            {label}
-            <span className="sr-only">. {readOnlyTip(forge)}.</span>
-          </button>
-        );
-        extra = (
-          <p id={hintId} className="basis-full text-2xs text-zinc-400">
-            {readOnlyHint(forge)}
-          </p>
-        );
-      } else {
-        const busy = state.kind === 'posting';
-        action = (
-          <button type="button" disabled={busy} aria-busy={busy || undefined} onClick={onPost} data-post-button className={`${btn} disabled:cursor-wait disabled:opacity-70`}>
-            {busy ? <Loader2 size={13} aria-hidden="true" className="motion-safe:animate-spin" /> : <Send size={13} aria-hidden="true" />}
-            {label}
-            {busy && <span className="sr-only">. Posting.</span>}
-          </button>
-        );
-      }
+    }
   }
-  const link = !!(prLink && name && state.kind !== 'posted');
-  // Nothing to post and nowhere to open (no forge): no empty footer rule either.
-  if (!line && !action && !link) return null;
+  // F7 (user-flow.md): Post first, then "Open on {Forge}". Not after posting: View on {Forge} replaces it.
+  const link = !!prLink && state.kind !== 'posted';
   return (
-    <footer data-review-footer data-post-state={state.kind} className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3">
-      <div className="min-w-0 flex-1 basis-full sm:basis-0">{line}</div>
-      {/* F7 (user-flow.md): Post to {Forge} first, then "Open on {Forge}". With no forge, neither. */}
-      {action && <div className="basis-full sm:basis-auto">{action}</div>}
+    <footer data-review-footer data-post-state={state.kind} className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3 text-[12.5px] text-zinc-400">
+      <div id={lineId} className="min-w-0 flex-1 basis-full sm:basis-0">{line}</div>
+      {action && <div className="flex basis-full sm:basis-auto">{action}</div>}
       {link && (
         <span data-forge-link className="text-meta">
           <OutLink href={prLink!} className="min-h-[44px] sm:min-h-0">{`Open on ${name}`}</OutLink>
         </span>
       )}
-      {extra}
       <span role="status" aria-live="polite" className="sr-only">
-        {state.kind === 'posted' ? postedLine(state.at) : state.kind === 'failed' ? `Couldn’t post: ${state.message}` : state.kind === 'stale' ? STALE_LINE : ''}
+        {state.kind === 'posted'
+          ? postedLine(state.at, state.login, state.comments)
+          : state.kind === 'failed'
+            ? `Couldn’t post: ${state.message}`
+            : state.kind === 'stale'
+              ? STALE_LINE
+              : state.kind === 'posting'
+                ? 'Posting…'
+                : ''}
       </span>
     </footer>
   );

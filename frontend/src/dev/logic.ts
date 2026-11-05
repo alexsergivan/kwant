@@ -369,22 +369,24 @@ export function postLabel(n: number, forge: Forge): string {
 
 /** "Nothing is posted until you press it. Posts as octocat." (the second sentence only with a login). */
 export function postLine(login: string | null | undefined): string {
-  return login ? `Nothing is posted until you press it. Posts as ${login}.` : 'Nothing is posted until you press it.';
+  return login ? `Nothing is posted until you press it. Posts as @${login}.` : 'Nothing is posted until you press it.';
 }
 
+/** "3 comments", "1 comment", or null for none or unknown (the line then drops it). */
+export const commentsWord = (n: number | null | undefined): string | null => (n ? `${n} ${n === 1 ? 'comment' : 'comments'}` : null);
+
 export const readOnlyTip = (forge: Forge): string => `Your ${FORGE_NAME[forge]} connection is read only`;
-/** The token scope wording is GitHub's; other forges get the plain line. */
-export const readOnlyHint = (forge: Forge): string =>
-  forge === 'github'
-    ? 'To post, give the token Pull requests: Read and write, then paste it again in Loose ends.'
-    : `To post, give the ${FORGE_NAME[forge]} token write access, then paste it again in Loose ends.`;
+/** Style v2 §7: what to give the token. The scope name is GitHub's; other forges get plain words. */
+export const readOnlyFix = (forge: Forge): string => (forge === 'github' ? 'pull_requests: write' : 'write access');
+/** The whole read-only line, for screen readers and tests: "Your GitHub connection is read only. Give the token pull_requests: write to post." */
+export const readOnlyLine = (forge: Forge): string => `${readOnlyTip(forge)}. Give the token ${readOnlyFix(forge)} to post.`;
 export const STALE_LINE = 'This PR has new commits. A new review is on its way.';
 
 export type PostState =
   | { kind: 'none' } // no Post button: the sample PR, or a card still being written
   | { kind: 'ready' }
   | { kind: 'posting' }
-  | { kind: 'posted'; at: string | null; url: string | null }
+  | { kind: 'posted'; at: string | null; url: string | null; login: string | null; comments: number | null }
   | { kind: 'read_only' }
   | { kind: 'stale' }
   | { kind: 'failed'; message: string };
@@ -394,10 +396,10 @@ export type PostState =
  * in-flight press; then the last error; a pending card has no review to post yet.
  */
 export function postState(
-  card: { status: string; posted: { at: string | null; url: string | null } | null; post_error: { kind: string; message: string | null } | null },
+  card: { status: string; posted: { at: string | null; url: string | null; login?: string | null; comments?: number | null } | null; post_error: { kind: string; message: string | null } | null },
   opts: { canPost: boolean; posting: boolean; forge: Forge | null },
 ): PostState {
-  if (card.posted) return { kind: 'posted', at: card.posted.at, url: card.posted.url };
+  if (card.posted) return { kind: 'posted', at: card.posted.at, url: card.posted.url, login: card.posted.login ?? null, comments: card.posted.comments ?? null };
   if (!opts.canPost || !opts.forge || card.status === 'pending') return { kind: 'none' };
   if (opts.posting) return { kind: 'posting' };
   const e = card.post_error;
@@ -407,10 +409,11 @@ export function postState(
   return { kind: 'ready' };
 }
 
-/** "Posted 19:58" (no time when the server sent none). */
-export const postedLine = (at: string | null): string => {
+/** "Posted 19:58 as @oleks-i · 3 comments"; the time, login and count each drop out when unknown. */
+export const postedLine = (at: string | null, login: string | null = null, comments: number | null = null): string => {
   const t = clock(at);
-  return t ? `Posted ${t}` : 'Posted';
+  const n = commentsWord(comments);
+  return `Posted${t ? ` ${t}` : ''}${login ? ` as @${login}` : ''}${n ? ` · ${n}` : ''}`;
 };
 // Style v2 parts (Mira, style-v2.md §2): pure helpers behind <Led>, <DiffStat> and <Sha>
 

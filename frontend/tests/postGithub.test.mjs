@@ -117,7 +117,7 @@ test('N counts every finding not dismissed; the label pluralises and drops a zer
   assert.equal(m.postLabel(3, 'github'), 'Post to GitHub · 3 comments');
   assert.equal(m.postLabel(1, 'github'), 'Post to GitHub · 1 comment');
   assert.equal(m.postLabel(0, 'github'), 'Post to GitHub');
-  assert.equal(m.postLine('octocat'), 'Nothing is posted until you press it. Posts as octocat.');
+  assert.equal(m.postLine('octocat'), 'Nothing is posted until you press it. Posts as @octocat.');
   assert.equal(m.postLine(null), 'Nothing is posted until you press it.');
 });
 
@@ -138,16 +138,18 @@ test('postState: posted wins, then posting, then the error; pending and the samp
 // ---------------------------------------------------------------------------------------------------
 // Every footer state, rendered
 
-test('ready: lock line with the login, Post to GitHub · N comments, Open on GitHub', async () => {
+test('ready: the line with @login in mono, primary Post to GitHub · N comments, Open on GitHub', async () => {
   const card = { ...base(), findings: [...base().findings, { ...base().findings[0], id: 'f9', state: 'dismissed' }] };
   const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'github', forgeLogin: LOGIN, now: NOW });
   const f = footer(host);
   assert.equal(f.dataset.postState, 'ready');
-  assert.match(flat(f), /Nothing is posted until you press it\. Posts as oleks-i\./);
-  assert.ok(f.querySelector('svg.lucide-lock'), 'lock icon');
+  assert.match(flat(f), /Nothing is posted until you press it\. Posts as @oleks-i\./);
+  assert.match(f.innerHTML, /<span class="font-mono text-zinc-100">@oleks-i<\/span>/, 'login in mono');
+  assert.equal(f.querySelector('svg.lucide-lock'), null, 'v2: no lock icon');
   const b = button(f, 'Post to GitHub');
   assert.equal(flat(b), 'Post to GitHub · 3 comments', 'the dismissed fourth finding is not counted');
   assert.equal(b.disabled, false);
+  assert.match(b.className, /kw-btn-primary/, 'the primary button');
   assert.match(f.innerHTML, /Open on GitHub/);
   assert.ok(/min-h-\[44px\]/.test(b.className) && /w-full/.test(b.className) && /sm:w-auto/.test(b.className), 'phone: full-width 44 px target under the text');
 });
@@ -169,7 +171,8 @@ test('posting: spinner, button disabled and busy, a second press sends nothing; 
   await click(button(footer(host), 'Post to GitHub'));
   let f = footer(host);
   assert.equal(f.dataset.postState, 'posting');
-  const b = button(f, 'Post to GitHub');
+  const b = f.querySelector('[data-post-button]');
+  assert.equal(flat(b), 'Posting…');
   assert.equal(b.disabled, true);
   assert.equal(b.getAttribute('aria-busy'), 'true');
   assert.ok(b.querySelector('svg.lucide-loader-circle, svg.lucide-loader2, svg.lucide-loader'), 'spinner');
@@ -180,12 +183,13 @@ test('posting: spinner, button disabled and busy, a second press sends nothing; 
   await settle();
   f = footer(host);
   assert.equal(f.dataset.postState, 'posted');
-  assert.match(flat(f), /^Posted 19:58\s*·\s*View on GitHub/);
+  assert.match(flat(f), /^Posted 19:58 as @oleks-i · 3 comments\s*View on GitHub/);
+  assert.equal(f.querySelector('.dv-led').dataset.s, 'ok', 'ok LED');
   const a = f.querySelector('a[href="https://github.com/o/r/pull/294#pullrequestreview-1"]');
   assert.ok(a, 'View on GitHub links to the review');
   assert.equal(a.getAttribute('target'), '_blank');
   assert.equal(button(f, 'Post to GitHub'), undefined, 'no button once posted');
-  assert.equal(f.querySelector('[role="status"]').textContent, 'Posted 19:58');
+  assert.equal(f.querySelector('[role="status"]').textContent, 'Posted 19:58 as @oleks-i · 3 comments');
 });
 
 test('posted from the server (SSE refetch): the card prop alone switches the footer', async () => {
@@ -208,7 +212,7 @@ test('posted without a url: "Posted 19:58" and no link', () => {
   assert.doesNotMatch(out, /View on GitHub/);
 });
 
-test('read_only: the button is aria-disabled with the tooltip, focusable, and the hint line is under it', async () => {
+test('read_only: warn LED line naming the scope, the button aria-disabled with the tooltip and focusable', async () => {
   const calls = [];
   const card = { ...base(), post_error: { kind: 'read_only', message: 'Resource not accessible by personal access token' } };
   const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async (id) => (calls.push(id), card), forge: 'github', forgeLogin: LOGIN, now: NOW });
@@ -218,21 +222,24 @@ test('read_only: the button is aria-disabled with the tooltip, focusable, and th
   assert.equal(b.getAttribute('aria-disabled'), 'true');
   assert.equal(b.getAttribute('title'), 'Your GitHub connection is read only');
   assert.equal(b.disabled, false, 'kept focusable so the tooltip words are reachable');
-  assert.match(b.textContent, /Your GitHub connection is read only/, 'screen readers hear why');
-  const hint = f.querySelector(`#${b.getAttribute('aria-describedby').replace(/([:.])/g, '\\$1')}`);
-  assert.equal(flat(hint), 'To post, give the token Pull requests: Read and write, then paste it again in Loose ends.');
+  const why = f.querySelector(`#${b.getAttribute('aria-describedby').replace(/([:.])/g, '\\$1')}`);
+  assert.equal(flat(why), m.readOnlyLine('github'), 'screen readers hear why');
+  assert.equal(flat(why), 'Your GitHub connection is read only. Give the token pull_requests: write to post.');
+  assert.match(why.innerHTML, /<code class="dv-code">pull_requests: write<\/code>/);
+  assert.equal(f.querySelector('.dv-led').dataset.s, 'warn');
   await click(b);
   assert.deepEqual(calls, [], 'pressing it posts nothing');
-  assert.match(flat(f), /Posts as oleks-i\./);
 });
 
-test('stale: the plan line, no button', async () => {
+test('stale: run LED line and a disabled button', async () => {
   const card = { ...base(), post_error: { kind: 'stale', message: 'head moved' } };
   const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'github', forgeLogin: LOGIN, now: NOW });
   const f = footer(host);
   assert.equal(f.dataset.postState, 'stale');
   assert.match(flat(f), /This PR has new commits\. A new review is on its way\./);
-  assert.equal(button(f, 'Post to GitHub'), undefined);
+  const b = button(f, 'Post to GitHub');
+  assert.equal(b.getAttribute('aria-disabled'), 'true');
+  assert.equal(f.querySelector('.dv-led').dataset.s, 'run');
   assert.equal(button(f, 'Try again'), undefined);
 });
 
@@ -244,6 +251,8 @@ test('failed: "Couldn’t post: {message}" and Try again, which posts again and 
   let f = footer(host);
   assert.equal(f.dataset.postState, 'failed');
   assert.match(flat(f), /Couldn’t post: GitHub answered 502/);
+  assert.equal(f.querySelector('.dv-led').dataset.s, 'bad');
+  assert.match(button(f, 'Try again').className, /kw-btn-ghost/);
   assert.equal(button(f, 'Post to GitHub'), undefined);
   await click(button(f, 'Try again'));
   assert.deepEqual(calls, ['dvr_294']);
@@ -309,7 +318,7 @@ test('F7: forge null shows neither the Post button nor the Open link, in every s
   for (const over of [{}, { post_error: { kind: 'read_only', message: null } }, { post_error: { kind: 'failed', message: 'x' } }]) {
     const card = { ...base(), ...over };
     const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: null, forgeLogin: LOGIN, now: NOW });
-    assert.equal(host.querySelector('[data-post-button], [data-post-read-only], [data-forge-link]'), null, 'no Post button, no link');
+    assert.equal(host.querySelector('[data-post-button], [data-post-disabled], [data-forge-link]'), null, 'no Post button, no link');
     assert.equal(button(host, 'Post to'), undefined);
     assert.equal(button(host, 'Try again'), undefined);
     assert.equal(host.querySelector('a[href="' + card.links.pr + '"]'), null, 'the PR link is not drawn anywhere on the card');
@@ -334,7 +343,7 @@ test('the label, tooltip and links come from a map on forge (GitLab, Gitea)', as
   assert.equal(m.postLabel(0, 'gitea'), 'Post to Gitea');
   assert.equal(m.readOnlyTip('github'), 'Your GitHub connection is read only');
   assert.equal(m.readOnlyTip('gitlab'), 'Your GitLab connection is read only');
-  assert.doesNotMatch(m.readOnlyHint('gitea'), /Pull requests: Read and write/, 'GitHub scope words only for github');
+  assert.equal(m.readOnlyLine('gitea'), 'Your Gitea connection is read only. Give the token write access to post.', 'GitHub scope words only for github');
   const card = { ...base(), post_error: { kind: 'read_only', message: null } };
   const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'gitlab', forgeLogin: LOGIN, now: NOW });
   const f = footer(host);
