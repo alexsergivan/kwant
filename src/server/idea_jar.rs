@@ -566,23 +566,33 @@ pub fn check_text(text: &str) -> Result<&str, Response> {
     Ok(t)
 }
 
-/// The space a request names (`space_id`, or the usual `space`), or the default space.
+/// The space the query names: `?space_id=`, as `GET /api/ideas` documents it, or the usual
+/// `?space=`.
+fn query_space(query: Option<&str>) -> Option<String> {
+    url::form_urlencoded::parse(query.unwrap_or("").as_bytes())
+        .find(|(k, _)| k == "space_id")
+        .map(|(_, v)| v.into_owned())
+        .or_else(|| super::spaces::space_param(query))
+}
+
+/// The space a request names (the body's `space_id`, else the query's `space_id` or `space`), or
+/// the default space.
 async fn space_of(state: &AppState, space_id: Option<&str>, query: Option<&str>) -> Result<SpaceId, Response> {
-    match space_id.map(str::to_string).or_else(|| super::spaces::space_param(query)) {
+    match space_id.map(str::to_string).or_else(|| query_space(query)) {
         Some(id) => super::spaces::active_space(state, &id).await,
         None => Ok(SpaceId::default_space()),
     }
 }
 
-/// The idea `id`: 404 when there's none, or when `?space=` names another space; 409 when its
-/// space is archived and `change`.
+/// The idea `id`: 404 when there's none, or when `?space_id=` or `?space=` names another space;
+/// 409 when its space is archived and `change`.
 async fn load(state: &AppState, query: Option<&str>, id: &str, change: bool) -> Result<Idea, Response> {
     let idea = match state.db.get_idea(id).await {
         Ok(Some(i)) => i,
         Ok(None) => return Err(err(StatusCode::NOT_FOUND, "not_found", "no such idea")),
         Err(e) => return Err(internal(e)),
     };
-    if super::spaces::space_param(query).is_some_and(|s| s.trim() != idea.space_id) {
+    if query_space(query).is_some_and(|s| s.trim() != idea.space_id) {
         return Err(err(StatusCode::NOT_FOUND, "not_found", "that isn't in this space"));
     }
     if change {

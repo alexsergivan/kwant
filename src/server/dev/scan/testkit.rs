@@ -1,4 +1,4 @@
-//! Test helpers: a tiny HTTP mock on 127.0.0.1 (Juno's ports 9475–9478 only), a fake gitleaks
+//! Test helpers: a tiny HTTP mock on 127.0.0.1 (a port the system picks), a fake gitleaks
 //! release built in memory, and fake keys assembled at runtime so no token prefix is written in
 //! the source. Nothing here reaches a real registry or GitHub.
 
@@ -7,12 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-/// The registry and download mock.
-pub const MOCK_PORT: u16 = 9475;
-/// A listener the fake gitleaks tries to reach; it must hear nothing.
-pub const LEAK_PORT: u16 = 9477;
-
-/// Tests that bind a port take this first, so they never share one.
+/// Tests that use a mock or the fake gitleaks take this first, so they run one at a time.
 pub async fn port_lock() -> tokio::sync::MutexGuard<'static, ()> {
     static L: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     L.lock().await
@@ -54,6 +49,11 @@ pub struct Mock {
 }
 
 impl Mock {
+    /// The port the mock listens on.
+    pub fn port(&self) -> u16 {
+        self.base.rsplit(':').next().and_then(|p| p.parse().ok()).expect("a port in the mock's base")
+    }
+
     pub fn requests(&self) -> Vec<Req> {
         self.seen.lock().unwrap().clone()
     }
@@ -65,26 +65,14 @@ impl Drop for Mock {
     }
 }
 
-/// Serves `handler` on `127.0.0.1:port` until dropped.
-pub async fn serve<F>(port: u16, handler: F) -> Mock
+/// Serves `handler` on 127.0.0.1, on a port the system picks, until dropped. `Mock::base` is
+/// its address.
+pub async fn serve<F>(handler: F) -> Mock
 where
     F: Fn(&Req) -> Reply + Send + Sync + 'static,
 {
-    assert!((9475..=9478).contains(&port), "Juno's tests use ports 9475-9478 only");
-    // A mock dropped a moment ago (here or in the test before) frees its port once its task is
-    // cancelled, which is not instant
-    let mut tries = 0;
-    let listener = loop {
-        match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
-            Ok(l) => break l,
-            Err(e) if tries < 150 => {
-                let _ = e;
-                tries += 1;
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            Err(e) => panic!("mock port {port} not free: {e}"),
-        }
-    };
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.expect("bind a mock on 127.0.0.1:0");
+    let port = listener.local_addr().expect("the mock's address").port();
     let seen: Arc<Mutex<Vec<Req>>> = Arc::default();
     let handler = Arc::new(handler);
     let seen2 = seen.clone();
@@ -139,6 +127,15 @@ where
         }
     });
     Mock { base: format!("http://127.0.0.1:{port}"), seen, task }
+}
+
+/// An address on 127.0.0.1 where nothing listens: a port the system just handed out and that
+/// was closed again, so a request there is refused.
+pub fn closed_url() -> String {
+    let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind 127.0.0.1:0");
+    let port = l.local_addr().expect("its address").port();
+    drop(l);
+    format!("http://127.0.0.1:{port}")
 }
 
 /// A ustar archive of `(name, mode, bytes)` entries.

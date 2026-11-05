@@ -16,6 +16,19 @@ included, because the settings hold the backup command and the cards hold the re
 tables (`dev_mode_spaces`, `dev_cards`, `dev_backups`, `dev_model_calls`, `dev_prod_connections`)
 are left out of exports, like approval modes.
 
+## Before you turn it on
+
+Dev mode reads GitHub through the Loose ends GitHub connection, so it needs a GitHub token saved
+first. With kwnt's built-in password store, a token can only be saved while **every** space and
+every bot is on "Ask before running commands". New installs start on "Ask only when risky", so the
+save is refused (409) until you either:
+
+- switch every space and every bot to "Ask before running commands", or
+- connect Bitwarden.
+
+While the token is in the built-in store, approvals can't go back to Off or "Ask only when risky".
+See [Saved passwords](saved-passwords.md#approvals-off-needs-bitwarden) for why.
+
 ## Settings
 
 `PUT /api/spaces/:id/dev_mode` saves these fields:

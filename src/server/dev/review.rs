@@ -404,7 +404,7 @@ mod tests {
         use crate::zombie::github::GhFile;
         let _l = port_lock().await;
         let (archive, a, b) = fake_release(&fake_gitleaks(""));
-        let mock = serve(MOCK_PORT, move |r| {
+        let mock = serve(move |r| {
             if r.path == "/gl.tar.gz" {
                 Reply::bytes(200, archive.clone())
             } else if r.path.starts_with("/npm/") {

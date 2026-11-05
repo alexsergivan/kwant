@@ -1,5 +1,5 @@
 //! Owner tests for qa/plan.md §3.5 (J-S1–J-S4, J-P). Every network call goes to a mock on
-//! 127.0.0.1:9475–9478; fake keys are joined at runtime (see `testkit`). Tests that need the real
+//! 127.0.0.1, on a port the system picks; fake keys are joined at runtime (see `testkit`). Tests that need the real
 //! gitleaks binary run only when `KWANT_TEST_GITLEAKS` names one (never in CI, which can't fetch).
 
 use super::gitleaks::{self, Source, Target, PINS};
@@ -36,14 +36,14 @@ fn cfg(dir: &std::path::Path, base: &str, archive_sha: &str, bin_sha: &str) -> C
             fetch_timeout: Duration::from_secs(5),
         }),
         gitleaks_timeout: Duration::from_secs(20),
-        registries: Registries::all_at("http://127.0.0.1:9476"),
+        registries: Registries::all_at(&closed_url()),
     }
 }
 
 /// Serves a fake gitleaks release made from `extra` and returns the mock and a Config for it.
 async fn fake(dir: &std::path::Path, extra: &str) -> (Mock, Config) {
     let (archive, a, b) = fake_release(&fake_gitleaks(extra));
-    let mock = serve(MOCK_PORT, move |r| if r.path == "/gl.tar.gz" { Reply::bytes(200, archive.clone()) } else { Reply::bytes(404, vec![]) }).await;
+    let mock = serve(move |r| if r.path == "/gl.tar.gz" { Reply::bytes(200, archive.clone()) } else { Reply::bytes(404, vec![]) }).await;
     let c = cfg(dir, &mock.base, &a, &b);
     (mock, c)
 }
@@ -77,7 +77,7 @@ fn j_s1_version_and_checksums_are_pinned_in_source_for_every_shipped_platform() 
 #[tokio::test]
 async fn j_s1_unpinned_platform_reads_not_run() {
     let dir = tempfile::tempdir().unwrap();
-    let mut c = cfg(dir.path(), "http://127.0.0.1:9475", "00", "00");
+    let mut c = cfg(dir.path(), &closed_url(), "00", "00");
     c.gitleaks = None;
     let s = scan(&c, &Input { files: vec![diff("a.rs", "added", Some(&added_patch(&["let x = 1;"])))], ..Input::default() }).await;
     assert_eq!(s.security.secrets.state, State::NotRun);
@@ -134,7 +134,7 @@ async fn j_s1_a_failed_or_timed_out_download_reads_not_run() {
     let files = vec![diff("a.rs", "added", Some(&added_patch(&[&secret(1)])))];
     for (status, slow, want) in [(500, false, "HTTP 500"), (404, false, "HTTP 404"), (429, false, "HTTP 429"), (200, true, "timed out")] {
         let dir = tempfile::tempdir().unwrap();
-        let mock = serve(MOCK_PORT, move |_| {
+        let mock = serve(move |_| {
             let r = Reply::bytes(status, b"nope".to_vec());
             if slow {
                 r.slow(Duration::from_secs(3))
@@ -152,7 +152,7 @@ async fn j_s1_a_failed_or_timed_out_download_reads_not_run() {
     }
     // Nothing listening at all
     let dir = tempfile::tempdir().unwrap();
-    let c = cfg(dir.path(), "http://127.0.0.1:9478", &"0".repeat(64), &"0".repeat(64));
+    let c = cfg(dir.path(), &closed_url(), &"0".repeat(64), &"0".repeat(64));
     let s = scan(&c, &Input { files, ..Input::default() }).await;
     assert_eq!(s.security.secrets.state, State::NotRun);
 }
@@ -162,10 +162,11 @@ async fn j_s1_gitleaks_runs_with_no_network_and_a_clean_environment() {
     let _l = port_lock().await;
     let dir = tempfile::tempdir().unwrap();
     let env_file = dir.path().join("env.txt");
-    let leak = serve(LEAK_PORT, |_| Reply::bytes(200, b"leaked".to_vec())).await;
+    let leak = serve(|_| Reply::bytes(200, b"leaked".to_vec())).await;
     let extra = format!(
-        "env > '{f}'\ncurl -s -m 3 http://127.0.0.1:{LEAK_PORT}/from-gitleaks >/dev/null 2>&1\necho \"curl_exit=$?\" >> '{f}'\ncurl -s -m 3 --noproxy '' http://127.0.0.1:{LEAK_PORT}/from-gitleaks-2 >/dev/null 2>&1\necho \"curl_exit=$?\" >> '{f}'",
-        f = env_file.display()
+        "env > '{f}'\ncurl -s -m 3 http://127.0.0.1:{port}/from-gitleaks >/dev/null 2>&1\necho \"curl_exit=$?\" >> '{f}'\ncurl -s -m 3 --noproxy '' http://127.0.0.1:{port}/from-gitleaks-2 >/dev/null 2>&1\necho \"curl_exit=$?\" >> '{f}'",
+        f = env_file.display(),
+        port = leak.port()
     );
     let (_mock, c) = fake(dir.path(), &extra).await;
     let s = scan(&c, &Input { files: vec![diff("a.rs", "added", Some(&added_patch(&["let a = 1;"])))], ..Input::default() }).await;
@@ -466,7 +467,7 @@ async fn j_p_custom_registries_are_skipped_and_read_not_run_with_the_reason() {
     ];
     for (f, text) in cases {
         let contents = BTreeMap::from([(f.path.clone(), text)]);
-        let (tile, findings) = packages::run(&Registries::all_at("http://127.0.0.1:9478"), std::slice::from_ref(&f), &contents).await;
+        let (tile, findings) = packages::run(&Registries::all_at(&closed_url()), std::slice::from_ref(&f), &contents).await;
         assert_eq!(tile.state, State::NotRun, "{}", f.path);
         assert!(tile.reason.as_deref().unwrap().contains("custom"), "{}: {:?}", f.path, tile.reason);
         assert!(findings.is_empty());
@@ -479,7 +480,7 @@ fn npm_doc(created: chrono::DateTime<Utc>) -> serde_json::Value {
 
 /// Serves npm, PyPI and crates answers from `table` (path → reply); anything else is 404.
 async fn registry(table: Vec<(String, u16, serde_json::Value, u64)>) -> Mock {
-    serve(MOCK_PORT, move |r| {
+    serve(move |r| {
         match table.iter().find(|(p, ..)| *p == r.path) {
             Some((_, s, v, slow)) => Reply::json(*s, v.clone()).slow(Duration::from_millis(*slow)),
             None => Reply::json(404, json!({"error": "not found"})),
@@ -619,14 +620,18 @@ async fn j_p_only_url_encoded_names_are_sent_never_source() {
     // The title quotes the name as data, so the look-alike letter shows as its code point
     let odd = findings.iter().find(|f| f.title.contains("`l\\u{43e}dash`")).unwrap();
     assert!(!odd.title.contains(&lookalike), "{}", odd.title);
-    assert!(odd.detail.contains("look-alike"), "{}", odd.detail);
+    assert!(odd.detail.contains("has characters from outside plain ASCII, like look-alike letters"), "{}", odd.detail);
+    // A plain-ASCII name with a space isn't sent looking for look-alikes that aren't there
+    let spaced = findings.iter().find(|f| f.title.contains("`a\\u{20}b?c#d`")).unwrap();
+    assert!(spaced.detail.contains("has characters a package name doesn't use"), "{}", spaced.detail);
+    assert!(!spaced.detail.contains("look-alike") && !spaced.detail.contains("ASCII"), "{}", spaced.detail);
 }
 
 #[tokio::test]
 async fn j_p_lookups_stop_at_the_cap_and_the_budget() {
     let _l = port_lock().await;
     let now = Utc::now();
-    let mock = serve(MOCK_PORT, move |r| {
+    let mock = serve(move |r| {
         if r.path.starts_with("/npm-downloads/") {
             Reply::json(200, json!({"downloads": 10_000}))
         } else {
@@ -664,7 +669,7 @@ fn j_p_the_base_is_rebuilt_by_undoing_the_patch() {
 #[tokio::test]
 async fn j_p_an_unreadable_manifest_reads_not_run() {
     let f = diff("package.json", "modified", Some("@@ -1 +1 @@\n-{}\n+{\"dependencies\": {\"x\": \"1\"}}"));
-    let (t, _) = packages::run(&Registries::all_at("http://127.0.0.1:9478"), &[f], &BTreeMap::new()).await;
+    let (t, _) = packages::run(&Registries::all_at(&closed_url()), &[f], &BTreeMap::new()).await;
     assert_eq!(t.state, State::NotRun);
     assert!(t.reason.as_deref().unwrap().contains("couldn't be read"));
 }
@@ -687,7 +692,7 @@ fn security_json_keeps_the_plan_shape_and_adds_reason_and_missing() {
 async fn file_text_is_fetched_by_encoded_path_at_the_head_sha_and_never_outside_the_repo() {
     use crate::zombie::github::{GithubConfig, GithubSource};
     let _l = port_lock().await;
-    let mock = serve(MOCK_PORT, |r| {
+    let mock = serve(|r| {
         use base64::Engine;
         let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
         match r.path.as_str() {
@@ -756,7 +761,7 @@ async fn f_a_real_gitleaks_finds_and_hides_keys_in_paths_its_allowlist_skips() {
     let _l = port_lock().await;
     let dir = tempfile::tempdir().unwrap();
     let (archive, a, b) = fake_release(&std::fs::read(&bin).unwrap());
-    let mock = serve(MOCK_PORT, move |r| if r.path == "/gl.tar.gz" { Reply::bytes(200, archive.clone()) } else { Reply::bytes(404, vec![]) }).await;
+    let mock = serve(move |r| if r.path == "/gl.tar.gz" { Reply::bytes(200, archive.clone()) } else { Reply::bytes(404, vec![]) }).await;
     let c = cfg(dir.path(), &mock.base, &a, &b);
     let (aws, ghp) = (fake_aws_key(), fake_github_token());
     // Only files gitleaks' default config allowlists by path: a PR like this must not read pass
@@ -801,7 +806,7 @@ async fn f_b_an_injection_package_name_is_data_in_the_card_tile_and_fix_it_text(
     // The registry has no such package the first time, and is down the second
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = calls.clone();
-    let mock = serve(MOCK_PORT, move |_| {
+    let mock = serve(move |_| {
         let status = if seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { 404 } else { 503 };
         Reply::json(status, json!({}))
     })
