@@ -8,7 +8,7 @@
 use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit};
 use super::{routes::get_or_create_browser_controller, AppState};
 use crate::sandbox::app_links::{self, AppLinkWatch, Verdict};
-use crate::sandbox::browser::{web_address, BrowserController, BrowserError, HeldPointer, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
+use crate::sandbox::browser::{web_address, BrowserController, BrowserError, HeldPointer, ViewClaim, ViewRelease, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
 use crate::sandbox::browser_history::HistoryDirection;
 use axum::{extract::{Path, State, WebSocketUpgrade, ws::{Message, WebSocket}}, http::{HeaderMap, StatusCode}, response::Response};
 use futures::{SinkExt, StreamExt};
@@ -361,6 +361,8 @@ impl FrameGate {
 
 /// State the stream and its worker share.
 struct Shared {
+    /// This live view among the open ones, for its claim on the page size.
+    socket: u64,
     /// The page viewport in CSS px, from frame metadata or the last resize.
     view: std::sync::Mutex<(f64, f64)>,
     /// A `resize` is applied and must be put back on hand back.
@@ -474,6 +476,8 @@ impl Shared {
 enum Job {
     Input { input: BrowserInput, id: Value },
     HandBack(Option<oneshot::Sender<()>>),
+    /// The view closes or goes to the background but keeps control: only its size goes.
+    Restore(Value),
 }
 
 /// Runs input in the order it came, on the stream's socket.
@@ -544,6 +548,11 @@ impl Worker {
                 Job::HandBack(done) => {
                     self.hand_back().await;
                     if let Some(done) = done { let _ = done.send(()); }
+                }
+                Job::Restore(id) => {
+                    restore_viewport(&self.ctrl, &self.cdp, &self.shared).await;
+                    let (w, h) = self.shared.view();
+                    let _ = self.client.send(ack(&id, json!({"viewport": {"width": w, "height": h}})));
                 }
             }
         }
@@ -698,9 +707,20 @@ impl Worker {
                     return Ok(());
                 };
                 let (w, h, dpr) = bi::clamp_resize(width, height, dpr).map_err(protocol)?;
+                // held while it applies: of two views resizing at once, the newest claim is on the page
+                let mut claims = self.ctrl.view_claims().lock().await;
+                let claim = ViewClaim { socket: self.shared.socket, width: w, height: h, dpr };
+                if claims.repeats_older(&claim) {
+                    drop(claims);
+                    let (w, h) = self.shared.view();
+                    let _ = self.client.send(ack(id, json!({"superseded": true, "viewport": {"width": w, "height": h}})));
+                    return Ok(());
+                }
                 // on the controller's session, which owns the saved 1280x800 override
                 self.ctrl.send_cdp_command("Emulation.setDeviceMetricsOverride",
                     json!({"width": w, "height": h, "deviceScaleFactor": dpr, "mobile": false})).await?;
+                claims.claim(claim);
+                drop(claims);
                 self.shared.resized.store(true, Ordering::SeqCst);
                 self.shared.set_view(w as f64, h as f64);
                 restart_screencast(&self.cdp, (w as f64 * dpr).round() as u32, (h as f64 * dpr).round() as u32).await?;
@@ -802,13 +822,27 @@ async fn release_on(cdp: &Cdp, held: Option<HeldPointer>) {
     }
 }
 
+/// This view lets go of its page size. The page keeps a newer view's size, takes the newest
+/// remaining one, or gets the bot's own viewport back when no other view has a size.
 async fn restore_viewport(ctrl: &BrowserController, cdp: &Cdp, shared: &Shared) {
     if !shared.resized.swap(false, Ordering::SeqCst) { return; }
-    let (w, h) = ctrl.fixed_viewport().unwrap_or(DEFAULT_VIEW);
-    let _ = ctrl.send_cdp_command("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": 1, "mobile": false})).await;
+    let mut claims = ctrl.view_claims().lock().await;
+    let (w, h, dpr) = match claims.release(shared.socket) {
+        // a newer view's size is on the page; this view's frames follow it
+        ViewRelease::Keep => return,
+        ViewRelease::Reapply(next) => (next.width, next.height, next.dpr),
+        ViewRelease::Restore => { let (w, h) = ctrl.fixed_viewport().unwrap_or(DEFAULT_VIEW); (w, h, 1.0) }
+    };
+    // the bot's own override is sent with a whole 1, as `set_viewport` sends it
+    let scale = if dpr == 1.0 { json!(1) } else { json!(dpr) };
+    let _ = ctrl.send_cdp_command("Emulation.setDeviceMetricsOverride", json!({"width": w, "height": h, "deviceScaleFactor": scale, "mobile": false})).await;
+    drop(claims);
     shared.set_view(w as f64, h as f64);
-    let _ = restart_screencast(cdp, w, h).await;
+    let _ = restart_screencast(cdp, (w as f64 * dpr).round() as u32, (h as f64 * dpr).round() as u32).await;
 }
+
+/// Numbers the live views, for their claims on the page size.
+static NEXT_SOCKET: AtomicU64 = AtomicU64::new(1);
 
 async fn restart_screencast(cdp: &Cdp, max_width: u32, max_height: u32) -> Result<(), BrowserError> {
     cdp.call("Page.stopScreencast", json!({}), PROBE_WAIT).await?;
@@ -849,6 +883,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
     let (cdp, mut events, tasks) = Cdp::open(ws);
     let (w, h) = ctrl.fixed_viewport().unwrap_or(DEFAULT_VIEW);
     let shared = Arc::new(Shared {
+        socket: NEXT_SOCKET.fetch_add(1, Ordering::Relaxed),
         view: std::sync::Mutex::new((w as f64, h as f64)),
         resized: AtomicBool::new(false),
         cursor: std::sync::Mutex::new("auto".into()),
@@ -1024,6 +1059,9 @@ async fn stream(
                             let (vw, vh) = shared.view();
                             send(socket, json!({"type":"control","active":false,"viewport":{"width":vw,"height":vh}})).await?;
                         }
+                        // the view closes or goes to the background: only this view's own size
+                        // goes, so it needs no control (a human step's view holds none)
+                        "restore_viewport" => { let _ = jobs.send(Job::Restore(id)); }
                         _ => {
                             if lease.is_none() && !ctrl.is_held_for_person() {
                                 send(socket, error(&id, not_in_control(ctrl.control.try_read().is_err()))).await?;

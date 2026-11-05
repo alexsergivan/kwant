@@ -710,6 +710,9 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           onHandBack={handBack}
           stream={stream}
           step={stepForStage}
+          controlling={stream.controlling}
+          resizeIgnored={stream.resizeIgnored}
+          restoreSize={stream.restoreViewport}
         />
       )}
 
