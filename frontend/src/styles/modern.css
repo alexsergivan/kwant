@@ -678,6 +678,9 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   --accent-fill: #6c58e0;       /* sky-600: toggles on */
   --accent-gradient: linear-gradient(135deg, #7a62f0 0%, #5b47d6 100%);
   --accent-soft: linear-gradient(135deg, rgb(122 98 240 / .22) 0%, rgb(91 71 214 / .10) 100%);
+  /* Pixel's names for the same shades (PX-* classes use --dv-t*, --dv-accent*) */
+  --dv-t1: var(--t1); --dv-t2: var(--t2); --dv-t3: var(--t3); --dv-t4: var(--t4); --dv-t5: var(--t5);
+  --dv-accent: var(--accent); --dv-accent-strong: var(--accent-strong);
   /* new Dev tokens (style v2) */
   --dv-code-bg: rgb(10 7 25 / .72);          /* command boxes, diff excerpts, sha chips */
   --dv-add: #5eead4;  --dv-add-bg: rgb(94 234 212 / .10);
@@ -790,3 +793,5 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
   .dv-led::after, .dv-led[data-ping]::after, .dv-node::before, .dv-caret, .dv-stamp { animation: none !important; }
   .dv-led[data-s="run"]::after { opacity: .5; transform: scale(1.6); }
 }
+/* §2.4 kbd chips are desktop only */
+@media (max-width: 639px) { .dv-kbd { display: none; } }
