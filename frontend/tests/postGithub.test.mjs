@@ -145,7 +145,7 @@ test('ready: the line with @login in mono, primary Post to GitHub · N comments,
   assert.equal(f.dataset.postState, 'ready');
   assert.match(flat(f), /Nothing is posted until you press it\. Posts as @oleks-i\./);
   assert.match(f.innerHTML, /<span class="font-mono text-zinc-100">@oleks-i<\/span>/, 'login in mono');
-  assert.equal(f.querySelector('svg.lucide-lock'), null, 'v2: no lock icon');
+  assert.equal(!!f.querySelector('svg.lucide-lock'), false, 'v2: no lock icon');
   const b = button(f, 'Post to GitHub');
   assert.equal(flat(b), 'Post to GitHub · 3 comments', 'the dismissed fourth finding is not counted');
   assert.equal(b.disabled, false);
@@ -188,7 +188,7 @@ test('posting: spinner, button disabled and busy, a second press sends nothing; 
   const a = f.querySelector('a[href="https://github.com/o/r/pull/294#pullrequestreview-1"]');
   assert.ok(a, 'View on GitHub links to the review');
   assert.equal(a.getAttribute('target'), '_blank');
-  assert.equal(button(f, 'Post to GitHub'), undefined, 'no button once posted');
+  assert.equal(!!button(f, 'Post to GitHub'), false, 'no button once posted');
   assert.equal(f.querySelector('[role="status"]').textContent, 'Posted 19:58 as @oleks-i · 3 comments');
 });
 
@@ -240,7 +240,7 @@ test('stale: run LED line and a disabled button', async () => {
   const b = button(f, 'Post to GitHub');
   assert.equal(b.getAttribute('aria-disabled'), 'true');
   assert.equal(f.querySelector('.dv-led').dataset.s, 'run');
-  assert.equal(button(f, 'Try again'), undefined);
+  assert.equal(!!button(f, 'Try again'), false);
 });
 
 test('failed: "Couldn’t post: {message}" and Try again, which posts again and clears the error', async () => {
@@ -253,7 +253,7 @@ test('failed: "Couldn’t post: {message}" and Try again, which posts again and 
   assert.match(flat(f), /Couldn’t post: GitHub answered 502/);
   assert.equal(f.querySelector('.dv-led').dataset.s, 'bad');
   assert.match(button(f, 'Try again').className, /kw-btn-ghost/);
-  assert.equal(button(f, 'Post to GitHub'), undefined);
+  assert.equal(!!button(f, 'Post to GitHub'), false);
   await click(button(f, 'Try again'));
   assert.deepEqual(calls, ['dvr_294']);
   f = footer(host);
@@ -318,12 +318,12 @@ test('F7: forge null shows neither the Post button nor the Open link, in every s
   for (const over of [{}, { post_error: { kind: 'read_only', message: null } }, { post_error: { kind: 'failed', message: 'x' } }]) {
     const card = { ...base(), ...over };
     const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: null, forgeLogin: LOGIN, now: NOW });
-    assert.equal(host.querySelector('[data-post-button], [data-post-disabled], [data-forge-link]'), null, 'no Post button, no link');
-    assert.equal(button(host, 'Post to'), undefined);
-    assert.equal(button(host, 'Try again'), undefined);
-    assert.equal(host.querySelector('a[href="' + card.links.pr + '"]'), null, 'the PR link is not drawn anywhere on the card');
+    assert.equal(!!host.querySelector('[data-post-button], [data-post-disabled], [data-forge-link]'), false, 'no Post button, no link');
+    assert.equal(!!button(host, 'Post to'), false);
+    assert.equal(!!button(host, 'Try again'), false);
+    assert.equal(!!host.querySelector('a[href="' + card.links.pr + '"]'), false, 'the PR link is not drawn anywhere on the card');
     assert.doesNotMatch(host.textContent, /Nothing is posted|Posts as|Open on|Open pull request|GitHub/, 'no lock line, no forge wording');
-    assert.equal(host.querySelector('[data-review-footer]'), null, 'nothing to show: no empty footer rule');
+    assert.equal(!!host.querySelector('[data-review-footer]'), false, 'nothing to show: no empty footer rule');
   }
   // Leaving forge out is the same as null.
   const out = html(m.ReviewCard, { card: base(), onFinding: async () => base(), onPost: async () => base(), now: NOW });

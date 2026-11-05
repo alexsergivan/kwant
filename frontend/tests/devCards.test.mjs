@@ -627,7 +627,7 @@ test('B2: a backup started from the secondary Back up first puts focus on the ma
   assert.notEqual(secondary, host.querySelector('[data-floor-main]'));
   secondary.focus();
   await click(secondary);
-  assert.equal(button(host, 'Back up first'), undefined, 'the secondary button is gone');
+  assert.equal(!!button(host, 'Back up first'), false, 'the secondary button is gone');
   assert.equal(document.activeElement, host.querySelector('[data-floor-main]'), 'focus is on the main button, not <body>');
 });
 
