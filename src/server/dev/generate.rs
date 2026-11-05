@@ -5,7 +5,11 @@
 //! Swarm Auditor runs its stages: a hidden, unsaved turn where every tool call would ask the
 //! person. The reply must be one JSON object; a reply that doesn't validate is asked for once more,
 //! then the card is `failed` with the reason and keeps its rule-based parts. Each try takes a call
-//! from the space's daily cap of 30 (`db.take_dev_call`).
+//! from the space's daily cap, which is a parameter of [`generate_with_cap`]; [`generate`] reads it
+//! from `KWANT_DEV_CALL_CAP` ([`super::call_cap`], 30 by default).
+//!
+//! Every card turn is asked with [`NO_TOOLS`]: the [`Model`] seam gets the tool list with each
+//! call, [`TurnModel`] refuses any other list, and the tests check the list stays empty.
 
 use super::facts::{DevFacts, FileDiff, Kind, ReleaseFacts, DIFF_CHARS};
 use super::{landed, notes, review};
@@ -18,10 +22,23 @@ use serde_json::Value;
 /// Shown as the turn's purpose, and marks any card the turn raised.
 pub const PURPOSE: &str = "dev_card";
 const TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-pub const CAP_REASON: &str = "Today's 30 Dev mode model calls for this space are used up; the card has only its rule-based parts.";
+/// The tools a card turn may use: none. The text is read from the prompt alone.
+pub const NO_TOOLS: &[&str] = &[];
 
-/// Generates the card `card_id`, then sets its status (`ready` or `failed`) and sends `dev_card`.
+/// The card's `error` once today's `cap` calls are used up.
+pub fn cap_reason(cap: i64) -> String {
+    format!("Today's {cap} Dev mode model calls for this space are used up; the card has only its rule-based parts.")
+}
+
+/// Generates the card `card_id` under the space's daily cap ([`super::call_cap`]:
+/// `KWANT_DEV_CALL_CAP`, else 30); see [`generate_with_cap`].
 pub async fn generate(state: AppState, card_id: String) {
+    generate_with_cap(state, card_id, super::call_cap()).await
+}
+
+/// Generates the card `card_id`, taking model calls from a daily cap of `cap` for its space,
+/// then sets its status (`ready` or `failed`) and sends `dev_card`.
+pub async fn generate_with_cap(state: AppState, card_id: String, cap: i64) {
     let row = match state.db.dev_card(&card_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return,
@@ -30,7 +47,7 @@ pub async fn generate(state: AppState, card_id: String) {
             return;
         }
     };
-    let (status, card) = build(&state, &row).await;
+    let (status, card) = build(&state, &row, cap).await;
     let card = card.to_string();
     match state.db.set_dev_card(&card_id, status, Some(&card)).await {
         Ok(Some(row)) => super::notify_card(&state, &row),
@@ -41,7 +58,7 @@ pub async fn generate(state: AppState, card_id: String) {
 
 /// The card's status and JSON. A failed card still carries everything rules could work out,
 /// plus `error`.
-async fn build(state: &AppState, row: &DevCardRow) -> (&'static str, Value) {
+async fn build(state: &AppState, row: &DevCardRow, cap: i64) -> (&'static str, Value) {
     match row.kind.as_str() {
         LANDED | REVIEW => {
             let facts: DevFacts = match serde_json::from_str(&row.facts) {
@@ -49,7 +66,7 @@ async fn build(state: &AppState, row: &DevCardRow) -> (&'static str, Value) {
                 Err(e) => return (FAILED, serde_json::json!({"kind": row.kind, "error": format!("The card's facts couldn't be read: {e}")})),
             };
             let picked = review::pick_reviewer(state, &row.space_id, &facts.author).await;
-            let model_on = |bot: Kwant| TurnModel { state: state.clone(), bot, space_id: row.space_id.clone() };
+            let model_on = |bot: Kwant| TurnModel { state: state.clone(), bot, space_id: row.space_id.clone(), cap };
             match facts.kind {
                 Kind::Review => {
                     let mut model = picked.as_ref().map(|p| model_on(p.bot.clone()));
@@ -108,15 +125,19 @@ async fn landed_review(state: &AppState, row: &DevCardRow, facts: &DevFacts) -> 
 pub(super) trait Model {
     /// The bot writing the text.
     fn bot(&self) -> &Kwant;
+    /// Today's cap of model calls for the space.
+    fn cap(&self) -> i64;
     /// Takes one call from today's cap: false once it's used up.
     async fn take_call(&mut self) -> bool;
-    async fn ask(&mut self, prompt: String) -> Result<String, String>;
+    /// One turn on `prompt`, offered exactly `tools` (always [`NO_TOOLS`] for a card).
+    async fn ask(&mut self, prompt: String, tools: &[&str]) -> Result<String, String>;
 }
 
 pub(super) struct TurnModel {
     state: AppState,
     bot: Kwant,
     space_id: String,
+    cap: i64,
 }
 
 impl Model for TurnModel {
@@ -124,11 +145,19 @@ impl Model for TurnModel {
         &self.bot
     }
 
-    async fn take_call(&mut self) -> bool {
-        self.state.db.take_dev_call(&self.space_id).await.unwrap_or(false)
+    fn cap(&self) -> i64 {
+        self.cap
     }
 
-    async fn ask(&mut self, prompt: String) -> Result<String, String> {
+    async fn take_call(&mut self) -> bool {
+        self.state.db.take_dev_call_at(&self.space_id, super::now(), self.cap).await.unwrap_or(false)
+    }
+
+    async fn ask(&mut self, prompt: String, tools: &[&str]) -> Result<String, String> {
+        // A card turn gets no tools; anything else is a bug, never a wider turn
+        if !tools.is_empty() {
+            return Err(format!("a Dev mode card turn gets no tools, and was offered {}", tools.join(", ")));
+        }
         let state = &self.state;
         let bot = &self.bot;
         let started = chrono::Utc::now();
@@ -166,14 +195,14 @@ pub(super) async fn ask_json<M: Model, T>(model: &mut M, prompt: &str, parse: im
     let mut last = String::new();
     for attempt in 0..2 {
         if !model.take_call().await {
-            return Err(CAP_REASON.into());
+            return Err(cap_reason(model.cap()));
         }
         let p = if attempt == 0 {
             prompt.to_string()
         } else {
             format!("{prompt}\n\nYour last reply couldn't be used: {last}\nReply again with only the JSON object, nothing before or after it.")
         };
-        match model.ask(p).await {
+        match model.ask(p, NO_TOOLS).await {
             Ok(reply) => match parse(&reply) {
                 Ok(t) => return Ok(t),
                 Err(e) => last = e,
@@ -243,20 +272,24 @@ Reply with one JSON object and nothing else.";
 
 #[cfg(test)]
 pub(super) mod stub {
-    //! A stand-in for the model in tests: canned replies, a call cap, and the prompts it got.
+    //! A stand-in for the model in tests: canned replies, a call cap, and each call's prompt and
+    //! the tool list it was offered.
     use super::Model;
     use crate::db::models::Kwant;
 
     pub struct Stub {
         pub bot: Kwant,
         pub replies: Vec<Result<String, String>>,
+        pub cap: i64,
         pub calls_left: u32,
         pub prompts: Vec<String>,
+        /// The tool list of each call, in order (one entry per prompt).
+        pub tools: Vec<Vec<String>>,
     }
 
     impl Stub {
         pub fn new(replies: Vec<Result<String, String>>) -> Self {
-            Stub { bot: bot("kw_demo_rigel", "Rigel", "codex"), replies, calls_left: 30, prompts: Vec::new() }
+            Stub { bot: bot("kw_demo_rigel", "Rigel", "codex"), replies, cap: 30, calls_left: 30, prompts: Vec::new(), tools: Vec::new() }
         }
     }
 
@@ -283,6 +316,9 @@ pub(super) mod stub {
         fn bot(&self) -> &Kwant {
             &self.bot
         }
+        fn cap(&self) -> i64 {
+            self.cap
+        }
         async fn take_call(&mut self) -> bool {
             if self.calls_left == 0 {
                 return false;
@@ -290,8 +326,9 @@ pub(super) mod stub {
             self.calls_left -= 1;
             true
         }
-        async fn ask(&mut self, prompt: String) -> Result<String, String> {
+        async fn ask(&mut self, prompt: String, tools: &[&str]) -> Result<String, String> {
             self.prompts.push(prompt);
+            self.tools.push(tools.iter().map(|t| t.to_string()).collect());
             if self.replies.is_empty() {
                 return Err("no reply left".into());
             }
@@ -331,12 +368,39 @@ mod tests {
     async fn the_daily_cap_stops_the_call_before_it_is_made() {
         let mut m = Stub::new(vec![Ok("{\"headline\": \"ok\"}".into())]);
         m.calls_left = 0;
-        assert_eq!(ask_json(&mut m, "P", parse).await, Err(CAP_REASON.into()));
+        assert_eq!(ask_json(&mut m, "P", parse).await, Err(cap_reason(30)));
         assert!(m.prompts.is_empty());
         // The retry needs a call of its own
         let mut m = Stub::new(vec![Ok("no".into()), Ok("{\"headline\": \"ok\"}".into())]);
         m.calls_left = 1;
-        assert_eq!(ask_json(&mut m, "P", parse).await, Err(CAP_REASON.into()));
+        assert_eq!(ask_json(&mut m, "P", parse).await, Err(cap_reason(30)));
+    }
+
+    #[tokio::test]
+    async fn the_cap_is_a_parameter_and_names_itself_in_the_reason() {
+        let mut m = Stub::new(vec![Ok("{\"headline\": \"ok\"}".into())]);
+        (m.cap, m.calls_left) = (5, 0);
+        let e = ask_json(&mut m, "P", parse).await.unwrap_err();
+        assert!(e.starts_with("Today's 5 Dev mode model calls"), "{e}");
+        assert_eq!(cap_reason(crate::db::dev_mode::CALLS_CAP), cap_reason(30));
+        // generate() reads the space's cap from Lin's KWANT_DEV_CALL_CAP seam (30 when unset)
+        assert_eq!(super::super::call_cap(), crate::db::dev_mode::CALLS_CAP);
+    }
+
+    #[tokio::test]
+    async fn the_db_counts_calls_up_to_the_cap_it_is_given() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
+        let now = super::super::now();
+        for _ in 0..2 {
+            assert!(db.take_dev_call_at("sp_a", now, 2).await.unwrap());
+        }
+        assert!(!db.take_dev_call_at("sp_a", now, 2).await.unwrap());
+        assert_eq!(db.dev_calls_on("sp_a", &super::super::utc_day(now)).await.unwrap(), 2);
+        // Another space has its own count; a higher cap lets the same space go on
+        assert!(db.take_dev_call_at("sp_b", now, 1).await.unwrap());
+        assert!(db.take_dev_call_at("sp_a", now, 3).await.unwrap());
+        assert_eq!(db.dev_calls_on("sp_a", &super::super::utc_day(now)).await.unwrap(), 3);
     }
 
     #[test]
@@ -406,6 +470,61 @@ mod examples {
         }
         if let Ok(path) = std::env::var("DEV_CARD_EXAMPLES") {
             std::fs::write(path, serde_json::to_string_pretty(&Value::Array(out)).unwrap()).unwrap();
+        }
+    }
+
+    /// Rigel's hook (qa/plan.md §2 item 3): every model call of a review or a landed card, the
+    /// retry included, is offered an empty tool list.
+    #[tokio::test]
+    async fn review_and_landed_turns_are_offered_no_tools() {
+        let good_landed = text("Chat", "A reaction reaches the bot once", "You see no change.", "A told column.");
+        let good_review = json!({"intent": {"asked": "x", "rows": [{"state": "ok", "text": "Does it"}]}, "findings": []}).to_string();
+        for n in [290, 301, 303] {
+            let f = fixture(n);
+            // Landed: a bad reply, then a good one: two calls
+            let mut m = Stub::new(vec![Ok("not json".into()), good_landed.clone()]);
+            let (status, _) = landed::card(&f, None, Some(&mut m)).await;
+            assert_eq!(status, "ready");
+            assert_eq!(m.tools, vec![Vec::<String>::new(); 2], "landed #{n}");
+            assert_eq!(m.prompts.len(), 2);
+            // Review: the same, as an open PR
+            let mut rf = f.clone();
+            (rf.kind, rf.merged_at, rf.merged_by) = (Kind::Review, None, None);
+            let picked = choose(vec![bot("kw_demo_rigel", "Rigel", "codex")], &rf.author);
+            let mut m = Stub::new(vec![Ok("{}".into()), Ok(good_review.clone())]);
+            let (status, _) = review::card(&rf, picked.as_ref(), Some(&mut m)).await;
+            assert_eq!(status, "ready");
+            assert_eq!(m.tools, vec![Vec::<String>::new(); 2], "review #{n}");
+            // And each prompt tells the model it has none
+            assert!(m.prompts.iter().all(|p| p.contains("Don't use any tools")));
+        }
+        assert!(super::NO_TOOLS.is_empty());
+    }
+
+    /// Rigel's hook (qa/plan.md §2 item 4): nothing secret-looking is written out in Dev mode's
+    /// sources or fixtures. The prefixes are joined here at runtime, so this file has none either.
+    #[test]
+    fn no_secret_looking_strings_in_dev_sources_or_fixtures() {
+        let prefixes: Vec<String> = [("gh", "p_"), ("gh", "o_"), ("gh", "s_"), ("github", "_pat_"), ("AK", "IA"), ("xo", "xb-"), ("sk", "_live_"), ("-----BEGIN ", "PRIVATE KEY")]
+            .iter()
+            .map(|(a, b)| format!("{a}{b}"))
+            .collect();
+        let dir = format!("{}/src/server/dev", env!("CARGO_MANIFEST_DIR"));
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for d in [dir.clone(), format!("{dir}/fixtures")] {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let path = e.unwrap().path();
+                if path.is_file() {
+                    files.push(path);
+                }
+            }
+        }
+        assert!(files.len() >= 10, "{files:?}");
+        for path in files {
+            let text = std::fs::read_to_string(&path).unwrap();
+            for p in &prefixes {
+                assert!(!text.contains(p.as_str()), "{} has {p}", path.display());
+            }
         }
     }
 }

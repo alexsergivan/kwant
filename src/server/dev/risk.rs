@@ -6,9 +6,11 @@
 //! - always **High**: a secret in the diff, or a new package that doesn't exist (Juno's scanners);
 //! - strong: a security path (auth, passwords, crypto, payments, redaction), a migration, a test
 //!   made easier to pass (`tamper`);
-//! - regular: deploy files, CI, build config, new packages, no tests near the change, a file
-//!   outside the task, a large change (more than [`LARGE_LINES`] lines or [`LARGE_FILES`] files);
-//! - weak (a reason, never a level on its own): the first edit to a file in 90 days.
+//! - regular: deploy files, CI, build config, new packages, no tests near the change, a large
+//!   change (more than [`LARGE_LINES`] lines or [`LARGE_FILES`] files);
+//! - chips only (a reason, never a level): the first edit to a file in 90 days, and a file outside
+//!   the task. `outside_task` comes from the reviewer's intent rows, a model's reading, so it never
+//!   moves the level (plan §3.6 item 15, D6).
 //!
 //! High: two strong, or one strong with two more, or four in all. Medium: any strong or regular.
 //! Otherwise Low.
@@ -48,6 +50,9 @@ pub struct Inputs<'a> {
     pub missing_packages: u32,
 }
 
+/// The chip for work the task didn't ask for.
+pub const OUTSIDE_TASK: &str = "Changed a file outside the task";
+
 pub const LARGE_LINES: u64 = 500;
 pub const LARGE_FILES: usize = 15;
 /// Code lines added with no test near them before it's "No tests near the change".
@@ -81,8 +86,8 @@ pub fn assess(i: &Inputs) -> Risk {
         reasons.push("A test was loosened".into());
     }
     if i.outside_task {
-        regular += 1;
-        reasons.push("Changed a file outside the task".into());
+        // A chip only: the model's intent rows never move the level
+        reasons.push(OUTSIDE_TASK.into());
     }
     let paths = || i.files.iter().map(|f| f.path.as_str()).chain(i.files.iter().filter_map(|f| f.previous_path.as_deref()));
     for (hit, chip) in [(paths().any(is_deploy_path), "Changes deploy files"), (paths().any(is_ci_path), "Changes CI"), (paths().any(is_build_config_path), "Changes build config")] {
@@ -654,13 +659,47 @@ mod tests {
     }
 
     #[test]
-    fn tamper_and_outside_task_raise_the_level() {
+    fn tamper_raises_the_level_and_outside_task_is_only_a_chip() {
         let files = [code("src/a.rs", 3), test_edit("tests/a_test.rs")];
         let flags = [flag()];
         let r = assess(&Inputs { files: &files, tamper: &flags, ..Default::default() });
         assert_eq!((r.level, r.reasons[0].as_str()), (Level::Medium, "A test was loosened"));
         let r = assess(&Inputs { files: &files, outside_task: true, ..Default::default() });
-        assert_eq!((r.level, r.reasons[0].as_str()), (Level::Medium, "Changed a file outside the task"));
+        assert_eq!((r.level, r.reasons[0].as_str()), (Level::Low, OUTSIDE_TASK));
+    }
+
+    /// D6 / plan §3.6 item 15: the same patch with and without "extra" intent rows gets the same
+    /// level; only the chip differs.
+    #[test]
+    fn outside_task_never_changes_the_level_only_the_chip() {
+        let flags = [flag()];
+        let patches: Vec<(Vec<FileDiff>, &[Flag])> = vec![
+            // Low: a small change with tests nearby
+            (vec![code("src/a.rs", 3), test_edit("tests/a_test.rs")], &[]),
+            // Medium, one regular signal away from High: CI plus deploy files
+            (vec![modified(".github/workflows/ci.yml", "@@ -1,1 +1,1 @@\n-a\n+b\n"), modified("Dockerfile", "@@ -1,1 +1,1 @@\n-a\n+b\n")], &[]),
+            // Medium, one strong signal: a loosened test
+            (vec![code("src/a.rs", 3), test_edit("tests/a_test.rs")], &flags),
+            // Medium, strong plus regular: one more signal would be High
+            (vec![code("src/auth.rs", 3), test_edit("tests/auth_test.rs"), modified(".github/workflows/ci.yml", "@@ -1,1 +1,1 @@\n-a\n+b\n")], &[]),
+            // High: a security path and a loosened test (#294's shape)
+            (vec![code("src/server/activity/redaction.rs", 3), test_edit("tests/redaction_test.rs")], &flags),
+        ];
+        let mut levels = Vec::new();
+        for (files, tamper) in &patches {
+            let without = assess(&Inputs { files, tamper, ..Default::default() });
+            let with = assess(&Inputs { files, tamper, outside_task: true, ..Default::default() });
+            assert_eq!(with.level, without.level, "{files:?}");
+            assert!(with.reasons.iter().any(|r| r == OUTSIDE_TASK) && !without.reasons.iter().any(|r| r == OUTSIDE_TASK));
+            let mut rest: Vec<&String> = with.reasons.iter().filter(|r| *r != OUTSIDE_TASK).collect();
+            // With nothing else to say, "Small change…" gives way to the chip
+            if without.reasons.len() == 2 && without.reasons[0].starts_with("Small change") {
+                rest.insert(0, &without.reasons[0]);
+            }
+            assert_eq!(rest, without.reasons.iter().collect::<Vec<_>>());
+            levels.push(without.level);
+        }
+        assert_eq!(levels, [Level::Low, Level::Medium, Level::Medium, Level::Medium, Level::High]);
     }
 
     #[test]
@@ -670,7 +709,7 @@ mod tests {
         let flags = [flag()];
         let r = assess(&Inputs { files: &files, tamper: &flags, outside_task: true, ..Default::default() });
         assert_eq!(r.level, Level::High);
-        assert_eq!(&r.reasons[..3], ["Security path: redaction", "A test was loosened", "Changed a file outside the task"]);
+        assert_eq!(&r.reasons[..3], ["Security path: redaction", "A test was loosened", OUTSIDE_TASK]);
         // One strong plus one regular is Medium; plus another regular is High
         let mut files = vec![code("src/auth.rs", 3), test_edit("tests/auth_test.rs"), modified(".github/workflows/ci.yml", "@@ -1,1 +1,1 @@\n-a\n+b\n")];
         assert_eq!(risk(&files).level, Level::Medium);

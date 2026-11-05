@@ -319,7 +319,8 @@ pub(super) async fn card<M: Model>(facts: &DevFacts, picked: Option<&Picked>, mo
 mod tests {
     use super::super::facts::{FileDiff, Kind, KwantRef};
     use super::super::generate::stub::{bot, Stub};
-    use super::super::generate::CAP_REASON;
+    use super::super::generate::cap_reason;
+    use super::super::risk::OUTSIDE_TASK;
     use super::*;
 
     fn author(engine: &str) -> Author {
@@ -431,7 +432,23 @@ mod tests {
         let mut m = Stub::new(vec![]);
         m.calls_left = 0;
         let (status, c) = card(&f, Some(&picked), Some(&mut m)).await;
-        assert_eq!((status, c["error"].as_str()), (FAILED, Some(CAP_REASON)));
+        assert_eq!((status, c["error"].as_str()), (FAILED, Some(cap_reason(30).as_str())));
+    }
+
+    /// D6 / plan §3.6 item 15: the reviewer's "extra" rows add the chip and never move the level.
+    #[tokio::test]
+    async fn extra_intent_rows_add_the_chip_but_never_move_the_level() {
+        let no_extra = r#"{"intent": {"asked": "x", "rows": [{"state": "ok", "text": "Does what it says"}]}, "findings": []}"#;
+        let extra = r#"{"intent": {"asked": "x", "rows": [{"state": "ok", "text": "Does what it says"}, {"state": "extra", "text": "Also rewrites the docs"}]}, "findings": []}"#;
+        for n in [290, 301, 303] {
+            let f = review_facts(n);
+            let picked = choose(vec![bot("kw_demo_rigel", "Rigel", "codex")], &f.author).unwrap();
+            let (_, without) = card(&f, Some(&picked), Some(&mut Stub::new(vec![Ok(no_extra.into())]))).await;
+            let (_, with) = card(&f, Some(&picked), Some(&mut Stub::new(vec![Ok(extra.into())]))).await;
+            assert_eq!(with["risk"]["level"], without["risk"]["level"], "#{n}");
+            let has = |c: &Value| c["risk"]["reasons"].as_array().unwrap().contains(&json!(OUTSIDE_TASK));
+            assert!(has(&with) && !has(&without), "#{n}: {} / {}", with["risk"], without["risk"]);
+        }
     }
 
     #[tokio::test]
