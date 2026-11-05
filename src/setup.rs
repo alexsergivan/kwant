@@ -269,10 +269,19 @@ pub const TORCH_CPU_INDEX: &str = "https://download.pytorch.org/whl/cpu";
 
 /// `cpu_torch`: install CPU-only PyTorch first (Linux; Mac wheels have no CUDA).
 pub fn laya_commands(data_dir: &Path, uv: Option<&Path>, python: Option<&Path>, cpu_torch: bool) -> Vec<Cmd> {
-    let venv = laya_dir(data_dir).join("venv");
+    venv_commands(data_dir, "venv", crate::router::sidecar::LAYA_PACKAGE, uv, python, cpu_torch)
+}
+
+/// The vega engine's own environment, `<data>/laya/venv-vega` with [`crate::router::sidecar::VEGA_PACKAGE`]:
+/// the same steps as [`laya_commands`], so the standard engine's venv is never touched.
+pub fn vega_commands(data_dir: &Path, uv: Option<&Path>, python: Option<&Path>, cpu_torch: bool) -> Vec<Cmd> {
+    venv_commands(data_dir, crate::router::sidecar::VEGA_VENV, crate::router::sidecar::VEGA_PACKAGE, uv, python, cpu_torch)
+}
+
+fn venv_commands(data_dir: &Path, venv_name: &str, pkg: &str, uv: Option<&Path>, python: Option<&Path>, cpu_torch: bool) -> Vec<Cmd> {
+    let venv = laya_dir(data_dir).join(venv_name);
     let venv_s = venv.display().to_string();
     let venv_py = venv.join("bin").join("python").display().to_string();
-    let pkg = crate::router::sidecar::LAYA_PACKAGE;
     let with_uv = |uv: &str| {
         let mut cmds = vec![Cmd::new("Make Laya's Python environment", &[uv, "venv", "--python", "3.12", &venv_s])];
         if cpu_torch {

@@ -3913,6 +3913,8 @@ pub struct SettingsResponse {
     pub decide_first: bool,
     /// Bots work ahead in quiet chats.
     pub work_ahead: bool,
+    /// Which Laya engine routes: `vega` (the default) or `standard` (laya-serve 0.4.8).
+    pub laya_engine: crate::router::sidecar::LayaEngine,
     /// Work-ahead runs per space per day (1–10).
     pub work_ahead_daily_cap: u64,
     /// Mission Control: the board, the bots' task tools and the mission runner (see `super::missions`).
@@ -3995,6 +3997,8 @@ pub struct SaveSettingsPayload {
     pub decide_first: Option<bool>,
     pub work_ahead: Option<bool>,
     pub work_ahead_daily_cap: Option<u64>,
+    /// `"vega"` or `"standard"`.
+    pub laya_engine: Option<String>,
     pub mission_board: Option<bool>,
     pub mission_lease_minutes: Option<i64>,
     pub mission_default_budget_tokens: Option<i64>,
@@ -4060,6 +4064,9 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         decide_first: super::decide::enabled(&state).await,
         work_ahead: super::decide::work_ahead_enabled(&state).await,
         work_ahead_daily_cap: super::decide::work_ahead_cap(&state).await,
+        laya_engine: crate::router::sidecar::LayaEngine::from_setting(
+            state.db.get_setting(crate::router::sidecar::ENGINE_SETTING).await.ok().flatten().as_deref(),
+        ),
         mission_board: super::missions::enabled(&state).await,
         mission_lease_minutes: super::missions::lease_minutes(&state).await,
         mission_default_budget_tokens: super::missions::default_budget(&state).await,
@@ -4130,6 +4137,13 @@ pub async fn save_settings(
     if payload.work_ahead_daily_cap.is_some_and(|n| !(1..=super::decide::MAX_WORK_AHEAD_CAP).contains(&n)) {
         return bad(format!("work_ahead_daily_cap must be 1–{}", super::decide::MAX_WORK_AHEAD_CAP));
     }
+    let laya_engine = match payload.laya_engine.as_deref() {
+        None => None,
+        Some(v) => match crate::router::sidecar::LayaEngine::parse(v) {
+            Some(engine) => Some(engine),
+            None => return bad("laya_engine must be \"vega\" or \"standard\"".to_string()),
+        },
+    };
     if let Some(e) = super::missions::settings_error(payload.mission_lease_minutes, payload.mission_default_budget_tokens, payload.mission_default_task_budget_tokens) {
         return bad(e);
     }
@@ -4251,6 +4265,11 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.work_ahead_daily_cap {
         let _ = state.db.set_setting(super::decide::WORK_AHEAD_CAP_SETTING, &n.to_string()).await;
+    }
+    if let Some(engine) = laya_engine {
+        let _ = state.db.set_setting(crate::router::sidecar::ENGINE_SETTING, engine.as_str()).await;
+        // the sidecar switches; a vega engine that fell back gets one more try
+        state.router.set_engine(engine);
     }
     if let Some(on) = payload.mission_board {
         let _ = state.db.set_setting(super::missions::SETTING, if on { "true" } else { "false" }).await;

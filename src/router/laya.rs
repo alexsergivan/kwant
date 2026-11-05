@@ -1,7 +1,7 @@
 use super::{RouteDecision, RouterError};
 use reqwest::Client;
 use serde_json::json;
-use super::sidecar::{LayaState, LayaStatus};
+use super::sidecar::{LayaEngine, LayaState, LayaStatus};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -22,9 +22,15 @@ pub fn routing_timeout() -> Duration {
 
 #[derive(Clone, Debug)]
 pub struct LayaRouter {
+    /// The configured address: where the standard engine (laya-serve 0.4.8) answers.
     pub base_url: String,
     pub(crate) client: Client,
     status: Arc<RwLock<LayaStatus>>,
+    /// Where routing questions go when that isn't [`Self::base_url`]: the vega engine's address once
+    /// it is healthy (see `sidecar`). `None` = the configured address.
+    active: Arc<RwLock<Option<String>>>,
+    /// The `laya_engine` setting as the sidecar should run it; settings changes are sent here.
+    engine: Arc<tokio::sync::watch::Sender<LayaEngine>>,
 }
 
 impl LayaRouter {
@@ -36,7 +42,45 @@ impl LayaRouter {
 
         let base_url = normalize_base_url(&base_url);
         let status = Arc::new(RwLock::new(LayaStatus::new(&base_url)));
-        Self { base_url, client, status }
+        let (engine, _) = tokio::sync::watch::channel(LayaEngine::default());
+        Self { base_url, client, status, active: Arc::new(RwLock::new(None)), engine: Arc::new(engine) }
+    }
+
+    /// Where routing questions go right now: the vega engine once it took over, else [`Self::base_url`].
+    pub fn url(&self) -> String {
+        self.active.read().ok().and_then(|a| a.clone()).unwrap_or_else(|| self.base_url.clone())
+    }
+
+    /// Sends routing questions to `url` (the vega engine), or back to [`Self::base_url`] with `None`.
+    pub fn set_active(&self, url: Option<String>) {
+        if let Ok(mut a) = self.active.write() {
+            *a = url.map(|u| normalize_base_url(&u));
+        }
+        if let Ok(mut s) = self.status.write() {
+            s.url = self.active.read().ok().and_then(|a| a.clone()).unwrap_or_else(|| self.base_url.clone());
+        }
+    }
+
+    /// The engine the sidecar runs (the `laya_engine` setting).
+    pub fn engine(&self) -> LayaEngine {
+        *self.engine.borrow()
+    }
+
+    /// A changed `laya_engine` setting: the sidecar switches engines, and a vega engine that fell
+    /// back gets one more try. The same value again changes nothing.
+    pub fn set_engine(&self, engine: LayaEngine) {
+        self.engine.send_if_modified(|e| std::mem::replace(e, engine) != engine);
+    }
+
+    pub fn engine_watch(&self) -> tokio::sync::watch::Receiver<LayaEngine> {
+        self.engine.subscribe()
+    }
+
+    /// Updates the engine fields of the status (which engine answers, and the vega engine's own state).
+    pub fn update_status(&self, f: impl FnOnce(&mut LayaStatus)) {
+        if let Ok(mut s) = self.status.write() {
+            f(&mut s);
+        }
     }
 
     pub fn status(&self) -> LayaStatus {
@@ -62,8 +106,13 @@ impl LayaRouter {
 
     /// Returns true when the Laya sidecar answers on its health endpoint.
     pub async fn is_reachable(&self) -> bool {
+        self.is_reachable_at(&self.url()).await
+    }
+
+    /// Whether a Laya server answers `/health` at `url` (one engine's own address).
+    pub async fn is_reachable_at(&self, url: &str) -> bool {
         self.client
-            .get(format!("{}/health", self.base_url))
+            .get(format!("{}/health", url.trim_end_matches('/')))
             .timeout(Duration::from_millis(800))
             .send()
             .await
@@ -74,12 +123,17 @@ impl LayaRouter {
     /// Sends a throwaway decision so the first real query doesn't pay the
     /// model's cold-start cost (which can exceed the routing timeout).
     pub async fn warm_up(&self) {
+        self.warm_up_at(&self.url()).await
+    }
+
+    /// [`Self::warm_up`] for one engine's own address.
+    pub async fn warm_up_at(&self, url: &str) {
         let payload = json!({
             "state": {"prompt": "hello, can you help me plan a trip?"},
             "questions": {"warmup": {"type": "choice", "instructions": "Who should answer?",
                 "criteria": {"a": "travel and planning", "b": "software engineering"}}}
         });
-        let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v1/systemone", url.trim_end_matches('/'));
         for _ in 0..2 {
             let started = std::time::Instant::now();
             let res = self.client.post(&endpoint).json(&payload).timeout(Duration::from_secs(60)).send().await;
@@ -119,7 +173,7 @@ impl LayaRouter {
         }
 
         let payload = model_payload(prompt, context, criteria);
-        let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v1/systemone", self.url().trim_end_matches('/'));
 
         let started = std::time::Instant::now();
         let fallback = |why: &str| {

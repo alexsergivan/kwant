@@ -77,7 +77,7 @@ impl LayaRouter {
             }
         });
 
-        let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v1/systemone", self.url().trim_end_matches('/'));
         let resp = self
             .client
             .post(&endpoint)
@@ -166,7 +166,7 @@ impl LayaRouter {
             Err((kind, e)) => {
                 let elapsed_ms = started.elapsed().as_millis() as u64;
                 if self.status().is_up() {
-                    tracing::warn!(error = %e, reason = kind, url = %self.base_url, elapsed_ms, "Laya channel routing failed, using keyword fallback");
+                    tracing::warn!(error = %e, reason = kind, url = %self.url(), elapsed_ms, "Laya channel routing failed, using keyword fallback");
                 } else {
                     tracing::info!(error = %e, reason = kind, elapsed_ms, "Laya didn't pick the bot for this message; using keyword fallback");
                 }
@@ -233,7 +233,7 @@ impl LayaRouter {
             }
         });
 
-        let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v1/systemone", self.url().trim_end_matches('/'));
         let resp = self
             .client
             .post(&endpoint)
@@ -331,6 +331,13 @@ pub struct LayaGuess<'a> {
 pub fn laya_guess<'a>(data: &serde_json::Value, members: &'a [Kwant]) -> Option<LayaGuess<'a>> {
     let lead = data.get("answers")?.get("lead_kwant")?;
     let kwant = resolve_kwant_choice(lead.get("choice")?.as_str()?, members)?;
+    // The vega engine decides for itself whether an answer can be trusted: `route` comes from its
+    // conformal set, its abstain flag and its out-of-distribution check, so it replaces the margin
+    // rule below. laya's own advice is to gate on `route`, never on the probabilities.
+    if let Some(route) = lead.get("route").and_then(|r| r.as_str()) {
+        let unbound = lead.get("unbound").and_then(|u| u.as_bool()).unwrap_or(false);
+        return Some(LayaGuess { kwant, confident: route == "auto" && !unbound });
+    }
     let mut probs: Vec<f64> = lead
         .get("probabilities")
         .and_then(|p| p.as_object())
