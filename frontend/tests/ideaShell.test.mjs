@@ -143,6 +143,63 @@ test('Drop toast: says Dropped in the jar, Undo calls back, then reads Taken bac
   after.done();
 });
 
+test('Drop toast keyboard (round 2): Undo stays focusable while undoing, focus returns to the composer, phone targets are 44 px', async () => {
+  const composer = document.createElement('textarea');
+  document.body.appendChild(composer);
+  let undone = 0;
+  let back = 0;
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = m.createRoot(host);
+  const props = { onUndo: () => { undone += 1; }, onOpenJar: () => {}, onClose: () => {}, onReturnFocus: () => { back += 1; composer.focus(); } };
+  root.render(h(m.IdeaDropToast, { ...props, state: 'dropped' }));
+  await settle();
+  const undo = host.querySelector('[data-idea-undo]');
+  assert.match(undo.className, /min-h-\[44px\] sm:min-h-\[36px\]/);
+  assert.match(host.querySelector('[data-idea-open-jar]').className, /min-h-\[44px\] sm:min-h-\[36px\]/);
+  assert.match(host.querySelector('[aria-label="Close"]').className, /min-w-\[44px\] min-h-\[44px\] sm:min-w-0 sm:min-h-0/);
+  undo.focus();
+  root.render(h(m.IdeaDropToast, { ...props, state: 'undoing' }));
+  await settle();
+  const busy = host.querySelector('[data-idea-undo]');
+  assert.equal(busy.disabled, false);
+  assert.equal(busy.getAttribute('aria-disabled'), 'true');
+  assert.equal(document.activeElement, busy);
+  busy.click();
+  assert.equal(undone, 0, 'a press while undoing is ignored');
+  root.render(h(m.IdeaDropToast, { ...props, state: 'undone' }));
+  await settle();
+  assert.equal(back, 1);
+  assert.equal(document.activeElement, composer);
+  // Focus elsewhere (the person moved on): the toast leaves it alone.
+  const other = document.createElement('input');
+  document.body.appendChild(other);
+  other.focus();
+  root.render(h(m.IdeaDropToast, { ...props, state: 'dropped', key: 'b' }));
+  await settle();
+  root.render(h(m.IdeaDropToast, { ...props, state: 'undo_failed', key: 'b' }));
+  await settle();
+  assert.equal(back, 1);
+  assert.equal(document.activeElement, other);
+  // Close from inside the toast hands focus back too.
+  host.querySelector('[aria-label="Close"]').focus();
+  host.querySelector('[aria-label="Close"]').click();
+  assert.equal(back, 2);
+  assert.equal(document.activeElement, composer);
+  root.unmount();
+  host.remove();
+  composer.remove();
+  other.remove();
+});
+
+test('Open jar (round 2): App focuses the jar quick-add after showPage, and ignores Undo unless dropped', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /showPage\('jar'\);\s*focusJarQuickAdd\(\);/);
+  assert.match(app, /\[data-quick-add="hero"\] input, \[data-quick-add="phone"\] input/);
+  assert.match(app, /if \(ideaToast\.state !== 'dropped'\) return;/);
+  assert.match(app, /onReturnFocus=\{\(\) => document\.querySelector<HTMLElement>\('\[data-composer\]'\)\?\.focus\(\)\}/);
+});
+
 test('Wiring: App catches idea_updated, skips the bubble for /idea; ChatView dresses the field', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /case 'idea_updated':[\s\S]{0,60}emitIdeaUpdated\(event\.data\)/);

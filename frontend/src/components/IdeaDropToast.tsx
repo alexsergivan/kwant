@@ -16,9 +16,28 @@ export const IdeaDropToast: React.FC<{
   onClose: () => void;
   /** ms before it closes itself; paused while the pointer or focus is inside. */
   timeout?: number;
-}> = ({ state, onUndo, onOpenJar, onClose, timeout = 6000 }) => {
+  /** Where focus goes when the toast's own buttons go away under it (the composer the idea came from). */
+  onReturnFocus?: () => void;
+}> = ({ state, onUndo, onOpenJar, onClose, timeout = 6000, onReturnFocus }) => {
   const box = useRef<HTMLDivElement>(null);
   const held = useRef(false);
+  // Only take focus back if it was ours: on body (a button unmounted) or still inside the toast.
+  const ownsFocus = () => {
+    const a = document.activeElement;
+    return !a || a === document.body || !!box.current?.contains(a);
+  };
+  useEffect(() => {
+    if ((state === 'undone' || state === 'undo_failed') && ownsFocus()) {
+      held.current = false;
+      onReturnFocus?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+  const close = () => {
+    const mine = ownsFocus();
+    onClose();
+    if (mine) onReturnFocus?.();
+  };
   useEffect(() => {
     if (state === 'undoing') return;
     const ms = state === 'dropped' ? timeout : 3000;
@@ -47,9 +66,11 @@ export const IdeaDropToast: React.FC<{
         {(state === 'dropped' || state === 'undoing') && (
           <button
             type="button"
-            onClick={onUndo}
-            disabled={state === 'undoing'}
-            className={`shrink-0 min-h-[36px] px-3 rounded-lg text-xs font-semibold text-sky-300 hover:bg-sky-500/10 disabled:opacity-60 ${focusRing}`}
+            onClick={() => {
+              if (state === 'dropped') onUndo();
+            }}
+            aria-disabled={state === 'undoing' || undefined}
+            className={`shrink-0 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg text-xs font-semibold text-sky-300 hover:bg-sky-500/10 aria-disabled:opacity-60 aria-disabled:cursor-default ${focusRing}`}
             data-idea-undo
           >
             Undo
@@ -59,13 +80,13 @@ export const IdeaDropToast: React.FC<{
           <button
             type="button"
             onClick={onOpenJar}
-            className={`shrink-0 min-h-[36px] px-3 rounded-lg text-xs font-semibold text-[#b8adff] hover:bg-violet-500/10 ${focusRing}`}
+            className={`shrink-0 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg text-xs font-semibold text-[#b8adff] hover:bg-violet-500/10 ${focusRing}`}
             data-idea-open-jar
           >
             Open jar
           </button>
         )}
-        <button type="button" onClick={onClose} aria-label="Close" className={`shrink-0 p-1.5 rounded-lg text-[#a39dcc] hover:text-white hover:bg-white/5 ${focusRing}`}>
+        <button type="button" onClick={close} aria-label="Close" className={`shrink-0 grid place-items-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 p-1.5 rounded-lg text-[#a39dcc] hover:text-white hover:bg-white/5 ${focusRing}`}>
           <X size={14} aria-hidden="true" />
         </button>
       </div>

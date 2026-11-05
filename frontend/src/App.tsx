@@ -379,6 +379,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [jarAnnouncement, setJarAnnouncement] = useState('');
   const [settingsFocusRow, setSettingsFocusRow] = useState<string | null>(null);
   const closeIdeaToast = useCallback(() => setIdeaToast(null), []);
+  // Open jar from the toast: land in the jar's own "Drop an idea…" field. The view may still be loading,
+  // so look for it for a couple of seconds; give up quietly if focus has moved elsewhere meanwhile.
+  const focusJarQuickAdd = useCallback(() => {
+    let tries = 0;
+    const tick = () => {
+      const field = document.querySelector<HTMLElement>('[data-quick-add="hero"] input, [data-quick-add="phone"] input');
+      const a = document.activeElement;
+      if (a && a !== document.body) return;
+      if (field) field.focus();
+      else if (++tries < 40) setTimeout(tick, 50);
+    };
+    requestAnimationFrame(tick);
+  }, []);
   const announceJar = (text: string) => {
     // Cleared first so the same words twice are read twice.
     setJarAnnouncement('');
@@ -3722,11 +3735,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           key={ideaToast.id}
           state={ideaToast.state}
           onClose={closeIdeaToast}
+          onReturnFocus={() => document.querySelector<HTMLElement>('[data-composer]')?.focus()}
           onOpenJar={page === 'jar' ? undefined : () => {
             setIdeaToast(null);
             showPage('jar');
+            focusJarQuickAdd();
           }}
           onUndo={() => {
+            if (ideaToast.state !== 'dropped') return;
             const id = ideaToast.id;
             setIdeaToast({ id, state: 'undoing' });
             deleteIdea(id, space.id).then(
