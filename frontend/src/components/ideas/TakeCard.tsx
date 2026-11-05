@@ -24,7 +24,8 @@ export interface TakeCardProps {
   editError?: string | null;
   onDoIt?: () => void;
   onLater?: () => void;
-  onEdit?: () => void;
+  /** Where Edit was opened from, so Cancel can put focus back there (M2). */
+  onEdit?: (from: 'button' | 'menu') => void;
   onSaveEdit?: (text: string) => void;
   onCancelEdit?: () => void;
   onLook?: () => void;
@@ -113,6 +114,10 @@ export const TakeCard: React.FC<TakeCardProps> = (p) => {
   const picking = pick?.kind === 'busy';
   const done = pick?.kind === 'done' ? pick.result : null;
   const locked = picking || busy !== null || !!done;
+  // Busy buttons stay focusable (aria-disabled, M3): a focused button that turns `disabled` drops focus to body.
+  const guard = (fn: (() => void) | undefined, off = locked) => () => {
+    if (!off) fn?.();
+  };
   const ago = since(idea.updated_at, now);
   const titleId = `take-${idea.id}-title`;
   const steps = take.plan;
@@ -131,7 +136,7 @@ export const TakeCard: React.FC<TakeCardProps> = (p) => {
               label="More for this idea"
               disabled={locked}
               items={[
-                { key: 'edit', label: 'Edit', onSelect: () => p.onEdit?.() },
+                { key: 'edit', label: 'Edit', onSelect: () => p.onEdit?.('menu') },
                 { key: 'delete', label: 'Delete', onSelect: () => p.onDelete?.(), danger: true },
               ]}
             />
@@ -214,7 +219,7 @@ export const TakeCard: React.FC<TakeCardProps> = (p) => {
         <div className={`flex flex-col gap-2 px-4 py-3 border-t border-white/[0.08] ${phone ? 'sticky bottom-0 z-10 bg-[#130f2a]' : 'bg-[rgb(10_7_25/.35)]'}`} data-action-bar>
           {pick?.kind === 'error' && idea.status === 'ready' && <InfoLine tone="rose">Couldn’t make the draft. Nothing was created. Try again.</InfoLine>}
           <div className={phone ? 'flex flex-col gap-2' : 'flex flex-wrap items-center gap-2'}>
-            <button ref={p.firstRef} type="button" onClick={p.onDoIt} disabled={locked} className={`${btn.primary} ${phone ? '!min-h-[48px] w-full text-[14px]' : ''}`} data-action="do-it">
+            <button ref={p.firstRef} type="button" onClick={guard(p.onDoIt)} aria-disabled={locked || undefined} className={`${btn.primary} ${phone ? '!min-h-[48px] w-full text-[14px]' : ''}`} data-action="do-it">
               {picking ? <Spinner /> : null}
               {picking ? 'Making the draft…' : phone ? 'Do it · make a draft' : 'Do it'}
               {!picking && <ArrowRight size={14} aria-hidden="true" />}
@@ -231,15 +236,15 @@ export const TakeCard: React.FC<TakeCardProps> = (p) => {
               </p>
             )}
             <div className={phone ? 'grid grid-cols-3 gap-2' : 'flex items-center gap-1.5'}>
-              <button type="button" onClick={p.onLater} disabled={locked} className={btn.secondary} data-action="later">
+              <button type="button" onClick={guard(p.onLater)} aria-disabled={locked || undefined} className={btn.secondary} data-action="later">
                 <Archive size={14} aria-hidden="true" />
                 Later
               </button>
-              <button type="button" onClick={p.onEdit} disabled={locked || editing} className={btn.secondary} data-action="edit">
+              <button type="button" onClick={guard(() => p.onEdit?.('button'), locked || editing)} aria-disabled={locked || editing || undefined} className={btn.secondary} data-action="edit">
                 <Pencil size={14} aria-hidden="true" />
                 Edit
               </button>
-              <button type="button" onClick={p.onLook} disabled={locked} className={btn.quiet} data-action="look">
+              <button type="button" onClick={guard(p.onLook)} aria-disabled={locked || undefined} className={`${btn.quiet} whitespace-nowrap`} data-action="look">
                 {busy === 'look' ? <Spinner /> : <RefreshCw size={14} aria-hidden="true" />}
                 {busy === 'look' ? 'Asking…' : 'Look again'}
               </button>

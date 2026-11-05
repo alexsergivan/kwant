@@ -4,7 +4,7 @@ import { OwnerAvatar } from '../MissionBoardView';
 import { EFFORT_PIPS, EFFORT_WORD, IDEA_MAX, type IdeaEffort, type IdeaVerdict, VERDICT_WORD } from '../../ideas';
 
 export const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 focus-visible:outline-offset-2';
-const btnBase = `inline-flex items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed ${focusRing}`;
+const btnBase = `inline-flex items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium disabled:opacity-50 disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:cursor-not-allowed ${focusRing}`;
 /** Phone targets are 44 px; desktop buttons 32 px (pointer). */
 export const btn = {
   primary: `${btnBase} kw-btn-primary min-h-[44px] sm:min-h-[32px] px-3.5`,
@@ -139,7 +139,9 @@ export const InfoLine: React.FC<{ tone: 'sky' | 'zinc' | 'rose'; children: React
   );
 };
 
-/** The slip/card menu: Edit and Delete (or what's passed). Esc closes and returns focus. */
+/** The slip/card menu: Edit and Delete (or what's passed). A plain disclosure (S3): aria-expanded on ⋯, Tab
+ * between items, Esc closes and returns focus, focus leaving it closes it. Busy is aria-disabled, so a
+ * focused ⋯ keeps focus (M3). */
 export const IdeaMenu: React.FC<{ label: string; items: { key: string; label: string; onSelect: () => void; danger?: boolean }[]; disabled?: boolean; buttonRef?: React.Ref<HTMLButtonElement> }> = ({
   label,
   items,
@@ -150,6 +152,7 @@ export const IdeaMenu: React.FC<{ label: string; items: { key: string; label: st
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const menuId = useId();
   const listRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
     listRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
@@ -165,17 +168,24 @@ export const IdeaMenu: React.FC<{ label: string; items: { key: string; label: st
     else if (buttonRef) (buttonRef as React.MutableRefObject<HTMLButtonElement | null>).current = el;
   };
   return (
-    <div className="relative shrink-0">
+    <div
+      ref={wrapRef}
+      className="relative shrink-0"
+      onBlur={(e) => {
+        if (open && !wrapRef.current?.contains(e.relatedTarget as Node | null) && e.relatedTarget) setOpen(false);
+      }}
+    >
       <button
         ref={setRef}
         type="button"
-        disabled={disabled}
+        aria-disabled={disabled || undefined}
         aria-label={label}
-        aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        onClick={() => setOpen((v) => !v)}
-        className={`grid place-items-center w-11 h-11 sm:w-8 sm:h-8 rounded-lg text-[#a39dcc] hover:text-[#f7f6ff] hover:bg-white/[0.06] disabled:opacity-50 ${focusRing}`}
+        onClick={() => {
+          if (!disabled) setOpen((v) => !v);
+        }}
+        className={`grid place-items-center w-11 h-11 sm:w-8 sm:h-8 rounded-lg text-[#a39dcc] hover:text-[#f7f6ff] hover:bg-white/[0.06] aria-disabled:opacity-50 aria-disabled:cursor-not-allowed ${focusRing}`}
         data-idea-menu
       >
         <MoreHorizontal size={16} aria-hidden="true" />
@@ -184,7 +194,7 @@ export const IdeaMenu: React.FC<{ label: string; items: { key: string; label: st
         <div
           ref={listRef}
           id={menuId}
-          role="menu"
+          role="group"
           aria-label={label}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
@@ -199,7 +209,6 @@ export const IdeaMenu: React.FC<{ label: string; items: { key: string; label: st
             <button
               key={it.key}
               type="button"
-              role="menuitem"
               onClick={() => {
                 setOpen(false);
                 it.onSelect();
@@ -273,7 +282,7 @@ export const EditIdea: React.FC<{ initial: string; hasTake: boolean; busy: boole
         <button type="button" onClick={onCancel} className={btn.quiet}>
           Cancel
         </button>
-        <button type="submit" disabled={over || empty || busy} className={btn.primary} data-save>
+        <button type="submit" disabled={over || empty} aria-disabled={busy || undefined} className={btn.primary} data-save>
           {busy && <Spinner />}
           Save and put back
         </button>

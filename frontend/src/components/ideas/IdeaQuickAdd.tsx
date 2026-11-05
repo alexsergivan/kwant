@@ -112,7 +112,7 @@ export const IdeaQuickAdd = forwardRef<IdeaQuickAddHandle, IdeaQuickAddProps>(({
             {busy ? <Spinner size={12} /> : <CornerDownLeft size={12} aria-hidden="true" />}
           </button>
         ) : phone ? (
-          <button type="submit" disabled={empty || over || busy} aria-label="Drop in" className={`${btn.primary} !min-h-[40px] w-11 !px-0`}>
+          <button type="submit" disabled={empty || over || busy} aria-label="Drop in" className={`${btn.primary} !min-h-[44px] w-11 !px-0`}>
             {busy ? <Spinner /> : <ArrowRight size={16} aria-hidden="true" />}
           </button>
         ) : (

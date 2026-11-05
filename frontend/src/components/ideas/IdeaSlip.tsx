@@ -17,7 +17,7 @@ export interface IdeaSlipProps {
   editing?: boolean;
   editError?: string | null;
   onLook?: () => void;
-  onEdit?: () => void;
+  onEdit?: (from: 'button' | 'menu') => void;
   onSaveEdit?: (text: string) => void;
   onCancelEdit?: () => void;
   onDelete?: () => void;
@@ -34,8 +34,13 @@ export const IdeaSlip: React.FC<IdeaSlipProps> = ({ idea, botName, botNames, now
   const textId = `idea-${idea.id}-text`;
   const border = peeking ? 'border-[rgb(157_143_255/.45)]' : failed ? 'border-[rgb(253_164_175/.35)]' : 'border-[rgb(63_56_104/.6)]';
   const surface = later ? 'bg-[#1d1840]/[0.35]' : 'bg-[#1d1840]';
+  // Busy buttons stay focusable (aria-disabled, M3).
+  const off = busy !== null;
+  const guard = (fn: (() => void) | undefined) => () => {
+    if (!off) fn?.();
+  };
   const lookBtn = (
-    <button type="button" onClick={onLook} disabled={busy !== null} className={btn.secondary} data-action="look">
+    <button type="button" onClick={guard(onLook)} aria-disabled={off || undefined} className={btn.secondary} data-action="look">
       {busy === 'look' ? <Spinner /> : <Eye size={14} aria-hidden="true" />}
       {busy === 'look' ? 'Asking…' : 'Look now'}
     </button>
@@ -55,7 +60,7 @@ export const IdeaSlip: React.FC<IdeaSlipProps> = ({ idea, botName, botNames, now
               buttonRef={menuRef}
               disabled={busy !== null}
               items={[
-                { key: 'edit', label: 'Edit', onSelect: () => onEdit?.() },
+                { key: 'edit', label: 'Edit', onSelect: () => onEdit?.('menu') },
                 { key: 'delete', label: 'Delete', onSelect: () => onDelete?.(), danger: true },
               ]}
             />
@@ -87,11 +92,11 @@ export const IdeaSlip: React.FC<IdeaSlipProps> = ({ idea, botName, botNames, now
           ) : later ? (
             <>
               <span className="min-w-0 flex-1">{idea.take ? 'Has a take' : droppedText(idea.created_at, now)}</span>
-              <button type="button" onClick={onRestore} disabled={busy !== null} className={btn.secondary} data-action="restore">
+              <button type="button" onClick={guard(onRestore)} aria-disabled={off || undefined} className={btn.secondary} data-action="restore">
                 {busy === 'restore' ? <Spinner /> : <ArchiveRestore size={14} aria-hidden="true" />}
                 Restore
               </button>
-              <button type="button" onClick={onDelete} disabled={busy !== null} className={btn.quiet} data-action="delete">
+              <button type="button" onClick={guard(onDelete)} aria-disabled={off || undefined} className={btn.quiet} data-action="delete">
                 <Trash2 size={14} aria-hidden="true" />
                 Delete
               </button>

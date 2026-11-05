@@ -254,7 +254,9 @@ test('Look now: Asking… while it waits, then the slip moves to Being peeked at
   const host = await jar({ bots: BOTS.filter((b) => b.name !== 'Pixel') });
   await click(button(card(host, ID.fresh), 'Look now'));
   assert.ok(button(card(host, ID.fresh), 'Asking'), 'busy text');
-  assert.ok(button(card(host, ID.fresh), 'Asking').disabled);
+  const asking = button(card(host, ID.fresh), 'Asking');
+  assert.equal(asking.getAttribute('aria-disabled'), 'true');
+  assert.equal(asking.disabled, false, 'busy stays focusable (M3)');
   d.resolve();
   await settle();
   assert.equal(sectionOfCard(host, ID.fresh), 'peeking');
@@ -307,7 +309,13 @@ test('Do it: hint says draft; busy disables every action; done shows Picked, the
   assert.equal(text(tc.querySelector('[data-read-only]')), 'Read only: Iris used no tools and changed nothing.');
   await click(tc.querySelector('[data-action="do-it"]'));
   assert.equal(text(tc.querySelector('[data-action="do-it"]')), 'Making the draft…');
-  for (const b of tc.querySelectorAll('[data-action-bar] button, [data-idea-menu]')) assert.ok(b.disabled, `${text(b) || 'menu'} is disabled while busy`);
+  for (const b of tc.querySelectorAll('[data-action-bar] button, [data-idea-menu]')) {
+    assert.equal(b.getAttribute('aria-disabled'), 'true', `${text(b) || 'menu'} is aria-disabled while busy`);
+    assert.equal(b.disabled, false, `${text(b) || 'menu'} keeps focus while busy (M3)`);
+  }
+  // A second press while busy does nothing.
+  await click(tc.querySelector('[data-action="do-it"]'));
+  assert.equal(calls.filter((c) => c.path.endsWith('/pick')).length, 1);
   d.resolve();
   await settle();
   const panel = host.querySelector(`[data-take-card="${ID.ready}"] [data-picked-panel]`);
@@ -601,4 +609,182 @@ test('copy has no emoji', async () => {
 
 test.after(() => {
   Date.now = realNow;
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Round 2 (Mira's #324 review): focus, busy, the badge after Do it, menu, header
+
+const focusOn = async (el) => {
+  assert.ok(el, 'element to focus exists');
+  el.focus();
+  await settle();
+};
+
+test('ruling 2: a just-picked idea stays in Takes ready but leaves the badge at once', async () => {
+  reset();
+  const d = deferred();
+  routes[`POST /api/ideas/${ID.ready}/pick`] = () => d.p.then(() => [201, FIX._examples['POST /api/ideas/:id/pick 201']]);
+  const Probe = ({ spaceId }) => h('span', { 'data-n': '' }, String(m.useIdeaJarBadge(spaceId)));
+  const badge = await mount(Probe, { spaceId: 'spc_default' });
+  const host = await jar();
+  assert.equal(text(badge), '1', 'one take ready before Do it');
+  await click(host.querySelector(`[data-take-card="${ID.ready}"] [data-action="do-it"]`));
+  d.resolve();
+  await settle();
+  // Before any refetch (the server here still says ready), the jar has already stopped counting it.
+  assert.equal(sectionOfCard(host, ID.ready), 'ready', 'still in Takes ready for the session');
+  assert.ok(host.querySelector(`[data-take-card="${ID.ready}"] [data-picked-panel]`));
+  assert.equal(text(badge), '0', 'the badge does not count the picked idea');
+  assert.equal(m.countIdeas([]).ready, 0);
+});
+
+test('M1: when the pick returns, focus stays where the person went (the quick-add)', async () => {
+  reset();
+  const d = deferred();
+  routes[`POST /api/ideas/${ID.ready}/pick`] = () => d.p.then(() => [201, FIX._examples['POST /api/ideas/:id/pick 201']]);
+  const host = await jar();
+  const doIt = host.querySelector(`[data-take-card="${ID.ready}"] [data-action="do-it"]`);
+  await focusOn(doIt);
+  await click(doIt);
+  assert.equal(document.activeElement, doIt, 'the busy Do it keeps focus (M3)');
+  const input = host.querySelector('[data-quick-add] input');
+  await focusOn(input);
+  d.resolve();
+  await settle();
+  assert.ok(host.querySelector('[data-picked-panel]'));
+  assert.equal(document.activeElement, input, 'focus is not taken to Open on board');
+});
+
+test('M1: focus on the busy Do it moves to Open on board when the pick returns', async () => {
+  reset();
+  const d = deferred();
+  routes[`POST /api/ideas/${ID.ready}/pick`] = () => d.p.then(() => [201, FIX._examples['POST /api/ideas/:id/pick 201']]);
+  const host = await jar();
+  const doIt = host.querySelector(`[data-take-card="${ID.ready}"] [data-action="do-it"]`);
+  await focusOn(doIt);
+  await click(doIt);
+  d.resolve();
+  await settle();
+  assert.equal(document.activeElement, host.querySelector('[data-picked-panel] [data-action="open-board"]'));
+});
+
+test('M2: Esc and Cancel return focus to Edit, or to the menu when Edit came from it', async () => {
+  reset();
+  const host = await jar();
+  const tc = () => host.querySelector(`[data-take-card="${ID.ready}"]`);
+  // Edit from the bar, Esc.
+  await click(tc().querySelector('[data-action="edit"]'));
+  const ta = tc().querySelector('[data-idea-edit] textarea');
+  assert.equal(document.activeElement, ta);
+  ta.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await settle();
+  assert.ok(!tc().querySelector('[data-idea-edit]'));
+  assert.equal(document.activeElement, tc().querySelector('[data-action="edit"]'), 'Esc → Edit');
+  // Edit from the menu, Cancel.
+  await click(tc().querySelector('[data-idea-menu]'));
+  await click(tc().querySelector('[data-menu-item="edit"]'));
+  await click(button(tc().querySelector('[data-idea-edit]'), 'Cancel'));
+  assert.equal(document.activeElement, tc().querySelector('[data-idea-menu]'), 'Cancel → ⋯');
+  // A slip (Edit only lives in its menu).
+  await click(card(host, ID.fresh).querySelector('[data-idea-menu]'));
+  await click(card(host, ID.fresh).querySelector('[data-menu-item="edit"]'));
+  await click(button(card(host, ID.fresh).querySelector('[data-idea-edit]'), 'Cancel'));
+  assert.equal(document.activeElement, card(host, ID.fresh).querySelector('[data-idea-menu]'));
+});
+
+test('M3: Look now keeps focus while it asks, and the 409 line shows next to it', async () => {
+  reset();
+  const d = deferred();
+  const body = FIX._examples['POST /api/ideas/:id/look 409'].find((x) => x.error === 'no_free_bot');
+  routes[`POST /api/ideas/${ID.fresh}/look`] = () => d.p.then(() => [409, body]);
+  const host = await jar();
+  const look = card(host, ID.fresh).querySelector('[data-action="look"]');
+  await focusOn(look);
+  await click(look);
+  assert.equal(document.activeElement, look);
+  await click(look);
+  assert.equal(calls.filter((c) => c.path.endsWith('/look')).length, 1, 'a press while busy is ignored');
+  d.resolve();
+  await settle();
+  assert.equal(document.activeElement, look);
+  assert.equal(look.getAttribute('aria-disabled'), null);
+});
+
+test('S1: when a card leaves, focus goes to the next card’s Do it or Look, not ⋯', async () => {
+  reset();
+  routes[`POST /api/ideas/${ID.failed}/later`] = [200, { idea: { ...FIX.ideas.find((i) => i.id === ID.failed), status: 'later' } }];
+  const host = await jar();
+  await click(card(host, ID.failed).querySelector('[data-idea-menu]'));
+  // Later isn't in a slip's menu; Delete leaves the same way.
+  await click(card(host, ID.failed).querySelector('[data-menu-item="delete"]'));
+  assert.equal(document.activeElement, card(host, ID.fresh).querySelector('[data-action="look"]'));
+});
+
+test('S2: Undo puts focus on the restored card (Later and Delete)', async () => {
+  reset();
+  const readyIdea = FIX.ideas.find((i) => i.status === 'ready');
+  routes[`POST /api/ideas/${ID.ready}/later`] = [200, { idea: { ...readyIdea, status: 'later' } }];
+  routes[`POST /api/ideas/${ID.ready}/restore`] = [200, { idea: readyIdea }];
+  const host = await jar();
+  await click(host.querySelector(`[data-take-card="${ID.ready}"] [data-action="later"]`));
+  const undo = host.querySelector('[data-undo-toast] [data-undo]');
+  await focusOn(undo);
+  await click(undo);
+  assert.equal(document.activeElement, host.querySelector(`[data-take-card="${ID.ready}"] [data-action="do-it"]`), 'Later → Undo → Do it');
+  await click(card(host, ID.fresh).querySelector('[data-idea-menu]'));
+  await click(card(host, ID.fresh).querySelector('[data-menu-item="delete"]'));
+  const undo2 = host.querySelector('[data-undo-toast] [data-undo]');
+  await focusOn(undo2); // a browser focuses the button it clicks; jsdom doesn't
+  await click(undo2);
+  assert.equal(document.activeElement, card(host, ID.fresh).querySelector('[data-action="look"]'), 'Delete → Undo → Look now');
+});
+
+test('S2: Undo does not take focus from somewhere else once the restore lands', async () => {
+  reset();
+  const readyIdea = FIX.ideas.find((i) => i.status === 'ready');
+  const d = deferred();
+  routes[`POST /api/ideas/${ID.ready}/later`] = [200, { idea: { ...readyIdea, status: 'later' } }];
+  routes[`POST /api/ideas/${ID.ready}/restore`] = () => d.p.then(() => [200, { idea: readyIdea }]);
+  const host = await jar();
+  await click(host.querySelector(`[data-take-card="${ID.ready}"] [data-action="later"]`));
+  await click(host.querySelector('[data-undo-toast] [data-undo]'));
+  const input = host.querySelector('[data-quick-add] input');
+  await focusOn(input);
+  d.resolve();
+  await settle();
+  assert.equal(document.activeElement, input);
+});
+
+test('S3: the ⋯ menu is a plain disclosure (no role=menu), Esc returns to ⋯', async () => {
+  reset();
+  const host = await jar();
+  const trigger = card(host, ID.fresh).querySelector('[data-idea-menu]');
+  assert.equal(trigger.getAttribute('aria-haspopup'), null);
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+  await click(trigger);
+  assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+  assert.ok(!host.querySelector('[role="menu"], [role="menuitem"]'));
+  const first = card(host, ID.fresh).querySelector('[data-menu-item="edit"]');
+  assert.equal(document.activeElement, first);
+  first.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await settle();
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false');
+  assert.equal(document.activeElement, trigger);
+});
+
+test('S4–S6: phone Drop in is 44 px, Look again does not wrap, Settings is icon-only below sm with chips on line 2', async () => {
+  reset();
+  phoneQuery = true;
+  const host = await jar({ onOpenSettings: () => {} });
+  const drop = host.querySelector('[data-quick-add] button[type="submit"]');
+  assert.ok(drop.className.includes('!min-h-[44px]') && !drop.className.includes('!min-h-[40px]'));
+  const s = host.querySelector('[data-action="settings"]');
+  assert.equal(s.getAttribute('aria-label'), 'Settings');
+  assert.ok(/max-sm:w-11/.test(s.className) && /max-sm:h-11/.test(s.className) && /\bml-auto\b/.test(s.className));
+  assert.ok(s.querySelector('span.hidden.sm\\:inline'), 'the word shows from sm up');
+  const chips = host.querySelector('[data-jar-chips]');
+  assert.ok(chips.contains(host.querySelector('[data-peeks-left]')));
+  assert.ok(/\bbasis-full\b/.test(chips.className) && /\border-last\b/.test(chips.className) && /sm:order-none/.test(chips.className));
+  await click(host.querySelector(`[data-card="${ID.ready}"] [data-action="open"]`));
+  assert.ok(/whitespace-nowrap/.test(host.querySelector('[data-action="look"]').className));
 });

@@ -107,7 +107,10 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
   const root = useRef<HTMLDivElement | null>(null);
   const quick = useRef<IdeaQuickAddHandle | null>(null);
   const openRef = useRef<HTMLButtonElement | null>(null);
-  const focusNext = useRef<{ kind: 'open' } | { kind: 'sel'; sel: string[] } | null>(null);
+  /** Where focus goes after the next commit. `from` is the card the action came from: focus only moves if it is
+   * on body or still inside that card, never from wherever the person went meanwhile (M1). */
+  const focusNext = useRef<{ kind: 'open'; from: string } | { kind: 'sel'; sel: string[]; from?: string } | null>(null);
+  const editFrom = useRef<'button' | 'menu'>('button');
   const prevStatus = useRef<Map<string, string>>(new Map());
   const loaded = useRef(false);
   const expandedRef = useRef<string | null>(null);
@@ -189,7 +192,8 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
   // Badge, "New" chips and the live region, from status changes.
   useEffect(() => {
     if (!list) return;
-    publishReadyCount(spaceId, countIdeas(ideas).ready);
+    // A just-picked idea stays in Takes ready for the session, but it is not a take waiting any more (ruling 2).
+    publishReadyCount(spaceId, countIdeas(ideas.filter((i) => !kept[i.id])).ready);
     const prev = prevStatus.current;
     const first = !loaded.current;
     const arrived: Ready[] = [];
@@ -212,7 +216,7 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     } else if (failed.length) {
       setLive(`${nameOf(failed[0].kwant_id) ?? 'A bot'} couldn’t read “${clip(failed[0].text)}”. It’s back in the jar.`);
     }
-  }, [list, ideas, spaceId, nameOf]);
+  }, [list, ideas, kept, spaceId, nameOf]);
 
   const groups = useMemo(() => {
     const g = groupIdeas(ideas.filter((i) => !kept[i.id]));
@@ -237,6 +241,9 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     const f = focusNext.current;
     if (!f) return;
     focusNext.current = null;
+    const a = document.activeElement;
+    const from = f.from ? root.current?.querySelector(f.from) : null;
+    if (a && a !== document.body && !from?.contains(a)) return;
     if (f.kind === 'open') openRef.current?.focus();
     else {
       for (const sel of f.sel) {
@@ -262,11 +269,18 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     const at = groups[sec].findIndex((i) => i.id === id);
     const next = rest[Math.min(at, rest.length - 1)];
     const after = SECTION_ORDER.slice(SECTION_ORDER.indexOf(sec)).map((k) => `#jar-sec-${k}`);
-    focusNext.current = { kind: 'sel', sel: [...(next ? [`[data-card="${cssId(next.id)}"] button:not([disabled])`] : []), ...after, '[data-section] h3 > *', '[data-quick-add] input'] };
+    focusNext.current = { kind: 'sel', sel: [...(next ? firstAction(next.id) : []), ...after, '[data-section] h3 > *', '[data-quick-add] input'] };
+  };
+
+  /** A card's first action: Do it, else Look (S1), else Open or any enabled button. */
+  const firstAction = (id: string) => {
+    const c = `[data-card="${cssId(id)}"]`;
+    return [`${c} [data-action="do-it"]`, `${c} [data-action="look"]`, `${c} [data-action="open"]`, `${c} button:not([disabled])`];
   };
 
   // ---- actions
   const look = async (idea: Idea) => {
+    if (busy[idea.id]) return;
     setB(idea.id, 'look');
     setN(idea.id, null);
     try {
@@ -287,6 +301,7 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
   };
 
   const doIt = async (idea: Ready) => {
+    if (busy[idea.id] || pick[idea.id]?.kind === 'done') return;
     setB(idea.id, 'pick');
     setPick((m) => ({ ...m, [idea.id]: { kind: 'busy' } }));
     setN(idea.id, null);
@@ -295,7 +310,7 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
       setKept((m) => ({ ...m, [idea.id]: idea }));
       setPick((m) => ({ ...m, [idea.id]: { kind: 'done', result } }));
       setLive(`Draft mission made${idea.take.bot ? ` for ${idea.take.bot}` : ''}. Nothing starts until you approve it.`);
-      focusNext.current = { kind: 'open' };
+      focusNext.current = { kind: 'open', from: `[data-take-card="${cssId(idea.id)}"]` };
       emitIdeaUpdated({ id: idea.id, status: 'picked', space_id: spaceId });
     } catch {
       setPick((m) => ({ ...m, [idea.id]: { kind: 'error' } }));
@@ -320,12 +335,15 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     }
   };
 
-  const restore = async (idea: Idea) => {
+  /** `undo`: from the toast, so focus goes to the restored card itself (S2), not to the next one in Later. */
+  const restore = async (idea: Idea, undo = false) => {
+    if (busy[idea.id]) return;
     setB(idea.id, 'restore');
     setN(idea.id, null);
     try {
       const r = await ideasApi.restore(idea.id);
-      if (idea.status === 'later') leaving(idea.id);
+      if (undo) focusNext.current = { kind: 'sel', sel: firstAction(idea.id) };
+      else if (idea.status === 'later') leaving(idea.id);
       replace(r);
     } catch {
       setN(idea.id, { tone: 'rose', text: 'Couldn’t restore it. Try again.' });
@@ -346,7 +364,7 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
         n.delete(idea.id);
         return n;
       });
-      focusNext.current = { kind: 'sel', sel: [`[data-card="${cssId(idea.id)}"] button:not([disabled])`] };
+      focusNext.current = { kind: 'sel', sel: firstAction(idea.id) };
     } catch (e) {
       setEditError(
         e instanceof IdeaError && e.code === 'already_peeking'
@@ -405,10 +423,11 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     if (!t) return;
     if (t.kind === 'delete') {
       unhide(t.id);
+      focusNext.current = { kind: 'sel', sel: firstAction(t.id) };
       return;
     }
     const idea = list?.ideas.find((i) => i.id === t.id);
-    if (idea) void restore(idea);
+    if (idea) void restore(idea, true);
   };
 
   useEffect(() => {
@@ -445,6 +464,24 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     }
   };
 
+  const startEdit = (id: string, from: 'button' | 'menu') => {
+    editFrom.current = from;
+    setEditing(id);
+    setEditError(null);
+  };
+
+  /** Esc and Cancel put focus back on Edit, or on ⋯ when Edit came from the menu (M2). */
+  const cancelEdit = (id: string) => {
+    setEditing(null);
+    setEditError(null);
+    const c = `[data-card="${cssId(id)}"]`;
+    const t = `[data-take-card="${cssId(id)}"]`;
+    focusNext.current = {
+      kind: 'sel',
+      sel: editFrom.current === 'button' ? [`${t} [data-action="edit"]`, `${c} [data-idea-menu]`] : [`${t} [data-idea-menu]`, `${c} [data-idea-menu]`, `${t} [data-action="edit"]`],
+    };
+  };
+
   // ---- render pieces
   const takeCard = (idea: Ready, asPhone: boolean) => (
     <TakeCard
@@ -461,12 +498,9 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
       editError={editing === idea.id ? editError : null}
       onDoIt={() => void doIt(idea)}
       onLater={() => void later(idea)}
-      onEdit={() => {
-        setEditing(idea.id);
-        setEditError(null);
-      }}
+      onEdit={(from) => startEdit(idea.id, from)}
       onSaveEdit={(t) => void saveEdit(idea, t)}
-      onCancelEdit={() => setEditing(null)}
+      onCancelEdit={() => cancelEdit(idea.id)}
       onLook={() => void look(idea)}
       onDelete={() => remove(idea)}
       onOpenMission={onOpenMission}
@@ -485,12 +519,9 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
       editing={editing === idea.id}
       editError={editing === idea.id ? editError : null}
       onLook={() => void look(idea)}
-      onEdit={() => {
-        setEditing(idea.id);
-        setEditError(null);
-      }}
+      onEdit={(from) => startEdit(idea.id, from)}
       onSaveEdit={(t) => void saveEdit(idea, t)}
-      onCancelEdit={() => setEditing(null)}
+      onCancelEdit={() => cancelEdit(idea.id)}
       onDelete={() => remove(idea)}
       onRestore={() => void restore(idea)}
     />
@@ -613,21 +644,26 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
       {/* Its own scroller: App mounts it in a flex-1 min-h-0 pane that doesn't scroll. */}
       <div className="flex-1 min-h-0 min-w-0 w-full overflow-y-auto" data-jar-scroll>
       <div ref={root} className="flex flex-col gap-5 min-h-full w-full max-w-[920px] mx-auto px-3 sm:px-6 py-4 sm:py-6 text-[#ecebfa] min-w-0" data-idea-jar>
-        <header className="flex flex-wrap items-center gap-2">
+        {/* Below sm: line 1 is the title and an icon-only Settings in the corner, line 2 the chips (ruling 3). */}
+        <header className="flex flex-wrap items-center gap-2" data-jar-header>
           <h2 className="flex items-center gap-2 text-[17px] font-semibold text-[#f7f6ff] m-0">
             <JarIcon size={18} className="text-[#b8adff]" />
             Idea jar
           </h2>
-          {spaceName && <span className="kw-chip !text-[11px]">{spaceName}</span>}
-          {left !== null && list && (
-            <span className="kw-chip !text-[11px]" data-peeks-left>
-              {left} of {list.daily_cap} peeks left today
-            </span>
+          {(spaceName || (left !== null && list)) && (
+            <div className="flex flex-wrap items-center gap-2 min-w-0 basis-full order-last sm:basis-auto sm:order-none" data-jar-chips>
+              {spaceName && <span className="kw-chip !text-[11px]">{spaceName}</span>}
+              {left !== null && list && (
+                <span className="kw-chip !text-[11px]" data-peeks-left>
+                  {left} of {list.daily_cap} peeks left today
+                </span>
+              )}
+            </div>
           )}
           {onOpenSettings && (
-            <button type="button" onClick={onOpenSettings} className={`${btn.quiet} ml-auto`} data-action="settings">
-              <Settings size={14} aria-hidden="true" />
-              Settings
+            <button type="button" onClick={onOpenSettings} aria-label="Settings" className={`${btn.quiet} ml-auto max-sm:w-11 max-sm:h-11 max-sm:!px-0`} data-action="settings">
+              <Settings size={16} aria-hidden="true" />
+              <span className="hidden sm:inline">Settings</span>
             </button>
           )}
         </header>
