@@ -1,10 +1,13 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { BotHome } from './BotHome';
 import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
+import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
+import { useMedia } from '../useMedia';
+import { composerStacked, keyboardMode, measureText16, phonePlaceholder } from '../composer';
 import { markNewSeen } from '../whatsNew';
 import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
 import { MentionPopover, MentionItem } from './MentionPopover';
@@ -55,38 +58,11 @@ import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
 import { SmartActionsSlot, actionClass } from './results/SmartActions';
 import { WorkingStrip } from './WorkingStrip';
+import { ScrollRow } from './ScrollRow';
 import { COMPOSE_PREFILL_EVENT, withPrefill } from './results/SmartResult';
 import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
-
-/** A swipeable chip row whose right fade edge (phones only, see .kw-scroll-row) goes away once
- *  it is scrolled to the end, or when everything already fits. */
-function ScrollRow({ children, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
-  const ref = useRef<HTMLDivElement>(null);
-  const update = () => {
-    const el = ref.current;
-    if (el) el.dataset.atEnd = String(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
-  };
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.addEventListener('scroll', update, { passive: true });
-    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
-    resize?.observe(el);
-    return () => {
-      el.removeEventListener('scroll', update);
-      resize?.disconnect();
-    };
-  }, []);
-  // The chips themselves can change without the row resizing.
-  useEffect(update);
-  return (
-    <div ref={ref} {...rest}>
-      {children}
-    </div>
-  );
-}
 
 export interface ChatMessage {
   id: string;
@@ -232,6 +208,8 @@ export interface ChatViewProps {
   onJumpToLatest?: () => void;
   /** Under the header: the bot's conversations and the open thread's controls. */
   subHeader?: React.ReactNode;
+  /** Phone only: the header's second line in place of the subtitle (the thread picker in a bot's chat). */
+  threadLine?: React.ReactNode;
   /** A note under the sub-header (the setup banner); hidden while `welcome` fills an empty chat. */
   notice?: React.ReactNode;
   /** Drawn in place of an empty chat (the first-run welcome). */
@@ -441,6 +419,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   viewingHistory,
   onJumpToLatest,
   subHeader,
+  threadLine,
   notice,
   welcome,
   titleExtra,
@@ -471,7 +450,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const toggleVm = onToggleVmPane || (() => setInternalIsVmPaneOpen((prev) => !prev));
 
   const [inputVal, setInputVal] = useState('');
+  // Phone (spec A1): keyboard mode while the composer has focus on a touch screen; the composer is two
+  // rows while in use. Desktop never changes.
+  const phone = useMedia(PHONE_QUERY);
+  const touch = useMedia(TOUCH_QUERY);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const kbd = keyboardMode({ phone, touch, focused: composerFocused });
+  const [fieldWidth, setFieldWidth] = useState(0);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
+  const stacked = composerStacked({ phone, focused: composerFocused, hasContent: inputVal.length > 0 || uploads.length > 0 });
   const [uploadNote, setUploadNote] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const uploadFiles = useRef(new Map<string, { file: File; abort: AbortController }>());
@@ -664,6 +651,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     stickRef.current = true;
   }, [contextKey]);
+  // Phone: the field's width picks the placeholder (A1), and its height follows when it moves between
+  // one row and two. Keyboard mode keeps the last message in view while the chat follows the bottom.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el || !phone) return;
+    const measure = () => setFieldWidth(el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [phone]);
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (el && phone && el.value) {
+      el.style.height = 'auto';
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    }
+    if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
+  }, [kbd, stacked]);
   // Back from an older window: land on the newest message
   useEffect(() => {
     if (!viewingHistory) stickRef.current = true;
@@ -1278,6 +1285,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
     teamName,
     names: activeKwants.map((k) => k.name).concat(activeTeams.map((t) => t.name)),
   });
+  const toolPhone = 'w-11 h-11 text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06] active:bg-white/[0.06] focus-visible:outline-[#b8adff]';
+  // Phone hint row (spec A2): no "@ mention · attach files" on touch, and "Answers:" only where it isn't
+  // obvious (channels and team chats, or a direct chat with an @mention typed).
+  const showAnswers = !phone || home?.kind !== 'bot' || target.kind === 'mention';
+  const showHintText = !(phone && touch);
+  const placeholder = phone
+    ? phonePlaceholder(title, fieldWidth, (t) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : ''))
+    : spaceName && !narrow
+      ? `Message ${title} in ${spaceName}`
+      : `Message ${title}`;
   const insertAt = () => {
     playSfx('click');
     const el = textareaRef.current;
@@ -1288,28 +1305,37 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-surface-main overflow-hidden">
-      {/* Channel / bot header */}
-      <div className="h-14 shrink-0 border-b border-hairline px-2 sm:px-6 gap-2 flex items-center justify-between bg-surface-main/80 backdrop-blur-md select-none">
+    <div className="flex-1 flex flex-col h-full bg-surface-main overflow-hidden" data-keyboard-mode={kbd ? 'on' : undefined}>
+      {/* Channel / bot header: 56 px on a phone, 48 px in keyboard mode (instant, no animation) */}
+      <div
+        data-chat-header
+        className={`${kbd ? 'h-12' : 'h-14'} shrink-0 border-b border-hairline px-2 sm:px-6 gap-2 flex items-center justify-between bg-surface-main/80 backdrop-blur-md select-none`}
+      >
         {onBack && (
           <button
             type="button"
             onClick={onBack}
             aria-label="Back to chats"
-            className="shrink-0 p-2 -ml-0.5 rounded-lg text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+            className="shrink-0 w-11 h-11 -ml-1 inline-flex items-center justify-center rounded-lg text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b8adff]"
           >
             <ChevronLeft size={18} />
           </button>
         )}
         {home?.kind === 'bot' && home.bot && (
-          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={34} kwantId={home.bot.id} className="rounded-xl" />
+          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={phone ? (kbd ? 28 : 32) : 34} kwantId={home.bot.id} className="rounded-xl" />
         )}
         <div className="min-w-0 flex-1">
-          <h2 className="text-body font-semibold text-zinc-50 flex items-center gap-2 min-w-0">
+          <h2
+            className={`${phone ? (kbd ? 'text-[15px] leading-5' : 'text-base leading-5') : 'text-body'} font-semibold text-zinc-50 flex items-center gap-2 min-w-0`}
+          >
             <span className="truncate">{title}</span>
             {titleExtra}
           </h2>
-          <p className="text-meta text-zinc-400 truncate max-w-lg">{subtitle}</p>
+          {kbd ? null : phone && threadLine ? (
+            <div className="flex min-w-0 mt-0.5">{threadLine}</div>
+          ) : (
+            <p className={`${phone ? 'text-[13px] leading-4 mt-0.5' : 'text-meta'} text-zinc-400 truncate max-w-lg`}>{subtitle}</p>
+          )}
         </div>
 
         <div className="flex items-center gap-0.5 sm:gap-3 shrink-0">
@@ -1409,10 +1435,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </div>
       </div>
 
-      {subHeader}
+      {/* In keyboard mode the thread controls and pinned instructions step aside (display: none) */}
+      <div data-thread-bar className={kbd ? 'hidden' : 'contents'}>
+        {subHeader}
+      </div>
       {!(welcome && messages.length === 0) && notice}
 
-      <PinnedInstructions items={pinned} onEdit={onEditInstructions} />
+      <div className={kbd ? 'hidden' : 'contents'}>
+        <PinnedInstructions items={pinned} onEdit={onEditInstructions} />
+      </div>
 
       {/* Discussion In-Flight Banner */}
       {discussionState?.inProgress && (
@@ -1465,7 +1496,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <div
             ref={scrollRef}
             onScroll={onScroll}
-            className="flex-1 overflow-y-auto px-3 py-4 sm:p-6 space-y-5 sm:space-y-6"
+            className="relative flex-1 overflow-y-auto px-3 py-4 sm:p-6 space-y-5 sm:space-y-6"
             role="log"
             aria-label={`Messages in ${title}`}
             aria-busy={isStreaming}
@@ -1635,7 +1666,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
       />
 
       {/* Modern Composer Input Bar */}
-      <div className="px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4 border-t border-hairline bg-surface-side/60">
+      <div
+        className={`px-3 ${phone ? 'pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]' : 'pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]'} sm:p-4 border-t border-hairline bg-surface-side/60`}
+      >
         {teamMembers && teamMembers.length > 0 && (
           <ScrollRow className="kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none" role="group" aria-label="Ask a member">
             <span className="shrink-0 text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
@@ -1701,8 +1734,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
           onSubmit={handleSubmit}
           {...dropHandlers}
           aria-label={`Message ${title}`}
-          className={`relative max-w-4xl mx-auto flex flex-wrap items-end gap-1.5 bg-surface-raised border rounded-2xl p-2 shadow-raised transition-colors ${
-            dragOver ? 'border-sky-500/70 bg-sky-950/30' : 'border-hairline-strong focus-within:border-sky-400/50'
+          data-composer-form
+          data-stacked={phone ? String(stacked) : undefined}
+          className={`relative max-w-4xl mx-auto flex flex-wrap items-end ${stacked ? 'gap-x-1.5 gap-y-1' : 'gap-1.5'} border rounded-2xl p-2 transition-colors ${
+            phone ? 'bg-[#1a1538]' : 'bg-surface-raised shadow-raised'
+          } ${
+            dragOver
+              ? 'border-sky-500/70 bg-sky-950/30'
+              : phone
+                ? 'border-white/10 focus-within:border-[#6c58e0]/70'
+                : 'border-hairline-strong focus-within:border-sky-400/50'
           }`}
         >
           {dragOver && (
@@ -1756,6 +1797,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-autocomplete="list"
             rows={1}
             value={inputVal}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => setComposerFocused(false)}
             onChange={(e) => {
               const val = e.target.value;
               setInputVal(val);
@@ -1779,11 +1822,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 checkMention(inputVal, (e.target as HTMLTextAreaElement).selectionStart);
               }
             }}
-            // Phones drop the space name so the 16px placeholder fits on one line
-            placeholder={spaceName && !narrow ? `Message ${title} in ${spaceName}` : `Message ${title}`}
+            // Phones: "Message {name}" only when it fits on one line, else "Message" (the header names the chat)
+            placeholder={placeholder}
             title="Enter to send, Shift+Enter for a new line, @ to mention"
 
-            className="flex-1 min-w-0 bg-transparent px-3 py-1.5 text-body text-zinc-50 placeholder-zinc-400 focus:outline-none resize-none max-h-40 font-sans"
+            className={
+              phone
+                ? `${stacked ? 'basis-full w-full py-2' : 'flex-1 py-2.5'} min-w-0 bg-transparent px-3 text-base leading-6 text-zinc-50 placeholder:text-[#8f88bb] placeholder:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis focus:outline-none resize-none max-h-40 font-sans`
+                : 'flex-1 min-w-0 bg-transparent px-3 py-1.5 text-body text-zinc-50 placeholder-zinc-400 focus:outline-none resize-none max-h-40 font-sans'
+            }
           />
           <input
             ref={fileInputRef}
@@ -1796,15 +1843,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
               e.target.value = '';
             }}
           />
+          {/* Phone, in use: the tools get their own 44 px row under the text. Elsewhere this wrapper is
+              display: contents, so the buttons sit beside the field as before. */}
+          <div data-composer-tools className={stacked ? 'basis-full flex items-center h-11' : 'contents'}>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploadSlotsLeft(uploads) === 0}
             title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : 'Attach files (or drop / paste them here). Max 20 MB each.'}
             aria-label="Attach files"
-            className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+            className={`${phone ? toolPhone : 'w-11 h-11 sm:w-9 sm:h-9 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] focus-visible:outline-sky-400'} rounded-xl flex items-center justify-center flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2`}
           >
-            <Paperclip size={17} aria-hidden="true" />
+            <Paperclip size={phone ? 18 : 17} aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -1814,16 +1864,21 @@ export const ChatView: React.FC<ChatViewProps> = ({
             }}
             title="Mention a bot: it answers instead of the default"
             aria-label="Mention a bot"
-            className="relative w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+            className={`relative ${phone ? toolPhone : 'w-11 h-11 sm:w-9 sm:h-9 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] focus-visible:outline-sky-400'} rounded-xl flex items-center justify-center flex-shrink-0 transition-colors focus-visible:outline focus-visible:outline-2`}
           >
-            <AtSign size={17} aria-hidden="true" />
+            <AtSign size={phone ? 18 : 17} aria-hidden="true" />
+            {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
+            {phone && !isStreaming && (
+              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''}`} />
+            )}
           </button>
+          {stacked && <span className="flex-1" aria-hidden="true" />}
           {/* "New" sits just above the field's top edge, over the "@" button: never on or inside the border.
               Only the send button follows "@" when it shows: 44px on phones / 36px from sm, plus a 6px gap;
               11px is the form's border + padding. Hidden (not marked as seen) while a reply streams, so it
               never sits on the working strip's edge and comes back after the turn; hidden while the mention
               picker is open, so it never peeks under it. */}
-          {!isStreaming && (
+          {!phone && !isStreaming && (
             <NewTag
               id="mention"
               className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''}`}
@@ -1849,32 +1904,44 @@ export const ChatView: React.FC<ChatViewProps> = ({
               title={stillUploading ? 'Waiting for uploads to finish' : undefined}
               disabled={!canSend}
               data-send-ready={canSend ? 'true' : 'false'}
-              className={`w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,filter,box-shadow,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300 ${
+              className={`${phone ? 'w-11 h-11 focus-visible:outline-[#b8adff]' : 'w-11 h-11 sm:w-9 sm:h-9 focus-visible:outline-sky-300'} rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,filter,box-shadow,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${
                 canSend
-                  ? 'bg-accent-gradient text-white shadow-glow hover:brightness-110 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
-                  : 'bg-surface-overlay text-zinc-400 cursor-not-allowed'
+                  ? phone
+                    ? 'bg-[#6c58e0] text-white hover:bg-[#5845bd] active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
+                    : 'bg-accent-gradient text-white shadow-glow hover:brightness-110 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
+                  : phone
+                    ? 'bg-[#2c2552] text-[#5a5383] cursor-not-allowed'
+                    : 'bg-surface-overlay text-zinc-400 cursor-not-allowed'
               }`}
             >
-              <ArrowUp size={17} strokeWidth={2.4} aria-hidden="true" />
+              <ArrowUp size={phone ? 18 : 17} strokeWidth={2.4} aria-hidden="true" />
             </button>
           )}
+          </div>
         </form>
         {/* Under the field: who will answer, and what the field understands */}
-        <div className="max-w-4xl mx-auto mt-1.5 px-1 flex items-center justify-between gap-3 text-meta text-zinc-400" data-composer-hints>
-          <span
-            className={`kw-chip shrink-0 ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''}`}
-            title={target.detail}
-            data-answer-target={target.kind}
-          >
-            {target.kind === 'laya' ? <Sparkles size={12} aria-hidden="true" /> : <AtSign size={12} aria-hidden="true" />}
-            <span className="text-zinc-400 font-normal">Answers:</span> {target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}
-          </span>
-          <span className="min-w-0 truncate text-right">
-            <span className="sm:hidden">@ mention · attach files</span>
-            <span className="hidden sm:inline">
-              <kbd className="font-sans text-zinc-300">@</kbd> mention a bot · <kbd className="font-sans text-zinc-300">Enter</kbd> send · <kbd className="font-sans text-zinc-300">Shift+Enter</kbd> new line · drop or paste files
+        <div
+          className={`max-w-4xl mx-auto mt-1.5 px-1 flex items-center justify-between gap-3 text-meta text-zinc-400${kbd || (!showAnswers && !showHintText) ? ' hidden' : ''}`}
+          data-composer-hints
+        >
+          {showAnswers && (
+            <span
+              className={`kw-chip shrink-0 ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''}`}
+              title={target.detail}
+              data-answer-target={target.kind}
+            >
+              {target.kind === 'laya' ? <Sparkles size={12} aria-hidden="true" /> : <AtSign size={12} aria-hidden="true" />}
+              <span className="text-zinc-400 font-normal">Answers:</span> {target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}
             </span>
-          </span>
+          )}
+          {showHintText && (
+            <span className="min-w-0 truncate text-right">
+              <span className="sm:hidden">@ mention · attach files</span>
+              <span className="hidden sm:inline">
+                <kbd className="font-sans text-zinc-300">@</kbd> mention a bot · <kbd className="font-sans text-zinc-300">Enter</kbd> send · <kbd className="font-sans text-zinc-300">Shift+Enter</kbd> new line · drop or paste files
+              </span>
+            </span>
+          )}
         </div>
       </div>
     </div>

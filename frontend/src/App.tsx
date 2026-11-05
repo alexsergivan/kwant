@@ -10,7 +10,8 @@ import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState, SendOptions } from './components/ChatView';
 import { ReactResult, Reaction, optimisticReplyRef, reactionOf, saveReaction, senderLabel } from './reactReply';
-import { ThreadBar, ThreadHeader } from './components/ThreadBar';
+import { PhoneTabBar } from './components/PhoneTabBar';
+import { ThreadBar, ThreadHeader, ThreadPicker, type ThreadBarProps } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
 import { ApprovalsOffBadge } from './components/ApprovalsSetting';
 import { APPROVALS_CHANGED_EVENT, approvalsOff } from './approvalMode';
@@ -112,7 +113,7 @@ import {
   questionsApi,
   turnsAwaitingAnswer,
 } from './questions';
-import { AwayItem, affectsAway, awayApi, awayTarget, badgeText } from './away';
+import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
 import { Space, eventsUrl, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
@@ -2866,23 +2867,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       </button>
     </div>
   ) : null;
+  const threadBarProps: ThreadBarProps | null = currentKwant
+    ? {
+        kwantName: currentKwant.name,
+        threads: agentThreads,
+        error: threadErrors[currentKwant.id] ?? null,
+        openThreadId,
+        turns,
+        awaiting: awaitingTurns,
+        directBadge: threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns),
+        showArchived,
+        onToggleArchived: () => setShowArchived((v) => !v),
+        onOpenDirect: openDirectChat,
+        onOpenThread: (t) => openThread(t.kwant_id, t.id),
+        onNewThread: handleNewThread,
+        onRetry: () => loadThreads(currentKwant.id),
+      }
+    : null;
+  // Phone: the conversations live in the header's second line (ThreadPicker), not in a bar of their own
   const subHeader = currentKwant ? (
     <>
-      <ThreadBar
-        kwantName={currentKwant.name}
-        threads={agentThreads}
-        error={threadErrors[currentKwant.id] ?? null}
-        openThreadId={openThreadId}
-        turns={turns}
-        awaiting={awaitingTurns}
-        directBadge={threadBadge({ id: currentKwant.id, delegation: null }, turns, awaitingTurns)}
-        showArchived={showArchived}
-        onToggleArchived={() => setShowArchived((v) => !v)}
-        onOpenDirect={openDirectChat}
-        onOpenThread={(t) => openThread(t.kwant_id, t.id)}
-        onNewThread={handleNewThread}
-        onRetry={() => loadThreads(currentKwant.id)}
-      />
+      {!isPhone && threadBarProps && <ThreadBar {...threadBarProps} />}
       {shownThread && (
         <ThreadHeader
           thread={shownThread}
@@ -3207,6 +3212,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           highlightMessageId={highlightMessageId}
           onHighlightDone={() => setHighlightMessageId(null)}
           subHeader={subHeader}
+          threadLine={isPhone && threadBarProps ? <ThreadPicker {...threadBarProps} /> : undefined}
           notice={setupBanner}
           welcome={
             setupBanner && isChannel ? (
@@ -3288,15 +3294,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   ) : chat;
 
   const phoneTabs: Array<{ id: PhoneTab; label: string; icon: React.ReactNode; badge?: number }> = [
-    { id: 'chats', label: 'Chats', icon: <MessageSquare size={18} /> },
-    { id: 'bots', label: 'Bots', icon: <Bot size={18} /> },
-    { id: 'inbox', label: 'Inbox', icon: <Inbox size={18} />, badge: awayCount },
-    { id: 'space', label: 'Space', icon: <Settings size={18} /> },
+    { id: 'chats', label: 'Chats', icon: <MessageSquare size={20} aria-hidden="true" /> },
+    { id: 'bots', label: 'Bots', icon: <Bot size={20} aria-hidden="true" /> },
+    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: awayCount },
+    { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
 
   return (
-    <div className="relative flex-1 min-w-0 h-full flex flex-col bg-surface-main text-zinc-100 overflow-hidden" data-space={space.id}>
+    // overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
+    // once slid the whole chat under its header (P1-7). Browsers without clip keep hidden.
+    <div className="relative flex-1 min-w-0 h-full flex flex-col bg-surface-main text-zinc-100 overflow-hidden [overflow:clip]" data-space={space.id}>
       <div ref={contentRef} className={`flex-1 min-h-0 flex ${isPhone ? 'flex-col' : 'overflow-hidden'}`}>
         {isPhone ? (
           <>
@@ -3315,42 +3323,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               <div className="flex-1 min-h-0 flex">{mainPane}</div>
             )}
             {(showPhoneList || needsSetup) && (
-              <nav aria-label={`${space.name} sections`} className="shrink-0 grid grid-cols-4 border-t border-zinc-800 bg-zinc-900/95 pb-[env(safe-area-inset-bottom)]">
-                {phoneTabs.map((t) => {
-                  const active = t.id === phoneTab;
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      aria-current={active ? 'page' : undefined}
-                      onClick={() => {
-                        playSfx('click');
-                        if (t.id === 'inbox') {
-                          showPage('inbox');
-                          return;
-                        }
-                        if (t.id === 'space') {
-                          // Nothing can run yet: the fix is in Accounts, so start there
-                          openSpaceSettings(canRun === false ? 'accounts' : 'general');
-                          return;
-                        }
-                        setPhoneTab(t.id);
-                      }}
-                      className={`relative flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500 ${
-                        active ? 'text-sky-300' : 'text-zinc-400 hover:text-zinc-200'
-                      }`}
-                    >
-                      {t.icon}
-                      {t.label}
-                      {!!t.badge && (
-                        <span className="absolute top-1 left-1/2 ml-2 min-w-[16px] px-1 rounded-full bg-amber-500 text-zinc-950 text-[9px] font-semibold text-center">
-                          {badgeText(t.badge)}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </nav>
+              <PhoneTabBar
+                label={`${space.name} sections`}
+                tabs={phoneTabs}
+                active={phoneTab}
+                onSelect={(id) => {
+                  playSfx('click');
+                  if (id === 'inbox') {
+                    showPage('inbox');
+                    return;
+                  }
+                  if (id === 'space') {
+                    // Nothing can run yet: the fix is in Accounts, so start there
+                    openSpaceSettings(canRun === false ? 'accounts' : 'general');
+                    return;
+                  }
+                  setPhoneTab(id);
+                }}
+              />
             )}
           </>
         ) : (

@@ -20,6 +20,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import { ScrollRow } from './ScrollRow';
 import { playSfx } from '../audio/chiptune';
 import { SPACE_COLORS, SPACE_ICONS, Space, spaceColor, spaceNameError, spacesApi } from '../spaces';
 import { useEngines } from '../useEngines';
@@ -175,7 +176,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
           ))}
         </div>
         {scope === 'space' && (
-          <nav aria-label={`${space.name} settings`} className="flex md:flex-col gap-1 px-3 pb-3 md:px-2 overflow-x-auto md:overflow-visible">
+          <ScrollRow as="nav" aria-label={`${space.name} settings`} className="kw-scroll-row flex md:flex-col gap-1 px-3 pb-3 md:px-2 overflow-x-auto md:overflow-visible">
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -193,7 +194,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
                 {t.label}
               </button>
             ))}
-          </nav>
+          </ScrollRow>
         )}
       </div>
 
