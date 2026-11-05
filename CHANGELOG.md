@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.6.12] - 2026-11-05
+
+### Fixed
+- **A CAPTCHA is asked in the right chat.** The **Human check needed** card now comes up in the chat of the bot whose
+  browser call met the check, even when a team's bots share one browser, and in the thread it was working in when a
+  bot runs two threads at once (else its channel or direct chat). It never goes to another bot or thread. Trying to
+  use a browser that is waiting on you now says why. (#298, #299)
+- **The CAPTCHA card is shorter.** Once the bot's turn has ended, an open card shows one line: the bot carries on by
+  itself once it's solved, and nothing you do there is passed to it. On a phone the card's top line wraps as a
+  sentence and its icons keep their size. (#302, #304)
+- **Bot names no longer break inside a word.** In the sidebar and the **Add member** list, a name wraps only between
+  words or after a hyphen, on up to two lines, and a word too long for the line ends in "…". "Needs you" on a bot's
+  row is now a compact amber hand with a count, and the line under the name says **Needs you in the browser**.
+  (#301, #305)
+- **A 👍 or 👎 is told to a bot once.** A reaction made in the same second as the bot's reply could be told again on
+  its later turns. (#303)
+
 ## [Mac 0.6.11] - 2026-11-04
 
 ### Added
