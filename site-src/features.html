@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-0611">New in 0.6.11</a></li>
         <li><a href="#new-069">New in 0.6.9</a></li>
         <li><a href="#new-065">New in 0.6.5</a></li>
         <li><a href="#new-064">New in 0.6.4</a></li>
@@ -42,6 +43,41 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-0611" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.6.11</p>
+      <h2>Answer with a tap, reply to a message, solve the human check</h2>
+      <p>Every finished bot message has 👍, 👎 and Reply next to Copy markdown. When a site asks if the bot is human, the check comes to you.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="reactions">
+        <span class="shot">{{shot:v611-react|Lead's release notes for Trailhead 2.4 end with Shall I publish them now? The thumbs-up shows its hover label, Yes, go ahead. An earlier message above has its thumbs-up selected.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>👍 and 👎 answer a question</h3><p>When the bot's newest message asks you something, 👍 means Yes, go ahead and 👎 means No (the words show on hover), and picking one answers it. Anywhere else a reaction is feedback the bot reads on its next turn; after a 👎 it says what it would change. A 👍 never approves an approval card, a payment or a decision card.</p></div>
+      </article>
+      <article class="card" id="reply">
+        <span class="shot">{{shot:v611-reply-sent|The sent reply Put the waitlist first in the email version, with a one-line quote of Lead's release notes above it, and Lead's answer: Done, the waitlist now leads the notes.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Reply to a message</h3><p>Reply puts the message in a "Replying to" chip in the box, and the bot is told which message you mean. Your message shows a one-line quote; click it to jump to the original. In a room, the reply goes to the bot that wrote it unless you @mention another.</p></div>
+      </article>
+      <article class="card" id="human-check">
+        <span class="shot">{{shot:v611-human-check|Researcher's chat after a link to a tent on gearhub.example: a Human check needed card, spotted automatically, says the site is showing a CAPTCHA to the bot browser, with Solve it, Done, I solved it and Skip.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Every CAPTCHA comes to you</h3><p>A Human check needed card comes up in the chat (or thread) where the check stopped the bot: a page from a link you sent, the bot's own web tools or a browser step. You solve it, and the bot carries on by itself. kwant never solves or bypasses a check itself.</p></div>
+      </article>
+      <article class="card" id="human-check-browser">
+        <span class="shot">{{shot:v611-human-check-browser|The bot browser panel open on gearhub.example's Verify you are human page, next to the card's Done, I solved it button.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Solve it in the bot's browser</h3><p>Solve it opens the page in the browser panel. While you're solving it, the bot stays off that browser.</p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Yes, go ahead, and the bot carries on</h3>
+        <p>Lead asks whether to publish the release notes. One tap answers it, and the reply comes back with nothing typed.</p>
+      </div>
+      <div class="frame">{{video:clip-v611-react|Demo: Lead's release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and Lead replies that the notes are published, with nothing typed.}}</div>
+    </div>
+  </div>
+</section>
 
 <section id="new-069" class="fgroup">
   <div class="wrap">
@@ -144,7 +180,7 @@ card_art: team
       </article>
       <article class="card" id="good-for-not-for">
         <span class="shot">{{shot:v64-bot-rules|The Researcher's settings: Good for lists competitor pricing, gear reviews and market sizing; Not for lists customer emails and refunds. Above them are the collapsed Browser sites row, which reads "Only 3 sites, never 2 sites, no local network", and the persona and soul fields.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
-        <div class="card-body"><h3>Good for and Not for</h3><p>List what a bot should take and what it shouldn't, on the New bot form or in its settings. Good for counts like its title when kwant picks. Not for keeps it out of picks by words, by what you taught and by small talk. Naming or @mentioning a bot still reaches it.</p></div>
+        <div class="card-body"><h3>Good for and Not for</h3><p>List what a bot should take and what it shouldn't, on the New kwant bot form or in its settings. Good for counts like its title when kwant picks. Not for keeps it out of picks by words, by what you taught and by small talk. Naming or @mentioning a bot still reaches it.</p></div>
       </article>
       <article class="card" id="browser-sites">
         <span class="shot">{{shot:v64-browser-sites|The Researcher's settings with Browser sites open: allowed sites outdoorgearlab.com, rei.com and wikipedia.org; blocked sites facebook.com and tiktok.com; and "Block local and private network addresses" ticked. The summary line reads "Only 3 sites, never 2 sites, no local network".|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
@@ -181,7 +217,7 @@ card_art: team
         <div class="card-body"><h3>Truth Ledger: conflicts wait for you</h3><p>When two facts disagree, both are flagged Disputed until you pick Keep this one or Not a conflict. Facts show their evidence and the tasks that rely on them. On from 0.6.5, and with it off bots see exactly what they saw in 0.5.</p></div>
       </article>
       <article class="card" id="insights-06">
-        <span class="shot">{{shot:v6-board|The top of the Mission board: the week's numbers (8 verified, 0 false successes, 2 need you), then verified per active week, 1.9 on average over 8 active weeks, as a bar chart, and cost per verified result, $0.30, from $2.71 over 15 settled tasks this week, failed runs included, with a note that it is based on 9 verified results that reported a cost and 4 runs reported none. Below, a fact dispute and a bot's request for a higher Flight School tier.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v6-board|The top of the Mission board: the week's numbers (7 verified, 0 false successes, 2 need you now, blocked 21 min), then verified per active week, 2.5 on average over 8 active weeks, as a bar chart, and cost per verified result, $0.22, from $2.63 over 20 settled tasks this week, failed runs included, with a note that it is based on 12 verified results that reported a cost and 4 runs reported none. Below, a fact dispute and QA's request for a higher Flight School tier.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Insights: verified per week, and the cost</h3><p>Verified results per active week over the last 8 weeks, and the cost of each one, failed runs included. A missing cost is said plainly, never shown as $0.</p></div>
       </article>
     </div>
@@ -401,7 +437,7 @@ card_art: team
         <div class="card-body"><h3>Teams with a lead</h3><p>Give a team a mission, pinned instructions every member follows, a lead and a shared workspace.</p></div>
       </article>
       <article class="card">
-        <span class="shot">{{shot:desktop-presets|The New bot dialog with the Security preset picked, showing Tech, Non-tech and Lifestyle tabs and the avatar grid.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:desktop-presets|The New kwant bot dialog with the Security preset picked, showing Tech, Non-tech and Lifestyle tabs and the avatar grid.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Personas and souls</h3><p>Start from a preset. Every bot has a persona for what it does, a soul for how it speaks, and a pixel avatar.</p></div>
       </article>
     </div>
