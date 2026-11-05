@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronLeft, Inbox, Loader2, RefreshCw } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard } from './ModernApprovalCard';
-import { approvalFromAway, lateAnswerText } from '../approvals';
+import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import {
   AWAY_SECTIONS,
   ApprovalDecision,
@@ -62,13 +62,14 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
     const { label, tone } = itemLabel(item);
     const when = relativeTime(item.timestamp, now);
     const disabled = busy !== null;
+    const title = awayTitle(item);
     return (
       <li key={`${item.kind}:${item.id}`} className="rounded-xl border border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 transition-colors">
         <button
           type="button"
           onClick={() => onOpen(item)}
           className="w-full flex items-start gap-3 p-3 text-left rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-          aria-label={`${item.title}, ${label}, from ${item.kwant_name}, ${when}. Open the chat.`}
+          aria-label={`${title}, ${label}, from ${item.kwant_name}, ${when}. Open the chat.`}
         >
           <ModernAvatar role={item.kwant_name} name={item.kwant_name} size={30} kwantId={item.kwant_id} />
           <div className="flex-1 min-w-0">
@@ -80,14 +81,14 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
               </time>
             </div>
             {/* The question is the point of the card: up to 3 lines on a phone (0.6.13 spec C3), one line on desktop. */}
-            <p className="mt-0.5 text-sm font-medium text-zinc-100 break-words max-md:line-clamp-6 md:truncate">{item.title}</p>
+            <p className="mt-0.5 text-sm font-medium text-zinc-100 break-words max-md:line-clamp-6 md:truncate">{title}</p>
             {/* A question's summary just lists its choices, which are buttons below. */}
             {awaySummary(item) && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length) && <p className="text-xs text-zinc-400 truncate">{awaySummary(item)}</p>}
           </div>
         </button>
 
         {item.kind === 'question' && (item.choices?.length ?? 0) > 0 && (
-          <div role="group" aria-label={`Answer: ${item.title}`} className="px-3 pb-3 sm:pl-[54px] flex flex-wrap gap-2">
+          <div role="group" aria-label={`Answer: ${title}`} className="px-3 pb-3 sm:pl-[54px] flex flex-wrap gap-2">
             {item.choices!.map((c, i) => (
               <button
                 key={i}
@@ -285,10 +286,10 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       setData((d) => (d ? withoutItem(d, 'waiting', item.id) : d));
       const late = item.kind === 'approval' && !denied ? lateAnswerText(reply, item.kwant_name) : null;
       const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
-      setNotice({ text: `${done} “${item.title}”`, error: false });
+      setNotice({ text: `${done} “${awayTitle(item)}”`, error: false });
     } catch (err) {
       const status = err instanceof AwayError ? err.status : 0;
-      setNotice(actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', item.title));
+      setNotice(actionFailureNotice(status, err instanceof Error ? err.message : 'Something went wrong.', awayTitle(item)));
     } finally {
       setBusy(null);
     }

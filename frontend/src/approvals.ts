@@ -2,7 +2,7 @@
 // reconnect, by `GET /api/away`'s waiting items, so a card never depends on the page having been
 // open when the bot asked. Pure helpers, shared by the app and the node tests.
 
-import type { PendingApproval } from './components/ModernApprovalCard';
+import { approvalAction, type PendingApproval } from './components/ModernApprovalCard';
 import type { AwayItem, AwayLink } from './away';
 
 /** A card plus where it belongs: the asking bot and, when the server knows it, the conversation. */
@@ -36,6 +36,16 @@ export function approvalFromAway(item: AwayItem): ChatApproval {
   if (item.status === 'waiting') approval.waiting = true;
   if (str(item.timestamp)) approval.asked_at = item.timestamp;
   return approval;
+}
+
+/**
+ * An Inbox item's title in words. An approval reads like its card ("Open a pull request on
+ * GitHub"), never the server's raw "Use create_pull_request (github)"; other items keep theirs.
+ */
+export function awayTitle(item: AwayItem): string {
+  if (item.kind !== 'approval') return item.title;
+  const action = approvalAction(approvalFromAway(item));
+  return action.charAt(0).toUpperCase() + action.slice(1);
 }
 
 /**

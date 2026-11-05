@@ -135,6 +135,22 @@ export const paymentReason = (approval: PendingApproval) => {
 export const waitingNote = (bot: string | null) =>
   `${bot ?? 'The bot'} stopped waiting for an answer and nothing ran. Allow starts it again to make this call; Deny closes the card.`;
 
+/**
+ * What the bot asks to do, in words, after "<Bot> wants to": "open a pull request on GitHub".
+ * The card's sentence and the Inbox title both use it, so they always say the same thing.
+ */
+export function approvalAction(approval: PendingApproval): string {
+  if (localShellView(approval)) return 'run a command on your computer';
+  const mcp = mcpView(approval);
+  const builtin = mcp ? null : builtinView(approval);
+  if (builtin?.kind === 'shell') return 'run a command';
+  if (builtin?.kind === 'file') return `${builtin.tool === 'Write' ? 'write a file' : 'change a file'}${builtin.outsideFolder ? ' outside its own folder' : ''}`;
+  if (builtin) return toolAction(builtin.tool);
+  const summary = summaryView(approval);
+  if (summary) return toolAction(summary.tool);
+  return mcp ? toolAction(mcp.tool, mcp.server || null) : toolAction(approval.tool_name);
+}
+
 /** The pre/JSON style inside a card: wraps between words, and only splits a word too long for the line. */
 /** "Show details": closed on a phone, so Allow is on screen with the card's top; open on desktop. */
 const ApprovalDetails: React.FC<{ phone?: boolean; children: React.ReactNode }> = ({ phone, children }) => {
@@ -190,17 +206,9 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
 
   const bot = botName ? <strong className="font-semibold text-zinc-50">{botName}</strong> : 'A bot';
   // "<Bot> wants to open a pull request on <Server>", the server in bold.
-  let what: React.ReactNode;
-  if (shell) what = 'run a command on your computer';
-  else if (builtin?.kind === 'shell') what = 'run a command';
-  else if (builtin?.kind === 'file') what = `${builtin.tool === 'Write' ? 'write a file' : 'change a file'}${builtin.outsideFolder ? ' outside its own folder' : ''}`;
-  else if (builtin) what = toolAction(builtin.tool);
-  else if (summary) what = toolAction(summary.tool);
-  else if (mcp) {
-    const action = toolAction(mcp.tool, mcp.server || null);
-    const on = / on (.+)$/.exec(action);
-    what = on ? <>{action.slice(0, on.index)} on <strong className="font-semibold text-zinc-50">{on[1]}</strong></> : action;
-  } else what = toolAction(approval.tool_name);
+  const action = approvalAction(approval);
+  const on = mcp && !summary ? / on (.+)$/.exec(action) : null;
+  const what: React.ReactNode = on ? <>{action.slice(0, on.index)} on <strong className="font-semibold text-zinc-50">{on[1]}</strong></> : action;
 
   const facts: Array<[string, string]> = mcp
     ? keyFacts(mcp.raw)
@@ -342,7 +350,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
           disabled={disabled}
           onClick={() => handleDecision('allow_once')}
           data-approval-allow=""
-          className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 min-h-[48px] sm:min-h-[36px] px-4 rounded-lg bg-[#059669] hover:bg-emerald-500 text-[15px] sm:text-sm font-semibold text-white shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 min-h-[48px] max-sm:!min-h-[48px] sm:min-h-[36px] px-4 rounded-lg bg-[#059669] hover:bg-emerald-500 text-[15px] sm:text-sm font-semibold text-white shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Check size={16} aria-hidden="true" />
           <span>{waiting ? 'Allow and continue' : 'Allow once'}</span>

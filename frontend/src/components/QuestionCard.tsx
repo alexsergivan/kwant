@@ -131,7 +131,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
                 aria-pressed={chosen}
                 onClick={() => submit({ choice: i })}
                 onKeyDown={(e) => onChoiceKey(e, i)}
-                className={`w-full sm:w-auto inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[48px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-base leading-[22px] sm:text-sm sm:leading-normal text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
+                className={`w-full sm:w-auto inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[48px] max-sm:!min-h-[48px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-base leading-[22px] sm:text-sm sm:leading-normal text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
                   chosen
                     ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-100'
                     : open

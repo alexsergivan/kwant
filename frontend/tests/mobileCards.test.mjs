@@ -19,6 +19,8 @@ const m = await loadBundled(`
   export * from './src/toolLabel';
   export { keyFacts } from './src/components/ModernApprovalCard';
   export { parseQuestionMeta } from './src/questions';
+  export { awayTitle } from './src/approvals';
+  import { AwayView } from './src/components/AwayView';
   const r = (C) => (props) => renderToStaticMarkup(React.createElement(C, props));
   export const card = r(ModernApprovalCard);
   export const strip = r(WorkingStrip);
@@ -27,6 +29,7 @@ const m = await loadBundled(`
   export const question = r(QuestionCard);
   export const chip = r(EngineChip);
   export const meta = r(ReplyMeta);
+  export const away = r(AwayView);
 `);
 
 const text = (html) => html.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&#x27;/g, "'").replace(/\s+/g, ' ').trim();
@@ -218,4 +221,51 @@ test('reply header on a phone: one row, the time never shrinks, the chip gives w
   assert.match(html, /<div class="[^"]*flex-nowrap sm:flex-wrap[^"]*">/);
   assert.match(html, /<span class="[^"]*shrink-0 whitespace-nowrap[^"]*" data-reply-time="">/);
   assert.match(html, /<span class="[^"]*sm:hidden[^"]*max-w-\[160px\][^"]*"[^>]*>claude-opus-5-5<\/span>/);
+});
+
+// --- Rigel's #309 HOLD on b48683c ------------------------------------------------------------
+
+import { readFileSync } from 'node:fs';
+const src = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
+
+test('C1.5d, C3.1c: Allow once and the choices beat the 44 px coarse-pointer rule with an important 48 px', () => {
+  // modern.css's phone rule is (0,2,0) and stays as it is; a plain .min-h-[48px] (0,1,0) loses to it.
+  assert.match(src('src/styles/modern.css'), /\(pointer: coarse\)[\s\S]*?:is\(button[\s\S]*?min-height: 44px/);
+  const allow = buttons(m.card({ approval: pr(), onResolve: noop, phone: true })).find((x) => x.label === 'Allow once');
+  assert.match(allow.attrs, /max-sm:!min-h-\[48px\]/);
+  assert.match(allow.attrs, /sm:min-h-\[36px\]/, 'desktop keeps its compact button');
+  const meta = m.parseQuestionMeta({ kind: 'ask_user', question_id: 'q1', question: 'Which hotel?', choices: ['Rifugio', 'Hotel'], status: 'open', answer: null });
+  const choices = buttons(m.question({ meta, messageId: 'm1', kwantName: 'QA', waiting: true, onAnswer: async () => {}, onDismiss: async () => {} })).filter((x) => /aria-pressed/.test(x.attrs));
+  assert.equal(choices.length, 2);
+  for (const c of choices) assert.match(c.attrs, /max-sm:!min-h-\[48px\]/, c.label);
+});
+
+const awayApproval = (over = {}) => ({
+  kind: 'approval', id: 'ap1', kwant_id: 'k1', kwant_name: 'TechLead', title: 'Use create_pull_request (github)',
+  summary: 'acme/site', status: 'pending', timestamp: '2026-11-05T08:00:00Z',
+  link: { thread_id: 't1', channel_id: null, direct_kwant_id: null },
+  tool_name: 'mcp__github__create_pull_request', details: pr().details, ...over,
+});
+
+test('C2.3: an Inbox approval is titled like its card, never by the raw tool name', () => {
+  assert.equal(m.awayTitle(awayApproval()), 'Open a pull request on GitHub');
+  // An older server: only the title and a summary.
+  assert.equal(m.awayTitle(awayApproval({ tool_name: undefined, details: undefined, title: 'Use Bash' })), 'Run a command');
+  const q = { ...awayApproval(), kind: 'question', title: 'Which hotel?' };
+  assert.equal(m.awayTitle(q), 'Which hotel?', 'other items keep their title');
+  const data = { since: '2026-11-05T07:00:00Z', last_seen: null, now: '2026-11-05T08:05:00Z', stuck_after_minutes: 30, waiting: [awayApproval()], finished: [], failed: [], unseen: { waiting: 1, finished: 0, failed: 0, total: 1 } };
+  const html = m.away({ data, loading: false, error: null, now: Date.parse('2026-11-05T08:05:00Z'), onRefresh: noop, onOpen: noop, onAnswer: noop, onResolve: noop });
+  // The item's title line and its accessible name; the card's own "Show details" may still show the raw call.
+  const titles = [...html.matchAll(/<p class="mt-0\.5 [^"]*">([^<]*)<\/p>/g)].map((x) => x[1]);
+  assert.deepEqual(titles, ['Open a pull request on GitHub']);
+  assert.match(html, /aria-label="Open a pull request on GitHub, /);
+  assert.doesNotMatch(html, /Use create_pull_request/);
+  // The card says the same words.
+  assert.match(text(m.card({ approval: pr(), onResolve: noop, phone: true })), /wants to open a pull request on GitHub/);
+});
+
+test('ChatView keeps one phone flag after the rebase on #307: useMedia(PHONE_QUERY)', () => {
+  const chat = src('src/components/ChatView.tsx');
+  assert.deepEqual([...chat.matchAll(/const phone\b[^;\n]*/g)].map((x) => x[0]), ['const phone = useMedia(PHONE_QUERY)']);
+  assert.doesNotMatch(chat, /usePhoneLayout/);
 });
