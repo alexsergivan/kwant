@@ -18,6 +18,8 @@ import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
 import { type NeedsYouRow, workingIds, directIds } from '../chatsTab';
 import { DevModeSwitch, DevFlipNote, useDevMode } from './DevModeSwitch';
+import { DevOnToast } from './DevOnToast';
+import { type DevModeState, deskIntent, devConnect, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
 import { IdeaJarRow } from './IdeaJarRow';
 
@@ -125,6 +127,8 @@ export interface SidebarProps {
   /** Dev mode (0.7): the Dev desk row's page is open, and how to open it. */
   devDeskActive?: boolean;
   onOpenDevDesk?: () => void;
+  /** Dev mode Connect (flow F5): opens Loose ends on the GitHub form; after connecting the app returns to the Dev desk. */
+  onConnectDevGitHub?: () => void;
   /** Idea jar (0.7): ready takes for the violet badge, whether its page is open, how to open it, and the quick-add. Hidden on phone, which has the Jar tab. */
   ideaJarCount?: number;
   ideaJarActive?: boolean;
@@ -287,6 +291,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   missionsActive = false,
   devDeskActive = false,
   onOpenDevDesk,
+  onConnectDevGitHub,
   onOpenMissions,
   ideaJarCount = 0,
   ideaJarActive = false,
@@ -376,13 +381,43 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Dev mode: on phones the switch sits after the name; on desktop it has its own row under it; on, the meta line says the branch.
   const dev = useDevMode(space.id);
   const devOn = !!dev?.on;
-  // The flip note under the header: 'on' (HEAD → dev) or 'off' (merged into main), or none.
-  const [devNote, setDevNote] = useState<'on' | 'off' | null>(null);
-  const dismissDevNote = useCallback(() => setDevNote(null), []);
-  useEffect(() => setDevNote(null), [space.id]);
+  // The off note under the header (flow copy §7: HEAD → main, with Turn back on).
+  const [devOffNote, setDevOffNote] = useState(false);
+  const dismissDevOff = useCallback(() => setDevOffNote(false), []);
+  useEffect(() => setDevOffNote(false), [space.id]);
+  // Flow F3: switching on keeps the person where they are; a toast says what was found, with one next
+  // step and Undo. It replaces the HEAD → dev note. The toast reads the live store, so a "checking"
+  // toast updates in place when the status arrives.
+  const [devOnToast, setDevOnToast] = useState<DevModeState | null>(null);
+  const closeDevOnToast = useCallback(() => setDevOnToast(null), []);
+  useEffect(() => setDevOnToast(null), [space.id]);
+  const showOn = (s: DevModeState) => {
+    setDevOffNote(false);
+    setDevOnToast(s);
+  };
   const devSwitch = (
-    <DevModeSwitch key={space.id} space={space} phone={phone} onTurnedOff={() => setDevNote('off')} onTurnedOn={() => setDevNote('on')} />
+    <DevModeSwitch
+      key={space.id}
+      space={space}
+      phone={phone}
+      onTurnedOff={() => {
+        setDevOnToast(null);
+        setDevOffNote(true);
+      }}
+      onTurnedOn={showOn}
+    />
   );
+  const focusDevSwitch = () => setTimeout(() => document.querySelector<HTMLElement>('[data-dev-switch]')?.focus(), 0);
+  const connectDev = onConnectDevGitHub
+    ? () => {
+        devConnect.start(space.id);
+        onConnectDevGitHub();
+      }
+    : undefined;
+  const typeDevRepo = () => {
+    deskIntent.set(space.id, 'type');
+    onOpenDevDesk?.();
+  };
   const devMeta = devOn ? (
     <span className="block text-meta text-zinc-400 truncate" data-dev-meta>
       Dev · <span className="font-mono text-sky-300">{dev?.branch ?? 'main'}</span>
@@ -760,7 +795,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {devSwitch}
           </div>
         )}
-        {devNote && <DevFlipNote key={devNote} on={devNote === 'on'} space={space.name} approvals={space.approvals} onDismiss={dismissDevNote} />}
+        {devOffNote && <DevFlipNote on={false} approvals={space.approvals} onDismiss={dismissDevOff} onTurnBackOn={() => turnDevMode(space.id, true).then(showOn)} />}
+        {devOnToast && devOn && (
+          <DevOnToast
+            state={dev ?? devOnToast}
+            phone={phone}
+            onOpenDesk={() => onOpenDevDesk?.()}
+            onConnect={connectDev}
+            onTypeRepo={typeDevRepo}
+            onUndo={() =>
+              turnDevMode(space.id, false).then(() => {
+                setDevOffNote(true);
+                focusDevSwitch();
+              })
+            }
+            onClose={closeDevOnToast}
+          />
+        )}
         {offLine && (
           <button
             type="button"
