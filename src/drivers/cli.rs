@@ -234,6 +234,18 @@ pub fn codex_feature_args() -> Vec<String> {
     CODEX_DISABLED_FEATURES.iter().flat_map(|f| ["-c".to_string(), format!("features.{f}=false")]).collect()
 }
 
+/// The reasoning effort for one codex turn. codex reads `model_reasoning_effort`; a bare
+/// `reasoning_effort` is ignored (codex 0.162 warns "`reasoning_effort` is ignored" and runs with
+/// no effort set). Anything but low or high runs at medium.
+pub fn codex_effort_args(effort: &str) -> [String; 2] {
+    let effort = match effort {
+        "high" => "high",
+        "low" => "low",
+        _ => "medium",
+    };
+    ["-c".into(), format!("model_reasoning_effort=\"{effort}\"")]
+}
+
 pub const CODEX_SHELL_POLICY: [&str; 4] = [
     "-c",
     "shell_environment_policy.inherit=\"core\"",
@@ -1084,11 +1096,6 @@ impl Driver for CliDriver {
         match self.tool_kind.as_str() {
             "codex" => {
                 let out_file = format!("/tmp/kwnt_codex_{}.txt", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-                let codex_effort = match effort {
-                    "high" => "high",
-                    "low" => "low",
-                    _ => "medium",
-                };
                 let full_prompt = format!("[System Context: {}]\n\n{}", system_prompt, effective_prompt);
                 // Fail closed: without the names, the user's own servers would run with no
                 // approval card (and despite a per-kwant opt-out). Same for a user server named
@@ -1132,8 +1139,7 @@ impl Driver for CliDriver {
                     .arg("--skip-git-repo-check")
                     .arg("--color")
                     .arg("never")
-                    .arg("-c")
-                    .arg(format!("reasoning_effort=\"{}\"", codex_effort))
+                    .args(codex_effort_args(effort))
                     // Never the user's own codex servers: codex exec has no hook for kwnt's
                     // approval cards. The kwant's servers come only through kwnt's gateway.
                     .arg("-c")
@@ -1581,6 +1587,25 @@ mod tests {
             let table: toml::Table = pair.parse().unwrap();
             assert_eq!(table["features"].as_table().unwrap().values().next(), Some(&toml::Value::Boolean(false)), "{pair}");
         }
+    }
+
+    #[test]
+    fn codex_effort_uses_the_key_codex_reads() {
+        assert_eq!(codex_effort_args("high"), ["-c", "model_reasoning_effort=\"high\""]);
+        assert_eq!(codex_effort_args("low"), ["-c", "model_reasoning_effort=\"low\""]);
+        for other in ["medium", "", "max", "xhigh"] {
+            assert_eq!(codex_effort_args(other), ["-c", "model_reasoning_effort=\"medium\""], "{other}");
+        }
+        // `codex -c key=value` reads the value as TOML
+        let [flag, pair] = codex_effort_args("high");
+        assert_eq!(flag, "-c");
+        let table: toml::Table = pair.parse().unwrap();
+        assert_eq!(table.len(), 1, "{pair}");
+        assert_eq!(table["model_reasoning_effort"].as_str(), Some("high"));
+        // codex ignores the bare key, so the driver must never pass it again
+        let driver = include_str!("cli.rs");
+        let bare = ["format!(\"", "reasoning_effort="].concat();
+        assert!(!driver.contains(&bare), "the codex driver passes the ignored `reasoning_effort` key");
     }
 
     #[test]
