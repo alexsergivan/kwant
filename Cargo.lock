@@ -1429,6 +1429,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "flate2",
  "futures",
  "libc",
  "mail-parser",
