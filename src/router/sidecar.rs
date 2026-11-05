@@ -659,7 +659,7 @@ async fn run_vega(
     let log_path = dir.join("vega.log");
     let mut crashes = 0;
     loop {
-        set_vega(router, VegaState::Starting, "Loading the vega model (the first start downloads it, about 1.7 GB)");
+        set_vega(router, VegaState::Starting, "Loading the vega model (the first start downloads it, about 1.8 GB)");
         let offset = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
         let mut child = match start_vega(&python, &script, dir, port) {
             Ok(child) => child,
@@ -950,32 +950,30 @@ fn vega_installed(venv: &Path) -> bool {
         && std::fs::read_to_string(venv.join(INSTALLED_FILE)).is_ok_and(|s| s.trim() == VEGA_PACKAGE)
 }
 
-/// Where Hugging Face models are cached for the sidecar: `HF_HOME`, else `<data>/laya/hf`.
+/// Where the vega engine caches its models: always `<data>/laya/hf-vega`, never a shared `HF_HOME`,
+/// so the size in the status is exactly what vega downloaded and deleting the folder frees exactly that.
 pub fn hf_dir(dir: &Path) -> PathBuf {
-    std::env::var_os("HF_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(|| dir.join("hf"))
+    dir.join("hf-vega")
 }
 
-/// The vega model's size in MB and where it is: the `models--*vega*` folders under `<hf>/hub`.
+/// The vega models' size in MB and where they are: everything under `<hf-vega>/hub`, once a model
+/// is there. vega downloads two (its head, `nandakishorm/vega-U`, and the reader it runs on,
+/// `Qwen/Qwen3.5-0.8B`), and newer huggingface_hub releases keep the weights in one shared
+/// `hub/blobs` folder with only symlinks under `models--*`, so the whole hub is measured.
 pub fn model_cache(hf: &Path) -> (Option<u64>, Option<String>) {
     let hub = hf.join("hub");
     let Ok(entries) = std::fs::read_dir(&hub) else { return (None, None) };
-    let dirs: Vec<PathBuf> = entries
+    let has_model = entries
         .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| {
-            let n = n.to_string_lossy().to_ascii_lowercase();
-            n.starts_with("models--") && n.contains("vega")
-        }))
-        .collect();
-    if dirs.is_empty() {
+        .any(|e| e.file_name().to_string_lossy().starts_with("models--") && e.path().is_dir());
+    if !has_model {
         return (None, None);
     }
-    let bytes: u64 = dirs.iter().map(|d| dir_bytes(d)).sum();
-    let cache = if dirs.len() == 1 { dirs[0].display().to_string() } else { hub.display().to_string() };
-    (Some(bytes.div_ceil(1024 * 1024)), Some(cache))
+    (Some(dir_bytes(&hub).div_ceil(1024 * 1024)), Some(hub.display().to_string()))
 }
 
-/// Bytes in regular files under `dir`; symlinks (Hugging Face's snapshots) aren't followed.
+/// Bytes in regular files under `dir`; symlinks (Hugging Face's snapshots) aren't followed, so each
+/// blob counts once.
 fn dir_bytes(dir: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
     entries
@@ -1113,19 +1111,27 @@ mod tests {
     }
 
     #[test]
-    fn model_cache_counts_the_vega_model_without_following_links() {
+    fn model_cache_counts_both_hub_layouts_once() {
         let hf = tempfile::tempdir().unwrap();
+        let hub = hf.path().join("hub");
         assert_eq!(model_cache(hf.path()), (None, None));
-        let model = hf.path().join("hub/models--nandakishorm--vega-U");
-        std::fs::create_dir_all(model.join("blobs")).unwrap();
-        std::fs::create_dir_all(model.join("snapshots/abc")).unwrap();
-        std::fs::write(model.join("blobs/w"), vec![0u8; 3 * 1024 * 1024]).unwrap();
+        std::fs::create_dir_all(hub.join(".locks")).unwrap();
+        assert_eq!(model_cache(hf.path()), (None, None), "no model yet");
+        // per-model blobs (older huggingface_hub): the head, 3 MB, linked from its snapshot
+        let head = hub.join("models--nandakishorm--vega-U");
+        std::fs::create_dir_all(head.join("blobs")).unwrap();
+        std::fs::create_dir_all(head.join("snapshots/abc")).unwrap();
+        std::fs::write(head.join("blobs/w"), vec![0u8; 3 * 1024 * 1024]).unwrap();
         #[cfg(unix)]
-        std::os::unix::fs::symlink(model.join("blobs/w"), model.join("snapshots/abc/model.safetensors")).unwrap();
-        // laya's own model isn't counted
-        std::fs::create_dir_all(hf.path().join("hub/models--other--modernbert/blobs")).unwrap();
-        std::fs::write(hf.path().join("hub/models--other--modernbert/blobs/w"), vec![0u8; 1024 * 1024]).unwrap();
-        assert_eq!(model_cache(hf.path()), (Some(3), Some(model.display().to_string())));
+        std::os::unix::fs::symlink(head.join("blobs/w"), head.join("snapshots/abc/model.safetensors")).unwrap();
+        // shared blobs (what 0.4.24 installs here): the reader, 5 MB in hub/blobs, only a link in its folder
+        let reader = hub.join("models--Qwen--Qwen3.5-0.8B/snapshots/def");
+        std::fs::create_dir_all(&reader).unwrap();
+        std::fs::create_dir_all(hub.join("blobs/8f")).unwrap();
+        std::fs::write(hub.join("blobs/8f/8f06"), vec![0u8; 5 * 1024 * 1024]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(hub.join("blobs/8f/8f06"), reader.join("model.safetensors")).unwrap();
+        assert_eq!(model_cache(hf.path()), (Some(8), Some(hub.display().to_string())));
     }
 
     // ---- the supervisor, with fake 0.4.8 and vega servers (needs python3) ----
@@ -1315,6 +1321,8 @@ ENGINE = "vega"
         assert_eq!(env["OMP_NUM_THREADS"], "4");
         assert_eq!(env["MKL_NUM_THREADS"], "4");
         assert_eq!(env["KWNT_VEGA_THREADS"], "4");
+        let hf_home = env["HF_HOME"].as_str().unwrap_or_default();
+        assert!(hf_home.ends_with("laya/hf-vega"), "{hf_home}");
 
         // healthy: routing moves to vega and 0.4.8 stops
         std::fs::write(&gate, "").unwrap();
@@ -1332,7 +1340,7 @@ ENGINE = "vega"
         rig.until("model size", |s| s.vega.model_mb.is_some()).await;
         let s = rig.router.status();
         assert_eq!(s.vega.model_mb, Some(2));
-        assert!(s.vega.model_cache.as_deref().unwrap().ends_with("models--nandakishorm--vega-U"));
+        assert!(s.vega.model_cache.as_deref().unwrap().ends_with("laya/hf-vega/hub"));
         rig.stop().await;
     }
 
