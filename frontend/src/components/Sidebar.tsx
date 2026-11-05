@@ -19,6 +19,7 @@ import { trapFocusTarget } from '../imports';
 import { type NeedsYouRow, workingIds, directIds } from '../chatsTab';
 import { DevModeSwitch, DevOffNote, useDevMode } from './DevModeSwitch';
 import { DevDeskRow } from './DevDesk';
+import { IdeaJarRow } from './IdeaJarRow';
 
 export interface Kwant {
   id: string;
@@ -124,6 +125,11 @@ export interface SidebarProps {
   /** Dev mode (0.7): the Dev desk row's page is open, and how to open it. */
   devDeskActive?: boolean;
   onOpenDevDesk?: () => void;
+  /** Idea jar (0.7): ready takes for the violet badge, whether its page is open, how to open it, and the quick-add. Hidden on phone, which has the Jar tab. */
+  ideaJarCount?: number;
+  ideaJarActive?: boolean;
+  onOpenIdeaJar?: () => void;
+  onDropIdea?: (text: string) => Promise<unknown>;
   /** Opens Space settings → Accounts from the footer. */
   onOpenAccounts?: () => void;
   /** Opens Accounts at "Sign in with Claude", when Claude being signed out is why nothing runs. */
@@ -282,6 +288,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   devDeskActive = false,
   onOpenDevDesk,
   onOpenMissions,
+  ideaJarCount = 0,
+  ideaJarActive = false,
+  onOpenIdeaJar,
+  onDropIdea,
   onOpenAccounts,
   onSignInClaude,
   enginesRefreshKey = 0,
@@ -798,6 +808,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <KanbanSquare size={15} className={missionsActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
             <span className="truncate flex-1">Mission board</span>
           </button>
+          )}
+          {onOpenIdeaJar && onDropIdea && !phone && (
+            <IdeaJarRow active={ideaJarActive} count={ideaJarCount} onOpen={onOpenIdeaJar} onDrop={onDropIdea} className={navRow(ideaJarActive)} />
           )}
           {onOpenParallel && (
             <MoreMenu

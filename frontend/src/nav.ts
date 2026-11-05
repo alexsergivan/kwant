@@ -16,6 +16,7 @@ export type SpaceView =
   | { kind: 'board' }
   | { kind: 'parallel' }
   | { kind: 'dev' }
+  | { kind: 'jar' }
   | { kind: 'settings'; scope: 'space'; tab: SpaceSettingsTab }
   | { kind: 'settings'; scope: 'app' };
 
@@ -30,6 +31,8 @@ export function viewSegment(v: SpaceView): string {
       return 'parallel';
     case 'dev':
       return 'dev';
+    case 'jar':
+      return 'jar';
     case 'settings':
       return v.scope === 'app' ? 'settings/app' : `settings/${v.tab}`;
   }
@@ -45,6 +48,8 @@ const LEGACY: Record<string, SpaceView> = {
   'mission-board': { kind: 'board' },
   missions: { kind: 'board' },
   'parallel-universe': { kind: 'parallel' },
+  'idea-jar': { kind: 'jar' },
+  ideas: { kind: 'jar' },
   'app-settings': { kind: 'settings', scope: 'app' },
 };
 
@@ -66,6 +71,7 @@ export function parseView(segment: string): { view: SpaceView; legacy: boolean }
   if (head === 'board' && !sub) return { view: { kind: 'board' }, legacy: false };
   if (head === 'parallel' && !sub) return { view: { kind: 'parallel' }, legacy: false };
   if (head === 'dev' && !sub) return { view: { kind: 'dev' }, legacy: false };
+  if (head === 'jar' && !sub) return { view: { kind: 'jar' }, legacy: false };
   if (head === 'settings') {
     if (!sub) return { view: { kind: 'settings', scope: 'space', tab: 'general' }, legacy: true };
     if (sub === 'app' || sub === 'all') return { view: { kind: 'settings', scope: 'app' }, legacy: sub !== 'app' };

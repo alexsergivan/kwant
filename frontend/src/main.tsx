@@ -9,6 +9,7 @@ import './styles/modern.css';
 import './styles/stream.css';
 import './styles/needsYou.css';
 import './styles/ideas.css';
+import './styles/ideaShell.css';
 
 registerServiceWorker();
 captureInstallPrompt();

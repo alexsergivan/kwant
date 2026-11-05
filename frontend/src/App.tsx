@@ -10,7 +10,7 @@ import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState, SendOptions } from './components/ChatView';
 import { ReactResult, Reaction, optimisticReplyRef, reactionOf, saveReaction, senderLabel } from './reactReply';
-import { PhoneTabBar } from './components/PhoneTabBar';
+import { PhoneTabBar, type PhoneTabItem } from './components/PhoneTabBar';
 import { ThreadBar, ThreadHeader, ThreadPicker, type ThreadBarProps } from './components/ThreadBar';
 import { DelegationCard } from './components/DelegationCard';
 import { ApprovalsOffBadge } from './components/ApprovalsSetting';
@@ -48,6 +48,11 @@ import { MISSION_BOARD_SETTING_EVENT, emitMission, parseMissionBoardSetting, sou
 import { type ChatTarget, planOpenTarget } from './chatTarget';
 import { ParallelPage } from './components/ParallelUniverseView';
 import { ConnectionsPage } from './components/ConnectionsView';
+import { IdeaJarView, deleteIdea, dropIdea, emitIdeaUpdated, isIdeaCommand, onIdeaUpdated, useIdeaJarBadge } from './components/ideas';
+import { ideasApi, takeArrivedText } from './ideas';
+import { JarIcon } from './components/JarIcon';
+import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToast';
+import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings, Sparkles } from 'lucide-react';
 import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
@@ -181,7 +186,7 @@ function useIsPhone(): boolean {
   return phone;
 }
 
-type PhoneTab = 'chats' | 'bots' | 'inbox' | 'space';
+type PhoneTab = 'chats' | 'bots' | 'jar' | 'inbox' | 'space';
 
 /** One space: its bots, teams, channels and chats. Remounted for every space, so nothing carries over. */
 export const SpaceApp: React.FC<SpaceAppProps> = ({
@@ -200,8 +205,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 }) => {
   const isPhone = useIsPhone();
   // Phones: the list (one tab of it) or the open chat.
-  const [phoneView, setPhoneView] = useState<'list' | 'chat'>(() => (initialTarget?.channelId || initialTarget?.botId ? 'chat' : 'list'));
-  const [phoneTab, setPhoneTab] = useState<PhoneTab>('chats');
+  // The Idea jar is a tab of the list on phones, so a link to it opens on the list.
+  const [phoneView, setPhoneView] = useState<'list' | 'chat'>(() =>
+    initialView?.kind !== 'jar' && (initialTarget?.channelId || initialTarget?.botId) ? 'chat' : 'list',
+  );
+  const [phoneTab, setPhoneTab] = useState<PhoneTab>(() => (initialView?.kind === 'jar' ? 'jar' : 'chats'));
   const [loaded, setLoaded] = useState(false);
   const [kwants, setKwants] = useState<Kwant[]>([]);
   // Whether the bot list is as new as the last bot change seen. Until then cards can't tell a
@@ -324,6 +332,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   useSettingsCover(!!spaceSettingsTab, contentRef);
   const closeSpaceSettings = () => {
     setSpaceSettingsTab(null);
+    setSettingsFocusRow(null);
     setSettingsClosedCount((n) => n + 1);
     // Accounts may have changed: the getting-started list counts the ready ones.
     onSpacesChanged();
@@ -343,16 +352,53 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const switchLogRef = useRef(createOutageLog());
   // What fills the main pane instead of a chat: the Inbox (New or Loose ends), the Mission board
   // or Parallel Universe. The Inbox's unseen count is the sidebar badge.
-  const [page, setPage] = useState<'chat' | 'inbox' | 'board' | 'parallel' | 'dev'>(() =>
-    initialView?.kind === 'inbox' || initialView?.kind === 'board' || initialView?.kind === 'parallel' || initialView?.kind === 'dev' ? initialView.kind : 'chat',
+  const [page, setPage] = useState<'chat' | 'inbox' | 'board' | 'parallel' | 'dev' | 'jar'>(() =>
+    initialView?.kind === 'inbox' || initialView?.kind === 'board' || initialView?.kind === 'parallel' || initialView?.kind === 'dev' || initialView?.kind === 'jar'
+      ? initialView.kind
+      : 'chat',
   );
   const [inboxTab, setInboxTab] = useState<InboxTab>(() => (initialView?.kind === 'inbox' ? initialView.tab : 'new'));
-  const showPage = (next: 'inbox' | 'board' | 'parallel' | 'dev', tab: InboxTab = 'new') => {
+  const showPage = (next: 'inbox' | 'board' | 'parallel' | 'dev' | 'jar', tab: InboxTab = 'new') => {
     setPage(next);
     if (next === 'inbox') setInboxTab(tab);
     if (spaceSettingsTab) closeSpaceSettings();
-    setPhoneView('chat');
+    // Phones keep the tab bar under the jar (it's a tab, spec §2.2); every other page covers the list.
+    if (next === 'jar' && isPhoneRef.current) {
+      setPhoneTab('jar');
+      setPhoneView('list');
+    } else setPhoneView('chat');
   };
+  const isPhoneRef = useRef(isPhone);
+  isPhoneRef.current = isPhone;
+  // Idea jar (0.7): the ready-takes badge, Open on board's mission, the drop toast and the
+  // app-wide live region (a take is announced on any screen; the open jar announces its own).
+  const ideaJarCount = useIdeaJarBadge(space.id);
+  const jarWobble = useJarWobble();
+  const [pendingMissionId, setPendingMissionId] = useState<string | null>(null);
+  const [ideaToast, setIdeaToast] = useState<{ id: string; state: IdeaDropToastState } | null>(null);
+  const [jarAnnouncement, setJarAnnouncement] = useState('');
+  const [settingsFocusRow, setSettingsFocusRow] = useState<string | null>(null);
+  const closeIdeaToast = useCallback(() => setIdeaToast(null), []);
+  const announceJar = (text: string) => {
+    // Cleared first so the same words twice are read twice.
+    setJarAnnouncement('');
+    requestAnimationFrame(() => setJarAnnouncement(text));
+  };
+  useEffect(
+    () =>
+      onIdeaUpdated((e) => {
+        if (e.status !== 'ready' || e.idea || (e.space_id && e.space_id !== space.id) || pageRef.current === 'jar') return;
+        ideasApi.list(space.id).then(
+          (l) => {
+            const i = l.ideas.find((x) => x.id === e.id);
+            if (i?.take) announceJar(takeArrivedText(kwantName(i.kwant_id) ?? null, i.take, i.text));
+          },
+          () => undefined,
+        );
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [space.id],
+  );
   // Mission board: shown in the sidebar only when the server has it switched on.
   const [missionBoard, setMissionBoard] = useState(false);
   // Dev mode (0.7): the open space's state, read by the switch, the hats and the grid.
@@ -1026,6 +1072,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'MemoryChanged':
             emitContinuity({ type: 'memory_changed', data: event.data });
             break;
+          case 'idea_updated':
+          case 'IdeaUpdated':
+            emitIdeaUpdated(event.data);
+            break;
           case 'task_updated':
             if (event.data?.task) emitMission({ type: 'task_updated', data: { task: event.data.task } });
             break;
@@ -1403,13 +1453,46 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     });
   };
 
-  const handleSendMessage = async (text: string, attachments: AttachmentRef[] = [], opts: SendOptions = {}): Promise<boolean> => {
+  const handleSendMessage = async (text: string, attachments: AttachmentRef[] = [], opts: SendOptions = {}): Promise<boolean | string> => {
     haptic('tap');
     setHistoryWindow(null);
     const targetId = openCtx;
     const threadId = openThreadId;
     const isTargetChannel = isChannel;
     const targetTeam = selectedTeamId;
+    // `/idea …` (spec §2.3): the server files it and starts no turn, so no bubble and no "thinking".
+    // A string back is the composer's error line; the text goes back into the box.
+    if (isIdeaCommand(text) && !attachments.length) {
+      try {
+        const res = await fetch('/api/chat/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            threadId
+              ? { thread_id: threadId, prompt: text, sender_id: 'PlayerHero', attachment_ids: [] }
+              : { channel_id: isTargetChannel ? targetId : null, kwant_id: !isTargetChannel ? targetId : null, team_id: targetTeam || null, prompt: text, sender_id: 'PlayerHero', attachment_ids: [] },
+          ),
+        });
+        const out = ideaSendOutcome(res.status, await res.json().catch(() => null));
+        if (out.kind === 'error') {
+          haptic('warning');
+          return out.line;
+        }
+        if (out.kind === 'dropped') {
+          emitIdeaUpdated({ id: out.idea.id, status: out.idea.status, space_id: out.idea.space_id || space.id, idea: out.idea });
+          setIdeaToast({ id: out.idea.id, state: 'dropped' });
+          wobbleJar();
+          haptic('success');
+          return true;
+        }
+        // An older server ran it as a chat message: show it the usual way.
+        refreshContext(targetId);
+        return true;
+      } catch {
+        haptic('warning');
+        return JAR_SEND_FAILED;
+      }
+    }
     const speakerName = !isTargetChannel ? (currentKwant?.name || 'Bot') : chatTitle;
 
     if (!threadId) {
@@ -3139,6 +3222,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         showPage('dev');
         playSfx('click');
       }}
+      ideaJarCount={ideaJarCount}
+      ideaJarActive={page === 'jar'}
+      onOpenIdeaJar={() => {
+        showPage('jar');
+        playSfx('click');
+      }}
+      onDropIdea={async (text) => {
+        await dropIdea(space.id, text);
+        wobbleJar();
+        announceJar(JAR_DROPPED);
+      }}
     />
   );
 
@@ -3188,6 +3282,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       openTaskId={pendingTaskId}
       onOpenedTaskId={() => setPendingTaskId(null)}
+      openMissionId={pendingMissionId}
+      onOpenedMissionId={() => setPendingMissionId(null)}
     />
   );
   const loose = <LooseEndsPage onOpenChat={openThread} />;
@@ -3339,16 +3435,45 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (viewRequest) applyViewRef.current(viewRequest.view);
   }, [viewRequest?.seq]);
 
+  const jarBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.title || null })), [kwants]);
+  const jarPage = (
+    <IdeaJarView
+      key={space.id}
+      spaceId={space.id}
+      spaceName={space.name}
+      bots={jarBots}
+      onOpenMission={(id) => {
+        setPendingMissionId(id);
+        showPage('board');
+      }}
+      onOpenSettings={() => {
+        setSettingsFocusRow('idea-jar');
+        openAppSettings();
+      }}
+    />
+  );
   const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} />;
-  const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'inbox' ? inbox : !loaded ? (
+  const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
     </main>
   ) : chat;
 
-  const phoneTabs: Array<{ id: PhoneTab; label: string; icon: React.ReactNode; badge?: number }> = [
+  const phoneTabs: Array<PhoneTabItem<PhoneTab>> = [
     { id: 'chats', label: 'Chats', icon: <MessageSquare size={20} aria-hidden="true" /> },
     { id: 'bots', label: 'Bots', icon: <Bot size={20} aria-hidden="true" /> },
+    {
+      id: 'jar',
+      label: 'Jar',
+      icon: (
+        <span key={jarWobble} className={`inline-flex ${jarWobble ? 'kw-jar-wobble' : ''}`}>
+          <JarIcon size={20} />
+        </span>
+      ),
+      badge: ideaJarCount,
+      badgeTone: 'violet',
+      badgeNoun: ideaJarCount === 1 ? 'take ready' : 'takes ready',
+    },
     { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: awayCount },
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
@@ -3368,6 +3493,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                     {sidebar('chats')}
                     {setupChecklist}
                   </>
+                ) : phoneTab === 'jar' ? (
+                  <div className="flex-1 min-h-0 flex" data-main-pane>{jarPage}</div>
                 ) : (
                   sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
                 )}
@@ -3391,6 +3518,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                     openSpaceSettings(canRun === false ? 'accounts' : 'general');
                     return;
                   }
+                  if (id === 'jar') {
+                    showPage('jar');
+                    return;
+                  }
+                  if (page === 'jar') setPage('chat');
                   setPhoneTab(id);
                 }}
               />
@@ -3532,7 +3664,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 </p>
               }
             >
-              <SettingsModal embedded isOpen onClose={closeSpaceSettings} tokensUsed={tokensUsed} onOpenApiKeys={() => openSpaceSettings('accounts')} />
+              <SettingsModal
+                embedded
+                isOpen
+                onClose={closeSpaceSettings}
+                tokensUsed={tokensUsed}
+                onOpenApiKeys={() => openSpaceSettings('accounts')}
+                focusRow={settingsFocusRow}
+              />
             </Suspense>
           }
           routineFocus={routineFocus}
@@ -3578,6 +3717,28 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+      {ideaToast && (
+        <IdeaDropToast
+          key={ideaToast.id}
+          state={ideaToast.state}
+          onClose={closeIdeaToast}
+          onOpenJar={page === 'jar' ? undefined : () => {
+            setIdeaToast(null);
+            showPage('jar');
+          }}
+          onUndo={() => {
+            const id = ideaToast.id;
+            setIdeaToast({ id, state: 'undoing' });
+            deleteIdea(id, space.id).then(
+              () => setIdeaToast((t) => (t?.id === id ? { id, state: 'undone' } : t)),
+              () => setIdeaToast((t) => (t?.id === id ? { id, state: 'undo_failed' } : t)),
+            );
+          }}
+        />
+      )}
+      <p role="status" aria-live="polite" className="sr-only" data-jar-live>
+        {jarAnnouncement}
+      </p>
       <NeedsYouPill items={pill.items} rev={pill.rev} spriteOf={spriteOf} onOpen={openPill} onDismiss={dismissPill} />
     </div>
   );

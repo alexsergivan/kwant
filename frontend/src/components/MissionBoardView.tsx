@@ -3021,7 +3021,10 @@ export const MissionBoardPage: React.FC<{
   /** A task to open as soon as the board has loaded (a link from a bot's Memory tab). `onOpenedTaskId` tells the parent it was used. */
   openTaskId?: string | null;
   onOpenedTaskId?: () => void;
-}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace, openTaskId = null, onOpenedTaskId }) => {
+  /** A mission to select once the board has loaded (Open on board from an idea's take). */
+  openMissionId?: string | null;
+  onOpenedMissionId?: () => void;
+}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace, openTaskId = null, onOpenedTaskId, openMissionId = null, onOpenedMissionId }) => {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [insights, setInsights] = useState<Insights | null>(null);
@@ -3241,6 +3244,14 @@ export const MissionBoardPage: React.FC<{
     onOpenedTaskId?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openTaskId, tasks === null]);
+
+  // Open on board from the Idea jar: select that (draft) mission once the board has its list.
+  useEffect(() => {
+    if (!openMissionId || tasks === null) return;
+    setMissionId(openMissionId);
+    onOpenedMissionId?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openMissionId, tasks === null]);
 
   // "Open goal" from a task's "Keep this true": the goal drawer takes the task panel's place.
   useEffect(() => {
