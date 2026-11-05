@@ -589,26 +589,30 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   position: relative; display: block; width: 36px; height: 20px; border-radius: 9999px;
   background: theme('colors.zinc.700');
   outline: 2px solid transparent; outline-offset: 2px;
-  transition: background-color 160ms var(--kw-ease), outline-color 150ms var(--kw-ease);
+  transition: background-color 120ms var(--kw-ease), outline-color 150ms var(--kw-ease);
 }
 .kw-dv:not(:disabled):hover .kw-dv-track { background: theme('colors.zinc.600'); }
+.kw-dv[data-on]:not(:disabled):hover .kw-dv-fill { background: theme('colors.sky.500'); }
 .kw-dv-fill {
   position: absolute; inset: 0; border-radius: 9999px; background: var(--kw-dv-on);
-  opacity: var(--kw-dv-fill, 0); transition: opacity 160ms var(--kw-ease);
+  opacity: var(--kw-dv-fill, 0); transition: opacity 160ms var(--kw-ease), background-color 120ms var(--kw-ease);
 }
 .kw-dv[data-ring] .kw-dv-track { outline-color: theme('colors.amber.400 / 75%'); }
 .kw-dv-knob {
   position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 9999px;
   display: flex; align-items: center; justify-content: center;
-  background: #fff; color: theme('colors.zinc.600'); box-shadow: 0 1px 2px rgb(6 3 20 / 0.35);
+  background: #fff; color: theme('colors.zinc.700'); box-shadow: 0 1px 2px rgb(6 3 20 / 0.35);
   transition: transform 160ms var(--kw-ease), color 160ms var(--kw-ease);
 }
 .kw-dv[data-knob='right'] .kw-dv-knob { transform: translateX(16px); }
 .kw-dv[data-on] .kw-dv-knob { color: var(--kw-dv-on); }
 .kw-dv[data-ring] .kw-dv-knob { color: theme('colors.amber.600'); }
-.kw-dv-glyph { display: block; }
-/* Reduced motion: the same look, every change instant */
-.kw-dv-rm .kw-dv-track, .kw-dv-rm .kw-dv-fill, .kw-dv-rm .kw-dv-knob { transition: none; }
+.kw-dv-glyph { display: block; animation: kw-dv-glyph 120ms var(--kw-ease) both; }
+@keyframes kw-dv-glyph { from { opacity: 0; } to { opacity: 1; } }
+/* Reduced motion: a "Dev" label before the same track; nothing moves (hover colour stays) */
+.kw-dv-rm { width: auto; gap: 6px; padding: 0 4px; }
+.kw-dv-rm .kw-dv-fill, .kw-dv-rm .kw-dv-knob { transition: none; }
+.kw-dv-rm .kw-dv-glyph { animation: none; }
 .kw-dv-hint { animation: kw-dv-hint 150ms var(--kw-ease) both; }
 @keyframes kw-dv-hint { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 
@@ -651,7 +655,8 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 @keyframes kw-dv-grid { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .kw-dv-track, .kw-dv-fill, .kw-dv-knob { transition: none; }
+  .kw-dv-fill, .kw-dv-knob { transition: none; }
+  .kw-dv-glyph { animation: none; }
   .kw-dv-hint, .kw-dev-badge, .kw-dev-hat, .kw-blueprint::before { animation: none; }
   .kw-dev-caret { animation: none; }
 }

@@ -5,7 +5,7 @@
 // It's a <button>, not role="switch": a switch promises one press.
 
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Code, CodeXml, LockOpen, X } from 'lucide-react';
+import { Code, CodeXml, Lock, LockOpen, X } from 'lucide-react';
 import {
   DROP_MS,
   RECOVER_MS,
@@ -169,6 +169,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
     'aria-label': look.label,
     title: look.tooltip,
     'data-dev-switch': state.phase,
+    'data-look': look.look,
     'data-on': state.on || undefined,
     'data-ring': look.ring || undefined,
     'data-knob': look.knobRight ? 'right' : 'left',
@@ -179,17 +180,20 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   // One look with or without motion: a Settings-size track with a solid knob. Resting, the knob
   // carries </>; lifted, it carries an open lock and the track gets an amber ring. Reduced motion
   // only drops the transitions (kw-dv-rm).
-  const glyph =
-    state.phase === 'lifted' || state.phase === 'pending' ? (
-      <LockOpen size={10} strokeWidth={2.6} className="kw-dv-glyph" data-dv-glyph="unlocked" />
-    ) : (
-      <CodeXml size={11} strokeWidth={2.6} className="kw-dv-glyph" data-dv-glyph="code" />
-    );
+  // The knob icon comes from switchLook: </> at rest, an open lock when armed, a closed lock when
+  // disabled. A new glyph fades in over 120 ms (instant under reduced motion).
+  const g = { size: 10, strokeWidth: 2.5, className: 'kw-dv-glyph', 'data-dv-glyph': look.glyph };
+  const glyph = look.glyph === 'locked' ? <Lock key="locked" {...g} /> : look.glyph === 'unlocked' ? <LockOpen key="unlocked" {...g} /> : <CodeXml key="code" {...g} />;
   const button = (
     <button
       {...common}
-      className={`kw-dv${state.reduced ? ' kw-dv-rm' : ''} ${phone ? 'w-11 h-11' : ''} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-sky-400`}
+      className={`kw-dv${state.reduced ? ' kw-dv-rm' : ''} ${phone && !state.reduced ? 'w-11 h-11' : ''} ${phone && state.reduced ? 'h-11' : ''} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400`}
     >
+      {state.reduced && (
+        <span className="text-meta font-semibold text-zinc-300" aria-hidden="true">
+          Dev
+        </span>
+      )}
       <span className="kw-dv-track" aria-hidden="true">
         <span className="kw-dv-fill" />
         <span className="kw-dv-knob">{glyph}</span>

@@ -212,7 +212,15 @@ function flip(s: SwitchState, on: boolean, now: number, space: string): SwitchSt
 }
 
 /** What the switch looks like: cover open or closed, knob side, fill opacity, ring and hint. */
+/** The visual state the switch draws: off, armed (first press), on, pending (setup sheet open),
+ * disabled. Styles key off this (data-look), so a new look is CSS plus the glyph map. */
+export type SwitchLookName = 'off' | 'armed' | 'on' | 'pending' | 'disabled';
+/** The icon in the knob: the code mark at rest, an open lock when armed, a closed lock when disabled. */
+export type SwitchGlyph = 'code' | 'unlocked' | 'locked';
+
 export interface SwitchLook {
+  look: SwitchLookName;
+  glyph: SwitchGlyph;
   coverOpen: boolean;
   knobRight: boolean;
   fill: number;
@@ -223,6 +231,13 @@ export interface SwitchLook {
 }
 
 export function switchLook(s: SwitchState): SwitchLook {
+  const base = switchParts(s);
+  const look: SwitchLookName = s.disabled ? 'disabled' : s.phase === 'pending' ? 'pending' : s.phase === 'lifted' ? 'armed' : s.on ? 'on' : 'off';
+  const glyph: SwitchGlyph = s.disabled ? 'locked' : s.phase === 'lifted' ? 'unlocked' : 'code';
+  return { look, glyph, ...base };
+}
+
+function switchParts(s: SwitchState): Omit<SwitchLook, 'look' | 'glyph'> {
   const unavailable = s.disabled ? ', unavailable' : '';
   const tooltip = s.disabled ? 'Only the space owner can change Dev mode' : `Dev mode is ${s.on ? 'on' : 'off'}. Press to unlock.`;
   switch (s.phase) {
