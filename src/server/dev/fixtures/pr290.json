@@ -1,0 +1,71 @@
+{
+ "repo": "alexsergivan/kwant",
+ "kind": "landed",
+ "pr": 290,
+ "title": "Sidebar: hovering a bot row no longer wraps its name or changes the row's height",
+ "body": "Oleks, 18:46 UTC: hovering a bot flickers because its name goes onto a new line.\n\n**Cause.** On hover or focus the name line got `pr-9` to make room for Edit and Remove. With a badge such as \"Needs you\" next to a short name, that squeezed the name. `[overflow-wrap:anywhere]` then broke it mid-word (\"Anal / yst\"), and the row grew from 52 to 72 px.\n\n**Fix** (`frontend/src/components/Sidebar.tsx`):\n- The name line no longer changes on hover.\n- Edit and Remove (`data-bot-row-actions`) now sit at `bottom-2`: the right end of the one-line status under the name.\n- That status line (`truncate`, both the title and busy variants) gets the hover `pr-9` instead. It never wraps, so hover trims a few letters of the status, not the row's height. The 0.6.3 rule still holds: buttons never cover letters.\n- Phone rows are unchanged.\n\n**Checks**\n- `tsc` clean. `npm test` 1274 pass / 0 fail (1 skipped).\n- `polish063` test 3 rewritten. The name line has no hover classes. The buttons sit at `bottom-2` with no `top-*`. The status line is `truncate` and carries the hover padding. Phone rows have neither.\n- Real Chromium, built CSS, 4 rows at 240/260/280 px:\n  - before: Analyst + Needs you goes 52→72 px on hover (name 20→40);\n  - after: every row is steady and the buttons sit inside the status line, clear of the name line.\n  - Harness and picture: `/home/maus/shared/ship-software-safely/row-hover/` (render.mjs, hover.mjs, before-after.png).\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+ "head_sha": "4049325ddcd05aec5d2b442826d20fbd5cc8c066",
+ "base_branch": "main",
+ "merged_at": "2026-11-04T19:26:30Z",
+ "merged_by": "Oleks",
+ "author": {
+  "login": null,
+  "name": "Ada (kwant bot)",
+  "email": "ada-bot@users.noreply.example.com",
+  "bot": {
+   "id": "kw_demo_ada",
+   "name": "Ada",
+   "engine": "claude",
+   "model": "claude-opus-5-5"
+  }
+ },
+ "files": [
+  {
+   "path": "frontend/src/components/Sidebar.tsx",
+   "status": "modified",
+   "additions": 10,
+   "deletions": 6,
+   "patch": "@@ -362,6 +362,9 @@ export const Sidebar: React.FC<SidebarProps> = ({\n     const isLead = !!team && k.id === team.lead_kwant_id;\n     const canRemove = !!team && !isLead && !!onUpdateTeamMembers;\n     const hasRowActions = !!onEditKwant || canRemove;\n+    // Desktop: the one-line status under the name makes room for Edit and Remove on hover or focus.\n+    // It never wraps, so the room costs a few letters of the status, never the row's height.\n+    const actionRoom = !phone && hasRowActions ? ' group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : '';\n     return (\n       <div\n         key={`${team?.id ?? 'none'}:${k.id}`}\n@@ -379,8 +382,8 @@ export const Sidebar: React.FC<SidebarProps> = ({\n           <ModernAvatar role={k.avatar_sprite} name={k.name} size={28} status={status} kwantId={k.id} />\n         </span>\n         <div className=\"flex-1 min-w-0\">\n-          {/* Desktop: on hover or focus the name makes room for Edit and Remove instead of sitting under them */}\n-          <div data-bot-name-line className={`flex items-start gap-1 ${!phone && hasRowActions ? 'group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : ''}`}>\n+          {/* The name line never changes on hover: padding it here made the name wrap and the row jump */}\n+          <div data-bot-name-line className=\"flex items-start gap-1\">\n             {/* The full name, on up to two lines (QA a); what it runs on is in the tooltip */}\n             <span data-bot-name className=\"min-w-0 text-body font-semibold leading-5 text-zinc-100 line-clamp-2 [overflow-wrap:anywhere]\" title={`${k.name} · ${engineTip(k.preferred_model)}`}>\n               {k.name}\n@@ -410,9 +413,10 @@ export const Sidebar: React.FC<SidebarProps> = ({\n                   <span className=\"sr-only\">Asks before acting</span>\n                 </span>\n               ))}\n-            {/* Over the row's right edge, so a long name gets the full width until you hover */}\n+            {/* Edit and Remove sit at the right end of the one-line status below the name, which makes room\n+                for them on hover: the name keeps its width and the row its height */}\n             {!phone && (\n-              <span className=\"absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-md bg-zinc-800/95 opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 empty:hidden\">\n+              <span data-bot-row-actions className=\"absolute right-1.5 bottom-2 flex items-center gap-0.5 rounded-md bg-zinc-800/95 opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 empty:hidden\">\n                 {onEditKwant && (\n                   <button\n                     type=\"button\"\n@@ -448,12 +452,12 @@ export const Sidebar: React.FC<SidebarProps> = ({\n             )}\n           </div>\n           {busyKwants[k.id] ? (\n-            <p className={`flex items-center gap-1.5 text-meta truncate ${status === 'needs_you' ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'}`} title={busyKwants[k.id]} data-bot-busy>\n+            <p className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${status === 'needs_you' ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'}`} title={busyKwants[k.id]} data-bot-busy>\n               <span className={`kw-status-dot !h-1.5 !w-1.5 ${status === 'needs_you' ? 'kw-status-warn' : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'}`} aria-hidden=\"true\" />\n               <span className=\"truncate\">{busyKwants[k.id]}</span>\n             </p>\n           ) : (\n-            <p className=\"text-meta text-zinc-400 truncate\">{k.title}</p>\n+            <p className={`text-meta text-zinc-400 truncate${actionRoom}`}>{k.title}</p>\n           )}\n         </div>\n         {/* Phones: one button at the row's end; in a team it opens the member's actions */}",
+   "previous_path": null
+  },
+  {
+   "path": "frontend/tests/polish063.test.mjs",
+   "status": "modified",
+   "additions": 17,
+   "deletions": 3,
+   "patch": "@@ -134,16 +134,30 @@ test('2: Back after a switch inside Settings steps back to the old space, then o\n // ---------------------------------------------------------------------------\n // 3. Room for Edit and Remove\n \n-test('3: on desktop the name line makes room for the hover buttons; phone rows are unchanged', () => {\n+test('3: on desktop the one-line status makes room for the hover buttons, never the name line; phone rows are unchanged', () => {\n   const desk = m.renderToStaticMarkup(React.createElement(m.Sidebar, sidebarProps({ onUpdateTeamMembers: noop })));\n+  // Padding the name line on hover squeezed the name onto a second line, so the row grew and flickered.\n   const lines = [...desk.matchAll(/<div data-bot-name-line=\"[^\"]*\" class=\"([^\"]*)\"/g)].map((x) => x[1]);\n   assert.ok(lines.length >= 3);\n-  for (const cls of lines) {\n+  for (const cls of lines) assert.doesNotMatch(cls, /group-hover|group-focus-within|pr-9/, 'the name line looks the same with and without hover');\n+  // The buttons sit at the end of the status line, which is one line and only loses a few letters.\n+  const actions = [...desk.matchAll(/<span data-bot-row-actions=\"[^\"]*\" class=\"([^\"]*)\"/g)].map((x) => x[1]);\n+  assert.equal(actions.length, lines.length);\n+  for (const cls of actions) {\n+    assert.match(cls, /\\babsolute\\b/);\n+    assert.match(cls, /\\bbottom-2\\b/);\n+    assert.doesNotMatch(cls, /\\btop-/);\n+  }\n+  const status = [...desk.matchAll(/<div data-bot-name-line[\\s\\S]*?<\\/div><p class=\"([^\"]*)\"/g)].map((x) => x[1]);\n+  assert.equal(status.length, lines.length);\n+  for (const cls of status) {\n+    assert.match(cls, /\\btruncate\\b/, 'one line, so its padding never changes the row height');\n     assert.match(cls, /group-hover\\/fleet:pr-9/);\n     assert.match(cls, /group-focus-within\\/fleet:pr-9/);\n   }\n   const phone = m.renderToStaticMarkup(React.createElement(m.Sidebar, sidebarProps({ onUpdateTeamMembers: noop, phone: true })));\n-  for (const [, cls] of phone.matchAll(/<div data-bot-name-line=\"[^\"]*\" class=\"([^\"]*)\"/g)) assert.doesNotMatch(cls, /pr-9/);\n+  assert.doesNotMatch(phone, /pr-9/);\n+  assert.doesNotMatch(phone, /data-bot-row-actions/);\n });\n \n // ---------------------------------------------------------------------------",
+   "previous_path": null
+  }
+ ],
+ "cut": null,
+ "checks": [
+  {
+   "name": "rust",
+   "status": "completed",
+   "conclusion": "success",
+   "url": "https://github.com/alexsergivan/kwant/actions/runs/41891504299/job/126790334867"
+  },
+  {
+   "name": "site",
+   "status": "completed",
+   "conclusion": "success",
+   "url": "https://github.com/alexsergivan/kwant/actions/runs/41891504299/job/126789820478"
+  },
+  {
+   "name": "frontend",
+   "status": "completed",
+   "conclusion": "success",
+   "url": "https://github.com/alexsergivan/kwant/actions/runs/41891504299/job/126789819817"
+  }
+ ],
+ "ci": "green",
+ "task": null,
+ "first_edit_files": [],
+ "draft": false,
+ "head_branch": "ada-row-hover",
+ "links": {
+  "pr": "https://github.com/alexsergivan/kwant/pull/290",
+  "commit": "https://github.com/alexsergivan/kwant/commit/4049325ddcd05aec5d2b442826d20fbd5cc8c066",
+  "ci": "https://github.com/alexsergivan/kwant/actions/runs/41891504299/job/126790334867"
+ }
+}
