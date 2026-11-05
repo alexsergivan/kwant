@@ -184,17 +184,13 @@ pub(super) fn one_line(s: &str) -> String {
 }
 
 /// The secrets and missing-package counts of a `security` object whose scan hit; Juno's scanners
-/// fill it, and either count makes the card High.
+/// fill it, and either count makes the card High. A package that exists but is new, little used or
+/// one letter off a popular name is a finding, not a forced High: only `missing` counts.
 pub fn security_hits(security: &Value) -> (u32, u32) {
-    let hits = |k: &str| {
-        let t = &security[k];
-        if t["state"] == "hit" {
-            t["count"].as_u64().unwrap_or(1).max(1) as u32
-        } else {
-            0
-        }
-    };
-    (hits("secrets"), hits("packages"))
+    let hit = |k: &str| security[k]["state"] == "hit";
+    let secrets = if hit("secrets") { security["secrets"]["count"].as_u64().unwrap_or(1).max(1) as u32 } else { 0 };
+    let missing = if hit("packages") { security["packages"]["missing"].as_u64().unwrap_or(0) as u32 } else { 0 };
+    (secrets, missing)
 }
 
 /// The card's `security` before the scanners land (plan §3.4: `not_run`, OSV and Semgrep later).
@@ -256,7 +252,7 @@ broken behaviour), none for style; an empty list is fine. `line` is a line numbe
 /// is used up.
 pub(super) async fn card<M: Model>(facts: &DevFacts, picked: Option<&Picked>, model: Option<&mut M>) -> (&'static str, Value) {
     let flags = tamper::check(&facts.files);
-    let security = security_not_run();
+    let security = facts.security.as_ref().map_or_else(security_not_run, super::scan::Security::card_json);
     let (secrets, missing_packages) = security_hits(&security);
     let inputs = Inputs { files: &facts.files, first_edit_files: &facts.first_edit_files, tamper: &flags, outside_task: false, secrets, missing_packages };
     let rules = risk::assess(&inputs);
@@ -285,6 +281,9 @@ pub(super) async fn card<M: Model>(facts: &DevFacts, picked: Option<&Picked>, mo
         }
     }
     findings.extend(flags.iter().enumerate().map(|(i, f)| tamper_finding(i + 1, f)));
+    if let Some(sec) = &facts.security {
+        findings.extend(sec.findings.iter().map(super::scan::Finding::card_json));
+    }
 
     let mut card = Map::new();
     card.insert("kind".into(), json!("review"));
@@ -388,8 +387,85 @@ mod tests {
     #[test]
     fn a_secret_or_a_missing_package_hit_counts() {
         assert_eq!(security_hits(&security_not_run()), (0, 0));
-        let hit = json!({"secrets": {"state": "hit", "count": 2}, "packages": {"state": "hit", "count": 0}});
+        let hit = json!({"secrets": {"state": "hit", "count": 2}, "packages": {"state": "hit", "count": 3, "missing": 1}});
         assert_eq!(security_hits(&hit), (2, 1));
+        // A hit with no count still counts one secret; packages that exist but look odd don't force High
+        let odd = json!({"secrets": {"state": "hit"}, "packages": {"state": "hit", "count": 2, "missing": 0}});
+        assert_eq!(security_hits(&odd), (1, 0));
+        let not_run = json!({"secrets": {"state": "not_run", "count": 4}, "packages": {"state": "not_run", "count": 1, "missing": 1}});
+        assert_eq!(security_hits(&not_run), (0, 0));
+    }
+
+    /// J-F (qa/plan.md §3.5): a secret or a missing package from Juno's scan forces High through
+    /// this card code, end to end from the PR's files.
+    #[tokio::test]
+    async fn j_f_a_secret_or_a_missing_package_from_the_scan_forces_high() {
+        use super::super::scan::{self, testkit::*, Config, State};
+        use crate::zombie::github::GhFile;
+        let _l = port_lock().await;
+        let (archive, a, b) = fake_release(&fake_gitleaks(""));
+        let mock = serve(MOCK_PORT, move |r| {
+            if r.path == "/gl.tar.gz" {
+                Reply::bytes(200, archive.clone())
+            } else if r.path.starts_with("/npm/") {
+                Reply::json(404, json!({"error": "not found"}))
+            } else {
+                Reply::bytes(404, vec![])
+            }
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            tools_dir: dir.path().to_path_buf(),
+            gitleaks: Some(scan::gitleaks::Source {
+                url: format!("{}/gl.tar.gz", mock.base),
+                archive: "gl.tar.gz",
+                archive_sha256: a,
+                binary_sha256: b,
+                fetch_timeout: std::time::Duration::from_secs(5),
+            }),
+            gitleaks_timeout: std::time::Duration::from_secs(20),
+            registries: scan::packages::Registries::all_at(&mock.base),
+        };
+        let gh = |path: &str, patch: String| GhFile { filename: path.into(), status: "added".into(), additions: 1, deletions: 0, patch: Some(patch), previous_filename: None };
+        let base = review_facts(290);
+        let (_, quiet) = card::<Stub>(&base, None, None).await;
+        assert_eq!(quiet["risk"]["level"], "low", "the fixture alone is Low");
+
+        // A secret
+        let mut files = vec![gh("src/demo.rs", added_patch(&["fn demo() {}", &format!("let k = \"FAKE_SECRET_{}\";", 31337)]))];
+        let sec = scan::scan_and_hide(&cfg, &mut files, Default::default(), None).await;
+        assert_eq!(sec.secrets.state, State::Hit);
+        let mut f = base.clone();
+        f.security = Some(sec);
+        let (_, c) = card::<Stub>(&f, None, None).await;
+        assert_eq!(c["risk"]["level"], "high", "{}", c["risk"]);
+        assert_eq!(c["risk"]["reasons"][0], "Has a secret in the diff");
+        assert_eq!(c["security"]["secrets"]["state"], "hit");
+        let s1 = c["findings"].as_array().unwrap().iter().find(|x| x["id"] == "s1").unwrap();
+        assert_eq!((s1["source"].as_str(), s1["state"].as_str(), s1["line"].as_u64()), (Some("gitleaks"), Some("open"), Some(2)));
+        assert!(!c.to_string().contains("FAKE_SECRET_31337"));
+
+        // A package that doesn't exist
+        let manifest = "{\"name\": \"demo-web\", \"dependencies\": {\"demo-ghost-pkg\": \"^1\"}}";
+        let mut files = vec![gh("package.json", added_patch(&[manifest]))];
+        let contents = std::collections::BTreeMap::from([("package.json".to_string(), manifest.to_string())]);
+        let sec = scan::scan_and_hide(&cfg, &mut files, contents, None).await;
+        assert_eq!((sec.packages.state, sec.packages.missing), (State::Hit, 1), "{sec:?}");
+        let mut f = base.clone();
+        f.security = Some(sec);
+        let (_, c) = card::<Stub>(&f, None, None).await;
+        assert_eq!(c["risk"]["level"], "high", "{}", c["risk"]);
+        assert_eq!(c["risk"]["reasons"][0], "Adds a package that doesn't exist");
+        assert_eq!(c["security"]["packages"]["missing"], 1);
+        assert!(c["findings"].as_array().unwrap().iter().any(|x| x["id"] == "p1" && x["source"] == "packages"));
+
+        // Not run is never a pass, and never High on its own
+        let mut f = base.clone();
+        f.security = Some(scan::Security::not_run("gitleaks didn't finish within 60 seconds"));
+        let (_, c) = card::<Stub>(&f, None, None).await;
+        assert_eq!((c["security"]["secrets"]["state"].as_str(), c["risk"]["level"].as_str()), (Some("not_run"), Some("low")));
+        assert_eq!(c["security"]["secrets"]["reason"], "gitleaks didn't finish within 60 seconds");
     }
 
     #[tokio::test]

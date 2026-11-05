@@ -269,11 +269,16 @@ async fn reviews(state: &AppState, client: &GithubSource, mode: &DevModeRow, kwa
             continue;
         }
         read += 1;
-        let files = client.dev_pull_files(&mode.repo, p.number).await?;
+        let mut files = client.dev_pull_files(&mode.repo, p.number).await?;
         let head = client.dev_commit(&mode.repo, &p.head.sha).await.ok();
         let checks = client.dev_check_runs(&mode.repo, &p.head.sha, etags()).await.unwrap_or_default();
         let first = first_edits(client, mode, &files, Utc::now()).await;
-        let facts = review_facts(mode, p, head.as_ref(), files, checks, kwants, first);
+        // The whole diff is scanned before the 60k cut, and secret lines are hidden before
+        // anything is stored or shown (Juno, plan §3.4)
+        let capped = files.len() >= crate::zombie::github::MAX_PR_FILES;
+        let security = super::scan::for_review(&state.config.data_dir, client, &mode.repo, &p.head.sha, &mut files, capped).await;
+        let mut facts = review_facts(mode, p, head.as_ref(), files, checks, kwants, first);
+        facts.security = Some(security);
         insert(state, &mode.space_id, REVIEW, &ref_, &p.head.sha, &facts).await;
         stale(state, &mode.space_id, &ref_, Some(&p.head.sha)).await;
     }
@@ -446,6 +451,7 @@ pub fn landed_facts(mode: &DevModeRow, c: &GhCommit, pr: Option<&GhPull>, files:
         cut,
         ci: CiState::of(&checks),
         links: Links { pr: https(pr.and_then(|p| p.html_url.as_deref())), commit: https(c.html_url.as_deref()), ci: ci_link(&checks) },
+        security: None,
         checks,
         task: None,
         first_edit_files: first,
@@ -473,6 +479,7 @@ pub fn review_facts(mode: &DevModeRow, p: &GhPull, head: Option<&GhCommit>, file
         cut,
         ci: CiState::of(&checks),
         links: Links { pr: https(p.html_url.as_deref()), commit: https(head.and_then(|c| c.html_url.as_deref())), ci: ci_link(&checks) },
+        security: None,
         checks,
         task: None,
         first_edit_files: first,

@@ -3,7 +3,7 @@
 //! `generate` turns them into cards. The production floor lives in `crate::mcp::prod_floor`.
 //!
 //! Lin owns `facts`, `routes`, `poller`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
-//! `review`, `risk`, `tamper` and `notes`.
+//! `review`, `risk`, `tamper` and `notes`; Juno owns `scan`.
 
 pub mod backup;
 pub mod facts;
@@ -16,6 +16,7 @@ pub mod repo;
 pub mod review;
 pub mod risk;
 pub mod routes;
+pub mod scan;
 pub mod tamper;
 
 pub use generate::generate;
@@ -51,6 +52,32 @@ pub fn poll_every() -> std::time::Duration {
 pub fn call_cap() -> i64 {
     static CAP: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     *CAP.get_or_init(|| env_num("KWANT_DEV_CALL_CAP", 0, 1000).map_or(CALLS_CAP, |v| v as i64))
+}
+
+/// Where the secrets scan downloads gitleaks from: `KWANT_DEV_GITLEAKS_URL` (an http(s) base; the
+/// pinned checksums still apply), else GitHub's release page.
+pub fn scan_gitleaks_base() -> Option<&'static str> {
+    static URL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    URL.get_or_init(|| env_url("KWANT_DEV_GITLEAKS_URL")).as_deref()
+}
+
+/// Where the package check looks names up: `KWANT_DEV_REGISTRIES_URL` (one http(s) base for all
+/// registries, see [`scan::packages::Registries::all_at`]), else npm, PyPI and crates.io.
+pub fn scan_registries_base() -> Option<&'static str> {
+    static URL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    URL.get_or_init(|| env_url("KWANT_DEV_REGISTRIES_URL")).as_deref()
+}
+
+fn env_url(name: &str) -> Option<String> {
+    let raw = std::env::var(name).ok()?;
+    let ok = url::Url::parse(raw.trim()).is_ok_and(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some());
+    if ok {
+        tracing::info!("dev: {name} is set");
+        Some(raw.trim().trim_end_matches('/').to_string())
+    } else {
+        tracing::warn!("dev: {name} must be an http(s) URL; the default is used");
+        None
+    }
 }
 
 fn env_num(name: &str, min: u64, max: u64) -> Option<u64> {

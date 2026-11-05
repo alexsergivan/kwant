@@ -54,6 +54,10 @@ pub struct DevFacts {
     /// commit). A review counts for the landed card only if it reviewed this commit.
     #[serde(default)]
     pub pr_head_sha: Option<String>,
+    /// Review only: the gitleaks and new-package checks over the whole diff (Juno, plan §3.4).
+    /// None when the head wasn't scanned (landed cards, cards written before the scan existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<super::scan::Security>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -181,6 +185,7 @@ mod tests {
             head_branch: Some("b".into()),
             links: Links::default(),
             pr_head_sha: None,
+            security: None,
         };
         let v = serde_json::to_value(&f).unwrap();
         assert_eq!(v["kind"], "review");

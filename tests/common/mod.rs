@@ -101,6 +101,16 @@ reply.append("answer " + (t[-1] if t else "none"))
 print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": " ".join(reply)}))
 "#;
 
+/// Dev mode's secrets and package checks never reach GitHub's releases or a real registry from a
+/// test: both point at a closed port, so a poll's scan reads `not_run`.
+pub fn no_network_scans() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::env::set_var("KWANT_DEV_GITLEAKS_URL", "http://127.0.0.1:9");
+        std::env::set_var("KWANT_DEV_REGISTRIES_URL", "http://127.0.0.1:9");
+    });
+}
+
 pub fn prompts_dir() -> &'static PathBuf {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
@@ -180,6 +190,7 @@ pub async fn setup() -> Env {
 /// router is built.
 pub async fn setup_with(change: impl FnOnce(&mut AppState)) -> Env {
     prompts_dir();
+    no_network_scans();
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();

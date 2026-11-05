@@ -344,7 +344,7 @@ struct ContentItem {
 }
 
 /// Most PR files read (GitHub stops at 3000; a card never needs that many).
-const MAX_PR_FILES: usize = 300;
+pub const MAX_PR_FILES: usize = 300;
 /// Most commits read back from the branch head per poll.
 pub const MAX_COMMITS: usize = 50;
 
@@ -481,6 +481,32 @@ impl GithubSource {
             }
         }
         Ok(out)
+    }
+
+    /// A file's text at `sha` (Dev mode's package check and secrets scan): none when it isn't
+    /// there, is a folder, isn't UTF-8 or is too big for the contents API (over 1 MB).
+    pub async fn dev_file_at(&self, repo: &str, path: &str, sha: &str) -> Result<Option<String>, GhError> {
+        if !seg_ok(sha) {
+            return Err(GhError::Other("bad sha".into()));
+        }
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.iter().any(|p| p.is_empty() || *p == "." || *p == "..") {
+            return Ok(None);
+        }
+        const SEG: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'-').remove(b'_').remove(b'.').remove(b'~');
+        let path = parts.iter().map(|p| percent_encoding::utf8_percent_encode(p, SEG).to_string()).collect::<Vec<_>>().join("/");
+        let v = match self.get_dev(&format!("/repos/{}/contents/{path}?ref={}", repo_path(repo)?, enc(sha)), None).await {
+            Ok(v) => v,
+            Err(GhError::NotFound) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        if v["type"].as_str() != Some("file") || v["encoding"].as_str() != Some("base64") {
+            return Ok(None);
+        }
+        use base64::Engine;
+        let b64: String = v["content"].as_str().unwrap_or("").chars().filter(|c| !c.is_whitespace()).collect();
+        let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|_| GhError::Other("GitHub sent a file kwant could not read".into()))?;
+        Ok(String::from_utf8(bytes).ok())
     }
 
     /// Check runs on a commit.
