@@ -719,3 +719,59 @@ async fn file_text_is_fetched_by_encoded_path_at_the_head_sha_and_never_outside_
     assert!(gh.dev_file_at("demo/app", "x", "main?evil=1").await.is_err(), "the ref must be a plain sha or name");
     assert_eq!(mock.requests().len(), before, "a path that leaves the repo's tree is never sent");
 }
+
+// ---------------------------------------------------------------------------------------------
+// #316 F-A: gitleaks' built-in path allowlist can't hide an added line
+
+#[test]
+fn f_a_every_file_also_gets_a_neutral_name_and_both_copies_map_back() {
+    let [r, n] = gitleaks::tree_paths_for_test(3, "node_modules/demo/index.js");
+    assert_eq!(r, std::path::Path::new("r/3/node_modules/demo/index.js"));
+    assert_eq!(n, std::path::Path::new("n/3.txt"));
+    for p in ["package-lock.json", "assets/logo.svg", "docs/gitleaks.toml.md", "vendor/x/go.sum"] {
+        let [_, n] = gitleaks::tree_paths_for_test(0, p);
+        let s = n.to_string_lossy();
+        assert!(!s.contains("lock") && !s.contains("svg") && !s.contains("gitleaks") && !s.contains("vendor"), "{s}");
+    }
+    let files = vec![target("a.rs", &["x".into()]), target("node_modules/demo/index.js", &["x".into(), "y".into()])];
+    let report = json!([
+        {"RuleID": "aws-access-token", "File": "/w/tree/n/1.txt", "StartLine": 2, "EndLine": 2},
+        {"RuleID": "aws-access-token", "File": "/w/tree/r/1/node_modules/demo/index.js", "StartLine": 2, "EndLine": 2},
+        {"RuleID": "github-pat", "File": "/w/tree/r/0/a.rs", "StartLine": 1, "EndLine": 1},
+        {"RuleID": "github-pat", "File": "/w/tree/n/9.txt", "StartLine": 1, "EndLine": 1},
+        {"RuleID": "github-pat", "File": "/w/tree/1/a.rs", "StartLine": 1, "EndLine": 1}
+    ]);
+    let hits = gitleaks::parse_report_for_test(report.to_string().as_bytes(), &files).unwrap();
+    let got: Vec<(&str, u64, &str)> = hits.iter().map(|h| (h.file.as_str(), h.start, h.rule.as_str())).collect();
+    // The two copies of one line are one hit; an index past the list or outside r/ and n/ names no file
+    assert_eq!(got, vec![("", 1, "github-pat"), ("a.rs", 1, "github-pat"), ("node_modules/demo/index.js", 2, "aws-access-token")]);
+}
+
+#[tokio::test]
+#[ignore = "needs KWANT_TEST_GITLEAKS (the real binary); CI has no network to fetch it"]
+async fn f_a_real_gitleaks_finds_and_hides_keys_in_paths_its_allowlist_skips() {
+    let Some(bin) = real_bin() else { return };
+    let _l = port_lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (archive, a, b) = fake_release(&std::fs::read(&bin).unwrap());
+    let mock = serve(MOCK_PORT, move |r| if r.path == "/gl.tar.gz" { Reply::bytes(200, archive.clone()) } else { Reply::bytes(404, vec![]) }).await;
+    let c = cfg(dir.path(), &mock.base, &a, &b);
+    let (aws, ghp) = (fake_aws_key(), fake_github_token());
+    // Only files gitleaks' default config allowlists by path: a PR like this must not read pass
+    let cases = [
+        ("node_modules/demo/index.js", format!("const awsKey = \"{aws}\";"), aws.clone()),
+        ("assets/logo.svg", format!("<!-- aws_access_key_id = \"{aws}\" -->"), aws.clone()),
+        ("docs/gitleaks.toml.md", format!("aws_access_key_id = \"{aws}\""), aws.clone()),
+        ("package-lock.json", format!("      \"resolved\": \"https://demo:{ghp}@npm.pkg.github.com/demo/-/demo-1.0.0.tgz\","), ghp.clone()),
+    ];
+    let mut files: Vec<GhFile> = cases.iter().map(|(p, line, _)| gh(p, "added", Some(&added_patch(&["// demo", line])))).collect();
+    let sec = scan_and_hide(&c, &mut files, BTreeMap::new(), None).await;
+    assert_eq!(sec.secrets.state, State::Hit, "{:?}", sec.secrets);
+    assert!(sec.secrets.count >= 4, "{:?}", sec.secrets);
+    for ((p, _, value), f) in cases.iter().zip(&files) {
+        assert!(sec.findings.iter().any(|x| x.file == *p && x.line == Some(2)), "no finding in {p}: {:?}", sec.findings);
+        let patch = f.patch.as_deref().unwrap();
+        assert!(patch.contains(&format!("+{HIDDEN_LINE}")) && !patch.contains(value.as_str()), "{p} not hidden: {patch}");
+        assert!(patch.contains("+// demo"), "{p}: only the flagged line is hidden");
+    }
+}

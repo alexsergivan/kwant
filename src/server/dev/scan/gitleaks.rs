@@ -390,11 +390,19 @@ fn safe_rel(i: usize, path: &str) -> PathBuf {
     p
 }
 
-/// Writes the targets under `root` and returns which index is which path.
+/// Where file `i` goes in the tree: under `r/` at its own (made safe) path, so rules that look at
+/// the path still apply, and under `n/` as `<i>.txt`, a name gitleaks' built-in path allowlist
+/// (`node_modules/`, lockfiles, images, `gitleaks.toml`, …) never matches, so no added line goes
+/// unscanned because of where it lives. Both copies map back to `files[i]`.
+fn tree_paths(i: usize, path: &str) -> [PathBuf; 2] {
+    [Path::new("r").join(safe_rel(i, path)), Path::new("n").join(format!("{i}.txt"))]
+}
+
+/// Writes the targets under `root` (see [`tree_paths`]).
 fn write_tree(root: &Path, files: &[Target]) -> Result<(), String> {
     let mut total = 0usize;
     for (i, f) in files.iter().enumerate() {
-        let path = root.join(safe_rel(i, &f.path));
+        let paths = tree_paths(i, &f.path);
         let max = f.lines.iter().map(|(n, _)| *n).max().unwrap_or(0) as usize;
         let mut rows = vec![""; max];
         for (n, text) in &f.lines {
@@ -407,10 +415,13 @@ fn write_tree(root: &Path, files: &[Target]) -> Result<(), String> {
         if total > MAX_TREE {
             return Err("the diff is too large to scan (over 64 MB of added lines)".into());
         }
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|_| "the scan's temp folder couldn't be written".to_string())?;
+        for rel in paths {
+            let path = root.join(rel);
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|_| "the scan's temp folder couldn't be written".to_string())?;
+            }
+            std::fs::write(&path, &body).map_err(|_| "the scan's temp folder couldn't be written".to_string())?;
         }
-        std::fs::write(&path, body).map_err(|_| "the scan's temp folder couldn't be written".to_string())?;
     }
     Ok(())
 }
@@ -556,7 +567,13 @@ fn parse_report(raw: &[u8], files: &[Target]) -> Option<Vec<Hit>> {
             let rule: String = r.rule.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(60).collect();
             let rel = r.file.replace('\\', "/");
             let rel = rel.find("tree/").map_or("", |i| &rel[i + 5..]);
-            let idx = rel.split('/').next().and_then(|i| i.parse::<usize>().ok());
+            // `r/<i>/<path>` or `n/<i>.txt`: the index is the next part either way
+            let idx = match rel.split_once('/') {
+                Some(("r", rest)) => rest.split('/').next(),
+                Some(("n", rest)) => rest.strip_suffix(".txt"),
+                _ => None,
+            }
+            .and_then(|i| i.parse::<usize>().ok());
             let file = idx.and_then(|i| files.get(i)).map(|t| t.path.clone()).unwrap_or_default();
             Hit { rule: if rule.is_empty() { "unknown".into() } else { rule }, file, start: r.start, end: r.end.max(r.start) }
         })
@@ -569,4 +586,14 @@ fn parse_report(raw: &[u8], files: &[Target]) -> Option<Vec<Hit>> {
 #[cfg(test)]
 pub(crate) fn safe_rel_for_test(i: usize, path: &str) -> PathBuf {
     safe_rel(i, path)
+}
+
+#[cfg(test)]
+pub(crate) fn tree_paths_for_test(i: usize, path: &str) -> [PathBuf; 2] {
+    tree_paths(i, path)
+}
+
+#[cfg(test)]
+pub(crate) fn parse_report_for_test(raw: &[u8], files: &[Target]) -> Option<Vec<Hit>> {
+    parse_report(raw, files)
 }
