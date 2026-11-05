@@ -490,7 +490,7 @@ fn script_reason(script: &str, ctx: &DevCtx) -> Option<Floor> {
 }
 
 fn has(args: &[&str], x: &str) -> bool {
-    args.iter().any(|a| *a == x)
+    args.contains(&x)
 }
 
 /// Positional arguments (not starting with `-`).

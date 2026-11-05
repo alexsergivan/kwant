@@ -42,6 +42,7 @@ async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceI
 // Settings
 
 /// `GET /api/spaces/:id/dev_mode` reply. With no row yet: off, the team's repo as a prefill.
+#[allow(clippy::result_large_err)]
 pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Response> {
     let row = state.db.dev_mode(space.as_str()).await.map_err(internal)?;
     let calls = state.db.dev_calls_today(space.as_str()).await.map_err(internal)?;

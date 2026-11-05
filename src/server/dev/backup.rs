@@ -102,7 +102,7 @@ pub fn judge(v: &Value, cwd: &Path) -> (bool, Option<String>, Option<i64>, Optio
         return (false, None, None, Some(format!("The backup command stopped with exit code {code}. {tail}").trim().to_string()));
     }
     match find_path(stdout, cwd).or_else(|| find_path(stderr, cwd)) {
-        Some(Found::Local(p, bytes)) if bytes == 0 => (false, Some(p), Some(0), Some("The backup file is empty".into())),
+        Some(Found::Local(p, 0)) => (false, Some(p), Some(0), Some("The backup file is empty".into())),
         Some(Found::Local(p, bytes)) => (true, Some(p), Some(bytes as i64), None),
         Some(Found::Missing(p)) => (false, Some(p), None, Some("The backup command named a file that isn't there".into())),
         Some(Found::Remote(p)) => (true, Some(p), printed_bytes(stdout), None),
@@ -137,8 +137,8 @@ fn find_path(out: &str, cwd: &Path) -> Option<Found> {
     for line in out.lines().rev().take(200) {
         for word in line.split_whitespace().rev() {
             let w = word
-                .trim_start_matches(|c: char| matches!(c, '"' | '\'' | '`' | '(' | '[' | '<'))
-                .trim_end_matches(|c: char| matches!(c, '"' | '\'' | '`' | ',' | ';' | ')' | ']' | '>' | '.' | ':'));
+                .trim_start_matches(['"', '\'', '`', '(', '[', '<'])
+                .trim_end_matches(['"', '\'', '`', ',', ';', ')', ']', '>', '.', ':']);
             let w = w.split_once('=').map(|(_, v)| v).unwrap_or(w);
             if w.len() < 2 || w.len() > 1024 {
                 continue;

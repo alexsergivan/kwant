@@ -216,7 +216,7 @@ pub fn window(commits: Vec<GhCommit>, first: bool, _found: bool) -> Vec<GhCommit
 /// The merged PR a commit on the branch is the merge (or squash) commit of. `Err(())` when the
 /// commit is one of several a rebase-merge put on the branch and isn't the last: the PR's card
 /// is made from its merge commit, so this one is skipped.
-pub fn merged_pr<'a>(pulls: &'a [GhPull], sha: &str, branch: &str) -> Result<Option<&'a GhPull>, ()> {
+pub(crate) fn merged_pr<'a>(pulls: &'a [GhPull], sha: &str, branch: &str) -> Result<Option<&'a GhPull>, ()> {
     let merged: Vec<&GhPull> = pulls.iter().filter(|p| p.merged_at.is_some() && p.base.branch == branch).collect();
     if let Some(p) = merged.iter().find(|p| p.merge_commit_sha.as_deref() == Some(sha)) {
         return Ok(Some(p));
