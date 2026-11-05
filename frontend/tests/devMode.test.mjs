@@ -527,3 +527,52 @@ test('Dev desk: empty What landed, then the Reviews tab by keyboard', async () =
   assert.equal(document.activeElement, now[1]);
   root.unmount();
 });
+
+// Round 2 (Mira's review of #315): B1 toast, S2/S3 setup footer, S1 desk header, S4 tab targets.
+test('round 2: on phone the hint is a viewport toast above the tab bar with the short copy', async () => {
+  reset({ ...off, on: true, repo: 'demo-org/demo-app', branch: 'main', polled_at: '2026-11-05T08:00:00Z' });
+  const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, phone: true }));
+  await click(switchEl(host));
+  const hint = host.querySelector('[data-dv-hint]');
+  assert.equal(hint.textContent, 'Press again to turn Dev mode off');
+  for (const c of ['fixed', 'inset-x-4', 'mx-auto', 'w-fit', 'max-w-[calc(100vw-32px)]', 'text-center', 'bottom-[calc(56px+env(safe-area-inset-bottom)+12px)]']) {
+    assert.ok(hint.classList.contains(c), c);
+  }
+  assert.ok(!hint.classList.contains('whitespace-nowrap'), 'may wrap to 2 lines rather than run off');
+  root.unmount();
+});
+
+test('round 2: the setup footer is sticky, says nothing is posted, and its buttons are 44 px on phone', async () => {
+  reset();
+  const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
+  const b = switchEl(host);
+  await click(b);
+  await click(b);
+  const footer = document.querySelector('[data-dv-setup-footer]');
+  assert.ok(footer.classList.contains('sticky') && footer.classList.contains('bottom-0'));
+  assert.ok(footer.classList.contains('pb-[max(16px,env(safe-area-inset-bottom))]'));
+  assert.match(footer.textContent, /Only you can turn this on or off\. Nothing is posted to GitHub\./);
+  assert.doesNotMatch(document.body.textContent, /without asking/);
+  for (const btn of footer.querySelectorAll('button')) assert.ok(btn.classList.contains('min-h-[44px]'), btn.textContent);
+  root.unmount();
+});
+
+test('round 2: the Dev desk header shows the repo chip and when it was checked; tabs are 44 px on phone', async () => {
+  reset();
+  m.devStore.set('spc_demo', { ...off, on: true, repo: 'demo-org/demo-app', branch: 'trunk' });
+  m.deskStore._reset();
+  const { host, root } = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+  await settle(20);
+  const chip = host.querySelector('[data-dev-repo-chip]');
+  assert.equal(chip.textContent, 'demo-org/demo-app · trunk');
+  assert.ok(chip.classList.contains('hidden') && chip.classList.contains('sm:inline-flex'), 'chip hides at 390');
+  assert.match(host.querySelector('[data-dev-checked]').textContent, /^Checked \d\d:\d\d$/);
+  for (const t of host.querySelectorAll('[role="tab"]')) assert.ok(t.classList.contains('min-h-[44px]'));
+  root.unmount();
+  m.devStore.set('spc_demo', { ...off, on: true, repo: null });
+  m.deskStore._reset();
+  const again = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+  await settle(20);
+  assert.equal(again.host.querySelector('[data-dev-repo-chip]'), null, 'no repo known: no chip');
+  again.root.unmount();
+});

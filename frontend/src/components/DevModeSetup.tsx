@@ -101,7 +101,7 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
         aria-modal="true"
         aria-labelledby="dv-setup-title"
         onKeyDown={onKey}
-        className="kw-dv-sheet w-full sm:w-[540px] max-h-[92dvh] overflow-y-auto rounded-t-3xl sm:rounded-3xl border border-white/14 bg-surface-raised p-6 flex flex-col gap-[18px] text-left"
+        className="kw-dv-sheet w-full sm:w-[540px] max-h-[92dvh] overflow-y-auto rounded-t-3xl sm:rounded-3xl border border-white/14 bg-surface-raised px-6 pt-6 flex flex-col gap-[18px] text-left"
       >
         <header>
           <h2 id="dv-setup-title" className="text-lg font-semibold text-zinc-50">
@@ -212,16 +212,16 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
           </p>
         )}
 
-        <footer className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
+        <footer className="sticky bottom-0 -mx-6 px-6 bg-[#120e26] border-t border-white/[0.07] pt-3 pb-[max(16px,env(safe-area-inset-bottom))] flex flex-col sm:flex-row sm:items-center gap-3" data-dv-setup-footer>
           <p className="flex-1 flex items-start gap-1.5 text-meta text-zinc-500">
             <Lock size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
-            Only you can turn this on or off. Bots never post to GitHub without asking.
+            Only you can turn this on or off. Nothing is posted to GitHub.
           </p>
           <div className="flex gap-2 justify-end">
             <button
               type="button"
               onClick={onCancel}
-              className="rounded-xl border border-hairline-strong px-3.5 h-9 text-meta font-medium text-zinc-200 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+              className="rounded-xl border border-hairline-strong px-3.5 min-h-[44px] sm:min-h-[36px] text-meta font-medium text-zinc-200 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
             >
               Cancel
             </button>
@@ -231,7 +231,7 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
               onClick={turnOn}
               disabled={!canTurnOn}
               data-dv-turn-on
-              className="inline-flex items-center gap-1.5 rounded-xl bg-accent-gradient px-3.5 h-9 text-meta font-semibold text-white disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-accent-gradient px-3.5 min-h-[44px] sm:min-h-[36px] text-meta font-semibold text-white disabled:opacity-45 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
             >
               {saving && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
               Turn on Dev mode

@@ -7,6 +7,7 @@ import { ChevronLeft, Code, Loader2, RefreshCw } from 'lucide-react';
 import { devApi, deskStatus } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
+import { useDevMode } from './DevModeSwitch';
 
 /** App re-sends the `dev_card` SSE as this window event: detail `{space_id, id, kind, status}`. */
 export const DEV_CARD_EVENT = 'kwant:dev-card';
@@ -27,9 +28,11 @@ export interface DeskData {
   reviews: ShellCard[] | null;
   loading: boolean;
   error: string | null;
+  /** When the last load succeeded (ms), for the header's "Checked 14:32". */
+  checkedAt: number | null;
 }
 
-const EMPTY: DeskData = { landed: null, reviews: null, loading: false, error: null };
+const EMPTY: DeskData = { landed: null, reviews: null, loading: false, error: null, checkedAt: null };
 const desks = new Map<string, DeskData>();
 const deskListeners = new Set<() => void>();
 const inflight = new Map<string, Promise<void>>();
@@ -51,7 +54,7 @@ export const deskStore = {
     if (running) return running;
     setDesk(space, { loading: true });
     const p = Promise.all([devApi.landed(space), devApi.reviews(space)])
-      .then(([l, r]) => setDesk(space, { landed: parseLandedPage(l), reviews: parseCards(r), loading: false, error: null }))
+      .then(([l, r]) => setDesk(space, { landed: parseLandedPage(l), reviews: parseCards(r), loading: false, error: null, checkedAt: Date.now() }))
       .catch((e: unknown) => setDesk(space, { loading: false, error: e instanceof Error ? e.message : 'The Dev desk couldn’t load.' }))
       .finally(() => inflight.delete(space));
     inflight.set(space, p);
@@ -64,6 +67,12 @@ export const deskStore = {
     inflight.clear();
   },
 };
+
+/** "14:32", 24-hour local time. */
+export function checkedLabel(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 export function useDesk(space: string, on: boolean): DeskData {
   const data = useSyncExternalStore(deskStore.subscribe, () => deskStore.get(space), () => EMPTY);
@@ -136,6 +145,7 @@ export interface DevDeskViewProps {
 
 export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, onBack, onSaveToNotion, initialTab = 'landed', now }) => {
   const desk = useDesk(spaceId, true);
+  const dev = useDevMode(spaceId);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [marking, setMarking] = useState(false);
   const [notes, setNotes] = useState<ShellCard | null>(null);
@@ -240,6 +250,16 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
           <h2 className="text-sm font-semibold text-zinc-100 truncate">Dev desk</h2>
           <p className="text-[11px] text-zinc-400 truncate mt-0.5">What landed in {spaceName}, and the open pull requests</p>
         </div>
+        {dev?.repo && (
+          <span className="hidden sm:inline-flex shrink-0 font-mono text-[11px] text-zinc-300 px-2 py-0.5 rounded-md bg-white/[0.04] border border-zinc-700/60" data-dev-repo-chip>
+            {dev.repo} · {dev.branch || 'main'}
+          </span>
+        )}
+        {desk.checkedAt != null && (
+          <span className="shrink-0 text-[11px] text-zinc-500 tabular-nums" data-dev-checked>
+            Checked {checkedLabel(desk.checkedAt)}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => void deskStore.load(spaceId)}
@@ -270,7 +290,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
                   onKeyDown={(e) => onTabKey(e, i)}
                   onClick={() => setTab(t.key)}
                   data-dev-tab={t.key}
-                  className={`inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-lg text-xs font-medium ${focusRing} ${
+                  className={`inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg text-xs font-medium ${focusRing} ${
                     on ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-400 border border-transparent hover:text-zinc-200'
                   }`}
                 >
