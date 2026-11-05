@@ -67,6 +67,13 @@ const TABLES: &[&str] = &[
         calls INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (space_id, day)
     )",
+    // Connections the person marked production (D10): `mcp:<server id>` or `composio:<toolkit slug>`
+    "CREATE TABLE IF NOT EXISTS dev_prod_connections (
+        space_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        marked_at TIMESTAMP NOT NULL,
+        PRIMARY KEY (space_id, connection_id)
+    )",
 ];
 
 /// A space's Dev mode settings and poll state.
@@ -188,10 +195,34 @@ impl Database {
 
     pub async fn delete_dev_mode_of_space(&self, space_id: &str) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
-        for t in ["dev_mode_spaces", "dev_cards", "dev_backups", "dev_model_calls"] {
+        for t in ["dev_mode_spaces", "dev_cards", "dev_backups", "dev_model_calls", "dev_prod_connections"] {
             sqlx::query(&format!("DELETE FROM {t} WHERE space_id = ?")).bind(space_id).execute(&mut *tx).await?;
         }
         tx.commit().await?;
+        Ok(())
+    }
+
+    /// The connection ids the person marked production in a space (D10).
+    pub async fn prod_connections(&self, space_id: &str) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT connection_id FROM dev_prod_connections WHERE space_id = ? ORDER BY connection_id")
+            .bind(space_id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Marks or unmarks a connection production.
+    pub async fn set_prod_connection(&self, space_id: &str, connection_id: &str, production: bool) -> Result<(), DbError> {
+        if production {
+            sqlx::query("INSERT INTO dev_prod_connections (space_id, connection_id, marked_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
+                .bind(space_id)
+                .bind(connection_id)
+                .bind(Utc::now())
+                .execute(&self.pool)
+                .await?;
+        } else {
+            sqlx::query("DELETE FROM dev_prod_connections WHERE space_id = ? AND connection_id = ?").bind(space_id).bind(connection_id).execute(&self.pool).await?;
+        }
         Ok(())
     }
 

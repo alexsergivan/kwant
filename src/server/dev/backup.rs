@@ -257,9 +257,9 @@ pub fn card_state(no_data: bool, has_command: bool, taking: bool, last: Option<&
 }
 
 /// The `backup` object for a space now.
-pub async fn state_of(state: &AppState, space_id: &str, no_data: bool) -> Value {
-    let has_command = state.db.dev_mode(space_id).await.ok().flatten().and_then(|m| m.backup_command).is_some_and(|c| !c.trim().is_empty());
-    let (last, ok) = state.db.latest_dev_backups(space_id).await.unwrap_or((None, None));
+pub async fn state_of(db: &crate::db::Database, space_id: &str, no_data: bool) -> Value {
+    let has_command = db.dev_mode(space_id).await.ok().flatten().and_then(|m| m.backup_command).is_some_and(|c| !c.trim().is_empty());
+    let (last, ok) = db.latest_dev_backups(space_id).await.unwrap_or((None, None));
     card_state(no_data, has_command, is_running(space_id), last.as_ref(), ok.as_ref(), Utc::now())
 }
 

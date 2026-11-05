@@ -65,6 +65,9 @@ pub struct Connection {
     pub logins_stored: &'static str,
     /// The API that manages it.
     pub manage: String,
+    /// The person marked it production (D10): in a Dev mode space every call through it gets the
+    /// production floor's card. Only MCP servers (and Composio apps, by toolkit slug) can be.
+    pub production: bool,
 }
 
 // Last MCP test results (POST /api/mcp/servers/:id/test), kept in memory
@@ -165,6 +168,7 @@ async fn mcp_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]) ->
                 used_by: used(&users),
                 logins_stored: if is_composio(s) { "composio" } else { "kwnt" },
                 manage: format!("/api/mcp/servers/{}", s.id),
+                production: false,
             }
         })
         .collect()
@@ -243,6 +247,7 @@ async fn account_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]
                 used_by: users.get(&p.id).cloned().unwrap_or_default(),
                 logins_stored: "kwnt",
                 manage: format!("/api/profiles/{}", p.id),
+                production: false,
             }
         })
         .collect()
@@ -285,6 +290,7 @@ async fn login_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]) 
                 used_by: used(&users),
                 logins_stored: "vault",
                 manage: format!("/api/sandbox/{owner}/passwords"),
+                production: false,
             });
         }
     }
@@ -331,6 +337,7 @@ async fn source_connections(state: &AppState, space: &SpaceId) -> Vec<Connection
                 used_by: users.clone(),
                 logins_stored: "vault",
                 manage: format!("/api/zombie/sources/{}", s.id),
+                production: false,
             })
         })
         .collect()
@@ -390,6 +397,10 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap, Scope(space
         }
     };
     connections.extend(source_connections(&state, &space).await);
+    let marked = state.db.prod_connections(space.as_str()).await.unwrap_or_default();
+    for c in connections.iter_mut() {
+        c.production = marked.contains(&c.id);
+    }
     let servers = state.db.list_mcp_servers(&space).await.unwrap_or_default();
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for c in &connections {
@@ -400,8 +411,54 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap, Scope(space
         "counts": counts,
         "vault": vault,
         "catalog": catalog(&servers),
+        // Composio apps marked production by toolkit slug (D10), as `composio:<slug>`
+        "production": marked.iter().filter(|m| m.starts_with("composio:")).collect::<Vec<_>>(),
     }))
     .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProductionBody {
+    pub production: bool,
+}
+
+/// Whether a connection id can carry the production mark: an MCP server of the space, or a
+/// Composio toolkit slug (`composio:github`). Accounts, logins and Loose ends sources can't.
+pub fn production_target(id: &str, servers: &[McpServer]) -> Result<(), &'static str> {
+    if let Some(sid) = id.strip_prefix("mcp:") {
+        return if servers.iter().any(|s| s.id == sid) { Ok(()) } else { Err("No such MCP server in this space") };
+    }
+    if let Some(slug) = id.strip_prefix("composio:") {
+        let ok = !slug.is_empty() && slug.len() <= 64 && slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+        return if ok { Ok(()) } else { Err("A Composio app is named by its toolkit slug, like composio:github") };
+    }
+    Err("Only MCP servers and Composio apps can be marked production")
+}
+
+/// `PUT /api/connections/:id/production?space=` `{production}`: the person marks a connection
+/// production (D10), or clears the mark. Replies `{id, production}`.
+pub async fn put_production(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Scope(space): Scope,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<ProductionBody>,
+) -> Response {
+    if let Err(r) = refuse_agent_tokens(&state, &headers, REFUSAL).await {
+        return r;
+    }
+    let servers = state.db.list_mcp_servers(&space).await.unwrap_or_default();
+    // Clearing a mark always works, so a server deleted since can be unmarked
+    if body.production {
+        if let Err(why) = production_target(&id, &servers) {
+            return error(StatusCode::BAD_REQUEST, why);
+        }
+    }
+    if let Err(e) = state.db.set_prod_connection(space.as_str(), &id, body.production).await {
+        tracing::warn!(error = %e, "connections: could not save the production mark");
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "The production mark could not be saved");
+    }
+    Json(json!({"id": id, "production": body.production})).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -611,6 +668,19 @@ mod tests {
             timeout_secs: 30,
             created_at: None,
         }
+    }
+
+    #[test]
+    fn only_mcp_servers_and_composio_slugs_can_be_marked_production() {
+        assert!(production_target("composio:github", &[]).is_ok());
+        assert!(production_target("composio:google_sheets", &[]).is_ok());
+        assert!(production_target("composio:", &[]).is_err());
+        assert!(production_target("composio:GitHub", &[]).is_err());
+        assert!(production_target("composio:../x", &[]).is_err());
+        assert!(production_target(&format!("composio:{}", "a".repeat(65)), &[]).is_err());
+        assert!(production_target("mcp:srv_gone", &[]).is_err(), "a server not in this space");
+        assert!(production_target("account:p1", &[]).is_err());
+        assert!(production_target("telegram", &[]).is_err());
     }
 
     #[test]

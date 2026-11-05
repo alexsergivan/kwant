@@ -198,7 +198,11 @@ impl BrokerApprover {
             Some(_) => None,
             None => self.tier_gate(&req).await,
         };
-        let forced = payment.is_some() || tier.is_some();
+        // The production floor (plan §3.5): in a Dev mode space, a step that can reach production
+        // (a deploy, a push to the watched branch, a migration, a marked connection) always asks,
+        // and "always allow" covers just that call.
+        let floor = super::dev::floor::for_call(&self.db, &req).await;
+        let forced = payment.is_some() || tier.is_some() || floor.is_some();
         // The two audit calls only record the audit in kwnt (risks the person closes), so they
         // follow approvals off even in an always-asking audit turn; its other tools still ask
         let audit_call = req.server == mcp::SELF_SERVER_NAME && super::missions::auditor::TOOL_NAMES.contains(&req.tool.as_str());
@@ -240,6 +244,9 @@ impl BrokerApprover {
         if let Some(why) = &tier {
             details["tier_reason"] = json!(why);
         }
+        if let Some((_, card)) = &floor {
+            details["prod_floor"] = card.clone();
+        }
         let record = NewApproval {
             turn_id: req.turn_id.clone(),
             kwant_id: req.kwant_id.clone(),
@@ -265,6 +272,8 @@ impl BrokerApprover {
         }
         if payment.is_some() {
             tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, reason = ?payment, "a payment: asking whatever the approvals say");
+        } else if let Some((f, _)) = &floor {
+            tracing::info!(kwant = %req.kwant_id, tool = %req.tool_name, kind = ?f.kind, "can reach production: asking whatever the approvals say");
         } else if !off && !self.always_ask && self.broker.is_allowed_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await {
             return (ApprovalOutcome::Allowed, "allowed", None);
         }
@@ -329,6 +338,8 @@ impl BrokerApprover {
             Ok(Ok(ApprovalDecision::AllowOnce)) => ApprovalOutcome::Allowed,
             // A payment's "always allow" covers this one call: nothing is remembered
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) if payment.is_some() => ApprovalOutcome::Allowed,
+            // So does a production step's
+            Ok(Ok(ApprovalDecision::AlwaysAllowSession)) if floor.is_some() => ApprovalOutcome::Allowed,
             Ok(Ok(ApprovalDecision::AlwaysAllowSession)) => {
                 self.broker.allow_for_session(&req.kwant_id, &self.conversation, &req.tool_name).await;
                 ApprovalOutcome::Allowed
@@ -438,8 +449,8 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     let channel_id = chat["channel_id"].as_str().map(str::to_string);
     let conversation = thread_id.clone().or_else(|| channel_id.clone()).or_else(|| chat["direct_kwant_id"].as_str().map(str::to_string)).unwrap_or_else(|| kwant.id.clone());
     state.broker.grant_once(&kwant.id, &conversation, &approval.tool_name, &arguments).await;
-    // A payment's "always allow" covers the one call (the payment floor, D8)
-    if decision == ApprovalDecision::AlwaysAllowSession && details.get("payment_reason").is_none() {
+    // A payment's "always allow" covers the one call (the payment floor, D8). So does a production step's (plan §3.5)
+    if decision == ApprovalDecision::AlwaysAllowSession && details.get("payment_reason").is_none() && details.get("prod_floor").is_none() {
         state.broker.allow_for_session(&kwant.id, &conversation, &approval.tool_name).await;
     }
     let depth = match &thread_id {

@@ -663,4 +663,78 @@ mod tests {
         assert_eq!(repo_of("https://api.github.com/repos/o/.."), None);
         assert_eq!(repo_of("https://api.github.com/repos/o/r?x=1"), None);
     }
+
+    /// A mock GitHub on a private local port (9481–9484 on the shared server, any free one
+    /// otherwise): Dev mode's reads send the ETag back, reuse the cached answer on a 304, and
+    /// report a rate limit with its wait.
+    #[tokio::test]
+    async fn dev_reads_against_a_mock_github() {
+        use axum::{extract::State, http::HeaderMap, response::IntoResponse, routing::get, Json, Router};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        #[derive(Default)]
+        struct Seen {
+            commits: AtomicUsize,
+            revalidated: AtomicUsize,
+        }
+        async fn commits(State(seen): State<Arc<Seen>>, headers: HeaderMap) -> axum::response::Response {
+            seen.commits.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(headers.get("authorization").and_then(|v| v.to_str().ok()), Some("Bearer demo-token"));
+            if headers.get("if-none-match").and_then(|v| v.to_str().ok()) == Some("\"c3\"") {
+                seen.revalidated.fetch_add(1, Ordering::SeqCst);
+                return axum::http::StatusCode::NOT_MODIFIED.into_response();
+            }
+            let c = |sha: &str| serde_json::json!({"sha": sha, "commit": {"message": format!("demo {sha}"), "author": {"name": "Demo (kwant bot)", "email": "demo-bot@example.com"}}});
+            ([("etag", "\"c3\"")], Json(serde_json::json!([c("c3"), c("c2"), c("c1")]))).into_response()
+        }
+        async fn pulls() -> axum::response::Response {
+            (axum::http::StatusCode::TOO_MANY_REQUESTS, [("retry-after", "120")], "slow down").into_response()
+        }
+        async fn tags() -> Json<serde_json::Value> {
+            Json(serde_json::json!([{"name": "v0.7.0", "commit": {"sha": "c2"}}]))
+        }
+        let seen = Arc::new(Seen::default());
+        let app = Router::new()
+            .route("/repos/demo-org/demo-app/commits", get(commits))
+            .route("/repos/demo-org/demo-app/pulls", get(pulls))
+            .route("/repos/demo-org/demo-app/tags", get(tags))
+            .with_state(seen.clone());
+        let mut listener = None;
+        for port in [9481u16, 9482, 9483, 9484, 0] {
+            if let Ok(l) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                listener = Some(l);
+                break;
+            }
+        }
+        let listener = listener.expect("a local port for the mock");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let cfg = GithubConfig { api_base: base };
+        cfg.validate().unwrap();
+        let gh = GithubSource::for_dev("demo", cfg, Zeroizing::new("demo-token".into()));
+        let cache = EtagCache::default();
+
+        let (newer, found) = gh.dev_commits_since("demo-org/demo-app", "main", Some("c1"), &cache).await.unwrap();
+        assert!(found);
+        assert_eq!(newer.iter().map(|c| c.sha.as_str()).collect::<Vec<_>>(), ["c2", "c3"], "oldest first, after last_seen");
+        // The second read sends the ETag back and gets the same answer from the cache
+        let (again, _) = gh.dev_commits_since("demo-org/demo-app", "main", Some("c2"), &cache).await.unwrap();
+        assert_eq!(again.iter().map(|c| c.sha.as_str()).collect::<Vec<_>>(), ["c3"]);
+        assert_eq!(seen.commits.load(Ordering::SeqCst), 2);
+        assert_eq!(seen.revalidated.load(Ordering::SeqCst), 1);
+        // A last_seen GitHub no longer lists: everything it sent, and `found` says so
+        let (all, found) = gh.dev_commits_since("demo-org/demo-app", "main", Some("gone"), &cache).await.unwrap();
+        assert!(!found);
+        assert_eq!(all.len(), 3);
+
+        match gh.dev_open_pulls("demo-org/demo-app", "main", &cache).await {
+            Err(GhError::Limited { retry_after_s }) => assert_eq!(retry_after_s, 120),
+            other => panic!("expected a rate limit, got {other:?}"),
+        }
+        assert_eq!(gh.dev_latest_tag("demo-org/demo-app", &cache).await.unwrap(), Some(("v0.7.0".into(), Some("c2".into()))));
+        assert!(matches!(gh.dev_latest_tag("demo-org/no-such", &cache).await, Err(GhError::NotFound)));
+        server.abort();
+    }
 }

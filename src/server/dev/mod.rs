@@ -2,11 +2,12 @@
 //! writes a pending card per merge to the watched branch and per open PR head, with its DevFacts;
 //! `generate` turns them into cards. The production floor lives in `crate::mcp::prod_floor`.
 //!
-//! Lin owns `facts`, `routes`, `poller`, `repo` and `backup`; Vega owns `generate`, `landed`,
+//! Lin owns `facts`, `routes`, `poller`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
 //! `review`, `risk`, `tamper` and `notes`.
 
 pub mod backup;
 pub mod facts;
+pub mod floor;
 pub mod generate;
 pub mod landed;
 pub mod notes;

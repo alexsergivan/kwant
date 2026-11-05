@@ -1,0 +1,143 @@
+# Dev mode
+
+Dev mode (0.7) points a space at one GitHub repo and branch. kwnt then reads the repo, **read only**,
+and turns what happens there into cards:
+
+- **Landed**: one card per commit that reaches the watched branch, saying what changed and how risky it is.
+- **Review**: one card per open pull request head, with findings. The person can press **Fix it**
+  (the finding goes to the bot that wrote the PR) or **Dismiss** on each finding.
+- **Release notes**: written on request, from the landed cards since the last tag.
+
+It also turns on the **production floor** for the space's bots: steps that can reach production
+always ask (see below).
+
+Everything in Dev mode belongs to the person. Every route is refused for a bot's turn token, reads
+included, because the settings hold the backup command and the cards hold the repo's diffs. The
+tables (`dev_mode_spaces`, `dev_cards`, `dev_backups`, `dev_model_calls`, `dev_prod_connections`)
+are left out of exports, like approval modes.
+
+## Settings
+
+`PUT /api/spaces/:id/dev_mode` saves these fields:
+
+- `repo`: a URL, an ssh address or `owner/name`, normalised to `owner/name`;
+- `branch`: the branch to watch;
+- `deploy_hint`: how the repo ships, for example `cloudflare_pages` or `fly`;
+- `backup_command`: the command that backs up production data.
+
+`POST …/dev_mode/check` looks the repo up through the Loose ends GitHub connection and answers
+`found`, `not_found` or `not_connected`. A new repo or branch starts the watch over. The same one
+keeps its place.
+
+Turning Dev mode **off** (D12) stops the polling, the reviews and the floor. Cards stay readable,
+and approvals stay as they were.
+
+## Reading GitHub
+
+Reads go through the GitHub connection only, and kwnt never writes to the repo. Every read sends
+the last ETag it got, so an unchanged answer costs no rate limit. A rate limit (a 403 or 429 with
+`retry-after` or `x-ratelimit-remaining: 0`) backs the space off until the reset time GitHub gives,
+at most an hour, or a minute for a bare 429. Another 403 is a permission error. The settings show
+either one as the poll error.
+
+Every 5 minutes, for each space with Dev mode on, kwnt:
+
+1. Reads the latest tag. Release notes start from it.
+2. Reads the commits on the branch since `last_seen_sha`. The first poll backfills the last 5. A
+   poll writes at most 20 new cards. A rebase merge (several commits, one PR, no merge commit) is
+   skipped.
+3. For each commit, reads the PR it came from, the files and patches, and the check runs, and
+   writes a `landed` card with its DevFacts. A patch past 60k characters is dropped whole, and the
+   facts say "diff cut, N file(s) not read". The bot that wrote it is matched by commit author name
+   (with "(kwant bot)" removed) or by the `<name>-bot` email.
+4. Reads the open PRs and writes a `review` card per new head, at most 10 per poll. A new push makes
+   the old head's card stale, and so does a draft or a closed PR.
+5. Checks CI again on the last 10 cards whose CI was pending, for 6 hours. A change re-runs the
+   card's text.
+
+Each new card is pending until `crate::server::dev::generate` writes its text, using at most 30
+model calls per space per day. After a restart, cards still pending are generated again, and a
+**Fix it** that was sent but never reached its bot is sent again.
+
+## The production floor
+
+In a space with Dev mode on, these steps always show an approval card, whatever the bot's
+approvals say (`ask`, `smart` or `off`), and whatever "always allow" was given before:
+
+| Kind | What it is | Needs a backup |
+| --- | --- | --- |
+| `push_main` | pushing to the watched branch or a protected one (`main`, `master`, `production`, `prod`, `live`, `stable`, `trunk`, `gh-pages`), or `gh pr merge` | no |
+| `force_push` | `git push --force`, `-f`, `--force-with-lease` or `+ref` to a protected branch | no |
+| `delete_ref` | deleting a protected branch or a release tag | no |
+| `deploy` | wrangler, fly, vercel `--prod`, netlify `--prod`, firebase, railway, kamal, serverless, kubectl, helm, terraform or pulumi apply, `docker compose up`, a push to a deploy remote (heroku, dokku, …), `make`, `npm` or `just` targets named deploy, ship or release, deploy tools on infrastructure MCP servers | no |
+| `deploy_migration` | a migration run against production: sqlx, diesel, prisma `migrate deploy`, rails `db:migrate`, alembic, `manage.py migrate` and others, when the command names a production database or environment | **yes** |
+| `destructive` | `DROP`, `TRUNCATE`, or `DELETE`/`UPDATE` with no `WHERE` through a database client, `rm -r` on data folders or database files, `docker volume rm`, `compose down -v`, `terraform destroy`, delete tools on infrastructure apps | **yes** |
+| `prod_key` | any tool on a connection the person marked **production** (D10) | no |
+
+- The card's `details.prod_floor` is `{kind, why, blast, needs_backup, space_id, backup}`.
+  - `blast` is a list of `[label, value]` rows, and only rows that are known: Where, What changes,
+    Downtime, Data, Key used, Migration, If it fails.
+  - `backup` is the space's backup state: `{state, age_s, bytes, path, error}`, where `state` is
+    `fresh`, `old`, `none`, `no_data`, `no_command`, `taking` or `failed`.
+- **Always this session** on a floor card allows that one call. Nothing is remembered, and the
+  next one asks again. The same goes for a late Allow.
+- **Allow** on a card that needs a backup is refused by the server (`409`, `status: "needs_backup"`)
+  until the space has an `ok` backup at most 10 minutes old. This is checked when the person
+  answers, so a backup taken while the card waits counts.
+- `POST /api/spaces/:id/dev/backup` runs the backup command in the bot's workspace, with a
+  10-minute limit and one run at a time per space. kwnt then records what it can tell:
+  - the exit code;
+  - the file the output names, its size, and whether it is empty;
+  - a remote target (`s3://`, `gs://`, `r2://`, …), which counts as ok on exit 0 because its size
+    can't be checked.
+- **Marking a connection production** (D10): `PUT /api/connections/:id/production?space=` with
+  `{production: true|false}`. Only an MCP server in the space (`mcp:<id>`) or a Composio app
+  (`composio:<slug>`) can be marked. `GET /api/connections` shows `production` on each one.
+
+Like the payment floor, the classifier (`src/mcp/prod_floor.rs`) is a pure function. It reads only
+the call and the space's Dev mode settings, never anything the bot says about the call. It runs:
+
+- in `BrokerApprover`, which covers claude's own tools (Bash and the rest, through claude's
+  permission prompt) and every MCP tool;
+- in `approve_local_shell_in`, which covers the API drivers' `execute_shell`.
+
+It asks for some things that never reach production, such as a `docker compose up` on a laptop
+or `npm run release` in a test repo. That is accepted: an extra card costs a tap, and a missed
+deploy can cost a site.
+
+### What the floor can't see
+
+- **Codex's own shell.** kwnt never sees Codex's commands, only the MCP tools Codex calls. Its
+  sandbox has no network, so it can't push or deploy. It can still delete files inside its
+  workspace, a local database file included.
+- **Commands hidden in scripts.** Running a script, or `bash script.sh`, is read by the script's
+  *name* only, for example `deploy.sh` or `release.py`. A script called `run.sh` that deploys
+  doesn't ask. The same goes for Makefile targets, npm scripts and CI workflows named for
+  something else, and for git hooks and aliases.
+- **Indirection.** A command built from variables (`$CMD`, `eval`), loaded from a file, or run
+  through another language (`python -c "subprocess…"`) isn't seen. Nesting deeper than 3 levels of
+  `ssh` or `sh -c` isn't read either.
+- **SDKs and HTTP calls.** A deploy or delete made with `curl` against a provider's API, or from
+  code that uses its SDK, doesn't ask unless it goes through a connection marked production.
+- **Tools and providers missing from the lists**, and MCP tools whose names don't say what they
+  do. Mark such a connection production to make every one of its tools ask.
+- **Where a command runs.** The floor can't tell a production database from a local copy unless
+  the command says so (a remote URL, `--prod`, `RAILS_ENV=production`, …). So a plain
+  `sqlx migrate run` doesn't ask, but `DROP TABLE` does, wherever it runs.
+- **What CI does after a push.** A push to the watched branch asks, because it may deploy. A push
+  to another branch that CI deploys from doesn't ask, unless that branch is protected.
+- **The checked-out branch** is read from `.git/HEAD` in the bot's folder, or the folder above it.
+  A `cd other-repo && git push` is judged by the first repo's branch. A bare `git push` from a
+  detached head, or from a folder that isn't a repo, counts as a push to a protected branch.
+
+## Tests
+
+Run these focused tests:
+
+```sh
+cargo test --lib -- server::dev:: prod_floor auth::tests::person_only zombie::github connections::tests::only_mcp
+```
+
+The poller runs against a mock GitHub on a private `127.0.0.1` port. There are table tests for each
+floor kind in `src/mcp/prod_floor.rs`. The backup checks and the Allow refusal are tested in
+`src/server/dev/backup.rs` and `src/server/dev/floor.rs`.
