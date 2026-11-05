@@ -16,6 +16,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'DOMP
 const m = await loadBundled(`
   export { default as React } from 'react';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
+  export { createRoot } from 'react-dom/client';
   export { Sidebar } from './src/components/Sidebar';
 `);
 const { React } = m;
@@ -101,4 +102,40 @@ test('hover and focus never change the name line, and a bot with no title still 
   assert.match(status.getAttribute('class'), /min-h-\[1\.125rem\]/, 'one text-meta line high even with no title');
   const src = readFileSync(new URL('../tailwind.config.js', import.meta.url), 'utf8');
   assert.match(src, /meta: \['0\.75rem', \{ lineHeight: '1\.125rem' \}\]/, 'the reserved height is text-meta\'s line height');
+});
+
+test('the Add member picker wraps a name the same way: between words or after a hyphen, never inside a word', async () => {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = m.createRoot(host);
+  const settle = async () => { for (let i = 0; i < 30; i++) await new Promise((r) => setTimeout(r, 0)); };
+  root.render(React.createElement(m.Sidebar, {
+    space, spaces: [space], onSwitchSpace: noop, onCreateSpace: noop, onOpenSpaceSettings: noop, onOpenArchived: noop, onOpenSearch: noop,
+    kwants, channels: [], teams: [team], selectedId: '', isChannel: true, onSelectKwant: noop, onSelectChannel: noop, onSelectTeam: noop,
+    onSummonKwant: noop, onCreateTeam: noop, onOpenInbox: noop, onOpenParallel: noop, onOpenMissions: noop, missionBoard: true,
+    onEditKwant: noop, onUpdateTeamMembers: noop,
+  }));
+  try {
+    await settle();
+    const add = [...host.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add member');
+    assert.ok(add, 'the team has an Add member button');
+    add.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await settle();
+    const names = [...host.querySelectorAll('[data-pick-name]')];
+    assert.deepEqual(names.map((el) => el.textContent).sort(), [NAMES[2], NAMES[3]].sort(), 'the bots not yet in the team are offered');
+    const rowCls = host.querySelector('[data-bot-name]').getAttribute('class');
+    for (const el of names) {
+      const cls = el.getAttribute('class');
+      assert.doesNotMatch(cls, MID_WORD, `${el.textContent}: no mid-word break class`);
+      for (const c of ['line-clamp-2', '[overflow-wrap:normal]', '[word-break:normal]', 'text-ellipsis']) {
+        assert.ok(cls.split(' ').includes(c), `${el.textContent}: ${c}`);
+        assert.ok(rowCls.split(' ').includes(c), `the sidebar row name shares ${c}`);
+      }
+      assert.equal(el.getAttribute('title'), el.textContent, 'the whole name is in the tooltip');
+      assert.doesNotMatch(el.closest('button').getAttribute('class'), MID_WORD);
+    }
+  } finally {
+    root.unmount();
+    host.remove();
+  }
 });

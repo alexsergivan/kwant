@@ -128,6 +128,11 @@ export interface SidebarProps {
 export const approvalsDiffers = (k: { approvals_effective?: string | null }, spaceApprovals: string | undefined): boolean =>
   !!k.approvals_effective && !!spaceApprovals && k.approvals_effective !== spaceApprovals;
 
+// A bot's name wraps only between words or after a hyphen, on up to two lines, never inside a word
+// ("Researche / r"); a word too long for its line ends in "…". Used by the sidebar row and the
+// Add member picker. Prose, results and errors keep [overflow-wrap:anywhere] for long URLs.
+const NAME_WRAP = 'line-clamp-2 [overflow-wrap:normal] [word-break:normal] text-ellipsis';
+
 const navRow = (active: boolean) =>
   `w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-body font-medium transition-colors text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
     active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
@@ -392,7 +397,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* The full name, on up to two lines (QA a), wrapping only between words or after a hyphen:
                 never inside a word ("Researche / r"). A word too long for the line ends in "…"; the
                 whole name and what it runs on are in the tooltip */}
-            <span data-bot-name className="min-w-0 text-body font-semibold leading-5 text-zinc-100 line-clamp-2 [overflow-wrap:normal] [word-break:normal] text-ellipsis" title={`${k.name} · ${engineTip(k.preferred_model)}`}>
+            <span data-bot-name className={`min-w-0 text-body font-semibold leading-5 text-zinc-100 ${NAME_WRAP}`} title={`${k.name} · ${engineTip(k.preferred_model)}`}>
               {k.name}
             </span>
             {isLead && (
@@ -610,7 +615,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-[11px] text-zinc-300 hover:bg-sky-500/10 hover:text-zinc-100 text-left"
           >
             <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} kwantId={k.id} />
-            <span className="flex-1 min-w-0 line-clamp-2 [overflow-wrap:anywhere]" title={k.name}>{k.name}</span>
+            <span data-pick-name className={`flex-1 min-w-0 ${NAME_WRAP}`} title={k.name}>{k.name}</span>
             <span className="shrink-0 text-[10px] text-zinc-500 truncate max-w-[80px]">{k.title}</span>
           </button>
         ))}
