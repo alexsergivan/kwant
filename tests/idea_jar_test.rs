@@ -304,6 +304,44 @@ async fn ideas_go_in_and_move_between_jar_and_shelf() {
 }
 
 #[tokio::test]
+async fn post_takes_the_space_from_the_query_like_get_does() {
+    let e = setup().await;
+    let lab = e
+        .state
+        .db
+        .create_space(&kwnt::db::spaces::NewSpace { name: "Lab".into(), icon: "🧪".into(), color: None, this_machine_enabled: true })
+        .await
+        .unwrap();
+    let lab = SpaceId::new(&lab.id);
+
+    // `?space_id=`, as GET takes it (Rigel's 0.7.0 N1: this went to the default space)
+    let (s, v) = call(&e.app, "POST", &format!("/api/ideas?space_id={}", lab.as_str()), Some(json!({"text": "A lab idea"}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["idea"]["space_id"], lab.as_str());
+    let id = v["idea"]["id"].as_str().unwrap().to_string();
+    // and the usual `?space=`
+    let (s, v) = call(&e.app, "POST", &format!("/api/ideas?space={}", lab.as_str()), Some(json!({"text": "Another"}))).await;
+    assert_eq!((s, v["idea"]["space_id"].as_str()), (StatusCode::CREATED, Some(lab.as_str())));
+    // The body's `space_id` still wins over the query
+    let (s, v) = call(&e.app, "POST", &format!("/api/ideas?space_id={}", lab.as_str()), Some(json!({"space_id": SpaceId::default_space().as_str(), "text": "Home"}))).await;
+    assert_eq!((s, v["idea"]["space_id"].as_str()), (StatusCode::CREATED, Some(SpaceId::default_space().as_str())));
+    // An unknown space is a 404, not the default space
+    assert_eq!(call(&e.app, "POST", "/api/ideas?space_id=nope", Some(json!({"text": "Lost"}))).await.0, StatusCode::NOT_FOUND);
+
+    assert_eq!(e.state.db.list_ideas(&lab, None).await.unwrap().len(), 2);
+    assert_eq!(e.state.db.list_ideas(&SpaceId::default_space(), None).await.unwrap().len(), 1, "nothing stray in the default space");
+    let list = ok(&e.app, "GET", &format!("/api/ideas?space_id={}", lab.as_str()), None).await;
+    assert_eq!(list["ideas"].as_array().unwrap().len(), 2);
+
+    // The idea routes check `?space_id=` like `?space=`
+    assert_eq!(call(&e.app, "GET", &format!("/api/ideas/{id}?space_id={}", lab.as_str()), None).await.0, StatusCode::OK);
+    let other = SpaceId::default_space();
+    assert_eq!(call(&e.app, "GET", &format!("/api/ideas/{id}?space_id={}", other.as_str()), None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(call(&e.app, "POST", &format!("/api/ideas/{id}/later?space_id={}", other.as_str()), None).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(e.state.db.get_idea(&id).await.unwrap().unwrap().status, "new", "a mismatched space changed nothing");
+}
+
+#[tokio::test]
 async fn every_idea_route_is_the_persons() {
     let e = setup().await;
     let id = e.drop_in("A dark mode").await.id;

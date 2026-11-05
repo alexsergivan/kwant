@@ -39,7 +39,7 @@ notification.
 | Route | What it does |
 |---|---|
 | `GET /api/ideas?space_id=&status=` | The space's ideas, newest first, with `counts` per status, `daily_cap`, `peeks_today`, `peeks_left` and `cap_reached`. |
-| `POST /api/ideas {space_id, text}` | Drops an idea in the jar. 201 with the idea. |
+| `POST /api/ideas {space_id, text}` | Drops an idea in the jar. 201 with the idea. The space can also be given as `?space_id=` (or `?space=`); the body wins. |
 | `GET /api/ideas/:id` | One idea and its takes, newest first. |
 | `PATCH /api/ideas/:id {text}` | Edit: new text, back to `new`. 409 `already_peeking` while a bot peeks, `picked` once it is a mission. |
 | `DELETE /api/ideas/:id` | Deletes the idea and its takes. A take still running is dropped when it ends. |
