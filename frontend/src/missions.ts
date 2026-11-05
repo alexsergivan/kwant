@@ -524,7 +524,15 @@ export function columnOfTask(t: Pick<Task, 'state' | 'flags' | 'needs_you'>): Co
 const PERSON_ITEMS = new Set<NeedsYouItem['kind']>(['autofix_suggested', 'fix_needed', 'workflow_change', 'check_approval', ENGINE_CANT_SANDBOX]);
 
 /**
- * The "Needs you now" count: the cards the Needs you column holds across all work, so the tile and the
+ * The lane a phone opens on: Needs you when something waits on the person, else Working, else Ready.
+ */
+export function defaultColumn(tasks: Task[]): Column {
+  const g = groupByColumn(tasks);
+  return g.needs_you.length ? 'needs_you' : g.working.length ? 'working' : 'ready';
+}
+
+/**
+ * The "Board tasks waiting on you" count: the cards the Needs you column holds across all work, so the tile and the
  * column never disagree. The server's `needs_you_now` counts the same tasks.
  */
 export function needsYouCount(tasks: Task[]): number {

@@ -146,7 +146,7 @@ test('the failure panel says each fact once, with the older server text and the 
   assert.equal(m.skippedWithFixText(attempt({ status: 'failed' })), undefined, 'only a skipped attempt is folded');
 });
 
-test('"Needs you now" counts the same cards as the Needs you column', () => {
+test('"Board tasks waiting on you" counts the same cards as the Needs you column', () => {
   const tasks = [
     task({ id: 'q', state: 'needs_you' }),
     failed({ id: 'f', needs_you: [{ kind: 'fix_needed', id: 'fl1', text: 'Usage limit reached.' }] }),
@@ -165,8 +165,8 @@ test('"Needs you now" counts the same cards as the Needs you column', () => {
   // Eval 10: the server said 0 while 9 failed tasks waited on a fix; the tile follows the column.
   const nine = Array.from({ length: 9 }, (_, i) => failed({ id: `f${i}`, needs_you: [{ kind: 'fix_needed', id: `fl${i}`, text: 'Sign in again.' }] }));
   const ins = { verified_7d: 1, false_success_7d: 7, needs_you_now: 0, blocked_now: 0, tokens_7d: 0, tokens_per_verified_7d: null };
-  assert.match(ui.insights({ insights: ins, needsYou: m.needsYouCount(nine) }), /Needs you now<\/dt><dd class="[^"]*text-amber-300[^"]*">9</);
-  assert.match(ui.insights({ insights: ins }), /Needs you now<\/dt><dd[^>]*>0</, 'without the board it falls back to the server count');
+  assert.match(ui.insights({ insights: ins, needsYou: m.needsYouCount(nine) }), /Board tasks waiting on you<\/dt><dd class="[^"]*text-amber-300[^"]*">9</);
+  assert.match(ui.insights({ insights: ins }), /Board tasks waiting on you<\/dt><dd[^>]*>0</, 'without the board it falls back to the server count');
 });
 
 test('AutoFix tries come from the server count, not from counting failures in the browser', () => {

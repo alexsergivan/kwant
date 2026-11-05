@@ -287,8 +287,10 @@ test('a task whose fact changed can stop relying on it; a disputed one points to
 
 test('wiring: the board shows Facts under the week strip, tasks label fact needs-you, a dispute notification opens the board', () => {
   const board = readFileSync(new URL('../src/components/MissionBoardView.tsx', import.meta.url), 'utf8');
-  // Measures (Insights) may sit between the week strip and Facts.
-  assert.match(board, /<InsightsStrip [^>]*\/>\s*(?:<MeasuresPanel [^>]*\/>\s*)?<FactsLedger /);
+  // Measures (Insights) may sit between the week strip and Facts; since 0.6.13 both fold into "This week",
+  // and Facts follows it (in its own block that a phone moves under the board).
+  assert.match(board, /<InsightsStrip [^>]*\/>\s*<MeasuresPanel [^>]*\/>\s*<\/div>\s*<\/div>\s*\);\s*\};/, 'the week strip and measures close "This week"');
+  assert.match(board, /<ThisWeek [^>]*\/>\s*<div className="order-1 lg:order-none space-y-4" data-board-notes>\s*<FactsLedger /);
   assert.match(board, /'A fact changed'/);
   assert.match(board, /'Rests on a disputed fact'/);
   assert.match(board, /isFactNeedsYou\(n\.kind\) \? \(\s*<FactNeedsYouAction /);

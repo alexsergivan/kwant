@@ -164,6 +164,6 @@ test('filters reload with by, class, bot and since; choices stay listed after fi
 
 test('the board shows Performance on All work only, and Refresh reloads it', () => {
   const src = readFileSync(new URL('../src/components/MissionBoardView.tsx', import.meta.url), 'utf8');
-  assert.match(src, /showPerformance && !mission && !needsToken && <PerformancePanel names=\{names\} refreshKey=\{refreshCount\} \/>/);
+  assert.match(src, /showPerformance && !mission && !needsToken && \(\s*<div className="order-2 lg:order-none">\s*<PerformancePanel names=\{names\} refreshKey=\{refreshCount\} \/>/);
   assert.match(src, /setRefreshCount\(\(n\) => n \+ 1\)/);
 });
