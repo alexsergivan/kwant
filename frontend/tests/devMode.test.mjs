@@ -77,77 +77,95 @@ const mount = async (el) => {
 
 const R = (s, a) => m.switchReducer(s, a, 'Demo');
 
-test('two presses: the first lifts the cover, the second flips (set up already)', () => {
+test('flow F1: off → on is one press (set up already); no cover while off', () => {
   let s = m.initialSwitch({ setup: false });
+  assert.equal(m.switchLook(s).ring, false, 'off: no cover');
+  assert.equal(m.switchLook(s).glyph, 'code');
   s = R(s, { type: 'press', now: 1000 });
-  assert.equal(s.phase, 'lifted');
-  assert.equal(s.on, false);
-  assert.equal(s.announce.text, 'Unlocked. Press again to turn Dev mode on.');
-  assert.equal(m.switchLook(s).hint, 'Press again to turn Dev mode on');
-  s = R(s, { type: 'press', now: 1200 });
   assert.equal(s.on, true);
   assert.equal(s.saving, true);
   assert.equal(s.phase, 'settling');
-  assert.equal(s.settleUntil, 1200 + m.SETTLE_MS);
+  assert.equal(s.settleUntil, 1000 + m.SETTLE_MS);
   assert.equal(s.announce.text, 'Dev mode on for Demo.');
-  assert.equal(m.switchLook(s).label, 'Dev mode, on. Press to unlock');
+  s = R({ ...s, saving: false }, { type: 'settled', now: 1000 + m.SETTLE_MS });
+  const look = m.switchLook(s);
+  assert.equal(look.look, 'on');
+  assert.equal(look.ring, true, 'on: the 1 px cover');
+  assert.equal(look.glyph, 'locked', 'on: lock shut');
+  assert.equal(look.label, 'Dev mode');
+  assert.equal(look.describe, 'Press twice to turn off.');
+  assert.equal(look.tooltip, 'Dev mode is on. Press twice to turn it off.');
+  assert.equal(m.switchLook(m.initialSwitch()).describe, 'Turns on reviews, the ship gate and the production floor.');
+  assert.equal(m.switchLook(m.initialSwitch()).tooltip, 'Dev mode: plain-words merges, code reviews, production floor');
 });
 
-test('a double-click while it settles is ignored, and so is a press while saving', () => {
-  let s = m.initialSwitch({ setup: false });
-  s = R(R(s, { type: 'press', now: 0 }), { type: 'press', now: 100 });
-  const settling = s;
-  assert.equal(R(settling, { type: 'press', now: 150 }), settling, 'third press inside the settle');
-  s = R({ ...settling, saving: false }, { type: 'press', now: 300 });
-  assert.equal(s.phase, 'settling', 'still settling at 300 ms');
-  s = R({ ...settling, saving: false }, { type: 'settled', now: 100 + m.SETTLE_MS });
+test('flow F2: on → off is two presses: arm (amber, open lock, the armed line), then off', () => {
+  let s = m.initialSwitch({ on: true, setup: false });
+  s = R(s, { type: 'press', now: 1000 });
+  assert.equal(s.phase, 'lifted');
+  assert.equal(s.on, true);
+  assert.equal(s.announce.text, 'Press again to turn Dev mode off, or Escape to keep it on.');
+  const look = m.switchLook(s);
+  assert.equal(look.look, 'armed');
+  assert.equal(look.glyph, 'unlocked');
+  assert.equal(look.hint, 'Press again to turn Dev mode off');
+  s = R(s, { type: 'press', now: 1200 });
+  assert.equal(s.on, false);
+  assert.equal(s.phase, 'settling');
+  assert.match(s.announce.text, /^Dev mode off for Demo\./);
+});
+
+test('a double-click on Off turns it on once and never arms it; a press while saving is eaten', () => {
+  let s = R(m.initialSwitch({ setup: false }), { type: 'press', now: 0 });
+  const settling = { ...s, saving: false };
+  assert.equal(R(settling, { type: 'press', now: 100 }), settling, 'second click inside the settle');
+  assert.equal(R(settling, { type: 'press', now: m.SETTLE_MS - 1 }).phase, 'settling');
+  s = R(settling, { type: 'settled', now: m.SETTLE_MS });
   assert.equal(s.phase, 'covered');
   assert.equal(R({ ...s, saving: true }, { type: 'press', now: 9999 }).phase, 'covered', 'a save in flight eats the press');
-  assert.equal(R({ ...s, saving: false }, { type: 'press', now: 9999 }).phase, 'lifted');
+  assert.equal(R(s, { type: 'press', now: 9999 }).phase, 'lifted', 'after the settle, a press arms');
 });
 
-test('a lifted cover drops back after 5 s with nothing changed, not before', () => {
+test('armed drops back after 5 s with nothing changed, not before: "Dev mode stays on."', () => {
   let s = R(m.initialSwitch({ on: true, setup: false }), { type: 'press', now: 1000 });
   assert.equal(R(s, { type: 'recover', now: 1000 + m.RECOVER_MS - 1 }).phase, 'lifted');
   s = R(s, { type: 'recover', now: 1000 + m.RECOVER_MS });
   assert.equal(s.phase, 'covered');
   assert.equal(s.on, true);
-  assert.equal(s.announce.text, 'Locked.');
+  assert.equal(s.announce.text, 'Dev mode stays on.');
 });
 
-test('Esc and blur drop a lifted cover; they do nothing when covered', () => {
-  const lifted = R(m.initialSwitch({ setup: false }), { type: 'press', now: 0 });
+test('Esc and blur re-cover an armed switch; they do nothing when covered', () => {
+  const lifted = R(m.initialSwitch({ on: true, setup: false }), { type: 'press', now: 0 });
   for (const type of ['escape', 'blur']) {
     const s = R(lifted, { type });
     assert.equal(s.phase, 'covered', type);
-    assert.equal(s.on, false, type);
+    assert.equal(s.on, true, type);
+    assert.equal(s.announce.text, 'Dev mode stays on.', type);
   }
   const covered = m.initialSwitch();
   assert.equal(R(covered, { type: 'escape' }), covered);
   assert.equal(R(covered, { type: 'blur' }), covered);
 });
 
-test('reduced motion: still two presses, but nothing to settle, so the next press lifts at once', () => {
+test('reduced motion: nothing to settle; on is one press, off still two', () => {
   let s = m.initialSwitch({ setup: false, reduced: true });
   s = R(s, { type: 'press', now: 0 });
-  assert.equal(s.phase, 'lifted');
-  s = R(s, { type: 'press', now: 10 });
   assert.equal(s.on, true);
   assert.equal(s.phase, 'covered');
   assert.equal(s.settleUntil, 0);
   s = R({ ...s, saving: false }, { type: 'press', now: 20 });
-  assert.equal(s.phase, 'lifted', 'one press lifts, never flips');
+  assert.equal(s.phase, 'lifted', 'one press arms, never flips');
   assert.equal(s.on, true);
 });
 
-test('first time: the second press opens the setup (pending, half-flipped); cancel covers, done flips on', () => {
-  let s = R(R(m.initialSwitch(), { type: 'press', now: 0 }), { type: 'press', now: 100 });
+test('first time (older server): one press opens the setup (pending); cancel covers, done flips on', () => {
+  let s = R(m.initialSwitch(), { type: 'press', now: 0 });
   assert.equal(s.phase, 'pending');
   assert.equal(s.on, false);
   const look = m.switchLook(s);
   assert.equal(look.fill, 0.45);
   assert.equal(look.knobRight, true);
-  assert.equal(look.coverOpen, true);
   assert.equal(R(s, { type: 'press', now: 200 }), s, 'presses wait for the sheet');
   assert.equal(R(s, { type: 'setup_cancel' }).phase, 'covered');
   assert.equal(R(s, { type: 'setup_cancel' }).on, false);
@@ -169,14 +187,16 @@ test('a failed save puts the switch back, covered, with the reason announced', (
 });
 
 test('the server changing Dev mode closes a held-open cover; a disabled switch says so', () => {
-  const lifted = R(m.initialSwitch({ setup: false }), { type: 'press', now: 0 });
-  const s = R(lifted, { type: 'server', state: { ...off, on: true, repo: 'demo-org/demo-app', polled_at: 'x' } });
-  assert.equal(s.on, true);
+  const lifted = R(m.initialSwitch({ on: true, setup: false }), { type: 'press', now: 0 });
+  const s = R(lifted, { type: 'server', state: { ...off, on: false, repo: 'demo-org/demo-app', polled_at: 'x' } });
+  assert.equal(s.on, false);
   assert.equal(s.phase, 'covered');
-  const d = R(m.initialSwitch(), { type: 'server', state: null, disabled: true });
+  const d = R(m.initialSwitch({ on: true }), { type: 'server', state: null, disabled: true });
   assert.equal(R(d, { type: 'press', now: 0 }), d);
-  assert.match(m.switchLook(d).label, /Only the space owner can change it$/);
-  assert.equal(m.switchLook(d).tooltip, 'Only the space owner can change Dev mode');
+  const look = m.switchLook(d);
+  assert.equal(look.tooltip, 'Only the space owner can change Dev mode.');
+  assert.equal(look.ring, false, 'not the owner: no ring');
+  assert.equal(look.glyph, 'locked');
 });
 
 // ---------------------------------------------------------------------------
@@ -274,6 +294,11 @@ test('the checker: empty and invalid answer at once without asking; a stale repl
 // In a DOM
 
 const switchEl = (host) => host.querySelector('[data-dev-switch]');
+const desc = (host, b) => {
+  const d = host.querySelector('[data-dv-describe]');
+  assert.equal(d.id, b.getAttribute('aria-describedby'));
+  return d.textContent;
+};
 const click = async (el) => {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await settle();
@@ -285,14 +310,20 @@ test('DOM: on → off with two presses saves PUT {on:false}, announces, and call
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, onTurnedOff: () => turnedOff++ }));
   const b = switchEl(host);
   assert.equal(b.tagName, 'BUTTON');
-  assert.equal(b.getAttribute('role'), null, 'a button, not role=switch');
+  assert.equal(b.getAttribute('role'), 'switch');
+  assert.equal(b.getAttribute('aria-checked'), 'true');
   assert.equal(b.dataset.on, 'true');
-  assert.equal(b.getAttribute('aria-label'), 'Dev mode, on. Press to unlock');
+  assert.equal(b.dataset.covered, 'true', 'on: the cover is closed');
+  assert.equal(b.getAttribute('aria-label'), 'Dev mode');
+  assert.equal(desc(host, b), 'Press twice to turn off.');
+  assert.equal(b.title, 'Dev mode is on. Press twice to turn it off.');
+  assert.ok(b.querySelector('[data-dv-glyph="locked"]'), 'on: lock shut');
   await click(b);
   assert.equal(b.dataset.devSwitch, 'lifted');
-  assert.equal(b.dataset.cover, 'open');
-  assert.equal(b.dataset.ring, 'true');
-  assert.match(host.querySelector('[data-dv-live]').textContent, /Unlocked\. Press again to turn Dev mode off\./);
+  assert.equal(b.dataset.armed, 'true');
+  assert.equal(b.dataset.covered, undefined);
+  assert.ok(b.querySelector('[data-dv-glyph="unlocked"]'), 'armed: lock open');
+  assert.match(host.querySelector('[data-dv-live]').textContent, /Press again to turn Dev mode off, or Escape to keep it on\./);
   assert.ok(host.querySelector('[data-dv-hint]'));
   await click(b);
   await click(b); // the double-click's third press: ignored while settling
@@ -307,8 +338,28 @@ test('DOM: on → off with two presses saves PUT {on:false}, announces, and call
   for (let i = 0; i < 100 && b.dataset.devSwitch !== 'covered'; i++) await wait(20);
   assert.equal(b.dataset.devSwitch, 'covered');
   assert.equal(b.dataset.on, undefined);
-  await click(b); // a render mid-save once left the switch stuck; the next press still lifts
-  assert.equal(b.dataset.devSwitch, 'lifted');
+  assert.equal(b.getAttribute('aria-checked'), 'false');
+  assert.equal(desc(host, b), 'Turns on reviews, the ship gate and the production floor.');
+  await click(b); // a render mid-save once left the switch stuck; the next press still turns it on (one press)
+  assert.equal(b.dataset.on, 'true');
+  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: false }, { on: true }]);
+  root.unmount();
+});
+
+test('DOM: off → on is one press: PUT {on:true}, onTurnedOn, and a double-click never arms it', async () => {
+  reset({ ...off, on: false, repo: 'demo-org/demo-app', polled_at: 'x' });
+  let turnedOn = 0;
+  const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, onTurnedOn: () => turnedOn++ }));
+  const b = switchEl(host);
+  assert.equal(b.dataset.covered, undefined, 'off: no cover');
+  assert.equal(b.querySelector('[data-dv-glyph]'), null, 'off: no lock');
+  assert.equal(b.title, 'Dev mode: plain-words merges, code reviews, production floor');
+  await click(b);
+  await click(b);
+  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: true }]);
+  assert.equal(b.dataset.on, 'true');
+  assert.equal(b.dataset.armed, undefined, 'the double-click’s second press lands in the settle');
+  assert.equal(turnedOn, 1);
   root.unmount();
 });
 
@@ -325,6 +376,7 @@ test('DOM: Escape and blur drop a lifted cover without saving', async () => {
   b.blur();
   await settle();
   assert.equal(b.dataset.devSwitch, 'covered');
+  assert.match(host.querySelector('[data-dv-live]').textContent, /Dev mode stays on\./);
   assert.equal(server.calls.filter(([meth]) => meth === 'PUT').length, 0);
   root.unmount();
 });
@@ -338,7 +390,7 @@ test('DOM: a 403 on load shows the switch disabled', async () => {
   root.unmount();
 });
 
-test('DOM: reduced motion shows the same switch with the </> glyph, unlocks to an open lock, and opens with no settle', async () => {
+test('DOM: reduced motion shows the same switch, turns on in one press and arms with no settle', async () => {
   reset({ ...off, on: false, repo: 'demo-org/demo-app', polled_at: 'x' });
   window.matchMedia = (q) => ({ matches: q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {} });
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
@@ -347,14 +399,13 @@ test('DOM: reduced motion shows the same switch with the </> glyph, unlocks to a
   assert.ok(b.querySelector('[data-dv-graph] .kw-dv-node'), 'the same branch graph');
   assert.equal(b.textContent.trim(), 'dev', 'the reduced-motion variant keeps its dev label');
   await click(b);
-  assert.equal(b.querySelector('[data-dv-word]').textContent, 'dev?');
-  await click(b);
   assert.equal(b.dataset.devSwitch, 'covered');
   assert.equal(b.dataset.on, 'true');
   await wait(30); // the save comes back; presses wait for it, motion or not
   await settle();
   await click(b);
-  assert.equal(b.dataset.devSwitch, 'lifted', 'the next press lifts at once: nothing to settle');
+  assert.equal(b.dataset.devSwitch, 'lifted', 'the next press arms at once: nothing to settle');
+  assert.equal(b.querySelector('[data-dv-word]').textContent, 'off?');
   root.unmount();
   delete window.matchMedia;
 });
@@ -363,13 +414,13 @@ test('switchLook names the visual state and the knob glyph: off, armed, on, pend
   const st = (o) => ({ ...m.initialSwitch({ reduced: false }), ...o });
   const pick = (o) => { const l = m.switchLook(st(o)); return [l.look, l.glyph]; };
   assert.deepEqual(pick({ on: false }), ['off', 'code']);
-  assert.deepEqual(pick({ on: true }), ['on', 'code']);
-  assert.deepEqual(pick({ phase: 'lifted', liftedAt: 0 }), ['armed', 'unlocked']);
+  assert.deepEqual(pick({ on: true }), ['on', 'locked']);
+  assert.deepEqual(pick({ on: true, phase: 'lifted', liftedAt: 0 }), ['armed', 'unlocked']);
   assert.deepEqual(pick({ phase: 'pending' }), ['pending', 'code']);
   assert.deepEqual(pick({ disabled: true, on: true }), ['disabled', 'locked']);
 });
 
-test('0.7.1 look (style v2 §10): the Branch switch; label dev → dev? → dev → off?; 44 px tall on phone; no knob, track or cover', async () => {
+test('0.7.1 look (style v2 §10): the Branch switch; label dev → (one press) dev → off?; 44 px tall on phone; no knob or track', async () => {
   reset({ ...off, on: false, repo: 'demo-org/demo-app', polled_at: 'x' });
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, phone: true }));
   const b = switchEl(host);
@@ -387,9 +438,9 @@ test('0.7.1 look (style v2 §10): the Branch switch; label dev → dev? → dev 
   assert.equal(word(), 'dev');
   assert.equal(b.dataset.armed, undefined);
   await click(b);
-  assert.equal(b.dataset.devSwitch, 'lifted');
-  assert.equal(b.dataset.armed, 'true');
-  assert.equal(word(), 'dev?');
+  assert.equal(b.dataset.on, 'true', 'one press: on');
+  assert.equal(b.dataset.armed, undefined, 'never armed on the way on');
+  assert.equal(word(), 'dev');
   root.unmount();
   reset({ ...off, on: true, repo: 'demo-org/demo-app', polled_at: 'x' });
   const on = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
@@ -420,9 +471,8 @@ test('DOM: first switch-on opens the setup sheet; typing checks after 400 ms; Tu
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
   const b = switchEl(host);
   await click(b);
-  await click(b);
-  assert.equal(b.dataset.devSwitch, 'pending');
-  assert.ok(b.dataset.armed === 'true' && b.querySelector('[data-dv-word]').textContent === 'dev?', 'pending: drawn armed, dev?');
+  assert.equal(b.dataset.devSwitch, 'pending', 'one press opens the setup on an older server');
+  assert.equal(b.dataset.armed, undefined, 'pending is not armed');
   const dialog = document.querySelector('[role="dialog"]');
   assert.equal(dialog.getAttribute('aria-modal'), 'true');
   assert.match(dialog.textContent, /Which repo is this space about\?/);

@@ -578,8 +578,8 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 /* ---- Dev mode (0.7): the switch, the </> badge, the hard hat and the blueprint grid. design.md §1–§2.
    Under reduced motion nothing animates. */
 /* The switch (style v2 §10, the Branch switch): a tiny git line. The knob is a commit node.
-   Off: a hollow node on the line. Press 1 (armed): a dashed amber fork and a halo; the label asks
-   dev? (or off?). Press 2: the fork goes solid violet and the node lands on it, filled. 32 px tall
+   Off: a hollow node on the line, no cover. One press: the node hops onto a solid violet fork, then
+   a 1 px violet cover closes. Off takes two: armed is a dashed amber fork, a halo and `off?`. 32 px tall
    (44 on phones), mono label + a 44×24 graph. Not colour alone: node position, fork drawn/dashed/
    absent and the label word all change. */
 .kw-dv {
@@ -595,7 +595,18 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 }
 .kw-dv[data-on] .kw-dv-lbl { color: theme('colors.sky.300'); }
 .kw-dv[data-armed] .kw-dv-lbl { color: var(--dv-armed); }
-.kw-dv-lock { color: theme('colors.zinc.400'); }
+.kw-dv-lock { color: theme('colors.zinc.400'); flex-shrink: 0; }
+.kw-dv[data-on]:not(:disabled) .kw-dv-lock { color: theme('colors.sky.300'); }
+.kw-dv[data-armed] .kw-dv-lock { color: var(--dv-armed); }
+/* The cover (flow F1/F2): only while on. A 1 px violet ring closes 160 ms after the node lands
+   (guards locked in); armed lifts it to a 2 px amber ring at once. Off and not-the-owner: none. */
+.kw-dv::after {
+  content: ''; position: absolute; inset: 0; border-radius: 10px; pointer-events: none; opacity: 0;
+  box-shadow: inset 0 0 0 1px rgb(157 143 255 / 0.45); transition: opacity 160ms var(--kw-ease);
+}
+.kw-dv[data-covered]::after { opacity: 1; transition-delay: 160ms; }
+.kw-dv[data-armed]::after { opacity: 1; box-shadow: inset 0 0 0 2px var(--dv-armed); transition-delay: 0s; }
+.kw-dv:disabled::after { opacity: 0; }
 .kw-dv-graph { display: block; width: 44px; height: 24px; overflow: visible; }
 .kw-dv-base { fill: none; stroke: theme('colors.zinc.500'); stroke-width: 2; stroke-linecap: round; transition: opacity 160ms var(--kw-ease); }
 .kw-dv[data-on] .kw-dv-base { opacity: 0.55; }
@@ -613,7 +624,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-dv[data-armed] .kw-dv-halo { animation: kw-dv-halo 900ms var(--kw-ease) infinite; }
 @keyframes kw-dv-halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2); } }
 /* Reduced motion: the same shapes, instant, no halo */
-.kw-dv-rm, .kw-dv-rm * { transition: none !important; }
+.kw-dv-rm, .kw-dv-rm *, .kw-dv-rm::after { transition: none !important; }
 .kw-dv-rm .kw-dv-halo { animation: none !important; opacity: 0 !important; }
 .kw-dv-hint { animation: kw-dv-hint 150ms var(--kw-ease) both; }
 @keyframes kw-dv-hint { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
@@ -660,7 +671,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 @keyframes kw-dv-grid { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .kw-dv, .kw-dv * { transition: none !important; }
+  .kw-dv, .kw-dv *, .kw-dv::after { transition: none !important; }
   .kw-dv-halo { animation: none !important; opacity: 0 !important; }
   .kw-dv-hint, .kw-dv-note, .kw-dev-badge, .kw-dev-hat, .kw-blueprint::before { animation: none; }
   .kw-dev-caret { animation: none; }
