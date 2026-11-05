@@ -422,7 +422,8 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
               firstVisit ? <SkeletonCards /> : <SkeletonCards line="Reading main" n={2} />
             ) : tab === 'landed' ? (
               <>
-                {landed?.rollup && landedCards.length > 0 && (
+                {/* No repo or no connection: the empty below says why; a "nothing landed" rollup would contradict it. */}
+                {landed?.rollup && landedCards.length > 0 && dev?.status !== 'not_connected' && dev?.status !== 'no_repo' && (
                   <Rollup
                     rollup={landed.rollup}
                     last_tag={landed.last_tag}

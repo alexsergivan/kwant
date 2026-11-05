@@ -568,6 +568,8 @@ test('PX-3 (style-v2 §9): later visits say "Nothing new on main" and "No open c
   later.root.unmount();
   const first = await desk({ status: 'no_repo', sources: [] });
   assert.match(document.querySelector('[data-dev-intro]').textContent, /\$ kwant dev --on/);
+  // no repo: no "nothing landed" rollup above the empty that says why
+  assert.doesNotMatch(document.body.textContent, /Nothing landed since you last looked/);
   first.root.unmount();
 });
 
