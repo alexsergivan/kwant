@@ -271,3 +271,14 @@ test('QA d: nothing tells the person to look in Settings → Profiles any more',
     assert.doesNotMatch(src(f), /Settings (?:→|›|>) Profiles/, f);
   }
 });
+
+test('desktop header: the Dev switch has its own row under the name; phones keep it in the name row', () => {
+  const html = ui.sidebar(base);
+  const header = html.slice(html.indexOf('data-space-header'), html.indexOf('data-dev-switch-row'));
+  assert.doesNotMatch(header, /data-dev-switch[ =>]/, 'no switch in the desktop name row');
+  assert.match(html, /class="h-8 flex items-center pl-12" data-dev-switch-row/);
+  assert.match(html.slice(html.indexOf('data-dev-switch-row')), /data-dev-switch/);
+  const phone = ui.sidebar({ ...base, phone: true, section: 'chats' });
+  assert.doesNotMatch(phone, /data-dev-switch-row/);
+  assert.match(phone, /data-dev-switch/);
+});
