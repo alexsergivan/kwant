@@ -503,3 +503,14 @@ export function lgtm(card: {
 export const lgtmLabel = (reviewer: string): string => `Looks good to me: ${reviewer} found nothing to fix`;
 /** "Rigel is reading the diff" (pending review); no ETA, we don't have one. */
 export const readingLine = (reviewer: string | null | undefined): string => `${reviewer || 'A reviewer'} is reading the diff`;
+
+/** The landed card's tests line in words (§5): LED + "Tests passed" / "Tests failed" / "No tests ran". */
+export function testsWords(state: 'passed' | 'failed' | 'none' | 'unknown'): string {
+  return state === 'passed' ? 'Tests passed' : state === 'failed' ? 'Tests failed' : state === 'none' ? 'No tests ran' : 'Tests not known';
+}
+
+/** The git rail node for a landed card (§5): a card still being written pings; else the tests decide. */
+export function landedNode(card: { status: string; tests: { state: 'passed' | 'failed' | 'none' | 'unknown' } }): 'ok' | 'bad' | 'off' | 'run' {
+  if (card.status === 'pending') return 'run';
+  return card.tests.state === 'passed' ? 'ok' : card.tests.state === 'failed' ? 'bad' : 'off';
+}

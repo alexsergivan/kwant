@@ -1,21 +1,22 @@
 import React from 'react';
-import { AlertTriangle, Check, ChevronRight, FileText, FlaskConical, GitCommitHorizontal, GitMerge, Minus, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, ChevronRight, FileText, FlaskConical, GitCommitHorizontal, GitMerge, ShieldCheck } from 'lucide-react';
 import { Sticker } from '../Sticker';
 import type { Forge, LandedCard as Landed, LandedListProps, ReviewCard } from '../../dev/types';
-import { byDay, clock, forgeOpen, openFindings, riskReasons, showVerified } from '../../dev/logic';
-import { OutLink, RiskChip, Who, personText } from './parts';
+import { byDay, clock, forgeOpen, landedNode, openFindings, riskReasons, showVerified, testsWords } from '../../dev/logic';
+import { DiffStat, Led, OutLink, RiskChip, Sha, Who, personText } from './parts';
 
 const isTest = (path: string) => /(^|\/)(tests?|__tests__|e2e)\/|\.(test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(path);
 
-const TESTS_ICON = { passed: Check, failed: X, none: Minus, unknown: Minus } as const;
 const TESTS_TONE = { passed: 'text-ok', failed: 'text-bad', none: 'text-zinc-400', unknown: 'text-zinc-400' } as const;
+const TESTS_LED = { passed: 'ok', failed: 'bad', none: 'off', unknown: 'off' } as const;
 
 /** One merge in plain words (design §4). A commit pushed without a PR (`pr: null`) is the same card, named by its commit. */
-export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number) => void; forge?: Forge | null }> = ({
+export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number) => void; forge?: Forge | null; onRail?: boolean }> = ({
   card,
   reviews = [],
   onOpenReview,
   forge = null,
+  onRail = false,
 }) => {
   const verified = showVerified(card, reviews);
   const writer = personText(card.written_by);
@@ -28,20 +29,37 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
   const pr = card.pr;
   const findingsOpen = pr === null ? 0 : openFindings(reviews.find((r) => r.pr === pr));
   const nothingToDo = openFollowUps.length === 0 && card.tests.state === 'passed' && findingsOpen === 0;
-  const TestsIcon = TESTS_ICON[card.tests.state];
-  const testsText =
-    card.tests.summary ?? (card.tests.state === 'passed' ? 'CI green' : card.tests.state === 'failed' ? 'CI failed' : card.tests.state === 'none' ? 'No CI checks' : 'CI not known');
+  const tests = testsWords(card.tests.state);
   const diff = card.links.commit ?? (card.links.pr ? `${card.links.pr}/files` : null);
   const headingId = `landed-${card.id || pr || card.sha}-h`;
   const MergeIcon = pr === null ? GitCommitHorizontal : GitMerge;
-  // Where the card came from: "PR #n", or "Commit abc1234" for a direct commit.
-  const source = pr !== null ? { text: `PR #${pr}`, href: card.links.pr } : { text: `Commit ${card.sha}`, href: card.links.commit };
   const github = card.links.pr ?? (pr === null ? card.links.commit : null);
+  const node = landedNode(card);
 
   return (
     <article data-dev-card="landed" data-pr={pr ?? undefined} data-commit={pr === null ? card.sha : undefined} data-verified={verified || undefined} aria-labelledby={headingId} className="kw-card relative min-w-0 p-4">
+      {onRail && (
+        <>
+          {pr !== null && <span aria-hidden="true" data-rail-arc className="dv-arc" />}
+          <span aria-hidden="true" data-rail-node={node} data-s={node} className="dv-node" />
+        </>
+      )}
       <div className="flex flex-wrap items-center gap-1.5">
         {card.area && <span className="kw-chip">{card.area}</span>}
+        <Sha sha={card.sha} />
+        {pr !== null ? (
+          card.links.pr ? (
+            <a href={card.links.pr} target="_blank" rel="noreferrer noopener" aria-label={`PR #${pr}`} className="kw-focus kw-hit rounded font-mono text-[11.5px] text-zinc-400 hover:text-sky-300">
+              #{pr}
+            </a>
+          ) : (
+            <span className="font-mono text-[11.5px] text-zinc-400">
+              <span className="sr-only">PR </span>#{pr}
+            </span>
+          )
+        ) : (
+          <span className="kw-chip">Direct push</span>
+        )}
         {card.risk && <RiskChip level={card.risk.level} />}
         {card.meta && <span className="text-meta text-zinc-400">{card.meta}</span>}
         {verified && (
@@ -73,14 +91,6 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
             {writer.sub && <span>({writer.sub})</span>}
           </>
         )}
-        <span aria-hidden="true">·</span>
-        {source.href ? (
-          <a href={source.href} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded text-sky-300 hover:text-sky-200">
-            {source.text}
-          </a>
-        ) : (
-          <span>{source.text}</span>
-        )}
       </div>
 
       {card.status === 'pending' && <p className="mt-3 text-meta text-zinc-400">Writing this change in plain words…</p>}
@@ -101,10 +111,16 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
         <details className="group mt-3 border-t border-hairline pt-3">
           <summary className="kw-focus flex min-h-[44px] cursor-pointer list-none items-center gap-1.5 rounded text-meta text-zinc-400 hover:text-zinc-200 sm:min-h-0 [&::-webkit-details-marker]:hidden">
             <ChevronRight size={14} aria-hidden="true" className="shrink-0 transition-transform duration-[160ms] group-open:rotate-90 motion-reduce:transition-none" />
-            <span>
-              Under the hood
-              {files.length > 0 && ` · ${files.length} ${files.length === 1 ? 'file' : 'files'}, +${add} −${del}`}
-            </span>
+            <span>Under the hood</span>
+            {files.length > 0 && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono text-[11.5px]">
+                  {files.length} {files.length === 1 ? 'file' : 'files'}
+                </span>
+                <DiffStat add={add} del={del} />
+              </>
+            )}
           </summary>
           {card.under_hood.summary && <p className="mt-2 text-meta text-zinc-300 [overflow-wrap:anywhere]">{card.under_hood.summary}</p>}
           {files.length > 0 && (
@@ -112,11 +128,10 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
               {files.map((f) => {
                 const Icon = isTest(f.path) ? FlaskConical : FileText;
                 return (
-                  <li key={f.path} className="flex min-w-0 items-start gap-1.5 font-mono text-[12px] leading-5">
+                  <li key={f.path} className="flex min-w-0 items-start gap-2 font-mono text-[12px] leading-5">
                     <Icon size={12} className="mt-1 shrink-0 text-zinc-500" aria-hidden="true" />
-                    <span className="min-w-0 text-zinc-200 [overflow-wrap:anywhere]">{f.path}</span>
-                    <span className="shrink-0 text-ok" aria-label={`${f.add} lines added`}>+{f.add}</span>
-                    <span className="shrink-0 text-bad" aria-label={`${f.del} lines removed`}>−{f.del}</span>
+                    <span className="min-w-0 flex-1 text-zinc-200 [overflow-wrap:anywhere]">{f.path}</span>
+                    <DiffStat add={f.add} del={f.del} className="mt-[5px] shrink-0" />
                   </li>
                 );
               })}
@@ -149,15 +164,27 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
         </div>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta">
-        <span className={`inline-flex items-center gap-1 ${TESTS_TONE[card.tests.state]}`}>
-          <TestsIcon size={13} aria-hidden="true" />
-          {card.links.ci ? (
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hairline pt-2.5 text-meta">
+        <span data-tests={card.tests.state} className={`inline-flex items-center gap-[7px] ${TESTS_TONE[card.tests.state]}`}>
+          <Led s={TESTS_LED[card.tests.state]} />
+          {card.tests.state === 'failed' ? (
+            <span>
+              {tests}
+              {card.links.ci && (
+                <>
+                  {' · '}
+                  <a href={card.links.ci} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded text-sky-300 hover:underline">
+                    see CI
+                  </a>
+                </>
+              )}
+            </span>
+          ) : card.links.ci ? (
             <a href={card.links.ci} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded hover:underline">
-              {testsText}
+              {tests}
             </a>
           ) : (
-            testsText
+            <span>{tests}</span>
           )}
         </span>
         <span className="text-zinc-400">{card.reviewed_by ? `Reviewed by ${card.reviewed_by}` : 'No bot review'}</span>
@@ -201,17 +228,17 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
   );
 };
 
-/** What landed: the cards under "Today", "Yesterday" and date separators. */
+/** What landed: one git rail down the left (style v2 §5), day labels sitting on it, a node per card. */
 export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now(), onOpenReview, forge = null }) => (
-  <div data-dev-landed-list className="space-y-3">
+  <div data-dev-landed-list className="dv-rail space-y-3">
     {byDay(cards, now).map((day) => (
       <section key={day.label} aria-label={day.label} className="space-y-3">
-        <h3 className="flex items-center gap-3 pt-2 text-2xs font-semibold uppercase tracking-wider text-zinc-400">
-          <span>{day.label}</span>
+        <h3 className="-ml-[30px] flex items-center gap-2 pt-2 font-mono text-[10.5px] font-semibold uppercase leading-none tracking-[0.06em] text-zinc-400">
+          <span data-rail-day className="relative rounded bg-surface-main py-1 pl-0.5 pr-2">{day.label}</span>
           <span aria-hidden="true" className="h-px flex-1 bg-hairline" />
         </h3>
         {day.cards.map((c) => (
-          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} />
+          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} onRail />
         ))}
       </section>
     ))}
