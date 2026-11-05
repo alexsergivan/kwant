@@ -1,0 +1,207 @@
+/* Dev desk status line, Switch list and first-run intro (0.7.1, any-git S5, Pixel).
+   Calm by default: one soft radar ping while watching, a caret that blinks four times, both gone
+   under reduced motion. Colours by status: watching teal (ok), not connected amber (warn, it needs you),
+   next update and no repo violet/zinc (nothing to do). Text is zinc-300 or brighter on the raised
+   surface, so every line passes AA. */
+
+.kw-dv-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 7px 8px 7px 10px;
+  border-radius: 14px;
+  border: 1px solid rgb(255 255 255 / 0.1);
+  background:
+    linear-gradient(90deg, rgb(var(--kw-dv-tint) / 0.1), transparent 55%),
+    rgb(255 255 255 / 0.025);
+  box-shadow: inset 2px 0 0 rgb(var(--kw-dv-tint) / 0.75);
+  --kw-dv-tint: 157 143 255;
+}
+.kw-dv-status[data-dv-status='watching'] { --kw-dv-tint: 45 212 191; }
+.kw-dv-status[data-dv-status='not_connected'] { --kw-dv-tint: 251 191 36; }
+.kw-dv-status[data-dv-status='no_repo'] { --kw-dv-tint: 161 161 170; }
+
+.kw-dv-status-icon {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: rgb(var(--kw-dv-tint));
+  background: rgb(var(--kw-dv-tint) / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(var(--kw-dv-tint) / 0.25);
+}
+.kw-dv-status-ping {
+  position: absolute;
+  inset: 0;
+  border-radius: 9px;
+  box-shadow: 0 0 0 1px rgb(var(--kw-dv-tint) / 0.55);
+  animation: kw-dv-ping 2.4s var(--kw-ease) 3;
+  opacity: 0;
+}
+@keyframes kw-dv-ping {
+  0% { transform: scale(1); opacity: 0.9; }
+  70%, 100% { transform: scale(1.55); opacity: 0; }
+}
+
+.kw-dv-status-btn {
+  flex: none;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgb(228 228 231);
+  border: 1px solid rgb(255 255 255 / 0.14);
+  background: rgb(255 255 255 / 0.04);
+  transition: background-color 140ms var(--kw-ease), border-color 140ms var(--kw-ease), transform 140ms var(--kw-ease);
+}
+.kw-dv-status-btn:hover:not(:disabled) { background: rgb(255 255 255 / 0.08); border-color: rgb(255 255 255 / 0.22); }
+.kw-dv-status-btn:active:not(:disabled) { transform: translateY(1px); }
+.kw-dv-status-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.kw-dv-status-btn[aria-expanded='true'] { background: rgb(255 255 255 / 0.1); }
+.kw-dv-status-btn-primary { color: #fff; border-color: transparent; background-image: linear-gradient(135deg, #7a62f0 0%, #5b47d6 100%); }
+.kw-dv-status-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+.kw-dv-picker {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  width: min(360px, calc(100vw - 32px));
+  padding: 10px 8px 6px;
+  border-radius: 16px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  background: var(--kw-surface-overlay);
+  box-shadow: 0 12px 32px rgb(6 3 20 / 0.55);
+  animation: kw-dv-picker-in 150ms var(--kw-ease) both;
+}
+@keyframes kw-dv-picker-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.kw-dv-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  transition: background-color 140ms var(--kw-ease), border-color 140ms var(--kw-ease);
+}
+.kw-dv-pick:hover:not(:disabled) { background: rgb(255 255 255 / 0.05); }
+.kw-dv-pick[aria-checked='true'] { background: rgb(45 212 191 / 0.07); border-color: rgb(45 212 191 / 0.25); }
+.kw-dv-pick-icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: rgb(196 189 255);
+  background: rgb(157 143 255 / 0.12);
+}
+.kw-dv-picker-input {
+  min-width: 0;
+  flex: 1;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  background: rgb(6 3 20 / 0.35);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  color: rgb(244 244 245);
+  outline: none;
+}
+.kw-dv-picker-input::placeholder { color: rgb(113 113 122); }
+.kw-dv-picker-input:focus { border-color: rgb(56 189 248 / 0.7); }
+.kw-dv-picker-input[aria-invalid='true'] { border-color: rgb(253 164 175 / 0.6); }
+
+.kw-dv-intro {
+  border-radius: 18px;
+  border: 1px dashed rgb(255 255 255 / 0.16);
+  padding: 16px 18px 18px;
+  background:
+    linear-gradient(rgb(157 143 255 / 0.05) 1px, transparent 1px) 0 0 / 16px 16px,
+    linear-gradient(90deg, rgb(157 143 255 / 0.05) 1px, transparent 1px) 0 0 / 16px 16px;
+}
+.kw-dv-intro-caret {
+  display: inline-block;
+  width: 6px;
+  height: 11px;
+  margin-left: 3px;
+  vertical-align: -1px;
+  background: rgb(125 211 252 / 0.8);
+  animation: kw-dv-caret 900ms steps(1) 4;
+}
+.kw-dv-intro-icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: rgb(196 189 255);
+  background: rgb(157 143 255 / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(157 143 255 / 0.22);
+}
+
+/* Flow F3: the switch-on toast. Same surface family as the status line; HEAD → dev as a small mono tag. */
+.kw-dv-ontoast {
+  border-radius: 14px;
+  border: 1px solid rgb(157 143 255 / 0.28);
+  background: linear-gradient(180deg, rgb(30 27 46 / 0.97), rgb(20 20 27 / 0.97));
+  box-shadow: 0 12px 32px -8px rgb(0 0 0 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.04);
+  animation: kw-dv-ontoast-in 180ms ease-out;
+}
+.kw-dv-ontoast-head {
+  font-size: 11px;
+  margin-right: 2px;
+}
+@keyframes kw-dv-ontoast-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* Flow F4: still placeholders while the first poll runs (no shimmer). */
+.kw-dv-skel { background: rgb(255 255 255 / 0.015); }
+.kw-dv-skel-bar { display: inline-block; border-radius: 6px; background: rgb(255 255 255 / 0.06); }
+.kw-dv-skel-bar.block { display: block; }
+
+/* Flow copy §4: one soft highlight the first time the Dev desk row appears: accent-soft fades in over
+   200 ms, holds 2.4 s, fades out over 200 ms. Once per space, no loop, nothing moves. */
+.kw-dv-row-fresh { animation: kw-dv-row-fresh 2800ms linear 1; }
+@keyframes kw-dv-row-fresh {
+  0% { background-color: transparent; }
+  7.1%, 92.9% { background-color: var(--kw-accent-soft, rgb(157 143 255 / 0.14)); }
+  100% { background-color: transparent; }
+}
+/* Flow copy §4: the new-reviews pill. Mono 10.5/700, white on #6c58e0 (5.1:1), 18 px, radius 9; 9+ cap. */
+.kw-dv-row-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: #6c58e0; color: #fff;
+  font: 700 10.5px/1 ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.kw-dv-row-badge-pop { animation: kw-dv-badge-pop 160ms ease-out 1; }
+@keyframes kw-dv-badge-pop { from { transform: scale(1.2); } to { transform: scale(1); } }
+
+@media (max-width: 639px) {
+  .kw-dv-status { flex-wrap: wrap; }
+  .kw-dv-status > p { flex-basis: calc(100% - 40px); }
+  .kw-dv-status-btn { min-height: 44px; margin-left: 36px; }
+  .kw-dv-picker { position: fixed; left: 16px; right: 16px; top: auto; bottom: calc(16px + env(safe-area-inset-bottom)); width: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-dv-status-ping, .kw-dv-intro-caret, .kw-dv-picker, .kw-dv-ontoast, .kw-dv-row-badge-pop { animation: none; }
+  /* Reduced motion: the highlight shows for 2.8 s with no fades. */
+  .kw-dv-row-fresh { animation: kw-dv-row-fresh-rm 2800ms steps(1, end) 1; }
+  @keyframes kw-dv-row-fresh-rm { 0% { background-color: var(--kw-accent-soft, rgb(157 143 255 / 0.14)); } 100% { background-color: transparent; } }
+  .kw-dv-status-ping { opacity: 0; }
+  .kw-dv-status-btn, .kw-dv-pick { transition: none; }
+}

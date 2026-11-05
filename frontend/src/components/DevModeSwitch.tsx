@@ -2,12 +2,12 @@
 // Off has no cover: one press turns it on (F1). On is covered by a 1 px violet ring and a lock; turning
 // it off takes two presses (F2): press 1 arms (2 px amber ring, open lock, `off?`), press 2 within 5 s
 // turns it off. Armed drops back after 5 s, on Esc or when focus leaves. Presses are ignored while a
-// flip settles (450 ms), so a double-click on Off can't turn it on and arm it.
+// flip settles (450 ms), so a double-click on Off can't turn it on and arm it. 0.7.1 (any-git S5):
+// there is no setup sheet; the server finds the repo and the Dev desk says what it found.
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { Lock, LockOpen, X } from 'lucide-react';
 import {
-  DROP_MS,
   RECOVER_MS,
   SwitchAction,
   SwitchState,
@@ -17,11 +17,9 @@ import {
   DevModeError,
   DevModeState,
   initialSwitch,
-  needsSetup,
   switchLook,
   switchReducer,
 } from '../devMode';
-import { DevModeSetup } from './DevModeSetup';
 
 export function useReducedMotion(): boolean {
   const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
@@ -53,8 +51,8 @@ export interface DevModeSwitchProps {
   phone?: boolean;
   /** Dev mode went off: the sidebar shows the turned-off note. */
   onTurnedOff?: () => void;
-  /** Dev mode went on: the sidebar shows the HEAD → dev note. */
-  onTurnedOn?: () => void;
+  /** The person turned it on here (flow F3): the sidebar shows the toast. Never for a space already on. */
+  onTurnedOn?: (s: DevModeState) => void;
   /** Test hooks: start in a given state, and a clock. */
   initial?: Partial<SwitchState>;
   now?: () => number;
@@ -64,7 +62,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   const reduced = useReducedMotion();
   const known = useDevMode(space.id);
   const [state, setState] = useState<SwitchState>(() =>
-    initialSwitch({ reduced, ...(known ? { on: known.on, setup: needsSetup(known) } : {}), ...initial }),
+    initialSwitch({ reduced, ...(known ? { on: known.on } : {}), ...initial }),
   );
   // The reducer's truth lives in the ref, written only by dispatch. Copying `state` into it on render
   // would let a render that started before a dispatch (a store update mid-save) put an older state back.
@@ -127,7 +125,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
           devStore.set(space.id, s);
           dispatch({ type: 'saved', on: s.on });
           if (!s.on && was?.on) onTurnedOff?.();
-          if (s.on && !was?.on) onTurnedOn?.();
+          if (s.on && on && !was?.on) onTurnedOn?.(s);
         },
         (e: unknown) => dispatch({ type: 'save_failed', error: e instanceof Error ? e.message : 'Dev mode couldn’t be changed.' }),
       );
@@ -230,45 +228,80 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
           {state.error}
         </span>
       )}
-      {state.phase === 'pending' && (
-        <DevModeSetup
-          space={space}
-          initial={known}
-          onCancel={() => {
-            dispatch({ type: 'setup_cancel' });
-            // The cover drops before focus returns, so the ring isn't drawn on a moving switch.
-            setTimeout(() => btn.current?.focus(), state.reduced ? 0 : DROP_MS);
-          }}
-          onDone={(s) => {
-            devStore.set(space.id, s);
-            dispatch({ type: 'setup_done', now: now() });
-            dispatch({ type: 'saved', on: s.on });
-            if (s.on) onTurnedOn?.();
-            btn.current?.focus();
-          }}
-        />
-      )}
     </span>
   );
 };
 
 /**
- * The flip note under the space header (style v2 §10): on reads `HEAD → dev` + "Dev mode is on for
- * {space}." with one caret blink; off reads `merged into main` + "Dev mode is off. Approvals stay on
- * {approvals}." role=status, 10 s or until dismissed.
+ * The flip note under the space header (style v2 §10). On reads `HEAD → dev` + "Dev mode is on for
+ * {space}." (the autodetect build shows the on toast instead). Off (flow copy §7) reads `HEAD → main`
+ * + the 0.7.0 text, with Turn back on (F8), one press. role=status, 10 s or until dismissed; the
+ * timer pauses while the pointer is over it or focus is inside it.
  */
-export const DevFlipNote: React.FC<{ on: boolean; space?: string; approvals?: string; onDismiss: () => void; ms?: number }> = ({ on, space, approvals, onDismiss, ms = 10_000 }) => {
+export const DevFlipNote: React.FC<{ on: boolean; space?: string; approvals?: string; onDismiss: () => void; ms?: number; onTurnBackOn?: () => Promise<unknown> }> = ({
+  on,
+  space,
+  approvals,
+  onDismiss,
+  ms = 10_000,
+  onTurnBackOn,
+}) => {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [held, setHeld] = useState(false);
   useEffect(() => {
+    if (busy || error || held) return undefined;
     const t = setTimeout(onDismiss, ms);
     return () => clearTimeout(t);
-  }, [onDismiss, ms]);
+  }, [onDismiss, ms, busy, error, held]);
+  const back = () => {
+    if (!onTurnBackOn || busy) return;
+    setBusy(true);
+    setError(null);
+    onTurnBackOn().then(onDismiss, (e: unknown) => {
+      setBusy(false);
+      setError(e instanceof Error ? e.message : 'Dev mode couldn’t be turned back on.');
+    });
+  };
   return (
-    <div role="status" data-dev-flip-note={on ? 'on' : 'off'} {...(on ? {} : { 'data-dev-off-note': '' })} className="kw-dv-note mt-1.5 flex items-start gap-2 rounded-xl border border-white/14 bg-surface-overlay px-2.5 py-2 text-meta text-zinc-200 shadow-raised">
-      <p className="min-w-0 flex-1 leading-snug">
-        <span className="font-mono font-semibold text-sky-300 whitespace-nowrap">{on ? 'HEAD → dev' : 'merged into main'}</span>
-        {on && <span className="dv-caret" aria-hidden="true" />}{' '}
-        {on ? `Dev mode is on for ${space ?? 'this space'}.` : `Dev mode is off. Approvals stay on ${approvalsWord(approvals)}.`}
-      </p>
+    <div
+      role="status"
+      data-dev-flip-note={on ? 'on' : 'off'}
+      {...(on ? {} : { 'data-dev-off-note': '' })}
+      onPointerEnter={() => setHeld(true)}
+      onPointerLeave={() => setHeld(false)}
+      onFocus={() => setHeld(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHeld(false);
+      }}
+      className="kw-dv-note mt-1.5 flex items-start gap-2 rounded-xl border border-white/14 bg-surface-overlay px-2.5 py-2 text-meta text-zinc-200 shadow-raised"
+    >
+      <div className="min-w-0 flex-1 leading-snug">
+        <p>
+          <span className="font-mono font-semibold text-sky-300 whitespace-nowrap">{on ? 'HEAD → dev' : 'HEAD → main'}</span>
+          {on && <span className="dv-caret" aria-hidden="true" />}{' '}
+          {on ? (
+            `Dev mode is on for ${space ?? 'this space'}.`
+          ) : (
+            <>
+              <strong className="font-semibold text-zinc-100">Dev mode is off.</strong> Reviews, the ship gate and the production floor stopped. Approvals stay on {approvalsWord(approvals)}. What
+              landed keeps its history.
+            </>
+          )}
+        </p>
+        {!on && onTurnBackOn && (
+          <button
+            type="button"
+            onClick={back}
+            aria-disabled={busy || undefined}
+            data-dev-turn-back-on
+            className="mt-1.5 inline-flex items-center min-h-[44px] sm:min-h-[28px] -ml-1 px-2 rounded-lg text-meta font-semibold text-sky-300 hover:bg-sky-500/10 aria-disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+          >
+            {busy ? 'Turning on…' : 'Turn back on'}
+          </button>
+        )}
+        {error && <p className="mt-1 text-bad">{error}</p>}
+      </div>
       <button type="button" onClick={onDismiss} aria-label="Dismiss" className="-m-1 p-1 shrink-0 rounded text-zinc-400 hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
         <X size={13} aria-hidden="true" />
       </button>
@@ -277,7 +310,7 @@ export const DevFlipNote: React.FC<{ on: boolean; space?: string; approvals?: st
 };
 
 /** The turned-off note (kept for callers): the flip note's off side. */
-export const DevOffNote: React.FC<{ approvals?: string; onDismiss: () => void; ms?: number }> = (p) => <DevFlipNote on={false} {...p} />;
+export const DevOffNote: React.FC<{ approvals?: string; onDismiss: () => void; ms?: number; onTurnBackOn?: () => Promise<unknown> }> = (p) => <DevFlipNote on={false} {...p} />;
 
 /** The </> badge with its caret on a space tile; `behind` is the surface it sits on. */
 export const DevBadge: React.FC<{ behind?: string }> = ({ behind }) => (

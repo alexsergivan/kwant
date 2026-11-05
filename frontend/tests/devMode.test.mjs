@@ -143,7 +143,7 @@ test('Esc and blur re-cover an armed switch; they do nothing when covered', () =
     assert.equal(s.on, true, type);
     assert.equal(s.announce.text, 'Dev mode stays on.', type);
   }
-  const covered = m.initialSwitch();
+  const covered = m.initialSwitch({ on: true });
   assert.equal(R(covered, { type: 'escape' }), covered);
   assert.equal(R(covered, { type: 'blur' }), covered);
 });
@@ -159,24 +159,8 @@ test('reduced motion: nothing to settle; on is one press, off still two', () => 
   assert.equal(s.on, true);
 });
 
-test('first time (older server): one press opens the setup (pending); cancel covers, done flips on', () => {
-  let s = R(m.initialSwitch(), { type: 'press', now: 0 });
-  assert.equal(s.phase, 'pending');
-  assert.equal(s.on, false);
-  const look = m.switchLook(s);
-  assert.equal(look.fill, 0.45);
-  assert.equal(look.knobRight, true);
-  assert.equal(R(s, { type: 'press', now: 200 }), s, 'presses wait for the sheet');
-  assert.equal(R(s, { type: 'setup_cancel' }).phase, 'covered');
-  assert.equal(R(s, { type: 'setup_cancel' }).on, false);
-  const done = R(s, { type: 'setup_done', now: 300 });
-  assert.equal(done.on, true);
-  assert.equal(done.setup, false);
-  assert.equal(done.phase, 'settling');
-});
-
 test('a failed save puts the switch back, covered, with the reason announced', () => {
-  let s = R(R(m.initialSwitch({ on: true, setup: false }), { type: 'press', now: 0 }), { type: 'press', now: 100 });
+  let s = R(R(m.initialSwitch({ on: true }), { type: 'press', now: 0 }), { type: 'press', now: 100 });
   assert.equal(s.on, false);
   s = R(s, { type: 'save_failed', error: 'Only the space owner can change Dev mode.' });
   assert.equal(s.on, true);
@@ -184,6 +168,8 @@ test('a failed save puts the switch back, covered, with the reason announced', (
   assert.equal(s.saving, false);
   assert.equal(s.error, 'Only the space owner can change Dev mode.');
   assert.equal(s.announce.text, 'Only the space owner can change Dev mode.');
+  const f = R(R(m.initialSwitch(), { type: 'press', now: 0 }), { type: 'save_failed', error: 'Offline.' });
+  assert.equal(f.on, false, 'a failed one-press on goes back to off');
 });
 
 test('the server changing Dev mode closes a held-open cover; a disabled switch says so', () => {
@@ -410,13 +396,12 @@ test('DOM: reduced motion shows the same switch, turns on in one press and arms 
   delete window.matchMedia;
 });
 
-test('switchLook names the visual state and the knob glyph: off, armed, on, pending, disabled', () => {
+test('switchLook names the visual state and the knob glyph: off, armed, on, disabled (0.7.1: no pending look)', () => {
   const st = (o) => ({ ...m.initialSwitch({ reduced: false }), ...o });
   const pick = (o) => { const l = m.switchLook(st(o)); return [l.look, l.glyph]; };
   assert.deepEqual(pick({ on: false }), ['off', 'code']);
   assert.deepEqual(pick({ on: true }), ['on', 'locked']);
   assert.deepEqual(pick({ on: true, phase: 'lifted', liftedAt: 0 }), ['armed', 'unlocked']);
-  assert.deepEqual(pick({ phase: 'pending' }), ['pending', 'code']);
   assert.deepEqual(pick({ disabled: true, on: true }), ['disabled', 'locked']);
 });
 
@@ -453,55 +438,35 @@ test('0.7.1 look (style v2 §10): the Branch switch; label dev → (one press) d
   on.root.unmount();
 });
 
-test('flip notes: HEAD → dev with one caret, and merged into main', () => {
+test('flip notes: HEAD → dev with one caret, and HEAD → main (flow copy §7)', () => {
   const onNote = m.renderToStaticMarkup(h(m.DevFlipNote, { on: true, space: 'Trailhead', onDismiss: () => {} }));
   assert.match(onNote, /role="status"/);
   assert.match(onNote, /HEAD → dev/);
   assert.match(onNote, /class="dv-caret"/);
   assert.match(onNote, /Dev mode is on for Trailhead\./);
   const offNote = m.renderToStaticMarkup(h(m.DevFlipNote, { on: false, approvals: 'smart', onDismiss: () => {} }));
-  assert.match(offNote, /merged into main/);
-  assert.match(offNote, /Dev mode is off\. Approvals stay on Smart\./);
+  assert.match(offNote, /HEAD → main/);
+  assert.match(offNote, /Dev mode is off\.<\/strong> Reviews, the ship gate and the production floor stopped\. Approvals stay on Smart\. What\s+landed keeps its history\./);
   assert.doesNotMatch(offNote, /dv-caret/);
 });
 
-test('DOM: first switch-on opens the setup sheet; typing checks after 400 ms; Turn on sends repo and branch', async () => {
+test('DOM 0.7.1: the first switch-on turns Dev mode on with no dialog and sends only {on: true}', async () => {
   reset();
-  server.check = { state: 'found', repo: 'demo-org/demo-app', branch: 'trunk', deploy_hint: null };
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
   const b = switchEl(host);
-  await click(b);
-  assert.equal(b.dataset.devSwitch, 'pending', 'one press opens the setup on an older server');
-  assert.equal(b.dataset.armed, undefined, 'pending is not armed');
-  const dialog = document.querySelector('[role="dialog"]');
-  assert.equal(dialog.getAttribute('aria-modal'), 'true');
-  assert.match(dialog.textContent, /Which repo is this space about\?/);
-  assert.doesNotMatch(dialog.textContent, /Ready to ship/);
-  const turnOn = dialog.querySelector('[data-dv-turn-on]');
-  assert.equal(turnOn.disabled, true);
-  const input = dialog.querySelector('#dv-repo');
-  const type = async (v) => {
-    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    set.call(input, v);
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await settle();
-  };
-  await type('demo-org');
-  assert.equal(dialog.querySelector('[data-dv-chip]').dataset.dvChip, 'invalid');
-  await type('https://github.com/demo-org/demo-app');
-  assert.equal(dialog.querySelector('[data-dv-chip]').dataset.dvChip, 'checking');
-  await wait(200);
-  assert.equal(server.calls.filter(([, u]) => u.endsWith('/check')).length, 0, 'not before 400 ms');
-  await wait(260);
+  let turnedOn = null;
+  root.render(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, onTurnedOn: (s) => (turnedOn = s) }));
   await settle();
-  assert.deepEqual(server.calls.filter(([, u]) => u.endsWith('/check')).map(([, , body]) => body), [{ repo: 'demo-org/demo-app' }]);
-  assert.equal(dialog.querySelector('[data-dv-chip]').dataset.dvChip, 'found');
-  assert.match(dialog.querySelector('[data-dv-tiles]').textContent, /trunk/);
-  assert.equal(turnOn.disabled, false);
-  await click(turnOn);
-  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: true, repo: 'demo-org/demo-app', branch: 'trunk' }]);
-  assert.equal(document.querySelector('[role="dialog"]'), null);
+  assert.equal(b.getAttribute('aria-checked'), 'false');
+  await click(b); // flow F1: one press
+  await settle();
+  assert.equal(turnedOn?.on, true, 'onTurnedOn gets the saved state, for the toast');
+  assert.equal(document.querySelector('[role="dialog"]'), null, 'no setup sheet');
+  assert.equal(document.querySelector('[data-dev-setup]'), null);
+  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: true }]);
+  assert.equal(server.calls.filter(([, u]) => u.endsWith('/check')).length, 0, 'no repo check');
   assert.equal(b.dataset.on, 'true');
+  assert.equal(m.devStore.isOn('spc_demo'), true);
   root.unmount();
 });
 
@@ -654,10 +619,8 @@ test('round 2: on phone the hint is a viewport toast above the tab bar with the 
 
 test('round 2: the setup footer is sticky, says nothing is posted, and its buttons are 44 px on phone', async () => {
   reset();
-  const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
-  const b = switchEl(host);
-  await click(b);
-  await click(b);
+  // 0.7.1: the switch no longer opens the sheet; the component is checked on its own.
+  const { root } = await mount(h(m.DevModeSetup, { space: { id: 'spc_demo', name: 'Demo' }, initial: null, onCancel() {}, onDone() {} }));
   const footer = document.querySelector('[data-dv-setup-footer]');
   assert.ok(footer.classList.contains('sticky') && footer.classList.contains('bottom-0'));
   assert.ok(footer.classList.contains('pb-[max(16px,env(safe-area-inset-bottom))]'));

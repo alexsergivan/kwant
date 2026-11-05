@@ -130,7 +130,7 @@ import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, showDeviceNotification } from './push';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
-import { devApi, devStore } from './devMode';
+import { devApi, devConnect, devStore } from './devMode';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
@@ -370,6 +370,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const isPhoneRef = useRef(isPhone);
   isPhoneRef.current = isPhone;
+  // Dev mode Connect (flow F5): Loose ends opens on the GitHub form; once a GitHub source is added
+  // the person lands back on the Dev desk, which reads Dev mode again.
+  const [devConnecting, setDevConnecting] = useState(0);
+  const connectDevGitHub = () => {
+    if (!devConnect.pending()) devConnect.start(space.id);
+    setDevConnecting((n) => n + 1);
+    showPage('inbox', 'loose');
+  };
+  const devGitHubAdded = () => {
+    const back = devConnect.finish();
+    setDevConnecting(0);
+    if (!back) return;
+    devApi.get(back).then((st) => devStore.set(back, st), () => undefined);
+    if (back === space.id) showPage('dev');
+  };
+  // Leaving Loose ends without connecting drops the trip back.
+  useEffect(() => {
+    if (page === 'inbox' || !devConnecting) return;
+    setDevConnecting(0);
+    devConnect.cancel();
+  }, [page, devConnecting]);
   // Idea jar (0.7): the ready-takes badge, Open on board's mission, the drop toast and the
   // app-wide live region (a take is announced on any screen; the open jar announces its own).
   const ideaJarCount = useIdeaJarBadge(space.id);
@@ -3235,6 +3256,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         showPage('dev');
         playSfx('click');
       }}
+      onConnectDevGitHub={connectDevGitHub}
       ideaJarCount={ideaJarCount}
       ideaJarActive={page === 'jar'}
       onOpenIdeaJar={() => {
@@ -3299,7 +3321,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenedMissionId={() => setPendingMissionId(null)}
     />
   );
-  const loose = <LooseEndsPage onOpenChat={openThread} />;
+  const loose = (
+    <LooseEndsPage
+      key={devConnecting ? `dev-connect-${devConnecting}` : 'loose'}
+      onOpenChat={openThread}
+      connectGitHub={devConnecting > 0}
+      onGitHubAdded={devGitHubAdded}
+    />
+  );
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
@@ -3465,7 +3494,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
     />
   );
-  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} />;
+  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} />;
   const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…

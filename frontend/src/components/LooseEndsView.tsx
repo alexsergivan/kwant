@@ -353,9 +353,13 @@ export const NeedsBitwarden: React.FC<{ message: string; locked: boolean; onRead
 const EMPTY_IMAP: ImapFields = { label: '', host: '', port: '', security: 'tls', username: '', folders: '', accept_invalid_certs: false };
 
 /** Add an IMAP mailbox or GitHub. The password or token is read from its field at submit and never kept in state. */
-export const AddSourceForm: React.FC<{ onAdded: (s: LooseSource) => void; onCancel: () => void }> = ({ onAdded, onCancel }) => {
+export const AddSourceForm: React.FC<{ onAdded: (s: LooseSource) => void; onCancel: () => void; initialKind?: 'imap' | 'github' }> = ({
+  onAdded,
+  onCancel,
+  initialKind = 'imap',
+}) => {
   const id = useId();
-  const [kind, setKind] = useState<'imap' | 'github'>('imap');
+  const [kind, setKind] = useState<'imap' | 'github'>(initialKind);
   const [imap, setImap] = useState<ImapFields>(EMPTY_IMAP);
   const [ghLabel, setGhLabel] = useState('');
   const [ghBase, setGhBase] = useState('');
@@ -508,10 +512,17 @@ export const LooseSources: React.FC<{
   sources: LooseSource[] | null;
   error: string | null;
   onChanged: () => void;
-  /** Tests open the form. */
+  /** Tests open the form; Dev mode's Connect opens it on GitHub (flow F5). */
   initialAdding?: boolean;
-}> = ({ sources, error, onChanged, initialAdding = false }) => {
+  initialKind?: 'imap' | 'github';
+  /** Called after a source is added, with it. */
+  onAdded?: (s: LooseSource) => void;
+}> = ({ sources, error, onChanged, initialAdding = false, initialKind, onAdded }) => {
   const [adding, setAdding] = useState(initialAdding);
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (initialAdding && initialKind) section.current?.scrollIntoView?.({ block: 'start' });
+  }, [initialAdding, initialKind]);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
@@ -539,7 +550,7 @@ export const LooseSources: React.FC<{
   };
 
   return (
-    <section aria-labelledby="loose-sources" className="space-y-2">
+    <section ref={section} aria-labelledby="loose-sources" className="space-y-2">
       <div className="flex items-center justify-between gap-2">
         <h3 id="loose-sources" className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">
           Where to look
@@ -556,11 +567,13 @@ export const LooseSources: React.FC<{
       </div>
       {adding && (
         <AddSourceForm
+          initialKind={initialKind}
           onCancel={() => setAdding(false)}
           onAdded={(s) => {
             setAdding(false);
             setNote({ text: `Added ${s.label}. It’s read at the next scan.`, error: false });
             onChanged();
+            onAdded?.(s);
           }}
         />
       )}
@@ -892,7 +905,13 @@ export const AddLetterButton: React.FC<{ onClick: () => void }> = ({ onClick }) 
 );
 
 /** Loads cases and sources, runs the card actions and scans. */
-export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantId: string, threadId: string) => void }> = ({ onBack, onOpenChat }) => {
+export const LooseEndsPage: React.FC<{
+  onBack?: () => void;
+  onOpenChat?: (kwantId: string, threadId: string) => void;
+  /** Dev mode's Connect (flow F5): open the add form on GitHub, and say when a GitHub source is added. */
+  connectGitHub?: boolean;
+  onGitHubAdded?: () => void;
+}> = ({ onBack, onOpenChat, connectGitHub = false, onGitHubAdded }) => {
   const [cases, setCases] = useState<LooseCase[] | null>(null);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1041,7 +1060,16 @@ export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantI
       }
       onBack={onBack}
       owner={<LooseOwnerSetting />}
-      sources={<LooseSources sources={sources} error={sourcesError} onChanged={() => (loadSources(), load())} />}
+      sources={
+        <LooseSources
+          sources={sources}
+          error={sourcesError}
+          onChanged={() => (loadSources(), load())}
+          initialAdding={connectGitHub}
+          initialKind={connectGitHub ? 'github' : undefined}
+          onAdded={(s) => s.kind === 'github' && onGitHubAdded?.()}
+        />
+      }
     />
   );
 };
