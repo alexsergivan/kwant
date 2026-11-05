@@ -143,7 +143,19 @@ Run these focused tests:
 cargo test --lib -- server::dev:: prod_floor auth::tests::person_only zombie::github connections::tests::only_mcp
 ```
 
-The poller runs against a mock GitHub on a private `127.0.0.1` port. There are table tests for each
+The poller runs against a mock GitHub on a private `127.0.0.1` port. The shared mock is
+`tests/support/mock_github.rs` (include it with `#[path = "support/mock_github.rs"] mod mock_github;`):
+fixtures by path with ETags and 304s, `Link: next` headers (to another host too), each GitHub
+error (401, 403, rate limits, secondary limits, 429, 5xx, slow answers, a lost base commit), and a
+log of every request. Anything but a GET fails the test. `tests/dev_github_test.rs` holds the
+contract tests and the canary: a token built at runtime goes through a whole poll, failures
+included, and must appear nowhere but the vault (logs, errors, events, cards, the database, model
+prompts, other files under the data folder).
+
+Test seams, for the test server only: `KWANT_DEV_POLL_SECS` (5–86400, default 300) and
+`KWANT_DEV_CALL_CAP` (0–1000, default 30), read once at the first use. The daily cap counts per UTC
+day. Tests move Dev mode's clock in-process with `server::dev::set_clock_skew`
+(`tests/dev_seams_test.rs`). There are table tests for each
 floor kind in `src/mcp/prod_floor.rs`. The backup checks and the Allow refusal are tested in
 `src/server/dev/backup.rs` and `src/server/dev/floor.rs`. `tests/dev_floor_test.rs` drives the refusal
 through `POST /api/approvals/:id/resolve`: a 409 with no backup or an old one, then a 200 once a
