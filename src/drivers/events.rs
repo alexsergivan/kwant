@@ -295,6 +295,10 @@ pub enum RuntimeEvent {
     /// Dev mode was turned on or off in a space.
     #[serde(rename = "dev_mode", alias = "DevMode")]
     DevMode { space_id: String, on: bool },
+    /// An idea in the idea jar changed (dropped in, peeked at, picked, edited, shelved, deleted:
+    /// `status` is then `deleted`); `GET /api/ideas/:id` has the rest.
+    #[serde(rename = "idea_updated", alias = "IdeaUpdated")]
+    IdeaUpdated { id: String, status: String, space_id: String },
     /// Something the user asked to be told about. `kind` is one of `continuity::NOTIFY_KINDS`
     /// ("turn_finished", "approval_needed", "human_step", …). `body` never holds chat text, tool arguments or secrets.
     #[serde(rename = "notify", alias = "Notify")]

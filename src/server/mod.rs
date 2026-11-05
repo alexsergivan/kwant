@@ -50,6 +50,7 @@ pub mod waiting;
 pub mod decide;
 pub mod reactions;
 pub mod work_ahead;
+pub mod idea_jar;
 pub mod missions;
 pub mod goals;
 pub mod app_update_routes;
@@ -393,6 +394,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/messages/:message_id/decisions/:index/change", post(decide::change))
         .route("/api/messages/:id/reaction", put(reactions::put_reaction))
         .route("/api/work-ahead/run", post(work_ahead::run_now))
+        .route("/api/ideas", get(idea_jar::list).post(idea_jar::create))
+        .route("/api/ideas/:id", get(idea_jar::get).patch(idea_jar::edit).delete(idea_jar::delete))
+        .route("/api/ideas/:id/look", post(idea_jar::look))
+        .route("/api/ideas/:id/pick", post(idea_jar::pick))
+        .route("/api/ideas/:id/later", post(idea_jar::later))
+        .route("/api/ideas/:id/restore", post(idea_jar::restore))
         .route("/api/goals", get(goals::routes::list_goals).post(goals::routes::create_goal))
         .route("/api/goals/draft", post(goals_remediation::draft))
         .route("/api/goals/:id", get(goals::routes::get_goal).patch(goals::routes::patch_goal).delete(goals::routes::delete_goal))

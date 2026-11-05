@@ -806,6 +806,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             super::parked::run_due(&state, Utc::now()).await;
             super::waiting::run_due(&state, Utc::now()).await;
             super::work_ahead::scan(&state, Utc::now(), false).await;
+            super::idea_jar::scan(&state, Utc::now(), false).await;
             super::missions::runner::tick(&state).await;
             super::goals_remediation::tick(&state).await;
             let next = [

@@ -404,7 +404,7 @@ pub async fn kwant_usage(State(state): State<AppState>, Path(id): Path<String>) 
 }
 
 /// A turn of the bot is running or waiting, or delegated work for or from it is.
-async fn kwant_is_busy(state: &AppState, id: &str) -> bool {
+pub(super) async fn kwant_is_busy(state: &AppState, id: &str) -> bool {
     if state.turns.active_turns().iter().any(|t| t.kwant_id == id) {
         return true;
     }
@@ -3138,9 +3138,45 @@ pub async fn send_chat(
         return super::reactions::error(status, msg);
     }
     let from_person = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "").await.is_ok();
+    // The composer's `/idea <text>` goes in the idea jar: no message is saved, no bot sees it
+    if let Some(text) = super::idea_jar::slash_idea(&payload.prompt) {
+        return idea_from_chat(&state, &headers, &payload, text, from_person).await;
+    }
     match send_chat_inner(state, payload, from_person).await {
         Ok(json) => json.into_response(),
         Err(status) => status.into_response(),
+    }
+}
+
+/// `/idea <text>` sent from the composer: the person's idea, dropped in the jar of the chat's
+/// space. 201 `{handled: "idea", idea}`; 403 for a bot's token.
+async fn idea_from_chat(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    payload: &SendChatPayload,
+    text: &str,
+    from_person: bool,
+) -> axum::response::Response {
+    if !from_person {
+        return match super::mcp_suggest::refuse_agent_tokens(state, headers, "only the person drops ideas in the idea jar").await {
+            Err(r) => r,
+            Ok(()) => StatusCode::FORBIDDEN.into_response(),
+        };
+    }
+    let space = match payload.thread_id.as_deref() {
+        Some(t) => state.db.space_of_thread(t).await.map(|s| s.unwrap_or_else(SpaceId::default_space)),
+        None => chat_space(state, payload).await,
+    };
+    let space = match space {
+        Ok(s) => s,
+        Err(e) => return db_error(&e, ""),
+    };
+    if let Err(r) = super::spaces::ensure_active(state, &space).await {
+        return r;
+    }
+    match super::idea_jar::drop_in(state, &space, text).await {
+        Ok(idea) => (StatusCode::CREATED, Json(serde_json::json!({"handled": "idea", "idea": super::idea_jar::idea_json(&idea)}))).into_response(),
+        Err(r) => r,
     }
 }
 
@@ -3936,6 +3972,8 @@ pub struct SettingsResponse {
     pub work_ahead: bool,
     /// Work-ahead runs per space per day (1–10).
     pub work_ahead_daily_cap: u64,
+    /// Idea-jar takes a free bot starts per space per day (0–10, 0 = off; see `super::idea_jar`).
+    pub idea_jar_daily_cap: u64,
     /// Mission Control: the board, the bots' task tools and the mission runner (see `super::missions`).
     pub mission_board: bool,
     /// Minutes a task claim lives without activity (5–240).
@@ -4016,6 +4054,7 @@ pub struct SaveSettingsPayload {
     pub decide_first: Option<bool>,
     pub work_ahead: Option<bool>,
     pub work_ahead_daily_cap: Option<u64>,
+    pub idea_jar_daily_cap: Option<u64>,
     pub mission_board: Option<bool>,
     pub mission_lease_minutes: Option<i64>,
     pub mission_default_budget_tokens: Option<i64>,
@@ -4081,6 +4120,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         decide_first: super::decide::enabled(&state).await,
         work_ahead: super::decide::work_ahead_enabled(&state).await,
         work_ahead_daily_cap: super::decide::work_ahead_cap(&state).await,
+        idea_jar_daily_cap: super::idea_jar::daily_cap(&state).await,
         mission_board: super::missions::enabled(&state).await,
         mission_lease_minutes: super::missions::lease_minutes(&state).await,
         mission_default_budget_tokens: super::missions::default_budget(&state).await,
@@ -4150,6 +4190,9 @@ pub async fn save_settings(
     }
     if payload.work_ahead_daily_cap.is_some_and(|n| !(1..=super::decide::MAX_WORK_AHEAD_CAP).contains(&n)) {
         return bad(format!("work_ahead_daily_cap must be 1–{}", super::decide::MAX_WORK_AHEAD_CAP));
+    }
+    if payload.idea_jar_daily_cap.is_some_and(|n| n > super::idea_jar::MAX_CAP) {
+        return bad(format!("idea_jar_daily_cap must be 0–{}", super::idea_jar::MAX_CAP));
     }
     if let Some(e) = super::missions::settings_error(payload.mission_lease_minutes, payload.mission_default_budget_tokens, payload.mission_default_task_budget_tokens) {
         return bad(e);
@@ -4272,6 +4315,9 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.work_ahead_daily_cap {
         let _ = state.db.set_setting(super::decide::WORK_AHEAD_CAP_SETTING, &n.to_string()).await;
+    }
+    if let Some(n) = payload.idea_jar_daily_cap {
+        let _ = state.db.set_setting(super::idea_jar::CAP_SETTING, &n.to_string()).await;
     }
     if let Some(on) = payload.mission_board {
         let _ = state.db.set_setting(super::missions::SETTING, if on { "true" } else { "false" }).await;

@@ -337,6 +337,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "waiting", ..] => true,
         // Starting work-ahead runs now spends the person's tokens
         ["", "api", "work-ahead", ..] => true,
+        // The idea jar is the person's: what they drop in, Look now, Do it and the shelf
+        ["", "api", "ideas", ..] => true,
         // Mission Control: approving plans, verifying, rejecting, retrying and approving checks are
         // the person's calls; bots act on tasks only through their task tools
         ["", "api", "missions" | "tasks" | "checks", ..] => *method != Method::GET && *method != Method::HEAD,
@@ -902,6 +904,12 @@ mod tests {
         assert!(person_only(&post, "/api/messages/m1/reaction"));
         assert!(!person_only(&get, "/api/messages/m1/reaction"));
         assert!(person_only(&post, "/api/work-ahead/run"));
+        assert!(person_only(&get, "/api/ideas"));
+        assert!(person_only(&post, "/api/ideas"));
+        assert!(person_only(&get, "/api/ideas/i1"));
+        assert!(person_only(&post, "/api/ideas/i1/pick"));
+        assert!(person_only(&post, "/api/ideas/i1/look"));
+        assert!(person_only(&del, "/api/ideas/i1"));
         assert!(person_only(&get, "/api/skills/foundry"));
         assert!(person_only(&get, "/api/kwants/k1/lessons"));
         assert!(person_only(&Method::HEAD, "/api/kwants/k1/lessons"));
