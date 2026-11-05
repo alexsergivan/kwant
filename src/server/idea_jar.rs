@@ -226,21 +226,15 @@ pub fn prompt(text: &str, bots: &[(String, String)], goals: &[String], missions:
     )
 }
 
-/// The options of a take's turn: hidden, unsaved, no tools and no MCP servers. `None` while this
-/// build has no tool-free turn: `TurnOpts.no_tools` comes with Lin's lin-dev-notools, and until
-/// this branch stacks on it no take runs at all (the scan leaves the jar alone, Look now says 409
-/// `no_tools_unavailable`). A take never runs with tools; this is the one place to change.
-fn take_opts() -> Option<TurnOpts> {
+/// The options of a take's turn: hidden, unsaved, and [`TurnOpts::no_tools`]: no built-in tools,
+/// no MCP servers (kwant's own included), no browser. A CLI that can't switch its tools off
+/// refuses the turn, and one that offers or starts a tool anyway is stopped and its reply
+/// dropped, so the idea ends `failed`, never with a take written by a bot that had tools.
+fn take_opts() -> TurnOpts {
     let mut opts = TurnOpts::always_asking("Idea jar");
     (opts.unsaved, opts.quiet_failure, opts.quiet_finish, opts.purpose) = (true, true, true, Some(PURPOSE.into()));
-    // Once stacked on lin-dev-notools: `opts.no_tools = true; return Some(opts);`
-    let _ = opts;
-    None
-}
-
-/// Whether takes can run in this build (see [`take_opts`]).
-pub fn tool_free_turns() -> bool {
-    take_opts().is_some()
+    opts.no_tools = true;
+    opts
 }
 
 // -- who peeks --------------------------------------------------------------------------------
@@ -312,9 +306,7 @@ pub async fn run(state: &AppState, idea: Idea, bot: Kwant, take_id: String) -> b
     let job = state.turns.start_job([format!("idea:{}", idea.id)]);
     let (job, k) = (&job, &bot);
     let ask = move |p: String| async move {
-        let Some(opts) = take_opts() else {
-            return (Err("this build can't run a turn without tools yet".to_string()), 0);
-        };
+        let opts = take_opts();
         let before = state.turns.job_tokens(&job.id);
         let reply = match scope_for(state, k, None, None, job, 0).await {
             Ok(scope) => tokio::time::timeout(TAKE_TIMEOUT, turn_once(&scope, k, p, opts))
@@ -444,11 +436,10 @@ pub async fn choose(state: &AppState, now: DateTime<Utc>, cap: u64) -> Vec<(Idea
 }
 
 /// Peeks in every space's jar at `now` (see [`choose`]) and starts those takes in the background.
-/// Returns `(idea_id, kwant_id)` of each. Nothing while [`daily_cap`] is 0 or this build can't run
-/// a tool-free turn. With `force` it doesn't wait for [`SCAN_EVERY`] since the last scan.
+/// Returns `(idea_id, kwant_id)` of each. Nothing while [`daily_cap`] is 0. With `force` it doesn't wait for [`SCAN_EVERY`] since the last scan.
 pub async fn scan(state: &AppState, now: DateTime<Utc>, force: bool) -> Vec<(String, String)> {
     let cap = daily_cap(state).await;
-    if cap == 0 || !tool_free_turns() {
+    if cap == 0 {
         return Vec::new();
     }
     let _guard = SCANNING.lock().await;
@@ -679,7 +670,7 @@ async fn out(state: &AppState, id: &str) -> Response {
 }
 
 /// `POST /api/ideas/:id/look`: a free bot peeks now, whatever the daily cap. 202 with the bot;
-/// 409 `already_peeking`, `no_free_bot`, `picked` or `no_tools_unavailable`.
+/// 409 `already_peeking`, `no_free_bot` or `picked`, which leave the idea as it was.
 pub async fn look(State(state): State<AppState>, headers: HeaderMap, RawQuery(raw): RawQuery, Path(id): Path<String>) -> Response {
     if let Err(r) = person(&state, &headers).await {
         return r;
@@ -692,9 +683,6 @@ pub async fn look(State(state): State<AppState>, headers: HeaderMap, RawQuery(ra
     let from = ["new", "ready", "later", "failed"];
     if !from.contains(&idea.status.as_str()) {
         return busy(&state, &id).await;
-    }
-    if !tool_free_turns() {
-        return err(StatusCode::CONFLICT, "no_tools_unavailable", "bots can't peek yet: this build has no turn without tools");
     }
     let now = Utc::now();
     let Some(bot) = free_bot(&state, &idea, now, &[]).await else {

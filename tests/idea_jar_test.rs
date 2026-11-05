@@ -1,9 +1,9 @@
 //! The idea jar: ideas in and out through the person's routes, the composer's `/idea`, who is
-//! free to peek (the busy rule), the daily cap, a take checked against its schema with one retry,
-//! the idea quoted as data, and Do it making a draft mission. Takes run through
-//! `idea_jar::run_with` with a scripted reply in place of the turn; in this build the real turn
-//! is gated off until it can run without tools, and that gate is tested too. A fake claude CLI
-//! logs every call. Its own test binary: it changes PATH.
+//! free to peek (the busy rule), the daily cap and peeks today, a take checked against its schema
+//! with one retry, the idea quoted as data, and Do it making a draft mission. Most takes run
+//! through `idea_jar::run_with` with a scripted reply in place of the turn; one test runs the
+//! real turn (Look now and the scan) on a fake claude CLI and checks it started with no tools.
+//! Its own test binary: it changes PATH.
 
 #[path = "common/exe.rs"]
 mod exe;
@@ -29,16 +29,36 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tower::ServiceExt;
 
-/// Logs the prompt of every call; a prompt saying SLOWTURN takes three seconds.
+/// Logs the prompt of every call; a prompt saying SLOWTURN takes three seconds. An idea jar
+/// prompt gets the take [`GOOD`] back and its run is logged to `idea_runs.log` with whether it
+/// was started with no tools (`--tools ""`) and whether it got an MCP config. Like claude with
+/// `--tools ""`, its init line then lists no tools; without it, it lists Bash.
 const FAKE_CLAUDE: &str = r#"#!/bin/sh
 case "$1" in
   auth) echo '{"loggedIn":true}'; exit 0 ;;
 esac
-for a; do last="$a"; done
-printf '%s\n----\n' "$last" >> "$(dirname "$0")/calls.log"
+dir="$(dirname "$0")"
+notools=no; mcp=no; idea=""; prev=""
+for a; do
+  if [ "$prev" = "--tools" ] && [ -z "$a" ]; then notools=yes; fi
+  if [ "$a" = "--mcp-config" ]; then mcp=yes; fi
+  case "$a" in *"[Idea jar]"*) idea="$a" ;; esac
+  prev="$a"; last="$a"
+done
+printf '%s\n----\n' "${idea:-$last}" >> "$dir/calls.log"
 case "$last" in
   *SLOWTURN*) sleep 3 ;;
 esac
+if [ -n "$idea" ]; then
+  printf 'notools=%s mcp=%s\n' "$notools" "$mcp" >> "$dir/idea_runs.log"
+  if [ "$notools" = yes ]; then
+    echo '{"type":"system","subtype":"init","tools":[],"mcp_servers":[],"skills":[],"slash_commands":[]}'
+  else
+    echo '{"type":"system","subtype":"init","tools":["Bash"]}'
+  fi
+  printf '%s\n' '{"type":"result","is_error":false,"num_turns":1,"result":__TAKE__,"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":20}}'
+  exit 0
+fi
 printf '%s\n' '{"type":"result","is_error":false,"num_turns":1,"result":"answer","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":20}}'
 "#;
 
@@ -47,11 +67,17 @@ fn fake_cli() -> PathBuf {
     DONE.get_or_init(|| {
         let bin = tempfile::tempdir().unwrap().keep().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        exe::write_executable(bin.join("claude"), FAKE_CLAUDE);
+        let script = FAKE_CLAUDE.replace("__TAKE__", &serde_json::to_string(GOOD).unwrap());
+        exe::write_executable(bin.join("claude"), &script);
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
         bin
     })
     .clone()
+}
+
+/// How each real idea jar turn in this test binary was started, one line per run.
+fn idea_runs() -> Vec<String> {
+    std::fs::read_to_string(fake_cli().join("idea_runs.log")).unwrap_or_default().lines().map(String::from).collect()
 }
 
 /// Every prompt the fake CLI got, in this test binary.
@@ -139,6 +165,9 @@ impl Env {
     async fn take(&self, idea: &Idea, bot: &Kwant, replies: Vec<(Result<String, String>, u64)>) -> (Vec<String>, Idea) {
         assert!(self.state.db.claim_idea(&idea.id, &["new", "ready", "later", "failed"], &bot.id).await.unwrap());
         let row = self.state.db.start_idea_take(idea, &bot.id, &today(), "scan").await.unwrap();
+        let peeking = self.state.db.get_idea(&idea.id).await.unwrap().unwrap();
+        assert_eq!((peeking.status.as_str(), peeking.kwant_id.as_deref()), ("peeking", Some(bot.id.as_str())), "who is peeking");
+        assert!(peeking.peeked_at.is_some(), "and since when");
         let asked = Arc::new(Mutex::new(Vec::new()));
         let replies = Arc::new(Mutex::new(replies.into_iter()));
         let (a, r) = (asked.clone(), replies.clone());
@@ -176,6 +205,18 @@ impl Env {
 
     async fn chosen(&self, cap: u64) -> Vec<(String, String)> {
         idea_jar::choose(&self.state, Utc::now(), cap).await.into_iter().map(|(i, k)| (i.id, k.name)).collect()
+    }
+
+    /// Waits for the idea to leave `peeking` and returns it.
+    async fn peeked(&self, id: &str) -> Idea {
+        for _ in 0..100 {
+            let idea = self.state.db.get_idea(id).await.unwrap().unwrap();
+            if idea.status != "peeking" {
+                return idea;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("the take never finished");
     }
 
     async fn settle(&self) {
@@ -277,7 +318,6 @@ async fn every_idea_route_is_the_persons() {
 #[tokio::test]
 async fn slash_idea_in_the_composer_becomes_an_idea_and_never_reaches_a_bot() {
     let e = setup().await;
-    let before = cli_calls();
     let v = ok(&e.app, "POST", "/api/chat/send", Some(json!({"kwant_id": e.ann.id, "prompt": "/idea a weekly digest @Bob", "sender_id": "user"}))).await;
     assert_eq!(v["handled"], "idea");
     assert_eq!(v["idea"]["text"], "a weekly digest @Bob");
@@ -286,7 +326,8 @@ async fn slash_idea_in_the_composer_becomes_an_idea_and_never_reaches_a_bot() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(e.state.db.list_messages(&e.ann.id, 50).await.unwrap().is_empty(), "no message saved");
     assert!(ok(&e.app, "GET", "/api/turns", None).await["turns"].as_array().unwrap().is_empty(), "no turn");
-    assert_eq!(cli_calls(), before, "the CLI never ran");
+    // Other tests in this binary use the CLI at the same time: look for this idea's words only
+    assert!(!cli_calls().contains("a weekly digest"), "the CLI never got it");
     assert_eq!(e.state.db.list_ideas(&SpaceId::default_space(), Some("new")).await.unwrap().len(), 1);
 }
 
@@ -321,7 +362,9 @@ async fn a_bot_is_free_when_idle_ten_minutes_and_the_named_one_goes_first() {
     assert!(e.chosen(3).await.is_empty(), "nobody is free");
     let (s, v) = call(&e.app, "POST", &format!("/api/ideas/{}/look", other.id), None).await;
     assert_eq!(s, StatusCode::CONFLICT);
-    assert!(matches!(v["error"].as_str(), Some("no_free_bot") | Some("no_tools_unavailable")), "{v}");
+    assert_eq!(v["error"], "no_free_bot", "{v}");
+    let after = e.state.db.get_idea(&other.id).await.unwrap().unwrap();
+    assert_eq!((after.status.as_str(), after.kwant_id.as_deref()), (other.status.as_str(), other.kwant_id.as_deref()), "a 409 leaves the idea as it was");
 }
 
 #[tokio::test]
@@ -338,9 +381,12 @@ async fn the_daily_cap_counts_scans_and_zero_turns_it_off() {
     assert!(!idea_jar::under_cap(&e.state, &space, &today(), 3).await);
     assert!(e.chosen(3).await.is_empty(), "cap reached");
     assert_eq!(e.chosen(4).await, vec![(ideas[3].id.clone(), "Ann".to_string())]);
-    // Look now rows don't count
+    let list = ok(&e.app, "GET", "/api/ideas", None).await;
+    assert_eq!((list["daily_cap"].as_u64(), list["peeks_today"].as_i64(), list["cap_reached"].as_bool()), (Some(3), Some(3), Some(true)));
+    // Look now rows don't count toward the cap but are peeks today
     e.state.db.start_idea_take(&ideas[0], &e.ann.id, &today(), "look").await.unwrap();
     assert_eq!(e.state.db.idea_scan_takes_on(&space, &today()).await.unwrap().0, 3);
+    assert_eq!(ok(&e.app, "GET", "/api/ideas", None).await["peeks_today"], 4);
     assert_eq!(e.state.db.idea_scan_takes_on(&space, "1999-01-01").await.unwrap(), (0, false), "a new day starts over");
 
     // The setting: 0–10, 0 is off
@@ -459,23 +505,42 @@ async fn do_it_makes_a_draft_mission_that_waits_for_approval() {
 }
 
 #[tokio::test]
-async fn without_a_tool_free_turn_no_take_ever_runs() {
+async fn a_real_take_runs_with_no_tools_and_look_now_retries_a_failed_idea() {
     let e = setup().await;
-    let idea = e.drop_in("A dark mode").await;
-    let before = cli_calls();
-    if idea_jar::tool_free_turns() {
-        return; // stacked on lin-dev-notools: the real turn is tested elsewhere
-    }
-    assert!(idea_jar::scan(&e.state, Utc::now(), true).await.is_empty());
-    let (s, v) = call(&e.app, "POST", &format!("/api/ideas/{}/look", idea.id), None).await;
-    assert_eq!((s, v["error"].as_str()), (StatusCode::CONFLICT, Some("no_tools_unavailable")));
-    // Even started by hand, the real take refuses to run a turn
-    assert!(e.state.db.claim_idea(&idea.id, &["new"], &e.ann.id).await.unwrap());
-    let row = e.state.db.start_idea_take(&idea, &e.ann.id, &today(), "look").await.unwrap();
-    let claimed = e.state.db.get_idea(&idea.id).await.unwrap().unwrap();
-    assert!(!idea_jar::run(&e.state, claimed, e.ann.clone(), row.id).await);
-    let after = e.state.db.get_idea(&idea.id).await.unwrap().unwrap();
-    assert_eq!(after.status, "failed");
-    assert_eq!(cli_calls(), before, "the CLI never ran");
-    assert!(!cli_calls().contains("[Idea jar]"));
+    let before = idea_runs().len();
+    // Look now: the named bot peeks, past the cap, with no tools and no MCP config
+    let idea = e.drop_in("A dark mode @Bob").await;
+    let v = ok(&e.app, "POST", &format!("/api/ideas/{}/look", idea.id), None).await;
+    assert_eq!((v["status"].as_str(), v["kwant_id"].as_str()), (Some("peeking"), Some(e.bob.id.as_str())), "{v}");
+    let after = e.peeked(&idea.id).await;
+    assert_eq!(after.status, "ready", "{:?}", after.error);
+    assert_eq!(after.kwant_id.as_deref(), Some(e.bob.id.as_str()), "the take's author");
+    let take: Value = serde_json::from_str(after.take.as_deref().unwrap()).unwrap();
+    assert_eq!((take["verdict"].as_str(), take["bot_id"].as_str()), (Some("worth_it"), Some(e.bob.id.as_str())));
+    let runs = idea_runs();
+    assert_eq!(runs[before..], ["notools=yes mcp=no".to_string()], "the CLI was started with no tools");
+    let list = ok(&e.app, "GET", "/api/ideas", None).await;
+    assert_eq!((list["peeks_today"].as_i64(), list["cap_reached"].as_bool()), (Some(1), Some(false)), "Look now isn't a scan");
+    let rows = e.state.db.idea_takes(&idea.id).await.unwrap();
+    assert_eq!((rows[0].trigger.as_str(), rows[0].status.as_str(), rows[0].tries), ("look", "ready", 1));
+
+    // A failed idea stays failed with its error, and Look now on it tries again
+    let failed = e.drop_in("Sync to the phone").await;
+    let (_, f) = e.take(&failed, &e.ann, vec![(Err("the CLI went away".into()), 0)]).await;
+    assert_eq!((f.status.as_str(), f.error.is_some()), ("failed", true));
+    e.last_turn(&e.ann, 30).await;
+    e.last_turn(&e.bob, 30).await;
+    ok(&e.app, "POST", &format!("/api/ideas/{}/look", failed.id), None).await;
+    let retried = e.peeked(&failed.id).await;
+    assert_eq!((retried.status.as_str(), retried.error.as_deref()), ("ready", None));
+
+    // The scan runs the same real turn on the oldest new idea
+    let third = e.drop_in("Weekly digest").await;
+    e.last_turn(&e.ann, 30).await;
+    e.last_turn(&e.bob, 30).await;
+    let started = idea_jar::scan(&e.state, Utc::now(), true).await;
+    assert_eq!(started.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>(), [third.id.as_str()]);
+    assert_eq!(e.peeked(&third.id).await.status, "ready");
+    assert!(idea_runs()[before..].iter().all(|r| r == "notools=yes mcp=no"), "{:?}", idea_runs());
+    assert_eq!(ok(&e.app, "GET", "/api/ideas", None).await["peeks_today"], 4);
 }
