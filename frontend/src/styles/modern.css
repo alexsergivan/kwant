@@ -575,54 +575,40 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
     animation: none;
   }
 }
-/* ---- Dev mode (0.7): the switch's safety cover, the </> badge, the hard hat and the blueprint grid.
-   design.md §1–§2. Motion is transform and opacity only; under reduced motion nothing animates and
-   the switch is a plain labelled track with a lock glyph (DevModeSwitch renders that variant). */
-.kw-dv { position: relative; width: 44px; height: 32px; border-radius: 10px; flex-shrink: 0; }
-.kw-dv:disabled { opacity: 0.5; cursor: not-allowed; }
-.kw-dv-track {
-  position: absolute; left: 5px; top: 7px; width: 34px; height: 18px; border-radius: 9999px;
-  background: #2c2552; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
+/* ---- Dev mode (0.7): the switch, the </> badge, the hard hat and the blueprint grid. design.md §1–§2.
+   Under reduced motion nothing animates. */
+/* The switch: the Settings toggle (36×20 track, 16 px white knob, 16 px travel) in a 44×32 button
+   (44×44 on phones). On fills the track with --kw-dv-on; unlocked rings it in amber. */
+.kw-dv {
+  --kw-dv-on: theme('colors.sky.600');
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 32px; border-radius: 10px; flex-shrink: 0; cursor: pointer;
 }
+.kw-dv:disabled { opacity: 0.4; cursor: not-allowed; }
+.kw-dv-track {
+  position: relative; display: block; width: 36px; height: 20px; border-radius: 9999px;
+  background: theme('colors.zinc.700');
+  outline: 2px solid transparent; outline-offset: 2px;
+  transition: background-color 160ms var(--kw-ease), outline-color 150ms var(--kw-ease);
+}
+.kw-dv:not(:disabled):hover .kw-dv-track { background: theme('colors.zinc.600'); }
 .kw-dv-fill {
-  position: absolute; inset: 0; border-radius: 9999px;
-  background: linear-gradient(135deg, #7a62f0 0%, #5b47d6 100%);
+  position: absolute; inset: 0; border-radius: 9999px; background: var(--kw-dv-on);
   opacity: var(--kw-dv-fill, 0); transition: opacity 160ms var(--kw-ease);
 }
-.kw-dv-ring {
-  position: absolute; inset: -3px; border-radius: 12px; pointer-events: none; opacity: 0;
-  box-shadow: 0 0 0 1.5px rgb(157 143 255 / 0.7), 0 0 10px rgb(157 143 255 / 0.35);
-  transition: opacity 150ms var(--kw-ease);
-}
-.kw-dv[data-ring] .kw-dv-ring { opacity: 1; }
+.kw-dv[data-ring] .kw-dv-track { outline-color: theme('colors.amber.400 / 75%'); }
 .kw-dv-knob {
-  position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 9999px;
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 9999px;
   display: flex; align-items: center; justify-content: center;
-  background: #ecebfa; box-shadow: 0 1px 2px rgb(6 3 20 / 0.5);
-  transition: transform 160ms var(--kw-ease);
+  background: #fff; color: theme('colors.zinc.600'); box-shadow: 0 1px 2px rgb(6 3 20 / 0.35);
+  transition: transform 160ms var(--kw-ease), color 160ms var(--kw-ease);
 }
 .kw-dv[data-knob='right'] .kw-dv-knob { transform: translateX(16px); }
-.kw-dv-cover {
-  position: absolute; left: 1px; top: 3px; width: 42px; height: 26px; border-radius: 9px;
-  display: flex; align-items: center; justify-content: center;
-  background: rgb(236 235 250 / 0.11); border: 1px solid rgb(255 255 255 / 0.24);
-  -webkit-backdrop-filter: blur(1.6px) saturate(1.2); backdrop-filter: blur(1.6px) saturate(1.2);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 2px 6px rgb(6 3 20 / 0.35);
-  font: 700 9px/1 'JetBrains Mono', ui-monospace, monospace; color: rgb(154 148 196 / 0.85);
-  transform-origin: top; transition: transform 150ms var(--kw-ease), opacity 150ms var(--kw-ease), background-color 150ms var(--kw-ease);
-}
-.kw-dv:not(:disabled):hover[data-cover='closed'] .kw-dv-cover { background: rgb(255 255 255 / 0.16); }
-.kw-dv[data-cover='open'] .kw-dv-cover { transform: perspective(220px) rotateX(112deg); opacity: 0.9; }
-.kw-dv-hinge { position: absolute; left: 12px; top: 1px; width: 20px; height: 3px; pointer-events: none; }
-.kw-dv-hinge::before, .kw-dv-hinge::after { content: ''; position: absolute; top: 0; width: 5px; height: 3px; border-radius: 1px; background: #8d87b8; }
-.kw-dv-hinge::before { left: 0; }
-.kw-dv-hinge::after { right: 0; }
-/* Reduced motion: "Dev" label, track, lock glyph in the knob; every change instant */
-.kw-dv-rm { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px; border-radius: 10px; flex-shrink: 0; }
-.kw-dv-rm:disabled { opacity: 0.5; cursor: not-allowed; }
-.kw-dv-rm .kw-dv-track { position: relative; left: auto; top: auto; display: block; }
-.kw-dv-rm[data-ring] .kw-dv-track { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14), 0 0 0 1.5px rgb(157 143 255 / 0.7), 0 0 10px rgb(157 143 255 / 0.35); }
-.kw-dv-rm[data-knob='right'] .kw-dv-knob { transform: translateX(16px); }
+.kw-dv[data-on] .kw-dv-knob { color: var(--kw-dv-on); }
+.kw-dv[data-ring] .kw-dv-knob { color: theme('colors.amber.600'); }
+.kw-dv-glyph { display: block; }
+/* Reduced motion: the same look, every change instant */
+.kw-dv-rm .kw-dv-track, .kw-dv-rm .kw-dv-fill, .kw-dv-rm .kw-dv-knob { transition: none; }
 .kw-dv-hint { animation: kw-dv-hint 150ms var(--kw-ease) both; }
 @keyframes kw-dv-hint { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 
@@ -665,7 +651,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 @keyframes kw-dv-grid { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .kw-dv-fill, .kw-dv-ring, .kw-dv-knob, .kw-dv-cover { transition: none; }
+  .kw-dv-track, .kw-dv-fill, .kw-dv-knob { transition: none; }
   .kw-dv-hint, .kw-dev-badge, .kw-dev-hat, .kw-blueprint::before { animation: none; }
   .kw-dev-caret { animation: none; }
 }

@@ -1,10 +1,11 @@
-// The Dev mode switch in the sidebar space header: a safety cover over a launch switch (design §1).
-// Press 1 lifts the cover, press 2 flips (or opens the setup sheet the first time). A lifted cover
-// drops back after 5 s, on Esc or when focus leaves. Presses are ignored while a flip settles.
+// The Dev mode switch in the sidebar space header (design §1, restyled in 0.7.1): a toggle that
+// unlocks before it flips. Press 1 unlocks (amber ring, open lock), press 2 flips (or opens the setup
+// sheet the first time). Unlocked drops back after 5 s, on Esc or when focus leaves. Presses are
+// ignored while a flip settles.
 // It's a <button>, not role="switch": a switch promises one press.
 
 import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Code, Lock, LockOpen, X } from 'lucide-react';
+import { Code, CodeXml, LockOpen, X } from 'lucide-react';
 import {
   DROP_MS,
   RECOVER_MS,
@@ -175,33 +176,24 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
     style: { ['--kw-dv-fill' as string]: String(look.fill) } as React.CSSProperties,
   };
 
-  const button = state.reduced ? (
-    <button {...common} className="kw-dv-rm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400">
-      <span className="text-meta font-semibold text-zinc-300" aria-hidden="true">
-        Dev
-      </span>
+  // One look with or without motion: a Settings-size track with a solid knob. Resting, the knob
+  // carries </>; lifted, it carries an open lock and the track gets an amber ring. Reduced motion
+  // only drops the transitions (kw-dv-rm).
+  const glyph =
+    state.phase === 'lifted' || state.phase === 'pending' ? (
+      <LockOpen size={10} strokeWidth={2.6} className="kw-dv-glyph" data-dv-glyph="unlocked" />
+    ) : (
+      <CodeXml size={11} strokeWidth={2.6} className="kw-dv-glyph" data-dv-glyph="code" />
+    );
+  const button = (
+    <button
+      {...common}
+      className={`kw-dv${state.reduced ? ' kw-dv-rm' : ''} ${phone ? 'w-11 h-11' : ''} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-sky-400`}
+    >
       <span className="kw-dv-track" aria-hidden="true">
         <span className="kw-dv-fill" />
-        <span className="kw-dv-knob">
-          {state.phase === 'lifted' || state.phase === 'pending' ? (
-            <LockOpen size={8} strokeWidth={2.6} className="text-sky-600" data-dv-glyph="unlocked" />
-          ) : (
-            <Lock size={8} strokeWidth={2.6} className="text-sky-600" data-dv-glyph="locked" />
-          )}
-        </span>
+        <span className="kw-dv-knob">{glyph}</span>
       </span>
-    </button>
-  ) : (
-    <button {...common} className="kw-dv focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400">
-      <span className="kw-dv-track" aria-hidden="true">
-        <span className="kw-dv-fill" />
-        <span className="kw-dv-ring" />
-        <span className="kw-dv-knob" />
-      </span>
-      <span className="kw-dv-cover" aria-hidden="true">
-        &lt;/&gt;
-      </span>
-      <span className="kw-dv-hinge" aria-hidden="true" />
     </button>
   );
 
