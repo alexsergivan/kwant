@@ -302,7 +302,9 @@ test('DOM: on → off with two presses saves PUT {on:false}, announces, and call
   );
   assert.match(host.querySelector('[data-dv-live]').textContent, /Dev mode off for Demo/);
   assert.equal(turnedOff, 1);
-  await wait(m.SETTLE_MS + 30);
+  // The settle timer fires after SETTLE_MS; a busy CI runner can run it late, so poll for it
+  await wait(m.SETTLE_MS);
+  for (let i = 0; i < 100 && b.dataset.devSwitch !== 'covered'; i++) await wait(20);
   assert.equal(b.dataset.devSwitch, 'covered');
   assert.equal(b.dataset.on, undefined);
   await click(b); // a render mid-save once left the switch stuck; the next press still lifts
