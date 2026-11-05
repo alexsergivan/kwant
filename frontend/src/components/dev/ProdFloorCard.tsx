@@ -73,6 +73,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
   const off = disabled || view.busy;
   const headingId = `floor-${id}-h`;
   const mainRef = useRef<HTMLButtonElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   // `fromSecondary`: the secondary "Back up first" unmounts once the backup starts, so focus goes back to the
   // main button (which turns into Allow in place) when the backup is done.
@@ -83,9 +84,18 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
       const result = await onBackup(floor.space_id);
       send({ type: 'backup_done', result, now: Date.now() });
       setTick(Date.now());
-      if (fromSecondary) window.setTimeout(() => mainRef.current?.focus(), 0);
     } catch (e) {
       send({ type: 'backup_error', error: e instanceof Error ? e.message : 'no reason given' });
+    } finally {
+      // Done or failed, the secondary button is gone by now; the main button is Allow on success and
+      // "Try the backup again" on failure. Bring focus there only if it was lost with the button (now on
+      // <body>) or is still inside this card: never take it from the composer or anywhere else, because
+      // after a good backup one Space on that button allows a production deploy.
+      if (fromSecondary)
+        window.setTimeout(() => {
+          const a = document.activeElement;
+          if (!a || a === document.body || cardRef.current?.contains(a)) mainRef.current?.focus();
+        }, 0);
     }
   };
 
@@ -106,6 +116,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
 
   return (
     <div
+      ref={cardRef}
       data-approval-card={id}
       data-prod-floor={floor.kind}
       data-floor-case={view.case}
@@ -193,7 +204,14 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
           </button>
         )}
         {view.secondaryBackup && (
-          <button type="button" disabled={off} onClick={() => void takeBackup(true)} className={PLAIN}>
+          <button
+            type="button"
+            // aria-disabled, not disabled: a focused button that turns disabled drops focus to <body> for the
+            // whole backup. takeBackup ignores presses while busy.
+            aria-disabled={off || undefined}
+            onClick={() => void takeBackup(true)}
+            className={PLAIN}
+          >
             <Database size={14} aria-hidden="true" />
             Back up first
           </button>

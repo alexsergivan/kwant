@@ -116,7 +116,13 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
           <label htmlFor="dv-repo" className="text-meta font-medium text-zinc-300">
             Repository
           </label>
-          <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-hairline-strong bg-surface-main px-3 h-10 focus-within:border-sky-400/70">
+          {/* N3: on phone the chip goes on its own line under the field, so the whole repo name stays readable.
+              From sm up it sits inside the field, as before. */}
+          <div
+            className="mt-1.5 flex flex-col items-start gap-1.5 sm:flex-row sm:items-center sm:gap-2 sm:rounded-xl sm:border sm:border-hairline-strong sm:bg-surface-main sm:px-3 sm:h-10 sm:focus-within:border-sky-400/70"
+            data-dv-repo-row
+          >
+          <div className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-hairline-strong bg-surface-main px-3 h-10 focus-within:border-sky-400/70 sm:flex-1 sm:w-auto sm:rounded-none sm:border-0 sm:bg-transparent sm:px-0 sm:h-auto">
             <span className="font-mono text-[13px] text-zinc-500 shrink-0" aria-hidden="true">
               github.com/
             </span>
@@ -137,6 +143,7 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
               aria-invalid={field.state === 'invalid' || field.state === 'not_found' || undefined}
               className="min-w-0 flex-1 bg-transparent font-mono text-[13px] text-zinc-100 placeholder:text-zinc-600 outline-none"
             />
+          </div>
             {view.chip && (
               <span className={`kw-chip ${chipTone[view.chip.tone]} shrink-0`} data-dv-chip={field.state}>
                 {view.chip.spinner && <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
@@ -176,13 +183,13 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
                 <span className="text-zinc-500">None found</span>
               )}
             </Tile>
-            <Tile label="Production keys">
+            <Tile label="Production keys" hint={!onOpenConnections && !productionCount ? 'Mark them in Connections' : undefined}>
               <span className={productionCount ? '' : 'text-zinc-500'}>{productionCount ? `${productionCount} marked` : 'None marked'}</span>
-              {onOpenConnections && (
+              {onOpenConnections ? (
                 <button type="button" onClick={onOpenConnections} className="ml-1.5 text-meta font-medium text-sky-300 hover:text-sky-200">
                   Mark
                 </button>
-              )}
+              ) : null}
             </Tile>
           </div>
         )}
@@ -243,9 +250,11 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
   );
 };
 
-const Tile: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+const Tile: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({ label, hint, children }) => (
   <div className="rounded-xl border border-hairline bg-surface-main px-3 py-2">
     <p className="text-2xs font-semibold uppercase tracking-wider text-zinc-500">{label}</p>
     <p className="mt-0.5 text-meta text-zinc-200 truncate">{children}</p>
+    {/* Outside the truncated line, so it wraps in the narrow tile at 1440 instead of being cut. */}
+    {hint && <p className="mt-0.5 text-meta leading-snug text-zinc-400">{hint}</p>}
   </div>
 );
