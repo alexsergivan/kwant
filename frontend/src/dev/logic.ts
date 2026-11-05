@@ -473,3 +473,33 @@ export function diffLabel(add: number, del: number): string {
 /** The first 7 characters of a commit sha. */
 export const shortSha = (sha: string): string => sha.trim().slice(0, 7);
 
+
+/**
+ * Style v2 §6 LGTM stamp: only when the review really found nothing to fix. All of: ready; no open finding;
+ * no tamper flag; no intent row missing; secrets and packages not hit; a reviewer on a different engine.
+ */
+export function lgtm(card: {
+  status: string;
+  reviewer: { name: string } | null;
+  same_engine: boolean;
+  findings: { state: string }[];
+  tamper: { flags: unknown[] };
+  intent: { rows: { state: string }[] } | null;
+  security: { secrets: { state: string }; packages: { state: string } };
+}): boolean {
+  return (
+    card.status === 'ready' &&
+    !!card.reviewer &&
+    !card.same_engine &&
+    !card.findings.some((f) => f.state === 'open') &&
+    card.tamper.flags.length === 0 &&
+    !(card.intent?.rows ?? []).some((r) => r.state === 'missing') &&
+    card.security.secrets.state !== 'hit' &&
+    card.security.packages.state !== 'hit'
+  );
+}
+
+/** "Looks good to me: Rigel found nothing to fix". */
+export const lgtmLabel = (reviewer: string): string => `Looks good to me: ${reviewer} found nothing to fix`;
+/** "Rigel is reading the diff" (pending review); no ETA, we don't have one. */
+export const readingLine = (reviewer: string | null | undefined): string => `${reviewer || 'A reviewer'} is reading the diff`;

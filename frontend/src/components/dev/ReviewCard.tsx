@@ -1,19 +1,16 @@
-import React, { useEffect, useReducer, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
   FlaskConical,
   GitPullRequest,
-  KeyRound,
   Loader2,
-  Package,
   ShieldAlert,
   ShieldCheck,
   Target,
   Wrench,
   X,
-  Bug,
-  Code2,
+  GitBranch,
 } from 'lucide-react';
 import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
@@ -34,6 +31,9 @@ import {
   postedLine,
   riskReasons,
   undoLeft,
+  lgtm,
+  lgtmLabel,
+  readingLine,
 } from '../../dev/logic';
 import type { LedState, PostState } from '../../dev/logic';
 import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
@@ -74,11 +74,17 @@ const Tamper: React.FC<{ flag: TamperFlag }> = ({ flag }) => (
       {flag.why}
     </p>
     {flag.excerpt && (
-      <figure className="mt-2 overflow-hidden rounded-lg border border-hairline bg-zinc-950/70">
-        <figcaption className="border-b border-hairline px-2 py-1 font-mono text-[11px] text-zinc-400 [overflow-wrap:anywhere]">{ref(flag)}</figcaption>
+      <figure className="mt-2 overflow-hidden rounded-lg border border-hairline bg-[var(--dv-code-bg)]">
+        {ref(flag) && (
+          <figcaption className="border-b border-hairline px-2 py-1.5">
+            <span data-tamper-ref className="dv-sha max-w-full [overflow-wrap:anywhere]">
+              {ref(flag)}
+            </span>
+          </figcaption>
+        )}
         <pre className="overflow-x-auto py-1 font-mono text-[12px] leading-5" tabIndex={0} aria-label={`Diff excerpt from ${flag.file}`}>
           {flag.excerpt.split('\n').map((l, i) => (
-            <div key={i} className={`px-2 ${l.startsWith('-') ? 'bg-rose-500/[0.12] text-rose-200' : l.startsWith('+') ? 'bg-teal-500/10 text-teal-200' : 'text-zinc-300'}`}>
+            <div key={i} className={`px-2 ${l.startsWith('-') ? 'bg-[var(--dv-del-bg)] text-[var(--dv-del)]' : l.startsWith('+') ? 'bg-[var(--dv-add-bg)] text-[var(--dv-add)]' : 'text-zinc-300'}`}>
               <span className="sr-only">{l.startsWith('-') ? 'Removed: ' : l.startsWith('+') ? 'Added: ' : ''}</span>
               {l}
             </div>
@@ -89,7 +95,10 @@ const Tamper: React.FC<{ flag: TamperFlag }> = ({ flag }) => (
   </div>
 );
 
-const SecTile: React.FC<{ icon: React.ReactNode; name: string; tool: string; state: 'pass' | 'hit' | 'not_run' | 'later'; text: string }> = ({ icon, name, tool, state, text }) => {
+// §6: an LED says the state (ok / bad for a hit / off when it didn't run); the tool sits top right in mono.
+const SEC_LED = { pass: 'ok', hit: 'bad', not_run: 'off', later: 'off' } as const satisfies Record<string, LedState>;
+
+const SecTile: React.FC<{ name: string; tool: string; mono: string; state: 'pass' | 'hit' | 'not_run' | 'later'; text: string }> = ({ name, tool, mono, state, text }) => {
   const look =
     state === 'later'
       ? 'border-dashed border-hairline-strong opacity-60'
@@ -99,13 +108,14 @@ const SecTile: React.FC<{ icon: React.ReactNode; name: string; tool: string; sta
   const tone = state === 'pass' ? 'text-ok' : state === 'hit' ? 'text-bad' : 'text-zinc-400';
   return (
     <li data-sec={tool} data-state={state} className={`min-w-0 rounded-xl border p-3 ${look}`}>
-      <p className="flex items-center gap-1.5 text-[13px] font-semibold text-zinc-100">
-        <span aria-hidden="true" className="text-zinc-400">
-          {icon}
+      <p className="flex items-center gap-2 text-[13px] font-semibold text-zinc-100">
+        <Led s={SEC_LED[state]} />
+        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{name}</span>
+        <span className="shrink-0 font-mono text-[10.5px] font-medium text-zinc-500">
+          <span className="sr-only"> checked by </span>
+          {mono}
         </span>
-        <span className="min-w-0 [overflow-wrap:anywhere]">{name}</span>
       </p>
-      <p className="mt-0.5 text-2xs text-zinc-500">{tool}</p>
       <p className={`mt-1 text-meta ${tone}`}>{text}</p>
     </li>
   );
@@ -410,6 +420,34 @@ const PostFooter: React.FC<{
   );
 };
 
+/**
+ * Cards whose LGTM stamp has already been drawn in this page. §6: the 180 ms stamp-in plays once, the first time
+ * a card renders ready, and never again (not on re-render, not on a remount after a poll or a tab switch).
+ */
+const STAMPED = new Set<string>();
+
+/** Style v2 §6 LGTM stamp: ink, not foil. Drawn only when lgtm(card) holds; static under reduced motion (CSS). */
+const Stamp: React.FC<{ id: string; reviewer: string }> = ({ id, reviewer }) => {
+  const fresh = useRef(!STAMPED.has(id));
+  useEffect(() => {
+    STAMPED.add(id);
+  }, [id]);
+  return (
+    <div data-lgtm className="mb-2.5 sm:absolute sm:right-4 sm:top-3.5 sm:mb-0">
+      <span
+        className="dv-stamp"
+        role="img"
+        aria-label={lgtmLabel(reviewer)}
+        data-stamp-in={fresh.current ? '' : undefined}
+        style={fresh.current ? undefined : { animation: 'none' }}
+      >
+        <b aria-hidden="true">LGTM</b>
+        <small aria-hidden="true">{reviewer} · 0 to fix</small>
+      </span>
+    </div>
+  );
+};
+
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
 export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null }) => {
   const [card, setCard] = useState<Review>(given);
@@ -466,11 +504,13 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const tile = card.draft ? 'bg-zinc-500/15 text-zinc-300' : 'bg-teal-400/15 text-teal-300';
   const summary = findingsSummary(card.findings);
   const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
+  const stamp = lgtm(card) && card.reviewer ? card.reviewer.name : null;
 
   return (
-    <article data-dev-card="review" data-pr={card.pr} aria-labelledby={headingId} className="kw-card min-w-0 scroll-mt-3 p-4">
+    <article data-dev-card="review" data-pr={card.pr} aria-labelledby={headingId} className="kw-card relative min-w-0 scroll-mt-3 p-4">
+      {stamp && <Stamp id={card.id || `pr-${card.pr}`} reviewer={stamp} />}
       {/* 1. Header */}
-      <header className="flex items-start gap-3">
+      <header className={`flex items-start gap-3 ${stamp ? 'sm:pr-32' : ''}`}>
         <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${tile}`} aria-hidden="true">
           <GitPullRequest size={16} />
         </span>
@@ -484,9 +524,18 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-meta text-zinc-400">
             {card.branch && (
-              <code className="rounded-md border border-hairline bg-surface-main px-1.5 py-0.5 font-mono text-[11px] text-zinc-300 [overflow-wrap:anywhere]">
-                {card.branch}
-                {card.base && ` → ${card.base}`}
+              <code data-branch className="dv-branch">
+                <GitBranch size={11} className="i" aria-hidden="true" />
+                <span className="h">{card.branch}</span>
+                {card.base && (
+                  <>
+                    <span className="arr" aria-hidden="true">
+                      →
+                    </span>
+                    <span className="sr-only"> into </span>
+                    <span className="shrink-0 text-zinc-300">{card.base}</span>
+                  </>
+                )}
               </code>
             )}
             {author && (
@@ -509,7 +558,22 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
         </div>
       </header>
 
-      {card.status === 'pending' && <p className="mt-3 text-meta text-zinc-400">Reviewing this PR…</p>}
+      {card.status === 'pending' && (
+        <div data-reading>
+          <p role="status" className="mt-3 flex items-center gap-2.5 rounded-[10px] border border-hairline bg-[var(--dv-code-bg)] px-3 py-2.5 font-mono text-[12.5px] leading-[18px] text-zinc-300 [overflow-wrap:anywhere]">
+            <Led s="run" />
+            <span className="min-w-0">
+              {readingLine(card.reviewer?.name)}
+              <span className="dv-caret" aria-hidden="true" />
+            </span>
+          </p>
+          {/* Static skeleton: no shimmer, no ETA. */}
+          <div aria-hidden="true" className="mt-3 grid gap-2">
+            <div className="h-2.5 w-[62%] rounded-full bg-[var(--kw-hairline-strong)]" />
+            <div className="h-2.5 w-[44%] rounded-full bg-[var(--kw-hairline-strong)]" />
+          </div>
+        </div>
+      )}
       {card.error && (
         <p className="mt-3 text-meta text-zinc-400">
           The review didn’t finish: <span className="text-zinc-300">{card.error}</span>
@@ -602,10 +666,10 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       <section className="mt-4" aria-label="Security checks">
         <SectionHead icon={<ShieldCheck size={12} aria-hidden="true" />}>Security checks</SectionHead>
         <ul role="list" className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 lg:grid-cols-4">
-          <SecTile icon={<KeyRound size={13} />} name="Secrets" tool="Gitleaks" state={sec.secrets.state} text={scanText(sec.secrets, 'secret', 'secrets', 'None found')} />
-          <SecTile icon={<Package size={13} />} name="New packages" tool="Registry check" state={sec.packages.state} text={scanText(sec.packages, 'package', 'packages', 'All real')} />
-          <SecTile icon={<Bug size={13} />} name="Dependencies" tool="OSV" state="later" text="in 0.7.x" />
-          <SecTile icon={<Code2 size={13} />} name="Code patterns" tool="Semgrep" state="later" text="in 0.7.x" />
+          <SecTile name="Secrets" tool="Gitleaks" mono="gitleaks" state={sec.secrets.state} text={scanText(sec.secrets, 'secret', 'secrets', 'None found')} />
+          <SecTile name="New packages" tool="Registry check" mono="registry" state={sec.packages.state} text={scanText(sec.packages, 'package', 'packages', 'All real')} />
+          <SecTile name="Dependencies" tool="OSV" mono="osv" state="later" text="in 0.7.x" />
+          <SecTile name="Code patterns" tool="Semgrep" mono="semgrep" state="later" text="in 0.7.x" />
         </ul>
       </section>
 
