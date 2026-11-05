@@ -41,7 +41,7 @@ const m = await loadBundled(`
   export { createRoot } from 'react-dom/client';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export * from './src/devMode';
-  export { DevModeSwitch, DevOffNote, DevBadge, HardHat } from './src/components/DevModeSwitch';
+  export { DevModeSwitch, DevOffNote, DevFlipNote, DevBadge, HardHat } from './src/components/DevModeSwitch';
   export { DevModeSetup } from './src/components/DevModeSetup';
   export { DevModeSettings } from './src/components/DevModeSettings';
   export { ConnectionRow } from './src/components/ConnectionsView';
@@ -175,7 +175,7 @@ test('the server changing Dev mode closes a held-open cover; a disabled switch s
   assert.equal(s.phase, 'covered');
   const d = R(m.initialSwitch(), { type: 'server', state: null, disabled: true });
   assert.equal(R(d, { type: 'press', now: 0 }), d);
-  assert.match(m.switchLook(d).label, /unavailable$/);
+  assert.match(m.switchLook(d).label, /Only the space owner can change it$/);
   assert.equal(m.switchLook(d).tooltip, 'Only the space owner can change Dev mode');
 });
 
@@ -344,10 +344,10 @@ test('DOM: reduced motion shows the same switch with the </> glyph, unlocks to a
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
   const b = switchEl(host);
   assert.ok(b.classList.contains('kw-dv-rm'));
-  assert.ok(b.querySelector('[data-dv-glyph="code"]'));
-  assert.equal(b.textContent.trim(), 'Dev', 'the reduced-motion variant keeps its Dev label');
+  assert.ok(b.querySelector('[data-dv-graph] .kw-dv-node'), 'the same branch graph');
+  assert.equal(b.textContent.trim(), 'dev', 'the reduced-motion variant keeps its dev label');
   await click(b);
-  assert.ok(b.querySelector('[data-dv-glyph="unlocked"]'));
+  assert.equal(b.querySelector('[data-dv-word]').textContent, 'dev?');
   await click(b);
   assert.equal(b.dataset.devSwitch, 'covered');
   assert.equal(b.dataset.on, 'true');
@@ -369,21 +369,49 @@ test('switchLook names the visual state and the knob glyph: off, armed, on, pend
   assert.deepEqual(pick({ disabled: true, on: true }), ['disabled', 'locked']);
 });
 
-test('0.7.1 look: a plain toggle with </> in the knob; unlocking rings it and shows an open lock; no cover or hinges; 44 px on phone', async () => {
+test('0.7.1 look (style v2 §10): the Branch switch; label dev → dev? → dev → off?; 44 px tall on phone; no knob, track or cover', async () => {
   reset({ ...off, on: false, repo: 'demo-org/demo-app', polled_at: 'x' });
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, phone: true }));
   const b = switchEl(host);
+  const word = () => b.querySelector('[data-dv-word]').textContent;
   assert.ok(b.classList.contains('kw-dv') && !b.classList.contains('kw-dv-rm'));
-  assert.ok(b.classList.contains('w-11') && b.classList.contains('h-11'), 'the phone target is 44×44');
-  for (const gone of ['.kw-dv-cover', '.kw-dv-hinge', '.kw-dv-ring']) assert.equal(b.querySelector(gone), null, gone);
-  assert.ok(b.querySelector('.kw-dv-knob [data-dv-glyph="code"]'));
-  assert.equal(b.dataset.ring, undefined);
+  assert.ok(b.classList.contains('h-11'), 'the phone target is 44 px tall');
+  assert.ok(host.querySelector('[data-dev-switch-wrap]').className.includes('min-w-[44px]'));
+  for (const gone of ['.kw-dv-cover', '.kw-dv-hinge', '.kw-dv-ring', '.kw-dv-knob', '.kw-dv-track']) assert.equal(b.querySelector(gone), null, gone);
+  const svg = b.querySelector('svg[data-dv-graph]');
+  assert.equal(svg.getAttribute('viewBox'), '0 0 44 24');
+  assert.equal(svg.querySelector('.kw-dv-base').getAttribute('d'), 'M2 17H42');
+  assert.equal(svg.querySelector('.kw-dv-fork').getAttribute('d'), 'M12 17C19 17 18 7 26 7H42');
+  assert.equal(svg.querySelector('.kw-dv-dot').getAttribute('r'), '5');
+  assert.equal(svg.querySelector('.kw-dv-pip').getAttribute('r'), '1.6');
+  assert.equal(word(), 'dev');
+  assert.equal(b.dataset.armed, undefined);
   await click(b);
   assert.equal(b.dataset.devSwitch, 'lifted');
-  assert.equal(b.dataset.ring, 'true');
-  assert.ok(b.querySelector('.kw-dv-knob [data-dv-glyph="unlocked"]'));
-  assert.equal(b.querySelector('[data-dv-glyph="code"]'), null);
+  assert.equal(b.dataset.armed, 'true');
+  assert.equal(word(), 'dev?');
   root.unmount();
+  reset({ ...off, on: true, repo: 'demo-org/demo-app', polled_at: 'x' });
+  const on = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
+  const b2 = switchEl(on.host);
+  assert.equal(b2.dataset.on, 'true');
+  assert.equal(b2.querySelector('[data-dv-word]').textContent, 'dev');
+  await click(b2);
+  assert.equal(b2.querySelector('[data-dv-word]').textContent, 'off?', 'armed to turn off asks off?');
+  assert.equal(b2.dataset.on, 'true', 'the node stays on the fork while armed to turn off');
+  on.root.unmount();
+});
+
+test('flip notes: HEAD → dev with one caret, and merged into main', () => {
+  const onNote = m.renderToStaticMarkup(h(m.DevFlipNote, { on: true, space: 'Trailhead', onDismiss: () => {} }));
+  assert.match(onNote, /role="status"/);
+  assert.match(onNote, /HEAD → dev/);
+  assert.match(onNote, /class="dv-caret"/);
+  assert.match(onNote, /Dev mode is on for Trailhead\./);
+  const offNote = m.renderToStaticMarkup(h(m.DevFlipNote, { on: false, approvals: 'smart', onDismiss: () => {} }));
+  assert.match(offNote, /merged into main/);
+  assert.match(offNote, /Dev mode is off\. Approvals stay on Smart\./);
+  assert.doesNotMatch(offNote, /dv-caret/);
 });
 
 test('DOM: first switch-on opens the setup sheet; typing checks after 400 ms; Turn on sends repo and branch', async () => {
@@ -394,7 +422,7 @@ test('DOM: first switch-on opens the setup sheet; typing checks after 400 ms; Tu
   await click(b);
   await click(b);
   assert.equal(b.dataset.devSwitch, 'pending');
-  assert.ok(b.querySelector('[data-dv-glyph="code"]') && b.dataset.ring === 'true' && b.dataset.knob === 'right', 'pending: </>, ring, knob right');
+  assert.ok(b.dataset.armed === 'true' && b.querySelector('[data-dv-word]').textContent === 'dev?', 'pending: drawn armed, dev?');
   const dialog = document.querySelector('[role="dialog"]');
   assert.equal(dialog.getAttribute('aria-modal'), 'true');
   assert.match(dialog.textContent, /Which repo is this space about\?/);

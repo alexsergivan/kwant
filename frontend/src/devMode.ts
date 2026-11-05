@@ -238,7 +238,6 @@ export function switchLook(s: SwitchState): SwitchLook {
 }
 
 function switchParts(s: SwitchState): Omit<SwitchLook, 'look' | 'glyph'> {
-  const unavailable = s.disabled ? ', unavailable' : '';
   const tooltip = s.disabled ? 'Only the space owner can change Dev mode' : `Dev mode is ${s.on ? 'on' : 'off'}. Press to unlock.`;
   switch (s.phase) {
     case 'lifted':
@@ -257,7 +256,7 @@ function switchParts(s: SwitchState): Omit<SwitchLook, 'look' | 'glyph'> {
       // Open while it settles, then it drops; the label is already the final state.
       return { coverOpen: true, knobRight: s.on, fill: s.on ? 1 : 0, ring: false, hint: null, label: `Dev mode, ${s.on ? 'on' : 'off'}. Press to unlock`, tooltip };
     default:
-      return { coverOpen: false, knobRight: s.on, fill: s.on ? 1 : 0, ring: false, hint: null, label: `Dev mode, ${s.on ? 'on' : 'off'}. Press to unlock${unavailable}`, tooltip };
+      return { coverOpen: false, knobRight: s.on, fill: s.on ? 1 : 0, ring: false, hint: null, label: s.disabled ? `Dev mode, ${s.on ? 'on' : 'off'}. Only the space owner can change it` : `Dev mode, ${s.on ? 'on' : 'off'}. Press to unlock`, tooltip };
   }
 }
 
