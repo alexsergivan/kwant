@@ -12,6 +12,7 @@
 //! of memory, a failed install, no answer in time, two crashes) routing stays on 0.4.8, the status
 //! says why, and vega is tried again only after a kwant update or a change of the setting.
 
+use super::laya::Probe;
 use super::LayaRouter;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -35,6 +36,10 @@ pub const VEGA_MIN_MEMORY_GB: f64 = 8.0;
 pub const VEGA_TORCH_THREADS: u32 = 4;
 /// Crashes in one kwant run after which vega gives way to the standard engine.
 pub const VEGA_MAX_CRASHES: u32 = 2;
+/// Wrong answers to the routing probe (a reply, but not a usable one) before vega is given up.
+pub const VEGA_MAX_BAD_PROBES: u32 = 3;
+/// How long the routing probe waits for one decision (the model is already warm by then).
+const VEGA_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 /// The server kwant runs for the vega engine; written to `<data>/laya/vega_serve.py` on each start.
 pub const VEGA_SERVE_PY: &str = include_str!("vega_serve.py");
 /// Why vega fell back, for which kwant version: `<data>/laya/vega-fallback.json`.
@@ -673,6 +678,10 @@ async fn run_vega(
                 let _ = child.kill().await;
                 return VegaRun::Fallback(format!("vega didn't answer within {} of starting", human(t.vega_health)));
             }
+            VegaExit::CantRoute(why) => {
+                let _ = child.kill().await;
+                return VegaRun::Fallback(format!("vega is up but couldn't answer a routing question ({why})"));
+            }
             VegaExit::Unresponsive => {
                 let _ = child.kill().await;
                 format!("it stopped answering for {}", human(t.vega_unhealthy))
@@ -701,12 +710,15 @@ enum VegaExit {
     Cancelled,
     EngineChanged,
     NeverHealthy,
+    /// Up, but answered the routing probe wrongly `VEGA_MAX_BAD_PROBES` times in a row.
+    CantRoute(String),
     Crashed(Option<std::process::ExitStatus>),
     /// Active, but `/health` stopped answering.
     Unresponsive,
 }
 
-/// Waits for vega's `/health`, hands routing to it, then watches it until it stops.
+/// Waits for vega's `/health` and one good routing answer, hands routing to it, then watches it
+/// until it stops.
 #[allow(clippy::too_many_arguments)]
 async fn watch_vega(
     router: &LayaRouter,
@@ -722,6 +734,7 @@ async fn watch_vega(
     let mut tick = tokio::time::interval(t.tick);
     let mut active = false;
     let mut last_ok = tokio::time::Instant::now();
+    let mut bad_probes = 0;
     loop {
         tokio::select! {
             _ = shutdown.cancelled() => return VegaExit::Cancelled,
@@ -740,6 +753,24 @@ async fn watch_vega(
                     last_ok = tokio::time::Instant::now();
                 }
                 if up && !active {
+                    // 0.4.8 keeps routing until vega has answered a real question, not just /health
+                    match router.probe_decision_at(url, VEGA_PROBE_TIMEOUT).await {
+                        Probe::Answered => {}
+                        Probe::NoReply => {
+                            if started.elapsed() > t.vega_health {
+                                return VegaExit::NeverHealthy;
+                            }
+                            continue;
+                        }
+                        Probe::Wrong(why) => {
+                            bad_probes += 1;
+                            tracing::warn!(%why, bad_probes, "vega answered /health but not a routing question");
+                            if bad_probes >= VEGA_MAX_BAD_PROBES {
+                                return VegaExit::CantRoute(why);
+                            }
+                            continue;
+                        }
+                    }
                     active = true;
                     tick = tokio::time::interval(t.online_tick.min(t.vega_unhealthy / 2).max(t.tick));
                     router.set_active(Some(url.to_string()));
@@ -1127,9 +1158,9 @@ mod tests {
     const FAKE_SERVER: &str = r#"
 import http.server, json
 class H(http.server.BaseHTTPRequestHandler):
-    def _send(self, body):
+    def _send(self, body, status=200):
         b = json.dumps(body).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(b)))
         self.end_headers()
@@ -1137,8 +1168,11 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self._send({"status": "ok", "engine": ENGINE})
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        self._send({"model": ENGINE, "engine": ENGINE, "answers": {}, "usage": {"input_tokens": 0, "output_tokens": 0}})
+        req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        if globals().get("MODE") == "bad-answers":
+            return self._send({"detail": [{"loc": ["query", "request"], "msg": "Field required"}]}, 422)
+        answers = {q: {"choice": next(iter(v.get("criteria") or {"x": ""}))} for q, v in req.get("questions", {}).items()}
+        self._send({"model": ENGINE, "engine": ENGINE, "answers": answers, "usage": {"input_tokens": 0, "output_tokens": 0}})
     def log_message(self, *a):
         pass
 http.server.HTTPServer((os.environ.get("LAYA_HOST", "127.0.0.1"), int(os.environ["LAYA_PORT"])), H).serve_forever()
@@ -1156,7 +1190,8 @@ http.server.HTTPServer((os.environ.get("LAYA_HOST", "127.0.0.1"), int(os.environ
         bin
     }
 
-    /// vega_serve.py's stand-in. `mode`: `ok` (answers once `gate` exists), `crash`, `crash-once`, `hang`.
+    /// vega_serve.py's stand-in. `mode`: `ok` (answers once `gate` exists), `crash`, `crash-once`, `hang`,
+    /// `bad-answers` (healthy, but every routing question gets a 422).
     /// Writes the env it got to `<dir>/vega-env.json`.
     fn fake_vega(dir: &Path, mode: &str, gate: Option<&Path>) -> String {
         let gate = gate.map(|g| g.display().to_string()).unwrap_or_default();
@@ -1403,6 +1438,30 @@ ENGINE = "vega"
         assert!(standard_online(&s) || s.state == LayaState::Starting, "{s:?}");
         assert_eq!(rig.router.url(), rig.std_url);
         assert!(!rig.router.is_reachable_at(&rig.vega_url).await);
+        rig.stop().await;
+    }
+
+    #[tokio::test]
+    async fn vega_that_is_up_but_cant_route_never_takes_over() {
+        if !python3() {
+            return;
+        }
+        let _one = SERIAL.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let script = fake_vega(data.path(), "bad-answers", None);
+        let rig = Rig::start(data.path(), ports(), LayaEngine::Vega, |o| o.vega_script = Some(script));
+        rig.until("fallback", |s| s.vega.state == VegaState::Fallback).await;
+        let s = rig.router.status();
+        assert!(
+            s.vega.detail.starts_with("vega is up but couldn't answer a routing question (HTTP 422: "),
+            "{}",
+            s.vega.detail
+        );
+        assert_eq!(s.engine, LayaEngine::Standard);
+        assert_eq!(rig.router.url(), rig.std_url);
+        assert!(standard_online(&s), "{s:?}");
+        let record = FallbackRecord::read(&rig.laya).unwrap();
+        assert!(record.holds_for(VERSION));
         rig.stop().await;
     }
 

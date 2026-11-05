@@ -15,8 +15,9 @@ It binds loopback only, builds the agent once, and runs every decision on one wo
 `/health` keeps answering while torch is busy. Everything above `create_app` is plain Python,
 so `scripts/test_vega_serve.py` checks the shape with a fake agent and no model.
 """
-from __future__ import annotations
-
+# Annotations stay live here (no postponed-annotations future import): FastAPI reads the `request: Request` annotation in
+# create_app at runtime, and as a string it cannot resolve the locally imported `Request`, so every
+# POST came back 422 "query.request: Field required" (caught in the live run, now tested).
 import json
 import logging
 import os

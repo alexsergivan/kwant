@@ -120,6 +120,27 @@ impl LayaRouter {
             .unwrap_or(false)
     }
 
+    /// Asks the server at `url` one real routing question. `/health` alone says the process is up,
+    /// not that it can route: the vega engine takes over only after this answers.
+    pub async fn probe_decision_at(&self, url: &str, timeout: Duration) -> Probe {
+        let endpoint = format!("{}/v1/systemone", url.trim_end_matches('/'));
+        let res = match self.client.post(&endpoint).json(&warm_up_payload()).timeout(timeout).send().await {
+            Ok(res) => res,
+            Err(_) => return Probe::NoReply,
+        };
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        if !status.is_success() {
+            let detail: String = body.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+            return Probe::Wrong(format!("HTTP {}{}", status.as_u16(), if detail.is_empty() { String::new() } else { format!(": {detail}") }));
+        }
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+        match parsed.pointer("/answers/warmup/choice").and_then(|c| c.as_str()) {
+            Some("a" | "b") => Probe::Answered,
+            _ => Probe::Wrong("the answer had no choice for the question".to_string()),
+        }
+    }
+
     /// Sends a throwaway decision so the first real query doesn't pay the
     /// model's cold-start cost (which can exceed the routing timeout).
     pub async fn warm_up(&self) {
@@ -128,11 +149,7 @@ impl LayaRouter {
 
     /// [`Self::warm_up`] for one engine's own address.
     pub async fn warm_up_at(&self, url: &str) {
-        let payload = json!({
-            "state": {"prompt": "hello, can you help me plan a trip?"},
-            "questions": {"warmup": {"type": "choice", "instructions": "Who should answer?",
-                "criteria": {"a": "travel and planning", "b": "software engineering"}}}
-        });
+        let payload = warm_up_payload();
         let endpoint = format!("{}/v1/systemone", url.trim_end_matches('/'));
         for _ in 0..2 {
             let started = std::time::Instant::now();
@@ -220,6 +237,24 @@ impl LayaRouter {
 /// the questions and options it sees: with serde_json's default sorted maps, `effort_level` comes
 /// before `model_selection` and options are alphabetical, which measured 30/33 on the routing eval
 /// against 24-25/33 in written order (laya-eval/results.md, P5). A test pins the exact bytes.
+/// What a probe found when it asked a Laya server one routing question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    Answered,
+    /// No reply in time (still loading, or the port is closed).
+    NoReply,
+    /// It replied, but not with an answer kwant can use.
+    Wrong(String),
+}
+
+fn warm_up_payload() -> serde_json::Value {
+    json!({
+        "state": {"prompt": "hello, can you help me plan a trip?"},
+        "questions": {"warmup": {"type": "choice", "instructions": "Who should answer?",
+            "criteria": {"a": "travel and planning", "b": "software engineering"}}}
+    })
+}
+
 pub fn model_payload(prompt: &str, context: &str, criteria: serde_json::Map<String, serde_json::Value>) -> serde_json::Value {
     json!({
         "state": {

@@ -4,6 +4,7 @@ No laya, torch, fastapi or model download: everything kwant relies on (the reque
 answer shape with vega's own fields, the error statuses, loopback only, the thread cap) is plain
 Python above `create_app`. Run: python3 -m unittest discover -s scripts -p 'test_*.py'
 """
+import asyncio
 import importlib.util
 import json
 import os
@@ -158,6 +159,61 @@ class ShapeTest(unittest.TestCase):
     def test_health(self):
         h = vs.health("vega", 0.0)
         self.assertEqual((h["status"], h["engine"]), ("ok", "vega"))
+
+
+    def test_source_keeps_annotations_live_for_fastapi(self):
+        # postponed annotations hide `Request` from FastAPI and turn every POST into a 422
+        with open(SRC) as f:
+            self.assertNotIn("from __future__ import annotations", f.read())
+
+
+def asgi_call(app, method, path, raw=b""):
+    """One request through the ASGI app with no HTTP client: (status, json body)."""
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method,
+             "scheme": "http", "path": path, "raw_path": path.encode(), "root_path": "", "query_string": b"",
+             "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(raw)).encode())],
+             "client": ("127.0.0.1", 1), "server": ("127.0.0.1", 9)}
+    sent, out = [False], {"status": 0, "body": b""}
+
+    async def receive():
+        if sent[0]:
+            return {"type": "http.disconnect"}
+        sent[0] = True
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    async def send(msg):
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+        elif msg["type"] == "http.response.body":
+            out["body"] += msg.get("body", b"")
+
+    asyncio.run(app(scope, receive, send))
+    return out["status"], json.loads(out["body"])
+
+
+try:
+    import fastapi  # noqa: F401
+    HAVE_FASTAPI = True
+except ImportError:
+    HAVE_FASTAPI = False
+
+
+@unittest.skipUnless(HAVE_FASTAPI, "fastapi is not installed (it is in kwant's venv-vega)")
+class AppTest(unittest.TestCase):
+    def test_systemone_reads_the_json_body(self):
+        agent = FakeAgent()
+        status, out = asgi_call(vs.create_app(agent), "POST", "/v1/systemone", body())
+        self.assertEqual(status, 200, out)
+        self.assertEqual(out["answers"]["lead_kwant"]["route"], "auto")
+        self.assertEqual(len(agent.calls), 1)
+
+    def test_bad_body_is_a_400_not_a_validation_error(self):
+        status, out = asgi_call(vs.create_app(FakeAgent()), "POST", "/v1/systemone", b"not json")
+        self.assertEqual((status, out["detail"]), (400, "request body is not valid JSON"))
+
+    def test_health(self):
+        status, out = asgi_call(vs.create_app(FakeAgent()), "GET", "/health")
+        self.assertEqual((status, out["engine"]), (200, "vega"))
 
 
 if __name__ == "__main__":
