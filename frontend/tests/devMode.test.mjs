@@ -337,13 +337,13 @@ test('DOM: a 403 on load shows the switch disabled', async () => {
   root.unmount();
 });
 
-test('DOM: reduced motion shows the Dev label and the lock glyph, and opens with no settle', async () => {
+test('DOM: reduced motion shows the same switch with the </> glyph, unlocks to an open lock, and opens with no settle', async () => {
   reset({ ...off, on: false, repo: 'demo-org/demo-app', polled_at: 'x' });
   window.matchMedia = (q) => ({ matches: q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {} });
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
   const b = switchEl(host);
   assert.ok(b.classList.contains('kw-dv-rm'));
-  assert.ok(b.querySelector('[data-dv-glyph="locked"]'));
+  assert.ok(b.querySelector('[data-dv-glyph="code"]'));
   await click(b);
   assert.ok(b.querySelector('[data-dv-glyph="unlocked"]'));
   await click(b);
@@ -355,6 +355,23 @@ test('DOM: reduced motion shows the Dev label and the lock glyph, and opens with
   assert.equal(b.dataset.devSwitch, 'lifted', 'the next press lifts at once: nothing to settle');
   root.unmount();
   delete window.matchMedia;
+});
+
+test('0.7.1 look: a plain toggle with </> in the knob; unlocking rings it and shows an open lock; no cover or hinges; 44 px on phone', async () => {
+  reset({ ...off, on: false, repo: 'demo-org/demo-app', polled_at: 'x' });
+  const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, phone: true }));
+  const b = switchEl(host);
+  assert.ok(b.classList.contains('kw-dv') && !b.classList.contains('kw-dv-rm'));
+  assert.ok(b.classList.contains('w-11') && b.classList.contains('h-11'), 'the phone target is 44×44');
+  for (const gone of ['.kw-dv-cover', '.kw-dv-hinge', '.kw-dv-ring']) assert.equal(b.querySelector(gone), null, gone);
+  assert.ok(b.querySelector('.kw-dv-knob [data-dv-glyph="code"]'));
+  assert.equal(b.dataset.ring, undefined);
+  await click(b);
+  assert.equal(b.dataset.devSwitch, 'lifted');
+  assert.equal(b.dataset.ring, 'true');
+  assert.ok(b.querySelector('.kw-dv-knob [data-dv-glyph="unlocked"]'));
+  assert.equal(b.querySelector('[data-dv-glyph="code"]'), null);
+  root.unmount();
 });
 
 test('DOM: first switch-on opens the setup sheet; typing checks after 400 ms; Turn on sends repo and branch', async () => {
