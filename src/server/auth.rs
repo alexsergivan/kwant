@@ -890,6 +890,7 @@ mod tests {
             (&get, "/api/spaces/s1/dev/reviews"),
             (&post, "/api/spaces/s1/dev/release_notes"),
             (&post, "/api/spaces/s1/dev/backup"),
+            (&get, "/api/dev/cards/dvc_1"),
             (&post, "/api/dev/cards/dvc_1/findings/f1"),
             (&Method::HEAD, "/api/spaces/s1/dev/reviews"),
         ] {

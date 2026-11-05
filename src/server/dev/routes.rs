@@ -379,6 +379,24 @@ pub async fn reviews(State(state): State<AppState>, headers: HeaderMap, Path(id)
     }
 }
 
+/// `GET /api/dev/cards/:id`: one card of any kind, as the lists return it. The desk reads a
+/// release notes draft here once its `dev_card` event says it is ready, since no list holds those.
+/// 404 for no such card; a card in an archived space is refused like that space's lists.
+pub async fn card(State(state): State<AppState>, headers: HeaderMap, Path(card_id): Path<String>) -> Response {
+    if let Err(r) = super::super::mcp_suggest::refuse_agent_tokens(&state, &headers, REFUSAL).await {
+        return r;
+    }
+    let row = match state.db.dev_card(card_id.trim()).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return error(StatusCode::NOT_FOUND, "no such card"),
+        Err(e) => return internal(e),
+    };
+    if let Err(r) = active_space(&state, &row.space_id).await {
+        return r;
+    }
+    Json(card_json(&row)).into_response()
+}
+
 // ---------------------------------------------------------------------------------------------
 // Findings
 

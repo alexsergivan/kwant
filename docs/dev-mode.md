@@ -29,6 +29,10 @@ are left out of exports, like approval modes.
 `found`, `not_found` or `not_connected`. A new repo or branch starts the watch over. The same one
 keeps its place.
 
+`GET /api/dev/cards/:id` returns one card of any kind, in the same shape as the lists, or 404. The
+desk reads a release notes draft here once its `dev_card` event says it is ready, since no list
+returns those. A card in an archived space is refused like that space's lists.
+
 Turning Dev mode **off** (D12) stops the polling, the reviews and the floor. Cards stay readable,
 and approvals stay as they were.
 
