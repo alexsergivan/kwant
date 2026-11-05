@@ -583,10 +583,11 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
    (44 on phones), mono label + a 44×24 graph. Not colour alone: node position, fork drawn/dashed/
    absent and the label word all change. */
 .kw-dv {
-  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
   height: 32px; min-width: 44px; padding: 0 6px; border-radius: 10px; flex-shrink: 0; cursor: pointer;
   background: transparent; transition: background-color 120ms var(--kw-ease);
 }
+.kw-dv.h-11 { height: 44px; } /* phone: a 44 px target */
 .kw-dv:not(:disabled):hover { background: rgb(247 246 255 / 0.06); }
 .kw-dv:disabled { opacity: 0.4; cursor: not-allowed; }
 .kw-dv-lbl {

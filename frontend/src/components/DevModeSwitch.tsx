@@ -149,7 +149,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
       className={
         phone
           ? 'kw-dv-hint fixed inset-x-4 mx-auto w-fit max-w-[calc(100vw-32px)] text-center leading-snug bottom-[calc(56px+env(safe-area-inset-bottom)+12px)] z-40 rounded-lg border border-white/14 bg-surface-overlay px-2.5 py-1.5 text-meta text-zinc-100 shadow-raised'
-          : 'kw-dv-hint absolute -right-9 top-full mt-1.5 z-30 whitespace-nowrap rounded-lg border border-white/14 bg-surface-overlay px-2.5 py-1.5 text-meta text-zinc-100 shadow-raised'
+          : 'kw-dv-hint absolute -right-11 top-full mt-1.5 z-30 whitespace-nowrap rounded-lg border border-white/14 bg-surface-overlay px-2.5 py-1.5 text-meta text-zinc-100 shadow-raised'
       }
       aria-hidden="true"
       data-dv-hint
