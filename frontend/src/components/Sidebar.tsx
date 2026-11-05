@@ -16,6 +16,7 @@ import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
+import { type NeedsYouRow, workingIds, directIds } from '../chatsTab';
 
 export interface Kwant {
   id: string;
@@ -92,6 +93,10 @@ export interface SidebarProps {
   botStatus?: Record<string, BotStatus>;
   /** Open browser steps per bot ("Needs you" pill). */
   needsYou?: Record<string, number>;
+  /** Phone Chats tab: bots waiting on you, one row each, first in the list. */
+  needsYouRows?: NeedsYouRow[];
+  /** Opens a Needs-you row's chat on its card. */
+  onOpenNeedsYou?: (row: NeedsYouRow) => void;
   onSelectKwant: (kwant: Kwant) => void;
   onSelectChannel: (channel: Channel) => void;
   onSelectTeam: (team: Team) => void;
@@ -251,6 +256,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   busyKwants = {},
   botStatus = {},
   needsYou = {},
+  needsYouRows = [],
+  onOpenNeedsYou,
   onSelectKwant,
   onSelectChannel,
   onSelectTeam,
@@ -289,13 +296,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   /** Phones: the member whose actions sheet is open, and whether "Remove" is waiting for a confirm. */
-  const [memberMenu, setMemberMenu] = useState<{ team: Team; kwant: Kwant; confirmRemove?: boolean } | null>(null);
+  const [memberMenu, setMemberMenu] = useState<{ team?: Team; kwant: Kwant; confirmRemove?: boolean } | null>(null);
   // Cancel, Escape or Remove: focus goes back to the member's ✕ (or ⋯ on phones), or to the bot's
   // row when it has left the team.
   const asideRef = React.useRef<HTMLElement>(null);
   const memberReturn = React.useRef<{ team: string; kwant: string } | null>(null);
   const closeMemberMenu = () => {
-    if (memberMenu) memberReturn.current = { team: memberMenu.team.id, kwant: memberMenu.kwant.id };
+    if (memberMenu) memberReturn.current = { team: memberMenu.team?.id ?? 'none', kwant: memberMenu.kwant.id };
     setMemberMenu(null);
   };
   React.useLayoutEffect(() => {
@@ -308,6 +315,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const closeSwitcher = useCallback(() => setSwitcherOpen(false), []);
   const showChats = section !== 'bots';
   const showBots = section !== 'chats';
+  // The phone's Chats tab is a launcher for everything you talk to (B1): who needs you, who is
+  // working, channels, team chats, then every other bot's direct chat. Nothing in it stays lit.
+  const chatsTab = phone && section === 'chats';
+  const needsRows = chatsTab ? needsYouRows.filter((r) => kwants.some((k) => k.id === r.kwant_id)) : [];
+  const needsIds = new Set(needsRows.map((r) => r.kwant_id));
+  const workingBots = chatsTab ? workingIds(kwants, busyKwants, needsIds) : [];
+  const directBots = chatsTab ? directIds(kwants, new Set([...needsIds, ...workingBots.map((k) => k.id)])) : [];
 
   const toggleTeam = (id: string) =>
     setCollapsedTeams((prev) => {
@@ -323,6 +337,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const isTeamActive = (team: Team) => {
+    if (phone) return false;
     if (selectedTeamId !== undefined && selectedTeamId !== null) {
       return selectedTeamId === team.id;
     }
@@ -333,7 +348,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const isChannelActive = (c: Channel) => {
-    if (!isChannel) return false;
+    if (phone || !isChannel) return false;
     if (selectedTeamId && teams.some((t) => t.id === selectedTeamId)) {
       return false;
     }
@@ -361,9 +376,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // One row per bot: avatar with its status dot, name, what it is doing, and its actions. In a
   // team the lead is marked and others can be removed; on phones those sit in a sheet.
-  const botRow = (k: Kwant, team?: Team) => {
-    const active = !isChannel && selectedId === k.id;
-    const status = statusOf(k.id, botStatus, canRun);
+  // On the phone's Chats tab a row is a plain launcher (`chat`): taller, no actions, and a
+  // Needs-you row says in amber what the bot is waiting for and opens the chat on that card.
+  const botRow = (k: Kwant, team?: Team, chat?: { needs?: NeedsYouRow }) => {
+    // Phones never light a row: the list is a launcher, and coming back to it shows no stale selection
+    const active = !phone && !isChannel && selectedId === k.id;
+    const asked = chat?.needs;
+    const status = asked ? 'needs_you' : statusOf(k.id, botStatus, canRun);
     const isLead = !!team && k.id === team.lead_kwant_id;
     const canRemove = !!team && !isLead && !!onUpdateTeamMembers;
     const hasRowActions = !!onEditKwant || canRemove;
@@ -374,22 +393,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const needs = needsYou[k.id] ?? 0;
     const needsTip = `${k.name} needs you in the browser`;
     const warn = needs > 0 || status === 'needs_you';
-    const busyLine = needs > 0 && !busyKwants[k.id]?.startsWith('Needs you in the browser') ? 'Needs you in the browser' : busyKwants[k.id];
+    const busyLine = asked
+      ? asked.line
+      : needs > 0 && !busyKwants[k.id]?.startsWith('Needs you in the browser')
+        ? 'Needs you in the browser'
+        : busyKwants[k.id];
+    const open = asked && onOpenNeedsYou ? () => onOpenNeedsYou(asked) : () => onSelectKwant(k);
     return (
       <div
-        key={`${team?.id ?? 'none'}:${k.id}`}
+        key={`${chat ? 'chat' : team?.id ?? 'none'}:${k.id}`}
         role="button"
         tabIndex={0}
-        onClick={() => onSelectKwant(k)}
+        onClick={open}
         // Only the row's own Enter: Enter on its ✕ or Edit is for that button, not for opening the chat.
-        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelectKwant(k)}
+        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && open()}
         data-bot-row={k.id}
-        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 py-1.5 rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+        data-chat-row={chat ? (asked ? 'needs' : 'bot') : undefined}
+        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >
         <span className="shrink-0" title={status === 'cant_run' ? "Can't run yet: no account works here" : statusText(k.name, status)}>
-          <ModernAvatar role={k.avatar_sprite} name={k.name} size={28} status={status} kwantId={k.id} />
+          <ModernAvatar role={k.avatar_sprite} name={k.name} size={chat ? 32 : 28} status={status} kwantId={k.id} />
         </span>
         <div className="flex-1 min-w-0">
           {/* The name line never changes on hover: padding it here made the name wrap and the row jump */}
@@ -408,7 +433,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
             {/* Compact on the name line (the hand, and a count past one), so it never squeezes the name;
                 the words "Needs you in the browser" are on the status line below */}
-            {needs > 0 && (
+            {needs > 0 && !asked && (
               <span
                 data-bot-needs-you={needs}
                 role="img"
@@ -479,8 +504,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <p className={`text-meta text-zinc-400 truncate${actionRoom}${!phone && hasRowActions ? ' min-h-[1.125rem]' : ''}`}>{k.title}</p>
           )}
         </div>
-        {/* Phones: one button at the row's end; in a team it opens the member's actions */}
-        {phone && team && (onEditKwant || (onUpdateTeamMembers && !isLead)) && (
+        {/* Phones' Bots tab: the same ⋯ at every row's end (B4), 44×44; it opens the bot's actions,
+            with Edit, and Remove when it is in a team. The Chats tab's rows have no actions. */}
+        {phone && !chat && (onEditKwant || (team && onUpdateTeamMembers && !isLead)) && (
           <button
             type="button"
             onClick={(e) => {
@@ -488,26 +514,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
               playSfx('click');
               setMemberMenu({ team, kwant: k });
             }}
-            data-member-opener={`${team.id}:${k.id}`}
+            data-member-opener={`${team?.id ?? 'none'}:${k.id}`}
+            data-row-more
             aria-haspopup="dialog"
             aria-label={`More for ${k.name}`}
-            className="-mr-1 shrink-0 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 active:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+            title={`More for ${k.name}`}
+            className="-mr-1.5 -my-1 w-11 h-11 shrink-0 inline-flex items-center justify-center rounded-lg text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06] active:bg-white/[0.08] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
           >
-            <MoreHorizontal size={16} />
-          </button>
-        )}
-        {phone && !team && onEditKwant && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onEditKwant(k);
-            }}
-            className="shrink-0 -my-1 rounded-lg text-zinc-400 hover:text-sky-300 hover:bg-sky-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
-            title={`Edit or delete ${k.name}`}
-            aria-label={`Edit or delete ${k.name}`}
-          >
-            <Pencil size={16} />
+            <MoreHorizontal size={16} aria-hidden="true" />
           </button>
         )}
       </div>
@@ -771,9 +785,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         )}
 
+        {/* Phones' Chats tab: who needs you, then who is working, above the channels */}
+        {needsRows.length > 0 && (
+          <section data-chats-section="needs" aria-labelledby="chats-needs-head">
+            <h2 id="chats-needs-head" className={`${sectionHead} !text-[11px] !leading-4 !tracking-[0.06em] !text-warn`}>
+              Needs you · {needsRows.length}
+            </h2>
+            <div className="mt-1 space-y-0.5">
+              {needsRows.map((r) => botRow(kwants.find((k) => k.id === r.kwant_id)!, undefined, { needs: r }))}
+            </div>
+          </section>
+        )}
+        {workingBots.length > 0 && (
+          <section data-chats-section="working" aria-labelledby="chats-working-head">
+            <h2 id="chats-working-head" className={sectionHead}>Working</h2>
+            <div className="mt-1 space-y-0.5">{workingBots.map((k) => botRow(k, undefined, {}))}</div>
+          </section>
+        )}
+
         {/* Channels Section */}
         {showChats && (
-        <div>
+        <div data-chats-section="channels">
           <div className={sectionHead}>
             <span className="whitespace-nowrap shrink-0">Channels</span>
             {onCreateChannel && kwants.length > 0 && headButton('Channel', 'New channel', `New channel in ${space.name}`, onCreateChannel)}
@@ -807,7 +839,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Phones' Chats tab: team chats are chats too; their members live on the Bots tab */}
         {section === 'chats' && teams.length > 0 && (
-        <div>
+        <div data-chats-section="teams">
           <div className={sectionHead}>
             <span>Team chats</span>
           </div>
@@ -817,6 +849,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             ))}
           </div>
         </div>
+        )}
+
+        {/* Phones' Chats tab: every other bot's direct chat, by name */}
+        {directBots.length > 0 && (
+          <section data-chats-section="direct" aria-labelledby="chats-direct-head">
+            <h2 id="chats-direct-head" className={sectionHead}>Direct chats</h2>
+            <div className="mt-1 space-y-0.5">{directBots.map((k) => botRow(k, undefined, {}))}</div>
+          </section>
         )}
 
         {/* Every bot once, grouped by team; bots in no team last */}
@@ -898,7 +938,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <MemberSheet
           team={memberMenu.team}
           kwant={memberMenu.kwant}
-          isLead={memberMenu.kwant.id === memberMenu.team.lead_kwant_id}
+          isLead={!!memberMenu.team && memberMenu.kwant.id === memberMenu.team.lead_kwant_id}
           confirmRemove={!!memberMenu.confirmRemove}
           onClose={closeMemberMenu}
           onChat={() => {
@@ -912,11 +952,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onEditKwant(memberMenu.kwant);
             })
           }
-          onAskRemove={onUpdateTeamMembers && (() => setMemberMenu({ ...memberMenu, confirmRemove: true }))}
+          onAskRemove={memberMenu.team && onUpdateTeamMembers && (() => setMemberMenu({ ...memberMenu, confirmRemove: true }))}
           onRemove={
+            memberMenu.team &&
             onUpdateTeamMembers &&
             (() => {
-              const { team, kwant } = memberMenu;
+              const { kwant } = memberMenu;
+              const team = memberMenu.team!;
               closeMemberMenu();
               onUpdateTeamMembers(team, memberIdsOf(team).filter((id) => id !== kwant.id));
             })
@@ -931,7 +973,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
  * other buttons, so a stray tap can't take a bot out of its team; desktop's Remove opens straight
  * on that question, as a small centred dialog. */
 const MemberSheet: React.FC<{
-  team: Team;
+  /** None for a bot in no team: the sheet then has Chat and Edit only. */
+  team?: Team;
   kwant: Kwant;
   isLead: boolean;
   confirmRemove: boolean;
@@ -978,12 +1021,11 @@ const MemberSheet: React.FC<{
           <div className="min-w-0">
             <p id={titleId} className="text-sm font-semibold text-zinc-100 truncate">{kwant.name}</p>
             <p className="text-xs text-zinc-500 truncate">
-              {isLead ? `Leads @${team.name}` : `In @${team.name}`}
-              {kwant.title ? ` · ${kwant.title}` : ''}
+              {team ? `${isLead ? 'Leads' : 'In'} @${team.name}${kwant.title ? ` · ${kwant.title}` : ''}` : kwant.title || 'No team'}
             </p>
           </div>
         </div>
-        {confirmRemove && onRemove ? (
+        {confirmRemove && onRemove && team ? (
           <div className="px-3 pb-1 space-y-3">
             <p className="text-sm text-zinc-300">
               Remove {kwant.name} from @{team.name}? The bot stays in this space and keeps its chats.
@@ -1007,7 +1049,7 @@ const MemberSheet: React.FC<{
                 <Pencil size={16} className="text-zinc-400" aria-hidden="true" /> Edit or delete {kwant.name}
               </button>
             )}
-            {onAskRemove && !isLead && (
+            {team && onAskRemove && !isLead && (
               <>
                 <div className="my-1 border-t border-zinc-800" />
                 <button type="button" onClick={onAskRemove} className={`${item} text-rose-300 hover:bg-rose-500/10`}>
