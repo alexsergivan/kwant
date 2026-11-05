@@ -17,7 +17,7 @@ export function rollupTiles<T>(areas: T[]): { shown: T[]; more: number } {
 }
 
 /** The "Since you last looked" card at the top of What landed. */
-export const Rollup: React.FC<RollupProps> = ({ rollup, last_tag, last_merge, branch, needsYouAreas = [], onDraftNotes, onMarkSeen, drafting = false }) => {
+export const Rollup: React.FC<RollupProps> = ({ rollup, last_tag, last_merge, branch = 'main', needsYouAreas = [], onDraftNotes, onMarkSeen, drafting = false, marking = false }) => {
   const since = clock(rollup.since);
   const until = clock(rollup.until);
   const range = since && until ? `Since you last looked · ${since} → ${until}` : until ? `Everything so far · up to ${until}` : 'Since you last looked';
@@ -91,8 +91,8 @@ export const Rollup: React.FC<RollupProps> = ({ rollup, last_tag, last_merge, br
           <Sparkles size={14} aria-hidden="true" />
           {drafting ? 'Drafting…' : 'Draft release notes'}
         </button>
-        <button type="button" onClick={onMarkSeen} className="kw-btn-ghost min-h-[44px] sm:min-h-0 max-sm:flex-1">
-          Mark all seen
+        <button type="button" onClick={onMarkSeen} disabled={marking} aria-busy={marking || undefined} className="kw-btn-ghost min-h-[44px] sm:min-h-0 max-sm:flex-1">
+          {marking ? 'Marking…' : 'Mark all seen'}
         </button>
         {/* The "Send me this every morning" link is 0.7.x (plan §1): hidden. */}
         <p className="w-full text-meta text-zinc-400 sm:ml-auto sm:w-auto">

@@ -180,14 +180,16 @@ export interface RollupProps {
   last_tag: string | null;
   /** For the empty state: "Last merge: #290, 19:26." The newest landed card, if any. */
   last_merge: { pr: number; merged_at: string | null } | null;
-  /** The watched branch: "3 changes landed on main". */
-  branch: string;
+  /** The watched branch: "3 changes landed on main". Defaults to "main". */
+  branch?: string;
   /** Areas whose tile gets the warn border: `needsYouAreas(cards)` from dev/logic.ts. */
   needsYouAreas?: string[];
   onDraftNotes: () => void;
   onMarkSeen: () => void;
   /** True while a release-notes draft is being written (the button waits). */
   drafting?: boolean;
+  /** True while the mark-seen POST is in flight (the button waits, like `drafting`). */
+  marking?: boolean;
 }
 
 export interface LandedListProps {

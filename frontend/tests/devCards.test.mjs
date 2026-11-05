@@ -179,6 +179,12 @@ test('roll-up: title, needs-you tiles, +N more, the empty state, no routine link
   const e = html(m.Rollup, { ...base, rollup: fx.ROLLUP_EMPTY, last_merge: { pr: 290, merged_at: '2026-11-04T19:26:00Z' } });
   assert.match(e, /Nothing landed since you last looked\. Last merge: #290, 19:26\./);
   assert.deepEqual(m.needsYouAreas(fx.LANDED_ROUTE.cards.map((c) => m.parseLanded(c))), ['Live activity']);
+
+  const { branch: _b, ...noBranch } = base;
+  assert.match(html(m.Rollup, { ...noBranch, rollup: fx.ROLLUP_QUIET }), /landed on main\./, 'branch defaults to main');
+  const waiting = html(m.Rollup, { ...base, rollup: fx.ROLLUP_QUIET, marking: true });
+  assert.match(waiting, /<button[^>]*disabled=""[^>]*aria-busy="true"[^>]*>Marking…<\/button>/, 'Mark all seen waits while marking');
+  assert.match(html(m.Rollup, { ...base, rollup: fx.ROLLUP_QUIET }), />Mark all seen<\/button>/);
 });
 
 // ---------------------------------------------------------------------------------------------------

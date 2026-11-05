@@ -42,7 +42,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[] }> = ({
       <h3 id={headingId} className="mt-2 text-title font-semibold text-zinc-50 [overflow-wrap:anywhere]">
         {card.headline}
       </h3>
-      <p className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-meta text-zinc-400">
+      <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-meta text-zinc-400">
         <GitMerge size={13} className="shrink-0 text-ok" aria-hidden="true" />
         <span>
           Merged{merged ? ` ${merged}` : ''}
@@ -68,7 +68,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[] }> = ({
         ) : (
           <span>PR #{card.pr}</span>
         )}
-      </p>
+      </div>
 
       {card.status === 'pending' && <p className="mt-3 text-meta text-zinc-400">Writing this change in plain words…</p>}
       {card.error && (

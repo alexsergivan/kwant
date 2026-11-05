@@ -300,7 +300,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
             {card.draft && <span className="kw-chip">Draft</span>}
             {sample && <span className="kw-chip kw-chip-info">Sample PR</span>}
           </div>
-          <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-meta text-zinc-400">
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-meta text-zinc-400">
             {card.branch && (
               <code className="rounded-md border border-hairline bg-surface-main px-1.5 py-0.5 font-mono text-[11px] text-zinc-300 [overflow-wrap:anywhere]">
                 {card.branch}
@@ -319,7 +319,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
                 {reviewerModel && <span>on {reviewerModel}</span>}
               </span>
             )}
-          </p>
+          </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {card.reviewer && (card.same_engine ? <span className="kw-chip kw-chip-warn">Same engine as the author</span> : <span className="kw-chip kw-chip-accent">Different engine from the author</span>)}
             {!card.reviewer && <span className="kw-chip kw-chip-warn">{card.note ?? 'No reviewer yet'}</span>}
