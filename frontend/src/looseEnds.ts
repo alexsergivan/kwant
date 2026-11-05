@@ -341,7 +341,7 @@ export function imapSource(f: ImapFields, secret: string): NewSource | { error: 
 }
 
 export function githubSource(label: string, apiBase: string, token: string): NewSource | { error: string } {
-  if (!token) return { error: 'Enter a GitHub token. It only needs to read issues and pull requests.' };
+  if (!token) return { error: 'Enter a GitHub token. Read-only access to issues and pull requests is enough. To post reviews from Dev mode, give it Pull requests: Read and write.' };
   const base = apiBase.trim() || 'https://api.github.com';
   return { kind: 'github', label: label.trim() || 'GitHub', config: { api_base: base }, secret: token };
 }

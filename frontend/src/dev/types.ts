@@ -119,6 +119,24 @@ export interface ReviewCard extends CardBase {
   findings: DevFinding[];
   cut: string | null;
   links: DevLinks;
+  /** 0.7.1 Post to GitHub (plan/post-to-github.md): set once the person posted this card as a PR review. */
+  posted: ReviewPosted | null;
+  /** Why the last post didn't go through; a successful post clears it. */
+  post_error: PostError | null;
+}
+
+export interface ReviewPosted {
+  at: string | null;
+  login: string | null;
+  /** https only, or null (then there is no "View on GitHub" link). */
+  url: string | null;
+  comments: number | null;
+}
+
+export type PostErrorKind = 'read_only' | 'stale' | 'failed';
+export interface PostError {
+  kind: PostErrorKind;
+  message: string | null;
 }
 
 export interface ReleaseNotesCard extends CardBase {
@@ -212,6 +230,11 @@ export interface ReviewCardProps {
   /** Shows the "Sample PR" chip (design §5: the #294 sample). */
   sample?: boolean;
   now?: number;
+  /** Posts the card as a PR review (`POST /api/dev/cards/:id/post`) and resolves with the new card, or throws.
+   *  Without it the footer has no Post button (the sample PR). */
+  onPost?: (cardId: string) => Promise<ReviewCard>;
+  /** `github_login` from GET dev_mode, for "Posts as {login}." */
+  githubLogin?: string | null;
 }
 
 export interface ReleaseNotesSheetProps {
@@ -385,7 +408,21 @@ export function parseReview(raw: unknown): ReviewCard | null {
     findings: arr(raw.findings).map(finding).filter((f): f is DevFinding => !!f),
     cut: str(raw.cut, 120),
     links: links(raw.links),
+    posted: posted(raw.posted),
+    post_error: postError(raw.post_error),
   };
+}
+
+function posted(v: unknown): ReviewPosted | null {
+  if (!isObj(v)) return null;
+  const url = str(v.url, 1000);
+  const n = num(v.comments);
+  return { at: str(v.at, 64), login: str(v.login, 80), url: url && /^https:\/\//.test(url) ? url : null, comments: n !== null && n >= 0 ? Math.floor(n) : null };
+}
+
+function postError(v: unknown): PostError | null {
+  if (!isObj(v)) return null;
+  return { kind: oneOf(v.kind, ['read_only', 'stale', 'failed'] as const, 'failed'), message: str(v.message, 300) };
 }
 
 export function parseReleaseNotes(raw: unknown): ReleaseNotesCard | null {

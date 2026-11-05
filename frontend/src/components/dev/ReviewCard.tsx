@@ -5,8 +5,10 @@ import {
   FlaskConical,
   GitPullRequest,
   KeyRound,
+  Loader2,
   Lock,
   Package,
+  Send,
   ShieldAlert,
   ShieldCheck,
   Target,
@@ -23,9 +25,18 @@ import {
   dismissReducer,
   dismissedLine,
   findingsSummary,
+  READ_ONLY_HINT,
+  READ_ONLY_TIP,
+  STALE_LINE,
+  postCount,
+  postLabel,
+  postLine,
+  postState,
+  postedLine,
   riskReasons,
   undoLeft,
 } from '../../dev/logic';
+import type { PostState } from '../../dev/logic';
 import { OutLink, SectionHead, Who, modelLabel, personText } from './parts';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
@@ -248,8 +259,130 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
 
 // ---------------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------------
+// 7. Footer: Post to GitHub (0.7.1, design §5.7, plan/post-to-github.md)
+
+const PostFooter: React.FC<{ id: string; state: PostState; count: number; login: string | null; prLink: string | null; onPost: () => void }> = ({
+  id,
+  state,
+  count,
+  login,
+  prLink,
+  onPost,
+}) => {
+  const hintId = `${id}-post-hint`;
+  const label = postLabel(count);
+  // One row: the lock line (or the result) on the left, the button on the right. Under 640 px the button
+  // wraps under the text and keeps a 44 px touch target.
+  const btn = 'kw-btn-ghost min-h-[44px] w-full px-3 py-1 text-xs sm:min-h-0 sm:w-auto';
+  let line: React.ReactNode;
+  let action: React.ReactNode = null;
+  let extra: React.ReactNode = null;
+  switch (state.kind) {
+    case 'none':
+      line = (
+        <span className="inline-flex min-w-0 items-start gap-1.5 text-xs text-zinc-400">
+          <Lock size={13} aria-hidden="true" className="mt-px shrink-0" />
+          {postLine(null)}
+        </span>
+      );
+      break;
+    case 'posted':
+      line = (
+        <span data-post-done className="inline-flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-ok">
+          <Check size={13} aria-hidden="true" className="shrink-0" />
+          {postedLine(state.at)}
+          {state.url && (
+            <>
+              <span aria-hidden="true" className="text-zinc-500">·</span>
+              <OutLink href={state.url}>View on GitHub</OutLink>
+            </>
+          )}
+        </span>
+      );
+      break;
+    case 'stale':
+      line = (
+        <span data-post-stale className="inline-flex min-w-0 items-start gap-1.5 text-xs text-warn">
+          <AlertTriangle size={13} aria-hidden="true" className="mt-px shrink-0" />
+          {STALE_LINE}
+        </span>
+      );
+      break;
+    case 'failed':
+      line = (
+        <span data-post-failed className="inline-flex min-w-0 items-start gap-1.5 text-xs text-bad [overflow-wrap:anywhere]">
+          <AlertTriangle size={13} aria-hidden="true" className="mt-px shrink-0" />
+          Couldn’t post: {state.message}
+        </span>
+      );
+      action = (
+        <button type="button" onClick={onPost} className={btn}>
+          <Send size={13} aria-hidden="true" />
+          Try again
+        </button>
+      );
+      break;
+    default:
+      line = (
+        <span className="inline-flex min-w-0 items-start gap-1.5 text-xs text-zinc-400">
+          <Lock size={13} aria-hidden="true" className="mt-px shrink-0" />
+          {postLine(login)}
+        </span>
+      );
+      if (state.kind === 'read_only') {
+        // aria-disabled, not disabled: it stays focusable, so keyboard and screen-reader users reach the
+        // tooltip's words (also tied on with aria-describedby) and the hint line below.
+        action = (
+          <button
+            type="button"
+            aria-disabled="true"
+            aria-describedby={hintId}
+            title={READ_ONLY_TIP}
+            data-post-read-only
+            onClick={(e) => e.preventDefault()}
+            className={`${btn} cursor-not-allowed opacity-60 hover:bg-white/[0.03] hover:text-zinc-200`}
+          >
+            <Send size={13} aria-hidden="true" />
+            {label}
+            <span className="sr-only">. {READ_ONLY_TIP}.</span>
+          </button>
+        );
+        extra = (
+          <p id={hintId} className="basis-full text-2xs text-zinc-400">
+            {READ_ONLY_HINT}
+          </p>
+        );
+      } else {
+        const busy = state.kind === 'posting';
+        action = (
+          <button type="button" disabled={busy} aria-busy={busy || undefined} onClick={onPost} data-post-button className={`${btn} disabled:cursor-wait disabled:opacity-70`}>
+            {busy ? <Loader2 size={13} aria-hidden="true" className="motion-safe:animate-spin" /> : <Send size={13} aria-hidden="true" />}
+            {label}
+            {busy && <span className="sr-only">. Posting.</span>}
+          </button>
+        );
+      }
+  }
+  return (
+    <footer data-review-footer data-post-state={state.kind} className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3">
+      <div className="min-w-0 flex-1 basis-full sm:basis-0">{line}</div>
+      {prLink && state.kind !== 'posted' && (
+        <span className="text-meta">
+          <OutLink href={prLink}>Open on GitHub</OutLink>
+        </span>
+      )}
+      {action && <div className="basis-full sm:basis-auto">{action}</div>}
+      {extra}
+      <span role="status" aria-live="polite" className="sr-only">
+        {state.kind === 'posted' ? postedLine(state.at) : state.kind === 'failed' ? `Couldn’t post: ${state.message}` : state.kind === 'stale' ? STALE_LINE : ''}
+      </span>
+    </footer>
+  );
+};
+
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, githubLogin = null }) => {
   const [card, setCard] = useState<Review>(given);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(() => Date.now());
@@ -276,6 +409,21 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       setCard((c) => ({ ...c, findings: c.findings.map((x) => (x.id === f.id ? { ...x, send_error: msg } : x)) }));
     } finally {
       setBusy(null);
+    }
+  };
+
+  const [posting, setPosting] = useState(false);
+  const post = async () => {
+    if (!onPost || posting || card.posted) return;
+    setPosting(true);
+    try {
+      setCard(await onPost(card.id));
+    } catch (err) {
+      // The route answers 200 with post_error for GitHub's refusals; a throw is the network or a 4xx from kwant.
+      const message = err instanceof Error && err.message ? err.message : 'it didn’t go through';
+      setCard((c) => ({ ...c, post_error: { kind: 'failed', message } }));
+    } finally {
+      setPosting(false);
     }
   };
 
@@ -445,18 +593,15 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
 
       {card.cut && <p className="mt-3 text-2xs text-zinc-400">{card.cut}</p>}
 
-      {/* 7. Footer: 0.7.0 is read only (D4), so there is no Post to GitHub button. */}
-      <footer data-review-footer className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3">
-        <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-zinc-400">
-          <Lock size={13} aria-hidden="true" className="shrink-0" />
-          Read only: nothing is posted to GitHub in this version.
-        </span>
-        {card.links.pr && (
-          <span className="text-meta sm:ml-auto">
-            <OutLink href={card.links.pr}>Open on GitHub</OutLink>
-          </span>
-        )}
-      </footer>
+      {/* 7. Footer: Post to GitHub (design §5.7) */}
+      <PostFooter
+        id={headingId}
+        state={postState(card, { canPost: !!onPost && !sample, posting })}
+        count={postCount(card.findings)}
+        login={githubLogin}
+        prLink={card.links.pr}
+        onPost={() => void post()}
+      />
     </article>
   );
 };

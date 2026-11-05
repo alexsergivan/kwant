@@ -21,6 +21,8 @@ export interface DevModeState {
   poll_error: string | null;
   calls_today: number | null;
   calls_cap: number | null;
+  /** 0.7.1: the GitHub connection's login, for "Posts as {login}." on review cards. */
+  github_login: string | null;
 }
 
 export type CheckState = 'found' | 'not_found' | 'not_connected';
@@ -52,6 +54,7 @@ export function parseDevMode(raw: unknown): DevModeState | null {
     poll_error: str(o.poll_error),
     calls_today: num(o.calls_today),
     calls_cap: num(o.calls_cap),
+    github_login: str(o.github_login),
   };
 }
 
@@ -400,6 +403,8 @@ export const devApi = {
   reviews: (space: string) => call<unknown>(`/api/spaces/${enc(space)}/dev/reviews`).then((r) => r.data),
   finding: (card: string, fid: string, body: { action: string; reason?: string; note?: string }) =>
     call<unknown>(`/api/dev/cards/${enc(card)}/findings/${enc(fid)}`, 'POST', body).then((r) => r.data),
+  /** 0.7.1 Post to GitHub: one PR review from this card. 200 with the card, `post_error` set when GitHub refused. */
+  post: (card: string) => call<unknown>(`/api/dev/cards/${enc(card)}/post`, 'POST', {}).then((r) => r.data),
   /** Not in lin-dev-core 492019f yet (asked Lin): the ready release-notes card after its SSE. */
   card: (id: string) => call<unknown>(`/api/dev/cards/${enc(id)}`).then((r) => r.data),
   releaseNotes: (space: string) => call<unknown>(`/api/spaces/${enc(space)}/dev/release_notes`, 'POST').then((r) => r.data),
@@ -459,6 +464,7 @@ export const emptyState = (): DevModeState => ({
   poll_error: null,
   calls_today: null,
   calls_cap: null,
+  github_login: null,
 });
 
 // ---------------------------------------------------------------------------

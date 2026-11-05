@@ -242,6 +242,17 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
     [spaceId],
   );
 
+  const onPost = useCallback(
+    async (cardId: string): Promise<ShellCard> => {
+      const card = asCard(await devApi.post(cardId));
+      if (!card) throw new Error('The review came back in a shape this app doesn’t know.');
+      const reviews = deskStore.get(spaceId).reviews ?? [];
+      deskStore._set(spaceId, { reviews: reviews.map((c) => (c.id === card.id ? card : c)) });
+      return card;
+    },
+    [spaceId],
+  );
+
   const landed = desk.landed;
   const reviews = desk.reviews ?? [];
   const landedCards = (landed?.cards ?? []).filter((c) => c.kind === 'landed');
@@ -368,7 +379,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
                 )}
               </>
             ) : reviews.length ? (
-              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} now={now} />)
+              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} githubLogin={dev?.github_login ?? null} now={now} />)
             ) : (
               desk.reviews && <Empty title="No open pull requests" line="Each open PR gets a review here from a bot that didn’t write it." />
             )}

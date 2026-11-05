@@ -36,6 +36,9 @@ export interface LandedListProps {
 export interface ReviewCardProps {
   card: ShellCard;
   onFinding: (cardId: string, findingId: string, action: FindingAction) => Promise<ShellCard>;
+  /** 0.7.1 Post to GitHub (`POST /api/dev/cards/:id/post`). */
+  onPost?: (cardId: string) => Promise<ShellCard>;
+  githubLogin?: string | null;
   sample?: boolean;
   now?: number;
 }
@@ -71,7 +74,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onO
   );
 };
 
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, sample, now }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, githubLogin, sample, now }) => {
   const parsed = useMemo(() => parseReview(card), [card]);
   if (!parsed) return <CardFallback raw={card} />;
   const send = async (cardId: string, findingId: string, action: FindingAction): Promise<Review> => {
@@ -79,7 +82,14 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, sample,
     if (!next) throw new Error('The review came back in a shape this app doesn’t know.');
     return next;
   };
-  return <IrisReviewCard card={parsed} onFinding={send} sample={sample} now={now} />;
+  const post = onPost
+    ? async (cardId: string): Promise<Review> => {
+        const next = parseReview(await onPost(cardId));
+        if (!next) throw new Error('The review came back in a shape this app doesn’t know.');
+        return next;
+      }
+    : undefined;
+  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} githubLogin={githubLogin} sample={sample} now={now} />;
 };
 
 export const ReleaseNotesSheet: React.FC<ReleaseNotesSheetProps> = ({ card, onSaveToNotion, onDiscard, onClose }) => {

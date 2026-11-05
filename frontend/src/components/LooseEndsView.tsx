@@ -467,8 +467,11 @@ export const AddSourceForm: React.FC<{ onAdded: (s: LooseSource) => void; onCanc
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
-            {label(`${id}-tok`, 'Token (read-only access to issues and pull requests is enough)')}
-            <input id={`${id}-tok`} ref={secretRef} type="password" className={field} autoComplete="new-password" />
+            {label(`${id}-tok`, 'Token')}
+            <input id={`${id}-tok`} ref={secretRef} type="password" className={field} autoComplete="new-password" aria-describedby={`${id}-tok-hint`} />
+            <p id={`${id}-tok-hint`} className="mt-1 text-[11px] text-zinc-400">
+              Read-only access to issues and pull requests is enough. To post reviews from Dev mode, give it Pull requests: Read and write.
+            </p>
           </div>
           <div>
             {label(`${id}-glabel`, 'Name (optional)')}

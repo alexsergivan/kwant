@@ -345,3 +345,56 @@ export function findingsSummary(findings: DevFinding[]): string {
     .map(([s, n]) => `${n} ${s}`)
     .join(', ');
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Post to GitHub (0.7.1, plan/post-to-github.md): the review card footer's one state
+
+/** Findings the post turns into comments: every one not dismissed (design §5.7 "N = open findings"). */
+export const postCount = (findings: Pick<DevFinding, 'state'>[]): number => findings.filter((f) => f.state !== 'dismissed').length;
+
+/** "Post to GitHub · 3 comments"; no count when nothing is open (the review is then its body only). */
+export function postLabel(n: number): string {
+  return n === 0 ? 'Post to GitHub' : `Post to GitHub · ${n} ${n === 1 ? 'comment' : 'comments'}`;
+}
+
+/** "Nothing is posted until you press it. Posts as octocat." (the second sentence only with a login). */
+export function postLine(login: string | null | undefined): string {
+  return login ? `Nothing is posted until you press it. Posts as ${login}.` : 'Nothing is posted until you press it.';
+}
+
+export const READ_ONLY_TIP = 'Your GitHub connection is read only';
+export const READ_ONLY_HINT = 'To post, give the token Pull requests: Read and write, then paste it again in Loose ends.';
+export const STALE_LINE = 'This PR has new commits. A new review is on its way.';
+
+export type PostState =
+  | { kind: 'none' } // no Post button: the sample PR, or a card still being written
+  | { kind: 'ready' }
+  | { kind: 'posting' }
+  | { kind: 'posted'; at: string | null; url: string | null }
+  | { kind: 'read_only' }
+  | { kind: 'stale' }
+  | { kind: 'failed'; message: string };
+
+/**
+ * Which footer to draw. `posted` wins over everything (the server never posts twice, P6); then the
+ * in-flight press; then the last error; a pending card has no review to post yet.
+ */
+export function postState(
+  card: { status: string; posted: { at: string | null; url: string | null } | null; post_error: { kind: string; message: string | null } | null },
+  opts: { canPost: boolean; posting: boolean },
+): PostState {
+  if (card.posted) return { kind: 'posted', at: card.posted.at, url: card.posted.url };
+  if (!opts.canPost || card.status === 'pending') return { kind: 'none' };
+  if (opts.posting) return { kind: 'posting' };
+  const e = card.post_error;
+  if (e?.kind === 'read_only') return { kind: 'read_only' };
+  if (e?.kind === 'stale') return { kind: 'stale' };
+  if (e) return { kind: 'failed', message: e.message ?? 'GitHub didn’t say why.' };
+  return { kind: 'ready' };
+}
+
+/** "Posted 19:58" (no time when the server sent none). */
+export const postedLine = (at: string | null): string => {
+  const t = clock(at);
+  return t ? `Posted ${t}` : 'Posted';
+};
