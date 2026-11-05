@@ -680,3 +680,42 @@ fn security_json_keeps_the_plan_shape_and_adds_reason_and_missing() {
     let old: Tile = serde_json::from_value(json!({"state": "pass", "count": 0})).unwrap();
     assert_eq!(old.state, State::Pass);
 }
+
+#[tokio::test]
+async fn file_text_is_fetched_by_encoded_path_at_the_head_sha_and_never_outside_the_repo() {
+    use crate::zombie::github::{GithubConfig, GithubSource};
+    let _l = port_lock().await;
+    let mock = serve(MOCK_PORT, |r| {
+        use base64::Engine;
+        let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+        match r.path.as_str() {
+            "/repos/demo/app/contents/web/package.json?ref=0123456789abcdef0123456789abcdef01234567" => {
+                // GitHub wraps the base64 at 60 characters
+                let body = b64("{\"dependencies\": {\"left-pad\": \"1\"}}");
+                Reply::json(200, json!({"type": "file", "encoding": "base64", "content": format!("{}\n{}", &body[..20], &body[20..])}))
+            }
+            "/repos/demo/app/contents/docs/a%20b%23c.md?ref=0123456789abcdef0123456789abcdef01234567" => {
+                Reply::json(200, json!({"type": "file", "encoding": "base64", "content": b64("text")}))
+            }
+            "/repos/demo/app/contents/src?ref=0123456789abcdef0123456789abcdef01234567" => Reply::json(200, json!([{"type": "file"}])),
+            "/repos/demo/app/contents/img.bin?ref=0123456789abcdef0123456789abcdef01234567" => {
+                Reply::json(200, json!({"type": "file", "encoding": "base64", "content": base64::engine::general_purpose::STANDARD.encode([0xff, 0xfe, 0x00])}))
+            }
+            _ => Reply::json(404, json!({"message": "Not Found"})),
+        }
+    })
+    .await;
+    let gh = GithubSource::new("demo", GithubConfig { api_base: mock.base.clone() }, zeroize::Zeroizing::new("demo-token".into()));
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+    assert_eq!(gh.dev_file_at("demo/app", "web/package.json", sha).await.unwrap().as_deref(), Some("{\"dependencies\": {\"left-pad\": \"1\"}}"));
+    assert_eq!(gh.dev_file_at("demo/app", "docs/a b#c.md", sha).await.unwrap().as_deref(), Some("text"));
+    assert_eq!(gh.dev_file_at("demo/app", "src", sha).await.unwrap(), None, "a folder");
+    assert_eq!(gh.dev_file_at("demo/app", "img.bin", sha).await.unwrap(), None, "not UTF-8");
+    assert_eq!(gh.dev_file_at("demo/app", "gone.rs", sha).await.unwrap(), None, "404");
+    let before = mock.requests().len();
+    for p in ["../../../user/repos", "a/../b", "./x", "a//b", ""] {
+        assert_eq!(gh.dev_file_at("demo/app", p, sha).await.unwrap(), None, "{p}");
+    }
+    assert!(gh.dev_file_at("demo/app", "x", "main?evil=1").await.is_err(), "the ref must be a plain sha or name");
+    assert_eq!(mock.requests().len(), before, "a path that leaves the repo's tree is never sent");
+}
