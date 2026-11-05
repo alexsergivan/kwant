@@ -288,7 +288,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
 
   return (
-    <article data-dev-card="review" data-pr={card.pr} aria-labelledby={headingId} className="kw-card min-w-0 p-4">
+    <article data-dev-card="review" data-pr={card.pr} aria-labelledby={headingId} className="kw-card min-w-0 scroll-mt-3 p-4">
       {/* 1. Header */}
       <header className="flex items-start gap-3">
         <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${tile}`} aria-hidden="true">
@@ -296,7 +296,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <h3 id={headingId} className="min-w-0 text-title font-semibold text-zinc-50 [overflow-wrap:anywhere]">
+            <h3 id={headingId} className="min-w-0 rounded-sm text-title font-semibold text-zinc-50 [overflow-wrap:anywhere] focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400">
               #{card.pr} {card.title}
             </h3>
             {card.draft && <span className="kw-chip">Draft</span>}

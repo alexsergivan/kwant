@@ -181,3 +181,96 @@ test('ProdFloorCard: a backup from the secondary Back up first that fails puts f
     host.remove();
   }
 });
+
+// Round 2 (Mira's #321 review). M1: after the backup, focus moves to the main button only when it was lost
+// (on <body>) or is still in the card. After a good backup that button is "Allow this deploy", so taking focus
+// from the composer let one Space allow a production deploy.
+const floorCard = async (outcome) => {
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const resolved = [];
+  const host = await mount(
+    h(m.ProdFloorCard, {
+      id: 'ap_m1',
+      floor: m.parseProdFloor(fx.FLOOR_DEPLOY_OLD.details),
+      bot: 'Iris',
+      command: './scripts/deploy_test.sh 9a2d5f3',
+      cwd: '~/work/demo',
+      onResolve: (id, how) => resolved.push(`${id}:${how}`),
+      onBackup: async () => {
+        await gate;
+        if (outcome === 'throws') throw new Error('disk full');
+        if (outcome === 'not ok') return { id: null, ok: false, path: null, bytes: null, taken_at: null, error: 'disk full' };
+        return { id: 'bk_1', ok: true, path: '/backups/demo.tar.gz', bytes: 2048, taken_at: new Date().toISOString(), error: null };
+      },
+    }),
+  );
+  const secondary = [...host.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Back up first' && !b.hasAttribute('data-floor-main'));
+  return { host, secondary, release, resolved };
+};
+
+for (const outcome of ['ok', 'throws', 'not ok']) {
+  test(`M1: focus in an outside input stays there when the backup ends (${outcome}), and Space allows nothing`, async () => {
+    const { host, secondary, release, resolved } = await floorCard(outcome);
+    const composer = document.createElement('textarea');
+    document.body.appendChild(composer);
+    secondary.focus();
+    await click(secondary);
+    composer.focus();
+    release();
+    await settle();
+    assert.equal(document.activeElement, composer, 'focus is not taken from the composer');
+    composer.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    composer.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
+    await settle();
+    assert.deepEqual(resolved, []);
+    assert.equal(host.querySelector('[data-floor-main]').getAttribute('data-floor-main'), outcome === 'ok' ? 'allow' : 'retry');
+  });
+}
+
+test('M1: with focus still in the card, a good backup lands focus on Allow this deploy', async () => {
+  const { host, secondary, release } = await floorCard('ok');
+  secondary.focus();
+  await click(secondary);
+  release();
+  await settle();
+  const main = host.querySelector('[data-floor-main]');
+  assert.equal(main.textContent.trim(), 'Allow this deploy');
+  assert.equal(document.activeElement, main);
+});
+
+test('S1: the secondary Back up first keeps focus during the backup and ignores presses while busy', async () => {
+  const { host, secondary, release } = await floorCard('ok');
+  secondary.focus();
+  await click(secondary);
+  assert.equal(secondary.hasAttribute('disabled'), false, 'not disabled, so focus does not drop to <body>');
+  assert.equal(secondary.getAttribute('aria-disabled'), 'true');
+  assert.equal(document.activeElement, secondary);
+  assert.equal(host.querySelector('[data-floor-case]').getAttribute('data-floor-case'), 'taking');
+  // A second press while busy does nothing: still one backup in flight, still taking.
+  const before = host.innerHTML;
+  await click(secondary);
+  assert.equal(host.innerHTML, before);
+  release();
+  await settle();
+});
+
+test('S2: the Production keys hint sits outside the truncated line, so it wraps instead of being cut', async () => {
+  const check = async () => ({ state: 'found', repo: 'demo-org/demo-app', branch: 'main', deploy_hint: 'docker' });
+  const host = await mount(h(m.DevModeSetup, { space: { id: 'spc_demo', name: 'Demo' }, initial: { on: false, repo: 'demo-org/demo-app', branch: null }, check, onCancel() {}, onDone() {} }));
+  await new Promise((r) => setTimeout(r, 450)); // the field's 400 ms check debounce
+  await settle();
+  const hint = [...host.querySelectorAll('[data-dv-tiles] p')].find((p) => p.textContent.trim() === 'Mark them in Connections');
+  assert.ok(hint, 'the hint is its own line in the tile');
+  assert.equal(hint.classList.contains('truncate'), false);
+  assert.equal(hint.parentElement.querySelector('.truncate').textContent.includes('Mark them'), false, 'not inside the truncated value');
+});
+
+test('S3 + S4: the review heading has the violet focus ring and the card stops 12 px under the top', async () => {
+  const host = await desk();
+  await click(host.querySelector('[data-dev-tab="reviews"]'));
+  const card = host.querySelector('[data-dev-card="review"]');
+  assert.ok(card.className.split(' ').includes('scroll-mt-3'));
+  const cls = card.querySelector('h3').className.split(' ');
+  for (const c of ['focus:outline-none', 'focus-visible:outline-2', 'focus-visible:outline-sky-400', 'rounded-sm']) assert.ok(cls.includes(c), c);
+});

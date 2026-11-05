@@ -183,15 +183,13 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
                 <span className="text-zinc-500">None found</span>
               )}
             </Tile>
-            <Tile label="Production keys">
+            <Tile label="Production keys" hint={!onOpenConnections && !productionCount ? 'Mark them in Connections' : undefined}>
               <span className={productionCount ? '' : 'text-zinc-500'}>{productionCount ? `${productionCount} marked` : 'None marked'}</span>
               {onOpenConnections ? (
                 <button type="button" onClick={onOpenConnections} className="ml-1.5 text-meta font-medium text-sky-300 hover:text-sky-200">
                   Mark
                 </button>
-              ) : (
-                !productionCount && <span className="block text-meta text-zinc-400">Mark them in Connections</span>
-              )}
+              ) : null}
             </Tile>
           </div>
         )}
@@ -252,9 +250,11 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
   );
 };
 
-const Tile: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+const Tile: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({ label, hint, children }) => (
   <div className="rounded-xl border border-hairline bg-surface-main px-3 py-2">
     <p className="text-2xs font-semibold uppercase tracking-wider text-zinc-500">{label}</p>
     <p className="mt-0.5 text-meta text-zinc-200 truncate">{children}</p>
+    {/* Outside the truncated line, so it wraps in the narrow tile at 1440 instead of being cut. */}
+    {hint && <p className="mt-0.5 text-meta leading-snug text-zinc-400">{hint}</p>}
   </div>
 );
