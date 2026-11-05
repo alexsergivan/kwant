@@ -143,7 +143,7 @@ const floorApproval = (id: string, bot: string, command: string, prod_floor: Rec
 });
 
 export const FLOOR_DEPLOY_FRESH = floorApproval('ap_1', 'Pixel', './scripts/deploy_test.sh 4049325', {
-  kind: 'deploy', why: 'a deploy to the test server', needs_backup: false,
+  kind: 'deploy', why: 'This command runs ./scripts/deploy_test.sh, a deploy script', needs_backup: false,
   blast: [['Where', 'kwant.jumpin.games · production'], ['What changes', 'App 51f9141 → 4049325 · 1 change: #290 sidebar hover'],
     ['Downtime', 'About 20 s while the container restarts'], ['Data', 'Nothing deleted. Database and uploads stay.'],
     ['If it fails', 'Health check fails → it goes back to 51f9141 on its own']],
@@ -151,13 +151,13 @@ export const FLOOR_DEPLOY_FRESH = floorApproval('ap_1', 'Pixel', './scripts/depl
 });
 
 export const FLOOR_DESTRUCTIVE = floorApproval('ap_2', 'Lin', 'sqlite3 data/kwant.db "DROP TABLE dev_cards_v0;"', {
-  kind: 'destructive', why: 'a database command that runs DROP TABLE', needs_backup: true,
+  kind: 'destructive', why: 'This database command runs DROP TABLE', needs_backup: true,
   blast: [['Where', 'kwant.jumpin.games database · production'], ['Data', "Table dev_cards_v0 · 1,284 rows. Can't be undone without a backup."]],
   backup: { state: 'old', age_s: 3 * 3600, bytes: 412_000_000, path: '/home/demo/backups/backup-old.tgz', error: null },
 }, '~/work/kwant');
 
 export const FLOOR_MIGRATION = floorApproval('ap_3', 'Vega', './scripts/deploy_test.sh 7c41e0a', {
-  kind: 'deploy_migration', why: 'a deploy that changes the database', needs_backup: true,
+  kind: 'deploy_migration', why: 'This command runs ./scripts/deploy_test.sh, a deploy script', needs_backup: true,
   blast: [['Where', 'kwant.jumpin.games · production'], ['What changes', 'App 4049325 → 7c41e0a · 1 change: #301 risk reasons'],
     ['Migration', '0031_landed_risk.sql · adds 1 column to landed_cards · has a way back'],
     ['If it fails', 'The app goes back on its own. The database goes back only from a backup.']],
@@ -165,26 +165,26 @@ export const FLOOR_MIGRATION = floorApproval('ap_3', 'Vega', './scripts/deploy_t
 });
 
 export const FLOOR_DEPLOY_OLD = floorApproval('ap_4', 'Iris', './scripts/deploy_test.sh 9a2d5f3', {
-  kind: 'deploy', why: 'a deploy to the test server', needs_backup: false,
+  kind: 'deploy', why: 'This command runs ./scripts/deploy_test.sh, a deploy script', needs_backup: false,
   blast: [['Where', 'kwant.jumpin.games · production'], ['What changes', 'App 7c41e0a → 9a2d5f3 · 1 change: #292 reactions'],
     ['Data', 'No migration. Database and uploads stay.']],
   backup: { state: 'old', age_s: 3 * 3600, bytes: 412_000_000, path: null, error: null },
 });
 
 export const FLOOR_PAGES = floorApproval('ap_5', 'Pixel', 'npx wrangler pages deploy site/dist', {
-  kind: 'deploy', why: 'a Cloudflare Pages deploy', needs_backup: false,
+  kind: 'deploy', why: 'wrangler pages ships to Cloudflare', needs_backup: false,
   blast: [['Where', 'kwant.si · production'], ['Key used', 'Cloudflare · production']],
   backup: { state: 'no_data', age_s: null, bytes: null, path: null, error: null },
 });
 
 export const FLOOR_NO_COMMAND = floorApproval('ap_6', 'Lin', 'psql -c "DELETE FROM sessions"', {
-  kind: 'destructive', why: 'a database command that runs DELETE without WHERE', needs_backup: true,
+  kind: 'destructive', why: 'This database command runs DELETE FROM with no WHERE', needs_backup: true,
   blast: [['Where', 'db.example.com · production']],
   backup: { state: 'no_command', age_s: null, bytes: null, path: null, error: null },
 });
 
 export const FLOOR_FAILED = floorApproval('ap_7', 'Lin', 'sqlite3 data/kwant.db "DROP TABLE old_x;"', {
-  kind: 'destructive', why: 'a database command that runs DROP TABLE', needs_backup: true,
+  kind: 'destructive', why: 'This database command runs DROP TABLE', needs_backup: true,
   blast: [['Where', 'kwant.jumpin.games database · production']],
   backup: { state: 'failed', age_s: null, bytes: null, path: null, error: 'disk full' },
 });

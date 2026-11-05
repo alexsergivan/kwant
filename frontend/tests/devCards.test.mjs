@@ -665,3 +665,27 @@ test('S4: each finding says its severity as a word, not only by colour', () => {
   assert.deepEqual(words.map(([s, w]) => [s, w]), [['high', 'High'], ['medium', 'Medium'], ['low', 'Low']]);
   for (const [, , cls] of words) assert.match(cls, /text-\[10px\] font-semibold uppercase tracking-wide text-(rose|amber|teal)-300/);
 });
+
+test('the floor card shows why as its own sentence, never "This is runs …" (0.7.1)', () => {
+  // What the server sends since 0.7.1: a subject of its own, no period
+  assert.equal(m.floorSentence('This command runs deploy.sh, a deploy script'), 'This command runs deploy.sh, a deploy script.');
+  assert.equal(m.floorSentence('fly deploy ships the app'), 'fly deploy ships the app.', 'a command name keeps its case');
+  assert.equal(m.floorSentence('git push sends new commits to main. '), 'git push sends new commits to main.', 'one period');
+  // Cards saved by 0.7.0 still read as a sentence
+  assert.equal(m.floorSentence('runs deploy.sh, a deploy script'), 'Runs deploy.sh, a deploy script.');
+  assert.equal(m.floorSentence('a force-push to main'), 'A force-push to main.');
+  assert.equal(m.floorSentence('  '), '');
+  const ap = (why) => ({ ...fx.FLOOR_DEPLOY_FRESH, details: { ...fx.FLOOR_DEPLOY_FRESH.details, prod_floor: { ...fx.FLOOR_DEPLOY_FRESH.details.prod_floor, why } } });
+  for (const [why, want] of [
+    ['This command runs deploy.sh, a deploy script', 'This command runs deploy.sh, a deploy script.'],
+    ['vercel ships the app to production', 'vercel ships the app to production.'],
+  ]) {
+    const out = html(m.ModernApprovalCard, { approval: ap(why), onResolve() {} });
+    assert.ok(out.includes(`>${want}</p>`), `${why}: ${out}`);
+    assert.doesNotMatch(out, /This is /);
+  }
+  assert.doesNotMatch(html(m.ModernApprovalCard, { approval: ap(''), onResolve() {} }), /<p class="text-zinc-300 \[overflow-wrap:anywhere\]">/, 'no empty line');
+  for (const f of [fx.FLOOR_DEPLOY_FRESH, fx.FLOOR_DESTRUCTIVE, fx.FLOOR_MIGRATION, fx.FLOOR_PAGES, fx.FLOOR_NO_COMMAND]) {
+    assert.doesNotMatch(html(m.ModernApprovalCard, { approval: f, onResolve() {} }), /This is /);
+  }
+});

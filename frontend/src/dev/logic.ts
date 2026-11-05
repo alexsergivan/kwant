@@ -259,6 +259,17 @@ export function floorHeader(floor: ProdFloor, bot: string): string {
   return `Production floor: ${bot} wants to ${what[floor.kind]}`;
 }
 
+/** Leads of the clauses 0.7.0 sent ("runs deploy.sh, a deploy script", "a force-push to main"):
+ * a card saved before 0.7.1 still gets a capital. A command name ("git push …") stays as typed. */
+const OLD_LEADS = /^(a|an|runs|starts)\b/;
+
+/** `why` as its own sentence: the server sends one with its own subject and no period (0.7.1). */
+export function floorSentence(why: string): string {
+  const t = why.trim().replace(/[.\s]+$/, '');
+  if (!t) return '';
+  return `${OLD_LEADS.test(t) ? t[0].toUpperCase() + t.slice(1) : t}.`;
+}
+
 export function floorSubline(floor: ProdFloor): string {
   if (floor.kind === 'deploy_migration') return 'This deploy changes the database, so it counts as destructive: it needs a backup from the last 10 minutes first.';
   if (floor.kind === 'destructive') return 'Destructive commands need a backup from the last 10 minutes first.';
