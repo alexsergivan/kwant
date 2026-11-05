@@ -69,7 +69,9 @@ own tools (shell, files, web search, subagents, skills). claude, codex and grok 
 tool switched off, and the run is stopped and its reply dropped if the CLI still offers or starts
 one. Any other CLI, and any turn that was given MCP servers, is refused instead of run with tools.
 The flags for each engine are on `TurnInput::no_tools` and next to `no_tools_refusal` in
-`src/drivers/cli.rs`.
+`src/drivers/cli.rs`. When a bot's engine refuses (or stops) a card turn this way, that card call
+fails at once: it is not asked again, with or without tools, and the card is `failed` with the
+reason and keeps its rule-based parts (risk, test tamper, CI), as any failed call does.
 
 ## The production floor
 
