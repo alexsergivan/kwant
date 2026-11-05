@@ -856,12 +856,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </div>
           )}
 
-          {proactive && (
+          {(proactive || ideaCap !== null) && (
             <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-testid="proactive-settings">
               <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
                 <Sparkles size={14} className="text-violet-300" aria-hidden="true" />
                 <span>Bots on their own</span>
               </legend>
+              {/* The jar's row stands on its own: a server without decide_first still shows it (#323 S3). */}
+              {proactive && (
+                <>
               <SwitchRow
                 id="decide-first"
                 label="Bots decide reversible choices themselves"
@@ -898,6 +901,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                   </span>
                 </div>
               </SwitchRow>
+                </>
+              )}
               {ideaCap !== null && (
                 <SwitchRow
                   id="idea-jar"

@@ -1223,9 +1223,10 @@ export const BoardToolbar: React.FC<{
   </div>
 );
 
-/** One pending card action: it waits UNDO_MS before reaching the server, so Undo can take it back. */
+/** One pending card action: it waits UNDO_MS before reaching the server, so Undo can take it back.
+ *  `kw-undo-toast` sits 16px up, or 8px over the phone tab bar while one is on screen (styles/ideaShell.css). */
 export const UndoToast: React.FC<{ text: string; onUndo: () => void; onClose: () => void }> = ({ text, onUndo, onClose }) => (
-  <div className="fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 pointer-events-none" data-undo-toast>
+  <div className="kw-undo-toast fixed inset-x-0 z-40 flex justify-center px-4 pointer-events-none" data-undo-toast>
     <div role="status" aria-live="polite" className="pointer-events-auto flex items-center gap-3 max-w-md w-full sm:w-auto px-4 py-2.5 rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl shadow-black/50">
       <span className="min-w-0 flex-1 text-xs text-zinc-100 break-words">{text}</span>
       <button type="button" onClick={onUndo} className={`shrink-0 min-h-[36px] px-3 rounded-lg text-xs font-semibold text-sky-300 hover:bg-sky-500/10 ${focusRing}`} data-undo>
