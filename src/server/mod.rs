@@ -54,6 +54,7 @@ pub mod missions;
 pub mod goals;
 pub mod app_update_routes;
 pub mod smart_results;
+pub mod dev;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;

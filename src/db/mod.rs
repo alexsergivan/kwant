@@ -41,6 +41,7 @@ pub mod lessons;
 pub mod reactions;
 pub mod routing;
 pub mod smart_results;
+pub mod dev_mode;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -233,6 +234,8 @@ impl Database {
         // Phase C1: the Truth Ledger mirrors memory (add-only). Last, so no later step rebuilds
         // a table its triggers or lookups depend on
         db.migrate_truth_ledger().await?;
+        // 0.7: Dev mode (add-only, outside exports)
+        db.migrate_dev_mode().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal
