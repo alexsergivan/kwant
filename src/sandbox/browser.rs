@@ -937,6 +937,60 @@ pub struct HeldPointer {
     pub buttons: u8,
 }
 
+/// One live view's own page size: the size its stage asked for with `resize`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewClaim {
+    pub socket: u64,
+    pub width: u32,
+    pub height: u32,
+    pub dpr: f64,
+}
+
+/// What a live view letting go of its size leaves the page at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewRelease {
+    /// It had no size of its own, or a newer view's size is on the page: nothing changes.
+    Keep,
+    /// Its size was on the page and another view still has one: the newest of those.
+    Reapply(ViewClaim),
+    /// The last sized view let go: the bot's own viewport comes back.
+    Restore,
+}
+
+/// The sizes the open live views asked for, oldest first. The newest is the one on the page:
+/// the last resize wins, and the bot's viewport comes back when the last sized view lets go.
+#[derive(Debug, Default)]
+pub struct ViewClaims(Vec<ViewClaim>);
+
+impl ViewClaims {
+    /// `claim` resized the page: it replaces that view's earlier size and becomes the newest.
+    pub fn claim(&mut self, claim: ViewClaim) {
+        self.0.retain(|c| c.socket != claim.socket);
+        self.0.push(claim);
+    }
+
+    /// The view on `socket` hands back, goes to the background or closes.
+    pub fn release(&mut self, socket: u64) -> ViewRelease {
+        let Some(at) = self.0.iter().position(|c| c.socket == socket) else { return ViewRelease::Keep };
+        let newest = at + 1 == self.0.len();
+        self.0.remove(at);
+        match (newest, self.0.last()) {
+            (false, _) => ViewRelease::Keep,
+            (true, Some(next)) => ViewRelease::Reapply(*next),
+            (true, None) => ViewRelease::Restore,
+        }
+    }
+
+    /// A view asking again for the size it already has while a newer view's size is on the page:
+    /// the desktop stage re-asking when the page doesn't match it, which would take the page back
+    /// from the phone that opened after it. Only a new size wins.
+    pub fn repeats_older(&self, claim: &ViewClaim) -> bool {
+        self.0.last().is_some_and(|newest| newest.socket != claim.socket) && self.0.contains(claim)
+    }
+
+    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+}
+
 /// CDP button names for each bit of a `buttons` mask, in bit order.
 pub const MOUSE_BUTTON_BITS: [(u8, &str); 5] = [(1, "left"), (2, "right"), (4, "middle"), (8, "back"), (16, "forward")];
 
@@ -962,6 +1016,9 @@ pub struct BrowserController {
     held_for_person: Arc<std::sync::Mutex<Option<OwnedRwLockWriteGuard<()>>>>,
     /// Which mouse buttons live-view input holds down, and where, if any.
     pointer_held: Arc<std::sync::Mutex<Option<HeldPointer>>>,
+    /// The page sizes open live views asked for. Async: a resize holds it while it applies, so
+    /// two views resizing at once leave the newest claim's size on the page.
+    view_claims: Arc<Mutex<ViewClaims>>,
     /// VM mode: this bot's cookies, saved outside the throwaway browser context.
     cookie_jar: Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
     /// The fixed viewport set for a windowless browser, restored after a bot's sized screenshot.
@@ -1031,6 +1088,7 @@ impl BrowserController {
             control: Arc::new(RwLock::new(())),
             held_for_person: Arc::default(),
             pointer_held: Arc::default(),
+            view_claims: Arc::default(),
             cookie_jar: Arc::default(),
             viewport: Arc::default(),
             progress: Arc::default(),
@@ -1092,6 +1150,8 @@ impl BrowserController {
     pub fn is_managed_session(&self) -> bool { self.target_id.is_some() }
 
     pub(crate) fn pointer_held_slot(&self) -> &std::sync::Mutex<Option<HeldPointer>> { &self.pointer_held }
+
+    pub(crate) fn view_claims(&self) -> &Mutex<ViewClaims> { &self.view_claims }
 
     /// The fixed viewport of a windowless browser (normally 1280x800), or `None` when the page
     /// follows a real window. The live view restores it when the person hands back.
@@ -2080,5 +2140,72 @@ mod ref_tests {
         assert_eq!(line(json!({"label": "No ref"})), None);
         assert_eq!(line(json!({"ref": 12, "role": "option", "name": "Large", "new": true})).as_deref(), Some("*[12] option \"Large\""));
         assert_eq!(line(json!({"ref": 12, "role": "option", "name": "Large", "new": false})).as_deref(), Some("[12] option \"Large\""));
+    }
+}
+
+#[cfg(test)]
+mod view_claim_tests {
+    use super::{ViewClaim, ViewClaims, ViewRelease};
+
+    fn size(socket: u64, width: u32) -> ViewClaim { ViewClaim { socket, width, height: 700, dpr: 2.0 } }
+
+    #[test]
+    fn one_view_restores_when_it_lets_go() {
+        let mut claims = ViewClaims::default();
+        claims.claim(size(1, 390));
+        claims.claim(size(1, 412)); // a rotate replaces its own claim
+        assert_eq!(claims.release(1), ViewRelease::Restore);
+        assert!(claims.is_empty());
+        assert_eq!(claims.release(1), ViewRelease::Keep, "letting go twice changes nothing");
+    }
+
+    #[test]
+    fn a_view_without_a_size_changes_nothing() {
+        let mut claims = ViewClaims::default();
+        claims.claim(size(1, 390));
+        assert_eq!(claims.release(2), ViewRelease::Keep);
+        assert_eq!(claims.release(1), ViewRelease::Restore);
+    }
+
+    #[test]
+    fn last_resize_wins_and_restore_waits_for_the_last_view() {
+        // the desktop stage (1) then the phone overlay (2)
+        let mut claims = ViewClaims::default();
+        claims.claim(size(1, 1100));
+        claims.claim(size(2, 390));
+        // the phone closes: the desktop's size comes back, not 1280
+        assert_eq!(claims.release(2), ViewRelease::Reapply(size(1, 1100)));
+        assert_eq!(claims.release(1), ViewRelease::Restore);
+    }
+
+    #[test]
+    fn an_older_view_closing_leaves_the_newest_size_on_the_page() {
+        let mut claims = ViewClaims::default();
+        claims.claim(size(1, 1100));
+        claims.claim(size(2, 390));
+        assert_eq!(claims.release(1), ViewRelease::Keep);
+        assert_eq!(claims.release(2), ViewRelease::Restore);
+    }
+
+    #[test]
+    fn repeating_an_older_size_does_not_take_the_page_back() {
+        let mut claims = ViewClaims::default();
+        claims.claim(size(1, 1100));
+        assert!(!claims.repeats_older(&size(1, 1100)), "the newest view re-asking applies again (a navigation reset)");
+        claims.claim(size(2, 390));
+        assert!(claims.repeats_older(&size(1, 1100)));
+        assert!(!claims.repeats_older(&size(1, 1000)), "a new size wins");
+        assert!(!claims.repeats_older(&size(2, 390)));
+        assert!(!claims.repeats_older(&size(3, 1100)), "another view's size is not a repeat");
+    }
+
+    #[test]
+    fn a_view_that_resizes_again_becomes_the_newest() {
+        let mut claims = ViewClaims::default();
+        claims.claim(size(1, 1100));
+        claims.claim(size(2, 390));
+        claims.claim(size(1, 1000));
+        assert_eq!(claims.release(1), ViewRelease::Reapply(size(2, 390)));
+        assert_eq!(claims.release(2), ViewRelease::Restore);
     }
 }

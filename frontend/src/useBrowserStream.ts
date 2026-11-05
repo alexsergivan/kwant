@@ -32,6 +32,8 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
   const [select, setSelect] = useState<SelectRequest | null>(null);
   const [dialog, setDialog] = useState<PageDialog | null>(null);
   const [cursor, setCursor] = useState<string>('default');
+  // The last resize was answered `ignored`: the page follows a real window and keeps its size
+  const [resizeIgnored, setResizeIgnored] = useState(false);
   // Actions the server answered "Invalid browser input" for (an older server): hide their buttons
   const [unsupported, setUnsupported] = useState<ReadonlySet<string>>(new Set());
   const actionsById = useRef(new Map<number, string>());
@@ -96,6 +98,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
             break;
           }
           case 'ack':
+            if (actionsById.current.get(message.id) === 'resize') setResizeIgnored(message.ignored === true);
             pending.current.delete(message.id);
             actionsById.current.delete(message.id);
             setBusy(pending.current.size > 0);
@@ -116,6 +119,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
         lastImage.current = null;
         setSelect(null);
         setDialog(null);
+        setResizeIgnored(false);
         setError((current) => current || 'Browser disconnected. Reconnecting…');
         reconnect = setTimeout(connect, Math.min(1000 * 2 ** attempts++, 10000));
       };
@@ -137,6 +141,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
       setSelect(null);
       setDialog(null);
       setViewport(null);
+      setResizeIgnored(false);
     };
   }, [id, visible]);
 
@@ -168,13 +173,22 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'frame_ack', id }));
   }, []);
 
+  /**
+   * Gives the page its own size back while keeping control (the phone overlay closing or going to
+   * the background). Quiet: a closed socket already restored it on the server.
+   */
+  const restoreViewport = useCallback(() => {
+    const ws = socket.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'restore_viewport', id: ++sequence.current }));
+  }, []);
+
   const clearSelect = useCallback(() => setSelect(null), []);
   const clearDialog = useCallback(() => setDialog(null), []);
   const clearError = useCallback(() => setError(null), []);
 
   return {
-    connected, controlling, busy, error, frame, location, tapFocus, viewport, select, dialog, cursor, unsupported,
-    send, acknowledgeFrame, clearSelect, clearDialog, clearError,
+    connected, controlling, busy, error, frame, location, tapFocus, viewport, select, dialog, cursor, unsupported, resizeIgnored,
+    send, acknowledgeFrame, restoreViewport, clearSelect, clearDialog, clearError,
   };
 }
 

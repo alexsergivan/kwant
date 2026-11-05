@@ -884,3 +884,77 @@ async fn a_host_and_port_open_as_a_web_page_and_a_phone_number_is_refused_by_bot
     assert_eq!(navigated().await.last(), Some(&json!("http://localhost:9411/target.html")));
     app_task.abort(); cdp_task.abort();
 }
+
+/// The widths `Emulation.setDeviceMetricsOverride` set the page to, in order.
+async fn page_widths(mock: &Mock) -> Vec<i64> {
+    mock.commands.lock().await.iter().filter(|c| c["method"]=="Emulation.setDeviceMetricsOverride").filter_map(|c| c["params"]["width"].as_i64()).collect()
+}
+
+#[tokio::test]
+async fn two_views_last_resize_wins_and_the_bot_size_returns_when_the_last_one_lets_go() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = Config {data_dir:tmp.path().into(),browser_cdp_url:Some(format!("http://127.0.0.1:{}",mock.port)),..Config::default()};
+    let db = Database::init(tmp.path()).await.unwrap();
+    let id=db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
+    let state=AppState::new(config.clone(),db,ToolRunner::new(tmp.path().join("workspace")),PermissionBroker::new(),LayaRouter::new(config.laya_url));
+    let ctrl=kwnt::server::routes::get_or_create_browser_controller(&state,&id).await.unwrap();
+    let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port=listener.local_addr().unwrap().port();
+    let app_task=tokio::spawn(async move {axum::serve(listener,create_router(state)).await.unwrap();});
+    let open = || async {
+        let mut request=format!("ws://127.0.0.1:{port}/api/sandbox/{id}/stream").into_client_request().unwrap();
+        request.headers_mut().insert("Origin",format!("http://127.0.0.1:{port}").parse().unwrap());
+        let (mut ws,_)=connect_async(request).await.unwrap();
+        receive(&mut ws,"frame").await;
+        ws
+    };
+    let send = |payload: Value| WsMessage::Text(payload.to_string());
+    // a CAPTCHA step holds the browser for the person: every open view may size the page
+    assert!(ctrl.hold_for_person().await);
+    let mut desktop = open().await;
+    let mut phone = open().await;
+
+    // restoring needs no control and is a no-op for a view that never resized
+    mock.commands.lock().await.clear();
+    phone.send(send(json!({"action":"restore_viewport","id":"noop"}))).await.unwrap();
+    assert_eq!(until_reply(&mut phone,"noop").await.last().unwrap()["type"], "ack");
+    assert!(page_widths(&mock).await.is_empty());
+
+    // the desktop stage, then the phone overlay: the phone's size is on the page
+    desktop.send(send(json!({"action":"resize","width":1100,"height":700,"id":"d1"}))).await.unwrap();
+    until_reply(&mut desktop,"d1").await;
+    phone.send(send(json!({"action":"resize","width":390,"height":700,"dpr":2,"id":"p1"}))).await.unwrap();
+    until_reply(&mut phone,"p1").await;
+    assert_eq!(page_widths(&mock).await, vec![1100, 390]);
+    // the desktop re-asks for its old size because the page no longer matches it: the phone keeps it
+    mock.commands.lock().await.clear();
+    desktop.send(send(json!({"action":"resize","width":1100,"height":700,"id":"d2"}))).await.unwrap();
+    let kept = until_reply(&mut desktop,"d2").await.pop().unwrap();
+    assert_eq!((kept["type"].clone(), kept["superseded"].clone()), (json!("ack"), json!(true)));
+    assert!(page_widths(&mock).await.is_empty(), "no resize for a repeat");
+
+    // the phone goes to the background: the desktop's size comes back, not the bot's 1280
+    mock.commands.lock().await.clear();
+    phone.send(send(json!({"action":"restore_viewport","id":"p2"}))).await.unwrap();
+    let back = until_reply(&mut phone,"p2").await.pop().unwrap();
+    assert_eq!((back["type"].clone(), back["viewport"]["width"].as_f64()), (json!("ack"), Some(1100.0)));
+    assert_eq!(page_widths(&mock).await, vec![1100]);
+
+    // the phone comes back and sizes the page again; the desktop closes first: nothing moves
+    phone.send(send(json!({"action":"resize","width":390,"height":700,"dpr":2,"id":"p3"}))).await.unwrap();
+    until_reply(&mut phone,"p3").await;
+    mock.commands.lock().await.clear();
+    drop(desktop);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(page_widths(&mock).await.is_empty(), "an older view closing leaves the newest size");
+
+    // the last view drops: the bot's 1280x800 is back
+    drop(phone);
+    timeout(Duration::from_secs(5),async {loop {
+        if page_widths(&mock).await == vec![1280] {break;}
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }}).await.unwrap();
+    ctrl.release_person_hold();
+    app_task.abort(); cdp_task.abort();
+}

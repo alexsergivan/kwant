@@ -174,7 +174,7 @@ test('wiring: meaningful actions buzz, typing and scrolling do not', () => {
 
   const overlay = src('components/BrowserControlOverlay.tsx');
   assert.match(overlay, /if \(solved\) haptic\('success'\)/);
-  assert.match(overlay, /haptic\('tap'\);\s*onHandBack\(\);/);
+  assert.match(overlay, /haptic\('tap'\);\s*handBack\(\);/);
 
   const settings = src('components/SettingsModal.tsx');
   assert.match(settings, /hapticsAvailable\(\) && \(/, 'the switch only shows where the phone can vibrate');

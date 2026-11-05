@@ -69,3 +69,45 @@ test('an identical frame is acknowledged at once; a changed one waits for the im
 
   m.flushSync(() => root.unmount());
 });
+
+// Mobile 0.6.13 B2: the phone overlay opens fit-width when the browser keeps its own size, and
+// gives the size back quietly when it closes without handing back.
+test('a resize answered `ignored` is surfaced; restoreViewport is quiet on a closed socket', async () => {
+  let stream;
+  function Hold() {
+    stream = m.useBrowserStream('k2', true);
+    return null;
+  }
+  const root = m.createRoot(document.createElement('div'));
+  m.flushSync(() => root.render(m.React.createElement(Hold)));
+  await settle();
+  const ws = sockets.at(-1);
+  ws.onopen?.();
+  assert.equal(stream.resizeIgnored, false);
+  stream.send({ action: 'resize', width: 390, height: 748, dpr: 2 });
+  const id = ws.sent.at(-1).id;
+  ws.receive({ type: 'ack', id, ignored: true, viewport: { width: 1440, height: 900 } });
+  await settle();
+  assert.equal(stream.resizeIgnored, true);
+  // a later resize the page takes clears it
+  stream.send({ action: 'resize', width: 390, height: 748, dpr: 2 });
+  ws.receive({ type: 'ack', id: ws.sent.at(-1).id, viewport: { width: 390, height: 748, dpr: 2 } });
+  await settle();
+  assert.equal(stream.resizeIgnored, false);
+  // an ack for anything else leaves it alone
+  ws.receive({ type: 'ack', id, ignored: true });
+  stream.send({ action: 'mouse', type: 'down', x: 1, y: 1 }, true);
+  ws.receive({ type: 'ack', id: ws.sent.at(-1).id });
+  await settle();
+  assert.equal(stream.resizeIgnored, false);
+
+  stream.restoreViewport();
+  assert.equal(ws.sent.at(-1).action, 'restore_viewport');
+  ws.readyState = 3;
+  const before = ws.sent.length;
+  stream.restoreViewport();
+  await settle();
+  assert.equal(ws.sent.length, before, 'nothing sent on a closed socket');
+  assert.equal(stream.error, null, 'and no "reconnecting" error for it');
+  m.flushSync(() => root.unmount());
+});
