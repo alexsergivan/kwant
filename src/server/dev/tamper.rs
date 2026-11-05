@@ -176,6 +176,7 @@ pub fn is_test_path(path: &str) -> bool {
         || name.contains(".spec.")
         || name.ends_with("_test.rs")
         || name.ends_with("_tests.rs")
+        || name == "tests.rs"
         || name.ends_with("_test.go")
         || name.ends_with("_test.py")
         || (name.starts_with("test_") && name.ends_with(".py"))
@@ -653,6 +654,8 @@ fn skip_marker(line: &str, lang: Lang, test_file: bool) -> Option<&'static str> 
         }
         Lang::Go if test_file && ["t.Skip(", "t.Skipf(", "t.SkipNow("].iter().any(|p| t.contains(p)) => return Some("t.Skip"),
         Lang::Other if test_file && (t.starts_with("@Disabled") || t.starts_with("@Ignore")) => return Some("@Disabled"),
+        // RSpec: `xit 'works' do`, `xdescribe`, `xcontext`, `xspecify`
+        Lang::Other if test_file && ["xit", "xdescribe", "xcontext", "xspecify"].iter().any(|x| t.strip_prefix(x).is_some_and(|r| r.starts_with([' ', '(']))) => return Some("xit"),
         _ => {}
     }
     None
@@ -661,22 +664,31 @@ fn skip_marker(line: &str, lang: Lang, test_file: bool) -> Option<&'static str> 
 fn skips(f: &Parsed) -> Option<Flag> {
     let lang = f.lang();
     let mut removed: Vec<String> = f.lines().filter(|l| l.op == Op::Del && skip_marker(l.text, lang, f.test_file || l.test).is_some()).map(|l| norm(l.text)).collect();
-    let mut found: Vec<(&Line, &'static str)> = Vec::new();
-    for l in f.lines().filter(|l| l.op == Op::Add && (l.test || lang == Lang::Rust)) {
-        let Some(m) = skip_marker(l.text, lang, f.test_file || l.test) else { continue };
-        // Only moved or re-indented
-        if let Some(i) = removed.iter().position(|r| *r == norm(l.text)) {
-            removed.swap_remove(i);
-            continue;
+    // (line, marker, a new test: the file is new, or the lines around the marker are added, not
+    // put in place of old ones)
+    let mut found: Vec<(&Line, &'static str, bool)> = Vec::new();
+    for h in &f.hunks {
+        for (i, l) in h.lines.iter().enumerate().filter(|(_, l)| l.op == Op::Add && (l.test || lang == Lang::Rust)) {
+            let Some(m) = skip_marker(l.text, lang, f.test_file || l.test) else { continue };
+            // Only moved or re-indented
+            if let Some(j) = removed.iter().position(|r| *r == norm(l.text)) {
+                removed.swap_remove(j);
+                continue;
+            }
+            let next_added = h.lines.get(i + 1).is_some_and(|n| n.op == Op::Add);
+            let prev_removed = i > 0 && h.lines[i - 1].op == Op::Del;
+            found.push((l, m, f.status == "added" || (next_added && !prev_removed)));
         }
-        found.push((l, m));
     }
-    let (first, marker) = *found.first()?;
+    let (first, marker, _) = *found.first()?;
     let focus = marker.contains("only");
-    let why = match (focus, found.len()) {
-        (true, _) => format!("`{marker}` runs this test alone, so every other test in the file is skipped."),
-        (false, 1) => format!("This test no longer runs (`{marker}`), so it can't fail."),
-        (false, n) => format!("{n} tests no longer run (`{marker}`), so they can't fail."),
+    let born = found.iter().all(|(_, _, new)| *new);
+    let why = match (focus, born, found.len()) {
+        (true, _, _) => format!("`{marker}` runs this test alone, so every other test in the file is skipped."),
+        (false, true, 1) => format!("This new test is added switched off (`{marker}`), so it never runs."),
+        (false, true, n) => format!("{n} new tests are added switched off (`{marker}`), so they never run."),
+        (false, false, 1) => format!("This test no longer runs (`{marker}`), so it can't fail."),
+        (false, false, n) => format!("{n} tests no longer run (`{marker}`), so they can't fail."),
     };
     Some(Flag { kind: Kind::Skip, file: f.path.to_string(), line: first.new, excerpt: excerpt([first]), why })
 }
@@ -728,6 +740,16 @@ fn mentions(line: &str, subject: &str) -> bool {
     false
 }
 
+/// `r.unwrap()` and `r.is_ok()` check the same value: one its contents, the other only that it's
+/// there.
+fn same_value(a: &str, b: &str) -> bool {
+    const WRAP: [&str; 6] = [".unwrap()", ".unwrap_or_default()", ".is_ok()", ".is_some()", ".expect(", "?"];
+    let root = |s: &str| -> Option<String> {
+        WRAP.iter().find_map(|w| s.rfind(w).filter(|i| *i > 0 && (s[*i..].ends_with(')') || *w == "?") && s.len() - i <= 80).map(|i| s[..i].to_string()))
+    };
+    matches!((root(a), root(b)), (Some(x), Some(y)) if x == y)
+}
+
 fn loosened(f: &Parsed) -> Option<Flag> {
     let lang = f.lang();
     for (dels, adds) in change_blocks(f) {
@@ -735,7 +757,7 @@ fn loosened(f: &Parsed) -> Option<Flag> {
             if let Some(old) = assertion(d.text, lang) {
                 // A check on the same value as strict as before, or stricter, means it was kept
                 let same: Vec<(&&Line, Assertion)> =
-                    adds.iter().filter(|a| a.test).filter_map(|a| assertion(a.text, lang).map(|x| (a, x))).filter(|(a, x)| x.subject == old.subject || mentions(a.text, &old.subject)).collect();
+                    adds.iter().filter(|a| a.test).filter_map(|a| assertion(a.text, lang).map(|x| (a, x))).filter(|(a, x)| x.subject == old.subject || mentions(a.text, &old.subject) || same_value(&x.subject, &old.subject)).collect();
                 if !same.is_empty() && same.iter().all(|(_, x)| x.strength < old.strength) {
                     let (a, new) = &same[0];
                     let what = if new.strength == Strength::Existence { "that there is something" } else { "part of it" };
@@ -764,8 +786,8 @@ fn loosened(f: &Parsed) -> Option<Flag> {
     None
 }
 
-const TOLERANCE_WORDS: [&str; 14] =
-    ["tol", "tolerance", "epsilon", "eps", "delta", "approx", "tobecloseto", "abs_diff", "rel=", "abs=", "atol", "rtol", "within", "margin"];
+const TOLERANCE_WORDS: [&str; 15] =
+    ["tol", "tolerance", "epsilon", "eps", "delta", "approx", "tobecloseto", "abs_diff", "rel=", "abs=", "atol", "rtol", "within", "margin", ".abs()"];
 
 /// The numbers in `s` with their byte ranges (not digits inside a name like `v2` or `polish063`).
 fn numbers(s: &str) -> Vec<(usize, usize, f64)> {
@@ -1144,6 +1166,41 @@ mod tests {
         assert!(kinds(&f).iter().all(|k| *k != Kind::Skip), "{:?}", check(&f));
     }
 
+    #[test]
+    fn rspec_x_prefixes_are_skips() {
+        for line in ["  xit 'a' do", "  xit('a') do", "xdescribe 'cart' do", "  xcontext 'empty' do", "  xspecify { expect(a).to eq 1 }"] {
+            let f = check(&[modified("spec/a_spec.rb", &format!("@@ -10,1 +10,2 @@\n describe 'x' do\n+{line}\n"))]);
+            assert_eq!(f.iter().map(|f| f.kind).collect::<Vec<_>>(), vec![Kind::Skip], "{line}: {f:?}");
+        }
+        // Not RSpec words, or not a test file
+        for (path, line) in [("spec/a_spec.rb", "  xit_count = 2"), ("spec/a_spec.rb", "  exit 1"), ("app/models/a.rb", "  xit 'a' do")] {
+            let f = check(&[modified(path, &format!("@@ -10,1 +10,2 @@\n x\n+{line}\n"))]);
+            assert!(f.is_empty(), "{path} {line}: {f:?}");
+        }
+    }
+
+    #[test]
+    fn a_new_test_added_switched_off_says_so() {
+        // A new file, and a new test inside an old file: "added switched off", not "no longer runs"
+        let new_file = file("tests/a_test.rs", "added", "@@ -0,0 +1,4 @@\n+#[test]\n+#[ignore]\n+fn slow() {\n+}\n");
+        let new_test = modified("frontend/tests/a.test.mjs", "@@ -10,1 +10,3 @@\n test('old', () => {});\n+it.skip('new', () => {\n+});\n");
+        for f in [new_file, new_test] {
+            let flags = check(std::slice::from_ref(&f));
+            assert_eq!(flags.len(), 1, "{}: {flags:?}", f.path);
+            assert!(flags[0].why.starts_with("This new test is added switched off"), "{}", flags[0].why);
+        }
+        // An existing test turned off keeps the old wording
+        let old = modified("frontend/tests/card.test.tsx", "@@ -3,2 +3,2 @@ describe('card', () => {\n-  it('shows the title', () => {\n+  it.skip('shows the title', () => {\n");
+        assert!(check(&[old])[0].why.starts_with("This test no longer runs"));
+    }
+
+    #[test]
+    fn src_tests_rs_is_a_test_file() {
+        assert!(is_test_path("src/tests.rs"));
+        assert!(is_test_path("src/server/dev/tests.rs"));
+        assert!(!is_test_path("src/contests.rs"));
+    }
+
     // --- loosened ---
 
     #[test]
@@ -1176,6 +1233,22 @@ mod tests {
             assert_eq!(flags[0].kind, Kind::Loosened);
             assert!(flags[0].why.contains(change), "{path}: {}", flags[0].why);
         }
+    }
+
+    #[test]
+    fn an_abs_margin_widened_and_unwrap_to_is_ok_are_loosened() {
+        let wide = check(&[modified("tests/a_test.rs", "@@ -10,1 +10,1 @@\n-    assert!((a - b).abs() < 0.001);\n+    assert!((a - b).abs() < 0.5);\n")]);
+        assert_eq!(wide.len(), 1, "{wide:?}");
+        assert_eq!(wide[0].kind, Kind::Loosened);
+        assert!(wide[0].why.contains("0.001 → 0.5"), "{}", wide[0].why);
+        for (old, new) in [("assert_eq!(r.unwrap(), 7);", "assert!(r.is_ok());"), ("assert_eq!(find(\"a\").unwrap(), 7);", "assert!(find(\"a\").is_some());")] {
+            let f = check(&[modified("tests/a_test.rs", &format!("@@ -10,1 +10,1 @@\n-    {old}\n+    {new}\n"))]);
+            assert_eq!(f.iter().map(|f| f.kind).collect::<Vec<_>>(), vec![Kind::Loosened], "{old}: {f:?}");
+        }
+        // A tighter margin, and a different value, are not
+        assert!(check(&[modified("tests/a_test.rs", "@@ -10,1 +10,1 @@\n-    assert!((a - b).abs() < 0.5);\n+    assert!((a - b).abs() < 0.001);\n")]).is_empty());
+        assert!(!same_value("r.unwrap()", "q.is_ok()"));
+        assert!(same_value("r.unwrap()", "r.is_ok()"));
     }
 
     #[test]

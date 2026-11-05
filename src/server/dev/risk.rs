@@ -7,7 +7,8 @@
 //! - strong: a security path (auth, passwords, crypto, payments, redaction), a migration, a test
 //!   made easier to pass (`tamper`);
 //! - regular: deploy files, CI, build config, new packages, no tests near the change, a large
-//!   change (more than [`LARGE_LINES`] lines or [`LARGE_FILES`] files);
+//!   change (more than [`LARGE_LINES`] lines or [`LARGE_FILES`] files), files GitHub sent no diff
+//!   for ("Couldn't read N files": the other rules never saw their text);
 //! - chips only (a reason, never a level): the first edit to a file in 90 days, and a file outside
 //!   the task. `outside_task` comes from the reviewer's intent rows, a model's reading, so it never
 //!   moves the level (plan §3.6 item 15, D6).
@@ -107,6 +108,13 @@ pub fn assess(i: &Inputs) -> Risk {
         regular += 1;
         reasons.push("No tests near the change".into());
     }
+    // GitHub sends no patch for very large files: the rules couldn't read them, so say so (and
+    // never "Small change" or "no code changed" over text nobody saw)
+    let unread = unread_files(i.files);
+    if !unread.is_empty() {
+        regular += 1;
+        reasons.push(unread_reason(unread.len()));
+    }
     let (add, del) = i.files.iter().fold((0, 0), |(a, d), f| (a + f.additions, d + f.deletions));
     if add + del > LARGE_LINES || i.files.len() > LARGE_FILES {
         regular += 1;
@@ -137,6 +145,17 @@ pub fn assess(i: &Inputs) -> Risk {
     }
     reasons.push(size_chip(add, del, i.files.len()));
     Risk { level, reasons }
+}
+
+/// Files with changed lines but no patch from GitHub (too large to diff). Binary files (no lines)
+/// aren't counted: there's no text to read.
+pub fn unread_files(files: &[FileDiff]) -> Vec<&str> {
+    files.iter().filter(|f| f.patch.is_none() && f.additions + f.deletions > 0).map(|f| f.path.as_str()).collect()
+}
+
+/// "Couldn't read 2 files (no diff from GitHub)".
+pub fn unread_reason(n: usize) -> String {
+    format!("Couldn't read {n} file{} (no diff from GitHub)", if n == 1 { "" } else { "s" })
 }
 
 /// "+27 −9 in 2 files" (a real minus sign, as the design writes it).
@@ -182,27 +201,38 @@ fn path_words(path: &str) -> Vec<String> {
 /// Words that name a security area exactly (prefix matching would catch "author").
 const AUTH_EXACT: [&str; 13] =
     ["auth", "oauth", "oauth2", "authn", "authz", "authentication", "authorization", "authorize", "login", "logout", "signin", "signup", "sso"];
-/// Word starts for the other areas.
-const AREA_PREFIXES: [(&str, &[&str]); 4] = [
-    ("passwords", &["password", "passwd", "credential", "keychain", "secret", "vault"]),
-    ("crypto", &["crypto", "encrypt", "decrypt", "cipher", "hmac"]),
-    ("payments", &["payment", "billing", "stripe", "checkout", "invoice", "payout", "refund"]),
-    ("redaction", &["redact"]),
+/// The words that name the other areas, whole words only (word starts would catch "secretary",
+/// "vaulted"): each stem and its common forms.
+const AREA_WORDS: [(&str, &[&str]); 4] = [
+    ("passwords", &["password", "passwords", "passwd", "credential", "credentials", "keychain", "secret", "secrets", "vault", "vaults"]),
+    ("crypto", &["crypto", "cryptography", "encrypt", "encrypted", "encryption", "decrypt", "decrypted", "decryption", "cipher", "ciphers", "hmac"]),
+    ("payments", &["payment", "payments", "billing", "stripe", "checkout", "invoice", "invoices", "invoicing", "payout", "payouts", "refund", "refunds"]),
+    ("redaction", &["redact", "redacted", "redaction", "redactor"]),
 ];
 
-/// The security areas the changed code touches (docs and tests don't count), in a fixed order.
+/// Images, video, fonts and other media: a file named `signin.webp` isn't sign-in code.
+fn is_media_path(path: &str) -> bool {
+    let name = file_name(path);
+    let ext = name.rsplit_once('.').map_or("", |(_, e)| e);
+    ["png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "bmp", "mp4", "webm", "mov", "mp3", "wav", "ogg", "woff", "woff2", "ttf", "otf", "pdf"].contains(&ext)
+}
+
+/// The security areas the changed code touches (docs, tests and media don't count), in a fixed order.
 pub fn security_areas(files: &[FileDiff]) -> Vec<&'static str> {
     let mut out = Vec::new();
     for f in files {
-        if tamper::is_test_path(&f.path) || is_doc_path(&f.path) {
+        if tamper::is_test_path(&f.path) || is_doc_path(&f.path) || is_media_path(&f.path) {
             continue;
         }
         let words = path_words(&f.path);
         if words.iter().any(|w| AUTH_EXACT.contains(&w.as_str())) && !out.contains(&"auth") {
             out.push("auth");
         }
-        for (area, prefixes) in AREA_PREFIXES {
-            if words.iter().any(|w| prefixes.iter().any(|p| w.starts_with(p))) && !out.contains(&area) {
+        // `git/checkout.rs` checks out a branch; it takes no money
+        let git = words.iter().any(|w| w == "git");
+        for (area, names) in AREA_WORDS {
+            let hit = words.iter().any(|w| names.contains(&w.as_str()) && !(git && w == "checkout"));
+            if hit && !out.contains(&area) {
                 out.push(area);
             }
         }
@@ -302,7 +332,26 @@ pub fn has_migration(files: &[Parsed]) -> bool {
             return true;
         }
         f.lines().any(|l| {
-            l.op == Op::Add && !l.test && (l.text.contains('"') || l.text.contains('\'') || l.text.contains('`')) && !l.text.trim_start().starts_with("//") && DDL.iter().any(|d| l.text.contains(d))
+            l.op == Op::Add && !l.test && (l.text.contains('"') || l.text.contains('\'') || l.text.contains('`')) && !l.text.trim_start().starts_with("//") && has_ddl(l.text)
+        })
+    })
+}
+
+/// DDL in `text`: upper case as it stands, or lower case (`create table if not exists t`) when a
+/// name follows. Mixed case ("Add column", "Drop index card") reads as a label, not SQL.
+pub fn has_ddl(text: &str) -> bool {
+    DDL.iter().any(|d| {
+        if text.contains(d) {
+            return true;
+        }
+        let lower = d.to_ascii_lowercase();
+        text.match_indices(lower.as_str()).any(|(i, _)| {
+            let before = text[..i].chars().next_back();
+            let rest = &text[i + lower.len()..];
+            let gap = rest.len() - rest.trim_start().len();
+            before.is_none_or(|c| !c.is_alphanumeric() && c != '_')
+                && gap > 0
+                && rest.trim_start().chars().next().is_some_and(|c| c.is_ascii_alphanumeric() || "_\"`[".contains(c))
         })
     })
 }
@@ -591,6 +640,60 @@ mod tests {
             modified("src/db/x.rs", "@@ -1,1 +1,2 @@\n+    let alter_table = 1;\n"),
         ];
         assert!(!has_migration(&tamper::parse_files(&not)));
+    }
+
+    /// Round 3 (Rigel's DDL row, feeds `needs_backup`): `create table` and `alter table` count as a
+    /// migration in upper or lower case; a UI label like "Add column" doesn't.
+    #[test]
+    fn lowercase_ddl_is_a_migration() {
+        for line in [
+            "+        sqlx::query(\"create table if not exists foo (id text)\").execute(&pool).await?;",
+            "+        sqlx::query(\"alter table kwants add column foo text\").execute(&pool).await?;",
+            "+    r#\"create unique index idx on t(a)\"#,",
+            "+        sqlx::query(\"drop table old\")",
+        ] {
+            let f = modified("src/db/spaces.rs", &format!("@@ -1,1 +1,2 @@\n ctx\n{line}\n"));
+            assert!(risk(&[f]).reasons.contains(&"Has a migration".into()), "{line}");
+        }
+        for line in ["+    <button title=\"Add column\">", "+    let msg = \"create tables of contents\";", "+    label: 'Drop index card',", "+    title: \"Create Table view\","] {
+            let f = modified("frontend/src/Board.tsx", &format!("@@ -1,1 +1,2 @@\n ctx\n{line}\n"));
+            assert!(!risk(&[f]).reasons.contains(&"Has a migration".into()), "{line}");
+        }
+        assert!(has_ddl("ALTER TABLE x") && has_ddl("alter table x") && has_ddl("ALTER TABLE") && !has_ddl("alter table"));
+    }
+
+    /// Round 3 (V-T5): GitHub sends no patch for very large files. The card says it couldn't read
+    /// them and never calls the change small or code-free.
+    #[test]
+    fn a_file_github_sent_no_diff_for_is_never_a_small_change() {
+        let unread = |path: &str, add: u64, del: u64| FileDiff { path: path.into(), status: "modified".into(), additions: add, deletions: del, patch: None, previous_path: None };
+        // A test file losing 300 lines, unread: at least Medium, and said
+        let r = risk(&[unread("tests/a_test.rs", 0, 300)]);
+        assert_eq!(r.level, Level::Medium);
+        assert_eq!(r.reasons, vec!["Couldn't read 1 file (no diff from GitHub)".to_string(), "+0 \u{2212}300 in 1 file".into()]);
+        // A big source file, unread: large plus unread
+        let r = risk(&[unread("src/a.rs", 900, 0)]);
+        assert!(r.level >= Level::Medium);
+        assert!(r.reasons.contains(&"Couldn't read 1 file (no diff from GitHub)".into()));
+        // Next to a small read change: still no "Small change"
+        let r = risk(&[code("src/runner.rs", 2), test_edit("tests/runner_test.rs"), unread("src/big.rs", 4, 0), unread("tests/big_test.rs", 1, 9)]);
+        assert!(r.reasons.contains(&"Couldn't read 2 files (no diff from GitHub)".into()), "{:?}", r.reasons);
+        assert!(r.reasons.iter().all(|x| !x.starts_with("Small change") && !x.contains("no code changed")), "{:?}", r.reasons);
+        // A binary file (no lines) has no text to read: not counted
+        let png = FileDiff { path: "site/a.png".into(), status: "modified".into(), additions: 0, deletions: 0, patch: None, previous_path: None };
+        assert!(unread_files(std::slice::from_ref(&png)).is_empty());
+        assert_eq!(risk(&[png]).level, Level::Low);
+    }
+
+    /// Round 3 (Rigel's security-path false positives): whole words only, and media files never.
+    #[test]
+    fn lookalike_paths_and_media_are_not_security_paths() {
+        for path in ["src/secretary.rs", "src/git/checkout.rs", "src/vaulted.rs", "site/assets/media/thumb-v69-signin-1280.webp", "frontend/public/login-hero.png", "src/encryptionless.rs"] {
+            assert!(security_areas(&[code(path, 3)]).is_empty(), "{path}: {:?}", security_areas(&[code(path, 3)]));
+        }
+        for (path, area) in [("frontend/src/checkout/Cart.tsx", "payments"), ("src/secrets.rs", "passwords"), ("src/server/credentials.rs", "passwords"), ("frontend/src/components/ClaudeSignIn.tsx", "auth"), ("src/encryption.rs", "crypto")] {
+            assert_eq!(security_areas(&[code(path, 3)]), vec![area], "{path}");
+        }
     }
 
     #[test]
