@@ -52,6 +52,9 @@ import { routeChipLabel, routeReasonText } from '../routeReason';
 import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
+import { IDEA_MAX, isIdeaCommand } from '../ideas';
+import { ideaBlockedLine, ideaLength } from '../ideaShell';
+import { JarIcon } from './JarIcon';
 import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
 import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
@@ -155,7 +158,8 @@ export interface ChatViewProps {
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
   /** Resolves to false when the message couldn't be sent. */
-  onSendMessage: (text: string, attachments: AttachmentRef[], opts?: SendOptions) => void | Promise<boolean | void>;
+  /** A string back is a `/idea` that didn't go in: the composer gets the text back with that line. */
+  onSendMessage: (text: string, attachments: AttachmentRef[], opts?: SendOptions) => void | Promise<boolean | string | void>;
   /** Saves the person's thumbs on a bot reply; absent hides the thumbs. */
   onReact?: (msg: ChatMessage, reaction: Reaction | null) => Promise<ReactResult> | void;
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
@@ -872,12 +876,57 @@ export const ChatView: React.FC<ChatViewProps> = ({
     },
   };
 
-  const canSend = composerReady(inputVal, uploads);
+  // `/idea …` goes in the idea jar, not to a bot (spec §2.3): the field dresses violet and blocks a send it can't take.
+  const ideaMode = isIdeaCommand(inputVal);
+  const ideaBlocked = ideaMode ? ideaBlockedLine(inputVal, IDEA_MAX, uploads.length > 0) : null;
+  // A failed drop's reason, shown while the field still holds the words it gave back.
+  const [ideaError, setIdeaError] = useState<{ text: string; line: string } | null>(null);
+  const [ideaTried, setIdeaTried] = useState(false);
+  useEffect(() => {
+    if (!ideaMode) setIdeaTried(false);
+  }, [ideaMode]);
+  // The one-item "/" popover: shows while the field holds a start of "/idea" and nothing else.
+  const slashOpen = !ideaMode && inputVal.length > 0 && inputVal.length < 5 && '/idea'.startsWith(inputVal.toLowerCase()) && !uploads.length;
+  const completeIdea = () => {
+    setInputVal('/idea ');
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(6, 6);
+      }
+    });
+  };
+
+  const canSend = ideaMode ? !ideaBlocked : composerReady(inputVal, uploads);
+  // The line under the field: too long or a file shows at once; an empty idea only once Enter was tried.
+  const ideaLine = (ideaError && ideaError.text === inputVal ? ideaError.line : null) ?? (ideaBlocked && (ideaTried || ideaLength(inputVal) > 0 || uploads.length > 0) ? ideaBlocked : null);
   const stillUploading = uploads.some((u) => u.state === 'uploading');
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     // A reply in progress doesn't block the next message (it waits its turn); a team discussion does.
+    if (ideaMode) {
+      // Ideas never wait on a reply or a discussion: the jar is not a bot.
+      if (ideaBlocked) {
+        setIdeaTried(true);
+        return;
+      }
+      const draft = inputVal;
+      playSfx('click');
+      const sent = onSendMessage(draft.trim(), [], undefined);
+      setInputVal('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      if (sent && typeof (sent as Promise<unknown>).then === 'function')
+        void (sent as Promise<boolean | string | void>).then((r) => {
+          if (typeof r === 'string') {
+            // A failed drop gives the words back, with the reason under the field.
+            setInputVal((now) => (now ? now : draft));
+            setIdeaError({ text: draft, line: r });
+          }
+        });
+      return;
+    }
     if (!canSend || (isStreaming && discussionState?.inProgress)) return;
     playSfx('click');
     stickRef.current = true;
@@ -903,6 +952,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashOpen && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
+      e.preventDefault();
+      completeIdea();
+      return;
+    }
     if (isMentionOpen) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -1301,7 +1355,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const toolPhone = 'w-11 h-11 text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06] active:bg-white/[0.06] focus-visible:outline-[#b8adff]';
   // Phone hint row (spec A2): no "@ mention · attach files" on touch, and "Answers:" only where it isn't
   // obvious (channels and team chats, or a direct chat with an @mention typed).
-  const showAnswers = !phone || home?.kind !== 'bot' || target.kind === 'mention';
+  const showAnswers = !ideaMode && (!phone || home?.kind !== 'bot' || target.kind === 'mention');
   const showHintText = !(phone && touch);
   const placeholder = phone
     ? phonePlaceholder(title, fieldWidth, (t) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : ''))
@@ -1797,6 +1851,42 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
             </div>
           )}
+          {ideaMode && (
+            <p data-idea-hint className="basis-full min-w-0 px-1 pt-0.5 flex items-center gap-1.5 text-[12px] leading-4 text-violet-200">
+              <JarIcon size={13} className="shrink-0 text-violet-300" />
+              <span className="min-w-0 line-clamp-2">
+                Goes in the idea jar, not to{' '}
+                <span className="font-medium text-violet-100">
+                  {home?.kind === 'bot' ? home.bot?.name ?? title : title.startsWith('#') || home?.kind === 'team' ? title : `#${title}`}
+                </span>
+                . No bot reads it now.
+              </span>
+            </p>
+          )}
+          {slashOpen && (
+            <div
+              role="listbox"
+              id="kw-slash-list"
+              aria-label="Commands"
+              data-slash-popover
+              className="kw-fade-in absolute bottom-full left-0 mb-2 bg-surface-overlay border border-hairline-strong rounded-xl shadow-raised p-1.5 min-w-[260px] z-50"
+            >
+              <button
+                type="button"
+                role="option"
+                id="kw-slash-idea"
+                aria-selected="true"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={completeIdea}
+                className="w-full flex items-center gap-2.5 px-2.5 min-h-11 sm:min-h-9 rounded-lg bg-white/[0.06] text-left text-sm text-zinc-100 hover:bg-white/[0.08]"
+              >
+                <JarIcon size={15} className="text-violet-300 shrink-0" />
+                <span className="font-semibold text-violet-300">/idea</span>
+                <span className="text-zinc-400">Drop an idea in the jar</span>
+                <kbd className="ml-auto font-sans text-[11px] text-zinc-500">Tab</kbd>
+              </button>
+            </div>
+          )}
           {isMentionOpen && (
             <MentionPopover
               items={matchingItems}
@@ -1809,9 +1899,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
             ref={textareaRef}
             data-composer
             role="combobox"
-            aria-expanded={isMentionOpen}
-            aria-controls={isMentionOpen ? 'kw-mention-list' : undefined}
-            aria-activedescendant={isMentionOpen ? `kw-mention-${safeSelectedIndex}` : undefined}
+            aria-expanded={isMentionOpen || slashOpen}
+            aria-controls={isMentionOpen ? 'kw-mention-list' : slashOpen ? 'kw-slash-list' : undefined}
+            aria-activedescendant={isMentionOpen ? `kw-mention-${safeSelectedIndex}` : slashOpen ? 'kw-slash-idea' : undefined}
+            aria-invalid={ideaLine ? true : undefined}
+            aria-describedby={ideaLine ? 'kw-idea-line' : undefined}
             aria-autocomplete="list"
             rows={1}
             value={inputVal}
@@ -1915,7 +2007,32 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <Square size={12} fill="currentColor" aria-hidden="true" />
             </button>
           )}
-          {!(isStreaming && (discussionState?.inProgress || !canSend)) && (
+          {ideaMode && (
+            <span
+              data-idea-counter
+              aria-hidden="true"
+              className={`flex-shrink-0 px-1.5 text-[11px] tabular-nums ${ideaLength(inputVal) > IDEA_MAX ? 'text-rose-300' : 'text-zinc-500'}`}
+            >
+              {ideaLength(inputVal).toLocaleString('en-US')} / {IDEA_MAX.toLocaleString('en-US')}
+            </span>
+          )}
+          {ideaMode ? (
+            <button
+              type="submit"
+              aria-label="Drop in the jar"
+              title="Drop in the jar"
+              disabled={!canSend}
+              data-send-ready={canSend ? 'true' : 'false'}
+              data-idea-send
+              className={`w-11 h-11 ${phone ? '' : 'sm:w-9 sm:h-9'} rounded-xl flex items-center justify-center flex-shrink-0 transition-[transform,background-color] duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 ${
+                canSend
+                  ? 'bg-violet-500 text-white hover:bg-violet-400 active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100'
+                  : 'bg-violet-500/20 text-violet-300/60 cursor-not-allowed'
+              }`}
+            >
+              <JarIcon size={phone ? 18 : 17} />
+            </button>
+          ) : !(isStreaming && (discussionState?.inProgress || !canSend)) && (
             <button
               type="submit"
               aria-label={stillUploading ? 'Send (waiting for uploads)' : isStreaming ? 'Send (waits for the current reply)' : 'Send'}
@@ -1937,6 +2054,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
           </div>
         </form>
+        {ideaLine && (
+          <p id="kw-idea-line" role="alert" data-idea-line className="max-w-4xl mx-auto mt-1.5 px-1 text-meta text-rose-300">
+            {ideaLine}
+          </p>
+        )}
         {/* Under the field: who will answer, and what the field understands */}
         <div
           className={`max-w-4xl mx-auto mt-1.5 px-1 flex items-center justify-between gap-3 text-meta text-zinc-400${kbd || (!showAnswers && !showHintText) ? ' hidden' : ''}`}

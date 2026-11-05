@@ -32,6 +32,7 @@ import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
 import { StarAskSettingsLink } from './StarAsk';
 import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
+import { IDEA_CAP_DEFAULT, IDEA_CAP_MAX, IDEA_CAP_MIN, ideaCapForSwitch, lastIdeaCap, parseIdeaCap, rememberIdeaCap } from '../ideaShell';
 import {
   AUTOFIX_MODES,
   AutofixSettings,
@@ -74,6 +75,7 @@ const SwitchRow: React.FC<{ id: string; label: string; hint: string; checked: bo
     <button
       type="button"
       role="switch"
+      data-switch={id}
       aria-checked={checked}
       aria-labelledby={`${id}-label`}
       aria-describedby={`${id}-hint`}
@@ -159,6 +161,8 @@ interface SettingsData {
   decide_first?: boolean;
   work_ahead?: boolean;
   work_ahead_daily_cap?: number;
+  /** Idea jar (0.7): takes a day per space; 0 = off. Missing on older servers. */
+  idea_jar_daily_cap?: number;
 }
 
 /**
@@ -247,6 +251,8 @@ interface SettingsModalProps {
   embedded?: boolean;
   /** Opens Settings › This space › Accounts, where the API keys and Ollama address live. */
   onOpenApiKeys?: () => void;
+  /** A switch to scroll to and focus once loaded, by its row id ("idea-jar" from the jar's Settings button). */
+  focusRow?: string | null;
 }
 
 /** App settings: shared by every space (keys, Laya, limits, notifications, sounds). Accounts,
@@ -293,7 +299,7 @@ const DiscoverySetting: React.FC<{ value: DiscoverySettings; onChange: (v: Disco
   );
 };
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys, focusRow = null }) => {
   const { authRequired, deviceLogin, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
   const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
@@ -311,6 +317,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [agentTools, setAgentTools] = useState<boolean | null>(null);
   // Deciding and working ahead on their own; null on a server without these settings
   const [proactive, setProactive] = useState<ProactiveSettings | null>(null);
+  // Idea jar: takes a day per space, 0 = off; null on a server without it (hidden, left out of the save).
+  const [ideaCap, setIdeaCap] = useState<number | null>(null);
   // null: this server has no Mission board, so the switch stays hidden.
   const [missionBoard, setMissionBoard] = useState<boolean | null>(null);
   const [autofix, setAutofix] = useState<AutofixSettings | null>(null);
@@ -386,6 +394,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           setTokenLimits(dl ? { task: String(dl.task), mission: String(dl.mission) } : null);
           setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
           setProactive(parseProactiveSettings(data));
+          if (data.idea_jar_daily_cap === undefined) setIdeaCap(null);
+          else {
+            const cap = parseIdeaCap(data.idea_jar_daily_cap);
+            if (cap > 0) rememberIdeaCap(cap);
+            setIdeaCap(cap);
+          }
           setMissionBoard(parseMissionBoardSetting(data));
           setAutofix(parseAutofixSettings(data));
           setLessons(parseLessonsSetting(data));
@@ -443,6 +457,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const notifyHint = deviceNotifyHint({ support, permission, on: browserNotify, android: notifyEnv.android, standalone: notifyEnv.standalone });
   const notifyBlocked = support === 'insecure' || support === 'ios-install' || support === 'unsupported';
 
+  // Opened from a page's Settings button (the Idea jar's): bring that switch into view and focus it.
+  useEffect(() => {
+    if (!isOpen || !focusRow || !settings) return;
+    const raf = requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(`[data-switch="${focusRow}"]`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center', behavior: 'auto' });
+      el.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isOpen, focusRow, settings]);
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (webhookError || limitsInvalid || chainBudgetError || tokenLimitsInvalid) return;
@@ -468,6 +494,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           ...(tokenLimitsValue ? defaultLimitsBody(tokenLimitsValue) : {}),
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
           ...(proactive ?? {}),
+          ...(ideaCap !== null ? { idea_jar_daily_cap: ideaCap } : {}),
           ...(missionBoard !== null ? { mission_board: missionBoard } : {}),
           ...(autofix !== null ? { autofix: autofix.autofix, recovery_budget_pct: autofix.recovery_budget_pct } : {}),
           ...(lessons !== null ? { lessons } : {}),
@@ -871,6 +898,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                   </span>
                 </div>
               </SwitchRow>
+              {ideaCap !== null && (
+                <SwitchRow
+                  id="idea-jar"
+                  label="Free bots peek in the idea jar"
+                  hint="A bot with nothing on takes the oldest idea and writes a take: worth it or not, how big, and a plan. It reads only. Nothing starts until you press Do it."
+                  checked={ideaCap > 0}
+                  onToggle={() =>
+                    setIdeaCap((c) => {
+                      const next = ideaCapForSwitch(!(c && c > 0), lastIdeaCap());
+                      if (next > 0) rememberIdeaCap(next);
+                      return next;
+                    })
+                  }
+                >
+                  <div className="mt-2 flex items-center gap-2">
+                    <label htmlFor="idea-jar-cap" className={`text-[11px] ${ideaCap > 0 ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                      At most
+                    </label>
+                    <select
+                      id="idea-jar-cap"
+                      value={ideaCap > 0 ? ideaCap : lastIdeaCap() ?? IDEA_CAP_DEFAULT}
+                      disabled={ideaCap <= 0}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        rememberIdeaCap(n);
+                        setIdeaCap(n);
+                      }}
+                      className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none disabled:opacity-50"
+                    >
+                      {Array.from({ length: IDEA_CAP_MAX - IDEA_CAP_MIN + 1 }, (_, i) => i + IDEA_CAP_MIN).map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                    <span className={`text-[11px] ${ideaCap > 0 ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                      {(ideaCap > 0 ? ideaCap : lastIdeaCap() ?? IDEA_CAP_DEFAULT) === 1 ? 'take' : 'takes'} a day in each space
+                    </span>
+                  </div>
+                </SwitchRow>
+              )}
             </fieldset>
           )}
 
