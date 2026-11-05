@@ -132,7 +132,7 @@ test('working strip: never "getting started" once the turn has steps (ticket 2)'
   // Between steps (a finished tool, nothing open yet) the bot is still working, not starting.
   assert.equal(w.workingLabel({ live: done }), 'working on it');
   // An open step still wins, and so does the reply once it streams.
-  assert.equal(w.workingLabel({ live: { ...done, steps: [...done.steps, step({ id: 's3', status: 'running', title: 'Using `web_search`' })] } }), 'using web_search');
+  assert.equal(w.workingLabel({ live: { ...done, steps: [...done.steps, step({ id: 's3', status: 'running', title: 'Using `web_search`' })] } }), 'searching the web');
   assert.equal(w.workingLabel({ live: done, writing: true }), 'writing the reply');
   // No steps at all: the turn really is just starting.
   assert.equal(w.workingLabel({ live: { turnId: 't', thinking: {}, steps: [] } }), 'getting started');

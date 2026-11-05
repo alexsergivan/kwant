@@ -2,7 +2,7 @@
 // reconnect, by `GET /api/away`'s waiting items, so a card never depends on the page having been
 // open when the bot asked. Pure helpers, shared by the app and the node tests.
 
-import type { PendingApproval } from './components/ModernApprovalCard';
+import { approvalAction, type PendingApproval } from './components/ModernApprovalCard';
 import type { AwayItem, AwayLink } from './away';
 
 /** A card plus where it belongs: the asking bot and, when the server knows it, the conversation. */
@@ -16,7 +16,7 @@ const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
 /** From the live SSE event's data. */
 export function approvalFromEvent(data: { id: string; tool_name: string; details?: Record<string, unknown> }): ChatApproval {
   const details = data.details ?? {};
-  return { id: data.id, tool_name: data.tool_name, details, kwant_id: str(details.kwant_id), link: null };
+  return { id: data.id, tool_name: data.tool_name, details, kwant_id: str(details.kwant_id), link: null, asked_at: new Date().toISOString() };
 }
 
 /**
@@ -34,7 +34,18 @@ export function approvalFromAway(item: AwayItem): ChatApproval {
   const link = item.link && (item.link.thread_id || item.link.channel_id || item.link.direct_kwant_id) ? item.link : null;
   const approval: ChatApproval = { id: item.id, tool_name: tool, details, kwant_id: item.kwant_id || str(details.kwant_id), link };
   if (item.status === 'waiting') approval.waiting = true;
+  if (str(item.timestamp)) approval.asked_at = item.timestamp;
   return approval;
+}
+
+/**
+ * An Inbox item's title in words. An approval reads like its card ("Open a pull request on
+ * GitHub"), never the server's raw "Use create_pull_request (github)"; other items keep theirs.
+ */
+export function awayTitle(item: AwayItem): string {
+  if (item.kind !== 'approval') return item.title;
+  const action = approvalAction(approvalFromAway(item));
+  return action.charAt(0).toUpperCase() + action.slice(1);
 }
 
 /**

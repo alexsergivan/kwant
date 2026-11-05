@@ -11,13 +11,14 @@ import {
   statusLabel,
   thinkingText,
 } from '../activity';
+import { readableStepTitle } from '../toolLabel';
 
 /** "Running `cargo test`" with the quoted part in mono. */
 const Title: React.FC<{ text: string }> = ({ text }) => (
   <>
     {text.split(/(`[^`]*`)/g).map((part, i) =>
       part.startsWith('`') && part.endsWith('`') && part.length > 1 ? (
-        <code key={i} className="font-mono text-[11px] px-1 py-px rounded bg-zinc-800/80 text-zinc-100 break-all">
+        <code key={i} className="font-mono text-[11px] px-1 py-px rounded bg-zinc-800/80 text-zinc-100 [overflow-wrap:anywhere] [box-decoration-break:clone] [-webkit-box-decoration-break:clone]">
           {part.slice(1, -1)}
         </code>
       ) : (
@@ -123,7 +124,7 @@ const StepRow: React.FC<{ step: ActivityStep; live?: LiveActivity; now: number; 
     <>
       <StatusIcon step={step} />
       <span className={`min-w-0 flex-1 break-words ${step.status === 'stopped' ? 'text-zinc-400' : waiting ? 'text-amber-100' : 'text-zinc-200'}`}>
-        {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={step.title} />}
+        {step.kind === 'thinking' ? (running ? 'Thinking…' : 'Thought') : <Title text={readableStepTitle(step.title)} />}
       </span>
       {time && <span className="flex-shrink-0 font-mono text-[10px] text-zinc-400 tabular-nums">{time}</span>}
     </>
@@ -190,12 +191,75 @@ const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: nu
   );
 };
 
-/** While the bot works: every step so far, newest last. */
-export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string }> = ({ live, idBase }) => {
+/**
+ * While the bot works: every step so far, newest last. `compact` (phone, 0.6.13 spec C2) folds it to
+ * one 44 px row, "Steps · 2 ▸", that opens to the same list; the engine's note (what it can't show of
+ * its thinking) moves behind an ⓘ in that row, since the working strip already says the bot works.
+ */
+export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string; compact?: boolean }> = ({ live, idBase, compact = false }) => {
   const { steps } = live;
+  const [open, setOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
   if (steps.length === 0) return null;
   const work = steps.filter((s) => s.kind !== 'note').length;
   const current = [...steps].reverse().find(isOpenStep);
+  // Only waits are announced; a stream of tool names would be noise.
+  const announce = (
+    <p className="sr-only" role="status" aria-live="polite">
+      {current?.status === 'waiting' ? readableStepTitle(plainTitle(current.title)) : ''}
+    </p>
+  );
+  if (compact) {
+    const notes = steps.filter((s) => s.kind === 'note');
+    const workSteps = steps.filter((s) => s.kind !== 'note');
+    const listId = `${idBase}-live`;
+    const noteId = `${idBase}-note`;
+    return (
+      <section aria-label="What the bot is doing" data-steps-compact="" className="mb-2 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden">
+        <div className="flex items-center">
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            aria-controls={open ? listId : undefined}
+            disabled={work === 0}
+            className="min-w-0 flex-1 flex items-center gap-2 min-h-[44px] px-3 text-left text-sm text-zinc-300 disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#b8adff]"
+          >
+            <ListTree size={14} className="shrink-0 text-sky-400/80" aria-hidden="true" />
+            <span className="truncate">Steps · {work}</span>
+            {work > 0 && (
+              <ChevronRight size={14} className={`shrink-0 text-zinc-400 transition-transform duration-150 motion-reduce:transition-none ${open ? 'rotate-90' : ''}`} aria-hidden="true" />
+            )}
+          </button>
+          {notes.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setNoteOpen((o) => !o)}
+              aria-expanded={noteOpen}
+              aria-controls={noteOpen ? noteId : undefined}
+              aria-label="About this engine's steps"
+              className="shrink-0 inline-flex items-center justify-center w-11 h-11 text-zinc-400 hover:text-zinc-200 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#b8adff]"
+            >
+              <Info size={16} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+        {announce}
+        {noteOpen && notes.length > 0 && (
+          <div id={noteId} className="border-t border-zinc-700/40 px-3 py-2 space-y-1 text-xs leading-5 text-zinc-400">
+            {notes.map((n) => (
+              <p key={n.id} className="break-words">{n.title}</p>
+            ))}
+          </div>
+        )}
+        {open && work > 0 && (
+          <div className="border-t border-zinc-700/40 max-h-[22rem] overflow-y-auto">
+            <Steps steps={workSteps} live={live} id={listId} />
+          </div>
+        )}
+      </section>
+    );
+  }
   return (
     <section aria-label="What the bot is doing" className="mb-2 w-full max-w-2xl rounded-xl border border-zinc-700/60 bg-zinc-900/60 overflow-hidden shadow-[var(--kws-shadow)]">
       <p className="flex items-center gap-1.5 px-3 pt-2 pb-1 text-[11px] font-medium uppercase tracking-wide text-zinc-400">
@@ -206,10 +270,7 @@ export const LiveActivityList: React.FC<{ live: LiveActivity; idBase: string }> 
           · {work} {work === 1 ? 'step' : 'steps'}
         </span>
       </p>
-      {/* Only waits are announced; a stream of tool names would be noise. */}
-      <p className="sr-only" role="status" aria-live="polite">
-        {current?.status === 'waiting' ? plainTitle(current.title) : ''}
-      </p>
+      {announce}
       <div className="max-h-[22rem] overflow-y-auto">
         <Steps steps={steps} live={live} id={`${idBase}-live`} />
       </div>

@@ -49,15 +49,15 @@ test('the server decides waiting: a live card turns waiting on sync, and back', 
 
 test('a still-open card says so, keeps Allow and Deny, and drops Always', () => {
   const html = m.card({ ...m.approvalFromAway(awayItem('waiting')), details: { ...awayItem('waiting').details, kwant_name: 'Architect' } });
-  assert.match(html, /Still open: you can still Allow/);
+  assert.match(html, /Still open: you can still allow/);
   assert.match(html, /Architect stopped waiting for an answer and nothing ran/);
   assert.match(html, /Allow and continue/);
   assert.match(html, />Deny</);
   assert.doesNotMatch(html, /Always/);
-  assert.doesNotMatch(html, /Action Approval Required/);
+  assert.doesNotMatch(html, /Approval needed/);
   // A normal card is unchanged.
   const normal = m.card(m.approvalFromAway(awayItem('pending')));
-  assert.match(normal, /Action Approval Required/);
+  assert.match(normal, /Approval needed/);
   assert.match(normal, /Always this session/);
   assert.doesNotMatch(normal, /Still open/);
 });
@@ -75,7 +75,7 @@ test('Allow and Deny on a still-open card answer with allow_once and deny', () =
   walk(el);
   assert.equal(buttons.length, 2);
   for (const b of buttons) b.props.onClick();
-  assert.deepEqual(calls, [['ap1', 'deny'], ['ap1', 'allow_once']]);
+  assert.deepEqual(calls, [['ap1', 'allow_once'], ['ap1', 'deny']]);
   // Disabled while sending: no answer goes out.
   const busy = [];
   const el2 = m.ModernApprovalCard({ approval: m.approvalFromAway(awayItem('waiting')), disabled: true, onResolve: (...a) => busy.push(a) });

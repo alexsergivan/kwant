@@ -182,7 +182,9 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           // Pre element pass-through to let CodeBlock handle layout
           pre: ({ children }) => <>{children}</>,
 
-          // Code rendering: CodeBlock for blocks, styled pill for inline
+          // Code rendering: CodeBlock for blocks, styled pill for inline. A long inline run (a 46-character
+          // identifier, `--test-threads=1`) may break anywhere rather than run past the bubble, and each
+          // wrapped line keeps its own padding and radius (clone) instead of one box cut in two.
           code: ({ className: codeClassName, children, ...props }) => {
             const match = /language-(\w+)/.exec(codeClassName || '');
             const strVal = String(children).replace(/\n$/, '');
@@ -199,7 +201,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
             return (
               <code
-                className="px-1.5 py-0.5 rounded-md font-mono text-[12px] bg-zinc-800/80 text-sky-300 border border-zinc-700/50"
+                className="px-1.5 py-0.5 rounded-md font-mono text-[12px] bg-zinc-800/80 text-sky-300 border border-zinc-700/50 [overflow-wrap:anywhere] [box-decoration-break:clone] [-webkit-box-decoration-break:clone]"
                 {...props}
               >
                 {children}

@@ -1,8 +1,11 @@
-import React from 'react';
-import { ShieldAlert, Check, CheckCheck, X, Plug, FileText, Terminal, Clock, CreditCard, GraduationCap } from 'lucide-react';
+import React, { useId, useState } from 'react';
+import { ShieldAlert, Check, CheckCheck, X, FileText, Clock, CreditCard, GraduationCap, ChevronDown } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
-import { formatArgs, humanizeToolName, parseMcpToolName } from '../mcp';
+import { formatArgs, parseMcpToolName } from '../mcp';
 import { tierReason } from '../flightSchool';
+import { toolAction } from '../toolLabel';
+import { localClock } from '../clock';
+import { isPhoneLayout } from '../layout';
 
 export interface PendingApproval {
   id: string;
@@ -13,6 +16,8 @@ export interface PendingApproval {
    * starts the bot again to make that call, Deny closes it.
    */
   waiting?: boolean;
+  /** When the bot asked (ISO time), for the card's header; left out when unknown. */
+  asked_at?: string;
 }
 
 interface ModernApprovalCardProps {
@@ -20,6 +25,8 @@ interface ModernApprovalCardProps {
   onResolve: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
   /** While an answer is being sent. */
   disabled?: boolean;
+  /** Forces the phone or desktop look (tests); by default it follows the window when the card appears. */
+  phone?: boolean;
 }
 
 /** Server/tool/arguments of an MCP approval, or null for other tools. */
@@ -32,8 +39,29 @@ const mcpView = (approval: PendingApproval) => {
     tool: typeof d.tool === 'string' ? d.tool : fromName?.tool ?? approval.tool_name,
     kwant: typeof d.kwant_name === 'string' ? d.kwant_name : null,
     args: formatArgs(d.arguments),
+    raw: d.arguments,
   };
 };
+
+/** Arguments worth a line of their own on the card, in this order (0.6.13 spec C1). */
+const KEY_FACTS = ['title', 'name', 'path', 'url', 'repo', 'command'];
+
+/**
+ * Up to two short "key: value" lines from a tool's arguments, so the card says what the call is
+ * about without opening the details. Only text and numbers; everything else stays in the details.
+ */
+export function keyFacts(args: unknown, max = 2): Array<[string, string]> {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return [];
+  const a = args as Record<string, unknown>;
+  const out: Array<[string, string]> = [];
+  for (const k of KEY_FACTS) {
+    const v = a[k];
+    const text = typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '';
+    if (text) out.push([k, text]);
+    if (out.length >= max) break;
+  }
+  return out;
+}
 
 /** Command and folder of a kwant shell command on this computer, or null for other tools. */
 export const localShellView = (approval: PendingApproval) => {
@@ -107,10 +135,56 @@ export const paymentReason = (approval: PendingApproval) => {
 export const waitingNote = (bot: string | null) =>
   `${bot ?? 'The bot'} stopped waiting for an answer and nothing ran. Allow starts it again to make this call; Deny closes the card.`;
 
+/**
+ * What the bot asks to do, in words, after "<Bot> wants to": "open a pull request on GitHub".
+ * The card's sentence and the Inbox title both use it, so they always say the same thing.
+ */
+export function approvalAction(approval: PendingApproval): string {
+  if (localShellView(approval)) return 'run a command on your computer';
+  const mcp = mcpView(approval);
+  const builtin = mcp ? null : builtinView(approval);
+  if (builtin?.kind === 'shell') return 'run a command';
+  if (builtin?.kind === 'file') return `${builtin.tool === 'Write' ? 'write a file' : 'change a file'}${builtin.outsideFolder ? ' outside its own folder' : ''}`;
+  if (builtin) return toolAction(builtin.tool);
+  const summary = summaryView(approval);
+  if (summary) return toolAction(summary.tool);
+  return mcp ? toolAction(mcp.tool, mcp.server || null) : toolAction(approval.tool_name);
+}
+
+/** The pre/JSON style inside a card: wraps between words, and only splits a word too long for the line. */
+/** "Show details": closed on a phone, so Allow is on screen with the card's top; open on desktop. */
+const ApprovalDetails: React.FC<{ phone?: boolean; children: React.ReactNode }> = ({ phone, children }) => {
+  const [open, setOpen] = useState(() => !(phone ?? isPhoneLayout()));
+  const id = useId();
+  return (
+    <div className="mt-1.5">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((o) => !o)}
+        data-approval-details-toggle=""
+        className="-ml-2 inline-flex items-center gap-1 min-h-[44px] sm:min-h-[32px] px-2 rounded-lg text-sm text-[#a39dcc] hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b8adff]"
+      >
+        {open ? 'Hide details' : 'Show details'}
+        <ChevronDown size={14} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div id={id} className="mt-1 space-y-1.5" data-approval-details="">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const PRE = 'font-mono text-xs leading-[18px] whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-h-[240px] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950/70 p-2';
+
 export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   approval,
   onResolve,
   disabled = false,
+  phone,
 }) => {
   const handleDecision = (decision: 'allow_once' | 'always_allow' | 'deny') => {
     if (disabled) return;
@@ -122,12 +196,71 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const builtin = shell || mcp ? null : builtinView(approval);
   const summary = summaryView(approval);
   const name = builtin?.kwant ?? summary?.kwant;
-  const who = name ? <span className="font-medium text-zinc-100">{name}</span> : 'A bot';
   const perSession = !!builtin || !!summary?.builtin;
   const waiting = approval.waiting === true;
   const botName = name ?? mcp?.kwant ?? null;
   const payment = paymentReason(approval);
   const tier = payment ? null : tierReason(approval.details);
+  const time = localClock(approval.asked_at);
+  const offerAlways = !shell && !waiting && !payment;
+
+  const bot = botName ? <strong className="font-semibold text-zinc-50">{botName}</strong> : 'A bot';
+  // "<Bot> wants to open a pull request on <Server>", the server in bold.
+  const action = approvalAction(approval);
+  const on = mcp && !summary ? / on (.+)$/.exec(action) : null;
+  const what: React.ReactNode = on ? <>{action.slice(0, on.index)} on <strong className="font-semibold text-zinc-50">{on[1]}</strong></> : action;
+
+  const facts: Array<[string, string]> = mcp
+    ? keyFacts(mcp.raw)
+    : builtin?.kind === 'file' && builtin.path
+      ? [['path', builtin.path]]
+      : builtin && 'args' in builtin
+        ? keyFacts((approval.details?.arguments ?? approval.details?.input) as unknown)
+        : [];
+
+  // What the details disclosure holds: the raw call, for the person who wants to check it.
+  const details: React.ReactNode = shell ? (
+    shell.cwd ? (
+      <p className="text-xs leading-[18px] text-[#a39dcc] break-words [overflow-wrap:anywhere]">
+        In folder: <span className="font-mono text-zinc-200">{shell.cwd}</span>
+      </p>
+    ) : null
+  ) : summary ? (
+    summary.summary ? <p className="text-xs leading-[18px] text-zinc-300 break-words">{summary.summary}</p> : null
+  ) : builtin?.kind === 'shell' ? (
+    builtin.cwd ? (
+      <p className="text-xs leading-[18px] text-[#a39dcc] break-words [overflow-wrap:anywhere]">
+        In folder: <span className="font-mono text-zinc-200">{builtin.cwd}</span>
+      </p>
+    ) : null
+  ) : builtin?.kind === 'file' ? (
+    <p className="text-xs leading-[18px] text-zinc-300 break-words">
+      {builtin.change}
+      {builtin.cwd && (
+        <>
+          {' · '}
+          <span className="text-[#a39dcc]">Its folder:</span> <span className="font-mono text-zinc-200 [overflow-wrap:anywhere]">{builtin.cwd}</span>
+        </>
+      )}
+    </p>
+  ) : builtin ? (
+    'args' in builtin && builtin.args ? <pre className={`${PRE} text-zinc-300`}>{builtin.args}</pre> : <p className="text-xs text-zinc-500">No arguments.</p>
+  ) : mcp ? (
+    <>
+      <p className="font-mono text-xs leading-[18px] text-zinc-500 break-words [overflow-wrap:anywhere]">
+        {mcp.server} · {mcp.tool}
+      </p>
+      {mcp.args ? <pre className={`${PRE} text-zinc-300`}>{mcp.args}</pre> : <p className="text-xs text-zinc-500">No arguments.</p>}
+    </>
+  ) : (
+    <>
+      <p className="font-mono text-xs leading-[18px] text-zinc-500 break-words [overflow-wrap:anywhere]">{approval.tool_name}</p>
+      <pre className={`${PRE} text-zinc-300`}>{JSON.stringify(approval.details, null, 2)}</pre>
+    </>
+  );
+
+  const secondary =
+    'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[36px] px-3 rounded-lg border border-[#3f3868] bg-[#231d4b] text-sm font-medium text-[#ecebfa] hover:bg-[#2c2552] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed';
 
   return (
     <div
@@ -136,185 +269,110 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
         waiting ? 'border-sky-500/30 bg-sky-950/20' : 'border-amber-500/30 bg-amber-950/20'
       }`}
     >
-      {waiting ? (
-        <div className="mb-2 space-y-1">
-          <div className="flex items-center gap-2 text-sky-300 font-semibold text-xs tracking-wide">
-            <Clock size={16} aria-hidden="true" />
-            <span>Still open: you can still Allow</span>
-          </div>
-          <p className="text-[11px] text-zinc-400">{waitingNote(botName)}</p>
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 mb-2 text-amber-400 font-semibold text-xs tracking-wide">
-          <ShieldAlert size={16} />
-          <span>Action Approval Required</span>
-        </div>
+      <div className="flex items-center gap-2.5" data-approval-header="">
+        <span
+          className={`shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full ${waiting ? 'bg-sky-500/15 text-sky-300' : 'bg-amber-500/15 text-amber-400'}`}
+          aria-hidden="true"
+        >
+          {waiting ? <Clock size={16} /> : <ShieldAlert size={16} />}
+        </span>
+        <h3 className="min-w-0 flex-1 text-[15px] leading-5 font-semibold text-zinc-50">{waiting ? 'Still open: you can still allow' : 'Approval needed'}</h3>
+        {time && (
+          <time dateTime={approval.asked_at} className="shrink-0 text-xs leading-4 text-[#a39dcc] tabular-nums">
+            {time}
+          </time>
+        )}
+      </div>
+      {waiting && <p className="mt-1.5 text-xs leading-[18px] text-zinc-400">{waitingNote(botName)}</p>}
+
+      <p className="mt-2.5 text-base leading-6 text-zinc-200 break-words" data-approval-summary="">
+        {bot} wants to {what}
+      </p>
+
+      {(shell || builtin?.kind === 'shell') && (
+        <>
+          {builtin?.kind === 'shell' && builtin.description && <p className="mt-1 text-sm leading-5 text-zinc-400 break-words">{builtin.description}</p>}
+          <pre className={`${PRE} mt-2 text-zinc-100`} aria-label="Command">
+            {(shell ? shell.command : builtin?.command) || '(empty command)'}
+          </pre>
+        </>
+      )}
+
+      {facts.length > 0 && (
+        <dl className="mt-2 space-y-1" data-approval-facts="">
+          {facts.map(([k, v]) => (
+            <div key={k} className="flex gap-2 text-sm leading-5 min-w-0">
+              <dt className="shrink-0 text-[#a39dcc]">
+                {builtin?.kind === 'file' && <FileText size={12} className="inline mr-1 -mt-0.5" aria-hidden="true" />}
+                {k}
+              </dt>
+              <dd className="min-w-0 text-[#ecebfa] break-words [overflow-wrap:anywhere] line-clamp-2" title={v}>
+                {v}
+              </dd>
+            </div>
+          ))}
+        </dl>
       )}
 
       {payment && (
-        <div role="note" className="flex items-start gap-2 mb-2 rounded-lg border border-rose-500/30 bg-rose-950/30 px-3 py-2 text-xs">
+        <div role="note" className="flex items-start gap-2 mt-2.5 rounded-lg border border-rose-500/30 bg-rose-950/30 px-3 py-2 text-sm leading-5">
           <CreditCard size={14} className="mt-0.5 shrink-0 text-rose-300" aria-hidden="true" />
           <div className="min-w-0 space-y-0.5">
             <p className="text-rose-100 break-words">
               <span className="font-semibold">This looks like a payment:</span> {payment}.
             </p>
-            <p className="text-[11px] text-zinc-400">Payments always ask you, even with approvals off. Allowing covers this one payment.</p>
+            <p className="text-xs leading-[18px] text-zinc-400">Payments always ask you, even with approvals off. Allowing covers this one payment.</p>
           </div>
         </div>
       )}
 
       {tier && (
-        <div role="note" data-tier-reason className="flex items-start gap-2 mb-2 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-2 text-xs">
+        <div role="note" data-tier-reason className="flex items-start gap-2 mt-2.5 rounded-lg border border-sky-500/30 bg-sky-950/30 px-3 py-2 text-sm leading-5">
           <GraduationCap size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
           <div className="min-w-0 space-y-0.5">
             <p className="text-sky-100 break-words">
               <span className="font-semibold">Flight School:</span> {tier}.
             </p>
-            <p className="text-[11px] text-zinc-400">This bot’s tier asks you here, even with approvals off.</p>
+            <p className="text-xs leading-[18px] text-zinc-400">This bot’s tier asks you here, even with approvals off.</p>
           </div>
         </div>
       )}
 
-      {shell ? (
-        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
-          <p className="text-zinc-300">A bot wants to run a command on your computer.</p>
-          <pre className="font-mono text-[11px] text-zinc-100 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
-            {shell.command || '(empty command)'}
-          </pre>
-          {shell.cwd && (
-            <p className="text-[11px] text-zinc-400 break-all">
-              <span className="text-zinc-500">In folder:</span> <span className="font-mono text-zinc-300">{shell.cwd}</span>
-            </p>
-          )}
-        </div>
-      ) : summary ? (
-        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
-          <p className="text-zinc-300">
-            {who} wants to use <span className="font-medium text-sky-200">{summary.tool}</span>.
-          </p>
-          {summary.summary && <p className="text-[11px] text-zinc-400 break-words">{summary.summary}</p>}
-        </div>
-      ) : builtin?.kind === 'shell' ? (
-        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
-          <p className="flex items-center gap-1.5 text-zinc-300">
-            <Terminal size={13} className="shrink-0 text-sky-400" aria-hidden="true" />
-            <span>{who} wants to run a command.</span>
-          </p>
-          {builtin.description && <p className="text-zinc-400 break-words">{builtin.description}</p>}
-          <pre className="font-mono text-[11px] text-zinc-100 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-64 overflow-y-auto">
-            {builtin.command || '(empty command)'}
-          </pre>
-          {builtin.cwd && (
-            <p className="text-[11px] text-zinc-400 break-all">
-              <span className="text-zinc-500">In folder:</span> <span className="font-mono text-zinc-300">{builtin.cwd}</span>
-            </p>
-          )}
-        </div>
-      ) : builtin?.kind === 'file' ? (
-        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
-          <p className="flex items-center gap-1.5 text-zinc-300">
-            <FileText size={13} className="shrink-0 text-sky-400" aria-hidden="true" />
-            <span>
-              {who} wants to {builtin.tool === 'Write' ? 'write a file' : 'change a file'}
-              {builtin.outsideFolder ? ' outside its own folder' : ''}.
-            </span>
-          </p>
-          <p className="font-mono text-[11px] text-zinc-100 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 break-all">
-            {builtin.path || '(no file given)'}
-          </p>
-          <p className="text-[11px] text-zinc-400 break-words">
-            {builtin.change}
-            {builtin.cwd && (
-              <>
-                {' · '}
-                <span className="text-zinc-500">Its folder:</span> <span className="font-mono text-zinc-300 break-all">{builtin.cwd}</span>
-              </>
-            )}
-          </p>
-        </div>
-      ) : builtin ? (
-        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
-          <p className="text-zinc-300">
-            {who} wants to use <span className="font-medium text-sky-200">{builtin.tool}</span>.
-          </p>
-          {'args' in builtin && builtin.args ? (
-            <pre className="font-mono text-[11px] text-zinc-300 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
-              {builtin.args}
-            </pre>
-          ) : (
-            <p className="text-[11px] text-zinc-500">No arguments.</p>
-          )}
-        </div>
-      ) : mcp ? (
-        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs space-y-2 mb-3">
-          <p className="text-zinc-300">
-            {mcp.kwant ? <span className="font-medium text-zinc-100">{mcp.kwant}</span> : 'A bot'} wants to use{' '}
-            <span className="font-medium text-sky-200">{humanizeToolName(mcp.tool)}</span>
-            {mcp.server && (
-              <>
-                {' '}from <span className="inline-flex items-center gap-1 font-medium text-zinc-100"><Plug size={11} className="text-sky-400" />{mcp.server}</span>
-              </>
-            )}
-            .
-          </p>
-          <p className="font-mono text-[11px] text-zinc-500">
-            {mcp.server} · {mcp.tool}
-          </p>
-          {mcp.args ? (
-            <pre className="font-mono text-[11px] text-zinc-300 bg-zinc-950/70 border border-zinc-800 rounded-md p-2 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
-              {mcp.args}
-            </pre>
-          ) : (
-            <p className="text-[11px] text-zinc-500">No arguments.</p>
-          )}
-        </div>
-      ) : (
-        <div className="bg-zinc-900/90 rounded-lg p-3 border border-zinc-800 text-xs font-mono space-y-1 mb-3">
-          <div className="text-zinc-400">
-            <span className="text-sky-400 font-semibold">Tool:</span> {approval.tool_name}
-          </div>
-          <div className="text-zinc-300 break-all overflow-x-auto max-h-36 py-1">
-            {JSON.stringify(approval.details, null, 2)}
-          </div>
-        </div>
-      )}
+      {details && <ApprovalDetails phone={phone}>{details}</ApprovalDetails>}
 
-      <div data-approval-actions className="flex flex-wrap items-center justify-end gap-2">
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => handleDecision('deny')}
-          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-zinc-300 bg-zinc-800 hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <X size={14} />
-          <span>Deny</span>
-        </button>
-
+      {/* Allow on a row of its own, first; Deny and Always allow share the row under it. On a wider
+          screen they sit in one row, right-aligned, with Allow last. Local shell approvals are never
+          remembered, a late answer only lets that one call run, and a payment always asks again,
+          so none of them gets an "always". */}
+      <div data-approval-actions className="mt-3 flex flex-col gap-2 sm:flex-row-reverse sm:items-center sm:justify-start">
         <button
           type="button"
           disabled={disabled}
           onClick={() => handleDecision('allow_once')}
-          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          data-approval-allow=""
+          className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 min-h-[48px] max-sm:!min-h-[48px] sm:min-h-[36px] px-4 rounded-lg bg-[#059669] hover:bg-emerald-500 text-[15px] sm:text-sm font-semibold text-white shadow-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <Check size={14} />
-          <span>{waiting ? 'Allow and continue' : 'Allow Once'}</span>
+          <Check size={16} aria-hidden="true" />
+          <span>{waiting ? 'Allow and continue' : 'Allow once'}</span>
         </button>
-
-        {/* Local shell approvals are never remembered, so only offer a one-off answer. A late
-            answer only lets that one call run, and a payment always asks again, so neither gets
-            an "always" either. */}
-        {!shell && !waiting && !payment && (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => handleDecision('always_allow')}
-            title={perSession ? 'Allow this tool for this bot in this conversation' : mcp ? 'Allow this tool for this bot until the app restarts' : undefined}
-            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[40px] sm:min-h-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <CheckCheck size={14} />
-            <span>{perSession ? 'Always this session' : 'Always Allow'}</span>
+        <div className={`grid gap-2 sm:flex ${offerAlways ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          <button type="button" disabled={disabled} onClick={() => handleDecision('deny')} className={secondary}>
+            <X size={14} aria-hidden="true" />
+            <span>Deny</span>
           </button>
-        )}
+          {offerAlways && (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => handleDecision('always_allow')}
+              title={perSession ? 'Allow this tool for this bot in this conversation' : mcp ? 'Allow this tool for this bot until the app restarts' : undefined}
+              className={secondary}
+            >
+              <CheckCheck size={14} aria-hidden="true" />
+              <span>{perSession ? 'Always this session' : 'Always allow'}</span>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

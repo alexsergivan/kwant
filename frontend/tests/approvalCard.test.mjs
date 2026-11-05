@@ -20,14 +20,14 @@ const shellTicket = (command, cwd = '/Users/alex/project') => ({
 const render = (approval) =>
   m.renderToStaticMarkup(m.createElement(m.ModernApprovalCard, { approval, onResolve: () => {} }));
 
-test('a local shell ticket shows the command and folder, without Always Allow', () => {
+test('a local shell ticket shows the command and folder, without Always allow', () => {
   const html = render(shellTicket('ls -la && git status'));
   assert.match(html, /run a command on your computer/);
   assert.match(html, /<pre[^>]*whitespace-pre-wrap[^>]*>ls -la &amp;&amp; git status<\/pre>/);
   assert.match(html, /In folder:.*\/Users\/alex\/project/);
-  assert.match(html, /Allow Once/);
+  assert.match(html, /Allow once/);
   assert.match(html, /Deny/);
-  assert.doesNotMatch(html, /Always Allow/);
+  assert.doesNotMatch(html, /Always allow/);
   assert.doesNotMatch(html, /kwant_id|&quot;source&quot;/, 'no raw JSON dump');
 });
 
@@ -47,11 +47,11 @@ test('localShellView tolerates missing fields and ignores other tools', () => {
   assert.doesNotMatch(html, /In folder:/);
 });
 
-test('a normal ticket keeps the raw details and Always Allow', () => {
+test('a normal ticket keeps the raw details and Always allow', () => {
   const html = render({ id: 'n1', tool_name: 'write_file', details: { path: '/tmp/a.txt' } });
-  assert.match(html, /Tool:<\/span> write_file/);
+  assert.match(html, /write_file/);
   assert.match(html, /&quot;path&quot;: &quot;\/tmp\/a.txt&quot;/);
-  assert.match(html, /Always Allow/);
+  assert.match(html, /Always allow/);
   assert.doesNotMatch(html, /run a command on your computer/);
 });
 
@@ -70,13 +70,13 @@ const stripeTicket = (extra = {}) => ({
   },
 });
 
-test('a payment card says why it is a payment and offers only Allow Once and Deny', () => {
+test('a payment card says why it is a payment and offers only Allow once and Deny', () => {
   const html = render(stripeTicket());
   assert.match(html, /This looks like a payment:<\/span> composio STRIPE_CREATE_PAYMENT_INTENT is a write action of Stripe, a money app\./);
   assert.match(html, /Payments always ask you, even with approvals off/);
-  assert.match(html, /Allow Once/);
+  assert.match(html, /Allow once/);
   assert.match(html, /Deny/);
-  assert.doesNotMatch(html, /Always Allow|Always this session/);
+  assert.doesNotMatch(html, /Always allow|Always this session/);
   assert.match(html, /role="note"/);
 });
 
@@ -87,7 +87,7 @@ test('a payment shown as a Claude tool card also drops Always this session', () 
     details: { source: 'claude_builtin', tool: 'Bash', arguments: { command: 'stripe charges create --amount 1' }, payment_reason: 'stripe CLI changes something.' },
   });
   assert.match(html, /This looks like a payment:<\/span> stripe CLI changes something\./, 'one full stop, not two');
-  assert.doesNotMatch(html, /Always this session|Always Allow/);
+  assert.doesNotMatch(html, /Always this session|Always allow/);
 });
 
 test('a payment by local shell keeps its command and shows the reason', () => {
@@ -96,7 +96,7 @@ test('a payment by local shell keeps its command and shows the reason', () => {
   const html = render(t);
   assert.match(html, /This looks like a payment:<\/span> POST to a payment host \(api.stripe.com\)\./);
   assert.match(html, /run a command on your computer/);
-  assert.doesNotMatch(html, /Always Allow/);
+  assert.doesNotMatch(html, /Always allow/);
 });
 
 test('cards without payment_reason are unchanged: no payment line, Always buttons as before', () => {
@@ -108,7 +108,7 @@ test('cards without payment_reason are unchanged: no payment line, Always button
   ]) {
     const html = render(t);
     assert.doesNotMatch(html, /looks like a payment|role="note"/, t.id);
-    assert.match(html, /Always Allow|Always this session/, t.id);
+    assert.match(html, /Always allow|Always this session/, t.id);
   }
 });
 
@@ -125,10 +125,10 @@ test('a payment card in its summary form (after a reload) shows the reason and n
     tool_name: 'Bash',
     details: { source: 'summary', tool: 'Bash', summary: 'command: stripe charges create', kwant_name: 'Ledger', payment_reason: 'stripe CLI changes something' },
   });
-  assert.match(html, /Ledger<\/span> wants to use <span[^>]*>Bash<\/span>/);
+  assert.match(html, /Ledger<\/strong> wants to run a command/);
   assert.match(html, /This looks like a payment:<\/span> stripe CLI changes something\./);
-  assert.match(html, /Allow Once/);
-  assert.doesNotMatch(html, /Always this session|Always Allow/);
+  assert.match(html, /Allow once/);
+  assert.doesNotMatch(html, /Always this session|Always allow/);
   // The same summary card without a reason still offers Always this session.
   const plain = render({ id: 'n4', tool_name: 'Bash', details: { source: 'summary', tool: 'Bash', summary: 'command: ls' } });
   assert.match(plain, /Always this session/);

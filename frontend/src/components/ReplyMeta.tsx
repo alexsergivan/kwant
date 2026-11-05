@@ -52,13 +52,15 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
   const hasDetails = facts.length > 0 || hasContent(children);
   return (
     <div className="w-full max-w-full min-w-0">
-      <div className="mb-1.5 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400 font-medium">
+      <div className="mb-1.5 flex min-w-0 max-w-full flex-nowrap sm:flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400 font-medium">
         {avatar && <span className="sm:hidden shrink-0 inline-flex">{avatar}</span>}
         <span className="shrink-0 text-[13px] font-semibold text-zinc-50">{name}</span>
         {why.chip}
-        {(ranOn || handoff) && <EngineChip label={[ranOn, account].filter(Boolean).join(' · ')} handoff={handoff} />}
+        {(ranOn || handoff) && (
+          <EngineChip label={[ranOn, account].filter(Boolean).join(' · ')} short={ranOn ? ranOn.split(' · ').pop() : null} handoff={handoff} />
+        )}
         {time && (
-          <span className="min-w-0 truncate text-zinc-400" data-reply-time="">
+          <span className="shrink-0 whitespace-nowrap text-zinc-400" data-reply-time="">
             <span aria-hidden="true" className="sm:hidden">· </span>
             {time}
           </span>

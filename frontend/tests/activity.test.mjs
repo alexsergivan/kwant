@@ -105,7 +105,7 @@ test('a page opened mid-turn seeds the open step from /api/turns (ticket 4)', as
   // Fresh load: nothing came live yet.
   const seeded = a.seedActivity(undefined, 't1', fromServer);
   assert.deepEqual(seeded.steps.map((s) => s.id), ['a', 'b']);
-  assert.equal(w.workingLabel({ live: seeded }), 'using web_search');
+  assert.equal(w.workingLabel({ live: seeded }), 'searching the web');
   // Reconnect: a step that already settled live stays settled; live order is kept.
   const live = { turnId: 't1', thinking: { x: 'hm' }, steps: [step({ id: 'b', status: 'ok', title: 'Using `web_search`' })] };
   const merged = a.seedActivity(live, 't1', fromServer);

@@ -100,15 +100,29 @@ const PixelBaton: React.FC = () => (
 );
 
 /** The engine that answered (ranOn + account, spec §4); after a failover, "Claude → Codex" with a pixel baton and the reason on hover. */
-export const EngineChip: React.FC<{ label: string; handoff?: { from: string; to: string; why: string } | null }> = ({ label, handoff }) =>
+export const EngineChip: React.FC<{
+  label: string;
+  handoff?: { from: string; to: string; why: string } | null;
+  /** On a phone only this shows (the model), cut at 160 px; the full label stays on desktop, in the tooltip and in Details (0.6.13 spec C4). */
+  short?: string | null;
+}> = ({ label, handoff, short }) =>
   handoff ? (
     <span className="kws-chip kws-chip-failover kws-tip min-w-0 max-w-full" data-tip={handoff.why} tabIndex={0} aria-label={`${handoff.from} to ${handoff.to}. ${handoff.why}`} data-engine-chip="" data-failover="">
       <PixelBaton />
       <span className="truncate" aria-hidden="true">{`${handoff.from} → ${handoff.to}`}</span>
     </span>
   ) : (
-    <span className="kws-chip kws-chip-engine min-w-0 max-w-full" data-engine-chip="">
+    <span className="kws-chip kws-chip-engine min-w-0 max-w-full" data-engine-chip="" title={short && short !== label ? label : undefined}>
       <Cpu size={12} className="shrink-0" aria-hidden="true" />
-      <span className="truncate">{label}</span>
+      {short && short !== label ? (
+        <>
+          <span className="truncate hidden sm:inline">{label}</span>
+          <span className="truncate sm:hidden max-w-[160px]" data-engine-short="">
+            {short}
+          </span>
+        </>
+      ) : (
+        <span className="truncate">{label}</span>
+      )}
     </span>
   );
