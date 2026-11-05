@@ -305,6 +305,8 @@ test('DOM: on → off with two presses saves PUT {on:false}, announces, and call
   await wait(m.SETTLE_MS + 30);
   assert.equal(b.dataset.devSwitch, 'covered');
   assert.equal(b.dataset.on, undefined);
+  await click(b); // a render mid-save once left the switch stuck; the next press still lifts
+  assert.equal(b.dataset.devSwitch, 'lifted');
   root.unmount();
 });
 
@@ -345,8 +347,10 @@ test('DOM: reduced motion shows the Dev label and the lock glyph, and opens with
   await click(b);
   assert.equal(b.dataset.devSwitch, 'covered');
   assert.equal(b.dataset.on, 'true');
+  await wait(30); // the save comes back; presses wait for it, motion or not
+  await settle();
   await click(b);
-  assert.equal(b.dataset.devSwitch, 'lifted', 'the next press lifts at once');
+  assert.equal(b.dataset.devSwitch, 'lifted', 'the next press lifts at once: nothing to settle');
   root.unmount();
   delete window.matchMedia;
 });

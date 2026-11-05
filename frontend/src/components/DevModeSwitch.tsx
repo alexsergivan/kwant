@@ -63,8 +63,9 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   const [state, setState] = useState<SwitchState>(() =>
     initialSwitch({ reduced, ...(known ? { on: known.on, setup: needsSetup(known) } : {}), ...initial }),
   );
+  // The reducer's truth lives in the ref, written only by dispatch. Copying `state` into it on render
+  // would let a render that started before a dispatch (a store update mid-save) put an older state back.
   const ref = useRef(state);
-  ref.current = state;
   const btn = useRef<HTMLButtonElement>(null);
 
   const dispatch = useCallback(
