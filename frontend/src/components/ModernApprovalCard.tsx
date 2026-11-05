@@ -6,6 +6,8 @@ import { tierReason } from '../flightSchool';
 import { toolAction } from '../toolLabel';
 import { localClock } from '../clock';
 import { isPhoneLayout } from '../layout';
+import { parseProdFloor, type BackupResult } from '../dev/types';
+import { ProdFloorCard } from './dev/ProdFloorCard';
 
 export interface PendingApproval {
   id: string;
@@ -27,6 +29,8 @@ interface ModernApprovalCardProps {
   disabled?: boolean;
   /** Forces the phone or desktop look (tests); by default it follows the window when the card appears. */
   phone?: boolean;
+  /** Production floor (Dev mode): takes a backup; defaults to the space's backup route. */
+  onBackup?: (spaceId: string) => Promise<BackupResult>;
 }
 
 /** Server/tool/arguments of an MCP approval, or null for other tools. */
@@ -185,7 +189,30 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   onResolve,
   disabled = false,
   phone,
+  onBackup,
 }) => {
+  // Dev mode's production floor has its own card: blast radius, backup row, and never "always allow".
+  const floor = parseProdFloor(approval.details);
+  if (floor) {
+    const shellCmd = localShellView(approval) ?? builtinView(approval);
+    const kwant = approval.details?.kwant_name;
+    return (
+      <ProdFloorCard
+        id={approval.id}
+        floor={floor}
+        bot={typeof kwant === 'string' && kwant ? kwant : null}
+        command={shellCmd?.command ?? ''}
+        cwd={shellCmd?.cwd ?? null}
+        disabled={disabled}
+        onBackup={onBackup}
+        onResolve={(id, decision) => {
+          if (disabled) return;
+          playSfx('click');
+          onResolve(id, decision);
+        }}
+      />
+    );
+  }
   const handleDecision = (decision: 'allow_once' | 'always_allow' | 'deny') => {
     if (disabled) return;
     playSfx('click');

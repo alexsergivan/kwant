@@ -1508,6 +1508,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision }),
       });
+      // Production floor (Dev mode): Allow without a fresh backup is refused and the card stays waiting.
+      if (res.status === 409) {
+        const body = await res.clone().json().catch(() => null);
+        if (body && typeof body === 'object' && (body as { status?: unknown }).status === 'needs_backup') {
+          haptic('warning');
+          pushToast('Back up first', 'This step needs a backup from the last 10 minutes. Take one on the card, then Allow.');
+          return;
+        }
+      }
       // 409/404: it lapsed meanwhile (turn ended, expired, answered elsewhere).
       if (res.ok || res.status === 409 || res.status === 404) {
         const card = pendingApprovals.find((a) => a.id === ticketId);

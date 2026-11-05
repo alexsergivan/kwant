@@ -157,7 +157,7 @@ export function floorReducer(ui: FloorUi, ev: FloorEvent): FloorUi {
       return ui.phase === 'taking' ? ui : { ...ui, phase: 'taking', error: null, armedAt: null };
     case 'backup_done':
       if (ui.phase !== 'taking') return ui;
-      if (!ev.result.ok) return { ...ui, phase: 'failed', error: ev.result.error ?? 'kwant could not take it', armedAt: null };
+      if (!ev.result.ok) return { ...ui, phase: 'failed', error: ev.result.error ?? 'no reason given', armedAt: null };
       return { phase: 'done', taken: { bytes: ev.result.bytes, path: ev.result.path, at: ev.now }, error: null, armedAt: ev.now };
     case 'backup_error':
       return ui.phase !== 'taking' ? ui : { ...ui, phase: 'failed', error: ev.error, armedAt: null };
@@ -204,7 +204,7 @@ export function floorView(floor: ProdFloor, ui: FloorUi, now: number, mountedAt:
     return { case: 'taking', tone: 'info', lead: '', text: `Taking a backup…${pct}`, file: null, main: floor.needs_backup ? 'backup' : 'allow', secondaryBackup: !floor.needs_backup, busy: true, note };
   }
   if (ui.phase === 'failed') {
-    const why = (ui.error ?? 'kwant could not take it').replace(/[.\s]+$/, '');
+    const why = (ui.error ?? 'no reason given').replace(/[.\s]+$/, '');
     return { case: 'failed', tone: 'bad', lead: 'Backup failed:', text: ` ${why}.`, file: null, main: 'retry', secondaryBackup: false, busy: false, note: blockedNote };
   }
   if (ui.phase === 'done' && ui.taken) {
@@ -259,9 +259,9 @@ export function floorHeader(floor: ProdFloor, bot: string): string {
 export function floorSubline(floor: ProdFloor): string {
   if (floor.kind === 'deploy_migration') return 'This deploy changes the database, so it counts as destructive: it needs a backup from the last 10 minutes first.';
   if (floor.kind === 'destructive') return 'Destructive commands need a backup from the last 10 minutes first.';
-  if (floor.kind === 'deploy') return 'Dev mode is on in kwant, so deploys always ask you, even with approvals off.';
-  if (floor.kind === 'prod_key') return 'Dev mode is on in kwant, so a production key always asks you, even with approvals off.';
-  return 'Dev mode is on in kwant, so this always asks you, even with approvals off.';
+  if (floor.kind === 'deploy') return 'Dev mode is on, so deploys always ask you, even with approvals off.';
+  if (floor.kind === 'prod_key') return 'Dev mode is on, so a production key always asks you, even with approvals off.';
+  return 'Dev mode is on, so this always asks you, even with approvals off.';
 }
 
 // ---------------------------------------------------------------------------------------------------
