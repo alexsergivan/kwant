@@ -1,11 +1,11 @@
-// The Dev mode switch in the sidebar space header (design §1, restyled in 0.7.1): a toggle that
-// unlocks before it flips. Press 1 unlocks (amber ring, open lock), press 2 flips (or opens the setup
-// sheet the first time). Unlocked drops back after 5 s, on Esc or when focus leaves. Presses are
-// ignored while a flip settles.
-// It's a <button>, not role="switch": a switch promises one press.
+// The Dev mode switch in the sidebar space header (style v2 §10, flow F1/F2/F9): the Branch switch.
+// Off has no cover: one press turns it on (F1). On is covered by a 1 px violet ring and a lock; turning
+// it off takes two presses (F2): press 1 arms (2 px amber ring, open lock, `off?`), press 2 within 5 s
+// turns it off. Armed drops back after 5 s, on Esc or when focus leaves. Presses are ignored while a
+// flip settles (450 ms), so a double-click on Off can't turn it on and arm it.
 
-import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Lock, X } from 'lucide-react';
+import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import { Lock, LockOpen, X } from 'lucide-react';
 import {
   DROP_MS,
   RECOVER_MS,
@@ -142,6 +142,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   };
 
   const look = switchLook(state);
+  const descId = useId();
   const hint = look.hint && (
     <span
       role="presentation"
@@ -170,7 +171,10 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
     },
     onBlur: () => dispatch({ type: 'blur' }),
     disabled: state.disabled,
+    role: 'switch' as const,
+    'aria-checked': state.on,
     'aria-label': look.label,
+    'aria-describedby': descId,
     title: look.tooltip,
     'data-dev-switch': state.phase,
     'data-look': look.look,
@@ -182,17 +186,20 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   };
 
   // The Branch switch (style v2 §10): a mono label and a tiny git graph. The node sits on the line
-  // when off and hops onto the fork when on; armed draws the fork dashed amber with a halo on the
-  // node. Reduced motion keeps the same shapes, instantly (kw-dv-rm). The look comes from switchLook.
-  const armed = look.look === 'armed' || look.look === 'pending';
-  const word = armed ? (state.on ? 'off?' : 'dev?') : 'dev';
+  // when off and hops onto the fork when on; then the cover (a 1 px violet ring, ::after) closes and a
+  // lock shows. Armed (only ever while on) lifts it: 2 px amber ring, open lock, the fork dashed amber
+  // with a halo on the node, `off?`. Reduced motion keeps the same shapes, instantly (kw-dv-rm).
+  const armed = look.look === 'armed';
+  const word = armed ? 'off?' : 'dev';
   const button = (
     <button
       {...common}
       data-armed={armed || undefined}
+      data-covered={(look.ring && !armed) || undefined}
       className={`kw-dv${state.reduced ? ' kw-dv-rm' : ''}${phone ? ' h-11' : ''} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400`}
     >
-      {state.disabled && <Lock size={10} strokeWidth={2.5} className="kw-dv-lock" aria-hidden="true" data-dv-glyph="locked" />}
+      {look.glyph === 'locked' && <Lock size={10} strokeWidth={2.5} className="kw-dv-lock" aria-hidden="true" data-dv-glyph="locked" />}
+      {look.glyph === 'unlocked' && <LockOpen size={10} strokeWidth={2.5} className="kw-dv-lock" aria-hidden="true" data-dv-glyph="unlocked" />}
       <span className="kw-dv-lbl" aria-hidden="true" data-dv-word>
         {word}
       </span>
@@ -212,6 +219,9 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
     <span className={`relative inline-flex shrink-0 items-center justify-center ${phone ? 'min-w-[44px] min-h-[44px]' : ''}`} data-dev-switch-wrap>
       {button}
       {hint}
+      <span id={descId} className="sr-only" data-dv-describe>
+        {look.describe}
+      </span>
       <span className="sr-only" aria-live="polite" data-dv-live>
         {state.announce ? <span key={state.announce.seq}>{state.announce.text}</span> : null}
       </span>

@@ -154,7 +154,12 @@ const say = (s: SwitchState, text: string) => ({ text, seq: (s.announce?.seq ?? 
 
 export const onText = (space: string) => `Dev mode on for ${space}.`;
 export const offText = (space: string) => `Dev mode off for ${space}. Reviews, the ship gate and the production floor stopped.`;
-export const liftText = (on: boolean) => `Unlocked. Press again to turn Dev mode ${on ? 'off' : 'on'}.`;
+/** Flow copy §2: the armed line, announced politely when the cover lifts. Only "on" can arm (F2). */
+export const ARMED_TEXT = 'Press again to turn Dev mode off, or Escape to keep it on.';
+/** Flow copy §2: the 5 s run out, Esc, or focus left. */
+export const STAYS_ON_TEXT = 'Dev mode stays on.';
+/** @deprecated kept for callers; arming only happens while on. */
+export const liftText = (_on: boolean) => ARMED_TEXT;
 
 /**
  * The switch's state machine. Pure: time comes in on the actions, and the component runs the timers
@@ -167,18 +172,23 @@ export function switchReducer(s: SwitchState, a: SwitchAction, space = 'this spa
       if (s.phase === 'pending') return s;
       // A fast double-click: the second press lands while the cover settles, and is ignored.
       if (s.phase === 'settling' || a.now < s.settleUntil) return s;
-      if (s.phase === 'covered') return { ...s, phase: 'lifted', liftedAt: a.now, error: null, announce: say(s, liftText(s.on)) };
-      // phase lifted: the second press flips, or opens the setup the first time
-      if (!s.on && s.setup) return { ...s, phase: 'pending', liftedAt: null, announce: say(s, 'Dev mode, setting up.') };
-      return flip(s, !s.on, a.now, space);
+      // Flow F1: on only adds guards, so off has no cover and one press turns it on (or opens the
+      // setup the first time, on a server that still needs it).
+      if (!s.on) {
+        if (s.setup) return { ...s, phase: 'pending', liftedAt: null, error: null, announce: say(s, 'Dev mode, setting up.') };
+        return flip(s, true, a.now, space);
+      }
+      // F2: off removes the guards, so it takes two presses: arm, then confirm within 5 s.
+      if (s.phase === 'covered') return { ...s, phase: 'lifted', liftedAt: a.now, error: null, announce: say(s, ARMED_TEXT) };
+      return flip(s, false, a.now, space);
     }
     case 'recover':
       if (s.phase !== 'lifted' || s.liftedAt === null || a.now - s.liftedAt < RECOVER_MS) return s;
-      return { ...s, phase: 'covered', liftedAt: null, announce: say(s, 'Locked.') };
+      return { ...s, phase: 'covered', liftedAt: null, announce: say(s, STAYS_ON_TEXT) };
     case 'escape':
     case 'blur':
       if (s.phase !== 'lifted') return s;
-      return { ...s, phase: 'covered', liftedAt: null, announce: say(s, 'Locked.') };
+      return { ...s, phase: 'covered', liftedAt: null, announce: say(s, STAYS_ON_TEXT) };
     case 'settled':
       if (s.phase !== 'settling' || a.now < s.settleUntil) return s;
       return { ...s, phase: 'covered' };
@@ -187,7 +197,7 @@ export function switchReducer(s: SwitchState, a: SwitchAction, space = 'this spa
       return flip({ ...s, setup: false }, true, a.now, space);
     case 'setup_cancel':
       if (s.phase !== 'pending') return s;
-      return { ...s, phase: 'covered', liftedAt: null, announce: say(s, 'Locked.') };
+      return { ...s, phase: 'covered', liftedAt: null, announce: null };
     case 'saved':
       return { ...s, saving: false, on: a.on, setup: a.on ? false : s.setup };
     case 'save_failed':
@@ -234,37 +244,41 @@ export interface SwitchLook {
   fill: number;
   ring: boolean;
   hint: string | null;
+  /** aria-label: role="switch" carries on/off in aria-checked, so this is just the name. */
   label: string;
+  /** aria-describedby text (flow copy §1). */
+  describe: string;
   tooltip: string;
 }
+
+export const OFF_TOOLTIP = 'Dev mode: plain-words merges, code reviews, production floor';
+export const ON_TOOLTIP = 'Dev mode is on. Press twice to turn it off.';
+export const OWNER_TOOLTIP = 'Only the space owner can change Dev mode.';
+export const OFF_DESCRIBE = 'Turns on reviews, the ship gate and the production floor.';
+export const ON_DESCRIBE = 'Press twice to turn off.';
+export const ARMED_HINT = 'Press again to turn Dev mode off';
 
 export function switchLook(s: SwitchState): SwitchLook {
   const base = switchParts(s);
   const look: SwitchLookName = s.disabled ? 'disabled' : s.phase === 'pending' ? 'pending' : s.phase === 'lifted' ? 'armed' : s.on ? 'on' : 'off';
-  const glyph: SwitchGlyph = s.disabled ? 'locked' : s.phase === 'lifted' ? 'unlocked' : 'code';
+  // The lock: shut while on and covered (guards locked in) or not the owner, open while armed.
+  const glyph: SwitchGlyph = s.disabled ? 'locked' : s.phase === 'lifted' ? 'unlocked' : s.on ? 'locked' : 'code';
   return { look, glyph, ...base };
 }
 
 function switchParts(s: SwitchState): Omit<SwitchLook, 'look' | 'glyph'> {
-  const tooltip = s.disabled ? 'Only the space owner can change Dev mode' : `Dev mode is ${s.on ? 'on' : 'off'}. Press to unlock.`;
+  const tooltip = s.disabled ? OWNER_TOOLTIP : s.on ? ON_TOOLTIP : OFF_TOOLTIP;
+  const describe = s.disabled ? OWNER_TOOLTIP : s.on ? ON_DESCRIBE : OFF_DESCRIBE;
+  const common = { label: 'Dev mode', describe, tooltip };
   switch (s.phase) {
     case 'lifted':
-      return {
-        coverOpen: true,
-        knobRight: s.on,
-        fill: s.on ? 1 : 0,
-        ring: true,
-        hint: `Press again to turn Dev mode ${s.on ? 'off' : 'on'}`,
-        label: `Dev mode, ${s.on ? 'on' : 'off'}. Unlocked. Press again to turn it ${s.on ? 'off' : 'on'}`,
-        tooltip,
-      };
+      return { coverOpen: true, knobRight: true, fill: 1, ring: true, hint: ARMED_HINT, ...common };
     case 'pending':
-      return { coverOpen: true, knobRight: true, fill: 0.45, ring: true, hint: null, label: 'Dev mode, setting up.', tooltip };
+      return { coverOpen: true, knobRight: true, fill: 0.45, ring: false, hint: null, ...common, describe: 'Setting up.' };
     case 'settling':
-      // Open while it settles, then it drops; the label is already the final state.
-      return { coverOpen: true, knobRight: s.on, fill: s.on ? 1 : 0, ring: false, hint: null, label: `Dev mode, ${s.on ? 'on' : 'off'}. Press to unlock`, tooltip };
+      return { coverOpen: !s.on, knobRight: s.on, fill: s.on ? 1 : 0, ring: false, hint: null, ...common };
     default:
-      return { coverOpen: false, knobRight: s.on, fill: s.on ? 1 : 0, ring: false, hint: null, label: s.disabled ? `Dev mode, ${s.on ? 'on' : 'off'}. Only the space owner can change it` : `Dev mode, ${s.on ? 'on' : 'off'}. Press to unlock`, tooltip };
+      return { coverOpen: false, knobRight: s.on, fill: s.on ? 1 : 0, ring: s.on && !s.disabled, hint: null, ...common };
   }
 }
 
