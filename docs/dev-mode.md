@@ -69,7 +69,18 @@ own tools (shell, files, web search, subagents, skills). claude, codex and grok 
 tool switched off, and the run is stopped and its reply dropped if the CLI still offers or starts
 one. Any other CLI, and any turn that was given MCP servers, is refused instead of run with tools.
 The flags for each engine are on `TurnInput::no_tools` and next to `no_tools_refusal` in
-`src/drivers/cli.rs`.
+`src/drivers/cli.rs`. When a bot's engine refuses (or stops) a card turn this way, that card call
+fails at once: it is not asked again, with or without tools, and the card is `failed` with the
+reason and keeps its rule-based parts (risk, test tamper, CI), as any failed call does.
+
+### Verified
+
+A landed card is **Verified** only when, as the card is written, the PR has a Dev mode review card
+of the head that merged, by a bot that isn't the PR's author (compared by bot id), with no open
+finding, and CI on the merge is green. A PR that merges before its review is ready, or that was
+reviewed outside kwnt, gets a landed card that says "not verified", and it stays that way: a review
+that finishes later doesn't rewrite the landed card (only a CI change re-runs a card's text). That
+is on purpose. Verified says what was checked before the change landed, not after.
 
 ## The production floor
 

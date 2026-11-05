@@ -287,15 +287,20 @@ impl Database {
         Ok(sqlx::query_as(&format!("SELECT {CARD_COLS} FROM dev_cards WHERE id = ?")).bind(id).fetch_optional(&self.pool).await?)
     }
 
-    /// Sets a card's status, and its card JSON when given (`None` keeps the stored one).
+    /// Sets a card's status, and its card JSON when given (`None` keeps the stored one). A `stale`
+    /// card stays as it is: a review that finishes after its PR merged (or moved on) must not come
+    /// back to life. `None` when nothing was written (no such card, or it is stale).
     pub async fn set_dev_card(&self, id: &str, status: &str, card: Option<&str>) -> Result<Option<DevCardRow>, DbError> {
-        sqlx::query("UPDATE dev_cards SET status = ?2, card = COALESCE(?3, card), updated_at = ?4 WHERE id = ?1")
+        let done = sqlx::query("UPDATE dev_cards SET status = ?2, card = COALESCE(?3, card), updated_at = ?4 WHERE id = ?1 AND status != 'stale'")
             .bind(id)
             .bind(status)
             .bind(card)
             .bind(Utc::now())
             .execute(&self.pool)
             .await?;
+        if done.rows_affected() == 0 {
+            return Ok(None);
+        }
         self.dev_card(id).await
     }
 
