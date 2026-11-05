@@ -365,6 +365,10 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // person's; the status stays readable
         ["", "api", "app", "update", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "approvals", _, "resolve"] => *method == Method::POST,
+        // Dev mode (0.7): the watched repo, its cards, Fix it and Dismiss, release notes and the
+        // backup command are the person's; bots never read the desk either (D3)
+        ["", "api", "spaces", _, "dev_mode" | "dev", ..] => true,
+        ["", "api", "dev", ..] => true,
         ["", "api", "spaces" | "kwants", _, "approvals"] => *method != Method::GET && *method != Method::HEAD,
         // A team's instructions go into every member's prompt (PUT and PATCH both set them), and a
         // channel's PATCH sets its instructions and members: bots change these through their
@@ -877,6 +881,21 @@ mod tests {
         assert!(person_only(&post, "/api/sandbox/t1/interact"));
         assert!(!person_only(&post, "/api/sandbox/t1/act"));
         assert!(person_only(&get, "/api/passwords/store"));
+        for (m, p) in [
+            (&get, "/api/spaces/s1/dev_mode"),
+            (&put, "/api/spaces/s1/dev_mode"),
+            (&post, "/api/spaces/s1/dev_mode/check"),
+            (&get, "/api/spaces/s1/dev/landed?before=2026-11-05T00:00:00Z"),
+            (&post, "/api/spaces/s1/dev/landed/seen"),
+            (&get, "/api/spaces/s1/dev/reviews"),
+            (&post, "/api/spaces/s1/dev/release_notes"),
+            (&post, "/api/spaces/s1/dev/backup"),
+            (&post, "/api/dev/cards/dvc_1/findings/f1"),
+            (&Method::HEAD, "/api/spaces/s1/dev/reviews"),
+        ] {
+            assert!(person_only(m, p), "{m} {p}");
+        }
+        assert!(!person_only(&get, "/api/spaces/s1/developers"));
         assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
         assert!(person_only(&put, "/api/messages/m1/reaction"));
         assert!(person_only(&post, "/api/messages/m1/reaction"));

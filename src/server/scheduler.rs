@@ -843,5 +843,6 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::missions::foundry::spawn(state.clone(), shutdown.clone());
     super::goals::runner::spawn(state.clone(), shutdown.clone());
     super::missions::discovery::spawn(state.clone(), shutdown.clone());
+    super::dev::poller::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);
 }

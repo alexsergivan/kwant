@@ -327,6 +327,13 @@ struct CheckRuns {
 #[derive(Debug, Deserialize)]
 struct Tag {
     name: String,
+    #[serde(default)]
+    commit: Option<TagCommit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TagCommit {
+    sha: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -491,10 +498,10 @@ impl GithubSource {
             .await
     }
 
-    /// The newest tag's name.
-    pub async fn dev_latest_tag(&self, repo: &str) -> Result<Option<String>, GhError> {
-        let tags: Vec<Tag> = self.get_as(&format!("/repos/{}/tags?per_page=1", repo_path(repo)?), None).await?;
-        Ok(tags.into_iter().next().map(|t| t.name))
+    /// The newest tag's name and the sha it points at.
+    pub async fn dev_latest_tag(&self, repo: &str, cache: &EtagCache) -> Result<Option<(String, Option<String>)>, GhError> {
+        let tags: Vec<Tag> = self.get_as(&format!("/repos/{}/tags?per_page=1", repo_path(repo)?), Some(cache)).await?;
+        Ok(tags.into_iter().next().map(|t| (t.name, t.commit.map(|c| c.sha))))
     }
 
     /// How many commits on `branch` touched `path` between `since` and `until` (counting at most 2).

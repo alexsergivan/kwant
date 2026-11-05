@@ -235,6 +235,18 @@ impl Database {
         self.dev_card(id).await
     }
 
+    /// New facts for a card (CI finished after the card was made): back to pending so `generate`
+    /// runs again; the card JSON stays until then.
+    pub async fn set_dev_card_facts(&self, id: &str, facts: &str) -> Result<Option<DevCardRow>, DbError> {
+        sqlx::query("UPDATE dev_cards SET facts = ?2, status = 'pending', updated_at = ?3 WHERE id = ?1")
+            .bind(id)
+            .bind(facts)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
+        self.dev_card(id).await
+    }
+
     /// Replaces a card's JSON only while it still has `expect` (compare-and-set), so two finding
     /// actions can't overwrite each other. False when it changed in between.
     pub async fn swap_dev_card_json(&self, id: &str, expect: Option<&str>, card: &str) -> Result<bool, DbError> {
