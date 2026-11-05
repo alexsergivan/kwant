@@ -330,10 +330,10 @@ test('the floor card never offers "always allow", in any case', () => {
     const out = html(m.ModernApprovalCard, { approval: ap, onResolve() {} });
     assert.match(out, /data-prod-floor=/);
     assert.doesNotMatch(out, /Always Allow|Always this session/);
-    assert.match(out, /Production floor: /);
+    assert.match(heading(out), /^Production floor: /);
   }
   const fresh = html(m.ModernApprovalCard, { approval: fx.FLOOR_DEPLOY_FRESH, onResolve() {} });
-  assert.match(fresh, /Production floor: Pixel wants to deploy/);
+  assert.equal(heading(fresh), 'Production floor: Pixel wants to deploy', 'the heading reads as one line to a screen reader');
   assert.match(fresh, /Allow this deploy/);
   assert.match(fresh, /<dt[^>]*>Downtime<\/dt>/);
   assert.match(fresh, /aria-live="polite"/);
@@ -341,6 +341,29 @@ test('the floor card never offers "always allow", in any case', () => {
   assert.match(mig, /wants to deploy a database change/);
   assert.doesNotMatch(mig, /Allow this deploy/, 'blocked: Allow is replaced');
   assert.match(mig, /Back up first/);
+});
+
+/** The floor card's <h3> as text (tags stripped). */
+function heading(out) {
+  const h3 = out.match(/<h3[^>]*>([\s\S]*?)<\/h3>/);
+  return h3 ? h3[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() : '';
+}
+
+test('style v2 §8: hazard tape frame, PRODUCTION FLOOR eyebrow with an LED, $ command box with the cwd bar, backup LED', () => {
+  const out = html(m.ModernApprovalCard, { approval: fx.FLOOR_DEPLOY_FRESH, onResolve() {} });
+  assert.match(out, /class="dv-floor /, 'the floor frame carries the hazard tape');
+  assert.match(out, /class="dv-led" data-s="ok" data-floor-led/, 'backed up: the eyebrow LED is ok');
+  assert.match(html(m.ModernApprovalCard, { approval: fx.FLOOR_MIGRATION, onResolve() {} }), /class="dv-led" data-s="warn" data-floor-led/, 'waiting: warn');
+  assert.match(out, /<div class="dv-cmd[^"]*" data-floor-cmd/);
+  assert.match(out, /<span class="ps" aria-hidden="true">\$ <\/span>/);
+  assert.doesNotMatch(out, /This is /);
+  assert.match(out, /data-backup-led/);
+  const led = (ap) => html(m.ModernApprovalCard, { approval: ap, onResolve() {} }).match(/data-s="(\w+)" data-backup-led/)?.[1];
+  assert.equal(led(fx.FLOOR_DEPLOY_FRESH), 'ok');
+  assert.equal(led(fx.FLOOR_DEPLOY_OLD), 'warn');
+  assert.equal(led(fx.FLOOR_MIGRATION), 'bad');
+  assert.equal(m.floorLed('info', 'taking'), 'run');
+  assert.equal(m.floorLed('neutral', 'no_data'), 'off');
 });
 
 // ---------------------------------------------------------------------------------------------------

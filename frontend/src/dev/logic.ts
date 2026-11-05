@@ -247,6 +247,11 @@ export function floorView(floor: ProdFloor, ui: FloorUi, now: number, mountedAt:
 
 /** Header verb per floor kind (design §6). */
 export function floorHeader(floor: ProdFloor, bot: string): string {
+  return `Production floor: ${floorWho(floor, bot)}`;
+}
+
+/** The eyebrow's second half (style v2 §8): "{bot} wants to deploy". */
+export function floorWho(floor: ProdFloor, bot: string): string {
   const what: Record<ProdFloor['kind'], string> = {
     deploy: 'deploy',
     deploy_migration: 'deploy a database change',
@@ -256,7 +261,16 @@ export function floorHeader(floor: ProdFloor, bot: string): string {
     destructive: 'delete data',
     prod_key: 'use a production key',
   };
-  return `Production floor: ${bot} wants to ${what[floor.kind]}`;
+  return `${bot} wants to ${what[floor.kind]}`;
+}
+
+/** The LED on the backup line (style v2 §8): warn old/none, run taking, ok fresh, bad failed/blocked. */
+export function floorLed(tone: RowTone, kase: string): 'ok' | 'run' | 'warn' | 'bad' | 'off' {
+  if (kase === 'taking') return 'run';
+  if (tone === 'ok') return 'ok';
+  if (tone === 'bad') return 'bad';
+  if (tone === 'warn') return 'warn';
+  return 'off';
 }
 
 /** Leads of the clauses 0.7.0 sent ("runs deploy.sh, a deploy script", "a force-push to main"):

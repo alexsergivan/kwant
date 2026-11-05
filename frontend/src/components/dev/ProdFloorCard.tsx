@@ -1,8 +1,8 @@
 import React, { useEffect, useReducer, useRef, useState } from 'react';
-import { Database, Loader2, ShieldAlert, Target, X, Check } from 'lucide-react';
+import { Database, Folder, Target, X, Check } from 'lucide-react';
 import type { BackupResult, ProdFloor } from '../../dev/types';
 import { parseBackupResult } from '../../dev/types';
-import { allowReady, floorHeader, floorReducer, floorSentence, floorSubline, floorView, initialFloorUi, type RowTone } from '../../dev/logic';
+import { allowReady, floorLed, floorReducer, floorSentence, floorSubline, floorView, floorWho, initialFloorUi, type RowTone } from '../../dev/logic';
 
 export type FloorDecision = 'allow_once' | 'deny';
 
@@ -123,26 +123,36 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
       data-floor-case={view.case}
       role="group"
       aria-labelledby={headingId}
-      className="my-3 max-w-2xl rounded-xl border border-amber-500/30 bg-amber-950/20 p-3 text-zinc-100 shadow-lg backdrop-blur-sm sm:p-4"
+      className="dv-floor my-3 max-w-2xl rounded-xl text-zinc-100 shadow-lg backdrop-blur-sm"
     >
-      <div className="mb-1 flex items-start gap-2 text-xs font-semibold tracking-wide text-amber-400">
-        <ShieldAlert size={16} aria-hidden="true" className="mt-px shrink-0" />
-        <h3 id={headingId} className="min-w-0 [overflow-wrap:anywhere]">
-          {floorHeader(floor, bot ?? 'A bot')}
+      {/* The hazard tape is .dv-floor::before (4 px, only on the floor card). */}
+      <div className="p-3 sm:px-4 sm:pb-4 sm:pt-3.5">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="dv-led" data-s={view.tone === 'ok' ? 'ok' : 'warn'} data-floor-led aria-hidden="true" />
+        <h3 id={headingId} className="min-w-0 text-meta text-zinc-400 [overflow-wrap:anywhere]">
+          <span className="font-mono text-[11px] font-bold uppercase tracking-[0.1em] text-amber-300">Production floor</span>
+          <span className="sr-only">: </span>
+          <span className="before:content-['·_'] before:text-zinc-500" data-floor-who>
+            {' '}
+            {floorWho(floor, bot ?? 'A bot')}
+          </span>
         </h3>
       </div>
-      <p className="mb-3 text-[11px] text-zinc-400 sm:pl-6">{floorSubline(floor)}</p>
+      {why && <p className="mt-2 text-[16px] font-semibold leading-snug text-zinc-50 [overflow-wrap:anywhere]" data-floor-why>{why}</p>}
+      <p className={`${why ? 'mt-0.5' : 'mt-2'} mb-2.5 text-[13px] text-zinc-300`}>{floorSubline(floor)}</p>
 
-      <div className="mb-3 space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/90 p-3 text-xs">
-        {why && <p className="text-zinc-300 [overflow-wrap:anywhere]">{why}</p>}
-        <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-all rounded-md border border-zinc-800 bg-zinc-950/70 p-2 font-mono text-[12px] text-zinc-100">
+      <div className="dv-cmd mb-3" data-floor-cmd>
+        {cwd && (
+          <div className="bar" data-floor-cwd>
+            <Folder size={12} aria-hidden="true" className="shrink-0" />
+            <span className="sr-only">In folder:</span>
+            <span className="min-w-0 break-all">{cwd}</span>
+          </div>
+        )}
+        <pre className="max-h-64 overflow-y-auto">
+          <span className="ps" aria-hidden="true">$ </span>
           {command || '(empty command)'}
         </pre>
-        {cwd && (
-          <p className="break-all text-[11px] text-zinc-400">
-            <span className="text-zinc-500">In folder:</span> <span className="font-mono text-zinc-300">{cwd}</span>
-          </p>
-        )}
       </div>
 
       {floor.blast.length > 0 && (
@@ -165,13 +175,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
       )}
 
       <div data-backup-row={view.case} aria-live="polite" className={`mb-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${ROW[view.tone]}`}>
-        {view.case === 'taking' ? (
-          <Loader2 size={14} aria-hidden="true" className="mt-px shrink-0 animate-spin motion-reduce:animate-none" />
-        ) : view.tone === 'bad' ? (
-          <X size={14} aria-hidden="true" className={`mt-px shrink-0 ${LEAD.bad}`} />
-        ) : (
-          <Database size={14} aria-hidden="true" className={`mt-px shrink-0 ${LEAD[view.tone]}`} />
-        )}
+        <span className="dv-led mt-[5px]" data-s={floorLed(view.tone, view.case)} data-backup-led aria-hidden="true" />
         <p className="min-w-0 [overflow-wrap:anywhere]">
           {view.lead && <span className={`font-semibold ${LEAD[view.tone]}`}>{view.lead}</span>}
           {view.text}
@@ -221,6 +225,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
           <X size={14} aria-hidden="true" />
           Deny
         </button>
+      </div>
       </div>
     </div>
   );
