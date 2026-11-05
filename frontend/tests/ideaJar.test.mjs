@@ -788,3 +788,31 @@ test('S4–S6: phone Drop in is 44 px, Look again does not wrap, Settings is ico
   await click(host.querySelector(`[data-card="${ID.ready}"] [data-action="open"]`));
   assert.ok(/whitespace-nowrap/.test(host.querySelector('[data-action="look"]').className));
 });
+
+// Round 3 (Mira's #324 round 2): M5 and M6
+
+test('M5: Undo of a deleted take: no New chip, no arrival announcement, it comes back open, focus is not body', async () => {
+  const two = listOf();
+  const readyIdea = two.ideas.find((i) => i.status === 'ready');
+  const ID2 = '6a1f0c2e-1b7d-4c55-9e0a-3f2d8b9c0a07';
+  two.ideas.push({ ...clone(readyIdea), id: ID2, text: 'Second take', updated_at: '2026-11-05T09:00:00Z' });
+  reset(two);
+  const host = await jar();
+  const open = host.querySelector('[data-take-card]').getAttribute('data-take-card');
+  const other = open === ID2 ? ID.ready : ID2;
+  const tc = () => host.querySelector(`[data-take-card="${open}"]`);
+  await click(tc().querySelector('[data-idea-menu]'));
+  await click(tc().querySelector('[data-menu-item="delete"]'));
+  assert.equal(card(host, open), null, 'hidden while the toast is up');
+  assert.ok(host.querySelector(`[data-take-card="${other}"]`), 'the other take opens meanwhile');
+  const undo = host.querySelector('[data-undo-toast] [data-undo]');
+  await focusOn(undo); // a browser focuses the button it clicks; jsdom doesn't
+  await click(undo);
+  await settle();
+  assert.ok(tc(), 'the take comes back open, as it was');
+  assert.equal(card(host, open).querySelector('[data-new-chip]'), null, 'no New chip');
+  assert.doesNotMatch(text(host.querySelector('[data-live]')), /take is ready/, 'no arrival announcement');
+  assert.notEqual(document.activeElement, document.body, 'focus is not dropped to body');
+  assert.equal(document.activeElement, tc().querySelector('[data-action="do-it"]'), 'focus on its Do it');
+  assert.ok(!calls.some((c) => c.method === 'DELETE'));
+});

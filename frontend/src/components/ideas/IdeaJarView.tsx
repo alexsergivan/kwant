@@ -205,7 +205,8 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
         if (i.status === 'failed' && was === 'peeking') failed.push(i);
       }
     }
-    prevStatus.current = new Map(ideas.map((i) => [i.id, i.status]));
+    // From the full list: an idea hidden for a pending delete keeps its status, so Undo isn't an arrival (M5).
+    prevStatus.current = new Map(list.ideas.map((i) => [i.id, i.status]));
     loaded.current = true;
     if (arrived.length) {
       // Keep the open card open: a take that arrives waits as a row with its New chip (no layout jump).
@@ -423,6 +424,8 @@ export const IdeaJarView: React.FC<IdeaJarViewProps> = ({ spaceId, onOpenMission
     if (!t) return;
     if (t.kind === 'delete') {
       unhide(t.id);
+      // A take comes back open, as it was (M5); expanded ignores this for slips.
+      if (!phone) setOpenId(t.id);
       focusNext.current = { kind: 'sel', sel: firstAction(t.id) };
       return;
     }
