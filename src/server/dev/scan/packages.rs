@@ -769,7 +769,8 @@ pub async fn run(r: &Registries, files: &[FileDiff], contents: &BTreeMap<String,
         }
         if odd {
             sev = if sev == "critical" { sev } else { "high" };
-            why.push("has characters from outside plain ASCII, like look-alike letters".into());
+            // Only a name that really has non-ASCII letters is told to look for look-alikes
+            why.push(if dep.name.is_ascii() { "has characters a package name doesn't use" } else { "has characters from outside plain ASCII, like look-alike letters" }.into());
         }
         if let Some(p) = near {
             sev = if sev == "critical" { sev } else { "high" };

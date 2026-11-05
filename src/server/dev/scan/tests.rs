@@ -619,14 +619,18 @@ async fn j_p_only_url_encoded_names_are_sent_never_source() {
     // The title quotes the name as data, so the look-alike letter shows as its code point
     let odd = findings.iter().find(|f| f.title.contains("`l\\u{43e}dash`")).unwrap();
     assert!(!odd.title.contains(&lookalike), "{}", odd.title);
-    assert!(odd.detail.contains("look-alike"), "{}", odd.detail);
+    assert!(odd.detail.contains("has characters from outside plain ASCII, like look-alike letters"), "{}", odd.detail);
+    // A plain-ASCII name with a space isn't sent looking for look-alikes that aren't there
+    let spaced = findings.iter().find(|f| f.title.contains("`a\\u{20}b?c#d`")).unwrap();
+    assert!(spaced.detail.contains("has characters a package name doesn't use"), "{}", spaced.detail);
+    assert!(!spaced.detail.contains("look-alike") && !spaced.detail.contains("ASCII"), "{}", spaced.detail);
 }
 
 #[tokio::test]
 async fn j_p_lookups_stop_at_the_cap_and_the_budget() {
     let _l = port_lock().await;
     let now = Utc::now();
-    let mock = serve(MOCK_PORT, move |r| {
+    let mock = serve(move |r| {
         if r.path.starts_with("/npm-downloads/") {
             Reply::json(200, json!({"downloads": 10_000}))
         } else {
