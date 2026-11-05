@@ -1,11 +1,13 @@
 # Dev mode
 
-Dev mode (0.7) points a space at one GitHub repo and branch. kwnt then reads the repo, **read only**,
-and turns what happens there into cards:
+Dev mode (0.7) points a space at one GitHub repo and branch. kwnt then reads the repo and turns what
+happens there into cards. It writes to GitHub only when the person presses **Post to GitHub** on a
+review card (0.7.1, see [Posting to GitHub](#posting-to-github)); nothing else is ever sent there.
 
 - **Landed**: one card per commit that reaches the watched branch, saying what changed and how risky it is.
 - **Review**: one card per open pull request head, with findings. The person can press **Fix it**
-  (the finding goes to the bot that wrote the PR) or **Dismiss** on each finding.
+  (the finding goes to the bot that wrote the PR) or **Dismiss** on each finding, and **Post to
+  GitHub** to put the card on the PR as one review comment.
 - **Release notes**: written on request, from the landed cards since the last tag.
 
 It also turns on the **production floor** for the space's bots: steps that can reach production
@@ -51,7 +53,8 @@ and approvals stay as they were.
 
 ## Reading GitHub
 
-Reads go through the GitHub connection only, and kwnt never writes to the repo. Every read sends
+Reads go through the GitHub connection only. kwnt never pushes, merges, approves or edits anything
+in the repo; its one write is the review the person posts (below). Every read sends
 the last ETag it got, so an unchanged answer costs no rate limit. A rate limit (a 403 or 429 with
 `retry-after` or `x-ratelimit-remaining: 0`) backs the space off until the reset time GitHub gives,
 at most an hour, or a minute for a bare 429. Another 403 is a permission error. The settings show
@@ -94,6 +97,63 @@ finding, and CI on the merge is green. A PR that merges before its review is rea
 reviewed outside kwnt, gets a landed card that says "not verified", and it stays that way: a review
 that finishes later doesn't rewrite the landed card (only a CI change re-runs a card's text). That
 is on purpose. Verified says what was checked before the change landed, not after.
+
+## Posting to GitHub
+
+`POST /api/dev/cards/:id/post` (0.7.1) puts one review card on its pull request as **one GitHub PR
+review** with `event: "COMMENT"`. kwnt never approves or requests changes, never merges, and never
+posts on its own: only the person's press posts, and the route refuses a bot's turn token like every
+Dev mode route. Landed and release notes cards can't be posted (400). An unknown card is 404, and a
+review that isn't written yet is 409.
+
+**What is posted.** The review is pinned to the card's head (`commit_id`). Its body has the risk
+level and its reasons, the intent check (done, missing, not asked for), the test-tamper flags with
+their diff excerpts, the security tiles (secrets, new packages, OSV, Semgrep), and the findings that
+can't go on a line. It ends "Reviewed by {reviewer} ({engine}) in kwant" ("Reviewed by kwant's rule
+checks (no reviewer bot) in kwant" when no bot wrote it), then a hidden marker
+`<!-- kwant review card {id} -->`. Each finding that isn't dismissed and whose file and line are
+inside the PR's diff hunks (the new side) becomes an inline comment, `side: RIGHT`, at most 50 of
+them; the rest are listed in the body. If GitHub still answers 422 about lines, kwnt posts once more
+with everything in the body.
+
+**What is never posted.** Secrets never leave kwant. A gitleaks finding is posted only as "Possible
+secret in {file}:{line}", without its rule, excerpt or value. The body and every comment then go
+through the same redaction as bot output (`[redacted]` over keys, tokens and long hex), so a model
+finding that quotes a key doesn't carry it out either. The GitHub token is only ever a header.
+Dismissed findings and the card's model prompts aren't posted.
+
+**The token.** Posting uses the Loose ends GitHub connection, GitHub Enterprise `api_base` included.
+It needs **Pull requests: Read and write** on a fine-grained token, or `repo` (`public_repo` for a
+public repo) on a classic one. Reading alone works with read access, so posting is the only reason
+to give it more.
+
+**The answer** is always the card, with HTTP 200, carrying two fields (review cards only):
+
+```jsonc
+"posted": null | {"at": "…", "login": "octocat" | null, "url": "https://github.com/o/r/pull/24#pullrequestreview-1" | null,
+                  "comments": 3, "forge": "github"},
+"post_error": null | {"kind": "read_only" | "stale" | "failed", "message": "…"}
+```
+
+- `read_only`: GitHub answered the write with 403 or 404, so the token can read but not post.
+- `stale`: the PR's head moved past the card's head (or the card is already stale). Nothing is
+  posted: a new review is on its way.
+- `failed`: anything else (no connection, a closed PR, a rate limit, a second 422). Press again to
+  retry. A successful post clears `post_error`.
+
+`posted.comments` is the number of inline comments (0 after the 422 retry). Each post emits the
+`dev_card` event.
+
+**Once only.** A posted card answers unchanged, without asking GitHub. Presses of one card wait on a
+lock, and the database only records the first post, so a double click makes one review. If GitHub
+took a post but its answer was lost, the next press finds that review by its marker and head, and
+records it instead of posting again.
+
+**Who posts.** `GET /api/spaces/:id/dev_mode` has `forge` (`"github"` once the space has a repo and a
+GitHub connection is saved, else `null`; `gitlab` and `gitea` are reserved) and `forge_login`, the
+login the post goes out as, from `GET /user`. That login is cached per connection for 15 minutes (a
+minute when it fails). Only GitHub can be posted to in 0.7.1; the code keeps it behind one function,
+`post_review` in `src/server/dev/post.rs`, so other forges can join later.
 
 ## The production floor
 
@@ -194,6 +254,7 @@ Run these focused tests:
 
 ```sh
 cargo test --lib -- server::dev:: prod_floor auth::tests::person_only zombie::github connections::tests::only_mcp
+cargo test --test dev_post_test --test dev_github_test
 ```
 
 The no-tools turns have their own: `cargo test --lib -- no_tools`.
@@ -202,7 +263,9 @@ The poller runs against a mock GitHub on a private `127.0.0.1` port. The shared 
 `tests/support/mock_github.rs` (include it with `#[path = "support/mock_github.rs"] mod mock_github;`):
 fixtures by path with ETags and 304s, `Link: next` headers (to another host too), each GitHub
 error (401, 403, rate limits, secondary limits, 429, 5xx, slow answers, a lost base commit), and a
-log of every request. Anything but a GET fails the test. `tests/dev_github_test.rs` holds the
+log of every request. Anything but a GET fails the test, except a write the test queued with
+`accept_write` (`tests/dev_post_test.rs` queues the review posts and reads them back with `writes()`
+to check what was sent, the AKIA-style secret test included). `tests/dev_github_test.rs` holds the
 contract tests and the canary: a token built at runtime goes through a whole poll, failures
 included, and must appear nowhere but the vault (logs, errors, events, cards, the database, model
 prompts, other files under the data folder).

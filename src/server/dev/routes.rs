@@ -46,7 +46,7 @@ async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceI
 pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Response> {
     let row = state.db.dev_mode(space.as_str()).await.map_err(internal)?;
     let calls = state.db.dev_calls_today(space.as_str()).await.map_err(internal)?;
-    Ok(match row {
+    let mut v = match row {
         Some(r) => row_json(&r, calls),
         None => json!({
             "on": false,
@@ -60,7 +60,13 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             "calls_today": calls,
             "calls_cap": super::call_cap(),
         }),
-    })
+    };
+    // Where a review would be posted, and as whom (post-to-github.md P7 and its amendment)
+    let has_repo = v["repo"].as_str().is_some_and(|r| !r.is_empty());
+    let (forge, login) = super::post::forge_json(state, has_repo).await;
+    v["forge"] = forge;
+    v["forge_login"] = login;
+    Ok(v)
 }
 
 fn row_json(r: &DevModeRow, calls: i64) -> Value {
@@ -260,6 +266,12 @@ pub fn card_json(row: &DevCardRow) -> Value {
     out.insert("kind".into(), json!(row.kind));
     out.insert("status".into(), json!(row.status));
     out.insert("created_at".into(), json!(row.created_at));
+    if row.kind == REVIEW {
+        // post-to-github.md P1: null until posted, null when the last post went through
+        let stored = |s: &Option<String>| s.as_deref().and_then(|v| serde_json::from_str::<Value>(v).ok()).unwrap_or(Value::Null);
+        out.insert("posted".into(), stored(&row.posted));
+        out.insert("post_error".into(), stored(&row.post_error));
+    }
     Value::Object(out)
 }
 
@@ -724,6 +736,8 @@ mod tests {
             card: card.map(|c| c.to_string()),
             created_at: at,
             updated_at: at,
+            posted: None,
+            post_error: None,
         }
     }
 

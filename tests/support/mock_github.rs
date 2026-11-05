@@ -17,9 +17,11 @@
 //!   gets 304 with no body, as GitHub does.
 //! - With [`MockGithub::require_token`], a request without that bearer token gets 401.
 //! - Every request is logged: method, path with query, and whether `Authorization` was sent.
-//! - Dev mode only reads. Any request that isn't a GET is answered 405, logged, and fails the test:
-//!   [`MockGithub::assert_read_only`] panics, and so does dropping the mock (unless the test is
-//!   already failing).
+//! - Dev mode reads, and writes only a review the person posts (0.7.1). A request that isn't a GET
+//!   is answered 405, logged, and fails the test (dropping the mock panics, unless the test is
+//!   already failing), unless the test queued an answer for it with [`MockGithub::accept_write`].
+//!   [`MockGithub::assert_read_only`] still panics on any write, accepted or not. Accepted writes
+//!   keep their request body: [`MockGithub::writes`].
 //! - Secret-looking strings are built at runtime ([`canary_token`], [`secret_like`]), so GitHub push
 //!   protection and Gitleaks never see one in the source.
 
@@ -68,8 +70,21 @@ pub struct Hit {
     pub not_modified: bool,
 }
 
+/// A write the mock accepted, with what was sent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Write {
+    pub method: String,
+    pub path: String,
+    pub authorized: bool,
+    /// The request body as sent (kept raw, so a test can search all of it).
+    pub body: String,
+}
+
 #[derive(Default)]
 struct Inner {
+    write_replies: Mutex<HashMap<String, std::collections::VecDeque<(u16, Value)>>>,
+    writes: Mutex<Vec<Write>>,
+    refused_writes: Mutex<Vec<Hit>>,
     replies: Mutex<HashMap<String, Value>>,
     faults: Mutex<HashMap<String, Fault>>,
     links: Mutex<HashMap<String, String>>,
@@ -149,6 +164,24 @@ impl MockGithub {
         self.inner.hits.lock().unwrap().clear();
     }
 
+    /// Queues one answer (`status`, `body`) to the next `method` `path` write (the path without
+    /// its query). Each queued answer serves one request; a write with none left fails the test.
+    pub fn accept_write(&self, method: &str, path: &str, status: u16, body: Value) -> &Self {
+        self.inner.write_replies.lock().unwrap().entry(format!("{} {path}", method.to_uppercase())).or_default().push_back((status, body));
+        self
+    }
+
+    /// The writes answered from [`MockGithub::accept_write`], oldest first.
+    pub fn writes(&self) -> Vec<Write> {
+        self.inner.writes.lock().unwrap().clone()
+    }
+
+    /// Panics if a write reached the mock that no test queued an answer for.
+    pub fn assert_no_unexpected_writes(&self) {
+        let refused = self.inner.refused_writes.lock().unwrap().clone();
+        assert!(refused.is_empty(), "the mock got writes nobody expected: {refused:?}");
+    }
+
     /// Panics if anything but a GET reached the mock.
     pub fn assert_read_only(&self) {
         let writes: Vec<Hit> = self.hits().into_iter().filter(|h| h.method != "GET").collect();
@@ -160,7 +193,7 @@ impl Drop for MockGithub {
     fn drop(&mut self) {
         self.server.abort();
         if !std::thread::panicking() {
-            self.assert_read_only();
+            self.assert_no_unexpected_writes();
         }
     }
 }
@@ -178,6 +211,7 @@ async fn answer(State(inner): State<Arc<Inner>>, req: Request) -> Response {
     let headers = req.headers().clone();
     let full = req.uri().path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| req.uri().path().to_string());
     let path = req.uri().path().to_string();
+    let body = axum::body::to_bytes(req.into_body(), 4 << 20).await.map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
     fn find<T: Clone>(m: &Mutex<HashMap<String, T>>, full: &str, path: &str) -> Option<T> {
         let m = m.lock().unwrap();
         m.get(full).or_else(|| m.get(path)).cloned()
@@ -185,8 +219,14 @@ async fn answer(State(inner): State<Arc<Inner>>, req: Request) -> Response {
     let mut hit = Hit { method: method.to_string(), path: full.clone(), authorized: headers.contains_key("authorization"), not_modified: false };
 
     if method != Method::GET {
-        inner.hits.lock().unwrap().push(hit);
-        return (StatusCode::METHOD_NOT_ALLOWED, axum::Json(json!({"message": "the mock GitHub only answers GET"}))).into_response();
+        inner.hits.lock().unwrap().push(hit.clone());
+        let queued = inner.write_replies.lock().unwrap().get_mut(&format!("{method} {path}")).and_then(|q| q.pop_front());
+        let Some((status, reply)) = queued else {
+            inner.refused_writes.lock().unwrap().push(hit);
+            return (StatusCode::METHOD_NOT_ALLOWED, axum::Json(json!({"message": "the mock GitHub only answers GET"}))).into_response();
+        };
+        inner.writes.lock().unwrap().push(Write { method: method.to_string(), path: full, authorized: hit.authorized, body });
+        return (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), axum::Json(reply)).into_response();
     }
     let token = inner.token.lock().unwrap().clone();
     if let Some(t) = token {

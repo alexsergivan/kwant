@@ -894,6 +894,7 @@ mod tests {
             (&post, "/api/spaces/s1/dev/backup"),
             (&get, "/api/dev/cards/dvc_1"),
             (&post, "/api/dev/cards/dvc_1/findings/f1"),
+            (&post, "/api/dev/cards/dvc_1/post"),
             (&Method::HEAD, "/api/spaces/s1/dev/reviews"),
         ] {
             assert!(person_only(m, p), "{m} {p}");

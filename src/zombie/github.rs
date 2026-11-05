@@ -1,6 +1,8 @@
 //! GitHub issues and pull requests the person opened or is assigned to, read with the REST API
-//! (GET only) and a token from the password vault. The token is only ever sent to the API base
-//! the person configured; every URL is built from it, never taken from a response.
+//! and a token from the password vault. The token is only ever sent to the API base the person
+//! configured; every URL is built from it, never taken from a response. Reads are GET only; the
+//! one write is [`GithubSource::dev_post_review`], a COMMENT review the person asked for on a Dev
+//! mode review card (docs/dev-mode.md, "Posting to GitHub").
 
 use super::{clip, ConvKind, Conversation, MissionSource, Msg, SourceKind, MAX_MESSAGE_CHARS};
 use chrono::{DateTime, Utc};
@@ -546,6 +548,123 @@ impl GithubSource {
             )
             .await?;
         Ok(list.len())
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Posting a review (0.7.1, post-to-github.md). kwant's only write to GitHub, made when the person
+// presses Post on a review card: one review with event COMMENT, never APPROVE or REQUEST_CHANGES.
+
+/// One inline comment, on the new side of the diff.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReviewComment {
+    pub path: String,
+    pub line: u64,
+    pub side: &'static str,
+    pub body: String,
+}
+
+/// `POST /repos/{o}/{r}/pulls/{n}/reviews`. The event is always COMMENT.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ReviewPost {
+    pub commit_id: String,
+    pub body: String,
+    pub event: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<ReviewComment>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct GhReview {
+    pub id: u64,
+    #[serde(default)]
+    pub user: Option<GhUser>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub commit_id: Option<String>,
+    #[serde(default)]
+    pub html_url: Option<String>,
+}
+
+/// Why a review didn't post.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PostError {
+    /// 422: GitHub couldn't take the review as sent (most often a comment line outside the
+    /// diff). GitHub's own message, which never holds the token.
+    Rejected(String),
+    Gh(GhError),
+}
+
+/// GitHub's 422 message and its `errors`, joined.
+fn unprocessable(body: &serde_json::Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(m) = body["message"].as_str() {
+        parts.push(m.to_string());
+    }
+    for e in body["errors"].as_array().into_iter().flatten() {
+        match e {
+            serde_json::Value::String(s) => parts.push(s.clone()),
+            v => {
+                if let Some(m) = v["message"].as_str() {
+                    parts.push(m.to_string());
+                }
+            }
+        }
+    }
+    let text = parts.join(": ");
+    super::clip(&text, 300)
+}
+
+impl GithubSource {
+    /// Posts one COMMENT review on PR `number`. No redirect is followed and nothing is retried
+    /// here: the caller decides about a 422.
+    pub async fn dev_post_review(&self, repo: &str, number: u64, review: &ReviewPost) -> Result<GhReview, PostError> {
+        let repo = repo_path(repo).map_err(PostError::Gh)?;
+        let url = format!("{}/repos/{repo}/pulls/{number}/reviews", self.cfg.base());
+        let res = self
+            .http
+            .post(&url)
+            .bearer_auth(self.token.as_str())
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(review)
+            .send()
+            .await
+            .map_err(|e| PostError::Gh(GhError::Other(format!("GitHub could not be reached: {}", e.without_url()))))?;
+        let status = res.status().as_u16();
+        let now = Utc::now().timestamp().max(0) as u64;
+        match status {
+            200 | 201 => res.json().await.map_err(|_| PostError::Gh(GhError::Other("GitHub sent an answer kwant could not read".into()))),
+            401 => Err(PostError::Gh(GhError::Auth)),
+            404 => Err(PostError::Gh(GhError::NotFound)),
+            422 => Err(PostError::Rejected(unprocessable(&res.json().await.unwrap_or_default()))),
+            403 | 429 => Err(PostError::Gh(match retry_after(status, res.headers(), now) {
+                Some(s) => GhError::Limited { retry_after_s: s },
+                None => GhError::Forbidden,
+            })),
+            s => Err(PostError::Gh(GhError::Other(format!("GitHub answered {s}")))),
+        }
+    }
+
+    /// The reviews on a PR (the newest 100), to find one kwant posted before.
+    pub async fn dev_reviews(&self, repo: &str, number: u64) -> Result<Vec<GhReview>, GhError> {
+        self.get_as(&format!("/repos/{}/pulls/{number}/reviews?per_page=100", repo_path(repo)?), None).await
+    }
+
+    /// The token's account login.
+    pub async fn dev_login(&self) -> Result<String, GhError> {
+        Ok(self.get_as::<GhUser>("/user", None).await?.login)
+    }
+
+    /// The Loose ends connection id this client belongs to.
+    pub fn connection_id(&self) -> &str {
+        &self.id
+    }
+
+    /// The API base it talks to.
+    pub fn api_base(&self) -> String {
+        self.cfg.base()
     }
 }
 
