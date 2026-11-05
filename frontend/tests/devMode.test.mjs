@@ -334,6 +334,7 @@ test('DOM: a 403 on load shows the switch disabled', async () => {
   server.fail = { method: 'GET', path: '/dev_mode', status: 403, error: 'only the person' };
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
   assert.equal(switchEl(host).disabled, true);
+  assert.ok(switchEl(host).querySelector('[data-dv-glyph="locked"]'), 'disabled shows a closed lock');
   root.unmount();
 });
 
@@ -344,6 +345,7 @@ test('DOM: reduced motion shows the same switch with the </> glyph, unlocks to a
   const b = switchEl(host);
   assert.ok(b.classList.contains('kw-dv-rm'));
   assert.ok(b.querySelector('[data-dv-glyph="code"]'));
+  assert.equal(b.textContent.trim(), 'Dev', 'the reduced-motion variant keeps its Dev label');
   await click(b);
   assert.ok(b.querySelector('[data-dv-glyph="unlocked"]'));
   await click(b);
@@ -355,6 +357,16 @@ test('DOM: reduced motion shows the same switch with the </> glyph, unlocks to a
   assert.equal(b.dataset.devSwitch, 'lifted', 'the next press lifts at once: nothing to settle');
   root.unmount();
   delete window.matchMedia;
+});
+
+test('switchLook names the visual state and the knob glyph: off, armed, on, pending, disabled', () => {
+  const st = (o) => ({ ...m.initialSwitch({ reduced: false }), ...o });
+  const pick = (o) => { const l = m.switchLook(st(o)); return [l.look, l.glyph]; };
+  assert.deepEqual(pick({ on: false }), ['off', 'code']);
+  assert.deepEqual(pick({ on: true }), ['on', 'code']);
+  assert.deepEqual(pick({ phase: 'lifted', liftedAt: 0 }), ['armed', 'unlocked']);
+  assert.deepEqual(pick({ phase: 'pending' }), ['pending', 'code']);
+  assert.deepEqual(pick({ disabled: true, on: true }), ['disabled', 'locked']);
 });
 
 test('0.7.1 look: a plain toggle with </> in the knob; unlocking rings it and shows an open lock; no cover or hinges; 44 px on phone', async () => {
@@ -382,6 +394,7 @@ test('DOM: first switch-on opens the setup sheet; typing checks after 400 ms; Tu
   await click(b);
   await click(b);
   assert.equal(b.dataset.devSwitch, 'pending');
+  assert.ok(b.querySelector('[data-dv-glyph="code"]') && b.dataset.ring === 'true' && b.dataset.knob === 'right', 'pending: </>, ring, knob right');
   const dialog = document.querySelector('[role="dialog"]');
   assert.equal(dialog.getAttribute('aria-modal'), 'true');
   assert.match(dialog.textContent, /Which repo is this space about\?/);
