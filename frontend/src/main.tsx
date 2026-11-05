@@ -8,6 +8,7 @@ import './styles/fonts.css';
 import './styles/modern.css';
 import './styles/stream.css';
 import './styles/needsYou.css';
+import './styles/ideas.css';
 
 registerServiceWorker();
 captureInstallPrompt();

@@ -1,0 +1,35 @@
+/* Idea jar (0.7, Iris; Mira's spec §3.4, §5, §8). Transform and opacity only, cubic-bezier(.2,.7,.2,1),
+   nothing loops, and every animation is off under prefers-reduced-motion (the resting frames show). */
+.kw-jar-pix { shape-rendering: crispEdges; display: block; }
+
+/* The drop: 1 the slip lifts (0-180 ms), 2 it folds and drops in (180-340 ms), 3 a bot peeks (340-520 ms). */
+.kw-jar-slip {
+  position: absolute; left: 50%; top: -6px; width: 18px; height: 8px; margin-left: -9px; border-radius: 2px;
+  background: #ecebfa; opacity: 0; pointer-events: none;
+  animation: kw-jar-lift 180ms cubic-bezier(.2,.7,.2,1) forwards, kw-jar-fall 160ms 180ms cubic-bezier(.2,.7,.2,1) forwards;
+}
+@keyframes kw-jar-lift { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes kw-jar-fall { from { opacity: 1; transform: translateY(0) scale(1); } to { opacity: 0; transform: translateY(22px) scale(.6); } }
+
+.kw-jar-wobble { transform-origin: 50% 100%; animation: kw-jar-wobble 160ms cubic-bezier(.2,.7,.2,1); }
+.kw-jar-wobble-late { transform-origin: 50% 100%; animation: kw-jar-wobble 160ms 180ms cubic-bezier(.2,.7,.2,1) backwards; }
+@keyframes kw-jar-wobble { 0% { transform: rotate(0); } 33% { transform: rotate(-3deg); } 66% { transform: rotate(2deg); } 100% { transform: rotate(0); } }
+
+.kw-jar-peek { animation: kw-jar-peek 180ms 340ms cubic-bezier(.2,.7,.2,1) backwards; }
+@keyframes kw-jar-peek { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* A take arriving in Takes ready: 160 ms fade and a 6 px rise. */
+.kw-jar-arrive { animation: kw-jar-arrive 160ms cubic-bezier(.2,.7,.2,1) backwards; }
+@keyframes kw-jar-arrive { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* The slip's folded corner, the only paper cue. */
+.kw-slip { position: relative; }
+.kw-slip::after {
+  content: ''; position: absolute; top: -1px; right: -1px; width: 14px; height: 14px; border-top-right-radius: 11px;
+  background: linear-gradient(225deg, #120e26 50%, #2c2552 50%); pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-jar-slip { display: none; }
+  .kw-jar-wobble, .kw-jar-wobble-late, .kw-jar-peek, .kw-jar-arrive { animation: none !important; }
+}
