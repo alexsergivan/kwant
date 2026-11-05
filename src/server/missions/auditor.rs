@@ -133,9 +133,15 @@ pub async fn pick_challenger(state: &AppState, task: &Task) -> Option<Kwant> {
 /// team would challenge work it knows nothing about. Within a pool: the most verified tasks of
 /// the class, then the fewest challenges in the last 7 days, then by name and id.
 pub async fn pick(state: &AppState, task: &Task, whole_space: bool) -> Option<(Kwant, &'static str)> {
+    ranked(state, task, whole_space).await.into_iter().next()
+}
+
+/// Every bot [`pick`] could choose, best first (`pick` takes the first). Dev mode's reviewer
+/// pick walks it for a bot on another engine than the author (plan D7).
+pub async fn ranked(state: &AppState, task: &Task, whole_space: bool) -> Vec<(Kwant, &'static str)> {
     let not = excluded(state, task).await;
     let space = SpaceId::new(&task.space_id);
-    let bots = state.db.list_kwants(&space).await.ok()?;
+    let Ok(bots) = state.db.list_kwants(&space).await else { return Vec::new() };
     let teams = state.db.list_teams(&space).await.unwrap_or_default();
     let teams_of = |id: &str| -> Vec<&str> {
         teams
@@ -174,7 +180,7 @@ pub async fn pick(state: &AppState, task: &Task, whole_space: bool) -> Option<(K
     // Stable: within a pool the order above holds
     let mut pooled: Vec<(Kwant, &'static str)> = cands.into_iter().filter_map(|k| pool_of(&k).map(|p| (k, p))).collect();
     pooled.sort_by_key(|(_, p)| rank(p));
-    pooled.into_iter().next()
+    pooled
 }
 
 async fn event(state: &AppState, task_id: &str, kind: &str, actor: &str, detail: Value) {

@@ -451,6 +451,7 @@ pub fn landed_facts(mode: &DevModeRow, c: &GhCommit, pr: Option<&GhPull>, files:
         first_edit_files: first,
         draft: false,
         head_branch: None,
+        pr_head_sha: pr.map(|p| p.head.sha.clone()),
     }
 }
 
@@ -477,6 +478,7 @@ pub fn review_facts(mode: &DevModeRow, p: &GhPull, head: Option<&GhCommit>, file
         first_edit_files: first,
         draft: p.draft,
         head_branch: Some(p.head.branch.clone()),
+        pr_head_sha: None,
     }
 }
 

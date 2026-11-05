@@ -50,6 +50,10 @@ pub struct DevFacts {
     /// Links for the card footer: PR, commit and CI pages (https only).
     #[serde(default)]
     pub links: Links,
+    /// Landed from a PR only: the PR's head commit when it merged (`head_sha` is then the merge
+    /// commit). A review counts for the landed card only if it reviewed this commit.
+    #[serde(default)]
+    pub pr_head_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -176,6 +180,7 @@ mod tests {
             draft: false,
             head_branch: Some("b".into()),
             links: Links::default(),
+            pr_head_sha: None,
         };
         let v = serde_json::to_value(&f).unwrap();
         assert_eq!(v["kind"], "review");
