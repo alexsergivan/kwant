@@ -15,6 +15,7 @@ const m = await loadBundled(`
   import { MarkdownRenderer } from './src/components/MarkdownRenderer';
   import { QuestionCard } from './src/components/QuestionCard';
   import { EngineChip } from './src/components/Signature';
+  import { ReplyMeta } from './src/components/ReplyMeta';
   export * from './src/toolLabel';
   export { keyFacts } from './src/components/ModernApprovalCard';
   export { parseQuestionMeta } from './src/questions';
@@ -25,6 +26,7 @@ const m = await loadBundled(`
   export const md = (content) => renderToStaticMarkup(React.createElement(MarkdownRenderer, { content }));
   export const question = r(QuestionCard);
   export const chip = r(EngineChip);
+  export const meta = r(ReplyMeta);
 `);
 
 const text = (html) => html.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&#x27;/g, "'").replace(/\s+/g, ' ').trim();
@@ -200,6 +202,8 @@ test('question card: a short placeholder on one line, a 16 px field and 44 px ta
   assert.match(skip.attrs, /text-sm/);
   assert.match(skip.attrs, /text-\[#a39dcc\]/);
   assert.match(html, /w-11 h-11/, 'a 44 px send button');
+  // The strip already says the bot waits: on a phone the card does not say it again (C2: at most twice).
+  assert.match(html, /<span class="[^"]*max-md:hidden[^"]*" data-question-waiting="">/);
 });
 
 test('engine chip: the model alone on a phone, the full label from sm up and on hover', () => {
@@ -207,4 +211,11 @@ test('engine chip: the model alone on a phone, the full label from sm up and on 
   assert.match(html, /title="Claude · claude-opus-5-5 · Booktuning"/);
   assert.match(html, /<span class="[^"]*sm:hidden[^"]*max-w-\[160px\][^"]*"[^>]*>claude-opus-5-5<\/span>/);
   assert.match(html, /<span class="[^"]*hidden sm:inline[^"]*">Claude · claude-opus-5-5 · Booktuning<\/span>/);
+});
+
+test('reply header on a phone: one row, the time never shrinks, the chip gives way', () => {
+  const html = m.meta({ name: 'Architect', at: '2026-11-02T11:42:00Z', now: Date.parse('2026-11-02T12:00:00Z'), ranOn: 'Custom API · claude-opus-5-5', account: 'Anthropic API' });
+  assert.match(html, /<div class="[^"]*flex-nowrap sm:flex-wrap[^"]*">/);
+  assert.match(html, /<span class="[^"]*shrink-0 whitespace-nowrap[^"]*" data-reply-time="">/);
+  assert.match(html, /<span class="[^"]*sm:hidden[^"]*max-w-\[160px\][^"]*"[^>]*>claude-opus-5-5<\/span>/);
 });

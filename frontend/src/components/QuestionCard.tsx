@@ -84,7 +84,8 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
         <CheckCircle2 size={13} aria-hidden="true" /> Answered{view.status === 'open' ? ', sending…' : ''}
       </span>
     ) : waiting ? (
-      <span className="inline-flex items-center gap-1.5 text-amber-300">
+      // Not on a phone: the working strip under the chat already says the bot waits, and says it once (spec C2).
+      <span className="inline-flex items-center gap-1.5 text-amber-300 max-md:hidden" data-question-waiting="">
         <Clock size={13} aria-hidden="true" /> {kwantName} is waiting for your answer. You can keep chatting meanwhile.
       </span>
     ) : (
@@ -130,7 +131,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
                 aria-pressed={chosen}
                 onClick={() => submit({ choice: i })}
                 onKeyDown={(e) => onChoiceKey(e, i)}
-                className={`w-full sm:w-auto inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[48px] sm:min-h-[34px] px-3 py-2 sm:py-1.5 rounded-xl text-base leading-[22px] sm:text-sm sm:leading-normal text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
+                className={`w-full sm:w-auto inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[48px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-base leading-[22px] sm:text-sm sm:leading-normal text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
                   chosen
                     ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-100'
                     : open
@@ -201,7 +202,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
           )
         )}
 
-        <div className="px-4 pb-3 pt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+        <div className="px-4 pb-1 sm:pb-3 pt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           <p role="status" aria-live="polite" className="min-w-0">
             {status}
           </p>
