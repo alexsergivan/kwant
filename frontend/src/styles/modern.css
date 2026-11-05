@@ -247,6 +247,7 @@
    .kw-btn-primary     the accent gradient button (one per view); .kw-btn-ghost a quiet button
    .kw-status-dot      a 8px dot; .kw-status-ok / -warn / -bad / -idle, .kw-pulse while something is live
    .kw-focus           the focus ring (2px accent, 2px offset); already on every .kw-card-interactive
+   .kw-hit             a 44px tap area on phone for a small inline link, with no visual change
    .kw-fade-in         enters in 160ms (opacity + 6px slide); .kw-stagger delays children by --i * 40ms
    Motion is 120-200ms, transform and opacity only, and off under prefers-reduced-motion.
    ------------------------------------------------------------------------------------------------ */
@@ -268,6 +269,19 @@
   }
   .kw-card-interactive:disabled {
     @apply opacity-50 cursor-not-allowed;
+  }
+  /* .kw-hit: on phone, a small inline link gets a 44px tap area from an invisible ::before; nothing moves. */
+  @media (max-width: 639.98px) {
+    .kw-hit { position: relative; }
+    .kw-hit::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      transform: translate(-50%, -50%);
+    }
   }
   .kw-card-interactive,
   .kw-focus {

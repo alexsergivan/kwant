@@ -39,7 +39,7 @@ const h = React.createElement;
 // Demo data only. One open finding on #289's review, so its landed card offers "Open review".
 const finding = fx.REVIEW_294.findings[0];
 const reviewsRoute = { cards: [fx.REVIEW_290, { ...fx.REVIEW_289, findings: [finding] }, { id: 'dvr_bad', kind: 'review', status: 'ready', title: 'No PR number' }] };
-const landedRoute = { ...fx.LANDED_ROUTE, cards: [...fx.LANDED_ROUTE.cards, { id: 'dvc_bad', kind: 'landed', status: 'ready', headline: 'A card without a PR' }] };
+const landedRoute = { ...fx.LANDED_ROUTE, cards: [...fx.LANDED_ROUTE.cards, fx.LANDED_DIRECT, { id: 'dvc_bad', kind: 'landed', status: 'ready', headline: 'A card without a PR' }] };
 let routes = { landed: landedRoute, reviews: reviewsRoute };
 g.fetch = g.window.fetch = async (url) => {
   const u = String(url);
@@ -85,8 +85,14 @@ test('slot swap: What landed draws Iris’s rollup and landed cards; a card she 
   assert.ok(host.querySelector('[data-dev-landed-list]'), 'Iris’s LandedList');
   assert.equal(host.querySelector('[data-dev-slot]'), null, 'no placeholder cards are left');
   assert.match(host.textContent, /changes? landed on main/, 'Iris’s rollup title, with the branch');
-  const prs = [...host.querySelectorAll('[data-dev-card="landed"]')].map((c) => Number(c.getAttribute('data-pr')));
+  const prs = [...host.querySelectorAll('[data-dev-card="landed"][data-pr]')].map((c) => Number(c.getAttribute('data-pr')));
   assert.deepEqual(prs.sort(), [288, 289, 290, 301, 303]);
+  // B1: a commit pushed without a PR is a normal landed card, not the fallback row
+  const direct = host.querySelector('[data-dev-card="landed"][data-commit="c0ffee1"]');
+  assert.ok(direct, 'the direct commit draws as a landed card');
+  assert.match(direct.textContent, /Fix typo in README/);
+  assert.match(direct.textContent, /Commit c0ffee1/);
+  assert.equal(direct.querySelector('[data-verified]'), null);
   const fallback = host.querySelectorAll('[data-dev-card="fallback"]');
   assert.equal(fallback.length, 1);
   assert.match(fallback[0].textContent, /A card without a PR · This card couldn’t be shown\./);
