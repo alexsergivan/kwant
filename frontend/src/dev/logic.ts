@@ -88,8 +88,11 @@ export function riskReasons(risk: { level: RiskLevel; reasons: string[] } | null
 const sameName = (a: string | null | undefined, b: string | null | undefined) =>
   !!a && !!b && a.trim().toLowerCase() === b.trim().toLowerCase();
 
-/** A finding still blocks Verified until it is fixed or dismissed. A Fix it that went out is on its way. */
-export const isOpen = (f: DevFinding) => f.state === 'open';
+/** A finding is open until it is fixed or dismissed (item 14). One sent as a Fix it task is still open. */
+export const isOpen = (f: DevFinding) => f.state !== 'dismissed';
+
+/** Findings in a review that still need the person: open or sent, never dismissed. */
+export const openFindings = (review: ReviewCard | null | undefined) => (review ? review.findings.filter(isOpen).length : 0);
 
 /**
  * The holo "Verified" sticker shows only when every one of these holds; the server's own `verified` is
@@ -332,8 +335,6 @@ export function dismissReducer(d: DismissDraft, ev: DismissEvent): DismissDraft 
   }
 }
 
-/** Post to GitHub · N comments: N = open findings (not sent, not dismissed). */
-export const commentCount = (findings: DevFinding[]) => findings.filter(isOpen).length;
 
 /** "1 high, 1 medium, 1 low" over the findings that are not dismissed. */
 export function findingsSummary(findings: DevFinding[]): string {

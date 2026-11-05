@@ -7,7 +7,6 @@ import {
   KeyRound,
   Lock,
   Package,
-  Send,
   ShieldAlert,
   ShieldCheck,
   Target,
@@ -21,7 +20,6 @@ import {
   DISMISS_REASONS,
   clock,
   closedDraft,
-  commentCount,
   dismissReducer,
   dismissedLine,
   findingsSummary,
@@ -34,11 +32,13 @@ import { OutLink, SectionHead, Who, modelLabel, personText } from './parts';
 const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
 const STRIPE: Record<Severity, string> = { critical: 'border-l-rose-500', high: 'border-l-orange-500', medium: 'border-l-amber-500', low: 'border-l-sky-500' };
 const SEV_WORD: Record<Severity, string> = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
+// S4 (WCAG 1.4.1): the severity is a word too, not only the dot's colour.
+const SEV_TONE: Record<Severity, string> = { critical: 'text-rose-300', high: 'text-rose-300', medium: 'text-amber-300', low: 'text-teal-300' };
 
 const RISK_BOX = {
-  high: { box: 'border-rose-300/35 bg-rose-300/[0.12]', pill: 'bg-rose-300 text-surface-main' },
-  medium: { box: 'border-amber-300/35 bg-amber-300/[0.12]', pill: 'bg-amber-300 text-surface-main' },
-  low: { box: 'border-teal-300/35 bg-teal-300/[0.12]', pill: 'bg-teal-300 text-surface-main' },
+  high: { box: 'border-rose-300/35 bg-rose-300/[0.12]', pill: 'bg-rose-300 text-[#120e26]' },
+  medium: { box: 'border-amber-300/35 bg-amber-300/[0.12]', pill: 'bg-amber-300 text-[#120e26]' },
+  low: { box: 'border-teal-300/35 bg-teal-300/[0.12]', pill: 'bg-teal-300 text-[#120e26]' },
 } as const;
 
 const TAMPER_WORD: Record<TamperFlag['kind'], string> = {
@@ -147,7 +147,10 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
         <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${DOT[f.severity]}`} aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="font-semibold leading-snug text-zinc-100 [overflow-wrap:anywhere]">
-            <span className="sr-only">{SEV_WORD[f.severity]}: </span>
+            <span data-sev-word={f.severity} className={`mr-1.5 text-[10px] font-semibold uppercase tracking-wide ${SEV_TONE[f.severity]}`}>
+              {SEV_WORD[f.severity]}
+              <span className="sr-only">:</span>
+            </span>
             {f.title}
           </div>
           {f.detail && <p className="mt-1 leading-relaxed text-zinc-400 [overflow-wrap:anywhere]">{f.detail}</p>}
@@ -281,7 +284,6 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const reviewerModel = card.reviewer ? modelLabel(card.reviewer.engine, card.reviewer.model) : null;
   const headingId = `review-${card.id || card.pr}-h`;
   const tile = card.draft ? 'bg-zinc-500/15 text-zinc-300' : 'bg-teal-400/15 text-teal-300';
-  const comments = commentCount(card.findings);
   const summary = findingsSummary(card.findings);
   const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
 
@@ -398,6 +400,22 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
             Tests changed with the code. Nothing loosened.
           </p>
         )}
+        {card.tamper.unread.length > 0 && (
+          <div data-tamper-unread={card.tamper.unread.length} className="mt-2 text-meta text-zinc-400">
+            <p className="flex items-center gap-1.5 text-warn">
+              <AlertTriangle size={13} aria-hidden="true" />
+              Couldn’t read {card.tamper.unread.length} {card.tamper.unread.length === 1 ? 'file' : 'files'}: GitHub sent no diff, so nothing in{' '}
+              {card.tamper.unread.length === 1 ? 'it' : 'them'} was checked.
+            </p>
+            <ul role="list" className="mt-1 space-y-0.5 pl-5">
+              {card.tamper.unread.map((p) => (
+                <li key={p} className="font-mono text-[11px] text-zinc-300 [overflow-wrap:anywhere]">
+                  {p}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {/* 5. Security */}
@@ -427,24 +445,17 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
 
       {card.cut && <p className="mt-3 text-2xs text-zinc-400">{card.cut}</p>}
 
-      {/* 7. Footer: posting is 0.7.x, so the button stays disabled with a tooltip. */}
-      <footer className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3 text-meta text-zinc-400">
-        <span className="inline-flex min-w-0 items-center gap-1.5">
+      {/* 7. Footer: 0.7.0 is read only (D4), so there is no Post to GitHub button. */}
+      <footer data-review-footer className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3">
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-zinc-400">
           <Lock size={13} aria-hidden="true" className="shrink-0" />
-          Nothing is posted until you press it.
+          Read only: nothing is posted to GitHub in this version.
         </span>
-        <span className="flex flex-wrap items-center gap-3 sm:ml-auto">
-          {card.links.pr && <OutLink href={card.links.pr}>Open on GitHub</OutLink>}
-          <span title="Posting to GitHub comes in 0.7.x" className="inline-flex">
-            <button type="button" disabled aria-describedby={`${headingId}-post`} className="kw-btn-ghost min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0">
-              <Send size={13} aria-hidden="true" />
-              Post to GitHub · {comments} {comments === 1 ? 'comment' : 'comments'}
-            </button>
+        {card.links.pr && (
+          <span className="text-meta sm:ml-auto">
+            <OutLink href={card.links.pr}>Open on GitHub</OutLink>
           </span>
-          <span id={`${headingId}-post`} className="sr-only">
-            Posting to GitHub comes in 0.7.x
-          </span>
-        </span>
+        )}
       </footer>
     </article>
   );

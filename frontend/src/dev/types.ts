@@ -103,12 +103,14 @@ export interface ReviewCard extends CardBase {
   draft: boolean;
   author: DevPerson | null;
   /** §3.6 item 10: null when no second bot could review; `note` then says so. */
-  reviewer: { name: string; engine: string | null; model: string | null } | null;
+  /** Round 3 (vega.md): `id` is the reviewing bot's id; the server's Verified compares it with the author's. */
+  reviewer: { id: string | null; name: string; engine: string | null; model: string | null } | null;
   note: string | null;
   same_engine: boolean;
   risk: DevRisk | null;
   intent: { source: string; asked: string; rows: { state: IntentState; text: string }[]; none: boolean } | null;
-  tamper: { flags: TamperFlag[] };
+  /** `unread`: files GitHub sent no diff for, so nothing in them was checked (round 3, V-T5). */
+  tamper: { flags: TamperFlag[]; unread: string[] };
   security: {
     secrets: { state: ScanState; count: number };
     packages: { state: ScanState; count: number };
@@ -198,6 +200,8 @@ export interface LandedListProps {
   reviews: ReviewCard[];
   /** Epoch ms; tests and shots pass a fixed clock. */
   now?: number;
+  /** Opens the PR's review card ("1 finding open in the review · Open review"); the link hides without it. */
+  onOpenReview?: (pr: number) => void;
 }
 
 export interface ReviewCardProps {
@@ -344,7 +348,7 @@ export function parseReview(raw: unknown): ReviewCard | null {
     base: str(raw.base, 200),
     draft: raw.draft === true,
     author: person(raw.author),
-    reviewer: rv && str(rv.name, 80) ? { name: str(rv.name, 80)!, engine: str(rv.engine, 40), model: str(rv.model, 80) } : null,
+    reviewer: rv && str(rv.name, 80) ? { id: str(rv.id, 120), name: str(rv.name, 80)!, engine: str(rv.engine, 40), model: str(rv.model, 80) } : null,
     note: str(raw.note, 200),
     same_engine: raw.same_engine === true,
     risk: risk(raw.risk),
@@ -369,6 +373,9 @@ export function parseReview(raw: unknown): ReviewCard | null {
           excerpt: str(f.excerpt, 2000) ?? '',
           why: str(f.why, 400) ?? '',
         })),
+      unread: arr(isObj(raw.tamper) ? raw.tamper.unread : [])
+        .map((p) => str(p, 400))
+        .filter((p): p is string => !!p),
     },
     security: { secrets: scan(sec.secrets), packages: scan(sec.packages) },
     findings: arr(raw.findings).map(finding).filter((f): f is DevFinding => !!f),

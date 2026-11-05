@@ -2,7 +2,7 @@ import React from 'react';
 import { AlertTriangle, Check, ChevronRight, FileText, FlaskConical, GitMerge, Minus, ShieldCheck, X } from 'lucide-react';
 import { Sticker } from '../Sticker';
 import type { LandedCard as Landed, LandedListProps, ReviewCard } from '../../dev/types';
-import { byDay, clock, riskReasons, showVerified } from '../../dev/logic';
+import { byDay, clock, openFindings, riskReasons, showVerified } from '../../dev/logic';
 import { OutLink, RiskChip, Who, personText } from './parts';
 
 const isTest = (path: string) => /(^|\/)(tests?|__tests__|e2e)\/|\.(test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(path);
@@ -11,7 +11,7 @@ const TESTS_ICON = { passed: Check, failed: X, none: Minus, unknown: Minus } as 
 const TESTS_TONE = { passed: 'text-ok', failed: 'text-bad', none: 'text-zinc-400', unknown: 'text-zinc-400' } as const;
 
 /** One merge in plain words (design §4). */
-export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[] }> = ({ card, reviews = [] }) => {
+export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number) => void }> = ({ card, reviews = [], onOpenReview }) => {
   const verified = showVerified(card, reviews);
   const writer = personText(card.written_by);
   const merged = clock(card.merged_at);
@@ -19,7 +19,9 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[] }> = ({
   const add = files.reduce((n, f) => n + f.add, 0);
   const del = files.reduce((n, f) => n + f.del, 0);
   const openFollowUps = card.follow_ups;
-  const nothingToDo = openFollowUps.length === 0 && card.tests.state === 'passed';
+  // S1: a finding still open in this PR's review is something to do, even when CI and follow-ups are clear.
+  const findingsOpen = openFindings(reviews.find((r) => r.pr === card.pr));
+  const nothingToDo = openFollowUps.length === 0 && card.tests.state === 'passed' && findingsOpen === 0;
   const TestsIcon = TESTS_ICON[card.tests.state];
   const testsText =
     card.tests.summary ?? (card.tests.state === 'passed' ? 'CI green' : card.tests.state === 'failed' ? 'CI failed' : card.tests.state === 'none' ? 'No CI checks' : 'CI not known');
@@ -149,6 +151,28 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[] }> = ({
         </span>
         <span className="text-zinc-400">{card.reviewed_by ? `Reviewed by ${card.reviewed_by}` : 'No bot review'}</span>
         {nothingToDo && <span className="text-zinc-400">Nothing to do for you.</span>}
+        {findingsOpen > 0 && (
+          <span data-findings-open={findingsOpen} className="inline-flex flex-wrap items-center gap-x-1">
+            <span className="font-semibold text-amber-300">
+              {findingsOpen} {findingsOpen === 1 ? 'finding' : 'findings'} open
+            </span>
+            <span className="text-zinc-400">in the review</span>
+            {onOpenReview && (
+              <>
+                <span aria-hidden="true" className="text-zinc-400">
+                  ·
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onOpenReview(card.pr)}
+                  className="kw-focus inline-flex min-h-[44px] items-center rounded text-sky-300 hover:text-sky-200 hover:underline sm:min-h-0"
+                >
+                  Open review
+                </button>
+              </>
+            )}
+          </span>
+        )}
         <span className="flex items-center gap-3 sm:ml-auto">
           {diff && (
             <a href={diff} target="_blank" rel="noreferrer noopener" className="kw-focus inline-flex min-h-[44px] items-center rounded text-sky-300 hover:text-sky-200 sm:min-h-0">
@@ -167,7 +191,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[] }> = ({
 };
 
 /** What landed: the cards under "Today", "Yesterday" and date separators. */
-export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now() }) => (
+export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now(), onOpenReview }) => (
   <div data-dev-landed-list className="space-y-3">
     {byDay(cards, now).map((day) => (
       <section key={day.label} aria-label={day.label} className="space-y-3">
@@ -176,7 +200,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Da
           <span aria-hidden="true" className="h-px flex-1 bg-hairline" />
         </h3>
         {day.cards.map((c) => (
-          <LandedCard key={c.id || c.pr} card={c} reviews={reviews} />
+          <LandedCard key={c.id || c.pr} card={c} reviews={reviews} onOpenReview={onOpenReview} />
         ))}
       </section>
     ))}

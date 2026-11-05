@@ -79,6 +79,7 @@
       "pr": 290,
       "reviewer": {
         "engine": "codex",
+        "id": "kw_demo_rigel",
         "model": "auto",
         "name": "Rigel"
       },
@@ -107,7 +108,8 @@
         }
       },
       "tamper": {
-        "flags": []
+        "flags": [],
+        "unread": []
       },
       "title": "Sidebar: hovering a bot row no longer wraps its name or changes the row's height"
     }
@@ -197,6 +199,7 @@
       "pr": 301,
       "reviewer": {
         "engine": "codex",
+        "id": "kw_demo_rigel",
         "model": "auto",
         "name": "Rigel"
       },
@@ -225,7 +228,8 @@
         }
       },
       "tamper": {
-        "flags": []
+        "flags": [],
+        "unread": []
       },
       "title": "Sidebar: a bot's name wraps only between words; Needs you is a compact hand"
     }
@@ -234,7 +238,12 @@
     "landed": {
       "area": "Chat",
       "cut": null,
-      "follow_ups": [],
+      "follow_ups": [
+        {
+          "ref": "#303 f1",
+          "text": "A turn that fails after its prompt loses the reaction"
+        }
+      ],
       "for_you": "When you react to a bot's message, its next turn hears about it once, even if you reacted in the same second as its reply.",
       "headline": "A 👍 or 👎 reaches the bot once",
       "kind": "landed",
@@ -284,7 +293,7 @@
         ],
         "summary": "Reactions are now marked told when they go into a turn's note, instead of being compared by second-precision timestamps. A migration adds the told column."
       },
-      "verified": true,
+      "verified": false,
       "written_by": {
         "engine": "claude",
         "kind": "bot",
@@ -334,6 +343,7 @@
       "pr": 303,
       "reviewer": {
         "engine": "codex",
+        "id": "kw_demo_rigel",
         "model": "auto",
         "name": "Rigel"
       },
@@ -362,7 +372,8 @@
         }
       },
       "tamper": {
-        "flags": []
+        "flags": [],
+        "unread": []
       },
       "title": "Tell a 👍/👎 to the bot's next turn once, even in the same second as its reply"
     }

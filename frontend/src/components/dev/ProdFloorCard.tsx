@@ -40,7 +40,7 @@ const ROW: Record<RowTone, string> = {
 };
 const LEAD: Record<RowTone, string> = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', neutral: 'text-zinc-300', info: 'text-sky-200' };
 
-const BTN = 'flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors min-h-[44px] sm:min-h-0 max-sm:w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:cursor-not-allowed disabled:opacity-50';
+const BTN = 'flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors min-h-[44px] sm:min-h-0 max-sm:w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed';
 const AMBER = `${BTN} bg-amber-600 text-white shadow-sm hover:bg-amber-500`;
 const PLAIN = `${BTN} bg-zinc-800 text-zinc-300 hover:bg-zinc-700`;
 
@@ -72,14 +72,18 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
   const allowLabel = isDeploy ? 'Allow this deploy' : 'Allow';
   const off = disabled || view.busy;
   const headingId = `floor-${id}-h`;
+  const mainRef = useRef<HTMLButtonElement>(null);
 
-  const takeBackup = async () => {
+  // `fromSecondary`: the secondary "Back up first" unmounts once the backup starts, so focus goes back to the
+  // main button (which turns into Allow in place) when the backup is done.
+  const takeBackup = async (fromSecondary = false) => {
     if (off || !floor.space_id) return;
     send({ type: 'backup_start' });
     try {
       const result = await onBackup(floor.space_id);
       send({ type: 'backup_done', result, now: Date.now() });
       setTick(Date.now());
+      if (fromSecondary) window.setTimeout(() => mainRef.current?.focus(), 0);
     } catch (e) {
       send({ type: 'backup_error', error: e instanceof Error ? e.message : 'no reason given' });
     }
@@ -95,9 +99,9 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
     view.main === 'allow'
       ? { label: allowLabel, icon: <Check size={14} aria-hidden="true" />, onClick: allow }
       : view.main === 'backup'
-        ? { label: 'Back up first', icon: <Database size={14} aria-hidden="true" />, onClick: takeBackup }
+        ? { label: 'Back up first', icon: <Database size={14} aria-hidden="true" />, onClick: () => void takeBackup() }
         : view.main === 'retry'
-          ? { label: 'Try the backup again', icon: <Database size={14} aria-hidden="true" />, onClick: takeBackup }
+          ? { label: 'Try the backup again', icon: <Database size={14} aria-hidden="true" />, onClick: () => void takeBackup() }
           : null;
 
   return (
@@ -172,13 +176,24 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
         <p className="text-[11px] text-zinc-400 sm:mr-auto">{view.note}</p>
         {main && (
           // One element for Back up first, Allow and Try again, so the button changes in place and keeps focus.
-          <button key="main" type="button" data-floor-main={view.main} disabled={off} aria-busy={view.busy || undefined} onClick={main.onClick} className={AMBER}>
+          // aria-disabled, never disabled: disabling the focused button sends focus to <body> (B2). The handlers
+          // ignore presses while `off`.
+          <button
+            ref={mainRef}
+            key="main"
+            type="button"
+            data-floor-main={view.main}
+            aria-disabled={off || undefined}
+            aria-busy={view.busy || undefined}
+            onClick={() => !off && main.onClick()}
+            className={AMBER}
+          >
             {main.icon}
             {main.label}
           </button>
         )}
         {view.secondaryBackup && (
-          <button type="button" disabled={off} onClick={takeBackup} className={PLAIN}>
+          <button type="button" disabled={off} onClick={() => void takeBackup(true)} className={PLAIN}>
             <Database size={14} aria-hidden="true" />
             Back up first
           </button>

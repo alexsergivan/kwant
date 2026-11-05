@@ -127,7 +127,7 @@ test('Verified: the PR review card can only take it away', () => {
   const open = { ...rv, findings: [{ ...review(fx.REVIEW_294).findings[0] }] };
   assert.equal(m.showVerified(ok, [open]), false, 'an open finding');
   assert.equal(m.showVerified(ok, [{ ...open, findings: open.findings.map((f) => ({ ...f, state: 'dismissed' })) }]), true, 'dismissed is closed');
-  assert.equal(m.showVerified(ok, [{ ...open, findings: open.findings.map((f) => ({ ...f, state: 'sent' })) }]), true, 'sent as a task is closed');
+  assert.equal(m.showVerified(ok, [{ ...open, findings: open.findings.map((f) => ({ ...f, state: 'sent' })) }]), false, 'sent as a task is still open (item 14)');
   assert.equal(m.showVerified(ok, [{ ...rv, reviewer: null }]), false, 'no reviewer');
   assert.equal(m.showVerified(ok, [{ ...rv, reviewer: { name: 'Ada', engine: null, model: null } }]), false, 'reviewer is the author');
   assert.equal(m.showVerified(ok, [{ ...rv, pr: 999, reviewer: null }]), true, 'another PR’s review does not count');
@@ -166,8 +166,9 @@ test('the landed card: plain words, the details fold, a failed card and day sepa
 test('roll-up: title, needs-you tiles, +N more, the empty state, no routine link', () => {
   assert.equal(m.rollupTitle(3, 0, 'main'), '3 changes landed on main. Nothing needs you.');
   assert.equal(m.rollupTitle(1, 1, 'main'), '1 change landed on main. 1 needs you.');
-  assert.deepEqual(m.rollupTiles([1, 2, 3, 4]), { shown: [1, 2, 3, 4], more: 0 });
-  assert.deepEqual(m.rollupTiles([1, 2, 3, 4, 5, 6]), { shown: [1, 2], more: 4 });
+  const A = (...xs) => xs.map((area) => ({ area }));
+  assert.deepEqual(m.rollupTiles(A('a', 'b', 'c', 'd')), { shown: A('a', 'b', 'c', 'd'), more: 0 });
+  assert.deepEqual(m.rollupTiles(A('a', 'b', 'c', 'd', 'e', 'f')), { shown: A('a', 'b'), more: 4 });
   const base = { last_tag: 'mac-v0.6.10', last_merge: null, branch: 'main', onDraftNotes() {}, onMarkSeen() {} };
   const r = html(m.Rollup, { ...base, rollup: fx.LANDED_ROUTE.rollup, needsYouAreas: ['Live activity'] });
   assert.match(r, /data-dev-rollup="needs-you"/);
@@ -178,7 +179,7 @@ test('roll-up: title, needs-you tiles, +N more, the empty state, no routine link
   assert.match(html(m.Rollup, { ...base, rollup: fx.ROLLUP_MANY }), /main is red/);
   const e = html(m.Rollup, { ...base, rollup: fx.ROLLUP_EMPTY, last_merge: { pr: 290, merged_at: '2026-11-04T19:26:00Z' } });
   assert.match(e, /Nothing landed since you last looked\. Last merge: #290, 19:26\./);
-  assert.deepEqual(m.needsYouAreas(fx.LANDED_ROUTE.cards.map((c) => m.parseLanded(c))), ['Live activity']);
+  assert.deepEqual(m.needsYouAreas(fx.LANDED_ROUTE.cards.map((c) => m.parseLanded(c))), ['Chat', 'Live activity']);
 
   const { branch: _b, ...noBranch } = base;
   assert.match(html(m.Rollup, { ...noBranch, rollup: fx.ROLLUP_QUIET }), /landed on main\./, 'branch defaults to main');
@@ -333,7 +334,11 @@ test('Back up first turns into Allow in place; a double press cannot run the com
     assert.equal(main.textContent.trim(), 'Back up first');
     await click(main);
     assert.equal(host.querySelector('[data-backup-row]').dataset.backupRow, 'taking');
-    assert.ok([...host.querySelectorAll('button')].every((b) => b.disabled), 'every button waits');
+    assert.equal(main.getAttribute('aria-disabled'), 'true', 'the main button waits');
+    assert.equal(main.hasAttribute('disabled'), false, 'and is never disabled, so it keeps focus (B2)');
+    assert.ok([...host.querySelectorAll('button')].filter((b) => b !== main).every((b) => b.disabled), 'every other button waits');
+    await click(main);
+    assert.deepEqual(calls, [], 'a press while busy does nothing');
     release();
     await settle();
     const after = host.querySelector('[data-floor-main]');
@@ -392,7 +397,8 @@ test('dismissReducer: a reason is required, a double submit is ignored, cancel r
 test('dismissedLine and the comment count', () => {
   const f = { ...review(fx.REVIEW_294).findings[0], state: 'dismissed', dismissed: { reason: 'fine_here', note: '', by: 'person', at: null } };
   assert.equal(m.dismissedLine(f), 'Dismissed · Fine in this PR · you');
-  assert.equal(m.commentCount(review(fx.REVIEW_294).findings), 2, 'f1 and f3 open; f2 was sent');
+  assert.equal(m.openFindings(review(fx.REVIEW_294)), 3, 'f1 and f3 open, f2 sent: all still open');
+  assert.equal(m.openFindings(null), 0);
   assert.equal(m.findingsSummary(review(fx.REVIEW_294).findings), '1 high, 1 medium, 1 low');
 });
 
@@ -428,7 +434,7 @@ test('the Dismiss flow in the review card: reason, submit, collapsed line', asyn
   assert.deepEqual(sent, [['dvr_294', 'f3', { action: 'dismiss', reason: 'fine_here' }]]);
   assert.equal(row().dataset.state, 'dismissed');
   assert.match(row().textContent, /Dismissed · Fine in this PR · you/);
-  assert.match(host.textContent, /Post to GitHub · 1 comment/);
+  assert.doesNotMatch(host.textContent, /Post to GitHub/);
 });
 
 test('Dismiss can be cancelled, and a failed dismiss keeps the form with the error', async () => {
@@ -465,7 +471,7 @@ test('Fix it sends the finding and offers Undo for 10 s', async () => {
   assert.deepEqual(actions, [['f1', 'fix'], ['f1', 'undo_fix']]);
 });
 
-test('the review card: sample chip, tamper, security tiles in 0.7.x, Post to GitHub disabled', () => {
+test('the review card: sample chip, tamper, security tiles in 0.7.x, read-only footer', () => {
   const out = html(m.ReviewCard, { card: review(fx.REVIEW_294), onFinding: async () => review(fx.REVIEW_294), sample: true, now: NOW });
   assert.match(out, /Sample PR/);
   assert.match(out, /A test was made easier to pass/);
@@ -473,8 +479,9 @@ test('the review card: sample chip, tamper, security tiles in 0.7.x, Post to Git
   assert.match(out, /data-sec="OSV" data-state="later"/);
   assert.match(out, /data-sec="Semgrep" data-state="later"/);
   assert.equal((out.match(/in 0\.7\.x/g) ?? []).length >= 2, true);
-  assert.match(out, /<span title="Posting to GitHub comes in 0\.7\.x"[^>]*><button type="button" disabled=""/);
-  assert.match(out, /Post to GitHub · 2 comments/);
+  assert.doesNotMatch(out, /Post to GitHub/, 'S2: no button that can never be pressed');
+  assert.match(out, /Read only: nothing is posted to GitHub in this version\./);
+  assert.match(out, /<footer data-review-footer[^>]*>[\s\S]*Open on GitHub[\s\S]*<\/footer>/);
   assert.match(out, /Did less than asked/);
   assert.match(out, /Did more than asked/);
   const none = html(m.ReviewCard, { card: review(fx.REVIEW_NO_REVIEWER), onFinding: async () => review(fx.REVIEW_NO_REVIEWER) });
@@ -493,4 +500,124 @@ test('release notes: a pending state, then Copy and Discard; Save to Notion only
   assert.match(ready, /Discard/);
   assert.doesNotMatch(ready, /Save to Notion/);
   assert.match(html(m.ReleaseNotesSheet, { card: m.parseReleaseNotes(fx.RELEASE_READY), onSaveToNotion: async () => {}, onDiscard() {}, onClose() {} }), /Save to Notion/);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Round 2: Mira's review of #314 (B1, B2, S1–S4) and Vega's round-3 shape
+
+test('round 3 shape: reviewer.id and tamper.unread parse; #303 with an open finding is not verified', () => {
+  const r = m.parseReview(fx.REVIEW_303);
+  assert.equal(r.reviewer.id, 'kw_demo_rigel');
+  assert.deepEqual(r.tamper.unread, []);
+  const none = m.parseReview(fx.REVIEW_NO_REVIEWER);
+  assert.deepEqual(none.tamper.unread, ['Cargo.lock', 'frontend/package-lock.json']);
+  const junk = m.parseReview({ ...fx.REVIEW_289, reviewer: { name: 'Rigel', id: 42 }, tamper: { flags: [], unread: ['', 7, 'a.rs'] } });
+  assert.equal(junk.reviewer.id, null, 'a non-string id is dropped');
+  assert.deepEqual(junk.tamper.unread, ['a.rs'], 'only non-empty paths');
+  assert.deepEqual(m.parseReview({ kind: 'review', pr: 1 }).tamper, { flags: [], unread: [] }, 'an older card without unread');
+  const l303 = m.parseLanded(fx.LANDED_303);
+  assert.equal(l303.verified, false);
+  assert.equal(m.showVerified(l303, [m.parseReview(fx.REVIEW_303)]), false);
+});
+
+test('review card lists the files GitHub sent no diff for', () => {
+  const out = html(m.ReviewCard, { card: review(fx.REVIEW_NO_REVIEWER), onFinding: async () => review(fx.REVIEW_NO_REVIEWER) });
+  assert.match(out, /data-tamper-unread="2"/);
+  assert.match(out, /Couldn’t read 2 files: GitHub sent no diff, so nothing in them was checked\./);
+  assert.match(out, />Cargo\.lock<\/li>/);
+  assert.doesNotMatch(html(m.ReviewCard, { card: review(fx.REVIEW_303), onFinding: async () => review(fx.REVIEW_303) }), /data-tamper-unread/);
+});
+
+test('B1: risk pills use the surface-main hex for their text, never text-surface-main', () => {
+  for (const level of ['high', 'medium', 'low']) {
+    const card = review(fx.REVIEW_294, { risk: { level, reasons: ['x'] } });
+    const out = html(m.ReviewCard, { card, onFinding: async () => card });
+    assert.match(out, /class="inline-flex items-center gap-1 rounded-full px-2 py-0\.5 text-xs font-semibold bg-(rose|amber|teal)-300 text-\[#120e26\]"/, level);
+    assert.doesNotMatch(out, /text-surface-main/, level);
+  }
+});
+
+test('B2: the main floor button is aria-disabled while busy, never disabled', async () => {
+  let release;
+  const done = new Promise((r) => (release = r));
+  const calls = [];
+  const host = await mount(m.ModernApprovalCard, {
+    approval: fx.FLOOR_MIGRATION,
+    onResolve: (id, d) => calls.push([id, d]),
+    onBackup: async () => {
+      await done;
+      return { id: 'b', ok: true, path: null, bytes: 1, taken_at: null, error: null };
+    },
+  });
+  const main = host.querySelector('[data-floor-main]');
+  assert.equal(main.hasAttribute('aria-disabled'), false, 'not marked while idle');
+  main.focus();
+  await click(main);
+  assert.equal(main.getAttribute('aria-disabled'), 'true');
+  assert.equal(main.hasAttribute('disabled'), false);
+  assert.equal(document.activeElement, main, 'focus stays on the button while the backup runs');
+  assert.match(main.className, /aria-disabled:opacity-50 aria-disabled:cursor-not-allowed/);
+  release();
+  await settle();
+  assert.equal(main.hasAttribute('disabled'), false);
+  assert.equal(main.hasAttribute('aria-disabled'), false);
+  assert.equal(document.activeElement, main);
+  assert.deepEqual(calls, []);
+});
+
+test('B2: a backup started from the secondary Back up first puts focus on the main button', async () => {
+  const host = await mount(m.ModernApprovalCard, {
+    approval: fx.FLOOR_DEPLOY_OLD,
+    onResolve() {},
+    onBackup: async () => ({ id: 'b', ok: true, path: null, bytes: 1, taken_at: null, error: null }),
+  });
+  const secondary = button(host, 'Back up first');
+  assert.ok(secondary, 'the old-backup deploy offers the secondary button');
+  assert.notEqual(secondary, host.querySelector('[data-floor-main]'));
+  secondary.focus();
+  await click(secondary);
+  assert.equal(button(host, 'Back up first'), undefined, 'the secondary button is gone');
+  assert.equal(document.activeElement, host.querySelector('[data-floor-main]'), 'focus is on the main button, not <body>');
+});
+
+test('S1: a landed card with an open review finding never says Nothing to do', () => {
+  const card = landed(fx.LANDED_289);
+  const clean = html(m.LandedCard, { card, reviews: [review(fx.REVIEW_289)] });
+  assert.match(clean, /Nothing to do for you\./);
+  assert.doesNotMatch(clean, /data-findings-open/);
+  const f = review(fx.REVIEW_294).findings;
+  const one = html(m.LandedCard, { card, reviews: [review(fx.REVIEW_289, { findings: [f[0]] })] });
+  assert.doesNotMatch(one, /Nothing to do for you/);
+  assert.match(one, /<span class="font-semibold text-amber-300">1 finding open<\/span><span class="text-zinc-400">in the review<\/span>/);
+  assert.doesNotMatch(one, /Open review/, 'no link without a handler');
+  const opened = [];
+  const two = html(m.LandedCard, { card, reviews: [review(fx.REVIEW_289, { findings: [f[0], f[1], { ...f[2], state: 'dismissed' }] })], onOpenReview: (pr) => opened.push(pr) });
+  assert.match(two, /2 findings open/, 'plural; sent counts, dismissed does not');
+  assert.match(two, /<button type="button"[^>]*>Open review<\/button>/);
+});
+
+test('S1: Open review calls back with the PR number', async () => {
+  const opened = [];
+  const host = await mount(m.LandedCard, { card: landed(fx.LANDED_303), reviews: [review(fx.REVIEW_303)], onOpenReview: (pr) => opened.push(pr) });
+  assert.match(host.textContent, /1 finding open/);
+  await click(button(host, 'Open review'));
+  assert.deepEqual(opened, [303]);
+});
+
+test('S3: areas that need the person come first, and are never folded into +N more', () => {
+  const A = (...xs) => xs.map((area) => ({ area }));
+  assert.deepEqual(m.rollupTiles(A('a', 'b', 'c', 'd', 'e'), ['e']), { shown: A('e', 'a'), more: 3 });
+  assert.deepEqual(m.rollupTiles(A('a', 'b', 'c', 'd', 'e', 'f'), ['f', 'b', 'd']), { shown: A('b', 'd', 'f'), more: 3 }, 'all three show, stable');
+  assert.deepEqual(m.rollupTiles(A('a', 'b', 'c'), ['c']), { shown: A('c', 'a', 'b'), more: 0 });
+  const base = { last_tag: null, last_merge: null, branch: 'main', onDraftNotes() {}, onMarkSeen() {} };
+  const r = html(m.Rollup, { ...base, rollup: fx.ROLLUP_MANY, needsYouAreas: ['Docs'] });
+  assert.match(r, /data-area="Docs" data-needs-you="true"/, 'the last area is not hidden behind +N more');
+  assert.match(r, /\+4 more areas/);
+});
+
+test('S4: each finding says its severity as a word, not only by colour', () => {
+  const out = html(m.ReviewCard, { card: review(fx.REVIEW_294), onFinding: async () => review(fx.REVIEW_294) });
+  const words = [...out.matchAll(/<span data-sev-word="(\w+)" class="([^"]+)">(\w+)<span class="sr-only">:<\/span><\/span>/g)].map((x) => [x[1], x[3], x[2]]);
+  assert.deepEqual(words.map(([s, w]) => [s, w]), [['high', 'High'], ['medium', 'Medium'], ['low', 'Low']]);
+  for (const [, , cls] of words) assert.match(cls, /text-\[10px\] font-semibold uppercase tracking-wide text-(rose|amber|teal)-300/);
 });

@@ -11,9 +11,16 @@ export function rollupTitle(count: number, needsYou: number, branch: string): st
   return `${landed} ${needsYou === 0 ? 'Nothing needs you.' : `${needsYou} ${needsYou === 1 ? 'needs' : 'need'} you.`}`;
 }
 
-/** Five or more areas: the first two, then a "+N more" tile, so the grid stays one row. */
-export function rollupTiles<T>(areas: T[]): { shown: T[]; more: number } {
-  return areas.length >= 5 ? { shown: areas.slice(0, 2), more: areas.length - 2 } : { shown: areas, more: 0 };
+/**
+ * Areas that need the person come first (stable). Five or more areas: the first two, then a "+N more" tile,
+ * so the grid stays one row; when more than two need the person, all of those show and only quiet ones fold.
+ */
+export function rollupTiles<T extends { area: string }>(areas: T[], needsYou: string[] = []): { shown: T[]; more: number } {
+  const needs = (a: T) => needsYou.includes(a.area);
+  const sorted = [...areas.filter(needs), ...areas.filter((a) => !needs(a))];
+  if (sorted.length < 5) return { shown: sorted, more: 0 };
+  const keep = Math.max(2, sorted.filter(needs).length);
+  return { shown: sorted.slice(0, keep), more: sorted.length - keep };
 }
 
 /** The "Since you last looked" card at the top of What landed. */
@@ -35,7 +42,7 @@ export const Rollup: React.FC<RollupProps> = ({ rollup, last_tag, last_merge, br
     );
   }
 
-  const { shown, more } = rollupTiles(rollup.areas);
+  const { shown, more } = rollupTiles(rollup.areas, needsYouAreas);
   const title = rollupTitle(rollup.count, rollup.needs_you, branch);
   return (
     <section data-dev-rollup={rollup.needs_you > 0 ? 'needs-you' : 'quiet'} aria-label="Since you last looked" className="kw-card p-4">

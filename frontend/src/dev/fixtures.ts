@@ -1,5 +1,5 @@
 // Fixtures for the Dev mode renderers: the route JSON shapes of impl/lin.md with the cards Vega's generator
-// wrote for #290, #301 and #303 (fixtures/vega-examples.json, unchanged), plus #288 and #289 from the design
+// wrote for #290, #301 and #303 (fixtures/vega-examples.json, copied unchanged from impl/ at round 3), plus #288 and #289 from the design
 // mock (screen 3) and #294 as the "Sample PR" review (screen 4). Tests and the screenshot page use these;
 // the app never imports them. Names are kwant's own bots; nothing here is a real key, token or email.
 
@@ -12,7 +12,7 @@ export const FIXTURE_NOW = Date.parse('2026-11-05T01:00:00Z');
 
 const ada = { kind: 'bot', name: 'Ada', engine: 'claude', model: 'Claude Opus' };
 const pixel = { kind: 'bot', name: 'Pixel', engine: 'claude', model: 'Claude Sonnet' };
-const rigel = { name: 'Rigel', engine: 'codex', model: 'Codex' };
+const rigel = { id: 'kw_demo_rigel', name: 'Rigel', engine: 'codex', model: 'Codex' };
 const gh = (n: number) => `https://github.com/alexsergivan/kwant/pull/${n}`;
 
 const [v290, v301, v303] = vega as { pr: number; landed: Record<string, unknown>; review: Record<string, unknown> }[];
@@ -90,14 +90,14 @@ export const REVIEW_NO_REVIEWER = row('dvr_312', {
   kind: 'review', pr: 312, title: 'Dev mode: landed and review cards', branch: 'vega-dev-cards', base: 'main', draft: true,
   author: { kind: 'bot', name: 'Vega', engine: 'claude', model: 'Claude Opus' }, reviewer: null, same_engine: false,
   note: 'No reviewer: add a second bot to this space',
-  risk: { level: 'medium', reasons: ['Has a migration', '+1840 −12 in 14 files'] }, intent: null, tamper: { flags: [] },
+  risk: { level: 'medium', reasons: ['Has a migration', '+1840 −12 in 14 files'] }, intent: null, tamper: { flags: [], unread: ['Cargo.lock', 'frontend/package-lock.json'] },
   security: { secrets: { state: 'not_run', count: 0 }, packages: { state: 'not_run', count: 0 } }, findings: [],
   cut: 'diff cut, 3 files not read', links: { pr: gh(312), commit: null, ci: null },
 });
 
 export const LANDED_ROUTE = {
   cards: [LANDED_303, LANDED_301, LANDED_290, LANDED_288, LANDED_289],
-  rollup: { since: '2026-11-04T17:40:00Z', until: '2026-11-05T01:00:00Z', count: 5, needs_you: 1, main_green: true, areas: [
+  rollup: { since: '2026-11-04T17:40:00Z', until: '2026-11-05T01:00:00Z', count: 5, needs_you: 2, main_green: true, areas: [
     { area: 'Chat', count: 1, first_headline: 'A 👍 or 👎 reaches the bot once' },
     { area: 'Sidebar', count: 2, first_headline: 'Long bot names wrap between words, not inside them' },
     { area: 'Live activity', count: 1, first_headline: 'Live activity hides secrets split across chunks' },
