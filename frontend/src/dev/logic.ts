@@ -102,10 +102,10 @@ export const openFindings = (review: ReviewCard | null | undefined) => (review ?
  * - someone reviewed it in kwant, and the reviewer is not the author;
  * - no follow-up is open;
  * - if the PR's review card is known, it has a reviewer who isn't the author and no open finding.
- * A pending or stale card never gets one.
+ * A pending or stale card, and a direct commit with no PR, never gets one.
  */
 export function showVerified(card: LandedCard, reviews: ReviewCard[] = []): boolean {
-  if (!card.verified || card.status === 'pending' || card.status === 'stale') return false;
+  if (card.pr === null || !card.verified || card.status === 'pending' || card.status === 'stale') return false;
   if (card.tests.state !== 'passed') return false;
   if (!card.reviewed_by || sameName(card.reviewed_by, card.written_by?.name)) return false;
   if (card.follow_ups.length > 0) return false;

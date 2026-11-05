@@ -59,7 +59,7 @@ export const Rollup: React.FC<RollupProps> = ({ cards = [], ...rest }) => {
 export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onOpenReview }) => {
   const parsed = useMemo(() => parseLandedCards(cards), [cards]);
   const parsedReviews = useMemo(() => parseReviewCards(reviews), [reviews]);
-  // Cards Iris's parser refuses (no PR number, wrong kind) still show, as the plain fallback row.
+  // Cards Iris's parser refuses (no PR number and no commit, wrong kind) still show, as the plain fallback row.
   const refused = useMemo(() => cards.filter((c) => parseLanded(c) === null), [cards]);
   return (
     <>

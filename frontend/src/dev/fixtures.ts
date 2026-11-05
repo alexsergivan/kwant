@@ -40,6 +40,17 @@ export const LANDED_289 = row('dvc_289', {
   follow_ups: [], verified: true, links: { pr: gh(289), commit: null, ci: null }, cut: null,
 });
 
+/** B1: a commit pushed to the branch without a PR (poller.rs `pr: null`). The server's `verified: true` here is
+ * deliberately wrong: with no PR review the card must never get the sticker. */
+export const LANDED_DIRECT = row('dvc_c0ffee1', {
+  kind: 'landed', pr: null, sha: 'c0ffee1', merged_at: '2026-11-04T19:02:00Z', merged_by: null, written_by: { kind: 'person', name: 'Oleks' },
+  area: 'Docs', headline: 'Fix typo in README',
+  for_you: 'The install line in the README now names the right command. Nothing in the app changes.',
+  under_hood: { summary: 'One word fixed in the README.', files: [{ path: 'README.md', add: 1, del: 1 }] },
+  risk: { level: 'low', reasons: ['+1 −1 in 1 file'] }, tests: { state: 'passed', summary: '1 check passed' }, reviewed_by: null,
+  follow_ups: [], verified: true, links: { pr: null, commit: 'https://github.com/alexsergivan/kwant/commit/c0ffee1', ci: 'https://github.com/alexsergivan/kwant/actions/runs/1' }, cut: null,
+});
+
 export const LANDED_290 = row('dvc_290', v290.landed);
 export const LANDED_301 = row('dvc_301', v301.landed);
 export const LANDED_303 = row('dvc_303', v303.landed);

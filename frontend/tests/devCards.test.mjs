@@ -84,7 +84,8 @@ test('parsers keep the §3.6 nulls and reject other shapes', () => {
   assert.equal(r.reviewer, null);
   assert.match(r.note, /No reviewer/);
   assert.equal(m.parseLanded({ kind: 'review', pr: 1 }), null);
-  assert.equal(m.parseLanded({ kind: 'landed' }), null, 'no PR number');
+  assert.equal(m.parseLanded({ kind: 'landed' }), null, 'no PR number and no commit');
+  assert.equal(m.parseLanded({ kind: 'landed', pr: null, sha: 'nope' }), null, 'no PR and no real commit sha');
   assert.equal(m.parseReview(null), null);
   const odd = m.parseLanded({ ...fx.LANDED_289, links: { pr: 'javascript:alert(1)', commit: 'http://x', ci: null } });
   assert.equal(odd.links.pr, null, 'only https links');
@@ -143,6 +144,49 @@ test('the landed card shows the holo sticker only when Verified', () => {
   assert.doesNotMatch(no, />Verified</);
   assert.match(no, /1 follow-up open:/);
   assert.match(no, /#288 N3/);
+});
+
+test('B1: a direct commit (pr null) parses and draws as a normal landed card named by its commit', () => {
+  const c = m.parseLanded(fx.LANDED_DIRECT);
+  assert.ok(c, 'not refused');
+  assert.equal(c.pr, null);
+  assert.equal(c.sha, 'c0ffee1');
+  assert.equal(c.headline, 'Fix typo in README');
+  assert.equal(c.verified, false, 'no PR review, so never verified, whatever the server says');
+  assert.equal(m.showVerified({ ...c, verified: true }), false, 'the sticker rule refuses a pr-less card too');
+  assert.equal(m.parseLanded({ ...fx.LANDED_DIRECT, headline: null }).headline, 'Commit c0ffee1', 'headline falls back to the commit');
+  const out = html(m.LandedCard, { card: c, reviews: [{ ...m.parseReview(fx.REVIEW_289), pr: 0 }], onOpenReview: () => {} });
+  assert.match(out, /data-dev-card="landed"/);
+  assert.match(out, /data-commit="c0ffee1"/);
+  assert.doesNotMatch(out, /data-pr=/);
+  assert.match(out, /<a href="https:\/\/github\.com\/alexsergivan\/kwant\/commit\/c0ffee1"[^>]*>Commit c0ffee1<\/a>/);
+  assert.doesNotMatch(out, /PR #/);
+  assert.match(out, /Committed 19:02/);
+  assert.doesNotMatch(out, />Verified</);
+  assert.doesNotMatch(out, /data-verified/);
+  assert.doesNotMatch(out, /text-warn|kw-chip-warn|amber/, 'no warning tone: like an old merge with no reviewer');
+  assert.match(out, /No bot review/);
+  assert.match(out, /Fix typo in README/);
+  assert.match(out, /What changes for you/);
+  assert.match(out, /Open on GitHub/, 'GitHub link goes to the commit');
+  assert.doesNotMatch(out, />Diff</, 'no second link to the same commit');
+  assert.doesNotMatch(out, /This card couldn/);
+  const list = html(m.LandedList, { cards: [landed(fx.LANDED_DIRECT), landed(fx.LANDED_288)], reviews: [], now: NOW });
+  assert.equal([...list.matchAll(/data-dev-card="landed"/g)].length, 2);
+});
+
+test('N2: the PR chip, the checks line and Diff get the phone tap area (kw-hit); the CSS is phone-only', async () => {
+  const out = html(m.LandedCard, { card: landed(fx.LANDED_288, { links: { ...fx.LANDED_288.links, ci: 'https://github.com/alexsergivan/kwant/actions/runs/2' } }) });
+  assert.match(out, /class="[^"]*kw-hit[^"]*"[^>]*>PR #288</);
+  assert.match(out, /class="[^"]*kw-hit[^"]*"[^>]*>3 checks passed</);
+  assert.match(out, /class="[^"]*kw-hit[^"]*"[^>]*>Diff</);
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('../src/styles/modern.css', import.meta.url), 'utf8');
+  const block = css.slice(css.indexOf('@media (max-width: 639.98px)'), css.indexOf('.kw-card-interactive,'));
+  assert.match(block, /\.kw-hit::before/);
+  assert.match(block, /width: max\(100%, 44px\)/);
+  assert.match(block, /height: max\(100%, 44px\)/);
+  assert.doesNotMatch(css.replace(block, ''), /\.kw-hit(::before)?\s*\{/, 'no kw-hit rule outside the phone query');
 });
 
 test('the landed card: plain words, the details fold, a failed card and day separators', () => {

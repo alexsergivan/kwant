@@ -39,7 +39,8 @@ interface CardBase {
 
 export interface LandedCard extends CardBase {
   kind: 'landed';
-  pr: number;
+  /** null for a commit that reached the branch without a PR (a direct push): the card names the commit instead. */
+  pr: number | null;
   sha: string;
   merged_at: string | null;
   merged_by: string | null;
@@ -265,20 +266,22 @@ function links(v: unknown): DevLinks {
 
 export function parseLanded(raw: unknown): LandedCard | null {
   if (!isObj(raw) || raw.kind !== 'landed') return null;
+  // A direct commit has no PR (poller.rs builds it with `pr: null`); it still needs its commit to be named.
   const pr = num(raw.pr);
-  if (pr === null) return null;
+  const sha = (str(raw.sha, 40) ?? '').slice(0, 7);
+  if (pr === null && !/^[0-9a-f]{7}$/i.test(sha)) return null;
   const uh = isObj(raw.under_hood) ? raw.under_hood : {};
   const tests = isObj(raw.tests) ? raw.tests : {};
   return {
     ...base(raw),
     kind: 'landed',
     pr,
-    sha: (str(raw.sha, 40) ?? '').slice(0, 7),
+    sha,
     merged_at: str(raw.merged_at, 64),
     merged_by: str(raw.merged_by, 80),
     written_by: person(raw.written_by),
     area: str(raw.area, 60),
-    headline: str(raw.headline, 200) ?? str(raw.title, 200) ?? `PR #${pr}`,
+    headline: str(raw.headline, 200) ?? str(raw.title, 200) ?? (pr !== null ? `PR #${pr}` : `Commit ${sha}`),
     for_you: str(raw.for_you, 600),
     under_hood: {
       summary: str(uh.summary, 600),
@@ -294,7 +297,8 @@ export function parseLanded(raw: unknown): LandedCard | null {
       .filter(isObj)
       .map((f) => ({ text: str(f.text, 400) ?? '', ref: str(f.ref, 40) }))
       .filter((f) => f.text),
-    verified: raw.verified === true,
+    // Verified needs a PR review (§3.6 item 14): a direct commit never has one.
+    verified: pr !== null && raw.verified === true,
     links: links(raw.links),
     cut: str(raw.cut, 120),
     meta: str(raw.meta, 80),

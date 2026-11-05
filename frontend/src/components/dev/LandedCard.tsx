@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, Check, ChevronRight, FileText, FlaskConical, GitMerge, Minus, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronRight, FileText, FlaskConical, GitCommitHorizontal, GitMerge, Minus, ShieldCheck, X } from 'lucide-react';
 import { Sticker } from '../Sticker';
 import type { LandedCard as Landed, LandedListProps, ReviewCard } from '../../dev/types';
 import { byDay, clock, openFindings, riskReasons, showVerified } from '../../dev/logic';
@@ -10,7 +10,7 @@ const isTest = (path: string) => /(^|\/)(tests?|__tests__|e2e)\/|\.(test|spec)\.
 const TESTS_ICON = { passed: Check, failed: X, none: Minus, unknown: Minus } as const;
 const TESTS_TONE = { passed: 'text-ok', failed: 'text-bad', none: 'text-zinc-400', unknown: 'text-zinc-400' } as const;
 
-/** One merge in plain words (design §4). */
+/** One merge in plain words (design §4). A commit pushed without a PR (`pr: null`) is the same card, named by its commit. */
 export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number) => void }> = ({ card, reviews = [], onOpenReview }) => {
   const verified = showVerified(card, reviews);
   const writer = personText(card.written_by);
@@ -20,16 +20,21 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
   const del = files.reduce((n, f) => n + f.del, 0);
   const openFollowUps = card.follow_ups;
   // S1: a finding still open in this PR's review is something to do, even when CI and follow-ups are clear.
-  const findingsOpen = openFindings(reviews.find((r) => r.pr === card.pr));
+  const pr = card.pr;
+  const findingsOpen = pr === null ? 0 : openFindings(reviews.find((r) => r.pr === pr));
   const nothingToDo = openFollowUps.length === 0 && card.tests.state === 'passed' && findingsOpen === 0;
   const TestsIcon = TESTS_ICON[card.tests.state];
   const testsText =
     card.tests.summary ?? (card.tests.state === 'passed' ? 'CI green' : card.tests.state === 'failed' ? 'CI failed' : card.tests.state === 'none' ? 'No CI checks' : 'CI not known');
   const diff = card.links.commit ?? (card.links.pr ? `${card.links.pr}/files` : null);
-  const headingId = `landed-${card.id || card.pr}-h`;
+  const headingId = `landed-${card.id || pr || card.sha}-h`;
+  const MergeIcon = pr === null ? GitCommitHorizontal : GitMerge;
+  // Where the card came from: "PR #n", or "Commit abc1234" for a direct commit.
+  const source = pr !== null ? { text: `PR #${pr}`, href: card.links.pr } : { text: `Commit ${card.sha}`, href: card.links.commit };
+  const github = card.links.pr ?? (pr === null ? card.links.commit : null);
 
   return (
-    <article data-dev-card="landed" data-pr={card.pr} data-verified={verified || undefined} aria-labelledby={headingId} className="kw-card relative min-w-0 p-4">
+    <article data-dev-card="landed" data-pr={pr ?? undefined} data-commit={pr === null ? card.sha : undefined} data-verified={verified || undefined} aria-labelledby={headingId} className="kw-card relative min-w-0 p-4">
       <div className="flex flex-wrap items-center gap-1.5">
         {card.area && <span className="kw-chip">{card.area}</span>}
         {card.risk && <RiskChip level={card.risk.level} />}
@@ -45,9 +50,10 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
         {card.headline}
       </h3>
       <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-meta text-zinc-400">
-        <GitMerge size={13} className="shrink-0 text-ok" aria-hidden="true" />
+        <MergeIcon size={13} className="shrink-0 text-ok" aria-hidden="true" />
         <span>
-          Merged{merged ? ` ${merged}` : ''}
+          {pr === null ? 'Committed' : 'Merged'}
+          {merged ? ` ${merged}` : ''}
           {card.merged_by && (
             <>
               {' '}by <span className="font-medium text-zinc-100">{card.merged_by}</span>
@@ -63,12 +69,12 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
           </>
         )}
         <span aria-hidden="true">·</span>
-        {card.links.pr ? (
-          <a href={card.links.pr} target="_blank" rel="noreferrer noopener" className="kw-focus rounded text-sky-300 hover:text-sky-200">
-            PR #{card.pr}
+        {source.href ? (
+          <a href={source.href} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded text-sky-300 hover:text-sky-200">
+            {source.text}
           </a>
         ) : (
-          <span>PR #{card.pr}</span>
+          <span>{source.text}</span>
         )}
       </div>
 
@@ -142,7 +148,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
         <span className={`inline-flex items-center gap-1 ${TESTS_TONE[card.tests.state]}`}>
           <TestsIcon size={13} aria-hidden="true" />
           {card.links.ci ? (
-            <a href={card.links.ci} target="_blank" rel="noreferrer noopener" className="kw-focus rounded hover:underline">
+            <a href={card.links.ci} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded hover:underline">
               {testsText}
             </a>
           ) : (
@@ -157,14 +163,14 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
               {findingsOpen} {findingsOpen === 1 ? 'finding' : 'findings'} open
             </span>
             <span className="text-zinc-400">in the review</span>
-            {onOpenReview && (
+            {onOpenReview && pr !== null && (
               <>
                 <span aria-hidden="true" className="text-zinc-400">
                   ·
                 </span>
                 <button
                   type="button"
-                  onClick={() => onOpenReview(card.pr)}
+                  onClick={() => onOpenReview(pr)}
                   className="kw-focus inline-flex min-h-[44px] items-center rounded text-sky-300 hover:text-sky-200 hover:underline sm:min-h-0"
                 >
                   Open review
@@ -174,13 +180,13 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
           </span>
         )}
         <span className="flex items-center gap-3 sm:ml-auto">
-          {diff && (
-            <a href={diff} target="_blank" rel="noreferrer noopener" className="kw-focus inline-flex min-h-[44px] items-center rounded text-sky-300 hover:text-sky-200 sm:min-h-0">
+          {diff && diff !== github && (
+            <a href={diff} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit inline-flex min-h-[44px] items-center rounded text-sky-300 hover:text-sky-200 sm:min-h-0">
               Diff
             </a>
           )}
-          {card.links.pr && (
-            <OutLink href={card.links.pr} className="min-h-[44px] sm:min-h-0">
+          {github && (
+            <OutLink href={github} className="min-h-[44px] sm:min-h-0">
               Open on GitHub
             </OutLink>
           )}
@@ -200,7 +206,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Da
           <span aria-hidden="true" className="h-px flex-1 bg-hairline" />
         </h3>
         {day.cards.map((c) => (
-          <LandedCard key={c.id || c.pr} card={c} reviews={reviews} onOpenReview={onOpenReview} />
+          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} />
         ))}
       </section>
     ))}
