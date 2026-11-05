@@ -577,44 +577,49 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 }
 /* ---- Dev mode (0.7): the switch, the </> badge, the hard hat and the blueprint grid. design.md §1–§2.
    Under reduced motion nothing animates. */
-/* The switch: the Settings toggle (36×20 track, 16 px white knob, 16 px travel) in a 44×32 button
-   (44×44 on phones). On fills the track with --kw-dv-on; unlocked rings it in amber. */
+/* The switch (style v2 §10, the Branch switch): a tiny git line. The knob is a commit node.
+   Off: a hollow node on the line. Press 1 (armed): a dashed amber fork and a halo; the label asks
+   dev? (or off?). Press 2: the fork goes solid violet and the node lands on it, filled. 32 px tall
+   (44 on phones), mono label + a 44×24 graph. Not colour alone: node position, fork drawn/dashed/
+   absent and the label word all change. */
 .kw-dv {
-  --kw-dv-on: theme('colors.sky.600');
-  position: relative; display: inline-flex; align-items: center; justify-content: center;
-  width: 44px; height: 32px; border-radius: 10px; flex-shrink: 0; cursor: pointer;
+  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; min-width: 44px; padding: 0 6px; border-radius: 10px; flex-shrink: 0; cursor: pointer;
+  background: transparent; transition: background-color 120ms var(--kw-ease);
 }
+.kw-dv:not(:disabled):hover { background: rgb(247 246 255 / 0.06); }
 .kw-dv:disabled { opacity: 0.4; cursor: not-allowed; }
-.kw-dv-track {
-  position: relative; display: block; width: 36px; height: 20px; border-radius: 9999px;
-  background: theme('colors.zinc.700');
-  outline: 2px solid transparent; outline-offset: 2px;
-  transition: background-color 120ms var(--kw-ease), outline-color 150ms var(--kw-ease);
+.kw-dv-lbl {
+  font: 600 11px/1 'JetBrains Mono', ui-monospace, monospace; color: theme('colors.zinc.400');
+  min-width: 4ch; text-align: right; transition: color 120ms var(--kw-ease);
 }
-.kw-dv:not(:disabled):hover .kw-dv-track { background: theme('colors.zinc.600'); }
-.kw-dv[data-on]:not(:disabled):hover .kw-dv-fill { background: theme('colors.sky.500'); }
-.kw-dv-fill {
-  position: absolute; inset: 0; border-radius: 9999px; background: var(--kw-dv-on);
-  opacity: var(--kw-dv-fill, 0); transition: opacity 160ms var(--kw-ease), background-color 120ms var(--kw-ease);
-}
-.kw-dv[data-ring] .kw-dv-track { outline-color: theme('colors.amber.400 / 75%'); }
-.kw-dv-knob {
-  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 9999px;
-  display: flex; align-items: center; justify-content: center;
-  background: #fff; color: theme('colors.zinc.700'); box-shadow: 0 1px 2px rgb(6 3 20 / 0.35);
-  transition: transform 160ms var(--kw-ease), color 160ms var(--kw-ease);
-}
-.kw-dv[data-knob='right'] .kw-dv-knob { transform: translateX(16px); }
-.kw-dv[data-on] .kw-dv-knob { color: var(--kw-dv-on); }
-.kw-dv[data-ring] .kw-dv-knob { color: theme('colors.amber.600'); }
-.kw-dv-glyph { display: block; animation: kw-dv-glyph 120ms var(--kw-ease) both; }
-@keyframes kw-dv-glyph { from { opacity: 0; } to { opacity: 1; } }
-/* Reduced motion: a "Dev" label before the same track; nothing moves (hover colour stays) */
-.kw-dv-rm { width: auto; gap: 6px; padding: 0 4px; }
-.kw-dv-rm .kw-dv-fill, .kw-dv-rm .kw-dv-knob { transition: none; }
-.kw-dv-rm .kw-dv-glyph { animation: none; }
+.kw-dv[data-on] .kw-dv-lbl { color: theme('colors.sky.300'); }
+.kw-dv[data-armed] .kw-dv-lbl { color: var(--dv-armed); }
+.kw-dv-lock { color: theme('colors.zinc.400'); }
+.kw-dv-graph { display: block; width: 44px; height: 24px; overflow: visible; }
+.kw-dv-base { fill: none; stroke: theme('colors.zinc.500'); stroke-width: 2; stroke-linecap: round; transition: opacity 160ms var(--kw-ease); }
+.kw-dv[data-on] .kw-dv-base { opacity: 0.55; }
+.kw-dv-fork { fill: none; stroke: theme('colors.sky.400'); stroke-width: 2; stroke-linecap: round; opacity: 0; transition: opacity 160ms var(--kw-ease); }
+.kw-dv[data-on] .kw-dv-fork { opacity: 1; }
+.kw-dv[data-armed] .kw-dv-fork { opacity: 1; stroke: var(--dv-armed); stroke-dasharray: 2.5 3; }
+.kw-dv-node { transition: transform 160ms var(--kw-ease); }
+.kw-dv[data-on] .kw-dv-node { transform: translate(22px, -10px); }
+.kw-dv-dot { fill: var(--kw-surface-side); stroke: theme('colors.zinc.300'); stroke-width: 2; transition: fill 160ms var(--kw-ease), stroke 160ms var(--kw-ease); }
+.kw-dv[data-on] .kw-dv-dot { fill: theme('colors.sky.400'); stroke: theme('colors.sky.400'); }
+.kw-dv[data-armed] .kw-dv-dot { stroke: var(--dv-armed); fill: color-mix(in srgb, var(--dv-armed) 25%, var(--kw-surface-side)); }
+.kw-dv-pip { fill: var(--kw-surface-side); opacity: 0; transition: opacity 160ms var(--kw-ease); }
+.kw-dv[data-on] .kw-dv-pip { opacity: 1; }
+.kw-dv-halo { fill: none; stroke: var(--dv-armed); stroke-width: 1.5; opacity: 0; transform-box: fill-box; transform-origin: center; }
+.kw-dv[data-armed] .kw-dv-halo { animation: kw-dv-halo 900ms var(--kw-ease) infinite; }
+@keyframes kw-dv-halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2); } }
+/* Reduced motion: the same shapes, instant, no halo */
+.kw-dv-rm, .kw-dv-rm * { transition: none !important; }
+.kw-dv-rm .kw-dv-halo { animation: none !important; opacity: 0 !important; }
 .kw-dv-hint { animation: kw-dv-hint 150ms var(--kw-ease) both; }
 @keyframes kw-dv-hint { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+/* The flip note under the space header: HEAD → dev / merged into main, one caret blink */
+.kw-dv-note { animation: kw-dv-hint 150ms var(--kw-ease) both; }
+.kw-dv-note .dv-caret { animation-iteration-count: 1; }
 
 /* The </> badge on a space tile: bottom-right, mirroring the unread badge top-right */
 .kw-dev-badge {
@@ -655,9 +660,9 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 @keyframes kw-dv-grid { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .kw-dv-fill, .kw-dv-knob { transition: none; }
-  .kw-dv-glyph { animation: none; }
-  .kw-dv-hint, .kw-dev-badge, .kw-dev-hat, .kw-blueprint::before { animation: none; }
+  .kw-dv, .kw-dv * { transition: none !important; }
+  .kw-dv-halo { animation: none !important; opacity: 0 !important; }
+  .kw-dv-hint, .kw-dv-note, .kw-dev-badge, .kw-dev-hat, .kw-blueprint::before { animation: none; }
   .kw-dev-caret { animation: none; }
 }
 
