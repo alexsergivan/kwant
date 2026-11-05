@@ -138,3 +138,36 @@ async fn a_limited_delegation_stays_open_and_its_retry_finishes_it() {
     let lead = messages(&env, &env.a).await;
     assert!(lead.iter().any(|m| m.text.contains("retrying “Limited task” once")));
 }
+
+/// A no-tools turn (a Dev mode card, an idea take) is never parked: its retry would run with
+/// default options, tools included, over the same untrusted text. It fails with the "out until"
+/// line instead, whether the limit is hit on the call or known before any engine runs. A normal
+/// turn still parks.
+#[tokio::test]
+async fn a_limited_no_tools_turn_is_never_parked_and_fails() {
+    let env = setup().await;
+    let state = &env.state;
+
+    // The limit is hit on the call
+    let err = parked::no_tools_turn_for_tests(state, &env.a, "card QUOTAALWAYS QUOTARESET:60 REPLYTAG:nt1").await.unwrap_err();
+    assert!(err.contains("out until"), "{err}");
+    assert!(!err.contains("I'll answer then") && !err.contains("retry this once"), "no retry promised: {err}");
+    assert!(parked_rows(&env).await.is_empty(), "no parked row");
+    let calls = invocations_with("REPLYTAG:nt1");
+    assert_eq!(calls.len(), 1);
+    assert!(calls[0].lines().any(|a| a == "--tools"), "it ran as a no-tools turn: {}", calls[0]);
+
+    // Every account is now known to be out: nothing runs, and still nothing is parked
+    let err = parked::no_tools_turn_for_tests(state, &env.a, "card REPLYTAG:nt2").await.unwrap_err();
+    assert!(err.contains("out until"), "{err}");
+    assert!(invocations_with("REPLYTAG:nt2").is_empty(), "no engine ran");
+    assert!(parked_rows(&env).await.is_empty(), "no parked row");
+
+    // A normal turn in the same state still parks
+    send_direct(&env, &env.a, "do it REPLYTAG:normal", json!({})).await;
+    wait_reply(&env, &env.a, "I'll answer then").await;
+    let rows = parked_rows(&env).await;
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].prompt.contains("REPLYTAG:normal"));
+    assert!(invocations_with("REPLYTAG:normal").is_empty(), "parked before any engine ran");
+}

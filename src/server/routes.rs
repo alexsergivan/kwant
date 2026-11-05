@@ -1823,6 +1823,14 @@ impl TurnOpts {
         TurnOpts { label: Some(label.to_string()), always_ask: true, ..Default::default() }
     }
 
+    /// The turn is never parked for a retry after a usage limit (see [`super::parked::park`]): a
+    /// retry already, a discussion round, or a no-tools turn. The parked row keeps only the prompt
+    /// and its retry runs with default options, so a no-tools turn would come back with tools over
+    /// the same untrusted text. Its caller gets the "out until" failure and retries itself.
+    pub(super) fn no_park(&self) -> bool {
+        self.retried || self.discussion.is_some() || self.no_tools
+    }
+
     /// The link to open in the bot browser before the turn: only a full link in the person's own
     /// message, never one in a prompt kwnt or a bot wrote.
     fn nav_target(&self) -> Option<String> {
@@ -2535,7 +2543,7 @@ async fn run_kwant_turn_inner(
         if let (Some(until), false) = (global.all_out_until, rehearse_blocked) {
             let at = super::profile_turn::clock_text(state, until).await;
             let mut text = super::profile_turn::all_out_line(&at);
-            let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), Some(until)).await;
+            let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.no_park(), opts.delegation_id.clone(), Some(until)).await;
             if parked.is_none() {
                 text = format!("Every model is out until {at}.");
             }
@@ -2863,7 +2871,7 @@ async fn run_kwant_turn_inner(
                     let again = super::profile_turn::plan_global(state, engine, &target_kwant.id).await;
                     if let Some(until) = again.all_out_until {
                         let at = super::profile_turn::clock_text(state, until).await;
-                        let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), Some(until)).await;
+                        let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.no_park(), opts.delegation_id.clone(), Some(until)).await;
                         let text = if parked.is_some() { super::profile_turn::all_out_line(&at) } else { format!("Every model is out until {at}.") };
                         event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
                         event_broadcast.send(RuntimeEvent::TurnComplete {
@@ -2889,7 +2897,7 @@ async fn run_kwant_turn_inner(
                 };
                 let mut text = text;
                 if failure.class == crate::profiles::classify::FailClass::Quota && !side_effects {
-                    if let Some(line) = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), failure.retry_at).await {
+                    if let Some(line) = super::parked::park(scope, target_kwant, &park_prompt, opts.no_park(), opts.delegation_id.clone(), failure.retry_at).await {
                         text = format!("{text}\n\n{line}");
                     }
                 }
@@ -5535,6 +5543,16 @@ pub async fn execute_tool(
 #[cfg(test)]
 mod tests {
     use super::{scrub_urls, turn_failed_text};
+
+    #[test]
+    fn a_retry_a_discussion_round_or_a_no_tools_turn_never_parks() {
+        use super::TurnOpts;
+        assert!(!TurnOpts::default().no_park(), "a normal turn parks");
+        assert!(TurnOpts { retried: true, ..TurnOpts::default() }.no_park());
+        assert!(TurnOpts { discussion: Some(None), ..TurnOpts::default() }.no_park());
+        // Its retry would run with default options, tools included
+        assert!(TurnOpts { no_tools: true, ..TurnOpts::default() }.no_park());
+    }
 
     #[test]
     fn only_the_persons_own_message_can_open_a_link_before_a_turn() {
