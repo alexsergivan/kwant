@@ -18,10 +18,11 @@ Contract: `/home/maus/shared/ship-software-safely/react-reply/contract.md`, sect
 
 These migrations are additive and idempotent, and run in `Database::open`:
 
-- **`message_reactions`:** columns `message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE`, `reaction TEXT NOT NULL CHECK (reaction IN ('up','down'))`, `created_at` and `answered INTEGER NOT NULL DEFAULT 0`.
+- **`message_reactions`:** columns `message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE`, `reaction TEXT NOT NULL CHECK (reaction IN ('up','down'))`, `created_at`, `answered INTEGER NOT NULL DEFAULT 0` and `told INTEGER NOT NULL DEFAULT 0`.
   - There's one reaction per message, because kwant has a single person.
   - A reaction goes away with its message.
   - `answered` is 1 when the reaction started a turn. A changed reaction resets it to 0.
+  - `told` is 1 once a turn's prompt carried the reaction as feedback. A changed reaction resets it to 0. On an older database the column is added only if it's missing.
 - **`messages.reply_to_message_id TEXT NULL`:** the column is added only if it's missing.
 
 ## `PUT /api/messages/:id/reaction`
@@ -99,7 +100,7 @@ For a 👎, reconsider that message briefly: say what you'd change, or ask what 
 A 👍 or 👎 never approves an approval card, a payment, a human step or a decision card: those keep their own buttons, and only the person's click on them counts.
 ```
 
-Each excerpt is plain text, up to 120 characters. The note appears once, because after the bot's reply the reactions are older than its last message.
+Each excerpt is plain text, up to 120 characters. The note appears once: putting a reaction in a turn's note marks it `told`, and later notes leave told reactions out. This holds even when the reaction and the bot's reply were made in the same second, since timestamps have 1-second precision. A reaction made before the bot's last reply isn't listed either.
 
 In history, which covers every engine and the API drivers, a reacted bot message ends with `(The person reacted 👍 to this message.)`. Only the prompt changes; the stored text stays as it is.
 
