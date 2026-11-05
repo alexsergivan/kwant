@@ -15,8 +15,9 @@ pub fn retry_line(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
     format!("⏳ kwnt will retry this once at {} UTC (in {wait}), when the limit resets.", at.format("%H:%M"))
 }
 
-/// Parks the turn that just hit a usage limit, if it can be retried: not already a retry or a
-/// discussion round (`no_park`), and in a chat the retry can find again. Returns the line for
+/// Parks the turn that just hit a usage limit, if it can be retried: not already a retry, a
+/// discussion round or a no-tools turn (`no_park`, see `TurnOpts::no_park`), and in a chat the
+/// retry can find again. Returns the line for
 /// the notice.
 pub(super) async fn park(
     scope: &TurnScope,
@@ -77,6 +78,18 @@ pub async fn run_due(state: &AppState, now: DateTime<Utc>) -> usize {
         let _ = state.db.set_parked_status(&p.id, "done").await;
     }
     started
+}
+
+/// Test hook: one no-tools turn (`TurnOpts::no_tools`, as a Dev mode card or an idea take runs)
+/// for `kwant_id` in its direct chat. Returns the reply, or the failure text.
+#[doc(hidden)]
+pub async fn no_tools_turn_for_tests(state: &AppState, kwant_id: &str, prompt: &str) -> Result<String, String> {
+    let kwant = state.db.get_kwant(kwant_id).await.ok().flatten().ok_or("no such bot")?;
+    let job = state.turns.start_job([kwant.id.clone()]);
+    let scope = scope_for(state, &kwant, None, None, &job, 0).await?;
+    let mut opts = TurnOpts::default();
+    opts.no_tools = true;
+    try_kwant_turn(&scope, &kwant, prompt.to_string(), opts).await
 }
 
 async fn retry(state: &AppState, p: &ParkedTurn) -> bool {

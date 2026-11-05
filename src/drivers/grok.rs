@@ -338,6 +338,9 @@ pub enum StreamEvent {
     ToolStart { id: String, name: String, args: serde_json::Value },
     /// A tool grok started finished; `error` says why when it didn't succeed.
     ToolEnd { id: String, ok: bool, error: Option<String> },
+    /// The tools grok offers the model this run (`available_commands`, printed before the first
+    /// model call). A no-tools run needs it, and empty (see `cli::GROK_NO_TOOLS`).
+    Tools(Vec<String>),
 }
 
 /// Splits grok's NDJSON output into events. Lines that aren't JSON are passed on as text, so
@@ -431,6 +434,12 @@ fn parse_line(line: &str) -> Option<StreamEvent> {
             .as_str()
             .filter(|t| !t.is_empty())
             .map(|t| StreamEvent::Thought(t.to_string())),
+        // A list that isn't one is reported as a tool, so a no-tools run fails closed
+        Some("available_commands") => Some(StreamEvent::Tools(match value["tools"].as_array() {
+            Some(tools) => tools.iter().map(|t| t.as_str().map_or_else(|| t.to_string(), str::to_string)).collect(),
+            None if value.get("tools").is_none() => return None,
+            None => vec![value["tools"].to_string()],
+        })),
         Some(_) => None,
         None => Some(StreamEvent::Text(line.to_string())),
     }
@@ -603,6 +612,7 @@ include_only = ["*"]
         assert_eq!(
             events,
             [
+                StreamEvent::Tools(Vec::new()),
                 StreamEvent::Text("Hel".into()),
                 StreamEvent::Text("lo\n".into()),
                 StreamEvent::ToolStart { id: "c1".into(), name: "tool".into(), args: serde_json::Value::Null },

@@ -1801,6 +1801,13 @@ pub(super) struct TurnOpts {
     /// `lessons_shown` or `lessons_held_out` once it reaches the driver, and gets no second
     /// lessons block in its continuity section.
     pub(super) task: Option<super::missions::lessons::TaskHint>,
+    /// The turn runs with no tools at all, for prompts that quote text nobody vetted (a Dev mode
+    /// card quotes PR text, which could ask for a tool call and raise an approval card). No MCP
+    /// server (not even kwant's own app tools) and none of the engine's built-in tools: no shell,
+    /// files, web, browser, skills or subagents. The bot browser isn't opened or read either.
+    /// Every driver runs it that way or refuses it, and the turn then fails; it is never run with
+    /// tools (see `crate::drivers::TurnInput::no_tools`). Default false.
+    pub(super) no_tools: bool,
 }
 
 impl TurnOpts {
@@ -1814,6 +1821,14 @@ impl TurnOpts {
     /// something asks (see [`TurnOpts::always_ask`]).
     pub(super) fn always_asking(label: &str) -> Self {
         TurnOpts { label: Some(label.to_string()), always_ask: true, ..Default::default() }
+    }
+
+    /// The turn is never parked for a retry after a usage limit (see [`super::parked::park`]): a
+    /// retry already, a discussion round, or a no-tools turn. The parked row keeps only the prompt
+    /// and its retry runs with default options, so a no-tools turn would come back with tools over
+    /// the same untrusted text. Its caller gets the "out until" failure and retries itself.
+    pub(super) fn no_park(&self) -> bool {
+        self.retried || self.discussion.is_some() || self.no_tools
     }
 
     /// The link to open in the bot browser before the turn: only a full link in the person's own
@@ -2313,7 +2328,7 @@ async fn run_kwant_turn_inner(
 
         let mut final_prompt = prompt.clone();
         // A replay opens no page: the bot's browser isn't its scratch folder
-        let target_url_opt = if opts.rehearse.is_some() { None } else { opts.nav_target() };
+        let target_url_opt = if opts.rehearse.is_some() || opts.no_tools { None } else { opts.nav_target() };
 
         if let Some(target_url) = target_url_opt {
             event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -2393,7 +2408,7 @@ async fn run_kwant_turn_inner(
                 Err(_) => {}
                 }
             }
-        } else if let Some(ref curr_url) = active_browser_url {
+        } else if let Some(ref curr_url) = active_browser_url.as_ref().filter(|_| !opts.no_tools) {
             if !curr_url.is_empty() && !curr_url.contains("about:blank") && !curr_url.contains("example.com") {
                 let (title, page_text, clickable) = match active_ctrl {
                     Some(ref ctrl) => (
@@ -2432,7 +2447,7 @@ async fn run_kwant_turn_inner(
         }
         let attempts: Vec<Option<LlmProfile>> = std::mem::take(&mut global.attempts);
         // The agents' own continuity tools, for engines that can call MCP tools
-        let self_scope = (engine.is_some() && super::continuity::agent_tools_enabled(state).await).then(|| turn_scope.clone());
+        let self_scope = (engine.is_some() && !opts.no_tools && super::continuity::agent_tools_enabled(state).await).then(|| turn_scope.clone());
         let browser_sign_in = self_scope.as_ref().is_some_and(super::continuity::offers_browser_sign_in);
         let card_opts = super::mcp_runtime::TurnApprovalOpts {
             routed: Some((target_model.clone(), effort_level.clone())),
@@ -2440,15 +2455,20 @@ async fn run_kwant_turn_inner(
             rehearse: opts.rehearse.clone(),
             purpose: opts.purpose.clone(),
         };
-        let mcp_turn = super::mcp_runtime::prepare_turn_with_opts(
-            state,
-            target_kwant,
-            Some(tag.turn_id.clone()),
-            workspace_dir.clone(),
-            self_scope,
-            card_opts,
-        )
-        .await;
+        // A no-tools turn starts no MCP server, kwant's own included
+        let mcp_turn = if opts.no_tools {
+            None
+        } else {
+            super::mcp_runtime::prepare_turn_with_opts(
+                state,
+                target_kwant,
+                Some(tag.turn_id.clone()),
+                workspace_dir.clone(),
+                self_scope,
+                card_opts,
+            )
+            .await
+        };
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
         if let Some(ctx) = &mcp_ctx {
             event_broadcast.activity.add_secrets(ctx.secret_values());
@@ -2478,7 +2498,7 @@ async fn run_kwant_turn_inner(
             // The bot's own copy of the browser API, naming this chat (thread, channel or DM): a
             // CAPTCHA it meets is asked in the thread whose call met it. The same for every turn
             // of the thread, so the cached prompt tail doesn't change.
-            browser_api_url: Some(bot_browser_api(state.config.port, &sandbox_target, &turn_scope)),
+            browser_api_url: (!opts.no_tools).then(|| bot_browser_api(state.config.port, &sandbox_target, &turn_scope)),
             thread_id: context_id,
             kwant: target_kwant.clone(),
             prompt: final_prompt,
@@ -2500,6 +2520,7 @@ async fn run_kwant_turn_inner(
             skills,
             person: super::bot_actions::person_place(&state.db).await,
             store: Some(state.db.clone()),
+            no_tools: opts.no_tools,
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -2522,7 +2543,7 @@ async fn run_kwant_turn_inner(
         if let (Some(until), false) = (global.all_out_until, rehearse_blocked) {
             let at = super::profile_turn::clock_text(state, until).await;
             let mut text = super::profile_turn::all_out_line(&at);
-            let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), Some(until)).await;
+            let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.no_park(), opts.delegation_id.clone(), Some(until)).await;
             if parked.is_none() {
                 text = format!("Every model is out until {at}.");
             }
@@ -2850,7 +2871,7 @@ async fn run_kwant_turn_inner(
                     let again = super::profile_turn::plan_global(state, engine, &target_kwant.id).await;
                     if let Some(until) = again.all_out_until {
                         let at = super::profile_turn::clock_text(state, until).await;
-                        let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), Some(until)).await;
+                        let parked = super::parked::park(scope, target_kwant, &park_prompt, opts.no_park(), opts.delegation_id.clone(), Some(until)).await;
                         let text = if parked.is_some() { super::profile_turn::all_out_line(&at) } else { format!("Every model is out until {at}.") };
                         event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
                         event_broadcast.send(RuntimeEvent::TurnComplete {
@@ -2876,7 +2897,7 @@ async fn run_kwant_turn_inner(
                 };
                 let mut text = text;
                 if failure.class == crate::profiles::classify::FailClass::Quota && !side_effects {
-                    if let Some(line) = super::parked::park(scope, target_kwant, &park_prompt, opts.retried || opts.discussion.is_some(), opts.delegation_id.clone(), failure.retry_at).await {
+                    if let Some(line) = super::parked::park(scope, target_kwant, &park_prompt, opts.no_park(), opts.delegation_id.clone(), failure.retry_at).await {
                         text = format!("{text}\n\n{line}");
                     }
                 }
@@ -5522,6 +5543,16 @@ pub async fn execute_tool(
 #[cfg(test)]
 mod tests {
     use super::{scrub_urls, turn_failed_text};
+
+    #[test]
+    fn a_retry_a_discussion_round_or_a_no_tools_turn_never_parks() {
+        use super::TurnOpts;
+        assert!(!TurnOpts::default().no_park(), "a normal turn parks");
+        assert!(TurnOpts { retried: true, ..TurnOpts::default() }.no_park());
+        assert!(TurnOpts { discussion: Some(None), ..TurnOpts::default() }.no_park());
+        // Its retry would run with default options, tools included
+        assert!(TurnOpts { no_tools: true, ..TurnOpts::default() }.no_park());
+    }
 
     #[test]
     fn only_the_persons_own_message_can_open_a_link_before_a_turn() {
