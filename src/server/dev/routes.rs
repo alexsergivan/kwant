@@ -676,6 +676,10 @@ pub async fn take_backup(State(state): State<AppState>, headers: HeaderMap, Path
         Err(backup::BackupError::NoCommand) => error(StatusCode::CONFLICT, "Set a backup command in Dev mode settings"),
         Err(backup::BackupError::Busy) => error(StatusCode::CONFLICT, "A backup is running already"),
         Err(backup::BackupError::Db(e)) => internal(e),
+        Err(backup::BackupError::Lost(e)) => {
+            tracing::warn!(space = %space, error = %e, "dev: the backup run ended without an answer");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "The backup run stopped unexpectedly")
+        }
     }
 }
 
