@@ -94,6 +94,7 @@ import {
   autofixErrorText,
   fixTextShown,
   needsYouCount,
+  defaultColumn,
   recoveryText,
   restoreErrorText,
   skippedWithFixText,
@@ -418,7 +419,7 @@ export const InsightsStrip: React.FC<{
       hint: 'A bot said done, then the check failed (last 7 days)',
       tone: insights.false_success_7d > 0 ? 'rose' : undefined,
     },
-    { label: 'Needs you now', value: String(needsNow), hint: 'Waiting on a question, approval or step from you', tone: needsNow > 0 ? 'amber' : undefined },
+    { label: 'Board tasks waiting on you', value: String(needsNow), hint: 'Board tasks waiting on a question, approval or step from you. Your Inbox can hold more.', tone: needsNow > 0 ? 'amber' : undefined },
     typeof blockedMin === 'number'
       ? {
           label: 'Blocked this week',
@@ -461,6 +462,44 @@ export const InsightsStrip: React.FC<{
         ))}
       </dl>
     </section>
+  );
+};
+
+/** The folded "This week" line on a phone: what the tiles would say first. */
+export function thisWeekSummary(insights: Insights): string {
+  const blocked = typeof insights.blocked_minutes_7d === 'number' ? `Blocked ${durationText(insights.blocked_minutes_7d)}` : `Blocked now ${insights.blocked_now}`;
+  return `Verified ${insights.verified_7d} · ${blocked}`;
+}
+
+/**
+ * The week's tiles and chart. A phone puts them under the board, folded to one line until opened
+ * (Mira's B3); from lg up they show as they always have, above the board.
+ */
+export const ThisWeek: React.FC<{ insights: Insights | null; needsYou?: number }> = ({ insights, needsYou }) => {
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
+  if (!insights) return null;
+  return (
+    <div className="order-1 lg:order-none flex flex-col gap-4 lg:block" data-this-week={open ? 'open' : 'closed'}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((v) => !v)}
+        className={`lg:hidden w-full min-h-[44px] flex items-center gap-2 px-3 rounded-xl border border-zinc-800 bg-zinc-900/40 text-left ${focusRing}`}
+        data-this-week-toggle
+      >
+        {open ? <ChevronDown size={16} className="shrink-0 text-zinc-400" aria-hidden="true" /> : <ChevronRight size={16} className="shrink-0 text-zinc-400" aria-hidden="true" />}
+        <span className="shrink-0 text-[13px] leading-4 font-semibold text-zinc-100">This week</span>
+        <span className="ml-auto min-w-0 truncate text-[13px] leading-4 text-zinc-400 tabular-nums" data-this-week-summary>
+          {thisWeekSummary(insights)}
+        </span>
+      </button>
+      <div id={bodyId} className={`${open ? '' : 'hidden'} lg:block space-y-4`} data-this-week-body>
+        <InsightsStrip insights={insights} needsYou={needsYou} />
+        <MeasuresPanel insights={insights} />
+      </div>
+    </div>
   );
 };
 
@@ -897,9 +936,9 @@ export const Board: React.FC<{
     );
   };
 
-  const countPill = (key: Column, n: number | string, dark = false) => (
+  const countPill = (key: Column, n: number | string, dark = false, tab = false) => (
     <span
-      className={`min-w-[18px] px-1 rounded-full text-[10px] text-center tabular-nums ${
+      className={`min-w-[18px] px-1 rounded-full ${tab ? 'text-[12px] leading-4' : 'text-[10px]'} text-center tabular-nums ${
         key === 'needs_you' && Number(n) > 0 ? 'bg-amber-500 text-zinc-950' : dark ? 'bg-zinc-700/70 text-zinc-200' : 'bg-zinc-800 text-zinc-300'
       }`}
     >
@@ -943,7 +982,7 @@ export const Board: React.FC<{
     <>
       {/* Phone and tablet: one column at a time, picked from tabs with counts */}
       <div className="lg:hidden space-y-3" data-board="tabs">
-        <div role="tablist" aria-label="Board columns" className="flex gap-1 overflow-x-auto -mx-1 px-1 pb-1 [scrollbar-width:none]">
+        <div role="tablist" aria-label="Board columns" className="flex gap-0.5 overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40 p-0.5 [scrollbar-width:none]">
           {COLUMNS.map((c, i) => {
             const on = c.key === column;
             return (
@@ -958,12 +997,12 @@ export const Board: React.FC<{
                 tabIndex={on ? 0 : -1}
                 onKeyDown={(e) => onTabKey(e, i)}
                 onClick={() => onColumn(c.key)}
-                className={`shrink-0 inline-flex items-center gap-1.5 min-h-[40px] px-3 rounded-lg text-xs font-medium ${focusRing} ${
+                className={`shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-lg text-[13px] leading-4 font-medium ${focusRing} ${
                   on ? 'bg-zinc-800 text-zinc-100 border border-zinc-700' : 'text-zinc-400 border border-transparent hover:text-zinc-200'
                 }`}
               >
                 {c.label}
-                {countPill(c.key, c.key === 'verified' ? (showOlder ? verifiedAll : verifiedRecent) : grouped[c.key].length, true)}
+                {countPill(c.key, c.key === 'verified' ? (showOlder ? verifiedAll : verifiedRecent) : grouped[c.key].length, true, true)}
               </button>
             );
           })}
@@ -2749,7 +2788,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6" aria-busy={loading}>
-        <div className="max-w-[1500px] mx-auto space-y-4">
+        <div className="max-w-[1500px] mx-auto flex flex-col gap-4 lg:block lg:space-y-4" data-board-page>
           {needsToken && (
             <div role="alert" className="px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 flex flex-wrap items-center gap-2 text-xs text-amber-100">
               <span>Only you can change the board. Confirm it’s you to continue.</span>
@@ -2785,21 +2824,22 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
               {liveShown && <LiveStrip bots={liveShown} teams={teams} workingCards={workingCards} now={now} onOpen={onOpenLive} />}
 
               {firstVerified && !firstDone && <FirstMomentLine kind="verified" onDone={() => setFirstDone(true)} />}
-              <InsightsStrip insights={insights} needsYou={needsYouCount(tasks)} />
-              <MeasuresPanel insights={insights} />
-              <FactsLedger names={names} taskTitles={taskTitles} onOpenTask={openTaskById} now={now} />
+              <ThisWeek insights={insights} needsYou={needsYouCount(tasks)} />
+              <div className="order-1 lg:order-none space-y-4" data-board-notes>
+                <FactsLedger names={names} taskTitles={taskTitles} onOpenTask={openTaskById} now={now} />
 
-              <TierRequests names={names} now={now} />
+                <TierRequests names={names} now={now} />
 
-              {/* Goals (0.6.5) on "All work". In a mission's own view only its drawer stays, so a "Goal:" chip opens it. */}
-              <GoalsStrip
-                names={names}
-                now={now}
-                spaceId={spaceId ?? null}
-                hidden={!!missionId}
-                onOpenTask={onOpenTaskId ?? openTaskById}
-                onOpenMission={(id) => onMission(id)}
-              />
+                {/* Goals (0.6.5) on "All work". In a mission's own view only its drawer stays, so a "Goal:" chip opens it. */}
+                <GoalsStrip
+                  names={names}
+                  now={now}
+                  spaceId={spaceId ?? null}
+                  hidden={!!missionId}
+                  onOpenTask={onOpenTaskId ?? openTaskById}
+                  onOpenMission={(id) => onMission(id)}
+                />
+              </div>
 
               {visibleMissions.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2">
@@ -2833,7 +2873,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                 />
               )}
               {mission && onView && (
-                <div role="group" aria-label="Show as" className="inline-flex rounded-lg border border-zinc-800 p-0.5" data-view-toggle>
+                <div role="group" aria-label="Show as" className="self-start lg:self-auto inline-flex rounded-lg border border-zinc-800 p-0.5" data-view-toggle>
                   {(['board', 'graph'] as const).map((v) => (
                     <button
                       key={v}
@@ -2942,7 +2982,11 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                 </p>
               )}
 
-              {showPerformance && !mission && !needsToken && <PerformancePanel names={names} refreshKey={refreshCount} />}
+              {showPerformance && !mission && !needsToken && (
+                <div className="order-2 lg:order-none">
+                  <PerformancePanel names={names} refreshKey={refreshCount} />
+                </div>
+              )}
             </>
           )}
         </div>
@@ -3174,6 +3218,13 @@ export const MissionBoardPage: React.FC<{
     setOpenId(null);
     setDetail(null);
   };
+  // A phone opens on Needs you when something waits on the person, else Working, else Ready
+  useEffect(() => {
+    if (tasks === null || openTaskId) return;
+    setColumn(defaultColumn(tasks));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks === null]);
+
   // A link from elsewhere (a lesson on a bot's Memory tab): open that task once the board has its list.
   useEffect(() => {
     if (!openTaskId || tasks === null) return;
