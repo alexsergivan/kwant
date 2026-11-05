@@ -1,4 +1,5 @@
 import React, { useCallback, useSyncExternalStore } from 'react';
+import { HardHat, useDevModeOn } from './DevModeSwitch';
 import { isKwantWorking, subscribeKwant } from '../kwantActivity';
 import { AvatarMood, useKwantMood, useKwantNotices } from './AvatarMood';
 import { moodLabel, restingUntilOf } from '../kwantMood';
@@ -344,6 +345,9 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   const moodText = moodLabel(mood, name, restingUntilOf(kwantId));
   const label = moodText ?? (shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined);
   const creature = pickCreature(role, name);
+  // Dev mode: every bot avatar of 28 px and up wears the hard hat (top-left, clear of the status dot).
+  const devOn = useDevModeOn();
+  const hat = devOn && !!kwantId && size >= 28;
   // At tiny sizes the frame would dominate, so zoom in on the creature alone
   const framed = size > 20;
   // Small framed avatars enlarge the creature so it stays readable
@@ -388,6 +392,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
         </g>
       </svg>
       <AvatarMood mood={mood} size={size} />
+      {hat && <HardHat />}
       {shown && (
         <>
           <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${STATUS_DOT[shown]}`} aria-hidden="true" />

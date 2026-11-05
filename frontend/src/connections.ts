@@ -29,6 +29,8 @@ export interface Connection {
   used_by: UsedBy[];
   logins_stored: LoginsStored | string;
   manage: string;
+  /** Dev mode D10: marked as a production connection in this space (0.7 servers). */
+  production?: boolean;
 }
 
 export interface CatalogEntry {
@@ -211,6 +213,9 @@ export function usedByText(used: UsedBy[], status: string): string {
 }
 
 /** The MCP server id inside a connection id (`mcp:<id>`), for "Check now". */
+/** Dev mode D10: only MCP servers and Composio apps can be marked production. */
+export const canMarkProduction = (c: Pick<Connection, 'id'>): boolean => c.id.startsWith('mcp:') || /^composio:[a-z0-9_-]{1,64}$/.test(c.id);
+
 export const mcpServerId = (c: Pick<Connection, 'id' | 'kind'>): string | null =>
   c.kind === 'mcp' && c.id.startsWith('mcp:') ? c.id.slice(4) : null;
 

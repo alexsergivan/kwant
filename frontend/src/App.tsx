@@ -125,6 +125,9 @@ import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, showDeviceNotification } from './push';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
+import { devApi, devStore } from './devMode';
+import { useDevModeOn } from './components/DevModeSwitch';
+import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
@@ -340,11 +343,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const switchLogRef = useRef(createOutageLog());
   // What fills the main pane instead of a chat: the Inbox (New or Loose ends), the Mission board
   // or Parallel Universe. The Inbox's unseen count is the sidebar badge.
-  const [page, setPage] = useState<'chat' | 'inbox' | 'board' | 'parallel'>(() =>
-    initialView?.kind === 'inbox' || initialView?.kind === 'board' || initialView?.kind === 'parallel' ? initialView.kind : 'chat',
+  const [page, setPage] = useState<'chat' | 'inbox' | 'board' | 'parallel' | 'dev'>(() =>
+    initialView?.kind === 'inbox' || initialView?.kind === 'board' || initialView?.kind === 'parallel' || initialView?.kind === 'dev' ? initialView.kind : 'chat',
   );
   const [inboxTab, setInboxTab] = useState<InboxTab>(() => (initialView?.kind === 'inbox' ? initialView.tab : 'new'));
-  const showPage = (next: 'inbox' | 'board' | 'parallel', tab: InboxTab = 'new') => {
+  const showPage = (next: 'inbox' | 'board' | 'parallel' | 'dev', tab: InboxTab = 'new') => {
     setPage(next);
     if (next === 'inbox') setInboxTab(tab);
     if (spaceSettingsTab) closeSpaceSettings();
@@ -352,6 +355,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // Mission board: shown in the sidebar only when the server has it switched on.
   const [missionBoard, setMissionBoard] = useState(false);
+  // Dev mode (0.7): the open space's state, read by the switch, the hats and the grid.
+  useEffect(() => devStore.setCurrent(space.id), [space.id]);
+  const devOn = useDevModeOn(space.id);
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [awayCount, setAwayCount] = useState(0);
@@ -1039,6 +1045,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'FactDispute':
             if (event.data?.dispute?.id) emitMission({ type: 'fact_dispute', data: { dispute: event.data.dispute } });
             break;
+          // Dev mode (0.7): the switch, tiles, hats and grid follow `dev_mode`; the desk refetches on `dev_card`.
+          case 'dev_mode':
+          case 'DevMode': {
+            const d = event.data ?? {};
+            if (typeof d.space_id === 'string' && typeof d.on === 'boolean') {
+              devStore.setOn(d.space_id, d.on);
+              devApi.get(d.space_id).then((st) => devStore.set(d.space_id, st), () => undefined);
+            }
+            break;
+          }
+          case 'dev_card':
+          case 'DevCard': {
+            const d = event.data ?? {};
+            if (typeof d.space_id === 'string' && typeof d.id === 'string') {
+              window.dispatchEvent(new CustomEvent<DevCardEvent>(DEV_CARD_EVENT, { detail: { space_id: d.space_id, id: d.id, kind: String(d.kind ?? ''), status: String(d.status ?? '') } }));
+            }
+            break;
+          }
           // Goals (0.6.5): the board's Goals strip reads the goal again.
           case 'goal_updated':
           case 'GoalUpdated': {
@@ -3110,6 +3134,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         showPage('board');
         playSfx('click');
       }}
+      devDeskActive={page === 'dev'}
+      onOpenDevDesk={() => {
+        showPage('dev');
+        playSfx('click');
+      }}
     />
   );
 
@@ -3310,7 +3339,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (viewRequest) applyViewRef.current(viewRequest.view);
   }, [viewRequest?.seq]);
 
-  const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'inbox' ? inbox : !loaded ? (
+  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} />;
+  const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
     </main>
@@ -3343,7 +3373,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 )}
               </div>
             ) : (
-              <div className="flex-1 min-h-0 flex">{mainPane}</div>
+              <div className={`flex-1 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>{mainPane}</div>
             )}
             {(showPhoneList || needsSetup) && (
               <PhoneTabBar
@@ -3369,7 +3399,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         ) : (
           <>
             {sidebar('all')}
-            {mainPane}
+            <div className={`flex-1 min-w-0 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+              {mainPane}
+            </div>
           </>
         )}
       </div>

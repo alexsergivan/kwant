@@ -1,5 +1,5 @@
-// Where you are inside a space besides a chat: Inbox, Mission board, Parallel Universe or
-// Settings. Each has its own address under /s/<space>/, so a reload, a bookmark or a link
+// Where you are inside a space besides a chat: Inbox, Mission board, Parallel Universe, the Dev
+// desk or Settings. Each has its own address under /s/<space>/, so a reload, a bookmark or a link
 // lands on the same place. Older names (While you were away, Loose ends, Connections,
 // Routines) still resolve and are rewritten to the new address.
 
@@ -15,6 +15,7 @@ export type SpaceView =
   | { kind: 'inbox'; tab: InboxTab }
   | { kind: 'board' }
   | { kind: 'parallel' }
+  | { kind: 'dev' }
   | { kind: 'settings'; scope: 'space'; tab: SpaceSettingsTab }
   | { kind: 'settings'; scope: 'app' };
 
@@ -27,6 +28,8 @@ export function viewSegment(v: SpaceView): string {
       return 'board';
     case 'parallel':
       return 'parallel';
+    case 'dev':
+      return 'dev';
     case 'settings':
       return v.scope === 'app' ? 'settings/app' : `settings/${v.tab}`;
   }
@@ -62,6 +65,7 @@ export function parseView(segment: string): { view: SpaceView; legacy: boolean }
   }
   if (head === 'board' && !sub) return { view: { kind: 'board' }, legacy: false };
   if (head === 'parallel' && !sub) return { view: { kind: 'parallel' }, legacy: false };
+  if (head === 'dev' && !sub) return { view: { kind: 'dev' }, legacy: false };
   if (head === 'settings') {
     if (!sub) return { view: { kind: 'settings', scope: 'space', tab: 'general' }, legacy: true };
     if (sub === 'app' || sub === 'all') return { view: { kind: 'settings', scope: 'app' }, legacy: sub !== 'app' };

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Archive, Check, Loader2, Plus, RotateCcw, Settings, X, AlertTriangle, KeyRound } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -14,23 +14,50 @@ import {
   spacesApi,
 } from '../spaces';
 import { useEscapeLayer } from '../escape';
+import { devApi, devStore } from '../devMode';
+import { DevBadge } from './DevModeSwitch';
 
 const badge = (n: number) => (n > 99 ? '99+' : String(n));
 
-/** A space's emoji on its colour. */
-export const SpaceTile: React.FC<{ space: Pick<Space, 'id' | 'icon' | 'color'>; size?: number; className?: string }> = ({
+/** A space's emoji on its colour; `dev` adds the Dev mode `</>` badge bottom-right. */
+export const SpaceTile: React.FC<{ space: Pick<Space, 'id' | 'icon' | 'color'>; size?: number; className?: string; dev?: boolean; devBehind?: string }> = ({
   space,
   size = 40,
   className = '',
-}) => (
-  <span
-    aria-hidden="true"
-    className={`inline-flex items-center justify-center shrink-0 rounded-xl ${className}`}
-    style={{ width: size, height: size, background: `${spaceColor(space)}33`, boxShadow: `inset 0 0 0 1px ${spaceColor(space)}66`, fontSize: size * 0.5 }}
-  >
-    {spaceIcon(space)}
-  </span>
-);
+  dev = false,
+  devBehind,
+}) => {
+  const tile = (
+    <span
+      aria-hidden="true"
+      className={`inline-flex items-center justify-center shrink-0 rounded-xl ${dev ? '' : className}`}
+      style={{ width: size, height: size, background: `${spaceColor(space)}33`, boxShadow: `inset 0 0 0 1px ${spaceColor(space)}66`, fontSize: size * 0.5 }}
+    >
+      {spaceIcon(space)}
+    </span>
+  );
+  if (!dev) return tile;
+  return (
+    <span className={`relative inline-flex shrink-0 ${className}`} data-dev-tile>
+      {tile}
+      <DevBadge behind={devBehind} />
+    </span>
+  );
+};
+
+/** The rail shows the badge on every Dev space, but the spaces list has no dev_mode field: ask each once. */
+function useRailDevMode(spaces: Space[]) {
+  useSyncExternalStore(devStore.subscribe, () => spaces.map((s) => (devStore.isOn(s.id) ? 1 : 0)).join(''), () => '');
+  const ids = spaces.map((s) => s.id).join(',');
+  useEffect(() => {
+    for (const id of ids ? ids.split(',') : []) {
+      if (devStore.get(id) || railAsked.has(id)) continue;
+      railAsked.add(id);
+      devApi.get(id).then((st) => devStore.set(id, st), () => undefined);
+    }
+  }, [ids]);
+}
+const railAsked = new Set<string>();
 
 // ---------------------------------------------------------------------------
 // Desktop rail
@@ -43,7 +70,9 @@ interface RailProps {
   onOpenAppSettings: () => void;
 }
 
-export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, onCreate, onOpenAppSettings }) => (
+export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, onCreate, onOpenAppSettings }) => {
+  useRailDevMode(spaces);
+  return (
   <nav aria-label="Spaces" className="hidden md:flex w-[68px] shrink-0 flex-col items-center gap-2 pt-1.5 pb-3 border-r border-hairline bg-surface-rail select-none">
     {/* The list scrolls, so it clips whatever sticks out of it. pt-1.5/pb-1.5 leave room for the
         active tile's ring (2px + 2px offset) and the unread badge (-6px); the nav's pt-1.5 keeps the
@@ -60,14 +89,14 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
               onClick={() => onSwitch(s.id)}
               data-rail-space={s.id}
               aria-current={active ? 'true' : undefined}
-              aria-label={`${s.name}${unread ? `, ${unread} unread` : ''}`}
+              aria-label={`${s.name}${devStore.isOn(s.id) ? ', Dev mode on' : ''}${unread ? `, ${unread} unread` : ''}`}
               title={`${s.name}${i < 9 ? ` (Ctrl/⌘ ${i + 1})` : ''}`}
               className={`relative rounded-xl transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
                 active ? 'ring-2 ring-offset-2 ring-offset-zinc-950' : 'opacity-75 hover:opacity-100'
               }`}
               style={active ? ({ '--tw-ring-color': spaceColor(s) } as React.CSSProperties) : undefined}
             >
-              <SpaceTile space={s} size={40} />
+              <SpaceTile space={s} size={40} dev={devStore.isOn(s.id)} devBehind="var(--kw-surface-rail)" />
               {unread > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 min-w-[18px] px-1 py-px rounded-full bg-rose-500 text-white text-[10px] font-semibold text-center border-2 border-zinc-950">
                   {badge(unread)}
@@ -100,7 +129,8 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
       <Settings size={18} />
     </button>
   </nav>
-);
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Switcher: a popover under the space header (desktop) or a bottom sheet (phone)
