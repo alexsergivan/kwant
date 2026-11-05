@@ -14,6 +14,12 @@
 //! isn't retried and ends the space's scans for the day) and [`TAKE_TIMEOUT`]. A bot is free when
 //! nothing of it runs (`kwant_is_busy`) and its last turn ended at least [`IDLE_MINUTES`] ago.
 //! Look now ignores the daily cap but still needs a free bot.
+//!
+//! A take that failed for kwant's own reasons ([`KWANT_CAUSES`]: a usage limit, a no-tools turn
+//! the engine refused, a restart) isn't the bot's doing: it fails at once with a plain reason, no
+//! retry, and counts toward neither the cap nor `peeks_today`. It pauses the space's scans for
+//! [`PAUSE_MINUTES`], so an outage can't run through the jar. A take is never parked behind a
+//! usage limit: the retry would be an ordinary turn in the lead's chat.
 
 // Route helpers hand back the axum Response they refuse with, as the other route modules do
 #![allow(clippy::result_large_err)]
@@ -55,6 +61,10 @@ pub const MAX_PLAN_STEPS: usize = 6;
 pub const MAX_TRIES: i64 = 2;
 /// A take turn that runs longer than this is dropped.
 pub const TAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// Minutes the scan leaves a space alone after a take there failed for one of [`KWANT_CAUSES`].
+pub const PAUSE_MINUTES: i64 = 60;
+/// Why a take failed when it wasn't the bot's doing; such a take isn't counted (see the db).
+pub use crate::db::ideas::KWANT_CAUSES;
 /// Goals and missions named in the prompt, at most.
 const CONTEXT_ROWS: usize = 20;
 
@@ -234,7 +244,31 @@ fn take_opts() -> TurnOpts {
     let mut opts = TurnOpts::always_asking("Idea jar");
     (opts.unsaved, opts.quiet_failure, opts.quiet_finish, opts.purpose) = (true, true, true, Some(PURPOSE.into()));
     opts.no_tools = true;
+    // Never parked behind a usage limit: the retry would be an ordinary turn (tools on) in the
+    // lead's chat, posting there. The take fails instead and the person can Look now later.
+    opts.retried = true;
     opts
+}
+
+/// A take's turn error that is kwant's doing, not the bot's: `(cause, plain reason)`, the cause
+/// one of [`KWANT_CAUSES`]. `None` for any other error, which counts as an ordinary failed take.
+pub fn kwant_cause(error: &str) -> Option<(&'static str, String)> {
+    let lower = error.to_lowercase();
+    if lower.contains("must run with no tools") {
+        return Some(("no_tools", "kwant didn't run this bot: its engine can't run a turn with every tool switched off. Look now asks another free bot.".into()));
+    }
+    if lower.contains("out until") || lower.contains("out of usage") || lower.contains("usage limit") {
+        // "Every model is out until 11:44 UTC; …": kwant's own wording, so the time is safe to show
+        let when = error
+            .find("until ")
+            .map(|i| &error[i + 6..])
+            .and_then(|rest| rest.split([';', '.', '\n']).next())
+            .map(str::trim)
+            .filter(|t| t.contains(':') && t.chars().count() <= 24);
+        let after = when.map(|t| format!("after {t}")).unwrap_or_else(|| "once the limit resets".into());
+        return Some(("usage_limit", format!("Every model was out of usage, so no bot could look at it. Use Look now {after}.")));
+    }
+    None
 }
 
 // -- who peeks --------------------------------------------------------------------------------
@@ -332,40 +366,54 @@ where
     let (names, goals, missions) = context(state, &space, &bots).await;
     let (mut tries, mut tokens, mut over_cap) = (0i64, 0u64, false);
     let mut last_error: Option<String> = None;
+    let mut cause: Option<&'static str> = None;
     let mut take: Option<Take> = None;
     while tries < MAX_TRIES && take.is_none() {
         tries += 1;
         let (reply, used) = ask(prompt(&idea.text, &names, &goals, &missions, last_error.as_deref())).await;
         tokens += used;
         let turn_failed = reply.is_err();
-        match reply.and_then(|text| parse_take(&text, &bots)) {
-            Ok(t) => take = Some(t),
-            Err(e) => last_error = Some(e),
+        match reply {
+            Ok(text) => match parse_take(&text, &bots) {
+                Ok(t) => take = Some(t),
+                Err(e) => last_error = Some(e),
+            },
+            // A usage limit, a refused no-tools turn: a plain reason, and the take isn't counted
+            Err(e) => match kwant_cause(&e) {
+                Some((c, why)) => (cause, last_error) = (Some(c), Some(why)),
+                None => last_error = Some(e),
+            },
         }
         if used > MAX_TURN_TOKENS {
             over_cap = true;
             tracing::warn!(idea_id = %idea.id, tokens = used, "an idea-jar turn went over its token cap; no more scans in this space today");
             break;
         }
-        // A turn that failed (an engine error, a stop) isn't a bad reply: no retry
+        // A turn that failed (an engine error, a usage limit, a stop) isn't a bad reply: no retry
         if turn_failed {
             break;
         }
     }
-    let saved = match &take {
+    // Only while the idea is still peeking: one deleted meanwhile gets nothing (its take rows
+    // went with it), no event and no notice
+    let (saved, here) = match &take {
         Some(t) => {
             let body = serde_json::to_string(t).unwrap_or_default();
-            state.db.finish_idea_take(&idea.id, Ok(&body)).await.unwrap_or(false)
+            let here = state.db.finish_idea_take(&idea.id, Ok(&body)).await.unwrap_or(false);
+            (here, here)
         }
         None => {
             let why = last_error.clone().unwrap_or_else(|| "no reply".into());
-            let _ = state.db.finish_idea_take(&idea.id, Err(&untrusted(&why, 300))).await;
-            false
+            (false, state.db.finish_idea_take(&idea.id, Err(&untrusted(&why, 300))).await.unwrap_or(false))
         }
     };
     let status = if take.is_some() { "ready" } else { "failed" };
     let error = last_error.as_deref().filter(|_| take.is_none());
-    let _ = state.db.finish_idea_take_row(&take_id, status, tries, tokens, error, over_cap).await;
+    let _ = state.db.finish_idea_take_row(&take_id, status, tries, tokens, error, over_cap, cause.filter(|_| take.is_none())).await;
+    if !here {
+        tracing::info!(idea_id = %idea.id, "an idea-jar take finished after its idea was deleted or changed; dropped");
+        return false;
+    }
     emit(state, &idea.id, status, &idea.space_id);
     if saved {
         notify(
@@ -391,7 +439,9 @@ async fn start(state: &AppState, idea: &Idea, bot: &Kwant, from: &[&str], trigge
         return false;
     }
     let row = match state.db.start_idea_take(idea, &bot.id, &super::work_ahead::day_of(now), trigger).await {
-        Ok(r) => r,
+        Ok(Some(r)) => r,
+        // Deleted between the claim and here: nothing to peek at, no row
+        Ok(None) => return false,
         Err(_) => {
             let _ = state.db.finish_idea_take(&idea.id, Err("could not log the take")).await;
             return false;
@@ -413,6 +463,16 @@ pub async fn under_cap(state: &AppState, space: &SpaceId, day: &str, cap: u64) -
     }
 }
 
+/// Scans the jar may still start today: `cap` minus today's counted scan takes, floored at 0.
+/// 0 when the cap is 0, when a scan already went over it (`over_cap`), or when the count can't
+/// be read, so it agrees with [`under_cap`]: `peeks_left > 0` exactly when the scan may peek.
+pub fn peeks_left(scan_takes: Option<(i64, bool)>, cap: u64) -> u64 {
+    match scan_takes {
+        Some((n, false)) => cap.saturating_sub(n.max(0) as u64),
+        _ => 0,
+    }
+}
+
 /// Who would peek at what at `now`: per space under its cap (`cap` > 0) with nothing being peeked
 /// at and not archived, its oldest new idea and the first free bot for it, one bot per idea.
 pub async fn choose(state: &AppState, now: DateTime<Utc>, cap: u64) -> Vec<(Idea, Kwant)> {
@@ -424,6 +484,10 @@ pub async fn choose(state: &AppState, now: DateTime<Utc>, cap: u64) -> Vec<(Idea
     for space in state.db.spaces_with_new_ideas().await.unwrap_or_default() {
         let space = SpaceId::new(space);
         if state.db.space_archived(&space).await.unwrap_or(true) || !under_cap(state, &space, &day, cap).await {
+            continue;
+        }
+        // A usage limit, a refused no-tools turn or a restart just failed a take here: wait
+        if state.db.idea_kwant_failure_since(&space, now - Duration::minutes(PAUSE_MINUTES)).await.unwrap_or(true) {
             continue;
         }
         let Ok(Some(idea)) = state.db.oldest_new_idea(&space).await else { continue };
@@ -538,7 +602,8 @@ pub async fn drop_in(state: &AppState, space: &SpaceId, text: &str) -> Result<Id
 /// The composer's `/idea <text>`, or `None` for any other message.
 pub fn slash_idea(prompt: &str) -> Option<&str> {
     let t = prompt.trim_start();
-    let rest = t.strip_prefix("/idea")?;
+    // `/idea`, `/IDEA`, `/Idea`: the composer's command in any case
+    let rest = t.get(..5).filter(|p| p.eq_ignore_ascii_case("/idea")).map(|_| &t[5..])?;
     (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim())
 }
 
@@ -573,17 +638,20 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap, RawQuery(ra
         counts.insert(s, json!(n));
     }
     // `peeks_today` counts every take started today, Look now included; only the scan's own
-    // takes count toward the cap, so `cap_reached` says whether the jar will peek again today.
+    // takes count toward the cap, so `peeks_left` (what "N of 3 peeks left today" shows) and
+    // `cap_reached` say whether the jar will peek again today.
     let day = super::work_ahead::day_of(Utc::now());
     let cap = daily_cap(&state).await;
     let peeks_today = state.db.idea_takes_started_on(&space, &day).await.unwrap_or(0);
+    let left = peeks_left(state.db.idea_scan_takes_on(&space, &day).await.ok(), cap);
     Json(json!({
         "space_id": space.as_str(),
         "ideas": ideas.iter().map(idea_json).collect::<Vec<_>>(),
         "counts": counts,
         "daily_cap": cap,
         "peeks_today": peeks_today,
-        "cap_reached": cap == 0 || !under_cap(&state, &space, &day, cap).await,
+        "peeks_left": left,
+        "cap_reached": left == 0,
     }))
     .into_response()
 }
@@ -885,11 +953,44 @@ mod tests {
     }
 
     #[test]
+    fn peeks_left_is_the_cap_minus_scans_floored_at_zero() {
+        assert_eq!(peeks_left(Some((0, false)), 3), 3);
+        assert_eq!(peeks_left(Some((2, false)), 3), 1);
+        assert_eq!(peeks_left(Some((3, false)), 3), 0);
+        assert_eq!(peeks_left(Some((5, false)), 3), 0, "floored");
+        assert_eq!(peeks_left(Some((0, false)), 0), 0, "cap 0");
+        assert_eq!(peeks_left(Some((1, true)), 3), 0, "a scan went over the cap");
+        assert_eq!(peeks_left(None, 3), 0, "unreadable count: no peeks");
+        assert_eq!(peeks_left(Some((-1, false)), 3), 3);
+    }
+
+    #[test]
     fn slash_idea_is_caught() {
         assert_eq!(slash_idea("/idea a dark mode"), Some("a dark mode"));
         assert_eq!(slash_idea("  /idea\ta dark mode "), Some("a dark mode"));
         assert_eq!(slash_idea("/idea"), Some(""));
         assert_eq!(slash_idea("/ideas are great"), None);
         assert_eq!(slash_idea("an /idea"), None);
+        assert_eq!(slash_idea("/IDEA a dark mode"), Some("a dark mode"));
+        assert_eq!(slash_idea(" /Idea\na dark mode"), Some("a dark mode"));
+        assert_eq!(slash_idea("/IDEAS are great"), None);
+        assert_eq!(slash_idea("/idéa x"), None);
+        assert_eq!(slash_idea("/ide"), None);
+    }
+
+    #[test]
+    fn kwants_own_failures_get_a_plain_reason() {
+        let (c, why) = kwant_cause("Every model is out until 11:44 UTC; I'll answer then.").unwrap();
+        assert_eq!((c, why.as_str()), ("usage_limit", "Every model was out of usage, so no bot could look at it. Use Look now after 11:44 UTC."));
+        assert_eq!(kwant_cause("Every model is out until 09:05 CET.").unwrap().1, "Every model was out of usage, so no bot could look at it. Use Look now after 09:05 CET.");
+        let (c, why) = kwant_cause("⚠️ [Ann] The claude account \"Work\" is out of usage. Add another account …").unwrap();
+        assert_eq!(c, "usage_limit");
+        assert!(why.ends_with("Use Look now once the limit resets."), "{why}");
+        let (c, _) = kwant_cause("this turn must run with no tools, and kwnt can't switch off the gemini CLI's own tools, so it didn't run it").unwrap();
+        assert_eq!(c, "no_tools");
+        // The bot's own doing counts: a tool it reached for anyway, a timeout, a dead CLI
+        assert_eq!(kwant_cause("this turn had to run with no tools, but the claude CLI offered a tool, so kwnt stopped it and dropped its reply"), None);
+        assert_eq!(kwant_cause("the take took longer than five minutes"), None);
+        assert_eq!(kwant_cause("the CLI went away"), None);
     }
 }

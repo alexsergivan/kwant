@@ -13,6 +13,13 @@ use uuid::Uuid;
 /// to `new`.
 pub const IDEA_STATUSES: [&str; 6] = ["new", "peeking", "ready", "picked", "later", "failed"];
 
+/// A take's `cause` when it failed for kwant's own reasons, not the bot's: a usage limit, a
+/// no-tools turn the engine refused, a restart. Such a take counts toward neither the daily cap
+/// nor peeks today.
+pub const KWANT_CAUSES: [&str; 3] = ["usage_limit", "no_tools", "restart"];
+/// SQL: the take row counts (its cause isn't one of [`KWANT_CAUSES`]).
+const COUNTED: &str = "COALESCE(cause, '') NOT IN ('usage_limit', 'no_tools', 'restart')";
+
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
 pub struct Idea {
     pub id: String,
@@ -53,6 +60,8 @@ pub struct IdeaTake {
     pub error: Option<String>,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+    /// Why it failed when that was kwant's doing: one of [`KWANT_CAUSES`]; such a take isn't counted.
+    pub cause: Option<String>,
 }
 
 impl Database {
@@ -85,16 +94,23 @@ impl Database {
                 over_cap INTEGER NOT NULL DEFAULT 0,
                 error TEXT,
                 started_at TIMESTAMP NOT NULL,
-                finished_at TIMESTAMP
+                finished_at TIMESTAMP,
+                cause TEXT
             )",
             "CREATE INDEX IF NOT EXISTS idea_takes_space_day ON idea_takes (space_id, day)",
             "CREATE INDEX IF NOT EXISTS idea_takes_idea ON idea_takes (idea_id, started_at)",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        // Add-only, for a database made before the column
+        let has_cause: Option<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('idea_takes') WHERE name = 'cause'").fetch_optional(&self.pool).await?;
+        if has_cause.is_none() {
+            sqlx::query("ALTER TABLE idea_takes ADD COLUMN cause TEXT").execute(&self.pool).await?;
+        }
         // A restart mid-take leaves nothing peeking: the idea goes back in the jar
         let now = Utc::now();
-        sqlx::query("UPDATE idea_takes SET status = 'failed', error = 'interrupted by a restart', finished_at = ? WHERE status = 'running'")
+        sqlx::query("UPDATE idea_takes SET status = 'failed', error = 'interrupted by a restart', cause = 'restart', finished_at = ? WHERE status = 'running'")
             .bind(now)
             .execute(&self.pool)
             .await?;
@@ -235,16 +251,21 @@ impl Database {
             == 1)
     }
 
+    /// Deletes the idea and its take rows, a running one too: no row is left for an idea that's
+    /// gone. A take still running finds both gone and writes nothing.
     pub async fn delete_idea(&self, id: &str) -> Result<bool, DbError> {
-        let gone = sqlx::query("DELETE FROM ideas WHERE id = ?").bind(id).execute(&self.pool).await?.rows_affected() == 1;
-        // The take rows stay: they still count towards the day's cap
+        let mut tx = self.pool.begin().await?;
+        let gone = sqlx::query("DELETE FROM ideas WHERE id = ?").bind(id).execute(&mut *tx).await?.rows_affected() == 1;
+        sqlx::query("DELETE FROM idea_takes WHERE idea_id = ?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(gone)
     }
 
-    pub async fn start_idea_take(&self, idea: &Idea, kwant_id: &str, day: &str, trigger: &str) -> Result<IdeaTake, DbError> {
+    /// Logs a take of `idea` that starts now. `None` when the idea is gone (deleted meanwhile).
+    pub async fn start_idea_take(&self, idea: &Idea, kwant_id: &str, day: &str, trigger: &str) -> Result<Option<IdeaTake>, DbError> {
         Ok(sqlx::query_as::<_, IdeaTake>(
             "INSERT INTO idea_takes (id, idea_id, space_id, kwant_id, day, trigger, status, started_at) \
-             VALUES (?, ?, ?, ?, ?, ?, 'running', ?) RETURNING *",
+             SELECT ?, ?, ?, ?, ?, ?, 'running', ? WHERE EXISTS (SELECT 1 FROM ideas WHERE id = ?) RETURNING *",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(&idea.id)
@@ -253,17 +274,31 @@ impl Database {
         .bind(day)
         .bind(trigger)
         .bind(Utc::now())
-        .fetch_one(&self.pool)
+        .bind(&idea.id)
+        .fetch_optional(&self.pool)
         .await?)
     }
 
-    pub async fn finish_idea_take_row(&self, id: &str, status: &str, tries: i64, fresh_tokens: u64, error: Option<&str>, over_cap: bool) -> Result<(), DbError> {
-        sqlx::query("UPDATE idea_takes SET status = ?, tries = ?, fresh_tokens = ?, over_cap = ?, error = ?, finished_at = ? WHERE id = ?")
+    /// Ends a take row. `cause` is set when it failed for kwant's own reasons ([`KWANT_CAUSES`]).
+    /// A row deleted with its idea stays deleted.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finish_idea_take_row(
+        &self,
+        id: &str,
+        status: &str,
+        tries: i64,
+        fresh_tokens: u64,
+        error: Option<&str>,
+        over_cap: bool,
+        cause: Option<&str>,
+    ) -> Result<(), DbError> {
+        sqlx::query("UPDATE idea_takes SET status = ?, tries = ?, fresh_tokens = ?, over_cap = ?, error = ?, cause = ?, finished_at = ? WHERE id = ?")
             .bind(status)
             .bind(tries)
             .bind(fresh_tokens.min(i64::MAX as u64) as i64)
             .bind(over_cap)
             .bind(error)
+            .bind(cause)
             .bind(Utc::now())
             .bind(id)
             .execute(&self.pool)
@@ -271,12 +306,14 @@ impl Database {
         Ok(())
     }
 
-    /// Scan-started takes in `space` on `day`, any outcome (Look now doesn't count), and whether
-    /// any take there that day (Look now too) went over its token cap.
+    /// Scan-started takes in `space` on `day`, any outcome but kwant's own failures
+    /// ([`KWANT_CAUSES`]; Look now doesn't count either), and whether any take there that day
+    /// (Look now too) went over its token cap.
     pub async fn idea_scan_takes_on(&self, space: &SpaceId, day: &str) -> Result<(i64, bool), DbError> {
-        let (n, over): (i64, i64) = sqlx::query_as(
-            "SELECT COALESCE(SUM(trigger = 'scan'), 0), COALESCE(MAX(over_cap), 0) FROM idea_takes WHERE space_id = ? AND day = ?",
-        )
+        let sql = format!(
+            "SELECT COALESCE(SUM(trigger = 'scan' AND {COUNTED}), 0), COALESCE(MAX(over_cap), 0) FROM idea_takes WHERE space_id = ? AND day = ?"
+        );
+        let (n, over): (i64, i64) = sqlx::query_as(&sql)
         .bind(space.as_str())
         .bind(day)
         .fetch_one(&self.pool)
@@ -284,14 +321,29 @@ impl Database {
         Ok((n, over != 0))
     }
 
-    /// Every take started in `space` on `day`, scan or Look now: the "peeks today" the jar shows.
+    /// Every take started in `space` on `day`, scan or Look now, but kwant's own failures
+    /// ([`KWANT_CAUSES`]): the "peeks today" the jar shows.
     pub async fn idea_takes_started_on(&self, space: &SpaceId, day: &str) -> Result<i64, DbError> {
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM idea_takes WHERE space_id = ? AND day = ?")
+        let sql = format!("SELECT COUNT(*) FROM idea_takes WHERE space_id = ? AND day = ? AND {COUNTED}");
+        let n: i64 = sqlx::query_scalar(&sql)
             .bind(space.as_str())
             .bind(day)
             .fetch_one(&self.pool)
             .await?;
         Ok(n)
+    }
+
+    /// Whether a take in `space` failed for kwant's own reasons ([`KWANT_CAUSES`]) at or after
+    /// `since`: the scan leaves the space alone a while (`idea_jar::PAUSE_MINUTES`).
+    pub async fn idea_kwant_failure_since(&self, space: &SpaceId, since: DateTime<Utc>) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM idea_takes WHERE space_id = ? AND cause IN ('usage_limit', 'no_tools', 'restart') AND finished_at >= ?",
+        )
+        .bind(space.as_str())
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
     }
 
     /// The idea's takes, newest first.
