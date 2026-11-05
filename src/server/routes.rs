@@ -3913,7 +3913,7 @@ pub struct SettingsResponse {
     pub decide_first: bool,
     /// Bots work ahead in quiet chats.
     pub work_ahead: bool,
-    /// Which Laya engine routes: `vega` (the default) or `standard` (laya-serve 0.4.8).
+    /// Which Laya engine routes: `standard` (laya-serve 0.4.8, the default) or `vega` (opt-in).
     pub laya_engine: crate::router::sidecar::LayaEngine,
     /// Work-ahead runs per space per day (1–10).
     pub work_ahead_daily_cap: u64,

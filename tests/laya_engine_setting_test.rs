@@ -36,7 +36,7 @@ async fn settings(app: &Router, state: &AppState, body: Option<Value>) -> (Statu
 }
 
 #[tokio::test]
-async fn laya_engine_defaults_to_vega_and_a_change_reaches_the_sidecar() {
+async fn laya_engine_defaults_to_standard_and_a_change_reaches_the_sidecar() {
     let tmp = tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();
     let config = Config { data_dir: tmp.path().to_path_buf(), ..Config::default() };
@@ -45,15 +45,16 @@ async fn laya_engine_defaults_to_vega_and_a_change_reaches_the_sidecar() {
     let state = AppState::new(config, db, ToolRunner::new(tmp.path().join("workspace")), PermissionBroker::new(), router.clone());
     let app = create_router(state.clone());
 
+    // vega is opt-in: nothing saved means the standard engine (0.4.8)
     let (status, s) = settings(&app, &state, None).await;
     assert_eq!(status, StatusCode::OK, "{s}");
-    assert_eq!(s["laya_engine"], "vega");
-    assert_eq!(router.engine(), LayaEngine::Vega);
-
-    let (status, _) = settings(&app, &state, Some(json!({"laya_engine": "standard"}))).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(settings(&app, &state, None).await.1["laya_engine"], "standard");
+    assert_eq!(s["laya_engine"], "standard");
     assert_eq!(router.engine(), LayaEngine::Standard);
+
+    let (status, _) = settings(&app, &state, Some(json!({"laya_engine": "vega"}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(settings(&app, &state, None).await.1["laya_engine"], "vega");
+    assert_eq!(router.engine(), LayaEngine::Vega);
     assert!(engine.has_changed().unwrap(), "the sidecar hears about the change");
     engine.borrow_and_update();
 
@@ -64,10 +65,10 @@ async fn laya_engine_defaults_to_vega_and_a_change_reaches_the_sidecar() {
         assert_eq!(v["error"], "laya_engine must be \"vega\" or \"standard\"");
     }
     let s = settings(&app, &state, None).await.1;
-    assert_eq!((s["laya_engine"].as_str(), s["work_ahead"].as_bool()), (Some("standard"), Some(true)));
+    assert_eq!((s["laya_engine"].as_str(), s["work_ahead"].as_bool()), (Some("vega"), Some(true)));
     assert!(!engine.has_changed().unwrap());
 
-    settings(&app, &state, Some(json!({"laya_engine": "vega"}))).await;
-    assert_eq!(router.engine(), LayaEngine::Vega);
-    assert_eq!(state.db.get_setting("laya_engine").await.unwrap().as_deref(), Some("vega"));
+    settings(&app, &state, Some(json!({"laya_engine": "standard"}))).await;
+    assert_eq!(router.engine(), LayaEngine::Standard);
+    assert_eq!(state.db.get_setting("laya_engine").await.unwrap().as_deref(), Some("standard"));
 }

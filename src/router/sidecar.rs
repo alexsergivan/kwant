@@ -2,12 +2,16 @@
 //! starts it next to the server, restarts it if it dies and reports its status.
 //!
 //! Two engines (the `laya_engine` setting, [`LayaEngine`]):
-//! - **standard**: `laya-serve` 0.4.8 on the configured port, in `<data>/laya/venv`.
-//! - **vega** (the default): laya 0.4.24's vegaml engine, which only Python can turn on, through
+//! - **standard** (the default): `laya-serve` 0.4.8 on the configured port, in `<data>/laya/venv`.
+//! - **vega** (opt-in): laya 0.4.24's vegaml engine, which only Python can turn on, through
 //!   kwant's own small server (`vega_serve.py`, embedded) in `<data>/laya/venv-vega`, on the next port.
 //!
-//! The standard engine always starts first, so routing works within a minute. The vega lane then
-//! installs and starts vega in the background, and routing moves to it only once its `/health`
+//! vega is opt-in: on the Nov 5 rerun of the Oct 24 routing cases it said "not sure" on 98 of 99
+//! clear cases (0.4.8: 33), so kwant's keywords made nearly every pick it would have made
+//! (see vega-vs-laya/rerun-2026-11-05.md).
+//!
+//! With vega chosen, the standard engine still starts first, so routing works within a minute. The
+//! vega lane then installs and starts vega in the background, and routing moves to it only once its `/health`
 //! answers; until then 0.4.8 keeps serving. When vega can't run here (no Python 3.10+, under 8 GB
 //! of memory, a failed install, no answer in time, two crashes) routing stays on 0.4.8, the status
 //! says why, and vega is tried again only after a kwant update or a change of the setting.
@@ -28,7 +32,7 @@ pub const LAYA_PACKAGE: &str = "laya[serve]==0.4.8";
 pub const VEGA_PACKAGE: &str = "laya[serve]==0.4.24";
 /// `<data>/laya/<VEGA_VENV>`.
 pub const VEGA_VENV: &str = "venv-vega";
-/// Setting key: `"standard"` or `"vega"` (the default).
+/// Setting key: `"standard"` (the default) or `"vega"`.
 pub const ENGINE_SETTING: &str = "laya_engine";
 /// Below this much memory the vega engine (a 0.8B reader, 2–4 GB resident) isn't tried.
 pub const VEGA_MIN_MEMORY_GB: f64 = 8.0;
@@ -53,18 +57,18 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[serde(rename_all = "snake_case")]
 pub enum LayaEngine {
     /// laya-serve 0.4.8.
-    Standard,
-    /// laya 0.4.24 with vegaml, falling back to the standard engine when it can't run.
     #[default]
+    Standard,
+    /// laya 0.4.24 with vegaml, falling back to the standard engine when it can't run. Opt-in.
     Vega,
 }
 
 impl LayaEngine {
-    /// The saved setting: anything but `"standard"` (including nothing saved) is vega.
+    /// The saved setting: only `"vega"` turns vega on; anything else (including nothing saved) is standard.
     pub fn from_setting(value: Option<&str>) -> Self {
         match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-            Some("standard") => Self::Standard,
-            _ => Self::Vega,
+            Some("vega") => Self::Vega,
+            _ => Self::Standard,
         }
     }
 
@@ -1064,18 +1068,20 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    fn engine_defaults_to_vega_and_standard_turns_it_off() {
-        assert_eq!(LayaEngine::default(), LayaEngine::Vega);
-        assert_eq!(LayaEngine::from_setting(None), LayaEngine::Vega);
+    fn engine_defaults_to_standard_and_only_vega_turns_vega_on() {
+        assert_eq!(LayaEngine::default(), LayaEngine::Standard);
+        assert_eq!(LayaEngine::from_setting(None), LayaEngine::Standard);
         assert_eq!(LayaEngine::from_setting(Some("vega")), LayaEngine::Vega);
+        assert_eq!(LayaEngine::from_setting(Some(" Vega ")), LayaEngine::Vega);
         assert_eq!(LayaEngine::from_setting(Some(" Standard ")), LayaEngine::Standard);
-        assert_eq!(LayaEngine::from_setting(Some("something-else")), LayaEngine::Vega);
+        assert_eq!(LayaEngine::from_setting(Some("something-else")), LayaEngine::Standard);
+        assert_eq!(LayaEngine::from_setting(Some("")), LayaEngine::Standard);
         assert_eq!(LayaEngine::parse("standard"), Some(LayaEngine::Standard));
         assert_eq!(LayaEngine::parse("vega"), Some(LayaEngine::Vega));
         assert_eq!(LayaEngine::parse("vegaml"), None);
         assert_eq!(LayaEngine::parse(""), None);
         assert_eq!(serde_json::to_value(LayaEngine::Vega).unwrap(), "vega");
-        assert_eq!(super::super::LayaRouter::new("http://127.0.0.1:1".into()).engine(), LayaEngine::Vega);
+        assert_eq!(super::super::LayaRouter::new("http://127.0.0.1:1".into()).engine(), LayaEngine::Standard);
     }
 
     #[test]
@@ -1300,7 +1306,7 @@ ENGINE = "vega"
         std::fs::create_dir_all(&hub).unwrap();
         std::fs::write(hub.join("w"), vec![0u8; 2 * 1024 * 1024]).unwrap();
         let script = fake_vega(data.path(), "ok", Some(&gate));
-        let rig = Rig::start(data.path(), ports(), LayaEngine::default(), |o| {
+        let rig = Rig::start(data.path(), ports(), LayaEngine::Vega, |o| {
             o.vega_python = VegaPython::Detect;
             o.vega_install = Some(vec![install]);
             o.vega_script = Some(script);
