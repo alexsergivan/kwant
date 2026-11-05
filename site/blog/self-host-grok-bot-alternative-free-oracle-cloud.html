@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Self-host a Grok Bot alternative for free on Oracle Cloud · kwant</title>
-<meta name="description" content="Get Oracle Cloud&#x27;s Always Free Arm server, install kwant with Docker, sign in with your xAI account and bring your Grok bots across, step by step.">
+<meta name="description" content="Run kwant free on Oracle Cloud&#x27;s Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.">
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 <link rel="canonical" href="https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud">
@@ -12,7 +12,7 @@
 <meta property="og:site_name" content="kwant">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Self-host a Grok Bot alternative for free on Oracle Cloud · kwant">
-<meta property="og:description" content="Get Oracle Cloud&#x27;s Always Free Arm server, install kwant with Docker, sign in with your xAI account and bring your Grok bots across, step by step.">
+<meta property="og:description" content="Run kwant free on Oracle Cloud&#x27;s Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.">
 <meta property="og:url" content="https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud">
 <meta property="og:image" content="https://kwant.si/assets/og/blog-self-host-grok-bot-alternative-free-oracle-cloud.png?v=b7f7b9673f">
 <meta property="og:image:type" content="image/png">
@@ -22,6 +22,8 @@
 <meta property="article:published_time" content="2026-11-05">
 <meta property="article:modified_time" content="2026-11-05">
 <meta property="article:tag" content="grok">
+<meta property="article:tag" content="claude">
+<meta property="article:tag" content="chatgpt">
 <meta property="article:tag" content="self-hosted">
 <meta property="article:tag" content="how-to">
 <meta property="article:tag" content="vps">
@@ -30,7 +32,7 @@
 <link rel="alternate" type="application/rss+xml" title="kwant blog" href="https://kwant.si/blog/feed.xml">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Self-host a Grok Bot alternative for free on Oracle Cloud · kwant">
-<meta name="twitter:description" content="Get Oracle Cloud&#x27;s Always Free Arm server, install kwant with Docker, sign in with your xAI account and bring your Grok bots across, step by step.">
+<meta name="twitter:description" content="Run kwant free on Oracle Cloud&#x27;s Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.">
 <meta name="twitter:image" content="https://kwant.si/assets/og/blog-self-host-grok-bot-alternative-free-oracle-cloud.png?v=b7f7b9673f">
 <meta name="twitter:image:alt" content="Self-host a Grok Bot alternative for free: Oracle&#x27;s Always Free Arm server plus kwant, step by step.">
 <link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
@@ -57,28 +59,28 @@
 <section class="page-head post-head">
   <div class="wrap">
     <nav class="crumbs" aria-label="Breadcrumb"><a href="/">kwant</a> <span aria-hidden="true">/</span> <a href="/blog/">Blog</a></nav>
-    <p class="kicker">grok, self-hosted, how-to, vps, oracle-cloud, ai-agents</p>
+    <p class="kicker">grok, claude, chatgpt, self-hosted, how-to, vps, oracle-cloud, ai-agents</p>
     <h1>Self-host a Grok Bot alternative for free on Oracle Cloud</h1>
-    <p class="lede">Get Oracle Cloud&#x27;s Always Free Arm server, install kwant with Docker, sign in with your xAI account and bring your Grok bots across, step by step.</p>
-    <p class="post-meta">The kwant team · <time datetime="2026-11-05">November 5, 2026</time> · 14 min read</p>
+    <p class="lede">Run kwant free on Oracle Cloud&#x27;s Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.</p>
+    <p class="post-meta">The kwant team · <time datetime="2026-11-05">November 5, 2026</time> · 17 min read</p>
   </div>
 </section>
 
 <div class="wrap">
   <article class="prose solo post">
 <p>Grok Bot is xAI's agent app. According to <a href="https://www.igeeksblog.com/grok-bot-macos-ios-launch/" rel="noopener">launch coverage</a>, its agents are always on, each with its own computer in the cloud. If you would rather keep your agents on a server you control, you can do that without paying for the server: Oracle Cloud's Always Free tier includes an Arm server with 2 CPUs and 12 GB of memory, and kwant, the open-source AI agent team we build, runs on it with one Docker command.</p>
-<p>This guide goes from a new Oracle account to a Grok-powered bot team you open in your browser. The longest wait is kwant's first build, which took about 20 minutes in our test.</p>
-<p><strong>How we checked this guide.</strong> The Oracle Cloud steps follow Oracle's own Free Tier tutorial and documentation, linked in each step and read on 2026-11-05. We ran every command from step 5 onwards on 2026-11-05, in a fresh Ubuntu 24.04 container on an Oracle Ampere A1 server, limited to 2 CPUs and 12 GB of memory, the Always Free size. The timings, memory figures and screenshots below come from that run. We started the Grok sign-in and checked what it asks for, but did not finish it with a real xAI account.</p>
+<p>This guide goes from a new Oracle account to a bot team you open in your browser, running on Claude, ChatGPT, Grok or another model you connect. The longest wait is kwant's first build, which took about 20 minutes in our test.</p>
+<p><strong>How we checked this guide.</strong> The Oracle Cloud steps follow Oracle's own Free Tier tutorial and documentation, linked in each step and read on 2026-11-05. We ran every command from step 5 onwards on 2026-11-05, in a fresh Ubuntu 24.04 container on an Oracle Ampere A1 server, limited to 2 CPUs and 12 GB of memory, the Always Free size. The timings, memory figures and screenshots below come from that run. We started the Grok sign-in and checked what it asks for, but did not finish it with a real xAI account. We did not connect Claude, ChatGPT, an API key, a custom server or Ollama on this server: those parts of step 8 follow kwant's <a href="https://kwant.si/docs/accounts">accounts docs</a> and what the app showed in our run.</p>
 <h2 id="what-free-covers">What "free" covers</h2>
-<div class="table-wrap"><table><thead><tr><th scope="col">Part</th><th scope="col">What it costs</th></tr></thead><tbody><tr><td>The server: Oracle's Always Free Arm instance</td><td>Nothing, as long as you stay within the Always Free limits</td></tr><tr><td>kwant</td><td>Nothing. It is open source under AGPL-3.0</td></tr><tr><td>Grok, the AI model</td><td>Your own xAI account or API key, on xAI's terms and prices</td></tr></tbody></table></div>
-<p>So the server and the software are free. The model calls are billed by xAI under your own account, the same as when you use Grok anywhere else.</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Part</th><th scope="col">What it costs</th></tr></thead><tbody><tr><td>The server: Oracle's Always Free Arm instance</td><td>Nothing, as long as you stay within the Always Free limits</td></tr><tr><td>kwant</td><td>Nothing. It is open source under AGPL-3.0</td></tr><tr><td>The AI model</td><td>Your own Claude, ChatGPT or Grok plan, or an API key, on that provider's terms and prices</td></tr></tbody></table></div>
+<p>So the server and the software are free. The model calls are billed by your AI provider under your own account, the same as when you use that model anywhere else.</p>
 <figure>
   <div class="frame"><img src="../assets/media/oracle-free-arm-tile.webp?v=88696c96b3" width="576" height="344" loading="lazy" decoding="async" alt="Oracle's Free Tier page: an AMD compute tile and an Arm compute tile with Ampere A1 cores and 12 GB of memory, both marked Always Free"></div>
   <figcaption>Oracle's Free Tier page lists the Arm server under Always Free: 1,500 OCPU hours and 9,000 GB hours a month, which Oracle says equals 2 OCPUs and 12 GB of memory. Screenshot from oracle.com/cloud/free, 2026-11-05.</figcaption>
 </figure>
 <p>Oracle's <a href="https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm" rel="noopener">Always Free resources page</a> (checked 2026-11-05) spells out the Arm allowance: one VM with 2 OCPUs and 12 GB of memory, or two smaller ones. That is enough for kwant's Docker setup, which needs about 4 GB of free memory (<a href="https://kwant.si/docs/install">install guide</a>). The free tier also has two tiny AMD servers with 1 GB of memory each. They are too small for kwant, so this guide uses the Arm one.</p>
 <h2 id="before-you-start">Before you start</h2>
-<ul><li><strong>A credit or debit card for Oracle's identity check.</strong> Oracle's <a href="https://www.oracle.com/cloud/free/" rel="noopener">Free Tier FAQ</a> (checked 2026-11-05) says the card is for verifying who you are and that you will not be charged; your bank may show a temporary hold that it removes in 3 to 5 days. Oracle does not accept PIN debit cards, virtual cards, single-use cards or prepaid cards.</li><li><strong>A terminal with SSH.</strong> macOS and Linux have one built in. On Windows, Oracle's tutorial uses OpenSSH in PowerShell.</li><li><strong>An xAI account</strong> to sign in to Grok, or an xAI API key.</li></ul>
+<ul><li><strong>A credit or debit card for Oracle's identity check.</strong> Oracle's <a href="https://www.oracle.com/cloud/free/" rel="noopener">Free Tier FAQ</a> (checked 2026-11-05) says the card is for verifying who you are and that you will not be charged; your bank may show a temporary hold that it removes in 3 to 5 days. Oracle does not accept PIN debit cards, virtual cards, single-use cards or prepaid cards.</li><li><strong>A terminal with SSH.</strong> macOS and Linux have one built in. On Windows, Oracle's tutorial uses OpenSSH in PowerShell.</li><li><strong>An AI account.</strong> A Claude Pro or Max plan, a ChatGPT plan or an xAI account to sign in with, or an API key from Anthropic, OpenAI, xAI or another provider with an OpenAI- or Anthropic-compatible API, such as OpenRouter or Google's Gemini API.</li></ul>
 <h2 id="step-1-create-your-oracle-cloud-account">Step 1: Create your Oracle Cloud account</h2>
 <p>Go to <a href="https://www.oracle.com/cloud/free/" rel="noopener">oracle.com/cloud/free</a> and choose <strong>Start for free</strong>. Oracle's <a href="https://docs.oracle.com/en-us/iaas/Content/GSG/Tasks/signingup_topic-Sign_Up_for_Free_Oracle_Cloud_Promotion.htm" rel="noopener">sign-up guide</a> (checked 2026-11-05) walks through the form in this order:</p>
 <ol><li>Your country, name and email, then <strong>Verify my email</strong>. The link Oracle emails you is valid for 30 minutes.</li><li>A password and a cloud account name, which identifies your account.</li><li>Your <strong>home region</strong> (more on this below).</li><li>Your address and phone number.</li><li><strong>Add payment verification method → Credit Card</strong>, then your card details.</li><li>Accept the terms and choose <strong>Start my free trial</strong>.</li></ol>
@@ -101,7 +103,7 @@
 <p>On the server's page in the console, copy its public IP address. Then, in a terminal on your computer, protect the private key you saved and connect. The user name on Ubuntu servers is <code>ubuntu</code>:</p>
 <pre><code>chmod 400 path/to/your-private.key
 ssh -i path/to/your-private.key ubuntu@YOUR_SERVER_IP</code></pre>
-<p>The first time, SSH asks whether you trust the server's fingerprint. Type <code>yes</code>. Every command from here until step 8 runs on the server.</p>
+<p>The first time, SSH asks whether you trust the server's fingerprint. Type <code>yes</code>. Every command from here until step 7 runs on the server.</p>
 <h2 id="step-5-install-docker">Step 5: Install Docker</h2>
 <p>These are the commands from Docker's own <a href="https://docs.docker.com/engine/install/ubuntu/" rel="noopener">Ubuntu install guide</a> (checked 2026-11-05). They add Docker's package repository and install Docker Engine with the Compose plugin:</p>
 <pre><code>sudo apt update
@@ -132,32 +134,24 @@ exit</code></pre>
 </figure>
 <p>On Ubuntu, Docker starts automatically when the server boots, so you do not need to set that up (<a href="https://docs.docker.com/engine/install/linux-postinstall/" rel="noopener">Docker docs</a>).</p>
 <h2 id="step-6-install-kwant">Step 6: Install kwant</h2>
-<p>Get kwant's code and tell Docker which AI command-line tools to include. Saving the choice in a <code>.env</code> file means every later build picks it up, including updates:</p>
+<p>Get kwant's code and choose which AI command-line tools to build in. They are what let kwant sign in with your Claude, ChatGPT or Grok plan. Saving the choice in a <code>.env</code> file means every later build picks it up, including updates:</p>
 <pre><code>sudo apt install -y git
 git clone https://github.com/alexsergivan/kwant.git &amp;&amp; cd kwant
-echo "KWNT_CLIS=grok" &gt; .env
+echo "KWNT_CLIS=claude,codex,grok" &gt; .env
 docker compose up -d --build</code></pre>
-<p><code>git</code> is usually already on Ubuntu servers; the first line just makes sure. To add Claude Code or Codex next to Grok, write <code>KWNT_CLIS=grok,claude,codex</code> instead.</p>
+<p><code>git</code> is usually already on Ubuntu servers; the first line just makes sure. <code>KWNT_CLIS</code> lists the tools:</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Put in <code>KWNT_CLIS</code></th><th scope="col">To sign in with</th></tr></thead><tbody><tr><td><code>claude</code></td><td>Your Claude Pro or Max plan, through Claude Code</td></tr><tr><td><code>codex</code></td><td>Your ChatGPT plan, through Codex</td></tr><tr><td><code>grok</code></td><td>Your xAI account, through the Grok command-line tool</td></tr></tbody></table></div>
+<p>Keep only the ones you will use, separated by commas, for example <code>KWNT_CLIS=claude</code>. Together the three add about 0.9 GB to the image (<a href="https://github.com/alexsergivan/kwant#readme" rel="noopener">kwant's README</a>). If you will only use API keys or a custom server (step 8), skip the <code>echo</code> line, and kwant builds without any of them.</p>
 <p>The first build compiles kwant from source, because there is no ready-made Arm desktop app; on Linux, kwant's desktop app is x86_64 only (<a href="https://kwant.si/docs/install">install guide</a>). In our test on 2 CPUs and 12 GB, with all three tools included, the build took <strong>19 minutes</strong>. Later starts take seconds.</p>
 <p>When it finishes, check that the three parts are running and that kwant is healthy:</p>
 <pre><code>docker compose ps
 docker compose exec kwnt kwnt doctor</code></pre>
 <figure>
   <div class="frame"><img src="../assets/media/oracle-free-compose-ps.webp?v=f2e0009819" width="1382" height="1508" loading="lazy" decoding="async" alt="Terminal output: docker compose ps shows the browser, kwnt and laya services up, laya healthy; kwnt doctor shows ok for the data folder, Laya router and browser, and warnings that grok is not signed in and that kwant should not be opened to the internet over plain http"></div>
-  <figcaption>Three services: kwnt (the app), laya (kwant's local router model, which picks which bot answers) and browser (a private Chromium for your bots). From our test run with <code>KWNT_CLIS=grok</code>. To fit the page, we left out three of the <code>ps</code> columns (IMAGE, COMMAND, CREATED) and wrapped long lines.</figcaption>
+  <figcaption>Three services: kwnt (the app), laya (kwant's local router model, which picks which bot answers) and browser (a private Chromium for your bots). From our test run with <code>KWNT_CLIS=grok</code>, so doctor names only Grok. To fit the page, we left out three of the <code>ps</code> columns (IMAGE, COMMAND, CREATED) and wrapped long lines.</figcaption>
 </figure>
-<p>The <code>warn</code> lines are expected at this point. Grok is not signed in yet; that is the next step. The Access warning says not to open kwant to the internet over plain HTTP, and this guide doesn't: you reach it through an SSH tunnel in step 8.</p>
-<h2 id="step-7-sign-in-to-grok">Step 7: Sign in to Grok</h2>
-<p>kwant uses the Grok command-line tool with your own xAI login. Start the sign-in on the server:</p>
-<pre><code>docker compose exec kwnt grok login --device-auth</code></pre>
-<p>It prints a link to <code>accounts.x.ai</code> and a short code, then waits. Open the link in a browser on your computer, check that the code on the page matches the one in your terminal, and approve the sign-in with your xAI account. As the tool itself says, only continue with a code you requested, and don't share it.</p>
-<figure>
-  <div class="frame"><img src="../assets/media/oracle-free-grok-login.webp?v=e28a6cabee" width="1360" height="689" loading="lazy" decoding="async" alt="Terminal output of grok login --device-auth: a link to accounts.x.ai, a code to confirm, and Waiting for authorization"></div>
-  <figcaption>The Grok sign-in waiting for you to approve it. We replaced the code with X's. From our test run.</figcaption>
-</figure>
-<p>Your Grok sign-in is kept in a Docker volume, so it survives updates and rebuilds.</p>
-<p>If you would rather use an xAI API key, skip this step and add the key in the app in step 8, under <strong>Settings → This space → Accounts</strong> (<a href="https://kwant.si/docs/install">install guide</a>). Either way, check xAI's current terms and prices for the plan or key you use.</p>
-<h2 id="step-8-open-kwant-from-your-computer">Step 8: Open kwant from your computer</h2>
+<p>The <code>warn</code> lines are expected at this point. No AI account is connected yet; you do that in step 8. The Access warning says not to open kwant to the internet over plain HTTP, and this guide doesn't: you reach it through an SSH tunnel in the next step.</p>
+<h2 id="step-7-open-kwant-from-your-computer">Step 7: Open kwant from your computer</h2>
 <p>kwant's web app listens only on the server itself (on <code>127.0.0.1</code>, port 8799), so it is not exposed to the internet. You reach it through an SSH tunnel. On <strong>your computer</strong>, in a new terminal:</p>
 <pre><code>ssh -i path/to/your-private.key -N -L 8799:127.0.0.1:8799 ubuntu@YOUR_SERVER_IP</code></pre>
 <p>The command prints nothing and keeps running; leave it open. Now, in your SSH session on the server, ask kwant for a sign-in link:</p>
@@ -170,17 +164,35 @@ docker compose exec kwnt kwnt doctor</code></pre>
 </figure>
 <figure>
   <div class="frame"><a class="zoom" href="../assets/media/oracle-free-kwant-home-2880.webp?v=dfa65dc5a5" data-caption="kwant after sign-in: the general channel with a Welcome to kwant bots message, and three starter bots, Architect, TechLead and DevOps"><img class="app" src="../assets/media/oracle-free-kwant-home-1440.webp?v=bfb02b69dc" srcset="../assets/media/oracle-free-kwant-home-1440.webp?v=bfb02b69dc 1440w, ../assets/media/oracle-free-kwant-home-2880.webp?v=dfa65dc5a5 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="kwant after sign-in: the general channel with a Welcome to kwant bots message, and three starter bots, Architect, TechLead and DevOps"></a></div>
-  <figcaption>Signed in. A new install starts with one space, a #general channel and three starter bots. Until an AI account is ready, the app suggests signing in with Claude; for Grok, see Accounts below. From our test run.</figcaption>
+  <figcaption>Signed in. A new install starts with one space, a #general channel and three starter bots. Until an AI account is ready, the app suggests signing in with Claude; the next step covers every option. From our test run.</figcaption>
 </figure>
-<p>To check that kwant can use your Grok sign-in, open <strong>Settings → This space → Accounts</strong>. It lists each AI tool on the server and whether it is signed in. This is also where you paste an xAI API key instead.</p>
+<h2 id="step-8-connect-your-ai-model">Step 8: Connect your AI model</h2>
+<p>kwant does not come with a model of its own. Your bots run on AI accounts you already have, and a space can hold several at once: when one runs out of usage, kwant moves the turn to the next one in your order, on any engine (<a href="https://kwant.si/docs/accounts">accounts docs</a>). Any of these works:</p>
+<div class="table-wrap"><table><thead><tr><th scope="col">Model</th><th scope="col">How you connect it</th></tr></thead><tbody><tr><td>Claude</td><td>Sign in with your Claude Pro or Max plan, or paste an Anthropic API key</td></tr><tr><td>ChatGPT's models</td><td>Sign in with your ChatGPT plan through Codex, or paste an OpenAI API key</td></tr><tr><td>Grok</td><td>Sign in with your xAI account, or paste an xAI API key</td></tr><tr><td>Other providers, such as Gemini or the models on OpenRouter</td><td>Add a custom server: any API in the OpenAI or Anthropic format</td></tr><tr><td>Open models you run yourself</td><td>Give kwant the address of your Ollama server</td></tr></tbody></table></div>
+<p>The sign-ins need the matching tool from <code>KWNT_CLIS</code> in step 6. API keys, custom servers and Ollama do not.</p>
+<p>Open <strong>Settings → This space → Accounts</strong>. While nothing is connected, it offers three ways to start: <strong>Sign in with Claude</strong>, <strong>Sign in with ChatGPT</strong> and <strong>Paste an API key</strong>.</p>
 <figure>
-  <div class="frame"><img src="../assets/media/oracle-free-kwant-accounts.webp?v=527475601e" width="1300" height="1440" loading="lazy" decoding="async" alt="kwant's Accounts settings: Claude, Codex and Grok on This machine, each marked Signed out, and options to sign in with Claude, sign in with ChatGPT or paste an Anthropic, OpenAI or xAI API key"></div>
-  <figcaption>Settings → This space → Accounts on our test server, before any sign-in, so Grok shows Signed out. Our test image included Claude Code and Codex too; with <code>KWNT_CLIS=grok</code> you get Grok only.</figcaption>
+  <div class="frame"><img src="../assets/media/oracle-free-kwant-accounts.webp?v=527475601e" width="1300" height="1440" loading="lazy" decoding="async" alt="kwant's Accounts settings: Claude, Codex and Grok on This machine, each marked Signed out, and three ways to start: Sign in with Claude with your Claude Pro or Max plan, Sign in with ChatGPT through Codex with your ChatGPT plan, or paste an Anthropic, OpenAI or xAI API key"></div>
+  <figcaption>Settings → This space → Accounts on our test server, before any sign-in. Our test image had all three tools, so Claude, Codex and Grok each show Signed out; you see the ones you put in <code>KWNT_CLIS</code>.</figcaption>
 </figure>
+<p><strong>Sign in with your plan.</strong> <strong>Sign in with Claude</strong> opens claude.ai in a new tab, and you paste the one-time code it shows back into kwant. <strong>Sign in with ChatGPT</strong> works through Codex's own sign-in: kwant shows a link, and you open it and enter the code. For Grok, choose <strong>Add account</strong> on the Grok card under <strong>Engines &amp; accounts</strong>; it works like ChatGPT's. A sign-in you start in the app expires after 10 minutes (<a href="https://kwant.si/docs/accounts">accounts docs</a>).</p>
+<p>You can also sign in from the server's terminal, in your SSH session:</p>
+<pre><code>docker compose exec kwnt claude auth login
+docker compose exec kwnt codex login --device-auth
+docker compose exec kwnt grok login --device-auth</code></pre>
+<p>Run only the ones for the tools you built in. We tried the Grok one: it prints a link to <code>accounts.x.ai</code> and a short code, then waits. Open the link in a browser on your computer, check that the code on the page matches the one in your terminal, and approve the sign-in with your xAI account. As the tool itself says, only continue with a code you requested, and don't share it.</p>
+<figure>
+  <div class="frame"><img src="../assets/media/oracle-free-grok-login.webp?v=e28a6cabee" width="1360" height="689" loading="lazy" decoding="async" alt="Terminal output of grok login --device-auth: a link to accounts.x.ai, a code to confirm, and Waiting for authorization"></div>
+  <figcaption>The Grok sign-in waiting for you to approve it. We replaced the code with X's. From our test run.</figcaption>
+</figure>
+<p><strong>Paste an API key.</strong> This takes an Anthropic, OpenAI or xAI key. Keys are write-only: kwant never shows a saved key again (<a href="https://kwant.si/docs/accounts">accounts docs</a>).</p>
+<p><strong>Any other model.</strong> Choose <strong>Add a custom server</strong> on the Custom API card. Pick the format, <strong>OpenAI-compatible</strong> or <strong>Anthropic-compatible</strong>, then paste the server's address and its key. kwant reads the server's model list when you save, and shows whether the server is ready, unreachable or rejected the key. The form has a fill-in button for OpenRouter (<code>https://openrouter.ai/api/v1</code>), where one key reaches models from many providers. Google's Gemini API has an OpenAI-compatible address too, <code>https://generativelanguage.googleapis.com/v1beta/openai/</code> (<a href="https://ai.google.dev/gemini-api/docs/openai" rel="noopener">Google's docs</a>, checked 2026-11-05).</p>
+<p><strong>Ollama.</strong> If you run models with Ollama, enter its address as <strong>Ollama Base URL</strong>, in the <strong>API keys and Ollama</strong> section of the same page.</p>
+<p>Once an account shows <strong>Ready</strong>, your bots can answer. Sign-ins and keys are kept in Docker volumes, so they survive updates and rebuilds (<a href="https://github.com/alexsergivan/kwant#readme" rel="noopener">README</a>). Whichever you use, check that provider's current terms and prices for your plan or key.</p>
 <h2 id="step-9-bring-your-grok-bot-across">Step 9: Bring your Grok Bot across</h2>
 <p>If you already have bots in Grok Bot, you do not have to start over. kwant has two routes (<a href="https://kwant.si/alternatives/grok-bot">Grok Bot alternative page</a>):</p>
 <ul><li><strong>Upload a Grok Bot export:</strong> go to <strong>Settings → This space → Import &amp; export</strong>, choose <strong>Import bots</strong>, then <strong>Upload a file</strong>, and pick your Grok Bot export file. kwant recreates each bot with its name and role, instructions, memories, skills, routines and plugin list. Plugins come across as setup notes, not working connections, so you reconnect them in kwant.</li><li><strong>Ask your Grok bot to describe itself:</strong> in the same dialog, pick <strong>Grok</strong>. kwant shows a message to copy into your Grok Project or custom Grok bot. Paste the bot's whole reply back into kwant and choose <strong>Preview</strong>.</li></ul>
-<p>Either way, nothing is created until you check the preview and press <strong>Import</strong>.</p>
+<p>Either way, nothing is created until you check the preview and press <strong>Import</strong>. Coming from somewhere else? The same dialog also brings a custom GPT or ChatGPT Project, a Claude Project, or any other bot.</p>
 <figure>
   <div class="frame"><img src="../assets/media/oracle-free-kwant-import.webp?v=0cb2008bba" width="1200" height="1056" loading="lazy" decoding="async" alt="kwant's Import bots dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file such as a Grok Bot export"></div>
   <figcaption>Settings → This space → Import & export → Import bots. From our test run.</figcaption>
@@ -252,7 +264,7 @@ docker compose exec kwnt kwnt doctor</code></pre>
 </footer>
 <script src="../assets/js/site.js?v=63f328cd53" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"BlogPosting","@id":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud#post","headline":"Self-host a Grok Bot alternative for free on Oracle Cloud","description":"Get Oracle Cloud's Always Free Arm server, install kwant with Docker, sign in with your xAI account and bring your Grok bots across, step by step.","url":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud","mainEntityOfPage":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud","image":"https://kwant.si/assets/og/blog-self-host-grok-bot-alternative-free-oracle-cloud.png?v=b7f7b9673f","inLanguage":"en","datePublished":"2026-11-05","dateModified":"2026-11-05","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"wordCount":3678,"isPartOf":{"@id":"https://kwant.si/blog/#blog"},"about":{"@id":"https://kwant.si/#app"},"keywords":["grok","self-hosted","how-to","vps","oracle-cloud","ai-agents"]},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://kwant.si/blog/"},{"@type":"ListItem","position":3,"name":"Self-host a Grok Bot alternative for free on Oracle Cloud","item":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"BlogPosting","@id":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud#post","headline":"Self-host a Grok Bot alternative for free on Oracle Cloud","description":"Run kwant free on Oracle Cloud's Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.","url":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud","mainEntityOfPage":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud","image":"https://kwant.si/assets/og/blog-self-host-grok-bot-alternative-free-oracle-cloud.png?v=b7f7b9673f","inLanguage":"en","datePublished":"2026-11-05","dateModified":"2026-11-05","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"wordCount":4315,"isPartOf":{"@id":"https://kwant.si/blog/#blog"},"about":{"@id":"https://kwant.si/#app"},"keywords":["grok","claude","chatgpt","self-hosted","how-to","vps","oracle-cloud","ai-agents"]},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://kwant.si/blog/"},{"@type":"ListItem","position":3,"name":"Self-host a Grok Bot alternative for free on Oracle Cloud","item":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
