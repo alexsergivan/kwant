@@ -1,0 +1,381 @@
+[
+  {
+    "landed": {
+      "area": "Sidebar",
+      "cut": null,
+      "follow_ups": [],
+      "for_you": "Hovering a bot no longer pushes its name onto a second line, so the list stays still.",
+      "headline": "Sidebar rows stop jumping on hover",
+      "kind": "landed",
+      "links": {
+        "ci": "https://github.com/alexsergivan/kwant/actions/runs/41891504299/job/126790334867",
+        "commit": "https://github.com/alexsergivan/kwant/commit/4049325ddcd05aec5d2b442826d20fbd5cc8c066",
+        "pr": "https://github.com/alexsergivan/kwant/pull/290"
+      },
+      "merged_at": "2026-11-04T19:26:30Z",
+      "merged_by": "Oleks",
+      "pr": 290,
+      "reviewed_by": "Rigel",
+      "risk": {
+        "level": "low",
+        "reasons": [
+          "Small change, tests nearby",
+          "+27 −9 in 2 files"
+        ]
+      },
+      "sha": "4049325",
+      "tests": {
+        "state": "passed",
+        "summary": "3 checks passed"
+      },
+      "under_hood": {
+        "files": [
+          {
+            "add": 10,
+            "del": 6,
+            "path": "frontend/src/components/Sidebar.tsx"
+          },
+          {
+            "add": 17,
+            "del": 3,
+            "path": "frontend/tests/polish063.test.mjs"
+          }
+        ],
+        "summary": "Only the sidebar's CSS changed: the hover space moved from the name to the status line, and a test pins it."
+      },
+      "verified": true,
+      "written_by": {
+        "engine": "claude",
+        "kind": "bot",
+        "model": "claude-opus-5-5",
+        "name": "Ada"
+      }
+    },
+    "pr": 290,
+    "review": {
+      "author": {
+        "engine": "claude",
+        "kind": "bot",
+        "model": "claude-opus-5-5",
+        "name": "Ada"
+      },
+      "base": "main",
+      "branch": "ada-row-hover",
+      "cut": null,
+      "draft": false,
+      "findings": [],
+      "intent": {
+        "asked": "Sidebar: hovering a bot row no longer wraps its name or changes the row's height",
+        "none": true,
+        "rows": [
+          {
+            "state": "ok",
+            "text": "Does what the PR description says"
+          }
+        ],
+        "source": "pr"
+      },
+      "kind": "review",
+      "pr": 290,
+      "reviewer": {
+        "engine": "codex",
+        "id": "kw_demo_rigel",
+        "model": "auto",
+        "name": "Rigel"
+      },
+      "risk": {
+        "level": "low",
+        "reasons": [
+          "Small change, tests nearby",
+          "+27 −9 in 2 files"
+        ]
+      },
+      "same_engine": false,
+      "security": {
+        "osv": {
+          "state": "later"
+        },
+        "packages": {
+          "count": 0,
+          "state": "not_run"
+        },
+        "secrets": {
+          "count": 0,
+          "state": "not_run"
+        },
+        "semgrep": {
+          "state": "later"
+        }
+      },
+      "tamper": {
+        "flags": [],
+        "unread": []
+      },
+      "title": "Sidebar: hovering a bot row no longer wraps its name or changes the row's height"
+    }
+  },
+  {
+    "landed": {
+      "area": "Sidebar",
+      "cut": null,
+      "follow_ups": [],
+      "for_you": "A name like \"Researcher\" next to \"Needs you\" stays whole; very long words end in \"…\" and the full name is in the tooltip.",
+      "headline": "Long bot names wrap between words, not inside them",
+      "kind": "landed",
+      "links": {
+        "ci": "https://github.com/alexsergivan/kwant/actions/runs/41929248024/job/126922241066",
+        "commit": "https://github.com/alexsergivan/kwant/commit/fd51f46faf1d6e6cf79b39058c56ec39706346b7",
+        "pr": "https://github.com/alexsergivan/kwant/pull/301"
+      },
+      "merged_at": "2026-11-04T23:37:23Z",
+      "merged_by": "Oleks",
+      "pr": 301,
+      "reviewed_by": "Rigel",
+      "risk": {
+        "level": "low",
+        "reasons": [
+          "Small change, tests nearby",
+          "+132 −13 in 3 files"
+        ]
+      },
+      "sha": "fd51f46",
+      "tests": {
+        "state": "passed",
+        "summary": "3 checks passed"
+      },
+      "under_hood": {
+        "files": [
+          {
+            "add": 26,
+            "del": 12,
+            "path": "frontend/src/components/Sidebar.tsx"
+          },
+          {
+            "add": 2,
+            "del": 1,
+            "path": "frontend/tests/ia.test.mjs"
+          },
+          {
+            "add": 104,
+            "del": 0,
+            "path": "frontend/tests/nameWrap.test.mjs"
+          }
+        ],
+        "summary": "The name line now wraps only at spaces or hyphens on up to two lines; \"Needs you\" becomes a small hand icon. New tests cover the wrap rule."
+      },
+      "verified": true,
+      "written_by": {
+        "engine": "claude",
+        "kind": "bot",
+        "model": "claude-opus-5-5",
+        "name": "Pixel"
+      }
+    },
+    "pr": 301,
+    "review": {
+      "author": {
+        "engine": "claude",
+        "kind": "bot",
+        "model": "claude-opus-5-5",
+        "name": "Pixel"
+      },
+      "base": "main",
+      "branch": "pixel-name-wrap",
+      "cut": null,
+      "draft": false,
+      "findings": [],
+      "intent": {
+        "asked": "Sidebar: a bot's name wraps only between words; Needs you is a compact hand",
+        "none": true,
+        "rows": [
+          {
+            "state": "ok",
+            "text": "Does what the PR description says"
+          }
+        ],
+        "source": "pr"
+      },
+      "kind": "review",
+      "pr": 301,
+      "reviewer": {
+        "engine": "codex",
+        "id": "kw_demo_rigel",
+        "model": "auto",
+        "name": "Rigel"
+      },
+      "risk": {
+        "level": "low",
+        "reasons": [
+          "Small change, tests nearby",
+          "+132 −13 in 3 files"
+        ]
+      },
+      "same_engine": false,
+      "security": {
+        "osv": {
+          "state": "later"
+        },
+        "packages": {
+          "count": 0,
+          "state": "not_run"
+        },
+        "secrets": {
+          "count": 0,
+          "state": "not_run"
+        },
+        "semgrep": {
+          "state": "later"
+        }
+      },
+      "tamper": {
+        "flags": [],
+        "unread": []
+      },
+      "title": "Sidebar: a bot's name wraps only between words; Needs you is a compact hand"
+    }
+  },
+  {
+    "landed": {
+      "area": "Chat",
+      "cut": null,
+      "follow_ups": [
+        {
+          "ref": "#303 f1",
+          "text": "A turn that fails after its prompt loses the reaction"
+        }
+      ],
+      "for_you": "When you react to a bot's message, its next turn hears about it once, even if you reacted in the same second as its reply.",
+      "headline": "A 👍 or 👎 reaches the bot once",
+      "kind": "landed",
+      "links": {
+        "ci": "https://github.com/alexsergivan/kwant/actions/runs/41935033589/job/126941762796",
+        "commit": "https://github.com/alexsergivan/kwant/commit/0cc0cfc9f54ea29f4048e8782d001c3886de7e79",
+        "pr": "https://github.com/alexsergivan/kwant/pull/303"
+      },
+      "merged_at": "2026-11-05T00:00:19Z",
+      "merged_by": "Oleks",
+      "pr": 303,
+      "reviewed_by": "Rigel",
+      "risk": {
+        "level": "medium",
+        "reasons": [
+          "Has a migration",
+          "+126 −7 in 4 files"
+        ]
+      },
+      "sha": "0cc0cfc",
+      "tests": {
+        "state": "passed",
+        "summary": "3 checks passed"
+      },
+      "under_hood": {
+        "files": [
+          {
+            "add": 3,
+            "del": 2,
+            "path": "docs/reactions-and-replies.md"
+          },
+          {
+            "add": 92,
+            "del": 4,
+            "path": "src/db/reactions.rs"
+          },
+          {
+            "add": 5,
+            "del": 1,
+            "path": "src/server/reactions.rs"
+          },
+          {
+            "add": 26,
+            "del": 0,
+            "path": "tests/reactions_replies_test.rs"
+          }
+        ],
+        "summary": "Reactions are now marked told when they go into a turn's note, instead of being compared by second-precision timestamps. A migration adds the told column."
+      },
+      "verified": false,
+      "written_by": {
+        "engine": "claude",
+        "kind": "bot",
+        "model": "claude-opus-5-5",
+        "name": "Pixel"
+      }
+    },
+    "pr": 303,
+    "review": {
+      "author": {
+        "engine": "claude",
+        "kind": "bot",
+        "model": "claude-opus-5-5",
+        "name": "Pixel"
+      },
+      "base": "main",
+      "branch": "vega-reaction-told-once",
+      "cut": null,
+      "draft": false,
+      "findings": [
+        {
+          "detail": "mark_told runs while the note is built, before the turn runs. If the turn then fails, the reaction is marked told but the bot never heard it.",
+          "dismissed": null,
+          "file": "src/server/reactions.rs",
+          "fix": "Mark the reactions told after the turn finishes, or unmark them when it fails.",
+          "id": "f1",
+          "line": 213,
+          "sent_at": null,
+          "severity": "medium",
+          "source": "review",
+          "state": "open",
+          "title": "A turn that fails after its prompt loses the reaction"
+        }
+      ],
+      "intent": {
+        "asked": "Tell a 👍/👎 to the bot's next turn once, even in the same second as its reply",
+        "none": true,
+        "rows": [
+          {
+            "state": "ok",
+            "text": "Does what the PR description says"
+          }
+        ],
+        "source": "pr"
+      },
+      "kind": "review",
+      "pr": 303,
+      "reviewer": {
+        "engine": "codex",
+        "id": "kw_demo_rigel",
+        "model": "auto",
+        "name": "Rigel"
+      },
+      "risk": {
+        "level": "medium",
+        "reasons": [
+          "Has a migration",
+          "+126 −7 in 4 files"
+        ]
+      },
+      "same_engine": false,
+      "security": {
+        "osv": {
+          "state": "later"
+        },
+        "packages": {
+          "count": 0,
+          "state": "not_run"
+        },
+        "secrets": {
+          "count": 0,
+          "state": "not_run"
+        },
+        "semgrep": {
+          "state": "later"
+        }
+      },
+      "tamper": {
+        "flags": [],
+        "unread": []
+      },
+      "title": "Tell a 👍/👎 to the bot's next turn once, even in the same second as its reply"
+    }
+  }
+]
