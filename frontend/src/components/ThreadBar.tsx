@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Archive, ArchiveRestore, ArrowLeft, ArrowRightLeft, HelpCircle, Loader2, MessageSquare, Plus, RotateCw, Square } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Archive, ArchiveRestore, ArrowLeft, ArrowRightLeft, Check, ChevronDown, HelpCircle, Loader2, MessageSquare, Plus, RotateCw, Square } from 'lucide-react';
 import { Badge, BadgeKind, Thread, TurnMap, sortThreads, threadBadge } from '../threads';
 
 const BADGE_STYLE: Record<BadgeKind, string> = {
@@ -180,6 +181,199 @@ export const ThreadBar: React.FC<ThreadBarProps> = ({
         </p>
       )}
     </nav>
+  );
+};
+
+/** The status dot on the phone header's second line: violet while working, amber while it waits on you (never holo). */
+export function statusDot(badge: Badge | null): { tone: 'working' | 'waiting'; label: string } | null {
+  if (!badge) return null;
+  if (badge.kind === 'working') return { tone: 'working', label: badge.label };
+  if (badge.kind === 'waiting' || badge.kind === 'queued') return { tone: 'waiting', label: badge.label };
+  return null;
+}
+
+const sheetRow =
+  'w-full min-h-[52px] flex items-center gap-3 px-4 text-left text-[15px] leading-5 text-zinc-100 hover:bg-white/[0.06] active:bg-white/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#b8adff]';
+
+/**
+ * Phone (spec A2): the bot's conversations folded into the header. Line 2 shows the open one
+ * ("Direct chat ▾" or the thread's title) with a status dot; tapping it opens the same list as the
+ * desktop thread bar in a bottom sheet, "+ New thread" first.
+ */
+export const ThreadPicker: React.FC<ThreadBarProps> = ({
+  kwantName,
+  threads,
+  error,
+  openThreadId,
+  turns,
+  awaiting,
+  directBadge,
+  showArchived,
+  onToggleArchived,
+  onOpenDirect,
+  onOpenThread,
+  onNewThread,
+  onRetry,
+}) => {
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const visible = threads ? sortThreads(threads, showArchived) : [];
+  const archivedCount = threads?.filter((t) => t.archived).length ?? 0;
+  const current = openThreadId ? threads?.find((t) => t.id === openThreadId) : undefined;
+  const label = openThreadId ? current?.title ?? 'Conversation' : 'Direct chat';
+  const badge = current ? threadBadge(current, turns, awaiting) : openThreadId ? null : directBadge;
+  const dot = statusDot(badge);
+
+  const close = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+  useEffect(() => {
+    if (!open) return;
+    sheetRef.current?.querySelector<HTMLElement>('button')?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [open]);
+
+  const pick = (fn: () => void) => {
+    fn();
+    setOpen(false);
+  };
+  const create = async () => {
+    setCreating(true);
+    setCreateError(null);
+    const err = await onNewThread();
+    setCreating(false);
+    if (err) setCreateError(err);
+    else setOpen(false);
+  };
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        data-compact
+        data-thread-picker
+        onClick={() => {
+          setCreateError(null);
+          setOpen(true);
+        }}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={`${label}${dot ? `, ${dot.label}` : ''}. Switch conversation with ${kwantName}`}
+        // The line is 16 px; the ::after reaches up over the name and down to the header's edge for a thumb-sized target
+        className="relative flex items-center gap-1.5 min-w-0 max-w-full text-[13px] leading-4 text-[#a39dcc] hover:text-zinc-100 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff] after:absolute after:-inset-x-1 after:-top-6 after:-bottom-3 after:content-['']"
+      >
+        {dot && (
+          <span
+            data-status-dot={dot.tone}
+            aria-hidden="true"
+            className={`shrink-0 w-1.5 h-1.5 rounded-full ${dot.tone === 'working' ? 'bg-[#9d8fff]' : 'bg-[#fcd34d]'}`}
+          />
+        )}
+        <span className="truncate">{label}</span>
+        <ChevronDown size={12} aria-hidden="true" className="shrink-0" />
+      </button>
+      {open &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex flex-col justify-end" data-thread-sheet>
+            <button type="button" aria-label="Close" data-compact tabIndex={-1} onClick={close} className="absolute inset-0 bg-black/50 cursor-default" />
+            <div
+              ref={sheetRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Conversations with ${kwantName}`}
+              className="kw-sheet relative max-h-[70vh] flex flex-col rounded-t-2xl bg-[#1a1538] border-t border-white/10 pb-[env(safe-area-inset-bottom)] shadow-2xl"
+            >
+              <div className="shrink-0 flex justify-center pt-2 pb-1" aria-hidden="true">
+                <span className="w-9 h-1 rounded-sm bg-[#3f3868]" />
+              </div>
+              <ul className="overflow-y-auto py-1" role="list">
+                <li>
+                  <button type="button" onClick={create} disabled={creating} className={`${sheetRow} text-[#b8adff] disabled:opacity-60`}>
+                    {creating ? <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Plus size={16} aria-hidden="true" />}
+                    <span>{creating ? 'Starting…' : 'New thread'}</span>
+                  </button>
+                  {createError && (
+                    <p role="alert" className="px-4 pb-2 text-[13px] text-rose-300">
+                      {createError}
+                    </p>
+                  )}
+                </li>
+                <li>
+                  <button type="button" onClick={() => pick(onOpenDirect)} aria-current={!openThreadId ? 'page' : undefined} className={sheetRow}>
+                    <MessageSquare size={16} aria-hidden="true" className="shrink-0 text-[#a39dcc]" />
+                    <span className="min-w-0 flex-1 truncate">Direct chat</span>
+                    {directBadge && <StatusBadge badge={directBadge} />}
+                    {!openThreadId && <Check size={16} aria-hidden="true" className="shrink-0 text-[#b8adff]" />}
+                  </button>
+                </li>
+                {threads === undefined && !error && (
+                  <li className="flex items-center gap-2 px-4 min-h-[52px] text-[13px] text-[#a39dcc]" aria-live="polite">
+                    <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                    Loading conversations…
+                  </li>
+                )}
+                {error && (
+                  <li className="flex items-center gap-3 px-4 min-h-[52px] text-[13px] text-rose-300" role="alert">
+                    <span className="flex-1">Couldn't load conversations.</span>
+                    <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 px-3 rounded-lg border border-rose-500/30 hover:bg-rose-500/10">
+                      <RotateCw size={12} aria-hidden="true" /> Retry
+                    </button>
+                  </li>
+                )}
+                {visible.map((t) => {
+                  const b = threadBadge(t, turns, awaiting);
+                  const isOpen = openThreadId === t.id;
+                  const delegated = t.kind === 'delegation';
+                  return (
+                    <li key={t.id}>
+                      <button
+                        type="button"
+                        onClick={() => pick(() => onOpenThread(t))}
+                        aria-current={isOpen ? 'page' : undefined}
+                        className={`${sheetRow} ${t.archived ? 'opacity-60' : ''}`}
+                      >
+                        {delegated ? (
+                          <ArrowRightLeft size={16} aria-hidden="true" className="shrink-0 text-amber-300/90" />
+                        ) : (
+                          <MessageSquare size={16} aria-hidden="true" className="shrink-0 text-[#a39dcc]" />
+                        )}
+                        <span className="min-w-0 flex-1 truncate">
+                          <span className="sr-only">{delegated ? 'Delegated: ' : 'Conversation: '}</span>
+                          {t.title}
+                          {t.archived && <span className="sr-only"> (archived)</span>}
+                        </span>
+                        {b && <StatusBadge badge={b} />}
+                        {isOpen && <Check size={16} aria-hidden="true" className="shrink-0 text-[#b8adff]" />}
+                      </button>
+                    </li>
+                  );
+                })}
+                {archivedCount > 0 && (
+                  <li>
+                    <button type="button" onClick={onToggleArchived} aria-pressed={showArchived} className={`${sheetRow} text-[#a39dcc]`}>
+                      <Archive size={16} aria-hidden="true" />
+                      <span>{showArchived ? 'Hide archived' : `Archived (${archivedCount})`}</span>
+                    </button>
+                  </li>
+                )}
+              </ul>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 };
 

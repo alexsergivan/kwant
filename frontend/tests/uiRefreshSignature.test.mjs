@@ -281,5 +281,7 @@ test('composer: 44 px buttons on phones; "New" on @ clears when the picker opens
   assert.match(c, /if \(isMentionOpen\) markNewSeen\('mention'\)/);
   assert.match(c, /\$\{isMentionOpen \? 'hidden' : ''\}/);
   // #266 Mira fix 3: hidden (not marked seen) while a reply streams; mounted behaviour is in newOnMentionStreaming.
-  assert.match(c, /\{!isStreaming && \(\s*<NewTag\s+id="mention"/);
+  // 0.6.13 A5: phone anchors it inside the @ button, desktop keeps its spot; both hide while streaming.
+  assert.match(c, /\{phone && !isStreaming && \(\s*<NewTag\s+id="mention"/);
+  assert.match(c, /\{!phone && !isStreaming && \(\s*<NewTag\s+id="mention"/);
 });
