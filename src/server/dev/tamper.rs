@@ -609,7 +609,7 @@ fn skip_marker(line: &str, lang: Lang, test_file: bool) -> Option<&'static str> 
     let t = line.trim();
     match lang {
         Lang::Rust => {
-            if t.starts_with("#[ignore") || (t.starts_with("#[cfg_attr(") && find_word(t, "ignore").is_some()) {
+            if is_ignore_attr(t) || (t.starts_with("#[cfg_attr(") && find_word(t, "ignore").is_some()) {
                 return Some("#[ignore]");
             }
         }
@@ -661,6 +661,60 @@ fn skip_marker(line: &str, lang: Lang, test_file: bool) -> Option<&'static str> 
     None
 }
 
+/// The `#[ignore]` attribute itself (`#[ignore]`, `#[ignore = "why"]`), not a longer name.
+fn is_ignore_attr(t: &str) -> bool {
+    t.strip_prefix("#[ignore").is_some_and(|r| r.trim_start().starts_with(']') || r.trim_start().starts_with('='))
+}
+
+/// A Rust attribute that makes a function a test: `#[test]`, `#[tokio::test]`, `#[sqlx::test]`,
+/// `#[rstest]`, `#[test_case(..)]` and the like (the path's last part is `test` or starts so).
+fn is_test_attr(t: &str) -> bool {
+    let Some(r) = t.strip_prefix("#[") else { return false };
+    let path = r.split(|c: char| c == '(' || c == ']' || c == '=' || c.is_whitespace()).next().unwrap_or("");
+    let last = path.rsplit("::").next().unwrap_or("");
+    last == "test" || last == "rstest" || last.starts_with("test_")
+}
+
+/// For each line of a Rust hunk, whether it sits inside a `/* … */` block comment (as the PR
+/// leaves the file: removed lines don't count).
+fn in_block_comment(h: &Hunk) -> Vec<bool> {
+    let mut open = false;
+    h.lines
+        .iter()
+        .map(|l| {
+            if l.op == Op::Del {
+                return open;
+            }
+            let inside = open;
+            let mut rest = l.text;
+            loop {
+                let mark = if open { "*/" } else { "/*" };
+                let Some(i) = rest.find(mark) else { break };
+                open = !open;
+                rest = &rest[i + 2..];
+            }
+            inside || open
+        })
+        .collect()
+}
+
+/// Whether the added Rust `#[ignore]` at `h.lines[i]` is a real attribute that switches a test
+/// off: not inside a block comment, and either on a test (a test attribute in the same run of
+/// attributes) or in test code (a test file or a test module). Text that only mentions
+/// `#[ignore]` in production code, such as an example in a doc block, isn't a skip.
+fn real_rust_ignore(h: &Hunk, i: usize, test_code: bool, block: &[bool]) -> bool {
+    if block.get(i).copied().unwrap_or(false) {
+        return false;
+    }
+    let attr = |l: &Line| l.op != Op::Del && l.text.trim_start().starts_with("#[");
+    let up = h.lines[..i].iter().rev().filter(|l| l.op != Op::Del).take_while(|l| attr(l));
+    let down = h.lines[i + 1..].iter().filter(|l| l.op != Op::Del).take_while(|l| attr(l));
+    if up.chain(down).any(|l| is_test_attr(l.text.trim_start())) {
+        return true;
+    }
+    test_code
+}
+
 fn skips(f: &Parsed) -> Option<Flag> {
     let lang = f.lang();
     let mut removed: Vec<String> = f.lines().filter(|l| l.op == Op::Del && skip_marker(l.text, lang, f.test_file || l.test).is_some()).map(|l| norm(l.text)).collect();
@@ -668,8 +722,12 @@ fn skips(f: &Parsed) -> Option<Flag> {
     // put in place of old ones)
     let mut found: Vec<(&Line, &'static str, bool)> = Vec::new();
     for h in &f.hunks {
+        let block = if lang == Lang::Rust { in_block_comment(h) } else { Vec::new() };
         for (i, l) in h.lines.iter().enumerate().filter(|(_, l)| l.op == Op::Add && (l.test || lang == Lang::Rust)) {
             let Some(m) = skip_marker(l.text, lang, f.test_file || l.test) else { continue };
+            if lang == Lang::Rust && !real_rust_ignore(h, i, f.test_file || l.test, &block) {
+                continue;
+            }
             // Only moved or re-indented
             if let Some(j) = removed.iter().position(|r| *r == norm(l.text)) {
                 removed.swap_remove(j);
@@ -1164,6 +1222,33 @@ mod tests {
             modified("frontend/src/pager.ts", "@@ -1,1 +1,2 @@\n+export const page = { skip: true, it: 1 };\n"),
         ];
         assert!(kinds(&f).iter().all(|k| *k != Kind::Skip), "{:?}", check(&f));
+    }
+
+    #[test]
+    fn ignore_mentioned_in_production_docs_is_not_a_skip() {
+        // Rigel's row: production code, a line that only says #[ignore] (an example in a doc
+        // block, a block comment, or a longer attribute name): no test is switched off
+        let f = [
+            modified("src/lib.rs", "@@ -10,0 +10,1 @@\n+    #[ignore]\n"),
+            modified("src/server/dev/tamper.rs", "@@ -1,1 +1,4 @@\n /// Skips:\n+/// `#[ignore]` on a test\n+//! #[ignore = \"slow\"]\n+    // #[ignore]\n"),
+            modified("src/a.rs", "@@ -1,1 +1,6 @@\n fn f() {}\n+/*\n+    #[ignore]\n+    #[test]\n+    fn slow() {}\n+*/\n"),
+            modified("src/b.rs", "@@ -1,1 +1,3 @@\n fn f() {}\n+#[ignored_by_lint]\n+fn g() {}\n"),
+            modified("tests/a_test.rs", "@@ -1,1 +1,2 @@\n fn f() {}\n+#[ignore_this_lint]\n"),
+        ];
+        assert!(check(&f).is_empty(), "{:?}", check(&f));
+        // The real attribute still counts: on a test in production code (no `mod tests` in sight),
+        // with a reason, or after the block comment closes
+        let real = [
+            modified("src/c.rs", "@@ -200,2 +200,3 @@ fn helper() {\n+    #[ignore]\n     #[test]\n     fn slow() {}\n"),
+            modified("src/d.rs", "@@ -200,2 +200,3 @@ fn helper() {\n     #[tokio::test]\n+    #[ignore = \"flaky on CI\"]\n     async fn slow() {}\n"),
+            modified("src/e.rs", "@@ -1,1 +1,4 @@\n /* old */\n+    #[test]\n+    #[ignore]\n+    fn slow() {}\n"),
+            modified("tests/a_test.rs", "@@ -10,0 +10,1 @@\n+#[ignore]\n"),
+        ];
+        for f in real {
+            let flags = check(std::slice::from_ref(&f));
+            assert_eq!(flags.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![Kind::Skip], "{}: {flags:?}", f.path);
+        }
+        assert!(is_test_attr("#[sqlx::test]") && is_test_attr("#[rstest]") && is_test_attr("#[test_case(1)]") && !is_test_attr("#[derive(Debug)]"));
     }
 
     #[test]
