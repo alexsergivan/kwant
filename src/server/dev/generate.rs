@@ -548,16 +548,21 @@ mod examples {
             .map(|(a, b)| format!("{a}{b}"))
             .collect();
         let dir = format!("{}/src/server/dev", env!("CARGO_MANIFEST_DIR"));
+        // Every file under src/server/dev, subfolders too (fixtures, Juno's scan)
         let mut files: Vec<std::path::PathBuf> = Vec::new();
-        for d in [dir.clone(), format!("{dir}/fixtures")] {
+        let mut dirs = vec![std::path::PathBuf::from(&dir)];
+        while let Some(d) = dirs.pop() {
             for e in std::fs::read_dir(&d).unwrap() {
                 let path = e.unwrap().path();
-                if path.is_file() {
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.is_file() {
                     files.push(path);
                 }
             }
         }
         assert!(files.len() >= 10, "{files:?}");
+        assert!(files.iter().any(|p| p.ends_with("scan/testkit.rs")), "the scan module's test keys are checked too");
         for path in files {
             let text = std::fs::read_to_string(&path).unwrap();
             for p in &prefixes {
