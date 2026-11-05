@@ -126,18 +126,16 @@ pub struct Config {
 }
 
 impl Config {
-    /// The production setup. Test seams (QA plan §2.2): `KWANT_DEV_GITLEAKS_URL` replaces the
-    /// release download base (the pinned checksums still apply) and `KWANT_DEV_REGISTRIES_URL`
-    /// sends every registry lookup to one mock (`/npm`, `/npm-downloads`, `/pypi`, `/pypistats`,
-    /// `/crates`).
+    /// The production setup, with the test seams of QA plan §2.2 ([`super::scan_gitleaks_base`],
+    /// [`super::scan_registries_base`]) applied when they are set.
     pub fn new(data_dir: &std::path::Path) -> Config {
         let mut gl = gitleaks::Source::pinned();
-        if let (Some(src), Ok(base)) = (gl.as_mut(), std::env::var("KWANT_DEV_GITLEAKS_URL")) {
-            src.url = gitleaks::Source::url_for(base.trim_end_matches('/'), src.archive);
+        if let (Some(src), Some(base)) = (gl.as_mut(), super::scan_gitleaks_base()) {
+            src.url = gitleaks::Source::url_for(base, src.archive);
         }
-        let registries = match std::env::var("KWANT_DEV_REGISTRIES_URL") {
-            Ok(base) => packages::Registries::all_at(base.trim_end_matches('/')),
-            Err(_) => packages::Registries::default(),
+        let registries = match super::scan_registries_base() {
+            Some(base) => packages::Registries::all_at(base),
+            None => packages::Registries::default(),
         };
         Config { tools_dir: data_dir.join("tools"), gitleaks: gl, gitleaks_timeout: gitleaks::RUN_TIMEOUT, registries }
     }
