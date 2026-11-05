@@ -43,10 +43,10 @@ test('a Bash approval loaded after a reload renders as the built-in card inline 
   const here = a.approvalsForChat(loaded, { kind: 'kwant', kwantId: 'k-dev', threadId: null });
   assert.equal(here.length, 1);
   const html = ui.chat(chatProps(here));
-  assert.match(html, /Dev<\/span> wants to run a command/);
+  assert.match(html, /Dev<\/strong> wants to run a command/);
   assert.match(html, /<pre[^>]*>touch x<\/pre>/);
   assert.match(html, /In folder:.*\/tmp\/bots\/dev/);
-  assert.match(html, /Allow Once/);
+  assert.match(html, /Allow once/);
   assert.match(html, /Always this session/);
   assert.match(html, /Deny/);
   assert.doesNotMatch(html, /command: touch x/, 'not the old raw summary');
@@ -82,7 +82,7 @@ test('an older server without details still gets a card with the summary and ses
   assert.equal(card.tool_name, 'Bash');
   assert.equal(card.kwant_id, 'k-dev');
   const html = ui.chat(chatProps([card]));
-  assert.match(html, /Dev<\/span> wants to use <span[^>]*>Bash<\/span>/);
+  assert.match(html, /Dev<\/strong> wants to run a command/);
   assert.match(html, /command: touch x, description: Create x/);
   assert.match(html, /Always this session/);
 });
@@ -114,7 +114,7 @@ test('a reloaded payment keeps its reason in every form the server sends, so no 
       onRefresh: () => {}, onOpen: () => {}, onAnswer: () => {}, onResolve: () => {},
     });
     assert.match(html, /This looks like a payment:<\/span> POST to a payment host \(api.stripe.com\)\./);
-    assert.doesNotMatch(html, /Always this session|Always Allow/);
+    assert.doesNotMatch(html, /Always this session|Always allow/);
   }
   // An old summary item without a reason is unchanged.
   const plain = a.approvalFromAway(bashItem({ tool_name: undefined, details: undefined }));

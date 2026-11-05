@@ -16,7 +16,7 @@ const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
 /** From the live SSE event's data. */
 export function approvalFromEvent(data: { id: string; tool_name: string; details?: Record<string, unknown> }): ChatApproval {
   const details = data.details ?? {};
-  return { id: data.id, tool_name: data.tool_name, details, kwant_id: str(details.kwant_id), link: null };
+  return { id: data.id, tool_name: data.tool_name, details, kwant_id: str(details.kwant_id), link: null, asked_at: new Date().toISOString() };
 }
 
 /**
@@ -34,6 +34,7 @@ export function approvalFromAway(item: AwayItem): ChatApproval {
   const link = item.link && (item.link.thread_id || item.link.channel_id || item.link.direct_kwant_id) ? item.link : null;
   const approval: ChatApproval = { id: item.id, tool_name: tool, details, kwant_id: item.kwant_id || str(details.kwant_id), link };
   if (item.status === 'waiting') approval.waiting = true;
+  if (str(item.timestamp)) approval.asked_at = item.timestamp;
   return approval;
 }
 

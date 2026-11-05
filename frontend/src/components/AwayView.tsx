@@ -79,7 +79,8 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
                 {when}
               </time>
             </div>
-            <p className="mt-0.5 text-sm font-medium text-zinc-100 truncate">{item.title}</p>
+            {/* The question is the point of the card: up to 3 lines on a phone (0.6.13 spec C3), one line on desktop. */}
+            <p className="mt-0.5 text-sm font-medium text-zinc-100 break-words max-md:line-clamp-3 md:truncate">{item.title}</p>
             {/* A question's summary just lists its choices, which are buttons below. */}
             {awaySummary(item) && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length) && <p className="text-xs text-zinc-400 truncate">{awaySummary(item)}</p>}
           </div>

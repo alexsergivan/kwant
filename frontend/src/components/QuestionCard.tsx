@@ -96,6 +96,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
   return (
     <section
       data-message-id={messageId}
+      data-question-card={open ? 'open' : 'closed'}
       aria-labelledby={headingId}
       className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`}
     >
@@ -129,7 +130,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
                 aria-pressed={chosen}
                 onClick={() => submit({ choice: i })}
                 onKeyDown={(e) => onChoiceKey(e, i)}
-                className={`inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-sm text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
+                className={`w-full sm:w-auto inline-flex items-center justify-center sm:justify-start gap-1.5 min-h-[48px] sm:min-h-[34px] px-3 py-2 sm:py-1.5 rounded-xl text-base leading-[22px] sm:text-sm sm:leading-normal text-left border transition-colors break-words focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 ${
                   chosen
                     ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-100'
                     : open
@@ -157,9 +158,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
             }}
           >
             <label htmlFor={`${headingId}-text`} className="sr-only">
-              Or type your own answer
+              Your own answer
             </label>
-            <div className="flex items-end gap-2 rounded-xl bg-zinc-950 border border-zinc-800 focus-within:border-amber-500/50 p-1.5">
+            <div className="flex items-center sm:items-end gap-2 min-h-[44px] rounded-xl bg-zinc-950 border border-zinc-800 focus-within:border-amber-500/50 pl-1.5 sm:p-1.5">
               <textarea
                 id={`${headingId}-text`}
                 rows={1}
@@ -177,14 +178,14 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
                     submit({ text });
                   }
                 }}
-                placeholder="Or type your own answer…"
-                className="flex-1 bg-transparent px-2 py-1 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none resize-none leading-relaxed"
+                placeholder="Your own answer…"
+                className="flex-1 min-w-0 bg-transparent px-2 py-2.5 sm:py-1 text-base leading-6 sm:text-sm sm:leading-relaxed text-zinc-100 placeholder-zinc-500 placeholder:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis focus:outline-none resize-none"
               />
               <button
                 type="submit"
                 disabled={!text.trim() || busy !== null}
                 aria-label="Send answer"
-                className="w-7 h-7 shrink-0 rounded-lg flex items-center justify-center bg-amber-500 text-zinc-950 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
+                className="w-11 h-11 sm:w-7 sm:h-7 shrink-0 rounded-lg flex items-center justify-center bg-amber-500 text-zinc-950 hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400"
               >
                 {busy === 'text' ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <ArrowUp size={14} strokeWidth={2.4} aria-hidden="true" />}
               </button>
@@ -209,7 +210,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
               type="button"
               onClick={dismiss}
               disabled={busy !== null}
-              className="ml-auto text-zinc-500 hover:text-zinc-300 underline-offset-2 hover:underline disabled:opacity-50 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-zinc-500"
+              className="ml-auto inline-flex items-center min-h-[44px] sm:min-h-0 px-2 -mr-2 sm:px-0 sm:mr-0 text-sm sm:text-[11px] text-[#a39dcc] sm:text-zinc-500 hover:text-zinc-300 underline-offset-2 hover:underline disabled:opacity-50 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-zinc-500"
             >
               {busy === 'dismiss' ? 'Skipping…' : 'Skip question'}
             </button>

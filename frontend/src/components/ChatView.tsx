@@ -59,6 +59,7 @@ import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../ro
 import { SmartActionsSlot, actionClass } from './results/SmartActions';
 import { WorkingStrip } from './WorkingStrip';
 import { ScrollRow } from './ScrollRow';
+import { waitingOn } from '../workingStrip';
 import { COMPOSE_PREFILL_EVENT, withPrefill } from './results/SmartResult';
 import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
@@ -625,6 +626,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
       lastScrollTopRef.current = el.scrollTop;
     }
     checkApprovalVisible();
+  };
+  // Phone (0.6.13 spec A3/C2): the working strip is the one live line, so the stream drops what repeats it.
+  // (`phone` is the A1 PHONE_QUERY flag above).
+  const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
+  // The strip's "Answer ↑": the open question card, else the approval card, fully in view.
+  const showWaitingCard = (on: 'question' | 'approval') => {
+    if (on === 'approval') return showApproval();
+    const cards = scrollRef.current?.querySelectorAll<HTMLElement>('[data-question-card="open"]');
+    const card = cards?.[cards.length - 1];
+    if (!card) return;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    card.scrollIntoView({ block: 'nearest', behavior: reduce ? 'auto' : 'smooth' });
   };
   const showApproval = () => {
     const cards = scrollRef.current?.querySelectorAll<HTMLElement>('[data-approval-card]');
@@ -1573,7 +1586,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
                     Queued
                   </span>
-                ) : awaitingAnswer ? (
+                ) : awaitingAnswer && !phone ? (
                   <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
                     {awaitingBrowser ? 'Waiting for you in the browser' : 'Waiting for your answer'}
@@ -1588,7 +1601,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && <LiveActivityList live={liveActivity} idBase={`live-${liveActivity.turnId}`} />}
+              {liveActivity && <LiveActivityList live={liveActivity} idBase={`live-${liveActivity.turnId}`} compact={phone} />}
 
               {streamingThinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-violet-950/20 border border-violet-500/20 text-xs text-violet-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
@@ -1597,6 +1610,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
               )}
 
+              {/* On a phone the strip says "working" and "waiting": no skeleton, no "Paused on…" bubble. */}
+              {(!phone || queued || streamingText) && (
               <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
@@ -1621,6 +1636,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </div>
                 )}
               </div>
+              )}
             </div>
           </div>
         )}
@@ -1663,6 +1679,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         awaitingAnswer={!!awaitingAnswer}
         awaitingBrowser={!!awaitingBrowser}
         writing={!!streamingText}
+        onAnswer={showWaitingCard}
       />
 
       {/* Modern Composer Input Bar */}
@@ -1698,7 +1715,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </ScrollRow>
         )}
 
-        {approvalOffscreen && pendingApprovals.length > 0 && (
+        {/* On a phone the strip's "Answer ↑" stands in for this pill while the bot waits on the card. */}
+        {approvalOffscreen && pendingApprovals.length > 0 && !(phone && stripWaitsOn === 'approval') && (
           <div role="status" className="max-w-4xl mx-auto mb-2 flex justify-center">
             <button
               type="button"

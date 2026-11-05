@@ -75,7 +75,7 @@ test('an open card offers the choices, a typed answer and skip; the agent is wai
   assert.match(html, /Which region\?/);
   assert.equal((html.match(/aria-pressed="false"/g) || []).length, 2);
   assert.doesNotMatch(html, /<button[^>]*disabled=""[^>]*aria-pressed/);
-  assert.match(html, /Or type your own answer/);
+  assert.match(html, /Your own answer/);
   assert.match(html, /Skip question/);
   assert.match(html, /CTO is waiting for your answer\. You can keep chatting meanwhile\./);
   assert.doesNotMatch(html, /busy|elsewhere/i);

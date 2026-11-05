@@ -47,7 +47,7 @@ test('a card marks itself and its button row so the chat can find them', () => {
     }),
   );
   assert.match(html, /data-approval-card="pay-1"/);
-  assert.match(html, /data-approval-actions="true"[^>]*>[\s\S]*Deny[\s\S]*Allow Once/);
+  assert.match(html, /data-approval-actions="true"[^>]*>[\s\S]*Allow once[\s\S]*Deny/);
 });
 
 test('only scrolling up stops following; a card growing under a pinned view does not', () => {
