@@ -293,6 +293,51 @@ async fn a_payment_app_through_composio_asks_with_approvals_off() {
     assert_eq!(reasons.len(), 3, "{rows}");
 }
 
+/// A crypto wallet MCP (Incentiv's, as a community guide connects it): its sends name no money
+/// app or money noun, so the amount and destination in the arguments make them payments. They ask
+/// with approvals off, after a smart Allow and after "always allow"; its reads don't.
+#[tokio::test]
+async fn a_wallet_mcp_send_asks_with_approvals_off_and_after_always_allow() {
+    let e = setup().await;
+    let a = approver(&e, Duration::from_millis(200));
+    let transfer = || {
+        let args = json!({"request_id": "6f1c1f5e-8a0b-4c1e-9f57-0d4f1c1b2a3d", "token": "USDC", "to": "0x52908400098527886E0F7030069857D2E4169EE7", "amount": "5"});
+        request(&e, "incentiv", "send_transfer", args)
+    };
+    let swap = || {
+        let args = json!({"request_id": "6f1c1f5e-8a0b-4c1e-9f57-0d4f1c1b2a3d", "token_in": "USDC", "token_out": "ETH", "amount_in": "5", "minimum_out": "0.001"});
+        request(&e, "incentiv", "send_swap", args)
+    };
+    let quote = || request(&e, "incentiv", "get_swap_quote", json!({"token_in": "USDC", "token_out": "ETH", "amount_in": "5"}));
+
+    set_approvals(&e, "off").await;
+    assert_eq!(a.decide(transfer()).await, ApprovalOutcome::Unanswered, "send_transfer with approvals off");
+    assert_eq!(a.decide(swap()).await, ApprovalOutcome::Unanswered, "send_swap with approvals off");
+    assert_eq!(a.decide(quote()).await, ApprovalOutcome::Allowed, "a quote only reads");
+    assert_eq!(a.decide(request(&e, "incentiv", "get_agent_wallet", json!({}))).await, ApprovalOutcome::Allowed);
+
+    // "Ask only when risky" said Allow: still a card
+    set_approvals(&e, "smart").await;
+    let mut req = transfer();
+    req.smart = Some(SmartVerdict::Allow("looked safe".into()));
+    assert_eq!(a.decide(req).await, ApprovalOutcome::Unanswered, "smart Allow");
+
+    // "Always allow" for the tool in this conversation: still a card, in ask and in off
+    e.state.broker.allow_for_session(&e.bot.id, &e.general, "mcp__incentiv__send_transfer").await;
+    e.state.broker.allow_for_session(&e.bot.id, &e.general, "mcp__incentiv__get_swap_quote").await;
+    for mode in ["ask", "off"] {
+        set_approvals(&e, mode).await;
+        assert_eq!(a.decide(transfer()).await, ApprovalOutcome::Unanswered, "always allow, {mode}");
+        assert_eq!(a.decide(quote()).await, ApprovalOutcome::Allowed, "always allow covers a read, {mode}");
+    }
+
+    let (_, rows) = call(&e.app, "GET", "/api/approvals?status=waiting", None, None).await;
+    let reasons: Vec<&str> = rows.as_array().unwrap().iter().filter_map(|r| r["details"]["payment_reason"].as_str()).collect();
+    assert_eq!(reasons.len(), 5, "{rows}");
+    assert!(reasons.contains(&"send_transfer moves an amount to another account or asset"), "{reasons:?}");
+    assert!(reasons.contains(&"send_swap moves an amount to another account or asset"), "{reasons:?}");
+}
+
 #[tokio::test]
 async fn kwnt_browser_pay_clicks_and_card_numbers_ask_with_approvals_off() {
     let e = setup().await;

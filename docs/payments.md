@@ -31,8 +31,22 @@ every MCP tool, through claude's permission prompt and the MCP gateway), in
   Payoneer, Checkout.com, Authorize.net, Plaid, MoonPay, Kraken, Binance.
 - Any other tool whose name has a pay word (`pay`, `payment`, `payout`, `purchase`, `checkout`,
   `buy`, `charge`, `donate`, …), a money move (`send`/`transfer`/`withdraw` with `money`,
-  `funds`, `crypto`, `btc`, `usd`, …), or an order step (`place`/`submit`/`confirm` with
-  `order`, `purchase`, `booking`, `subscription`).
+  `funds`, `crypto`, `btc`, `usd`, `token`, `coin`, `asset`, `stablecoin`, …), or an order step
+  (`place`/`submit`/`confirm` with `order`, `purchase`, `booking`, `subscription`).
+- Any tool that doesn't start with a read verb whose arguments (top level, or one object down;
+  any spelling: `amountIn`, `amount-in`) have both an amount (`amount`, `amount_in`,
+  `amount_out`, `value`, `quantity`, `sum` or any `*_amount`) and a destination or asset (`to`,
+  `recipient`, `destination`, `to_address`, `address`, `token`, `token_in`, `token_out`, `asset`,
+  `currency`, `coin`), whatever the tool or server is called. The same goes for each
+  `tool_slug` Composio runs, by that slug's own `arguments`. The reason reads e.g.
+  "send_transfer moves an amount to another account or asset".
+
+  This is what catches a crypto wallet MCP such as Incentiv's
+  ([incentiv-mcp](https://github.com/IncentivNetwork/incentiv-mcp), `src/wallet/tools.ts`):
+  `send_transfer {token, to, amount}` and `send_swap {token_in, token_out, amount_in, …}` name
+  no money app and no money noun, so before 0.7.1 they asked only in `ask` and `smart` (the server
+  marks them destructive) and ran without a card with approvals off or after "always allow".
+  Its reads (`get_swap_quote`, `get_agent_wallet`, `get_agent_operation`) still don't ask.
 - A browser-type MCP tool (name with `click`, `tap`, `press`, `submit`) whose arguments name a
   pay-type label, or one that types (`type`, `fill`, `input`, …) a card number.
 - A remote shell tool (`bash`, `shell`, `exec`, `command`…) whose `command` is a payment below.
@@ -101,14 +115,17 @@ classified here.
 - Shell commands that hide the host or method: variables (`$URL`), scripts, config files, other
   languages' HTTP libraries without `.post(`, and SDKs (`stripe.Charge.create(...)` in Python).
 - Payment services, MCP tools and wallets missing from the lists, and tools whose names don't
-  say what they do.
+  say what they do and whose arguments don't carry an amount and a destination or asset in
+  reach (e.g. `{order: {lines: [{amount, to}]}}`, two levels down, or an amount under another
+  key name such as `units`).
 - Codex's own shell, which kwnt never sees. Its sandbox has no network, so it can't reach a
   payment service.
 - Someone else's browser tools the bot drives through an MCP server, unless the tool's label or
   typed text matches the rules above.
 
-It also asks for some things that aren't payments, e.g. an "Upgrade" link in docs or any click on
-a `/billing` page. That's accepted: an extra card costs a tap, a missed payment costs money.
+It also asks for some things that aren't payments, e.g. an "Upgrade" link in docs, any click on
+a `/billing` page, a wallet's unsigned `build_transfer`/`build_swap` (no key moves), or a
+spreadsheet write like `write_cell {address: "A1", value: 5}`. That's accepted: an extra card costs a tap, a missed payment costs money.
 
 ## Tests
 

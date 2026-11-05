@@ -28,6 +28,15 @@ const PAY_WORDS: &[&str] = &[
 const MOVE_VERBS: &[&str] = &["send", "transfer", "withdraw", "wire", "move", "deposit"];
 const MONEY_NOUNS: &[&str] = &[
     "money", "funds", "fund", "cash", "crypto", "bitcoin", "btc", "eth", "ether", "usdc", "usdt", "sol", "usd", "eur", "gbp",
+    "token", "tokens", "coin", "coins", "asset", "assets", "stablecoin",
+];
+
+/// Argument keys that hold an amount (also any `*_amount`), and keys that say where it goes or
+/// what moves. A write tool whose arguments have one of each moves value, whatever its name or
+/// server: a crypto wallet's `send_transfer {token, to, amount}` or `send_swap {token_in, amount_in}`.
+const AMOUNT_KEYS: &[&str] = &["amount", "amount_in", "amount_out", "value", "quantity", "sum"];
+const DESTINATION_KEYS: &[&str] = &[
+    "to", "recipient", "destination", "to_address", "address", "token", "token_in", "token_out", "asset", "currency", "coin",
 ];
 
 /// Verbs that complete an order.
@@ -259,6 +268,15 @@ fn mcp_reason(server: &str, tool: &str, args: &Value) -> Option<String> {
             return Some(why);
         }
     }
+    if let Some(why) = amount_shape_reason(tool, args, false) {
+        return Some(why);
+    }
+    // Composio runs other tools by slug, each with its own arguments
+    let mut calls = Vec::new();
+    collect_slug_calls(args, &mut calls, 0);
+    if let Some(why) = calls.into_iter().find_map(|(slug, args)| amount_shape_reason(slug, args, true)) {
+        return Some(why);
+    }
     let words = words(tool);
     let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
     let mut texts = Vec::new();
@@ -317,6 +335,56 @@ fn name_words_reason(server_words: &[String], words: &[String], name: &str) -> O
         return Some(format!("{name} looks like a payment"));
     }
     None
+}
+
+/// A tool that doesn't only read and whose arguments carry an amount and a destination or asset
+/// (top level, or one object down): it moves value, whatever its name says. A Composio `slug`
+/// starts with its app (`SOMEWALLET_GET_QUOTE`), so its first word isn't an action word.
+fn amount_shape_reason(tool: &str, args: &Value, slug: bool) -> Option<String> {
+    let action: Vec<String> = words(tool)
+        .into_iter()
+        .skip(usize::from(slug))
+        .skip_while(|w| MONEY_APPS.contains(&w.as_str()) || ["composio", "mcp"].contains(&w.as_str()))
+        .collect();
+    if action.first().is_some_and(|w| READ_VERBS.contains(&w.as_str())) {
+        return None;
+    }
+    let Value::Object(top) = args else { return None };
+    let mut keys: Vec<String> = Vec::new();
+    for (k, v) in top {
+        keys.push(arg_key(k));
+        if let Value::Object(inner) = v {
+            keys.extend(inner.keys().map(|k| arg_key(k)));
+        }
+    }
+    let amount = keys.iter().any(|k| AMOUNT_KEYS.contains(&k.as_str()) || k.ends_with("_amount"));
+    let destination = keys.iter().any(|k| DESTINATION_KEYS.contains(&k.as_str()));
+    (amount && destination).then(|| format!("{tool} moves an amount to another account or asset"))
+}
+
+/// An argument key in one spelling: `amountIn`, `amount-in` and `AMOUNT_IN` → `amount_in`.
+fn arg_key(key: &str) -> String {
+    words(key).join("_")
+}
+
+/// The tools Composio runs by slug, each with its own `arguments`.
+fn collect_slug_calls<'a>(v: &'a Value, out: &mut Vec<(&'a str, &'a Value)>, depth: usize) {
+    if depth > 6 || out.len() > 50 {
+        return;
+    }
+    match v {
+        Value::Object(map) => {
+            let slug = ["tool_slug", "slug", "action", "action_name", "tool", "tool_name"]
+                .iter()
+                .find_map(|k| map.get(*k).and_then(Value::as_str));
+            if let (Some(slug), Some(args)) = (slug, map.get("arguments")) {
+                out.push((slug, args));
+            }
+            map.values().for_each(|v| collect_slug_calls(v, out, depth + 1));
+        }
+        Value::Array(list) => list.iter().for_each(|v| collect_slug_calls(v, out, depth + 1)),
+        _ => {}
+    }
 }
 
 /// Composio runs other tools by slug (`COMPOSIO_MULTI_EXECUTE_TOOL {tools: [{tool_slug}]}`).
@@ -617,6 +685,50 @@ mod tests {
         assert!(mcp("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", multi("STRIPE_LIST_CHARGES")).is_none());
         assert!(mcp("composio", "STRIPE_CREATE_REFUND", json!({})).is_some());
         assert!(name_reason("", "mcp__stripe__create_charge").is_some());
+    }
+
+    /// A crypto wallet MCP (Incentiv's `src/wallet/tools.ts`): its sends name no money app and no
+    /// money noun, so the amount and destination in the arguments decide.
+    #[test]
+    fn wallet_sends_pay_by_their_arguments() {
+        let to = "0x52908400098527886E0F7030069857D2E4169EE7";
+        let transfer = json!({"request_id": "6f1c1f5e-8a0b-4c1e-9f57-0d4f1c1b2a3d", "token": "USDC", "to": to, "amount": "5", "gas_token": "USDC", "wait_for_confirmation": false});
+        let swap = json!({"request_id": "6f1c1f5e-8a0b-4c1e-9f57-0d4f1c1b2a3d", "token_in": "USDC", "token_out": "ETH", "amount_in": "5", "minimum_out": "0.001", "slippage_bps": 50});
+        for server in ["incentiv", "wallet-7", "x"] {
+            let why = mcp(server, "send_transfer", transfer.clone()).unwrap_or_else(|| panic!("{server} send_transfer"));
+            assert_eq!(why, "send_transfer moves an amount to another account or asset");
+            assert!(mcp(server, "send_swap", swap.clone()).is_some(), "{server} send_swap");
+            assert!(mcp(server, "anything", swap.clone()).is_some(), "{server}: the arguments decide, not the name");
+        }
+        // Other spellings and one object down
+        assert!(mcp("w", "execute", json!({"toAddress": to, "amountIn": 1})).is_some());
+        assert!(mcp("w", "do", json!({"transfer": {"recipient": "bob", "fee_amount": 1}})).is_some());
+        assert!(mcp("w", "create_order", json!({"asset": "BTC", "quantity": 2})).is_some());
+        // Through Composio, by the slug's own arguments
+        let multi = json!({"tools": [{"tool_slug": "SOMEWALLET_SEND", "arguments": {"to": to, "value": "1"}}]});
+        assert!(mcp("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", multi).is_some());
+        let quote = json!({"tools": [{"tool_slug": "SOMEWALLET_GET_QUOTE", "arguments": {"to": to, "value": "1"}}]});
+        assert!(mcp("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", quote).is_none(), "a read slug");
+
+        // Reads, and amounts with nowhere to go, don't pay
+        assert!(mcp("incentiv", "get_swap_quote", json!({"token_in": "USDC", "token_out": "ETH", "amount_in": "5"})).is_none());
+        assert!(mcp("incentiv", "get_agent_wallet", json!({})).is_none());
+        assert!(mcp("incentiv", "get_agent_operation", json!({"id": "6f1c1f5e-8a0b-4c1e-9f57-0d4f1c1b2a3d"})).is_none());
+        assert!(mcp("incentiv", "create_agent_wallet", json!({})).is_none());
+        assert!(mcp("github", "create_issue", json!({"title": "t", "body": "b"})).is_none());
+        assert!(mcp("speaker", "set_volume", json!({"amount": 5})).is_none(), "an amount but no destination or asset");
+        assert!(mcp("mail", "send_email", json!({"to": "a@b.c", "subject": "s"})).is_none(), "a destination but no amount");
+        assert!(mcp("w", "do", json!({"a": {"b": {"to": to, "amount": 1}}})).is_none(), "two objects down is out of reach");
+    }
+
+    #[test]
+    fn crypto_nouns_are_money() {
+        for name in ["send_tokens", "transfer_token", "withdraw_coins", "move_assets", "send_stablecoin", "deposit_coin"] {
+            assert!(mcp("x", name, json!({})).is_some(), "{name}");
+        }
+        assert!(mcp("x", "list_tokens", json!({})).is_none());
+        assert!(mcp("auth", "create_token", json!({})).is_none(), "no move verb");
+        assert!(mcp("x", "get_asset", json!({})).is_none());
     }
 
     #[test]
