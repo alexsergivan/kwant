@@ -432,13 +432,15 @@ async fn the_run_hook_starts_one_turn_per_mission_and_releases_an_unfinished_tas
     assert_eq!(out["started"][0]["kwant_id"], e.bot.id.as_str());
     let (status, _) = call(&e.app, "POST", &format!("/api/missions/{}/run", id(&m)), None, Some(json!({"max_tasks": 9}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    // No engine is set up here, so the turn ends without a review: the lease is let go
+    // No engine is set up here, so the turn ends without a review: the lease is let go.
+    // GET /api/tasks/:id reads the task row before its events, so a release committed in between
+    // shows the event on a row still `working` with 0 attempts: wait for the row to show it too
     let mut released = false;
     for _ in 0..100 {
         let t = task(&e, &tid).await;
-        if t["events"].as_array().unwrap().iter().any(|ev| ev["kind"] == "released") {
-            assert_eq!(t["task"]["attempts"], 1);
-            assert_ne!(t["task"]["state"], "working");
+        let event = t["events"].as_array().unwrap().iter().any(|ev| ev["kind"] == "released");
+        if event && t["task"]["state"] != "working" {
+            assert_eq!(t["task"]["attempts"], 1, "{t}");
             released = true;
             break;
         }
