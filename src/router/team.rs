@@ -77,7 +77,7 @@ impl LayaRouter {
             }
         });
 
-        let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v1/systemone", self.url().trim_end_matches('/'));
         let resp = self
             .client
             .post(&endpoint)
@@ -166,7 +166,7 @@ impl LayaRouter {
             Err((kind, e)) => {
                 let elapsed_ms = started.elapsed().as_millis() as u64;
                 if self.status().is_up() {
-                    tracing::warn!(error = %e, reason = kind, url = %self.base_url, elapsed_ms, "Laya channel routing failed, using keyword fallback");
+                    tracing::warn!(error = %e, reason = kind, url = %self.url(), elapsed_ms, "Laya channel routing failed, using keyword fallback");
                 } else {
                     tracing::info!(error = %e, reason = kind, elapsed_ms, "Laya didn't pick the bot for this message; using keyword fallback");
                 }
@@ -233,7 +233,7 @@ impl LayaRouter {
             }
         });
 
-        let endpoint = format!("{}/v1/systemone", self.base_url.trim_end_matches('/'));
+        let endpoint = format!("{}/v1/systemone", self.url().trim_end_matches('/'));
         let resp = self
             .client
             .post(&endpoint)
@@ -331,6 +331,13 @@ pub struct LayaGuess<'a> {
 pub fn laya_guess<'a>(data: &serde_json::Value, members: &'a [Kwant]) -> Option<LayaGuess<'a>> {
     let lead = data.get("answers")?.get("lead_kwant")?;
     let kwant = resolve_kwant_choice(lead.get("choice")?.as_str()?, members)?;
+    // The vega engine decides for itself whether an answer can be trusted: `route` comes from its
+    // conformal set, its abstain flag and its out-of-distribution check, so it replaces the margin
+    // rule below. laya's own advice is to gate on `route`, never on the probabilities.
+    if let Some(route) = lead.get("route").and_then(|r| r.as_str()) {
+        let unbound = lead.get("unbound").and_then(|u| u.as_bool()).unwrap_or(false);
+        return Some(LayaGuess { kwant, confident: route == "auto" && !unbound });
+    }
     let mut probs: Vec<f64> = lead
         .get("probabilities")
         .and_then(|p| p.as_object())
@@ -2017,5 +2024,34 @@ mod fit_tests {
         let mut history = vec![crate::drivers::tests::said("user", asked)];
         crate::drivers::drop_current_message(&mut history, &format!("{asked}\n\n{TEAM_BUILDING_NOTE}"));
         assert!(history.is_empty(), "the prompt carries the message once");
+    }
+
+    #[test]
+    fn laya_guess_gates_on_vegas_route_when_present() {
+        let (_, members) = super::tests::make_test_fixture();
+        let lead = |extra: serde_json::Value| {
+            let mut lk = json!({"choice": "kwant-1", "probabilities": {"a": 0.51, "b": 0.49}});
+            for (k, v) in extra.as_object().unwrap() {
+                lk[k] = v.clone();
+            }
+            json!({"answers": {"lead_kwant": lk}})
+        };
+        // without vega's fields the margin rule decides: 0.02 apart is a guess
+        let g = laya_guess(&lead(json!({})), &members).unwrap();
+        assert_eq!(g.kwant.id, "kwant-1");
+        assert!(!g.confident);
+        let clear = json!({"answers": {"lead_kwant": {"choice": "kwant-1", "probabilities": {"a": 0.8, "b": 0.2}}}});
+        assert!(laya_guess(&clear, &members).unwrap().confident);
+        // with them, route decides, whatever the margin
+        let auto = lead(json!({"route": "auto", "unbound": false, "prediction_set": ["a"], "abstain": false}));
+        assert!(laya_guess(&auto, &members).unwrap().confident);
+        let review = json!({"answers": {"lead_kwant": {"choice": "kwant-1", "probabilities": {"a": 0.9, "b": 0.1},
+            "route": "review", "unbound": false}}});
+        assert!(!laya_guess(&review, &members).unwrap().confident);
+        // out of distribution is never confident, even on auto
+        let unbound = lead(json!({"route": "auto", "unbound": true}));
+        assert!(!laya_guess(&unbound, &members).unwrap().confident);
+        // a missing unbound flag counts as bound
+        assert!(laya_guess(&lead(json!({"route": "auto"})), &members).unwrap().confident);
     }
 }

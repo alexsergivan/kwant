@@ -26,6 +26,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     let tools = ToolRunner::new(config.data_dir.join("workspace"));
     let broker = PermissionBroker::new();
     let router = LayaRouter::new(config.laya_url.clone());
+    // the standard engine unless the person chose vega (Settings → laya_engine)
+    router.set_engine(sidecar::LayaEngine::from_setting(
+        db.get_setting(sidecar::ENGINE_SETTING).await.ok().flatten().as_deref(),
+    ));
     let cancel = CancellationToken::new();
     let sidecar = sidecar::spawn(
         router.clone(),
@@ -33,6 +37,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
             data_dir: config.data_dir.clone(),
             managed: config.laya_managed,
             models: config.laya_models.clone(),
+            ..Default::default()
         },
         cancel.clone(),
     );
