@@ -308,6 +308,7 @@ fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
         sandbox_id: None,
         teammates: vec![],
         mcp,
+        no_tools: false,
     }
 }
 

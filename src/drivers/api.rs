@@ -1215,6 +1215,13 @@ impl Driver for ApiDriver {
         event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<TurnOutput, DriverError> {
         let start = Instant::now();
+        // An API turn's only tools are its MCP session's: with none it sends no `tools`, so a
+        // no-tools turn runs as is, and one that was given servers anyway is refused
+        if input.no_tools && input.mcp.is_some() {
+            return Err(DriverError::Execution(
+                "this turn must run with no tools, but it was given MCP servers, so kwnt didn't run it".into(),
+            ));
+        }
         let target_model = input
             .model_override
             .as_deref()
@@ -1808,7 +1815,45 @@ mod tests {
             sandbox_id: None,
             teammates: vec![],
             mcp: None,
+            no_tools: false,
         }
+    }
+
+    /// A no-tools API turn sends no `tools` and promises no browser; one given MCP servers anyway
+    /// is refused before any model call.
+    #[tokio::test]
+    async fn a_no_tools_turn_sends_no_tools_and_refuses_mcp_servers() {
+        let reply = json!({"content": [{"type": "text", "text": "The card."}], "usage": {"input_tokens": 5, "output_tokens": 2}});
+        let (url, seen) = mock(200, reply).await;
+        let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let mut input = turn("write the card", vec![]);
+        input.no_tools = true;
+        let out = driver.stream_turn(input.clone(), tx.clone()).await.unwrap();
+        assert_eq!(out.text, "The card.");
+        let bodies: Vec<Value> = seen.lock().unwrap().iter().map(|(_, b)| b.clone()).collect();
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies[0].get("tools").is_none(), "{}", bodies[0]);
+        assert!(bodies[0].to_string().contains("You have no way to use the browser"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        input.mcp = Some(crate::mcp::McpTurnContext {
+            servers: vec![],
+            approver: Arc::new(crate::mcp::FixedApprover(true)),
+            config_dir: tmp.path().to_path_buf(),
+            permission_url: None,
+            gateway: None,
+            max_tool_iterations: 4,
+            smart_approvals: false,
+            records: Default::default(),
+        });
+        match driver.stream_turn(input, tx).await {
+            Err(DriverError::Execution(why)) => assert!(why.contains("MCP servers"), "{why}"),
+            other => panic!("ran a no-tools turn with MCP servers: {:?}", other.map(|o| o.text)),
+        }
+        assert_eq!(seen.lock().unwrap().len(), 1, "no model call for the refused turn");
     }
 
     /// The point of caching: turn 2 starts with exactly the blocks turn 1 cached, and nothing that

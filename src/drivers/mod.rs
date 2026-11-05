@@ -78,6 +78,12 @@ pub struct TurnInput {
     /// MCP servers, approver and records for this turn; `None` when the kwant has none.
     #[serde(skip)]
     pub mcp: Option<crate::mcp::McpTurnContext>,
+    /// The turn runs with no tools at all: no MCP servers (`mcp` must be `None`) and none of the
+    /// engine's own tools (shell, file edits, web search, subagents, skills). Every driver either
+    /// runs it that way or refuses the turn with [`DriverError::Execution`]; none runs it with
+    /// tools. Set from `TurnOpts::no_tools` (Dev mode cards, where the prompt quotes PR text).
+    #[serde(default)]
+    pub no_tools: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -387,7 +393,13 @@ impl TurnInput {
 
     /// The prompt for a CLI turn: browser tools when attached, else curl through the shell.
     pub fn format_system_prompt(&self) -> String {
-        let access = if self.has_self_tools() { BrowserAccess::Tools } else { BrowserAccess::Shell };
+        let access = if self.no_tools {
+            BrowserAccess::Unavailable
+        } else if self.has_self_tools() {
+            BrowserAccess::Tools
+        } else {
+            BrowserAccess::Shell
+        };
         self.format_system_prompt_with(access)
     }
 
@@ -858,6 +870,7 @@ pub(crate) mod tests {
             person: Default::default(),
             store: None,
             mcp: None,
+            no_tools: false,
         }
     }
 

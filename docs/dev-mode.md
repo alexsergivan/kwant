@@ -63,6 +63,14 @@ Each new card is pending until `crate::server::dev::generate` writes its text, u
 model calls per space per day. After a restart, cards still pending are generated again, and a
 **Fix it** that was sent but never reached its bot is sent again.
 
+Card text is written from PR titles, bodies and diffs, which anyone who can open a PR controls, so
+those model calls run with `TurnOpts::no_tools`: no MCP servers, no browser and none of the engine's
+own tools (shell, files, web search, subagents, skills). claude, codex and grok start with every
+tool switched off, and the run is stopped and its reply dropped if the CLI still offers or starts
+one. Any other CLI, and any turn that was given MCP servers, is refused instead of run with tools.
+The flags for each engine are on `TurnInput::no_tools` and next to `no_tools_refusal` in
+`src/drivers/cli.rs`.
+
 ## The production floor
 
 In a space with Dev mode on, these steps always show an approval card, whatever the bot's
@@ -163,6 +171,8 @@ Run these focused tests:
 ```sh
 cargo test --lib -- server::dev:: prod_floor auth::tests::person_only zombie::github connections::tests::only_mcp
 ```
+
+The no-tools turns have their own: `cargo test --lib -- no_tools`.
 
 The poller runs against a mock GitHub on a private `127.0.0.1` port. The shared mock is
 `tests/support/mock_github.rs` (include it with `#[path = "support/mock_github.rs"] mod mock_github;`):

@@ -1801,6 +1801,13 @@ pub(super) struct TurnOpts {
     /// `lessons_shown` or `lessons_held_out` once it reaches the driver, and gets no second
     /// lessons block in its continuity section.
     pub(super) task: Option<super::missions::lessons::TaskHint>,
+    /// The turn runs with no tools at all, for prompts that quote text nobody vetted (a Dev mode
+    /// card quotes PR text, which could ask for a tool call and raise an approval card). No MCP
+    /// server (not even kwant's own app tools) and none of the engine's built-in tools: no shell,
+    /// files, web, browser, skills or subagents. The bot browser isn't opened or read either.
+    /// Every driver runs it that way or refuses it, and the turn then fails; it is never run with
+    /// tools (see `crate::drivers::TurnInput::no_tools`). Default false.
+    pub(super) no_tools: bool,
 }
 
 impl TurnOpts {
@@ -2313,7 +2320,7 @@ async fn run_kwant_turn_inner(
 
         let mut final_prompt = prompt.clone();
         // A replay opens no page: the bot's browser isn't its scratch folder
-        let target_url_opt = if opts.rehearse.is_some() { None } else { opts.nav_target() };
+        let target_url_opt = if opts.rehearse.is_some() || opts.no_tools { None } else { opts.nav_target() };
 
         if let Some(target_url) = target_url_opt {
             event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
@@ -2393,7 +2400,7 @@ async fn run_kwant_turn_inner(
                 Err(_) => {}
                 }
             }
-        } else if let Some(ref curr_url) = active_browser_url {
+        } else if let Some(ref curr_url) = active_browser_url.as_ref().filter(|_| !opts.no_tools) {
             if !curr_url.is_empty() && !curr_url.contains("about:blank") && !curr_url.contains("example.com") {
                 let (title, page_text, clickable) = match active_ctrl {
                     Some(ref ctrl) => (
@@ -2432,7 +2439,7 @@ async fn run_kwant_turn_inner(
         }
         let attempts: Vec<Option<LlmProfile>> = std::mem::take(&mut global.attempts);
         // The agents' own continuity tools, for engines that can call MCP tools
-        let self_scope = (engine.is_some() && super::continuity::agent_tools_enabled(state).await).then(|| turn_scope.clone());
+        let self_scope = (engine.is_some() && !opts.no_tools && super::continuity::agent_tools_enabled(state).await).then(|| turn_scope.clone());
         let browser_sign_in = self_scope.as_ref().is_some_and(super::continuity::offers_browser_sign_in);
         let card_opts = super::mcp_runtime::TurnApprovalOpts {
             routed: Some((target_model.clone(), effort_level.clone())),
@@ -2440,15 +2447,20 @@ async fn run_kwant_turn_inner(
             rehearse: opts.rehearse.clone(),
             purpose: opts.purpose.clone(),
         };
-        let mcp_turn = super::mcp_runtime::prepare_turn_with_opts(
-            state,
-            target_kwant,
-            Some(tag.turn_id.clone()),
-            workspace_dir.clone(),
-            self_scope,
-            card_opts,
-        )
-        .await;
+        // A no-tools turn starts no MCP server, kwant's own included
+        let mcp_turn = if opts.no_tools {
+            None
+        } else {
+            super::mcp_runtime::prepare_turn_with_opts(
+                state,
+                target_kwant,
+                Some(tag.turn_id.clone()),
+                workspace_dir.clone(),
+                self_scope,
+                card_opts,
+            )
+            .await
+        };
         let mcp_ctx = mcp_turn.as_ref().map(|(ctx, _)| ctx.clone());
         if let Some(ctx) = &mcp_ctx {
             event_broadcast.activity.add_secrets(ctx.secret_values());
@@ -2478,7 +2490,7 @@ async fn run_kwant_turn_inner(
             // The bot's own copy of the browser API, naming this chat (thread, channel or DM): a
             // CAPTCHA it meets is asked in the thread whose call met it. The same for every turn
             // of the thread, so the cached prompt tail doesn't change.
-            browser_api_url: Some(bot_browser_api(state.config.port, &sandbox_target, &turn_scope)),
+            browser_api_url: (!opts.no_tools).then(|| bot_browser_api(state.config.port, &sandbox_target, &turn_scope)),
             thread_id: context_id,
             kwant: target_kwant.clone(),
             prompt: final_prompt,
@@ -2500,6 +2512,7 @@ async fn run_kwant_turn_inner(
             skills,
             person: super::bot_actions::person_place(&state.db).await,
             store: Some(state.db.clone()),
+            no_tools: opts.no_tools,
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();

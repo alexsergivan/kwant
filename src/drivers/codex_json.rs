@@ -21,6 +21,9 @@ pub struct CodexStream {
     pub had_effects: bool,
     /// The turn's errors, one per line, retries left out.
     pub errors: String,
+    /// An item that is neither the reply, reasoning, an error nor a tool kwnt knows (a tool a
+    /// later codex adds, say): counted as a tool by [`CodexStream::used_tools`].
+    unknown_items: bool,
 }
 
 /// The tool name and arguments an item is shown with, or `None` for items that aren't tool runs.
@@ -58,6 +61,12 @@ fn outcome(item: &Value) -> Value {
 }
 
 impl CodexStream {
+    /// codex started or finished any tool item at all, a plan update included.
+    /// Fails closed: an item type kwnt doesn't know counts as a tool.
+    pub fn used_tools(&self) -> bool {
+        self.had_effects || self.unknown_items || !self.running.is_empty() || !self.finished.is_empty()
+    }
+
     fn keep_error(&mut self, message: &str) {
         let message = message.trim();
         // "Reconnecting... 2/5 (…)" is a retry; the error that ends the turn follows it
@@ -77,6 +86,12 @@ impl CodexStream {
         let mut events = Vec::new();
         let item = &v["item"];
         let id = item["id"].as_str().unwrap_or_default().to_string();
+        if matches!(v["type"].as_str(), Some("item.started" | "item.updated" | "item.completed"))
+            && !matches!(item["type"].as_str(), Some("agent_message" | "reasoning" | "error"))
+            && as_tool(item).is_none()
+        {
+            self.unknown_items = true;
+        }
         match v["type"].as_str() {
             Some("error") => self.keep_error(v["message"].as_str().unwrap_or_default()),
             Some("turn.failed") => self.keep_error(v["error"]["message"].as_str().unwrap_or_default()),
@@ -117,6 +132,17 @@ impl CodexStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_item_kwnt_does_not_know_counts_as_a_tool() {
+        let mut s = CodexStream::default();
+        s.line(r#"{"type":"item.completed","item":{"id":"r","type":"reasoning","text":"thinking"}}"#);
+        s.line(r#"{"type":"item.completed","item":{"id":"m","type":"agent_message","text":"hi"}}"#);
+        s.line(r#"{"type":"turn.completed","usage":{}}"#);
+        assert!(!s.used_tools());
+        s.line(r#"{"type":"item.started","item":{"id":"x","type":"image_view","path":"/etc/passwd"}}"#);
+        assert!(s.used_tools(), "a new kind of item fails closed");
+    }
 
     fn kinds(events: &[RuntimeEvent]) -> Vec<String> {
         events
