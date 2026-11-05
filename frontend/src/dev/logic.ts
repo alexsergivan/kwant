@@ -6,6 +6,7 @@ import type {
   BackupResult,
   DevFinding,
   DismissReason,
+  Forge,
   FloorBackup,
   LandedCard,
   ProdFloor,
@@ -347,14 +348,18 @@ export function findingsSummary(findings: DevFinding[]): string {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Post to GitHub (0.7.1, plan/post-to-github.md): the review card footer's one state
+// Post to {Forge} (0.7.1, plan/post-to-github.md + amendment): the review card footer's one state
 
 /** Findings the post turns into comments: every one not dismissed (design §5.7 "N = open findings"). */
 export const postCount = (findings: Pick<DevFinding, 'state'>[]): number => findings.filter((f) => f.state !== 'dismissed').length;
 
+/** Display names for `forge` (amendment, 21:50): posting is GitHub-only in 0.7.1, GitLab and Gitea come in 0.7.2. */
+export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
+
 /** "Post to GitHub · 3 comments"; no count when nothing is open (the review is then its body only). */
-export function postLabel(n: number): string {
-  return n === 0 ? 'Post to GitHub' : `Post to GitHub · ${n} ${n === 1 ? 'comment' : 'comments'}`;
+export function postLabel(n: number, forge: Forge): string {
+  const to = `Post to ${FORGE_NAME[forge]}`;
+  return n === 0 ? to : `${to} · ${n} ${n === 1 ? 'comment' : 'comments'}`;
 }
 
 /** "Nothing is posted until you press it. Posts as octocat." (the second sentence only with a login). */
@@ -362,8 +367,12 @@ export function postLine(login: string | null | undefined): string {
   return login ? `Nothing is posted until you press it. Posts as ${login}.` : 'Nothing is posted until you press it.';
 }
 
-export const READ_ONLY_TIP = 'Your GitHub connection is read only';
-export const READ_ONLY_HINT = 'To post, give the token Pull requests: Read and write, then paste it again in Loose ends.';
+export const readOnlyTip = (forge: Forge): string => `Your ${FORGE_NAME[forge]} connection is read only`;
+/** The token scope wording is GitHub's; other forges get the plain line. */
+export const readOnlyHint = (forge: Forge): string =>
+  forge === 'github'
+    ? 'To post, give the token Pull requests: Read and write, then paste it again in Loose ends.'
+    : `To post, give the ${FORGE_NAME[forge]} token write access, then paste it again in Loose ends.`;
 export const STALE_LINE = 'This PR has new commits. A new review is on its way.';
 
 export type PostState =
@@ -381,15 +390,15 @@ export type PostState =
  */
 export function postState(
   card: { status: string; posted: { at: string | null; url: string | null } | null; post_error: { kind: string; message: string | null } | null },
-  opts: { canPost: boolean; posting: boolean },
+  opts: { canPost: boolean; posting: boolean; forge: Forge | null },
 ): PostState {
   if (card.posted) return { kind: 'posted', at: card.posted.at, url: card.posted.url };
-  if (!opts.canPost || card.status === 'pending') return { kind: 'none' };
+  if (!opts.canPost || !opts.forge || card.status === 'pending') return { kind: 'none' };
   if (opts.posting) return { kind: 'posting' };
   const e = card.post_error;
   if (e?.kind === 'read_only') return { kind: 'read_only' };
   if (e?.kind === 'stale') return { kind: 'stale' };
-  if (e) return { kind: 'failed', message: e.message ?? 'GitHub didn’t say why.' };
+  if (e) return { kind: 'failed', message: e.message ?? `${FORGE_NAME[opts.forge]} didn’t say why.` };
   return { kind: 'ready' };
 }
 

@@ -72,7 +72,7 @@ const base = () => review(fx.REVIEW_294);
 const LOGIN = 'oleks-i';
 const footer = (host) => host.querySelector('[data-review-footer]');
 const flat = (el) => el.textContent.replace(/\s+/g, ' ').trim();
-const POSTED = { at: '2026-11-05T19:58:00Z', login: LOGIN, url: 'https://github.com/o/r/pull/294#pullrequestreview-1', comments: 3 };
+const POSTED = { forge: 'github', at: '2026-11-05T19:58:00Z', login: LOGIN, url: 'https://github.com/o/r/pull/294#pullrequestreview-1', comments: 3 };
 
 // ---------------------------------------------------------------------------------------------------
 // Parse
@@ -89,12 +89,23 @@ test('parseReview keeps posted and post_error, https links only, unknown kinds a
   assert.equal(m.parseReview({ ...fx.REVIEW_294, post_error: 'nope' }).post_error, null);
 });
 
-test('the dev_mode parse keeps github_login', () => {
+test('the dev_mode parse reads forge and forge_login; unknown forge and a stray github_login are ignored', () => {
   // devMode.ts is bundled separately: it imports auth.
-  return loadBundled(`export { parseDevMode } from './src/devMode';`).then(({ parseDevMode }) => {
-    assert.equal(parseDevMode({ on: true, github_login: 'octocat' }).github_login, 'octocat');
-    assert.equal(parseDevMode({ on: true }).github_login, null);
-    assert.equal(parseDevMode({ on: true, github_login: '' }).github_login, null);
+  return loadBundled(`export { parseDevMode, emptyState } from './src/devMode';`).then(({ parseDevMode, emptyState }) => {
+    const d = parseDevMode({ on: true, forge: 'github', forge_login: 'octocat' });
+    assert.equal(d.forge, 'github');
+    assert.equal(d.forge_login, 'octocat');
+    assert.equal(parseDevMode({ on: true, forge: 'gitlab' }).forge, 'gitlab');
+    assert.equal(parseDevMode({ on: true, forge: 'gitea' }).forge, 'gitea');
+    assert.equal(parseDevMode({ on: true, forge: 'bitbucket' }).forge, null);
+    assert.equal(parseDevMode({ on: true }).forge, null);
+    assert.equal(parseDevMode({ on: true }).forge_login, null);
+    assert.equal(parseDevMode({ on: true, forge_login: '' }).forge_login, null);
+    const old = parseDevMode({ on: true, github_login: 'octocat' });
+    assert.equal(old.forge_login, null, 'github_login is gone from the contract');
+    assert.ok(!('github_login' in old));
+    assert.equal(emptyState().forge, null);
+    assert.equal(emptyState().forge_login, null);
   });
 });
 
@@ -103,25 +114,25 @@ test('the dev_mode parse keeps github_login', () => {
 
 test('N counts every finding not dismissed; the label pluralises and drops a zero count', () => {
   assert.equal(m.postCount([{ state: 'open' }, { state: 'sent' }, { state: 'dismissed' }]), 2);
-  assert.equal(m.postLabel(3), 'Post to GitHub · 3 comments');
-  assert.equal(m.postLabel(1), 'Post to GitHub · 1 comment');
-  assert.equal(m.postLabel(0), 'Post to GitHub');
+  assert.equal(m.postLabel(3, 'github'), 'Post to GitHub · 3 comments');
+  assert.equal(m.postLabel(1, 'github'), 'Post to GitHub · 1 comment');
+  assert.equal(m.postLabel(0, 'github'), 'Post to GitHub');
   assert.equal(m.postLine('octocat'), 'Nothing is posted until you press it. Posts as octocat.');
   assert.equal(m.postLine(null), 'Nothing is posted until you press it.');
 });
 
 test('postState: posted wins, then posting, then the error; pending and the sample have no button', () => {
   const c = (o = {}) => ({ status: 'ready', posted: null, post_error: null, ...o });
-  const on = { canPost: true, posting: false };
+  const on = { canPost: true, posting: false, forge: 'github' };
   assert.equal(m.postState(c(), on).kind, 'ready');
-  assert.equal(m.postState(c(), { canPost: true, posting: true }).kind, 'posting');
-  assert.equal(m.postState(c({ posted: POSTED, post_error: { kind: 'failed', message: 'x' } }), { canPost: true, posting: true }).kind, 'posted');
-  assert.equal(m.postState(c({ posted: POSTED }), { canPost: false, posting: false }).kind, 'posted', 'a posted card says so even without the call');
+  assert.equal(m.postState(c(), { canPost: true, posting: true, forge: 'github' }).kind, 'posting');
+  assert.equal(m.postState(c({ posted: POSTED, post_error: { kind: 'failed', message: 'x' } }), { canPost: true, posting: true, forge: 'github' }).kind, 'posted');
+  assert.equal(m.postState(c({ posted: POSTED }), { canPost: false, posting: false, forge: 'github' }).kind, 'posted', 'a posted card says so even without the call');
   assert.equal(m.postState(c({ post_error: { kind: 'read_only', message: null } }), on).kind, 'read_only');
   assert.equal(m.postState(c({ post_error: { kind: 'stale', message: null } }), on).kind, 'stale');
   assert.deepEqual(m.postState(c({ post_error: { kind: 'failed', message: 'GitHub said 502' } }), on), { kind: 'failed', message: 'GitHub said 502' });
   assert.equal(m.postState(c({ status: 'pending' }), on).kind, 'none');
-  assert.equal(m.postState(c(), { canPost: false, posting: false }).kind, 'none');
+  assert.equal(m.postState(c(), { canPost: false, posting: false, forge: 'github' }).kind, 'none');
 });
 
 // ---------------------------------------------------------------------------------------------------
@@ -129,7 +140,7 @@ test('postState: posted wins, then posting, then the error; pending and the samp
 
 test('ready: lock line with the login, Post to GitHub · N comments, Open on GitHub', async () => {
   const card = { ...base(), findings: [...base().findings, { ...base().findings[0], id: 'f9', state: 'dismissed' }] };
-  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, githubLogin: LOGIN, now: NOW });
+  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'github', forgeLogin: LOGIN, now: NOW });
   const f = footer(host);
   assert.equal(f.dataset.postState, 'ready');
   assert.match(flat(f), /Nothing is posted until you press it\. Posts as oleks-i\./);
@@ -142,7 +153,7 @@ test('ready: lock line with the login, Post to GitHub · N comments, Open on Git
 });
 
 test('ready without a login: no "Posts as"', async () => {
-  const host = await mount(m.ReviewCard, { card: base(), onFinding: async () => base(), onPost: async () => base(), githubLogin: null, now: NOW });
+  const host = await mount(m.ReviewCard, { card: base(), onFinding: async () => base(), onPost: async () => base(), forge: 'github', forgeLogin: null, now: NOW });
   assert.match(flat(footer(host)), /Nothing is posted until you press it\./);
   assert.doesNotMatch(flat(footer(host)), /Posts as/);
 });
@@ -154,7 +165,7 @@ test('posting: spinner, button disabled and busy, a second press sends nothing; 
     calls.push(id);
     return new Promise((r) => (release = () => r({ ...base(), posted: POSTED })));
   };
-  const host = await mount(m.ReviewCard, { card: base(), onFinding: async () => base(), onPost, githubLogin: LOGIN, now: NOW });
+  const host = await mount(m.ReviewCard, { card: base(), onFinding: async () => base(), onPost, forge: 'github', forgeLogin: LOGIN, now: NOW });
   await click(button(footer(host), 'Post to GitHub'));
   let f = footer(host);
   assert.equal(f.dataset.postState, 'posting');
@@ -181,7 +192,7 @@ test('posted from the server (SSE refetch): the card prop alone switches the foo
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = m.createRoot(host);
-  const props = { onFinding: async () => base(), onPost: async () => base(), githubLogin: LOGIN, now: NOW };
+  const props = { onFinding: async () => base(), onPost: async () => base(), forge: 'github', forgeLogin: LOGIN, now: NOW };
   root.render(h(m.ReviewCard, { ...props, card: base() }));
   await settle();
   assert.equal(footer(host).dataset.postState, 'ready');
@@ -200,7 +211,7 @@ test('posted without a url: "Posted 19:58" and no link', () => {
 test('read_only: the button is aria-disabled with the tooltip, focusable, and the hint line is under it', async () => {
   const calls = [];
   const card = { ...base(), post_error: { kind: 'read_only', message: 'Resource not accessible by personal access token' } };
-  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async (id) => (calls.push(id), card), githubLogin: LOGIN, now: NOW });
+  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async (id) => (calls.push(id), card), forge: 'github', forgeLogin: LOGIN, now: NOW });
   const f = footer(host);
   assert.equal(f.dataset.postState, 'read_only');
   const b = button(f, 'Post to GitHub');
@@ -217,7 +228,7 @@ test('read_only: the button is aria-disabled with the tooltip, focusable, and th
 
 test('stale: the plan line, no button', async () => {
   const card = { ...base(), post_error: { kind: 'stale', message: 'head moved' } };
-  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, githubLogin: LOGIN, now: NOW });
+  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'github', forgeLogin: LOGIN, now: NOW });
   const f = footer(host);
   assert.equal(f.dataset.postState, 'stale');
   assert.match(flat(f), /This PR has new commits\. A new review is on its way\./);
@@ -229,7 +240,7 @@ test('failed: "Couldn’t post: {message}" and Try again, which posts again and 
   const calls = [];
   const card = { ...base(), post_error: { kind: 'failed', message: 'GitHub answered 502' } };
   const onPost = async (id) => (calls.push(id), { ...base(), posted: POSTED, post_error: null });
-  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost, githubLogin: LOGIN, now: NOW });
+  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost, forge: 'github', forgeLogin: LOGIN, now: NOW });
   let f = footer(host);
   assert.equal(f.dataset.postState, 'failed');
   assert.match(flat(f), /Couldn’t post: GitHub answered 502/);
@@ -247,7 +258,7 @@ test('failed from the network: a throw becomes "Couldn’t post: {message}"', as
     onPost: async () => {
       throw new Error('kwant is not reachable');
     },
-    githubLogin: LOGIN,
+    forge: 'github', forgeLogin: LOGIN,
     now: NOW,
   });
   await click(button(footer(host), 'Post to GitHub'));
@@ -258,13 +269,13 @@ test('failed from the network: a throw becomes "Couldn’t post: {message}"', as
 });
 
 test('a message is text, never HTML', () => {
-  const out = html(m.ReviewCard, { card: { ...base(), post_error: { kind: 'failed', message: '<img src=x onerror=alert(1)>' } }, onFinding: async () => base(), onPost: async () => base(), now: NOW });
+  const out = html(m.ReviewCard, { card: { ...base(), post_error: { kind: 'failed', message: '<img src=x onerror=alert(1)>' } }, onFinding: async () => base(), onPost: async () => base(), forge: 'github', now: NOW });
   assert.doesNotMatch(out, /<img/);
   assert.match(out, /&lt;img/);
 });
 
 test('pending card: no Post button yet', () => {
-  const out = html(m.ReviewCard, { card: { ...base(), status: 'pending' }, onFinding: async () => base(), onPost: async () => base(), githubLogin: LOGIN, now: NOW });
+  const out = html(m.ReviewCard, { card: { ...base(), status: 'pending' }, onFinding: async () => base(), onPost: async () => base(), forge: 'github', forgeLogin: LOGIN, now: NOW });
   assert.match(out, /data-post-state="none"/);
   assert.doesNotMatch(out, /Post to GitHub/);
 });
@@ -284,9 +295,63 @@ test('copy: Dev mode setup, Loose ends label and the token error say what postin
   assert.doesNotMatch(src('src/components/dev/ReviewCard.tsx'), /nothing is posted to GitHub in this version/);
 });
 
-test('the desk posts to /api/dev/cards/:id/post and passes github_login', () => {
+test('the desk posts to /api/dev/cards/:id/post and passes forge and forge_login', () => {
   assert.match(src('src/devMode.ts'), /post: \(card: string\) => call<unknown>\(`\/api\/dev\/cards\/\$\{enc\(card\)\}\/post`, 'POST'/);
   const desk = src('src/components/DevDesk.tsx');
   assert.match(desk, /devApi\.post\(cardId\)/);
-  assert.match(desk, /onPost=\{onPost\} githubLogin=\{dev\?\.github_login \?\? null\}/);
+  assert.match(desk, /onPost=\{onPost\} forge=\{dev\?\.forge \?\? null\} forgeLogin=\{dev\?\.forge_login \?\? null\}/);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Any forge (amendment, 21:50): the contract names the forge; posting is GitHub-only in 0.7.1
+
+test('forge null: no Post button and no lock line, in every state that would have one', async () => {
+  for (const over of [{}, { post_error: { kind: 'read_only', message: null } }, { post_error: { kind: 'failed', message: 'x' } }]) {
+    const card = { ...base(), ...over };
+    const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: null, forgeLogin: LOGIN, now: NOW });
+    const f = footer(host);
+    assert.equal(f.dataset.postState, 'none');
+    assert.equal(f.querySelector('[data-post-button], [data-post-read-only]'), null, 'no Post button');
+    assert.equal(button(f, 'Post to'), undefined);
+    assert.equal(button(f, 'Try again'), undefined);
+    assert.equal(f.querySelector('svg.lucide-lock'), null, 'no lock icon');
+    assert.doesNotMatch(flat(f), /Nothing is posted|Posts as|GitHub/, 'no lock line, no GitHub wording');
+    assert.match(flat(f), /Open pull request/);
+  }
+  // Leaving forge out is the same as null.
+  const out = html(m.ReviewCard, { card: base(), onFinding: async () => base(), onPost: async () => base(), now: NOW });
+  assert.match(out, /data-post-state="none"/);
+  assert.doesNotMatch(out, /Post to|Nothing is posted/);
+  assert.equal(m.postState({ status: 'ready', posted: null, post_error: null }, { canPost: true, posting: false, forge: null }).kind, 'none');
+});
+
+test('forge null but already posted: still says Posted, with the forge from posted', () => {
+  const out = html(m.ReviewCard, { card: { ...base(), posted: POSTED }, onFinding: async () => base(), now: NOW });
+  assert.match(out, /Posted 19:58/);
+  assert.match(out, /View on GitHub/);
+});
+
+test('the label, tooltip and links come from a map on forge (GitLab, Gitea)', async () => {
+  assert.equal(m.FORGE_NAME.github, 'GitHub');
+  assert.equal(m.postLabel(2, 'gitlab'), 'Post to GitLab · 2 comments');
+  assert.equal(m.postLabel(0, 'gitea'), 'Post to Gitea');
+  assert.equal(m.readOnlyTip('github'), 'Your GitHub connection is read only');
+  assert.equal(m.readOnlyTip('gitlab'), 'Your GitLab connection is read only');
+  assert.doesNotMatch(m.readOnlyHint('gitea'), /Pull requests: Read and write/, 'GitHub scope words only for github');
+  const card = { ...base(), post_error: { kind: 'read_only', message: null } };
+  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'gitlab', forgeLogin: LOGIN, now: NOW });
+  const f = footer(host);
+  const b = button(f, 'Post to GitLab');
+  assert.ok(b, 'Post to GitLab');
+  assert.equal(b.getAttribute('title'), 'Your GitLab connection is read only');
+  assert.match(f.innerHTML, /Open on GitLab/);
+  assert.doesNotMatch(flat(f), /GitHub/);
+});
+
+test('no github_login or githubLogin is left in the frontend source', async () => {
+  const { readdirSync, statSync } = await import('node:fs');
+  const walk = (d) => readdirSync(d).flatMap((n) => (statSync(`${d}/${n}`).isDirectory() ? walk(`${d}/${n}`) : [`${d}/${n}`]));
+  const root = new URL('../src', import.meta.url).pathname;
+  const hits = walk(root).filter((f) => /\.(ts|tsx)$/.test(f) && /github_login|githubLogin/.test(readFileSync(f, 'utf8')));
+  assert.deepEqual(hits, []);
 });

@@ -516,7 +516,7 @@ test('Fix it sends the finding and offers Undo for 10 s', async () => {
 });
 
 test('the review card: sample chip, tamper, security tiles in 0.7.x, no Post button on the sample', () => {
-  const out = html(m.ReviewCard, { card: review(fx.REVIEW_294), onFinding: async () => review(fx.REVIEW_294), sample: true, now: NOW });
+  const out = html(m.ReviewCard, { card: review(fx.REVIEW_294), onFinding: async () => review(fx.REVIEW_294), sample: true, forge: 'github', now: NOW });
   assert.match(out, /Sample PR/);
   assert.match(out, /A test was made easier to pass/);
   assert.match(out, /Different engine from the author/);

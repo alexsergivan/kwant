@@ -5,7 +5,7 @@
 import React, { useMemo } from 'react';
 import type { FindingAction, LandedRollup, ShellCard } from '../dev/shellTypes';
 import { parseLanded, parseReleaseNotes, parseReview } from '../dev/types';
-import type { LandedCard as Landed, ReviewCard as Review } from '../dev/types';
+import type { Forge, LandedCard as Landed, ReviewCard as Review } from '../dev/types';
 import { needsYouAreas } from '../dev/logic';
 import { CardFallback } from './dev/parts';
 import { LandedList as IrisLandedList } from './dev/LandedCard';
@@ -36,9 +36,11 @@ export interface LandedListProps {
 export interface ReviewCardProps {
   card: ShellCard;
   onFinding: (cardId: string, findingId: string, action: FindingAction) => Promise<ShellCard>;
-  /** 0.7.1 Post to GitHub (`POST /api/dev/cards/:id/post`). */
+  /** 0.7.1 Post to {Forge} (`POST /api/dev/cards/:id/post`). */
   onPost?: (cardId: string) => Promise<ShellCard>;
-  githubLogin?: string | null;
+  /** `forge` and `forge_login` from GET dev_mode; no forge, no Post button. */
+  forge?: Forge | null;
+  forgeLogin?: string | null;
   sample?: boolean;
   now?: number;
 }
@@ -74,7 +76,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onO
   );
 };
 
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, githubLogin, sample, now }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, forge, forgeLogin, sample, now }) => {
   const parsed = useMemo(() => parseReview(card), [card]);
   if (!parsed) return <CardFallback raw={card} />;
   const send = async (cardId: string, findingId: string, action: FindingAction): Promise<Review> => {
@@ -89,7 +91,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost,
         return next;
       }
     : undefined;
-  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} githubLogin={githubLogin} sample={sample} now={now} />;
+  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} forge={forge} forgeLogin={forgeLogin} sample={sample} now={now} />;
 };
 
 export const ReleaseNotesSheet: React.FC<ReleaseNotesSheetProps> = ({ card, onSaveToNotion, onDiscard, onClose }) => {

@@ -125,10 +125,14 @@ export interface ReviewCard extends CardBase {
   post_error: PostError | null;
 }
 
+export type Forge = 'github' | 'gitlab' | 'gitea';
+
 export interface ReviewPosted {
+  /** Where it was posted; "github" in 0.7.1. */
+  forge: Forge | null;
   at: string | null;
   login: string | null;
-  /** https only, or null (then there is no "View on GitHub" link). */
+  /** https only, or null (then there is no "View on {Forge}" link). */
   url: string | null;
   comments: number | null;
 }
@@ -233,8 +237,10 @@ export interface ReviewCardProps {
   /** Posts the card as a PR review (`POST /api/dev/cards/:id/post`) and resolves with the new card, or throws.
    *  Without it the footer has no Post button (the sample PR). */
   onPost?: (cardId: string) => Promise<ReviewCard>;
-  /** `github_login` from GET dev_mode, for "Posts as {login}." */
-  githubLogin?: string | null;
+  /** `forge` from GET dev_mode: names the button ("Post to GitHub"). Null: no Post button and no lock line. */
+  forge?: Forge | null;
+  /** `forge_login` from GET dev_mode, for "Posts as {login}." */
+  forgeLogin?: string | null;
 }
 
 export interface ReleaseNotesSheetProps {
@@ -417,7 +423,8 @@ function posted(v: unknown): ReviewPosted | null {
   if (!isObj(v)) return null;
   const url = str(v.url, 1000);
   const n = num(v.comments);
-  return { at: str(v.at, 64), login: str(v.login, 80), url: url && /^https:\/\//.test(url) ? url : null, comments: n !== null && n >= 0 ? Math.floor(n) : null };
+  const fg = v.forge;
+  return { forge: fg === 'github' || fg === 'gitlab' || fg === 'gitea' ? fg : null, at: str(v.at, 64), login: str(v.login, 80), url: url && /^https:\/\//.test(url) ? url : null, comments: n !== null && n >= 0 ? Math.floor(n) : null };
 }
 
 function postError(v: unknown): PostError | null {

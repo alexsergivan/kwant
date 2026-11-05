@@ -17,7 +17,7 @@ import {
   Bug,
   Code2,
 } from 'lucide-react';
-import type { DevFinding, FindingAction, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
+import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
   DISMISS_REASONS,
   clock,
@@ -25,8 +25,9 @@ import {
   dismissReducer,
   dismissedLine,
   findingsSummary,
-  READ_ONLY_HINT,
-  READ_ONLY_TIP,
+  FORGE_NAME,
+  readOnlyHint,
+  readOnlyTip,
   STALE_LINE,
   postCount,
   postLabel,
@@ -260,18 +261,29 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
 // ---------------------------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------------------------------
-// 7. Footer: Post to GitHub (0.7.1, design §5.7, plan/post-to-github.md)
+// 7. Footer: Post to {Forge} (0.7.1, design §5.7, plan/post-to-github.md + amendment). With no forge there is
+// no Post button and no lock line.
 
-const PostFooter: React.FC<{ id: string; state: PostState; count: number; login: string | null; prLink: string | null; onPost: () => void }> = ({
+const PostFooter: React.FC<{
+  id: string;
+  state: PostState;
+  forge: Forge | null;
+  count: number;
+  login: string | null;
+  prLink: string | null;
+  onPost: () => void;
+}> = ({
   id,
   state,
+  forge,
   count,
   login,
   prLink,
   onPost,
 }) => {
   const hintId = `${id}-post-hint`;
-  const label = postLabel(count);
+  const name = forge ? FORGE_NAME[forge] : null;
+  const label = forge ? postLabel(count, forge) : '';
   // One row: the lock line (or the result) on the left, the button on the right. Under 640 px the button
   // wraps under the text and keeps a 44 px touch target.
   const btn = 'kw-btn-ghost min-h-[44px] w-full px-3 py-1 text-xs sm:min-h-0 sm:w-auto';
@@ -280,7 +292,7 @@ const PostFooter: React.FC<{ id: string; state: PostState; count: number; login:
   let extra: React.ReactNode = null;
   switch (state.kind) {
     case 'none':
-      line = (
+      line = forge && (
         <span className="inline-flex min-w-0 items-start gap-1.5 text-xs text-zinc-400">
           <Lock size={13} aria-hidden="true" className="mt-px shrink-0" />
           {postLine(null)}
@@ -295,7 +307,7 @@ const PostFooter: React.FC<{ id: string; state: PostState; count: number; login:
           {state.url && (
             <>
               <span aria-hidden="true" className="text-zinc-500">·</span>
-              <OutLink href={state.url}>View on GitHub</OutLink>
+              <OutLink href={state.url}>{name ? `View on ${name}` : 'View review'}</OutLink>
             </>
           )}
         </span>
@@ -330,7 +342,7 @@ const PostFooter: React.FC<{ id: string; state: PostState; count: number; login:
           {postLine(login)}
         </span>
       );
-      if (state.kind === 'read_only') {
+      if (state.kind === 'read_only' && forge) {
         // aria-disabled, not disabled: it stays focusable, so keyboard and screen-reader users reach the
         // tooltip's words (also tied on with aria-describedby) and the hint line below.
         action = (
@@ -338,19 +350,19 @@ const PostFooter: React.FC<{ id: string; state: PostState; count: number; login:
             type="button"
             aria-disabled="true"
             aria-describedby={hintId}
-            title={READ_ONLY_TIP}
+            title={readOnlyTip(forge)}
             data-post-read-only
             onClick={(e) => e.preventDefault()}
             className={`${btn} cursor-not-allowed opacity-60 hover:bg-white/[0.03] hover:text-zinc-200`}
           >
             <Send size={13} aria-hidden="true" />
             {label}
-            <span className="sr-only">. {READ_ONLY_TIP}.</span>
+            <span className="sr-only">. {readOnlyTip(forge)}.</span>
           </button>
         );
         extra = (
           <p id={hintId} className="basis-full text-2xs text-zinc-400">
-            {READ_ONLY_HINT}
+            {readOnlyHint(forge)}
           </p>
         );
       } else {
@@ -369,7 +381,7 @@ const PostFooter: React.FC<{ id: string; state: PostState; count: number; login:
       <div className="min-w-0 flex-1 basis-full sm:basis-0">{line}</div>
       {prLink && state.kind !== 'posted' && (
         <span className="text-meta">
-          <OutLink href={prLink}>Open on GitHub</OutLink>
+          <OutLink href={prLink}>{name ? `Open on ${name}` : 'Open pull request'}</OutLink>
         </span>
       )}
       {action && <div className="basis-full sm:basis-auto">{action}</div>}
@@ -382,7 +394,7 @@ const PostFooter: React.FC<{ id: string; state: PostState; count: number; login:
 };
 
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, githubLogin = null }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null }) => {
   const [card, setCard] = useState<Review>(given);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(() => Date.now());
@@ -419,7 +431,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
     try {
       setCard(await onPost(card.id));
     } catch (err) {
-      // The route answers 200 with post_error for GitHub's refusals; a throw is the network or a 4xx from kwant.
+      // The route answers 200 with post_error for the forge's refusals; a throw is the network or a 4xx from kwant.
       const message = err instanceof Error && err.message ? err.message : 'it didn’t go through';
       setCard((c) => ({ ...c, post_error: { kind: 'failed', message } }));
     } finally {
@@ -593,12 +605,13 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
 
       {card.cut && <p className="mt-3 text-2xs text-zinc-400">{card.cut}</p>}
 
-      {/* 7. Footer: Post to GitHub (design §5.7) */}
+      {/* 7. Footer: Post to {Forge} (design §5.7) */}
       <PostFooter
         id={headingId}
-        state={postState(card, { canPost: !!onPost && !sample, posting })}
+        state={postState(card, { canPost: !!onPost && !sample, posting, forge })}
+        forge={card.posted?.forge ?? forge}
         count={postCount(card.findings)}
-        login={githubLogin}
+        login={forgeLogin}
         prLink={card.links.pr}
         onPost={() => void post()}
       />

@@ -379,7 +379,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, spaceName, on
                 )}
               </>
             ) : reviews.length ? (
-              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} githubLogin={dev?.github_login ?? null} now={now} />)
+              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} now={now} />)
             ) : (
               desk.reviews && <Empty title="No open pull requests" line="Each open PR gets a review here from a bot that didn’t write it." />
             )}
