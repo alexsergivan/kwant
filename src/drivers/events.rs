@@ -288,6 +288,13 @@ pub enum RuntimeEvent {
     /// A goal changed (status, checks, schedule, its fix task); `GET /api/goals/:id` has the rest.
     #[serde(rename = "goal_updated", alias = "GoalUpdated")]
     GoalUpdated { id: String, status: String, space_id: String },
+    /// A Dev mode card was added or changed (plan §3.2); refetch `GET /api/spaces/:id/dev/…`.
+    /// `kind` is `landed`, `review` or `release_notes`; `status` `pending`, `ready`, `failed` or `stale`.
+    #[serde(rename = "dev_card", alias = "DevCard")]
+    DevCard { space_id: String, id: String, kind: String, status: String },
+    /// Dev mode was turned on or off in a space.
+    #[serde(rename = "dev_mode", alias = "DevMode")]
+    DevMode { space_id: String, on: bool },
     /// Something the user asked to be told about. `kind` is one of `continuity::NOTIFY_KINDS`
     /// ("turn_finished", "approval_needed", "human_step", …). `body` never holds chat text, tool arguments or secrets.
     #[serde(rename = "notify", alias = "Notify")]

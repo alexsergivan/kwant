@@ -54,6 +54,7 @@ pub mod missions;
 pub mod goals;
 pub mod app_update_routes;
 pub mod smart_results;
+pub mod dev;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -249,6 +250,15 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/approvals", get(approval_modes::list))
         .route("/api/approvals/:id/resolve", post(routes::resolve_approval))
         .route("/api/spaces/:id/approvals", get(approval_modes::get_space).put(approval_modes::put_space))
+        .route("/api/spaces/:id/dev_mode", get(dev::routes::get_mode).put(dev::routes::put_mode))
+        .route("/api/spaces/:id/dev_mode/check", post(dev::routes::check))
+        .route("/api/spaces/:id/dev/landed", get(dev::routes::landed))
+        .route("/api/spaces/:id/dev/landed/seen", post(dev::routes::seen))
+        .route("/api/spaces/:id/dev/reviews", get(dev::routes::reviews))
+        .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
+        .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
+        .route("/api/dev/cards/:id", get(dev::routes::card))
+        .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
@@ -315,6 +325,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/parallel/runs", get(parallel_routes::list_runs))
         .route("/api/parallel/runs/:id", get(parallel_routes::get_run))
         .route("/api/connections", get(connections::list))
+        .route("/api/connections/:id/production", put(connections::put_production))
         .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/connections/composio/apps", get(connections::search_composio_apps))
         .route("/api/connections/composio/apps/:slug/connect", post(connections::connect_composio_app))

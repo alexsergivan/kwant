@@ -120,22 +120,40 @@ async fn claude_asks(e: &Env, tool: &str, input: Value, answer: ApprovalDecision
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         serde_json::from_str::<Value>(text).unwrap()["behavior"].as_str().unwrap().to_string()
     };
-    let answered = tokio::time::timeout(Duration::from_millis(1500), &mut prompt).await;
-    let card = loop {
-        match events.try_recv() {
-            Ok(RuntimeEvent::ApprovalRequired { id, details, .. }) => break Some((id, details)),
-            Ok(_) => continue,
-            Err(_) => break None,
+    // Whichever comes first, the answer or a card, up to 10 s: a fixed wait flaked under load
+    let first = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            tokio::select! {
+                done = &mut prompt => break Ok(done.unwrap().1),
+                ev = events.recv() => match ev {
+                    Ok(RuntimeEvent::ApprovalRequired { id, details, .. }) => break Err((id, details)),
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(e) => panic!("event stream closed: {e}"),
+                },
+            }
         }
-    };
-    let out = match (answered, card) {
-        (Ok(done), None) => Ok(behavior(&done.unwrap().1)),
-        (Err(_), Some((id, details))) => {
+    })
+    .await
+    .expect("no answer and no card within 10 s");
+    let out = match first {
+        Ok(v) => {
+            // Answered without asking: no card may have gone out on the way
+            let card = loop {
+                match events.try_recv() {
+                    Ok(RuntimeEvent::ApprovalRequired { id, details, .. }) => break Some((id, details)),
+                    Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(_) => break None,
+                }
+            };
+            assert!(card.is_none(), "answered with card {card:?}");
+            Ok(behavior(&v))
+        }
+        Err((id, details)) => {
+            assert!(!prompt.is_finished(), "a card went out and the prompt answered anyway");
             assert!(e.state.broker.resolve(&id, answer).await);
             let (_, v) = prompt.await.unwrap();
             Err((details, behavior(&v)))
         }
-        (answered, card) => panic!("answered {} with card {card:?}", answered.is_ok()),
     };
     mcp_runtime::finish_turn(&e.state, &token).await;
     e.state.turns.end_turn(&turn_id);
@@ -295,7 +313,7 @@ async fn a_local_shell_payment_waits_for_the_person_with_approvals_off() {
     set_approvals(&e, "off").await;
     let folder = tempdir().unwrap();
     let ran = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(10),
         kwnt::server::computer::approve_local_shell(&e.state, &e.bot.id, "touch x", folder.path()),
     )
     .await

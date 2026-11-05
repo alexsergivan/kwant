@@ -3816,6 +3816,26 @@ pub async fn resolve_approval(
         ApprovalDecision::Deny => "denied",
     };
 
+    // The production floor (plan §3.5): Allow on a step that needs a backup is refused here,
+    // not only greyed out on the card, until the space has an ok backup at most 10 minutes old
+    if decision != ApprovalDecision::Deny {
+        let details = state
+            .db
+            .get_approval(&ticket_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|a| serde_json::from_str::<serde_json::Value>(&a.parameters).ok());
+        if let Some(details) = details {
+            if let Some(mut refusal) = super::dev::floor::allow_refusal(&state.db, &details).await {
+                refusal["ticket_id"] = json!(ticket_id);
+                refusal["resolved"] = json!(false);
+                refusal["status"] = json!("needs_backup");
+                return Ok((StatusCode::CONFLICT, Json(refusal)).into_response());
+            }
+        }
+    }
+
     // Only a ticket still waiting can be answered; a withdrawn one (turn ended, expired)
     // keeps its status and its tool never runs
     let resolved = state.broker.resolve(&ticket_id, decision.clone()).await;
