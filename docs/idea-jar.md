@@ -9,7 +9,8 @@ questions, and which bot should do it. The person then chooses what happens next
   order. A draft runs nothing: the person still approves it on the board, like any other plan.
 - **Not now** puts the idea on the Later shelf.
 - **Edit** saves new text and puts the idea back in the jar for a fresh look.
-- **Look now** asks a free bot to peek straight away.
+- **Look now** asks a free bot to peek straight away, in the same order as the jar's own peeking
+  (below).
 
 An idea comes in through `POST /api/ideas`, or from the chat composer as `/idea <text>` (any
 case). `/idea` saves no chat message and starts no turn, so no bot sees it there. An idea is at
@@ -59,7 +60,8 @@ when nothing of it is running and its last turn ended at least 10 minutes ago.
 **The daily cap** is the `idea_jar_daily_cap` setting (`POST /api/settings`, and in Settings): how
 many takes the jar starts on its own per space per UTC day. The default is 3, the most is 10, and 0
 turns the jar's own peeking off. Look now is the person asking, so it ignores the cap. It still
-needs a free bot, though.
+needs a free bot, though: in a busy space, such as one where every bot has just reviewed a pull
+request in Dev mode, Look now answers `no_free_bot` until one has been idle for 10 minutes.
 
 `GET /api/ideas` shows three numbers:
 
