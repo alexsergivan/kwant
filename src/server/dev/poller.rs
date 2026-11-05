@@ -397,7 +397,12 @@ pub fn match_bot(name: &str, email: Option<&str>, kwants: &[Kwant]) -> Option<Kw
         .iter()
         .find(|k| !k.name.trim().is_empty() && k.name.trim().eq_ignore_ascii_case(bare))
         .or_else(|| kwants.iter().find(|k| local.as_deref().is_some_and(|l| !k.name.trim().is_empty() && l == format!("{}-bot", slug(&k.name)))))?;
-    Some(KwantRef { id: hit.id.clone(), name: hit.name.clone(), engine: hit.driver_type.clone(), model: hit.preferred_model.clone() })
+    // The engine family and model from the bot's pin, as the reviewer's are (review.rs); the driver
+    // type ("cli", "api") isn't an engine, so comparing it never found "another engine"
+    let pin = crate::router::parse_pin(&hit.preferred_model);
+    let engine = pin.family.unwrap_or_else(|| "auto".into());
+    let model = pin.model.unwrap_or_else(|| "auto".into());
+    Some(KwantRef { id: hit.id.clone(), name: hit.name.clone(), engine, model })
 }
 
 /// The commit message's first line, and the rest.
@@ -501,7 +506,7 @@ mod tests {
     fn kwant(id: &str, name: &str) -> Kwant {
         serde_json::from_value(json!({
             "id": id, "name": name, "title": "Engineer", "persona_prompt": "", "soul": "", "avatar_sprite": "",
-            "driver_type": "claude", "preferred_model": "demo-model", "temperature": 0.0, "max_tokens": 0,
+            "driver_type": "cli", "preferred_model": "claude/demo-model", "temperature": 0.0, "max_tokens": 0,
             "level": 1, "turns_completed": 0, "created_at": null, "space_id": "s1"
         }))
         .unwrap()

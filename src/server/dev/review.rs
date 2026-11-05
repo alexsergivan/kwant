@@ -364,6 +364,31 @@ mod tests {
         assert_eq!(author_json(&Author { login: Some("demo-person".into()), ..Default::default() }), json!({"kind": "person", "name": "demo-person"}));
     }
 
+    #[test]
+    fn a_matched_author_is_compared_by_engine_family_not_driver_type() {
+        // Real bots run through a "cli" or "api" driver; the engine is in the pin (F-R2-1)
+        let mut pixel = bot("kw_demo_pixel", "Pixel", "claude/claude-sonnet-5-5");
+        pixel.driver_type = "cli".into();
+        let mut lin = bot("kw_demo_lin", "Lin", "claude");
+        lin.driver_type = "api".into();
+        let mut rigel = bot("kw_demo_rigel", "Rigel", "codex/gpt-5.5");
+        rigel.driver_type = "cli".into();
+        let ks = [pixel.clone(), lin.clone(), rigel.clone()];
+        let who = |name: &str| Author { name: name.into(), bot: super::super::poller::match_bot(name, None, &ks), ..Default::default() };
+        assert_eq!(author_json(&who("Pixel")), json!({"kind": "bot", "name": "Pixel", "engine": "claude", "model": "claude-sonnet-5-5"}));
+        // Lin ranks first but is on Pixel's engine: Rigel (codex) reviews
+        let p = choose(vec![lin.clone(), rigel.clone()], &who("Pixel")).unwrap();
+        assert_eq!((p.bot.name.as_str(), p.same_engine), ("Rigel", false));
+        // Only the same engine left: the card says so
+        let p = choose(vec![pixel.clone(), lin.clone()], &who("Pixel")).unwrap();
+        assert_eq!((p.bot.name.as_str(), p.same_engine), ("Lin", true));
+        // A codex author is reviewed by claude, not by another codex bot ranked first
+        let mut juno = bot("kw_demo_juno", "Juno", "codex");
+        juno.driver_type = "cli".into();
+        let p = choose(vec![juno, lin], &who("Rigel")).unwrap();
+        assert_eq!((p.bot.name.as_str(), p.engine.as_deref(), p.same_engine), ("Lin", Some("claude"), false));
+    }
+
     const GOOD: &str = r#"{"intent": {"asked": "Tell a reaction to the bot once.", "rows": [{"state": "ok", "text": "Marks the reaction told"}, {"state": "extra", "text": "Rewrites the docs page"}]},
         "findings": [{"severity": "medium", "title": "Told before the turn ran", "file": "src/server/reactions.rs", "line": 40, "detail": "A failed turn loses it.", "fix": "Mark it after the turn."}]}"#;
 
