@@ -124,9 +124,11 @@ pub async fn clients(state: &AppState) -> Result<Vec<(GithubConfig, GithubSource
     }
 }
 
-/// The client whose connection can read `repo` (the first that finds it), with the repo.
+/// The client whose connection can read `repo` (the first that finds it), with the repo. With no
+/// connection the error says so (why [`clients`] found none), never a refused token: the desk
+/// shows such a row as `not_connected` (QA h).
 pub async fn client_for(state: &AppState, repo: &str) -> Result<(GithubSource, crate::zombie::github::GhRepo), GhError> {
-    let list = clients(state).await.map_err(|_| GhError::Auth)?;
+    let list = clients(state).await.map_err(GhError::Other)?;
     let mut last = GhError::NotFound;
     for (_, c) in list {
         match c.dev_repo(repo).await {
@@ -548,14 +550,23 @@ pub async fn reconcile(state: &AppState, space: &SpaceId) -> Reconciled {
     }
     let mut rows = db.dev_repos(sp).await.unwrap_or_default();
 
-    // Rows added while off have no branch yet
+    // Rows added while off have no branch yet. One the check can't read keeps no branch (the
+    // poller skips it) and records why, so the desk shows an error, not watching (QA g); the next
+    // reconcile checks again, and setting the branch clears the error.
     for r in rows.iter().filter(|r| r.branch.trim().is_empty()) {
-        if let Ok(found) = check(state, space, &r.check_input()).await {
-            if found.state == "found" {
+        let why = match check(state, space, &r.check_input()).await {
+            Ok(found) if found.state == "found" => {
                 let branch = found.branch.clone().unwrap_or_else(|| "main".into());
                 let _ = db.set_dev_repo_branch(sp, &r.key, &branch).await;
                 let _ = db.set_dev_repo_hint(sp, &r.key, found.deploy_hint).await;
+                continue;
             }
+            Ok(found) if found.state == "not_connected" => clients(state).await.err().unwrap_or_else(|| GhError::Auth.to_string()),
+            Ok(_) => GhError::NotFound.to_string(),
+            Err(e) => e,
+        };
+        if r.poll_error.as_deref() != Some(why.as_str()) {
+            let _ = db.set_dev_repo_error(sp, &r.key, &why).await;
         }
     }
 
