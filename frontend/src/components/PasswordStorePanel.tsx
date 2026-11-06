@@ -95,7 +95,9 @@ export const BitwardenLoginForm: React.FC<{
   initialProblem?: UnlockProblem | null;
   initialApiKey?: boolean;
   initialServer?: string;
-}> = ({ mode, status, onDone, onCancel, initialStep = null, initialProblem = null, initialApiKey, initialServer = DEFAULT_BITWARDEN_SERVER }) => {
+  /** A plain heading (zinc, not the sky link look), for a form shown inside another card. */
+  plainTitle?: boolean;
+}> = ({ mode, status, onDone, onCancel, initialStep = null, initialProblem = null, initialApiKey, initialServer = DEFAULT_BITWARDEN_SERVER, plainTitle = false }) => {
   const id = useId();
   const bw = status?.bitwarden ?? null;
   const [server, setServer] = useState(initialServer);
@@ -195,7 +197,7 @@ export const BitwardenLoginForm: React.FC<{
 
   return (
     <form onSubmit={submit} className="space-y-2 text-xs" aria-labelledby={`${id}-t`} data-bitwarden-form={mode} noValidate>
-      <p id={`${id}-t`} className="text-[11px] font-semibold text-sky-400 flex items-center gap-1.5">
+      <p id={`${id}-t`} className={plainTitle ? 'text-xs font-medium text-zinc-100 flex items-center gap-1.5' : 'text-[11px] font-semibold text-sky-400 flex items-center gap-1.5'}>
         {mode === 'connect' ? <KeyRound size={12} aria-hidden="true" /> : <LockOpen size={12} aria-hidden="true" />}
         {mode === 'connect' ? 'Connect Bitwarden' : 'Unlock Bitwarden'}
       </p>

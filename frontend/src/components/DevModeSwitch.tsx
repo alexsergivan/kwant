@@ -61,19 +61,20 @@ export interface DevModeSwitchProps {
 /** The last on/off seen per space, kept in this browser only (no repo, no token): the switch's first frame. */
 export const lastOn = {
   key: (space: string) => `kw-dev-on:${space}`,
-  get(space: string): boolean {
+  /** null: never seen here (a fresh browser), so the switch waits for the server instead of guessing. */
+  get(space: string): boolean | null {
     try {
-      return localStorage.getItem(lastOn.key(space)) === '1';
+      const v = localStorage.getItem(lastOn.key(space));
+      return v === '1' ? true : v === '0' ? false : null;
     } catch {
-      return false;
+      return null;
     }
   },
   set(space: string, on: boolean) {
     try {
-      if (on) localStorage.setItem(lastOn.key(space), '1');
-      else localStorage.removeItem(lastOn.key(space));
+      localStorage.setItem(lastOn.key(space), on ? '1' : '0');
     } catch {
-      /* private mode: the switch just starts off */
+      /* private mode: the switch waits for the server on each load */
     }
   },
 };
@@ -86,6 +87,9 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   const [state, setState] = useState<SwitchState>(() =>
     initialSwitch({ reduced, ...(known ? { on: known.on } : lastOn.get(space.id) ? { on: true } : {}), ...initial }),
   );
+  // Never seen here and not loaded yet: neither on nor off (no node on the graph, busy) until dev_mode
+  // answers, so an on space never reads "off" for a moment (QA F8-R3-1).
+  const [loading, setLoading] = useState(() => !known && !initial && lastOn.get(space.id) === null);
   // The reducer's truth lives in the ref, written only by dispatch. Copying `state` into it on render
   // would let a render that started before a dispatch (a store update mid-save) put an older state back.
   const ref = useRef(state);
@@ -113,6 +117,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
       },
       (e: unknown) => {
         if (!live) return;
+        setLoading(false);
         dispatch({ type: 'server', state: null, disabled: e instanceof DevModeError && (e.status === 403 || e.status === 404) });
       },
     );
@@ -124,6 +129,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   // The store changes (the load above, SSE, Settings): follow it.
   useEffect(() => {
     if (!known) return;
+    setLoading(false);
     dispatch({ type: 'server', state: known });
     lastOn.set(space.id, known.on);
   }, [known, dispatch, space.id]);
@@ -192,13 +198,14 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
       }
     },
     onBlur: () => dispatch({ type: 'blur' }),
-    disabled: state.disabled,
+    disabled: state.disabled || loading,
+    'aria-busy': loading || undefined,
     role: 'switch' as const,
     'aria-checked': state.on,
     'aria-label': look.label,
     'aria-describedby': descId,
     title: look.tooltip,
-    'data-dev-switch': state.phase,
+    'data-dev-switch': loading ? 'loading' : state.phase,
     'data-look': look.look,
     'data-on': state.on || undefined,
     'data-ring': look.ring || undefined,
@@ -228,7 +235,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
       <svg className="kw-dv-graph" viewBox="0 0 44 24" aria-hidden="true" data-dv-graph>
         <path className="kw-dv-base" d="M2 17H42" />
         <path className="kw-dv-fork" d="M12 17C19 17 18 7 26 7H42" />
-        <g className="kw-dv-node">
+        <g className="kw-dv-node" visibility={loading ? 'hidden' : undefined}>
           <circle className="kw-dv-halo" cx="12" cy="17" r="5" />
           <circle className="kw-dv-dot" cx="12" cy="17" r="5" />
           <circle className="kw-dv-pip" cx="12" cy="17" r="1.6" />

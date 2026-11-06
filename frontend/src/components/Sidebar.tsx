@@ -419,17 +419,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onOpenDevDesk?.();
   };
   const devMeta = devOn ? (
-    <span className="block text-meta text-zinc-400 truncate" data-dev-meta>
-      Dev ·{' '}
+    // The repo truncates; the branch never does (Mira S3)
+    <span className="flex min-w-0 items-baseline gap-1 text-meta text-zinc-400" data-dev-meta>
+      <span className="shrink-0">Dev ·{' '}</span>
       {dev?.repo ? (
         <>
-          <span className="font-mono text-zinc-200" title={dev.repo} data-dev-meta-repo>
+          <span className="truncate min-w-0 font-mono text-zinc-200" title={dev.repo} data-dev-meta-repo>
             {dev.repo}
-          </span>{' '}
-          · <span className="font-mono text-sky-300">{dev.branch ?? 'main'}</span>
+          </span>
+          <span className="shrink-0">
+            {' '}· <span className="font-mono text-sky-300">{dev.branch ?? 'main'}</span>
+          </span>
         </>
       ) : (
-        <span>no repo yet</span>
+        <span className="truncate min-w-0">no repo yet</span>
       )}
     </span>
   ) : null;

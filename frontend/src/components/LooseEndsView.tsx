@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { playSfx } from '../audio/chiptune';
-import { AUTOFILL_GAP_NOTE, SAVE_FIRST, SaveGate, saveGate, storeApi } from '../passwordStore';
+import { SAVE_FIRST, SaveGate, saveGate, storeApi } from '../passwordStore';
 import { approvalModeApi } from '../approvalMode';
 import { BitwardenLoginForm, usePasswordStore } from './PasswordStorePanel';
 import { AddLetterForm, LetterPage } from './LetterView';
@@ -390,28 +390,32 @@ export const SaveFirst: React.FC<{ gate: Exclude<SaveGate, 'open'>; onReady: (no
   };
 
   return (
-    <div ref={box} role="group" aria-labelledby={`${id}-t`} className="sm:col-span-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 space-y-2" data-save-first={gate}>
+    <div ref={box} role="group" aria-labelledby={`${id}-t`} className={`sm:col-span-2 rounded-xl border p-3 space-y-2 ${step ? 'border-white/10 bg-white/[0.03]' : 'border-amber-500/40 bg-amber-500/10'}`} data-save-first={gate} data-save-first-step={step || undefined}>
       <p id={`${id}-t`} className="text-xs font-medium text-amber-100">
         {locked ? SAVE_FIRST.lockedTitle : SAVE_FIRST.title}
       </p>
-      {!locked && <p className="text-[11px] text-amber-100/80 leading-snug">{AUTOFILL_GAP_NOTE.local}</p>}
+      {!locked && <p className="text-[11px] text-amber-100/80 leading-snug" data-save-first-why>{SAVE_FIRST.why}</p>}
       {!step ? (
+        <>
         <div className="flex flex-wrap gap-2">
-          <button ref={first} type="button" onClick={() => setStep(true)} disabled={!store.status} className={`${actionBtn} bg-sky-500 hover:bg-sky-400 text-zinc-950 font-semibold`} data-save-first-bitwarden data-land>
+          <button ref={first} type="button" onClick={() => setStep(true)} disabled={!store.status} className={`${actionBtn} w-full sm:w-auto justify-center bg-sky-500 hover:bg-sky-400 text-zinc-950 font-semibold`} data-save-first-bitwarden data-land>
             {locked ? SAVE_FIRST.unlock : SAVE_FIRST.bitwarden}
           </button>
           {!locked && (
-            <button type="button" onClick={ask} disabled={busy} className={quietBtn} data-save-first-ask>
+            <button type="button" onClick={ask} disabled={busy} className={`${quietBtn} w-full sm:w-auto justify-center`} data-save-first-ask>
               {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
               {busy ? SAVE_FIRST.asking : SAVE_FIRST.ask}
             </button>
           )}
         </div>
+        {!locked && <p className="text-[11px] text-amber-100/70 leading-snug" data-save-first-scope>{SAVE_FIRST.askScope}</p>}
+        </>
       ) : (
         store.status && (
           <BitwardenLoginForm
             mode={locked ? 'unlock' : 'connect'}
             status={store.status}
+            plainTitle
             onCancel={() => setStep(false)}
             onDone={async (next) => {
               store.set(next);

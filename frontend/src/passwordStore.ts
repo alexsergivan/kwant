@@ -292,14 +292,16 @@ export type SaveGate = 'open' | 'store' | 'locked';
 export const saveGate = (s: StoreStatus | null | undefined): SaveGate =>
   !s ? 'open' : s.store === 'local' ? (s.approvals_off ? 'store' : 'open') : s.locked ? 'locked' : 'open';
 
-/** The two ways out, before the token field (flow F5). Short; the reason is AUTOFILL_GAP_NOTE.local. */
+/** The two ways out, before the token field (flow F5). `ask` changes every space and bot, so `askScope` says so. */
 export const SAVE_FIRST = {
   title: 'One step before the token',
   lockedTitle: 'Bitwarden is locked. Unlock it to save this login there.',
   bitwarden: 'Connect Bitwarden',
   unlock: 'Unlock Bitwarden',
-  ask: 'Switch to “Ask before running commands”',
+  why: 'Some bots here run commands without asking, so they could read a token saved on this server. Keep it in Bitwarden, or make every bot ask first.',
+  ask: 'Make every bot ask first',
+  askScope: 'Turns on “Ask before running commands” in every space. You can change it back in each space’s settings.',
   asking: 'Switching…',
-  asked: 'Bots ask before running commands now. Add the token below.',
+  asked: 'Every bot now asks before running commands. Add the token below.',
   connected: 'Bitwarden is connected. Add the token below.',
 } as const;

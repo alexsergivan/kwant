@@ -623,7 +623,12 @@ test('B2 DOM: under "Ask only when risky" Connect offers the two ways out before
   assert.equal(document.querySelector('input[type="password"]'), null, 'no token field to type into yet');
   assert.match(gate.textContent, /One step before the token/);
   assert.equal(gate.querySelector('[data-save-first-bitwarden]').textContent.trim(), 'Connect Bitwarden');
-  assert.equal(gate.querySelector('[data-save-first-ask]').textContent.trim(), 'Switch to “Ask before running commands”');
+  assert.equal(gate.querySelector('[data-save-first-ask]').textContent.trim(), 'Make every bot ask first');
+  assert.equal(gate.querySelector('[data-save-first-why]').textContent, 'Some bots here run commands without asking, so they could read a token saved on this server. Keep it in Bitwarden, or make every bot ask first.', 'M2: its own reason line');
+  assert.equal(gate.querySelector('[data-save-first-scope]').textContent, 'Turns on “Ask before running commands” in every space. You can change it back in each space’s settings.', 'M1: the scope is said');
+  assert.match(gate.querySelector('[data-save-first-scope]').className, /text-\[11px\] text-amber-100\/70/);
+  for (const b of gate.querySelectorAll('[data-save-first-bitwarden], [data-save-first-ask]')) assert.match(b.className, /w-full sm:w-auto/, 'S2: equal width when stacked');
+  assert.match(gate.className, /border-amber-500\/40 bg-amber-500\/10/, 'amber while it needs you');
   assert.ok(document.activeElement === gate.querySelector('[data-save-first-bitwarden]'), 'B3: focus lands on the first way out');
   assert.equal(document.querySelector('button[type="submit"]').disabled, true);
   assert.equal(server.calls.filter(([meth, u]) => meth === 'POST' && u.includes('/loose')).length, 0);
@@ -640,7 +645,7 @@ test('B2 DOM: "Ask before running commands" switches every space and bot to ask,
   const tok = document.querySelector('input[type="password"]');
   assert.ok(tok, 'the token field is back');
   assert.ok(document.activeElement === tok, 'and focused');
-  assert.equal(document.querySelector('[data-save-ready]').textContent, m.SAVE_FIRST.asked);
+  assert.equal(document.querySelector('[data-save-ready]').textContent, 'Every bot now asks before running commands. Add the token below.');
   root.unmount();
 });
 
@@ -648,6 +653,11 @@ test('B2 DOM: Connect Bitwarden opens the existing Bitwarden form in place; a lo
   const one = await connectForm({ store: 'local', local_count: 0, approvals_off: true }, []);
   await click(document.querySelector('[data-save-first-bitwarden]'));
   assert.equal(document.querySelector('[data-save-first-bitwarden]'), null, 'the Bitwarden form replaces the buttons');
+  const open = document.querySelector('[data-save-first]');
+  assert.match(open.className, /border-white\/10 bg-white\/\[0\.03\]/, 'S1: the open form is not on amber');
+  assert.doesNotMatch(open.className, /bg-amber-500/);
+  assert.match(open.querySelector('[data-bitwarden-form] > p').className, /text-xs font-medium text-zinc-100/, 'S1: a plain heading, not a link look');
+  assert.equal(open.querySelector('[data-save-first-scope]'), null, 'the scope line goes with its button');
   assert.ok(document.querySelector('[data-save-first] form, [data-save-first] input'), 'Bitwarden sign-in fields show');
   await frame();
   assert.ok(['INPUT', 'SELECT'].includes(document.activeElement?.tagName) && document.activeElement.closest('[data-save-first]'), 'focus goes to its first field: ' + document.activeElement?.outerHTML?.slice(0, 120));
@@ -774,6 +784,7 @@ test('minor: the switch starts from the last value seen here, so an on space nev
   reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] });
   m.lastOn.set('spc_demo', true);
   let release;
+  assert.equal(m.lastOn.get('spc_never'), null, 'never seen here: no guess');
   const realFetch = g.fetch;
   g.fetch = g.window.fetch = (url, init) => (String(url).includes('/dev_mode') ? new Promise((r) => (release = () => r(realFetch(url, init)))) : realFetch(url, init));
   const { root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
@@ -786,6 +797,31 @@ test('minor: the switch starts from the last value seen here, so an on space nev
   reset({ on: false });
   const off = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
   await settle(20);
-  assert.equal(m.lastOn.get('spc_demo'), false, 'turned off elsewhere: forgotten');
+  assert.equal(m.lastOn.get('spc_demo'), false, 'turned off elsewhere: remembered as off');
   off.root.unmount();
+});
+
+test('F8-R3-1: a space never seen in this browser shows the switch as loading (neither on nor off) until dev_mode answers', async () => {
+  reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] });
+  localStorage.removeItem(m.lastOn.key('spc_demo'));
+  let release;
+  const realFetch = g.fetch;
+  g.fetch = g.window.fetch = (url, init) => (String(url).includes('/dev_mode') ? new Promise((r) => (release = () => r(realFetch(url, init)))) : realFetch(url, init));
+  const { root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
+  const sw = () => document.querySelector('[role="switch"]');
+  assert.equal(sw().dataset.devSwitch, 'loading');
+  assert.equal(sw().getAttribute('aria-busy'), 'true');
+  assert.equal(sw().disabled, true, 'not pressable before its state is known');
+  assert.equal(sw().hasAttribute('data-on'), false);
+  assert.equal(sw().querySelector('.kw-dv-node').getAttribute('visibility'), 'hidden', 'no node on either side');
+  release();
+  await settle(20);
+  assert.notEqual(sw().dataset.devSwitch, 'loading');
+  assert.equal(sw().getAttribute('aria-checked'), 'true');
+  assert.equal(sw().hasAttribute('aria-busy'), false);
+  assert.equal(sw().disabled, false);
+  assert.equal(sw().querySelector('.kw-dv-node').hasAttribute('visibility'), false);
+  assert.equal(m.lastOn.get('spc_demo'), true, 'the next load starts on');
+  g.fetch = g.window.fetch = realFetch;
+  root.unmount();
 });
