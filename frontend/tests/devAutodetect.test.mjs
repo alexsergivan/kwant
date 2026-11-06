@@ -191,7 +191,7 @@ test('first-run block copy (flow copy §5): three numbered lines', () => {
     [
       '01 What landed. Every merge to main in plain words, and when main is ready to ship.',
       '02 Reviews. A second bot reads each pull request before you merge it.',
-      '03 Production floor. Deploys and live-database commands wait for your OK.',
+      '03 Production floor. Pushes to main, deploys and deleting data always wait for your OK, even with approvals off.',
     ],
   );
 });
@@ -843,14 +843,16 @@ test('F8-R3-1: a space never seen in this browser shows the switch as loading (n
   assert.equal(sw().getAttribute('aria-busy'), 'true');
   assert.equal(sw().disabled, true, 'not pressable before its state is known');
   assert.equal(sw().hasAttribute('data-on'), false);
-  assert.equal(sw().querySelector('.kw-dv-node').getAttribute('visibility'), 'hidden', 'no node on either side');
+  assert.equal(sw().querySelector('[data-dv-knob]').style.visibility, 'hidden', 'no knob on either side');
+  assert.equal(sw().querySelector('[data-dv-word]').textContent, '', 'neither Off nor On');
   release();
   await settle(20);
   assert.notEqual(sw().dataset.devSwitch, 'loading');
   assert.equal(sw().getAttribute('aria-checked'), 'true');
   assert.equal(sw().hasAttribute('aria-busy'), false);
   assert.equal(sw().disabled, false);
-  assert.equal(sw().querySelector('.kw-dv-node').hasAttribute('visibility'), false);
+  assert.equal(sw().querySelector('[data-dv-knob]').style.visibility, '');
+  assert.equal(sw().querySelector('[data-dv-word]').textContent, 'On');
   assert.equal(m.lastOn.get('spc_demo'), true, 'the next load starts on');
   g.fetch = g.window.fetch = realFetch;
   root.unmount();

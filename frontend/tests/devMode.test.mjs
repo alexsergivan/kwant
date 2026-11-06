@@ -43,6 +43,7 @@ const m = await loadBundled(`
   export * from './src/devMode';
   export { DevModeSwitch, DevOffNote, DevFlipNote, DevBadge, HardHat } from './src/components/DevModeSwitch';
   export { DevModeSetup } from './src/components/DevModeSetup';
+  export { SpaceControls } from './src/components/SpaceControls';
   export { DevModeSettings } from './src/components/DevModeSettings';
   export { ConnectionRow } from './src/components/ConnectionsView';
   export { canMarkProduction } from './src/connections';
@@ -95,7 +96,7 @@ test('flow F1: off → on is one press (set up already); no cover while off', ()
   assert.equal(look.label, 'Dev mode');
   assert.equal(look.describe, 'Press twice to turn off.');
   assert.equal(look.tooltip, 'Dev mode is on. Press twice to turn it off.');
-  assert.equal(m.switchLook(m.initialSwitch()).describe, 'Turns on reviews, the ship gate and the production floor.');
+  assert.equal(m.switchLook(m.initialSwitch()).describe, 'For bots that write code');
   assert.equal(m.switchLook(m.initialSwitch()).tooltip, 'Dev mode: plain-words merges, code reviews, production floor');
 });
 
@@ -180,7 +181,7 @@ test('the server changing Dev mode closes a held-open cover; a disabled switch s
   const d = R(m.initialSwitch({ on: true }), { type: 'server', state: null, disabled: true });
   assert.equal(R(d, { type: 'press', now: 0 }), d);
   const look = m.switchLook(d);
-  assert.equal(look.tooltip, 'Only the space owner can change Dev mode.');
+  assert.equal(look.tooltip, 'Only the space owner can turn Dev mode on or off.');
   assert.equal(look.ring, false, 'not the owner: no ring');
   assert.equal(look.glyph, 'locked');
 });
@@ -310,7 +311,8 @@ test('DOM: on → off with two presses saves PUT {on:false}, announces, and call
   assert.equal(b.dataset.covered, undefined);
   assert.ok(b.querySelector('[data-dv-glyph="unlocked"]'), 'armed: lock open');
   assert.match(host.querySelector('[data-dv-live]').textContent, /Press again to turn Dev mode off, or Escape to keep it on\./);
-  assert.ok(host.querySelector('[data-dv-hint]'));
+  assert.equal(!!host.querySelector('[data-dv-hint]'), false, 'v3: the armed hint is the space-controls sub-line, not a bubble');
+  assert.equal(b.querySelector('[data-dv-word]').textContent, 'Off?');
   await click(b);
   await click(b); // the double-click's third press: ignored while settling
   // The save resolves on the event loop; a busy CI runner can take more than a few ticks, so wait for it
@@ -327,7 +329,7 @@ test('DOM: on → off with two presses saves PUT {on:false}, announces, and call
   assert.equal(b.dataset.devSwitch, 'covered');
   assert.equal(b.dataset.on, undefined);
   assert.equal(b.getAttribute('aria-checked'), 'false');
-  assert.equal(desc(host, b), 'Turns on reviews, the ship gate and the production floor.');
+  assert.equal(desc(host, b), 'For bots that write code');
   await click(b); // a render mid-save once left the switch stuck; the next press still turns it on (one press)
   assert.equal(b.dataset.on, 'true');
   assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: false }, { on: true }]);
@@ -373,7 +375,7 @@ test('DOM: a 403 on load shows the switch disabled', async () => {
   reset();
   server.fail = { method: 'GET', path: '/dev_mode', status: 403, error: 'only the person' };
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
-  assert.equal(switchEl(host).disabled, true);
+  assert.equal(switchEl(host).getAttribute('aria-disabled'), 'true', 'focusable but not pressable, so the reason can be read');
   assert.ok(switchEl(host).querySelector('[data-dv-glyph="locked"]'), 'disabled shows a closed lock');
   root.unmount();
 });
@@ -384,8 +386,8 @@ test('DOM: reduced motion shows the same switch, turns on in one press and arms 
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
   const b = switchEl(host);
   assert.ok(b.classList.contains('kw-dv-rm'));
-  assert.ok(b.querySelector('[data-dv-graph] .kw-dv-node'), 'the same branch graph');
-  assert.equal(b.textContent.trim(), 'dev', 'the reduced-motion variant keeps its dev label');
+  assert.ok(b.querySelector('[data-dv-track] [data-dv-knob]'), 'the same track and knob');
+  assert.equal(b.querySelector('[data-dv-word]').textContent, 'Off', 'the reduced-motion variant keeps its word');
   await click(b);
   assert.equal(b.dataset.devSwitch, 'covered');
   assert.equal(b.dataset.on, 'true');
@@ -393,7 +395,7 @@ test('DOM: reduced motion shows the same switch, turns on in one press and arms 
   await settle();
   await click(b);
   assert.equal(b.dataset.devSwitch, 'lifted', 'the next press arms at once: nothing to settle');
-  assert.equal(b.querySelector('[data-dv-word]').textContent, 'off?');
+  assert.equal(b.querySelector('[data-dv-word]').textContent, 'Off?');
   root.unmount();
   delete window.matchMedia;
 });
@@ -407,7 +409,7 @@ test('switchLook names the visual state and the knob glyph: off, armed, on, disa
   assert.deepEqual(pick({ disabled: true, on: true }), ['disabled', 'locked']);
 });
 
-test('0.7.1 look (style v2 §10): the Branch switch; label dev → (one press) dev → off?; 44 px tall on phone; no knob or track', async () => {
+test('switch v3 (dev-mode-explainer §3): a word and a track; Off → (one press) On → Off?; 44 px tall on phone; no branch graph', async () => {
   reset({ ...off, on: false, repo: 'demo-org/demo-app', polled_at: 'x' });
   const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, phone: true }));
   const b = switchEl(host);
@@ -415,28 +417,26 @@ test('0.7.1 look (style v2 §10): the Branch switch; label dev → (one press) d
   assert.ok(b.classList.contains('kw-dv') && !b.classList.contains('kw-dv-rm'));
   assert.ok(b.classList.contains('h-11'), 'the phone target is 44 px tall');
   assert.ok(host.querySelector('[data-dev-switch-wrap]').className.includes('min-w-[44px]'));
-  for (const gone of ['.kw-dv-cover', '.kw-dv-hinge', '.kw-dv-ring', '.kw-dv-knob', '.kw-dv-track']) assert.equal(!!b.querySelector(gone), false, gone);
-  const svg = b.querySelector('svg[data-dv-graph]');
-  assert.equal(svg.getAttribute('viewBox'), '0 0 44 24');
-  assert.equal(svg.querySelector('.kw-dv-base').getAttribute('d'), 'M2 17H42');
-  assert.equal(svg.querySelector('.kw-dv-fork').getAttribute('d'), 'M12 17C19 17 18 7 26 7H42');
-  assert.equal(svg.querySelector('.kw-dv-dot').getAttribute('r'), '5');
-  assert.equal(svg.querySelector('.kw-dv-pip').getAttribute('r'), '1.6');
-  assert.equal(word(), 'dev');
-  assert.equal(b.dataset.armed, undefined);
+  assert.ok(b.querySelector('[data-dv-track] [data-dv-knob]'), 'a track with a knob');
+  assert.equal(b.querySelector('[data-dv-word]').getAttribute('aria-hidden'), 'true', 'the word is visual; aria-checked carries the state');
+  for (const gone of ['svg[data-dv-graph]', '.kw-dv-cover', '.kw-dv-hinge', '.kw-dv-ring']) assert.equal(!!b.querySelector(gone), false, gone);
+  assert.equal(word(), 'Off');
+  assert.equal(b.dataset.knob, 'left');
   await click(b);
   assert.equal(b.dataset.on, 'true', 'one press: on');
   assert.equal(b.dataset.armed, undefined, 'never armed on the way on');
-  assert.equal(word(), 'dev');
+  assert.equal(word(), 'On');
+  assert.equal(b.dataset.knob, 'right');
   root.unmount();
   reset({ ...off, on: true, repo: 'demo-org/demo-app', polled_at: 'x' });
   const on = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
   const b2 = switchEl(on.host);
   assert.equal(b2.dataset.on, 'true');
-  assert.equal(b2.querySelector('[data-dv-word]').textContent, 'dev');
+  assert.equal(b2.querySelector('[data-dv-word]').textContent, 'On');
   await click(b2);
-  assert.equal(b2.querySelector('[data-dv-word]').textContent, 'off?', 'armed to turn off asks off?');
-  assert.equal(b2.dataset.on, 'true', 'the node stays on the fork while armed to turn off');
+  assert.equal(b2.querySelector('[data-dv-word]').textContent, 'Off?', 'armed to turn off asks Off?');
+  assert.equal(b2.dataset.on, 'true', 'still on while armed to turn off');
+  assert.ok(b2.querySelector('[data-dv-glyph="unlocked"]'));
   on.root.unmount();
 });
 
@@ -606,16 +606,16 @@ test('Dev desk: empty What landed, then the Reviews tab by keyboard', async () =
 });
 
 // Round 2 (Mira's review of #315): B1 toast, S2/S3 setup footer, S1 desk header, S4 tab targets.
-test('round 2: on phone the hint is a viewport toast above the tab bar with the short copy', async () => {
+test('v3: on phone the armed switch shows no toast; the space-controls sub-line says Press again to turn off', async () => {
   reset({ ...off, on: true, repo: 'demo-org/demo-app', branch: 'main', polled_at: '2026-11-05T08:00:00Z' });
-  const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, phone: true }));
+  const { host, root } = await mount(h(m.SpaceControls, { space: { id: 'spc_demo', name: 'Demo' }, phone: true, bots: [] }));
+  assert.match(host.querySelector('[data-dev-sub-text]').textContent, /Watching demo-org\/demo-app · main/);
   await click(switchEl(host));
-  const hint = host.querySelector('[data-dv-hint]');
-  assert.equal(hint.textContent, 'Press again to turn Dev mode off');
-  for (const c of ['fixed', 'inset-x-4', 'mx-auto', 'w-fit', 'max-w-[calc(100vw-32px)]', 'text-center', 'bottom-[calc(56px+env(safe-area-inset-bottom)+12px)]']) {
-    assert.ok(hint.classList.contains(c), c);
-  }
-  assert.ok(!hint.classList.contains('whitespace-nowrap'), 'may wrap to 2 lines rather than run off');
+  assert.equal(!!document.querySelector('[data-dv-hint]'), false);
+  const sub = host.querySelector('[data-dev-sub]');
+  assert.equal(sub.dataset.devSub, 'armed');
+  assert.equal(host.querySelector('[data-dev-sub-text]').textContent, 'Press again to turn off');
+  assert.equal(!!sub.querySelector('kbd'), false, 'no Esc key hint on a phone');
   root.unmount();
 });
 

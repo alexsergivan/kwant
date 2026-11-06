@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, ShieldOff, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
+import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
@@ -11,13 +11,14 @@ import { Space, spaceSummary, spaceSummaryTitle } from '../spaces';
 import { SpaceSwitcher, SpaceTile } from './Spaces';
 import { isMac } from './LayaStatus';
 import { ApprovalsOffBadge } from './ApprovalsSetting';
-import { approvalsOff, spaceOffLine } from '../approvalMode';
+import { approvalsOff } from '../approvalMode';
 import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
 import { type NeedsYouRow, workingIds, directIds } from '../chatsTab';
-import { DevModeSwitch, DevFlipNote, useDevMode } from './DevModeSwitch';
+import { DevFlipNote, useDevMode } from './DevModeSwitch';
+import { SpaceControls } from './SpaceControls';
 import { DevOnToast } from './DevOnToast';
 import { type DevModeState, deskIntent, devConnect, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
@@ -377,8 +378,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return selectedId === c.id;
   };
 
-  const offLine = spaceOffLine(space.approvals, kwants);
-  // Dev mode: on phones the switch sits after the name; on desktop it has its own row under it; on, the meta line says the branch.
+  // Dev mode and Approvals live in the space controls block under the header (explainer spec §1).
   const dev = useDevMode(space.id);
   const devOn = !!dev?.on;
   // The off note under the header (flow copy §7: HEAD → main, with Turn back on).
@@ -395,18 +395,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setDevOffNote(false);
     setDevOnToast(s);
   };
-  const devSwitch = (
-    <DevModeSwitch
-      key={space.id}
-      space={space}
-      phone={phone}
-      onTurnedOff={() => {
-        setDevOnToast(null);
-        setDevOffNote(true);
-      }}
-      onTurnedOn={showOn}
-    />
-  );
   const focusDevSwitch = () => setTimeout(() => document.querySelector<HTMLElement>('[data-dev-switch]')?.focus(), 0);
   const connectDev = onConnectDevGitHub
     ? () => {
@@ -418,24 +406,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
     deskIntent.set(space.id, 'type');
     onOpenDevDesk?.();
   };
-  const devMeta = devOn ? (
-    // The repo truncates; the branch never does (Mira S3)
-    <span className="flex min-w-0 items-baseline gap-1 text-meta text-zinc-400" data-dev-meta>
-      <span className="shrink-0">Dev ·{' '}</span>
-      {dev?.repo ? (
-        <>
-          <span className="truncate min-w-0 font-mono text-zinc-200" title={dev.repo} data-dev-meta-repo>
-            {dev.repo}
-          </span>
-          <span className="shrink-0">
-            {' '}· <span className="font-mono text-sky-300">{dev.branch ?? 'main'}</span>
-          </span>
-        </>
-      ) : (
-        <span className="truncate min-w-0">no repo yet</span>
-      )}
-    </span>
-  ) : null;
+  const seeDevRepos = () => {
+    deskIntent.set(space.id, 'repos');
+    onOpenDevDesk?.();
+  };
+  const spaceControls = (
+    <SpaceControls
+      space={{ id: space.id, name: space.name, approvals: space.approvals }}
+      phone={phone}
+      bots={kwants}
+      onTurnedOn={showOn}
+      onTurnedOff={() => {
+        setDevOnToast(null);
+        setDevOffNote(true);
+      }}
+      onOpenDevDesk={onOpenDevDesk}
+      onSeeRepos={onOpenDevDesk ? seeDevRepos : undefined}
+      onLinkRepo={onOpenDevDesk ? typeDevRepo : undefined}
+      onConnect={connectDev}
+      onOpenSettings={onOpenSpaceSettings}
+    />
+  );
   // Phones: section titles stay pinned while their list scrolls, so they are never cut off
   const sectionHead = `px-2 py-1 min-w-0 flex items-center justify-between gap-2 text-2xs font-semibold text-zinc-400 uppercase tracking-wider${
     phone ? ' kw-sticky-head sticky top-0 z-10' : ''
@@ -770,21 +761,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
             aria-expanded={switcherOpen}
             className="w-full flex items-center gap-2.5 px-1.5 py-1.5 rounded-lg text-left hover:bg-zinc-800/60 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
           >
-            <SpaceTile space={space} size={32} dev={devOn} devBehind="var(--kw-surface-side)" />
+            <SpaceTile space={space} size={32} dev={false} />
             <span className="flex-1 min-w-0">
               <span className="block text-body font-semibold text-zinc-50 truncate">{space.name}</span>
-              {devMeta ?? <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>}
+              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
             </span>
             <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
-          {devSwitch}
           </div>
         ) : (
           <div className="flex items-center gap-2.5 px-1.5 py-1.5" data-space-header>
-            <SpaceTile space={space} size={32} dev={devOn} devBehind="var(--kw-surface-side)" />
+            <SpaceTile space={space} size={32} dev={false} />
             <span className="flex-1 min-w-0">
               <h1 className="text-body font-semibold text-zinc-50 truncate">{space.name}</h1>
-              {devMeta ?? <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>}
+              <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>
             </span>
             <button
               type="button"
@@ -801,13 +791,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
         )}
-        {/* Desktop: the switch has its own 32 px row under the name, starting where the name text
-            starts (6 px pad + 32 px tile + 10 px gap), so it never squeezes the name or subtitle. */}
-        {!phone && (
-          <div className="h-8 flex items-center pl-12" data-dev-switch-row>
-            {devSwitch}
-          </div>
-        )}
+        {spaceControls}
         {devOffNote && <DevFlipNote on={false} approvals={space.approvals} onDismiss={dismissDevOff} onTurnBackOn={() => turnDevMode(space.id, true).then(showOn)} />}
         {devOnToast && devOn && (
           <DevOnToast
@@ -824,17 +808,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }
             onClose={closeDevOnToast}
           />
-        )}
-        {offLine && (
-          <button
-            type="button"
-            onClick={onOpenSpaceSettings}
-            title="Bots here act without asking, including deletions, publishing and sign-ins. Payments still ask you. Change it in Settings › This space."
-            className="mt-1.5 w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-amber-300/30 bg-amber-300/10 text-meta font-medium text-warn hover:bg-amber-300/15 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-300"
-          >
-            <ShieldOff size={12} aria-hidden="true" className="shrink-0" />
-            <span className="truncate">{offLine}</span>
-          </button>
         )}
         {phone && switcherOpen && (
           <SpaceSwitcher
