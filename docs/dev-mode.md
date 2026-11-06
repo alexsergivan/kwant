@@ -120,8 +120,19 @@ and newest tag. The full contract is in the team's `dev-mode/team-repos/api.md`;
 `(space_id, repo, kind, ref, head_sha)`) and turns each space's one repo into a `dev_repos` row keyed
 `github.com/owner/name`, with its branch, last seen commit and poll state, so nothing is announced
 again. The first reconcile hands it to the team that points at it, re-keying it and its cards if that
-team's repo is on a GitHub Enterprise host. A 0.7.1 build can still read the database afterwards, but
-can't add cards to it.
+team's repo is on a GitHub Enterprise host.
+
+**Going back to 0.7.1** after this is safe but limited. 0.7.1 still starts, reads every card and
+setting, and polls its one repo, but it can't make cards: its insert names the old unique key, SQLite
+refuses it, and 0.7.1 logs "could not save a card" and goes on. A trigger
+(`dev_cards_071_keeps_to_its_repo`) keeps it off other repos' cards: 0.7.1 finds review cards by PR
+number across the whole space, so without it its poll would mark other repos' reviews stale and its CI
+recheck would overwrite their facts. Every 0.7.2 write to `dev_cards` bumps a `rev` column; a write
+that doesn't (0.7.1's) and would mark stale, or change the facts of, a card of a repo other than
+`dev_mode_spaces.repo` is skipped. Coming back up to 0.7.2 rebuilds nothing; each repo carries on from
+its own `dev_repos.last_seen_sha` (0.7.1 never writes that table), so what landed meanwhile becomes cards
+once. A repo changed by hand while on 0.7.1 is not carried over (0.7.1 writes it to
+`dev_mode_spaces.repo`); teams' repo links are.
 
 `GET /api/dev/cards/:id` returns one card of any kind, in the same shape as the lists, or 404. The
 desk reads a release notes draft here once its `dev_card` event says it is ready, since no list

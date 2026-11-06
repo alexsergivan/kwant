@@ -116,8 +116,24 @@ const CARDS_TABLE: &str = "CREATE TABLE IF NOT EXISTS dev_cards (
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         posted TEXT,
         post_error TEXT,
+        rev INTEGER NOT NULL DEFAULT 0,
         UNIQUE(space_id, repo, kind, ref, head_sha)
     )";
+
+/// Downgrade guard (Ada's condition 1 for T2). A 0.7.1 build on this database watches one repo
+/// (`dev_mode_spaces.repo`) and still finds cards by PR number across the whole space: its poll
+/// would mark every other repo's review cards stale (their PRs aren't open in its repo) and its CI
+/// recheck would read other repos' commits on its repo and overwrite their facts. Every 0.7.2
+/// write to `dev_cards` bumps `rev`; a write that leaves `rev` alone comes from 0.7.1, and when it
+/// would mark stale, or rewrite the facts of, a card of another repo than the one 0.7.1 watches,
+/// that row is skipped (`RAISE(IGNORE)`: no error, the rest of the statement goes on). 0.7.1 keeps
+/// working for its own repo. Its card inserts fail anyway (see `migrate_team_repos`).
+const CARDS_071_GUARD: &str = "CREATE TRIGGER IF NOT EXISTS dev_cards_071_keeps_to_its_repo BEFORE UPDATE ON dev_cards
+    WHEN NEW.rev = OLD.rev
+      AND (NEW.facts IS NOT OLD.facts OR (NEW.status = 'stale' AND OLD.status != 'stale'))
+      AND OLD.repo != COALESCE(
+        (SELECT lower('github.com/' || s.repo) FROM dev_mode_spaces s WHERE s.space_id = OLD.space_id AND trim(s.repo) != ''), '')
+    BEGIN SELECT RAISE(IGNORE); END";
 
 const CARD_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_dev_cards_space ON dev_cards(space_id, kind, created_at)",
@@ -272,6 +288,11 @@ impl Database {
         if !self.dev_cards_has("repo").await? {
             self.migrate_team_repos().await?;
         }
+        // Built before the guard came in (0.7.2 development databases only)
+        if !self.dev_cards_has("rev").await? {
+            sqlx::query("ALTER TABLE dev_cards ADD COLUMN rev INTEGER NOT NULL DEFAULT 0").execute(&self.pool).await?;
+        }
+        sqlx::query(CARDS_071_GUARD).execute(&self.pool).await?;
         for sql in CARD_INDEXES {
             sqlx::query(sql).execute(&self.pool).await?;
         }
@@ -289,6 +310,14 @@ impl Database {
     /// again), and `dev_cards` is rebuilt with a `repo` column in its unique key. A card's repo is
     /// the one its facts name, else its space's. 0.7.1 kept `owner/name` without a host, so the
     /// key is github.com's; reconcile re-keys it if a team's source is on a GitHub Enterprise host.
+    ///
+    /// Going back to 0.7.1 afterwards is safe but limited, by design: 0.7.1 still reads every card
+    /// and repo setting, but its card insert names the old unique key (`ON CONFLICT(space_id, kind,
+    /// ref, head_sha)`), which this table no longer has, so SQLite refuses it; 0.7.1 logs "could not
+    /// save a card" and its poll goes on. It never sees `dev_repos`, so coming back up to 0.7.2
+    /// picks each repo up where 0.7.2 left it (`dev_repos.last_seen_sha`) and makes the cards for
+    /// what landed in between, once; this function doesn't run again (`dev_cards` has `repo`).
+    /// [`CARDS_071_GUARD`] keeps 0.7.1 off other repos' cards.
     async fn migrate_team_repos(&self) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
@@ -500,7 +529,7 @@ impl Database {
         if done.rows_affected() != 1 {
             return Ok(false);
         }
-        sqlx::query("UPDATE OR IGNORE dev_cards SET repo = ?3 WHERE space_id = ?1 AND repo = ?2").bind(space_id).bind(from).bind(to).execute(&mut *tx).await?;
+        sqlx::query("UPDATE OR IGNORE dev_cards SET repo = ?3, rev = rev + 1 WHERE space_id = ?1 AND repo = ?2").bind(space_id).bind(from).bind(to).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -617,7 +646,7 @@ impl Database {
     /// card stays as it is: a review that finishes after its PR merged (or moved on) must not come
     /// back to life. `None` when nothing was written (no such card, or it is stale).
     pub async fn set_dev_card(&self, id: &str, status: &str, card: Option<&str>) -> Result<Option<DevCardRow>, DbError> {
-        let done = sqlx::query("UPDATE dev_cards SET status = ?2, card = COALESCE(?3, card), updated_at = ?4 WHERE id = ?1 AND status != 'stale'")
+        let done = sqlx::query("UPDATE dev_cards SET status = ?2, card = COALESCE(?3, card), updated_at = ?4, rev = rev + 1 WHERE id = ?1 AND status != 'stale'")
             .bind(id)
             .bind(status)
             .bind(card)
@@ -633,7 +662,7 @@ impl Database {
     /// New facts for a card (CI finished after the card was made): back to pending so `generate`
     /// runs again; the card JSON stays until then.
     pub async fn set_dev_card_facts(&self, id: &str, facts: &str) -> Result<Option<DevCardRow>, DbError> {
-        sqlx::query("UPDATE dev_cards SET facts = ?2, status = 'pending', updated_at = ?3 WHERE id = ?1")
+        sqlx::query("UPDATE dev_cards SET facts = ?2, status = 'pending', updated_at = ?3, rev = rev + 1 WHERE id = ?1")
             .bind(id)
             .bind(facts)
             .bind(Utc::now())
@@ -645,7 +674,7 @@ impl Database {
     /// Replaces a card's JSON only while it still has `expect` (compare-and-set), so two finding
     /// actions can't overwrite each other. False when it changed in between.
     pub async fn swap_dev_card_json(&self, id: &str, expect: Option<&str>, card: &str) -> Result<bool, DbError> {
-        let done = sqlx::query("UPDATE dev_cards SET card = ?3, updated_at = ?4 WHERE id = ?1 AND card IS ?2")
+        let done = sqlx::query("UPDATE dev_cards SET card = ?3, updated_at = ?4, rev = rev + 1 WHERE id = ?1 AND card IS ?2")
             .bind(id)
             .bind(expect)
             .bind(card)
@@ -658,7 +687,7 @@ impl Database {
     /// Records a review as posted, only while none is (P6): false when another post got there
     /// first. Clears `post_error`.
     pub async fn set_dev_card_posted(&self, id: &str, posted: &str) -> Result<bool, DbError> {
-        let done = sqlx::query("UPDATE dev_cards SET posted = ?2, post_error = NULL, updated_at = ?3 WHERE id = ?1 AND posted IS NULL")
+        let done = sqlx::query("UPDATE dev_cards SET posted = ?2, post_error = NULL, updated_at = ?3, rev = rev + 1 WHERE id = ?1 AND posted IS NULL")
             .bind(id)
             .bind(posted)
             .bind(Utc::now())
@@ -669,7 +698,7 @@ impl Database {
 
     /// Records why a post didn't go through (`None` clears it). A posted card keeps no error.
     pub async fn set_dev_card_post_error(&self, id: &str, error: Option<&str>) -> Result<(), DbError> {
-        sqlx::query("UPDATE dev_cards SET post_error = ?2, updated_at = ?3 WHERE id = ?1 AND posted IS NULL")
+        sqlx::query("UPDATE dev_cards SET post_error = ?2, updated_at = ?3, rev = rev + 1 WHERE id = ?1 AND posted IS NULL")
             .bind(id)
             .bind(error)
             .bind(Utc::now())
@@ -737,7 +766,7 @@ impl Database {
 
     async fn stale_reviews(&self, space_id: &str, repo: Option<&str>, ref_: &str, keep_head: Option<&str>) -> Result<Vec<String>, DbError> {
         let rows: Vec<(String,)> = sqlx::query_as(
-            "UPDATE dev_cards SET status = 'stale', updated_at = ?4
+            "UPDATE dev_cards SET status = 'stale', updated_at = ?4, rev = rev + 1
              WHERE space_id = ?1 AND kind = 'review' AND ref = ?2 AND status != 'stale' AND (?3 IS NULL OR head_sha != ?3)
                AND (?5 IS NULL OR repo = ?5) RETURNING id",
         )
@@ -892,6 +921,99 @@ mod tests {
         assert_eq!(n, 4);
         let tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE name = 'dev_cards_v2'").fetch_one(&db.pool).await.unwrap();
         assert_eq!(tables, 0);
+    }
+
+    /// 0.7.1's own statements, copied from dbdff6b (src/db/dev_mode.rs), as it runs them.
+    const V071_CARD_COLS: &str = "id, space_id, kind, ref, head_sha, status, facts, card, created_at, updated_at, posted, post_error";
+    const V071_INSERT: &str = "INSERT INTO dev_cards (id, space_id, kind, ref, head_sha, status, facts, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?) ON CONFLICT(space_id, kind, ref, head_sha) DO NOTHING";
+    const V071_STALE: &str = "UPDATE dev_cards SET status = 'stale', updated_at = ?4
+             WHERE space_id = ?1 AND kind = 'review' AND ref = ?2 AND status != 'stale' AND (?3 IS NULL OR head_sha != ?3) RETURNING id";
+    const V071_FACTS: &str = "UPDATE dev_cards SET facts = ?2, status = 'pending', updated_at = ?3 WHERE id = ?1";
+    const V071_SET: &str = "UPDATE dev_cards SET status = ?2, card = COALESCE(?3, card), updated_at = ?4 WHERE id = ?1 AND status != 'stale'";
+    const V071_POLLED: &str = "UPDATE dev_mode_spaces SET last_seen_sha = COALESCE(?2, last_seen_sha), polled_at = ?3, poll_error = ?4 WHERE space_id = ?1";
+
+    async fn v071_stale(db: &Database, ref_: &str, keep: Option<&str>) -> Vec<String> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as(V071_STALE).bind(SPACE).bind(ref_).bind(keep).bind(Utc::now()).fetch_all(&db.pool).await.unwrap();
+        rows.into_iter().map(|r| r.0).collect()
+    }
+
+    async fn v071_facts(db: &Database, id: &str, facts: &str) {
+        sqlx::query(V071_FACTS).bind(id).bind(facts).bind(Utc::now()).execute(&db.pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_071_build_on_a_migrated_database_only_stops_making_cards_and_coming_back_catches_up() {
+        let (db, _tmp) = db().await;
+        as_071(&db).await;
+        db.migrate_dev_mode().await.unwrap();
+        // 0.7.2 then watched a second repo, with its own PR #12 and a landed card
+        let site = "github.com/demo-org/site";
+        let site_review = db.insert_dev_card_in(SPACE, site, REVIEW, "pr:12", "ssss", "{\"repo\":\"demo-org/site\"}").await.unwrap().unwrap();
+        db.set_dev_card(&site_review.id, READY, Some("{}")).await.unwrap().unwrap();
+        let site_landed = db.insert_dev_card_in(SPACE, site, LANDED, "s111", "s111", "{\"ci\":\"pending\"}").await.unwrap().unwrap();
+        db.set_dev_card(&site_landed.id, READY, Some("{}")).await.unwrap().unwrap();
+        let before: Vec<(String, String, String, String)> =
+            sqlx::query_as("SELECT id, repo, status, facts FROM dev_cards ORDER BY id").fetch_all(&db.pool).await.unwrap();
+
+        // --- Downgrade: 0.7.1 starts. Its migration is a no-op on this shape
+        for sql in [
+            "CREATE TABLE IF NOT EXISTS dev_cards (id TEXT PRIMARY KEY, space_id TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
+               head_sha TEXT NOT NULL, status TEXT NOT NULL, facts TEXT NOT NULL, card TEXT,
+               created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+               UNIQUE(space_id, kind, ref, head_sha))",
+            "CREATE INDEX IF NOT EXISTS idx_dev_cards_space ON dev_cards(space_id, kind, created_at)",
+        ] {
+            sqlx::query(sql).execute(&db.pool).await.unwrap();
+        }
+        // It reads every card, every repo's
+        let read = sqlx::query(&format!("SELECT {V071_CARD_COLS} FROM dev_cards WHERE space_id = ?")).bind(SPACE).fetch_all(&db.pool).await.unwrap();
+        assert_eq!(read.len(), 5);
+        // Its insert fails (the poller logs it and goes on): no card is made, none is lost
+        let now = Utc::now();
+        let insert = sqlx::query(V071_INSERT)
+            .bind("dvc_071").bind(SPACE).bind(LANDED).bind("dddd").bind("dddd").bind("{}").bind(now).bind(now)
+            .execute(&db.pool)
+            .await;
+        assert!(insert.is_err(), "0.7.1 can't make cards here");
+        // Its PR #12 moved on: only its own repo's old card goes stale, not demo-org/site's
+        assert_eq!(v071_stale(&db, "pr:12", Some("bnew")).await, vec!["dvc_review".to_string()]);
+        // Its "PR closed" sweep over every review card can't touch the other repo's either
+        assert!(v071_stale(&db, "pr:12", None).await.is_empty());
+        // Its CI recheck can't rewrite another repo's facts; its own repo's still work
+        v071_facts(&db, &site_landed.id, "{\"ci\":\"wrong repo\"}").await;
+        v071_facts(&db, "dvc_landed", "{\"repo\":\"Demo-Org/App\",\"ci\":\"pass\"}").await;
+        assert_eq!(db.dev_card("dvc_landed").await.unwrap().unwrap().status, PENDING);
+        // Finishing a card by id still works for any repo (the person's edits, generate)
+        sqlx::query(V071_SET).bind("dvc_landed").bind(READY).bind(None::<String>).bind(Utc::now()).execute(&db.pool).await.unwrap();
+        // It polls on, moving only its own 0.7.1 place
+        sqlx::query(V071_POLLED).bind(SPACE).bind("zzzz").bind(Utc::now()).bind(None::<String>).execute(&db.pool).await.unwrap();
+
+        let after: Vec<(String, String, String, String)> =
+            sqlx::query_as("SELECT id, repo, status, facts FROM dev_cards ORDER BY id").fetch_all(&db.pool).await.unwrap();
+        let of = |rows: &[(String, String, String, String)], id: &str| rows.iter().find(|r| r.0 == id).cloned().unwrap();
+        assert_eq!(after.len(), before.len());
+        assert_eq!(of(&after, &site_review.id), of(&before, &site_review.id), "the other repo's review is untouched");
+        assert_eq!(of(&after, &site_landed.id), of(&before, &site_landed.id), "the other repo's facts are untouched");
+        assert_eq!(of(&after, "dvc_review").2, STALE);
+
+        // --- Back up to 0.7.2: nothing is rebuilt, every row is as 0.7.1 left it
+        db.migrate_dev_mode().await.unwrap();
+        let again: Vec<(String, String, String, String)> =
+            sqlx::query_as("SELECT id, repo, status, facts FROM dev_cards ORDER BY id").fetch_all(&db.pool).await.unwrap();
+        assert_eq!(again, after);
+        // 0.7.2 picks the repo up where it left it, so what landed meanwhile becomes cards, once
+        let app = "github.com/demo-org/app";
+        assert_eq!(db.dev_repo(SPACE, app).await.unwrap().unwrap().last_seen_sha.as_deref(), Some("aaaa"));
+        let caught = db.insert_dev_card_in(SPACE, app, LANDED, "dddd", "dddd", "{}").await.unwrap();
+        assert!(caught.is_some());
+        assert!(db.insert_dev_card_in(SPACE, app, LANDED, "dddd", "dddd", "{}").await.unwrap().is_none());
+        assert!(db.insert_dev_card_in(SPACE, app, REVIEW, "pr:12", "bnew", "{}").await.unwrap().is_some(), "PR #12's new head gets its card");
+        // and 0.7.2's own writes to the other repo's cards go through the guard
+        db.set_dev_card_facts(&site_landed.id, "{\"ci\":\"pass\"}").await.unwrap();
+        assert_eq!(db.dev_card(&site_landed.id).await.unwrap().unwrap().facts, "{\"ci\":\"pass\"}");
+        assert_eq!(db.stale_dev_reviews_in(SPACE, site, "pr:12", None).await.unwrap(), vec![site_review.id.clone()]);
     }
 
     #[tokio::test]
