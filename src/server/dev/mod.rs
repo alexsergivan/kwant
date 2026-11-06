@@ -4,11 +4,12 @@
 //! `generate` turns them into cards. The production floor lives in `crate::mcp::prod_floor`.
 //!
 //! Lin owns `facts`, `routes`, `poller`, `post`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
-//! `review`, `risk`, `tamper` and `notes`; Juno owns `scan`.
+//! `review`, `risk`, `tamper`, `notes` and `source`; Juno owns `scan`.
 
 pub mod backup;
 pub mod facts;
 pub mod floor;
+pub mod git;
 pub mod generate;
 pub mod landed;
 pub mod notes;
@@ -19,6 +20,7 @@ pub mod review;
 pub mod risk;
 pub mod routes;
 pub mod scan;
+pub mod source;
 pub mod tamper;
 
 pub use generate::generate;
@@ -54,6 +56,13 @@ pub fn poll_every() -> std::time::Duration {
 pub fn call_cap() -> i64 {
     static CAP: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     *CAP.get_or_init(|| env_num("KWANT_DEV_CALL_CAP", 0, 1000).map_or(CALLS_CAP, |v| v as i64))
+}
+
+/// The most disk one repo's git mirror may use: `KWANT_DEV_MIRROR_CAP_BYTES` (1 B–1 TB, so a test
+/// can use a tiny cap), else [`git::MIRROR_CAP`] (1 GB).
+pub fn mirror_cap() -> u64 {
+    static CAP: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| env_num("KWANT_DEV_MIRROR_CAP_BYTES", 1, 1 << 40).unwrap_or(git::MIRROR_CAP))
 }
 
 /// Where the secrets scan downloads gitleaks from: `KWANT_DEV_GITLEAKS_URL` (an http(s) base; the

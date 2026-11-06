@@ -12,7 +12,9 @@ use crate::db::dev_mode::{DevCardRow, DevRepoRow, LANDED, PENDING, REVIEW, STALE
 use crate::db::models::Kwant;
 use crate::db::spaces::SpaceId;
 use crate::server::AppState;
-use crate::zombie::github::{EtagCache, GhCheck, GhCommit, GhError, GhFile, GhPull, GithubSource};
+use super::git::{self, Auth, GitError, Repo};
+use super::source::{Change, Commit, Forge, GithubForge, History};
+use crate::zombie::github::{EtagCache, GhError};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -191,59 +193,119 @@ pub async fn poll_logged(state: &AppState, row: DevRepoRow) {
 }
 
 /// One poll of one watched repo. Merges are recorded as `last_seen_sha` one by one, so a failure
-/// part way keeps the ones done.
+/// part way keeps the ones done. History comes from git ([`History`]: kwant's mirror of the repo,
+/// or a team folder's own `.git`) and, on GitHub, from the API when git can't answer; pull
+/// requests and checks come from the repo's [`Forge`] (GitHub only, until G4).
 pub async fn poll(state: &AppState, mode: &DevRepoRow) -> Result<(), GhError> {
-    // A row whose branch isn't known yet (added while off): reconcile fills it at switch-on
-    if mode.repo.trim().is_empty() || mode.branch.trim().is_empty() {
+    if mode.repo.trim().is_empty() {
         return Ok(());
     }
-    let space = SpaceId::new(&mode.space_id);
+    if mode.is_git() {
+        return poll_git(state, mode).await;
+    }
+    // A row whose branch isn't known yet (added while off): reconcile fills it at switch-on
+    if mode.branch.trim().is_empty() {
+        return Ok(());
+    }
     let (client, _) = repo::client_for(state, &mode.repo).await?;
+    let mut git_repo = None;
+    let (mut url, mut auth) = (String::new(), None);
+    if git::available().await {
+        if let Ok((u, header)) = client.dev_git_remote(&mode.repo) {
+            if let Some(a) = Auth::header(&u, header) {
+                git_repo = Repo::mirror(&state.config.data_dir, &mode.space_id, &mode.key).await.ok();
+                (url, auth) = (u, Some(a));
+            }
+        }
+    }
+    let commit_base = Some(format!("{}/{}/commit", client.dev_web(), mode.repo.trim_matches('/')));
+    let mut h = History::new(git_repo, url, auth, Some((&client, mode.repo.as_str())), &mode.branch, commit_base);
+    h.fetch().await?;
+    let forge = GithubForge { client: &client, repo: &mode.repo };
+    read(state, mode, &h, Some(&forge)).await
+}
+
+/// A repo GitHub's API can't read (GitLab, Gitea, a bare git server, a team folder with no
+/// remote): git only, so only landed cards, without PRs or checks.
+async fn poll_git(state: &AppState, mode: &DevRepoRow) -> Result<(), GhError> {
+    if !git::available().await {
+        return Err(GitError::NoGit.into());
+    }
+    let from = mode.git_url.as_deref().unwrap_or_default();
+    let (g, url) = if from.starts_with('/') {
+        (Repo::local(std::path::Path::new(from), &state.config.data_dir).await?, String::new())
+    } else {
+        let url = git::remote_url(from).filter(|u| u == from).ok_or(GitError::Refused)?;
+        (Repo::mirror(&state.config.data_dir, &mode.space_id, &mode.key).await?, url)
+    };
+    let mut mode = mode.clone();
+    if mode.branch.trim().is_empty() {
+        mode.branch = g.default_branch(&url, None).await?;
+        state.db.set_dev_repo_branch(&mode.space_id, &mode.key, &mode.branch).await.map_err(|e| GhError::Other(e.to_string()))?;
+    }
+    let base = mode.host.as_deref().and_then(|h| git::commit_base(h, &mode.repo));
+    let mut h = History::new(Some(g), url, None, None, &mode.branch, base);
+    h.fetch().await?;
+    if mode.deploy_hint.is_none() {
+        if let Some(hint) = h.root_names().await.as_deref().and_then(repo::deploy_hint) {
+            let _ = state.db.set_dev_repo_hint(&mode.space_id, &mode.key, Some(hint)).await;
+        }
+    }
+    read(state, &mode, &h, None).await
+}
+
+/// Reads what landed, the open changes and the CI that was still running, and makes their cards:
+/// the poll's body over any [`History`] and, when the host has one, its [`Forge`] (the seam a GitLab
+/// or Gitea forge plugs into, any-git.md G4). With no forge, only landed cards.
+pub async fn read(state: &AppState, mode: &DevRepoRow, h: &History<'_>, forge: Option<&dyn Forge>) -> Result<(), GhError> {
+    let space = SpaceId::new(&mode.space_id);
     let kwants = state.db.list_kwants(&space).await.unwrap_or_default();
     let cache = etags();
 
     // The newest tag, for release notes
-    if let Ok(tag) = client.dev_latest_tag(&mode.repo, cache).await {
-        update_tag(&client, mode, tag).await;
-    }
+    update_tag(h, mode).await;
 
     // What landed
-    let (commits, found) = client.dev_commits_since(&mode.repo, &mode.branch, mode.last_seen_sha.as_deref(), cache).await?;
+    let (commits, found) = h.commits_since(mode.last_seen_sha.as_deref(), cache).await?;
     let mut last = None;
+    let mut skipped: Option<String> = None;
     for c in window(commits, mode.last_seen_sha.is_none(), found) {
-        landed(state, &client, mode, &kwants, &c).await?;
+        // A rebase-merge's earlier commits are skipped; the PR's card shows what they all changed
+        let base = skipped.take();
+        if !landed(state, h, forge, mode, &kwants, &c, base.as_deref()).await? {
+            skipped = base.or_else(|| c.parents.first().cloned());
+        }
         last = Some(c.sha.clone());
     }
     state.db.dev_repo_polled(&mode.space_id, &mode.key, last.as_deref(), None).await.map_err(|e| GhError::Other(e.to_string()))?;
 
+    let Some(forge) = forge else { return Ok(()) };
     // Open PRs
-    let pulls = client.dev_open_pulls(&mode.repo, &mode.branch, cache).await?;
-    reviews(state, &client, mode, &kwants, &pulls).await?;
+    let pulls = forge.open_changes(&mode.branch, cache).await?;
+    reviews(state, h, forge, mode, &kwants, &pulls).await?;
 
     // CI that was still running
-    recheck_ci(state, &client, mode).await;
+    recheck_ci(state, forge, mode).await;
     Ok(())
 }
 
-async fn update_tag(client: &GithubSource, mode: &DevRepoRow, tag: Option<(String, Option<String>)>) {
+async fn update_tag(h: &History<'_>, mode: &DevRepoRow) {
     let key = tag_key(&mode.space_id, &mode.key);
-    let Some((name, sha)) = tag else {
-        shared().lock().unwrap().tags.remove(&key);
-        return;
-    };
-    if shared().lock().unwrap().tags.get(&key).is_some_and(|(t, at)| *t == name && at.is_some()) {
-        return;
+    let known = shared().lock().unwrap().tags.get(&key).cloned();
+    match h.latest_tag(known.as_ref(), etags()).await {
+        Ok(Some(t)) => {
+            shared().lock().unwrap().tags.insert(key, t);
+        }
+        Ok(None) => {
+            shared().lock().unwrap().tags.remove(&key);
+        }
+        Err(_) => {}
     }
-    let at = match sha {
-        Some(s) => client.dev_commit(&mode.repo, &s).await.ok().and_then(|c| c.commit.committer.date.or(c.commit.author.date)),
-        None => None,
-    };
-    shared().lock().unwrap().tags.insert(key, (name, at));
 }
 
 /// Which of the new commits (oldest first) become cards: the newest [`BACKFILL`] on a space's
 /// first poll, else up to [`MAX_NEW`] (the newest, when there were more or `last_seen` was lost).
-pub fn window(commits: Vec<GhCommit>, first: bool, _found: bool) -> Vec<GhCommit> {
+pub fn window(commits: Vec<Commit>, first: bool, _found: bool) -> Vec<Commit> {
     let keep = if first { BACKFILL } else { MAX_NEW };
     let skip = commits.len().saturating_sub(keep);
     commits.into_iter().skip(skip).collect()
@@ -252,9 +314,9 @@ pub fn window(commits: Vec<GhCommit>, first: bool, _found: bool) -> Vec<GhCommit
 /// The merged PR a commit on the branch is the merge (or squash) commit of. `Err(())` when the
 /// commit is one of several a rebase-merge put on the branch and isn't the last: the PR's card
 /// is made from its merge commit, so this one is skipped.
-pub(crate) fn merged_pr<'a>(pulls: &'a [GhPull], sha: &str, branch: &str) -> Result<Option<&'a GhPull>, ()> {
-    let merged: Vec<&GhPull> = pulls.iter().filter(|p| p.merged_at.is_some() && p.base.branch == branch).collect();
-    if let Some(p) = merged.iter().find(|p| p.merge_commit_sha.as_deref() == Some(sha)) {
+pub(crate) fn merged_pr<'a>(pulls: &'a [Change], sha: &str, branch: &str) -> Result<Option<&'a Change>, ()> {
+    let merged: Vec<&Change> = pulls.iter().filter(|p| p.merged_at.is_some() && p.base_branch == branch).collect();
+    if let Some(p) = merged.iter().find(|p| p.merge_sha.as_deref() == Some(sha)) {
         return Ok(Some(p));
     }
     if merged.is_empty() {
@@ -264,26 +326,45 @@ pub(crate) fn merged_pr<'a>(pulls: &'a [GhPull], sha: &str, branch: &str) -> Res
     }
 }
 
-async fn landed(state: &AppState, client: &GithubSource, mode: &DevRepoRow, kwants: &[Kwant], c: &GhCommit) -> Result<(), GhError> {
+/// Makes the landed card of commit `c`. False when `c` is one of a rebase-merge's earlier commits
+/// and was skipped; `base` is then where the next card's files start (the commit before the first
+/// skipped one), so the PR's card shows all it changed.
+async fn landed(state: &AppState, h: &History<'_>, forge: Option<&dyn Forge>, mode: &DevRepoRow, kwants: &[Kwant], c: &Commit, base: Option<&str>) -> Result<bool, GhError> {
     if state.db.dev_cards_of_ref_in(&mode.space_id, &mode.key, LANDED, &c.sha).await.map(|v| !v.is_empty()).unwrap_or(false) {
-        return Ok(());
+        return Ok(true);
     }
-    let pulls = client.dev_pulls_for_commit(&mode.repo, &c.sha).await.unwrap_or_default();
-    let Ok(pr) = merged_pr(&pulls, &c.sha, &mode.branch) else { return Ok(()) };
-    let full = client.dev_commit(&mode.repo, &c.sha).await?;
-    let files = match pr {
-        Some(p) => client.dev_pull_files(&mode.repo, p.number).await?,
-        None => full.files.clone(),
+    let pulls = match forge {
+        Some(f) => f.changes_for_commit(&c.sha).await.unwrap_or_default(),
+        None => Vec::new(),
     };
-    let checks = client.dev_check_runs(&mode.repo, &c.sha, etags()).await.unwrap_or_default();
-    let until = pr.and_then(|p| p.merged_at).or(full.commit.committer.date).unwrap_or_else(Utc::now) - Duration::seconds(1);
-    let first = first_edits(client, mode, &files, until).await;
+    let Ok(pr) = merged_pr(&pulls, &c.sha, &mode.branch) else { return Ok(false) };
+    let mut full = h.commit(&c.sha).await?;
+    let files = match (h.has_git(), pr, forge) {
+        (true, _, _) => match base {
+            Some(b) => h.landed_files(Some(b), &c.sha).await.unwrap_or_else(|| full.files.clone()),
+            None => full.files.clone(),
+        },
+        (false, Some(p), Some(f)) => f.change_files(p.number).await?,
+        _ => full.files.clone(),
+    };
+    // Git knows no forge accounts: a direct push asks the forge who wrote it
+    if full.login.is_none() && pr.is_none() && h.has_git() {
+        if let Some(f) = forge {
+            full.login = f.commit_login(&c.sha).await;
+        }
+    }
+    let checks = match forge {
+        Some(f) => f.checks(&c.sha, etags()).await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let until = pr.and_then(|p| p.merged_at).or(full.committer.date).unwrap_or_else(Utc::now) - Duration::seconds(1);
+    let first = first_edits(h, &files, until).await;
     let facts = landed_facts(mode, &full, pr, files, checks, kwants, first);
     insert(state, mode, LANDED, &c.sha, &c.sha, &facts).await;
-    Ok(())
+    Ok(true)
 }
 
-async fn reviews(state: &AppState, client: &GithubSource, mode: &DevRepoRow, kwants: &[Kwant], pulls: &[GhPull]) -> Result<(), GhError> {
+async fn reviews(state: &AppState, h: &History<'_>, forge: &dyn Forge, mode: &DevRepoRow, kwants: &[Kwant], pulls: &[Change]) -> Result<(), GhError> {
     let mut open = HashSet::new();
     let mut read = 0;
     for p in pulls {
@@ -295,26 +376,30 @@ async fn reviews(state: &AppState, client: &GithubSource, mode: &DevRepoRow, kwa
             continue;
         }
         let have = state.db.dev_cards_of_ref_in(&mode.space_id, &mode.key, REVIEW, &ref_).await.unwrap_or_default();
-        if have.iter().any(|c| c.head_sha == p.head.sha) {
-            stale(state, mode, &ref_, Some(&p.head.sha)).await;
+        if have.iter().any(|c| c.head_sha == p.head_sha) {
+            stale(state, mode, &ref_, Some(&p.head_sha)).await;
             continue;
         }
         if read >= MAX_REVIEWS {
             continue;
         }
         read += 1;
-        let mut files = client.dev_pull_files(&mode.repo, p.number).await?;
-        let head = client.dev_commit(&mode.repo, &p.head.sha).await.ok();
-        let checks = client.dev_check_runs(&mode.repo, &p.head.sha, etags()).await.unwrap_or_default();
-        let first = first_edits(client, mode, &files, Utc::now()).await;
+        let head_ref = forge.change_head_ref(p.number);
+        let mut files: Vec<FileDiff> = match h.change_files(head_ref.as_deref(), p.number, &p.head_sha, &p.base_branch).await {
+            Some(f) => f,
+            None => forge.change_files(p.number).await?,
+        };
+        let head = h.commit(&p.head_sha).await.ok();
+        let checks: Vec<Check> = forge.checks(&p.head_sha, etags()).await.unwrap_or_default();
+        let first = first_edits(h, &files, Utc::now()).await;
         // The whole diff is scanned before the 60k cut, and secret lines are hidden before
         // anything is stored or shown (Juno, plan §3.4)
         let capped = files.len() >= crate::zombie::github::MAX_PR_FILES;
-        let security = super::scan::for_review(&state.config.data_dir, client, &mode.repo, &p.head.sha, &mut files, capped).await;
+        let security = super::scan::for_review(&state.config.data_dir, h, &p.head_sha, &mut files, capped).await;
         let mut facts = review_facts(mode, p, head.as_ref(), files, checks, kwants, first);
         facts.security = Some(security);
-        insert(state, mode, REVIEW, &ref_, &p.head.sha, &facts).await;
-        stale(state, mode, &ref_, Some(&p.head.sha)).await;
+        insert(state, mode, REVIEW, &ref_, &p.head_sha, &facts).await;
+        stale(state, mode, &ref_, Some(&p.head_sha)).await;
     }
     // A PR of this repo that closed or merged: its review cards go stale
     if let Ok(cards) = state.db.dev_cards_in(&mode.space_id, Some(&mode.key), REVIEW, None, 200).await {
@@ -349,7 +434,7 @@ async fn insert(state: &AppState, mode: &DevRepoRow, kind: &str, ref_: &str, hea
 
 /// Landed and review cards made in the last [`CI_RECHECK_HOURS`] whose CI was pending: read the
 /// checks again, and when they changed, store them and run `generate` again.
-async fn recheck_ci(state: &AppState, client: &GithubSource, mode: &DevRepoRow) {
+async fn recheck_ci(state: &AppState, forge: &dyn Forge, mode: &DevRepoRow) {
     let since = Utc::now() - Duration::hours(CI_RECHECK_HOURS);
     let mut rows: Vec<DevCardRow> = Vec::new();
     for kind in [LANDED, REVIEW] {
@@ -365,7 +450,7 @@ async fn recheck_ci(state: &AppState, client: &GithubSource, mode: &DevRepoRow) 
             continue;
         }
         done += 1;
-        let Ok(checks) = client.dev_check_runs(&mode.repo, &row.head_sha, etags()).await else { continue };
+        let Ok(checks) = forge.checks(&row.head_sha, etags()).await else { continue };
         let checks = to_checks(checks);
         if checks == facts.checks {
             continue;
@@ -383,21 +468,21 @@ async fn recheck_ci(state: &AppState, client: &GithubSource, mode: &DevRepoRow) 
 
 /// The changed files (not new ones) nobody committed to in the last [`FIRST_EDIT_DAYS`] before
 /// `until`, reading at most [`FIRST_EDIT_FILES`] histories.
-async fn first_edits(client: &GithubSource, mode: &DevRepoRow, files: &[GhFile], until: DateTime<Utc>) -> Vec<String> {
+async fn first_edits(h: &History<'_>, files: &[FileDiff], until: DateTime<Utc>) -> Vec<String> {
     let since = until - Duration::days(FIRST_EDIT_DAYS);
     let mut out = Vec::new();
     for f in files.iter().filter(|f| f.status != "added").take(FIRST_EDIT_FILES) {
-        let path = f.previous_filename.as_deref().unwrap_or(&f.filename);
-        if let Ok(0) = client.dev_path_commits(&mode.repo, &mode.branch, path, since, until).await {
-            out.push(f.filename.clone());
+        let path = f.previous_path.as_deref().unwrap_or(&f.path);
+        if let Ok(0) = h.path_commits(path, since, until).await {
+            out.push(f.path.clone());
         }
     }
     out
 }
 
-/// GitHub's files with their patches, cut so the patches add up to at most [`DIFF_CHARS`]: a
+/// The changed files with their patches, cut so the patches add up to at most [`DIFF_CHARS`]: a
 /// patch that doesn't fit is dropped whole, and `cut` says how many files weren't read.
-pub fn cut_diffs(files: Vec<GhFile>) -> (Vec<FileDiff>, Option<String>) {
+pub fn cut_diffs(files: Vec<FileDiff>) -> (Vec<FileDiff>, Option<String>) {
     let mut left = DIFF_CHARS;
     let mut unread = 0;
     let out = files
@@ -414,7 +499,7 @@ pub fn cut_diffs(files: Vec<GhFile>) -> (Vec<FileDiff>, Option<String>) {
                 }
                 None => None,
             };
-            FileDiff { path: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch, previous_path: f.previous_filename }
+            FileDiff { patch, ..f }
         })
         .collect();
     let cut = (unread > 0).then(|| format!("diff cut, {unread} {} not read", if unread == 1 { "file" } else { "files" }));
@@ -452,8 +537,9 @@ fn https(u: Option<&str>) -> Option<String> {
     u.filter(|u| u.starts_with("https://")).map(str::to_string)
 }
 
-fn to_checks(cs: Vec<GhCheck>) -> Vec<Check> {
-    let mut v: Vec<Check> = cs.into_iter().map(|c| Check { name: c.name, status: c.status, conclusion: c.conclusion, url: https(c.html_url.as_deref()) }).collect();
+/// The checks with only https links, sorted by name so a re-read compares equal.
+fn to_checks(cs: Vec<Check>) -> Vec<Check> {
+    let mut v: Vec<Check> = cs.into_iter().map(|c| Check { url: https(c.url.as_deref()), ..c }).collect();
     v.sort_by(|a, b| a.name.cmp(&b.name));
     v
 }
@@ -464,16 +550,16 @@ fn ci_link(checks: &[Check]) -> Option<String> {
     checks.iter().find(bad).or(checks.first()).and_then(|c| c.url.clone())
 }
 
-fn author_of(commit: Option<&GhCommit>, pr: Option<&GhPull>, kwants: &[Kwant]) -> Author {
-    let login = pr.and_then(|p| p.user.as_ref()).or(commit.and_then(|c| c.author.as_ref())).map(|u| u.login.clone());
-    let name = commit.map(|c| c.commit.author.name.clone()).filter(|n| !n.trim().is_empty()).or_else(|| login.clone()).unwrap_or_default();
-    let email = commit.and_then(|c| c.commit.author.email.clone());
+fn author_of(commit: Option<&Commit>, pr: Option<&Change>, kwants: &[Kwant]) -> Author {
+    let login = pr.and_then(|p| p.author.clone()).or(commit.and_then(|c| c.login.clone()));
+    let name = commit.map(|c| c.author.name.clone()).filter(|n| !n.trim().is_empty()).or_else(|| login.clone()).unwrap_or_default();
+    let email = commit.and_then(|c| c.author.email.clone());
     let bot = match_bot(&name, email.as_deref(), kwants);
     Author { login, name, email, bot }
 }
 
-pub fn landed_facts(mode: &DevRepoRow, c: &GhCommit, pr: Option<&GhPull>, files: Vec<GhFile>, checks: Vec<GhCheck>, kwants: &[Kwant], first: Vec<String>) -> DevFacts {
-    let (msg_title, msg_body) = split_message(&c.commit.message);
+pub fn landed_facts(mode: &DevRepoRow, c: &Commit, pr: Option<&Change>, files: Vec<FileDiff>, checks: Vec<Check>, kwants: &[Kwant], first: Vec<String>) -> DevFacts {
+    let (msg_title, msg_body) = split_message(&c.message);
     let (files, cut) = cut_diffs(files);
     let checks = to_checks(checks);
     DevFacts {
@@ -484,24 +570,24 @@ pub fn landed_facts(mode: &DevRepoRow, c: &GhCommit, pr: Option<&GhPull>, files:
         body: pr.and_then(|p| p.body.clone()).unwrap_or(msg_body),
         head_sha: c.sha.clone(),
         base_branch: mode.branch.clone(),
-        merged_at: pr.and_then(|p| p.merged_at).or(c.commit.committer.date),
-        merged_by: pr.and_then(|p| p.merged_by.as_ref()).map(|u| u.login.clone()),
+        merged_at: pr.and_then(|p| p.merged_at).or(c.committer.date),
+        merged_by: pr.and_then(|p| p.merged_by.clone()),
         author: author_of(Some(c), pr, kwants),
         files,
         cut,
         ci: CiState::of(&checks),
-        links: Links { pr: https(pr.and_then(|p| p.html_url.as_deref())), commit: https(c.html_url.as_deref()), ci: ci_link(&checks) },
+        links: Links { pr: https(pr.and_then(|p| p.url.as_deref())), commit: https(c.url.as_deref()), ci: ci_link(&checks) },
         security: None,
         checks,
         task: None,
         first_edit_files: first,
         draft: false,
         head_branch: None,
-        pr_head_sha: pr.map(|p| p.head.sha.clone()),
+        pr_head_sha: pr.map(|p| p.head_sha.clone()),
     }
 }
 
-pub fn review_facts(mode: &DevRepoRow, p: &GhPull, head: Option<&GhCommit>, files: Vec<GhFile>, checks: Vec<GhCheck>, kwants: &[Kwant], first: Vec<String>) -> DevFacts {
+pub fn review_facts(mode: &DevRepoRow, p: &Change, head: Option<&Commit>, files: Vec<FileDiff>, checks: Vec<Check>, kwants: &[Kwant], first: Vec<String>) -> DevFacts {
     let (files, cut) = cut_diffs(files);
     let checks = to_checks(checks);
     DevFacts {
@@ -510,21 +596,21 @@ pub fn review_facts(mode: &DevRepoRow, p: &GhPull, head: Option<&GhCommit>, file
         pr: Some(p.number),
         title: p.title.trim().to_string(),
         body: p.body.clone().unwrap_or_default(),
-        head_sha: p.head.sha.clone(),
-        base_branch: p.base.branch.clone(),
+        head_sha: p.head_sha.clone(),
+        base_branch: p.base_branch.clone(),
         merged_at: None,
         merged_by: None,
         author: author_of(head, Some(p), kwants),
         files,
         cut,
         ci: CiState::of(&checks),
-        links: Links { pr: https(p.html_url.as_deref()), commit: https(head.and_then(|c| c.html_url.as_deref())), ci: ci_link(&checks) },
+        links: Links { pr: https(p.url.as_deref()), commit: https(head.and_then(|c| c.url.as_deref())), ci: ci_link(&checks) },
         security: None,
         checks,
         task: None,
         first_edit_files: first,
         draft: p.draft,
-        head_branch: Some(p.head.branch.clone()),
+        head_branch: Some(p.head_branch.clone()),
         pr_head_sha: None,
     }
 }
@@ -534,8 +620,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn file(name: &str, patch_len: Option<usize>) -> GhFile {
-        serde_json::from_value(json!({"filename": name, "status": "modified", "additions": 3, "deletions": 1, "patch": patch_len.map(|n| "x".repeat(n))})).unwrap()
+    fn file(name: &str, patch_len: Option<usize>) -> FileDiff {
+        FileDiff { path: name.into(), status: "modified".into(), additions: 3, deletions: 1, patch: patch_len.map(|n| "x".repeat(n)), previous_path: None }
     }
 
     fn kwant(id: &str, name: &str) -> Kwant {
@@ -547,24 +633,27 @@ mod tests {
         .unwrap()
     }
 
-    fn pull(n: u64, merge: Option<&str>, merged: bool, base: &str) -> GhPull {
-        serde_json::from_value(json!({
+    /// Built from GitHub's JSON, so the conversion is under test too.
+    fn pull(n: u64, merge: Option<&str>, merged: bool, base: &str) -> Change {
+        serde_json::from_value::<crate::zombie::github::GhPull>(json!({
             "number": n, "title": format!("PR {n}"), "state": if merged { "closed" } else { "open" }, "draft": false,
             "head": {"ref": "feature", "sha": "h1"}, "base": {"ref": base, "sha": "b1"},
             "merged_at": if merged { json!("2026-11-05T01:00:00Z") } else { json!(null) },
             "merge_commit_sha": merge,
         }))
         .unwrap()
+        .into()
     }
 
-    fn commit(sha: &str) -> GhCommit {
-        serde_json::from_value(json!({
+    fn commit(sha: &str) -> Commit {
+        serde_json::from_value::<crate::zombie::github::GhCommit>(json!({
             "sha": sha, "html_url": format!("https://github.com/demo-org/app/commit/{sha}"),
             "commit": {"message": "Fix the thing\n\nLonger words.", "author": {"name": "Lin (kwant bot)", "email": "lin-bot@users.noreply.example.com", "date": "2026-11-05T01:00:00Z"},
                        "committer": {"name": "GitHub", "email": "noreply@example.com", "date": "2026-11-05T01:00:00Z"}},
             "parents": []
         }))
         .unwrap()
+        .into()
     }
 
     #[test]
@@ -598,7 +687,7 @@ mod tests {
 
     #[test]
     fn the_first_poll_backfills_five_and_later_ones_twenty() {
-        let cs: Vec<GhCommit> = (0..30).map(|i| commit(&format!("c{i:02}"))).collect();
+        let cs: Vec<Commit> = (0..30).map(|i| commit(&format!("c{i:02}"))).collect();
         let w = window(cs.clone(), true, false);
         assert_eq!(w.iter().map(|c| c.sha.as_str()).collect::<Vec<_>>(), ["c25", "c26", "c27", "c28", "c29"]);
         let w = window(cs.clone(), false, true);
@@ -632,16 +721,17 @@ mod tests {
             polled_at: None,
             poll_error: None,
             added_by: "team".into(),
+            git_url: None,
             added_at: Utc::now(),
         };
         let c = commit("m1");
         let mut p = pull(7, Some("m1"), true, "main");
-        p.html_url = Some("javascript:alert(1)".into());
-        let checks: Vec<GhCheck> = serde_json::from_value(json!([
+        p.url = Some("javascript:alert(1)".into());
+        let checks: Vec<Check> = crate::server::dev::source::all(serde_json::from_value::<Vec<crate::zombie::github::GhCheck>>(json!([
             {"name": "rust", "status": "completed", "conclusion": "failure", "html_url": "https://github.com/demo-org/app/actions/runs/1"},
             {"name": "frontend", "status": "completed", "conclusion": "success", "html_url": "https://github.com/demo-org/app/actions/runs/2"}
         ]))
-        .unwrap();
+        .unwrap());
         let f = landed_facts(&mode, &c, Some(&p), vec![file("src/a.rs", Some(10))], checks, &[kwant("k1", "Lin")], vec!["src/a.rs".into()]);
         assert_eq!(f.pr, Some(7));
         assert_eq!(f.title, "PR 7");

@@ -414,6 +414,31 @@ impl GithubSource {
         serde_json::from_value(self.get_dev(path, cache).await?).map_err(|_| GhError::Other("GitHub sent an answer kwant could not read".into()))
     }
 
+    /// The web origin of this connection's GitHub: `https://github.com` for api.github.com, the
+    /// Enterprise host's own origin otherwise.
+    pub fn dev_web(&self) -> String {
+        let Ok(u) = url::Url::parse(self.cfg.api_base.trim()) else { return String::new() };
+        if u.host_str().is_some_and(|h| h.eq_ignore_ascii_case("api.github.com")) {
+            "https://github.com".into()
+        } else {
+            u.origin().ascii_serialization()
+        }
+    }
+
+    /// What git fetches `repo` from (`<web>/owner/name.git`) and the `Authorization` value that
+    /// carries this connection's token to it (any-git.md G2). The value goes to git through its
+    /// environment only (`dev::git::Auth`), never into argv, a file or a log.
+    pub fn dev_git_remote(&self, repo: &str) -> Result<(String, Zeroizing<String>), GhError> {
+        use base64::Engine;
+        let web = self.dev_web();
+        if web.is_empty() || web == "null" {
+            return Err(GhError::Other("this GitHub connection has no web address".into()));
+        }
+        let url = format!("{web}/{}.git", repo_path(repo)?);
+        let pair = Zeroizing::new(format!("x-access-token:{}", self.token.as_str()));
+        Ok((url, Zeroizing::new(format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(pair.as_bytes())))))
+    }
+
     /// The repo and its default branch.
     pub async fn dev_repo(&self, repo: &str) -> Result<GhRepo, GhError> {
         self.get_as(&format!("/repos/{}", repo_path(repo)?), None).await

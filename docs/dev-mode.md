@@ -74,8 +74,9 @@ reply carries a `check` that says why. A `branch` the repo doesn't have is a 400
     is added or changed in Loose ends, every space that is on with no repo binds the repo it finds
     and polls soon, with no off and on. The `GET` does the same if nothing else did (at most every
     30 s per space). A repo the person typed or picked is never replaced.
-  - `other_host`: only GitLab, Gitea or other non-GitHub sources, or `local` ones. These are read
-    from 0.7.3.
+  - `no_git`: only GitLab, Gitea or other non-GitHub sources, or `local` ones, and no git 2.31+ on
+    the server to read them. The reply adds `install_hint`. (0.7.2's `other_host` is retired in
+    0.7.3: git reads those repos now, so they show `watching`.)
 - `new_reviews`: review cards ready to read that were made since the desk was last opened (open
   ones only, never landed cards or floor approvals), every watched repo's together: one count for
   the space, with one seen time. A space never opened counts 0.
@@ -101,8 +102,10 @@ and newest tag. The full contract is in the team's `dev-mode/team-repos/api.md`;
 - **At most 10 repos a space.** A team source past the cap shows `too_many` and has no row; a hand repo
   past it is a 409 `too_many`.
 - **`GET` and the `PUT` reply** have `repos[]`: one entry per repo, in team order then hand rows, with
-  `key`, `repo`, `host`, `team`, `team_id`, `from`, `branch`, `status` (`watching`, `not_connected`,
-  `other_host`, `error`, `too_many`), `poll_error`, `polled_at`, `last_tag` and `added_by`. The
+  `key`, `repo`, `host`, `team`, `team_id`, `from`, `provider` (0.7.3: `github` when it's read
+  through a GitHub connection, GitHub Enterprise too, `git` when git alone reads it), `branch`, `status` (`watching`, `not_connected`,
+  `no_git`, `error`, `too_many`; 0.7.2 also had `other_host`), `poll_error`, `poll_code` (0.7.3: `too_big` for a repo over the mirror cap or an answer from git too big to read, else null),
+  `polled_at`, `last_tag` and `added_by`. The
   top-level `repo`, `branch`, `deploy_hint`, `last_seen_sha`, `polled_at` and `poll_error` are the
   first watched repo's, kept for one release only (deprecated). Top-level `status` is `watching` when
   any repo is.
@@ -134,6 +137,93 @@ that doesn't (0.7.1's) and would mark stale, or change the facts of, a card of a
 its own `dev_repos.last_seen_sha` (0.7.1 never writes that table), so what landed meanwhile becomes cards
 once. A repo changed by hand while on 0.7.1 is not carried over (0.7.1 writes it to
 `dev_mode_spaces.repo`); teams' repo links are.
+
+### Any git repo (0.7.3)
+
+Dev mode reads every watched repo's history with git (any-git.md G1-G3). kwant keeps a bare mirror
+of each repo at `<data>/dev/<space>/<key>-<hash>.git` (deleted when the repo stops being watched; its
+cards stay), or reads a `local` team folder's own `.git` in place, never touching its working tree.
+Commits, diffs, file text, tags, path history and the root's names come from git; on GitHub, pull
+requests, checks and review cards still come from the API, and the API answers when a fetch fails.
+A team's repo on GitLab, Gitea, a bare git server or a folder with no remote now gets a row too
+(`provider: "git"`, with the URL git fetches from in `git_url`) and landed cards, with no PR, CI or
+review cards until its forge is added (G4, G5).
+
+Git runs as kwant's own user, so its SSH keys and credential helpers work. A GitHub token goes to git
+only as an `http.extraHeader` in `GIT_CONFIG_*` environment variables, never in argv, a file or a
+log; URL userinfo is stripped before anything else. http(s) and git:// addresses lose all of it;
+ssh keeps a user name (`ssh://deploy@host/x.git`, `deploy@host:x.git`) and never a password, and
+`git_url` is never logged. Each call has no terminal prompt, a timeout,
+`nice` and its own process group, which is killed when it runs over. The Docker image installs git
+and openssh-client. Without git 2.31+, the status is `no_git`.
+
+A remote read from a team's folder or repo link is fetched only over https, http, ssh or git, and
+never from this machine or a link-local address (`localhost`, `127.0.0.0/8`, `::1`, `169.254.0.0/16`,
+`fe80::/10`, `0.0.0.0`): anyone working in the folder can write its remote, so it can't aim kwant at
+the server itself or a cloud metadata address. Such a source shows `no_repo`. LAN hosts (a Gitea on
+`192.168.x`) are fetched.
+
+Right before every fetch or remote read (GitHub's too), kwant looks the host up itself and refuses it
+if any address is loopback, unspecified, `0.0.0.0/8`, link-local (`169.254.0.0/16`, so
+`169.254.169.254`, and `fe80::/10`), broadcast, the cloud metadata addresses outside link-local
+(`100.100.100.200` and `fd00:ec2::254` exactly; `100.64.0.0/10`, Tailscale's, stays allowed), or one
+of these inside an IPv6 address (IPv4-mapped
+or -compatible, NAT64): a name that resolves to the server is refused like the address itself. The
+row reads `error` ("Dev mode can’t use this repo address or branch name."). Private LAN ranges stay
+allowed. Over http(s) git is then pinned to the addresses checked with
+`-c http.curloptResolve=<host>:<port>:<addresses>` (git 2.37+), so DNS can't answer differently
+between the check and the connect; ssh and git:// (and git 2.31-2.36) get the check alone. git never
+follows an HTTP redirect, since it would lead to a host the check didn't see: a remote that redirects
+(say `http://` to `https://`) reads as an error until its URL is the one the host serves. A GitHub
+remote kwant can't fetch falls back to the API, as any failed fetch does.
+
+The address check and the pin don't cover what the server's admin set up for git outside kwant: a
+proxy (`http_proxy`, `https_proxy`, `ALL_PROXY` in kwant's environment, or `http.proxy` in the
+admin's git config) gets the request and looks the host up itself, so it bypasses the pin and the
+check; and an ssh host alias or `ProxyCommand` in kwant's `~/.ssh/config` connects to an address the
+check never saw. Over ssh, git always runs `ssh` (or the admin's `GIT_SSH`/`GIT_SSH_COMMAND`), never a
+command a repo's own config names; a host whose key isn't in kwant's `known_hosts` fails ("The repo’s
+host said no"), so the admin adds it first. DNS can still change between the check and the connect
+over ssh, git:// and git older than 2.37 (the check stands alone there).
+
+**Team folders.** A `local` team folder is read only if its `.git` is its own, checked again on every
+poll because anyone working in the folder can change it. The row reads `error` ("Dev mode can’t use
+this repo address or branch name.") when `.git` is a symlink; when it is a file (a linked worktree)
+whose git dir doesn't point back at this folder or doesn't sit in its main repo's `worktrees/`; when a
+`.git` directory has a `commondir`; when the git dir or its main repo is under `<data>/dev`; or when
+it has `objects/info/alternates` or a symlink among its objects and refs. A real `git worktree add`
+checkout reads as before; a git submodule checkout (whose `.git` file names `.git/modules/…`) is
+refused. Team detection follows the same rules, so a folder whose `.git` points at another repo is
+not detected as a source at all, and a submodule checkout used as a team folder is no longer
+detected from its folder: link the repo on the team instead.
+
+The check and git's own read are separate steps. A process that keeps swapping a team folder's
+`.git` can sometimes get another repo read in between, and the next poll doesn't stop that (in a
+review probe, 65 of 131 reads got the other repo). Only give a team folder to people you would let
+read every repo on this server. A sandboxed local read is planned for 0.7.4.
+
+**Mirror size.** A mirror is a full bare copy of the repo. A fetch may not write any file past 1 GB
+(`RLIMIT_FSIZE`, with what it fetches kept as one pack), so a huge or hostile remote stops at the cap
+rather than after it. The limit is per file, and the pack, its `.idx` and its `.rev` are each
+limited separately, so one fetch can briefly write about 3× the cap before it is stopped. A fetch stopped there, or a mirror over 1 GB on disk after its fetch, is deleted and a `<mirror>.too-big` note is left beside it; the row reads `error` with "This repo
+is too big for Dev mode to read (over 1 GB)." and `poll_code: "too_big"` (a GitHub row falls back to
+the API instead). One answer from git over 16 MB (a commit touching a vast number of files) reads
+`error` with "This repo is too big for Dev mode to read." and the same `poll_code`. The repo
+isn't fetched again for a day, or until it is removed and added again, which deletes the note.
+
+**Tags and merges.** `last_tag` is the nearest tag reachable from the watched branch (`git describe`),
+where 0.7.2 took GitHub's newest tag: a tag on another branch no longer counts. A merge commit's
+files are its diff against its first parent, which is what the pull request changed.
+
+**New columns, and going back to 0.7.2.** `dev_repos` gains `git_branch` and `git_url` (additive,
+both `NULL` on GitHub rows). A git row keeps `branch = ''` and its real branch in `git_branch`, so
+0.7.2, which ignores the new columns, never polls it (an empty branch waits for reconcile), and its
+reconcile drops the row as one no GitHub source points at. Its cards stay, and 0.7.2 shows them like
+any other repo's. Coming back to 0.7.3 adds the row again; its first poll back-fills the newest
+merges, and a commit that already has a card never gets a second. GitHub rows are unchanged, so 0.7.2
+keeps polling them from their `last_seen_sha`. The mirrors under `<data>/dev/` are left on disk by
+0.7.2 and reused by 0.7.3. 0.7.2 ignores the `<mirror>.too-big` notes and the `poll_code` field;
+back on 0.7.3 a note younger than a day still holds its repo back.
 
 `GET /api/dev/cards/:id` returns one card of any kind, in the same shape as the lists, or 404. The
 desk reads a release notes draft here once its `dev_card` event says it is ready, since no list
@@ -372,7 +462,8 @@ included, and must appear nowhere but the vault (logs, errors, events, cards, th
 prompts, other files under the data folder).
 
 Test seams, for the test server only: `KWANT_DEV_POLL_SECS` (5–86400, default 300) and
-`KWANT_DEV_CALL_CAP` (0–1000, default 30), read once at the first use. The daily cap counts per UTC
+`KWANT_DEV_CALL_CAP` (0–1000, default 30) and `KWANT_DEV_MIRROR_CAP_BYTES` (1 B to 1 TB, default
+1 GB, so QA can make a small repo too big), read once at the first use. The daily cap counts per UTC
 day. Tests move Dev mode's clock in-process with `server::dev::set_clock_skew`
 (`tests/dev_seams_test.rs`). There are table tests for each
 floor kind in `src/mcp/prod_floor.rs`. The backup checks and the Allow refusal are tested in

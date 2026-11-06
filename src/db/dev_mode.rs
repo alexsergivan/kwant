@@ -21,6 +21,10 @@ pub const MAX_REPOS: usize = 10;
 pub const BY_TEAM: &str = "team";
 pub const BY_HAND: &str = "hand";
 pub const BY_MIGRATION: &str = "migrated";
+/// `dev_repos.provider` of a repo read with git alone (any-git.md G1): a non-GitHub host or a
+/// team folder. Its branch is kept in `git_branch` and `branch` stays `''`, so 0.7.2 (which polls
+/// only rows with a branch, through GitHub) leaves it alone.
+pub const GIT: &str = "git";
 
 /// Card kinds and statuses, as stored.
 pub const LANDED: &str = "landed";
@@ -158,6 +162,9 @@ pub struct DevRepoRow {
     pub poll_error: Option<String>,
     pub added_by: String,
     pub added_at: DateTime<Utc>,
+    /// A [`GIT`] row's fetch URL (userinfo stripped) or team folder: kwant's own, never returned.
+    #[sqlx(default)]
+    pub git_url: Option<String>,
 }
 
 impl DevRepoRow {
@@ -169,7 +176,18 @@ impl DevRepoRow {
             BY_HAND
         }
     }
+
+    /// Read with git alone (no GitHub connection behind it).
+    pub fn is_git(&self) -> bool {
+        self.provider == GIT
+    }
 }
+
+/// `dev_repos` columns as kwant reads them: a [`GIT`] row's branch is its `git_branch`.
+const REPO_COLS: &str = "space_id, key, team, provider, repo, host, CASE WHEN provider = 'git' THEN COALESCE(git_branch, '') ELSE branch END AS branch, deploy_hint, last_seen_sha, polled_at, poll_error, added_by, added_at, git_url";
+
+/// The branch a row watches, in SQL (see [`REPO_COLS`]).
+const ROW_BRANCH: &str = "(CASE WHEN provider = 'git' THEN COALESCE(git_branch, '') ELSE branch END)";
 
 /// What adding a repo row did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +311,13 @@ impl Database {
             sqlx::query("ALTER TABLE dev_cards ADD COLUMN rev INTEGER NOT NULL DEFAULT 0").execute(&self.pool).await?;
         }
         sqlx::query(CARDS_071_GUARD).execute(&self.pool).await?;
+        // 0.7.3: repos read with git alone (any-git.md G1). Additive; 0.7.2 never names them
+        for column in ["git_branch", "git_url"] {
+            let has: Option<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('dev_repos') WHERE name = ?").bind(column).fetch_optional(&self.pool).await?;
+            if has.is_none() {
+                sqlx::query(&format!("ALTER TABLE dev_repos ADD COLUMN {column} TEXT")).execute(&self.pool).await?;
+            }
+        }
         for sql in CARD_INDEXES {
             sqlx::query(sql).execute(&self.pool).await?;
         }
@@ -415,11 +440,11 @@ impl Database {
 
     /// A space's watched repos, oldest first.
     pub async fn dev_repos(&self, space_id: &str) -> Result<Vec<DevRepoRow>, DbError> {
-        Ok(sqlx::query_as("SELECT * FROM dev_repos WHERE space_id = ? ORDER BY added_at, key").bind(space_id).fetch_all(&self.pool).await?)
+        Ok(sqlx::query_as(&format!("SELECT {REPO_COLS} FROM dev_repos WHERE space_id = ? ORDER BY added_at, key")).bind(space_id).fetch_all(&self.pool).await?)
     }
 
     pub async fn dev_repo(&self, space_id: &str, key: &str) -> Result<Option<DevRepoRow>, DbError> {
-        Ok(sqlx::query_as("SELECT * FROM dev_repos WHERE space_id = ? AND key = ?").bind(space_id).bind(key).fetch_optional(&self.pool).await?)
+        Ok(sqlx::query_as(&format!("SELECT {REPO_COLS} FROM dev_repos WHERE space_id = ? AND key = ?")).bind(space_id).bind(key).fetch_optional(&self.pool).await?)
     }
 
     /// Adds a watched repo, unless the space watches [`MAX_REPOS`] already (T4). A row with the
@@ -436,6 +461,30 @@ impl Database {
         branch: &str,
         deploy_hint: Option<&str>,
         added_by: &str,
+    ) -> Result<RepoAdd, DbError> {
+        self.add_repo_row(space_id, key, team, repo, host, branch, deploy_hint, added_by, None).await
+    }
+
+    /// [`Self::add_dev_repo`] for a repo read with git alone ([`GIT`]): `url` is what git fetches
+    /// from (userinfo stripped by the caller) or the team folder, `branch` may be `''` (the
+    /// poller takes the default branch).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_dev_repo_git(&self, space_id: &str, key: &str, team: Option<&str>, repo: &str, host: Option<&str>, branch: &str, url: &str, added_by: &str) -> Result<RepoAdd, DbError> {
+        self.add_repo_row(space_id, key, team, repo, host, branch, None, added_by, Some(url)).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn add_repo_row(
+        &self,
+        space_id: &str,
+        key: &str,
+        team: Option<&str>,
+        repo: &str,
+        host: Option<&str>,
+        branch: &str,
+        deploy_hint: Option<&str>,
+        added_by: &str,
+        git_url: Option<&str>,
     ) -> Result<RepoAdd, DbError> {
         let _writes = self.dev_on.writes.lock().await;
         // Reads, then writes: holds the write lock from BEGIN, or a poller's write in between
@@ -461,18 +510,26 @@ impl Database {
             tx.rollback().await?;
             return Ok(RepoAdd::TooMany);
         }
+        // A git row keeps its branch in git_branch; `branch` stays '' for 0.7.2's poller
+        let (provider, gh_branch, git_branch) = match git_url {
+            Some(_) => (GIT, "", Some(branch)),
+            None => ("github", branch, None),
+        };
         sqlx::query(
-            "INSERT INTO dev_repos (space_id, key, team, repo, host, branch, deploy_hint, added_by, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO dev_repos (space_id, key, team, provider, repo, host, branch, deploy_hint, added_by, added_at, git_branch, git_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(space_id)
         .bind(key)
         .bind(team)
+        .bind(provider)
         .bind(repo)
         .bind(host)
-        .bind(branch)
+        .bind(gh_branch)
         .bind(deploy_hint)
         .bind(added_by)
         .bind(Utc::now())
+        .bind(git_branch)
+        .bind(git_url)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -483,12 +540,15 @@ impl Database {
     /// cleared), the same one keeps them. False: no such row.
     pub async fn set_dev_repo_branch(&self, space_id: &str, key: &str, branch: &str) -> Result<bool, DbError> {
         let done = sqlx::query(
-            "UPDATE dev_repos SET
-               last_seen_sha = CASE WHEN branch = ?3 THEN last_seen_sha ELSE NULL END,
-               polled_at = CASE WHEN branch = ?3 THEN polled_at ELSE NULL END,
-               poll_error = CASE WHEN branch = ?3 THEN poll_error ELSE NULL END,
-               branch = ?3
-             WHERE space_id = ?1 AND key = ?2",
+            &format!(
+                "UPDATE dev_repos SET
+                   last_seen_sha = CASE WHEN {ROW_BRANCH} = ?3 THEN last_seen_sha ELSE NULL END,
+                   polled_at = CASE WHEN {ROW_BRANCH} = ?3 THEN polled_at ELSE NULL END,
+                   poll_error = CASE WHEN {ROW_BRANCH} = ?3 THEN poll_error ELSE NULL END,
+                   branch = CASE WHEN provider = 'git' THEN '' ELSE ?3 END,
+                   git_branch = CASE WHEN provider = 'git' THEN ?3 ELSE git_branch END
+                 WHERE space_id = ?1 AND key = ?2"
+            ),
         )
         .bind(space_id)
         .bind(key)

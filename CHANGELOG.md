@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - NVIDIA preset for custom servers: free models from build.nvidia.com (#365).
+- **Dev mode reads any git repo.** Repos on GitLab, Gitea or any git server, and team folders with no remote, are watched with git, and what lands there shows on the Dev desk. Reviews, CI checks and Post to GitHub still work on GitHub repos only. The server needs git 2.31 or newer; without it, the desk says "Needs git on the server". (#366, #368)
+
+### Changed
+- **Dev mode reads commit history with git, not GitHub's API.** Each watched repo gets a copy in kwant's data folder, up to 1 GB each; a bigger repo reads "Too big to read". Repo addresses that point at this server, link-local addresses or cloud metadata addresses are refused, and https reads are pinned to the address that was checked. A team folder whose .git points somewhere else is refused. GitHub PRs, checks and logins still come from GitHub. (#366)
 
 ### Fixed
 - A custom server's models that have no name now show their id in the model picker instead of "[redacted]" (#365).

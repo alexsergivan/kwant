@@ -1,5 +1,5 @@
 //! Dev mode's test seams (QA plan §2.2), in their own binary because both are process-wide:
-//! `KWANT_DEV_POLL_SECS` / `KWANT_DEV_CALL_CAP` are read once, and the clock skew moves
+//! `KWANT_DEV_POLL_SECS` / `KWANT_DEV_CALL_CAP` / `KWANT_DEV_MIRROR_CAP_BYTES` are read once, and the clock skew moves
 //! `kwnt::server::dev::now()` for everything in the process.
 
 use chrono::{Duration, Utc};
@@ -49,8 +49,10 @@ async fn the_env_seams_set_the_poll_and_the_cap() {
     // Read once per process: set before the first read, as a test server would at launch
     std::env::set_var("KWANT_DEV_POLL_SECS", "7");
     std::env::set_var("KWANT_DEV_CALL_CAP", "2");
+    std::env::set_var("KWANT_DEV_MIRROR_CAP_BYTES", "4096");
     assert_eq!(dev::poll_every(), std::time::Duration::from_secs(7));
     assert_eq!(dev::call_cap(), 2);
+    assert_eq!(dev::mirror_cap(), 4096, "a tiny git mirror cap, for QA (the default is 1 GB)");
 
     let tmp = tempfile::tempdir().unwrap();
     let db = Database::init(tmp.path()).await.unwrap();

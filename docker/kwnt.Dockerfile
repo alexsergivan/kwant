@@ -41,10 +41,11 @@ RUN set -eu; mkdir -p /opt/clis/bin; \
 
 FROM debian:bookworm-slim
 ARG KWNT_CLIS=""
-# The CLIs' own tools want git and a few basics; kwnt alone needs only CA certificates.
+# kwnt needs CA certificates, and git (2.31+) with ssh for Dev mode, which reads every watched repo
+# with git; the CLIs' own tools want a few more basics.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
-      $(if [ -n "$KWNT_CLIS" ]; then echo git curl procps ripgrep less; fi) \
+ && apt-get install -y --no-install-recommends ca-certificates git openssh-client \
+      $(if [ -n "$KWNT_CLIS" ]; then echo curl procps ripgrep less; fi) \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 10001 --create-home --home-dir /home/kwnt --shell /bin/bash kwnt \
  && mkdir -p /data && chown kwnt:kwnt /data

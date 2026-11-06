@@ -66,7 +66,7 @@ struct Entry<'a> {
 /// team order (with its row, if any), then hand rows not tied to a source (oldest first), then team
 /// rows no team points at any more.
 fn entries<'a>(rows: &'a [DevRepoRow], sources: &'a [repo::Source]) -> Vec<Entry<'a>> {
-    let mut out: Vec<Entry> = sources.iter().map(|s| Entry { source: Some(s), row: rows.iter().find(|r| s.host.is_some() && r.key == s.key()) }).collect();
+    let mut out: Vec<Entry> = sources.iter().map(|s| Entry { source: Some(s), row: rows.iter().find(|r| r.key == s.row_key()) }).collect();
     let tied = |r: &DevRepoRow| out_has(sources, r);
     out.extend(rows.iter().filter(|r| r.added_by != BY_TEAM && !tied(r)).map(|r| Entry { source: None, row: Some(r) }));
     out.extend(rows.iter().filter(|r| r.added_by == BY_TEAM && !tied(r)).map(|r| Entry { source: None, row: Some(r) }));
@@ -74,7 +74,7 @@ fn entries<'a>(rows: &'a [DevRepoRow], sources: &'a [repo::Source]) -> Vec<Entry
 }
 
 fn out_has(sources: &[repo::Source], r: &DevRepoRow) -> bool {
-    sources.iter().any(|s| s.host.is_some() && s.key() == r.key)
+    sources.iter().any(|s| s.row_key() == r.key)
 }
 
 /// The space's rows in the API's order: the first is the one the deprecated top-level fields,
@@ -100,16 +100,21 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
     // Only while off does a source with no row hang on a connection existing
     let ask = !on && list.iter().any(|e| e.row.is_none() && e.source.is_some_and(|s| s.on_github(&hosts)));
     let connected = ask && repo::clients(state).await.is_ok();
-    // A row whose poll failed because no connection reads GitHub any more (deleted, or the vault
-    // locked) needs the connection, not a retry: it reads not_connected (QA h)
-    let lost = rows.iter().any(|r| r.poll_error.is_some()) && repo::clients(state).await.is_err();
+    // A GitHub row whose poll failed because no connection reads GitHub any more (deleted, or the
+    // vault locked) needs the connection, not a retry: it reads not_connected (QA h). A git row
+    // never needs one.
+    let lost = rows.iter().any(|r| r.poll_error.is_some() && !r.is_git()) && repo::clients(state).await.is_err();
+    let git = super::git::available().await;
     let mut repos = Vec::new();
     for e in &list {
         let status = match (e.row, e.source) {
-            (Some(r), _) if r.poll_error.is_some() && lost => "not_connected",
+            (Some(r), _) if r.poll_error.is_some() && lost && !r.is_git() => "not_connected",
             (Some(r), _) if r.poll_error.is_some() => "error",
             (Some(_), _) => "watching",
-            (None, Some(s)) if !s.on_github(&hosts) => "other_host",
+            // Git reads every other host (any-git.md G1); a row comes at switch-on
+            (None, Some(s)) if !s.on_github(&hosts) && !git => "no_git",
+            (None, Some(s)) if !s.on_github(&hosts) && s.fetch.is_none() => "no_repo",
+            (None, Some(s)) if !s.on_github(&hosts) && (!on || rows.len() < crate::db::dev_mode::MAX_REPOS) => "watching",
             (None, _) if rows.len() >= crate::db::dev_mode::MAX_REPOS => "too_many",
             (None, _) if !on && connected => "watching",
             (None, _) => "not_connected",
@@ -118,6 +123,12 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             (Some(r), _) => (r.key.clone(), r.repo.clone(), r.host.clone()),
             (None, Some(s)) => (s.api_key(), s.repo.clone(), s.host.clone()),
             (None, None) => continue,
+        };
+        // How it's read: the API and git (`github`, GitHub Enterprise too), or git alone (`git`)
+        let provider = match (e.row, e.source) {
+            (Some(r), _) if r.is_git() => "git",
+            (None, Some(s)) if !s.on_github(&hosts) => "git",
+            _ => "github",
         };
         let team_id = match (e.source, e.row) {
             (Some(s), _) => Some(s.team_id.clone()),
@@ -136,9 +147,12 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             "team": team_name(team_id.as_deref()),
             "team_id": team_id,
             "from": from,
+            "provider": provider,
             "branch": e.row.map(|r| &r.branch).filter(|b| !b.is_empty()),
             "status": status,
             "poll_error": e.row.and_then(|r| r.poll_error.clone()),
+            // A code for the one error the desk words differently; null for the rest
+            "poll_code": e.row.and_then(|r| r.poll_error.as_deref()).and_then(super::git::GitError::poll_code),
             "polled_at": e.row.and_then(|r| r.polled_at),
             "last_tag": e.row.and_then(|r| poller::last_tag(space.as_str(), &r.key)),
             "added_by": e.row.map(|r| r.added_by_shown()),
@@ -167,8 +181,11 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
     } else if any_unread {
         "not_connected"
     } else {
-        repo::status(on, "", &sources, &hosts, connected)
+        repo::status(on, "", &sources, &hosts, connected, git)
     });
+    if v["status"] == "no_git" {
+        v["install_hint"] = json!(super::git::INSTALL_HINT);
+    }
     v["sources"] = json!(sources);
     v["new_reviews"] = json!(new_reviews(state, row.as_ref()).await);
     // Where a review would be posted, and as whom (post-to-github.md P7 and its amendment)
@@ -298,6 +315,34 @@ async fn branch_exists(state: &AppState, repo_name: &str, branch: &str) -> Resul
     }
 }
 
+/// [`branch_exists`] for a watched row: a git row asks git (its folder, or its remote), a GitHub
+/// row asks GitHub.
+#[allow(clippy::result_large_err)]
+async fn row_branch_exists(state: &AppState, row: &DevRepoRow, branch: &str) -> Result<(), Response> {
+    use super::git::{self, Repo};
+    if !row.is_git() {
+        return branch_exists(state, &row.repo, branch).await;
+    }
+    let from = row.git_url.as_deref().unwrap_or_default();
+    let found = if from.starts_with('/') {
+        match Repo::local(std::path::Path::new(from), &state.config.data_dir).await {
+            Ok(g) => g.has_branch("", branch, None).await,
+            Err(e) => Err(e),
+        }
+    } else {
+        match Repo::mirror(&state.config.data_dir, &row.space_id, &row.key).await {
+            Ok(g) => g.has_branch(from, branch, None).await,
+            Err(e) => Err(e),
+        }
+    };
+    match found {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(coded(StatusCode::BAD_REQUEST, "no_branch", format!("{} has no branch {branch}", row.repo))),
+        Err(git::GitError::NoGit) => Err(coded(StatusCode::BAD_GATEWAY, "no_git", git::INSTALL_HINT)),
+        Err(e) => Err(coded(StatusCode::BAD_GATEWAY, "git", e.to_string())),
+    }
+}
+
 pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(body): Json<PutBody>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
@@ -403,7 +448,7 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
             Ok(Some(r)) => {
                 if let Some(b) = asked_branch.filter(|b| *b != r.branch) {
                     if on {
-                        if let Err(resp) = branch_exists(&state, &r.repo, b).await {
+                        if let Err(resp) = row_branch_exists(&state, &r, b).await {
                             return resp;
                         }
                     }
@@ -449,7 +494,7 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
         if let (Some(b), Some(first)) = (asked_branch, ordered_rows(&rows_before, &sources).first()) {
             if b != first.branch {
                 if on {
-                    if let Err(resp) = branch_exists(&state, &first.repo, b).await {
+                    if let Err(resp) = row_branch_exists(&state, first, b).await {
                         return resp;
                     }
                 }
@@ -464,7 +509,7 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
         let rows = state.db.dev_repos(sp).await.unwrap_or_default();
         if let Some(r) = rows.iter().find(|r| r.team.as_deref() == Some(team_id.as_str()) && r.branch != b) {
             if on {
-                if let Err(resp) = branch_exists(&state, &r.repo, b).await {
+                if let Err(resp) = row_branch_exists(&state, r, b).await {
                     return resp;
                 }
             }
@@ -627,7 +672,9 @@ pub async fn landed(State(state): State<AppState>, headers: HeaderMap, Path(id):
         Err(e) => return internal(e),
     };
     let reviews = open_reviews(&state, &space, only.as_deref()).await.unwrap_or_default();
-    let rollup = rollup(&recent, &reviews, mode.as_ref().and_then(|m| m.seen_at), Utc::now());
+    // Repos read with git alone have no CI to read
+    let no_ci: Vec<String> = state.db.dev_repos(space.as_str()).await.unwrap_or_default().into_iter().filter(|r| r.is_git()).map(|r| r.key).collect();
+    let rollup = rollup(&recent, &reviews, &no_ci, mode.as_ref().and_then(|m| m.seen_at), Utc::now());
     // The repo asked for, else the first watched one (deprecated, like the top-level `repo`)
     let tag_repo = match &only {
         Some(k) => Some(k.clone()),
@@ -647,9 +694,10 @@ pub async fn landed(State(state): State<AppState>, headers: HeaderMap, Path(id):
 /// - `count`: landed cards since then.
 /// - `needs_you`: those with failed tests or a high risk, plus open reviews that are high risk or
 ///   have an open critical or high finding.
-/// - `main_green`: CI on the newest landed card (`null` when it has no checks or is pending).
+/// - `main_green`: CI on the newest landed card from a repo with CI (`null` when it has no checks or
+///   is pending, or when every landed card is from a repo in `no_ci`, read with git alone).
 /// - `areas`: cards since then by `area`, newest area first, with the newest card's headline.
-pub fn rollup(landed: &[DevCardRow], reviews: &[DevCardRow], since: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Value {
+pub fn rollup(landed: &[DevCardRow], reviews: &[DevCardRow], no_ci: &[String], since: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Value {
     let fresh: Vec<&DevCardRow> = landed.iter().filter(|r| since.is_none_or(|s| r.created_at > s)).collect();
     let card = |r: &DevCardRow| r.card.as_deref().and_then(|c| serde_json::from_str::<Value>(c).ok()).unwrap_or(Value::Null);
     let mut needs = 0usize;
@@ -666,7 +714,7 @@ pub fn rollup(landed: &[DevCardRow], reviews: &[DevCardRow], since: Option<DateT
             needs += 1;
         }
     }
-    let main_green = landed.first().and_then(|r| serde_json::from_str::<DevFacts>(&r.facts).ok()).and_then(|f| match f.ci {
+    let main_green = landed.iter().find(|r| !no_ci.contains(&r.repo)).and_then(|r| serde_json::from_str::<DevFacts>(&r.facts).ok()).and_then(|f| match f.ci {
         CiState::Green => Some(true),
         CiState::Red => Some(false),
         _ => None,
@@ -1143,16 +1191,32 @@ mod tests {
             row(REVIEW, Some(json!({"risk": {"level": "low"}, "findings": [{"state": "open", "severity": "high"}]})), facts("none"), h(1)),
             row(REVIEW, Some(json!({"risk": {"level": "low"}, "findings": [{"state": "dismissed", "severity": "critical"}]})), facts("none"), h(1)),
         ];
-        let v = rollup(&landed, &reviews, Some(h(24)), now);
+        let v = rollup(&landed, &reviews, &[], Some(h(24)), now);
         assert_eq!(v["count"], 3);
         assert_eq!(v["needs_you"], 3, "high risk, failed tests, a review with an open high finding");
         assert_eq!(v["main_green"], true);
         assert_eq!(v["areas"][0], json!({"area": "Sidebar", "count": 2, "first_headline": "B"}));
         assert_eq!(v["areas"][1], json!({"area": "Other", "count": 1, "first_headline": null}));
-        let all = rollup(&landed, &[], None, now);
+        let all = rollup(&landed, &[], &[], None, now);
         assert_eq!(all["count"], 4);
         assert_eq!(all["since"], Value::Null);
-        assert_eq!(rollup(&[], &[], None, now)["main_green"], Value::Null);
+        assert_eq!(rollup(&[], &[], &[], None, now)["main_green"], Value::Null);
+    }
+
+    #[test]
+    fn main_green_never_comes_from_a_repo_read_with_git_alone() {
+        let now = Utc::now();
+        let h = |n: i64| now - chrono::Duration::hours(n);
+        let mut git_card = row(LANDED, None, facts("green"), h(1));
+        git_card.repo = "gitlab.example.com/group/ops".into();
+        let mut red = row(LANDED, None, facts("red"), h(2));
+        red.repo = "o/web".into();
+        let no_ci = ["gitlab.example.com/group/ops".to_string()];
+        // A git-only repo's card is skipped, even when it is the newest...
+        assert_eq!(rollup(&[git_card.clone(), red], &[], &no_ci, None, now)["main_green"], false);
+        // ...and with only git-only cards there's no CI to read
+        assert_eq!(rollup(&[git_card.clone()], &[], &no_ci, None, now)["main_green"], Value::Null);
+        assert_eq!(rollup(&[git_card], &[], &[], None, now)["main_green"], true, "without the list it's an ordinary card");
     }
 
     fn body(action: &str, reason: Option<&str>) -> FindingBody {
