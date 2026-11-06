@@ -314,9 +314,13 @@ fn gh_error(e: GhError) -> PostError {
     }
 }
 
-/// The client whose connection can read PR `number`, and the PR. Same order as Dev mode's reads.
-async fn client_for_pull(state: &AppState, repo_name: &str, number: u64) -> Result<(GithubSource, crate::zombie::github::GhPull), PostError> {
-    let list = repo::clients(state).await.map_err(PostError::failed)?;
+/// The client whose connection can read PR `number`, and the PR. Same order as Dev mode's reads,
+/// with the connections of the card's own host (the first part of its repo key) first (T6).
+async fn client_for_pull(state: &AppState, host: Option<&str>, repo_name: &str, number: u64) -> Result<(GithubSource, crate::zombie::github::GhPull), PostError> {
+    let mut list = repo::clients(state).await.map_err(PostError::failed)?;
+    if let Some(h) = host {
+        list.sort_by_key(|(cfg, _)| repo::web_host(cfg) != h);
+    }
     let mut last = GhError::NotFound;
     for (_, c) in list {
         match c.dev_pull(repo_name, number).await {
@@ -354,7 +358,8 @@ pub async fn post_review(state: &AppState, row: &DevCardRow) -> Result<Posted, P
     let Some(number) = facts.pr else {
         return Err(PostError::failed("this card has no pull request"));
     };
-    let (client, pull) = client_for_pull(state, &facts.repo, number).await?;
+    let host = row.repo.split_once('/').map(|(h, _)| h).filter(|h| !h.starts_with("local:"));
+    let (client, pull) = client_for_pull(state, host, &facts.repo, number).await?;
     if pull.head.sha != row.head_sha {
         return Err(PostError::new(ErrorKind::Stale, STALE_MESSAGE));
     }

@@ -565,12 +565,14 @@ pub async fn create_team(
 ) -> Result<Json<Team>, axum::response::Response> {
     check_team_name(&state, &space, &mut payload.name, None).await?;
     check_workspace(&state, &space, None, &payload).await?;
-    state
+    let team = state
         .db
         .create_team(&space, &payload)
         .await
-        .map(Json)
-        .map_err(|e| db_error(&e, &team_clash(&payload.name)))
+        .map_err(|e| db_error(&e, &team_clash(&payload.name)))?;
+    // Dev mode watches each team's repo (team-repos.md T3)
+    super::dev::repo::reconcile_soon(&state, &space);
+    Ok(Json(team))
 }
 
 pub async fn get_team(
@@ -621,6 +623,7 @@ pub async fn update_team(
                     .map_err(|_| status(StatusCode::INTERNAL_SERVER_ERROR))?;
                 team.instructions = Some(text.trim().to_string()).filter(|t| !t.is_empty());
             }
+            super::dev::repo::reconcile_soon(&state, &space);
             Ok(Json(team))
         }
         Ok(None) => Err(status(StatusCode::NOT_FOUND)),
@@ -632,9 +635,13 @@ pub async fn delete_team(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let space = state.db.space_of_team(&id).await.ok().flatten();
     match state.db.delete_team(&id).await {
         Ok(true) => {
             super::passwords::forget_deleted_owners(&state, &[&id]).await;
+            if let Some(space) = &space {
+                super::dev::repo::reconcile_soon(&state, space);
+            }
             Ok(Json(json!({ "status": "deleted" })))
         }
         Ok(false) => Err(StatusCode::NOT_FOUND),

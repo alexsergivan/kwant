@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- **Once 0.7.2 runs, don't go back to 0.7.1:** Dev mode stops making new cards there (nothing is lost; updating
+  again fixes it). (#359)
+
+### Fixed
+- **The Dev desk badge and the "what landed" rollup each keep their own seen time.** Opening the desk clears the
+  new reviews badge, and **Mark seen** starts the rollup over. Before, opening the desk also emptied the rollup, so
+  it almost always said "Nothing landed since you last looked". (#357)
+
 ## [Mac 0.7.1] - 2026-11-06
 
 ### Added

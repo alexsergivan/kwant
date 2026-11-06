@@ -122,7 +122,7 @@ pub fn pr_ref(pr: u64) -> String {
 /// `ready` and `stale` both count; a `failed` one doesn't, nor a review of another head.
 async fn landed_review(state: &AppState, row: &DevCardRow, facts: &DevFacts) -> Option<(Value, String)> {
     let (pr, head) = (facts.pr?, facts.pr_head_sha.as_deref()?);
-    let cards = state.db.dev_cards_of_ref(&row.space_id, REVIEW, &pr_ref(pr)).await.ok()?;
+    let cards = state.db.dev_cards_of_ref_in(&row.space_id, &row.repo, REVIEW, &pr_ref(pr)).await.ok()?;
     cards.into_iter().filter(|c| c.status != FAILED && c.head_sha == head).find_map(|c| Some((serde_json::from_str(c.card.as_deref()?).ok()?, c.head_sha)))
 }
 

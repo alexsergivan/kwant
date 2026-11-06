@@ -84,7 +84,7 @@ async fn a_merged_pr_takes_its_reviewer_from_the_review_of_the_merged_head() {
     assert_eq!(s.as_u16(), 200, "{v}");
 
     // Poll 1: a review card for each open PR, under the poller's own ref
-    let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+    let mode = env.state.db.dev_repos(space.as_str()).await.unwrap().remove(0);
     poller::poll(&env.state, &mode).await.expect("a clean poll");
     cards_written(&env).await;
     let reviews = env.state.db.dev_cards(space.as_str(), REVIEW, None, 50).await.unwrap();
@@ -113,7 +113,7 @@ async fn a_merged_pr_takes_its_reviewer_from_the_review_of_the_merged_head() {
     gh.json(&format!("{R}/commits"), Value::Array(list)).json(&format!("{R}/pulls"), json!([]));
 
     // Poll 2: three landed cards; the merge stales every review
-    let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+    let mode = env.state.db.dev_repos(space.as_str()).await.unwrap().remove(0);
     poller::poll(&env.state, &mode).await.expect("a clean poll");
     cards_written(&env).await;
     let reviews = env.state.db.dev_cards(space.as_str(), REVIEW, None, 50).await.unwrap();

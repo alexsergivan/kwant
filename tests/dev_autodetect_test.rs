@@ -135,9 +135,10 @@ async fn an_empty_space_turns_on_with_no_repo_and_the_poller_idles() {
     assert!(env.state.db.any_dev_mode_on());
     let mode = env.state.db.dev_mode(SpaceId::default_space().as_str()).await.unwrap().unwrap();
     assert!(mode.on && mode.repo.is_empty());
-    // The poller idles: no read, no error
-    poller::poll(&env.state, &mode).await.expect("an empty repo polls clean");
-    poller::poll_logged(&env.state, mode).await;
+    // The poller idles: no repo rows, no read, no error
+    assert!(env.state.db.dev_repos(SpaceId::default_space().as_str()).await.unwrap().is_empty());
+    poller::poll_space(&env.state, SpaceId::default_space().as_str()).await;
+    assert!(env.state.db.dev_repos(SpaceId::default_space().as_str()).await.unwrap().is_empty());
     let after = env.state.db.dev_mode(SpaceId::default_space().as_str()).await.unwrap().unwrap();
     assert_eq!(after.poll_error, None);
 
@@ -324,7 +325,8 @@ async fn a_detected_repo_wakes_the_poller_counts_new_reviews_and_never_replaces_
     assert_eq!(v["sources"], json!([{"team": "Shop", "repo": REPO, "host": host, "from": "folder"}]));
     assert!(poller::is_due_soon(space.as_str()), "on with a detected repo wakes the poller");
     // ...and that first poll backfills (both commits are within BACKFILL) plus the open PR
-    let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+    let mode = env.state.db.dev_repos(space.as_str()).await.unwrap().remove(0);
+    assert_eq!((mode.added_by.as_str(), mode.key.as_str()), ("team", format!("{host}/{REPO}").as_str()));
     poller::poll(&env.state, &mode).await.expect("a clean first poll");
     let landed = env.state.db.dev_cards(space.as_str(), LANDED, None, 50).await.unwrap();
     let reviews = env.state.db.dev_cards(space.as_str(), REVIEW, None, 50).await.unwrap();
@@ -351,17 +353,21 @@ async fn a_detected_repo_wakes_the_poller_counts_new_reviews_and_never_replaces_
     let (_, v) = call(&env.app, "GET", &u, None).await;
     assert_eq!(v["new_reviews"], 0, "seen clears the count: {v}");
 
-    // F10: a repo the person typed is kept; the folder's repo never replaces it
+    // F10 (0.7.2): a repo the person typed is watched next to the team's; neither replaces the other
+    let watched = |v: &Value| v["repos"].as_array().unwrap().iter().map(|r| (r["repo"].as_str().unwrap().to_string(), r["added_by"].as_str().unwrap_or("").to_string())).collect::<Vec<_>>();
+    let both = vec![(REPO.to_string(), "team".to_string()), (other.to_string(), "hand".to_string())];
     let (s, v) = call(&env.app, "PUT", &u, Some(json!({"on": true, "repo": other}))).await;
-    assert_eq!((s.as_u16(), v["repo"].clone()), (200, json!(other)), "{v}");
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(watched(&v), both, "{v}");
+    assert_eq!(v["repo"], json!(REPO), "the deprecated field is the first row's: {v}");
     let (_, v) = call(&env.app, "PUT", &u, Some(json!({"on": true}))).await;
-    assert_eq!((v["repo"].clone(), v["status"].clone()), (json!(other), json!("watching")), "{v}");
+    assert_eq!((watched(&v), v["status"].clone()), (both.clone(), json!("watching")), "{v}");
     let (_, v) = call(&env.app, "PUT", &u, Some(json!({"on": false}))).await;
     assert_eq!(v["on"], false);
     let (_, v) = call(&env.app, "PUT", &u, Some(json!({"on": true}))).await;
-    assert_eq!(v["repo"], json!(other), "off and on again keeps the typed repo: {v}");
+    assert_eq!(watched(&v), both, "off and on again keeps the typed repo: {v}");
     let (_, v) = call(&env.app, "GET", &u, None).await;
-    assert_eq!((v["repo"].clone(), v["status"].clone()), (json!(other), json!("watching")), "{v}");
+    assert_eq!((watched(&v), v["status"].clone()), (both.clone(), json!("watching")), "{v}");
     gh.assert_read_only();
 }
 
@@ -394,8 +400,8 @@ async fn connecting_github_while_on_binds_the_detected_repo_without_off_and_on()
     let (_, v) = call(&env.app, "GET", &u, None).await;
     assert_eq!(v["repo"], Value::Null, "no connection yet: {v}");
     // The wake from turning on has been taken by a poll, which had nothing to read
-    let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
-    poller::poll(&env.state, &mode).await.unwrap();
+    assert!(env.state.db.dev_repos(space.as_str()).await.unwrap().is_empty(), "no connection, no row");
+    poller::poll_space(&env.state, space.as_str()).await;
     poller::take_due_soon(space.as_str());
     assert!(!poller::is_due_soon(space.as_str()));
 
@@ -407,7 +413,7 @@ async fn connecting_github_while_on_binds_the_detected_repo_without_off_and_on()
     let (_, v) = call(&env.app, "GET", &u, None).await;
     assert_eq!((v["on"].clone(), v["repo"].clone(), v["branch"].clone(), v["status"].clone()), (json!(true), json!(REPO), json!("main"), json!("watching")), "{v}");
     assert_eq!(v["deploy_hint"], "fly");
-    let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+    let mode = env.state.db.dev_repos(space.as_str()).await.unwrap().remove(0);
     poller::poll(&env.state, &mode).await.expect("the bound repo polls");
     assert_eq!(env.state.db.dev_cards(space.as_str(), LANDED, None, 50).await.unwrap().len(), 2, "the first poll backfilled");
 
@@ -430,8 +436,9 @@ async fn connecting_github_while_on_binds_the_detected_repo_without_off_and_on()
     let (s, v) = call(&env.app, "PATCH", &format!("/api/zombie/sources/{id}"), Some(json!({"label": "GitHub (work)"}))).await;
     assert_eq!(s.as_u16(), 200, "{v}");
     for s in [&changed, &read] {
-        let m = env.state.db.dev_mode(s.as_str()).await.unwrap().unwrap();
-        assert_eq!((m.on, m.repo.as_str(), m.branch.as_str()), (true, REPO, "main"), "the source change bound {}", s.as_str());
+        let rows = env.state.db.dev_repos(s.as_str()).await.unwrap();
+        let got: Vec<_> = rows.iter().map(|r| (r.repo.as_str(), r.branch.as_str(), r.added_by.as_str())).collect();
+        assert_eq!(got, vec![(REPO, "main", "team")], "the source change bound {}", s.as_str());
     }
     // When no source change happened, the GET falls back to the same binding
     let late = SpaceId::new(env.state.db.create_space(&mk("Late")).await.unwrap().id);
