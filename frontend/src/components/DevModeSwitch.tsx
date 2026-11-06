@@ -1,10 +1,11 @@
-// The Dev mode switch in the sidebar space header: a safety cover over a launch switch (design §1).
-// Press 1 lifts the cover, press 2 flips (or opens the setup sheet the first time). A lifted cover
-// drops back after 5 s, on Esc or when focus leaves. Presses are ignored while a flip settles.
-// It's a <button>, not role="switch": a switch promises one press.
+// The Dev mode switch in the sidebar space header (style v2 §10, flow F1/F2/F9): the Branch switch.
+// Off has no cover: one press turns it on (F1). On is covered by a 1 px violet ring and a lock; turning
+// it off takes two presses (F2): press 1 arms (2 px amber ring, open lock, `off?`), press 2 within 5 s
+// turns it off. Armed drops back after 5 s, on Esc or when focus leaves. Presses are ignored while a
+// flip settles (450 ms), so a double-click on Off can't turn it on and arm it.
 
-import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Code, Lock, LockOpen, X } from 'lucide-react';
+import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import { Lock, LockOpen, X } from 'lucide-react';
 import {
   DROP_MS,
   RECOVER_MS,
@@ -52,12 +53,14 @@ export interface DevModeSwitchProps {
   phone?: boolean;
   /** Dev mode went off: the sidebar shows the turned-off note. */
   onTurnedOff?: () => void;
+  /** Dev mode went on: the sidebar shows the HEAD → dev note. */
+  onTurnedOn?: () => void;
   /** Test hooks: start in a given state, and a clock. */
   initial?: Partial<SwitchState>;
   now?: () => number;
 }
 
-export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = false, onTurnedOff, initial, now = Date.now }) => {
+export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = false, onTurnedOff, onTurnedOn, initial, now = Date.now }) => {
   const reduced = useReducedMotion();
   const known = useDevMode(space.id);
   const [state, setState] = useState<SwitchState>(() =>
@@ -124,11 +127,12 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
           devStore.set(space.id, s);
           dispatch({ type: 'saved', on: s.on });
           if (!s.on && was?.on) onTurnedOff?.();
+          if (s.on && !was?.on) onTurnedOn?.();
         },
         (e: unknown) => dispatch({ type: 'save_failed', error: e instanceof Error ? e.message : 'Dev mode couldn’t be changed.' }),
       );
     },
-    [space.id, dispatch, onTurnedOff],
+    [space.id, dispatch, onTurnedOff, onTurnedOn],
   );
 
   const press = () => {
@@ -138,18 +142,20 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   };
 
   const look = switchLook(state);
+  const descId = useId();
   const hint = look.hint && (
     <span
       role="presentation"
       className={
         phone
           ? 'kw-dv-hint fixed inset-x-4 mx-auto w-fit max-w-[calc(100vw-32px)] text-center leading-snug bottom-[calc(56px+env(safe-area-inset-bottom)+12px)] z-40 rounded-lg border border-white/14 bg-surface-overlay px-2.5 py-1.5 text-meta text-zinc-100 shadow-raised'
-          : 'kw-dv-hint absolute -right-9 top-full mt-1.5 z-30 whitespace-nowrap rounded-lg border border-white/14 bg-surface-overlay px-2.5 py-1.5 text-meta text-zinc-100 shadow-raised'
+          : 'kw-dv-hint absolute -left-[52px] top-full mt-1.5 z-30 whitespace-nowrap rounded-lg border border-white/14 bg-surface-overlay px-2 py-1.5 text-meta text-zinc-100 shadow-raised'
       }
       aria-hidden="true"
       data-dv-hint
     >
       {look.hint}
+      {!phone && <kbd className="dv-kbd ml-1.5">Esc</kbd>}
     </span>
   );
 
@@ -165,9 +171,13 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
     },
     onBlur: () => dispatch({ type: 'blur' }),
     disabled: state.disabled,
+    role: 'switch' as const,
+    'aria-checked': state.on,
     'aria-label': look.label,
+    'aria-describedby': descId,
     title: look.tooltip,
     'data-dev-switch': state.phase,
+    'data-look': look.look,
     'data-on': state.on || undefined,
     'data-ring': look.ring || undefined,
     'data-knob': look.knobRight ? 'right' : 'left',
@@ -175,33 +185,33 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
     style: { ['--kw-dv-fill' as string]: String(look.fill) } as React.CSSProperties,
   };
 
-  const button = state.reduced ? (
-    <button {...common} className="kw-dv-rm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400">
-      <span className="text-meta font-semibold text-zinc-300" aria-hidden="true">
-        Dev
+  // The Branch switch (style v2 §10): a mono label and a tiny git graph. The node sits on the line
+  // when off and hops onto the fork when on; then the cover (a 1 px violet ring, ::after) closes and a
+  // lock shows. Armed (only ever while on) lifts it: 2 px amber ring, open lock, the fork dashed amber
+  // with a halo on the node, `off?`. Reduced motion keeps the same shapes, instantly (kw-dv-rm).
+  const armed = look.look === 'armed';
+  const word = armed ? 'off?' : 'dev';
+  const button = (
+    <button
+      {...common}
+      data-armed={armed || undefined}
+      data-covered={(look.ring && !armed) || undefined}
+      className={`kw-dv${state.reduced ? ' kw-dv-rm' : ''}${phone ? ' h-11' : ''} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400`}
+    >
+      {look.glyph === 'locked' && <Lock size={10} strokeWidth={2.5} className="kw-dv-lock" aria-hidden="true" data-dv-glyph="locked" />}
+      {look.glyph === 'unlocked' && <LockOpen size={10} strokeWidth={2.5} className="kw-dv-lock" aria-hidden="true" data-dv-glyph="unlocked" />}
+      <span className="kw-dv-lbl" aria-hidden="true" data-dv-word>
+        {word}
       </span>
-      <span className="kw-dv-track" aria-hidden="true">
-        <span className="kw-dv-fill" />
-        <span className="kw-dv-knob">
-          {state.phase === 'lifted' || state.phase === 'pending' ? (
-            <LockOpen size={8} strokeWidth={2.6} className="text-sky-600" data-dv-glyph="unlocked" />
-          ) : (
-            <Lock size={8} strokeWidth={2.6} className="text-sky-600" data-dv-glyph="locked" />
-          )}
-        </span>
-      </span>
-    </button>
-  ) : (
-    <button {...common} className="kw-dv focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400">
-      <span className="kw-dv-track" aria-hidden="true">
-        <span className="kw-dv-fill" />
-        <span className="kw-dv-ring" />
-        <span className="kw-dv-knob" />
-      </span>
-      <span className="kw-dv-cover" aria-hidden="true">
-        &lt;/&gt;
-      </span>
-      <span className="kw-dv-hinge" aria-hidden="true" />
+      <svg className="kw-dv-graph" viewBox="0 0 44 24" aria-hidden="true" data-dv-graph>
+        <path className="kw-dv-base" d="M2 17H42" />
+        <path className="kw-dv-fork" d="M12 17C19 17 18 7 26 7H42" />
+        <g className="kw-dv-node">
+          <circle className="kw-dv-halo" cx="12" cy="17" r="5" />
+          <circle className="kw-dv-dot" cx="12" cy="17" r="5" />
+          <circle className="kw-dv-pip" cx="12" cy="17" r="1.6" />
+        </g>
+      </svg>
     </button>
   );
 
@@ -209,6 +219,9 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
     <span className={`relative inline-flex shrink-0 items-center justify-center ${phone ? 'min-w-[44px] min-h-[44px]' : ''}`} data-dev-switch-wrap>
       {button}
       {hint}
+      <span id={descId} className="sr-only" data-dv-describe>
+        {look.describe}
+      </span>
       <span className="sr-only" aria-live="polite" data-dv-live>
         {state.announce ? <span key={state.announce.seq}>{state.announce.text}</span> : null}
       </span>
@@ -230,6 +243,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
             devStore.set(space.id, s);
             dispatch({ type: 'setup_done', now: now() });
             dispatch({ type: 'saved', on: s.on });
+            if (s.on) onTurnedOn?.();
             btn.current?.focus();
           }}
         />
@@ -238,18 +252,22 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   );
 };
 
-/** "Dev mode is off." under the space header: role=status, 10 s or until dismissed. */
-export const DevOffNote: React.FC<{ approvals?: string; onDismiss: () => void; ms?: number }> = ({ approvals, onDismiss, ms = 10_000 }) => {
+/**
+ * The flip note under the space header (style v2 §10): on reads `HEAD → dev` + "Dev mode is on for
+ * {space}." with one caret blink; off reads `merged into main` + "Dev mode is off. Approvals stay on
+ * {approvals}." role=status, 10 s or until dismissed.
+ */
+export const DevFlipNote: React.FC<{ on: boolean; space?: string; approvals?: string; onDismiss: () => void; ms?: number }> = ({ on, space, approvals, onDismiss, ms = 10_000 }) => {
   useEffect(() => {
     const t = setTimeout(onDismiss, ms);
     return () => clearTimeout(t);
   }, [onDismiss, ms]);
   return (
-    <div role="status" data-dev-off-note className="mt-1.5 flex items-start gap-2 rounded-xl border border-white/14 bg-surface-raised px-2.5 py-2 text-meta text-zinc-300">
-      <Code size={13} className="mt-px shrink-0 text-zinc-400" aria-hidden="true" />
-      <p className="min-w-0 flex-1">
-        <strong className="font-semibold text-zinc-100">Dev mode is off.</strong> Reviews, the ship gate and the production floor stopped. Approvals stay on {approvalsWord(approvals)}. What
-        landed keeps its history.
+    <div role="status" data-dev-flip-note={on ? 'on' : 'off'} {...(on ? {} : { 'data-dev-off-note': '' })} className="kw-dv-note mt-1.5 flex items-start gap-2 rounded-xl border border-white/14 bg-surface-overlay px-2.5 py-2 text-meta text-zinc-200 shadow-raised">
+      <p className="min-w-0 flex-1 leading-snug">
+        <span className="font-mono font-semibold text-sky-300 whitespace-nowrap">{on ? 'HEAD → dev' : 'merged into main'}</span>
+        {on && <span className="dv-caret" aria-hidden="true" />}{' '}
+        {on ? `Dev mode is on for ${space ?? 'this space'}.` : `Dev mode is off. Approvals stay on ${approvalsWord(approvals)}.`}
       </p>
       <button type="button" onClick={onDismiss} aria-label="Dismiss" className="-m-1 p-1 shrink-0 rounded text-zinc-400 hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400">
         <X size={13} aria-hidden="true" />
@@ -257,6 +275,9 @@ export const DevOffNote: React.FC<{ approvals?: string; onDismiss: () => void; m
     </div>
   );
 };
+
+/** The turned-off note (kept for callers): the flip note's off side. */
+export const DevOffNote: React.FC<{ approvals?: string; onDismiss: () => void; ms?: number }> = (p) => <DevFlipNote on={false} {...p} />;
 
 /** The </> badge with its caret on a space tile; `behind` is the surface it sits on. */
 export const DevBadge: React.FC<{ behind?: string }> = ({ behind }) => (

@@ -17,7 +17,7 @@ import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
 import { type NeedsYouRow, workingIds, directIds } from '../chatsTab';
-import { DevModeSwitch, DevOffNote, useDevMode } from './DevModeSwitch';
+import { DevModeSwitch, DevFlipNote, useDevMode } from './DevModeSwitch';
 import { DevDeskRow } from './DevDesk';
 import { IdeaJarRow } from './IdeaJarRow';
 
@@ -373,13 +373,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const offLine = spaceOffLine(space.approvals, kwants);
-  // Dev mode: the switch sits between the name and the gear; on, the meta line says the branch.
+  // Dev mode: on phones the switch sits after the name; on desktop it has its own row under it; on, the meta line says the branch.
   const dev = useDevMode(space.id);
   const devOn = !!dev?.on;
-  const [devOffNote, setDevOffNote] = useState(false);
-  const dismissDevOff = useCallback(() => setDevOffNote(false), []);
-  useEffect(() => setDevOffNote(false), [space.id]);
-  const devSwitch = <DevModeSwitch key={space.id} space={space} phone={phone} onTurnedOff={() => setDevOffNote(true)} />;
+  // The flip note under the header: 'on' (HEAD → dev) or 'off' (merged into main), or none.
+  const [devNote, setDevNote] = useState<'on' | 'off' | null>(null);
+  const dismissDevNote = useCallback(() => setDevNote(null), []);
+  useEffect(() => setDevNote(null), [space.id]);
+  const devSwitch = (
+    <DevModeSwitch key={space.id} space={space} phone={phone} onTurnedOff={() => setDevNote('off')} onTurnedOn={() => setDevNote('on')} />
+  );
   const devMeta = devOn ? (
     <span className="block text-meta text-zinc-400 truncate" data-dev-meta>
       Dev · <span className="font-mono text-sky-300">{dev?.branch ?? 'main'}</span>
@@ -735,7 +738,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <h1 className="text-body font-semibold text-zinc-50 truncate">{space.name}</h1>
               {devMeta ?? <span className="block text-meta text-zinc-400 truncate" title={spaceSummaryTitle(space.counts)}>{spaceSummary(space.counts)}</span>}
             </span>
-            {devSwitch}
             <button
               type="button"
               onClick={() => {
@@ -751,7 +753,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
         )}
-        {devOffNote && <DevOffNote approvals={space.approvals} onDismiss={dismissDevOff} />}
+        {/* Desktop: the switch has its own 32 px row under the name, starting where the name text
+            starts (6 px pad + 32 px tile + 10 px gap), so it never squeezes the name or subtitle. */}
+        {!phone && (
+          <div className="h-8 flex items-center pl-12" data-dev-switch-row>
+            {devSwitch}
+          </div>
+        )}
+        {devNote && <DevFlipNote key={devNote} on={devNote === 'on'} space={space.name} approvals={space.approvals} onDismiss={dismissDevNote} />}
         {offLine && (
           <button
             type="button"
