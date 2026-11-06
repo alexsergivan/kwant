@@ -641,9 +641,13 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-sc-repo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: theme('colors.zinc.200'); font-weight: 400; }
 .kw-sc-branch { flex-shrink: 0; color: theme('colors.sky.300'); font-weight: 500; }
 .kw-sc-led[data-s='off'] { background: transparent; box-shadow: inset 0 0 0 1.5px theme('colors.zinc.500'); }
-.kw-sc-led.kw-sc-spin { background: conic-gradient(theme('colors.sky.400') 0 75%, transparent 75% 100%); box-shadow: none; animation: kw-sc-spin 900ms linear infinite;
-  -webkit-mask: radial-gradient(circle, transparent 2px, #000 2.5px); mask: radial-gradient(circle, transparent 2px, #000 2.5px); }
-@keyframes kw-sc-spin { to { transform: rotate(360deg); } }
+/* Answer 3: the Approvals row while loading. Same grid and height as the row, no text. */
+.kw-sc-skel { display: block; border-radius: 9999px; background: rgb(255 255 255 / 0.06); animation: kw-sc-skel 1.4s ease-in-out infinite; }
+.kw-sc-skel-icon { width: 16px; height: 16px; border-radius: 5px; }
+.kw-sc-skel-line { width: 72px; height: 10px; }
+.kw-sc-skel-chip { width: 56px; height: 24px; }
+.kw-sc-phone .kw-sc-skel-chip { margin-block: 10px; }
+@keyframes kw-sc-skel { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 .kw-sc-act {
   margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; min-height: 24px; padding: 0 2px; border-radius: 6px;
   font-size: 12px; line-height: 18px; font-weight: 600; color: theme('colors.sky.300');
@@ -707,6 +711,17 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   padding: 12px 20px calc(20px + env(safe-area-inset-bottom)); animation: kw-dvx-up 200ms var(--kw-ease) both;
 }
 @keyframes kw-dvx-up { from { transform: translateY(100%); } to { transform: none; } }
+/* Answer 1: the switch's knob turns into a small spinner only while its request is in flight. */
+.kw-dv[data-saving] .kw-dv-knob {
+  background: conic-gradient(currentColor 0 75%, transparent 75% 100%) !important; animation: kw-dv-saving 800ms linear infinite;
+  -webkit-mask: radial-gradient(circle, transparent 4px, #000 4.5px); mask: radial-gradient(circle, transparent 4px, #000 4.5px);
+}
+@keyframes kw-dv-saving { to { rotate: 360deg; } }
+/* Answer 4: closing mirrors the open, 150 ms down (none under reduced motion, below). */
+.kw-dvx-sheet[data-closing] { animation: kw-dvx-down 150ms var(--kw-ease) both; }
+.kw-dvx-scrim[data-closing] { animation: kw-dvx-fade-out 150ms var(--kw-ease) both; }
+@keyframes kw-dvx-down { from { transform: none; } to { transform: translateY(100%); } }
+@keyframes kw-dvx-fade-out { from { opacity: 1; } to { opacity: 0; } }
 .kw-dvx-grab { display: block; width: 36px; height: 4px; border-radius: 2px; margin: 0 auto 12px; background: theme('colors.zinc.600'); }
 .kw-dvx-sheet .kw-dvx-close { top: 6px; right: 6px; width: 44px; height: 44px; }
 .kw-dvx-sheet .kw-dvx-actions { flex-direction: column; align-items: stretch; gap: 8px; }
@@ -714,8 +729,9 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-dvx-sheet .kw-dvx-guide { justify-content: center; min-height: 44px; }
 @media (prefers-reduced-motion: reduce) {
   .kw-dv-track, .kw-dv-knob { transition: none !important; }
-  .kw-sc-led.kw-sc-spin { animation: none; }
-  .kw-dvx-pop, .kw-dvx-sheet, .kw-dvx-scrim { animation: none; }
+  .kw-dvx-pop, .kw-dvx-sheet, .kw-dvx-scrim, .kw-dvx-sheet[data-closing], .kw-dvx-scrim[data-closing] { animation: none; }
+  .kw-sc-skel { animation: none; }
+  .kw-dv[data-saving] .kw-dv-knob { animation: none; }
 }
 /* The flip note under the space header: HEAD → dev / merged into main, one caret blink */
 .kw-dv-note { animation: kw-dv-hint 150ms var(--kw-ease) both; }

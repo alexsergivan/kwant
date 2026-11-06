@@ -3,6 +3,7 @@
 // wiring. Demo data only.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
 
@@ -34,12 +35,14 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
 const m = await loadBundled(`
   export { default as React } from 'react';
   export { createRoot } from 'react-dom/client';
-  export { devSubLine, devChecking, parseDevMode, devStore, DEV_GUIDE_URL, EXPLAINER } from './src/devMode';
+  export { devSubLine, parseDevMode, devStore, DEV_GUIDE_URL, EXPLAINER } from './src/devMode';
   export { approvalsRow } from './src/approvalMode';
-  export { SpaceControls } from './src/components/SpaceControls';
+  export { SpaceControls, SHEET_CLOSE_MS } from './src/components/SpaceControls';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;
+const ourEntry = () => !!window.history.state?.kwBrowserOverlay;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const settle = async (n = 10) => {
   for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
 };
@@ -89,7 +92,7 @@ test('§2 sub-line: one repo names it and its branch; several count; partial and
   assert.equal(text(m.devSubLine(S({ repos: [R('demo-org/app', 'error'), R('demo-org/api', 'error')] }))), 'Can’t read 2 repos');
 });
 
-test('§2 sub-line: GitHub not connected, other hosts, a local folder, no repo, checking', () => {
+test('§2 sub-line: GitHub not connected, other hosts, a local folder, no repo, never a checking line', () => {
   const nc = m.devSubLine(S({ repos: [R('demo-org/app', 'not_connected')] }));
   assert.deepEqual([text(nc), nc.led, nc.action], ['Needs GitHub', 'warn', 'connect']);
   const gl = m.devSubLine(S({ repos: [R('gitlab.example.test/demo/app', 'other_host', { host: 'gitlab.example.test' })] }));
@@ -99,9 +102,9 @@ test('§2 sub-line: GitHub not connected, other hosts, a local folder, no repo, 
   assert.equal(text(local), 'Local folder, no remote');
   const none = m.devSubLine(S({ repos: [], status: 'no_repo' }));
   assert.deepEqual([none.state, text(none), none.action], ['no_repo', 'No repo yet', 'link']);
-  const checking = m.parseDevMode({ ...off, on: true, repos: [] });
-  assert.equal(m.devChecking(checking), true);
-  assert.deepEqual([m.devSubLine(checking).state, text(m.devSubLine(checking))], ['checking', 'Looking for repos…']);
+  // Answer 1: no "checking" sub-line. On with no repos yet and no poll is plain "No repo yet".
+  const fresh = m.devSubLine(m.parseDevMode({ ...off, on: true, repos: [] }));
+  assert.deepEqual([fresh.state, text(fresh), fresh.led], ['no_repo', 'No repo yet', 'off']);
 });
 
 test('§2 sub-line: armed beats everything, off says what it is for, not-owner is its own state', () => {
@@ -273,9 +276,110 @@ test('DOM: on a phone the explainer is a modal sheet; the page behind is inert; 
   assert.equal(host.hasAttribute('inert'), true, 'the sidebar behind is inert');
   assert.ok(document.querySelector('[data-dvx-scrim]'));
   await click(sheet.querySelector('[data-dvx-close]'));
-  await settle();
+  await wait(m.SHEET_CLOSE_MS + 40);
   assert.equal(!!document.querySelector('[data-dev-explainer]'), false);
   assert.equal(host.hasAttribute('inert'), false);
+  root.unmount();
+});
+
+// ---------------------------------------------------------------- Ada's answers 1, 3 and 4 (0.7.2)
+
+test('answer 4: the phone sheet slides down for 150 ms before it goes; the X takes its history entry off', async () => {
+  reset({ ...off });
+  const { host, root } = await mount({ phone: true });
+  assert.equal(ourEntry(), false);
+  await click(host.querySelector('[data-dv-help]'));
+  assert.equal(ourEntry(), true, 'opening the sheet pushes a history entry');
+  const sheet = document.querySelector('[data-dev-explainer]');
+  await click(sheet.querySelector('[data-dvx-close]'));
+  assert.equal(sheet.dataset.closing, 'true', 'the sheet is sliding down');
+  assert.equal(document.querySelector('[data-dvx-scrim]').dataset.closing, 'true', 'the scrim fades with it');
+  assert.ok(document.querySelector('[data-dev-explainer]'), 'still there during the slide');
+  await wait(m.SHEET_CLOSE_MS + 40);
+  assert.equal(!!document.querySelector('[data-dev-explainer]'), false);
+  await wait(30);
+  assert.equal(ourEntry(), false, 'closing with the X took the entry off');
+  root.unmount();
+});
+
+test('answer 4: the back gesture closes the phone sheet', async () => {
+  reset({ ...off });
+  const { host, root } = await mount({ phone: true });
+  await click(host.querySelector('[data-dv-help]'));
+  assert.ok(document.querySelector('[data-dev-explainer]'));
+  assert.equal(ourEntry(), true);
+  window.history.back();
+  await wait(m.SHEET_CLOSE_MS + 80);
+  assert.equal(ourEntry(), false);
+  assert.equal(!!document.querySelector('[data-dev-explainer]'), false);
+  assert.equal(host.hasAttribute('inert'), false);
+  root.unmount();
+});
+
+test('answer 4: under reduced motion the sheet closes at once; desktop pushes no history entry', async () => {
+  reset({ ...off });
+  const had = window.matchMedia;
+  window.matchMedia = (q) => ({ matches: q.includes('reduce'), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
+  try {
+    const { host, root } = await mount({ phone: true });
+    await click(host.querySelector('[data-dv-help]'));
+    await click(document.querySelector('[data-dvx-close]'));
+    assert.equal(!!document.querySelector('[data-dev-explainer]'), false, 'gone with no slide');
+    root.unmount();
+  } finally {
+    window.matchMedia = had;
+  }
+  await wait(30);
+  const { host, root } = await mount({});
+  await click(host.querySelector('[data-dv-help]'));
+  assert.equal(ourEntry(), false, 'the desktop popover adds no history entry');
+  root.unmount();
+  const css = readFileSync(new URL('../src/styles/modern.css', import.meta.url), 'utf8');
+  assert.match(css, /\.kw-dvx-sheet\[data-closing\][^{]*\{[^}]*150ms/);
+  assert.match(css, /prefers-reduced-motion: reduce\)\s*\{[^@]*\.kw-dvx-sheet\[data-closing\][^}]*animation: none/);
+});
+
+test('answer 3: while approvals load, the row is a same-height skeleton with no text', async () => {
+  reset({ ...off });
+  const { host, root } = await mount({ space: { id: 'spc_demo', name: 'Demo' } });
+  const sk = host.querySelector('[data-sc-row="approvals"]');
+  assert.ok(sk.hasAttribute('data-sc-skeleton'));
+  assert.ok(sk.classList.contains('kw-sc-row'), 'same row class, so the same height');
+  assert.equal(sk.getAttribute('aria-hidden'), 'true');
+  assert.equal(sk.textContent, '');
+  root.render(h(m.SpaceControls, { space: { id: 'spc_demo', name: 'Demo', approvals: 'ask' }, bots: [], onOpenSettings() {} }));
+  await settle();
+  const row = host.querySelector('[data-sc-row="approvals"]');
+  assert.equal(row.hasAttribute('data-sc-skeleton'), false);
+  assert.match(row.textContent, /Ask/);
+  root.unmount();
+});
+
+test('answer 1: no checking sub-line; the switch is busy only while its PUT is in flight', async () => {
+  reset({ ...off });
+  const { host, root } = await mount({});
+  const sw = host.querySelector('[role="switch"]');
+  let release;
+  const realFetch = g.fetch;
+  g.fetch = g.window.fetch = async (url, init = {}) => {
+    if ((init.method ?? 'GET') === 'PUT') await new Promise((r) => (release = r));
+    return realFetch(url, init);
+  };
+  try {
+    sw.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await settle();
+    const dv = host.querySelector('[data-saving]');
+    assert.ok(dv, 'the knob spins while saving');
+    assert.equal(sw.getAttribute('aria-busy'), 'true');
+    assert.doesNotMatch(host.textContent, /Looking for repos/);
+    release();
+    await settle(20);
+  } finally {
+    g.fetch = g.window.fetch = realFetch;
+  }
+  assert.equal(!!host.querySelector('[data-saving]'), false);
+  assert.equal(!!host.querySelector('[aria-busy="true"]'), false);
+  assert.doesNotMatch(host.textContent, /Looking for repos/);
   root.unmount();
 });
 

@@ -763,13 +763,13 @@ export const EXPLAINER = {
   notOwner: 'Only the space owner can turn on Dev mode.',
 } as const;
 
-export type DevSubState = 'off' | 'disabled' | 'checking' | 'watching' | 'several' | 'partial' | 'no_repo' | 'not_connected' | 'other_host' | 'error' | 'armed';
+export type DevSubState = 'off' | 'disabled' | 'watching' | 'several' | 'partial' | 'no_repo' | 'not_connected' | 'other_host' | 'error' | 'armed';
 export type DevSubAction = 'repos' | 'link' | 'connect';
 
 export interface DevSub {
   state: DevSubState;
-  /** null: no LED (off, armed). 'run' is the checking spinner; 'off' the hollow ring. */
-  led: 'ok' | 'warn' | 'bad' | 'off' | 'run' | null;
+  /** null: no LED (off, armed). 'off' is the hollow ring. */
+  led: 'ok' | 'warn' | 'bad' | 'off' | null;
   /** The text in pieces: `repo` truncates first, `branch` never does. */
   parts: Array<{ text: string; repo?: boolean; branch?: boolean }>;
   /** warn: the armed line. */
@@ -793,18 +793,16 @@ const sub = (state: DevSubState, led: DevSub['led'], text: string | DevSub['part
   action,
 });
 
-/** True while a space that was just turned on has not heard about any repo yet (spec §2 "checking"). */
-export const devChecking = (s: DevModeState | null): boolean => !!s?.on && s.repos.length === 0 && s.status === null && s.polled_at === null;
-
 /**
- * The Dev mode row's one line under the label (spec §2). Which state wins: armed, checking, then if any
+ * The Dev mode row's one line under the label (spec §2). Which state wins: armed, then if any
  * repo is watched several / partial / watching, else error, not_connected, other_host, no_repo. Counts
  * come straight from repos[]; nothing is added up beyond counting rows.
  */
 export function devSubLine(s: DevModeState | null, o: { armed?: boolean; disabled?: boolean } = {}): DevSub {
   if (o.armed) return sub('armed', null, ARMED_SUB, null, 'warn');
   if (!s?.on) return sub(o.disabled ? 'disabled' : 'off', null, OFF_DESCRIBE);
-  if (devChecking(s)) return sub('checking', 'run', 'Looking for repos…');
+  // No "checking" line (Ada's answer 1, 0.7.2): the PUT reply already carries the repos, so there is no
+  // in-between state; only the switch shows a spinner, while its request is in flight.
   const repos = s.repos;
   const watching = repos.filter((r) => r.status === 'watching');
   if (watching.length) {

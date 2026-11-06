@@ -208,7 +208,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
       // Not the owner: still focusable so the reason (title) can be read; presses do nothing (reducer).
       disabled={loading}
       aria-disabled={disabled || undefined}
-      aria-busy={loading || undefined}
+      aria-busy={loading || state.saving || undefined}
       role="switch"
       aria-checked={state.on}
       {...(labelledBy ? { 'aria-labelledby': labelledBy } : { 'aria-label': look.label })}
@@ -221,6 +221,8 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
       data-knob={look.knobRight ? 'right' : 'left'}
       data-cover={look.coverOpen ? 'open' : 'closed'}
       data-armed={armed || undefined}
+      // Answer 1 (0.7.2): the only "busy" sign is this spinner, and only while the PUT is in flight.
+      data-saving={state.saving || undefined}
       data-covered={(look.ring && !armed) || undefined}
       className={`kw-dv${state.reduced ? ' kw-dv-rm' : ''}${phone ? ' h-11' : ''}`}
     >

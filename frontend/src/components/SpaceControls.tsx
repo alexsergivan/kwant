@@ -10,6 +10,7 @@ import { ArrowUpRight, ChevronRight, CircleHelp, CodeXml, Lock, Shield, ShieldCh
 import { DEV_FEATURES, DEV_GUIDE_URL, EXPLAINER, SUB_ACTION_TEXT, type DevModeState, type DevSub, type DevSubAction, devSubLine } from '../devMode';
 import { approvalsRow, type SpaceApprovals } from '../approvalMode';
 import { DevModeSwitch, useDevMode } from './DevModeSwitch';
+import { backGestureEntry } from './BrowserControlOverlay';
 
 export interface SpaceControlsProps {
   space: { id: string; name: string; approvals?: SpaceApprovals };
@@ -84,6 +85,14 @@ export const SpaceControls: React.FC<SpaceControlsProps> = ({ space, phone = fal
         />
         <DevSubLine id={subId} sub={sub} phone={phone} onAction={act} />
       </div>
+      {/* Answer 3: while the space's approvals are still loading, a skeleton the row's height, no text. */}
+      {!appr && space.approvals === undefined && (
+        <div className="kw-sc-row kw-sc-row-skeleton" data-sc-row="approvals" data-sc-skeleton aria-hidden="true">
+          <span className="kw-sc-skel kw-sc-skel-icon" />
+          <span className="kw-sc-skel kw-sc-skel-line" />
+          <span className="kw-sc-skel kw-sc-skel-chip" />
+        </div>
+      )}
       {appr && (
         <div className="kw-sc-row" data-sc-row="approvals">
           {appr.value === 'ask' ? (
@@ -138,7 +147,7 @@ export const SpaceControls: React.FC<SpaceControlsProps> = ({ space, phone = fal
 /** The Dev mode row's second line (spec §2): an LED, the text, and at most one action on the right. */
 const DevSubLine: React.FC<{ id: string; sub: DevSub; phone: boolean; onAction?: () => void }> = ({ id, sub, phone, onAction }) => (
   <div className="kw-sc-sub" data-dev-sub={sub.state} data-tone={sub.tone ?? undefined}>
-    {sub.led && <span className={`dv-led kw-sc-led${sub.led === 'run' ? ' kw-sc-spin' : ''}`} data-s={sub.led} aria-hidden="true" />}
+    {sub.led && <span className="dv-led kw-sc-led" data-s={sub.led} aria-hidden="true" />}
     <span id={id} className="kw-sc-sub-text" data-dev-sub-text>
       {sub.parts.map((p, i) =>
         p.repo ? (
@@ -188,8 +197,33 @@ const focusables = (root: HTMLElement | null): HTMLElement[] =>
  * What Dev mode is (spec §4): a non-modal popover beside the sidebar on desktop, a modal bottom sheet on
  * phones. Esc, the X or a click outside closes it and focus goes back to the "?".
  */
-export const DevExplainer: React.FC<ExplainerProps> = ({ id, space, on, disabled, phone, anchor, onClose, onTurnOn, onOpenDesk }) => {
+/** The phone sheet's slide-down on close (answer 4): mirrors the 200 ms open, none under reduced motion. */
+export const SHEET_CLOSE_MS = 150;
+const reducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+export const DevExplainer: React.FC<ExplainerProps> = ({ id, space, on, disabled, phone, anchor, onClose: close, onTurnOn, onOpenDesk }) => {
   const card = useRef<HTMLDivElement>(null);
+  // Phone: closing slides the sheet down first, then it unmounts. Desktop closes at once.
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  const onClose = useCallback(
+    (refocus: boolean) => {
+      if (closingRef.current) return;
+      if (!phone || reducedMotion()) {
+        closingRef.current = true;
+        closeRef.current(refocus);
+        return;
+      }
+      closingRef.current = true;
+      setClosing(true);
+      window.setTimeout(() => closeRef.current(refocus), SHEET_CLOSE_MS);
+    },
+    [phone],
+  );
+  // Phone: the back gesture closes the sheet. Opening adds a history entry; closing any other way takes it off.
+  useEffect(() => (phone ? backGestureEntry(() => onClose(true)) : undefined), [phone, onClose]);
   const primary = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; arrow: number; width: number } | null>(null);
 
@@ -323,7 +357,7 @@ export const DevExplainer: React.FC<ExplainerProps> = ({ id, space, on, disabled
 
   const content = phone ? (
     <div className="kw-dvx-layer" data-dvx-portal>
-      <div className="kw-dvx-scrim" aria-hidden="true" onClick={() => onClose(true)} data-dvx-scrim />
+      <div className="kw-dvx-scrim" aria-hidden="true" onClick={() => onClose(true)} data-dvx-scrim data-closing={closing || undefined} />
       <div
         ref={card}
         id={id}
@@ -331,6 +365,7 @@ export const DevExplainer: React.FC<ExplainerProps> = ({ id, space, on, disabled
         aria-modal="true"
         aria-labelledby={titleId}
         className="kw-dvx kw-dvx-sheet"
+        data-closing={closing || undefined}
         onKeyDown={onKeyDown}
         onTouchStart={(e) => (swipe.current = e.touches[0]?.clientY ?? null)}
         onTouchEnd={(e) => {
