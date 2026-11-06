@@ -6,21 +6,15 @@ use super::gitleaks::{self, Source, Target, PINS};
 use super::packages::{self, Eco, Registries};
 use super::testkit::*;
 use super::*;
-use crate::zombie::github::GhFile;
 use chrono::{Duration as Days, TimeZone, Utc};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-fn gh(path: &str, status: &str, patch: Option<&str>) -> GhFile {
+fn diff(path: &str, status: &str, patch: Option<&str>) -> FileDiff {
     let adds = patch.map_or(0, |p| p.lines().filter(|l| l.starts_with('+')).count() as u64);
     let dels = patch.map_or(0, |p| p.lines().filter(|l| l.starts_with('-')).count() as u64);
-    GhFile { filename: path.into(), status: status.into(), additions: adds, deletions: dels, patch: patch.map(Into::into), previous_filename: None }
-}
-
-fn diff(path: &str, status: &str, patch: Option<&str>) -> FileDiff {
-    let g = gh(path, status, patch);
-    FileDiff { path: g.filename, status: g.status, additions: g.additions, deletions: g.deletions, patch: g.patch, previous_path: None }
+    FileDiff { path: path.into(), status: status.into(), additions: adds, deletions: dels, patch: patch.map(Into::into), previous_path: None }
 }
 
 /// A Config whose gitleaks comes from the mock, cached in `dir`, and whose registries all fail
@@ -216,7 +210,7 @@ async fn j_s2_the_value_is_hidden_from_facts_card_findings_and_fix_it_text() {
     let (_mock, c) = fake(dir.path(), "").await;
     let value = secret(424242);
     let patch = format!("@@ -1,2 +1,4 @@\n use x;\n+// demo config for example.com\n+const KEY: &str = \"{value}\";\n fn f() {{}}");
-    let mut files = vec![gh("src/config.rs", "modified", Some(&patch)), gh("README.md", "modified", Some("@@ -1 +1,2 @@\n # demo\n+More text."))];
+    let mut files = vec![diff("src/config.rs", "modified", Some(&patch)), diff("README.md", "modified", Some("@@ -1 +1,2 @@\n # demo\n+More text."))];
     let sec = scan_and_hide(&c, &mut files, BTreeMap::new(), None).await;
     assert_eq!(sec.secrets.state, State::Hit);
     // The stored patch keeps its shape, with the line replaced
@@ -319,7 +313,7 @@ async fn j_s4_files_cut_from_the_models_60k_are_still_scanned() {
     let big_patch = added_patch(&big.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(big_patch.len() > super::super::facts::DIFF_CHARS);
     let late = added_patch(&["fn demo() {}", &format!("let k = \"{}\";", secret(7))]);
-    let mut files = vec![gh("src/a_small.rs", "added", Some("@@ -0,0 +1 @@\n+fn a() {}")), gh("src/b_big.rs", "added", Some(&big_patch)), gh("src/c_late.rs", "added", Some(&late))];
+    let mut files = vec![diff("src/a_small.rs", "added", Some("@@ -0,0 +1 @@\n+fn a() {}")), diff("src/b_big.rs", "added", Some(&big_patch)), diff("src/c_late.rs", "added", Some(&late))];
     let sec = scan_and_hide(&c, &mut files, BTreeMap::new(), None).await;
     let (diffs, cut) = crate::server::dev::poller::cut_diffs(files);
     assert!(cut.is_some() && diffs[1].patch.is_none(), "the big file is cut for the model");
@@ -771,7 +765,7 @@ async fn f_a_real_gitleaks_finds_and_hides_keys_in_paths_its_allowlist_skips() {
         ("docs/gitleaks.toml.md", format!("aws_access_key_id = \"{aws}\""), aws.clone()),
         ("package-lock.json", format!("      \"resolved\": \"https://demo:{ghp}@npm.pkg.github.com/demo/-/demo-1.0.0.tgz\","), ghp.clone()),
     ];
-    let mut files: Vec<GhFile> = cases.iter().map(|(p, line, _)| gh(p, "added", Some(&added_patch(&["// demo", line])))).collect();
+    let mut files: Vec<FileDiff> = cases.iter().map(|(p, line, _)| diff(p, "added", Some(&added_patch(&["// demo", line])))).collect();
     let sec = scan_and_hide(&c, &mut files, BTreeMap::new(), None).await;
     assert_eq!(sec.secrets.state, State::Hit, "{:?}", sec.secrets);
     assert!(sec.secrets.count >= 4, "{:?}", sec.secrets);

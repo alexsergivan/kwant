@@ -426,7 +426,6 @@ mod tests {
     #[tokio::test]
     async fn j_f_a_secret_or_a_missing_package_from_the_scan_forces_high() {
         use super::super::scan::{self, testkit::*, Config, State};
-        use crate::zombie::github::GhFile;
         let _l = port_lock().await;
         let (archive, a, b) = fake_release(&fake_gitleaks(""));
         let mock = serve(move |r| {
@@ -452,7 +451,7 @@ mod tests {
             gitleaks_timeout: std::time::Duration::from_secs(20),
             registries: scan::packages::Registries::all_at(&mock.base),
         };
-        let gh = |path: &str, patch: String| GhFile { filename: path.into(), status: "added".into(), additions: 1, deletions: 0, patch: Some(patch), previous_filename: None };
+        let gh = |path: &str, patch: String| FileDiff { path: path.into(), status: "added".into(), additions: 1, deletions: 0, patch: Some(patch), previous_path: None };
         let base = review_facts(290);
         let (_, quiet) = card::<Stub>(&base, None, None).await;
         assert_eq!(quiet["risk"]["level"], "low", "the fixture alone is Low");

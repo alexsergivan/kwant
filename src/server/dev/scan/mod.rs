@@ -310,18 +310,18 @@ pub async fn for_review(
     client: &crate::zombie::github::GithubSource,
     repo: &str,
     head_sha: &str,
-    files: &mut [crate::zombie::github::GhFile],
+    files: &mut [FileDiff],
     capped: bool,
 ) -> Security {
     let mut contents = BTreeMap::new();
     let wanted = files
         .iter()
         .filter(|f| f.status != "removed")
-        .filter(|f| packages::manifest_kind(&f.filename).is_some() || (f.patch.is_none() && gitleaks::needs_text(&diff_of(f))))
+        .filter(|f| packages::manifest_kind(&f.path).is_some() || (f.patch.is_none() && gitleaks::needs_text(f)))
         .take(MAX_FETCHED);
     for f in wanted {
-        if let Ok(Some(text)) = client.dev_file_at(repo, &f.filename, head_sha).await {
-            contents.insert(f.filename.clone(), text);
+        if let Ok(Some(text)) = client.dev_file_at(repo, &f.path, head_sha).await {
+            contents.insert(f.path.clone(), text);
         }
     }
     let capped = capped.then(|| format!("the PR has more than {} files; the rest weren't read", files.len()));
@@ -331,29 +331,18 @@ pub async fn for_review(
 /// [`scan`], then the flagged added lines replaced in `files`' patches.
 pub async fn scan_and_hide(
     cfg: &Config,
-    files: &mut [crate::zombie::github::GhFile],
+    files: &mut [FileDiff],
     contents: BTreeMap<String, String>,
     files_capped: Option<String>,
 ) -> Security {
-    let input = Input { files: files.iter().map(diff_of).collect(), contents, files_capped };
+    let input = Input { files: files.to_vec(), contents, files_capped };
     let out = scan(cfg, &input).await;
     for f in files.iter_mut() {
-        if let (Some(ranges), Some(p)) = (out.hide.get(&f.filename), f.patch.as_mut()) {
+        if let (Some(ranges), Some(p)) = (out.hide.get(&f.path), f.patch.as_mut()) {
             *p = hide_lines(p, ranges);
         }
     }
     out.security
-}
-
-fn diff_of(f: &crate::zombie::github::GhFile) -> FileDiff {
-    FileDiff {
-        path: f.filename.clone(),
-        status: f.status.clone(),
-        additions: f.additions,
-        deletions: f.deletions,
-        patch: f.patch.clone(),
-        previous_path: f.previous_filename.clone(),
-    }
 }
 
 #[cfg(test)]

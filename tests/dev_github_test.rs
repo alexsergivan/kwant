@@ -129,7 +129,7 @@ async fn a_lost_base_commit_falls_back_to_the_newest() {
     let (commits, found) = c.dev_commits_since(REPO, "main", Some(&sha(1)), &EtagCache::default()).await.unwrap();
     assert!(!found);
     assert_eq!(commits.iter().map(|c| c.sha.clone()).collect::<Vec<_>>(), [sha(2), sha(3), sha(4)], "oldest first");
-    assert_eq!(poller::window(commits, false, found).len(), 3, "at most MAX_NEW of them");
+    assert_eq!(poller::window(kwnt::server::dev::source::all(commits), false, found).len(), 3, "at most MAX_NEW of them");
     assert_eq!(c.dev_commit(REPO, &sha(1)).await.unwrap_err(), GhError::NotFound);
 
     let (commits, found) = c.dev_commits_since(REPO, "main", Some(&sha(3)), &EtagCache::default()).await.unwrap();
