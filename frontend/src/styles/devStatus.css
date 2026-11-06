@@ -261,6 +261,8 @@
 /* 0.7.2 final copy (dev-mode-explainer/spec.md §6, §9b): second line, team note, the quiet no-repo line
    and the Remove toast. Muted text is --t3 (AA on the side surface); actions are --accent. */
 .kw-dv-repo-origin { margin: -4px 0 6px 18px; font-size: 12px; line-height: 18px; color: var(--t3); overflow-wrap: anywhere; }
+/* 0.7.3: the quiet line under a single repo (plain git: landed only; no_git: what to install). */
+.kw-dv-line-note { margin: 2px 0 6px 18px; font-size: 12px; line-height: 18px; color: var(--t3); overflow-wrap: anywhere; }
 .kw-dv-repo-state { overflow-wrap: anywhere; }
 .kw-dv-repo[data-s='error'] .kw-dv-repo-state { color: var(--dv-led-bad); }
 /* Ada's answer 2: Dev mode off, a `watching` repo is ready, not watched. A neutral chip, never green. */

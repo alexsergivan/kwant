@@ -103,10 +103,12 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   const single = rows.length === 0;
   const singleRow: RepoRow | null =
     single && state.repos.length === 1
-      ? { id: state.repos[0].key, team: state.repos[0].team, teamId: null, repo: state.repos[0], state: '', origin: null, teamNote: null, title: null, led: line.led, action: line.action }
+      ? { id: state.repos[0].key, team: state.repos[0].team, teamId: null, repo: state.repos[0], state: '', origin: null, teamNote: null, title: null, note: line.note, led: line.led, action: line.action }
       : null;
   // The single line's Link: the one team with none, if there is exactly one; else a repo added by hand.
-  const loneTeam = single && line.action === 'link' ? teams.find((t) => !state.repos.some((r) => r.team === t.name)) ?? null : null;
+  // 0.7.3: a lone no_repo row (a remote kwant won't fetch) links its own team's repo.
+  const ownTeam = (r: DevModeState['repos'][number] | undefined) => (r?.status === 'no_repo' && r.team ? teams.find((t) => t.id === r.team_id || t.name === r.team) ?? null : null);
+  const loneTeam = single && line.action === 'link' ? ownTeam(state.repos[0]) ?? teams.find((t) => !state.repos.some((r) => r.team === t.name)) ?? null : null;
 
   const focusAfter = (id: string) => {
     requestAnimationFrame(() => {
@@ -201,7 +203,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   return (
     <div ref={wrap} className="relative" data-dv-status-wrap>
       <div role="status" className="dv-statusline kw-dv-statusline" data-dv-status={line.status} data-dv-repos={state.repos.length}>
-        <p className="txt" data-dv-status-text>
+        <p className="txt" data-dv-status-text aria-describedby={single && line.note ? `${listId}-note` : undefined}>
           <span key={checkedAt ?? 0} className="dv-led" data-s={line.led} data-ping={ping || undefined} data-dv-led={line.led} aria-hidden="true" />
           <span className="min-w-0">
             {line.parts.map((p, i) =>
@@ -242,6 +244,11 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
           </span>
         )}
       </div>
+      {single && line.note && (
+        <p id={`${listId}-note`} className="kw-dv-line-note" data-dv-line-note>
+          {line.note}
+        </p>
+      )}
       {single && linkingId === 'line' && line.action === 'link' && <div className="kw-dv-repo-form-wrap">{linkForm('line', loneTeam, 'line')}</div>}
       {single && error && (
         <p className="kw-dv-repo-err" role="alert">
@@ -250,7 +257,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
       )}
       {!single && open && (
         <ul id={listId} className="kw-dv-repos" aria-label="Repos Dev mode watches" data-dv-repos-list>
-          {rows.map((r) => (
+          {rows.map((r, i) => (
             <li key={r.id} className="kw-dv-repo" data-dv-repo-row={r.id} data-s={r.repo?.status ?? 'no_repo'}>
               <div className="kw-dv-repo-line">
                 <span className="dv-led" data-s={r.led} aria-hidden="true" />
@@ -283,6 +290,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
                     data-tone={r.state === READY ? 'neutral' : undefined}
                     title={r.state === READY ? READY_TITLE : r.title ?? undefined}
                     aria-label={r.state === READY ? READY_TITLE : undefined}
+                    aria-describedby={r.note ? `${listId}-note-${i}` : undefined}
                   >
                     {r.state}
                   </span>
@@ -305,6 +313,11 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
               {r.origin && (
                 <p className="kw-dv-repo-origin" data-dv-repo-origin>
                   {r.origin}
+                </p>
+              )}
+              {r.note && (
+                <p id={`${listId}-note-${i}`} className="kw-dv-repo-origin" data-dv-repo-note>
+                  {r.note}
                 </p>
               )}
               {note === r.id && r.teamNote && (

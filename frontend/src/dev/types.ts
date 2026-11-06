@@ -231,6 +231,8 @@ export interface LandedListProps {
   onOpenReview?: (pr: number, repo?: string | null) => void;
   /** `forge` from GET dev_mode: names the link ("Open on GitHub"). */
   forge?: Forge | null;
+  /** 0.7.3 (any-git): is this card's repo read with plain git? Then no CI tile and no "Open on {Forge}" link. */
+  gitOnly?: (repo: string | null) => boolean;
   /** 0.7.2: the card's repo chip text, or null with one repo in the space (`cardRepoLabel`). */
   repoLabel?: (repo: string | null, name?: string | null) => string | null;
 }
