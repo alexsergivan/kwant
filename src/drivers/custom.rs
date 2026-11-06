@@ -175,10 +175,16 @@ pub fn parse_models(body: &serde_json::Value, model: Option<&str>) -> Option<Vec
             if id.is_empty() || id.len() > MAX_MODEL_LEN {
                 return None;
             }
-            let label = m["display_name"].as_str().or_else(|| m["name"].as_str()).unwrap_or(id);
+            // A server-sent name is masked like any server text. Without one the label is the id,
+            // which is kept and shown as is anyway: masking it would turn long ids such as
+            // NVIDIA's `nvidia/nemotron-3.5-super-vl-120b-a12b` into "[redacted]".
+            let label = match m["display_name"].as_str().or_else(|| m["name"].as_str()) {
+                Some(name) => crate::profiles::classify::redact_detail(name, 120),
+                None => id.to_string(),
+            };
             Some(EngineModel {
                 id: id.to_string(),
-                label: crate::profiles::classify::redact_detail(label, 120),
+                label,
                 default: model.is_some_and(|d| d.eq_ignore_ascii_case(id)),
                 tier: tier_from_name(id),
             })
@@ -372,5 +378,24 @@ mod tests {
         assert_eq!(models[0].tier, Some(super::super::engines::Tier::Balanced));
         assert_eq!(models[2].tier, Some(super::super::engines::Tier::Fast));
         assert!(parse_models(&serde_json::json!({"error": "nope"}), None).is_none());
+    }
+
+    #[test]
+    fn nvidia_model_list_parses() {
+        // Trimmed from GET https://integrate.api.nvidia.com/v1/models (public, no key), 2026-11-06.
+        let body = serde_json::json!({"object": "list", "data": [
+            {"id": "01-ai/yi-large", "object": "model", "created": 735790403, "owned_by": "01-ai"},
+            {"id": "nvidia/nemotron-3.5-super-vl-120b-a12b", "object": "model", "created": 735790403, "owned_by": "nvidia"},
+            {"id": "nvidia/nemotron-3-ultra-550b-a55b", "object": "model", "created": 735790403, "owned_by": "nvidia"},
+            {"id": "deepseek-ai/deepseek-v4.1-flash", "object": "model", "created": 735790403, "owned_by": "deepseek-ai"},
+            {"id": "moonshotai/kimi-k2.6", "object": "model", "created": 735790403, "owned_by": "moonshotai"}
+        ]});
+        let models = parse_models(&body, Some("moonshotai/kimi-k2.6")).unwrap();
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids[1], "nvidia/nemotron-3.5-super-vl-120b-a12b");
+        assert_eq!(models.len(), 5);
+        // No `name` in NVIDIA's list: the label is the id, never "[redacted]".
+        assert!(models.iter().all(|m| m.label == m.id));
+        assert!(models[4].default && !models[0].default);
     }
 }

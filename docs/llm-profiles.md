@@ -34,7 +34,8 @@ A profile that ran out of usage is skipped until its reset time (or one hour whe
 didn't say). Overloads and rate limits are retried, not failed over.
 
 **Custom API accounts.** Engine `custom`, kind `custom_api`: any server that speaks the OpenAI
-chat API (`openai-chat`: OpenRouter, LM Studio, Agent Maestro's `/api/openai/v1`, …) or the
+chat API (`openai-chat`: OpenRouter, NVIDIA's `https://integrate.api.nvidia.com/v1`, LM Studio, Agent
+Maestro's `/api/openai/v1`, …) or the
 Anthropic Messages API (`anthropic-messages`: Agent Maestro's `/api/anthropic`). A space can have
 several; they belong to that space only. The base URL is cut back to the API root (a pasted
 `…/chat/completions` or `…/messages` is removed; Anthropic gets `/v1` added), must be http(s), and

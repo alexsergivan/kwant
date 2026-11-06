@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- NVIDIA preset for custom servers: free models from build.nvidia.com (#365).
+
+### Fixed
+- A custom server's models that have no name now show their id in the model picker instead of "[redacted]" (#365).
+
 ## [Mac 0.7.2] - 2026-11-06
 
 ### Added

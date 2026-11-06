@@ -86,8 +86,22 @@ export const CUSTOM_PRESETS: Array<{ id: string; label: string; name: string; ur
     note: 'GitHub Copilot models from VS Code. Keep VS Code open with Agent Maestro running.',
   },
   { id: 'openrouter', label: 'OpenRouter', name: 'OpenRouter', urls: { 'openai-chat': 'https://openrouter.ai/api/v1' }, needsKey: true, note: 'Needs an OpenRouter API key.' },
+  {
+    id: 'nvidia',
+    label: 'NVIDIA',
+    name: 'NVIDIA',
+    urls: { 'openai-chat': 'https://integrate.api.nvidia.com/v1' },
+    needsKey: true,
+    note: 'Free models from build.nvidia.com. Needs an NVIDIA API key (starts with nvapi-).',
+  },
   { id: 'lmstudio', label: 'LM Studio', name: 'LM Studio', urls: { 'openai-chat': 'http://localhost:1234/v1' }, needsKey: false, note: 'Start LM Studio’s local server first.' },
 ];
+
+/** True when the address is a preset server that needs a key (NVIDIA, OpenRouter); the form drops "optional" then. */
+export function customKeyRequired(baseUrl: string): boolean {
+  const url = baseUrl.trim().replace(/\/+$/, '');
+  return !!url && CUSTOM_PRESETS.some((p) => p.needsKey && Object.values(p.urls).some((u) => u === url));
+}
 
 /** The engine a kwant's model runs on, like the server's `Engine::from_model`; null for auto and Ollama. */
 export function engineOfModel(model: string | null | undefined): Engine | null {

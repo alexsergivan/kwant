@@ -5,6 +5,7 @@ import { editorProps } from '../escape';
 import type { EngineInfo, Tone } from '../engines';
 import {
   CUSTOM_PRESETS,
+  customKeyRequired,
   CustomProtocol,
   KIND_LABELS,
   Login,
@@ -423,7 +424,7 @@ export const CustomServerForm: React.FC<{
       {!editing && (
         <div>
           <label htmlFor={`${id}-key`} className="block text-[11px] font-medium text-zinc-400 mb-1">
-            API key <span className="text-zinc-600 font-normal">· optional, never shown again</span>
+            API key <span className="text-zinc-600 font-normal">{customKeyRequired(baseUrl) ? '· never shown again' : '· optional, never shown again'}</span>
           </label>
           <input id={`${id}-key`} type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(e) => setApiKey(e.target.value)} className={input} />
         </div>

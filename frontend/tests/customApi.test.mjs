@@ -6,7 +6,7 @@ globalThis.localStorage ??= { getItem: () => null, setItem: () => {} };
 
 const m = await loadBundled(`
   export * from './src/engines';
-  export { accountState, engineOfModel, readyCustomAccounts, accountUsable, CUSTOM_PRESETS, customKindText, customModelText } from './src/profiles';
+  export { accountState, engineOfModel, readyCustomAccounts, accountUsable, CUSTOM_PRESETS, customKeyRequired, customKindText, customModelText } from './src/profiles';
   export { EnginesPanel } from './src/components/EnginesPanel';
   export { CustomServerForm } from './src/components/EngineAccounts';
   export { ModelPicker } from './src/components/ModelPicker';
@@ -123,6 +123,38 @@ test('the form offers both formats, the Agent Maestro preset and a password key 
   assert.match(edit, /data-custom-form="edit"/);
   assert.match(edit, /<option value="gpt-4.1">gpt-4.1<\/option>/);
   assert.doesNotMatch(edit, /type="password"/);
+});
+
+test('the form offers an NVIDIA preset for build.nvidia.com, with a key', () => {
+  const ids = m.CUSTOM_PRESETS.map((p) => p.id);
+  assert.deepEqual(ids, ['maestro', 'openrouter', 'nvidia', 'lmstudio']);
+  const nv = m.CUSTOM_PRESETS.find((p) => p.id === 'nvidia');
+  assert.deepEqual(nv.urls, { 'openai-chat': 'https://integrate.api.nvidia.com/v1' });
+  assert.equal(nv.needsKey, true);
+  assert.equal(nv.name, 'NVIDIA');
+  assert.match(nv.note, /build\.nvidia\.com/);
+  assert.match(nv.note, /nvapi-/);
+  const html = m.renderToStaticMarkup(h(m.CustomServerForm, { onCancel: () => {}, onSaved: () => {} }));
+  assert.match(html, />NVIDIA<\/button>/);
+  assert.match(m.engineSummary(customEngine(), []).text, /OpenRouter, NVIDIA, LM Studio/);
+});
+
+test('the key reads required for NVIDIA and OpenRouter', () => {
+  assert.equal(m.customKeyRequired('https://integrate.api.nvidia.com/v1'), true);
+  assert.equal(m.customKeyRequired(' https://integrate.api.nvidia.com/v1/ '), true);
+  assert.equal(m.customKeyRequired('https://openrouter.ai/api/v1'), true);
+});
+
+test('the key stays optional for Agent Maestro, LM Studio and hand-entered servers', () => {
+  assert.equal(m.customKeyRequired('http://localhost:23333/api/openai/v1'), false);
+  assert.equal(m.customKeyRequired('http://localhost:23333/api/anthropic'), false);
+  assert.equal(m.customKeyRequired('http://localhost:1234/v1'), false);
+  assert.equal(m.customKeyRequired('https://llm.example.test/v1'), false);
+  assert.equal(m.customKeyRequired(''), false);
+  // A new form starts hand-entered, so its key says optional; saving never waits on a key.
+  const html = m.renderToStaticMarkup(h(m.CustomServerForm, { onCancel: () => {}, onSaved: () => {} }));
+  assert.match(html, /API key <span[^>]*>· optional, never shown again</);
+  assert.doesNotMatch(html, /id="new-custom-key"[^>]*required/);
 });
 
 test('the bot editor offers custom models grouped and labelled by account', () => {
