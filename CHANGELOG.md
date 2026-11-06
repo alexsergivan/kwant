@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.7.2] - 2026-11-06
+
 ### Added
 - **Dev mode watches every team's repo.** A space no longer has one watched repo. Dev mode watches each team's
   repo (its repo link, or its folder when that folder is a git checkout), up to 10 per space. When there's more
