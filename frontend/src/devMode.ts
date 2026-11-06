@@ -343,6 +343,10 @@ export const gitTip = (r: Pick<DevRepo, 'from' | 'team' | 'branch'>) => {
 const TOO_BIG_ERROR = /too big for Dev mode to read/i;
 const isTooBig = (r: DevRepo) => r.status === 'error' && (r.poll_code === 'too_big' || TOO_BIG_ERROR.test(r.poll_error ?? ''));
 export const TOO_BIG = 'Too big to read';
+/** O10 (Rigel, qa-073): a row that was already watched when git went missing comes back as `error` with the server's
+ * "Needs git 2.31 or newer on the server." (no poll_code for it), so it reads like `no_git`, not "Trying again". */
+const NEEDS_GIT_ERROR = /needs git 2\.31/i;
+const isNeedsGit = (r: DevRepo) => r.status === 'error' && !isTooBig(r) && NEEDS_GIT_ERROR.test(r.poll_error ?? '');
 /** §1c no-number sentence: the quiet line when the server sends no words. The size is only ever the server's own
  * words (the 1 GB cap says "(over 1 GB)", a single git answer over 16 MB doesn't), never matched or added here. */
 export const TOO_BIG_SENTENCE = 'This repo is too big for Dev mode to read.';
@@ -354,7 +358,7 @@ export const cantUseTip = (team: string | null) =>
   `Dev mode only reads https, ssh or git addresses on another computer. This one points at this server, or isn’t a git address. Change it in ${team ?? 'the team'}’s settings or in the folder’s git remote.`;
 /** A row's quiet second line (Mira's tooltip text, shown so keyboard, touch and screen readers get it too). */
 export const repoNote = (r: DevRepo, hint: string | null = null): string | null => {
-  if (r.status === 'no_git') return noGitTip(hint);
+  if (r.status === 'no_git' || isNeedsGit(r)) return noGitTip(hint);
   if (r.status === 'no_repo') return cantUseTip(r.team);
   if (isTooBig(r)) return tooBigNote(r);
   return r.provider === 'git' && r.status === 'watching' ? gitTip(r) : null;
@@ -399,6 +403,7 @@ const rowState = (r: DevRepo, on = true): { state: string; led: Led } => {
       // A 0.7.1/0.7.2 server: a folder with no remote, or a host it doesn't read yet.
       return { state: r.from === 'local' || !r.host ? LOCAL_ONLY : hostNotRead(r.host), led: 'off' };
     case 'error':
+      if (isNeedsGit(r)) return { state: NEEDS_GIT, led: 'warn' };
       return { state: isTooBig(r) ? TOO_BIG : CANT_READ, led: 'bad' };
     default:
       return { state: TOO_MANY, led: 'off' };
@@ -426,7 +431,7 @@ const repoRow = (r: DevRepo, teams: DevTeamRef[], on = true, hint: string | null
   ...rowState(r, on),
   origin: rowOrigin(r),
   teamNote: r.added_by !== 'hand' && r.team && (r.from === 'repo' || r.from === 'folder' || r.from === 'local') ? teamNoteText(r.team, r.from === 'local' ? 'folder' : r.from) : null,
-  title: r.status === 'error' ? (isTooBig(r) ? tooBigNote(r) : safeError(r.poll_error)) : null,
+  title: r.status === 'error' && !isNeedsGit(r) ? (isTooBig(r) ? tooBigNote(r) : safeError(r.poll_error)) : null,
   note: repoNote(r, hint),
   action: rowAction(r),
 });

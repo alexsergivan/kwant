@@ -292,3 +292,16 @@ test('no_git with 6dd0243’s full-sentence install_hint: one full stop, never t
   assert.doesNotMatch(tip, /\.\./);
   assert.equal(m.noGitTip('Install git 2.31 or newer on the server. '), NO_GIT_TIP);
 });
+
+test('O10: a watched row whose git went missing reads "Needs git on the server", not "Trying again"', () => {
+  // The server keeps the row and answers `error` with GitError::NoGit's sentence (no poll_code for it).
+  const gone = { ...LAB, status: 'error', poll_code: null, poll_error: 'Needs git 2.31 or newer on the server.' };
+  const s = state({ status: 'watching', install_hint: HINT, repos: [APP, gone] });
+  const r = m.repoRows(s)[1];
+  assert.deepEqual([r.state, r.led, r.note, r.title, r.action], ['Needs git on the server', 'warn', NO_GIT_TIP, null, null]);
+  assert.equal(m.needsYouCount(s), 1);
+  assert.deepEqual(texts(m.statusLine(state({ status: 'watching', install_hint: HINT, repos: [gone] })).parts), ['https://gitlab.example.test/demo/lab', ' · Needs git on the server']);
+  // Any other error still reads as a passing problem, and too big still wins.
+  assert.equal(m.repoRows(state({ repos: [APP, { ...LAB, status: 'error', poll_error: 'The repo’s host said no.' }] }))[1].state, 'Can’t read it right now. Trying again.');
+  assert.equal(m.repoRows(state({ repos: [APP, { ...gone, poll_code: 'too_big' }] }))[1].state, 'Too big to read');
+});
