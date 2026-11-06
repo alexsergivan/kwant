@@ -125,6 +125,20 @@ test('the form offers both formats, the Agent Maestro preset and a password key 
   assert.doesNotMatch(edit, /type="password"/);
 });
 
+test('the form offers an NVIDIA preset for build.nvidia.com, with a key', () => {
+  const ids = m.CUSTOM_PRESETS.map((p) => p.id);
+  assert.deepEqual(ids, ['maestro', 'openrouter', 'nvidia', 'lmstudio']);
+  const nv = m.CUSTOM_PRESETS.find((p) => p.id === 'nvidia');
+  assert.deepEqual(nv.urls, { 'openai-chat': 'https://integrate.api.nvidia.com/v1' });
+  assert.equal(nv.needsKey, true);
+  assert.equal(nv.name, 'NVIDIA');
+  assert.match(nv.note, /build\.nvidia\.com/);
+  assert.match(nv.note, /nvapi-/);
+  const html = m.renderToStaticMarkup(h(m.CustomServerForm, { onCancel: () => {}, onSaved: () => {} }));
+  assert.match(html, />NVIDIA<\/button>/);
+  assert.match(m.engineSummary(customEngine(), []).text, /OpenRouter, NVIDIA, LM Studio/);
+});
+
 test('the bot editor offers custom models grouped and labelled by account', () => {
   const html = m.renderToStaticMarkup(h(m.ModelPicker, {
     value: 'custom:claude-sonnet-4', onChange: () => {}, engines: [customEngine({ ready: true })],

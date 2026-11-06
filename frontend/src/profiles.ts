@@ -86,6 +86,14 @@ export const CUSTOM_PRESETS: Array<{ id: string; label: string; name: string; ur
     note: 'GitHub Copilot models from VS Code. Keep VS Code open with Agent Maestro running.',
   },
   { id: 'openrouter', label: 'OpenRouter', name: 'OpenRouter', urls: { 'openai-chat': 'https://openrouter.ai/api/v1' }, needsKey: true, note: 'Needs an OpenRouter API key.' },
+  {
+    id: 'nvidia',
+    label: 'NVIDIA',
+    name: 'NVIDIA',
+    urls: { 'openai-chat': 'https://integrate.api.nvidia.com/v1' },
+    needsKey: true,
+    note: 'Free models from build.nvidia.com. Needs an NVIDIA API key (starts with nvapi-).',
+  },
   { id: 'lmstudio', label: 'LM Studio', name: 'LM Studio', urls: { 'openai-chat': 'http://localhost:1234/v1' }, needsKey: false, note: 'Start LM Studio’s local server first.' },
 ];
 

@@ -373,4 +373,22 @@ mod tests {
         assert_eq!(models[2].tier, Some(super::super::engines::Tier::Fast));
         assert!(parse_models(&serde_json::json!({"error": "nope"}), None).is_none());
     }
+
+    #[test]
+    fn nvidia_model_list_parses() {
+        // Trimmed from GET https://integrate.api.nvidia.com/v1/models (public, no key), 2026-11-06.
+        let body = serde_json::json!({"object": "list", "data": [
+            {"id": "01-ai/yi-large", "object": "model", "created": 735790403, "owned_by": "01-ai"},
+            {"id": "nvidia/nemotron-3.5-super-vl-120b-a12b", "object": "model", "created": 735790403, "owned_by": "nvidia"},
+            {"id": "nvidia/nemotron-3-ultra-550b-a55b", "object": "model", "created": 735790403, "owned_by": "nvidia"},
+            {"id": "deepseek-ai/deepseek-v4.1-flash", "object": "model", "created": 735790403, "owned_by": "deepseek-ai"},
+            {"id": "moonshotai/kimi-k2.6", "object": "model", "created": 735790403, "owned_by": "moonshotai"}
+        ]});
+        let models = parse_models(&body, Some("moonshotai/kimi-k2.6")).unwrap();
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids[1], "nvidia/nemotron-3.5-super-vl-120b-a12b");
+        assert_eq!(models.len(), 5);
+        assert_eq!(models[1].label, models[1].id);
+        assert!(models[4].default && !models[0].default);
+    }
 }

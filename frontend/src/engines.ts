@@ -347,7 +347,7 @@ export function engineSummary(e: EngineInfo, accounts: SummaryAccount[] = []): {
       if (e.id === 'custom_api')
         return accounts.length
           ? { text: 'None of its servers answered · Check them below', tone: 'warn' }
-          : { text: 'Add a server below: Agent Maestro (GitHub Copilot), OpenRouter, LM Studio or any OpenAI- or Anthropic-compatible one', tone: 'muted' };
+          : { text: 'Add a server below: Agent Maestro (GitHub Copilot), OpenRouter, NVIDIA, LM Studio or any OpenAI- or Anthropic-compatible one', tone: 'muted' };
       if (e.kind === 'api') return { text: 'No key yet · Add a key below to use it', tone: 'muted' };
       return { text: e.detail ?? (e.kind === 'local' ? 'Not running on this computer' : 'Not installed on this computer'), tone: 'muted' };
     case 'error':
