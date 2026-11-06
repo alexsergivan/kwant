@@ -156,6 +156,10 @@ async fn two_teams_two_repos_and_pr_12_in_both_is_two_cards() {
     assert_eq!((v["status"].clone(), v["repo"].clone(), v["branch"].clone()), (json!("watching"), json!(APP), json!("main")), "deprecated fields are the first row's: {v}");
     assert!(poller::is_due_soon(sp.id.as_str()));
 
+    // The desk is opened before the first reviews (#357: its own seen time)
+    let (s, v) = call(&env.app, "POST", &format!("{}/seen", uri(&sp)), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+
     // One poll of the space reads both: PR #12 in each is its own card
     poller::poll_space(&env.state, sp.id.as_str()).await;
     let reviews = env.state.db.dev_cards_in(sp.id.as_str(), None, REVIEW, None, 50).await.unwrap();
@@ -169,6 +173,24 @@ async fn two_teams_two_repos_and_pr_12_in_both_is_two_cards() {
     // A second poll makes nothing new
     poller::poll_space(&env.state, sp.id.as_str()).await;
     assert_eq!(env.state.db.dev_cards_in(sp.id.as_str(), None, REVIEW, None, 50).await.unwrap().len(), 2);
+
+    // The badge is the space's total over every repo; Mark seen (the rollup) leaves it, opening the
+    // desk clears it. The cards' own text runs first, so it can't overwrite the status set here
+    wait_for("the cards' text", || async { env.state.db.pending_dev_cards().await.map(|p| p.is_empty()).unwrap_or(false) }).await;
+    for c in &reviews {
+        env.state.db.set_dev_card(&c.id, READY, Some(&review_card().to_string())).await.unwrap().unwrap();
+    }
+    let badge = |v: &Value| v["new_reviews"].clone();
+    let (_, v) = call(&env.app, "GET", &uri(&sp), None).await;
+    assert_eq!(badge(&v), json!(2), "PR #12 in both repos: {v}");
+    let (s, v) = call(&env.app, "POST", &format!("/api/spaces/{}/dev/landed/seen", sp.id.as_str()), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let (_, v) = call(&env.app, "GET", &uri(&sp), None).await;
+    assert_eq!(badge(&v), json!(2), "Mark seen moves only the rollup: {v}");
+    let (s, v) = call(&env.app, "POST", &format!("{}/seen", uri(&sp)), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let (_, v) = call(&env.app, "GET", &uri(&sp), None).await;
+    assert_eq!(badge(&v), json!(0), "{v}");
 
     // The lists: every repo, or one with ?repo= (encoded or not)
     let base = format!("/api/spaces/{}/dev", sp.id.as_str());

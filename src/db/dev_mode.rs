@@ -855,9 +855,11 @@ mod tests {
     }
 
     /// Puts the database back in 0.7.1's shape: `dev_cards` with the old unique key and no `repo`,
-    /// no `dev_repos`, and one space watching `Demo-Org/App` on `main`.
+    /// no `dev_repos`, no `dev_mode_spaces.reviews_seen_at` (#357), and one space watching
+    /// `Demo-Org/App` on `main` whose desk was last seen at 09:00.
     async fn as_071(db: &Database) {
         for sql in [
+            "ALTER TABLE dev_mode_spaces DROP COLUMN reviews_seen_at",
             "DROP TABLE dev_repos",
             "DROP TABLE dev_cards",
             "CREATE TABLE dev_cards (
@@ -866,8 +868,8 @@ mod tests {
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 posted TEXT, post_error TEXT,
                 UNIQUE(space_id, kind, ref, head_sha))",
-            "INSERT INTO dev_mode_spaces (space_id, on_, repo, branch, deploy_hint, last_seen_sha, polled_at, poll_error, updated_at)
-             VALUES ('space_demo', 1, 'Demo-Org/App', 'main', 'fly', 'aaaa', '2026-11-06T10:00:00Z', NULL, '2026-11-05T10:00:00Z')",
+            "INSERT INTO dev_mode_spaces (space_id, on_, repo, branch, deploy_hint, last_seen_sha, polled_at, poll_error, seen_at, updated_at)
+             VALUES ('space_demo', 1, 'Demo-Org/App', 'main', 'fly', 'aaaa', '2026-11-06T10:00:00Z', NULL, '2026-11-06T09:00:00Z', '2026-11-05T10:00:00Z')",
             "INSERT INTO dev_mode_spaces (space_id, on_, repo, branch, updated_at) VALUES ('space_empty', 0, '', 'main', '2026-11-05T10:00:00Z')",
             "INSERT INTO dev_cards (id, space_id, kind, ref, head_sha, status, facts, card, posted)
              VALUES ('dvc_landed', 'space_demo', 'landed', 'aaaa', 'aaaa', 'ready', '{\"repo\":\"Demo-Org/App\",\"sha\":\"aaaa\"}', '{\"headline\":\"x\"}', NULL)",
@@ -914,8 +916,18 @@ mod tests {
         assert!(db.insert_dev_card_in(SPACE, "github.com/demo-org/app", LANDED, "aaaa", "aaaa", "{}").await.unwrap().is_none());
         assert!(db.insert_dev_card_in(SPACE, "github.com/demo-org/app", REVIEW, "pr:12", "bbbb", "{}").await.unwrap().is_none());
 
+        // #357's column came first: the badge keeps 0.7.1's seen time
+        let nine: DateTime<Utc> = "2026-11-06T09:00:00Z".parse().unwrap();
+        let mode = db.dev_mode(SPACE).await.unwrap().unwrap();
+        assert_eq!((mode.seen_at, mode.reviews_seen_at), (Some(nine), Some(nine)), "backfilled from seen_at");
+        // A Mark seen after the migration is never copied into the badge by a later start
+        let later: DateTime<Utc> = "2026-11-06T11:00:00Z".parse().unwrap();
+        db.dev_mode_seen(SPACE, later).await.unwrap();
+
         // Idempotent: a second start changes nothing
         db.migrate_dev_mode().await.unwrap();
+        let mode = db.dev_mode(SPACE).await.unwrap().unwrap();
+        assert_eq!((mode.seen_at, mode.reviews_seen_at), (Some(later), Some(nine)));
         assert_eq!(db.dev_repos(SPACE).await.unwrap(), rows);
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dev_cards").fetch_one(&db.pool).await.unwrap();
         assert_eq!(n, 4);
@@ -932,6 +944,8 @@ mod tests {
     const V071_FACTS: &str = "UPDATE dev_cards SET facts = ?2, status = 'pending', updated_at = ?3 WHERE id = ?1";
     const V071_SET: &str = "UPDATE dev_cards SET status = ?2, card = COALESCE(?3, card), updated_at = ?4 WHERE id = ?1 AND status != 'stale'";
     const V071_POLLED: &str = "UPDATE dev_mode_spaces SET last_seen_sha = COALESCE(?2, last_seen_sha), polled_at = ?3, poll_error = ?4 WHERE space_id = ?1";
+    /// 0.7.1's one seen route (desk opened and Mark seen alike).
+    const V071_SEEN: &str = "UPDATE dev_mode_spaces SET seen_at = ?2 WHERE space_id = ?1";
 
     async fn v071_stale(db: &Database, ref_: &str, keep: Option<&str>) -> Vec<String> {
         let rows: Vec<(String,)> =
@@ -989,6 +1003,11 @@ mod tests {
         sqlx::query(V071_SET).bind("dvc_landed").bind(READY).bind(None::<String>).bind(Utc::now()).execute(&db.pool).await.unwrap();
         // It polls on, moving only its own 0.7.1 place
         sqlx::query(V071_POLLED).bind(SPACE).bind("zzzz").bind(Utc::now()).bind(None::<String>).execute(&db.pool).await.unwrap();
+        // It reads the space row with the extra column, and its seen route moves only seen_at
+        let badge = db.dev_mode(SPACE).await.unwrap().unwrap().reviews_seen_at;
+        assert!(badge.is_some());
+        let opened_on_071 = Utc::now();
+        sqlx::query(V071_SEEN).bind(SPACE).bind(opened_on_071).execute(&db.pool).await.unwrap();
 
         let after: Vec<(String, String, String, String)> =
             sqlx::query_as("SELECT id, repo, status, facts FROM dev_cards ORDER BY id").fetch_all(&db.pool).await.unwrap();
@@ -1003,6 +1022,14 @@ mod tests {
         let again: Vec<(String, String, String, String)> =
             sqlx::query_as("SELECT id, repo, status, facts FROM dev_cards ORDER BY id").fetch_all(&db.pool).await.unwrap();
         assert_eq!(again, after);
+        // #357's column isn't added or backfilled again: the badge keeps its time, the rollup 0.7.1's
+        let mode = db.dev_mode(SPACE).await.unwrap().unwrap();
+        assert_eq!((mode.seen_at, mode.reviews_seen_at), (Some(opened_on_071), badge));
+        let cols: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('dev_mode_spaces') WHERE name = 'reviews_seen_at'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(cols, 1);
         // 0.7.2 picks the repo up where it left it, so what landed meanwhile becomes cards, once
         let app = "github.com/demo-org/app";
         assert_eq!(db.dev_repo(SPACE, app).await.unwrap().unwrap().last_seen_sha.as_deref(), Some("aaaa"));

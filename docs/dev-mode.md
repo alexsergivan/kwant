@@ -77,7 +77,8 @@ reply carries a `check` that says why. A `branch` the repo doesn't have is a 400
   - `other_host`: only GitLab, Gitea or other non-GitHub sources, or `local` ones. These are read
     from 0.7.2.
 - `new_reviews`: review cards ready to read that were made since the desk was last opened (open
-  ones only, never landed cards or floor approvals). A space never opened counts 0.
+  ones only, never landed cards or floor approvals), every watched repo's together: one count for
+  the space, with one seen time. A space never opened counts 0.
   `POST /api/spaces/:id/dev_mode/seen` marks the desk opened now, so phone and desktop agree. It
   sets `reviews_seen_at` only. "Mark seen" (`POST …/dev/landed/seen`) sets `seen_at`, which the
   landed rollup counts from, and never clears the badge. Before 0.7.2 both routes shared
