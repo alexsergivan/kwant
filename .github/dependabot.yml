@@ -1,0 +1,16 @@
+# Dependabot security updates for cargo and npm are switched on in the
+# repository settings, so vulnerable dependencies already get a PR on their own.
+# This file only keeps the GitHub Actions in .github/workflows current. The
+# third-party ones are pinned to a full commit sha, so a moved tag can't change
+# what runs next to the update-signing key in the release jobs.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "CI"
