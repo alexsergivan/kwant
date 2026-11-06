@@ -32,11 +32,22 @@ const MONEY_NOUNS: &[&str] = &[
 ];
 
 /// Argument keys that hold an amount (also any `*_amount`), and keys that say where it goes or
-/// what moves. A write tool whose arguments have one of each moves value, whatever its name or
-/// server: a crypto wallet's `send_transfer {token, to, amount}` or `send_swap {token_in, amount_in}`.
+/// what moves. A write tool moves value, whatever its name or server, when one of each also has
+/// the right shape: a number for the amount, and an account address or a crypto asset for the
+/// other (a crypto wallet's `send_transfer {token, to: "0x…", amount: "5"}`). A swap pair
+/// (`token_in` and `token_out`) counts on its own, since wallets take any token there.
 const AMOUNT_KEYS: &[&str] = &["amount", "amount_in", "amount_out", "value", "quantity", "sum"];
 const DESTINATION_KEYS: &[&str] = &[
     "to", "recipient", "destination", "to_address", "address", "token", "token_in", "token_out", "asset", "currency", "coin",
+];
+const SWAP_PAIRS: &[(&str, &str)] =
+    &[("token_in", "token_out"), ("from_token", "to_token"), ("sell_token", "buy_token"), ("input_mint", "output_mint")];
+/// Token symbols and crypto nouns a destination or asset value can be. Symbols that are also
+/// everyday words or names (ADA, TON, DOT, LINK, ONE, OP) are left out.
+const CRYPTO_ASSETS: &[&str] = &[
+    "btc", "wbtc", "eth", "weth", "steth", "usdc", "usdt", "dai", "usde", "pyusd", "eurc", "sol", "matic", "pol", "bnb",
+    "avax", "arb", "xrp", "doge", "trx", "ltc", "bch", "xlm", "bitcoin", "ether", "ethereum", "solana", "crypto", "token",
+    "coin", "stablecoin", "native",
 ];
 
 /// Verbs that complete an order.
@@ -47,6 +58,8 @@ const ORDER_NOUNS: &[&str] = &["order", "orders", "purchase", "booking", "subscr
 const READ_VERBS: &[&str] = &[
     "get", "list", "retrieve", "search", "find", "read", "fetch", "describe", "view", "show", "count", "lookup", "query",
     "estimate", "preview", "check", "verify", "validate", "export", "download", "inspect", "status", "info", "balance",
+    // Pure compute: works something out or moves the view, nothing else
+    "calculate", "compute", "format", "translate", "scroll",
 ];
 
 /// Tools that type or fill text in a page (any browser MCP): a card number typed there pays.
@@ -337,9 +350,12 @@ fn name_words_reason(server_words: &[String], words: &[String], name: &str) -> O
     None
 }
 
-/// A tool that doesn't only read and whose arguments carry an amount and a destination or asset
-/// (top level, or one object down): it moves value, whatever its name says. A Composio `slug`
-/// starts with its app (`SOMEWALLET_GET_QUOTE`), so its first word isn't an action word.
+/// A tool that doesn't only read and whose arguments carry a number under an amount key and an
+/// account address or crypto asset under a destination or asset key, or a swap pair (top level,
+/// or one object down): it moves value, whatever its name says. Key names alone aren't enough:
+/// `convert {to: "mi", value: 5}` or `update_cell {address: "A1", value: 5}` don't pay. A
+/// Composio `slug` starts with its app (`SOMEWALLET_GET_QUOTE`), so its first word isn't an
+/// action word.
 fn amount_shape_reason(tool: &str, args: &Value, slug: bool) -> Option<String> {
     let action: Vec<String> = words(tool)
         .into_iter()
@@ -350,16 +366,111 @@ fn amount_shape_reason(tool: &str, args: &Value, slug: bool) -> Option<String> {
         return None;
     }
     let Value::Object(top) = args else { return None };
-    let mut keys: Vec<String> = Vec::new();
+    let mut pairs: Vec<(String, &Value)> = Vec::new();
     for (k, v) in top {
-        keys.push(arg_key(k));
+        pairs.push((arg_key(k), v));
         if let Value::Object(inner) = v {
-            keys.extend(inner.keys().map(|k| arg_key(k)));
+            pairs.extend(inner.iter().map(|(k, v)| (arg_key(k), v)));
         }
     }
-    let amount = keys.iter().any(|k| AMOUNT_KEYS.contains(&k.as_str()) || k.ends_with("_amount"));
-    let destination = keys.iter().any(|k| DESTINATION_KEYS.contains(&k.as_str()));
+    let has_key = |key: &str| pairs.iter().any(|(k, _)| k == key);
+    let amount = pairs
+        .iter()
+        .any(|(k, v)| (AMOUNT_KEYS.contains(&k.as_str()) || k.ends_with("_amount")) && amount_value(v));
+    let destination = pairs.iter().any(|(k, v)| DESTINATION_KEYS.contains(&k.as_str()) && destination_value(v))
+        || SWAP_PAIRS.iter().any(|(a, b)| has_key(a) && has_key(b));
     (amount && destination).then(|| format!("{tool} moves an amount to another account or asset"))
+}
+
+/// A number, or a string that is one: `5`, `"0.001"`, `"1,000"`, `"1e18"`, `"0x2386f26fc10000"`,
+/// `"5 USDC"`, or `"max"`/`"all"` (send everything).
+fn amount_value(v: &Value) -> bool {
+    match v {
+        Value::Number(_) => true,
+        Value::String(s) => {
+            let first = s.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+            if matches!(first.as_str(), "max" | "all") {
+                return true;
+            }
+            if let Some(hex) = first.strip_prefix("0x") {
+                return !hex.is_empty() && hex.len() <= 64 && hex.chars().all(|c| c.is_ascii_hexdigit());
+            }
+            let plain: String = first.chars().filter(|c| !matches!(c, ',' | '_')).collect();
+            plain.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+                && plain.parse::<f64>().is_ok_and(f64::is_finite)
+        }
+        _ => false,
+    }
+}
+
+/// An account address (EVM `0x…`, ENS `*.eth`, bech32, base58, IBAN) or a crypto asset (a token
+/// symbol, a crypto noun, or a mint or contract address, which the address shapes cover).
+fn destination_value(v: &Value) -> bool {
+    let Some(s) = v.as_str().map(str::trim) else { return false };
+    let lower = s.to_ascii_lowercase();
+    CRYPTO_ASSETS.contains(&lower.as_str())
+        || evm_address(s)
+        || ens_name(&lower)
+        || bech32_address(s)
+        || base58_address(s)
+        || iban(s)
+}
+
+/// `0x` and 40 hex digits (EVM), or 64 (Sui, Aptos, Starknet).
+fn evm_address(s: &str) -> bool {
+    s.strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .is_some_and(|h| matches!(h.len(), 40 | 64) && h.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+fn ens_name(lower: &str) -> bool {
+    lower.strip_suffix(".eth").is_some_and(|name| {
+        !name.is_empty()
+            && !name.starts_with('.')
+            && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
+    })
+}
+
+/// `bc1q…`, `cosmos1…`: a lowercase prefix, `1`, then 20 or more bech32 characters.
+fn bech32_address(s: &str) -> bool {
+    const CHARSET: &str = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+    let lower = s.to_ascii_lowercase();
+    if s != lower && s != s.to_ascii_uppercase() {
+        return false;
+    }
+    let Some((hrp, data)) = lower.rsplit_once('1') else { return false };
+    (1..=20).contains(&hrp.len())
+        && hrp.chars().all(|c| c.is_ascii_lowercase())
+        && (20..=90).contains(&data.len())
+        && data.chars().all(|c| CHARSET.contains(c))
+}
+
+/// Solana accounts and mints, Bitcoin legacy, Tron: 25–44 base58 characters, digits and letters.
+fn base58_address(s: &str) -> bool {
+    const ALPHABET: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    (25..=44).contains(&s.len())
+        && s.chars().all(|c| ALPHABET.contains(c))
+        && s.chars().any(|c| c.is_ascii_digit())
+        && s.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// An IBAN with a valid mod-97 check.
+fn iban(s: &str) -> bool {
+    let compact: String = s.chars().filter(|c| *c != ' ').collect::<String>().to_ascii_uppercase();
+    let b = compact.as_bytes();
+    if !(15..=34).contains(&b.len())
+        || !b[..2].iter().all(u8::is_ascii_uppercase)
+        || !b[2..4].iter().all(u8::is_ascii_digit)
+        || !b.iter().all(u8::is_ascii_alphanumeric)
+    {
+        return false;
+    }
+    let mut rem: u32 = 0;
+    for c in compact[4..].chars().chain(compact[..4].chars()) {
+        let n = c.to_digit(36).unwrap_or(0);
+        rem = if n >= 10 { (rem * 100 + n) % 97 } else { (rem * 10 + n) % 97 };
+    }
+    rem == 1
 }
 
 /// An argument key in one spelling: `amountIn`, `amount-in` and `AMOUNT_IN` → `amount_in`.
@@ -702,7 +813,8 @@ mod tests {
         }
         // Other spellings and one object down
         assert!(mcp("w", "execute", json!({"toAddress": to, "amountIn": 1})).is_some());
-        assert!(mcp("w", "do", json!({"transfer": {"recipient": "bob", "fee_amount": 1}})).is_some());
+        assert!(mcp("w", "do", json!({"transfer": {"recipient": "vitalik.eth", "fee_amount": 1}})).is_some());
+        assert!(mcp("w", "do", json!({"transfer": {"recipient": "bob", "fee_amount": 1}})).is_none(), "bob isn't an account address");
         assert!(mcp("w", "create_order", json!({"asset": "BTC", "quantity": 2})).is_some());
         // Through Composio, by the slug's own arguments
         let multi = json!({"tools": [{"tool_slug": "SOMEWALLET_SEND", "arguments": {"to": to, "value": "1"}}]});
@@ -719,6 +831,73 @@ mod tests {
         assert!(mcp("speaker", "set_volume", json!({"amount": 5})).is_none(), "an amount but no destination or asset");
         assert!(mcp("mail", "send_email", json!({"to": "a@b.c", "subject": "s"})).is_none(), "a destination but no amount");
         assert!(mcp("w", "do", json!({"a": {"b": {"to": to, "amount": 1}}})).is_none(), "two objects down is out of reach");
+    }
+
+    /// Rigel's F7 corpus: ordinary tools with amount-like and destination-like key names.
+    #[test]
+    fn key_names_alone_dont_pay() {
+        for (tool, args) in [
+            ("convert", json!({"from": "km", "to": "mi", "value": 5})),
+            ("convert_units", json!({"to": "mi", "value": 5})),
+            ("convert_currency", json!({"amount": 100, "from": "USD", "to": "EUR"})),
+            ("calculate_tax", json!({"amount": 100, "currency": "USD"})),
+            ("format_price", json!({"currency": "USD", "value": 100})),
+            ("calculate_tip", json!({"amount": 100, "to": "split"})),
+            ("translate", json!({"text": "hi", "to": "fr", "value": "x"})),
+            ("browser_scroll", json!({"amount": 300, "to": "bottom"})),
+            ("set_volume", json!({"address": "x", "value": 50})),
+            ("update_cell", json!({"spreadsheet": "s", "address": "A1", "value": 5})),
+            ("set", json!({"address": "h", "key": "k", "value": "v"})),
+            ("put_secret", json!({"token": "abc", "value": "v"})),
+            ("set_limit", json!({"token": "t", "value": 100})),
+            ("kwnt_create_task", json!({"amount": 1, "title": "t", "to": "Ada"})),
+            ("http_request", json!({"method": "POST", "url": "https://x", "body": {"amount": 5, "to": "x"}})),
+        ] {
+            assert_eq!(mcp("x", tool, args.clone()), None, "{tool} {args}");
+        }
+        // A wallet that names its swap `convert` still asks: its values are assets
+        assert!(mcp("w", "convert", json!({"amount": "1", "from": "USDC", "to": "ETH"})).is_some());
+        assert!(mcp("w", "convert", json!({"amount_in": "1", "token_in": "CENT", "token_out": "XYZ"})).is_some(), "a swap pair");
+        // Compute verbs only read, even with wallet-shaped values
+        assert!(mcp("w", "calculate_fee", json!({"amount": "1", "to": "0x52908400098527886E0F7030069857D2E4169EE7"})).is_none());
+        // The amount must be a number
+        assert!(mcp("w", "send", json!({"amount": "lots", "to": "0x52908400098527886E0F7030069857D2E4169EE7"})).is_none());
+    }
+
+    #[test]
+    fn destination_and_amount_value_shapes() {
+        for yes in [
+            "0x52908400098527886E0F7030069857D2E4169EE7",
+            "0x52908400098527886e0f7030069857d2e4169ee752908400098527886e0f7030",
+            "vitalik.eth",
+            "pay.team-wallet.eth",
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+            "cosmos1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc5lzv7xu",
+            "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+            "DE89 3704 0044 0532 0130 00",
+            "GB82WEST12345698765432",
+            "USDC",
+            "usdt",
+            "native",
+        ] {
+            assert!(destination_value(&json!(yes)), "{yes}");
+        }
+        for no in [
+            "A1", "mi", "fr", "EUR", "USD", "bob", "Ada", "bottom", "split", "abc", "Lin", "0x5290",
+            "DE89370400440532013001", "hello.eth.com", ".eth", "sk_live_51Habc", "C1", "/a/b.txt",
+            "https://x", "a@b.c", "climate.living_room",
+        ] {
+            assert!(!destination_value(&json!(no)), "{no}");
+        }
+        assert!(!destination_value(&json!(5)));
+        for yes in [json!(5), json!(0.5), json!("5"), json!("0.001"), json!("1,000"), json!("1e18"), json!("0x2386f26fc10000"), json!("5 USDC"), json!("max")] {
+            assert!(amount_value(&yes), "{yes}");
+        }
+        for no in [json!("v"), json!("x"), json!("lots"), json!("NaN"), json!("inf"), json!("-"), json!(""), json!(true), json!(null), json!({"a": 1})] {
+            assert!(!amount_value(&no), "{no}");
+        }
     }
 
     #[test]

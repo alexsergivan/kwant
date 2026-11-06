@@ -338,6 +338,47 @@ async fn a_wallet_mcp_send_asks_with_approvals_off_and_after_always_allow() {
     assert!(reasons.contains(&"send_swap moves an amount to another account or asset"), "{reasons:?}");
 }
 
+/// Rigel's F7 shapes: ordinary tools whose argument names look like an amount and a destination
+/// run without a card with approvals off; the wallet's own sends still ask.
+#[tokio::test]
+async fn ordinary_tools_with_amount_like_keys_run_with_approvals_off() {
+    let e = setup().await;
+    let a = approver(&e, Duration::from_millis(200));
+    set_approvals(&e, "off").await;
+    for (server, tool, args) in [
+        ("units", "convert", json!({"from": "km", "to": "mi", "value": 5})),
+        ("units", "convert_units", json!({"to": "mi", "value": 5})),
+        ("fx", "convert_currency", json!({"amount": 100, "from": "USD", "to": "EUR"})),
+        ("fx", "calculate_tax", json!({"amount": 100, "currency": "USD"})),
+        ("fx", "format_price", json!({"currency": "USD", "value": 100})),
+        ("calc", "calculate_tip", json!({"amount": 100, "to": "split"})),
+        ("trans", "translate", json!({"text": "hi", "to": "fr", "value": "x"})),
+        ("browser", "browser_scroll", json!({"amount": 300, "to": "bottom"})),
+        ("spotify", "set_volume", json!({"address": "x", "value": 50})),
+        ("sheets", "update_cell", json!({"spreadsheet": "s", "address": "A1", "value": 5})),
+        ("redis", "set", json!({"address": "h", "key": "k", "value": "v"})),
+        ("kv", "put_secret", json!({"token": "abc", "value": "v"})),
+        ("ratelimit", "set_limit", json!({"token": "t", "value": 100})),
+        ("http", "http_request", json!({"method": "POST", "url": "https://x", "body": {"amount": 5, "to": "x"}})),
+    ] {
+        let req = request(&e, server, tool, args.clone());
+        assert_eq!(payment_floor::reason(&req, None), None, "{server}/{tool} {args}");
+        assert_eq!(a.decide(req).await, ApprovalOutcome::Allowed, "{server}/{tool} {args}");
+    }
+    let to = "0x52908400098527886E0F7030069857D2E4169EE7";
+    for (tool, args) in [
+        ("send_transfer", json!({"request_id": "r", "token": "USDC", "to": to, "amount": "5"})),
+        ("send_transfer", json!({"request_id": "r", "token": "CENT", "to": to, "amount": "5"})),
+        ("send_swap", json!({"request_id": "r", "token_in": "USDC", "token_out": "ETH", "amount_in": "5"})),
+        ("send_swap", json!({"request_id": "r", "token_in": "CENT", "token_out": to, "amount_in": "5", "minimum_out": "0.001", "slippage_bps": 50})),
+        ("build_transfer", json!({"token": "USDC", "to": to, "amount": "5"})),
+    ] {
+        let req = request(&e, "incentiv", tool, args.clone());
+        assert!(payment_floor::reason(&req, None).is_some(), "{tool} {args}");
+        assert_eq!(a.decide(req).await, ApprovalOutcome::Unanswered, "{tool} {args}");
+    }
+}
+
 #[tokio::test]
 async fn kwnt_browser_pay_clicks_and_card_numbers_ask_with_approvals_off() {
     let e = setup().await;

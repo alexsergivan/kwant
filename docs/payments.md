@@ -34,16 +34,30 @@ every MCP tool, through claude's permission prompt and the MCP gateway), in
   `funds`, `crypto`, `btc`, `usd`, `token`, `coin`, `asset`, `stablecoin`, …), or an order step
   (`place`/`submit`/`confirm` with `order`, `purchase`, `booking`, `subscription`).
 - Any tool that doesn't start with a read verb whose arguments (top level, or one object down;
-  any spelling: `amountIn`, `amount-in`) have both an amount (`amount`, `amount_in`,
-  `amount_out`, `value`, `quantity`, `sum` or any `*_amount`) and a destination or asset (`to`,
-  `recipient`, `destination`, `to_address`, `address`, `token`, `token_in`, `token_out`, `asset`,
-  `currency`, `coin`), whatever the tool or server is called. The same goes for each
-  `tool_slug` Composio runs, by that slug's own `arguments`. The reason reads e.g.
-  "send_transfer moves an amount to another account or asset".
+  any spelling: `amountIn`, `amount-in`) have both:
+  - an amount: a number (`5`, `"0.001"`, `"1e18"`, `"0x2386…"`, `"5 USDC"`, `"max"`) under
+    `amount`, `amount_in`, `amount_out`, `value`, `quantity`, `sum` or any `*_amount`;
+  - and a destination or asset: under `to`, `recipient`, `destination`, `to_address`, `address`,
+    `token`, `token_in`, `token_out`, `asset`, `currency` or `coin`, a value that looks like an
+    account address (EVM `0x` + 40 or 64 hex, ENS `*.eth`, bech32 `bc1…`/`cosmos1…`, base58
+    such as Solana accounts and mints, or an IBAN with a valid check) or a crypto asset (`USDC`,
+    `ETH`, `BTC`, `SOL`, … or `token`, `coin`, `native`). A swap pair (`token_in` with
+    `token_out`, `from_token`/`to_token`, `sell_token`/`buy_token`, `input_mint`/`output_mint`)
+    counts whatever the tokens are called, since wallets take any token there.
+
+  The key names alone aren't enough, so `convert {from: "km", to: "mi", value: 5}`,
+  `update_cell {address: "A1", value: 5}`, `set_limit {token: "t", value: 100}` or an
+  `http_request` with body `{amount: 5, to: "x"}` don't ask. Pure-compute verbs (`calculate`,
+  `compute`, `format`, `translate`, `scroll`) count as reads. `convert` doesn't: some wallets
+  call their swap that, so `convert {amount: 1, from: "USDC", to: "ETH"}` asks and a unit or
+  fiat conversion (`to: "mi"`, `to: "EUR"`) doesn't. Fiat codes are not crypto assets here.
+  The same goes for each `tool_slug` Composio runs, by that slug's own `arguments`. The reason
+  reads e.g. "send_transfer moves an amount to another account or asset".
 
   This is what catches a crypto wallet MCP such as Incentiv's
   ([incentiv-mcp](https://github.com/IncentivNetwork/incentiv-mcp), `src/wallet/tools.ts`):
-  `send_transfer {token, to, amount}` and `send_swap {token_in, token_out, amount_in, …}` name
+  `send_transfer {token, to: "0x…40 hex", amount}` and `send_swap {token_in, token_out,
+  amount_in, minimum_out, …}` name
   no money app and no money noun, so before 0.7.1 they asked only in `ask` and `smart` (the server
   marks them destructive) and ran without a card with approvals off or after "always allow".
   Its reads (`get_swap_quote`, `get_agent_wallet`, `get_agent_operation`) still don't ask.
@@ -118,14 +132,18 @@ classified here.
   say what they do and whose arguments don't carry an amount and a destination or asset in
   reach (e.g. `{order: {lines: [{amount, to}]}}`, two levels down, or an amount under another
   key name such as `units`).
+- A send whose destination is a name or handle rather than an address (`to: "bob"`), with a
+  token missing from the list, or a fiat send to an account number that isn't an IBAN, unless
+  its name says it pays (`send_money`, `transfer_funds`) or its app is a money app.
 - Codex's own shell, which kwnt never sees. Its sandbox has no network, so it can't reach a
   payment service.
 - Someone else's browser tools the bot drives through an MCP server, unless the tool's label or
   typed text matches the rules above.
 
 It also asks for some things that aren't payments, e.g. an "Upgrade" link in docs, any click on
-a `/billing` page, a wallet's unsigned `build_transfer`/`build_swap` (no key moves), or a
-spreadsheet write like `write_cell {address: "A1", value: 5}`. That's accepted: an extra card costs a tap, a missed payment costs money.
+a `/billing` page, a wallet's unsigned `build_transfer`/`build_swap` (no key moves), or an
+ordinary write that happens to hold a number and an address-shaped value (e.g. a key-value
+store's `set_limit {token: "<32-character base58 key>", value: 100}`). That's accepted: an extra card costs a tap, a missed payment costs money.
 
 ## Tests
 
