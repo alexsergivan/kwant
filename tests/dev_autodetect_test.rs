@@ -364,3 +364,81 @@ async fn a_detected_repo_wakes_the_poller_counts_new_reviews_and_never_replaces_
     assert_eq!((v["repo"].clone(), v["status"].clone()), (json!(other), json!("watching")), "{v}");
     gh.assert_read_only();
 }
+
+/// QA B1: on with a detected repo and no connection, then the person connects GitHub. The repo is
+/// bound and the poller wakes with no off and on; a space that is off is left alone.
+#[tokio::test]
+async fn connecting_github_while_on_binds_the_detected_repo_without_off_and_on() {
+    let env = setup().await;
+    let mk = |name: &str| NewSpace { name: name.into(), icon: "S".into(), color: None, this_machine_enabled: true };
+    let space = SpaceId::new(env.state.db.create_space(&mk("Shop")).await.unwrap().id);
+    let off = SpaceId::new(env.state.db.create_space(&mk("Idle")).await.unwrap().id);
+    for s in [&space, &off, &SpaceId::default_space()] {
+        env.state.db.set_space_approvals(s, "ask").await.unwrap();
+    }
+    let token = canary_token();
+    let gh = MockGithub::start(&PORTS).await;
+    gh.require_token(&token);
+    let r = format!("/repos/{REPO}");
+    gh.json("/user", user("demo-person")).json(&r, repo(REPO, "main")).json(&format!("{r}/contents"), json!([{"name": "fly.toml", "type": "file"}]));
+    seed(&gh, &r);
+    let web = checkout(&env.tmp.path().join("folders/shop"), Some(&format!("{}/{REPO}.git", gh.base)));
+    team_in(&env, &space, "Shop", Some(&web)).await;
+    team_in(&env, &off, "Idle", Some(&web)).await;
+
+    // On before any connection: no repo. (The mock's host only counts as GitHub once a connection
+    // names it, so here it reads other_host; on github.com it is not_connected.)
+    let u = uri_of(&space);
+    let (s, v) = call(&env.app, "PUT", &u, Some(json!({"on": true}))).await;
+    assert_eq!((s.as_u16(), v["on"].clone(), v["repo"].clone()), (200, json!(true), Value::Null), "{v}");
+    let (_, v) = call(&env.app, "GET", &u, None).await;
+    assert_eq!(v["repo"], Value::Null, "no connection yet: {v}");
+    // The wake from turning on has been taken by a poll, which had nothing to read
+    let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+    poller::poll(&env.state, &mode).await.unwrap();
+    poller::take_due_soon(space.as_str());
+    assert!(!poller::is_due_soon(space.as_str()));
+
+    // The person connects GitHub (Loose ends) and comes back: no off, no on, no typing
+    let (s, v) = call(&env.app, "POST", "/api/zombie/sources", Some(json!({"kind": "github", "label": "GitHub", "config": {"api_base": gh.base}, "secret": token}))).await;
+    assert_eq!(s.as_u16(), 201, "{v}");
+    assert!(!v.to_string().contains(&token));
+    assert!(poller::is_due_soon(space.as_str()), "binding wakes the poller");
+    let (_, v) = call(&env.app, "GET", &u, None).await;
+    assert_eq!((v["on"].clone(), v["repo"].clone(), v["branch"].clone(), v["status"].clone()), (json!(true), json!(REPO), json!("main"), json!("watching")), "{v}");
+    assert_eq!(v["deploy_hint"], "fly");
+    let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+    poller::poll(&env.state, &mode).await.expect("the bound repo polls");
+    assert_eq!(env.state.db.dev_cards(space.as_str(), LANDED, None, 50).await.unwrap().len(), 2, "the first poll backfilled");
+
+    // A space that is off stays off with no repo; its GET only says what on would watch
+    assert!(env.state.db.dev_mode(off.as_str()).await.unwrap().is_none());
+    let (_, v) = call(&env.app, "GET", &uri_of(&off), None).await;
+    assert_eq!((v["on"].clone(), v["status"].clone()), (json!(false), json!("watching")), "{v}");
+    assert!(env.state.db.dev_mode(off.as_str()).await.unwrap().is_none(), "a GET never writes an off space");
+
+    // A changed GitHub source binds every space that is on with no repo, with no GET needed
+    let changed = SpaceId::new(env.state.db.create_space(&mk("Changed")).await.unwrap().id);
+    let read = SpaceId::new(env.state.db.create_space(&mk("Read")).await.unwrap().id);
+    for s in [&changed, &read] {
+        team_in(&env, s, "Web", Some(&web)).await;
+        env.state.db.put_dev_mode(s.as_str(), true, "", "", None, None).await.unwrap();
+    }
+    let (s, v) = call(&env.app, "GET", "/api/zombie/sources", None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let id = v["sources"].as_array().unwrap().iter().find(|x| x["kind"] == "github").unwrap()["id"].as_str().unwrap().to_string();
+    let (s, v) = call(&env.app, "PATCH", &format!("/api/zombie/sources/{id}"), Some(json!({"label": "GitHub (work)"}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    for s in [&changed, &read] {
+        let m = env.state.db.dev_mode(s.as_str()).await.unwrap().unwrap();
+        assert_eq!((m.on, m.repo.as_str(), m.branch.as_str()), (true, REPO, "main"), "the source change bound {}", s.as_str());
+    }
+    // When no source change happened, the GET falls back to the same binding
+    let late = SpaceId::new(env.state.db.create_space(&mk("Late")).await.unwrap().id);
+    team_in(&env, &late, "Web", Some(&web)).await;
+    env.state.db.put_dev_mode(late.as_str(), true, "", "", None, None).await.unwrap();
+    let (_, v) = call(&env.app, "GET", &uri_of(&late), None).await;
+    assert_eq!((v["repo"].clone(), v["status"].clone()), (json!(REPO), json!("watching")), "the GET fallback bound it: {v}");
+    assert!(poller::is_due_soon(late.as_str()));
+    gh.assert_read_only();
+}

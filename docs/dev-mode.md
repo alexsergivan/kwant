@@ -69,7 +69,10 @@ reply carries a `check` that says why. A `branch` the repo doesn't have is a 400
 - `status`:
   - `watching`: a repo is watched. While off, it means turning on would watch one.
   - `no_repo`: no team points at a git repo.
-  - `not_connected`: there's a GitHub source, but no connection reads it.
+  - `not_connected`: there's a GitHub source, but no connection reads it. Once a GitHub connection
+    is added or changed in Loose ends, every space that is on with no repo binds the repo it finds
+    and polls soon, with no off and on. The `GET` does the same if nothing else did (at most every
+    30 s per space). A repo the person typed or picked is never replaced.
   - `other_host`: only GitLab, Gitea or other non-GitHub sources, or `local` ones. These are read
     from 0.7.2.
 - `new_reviews`: review cards ready to read that were made since the desk was last opened (open

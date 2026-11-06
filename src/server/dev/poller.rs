@@ -71,6 +71,11 @@ pub fn is_due_soon(space_id: &str) -> bool {
     shared().lock().unwrap().soon.contains(space_id)
 }
 
+/// Takes `space_id` off the wake list; true when it was on it.
+pub fn take_due_soon(space_id: &str) -> bool {
+    shared().lock().unwrap().soon.remove(space_id)
+}
+
 /// The newest tag the last poll saw on the space's repo.
 pub fn last_tag(space_id: &str) -> Option<String> {
     shared().lock().unwrap().tags.get(space_id).map(|(t, _)| t.clone())

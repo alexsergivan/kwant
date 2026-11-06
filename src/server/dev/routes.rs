@@ -45,6 +45,8 @@ async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceI
 /// a prefill. Always with the detected `sources` and the desk's `status` (plan any-git.md S4).
 #[allow(clippy::result_large_err)]
 pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Response> {
+    // On with no repo and a connection now: bind the detected repo before answering (QA B1)
+    bind_on_read(state, space).await;
     let row = state.db.dev_mode(space.as_str()).await.map_err(internal)?;
     let calls = state.db.dev_calls_today(space.as_str()).await.map_err(internal)?;
     let sources = repo::detect(state, space).await;
@@ -177,6 +179,83 @@ pub fn valid_branch(b: &str) -> bool {
         && !b.contains("//")
         && !b.contains("@{")
         && b.chars().all(|c| !c.is_control() && !c.is_whitespace() && !"~^:?*[\\".contains(c))
+}
+
+/// How often a GET may try to bind a detected repo for one space (the source hooks don't wait).
+const BIND_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn bind_tried() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static T: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+/// A space that is on with no repo watches the first detected GitHub source a connection now
+/// reads, the same choice as turning on, and the poller wakes (QA B1: a GitHub connection added
+/// while on). A space off, or with a repo, is never touched. True when a repo was bound.
+pub async fn bind_detected(state: &AppState, space: &SpaceId) -> bool {
+    let Ok(Some(row)) = state.db.dev_mode(space.as_str()).await else { return false };
+    if !row.on || !row.repo.is_empty() {
+        return false;
+    }
+    bind_tried().lock().unwrap().insert(space.as_str().to_string(), std::time::Instant::now());
+    let hosts = repo::github_hosts(state).await;
+    let mut seen: Vec<String> = Vec::new();
+    for s in repo::detect(state, space).await.into_iter().filter(|s| s.on_github(&hosts)) {
+        let key = s.check_input().to_lowercase();
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let Ok(found) = repo::check(state, space, &s.check_input()).await else { continue };
+        if found.state != "found" {
+            continue;
+        }
+        let full = found.repo.clone().unwrap_or_default();
+        let default = found.branch.clone().unwrap_or_else(|| "main".into());
+        // The branch the space already names (a folder's or the person's) when the repo has it
+        let branch = match row.branch.trim() {
+            b if b.is_empty() || b == default => default.clone(),
+            b => match repo::client_for(state, &full).await {
+                Ok((c, _)) if matches!(c.dev_branch_exists(&full, b).await, Ok(true)) => b.to_string(),
+                _ => default.clone(),
+            },
+        };
+        return match state.db.bind_dev_repo(space.as_str(), &full, &branch, found.deploy_hint).await {
+            Ok(true) => {
+                tracing::info!(space = %space, repo = %full, branch = %branch, "dev: bound the detected repo");
+                poller::poll_soon(state, space.as_str());
+                true
+            }
+            Ok(false) => false,
+            Err(e) => {
+                tracing::warn!("dev: {e}");
+                false
+            }
+        };
+    }
+    false
+}
+
+/// [`bind_detected`] for every space that is on with no repo: after a GitHub source is added or
+/// changed.
+pub async fn bind_detected_all(state: &AppState) {
+    for row in state.db.dev_mode_on_spaces().await.unwrap_or_default().into_iter().filter(|r| r.repo.is_empty()) {
+        bind_detected(state, &SpaceId::new(&row.space_id)).await;
+    }
+}
+
+/// The GET fallback: on, no repo, a GitHub source detected and a connection there, at most once
+/// per [`BIND_COOLDOWN`] for the space.
+async fn bind_on_read(state: &AppState, space: &SpaceId) -> bool {
+    let Ok(Some(row)) = state.db.dev_mode(space.as_str()).await else { return false };
+    if !row.on || !row.repo.is_empty() {
+        return false;
+    }
+    let recent = bind_tried().lock().unwrap().get(space.as_str()).is_some_and(|t| t.elapsed() < BIND_COOLDOWN);
+    if recent || repo::clients(state).await.is_err() {
+        return false;
+    }
+    bind_detected(state, space).await
 }
 
 pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(body): Json<PutBody>) -> Response {

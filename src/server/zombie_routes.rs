@@ -467,6 +467,10 @@ pub async fn add_source(State(state): State<AppState>, headers: HeaderMap, Json(
         let _ = hunt::forget_secret(state.credentials.as_ref(), &id).await;
         return Err(db_error(e));
     }
+    if row.kind == "github" {
+        // A space on with no repo watches the repo this connection now reads (Dev mode, QA B1)
+        super::dev::routes::bind_detected_all(&state).await;
+    }
     Ok((StatusCode::CREATED, Json(json!({"source": source_view(row), "test": test}))).into_response())
 }
 
@@ -516,6 +520,9 @@ pub async fn update_source(State(state): State<AppState>, headers: HeaderMap, Pa
         row.config = config;
     }
     state.db.zombie_put_source(&row).await.map_err(db_error)?;
+    if row.kind == "github" && row.enabled {
+        super::dev::routes::bind_detected_all(&state).await;
+    }
     Ok(Json(json!({"source": source_view(row), "test": test})).into_response())
 }
 
