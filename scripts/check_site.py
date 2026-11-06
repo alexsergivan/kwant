@@ -309,6 +309,12 @@ def main():
     if f"Sitemap: {SITE_URL}/sitemap.xml" not in robots or "Disallow: /\n" in robots:
         errors.append("robots.txt: missing sitemap line or blocks the site")
     print(f"checked {len(pages)} pages, {len(sitemap_urls)} sitemap URLs")
+    # Is kwant.si current with the newest CHANGELOG release? Only a warning here: the release PR bumps CHANGELOG.md
+    # before the site PR lands. The release script runs site_release_gate.py strictly.
+    import site_release_gate
+
+    for gap in site_release_gate.gaps():
+        print("WARN", gap)
     for e in errors:
         print("FAIL", e)
     sys.exit(1 if errors else 0)

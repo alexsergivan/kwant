@@ -17,6 +17,10 @@ Key facts:
   the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
 - Smart Results draw a bot's table or list as a sortable comparison, chart or checklist, copied word for word from the
   reply. Goals check that a page, command or file stays OK and offer one fix when one breaks.
+- Dev mode points a space at a GitHub repo: a plain-words card for every merge, a review of every pull request by a bot
+  that didn't write it (posted to GitHub only when you press Post to GitHub), and a production floor where pushes to
+  main, deploys and destructive data commands always ask. The Idea jar has a free bot write a take on each idea you
+  drop in; Do it makes a draft mission you approve.
 - Automatic model failover: when an account runs out of usage, bots move to the next account in your order, across
   Claude, Codex, Grok and Custom API, and go back after the reset.
 - Bots cite web facts with links that open the page at the exact quote; kwant checks the quote is on the page word for
@@ -27,7 +31,7 @@ Key facts:
 ## Site
 - [kwant (kwnt): self-hosted AI agent team in one binary](https://kwant.si/): Open-source, self-hosted AI agents that share chats, hand off work and run on a schedule. One Rust binary (kwnt) for your laptop or a VPS.
 - [Contact](https://kwant.si/contact): How to reach the people behind kwant. Email contact@kwant.si for questions, a commercial license, privacy requests or press. Bugs and ideas go to GitHub issues, security problems to a private GitHub report.
-- [Features: self-hosted AI agent orchestration](https://kwant.si/features): Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.
+- [Features: self-hosted AI agent orchestration](https://kwant.si/features): Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.
 - [Self-Hosted AI Agent Team: Run One Yourself](https://kwant.si/self-hosted-ai-agents): What a self-hosted AI agent team is, what it takes to run one, and what stays on your machine. How kwant does it: one binary, your own logins.
 
 ## Docs
@@ -40,8 +44,10 @@ Key facts:
 - [Human approval for AI agent actions](https://kwant.si/docs/approvals): kwant asks before bots run commands or edit outside their folder. Three approval modes per space or bot, plus saved passwords in a vault or Bitwarden.
 - [Flight School: earned freedom for AI agents](https://kwant.si/docs/flight-school): Set each bot's tier per kind of work: Observe, Sandbox or Act. Bots earn a step up with a scorecard, only you grant it, payments always ask, and you can revoke a tier in a click.
 - [Smart Results: AI agent replies as tables, charts and checklists](https://kwant.si/docs/smart-results): kwant draws a bot's table or list as a sortable comparison, a chart, key numbers, findings or a checklist, copied from the reply word for word. The reply text never changes.
+- [Dev mode: AI code review and a production safety floor](https://kwant.si/docs/dev-mode): Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.
 - [Mission board: AI agent tasks with proof](https://kwant.si/docs/mission-board): One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.
 - [Goals: keep a site, a service or a file working with AI agents](https://kwant.si/docs/goals): A kwant goal checks that a page answers, a command succeeds or a file exists. When it breaks, a bot looks into it and offers one fix. Nothing runs until you create or approve a goal.
+- [Idea jar: drop an idea, a free AI agent writes its take](https://kwant.si/docs/idea-jar): Drop an idea in kwant's Idea jar. When a bot is free, it writes a take: worth it or not, the effort, the risks and a short plan. Do it turns it into a draft mission you approve.
 - [Scheduled AI agents: routines & cron](https://kwant.si/docs/routines): Schedule bot work with routines, cron rules and follow-ups that run on your own machine, with an Undo on every change bots make.
 - [AI agent memory, skills & chat search](https://kwant.si/docs/memory-skills): What kwant bots remember and how you edit it, skills bots propose and you approve, and search across every chat in a space. Local and editable.
 - [Lessons: AI agents that learn from their earlier tasks](https://kwant.si/docs/lessons): In kwant, a bot's failed checks, stalled turns, your send-backs and goals that stopped holding become short lessons it sees before similar work. They come from kwant's own records, so a bot can't write its own.

@@ -533,6 +533,10 @@ td code { white-space: nowrap; }
   .nav a:not(.btn) { padding: 8px 6px; }
   .nav .btn { padding: 0 10px; }
 }
+/* Phone screenshots inside a docs figure: a 300 px phone, centred (Mira, 0.7.1 design pass) */
+.prose figure .phone { width: 300px; margin: 0 auto; }
+.prose figure .phone + figcaption { text-align: center; }
+@media (max-width: 640px) { .prose figure .phone { width: 240px; } }
 @media (prefers-reduced-motion: no-preference) {
   html:has(.jump-bar) { scroll-behavior: smooth; }
 }

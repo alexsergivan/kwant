@@ -82,10 +82,10 @@ card_art: avatar:qa
 <h2 id="payments">Payments always ask</h2>
 <p>Whatever the tier, and even with approvals off, anything that looks like paying shows a card first. The card says why it looks like a payment, and offers only <strong>Allow Once</strong> and <strong>Deny</strong>: allowing a payment covers that one payment, so there's no "Always" button.</p>
 <figure>
-  <div class="frame">{{shot:v3-payment-card|An approval card for a command that posts a payment to Stripe. It says "This looks like a payment" and why, and has only Deny and Allow Once buttons.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v071-wallet-payment|An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>A payment card has no Always button.</figcaption>
 </figure>
-<p>kwant recognises payment apps and their actions (Stripe, PayPal, Square, Wise, Coinbase and others), commands that post to payment services or send crypto, and, in its browser, pay buttons, clicks on checkout pages and typed card numbers. It can't catch everything, such as a plain "Continue" on an unusual checkout page or a card a site already saved.</p>
+<p>kwant recognises payment apps and their actions (Stripe, PayPal, Square, Wise, Coinbase and others), commands that post to payment services or send crypto, tools whose arguments carry an amount and a wallet address or crypto asset (such as a wallet's <code>send_transfer</code> or <code>send_swap</code>), and, in its browser, pay buttons, clicks on checkout pages and typed card numbers. It can't catch everything, such as a plain "Continue" on an unusual checkout page or a card a site already saved.</p>
 <p>When you choose <strong>Don't ask</strong> for a space or a bot, kwant first says plainly what bots can then do without asking, such as send messages, delete files, publish and sign in, and that payments still ask. Nothing changes until you press <strong>Turn off approvals</strong>. See <a href="approvals.html#modes">Approvals</a>.</p>
 
 <h2 id="engines">Codex and Custom API accounts</h2>
