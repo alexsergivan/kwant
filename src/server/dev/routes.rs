@@ -124,6 +124,12 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             (None, Some(s)) => (s.api_key(), s.repo.clone(), s.host.clone()),
             (None, None) => continue,
         };
+        // How it's read: the API and git (`github`, GitHub Enterprise too), or git alone (`git`)
+        let provider = match (e.row, e.source) {
+            (Some(r), _) if r.is_git() => "git",
+            (None, Some(s)) if !s.on_github(&hosts) => "git",
+            _ => "github",
+        };
         let team_id = match (e.source, e.row) {
             (Some(s), _) => Some(s.team_id.clone()),
             (None, Some(r)) => r.team.clone(),
@@ -141,9 +147,12 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             "team": team_name(team_id.as_deref()),
             "team_id": team_id,
             "from": from,
+            "provider": provider,
             "branch": e.row.map(|r| &r.branch).filter(|b| !b.is_empty()),
             "status": status,
             "poll_error": e.row.and_then(|r| r.poll_error.clone()),
+            // A code for the one error the desk words differently; null for the rest
+            "poll_code": e.row.and_then(|r| r.poll_error.as_deref()).filter(|m| *m == super::git::GitError::RepoTooBig.to_string()).map(|_| "too_big"),
             "polled_at": e.row.and_then(|r| r.polled_at),
             "last_tag": e.row.and_then(|r| poller::last_tag(space.as_str(), &r.key)),
             "added_by": e.row.map(|r| r.added_by_shown()),
@@ -663,7 +672,9 @@ pub async fn landed(State(state): State<AppState>, headers: HeaderMap, Path(id):
         Err(e) => return internal(e),
     };
     let reviews = open_reviews(&state, &space, only.as_deref()).await.unwrap_or_default();
-    let rollup = rollup(&recent, &reviews, mode.as_ref().and_then(|m| m.seen_at), Utc::now());
+    // Repos read with git alone have no CI to read
+    let no_ci: Vec<String> = state.db.dev_repos(space.as_str()).await.unwrap_or_default().into_iter().filter(|r| r.is_git()).map(|r| r.key).collect();
+    let rollup = rollup(&recent, &reviews, &no_ci, mode.as_ref().and_then(|m| m.seen_at), Utc::now());
     // The repo asked for, else the first watched one (deprecated, like the top-level `repo`)
     let tag_repo = match &only {
         Some(k) => Some(k.clone()),
@@ -683,9 +694,10 @@ pub async fn landed(State(state): State<AppState>, headers: HeaderMap, Path(id):
 /// - `count`: landed cards since then.
 /// - `needs_you`: those with failed tests or a high risk, plus open reviews that are high risk or
 ///   have an open critical or high finding.
-/// - `main_green`: CI on the newest landed card (`null` when it has no checks or is pending).
+/// - `main_green`: CI on the newest landed card from a repo with CI (`null` when it has no checks or
+///   is pending, or when every landed card is from a repo in `no_ci`, read with git alone).
 /// - `areas`: cards since then by `area`, newest area first, with the newest card's headline.
-pub fn rollup(landed: &[DevCardRow], reviews: &[DevCardRow], since: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Value {
+pub fn rollup(landed: &[DevCardRow], reviews: &[DevCardRow], no_ci: &[String], since: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Value {
     let fresh: Vec<&DevCardRow> = landed.iter().filter(|r| since.is_none_or(|s| r.created_at > s)).collect();
     let card = |r: &DevCardRow| r.card.as_deref().and_then(|c| serde_json::from_str::<Value>(c).ok()).unwrap_or(Value::Null);
     let mut needs = 0usize;
@@ -702,7 +714,7 @@ pub fn rollup(landed: &[DevCardRow], reviews: &[DevCardRow], since: Option<DateT
             needs += 1;
         }
     }
-    let main_green = landed.first().and_then(|r| serde_json::from_str::<DevFacts>(&r.facts).ok()).and_then(|f| match f.ci {
+    let main_green = landed.iter().find(|r| !no_ci.contains(&r.repo)).and_then(|r| serde_json::from_str::<DevFacts>(&r.facts).ok()).and_then(|f| match f.ci {
         CiState::Green => Some(true),
         CiState::Red => Some(false),
         _ => None,
@@ -1179,16 +1191,32 @@ mod tests {
             row(REVIEW, Some(json!({"risk": {"level": "low"}, "findings": [{"state": "open", "severity": "high"}]})), facts("none"), h(1)),
             row(REVIEW, Some(json!({"risk": {"level": "low"}, "findings": [{"state": "dismissed", "severity": "critical"}]})), facts("none"), h(1)),
         ];
-        let v = rollup(&landed, &reviews, Some(h(24)), now);
+        let v = rollup(&landed, &reviews, &[], Some(h(24)), now);
         assert_eq!(v["count"], 3);
         assert_eq!(v["needs_you"], 3, "high risk, failed tests, a review with an open high finding");
         assert_eq!(v["main_green"], true);
         assert_eq!(v["areas"][0], json!({"area": "Sidebar", "count": 2, "first_headline": "B"}));
         assert_eq!(v["areas"][1], json!({"area": "Other", "count": 1, "first_headline": null}));
-        let all = rollup(&landed, &[], None, now);
+        let all = rollup(&landed, &[], &[], None, now);
         assert_eq!(all["count"], 4);
         assert_eq!(all["since"], Value::Null);
-        assert_eq!(rollup(&[], &[], None, now)["main_green"], Value::Null);
+        assert_eq!(rollup(&[], &[], &[], None, now)["main_green"], Value::Null);
+    }
+
+    #[test]
+    fn main_green_never_comes_from_a_repo_read_with_git_alone() {
+        let now = Utc::now();
+        let h = |n: i64| now - chrono::Duration::hours(n);
+        let mut git_card = row(LANDED, None, facts("green"), h(1));
+        git_card.repo = "gitlab.example.com/group/ops".into();
+        let mut red = row(LANDED, None, facts("red"), h(2));
+        red.repo = "o/web".into();
+        let no_ci = ["gitlab.example.com/group/ops".to_string()];
+        // A git-only repo's card is skipped, even when it is the newest...
+        assert_eq!(rollup(&[git_card.clone(), red], &[], &no_ci, None, now)["main_green"], false);
+        // ...and with only git-only cards there's no CI to read
+        assert_eq!(rollup(&[git_card.clone()], &[], &no_ci, None, now)["main_green"], Value::Null);
+        assert_eq!(rollup(&[git_card], &[], &[], None, now)["main_green"], true, "without the list it's an ordinary card");
     }
 
     fn body(action: &str, reason: Option<&str>) -> FindingBody {

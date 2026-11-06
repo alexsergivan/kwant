@@ -11,13 +11,19 @@
 //!   no hooks, no fsmonitor, no pager, no external diff or textconv, no signature checks;
 //! - only the https, http, ssh and git protocols (file only for a team folder), and no redirect
 //!   while a token is set;
+//! - before git reaches a remote, its host is looked up and refused if any address is this machine
+//!   or link-local ([`check_remote`]); over http(s) git is pinned to the addresses checked
+//!   (`http.curloptResolve`), so DNS can't answer differently between the check and the connect;
 //! - `nice 10`, a timeout that kills its whole process group, and capped output;
+//! - a mirror over [`MIRROR_CAP`] on disk is deleted after the fetch that grew it, and fetched again
+//!   at most once a day;
 //! - stderr is only sorted into a [`GitError`], never logged or returned, so a URL in it goes
 //!   nowhere.
 
 use super::facts::FileDiff;
 use super::source::{Commit, Person};
 use chrono::{DateTime, Utc};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -28,7 +34,7 @@ use zeroize::Zeroizing;
 /// The oldest git kwant runs: `GIT_CONFIG_COUNT` came in 2.31.
 pub const MIN_VERSION: (u32, u32) = (2, 31);
 /// What the desk says to do when the server has no usable git.
-pub const INSTALL_HINT: &str = "install git 2.31 or newer on the server";
+pub const INSTALL_HINT: &str = "Install git 2.31 or newer on the server.";
 /// How long one fetch may take (a first fetch of a big repo is the slow one).
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long one ls-remote may take.
@@ -45,6 +51,15 @@ pub const MAX_FILE: usize = 1 << 20;
 pub const MAX_COMMITS: usize = crate::zombie::github::MAX_COMMITS;
 /// Most files one diff lists, as GitHub's PR files.
 pub const MAX_FILES: usize = crate::zombie::github::MAX_PR_FILES;
+/// The most disk one repo's mirror may use (1 GB): one over it is deleted after the fetch.
+pub const MIRROR_CAP: u64 = 1 << 30;
+/// How long a mirror that was too big waits before it is fetched again (unless its repo is
+/// removed and added again, which starts afresh).
+pub const TOO_BIG_RETRY: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long looking a remote's host up may take.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// The first git with `http.curloptResolve` (2.37), which pins a checked address.
+const PIN_VERSION: (u32, u32) = (2, 37);
 
 /// Why git didn't answer. Each says the same fixed words whatever git printed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +74,9 @@ pub enum GitError {
     Unreachable,
     Timeout,
     TooBig,
+    /// The repo's mirror passed [`MIRROR_CAP`] and was deleted: it is fetched again after
+    /// [`TOO_BIG_RETRY`], or when the repo is removed and added again.
+    RepoTooBig,
     /// kwant refused the input before running git (a URL or ref it won't pass on).
     Refused,
     Failed,
@@ -67,14 +85,16 @@ pub enum GitError {
 impl std::fmt::Display for GitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            GitError::NoGit => "git isn't installed on the server: install git 2.31 or newer on the server",
-            GitError::Auth => "git was refused: check the server's SSH key or git credentials for this repo",
-            GitError::NotFound => "git could not find this repo or branch",
-            GitError::Unreachable => "git could not reach the repo's host",
-            GitError::Timeout => "git took too long to answer",
-            GitError::TooBig => "git's answer was too big to read",
-            GitError::Refused => "kwant won't pass that repo address or ref to git",
-            GitError::Failed => "git could not read this repo",
+            // Wording from Mira's copy-073.md; the desk matches RepoTooBig by `poll_code`.
+            GitError::NoGit => "Needs git 2.31 or newer on the server.",
+            GitError::Auth => "The repo’s host said no. Check the server’s SSH key or git login for this repo.",
+            GitError::NotFound => "Couldn’t find this repo or branch.",
+            GitError::Unreachable => "Couldn’t reach the repo’s host.",
+            GitError::Timeout => "The repo’s host took too long to answer.",
+            GitError::TooBig => "This repo is too big for Dev mode to read.",
+            GitError::RepoTooBig => "This repo is too big for Dev mode to read (over 1 GB).",
+            GitError::Refused => "Dev mode can’t use this repo address or branch name.",
+            GitError::Failed => "Couldn’t read this repo.",
         })
     }
 }
@@ -176,11 +196,13 @@ struct Opts<'a> {
     auth: Option<&'a Auth>,
     /// A team folder: the file protocol is allowed (git reads its own objects).
     file: bool,
+    /// `-c` settings from [`check_remote`] that pin git to the addresses it checked.
+    pin: &'a [String],
 }
 
 impl Opts<'static> {
     fn read() -> Self {
-        Opts { timeout: READ_TIMEOUT, max_out: MAX_OUT, auth: None, file: false }
+        Opts { timeout: READ_TIMEOUT, max_out: MAX_OUT, auth: None, file: false, pin: &[] }
     }
 }
 
@@ -197,11 +219,15 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
     if o.file {
         cmd.args(["-c", "protocol.file.allow=always"]);
     }
+    // No redirect: it would take git to a host the address check never saw (and, with a token,
+    // the token with it)
+    cmd.args(["-c", "http.followRedirects=false"]);
     if o.auth.is_some() {
-        // The token goes to this origin only: no redirect elsewhere, no helper asked or told
-        cmd.args(["-c", "http.followRedirects=false", "-c", "credential.helper="]);
-    } else {
-        cmd.args(["-c", "http.followRedirects=initial"]);
+        // The token goes to this origin only: no helper asked or told
+        cmd.args(["-c", "credential.helper="]);
+    }
+    for c in o.pin {
+        cmd.arg("-c").arg(c);
     }
     cmd.args(args);
     for (k, _) in std::env::vars_os() {
@@ -301,19 +327,26 @@ fn parse_version(s: &str) -> Option<(u32, u32)> {
     Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
 }
 
-/// Whether the server has a git kwant can use ([`MIN_VERSION`] or newer). A yes is kept; a no is
-/// asked again after a minute, so installing git needs no restart.
-pub async fn available() -> bool {
-    static SEEN: OnceLock<Mutex<Option<(bool, Instant)>>> = OnceLock::new();
+/// The server's git version, if it has one kwant can use ([`MIN_VERSION`] or newer). A yes is kept;
+/// a no is asked again after a minute, so installing git needs no restart.
+async fn usable_version() -> Option<(u32, u32)> {
+    // The last answer and when it was asked
+    type Seen = Option<(Option<(u32, u32)>, Instant)>;
+    static SEEN: OnceLock<Mutex<Seen>> = OnceLock::new();
     let seen = SEEN.get_or_init(Default::default);
-    if let Some((ok, at)) = *seen.lock().unwrap() {
-        if ok || at.elapsed() < Duration::from_secs(60) {
-            return ok;
+    if let Some((v, at)) = *seen.lock().unwrap() {
+        if v.is_some() || at.elapsed() < Duration::from_secs(60) {
+            return v;
         }
     }
-    let ok = version("git").await.is_some_and(|v| v >= MIN_VERSION);
-    *seen.lock().unwrap() = Some((ok, Instant::now()));
-    ok
+    let v = version("git").await.filter(|v| *v >= MIN_VERSION);
+    *seen.lock().unwrap() = Some((v, Instant::now()));
+    v
+}
+
+/// Whether the server has a git kwant can use ([`MIN_VERSION`] or newer).
+pub async fn available() -> bool {
+    usable_version().await.is_some()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -359,34 +392,123 @@ pub fn remote_url(raw: &str) -> Option<String> {
 }
 
 fn on_this_machine(url: &str) -> bool {
-    use std::net::{Ipv4Addr, Ipv6Addr};
-    let host = match url.find("://") {
+    match url::Host::parse(&remote_host(url).0) {
+        Ok(url::Host::Domain(d)) => {
+            let d = d.trim_end_matches('.').to_ascii_lowercase();
+            d == "localhost" || d.ends_with(".localhost")
+        }
+        Ok(url::Host::Ipv4(ip)) => blocked(IpAddr::V4(ip)),
+        Ok(url::Host::Ipv6(ip)) => blocked(IpAddr::V6(ip)),
+        Err(_) => true,
+    }
+}
+
+/// The host of a [`fetch_url`] (`[v6]` keeps its brackets) and its port, if it names one.
+fn remote_host(url: &str) -> (String, Option<u16>) {
+    match url.find("://") {
         Some(i) => {
             let rest = &url[i + 3..];
             let rest = &rest[..rest.find('/').unwrap_or(rest.len())];
             let rest = rest.rsplit_once('@').map_or(rest, |(_, h)| h);
             // `host:port` or `[v6]:port`
             match rest.strip_prefix('[') {
-                Some(r) => format!("[{}]", &r[..r.find(']').unwrap_or(r.len())]),
-                None => rest.split(':').next().unwrap_or("").to_string(),
+                Some(r) => {
+                    let end = r.find(']').unwrap_or(r.len());
+                    (format!("[{}]", &r[..end]), r[end..].strip_prefix("]:").and_then(|p| p.parse().ok()))
+                }
+                None => {
+                    let mut it = rest.splitn(2, ':');
+                    (it.next().unwrap_or("").to_string(), it.next().and_then(|p| p.parse().ok()))
+                }
             }
         }
         None => {
             let h = url.split_once(':').map_or(url, |(h, _)| h);
-            h.rsplit_once('@').map_or(h, |(_, h)| h).to_string()
+            (h.rsplit_once('@').map_or(h, |(_, h)| h).to_string(), None)
         }
-    };
-    let v4 = |ip: Ipv4Addr| ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast();
-    let v6 = |ip: Ipv6Addr| ip.is_loopback() || ip.is_unspecified() || (ip.segments()[0] & 0xffc0) == 0xfe80 || ip.to_ipv4_mapped().is_some_and(v4);
-    match url::Host::parse(&host) {
-        Ok(url::Host::Domain(d)) => {
-            let d = d.trim_end_matches('.').to_ascii_lowercase();
-            d == "localhost" || d.ends_with(".localhost")
-        }
-        Ok(url::Host::Ipv4(ip)) => v4(ip),
-        Ok(url::Host::Ipv6(ip)) => v6(ip),
-        Err(_) => true,
     }
+}
+
+/// An address kwant never lets git connect to: this machine (loopback, unspecified, `0.0.0.0/8`),
+/// link-local (`169.254.0.0/16`, where cloud metadata lives, and `fe80::/10`), broadcast, or any of
+/// these inside an IPv6 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`). Private LAN
+/// ranges are allowed: people run Gitea at home.
+pub fn blocked(ip: IpAddr) -> bool {
+    let v4 = |ip: Ipv4Addr| ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || ip.octets()[0] == 0;
+    match ip {
+        IpAddr::V4(ip) => v4(ip),
+        IpAddr::V6(ip) => {
+            let s = ip.segments();
+            let nat64 = s[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
+            let embedded = |ip: Ipv6Addr| {
+                let o = ip.octets();
+                Ipv4Addr::new(o[12], o[13], o[14], o[15])
+            };
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || (s[0] & 0xffc0) == 0xfe80
+                || ip.to_ipv4_mapped().is_some_and(v4)
+                || (s[..6] == [0; 6] && v4(embedded(ip)))
+                || (nat64 && v4(embedded(ip)))
+        }
+    }
+}
+
+/// Looks a remote's host up: the seam [`check_remote`] is tested through, with no network.
+#[async_trait::async_trait]
+pub trait Resolver: Send + Sync {
+    async fn lookup(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, GitError>;
+}
+
+/// The system's resolver, with a timeout.
+pub struct SystemResolver;
+
+#[async_trait::async_trait]
+impl Resolver for SystemResolver {
+    async fn lookup(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, GitError> {
+        let found = tokio::time::timeout(LOOKUP_TIMEOUT, tokio::net::lookup_host((host, port))).await.map_err(|_| GitError::Unreachable)?.map_err(|_| GitError::Unreachable)?;
+        Ok(found.map(|a| a.ip()).collect())
+    }
+}
+
+/// Checks a [`fetch_url`] right before git reaches it (any-git.md G2): its host is looked up, and
+/// refused ([`GitError::Refused`]) if it is, or any address it has is, [`blocked`]. Over http(s),
+/// with git [`PIN_VERSION`] or newer, the answer is the `-c http.curloptResolve=<host>:<port>:<addrs>`
+/// that pins git to the addresses checked, so DNS can't change between the check and the connect;
+/// over ssh and git://, or on an older git, the check stands alone.
+pub async fn check_remote(url: &str, resolver: &dyn Resolver, git: Option<(u32, u32)>) -> Result<Vec<String>, GitError> {
+    if fetch_url(url).as_deref() != Some(url) || on_this_machine(url) {
+        return Err(GitError::Refused);
+    }
+    let (host, port) = remote_host(url);
+    let scheme = url.find("://").map(|i| &url[..i]);
+    let port = port.unwrap_or(match scheme {
+        Some("https") => 443,
+        Some("http") => 80,
+        Some("git") => 9418,
+        _ => 22,
+    });
+    let addrs = match url::Host::parse(&host).map_err(|_| GitError::Refused)? {
+        // A literal address needs no lookup and no pin: on_this_machine checked it
+        url::Host::Ipv4(_) | url::Host::Ipv6(_) => return Ok(Vec::new()),
+        url::Host::Domain(d) => resolver.lookup(&d, port).await?,
+    };
+    if addrs.is_empty() {
+        return Err(GitError::Unreachable);
+    }
+    if addrs.iter().any(|a| blocked(*a)) {
+        return Err(GitError::Refused);
+    }
+    if !matches!(scheme, Some("https" | "http")) || git.is_none_or(|v| v < PIN_VERSION) {
+        return Ok(Vec::new());
+    }
+    let list: Vec<String> = addrs.iter().map(|a| if a.is_ipv6() { format!("[{a}]") } else { a.to_string() }).collect();
+    Ok(vec![format!("http.curloptResolve={host}:{port}:{}", list.join(","))])
+}
+
+/// [`check_remote`] with the system's resolver and this server's git.
+async fn checked(url: &str) -> Result<Vec<String>, GitError> {
+    check_remote(url, &SystemResolver, usable_version().await).await
 }
 
 /// What git fetches a remote from, made from a remote URL or repo link as written: its userinfo
@@ -494,10 +616,38 @@ pub fn mirror_dir(data_dir: &Path, space: &str, key: &str) -> PathBuf {
     data_dir.join("dev").join(safe_name(space)).join(format!("{}-{hex}.git", safe_name(key)))
 }
 
-/// Deletes the mirror of a repo no longer watched (its cards stay).
+/// The note left beside a mirror deleted for passing [`MIRROR_CAP`]: `<mirror>.too-big`. Its
+/// age is when that was.
+pub fn too_big_mark(mirror: &Path) -> PathBuf {
+    let mut name = mirror.file_name().unwrap_or_default().to_os_string();
+    name.push(".too-big");
+    mirror.with_file_name(name)
+}
+
+/// What `dir` and everything under it take on disk (links not followed).
+fn disk_use(dir: &Path) -> u64 {
+    let mut total = 0;
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let Ok(list) = std::fs::read_dir(&d) else { continue };
+        for e in list.flatten() {
+            let Ok(m) = e.path().symlink_metadata() else { continue };
+            if m.is_dir() {
+                todo.push(e.path());
+            } else {
+                total += m.len();
+            }
+        }
+    }
+    total
+}
+
+/// Deletes the mirror of a repo no longer watched (its cards stay), and any note that it was too
+/// big, so adding the repo again fetches it afresh.
 pub async fn remove_mirror(data_dir: &Path, space: &str, key: &str) {
     let dir = mirror_dir(data_dir, space, key);
     let _held = lock(&dir).await;
+    let _ = tokio::fs::remove_file(too_big_mark(&dir)).await;
     if dir.is_dir() {
         if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
             tracing::warn!(space = %space, "dev: could not remove a repo mirror: {}", e.kind());
@@ -566,9 +716,44 @@ impl Repo {
         if !ok_branch(branch) || fetch_url(url).as_deref() != Some(url) {
             return Err(GitError::Refused);
         }
+        self.not_too_big().await?;
+        let pin = checked(url).await?;
         let heads = format!("+refs/heads/{branch}:refs/heads/{branch}");
         let args = ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--prune", "--", url, &heads, "+refs/tags/*:refs/tags/*"];
-        run("git", Some(&self.dir), &args, Opts { timeout: FETCH_TIMEOUT, max_out: MAX_OUT, auth, file: false }).await.map(|_| ())
+        let done = run("git", Some(&self.dir), &args, Opts { timeout: FETCH_TIMEOUT, max_out: MAX_OUT, auth, file: false, pin: &pin }).await.map(|_| ());
+        self.cap(crate::server::dev::mirror_cap()).await?;
+        done
+    }
+
+    /// [`GitError::RepoTooBig`] while this mirror's note says it passed the cap less than
+    /// [`TOO_BIG_RETRY`] ago; an older note is cleared, so this fetch tries again.
+    async fn not_too_big(&self) -> Result<(), GitError> {
+        let mark = too_big_mark(&self.dir);
+        let Ok(m) = tokio::fs::metadata(&mark).await else { return Ok(()) };
+        let age = m.modified().ok().and_then(|t| t.elapsed().ok()).unwrap_or_default();
+        if age < TOO_BIG_RETRY {
+            return Err(GitError::RepoTooBig);
+        }
+        let _ = tokio::fs::remove_file(&mark).await;
+        Ok(())
+    }
+
+    /// After a fetch: a mirror over `cap` bytes on disk is deleted and a note left beside it, so
+    /// it isn't fetched again for [`TOO_BIG_RETRY`] ([`GitError::RepoTooBig`]).
+    async fn cap(&self, cap: u64) -> Result<(), GitError> {
+        if self.local {
+            return Ok(());
+        }
+        let dir = self.dir.clone();
+        let used = tokio::task::spawn_blocking(move || disk_use(&dir)).await.unwrap_or(0);
+        if used <= cap {
+            return Ok(());
+        }
+        if let Err(e) = tokio::fs::remove_dir_all(&self.dir).await {
+            tracing::warn!("dev: could not remove a repo mirror over the size cap: {}", e.kind());
+        }
+        let _ = tokio::fs::write(too_big_mark(&self.dir), b"").await;
+        Err(GitError::RepoTooBig)
     }
 
     /// Fetches one ref of `url` (a PR head, `refs/pull/7/head`) into `to` (`refs/kwant/…`); the sha
@@ -577,9 +762,13 @@ impl Repo {
         if self.local || !ok_ref(from) || !to.starts_with("refs/kwant/") || !ok_ref(to) || fetch_url(url).as_deref() != Some(url) {
             return Err(GitError::Refused);
         }
+        self.not_too_big().await?;
+        let pin = checked(url).await?;
         let spec = format!("+{from}:{to}");
         let args = ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", url, &spec];
-        run("git", Some(&self.dir), &args, Opts { timeout: FETCH_TIMEOUT, max_out: MAX_OUT, auth, file: false }).await?;
+        let done = run("git", Some(&self.dir), &args, Opts { timeout: FETCH_TIMEOUT, max_out: MAX_OUT, auth, file: false, pin: &pin }).await;
+        self.cap(crate::server::dev::mirror_cap()).await?;
+        done?;
         self.resolve(to).await
     }
 
@@ -598,7 +787,8 @@ impl Repo {
             if fetch_url(url).as_deref() != Some(url) {
                 return Err(GitError::Refused);
             }
-            let out = run("git", Some(&self.dir), &["ls-remote", "--symref", "--", url, "HEAD"], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false }).await?;
+            let pin = checked(url).await?;
+            let out = run("git", Some(&self.dir), &["ls-remote", "--symref", "--", url, "HEAD"], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin }).await?;
             let out = String::from_utf8_lossy(&out).into_owned();
             out.lines().find_map(|l| l.strip_prefix("ref: ").and_then(|r| r.strip_suffix("\tHEAD")).map(str::to_string)).ok_or(GitError::NotFound)?
         };
@@ -617,7 +807,8 @@ impl Repo {
         if fetch_url(url).as_deref() != Some(url) {
             return Err(GitError::Refused);
         }
-        let out = run("git", Some(&self.dir), &["ls-remote", "--heads", "--", url, &name], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false }).await?;
+        let pin = checked(url).await?;
+        let out = run("git", Some(&self.dir), &["ls-remote", "--heads", "--", url, &name], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin }).await?;
         Ok(String::from_utf8_lossy(&out).lines().any(|l| l.split('\t').nth(1) == Some(name.as_str())))
     }
 
@@ -1146,7 +1337,7 @@ mod tests {
         for e in [GitError::Auth, GitError::NotFound, GitError::Unreachable, GitError::Failed] {
             assert!(!e.to_string().contains("http"), "no URL in the words: {e}");
         }
-        assert!(GitError::NoGit.to_string().contains(INSTALL_HINT));
+        assert!(GitError::NoGit.to_string().contains("git 2.31 or newer on the server") && INSTALL_HINT.contains("git 2.31 or newer on the server"));
         assert_eq!(parse_version("git version 2.43.0\n"), Some((2, 43)));
         assert_eq!(parse_version("git version 2.30.9.windows.1"), Some((2, 30)));
         assert!(parse_version("git version 2.30.9").unwrap() < MIN_VERSION);
@@ -1223,6 +1414,194 @@ mod tests {
         assert!(Auth::header("ssh://git@github.com/o/n.git", Zeroizing::new("Basic x".into())).is_none());
         assert!(Auth::header("https://github.com/o/n.git", Zeroizing::new("Basic x\r\nX-Evil: 1".into())).is_none(), "one header line");
         assert!(Auth::header("http://127.0.0.1:9/o/n.git", Zeroizing::new("Basic x".into())).is_some(), "a test server on this machine");
+    }
+
+    /// A resolver with fixed answers that remembers what it was asked (no network).
+    struct Fake {
+        answers: std::collections::HashMap<&'static str, Vec<IpAddr>>,
+        asked: Mutex<Vec<(String, u16)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Resolver for Fake {
+        async fn lookup(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, GitError> {
+            self.asked.lock().unwrap().push((host.to_string(), port));
+            match host {
+                "down.example" => Err(GitError::Unreachable),
+                _ => Ok(self.answers.get(host).cloned().unwrap_or_default()),
+            }
+        }
+    }
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_remote_is_looked_up_refused_on_this_machine_and_pinned_to_what_was_checked() {
+        let fake = Fake {
+            answers: [
+                ("gitea.home.example", vec![ip("192.168.1.20")]),
+                ("two.example", vec![ip("203.0.113.7"), ip("2001:db8::5")]),
+                ("rebind.example", vec![ip("127.0.0.1")]),
+                ("meta.example", vec![ip("169.254.169.254")]),
+                ("v6local.example", vec![ip("fe80::1")]),
+                ("v6loop.example", vec![ip("::1")]),
+                ("mapped.example", vec![ip("::ffff:127.0.0.1")]),
+                ("mapped-meta.example", vec![ip("::ffff:169.254.169.254")]),
+                ("nat64.example", vec![ip("64:ff9b::7f00:1")]),
+                ("zero.example", vec![ip("0.0.0.0")]),
+                ("mixed.example", vec![ip("203.0.113.7"), ip("127.0.0.2")]),
+            ]
+            .into_iter()
+            .collect(),
+            asked: Mutex::new(Vec::new()),
+        };
+        let new = Some((2, 43));
+        let pin = |s: &str| Ok(vec![format!("http.curloptResolve={s}")]);
+
+        // A LAN host is allowed (people run Gitea at home) and pinned to the address checked
+        assert_eq!(check_remote("https://gitea.home.example/o/n.git", &fake, new).await, pin("gitea.home.example:443:192.168.1.20"));
+        assert_eq!(check_remote("http://gitea.home.example:3000/o/n.git", &fake, new).await, pin("gitea.home.example:3000:192.168.1.20"));
+        assert_eq!(check_remote("https://two.example/o/n.git", &fake, new).await, pin("two.example:443:203.0.113.7,[2001:db8::5]"), "every address checked, v6 in brackets");
+        // An older git (before 2.37) can't pin: the check stands alone
+        assert_eq!(check_remote("https://gitea.home.example/o/n.git", &fake, Some((2, 36))).await, Ok(vec![]));
+        // ssh and git:// are checked, never pinned
+        assert_eq!(check_remote("ssh://git@gitea.home.example/o/n.git", &fake, new).await, Ok(vec![]));
+        assert_eq!(check_remote("git@gitea.home.example:o/n.git", &fake, new).await, Ok(vec![]));
+        assert_eq!(check_remote("git://gitea.home.example/o/n.git", &fake, new).await, Ok(vec![]));
+        assert_eq!(
+            fake.asked.lock().unwrap().clone(),
+            [("gitea.home.example", 443), ("gitea.home.example", 3000), ("two.example", 443), ("gitea.home.example", 443), ("gitea.home.example", 22), ("gitea.home.example", 22), ("gitea.home.example", 9418)]
+                .map(|(h, p)| (h.to_string(), p))
+        );
+
+        // A name that resolves to this machine or link-local is refused, over every protocol
+        for host in ["rebind.example", "meta.example", "v6local.example", "v6loop.example", "mapped.example", "mapped-meta.example", "nat64.example", "zero.example", "mixed.example"] {
+            for url in [format!("https://{host}/o/n.git"), format!("ssh://git@{host}/o/n.git"), format!("git@{host}:o/n.git"), format!("git://{host}/o/n.git")] {
+                assert_eq!(check_remote(&url, &fake, new).await, Err(GitError::Refused), "{url}");
+            }
+        }
+        // A literal address or localhost is decided without a lookup
+        fake.asked.lock().unwrap().clear();
+        for url in ["https://127.0.0.1/o/n.git", "https://[::1]/o/n.git", "https://169.254.169.254/o/n.git", "https://[::ffff:169.254.169.254]/o/n.git", "https://localhost/o/n.git", "ssh://git@app.localhost/o/n.git"] {
+            assert_eq!(check_remote(url, &fake, new).await, Err(GitError::Refused), "{url}");
+        }
+        assert_eq!(check_remote("https://192.168.1.9:8443/o/n.git", &fake, new).await, Ok(vec![]), "a LAN address: nothing to pin");
+        assert!(fake.asked.lock().unwrap().is_empty());
+        // No answer is unreachable; an address kwant won't pass on is refused before any lookup
+        assert_eq!(check_remote("https://nowhere.example/o/n.git", &fake, new).await, Err(GitError::Unreachable));
+        assert_eq!(check_remote("https://down.example/o/n.git", &fake, new).await, Err(GitError::Unreachable));
+        assert_eq!(check_remote("file:///etc/o.git", &fake, new).await, Err(GitError::Refused));
+        assert_eq!(check_remote("https://u:p@gitea.home.example/o/n.git", &fake, new).await, Err(GitError::Refused), "only a stripped fetch URL");
+    }
+
+    #[test]
+    fn blocked_addresses_are_this_machine_and_link_local_never_the_lan() {
+        for a in ["127.0.0.1", "127.9.9.9", "0.0.0.0", "0.1.2.3", "169.254.169.254", "169.254.0.1", "255.255.255.255", "::1", "::", "fe80::1", "febf::1", "::ffff:127.0.0.1", "::ffff:169.254.169.254", "::127.0.0.1", "64:ff9b::a9fe:a9fe"] {
+            assert!(blocked(ip(a)), "{a}");
+        }
+        for a in ["10.0.0.1", "172.16.0.1", "192.168.1.20", "100.64.0.1", "203.0.113.7", "fd00::1", "2001:db8::5", "::ffff:192.168.1.20", "fec0::1"] {
+            assert!(!blocked(ip(a)), "{a}");
+        }
+    }
+
+    /// The pin is what git connects to: a name that can't resolve (`.invalid`) reaches a listener
+    /// on this machine only through `http.curloptResolve`. (The check never lets kwant pin to
+    /// loopback; `run` is called directly to see real git honour the setting.)
+    #[tokio::test]
+    async fn real_git_connects_where_it_was_pinned() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut c, _) = listener.accept().unwrap();
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut buf = [0u8; 4096];
+            let n = c.read(&mut buf).unwrap_or(0);
+            let _ = c.write_all(b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let pin = [format!("http.curloptResolve=pinned.invalid:{port}:127.0.0.1")];
+        let url = format!("http://pinned.invalid:{port}/o/n.git");
+        let r = run("git", Some(tmp.path()), &["ls-remote", "--", &url], Opts { timeout: REMOTE_TIMEOUT, pin: &pin, ..Opts::read() }).await;
+        assert_eq!(r, Err(GitError::NotFound));
+        let request = seen.join().unwrap();
+        assert!(request.starts_with("GET /o/n.git/info/refs"), "{request}");
+        assert!(request.to_ascii_lowercase().contains(&format!("host: pinned.invalid:{port}")), "{request}");
+    }
+
+    #[tokio::test]
+    async fn a_fetch_checks_its_remote_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = Repo::mirror(tmp.path(), "s1", "localhost/o/n").await.unwrap();
+        for url in ["https://localhost/o/n.git", "https://127.0.0.1/o/n.git", "http://[::1]:8080/o/n.git"] {
+            assert_eq!(repo.fetch(url, "main", None).await, Err(GitError::Refused), "{url}");
+            assert_eq!(repo.fetch_ref(url, "refs/pull/1/head", "refs/kwant/pr-1", None).await, Err(GitError::Refused), "{url}");
+            assert_eq!(repo.default_branch(url, None).await, Err(GitError::Refused), "{url}");
+            assert_eq!(repo.has_branch(url, "main", None).await, Err(GitError::Refused), "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_mirror_over_the_cap_is_deleted_and_fetched_again_after_a_day_or_when_added_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (w, _) = upstream(tmp.path());
+        let data = tmp.path().join("data");
+        let key = "gitlab.example.com/group/big";
+        let dir = mirror_dir(&data, "s1", key);
+        let repo = Repo::mirror(&data, "s1", key).await.unwrap();
+        run("git", Some(&repo.dir), &["fetch", "--quiet", "--", w.to_str().unwrap(), "+refs/heads/main:refs/heads/main"], Opts { file: true, ..Opts::read() }).await.unwrap();
+        assert_eq!(repo.cap(MIRROR_CAP).await, Ok(()), "a small repo stays");
+        assert!(dir.join("HEAD").is_file());
+        // A tiny cap (the test hook): the mirror goes and a note says why
+        assert_eq!(repo.cap(1000).await, Err(GitError::RepoTooBig));
+        assert!(!dir.exists(), "the mirror is deleted");
+        assert!(too_big_mark(&dir).is_file());
+        assert_eq!(GitError::RepoTooBig.to_string(), "This repo is too big for Dev mode to read (over 1 GB).");
+        drop(repo);
+
+        // The next polls don't fetch it again: refused before git or a lookup runs
+        let repo = Repo::mirror(&data, "s1", key).await.unwrap();
+        assert_eq!(repo.fetch("https://gitlab.example.com/group/big.git", "main", None).await, Err(GitError::RepoTooBig));
+        assert_eq!(repo.fetch_ref("https://gitlab.example.com/group/big.git", "refs/pull/1/head", "refs/kwant/pr-1", None).await, Err(GitError::RepoTooBig));
+        // A day on, it is tried again
+        let day_ago = std::time::SystemTime::now() - TOO_BIG_RETRY - Duration::from_secs(60);
+        std::fs::File::options().write(true).open(too_big_mark(&dir)).unwrap().set_modified(day_ago).unwrap();
+        assert_eq!(repo.not_too_big().await, Ok(()));
+        assert!(!too_big_mark(&dir).exists(), "the old note is cleared");
+        drop(repo);
+
+        // Removing the repo (and adding it again) starts afresh
+        std::fs::write(too_big_mark(&dir), b"").unwrap();
+        remove_mirror(&data, "s1", key).await;
+        assert!(!too_big_mark(&dir).exists() && !dir.exists());
+        let repo = Repo::mirror(&data, "s1", key).await.unwrap();
+        assert_eq!(repo.not_too_big().await, Ok(()));
+
+        // A team folder is never capped: kwant didn't copy it
+        let local = Repo::local(&w).unwrap();
+        assert_eq!(local.cap(1).await, Ok(()));
+        assert!(w.join(".git/HEAD").is_file());
+    }
+
+    #[test]
+    fn a_password_in_a_remote_is_never_kept() {
+        // http(s) and git:// lose their userinfo whole; ssh keeps a user name only
+        assert_eq!(fetch_url("https://u:p@host.example/x.git").as_deref(), Some("https://host.example/x.git"));
+        assert_eq!(fetch_url("ssh://u:p@host.example/x.git").as_deref(), Some("ssh://u@host.example/x.git"));
+        assert_eq!(fetch_url("http://u:p@host.example:8080/x.git").as_deref(), Some("http://host.example:8080/x.git"));
+        assert_eq!(fetch_url("git://u:p@host.example/x.git").as_deref(), Some("git://host.example/x.git"));
+        assert_eq!(fetch_url("https://u@host.example/x.git").as_deref(), Some("https://host.example/x.git"));
+        assert_eq!(fetch_url("u:p@host.example:x.git").as_deref(), Some("u@host.example:x.git"));
+        let secret = "s3cr3t-c4n4ry";
+        for raw in [format!("https://u:{secret}@host.example/x.git"), format!("ssh://u:{secret}@host.example/x.git"), format!("u:{secret}@host.example:x.git")] {
+            for got in [fetch_url(&raw), remote_url(&raw)] {
+                let got = got.unwrap_or_default();
+                assert!(!got.contains(secret) && !got.contains(":p@"), "{raw} -> {got}");
+            }
+        }
     }
 
     #[test]

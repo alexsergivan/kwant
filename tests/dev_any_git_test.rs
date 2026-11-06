@@ -12,7 +12,7 @@ use kwnt::db::dev_mode::{GIT, LANDED};
 use kwnt::db::models::NewTeam;
 use kwnt::db::spaces::SpaceId;
 use kwnt::server::dev::facts::DevFacts;
-use kwnt::server::dev::poller;
+use kwnt::server::dev::{git, poller};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -88,7 +88,7 @@ async fn a_plain_git_folder_gets_landed_cards_read_in_place() {
     let (s, v) = call(&env.app, "PUT", &uri, Some(json!({"on": true}))).await;
     assert_eq!(s.as_u16(), 200, "{v}");
     assert_eq!(v["status"], "watching", "{v}");
-    assert_eq!(v["repos"][0]["key"], "local:plain", "{v}");
+    assert_eq!((v["repos"][0]["key"].clone(), v["repos"][0]["provider"].clone()), (json!("local:plain"), json!("git")), "{v}");
     assert_eq!((v["repos"][0]["status"].clone(), v["repos"][0]["from"].clone(), v["repos"][0]["branch"].clone()), (json!("watching"), json!("local"), json!("main")), "{v}");
     let path = std::fs::canonicalize(&folder).unwrap().to_string_lossy().to_string();
     assert!(!v.to_string().contains(&path), "the folder path reached a reply: {v}");
@@ -140,6 +140,11 @@ async fn a_plain_git_folder_gets_landed_cards_read_in_place() {
     // Nothing new: nothing announced twice
     poller::poll_space(&env.state, space.as_str()).await;
     assert_eq!(landed(&env, "local:plain").await.len(), 4);
+
+    // The desk's rollup: four landed, and no "main is green" from a repo with no CI to read
+    let (s, v) = call(&env.app, "GET", &format!("/api/spaces/{}/dev/landed", space.as_str()), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!((v["rollup"]["count"].clone(), v["rollup"]["main_green"].clone()), (json!(4), Value::Null), "{v}");
 
     // The folder is as the team left it: files, index, HEAD, refs (no kwant refs)
     let after = snapshot(&folder);
@@ -267,4 +272,95 @@ async fn with_a_forge_prs_and_checks_come_from_it_and_files_from_git() {
     assert!(fake.asked_files.lock().unwrap().is_empty(), "git read every diff");
     // ...and the repo read in place has no kwant refs
     assert!(!git(&dir, &["for-each-ref"]).contains("refs/kwant"));
+}
+
+/// A team folder at `folders/<name>` on `main` whose `origin` is `remote`.
+async fn remote_team(env: &Env, name: &str, remote: &str) -> std::path::PathBuf {
+    let folder = env.tmp.path().join("folders").join(name.to_lowercase());
+    std::fs::create_dir_all(&folder).unwrap();
+    git(&folder, &["init", "-q", "-b", "main"]);
+    git(&folder, &["remote", "add", "origin", remote]);
+    let t = NewTeam {
+        name: name.into(),
+        description: None,
+        icon: None,
+        lead_kwant_id: env.a.clone(),
+        member_kwants: vec![env.a.clone()],
+        workspace_path: Some(folder.to_string_lossy().to_string()),
+        repo_url: None,
+    };
+    env.state.db.create_team(&SpaceId::default_space(), &t).await.unwrap();
+    folder
+}
+
+/// Every file under `dir` whose bytes contain `needle`.
+fn files_with(dir: &Path, needle: &[u8], out: &mut Vec<String>) {
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            files_with(&p, needle, out);
+        } else if std::fs::read(&p).is_ok_and(|b| b.windows(needle.len()).any(|w| w == needle)) {
+            out.push(p.display().to_string());
+        }
+    }
+}
+
+/// any-git.md G2: a remote's password never reaches the database, a reply or the data folder.
+/// http(s) and git:// lose their userinfo whole; ssh keeps a user name (not a credential), never a
+/// password. Nothing is fetched here (the poller isn't running).
+#[tokio::test]
+async fn a_remotes_password_is_never_stored() {
+    let env = setup().await;
+    let space = SpaceId::default_space();
+    let secret = "s3cr3t-c4n4ry-pw";
+    remote_team(&env, "Web", &format!("https://deploy:{secret}@gitlab.example.com/group/web.git")).await;
+    remote_team(&env, "Ops", &format!("ssh://deploy:{secret}@gitea.example.org/group/ops.git")).await;
+    let uri = format!("/api/spaces/{}/dev_mode", space.as_str());
+    let (s, on) = call(&env.app, "PUT", &uri, Some(json!({"on": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{on}");
+    let (_, v) = call(&env.app, "GET", &uri, None).await;
+
+    let mut rows = env.state.db.dev_repos(space.as_str()).await.unwrap();
+    rows.sort_by(|a, b| a.key.cmp(&b.key));
+    let urls: Vec<_> = rows.iter().map(|r| (r.key.as_str(), r.git_url.as_deref())).collect();
+    assert_eq!(urls, [("gitea.example.org/group/ops", Some("ssh://deploy@gitea.example.org/group/ops.git")), ("gitlab.example.com/group/web", Some("https://gitlab.example.com/group/web.git"))]);
+    for r in [on, v] {
+        assert!(!r.to_string().contains(secret), "{r}");
+    }
+    let mut leaked = Vec::new();
+    files_with(&env.tmp.path().join("data"), secret.as_bytes(), &mut leaked);
+    assert!(leaked.is_empty(), "the password was stored in {leaked:?}");
+}
+
+/// any-git.md G1: a mirror over the size cap (1 GB) was deleted after its fetch and left a note.
+/// Until a day has passed the repo isn't fetched again, and the row reads `error` with the reason;
+/// removing the repo (and adding it again) starts afresh. The cap itself is tested in git.rs with a
+/// tiny cap; nothing here touches the network (the note stops the poll before any lookup).
+#[tokio::test]
+async fn a_repo_too_big_to_copy_reads_as_an_error_until_it_is_added_again() {
+    let env = setup().await;
+    let space = SpaceId::default_space();
+    remote_team(&env, "Big", "https://gitlab.example.com/group/big.git").await;
+    let uri = format!("/api/spaces/{}/dev_mode", space.as_str());
+    let (s, v) = call(&env.app, "PUT", &uri, Some(json!({"on": true}))).await;
+    assert_eq!((s.as_u16(), v["repos"][0]["key"].clone(), v["repos"][0]["branch"].clone()), (200, json!("gitlab.example.com/group/big"), json!("main")), "{v}");
+
+    // The last fetch passed the cap: the mirror went and a note was left beside it
+    let dir = git::mirror_dir(&env.state.config.data_dir, space.as_str(), "gitlab.example.com/group/big");
+    std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
+    std::fs::write(git::too_big_mark(&dir), b"").unwrap();
+
+    poller::poll_space(&env.state, space.as_str()).await;
+    let (_, v) = call(&env.app, "GET", &uri, None).await;
+    assert_eq!((v["repos"][0]["status"].clone(), v["repos"][0]["poll_error"].clone()), (json!("error"), json!("This repo is too big for Dev mode to read (over 1 GB).")), "{v}");
+    assert_eq!(v["repos"][0]["poll_code"], json!("too_big"), "{v}");
+    assert_eq!(v["status"], "watching", "{v}");
+    assert!(landed(&env, "gitlab.example.com/group/big").await.is_empty());
+    assert!(git::too_big_mark(&dir).is_file(), "the note stays for its day");
+
+    // The team stops pointing at it: the row and the note go, so adding it again fetches afresh
+    let teams = env.state.db.list_teams(&space).await.unwrap();
+    env.state.db.delete_team(&teams.iter().find(|t| t.name == "Big").unwrap().id).await.unwrap();
+    kwnt::server::dev::repo::reconcile(&env.state, &space).await;
+    assert!(!git::too_big_mark(&dir).exists() && !dir.exists());
 }

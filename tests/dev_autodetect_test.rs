@@ -168,6 +168,9 @@ async fn with_no_connection_it_still_turns_on_and_no_token_leaks() {
     assert_eq!(v["status"], "watching", "{v}");
     let by_host = |v: &Value, h: &str| v["repos"].as_array().unwrap().iter().find(|r| r["host"] == h).map(|r| r["status"].clone());
     assert_eq!((by_host(&v, "github.com"), by_host(&v, "gitlab.example.com")), (Some(json!("not_connected")), Some(json!("watching"))), "{v}");
+    // The desk reads the kind from `provider`, never from the host
+    let provider = |v: &Value, h: &str| v["repos"].as_array().unwrap().iter().find(|r| r["host"] == h).map(|r| r["provider"].clone());
+    assert_eq!((provider(&v, "github.com"), provider(&v, "gitlab.example.com")), (Some(json!("github")), Some(json!("git"))), "{v}");
     assert_eq!(v["repo"], REPO, "the folder's repo is the prefill");
     assert_eq!(
         v["sources"],
@@ -183,6 +186,7 @@ async fn with_no_connection_it_still_turns_on_and_no_token_leaks() {
     // Ops gets a git row (the poller isn't running here, so nothing is fetched); Web still can't be read
     assert_eq!((v["on"].clone(), v["repo"].clone(), v["branch"].clone(), v["status"].clone()), (json!(true), json!("group/sub/ops"), json!("trunk"), json!("watching")), "{v}");
     assert_eq!(by_host(&v, "github.com"), Some(json!("not_connected")), "{v}");
+    assert_eq!((provider(&v, "github.com"), provider(&v, "gitlab.example.com")), (Some(json!("github")), Some(json!("git"))), "with a row too: {v}");
     let mode = env.state.db.dev_mode(SpaceId::default_space().as_str()).await.unwrap().unwrap();
     assert_eq!(mode.branch, "main", "the floor still learns the folder's branch");
     let ops_row = env.state.db.dev_repo(SpaceId::default_space().as_str(), "gitlab.example.com/group/sub/ops").await.unwrap().expect("a git row for Ops");
