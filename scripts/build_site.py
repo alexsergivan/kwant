@@ -340,6 +340,7 @@ def footer(root):
       <a href="{GITHUB}" rel="noopener">GitHub</a>
       <a href="{GITHUB}/issues" rel="noopener">Issues</a>
       <a href="{GITHUB}/blob/main/SECURITY.md" rel="noopener">Security</a>
+      <a href="{root}contact.html">Contact</a>
     </nav>
     <nav aria-label="Legal">
       <h2>Legal</h2>
@@ -490,7 +491,7 @@ def structured_data(meta, url, title, image, dates, body=""):
         return ""
     else:
         graph = [
-            {"@type": "WebPage", "@id": url, "name": title, "description": meta["description"], "url": url, "image": image,
+            {"@type": "ContactPage" if path == "contact.html" else "WebPage", "@id": url, "name": title, "description": meta["description"], "url": url, "image": image,
              "inLanguage": "en", "dateModified": dates[1], "about": {"@id": APP_ID}, "isPartOf": {"@id": SITE_ID}},
             crumbs([("kwant", SITE_URL + "/"), (title.split(":")[0], url)]),
         ]
