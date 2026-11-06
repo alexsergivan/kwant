@@ -19,7 +19,7 @@ import {
   OFF_HINT,
   offConsequences,
 } from '../approvalMode';
-import { StoreStatus, moveFirstLabel, moveFirstText } from '../passwordStore';
+import { StoreStatus, acceptRiskLabel, acceptRiskText } from '../passwordStore';
 import { ExposedBanner, MoveToBitwardenFirst, PasswordStoreState, usePasswordStore } from './PasswordStorePanel';
 
 /** "Approvals off": in a chat header (full) or a sidebar row (icon, with the words for screen readers). */
@@ -62,19 +62,21 @@ export const OffHint: React.FC = () => (
 
 /**
  * The plain-words confirm before anything runs without asking. With passwords still saved on this
- * server, "off" isn't offered: they move to Bitwarden first (the server refuses otherwise, F-10).
+ * server and the risk not accepted yet, it says so once (0.7.3 A3): keep them here (sends accept_risk,
+ * once per server) or move them to Bitwarden first.
  */
 export const OffConfirm: React.FC<{
   title: string;
   busy: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  /** `acceptRisk`: the person kept passwords on this server (the one-time confirm). */
+  onConfirm: (acceptRisk?: boolean) => void;
   /** Where passwords are kept; missing on screens (and older servers) that don't know. */
   passwords?: PasswordStoreState;
 }> = ({ title, busy, onCancel, onConfirm, passwords }) => {
   const id = useId();
   const status = passwords?.status ?? null;
-  const mustMove = !!status && status.local_count > 0;
+  const mustMove = !!status && status.local_count > 0 && !status.risk_accepted;
   // Still finding out: don't offer "off" for the moment it takes.
   const checking = !!passwords && !status && !passwords.problem;
   return (
@@ -100,9 +102,9 @@ export const OffConfirm: React.FC<{
         ))}
       </ul>
       {mustMove ? (
-        <div className="space-y-1.5 pt-0.5" data-off-needs-bitwarden>
-          <p className="text-[11px] text-amber-100 leading-snug">{moveFirstText(status!.local_count)}</p>
-          <MoveToBitwardenFirst store={passwords!} label={moveFirstLabel(status!.local_count)} />
+        <div className="space-y-1.5 pt-0.5" data-off-accept-risk>
+          <p className="text-[11px] text-amber-100 leading-snug">{acceptRiskText(status!.local_count)}</p>
+          <MoveToBitwardenFirst store={passwords!} label="Move them to Bitwarden first" />
         </div>
       ) : (
         <>
@@ -119,27 +121,26 @@ export const OffConfirm: React.FC<{
         >
           Cancel
         </button>
-        {!mustMove && (
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={busy || checking}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50"
-          >
-            {(busy || checking) && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
-            {checking ? 'Checking saved passwords…' : 'Turn off approvals'}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => onConfirm(mustMove)}
+          disabled={busy || checking}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-rose-600 hover:bg-rose-500 disabled:opacity-50"
+          data-off-confirm={mustMove ? 'accept-risk' : 'off'}
+        >
+          {(busy || checking) && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+          {checking ? 'Checking saved passwords…' : mustMove ? acceptRiskLabel(status!.local_count) : 'Turn off approvals'}
+        </button>
       </div>
     </div>
   );
 };
 
-/** A refused "off": show the move step when the store is known, else the server's sentence. */
+/** A refused "off": show the one-time confirm when the store is known, else the server's sentence. */
 function refusedOff(err: unknown, passwords: PasswordStoreState): string | null {
   if (!(err instanceof NeedsBitwardenError)) return err instanceof Error ? err.message : null;
   const known = passwords.status;
-  if (known) passwords.set({ ...known, local_count: Math.max(err.localCount ?? 1, 1) });
+  if (known) passwords.set({ ...known, local_count: Math.max(err.localCount ?? 1, 1), risk_accepted: false });
   passwords.reload();
   return known ? null : err.message;
 }
@@ -171,11 +172,11 @@ export const SpaceApprovalsSetting: React.FC<{
     if (confirming) storeReload();
   }, [confirming, storeReload]);
 
-  const save = async (v: SpaceApprovals) => {
+  const save = async (v: SpaceApprovals, acceptRisk = false) => {
     setBusy(true);
     setError(null);
     try {
-      const next = await approvalModeApi.setSpace(spaceId, v);
+      const next = await approvalModeApi.setSpace(spaceId, v, acceptRisk);
       setCurrent(next);
       setConfirming(false);
       onChanged(next);
@@ -230,7 +231,7 @@ export const SpaceApprovalsSetting: React.FC<{
         ))}
       </div>
       {confirming && (
-        <OffConfirm title={offConfirmTitle({ space: spaceName })} busy={busy} passwords={passwords} onCancel={() => setConfirming(false)} onConfirm={() => save('off')} />
+        <OffConfirm title={offConfirmTitle({ space: spaceName })} busy={busy} passwords={passwords} onCancel={() => setConfirming(false)} onConfirm={(accept) => save('off', accept)} />
       )}
       {current === 'off' && !confirming && <OffHint />}
       {exceptions.length > 0 && !confirming && (
@@ -288,11 +289,11 @@ export const BotApprovalsSetting: React.FC<{
   // An older server without the switch: show nothing rather than a control that can't save.
   if (state === null) return null;
 
-  const save = async (v: BotApprovals) => {
+  const save = async (v: BotApprovals, acceptRisk = false) => {
     setBusy(true);
     setError(null);
     try {
-      const next = await approvalModeApi.setBot(kwantId, v);
+      const next = await approvalModeApi.setBot(kwantId, v, undefined, acceptRisk);
       setState(next);
       setPending(null);
       onChanged?.(next);
@@ -344,7 +345,7 @@ export const BotApprovalsSetting: React.FC<{
         }
       />
       {pending && (
-        <OffConfirm title={offConfirmTitle({ bot: kwantName })} busy={busy} passwords={passwords} onCancel={() => setPending(null)} onConfirm={() => save(pending)} />
+        <OffConfirm title={offConfirmTitle({ bot: kwantName })} busy={busy} passwords={passwords} onCancel={() => setPending(null)} onConfirm={(accept) => save(pending, accept)} />
       )}
       {error && (
         <p role="alert" className="flex items-center gap-2 text-[11px] text-rose-300">

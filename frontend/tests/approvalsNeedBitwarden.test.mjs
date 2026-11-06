@@ -148,7 +148,7 @@ test('saving here while a space or bot doesn\'t ask before commands: the 409 rea
   assert.match(src, /err\.needsBitwarden\) setPassword\(''\)/);
 });
 
-test('"Turn approvals back on": every active space that is off and every bot set to off → ask; archived counts as not changed', async () => {
+test('"Turn approvals back on": every active space that is off and every bot set to off → ask; archived spaces are skipped and don\'t count (0.7.3 A1)', async () => {
   let changedEvents = 0;
   await withFetch(
     (url, init) => {
@@ -167,7 +167,8 @@ test('"Turn approvals back on": every active space that is off and every bot set
     },
     async (calls) => {
       window.addEventListener(m.APPROVALS_CHANGED_EVENT, () => changedEvents++);
-      assert.deepEqual(await m.approvalModeApi.turnAllOn(), { changed: 3, failed: 1 });
+      assert.deepEqual(await m.approvalModeApi.turnAllOn(), { changed: 3, failed: 0 });
+      assert.ok(!calls.some((c) => c.url === '/api/spaces?archived=1'), 'archived spaces are not even listed');
       const puts = calls.filter((c) => c.method === 'PUT');
       assert.deepEqual(
         puts.map((c) => `${c.url} ${c.body}`),
@@ -181,18 +182,17 @@ test('"Turn approvals back on": every active space that is off and every bot set
 
 // ---------------------------------------------------------------- the confirm
 
-test('confirm with passwords here: "off" isn\'t offered; it says why and offers to move them first', () => {
+test('confirm with passwords here (0.7.3 A3): it says why, offers to move them first, and lets the person keep them here once', () => {
   const html = m.confirm(LOCAL3);
   const t = text(html);
-  assert.match(html, /data-off-needs-bitwarden/);
-  assert.match(t, /3 saved passwords are kept on this server\. Under “Ask only when risky” or “Don't ask”, any bot that can run commands could read them, so move them to Bitwarden first\./);
-  assert.deepEqual(buttons(html), ['Move 3 saved passwords to Bitwarden first', 'Cancel']);
+  assert.match(html, /data-off-accept-risk/);
+  assert.match(t, /3 saved passwords are kept on this server\. Under “Ask only when risky” or “Don.t ask”, a bot that can run commands could read them\. You confirm this once for this server; Bitwarden keeps them out of reach\./);
+  assert.deepEqual(buttons(html), ['Move them to Bitwarden first', 'Cancel', 'Keep them here and turn off approvals']);
+  assert.match(html, /data-off-confirm="accept-risk"/);
   assert.ok(!buttons(html).includes('Turn off approvals'));
-  // The paragraph says it; the note isn't repeated above it.
   assert.ok(!t.includes(LOCAL_NOTE));
-  // Bitwarden with leftovers here, and Bitwarden locked with some here: the same.
-  assert.deepEqual(buttons(m.confirm(BW_LEFTOVER)), ['Move 2 saved passwords to Bitwarden first', 'Cancel']);
-  assert.deepEqual(buttons(m.confirm(BW_LOCKED)), ['Move 3 saved passwords to Bitwarden first', 'Cancel']);
+  assert.deepEqual(buttons(m.confirm(BW_LEFTOVER)), ['Move them to Bitwarden first', 'Cancel', 'Keep them here and turn off approvals']);
+  assert.deepEqual(buttons(m.confirm(BW_LOCKED)), ['Move them to Bitwarden first', 'Cancel', 'Keep them here and turn off approvals']);
 });
 
 test('confirm with nothing here: "off" is offered, with the sentence for that store', () => {
@@ -215,12 +215,13 @@ test('confirm while the store is still loading: "off" waits; with no store info 
 });
 
 test('space and bot settings use it: move first with passwords here, off with none', () => {
-  assert.match(text(m.spaceSetting({ initialConfirm: true, initialPasswords: LOCAL3 })), /Move 3 saved passwords to Bitwarden first/);
+  assert.match(text(m.spaceSetting({ initialConfirm: true, initialPasswords: LOCAL3 })), /Move them to Bitwarden first/);
+  assert.ok(buttons(m.spaceSetting({ initialConfirm: true, initialPasswords: LOCAL3 })).includes('Keep them here and turn off approvals'));
   assert.ok(!buttons(m.spaceSetting({ initialConfirm: true, initialPasswords: LOCAL3 })).includes('Turn off approvals'));
   const state = { kwant_id: 'k1', approvals: 'inherit', approvals_effective: 'ask', space_approvals: 'ask' };
   const bot = m.botSetting({ initial: state, initialPending: 'off', initialPasswords: LOCAL3 });
   assert.match(text(bot), /Let Dev run everything without approval\?/);
-  assert.match(text(bot), /Move 3 saved passwords to Bitwarden first/);
+  assert.match(text(bot), /Move them to Bitwarden first/);
   assert.ok(!buttons(bot).includes('Turn off approvals'));
   assert.ok(buttons(m.botSetting({ initial: state, initialPending: 'off', initialPasswords: BW })).includes('Turn off approvals'));
 });

@@ -11,6 +11,7 @@ import {
   UnlockProblem,
   autofillGapNote,
   checkServerUrl,
+  otherCloudHint,
   exposedText,
   migrateText,
   serverLabel,
@@ -110,6 +111,8 @@ export const BitwardenLoginForm: React.FC<{
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<UnlockProblem | null>(initialProblem);
+  // The server a connect was tried on (C5): the other cloud is named under a wrong password.
+  const [triedServer, setTriedServer] = useState<string>(initialServer);
   const [formError, setFormError] = useState<string | null>(null);
   const masterRef = useRef<HTMLInputElement>(null);
   const secretRef = useRef<HTMLInputElement>(null);
@@ -164,6 +167,7 @@ export const BitwardenLoginForm: React.FC<{
     } catch (err) {
       const p = err instanceof StoreError ? err.problem : ({ kind: 'error', message: 'Couldn’t reach the server.' } as UnlockProblem);
       setProblem(p);
+      setTriedServer(server);
       if (p.kind === 'two-factor') {
         setStep(p);
         setProvider(p.providers.find((x) => x.usable)?.id ?? null);
@@ -292,6 +296,11 @@ export const BitwardenLoginForm: React.FC<{
 
       {formError && <ProblemLine text={formError} />}
       {problem && !formError && problem.kind !== 'needs-token' && <ProblemLine text={unlockProblemText(problem)} />}
+      {mode === 'connect' && problem?.kind === 'wrong-password' && !formError && otherCloudHint(triedServer) && (
+        <p className="text-[11px] text-zinc-300 leading-snug" data-bw-other-cloud>
+          {otherCloudHint(triedServer)}
+        </p>
+      )}
       {problem?.kind === 'needs-token' && (
         <p role="alert" className="flex items-center gap-2 text-[11px] text-zinc-300">
           {unlockProblemText(problem)}
@@ -737,7 +746,7 @@ export const ExposedBanner: React.FC<{
       playSfx('click');
       store.reload();
       onApprovalsOn?.();
-      if (r.failed) setError(`${r.failed} ${r.failed === 1 ? 'setting' : 'settings'} couldn’t be changed. An archived space keeps its approvals until you restore it.`);
+      if (r.failed) setError(`${r.failed} ${r.failed === 1 ? 'setting' : 'settings'} couldn’t be changed. Try again.`);
       else setDone('Approvals are back on. Bots ask before running commands again.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Couldn’t turn approvals back on.');

@@ -11,9 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - NVIDIA preset for custom servers: free models from build.nvidia.com (#365).
 - **Dev mode reads any git repo.** Repos on GitLab, Gitea or any git server, and team folders with no remote, are watched with git, and what lands there shows on the Dev desk. Reviews, CI checks and Post to GitHub still work on GitHub repos only. The server needs git 2.31 or newer; without it, the desk says "Needs git on the server". (#366, #368)
+- **Connect GitHub in one place.** Every Connect GitHub (the Dev desk's status line and empty state, the Dev mode toast, Dev mode setup and Team settings) opens the same GitHub form right where you pressed it: a popover on the desktop, a sheet on the phone. It no longer jumps to Loose ends. The GitHub row in Loose ends says "Also used by Dev mode".
+- **Team settings say what Dev mode does with the repo.** Under Git Repo URL, one line: watched with GitHub connected, watched but needs Connect GitHub for reviews, can be watched once Dev mode is on, or read with git (reviews need GitHub).
 
 ### Changed
 - **Dev mode reads commit history with git, not GitHub's API.** Each watched repo gets a copy in kwant's data folder, up to 1 GB each; a bigger repo reads "Too big to read". Repo addresses that point at this server, link-local addresses or cloud metadata addresses are refused, and https reads are pinned to the address that was checked. A team folder whose .git points somewhere else is refused. GitHub PRs, checks and logins still come from GitHub. (#366)
+- **Saving a token while some bots don't ask first is a choice, not a wall.** The card "Before you save the token" explains the risk and offers **Save it on this server** (asked once per server), **Use Bitwarden** or **Make every bot ask first**. Turning approvals off with passwords on this server gets the same one-time confirm. Archived spaces no longer count.
+- The Git Repo URL hint reads "Bots clone it into the team's folder on first run. Dev mode watches it too."
+- After a wrong master password on bitwarden.com or bitwarden.eu, the Bitwarden form asks whether the account is on the other one.
+- A token form waiting on Bitwarden or approvals checks again when you come back to the window, so connecting Bitwarden in another tab unblocks it.
 
 ### Fixed
 - A custom server's models that have no name now show their id in the model picker instead of "[redacted]" (#365).

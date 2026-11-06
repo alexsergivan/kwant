@@ -7,6 +7,7 @@ import { playSfx } from '../audio/chiptune';
 import { InstructionsField } from './Instructions';
 import { MAX_INSTRUCTIONS } from '../continuity';
 import { teamNameToSave } from '../teamChannel';
+import { TeamRepoDevLine } from './TeamRepoDevLine';
 import { useEscapeLayer } from '../escape';
 
 interface ManageTeamModalProps {
@@ -443,8 +444,9 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
                   placeholder="https://github.com/owner/repository.git"
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
                 />
+                <TeamRepoDevLine url={repoUrl} teamId={team?.id ?? null} />
                 <p className="text-[11px] text-zinc-500 mt-1">
-                  Repository will be cloned and managed in team workspace directory on first run.
+                  Bots clone it into the team’s folder on first run. Dev mode watches it too.
                 </p>
               </div>
             )}
