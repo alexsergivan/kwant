@@ -5,9 +5,29 @@
 <h3 align="center">Your own team of AI bots that check each other’s work before saying “done”.</h3>
 
 <p align="center">
+  <a href="https://kwant.si">Website</a> ·
+  <a href="https://kwant.si/docs/quickstart">Docs</a> ·
+  <a href="https://kwant.si/features">Features</a> ·
+  <a href="https://kwant.si/alternatives/grok-bot">Compare</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/alexsergivan/kwant/discussions">Discussions</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg"><img src="https://img.shields.io/badge/Download-macOS-5c3fd0?style=for-the-badge&logo=apple&logoColor=white&labelColor=160c3a" alt="Download kwant for macOS"></a>
+  <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb"><img src="https://img.shields.io/badge/Download-Linux_.deb-5c3fd0?style=for-the-badge&logo=linux&logoColor=white&labelColor=160c3a" alt="Download kwant for Linux (.deb)"></a>
+  <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage"><img src="https://img.shields.io/badge/Download-Linux_AppImage-5c3fd0?style=for-the-badge&logo=linux&logoColor=white&labelColor=160c3a" alt="Download kwant for Linux (AppImage)"></a>
+  <br>
+  <sub>macOS: one app for Apple silicon and Intel · Linux x86_64 (beta): .deb or AppImage · A server: <a href="#self-hosting-on-a-vps">binary or Docker</a> · <a href="https://github.com/alexsergivan/kwant/releases/latest">All downloads</a></sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/alexsergivan/kwant/stargazers"><img src="https://img.shields.io/github/stars/alexsergivan/kwant?style=social&label=Star" alt="Star kwant on GitHub"></a>
   <a href="https://github.com/alexsergivan/kwant/actions/workflows/ci.yml"><img src="https://github.com/alexsergivan/kwant/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/alexsergivan/kwant/releases/latest"><img src="https://img.shields.io/github/v/release/alexsergivan/kwant?label=release&color=5c3fd0" alt="Latest release"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
-  <a href="https://kwant.si/docs/quickstart"><img src="https://img.shields.io/badge/docs-kwant.si-orange.svg" alt="Docs"></a>
+  <br>
+  <sub>Free and open source. A ⭐ helps others find kwant.</sub>
 </p>
 
 kwant gives you a team of bots that share chats, hand work to each other with an @mention and get it done on their own, on a schedule or while you're away. Each message goes to the bot that fits, and the reply says why. Work shows up as cards on a Mission board, and a task turns **Verified** only when kwant runs the check itself, never on a bot's word. Keep separate spaces for work and home, each with its own bots and accounts. Run it as an app on your Mac or Linux, or on a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
@@ -15,8 +35,6 @@ kwant gives you a team of bots that share chats, hand work to each other with an
 It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the binary.
 
 ![A kwant channel: Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen.](docs/media/handoff.webp)
-
-**Website and docs: [kwant.si](https://kwant.si)** · **[Download for Mac](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg)** · **Linux (beta): [.deb](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb) or [AppImage](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage)**
 
 ---
 
@@ -245,6 +263,24 @@ The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwa
 
 ---
 
+## FAQ
+
+**Is kwant free?** Yes. It's open source under the AGPL-3.0: use it, change it and run it for yourself, your team or your company, at any size. You pay only for the AI accounts you already have. If you want to sell or host kwant without publishing your changes, there's a [commercial license](COMMERCIAL.md).
+
+**Can I use my Claude or ChatGPT plan?** Yes. kwant runs the Claude, Codex or Grok CLI you're signed in to, so your plan covers the work. You can also add Anthropic, OpenAI or xAI API keys, or your own OpenAI- or Anthropic-compatible server. When one account runs out of usage, the turn moves to the next.
+
+**How is it different from Grok Bot, Claude Duet or OpenAI dots?** It's the same idea, a team of named bots you message, but open source, running on your own computer or server, with any of your accounts. And a task counts as done only when kwant runs the check itself. Side by side: [kwant vs Grok Bot](https://kwant.si/alternatives/grok-bot).
+
+**Where does my data go?** It stays on your computer or server, in kwant's data folder (`~/.kwnt` by default). kwant has no telemetry and sends nothing to us. Your messages go only to the AI providers and services you add.
+
+**Do I need an account with you?** No. There's no sign-up: you run kwant yourself and sign in only to the AI accounts you add.
+
+**Which computers can run it?** A Mac (Apple silicon or Intel), a Linux desktop (x86_64, beta) or a Linux server, with the binary or Docker Compose. There's no Windows app yet.
+
+**Can I run it on a free server?** Yes. [This guide](https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud) sets kwant up on Oracle Cloud's free tier, step by step.
+
+---
+
 ## Documentation
 
 - What changed in each release: [CHANGELOG.md](CHANGELOG.md)
@@ -283,6 +319,12 @@ cd frontend && npm test        # web app tests
 ## Security
 
 kwant runs commands and holds API keys and passwords, so please report vulnerabilities privately. See [SECURITY.md](SECURITY.md). Don't open a public issue for a security problem.
+
+## Contact
+
+- Email: [contact@kwant.si](mailto:contact@kwant.si), for questions, a commercial license, privacy requests or press.
+- Bugs and ideas: [GitHub issues](https://github.com/alexsergivan/kwant/issues). Questions and setups to share: [GitHub Discussions](https://github.com/alexsergivan/kwant/discussions).
+- Security problems: report them privately, as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 
