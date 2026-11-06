@@ -454,7 +454,7 @@ td code { white-space: nowrap; }
   .docs-nav h2, .docs-group h3 { display: none; }
   .docs-group, .docs-nav ul { display: contents; }
   .docs-group + .docs-group { margin: 0; }
-  .docs-nav a { margin: 0; white-space: nowrap; padding: 6px 12px; background: #fff; border: 1px solid var(--line); border-radius: 999px; font-size: 14px; }
+  .docs-nav a { margin: 0; white-space: nowrap; display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; background: #fff; border: 1px solid var(--line); border-radius: 999px; font-size: 14px; }
   .docs-nav a[aria-current="page"] { border-color: var(--v4); }
   .prose { padding: 28px 0 80px; }
   .grid.two, .tiles { grid-template-columns: minmax(0, 1fr); }
