@@ -14,8 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - **Dev mode reads commit history with git, not GitHub's API.** Each watched repo gets a copy in kwant's data folder, up to 1 GB each; a bigger repo reads "Too big to read". Repo addresses that point at this server, link-local addresses or cloud metadata addresses are refused, and https reads are pinned to the address that was checked. A team folder whose .git points somewhere else is refused. GitHub PRs, checks and logins still come from GitHub. (#366)
+- **Saving a password on this server no longer dead-ends.** An archived space, and the bots in it, no longer count as "Ask only when risky" or "Don't ask", so they don't block saving passwords. When a space or bot that doesn't ask is still active, you can choose to save the password on this server anyway. You make that choice once for the server, and a bot can never make it for you. The warning that such passwords are exposed stays. Restoring an archived space that doesn't ask needs the same choice.
 
 ### Fixed
+- **Connecting Bitwarden works with accounts whose key salt isn't their email.** kwant now uses the salt Bitwarden's server reports, and also reads the account key from Bitwarden's newer login reply. Each failed connect or unlock logs one line with what went wrong, the HTTP status and the server's host. That line never includes the email, password or codes.
 - A custom server's models that have no name now show their id in the model picker instead of "[redacted]" (#365).
 
 ## [Mac 0.7.2] - 2026-11-06
