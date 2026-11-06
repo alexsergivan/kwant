@@ -17,7 +17,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - **Dev mode reads commit history with git, not GitHub's API.** Each watched repo gets a copy in kwant's data folder, up to 1 GB each; a bigger repo reads "Too big to read". Repo addresses that point at this server, link-local addresses or cloud metadata addresses are refused, and https reads are pinned to the address that was checked. A team folder whose .git points somewhere else is refused. GitHub PRs, checks and logins still come from GitHub. (#366)
 - **Saving a token while some bots don't ask first is a choice, not a wall.** The card "Before you save the token" explains the risk and offers **Save it on this server** (asked once per server), **Use Bitwarden** or **Make every bot ask first**. Turning approvals off with passwords on this server gets the same one-time confirm. Archived spaces no longer count.
-- The Git Repo URL hint reads "Bots clone it into the team's folder on first run. Dev mode watches it too."
 - After a wrong master password on bitwarden.com or bitwarden.eu, the Bitwarden form asks whether the account is on the other one.
 - A token form waiting on Bitwarden or approvals checks again when you come back to the window, so connecting Bitwarden in another tab unblocks it.
 

@@ -362,7 +362,8 @@ test('B2/B3: both team modals show the line under Git Repo URL, with the new hel
   for (const f of ['NewTeamModal.tsx', 'ManageTeamModal.tsx']) {
     const src = readFileSync(new URL(`../src/components/${f}`, import.meta.url), 'utf8');
     assert.match(src, /<TeamRepoDevLine url=\{repoUrl\}/, f);
-    assert.match(src, /Bots clone it into the team’s folder on first run\. Dev mode watches it too\./, f);
+    assert.match(src, /Bots clone it into the team’s folder on first run\.\s*</, f);
+    assert.doesNotMatch(src, /Dev mode watches it too/, f);
   }
   assert.match(readFileSync(new URL('../src/components/ManageTeamModal.tsx', import.meta.url), 'utf8'), /<TeamRepoDevLine url=\{repoUrl\} teamId=/);
 });

@@ -385,7 +385,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
                 />
                 <TeamRepoDevLine url={repoUrl} />
                 <p className="text-[11px] text-zinc-500 mt-1">
-                  Bots clone it into the team’s folder on first run. Dev mode watches it too.
+                  Bots clone it into the team’s folder on first run.
                 </p>
               </div>
             )}
