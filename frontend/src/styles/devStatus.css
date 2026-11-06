@@ -1,4 +1,4 @@
-/* Dev desk status line, Switch list and first-run intro (0.7.1, any-git S5, Pixel).
+/* Dev desk status line, repo list (0.7.2) and first-run intro (0.7.1, any-git S5, Pixel).
    Calm by default: one soft radar ping while watching, a caret that blinks four times, both gone
    under reduced motion. Colours by status: watching teal (ok), not connected amber (warn, it needs you),
    next update and no repo violet/zinc (nothing to do). Text is zinc-300 or brighter on the raised
@@ -34,47 +34,6 @@
 .kw-dv-status-btn-primary { color: #fff; border-color: transparent; background-image: linear-gradient(135deg, #7a62f0 0%, #5b47d6 100%); }
 .kw-dv-status-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 
-.kw-dv-picker {
-  position: absolute;
-  right: 16px;
-  top: calc(100% + 6px);
-  z-index: 30;
-  width: min(340px, calc(100vw - 32px));
-  padding: 10px 8px 6px;
-  border-radius: 16px;
-  border: 1px solid rgb(255 255 255 / 0.14);
-  background: var(--kw-surface-overlay);
-  box-shadow: 0 12px 32px rgb(6 3 20 / 0.55);
-  animation: kw-dv-picker-in 150ms var(--kw-ease) both;
-}
-@keyframes kw-dv-picker-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: none; }
-}
-.kw-dv-pick {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 44px;
-  padding: 6px 8px;
-  border-radius: 11px;
-  border: 1px solid transparent;
-  transition: background-color 140ms var(--kw-ease), border-color 140ms var(--kw-ease);
-}
-.kw-dv-pick:hover:not(:disabled) { background: rgb(255 255 255 / 0.05); }
-.kw-dv-pick[aria-checked='true'] { background: linear-gradient(135deg, rgb(122 98 240 / 0.22) 0%, rgb(91 71 214 / 0.10) 100%); border-color: rgb(184 173 255 / 0.25); }
-@media (max-width: 639px) { .kw-dv-picker { left: 12px; right: 12px; width: auto; } }
-.kw-dv-pick-icon {
-  flex: none;
-  width: 26px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  color: rgb(196 189 255);
-  background: rgb(157 143 255 / 0.12);
-}
 .kw-dv-picker-input {
   min-width: 0;
   flex: 1;
@@ -91,6 +50,47 @@
 .kw-dv-picker-input::placeholder { color: rgb(113 113 122); }
 .kw-dv-picker-input:focus { border-color: rgb(56 189 248 / 0.7); }
 .kw-dv-picker-input[aria-invalid='true'] { border-color: rgb(253 164 175 / 0.6); }
+
+/* 0.7.2 team repos: one row per repo under the status line. Rows wrap at 390 px: the cells take the
+   line, the action drops below them at 44 px. Status words are --t3 or brighter (AA on the side surface). */
+.kw-dv-disclosure {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 6px; margin-left: -6px;
+  border-radius: 7px; color: var(--t1); font-weight: 600; background: transparent; cursor: pointer;
+}
+.kw-dv-disclosure:hover { background: rgb(157 143 255 / 0.1); }
+.kw-dv-disclosure svg { transition: transform 140ms var(--kw-ease); }
+.kw-dv-repos {
+  margin: 0; padding: 4px 24px 8px; list-style: none; border-bottom: 1px solid var(--kw-hairline);
+  background: color-mix(in srgb, var(--kw-surface-side) 70%, transparent);
+  font-size: 12.5px; line-height: 18px; color: var(--t3);
+}
+.kw-dv-repo + .kw-dv-repo { border-top: 1px solid var(--kw-hairline); }
+.kw-dv-repo-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-height: 40px; padding: 4px 0; }
+.kw-dv-repo-cells { flex: 1 1 240px; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.kw-dv-repo-team { color: var(--t2); font-weight: 500; }
+.kw-dv-repo-name { color: var(--t1); font-weight: 600; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
+.kw-dv-repo-sep { color: var(--t5); }
+.kw-dv-repo[data-s='not_connected'] .kw-dv-repo-state,
+.kw-dv-repo[data-s='error'] .kw-dv-repo-state { color: var(--dv-led-warn); }
+.kw-dv-repos .act, .kw-dv-statusline .act { flex: none; }
+.kw-dv-repos .act { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; border-radius: 7px; color: var(--accent); font-weight: 500; border: 1px solid var(--kw-hairline-strong); background: transparent; font-size: 12px; cursor: pointer; }
+.kw-dv-repos .act:hover { background: rgb(157 143 255 / 0.1); }
+.kw-dv-repos .act:disabled { opacity: 0.6; cursor: progress; }
+.kw-dv-repo-form-wrap { padding: 4px 24px 8px; border-bottom: 1px solid var(--kw-hairline); }
+.kw-dv-repo-form { padding: 2px 0 6px 18px; }
+.kw-dv-repo-form-label { display: block; margin-bottom: 4px; font-size: 11.5px; font-weight: 500; color: var(--t3); }
+.kw-dv-repo-form-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.kw-dv-repo-form-row .kw-dv-picker-input { flex: 1 1 200px; }
+.kw-dv-repo-form-err { min-height: 1em; margin-top: 4px; font-size: 11.5px; color: rgb(253 164 175); }
+.kw-dv-repo-err { margin: 0; padding: 0 0 6px 18px; font-size: 11.5px; color: rgb(253 164 175); }
+@media (max-width: 639px) {
+  .kw-dv-repos, .kw-dv-repo-form-wrap { padding-left: 12px; padding-right: 12px; }
+  .kw-dv-repos .act { min-height: 44px; padding: 0 12px; margin-left: 18px; }
+  .kw-dv-disclosure { min-height: 44px; }
+  .kw-dv-repo-form { padding-left: 0; }
+  .kw-dv-repo-form-row .kw-dv-status-btn { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .kw-dv-disclosure svg { transition: none; } }
 
 .kw-dv-intro {
   border-radius: 18px;
@@ -163,15 +163,14 @@
   .kw-dv-status { flex-wrap: wrap; }
   .kw-dv-status > p { flex-basis: calc(100% - 40px); }
   .kw-dv-status-btn { min-height: 44px; margin-left: 36px; }
-  .kw-dv-picker { position: fixed; left: 16px; right: 16px; top: auto; bottom: calc(16px + env(safe-area-inset-bottom)); width: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .kw-dv-intro-caret, .kw-dv-picker, .kw-dv-ontoast, .kw-dv-row-badge-pop { animation: none; }
+  .kw-dv-intro-caret, .kw-dv-ontoast, .kw-dv-row-badge-pop { animation: none; }
   /* Reduced motion: the highlight shows for 2.8 s with no fades. */
   .kw-dv-row-fresh { animation: kw-dv-row-fresh-rm 2800ms steps(1, end) 1; }
   @keyframes kw-dv-row-fresh-rm { 0% { background-color: var(--kw-accent-soft, rgb(157 143 255 / 0.14)); } 100% { background-color: transparent; } }
-  .kw-dv-status-btn, .kw-dv-pick { transition: none; }
+  .kw-dv-status-btn { transition: none; }
 }
 
 /* style-v2 §3: the desk header's `</>` chip (mono 12, accent on accent-soft, radius 6). */
@@ -228,3 +227,68 @@
   background: var(--kw-surface-overlay);
 }
 @media (max-width: 639px) { .kw-dv-tab { min-height: 44px; } }
+
+/* 0.7.2: repo filter chips over both lists (All · app · site). */
+.kw-dv-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+.kw-dv-filter {
+  min-height: 28px;
+  max-width: 100%;
+  padding: 2px 10px;
+  border: 1px solid var(--kw-hairline);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--t3);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.kw-dv-filter:hover { color: var(--t1); }
+.kw-dv-filter[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--t1);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+@media (max-width: 639px) {
+  .kw-dv-filter { min-height: 44px; padding: 2px 14px; }
+}
+
+/* 0.7.2 final copy (dev-mode-explainer/spec.md §6, §9b): second line, team note, the quiet no-repo line
+   and the Remove toast. Muted text is --t3 (AA on the side surface); actions are --accent. */
+.kw-dv-repo-origin { margin: -4px 0 6px 18px; font-size: 12px; line-height: 18px; color: var(--t3); overflow-wrap: anywhere; }
+.kw-dv-repo-state { overflow-wrap: anywhere; }
+.kw-dv-repo[data-s='error'] .kw-dv-repo-state { color: var(--dv-led-bad); }
+/* Ada's answer 2: Dev mode off, a `watching` repo is ready, not watched. A neutral chip, never green. */
+.kw-dv-repo-state[data-tone='neutral'] {
+  display: inline-flex; align-items: center; min-height: 18px; padding: 0 7px; border-radius: 999px;
+  color: var(--t2); border: 1px solid var(--kw-hairline-strong); background: transparent; font-size: 11.5px;
+}
+.kw-dv-info {
+  flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 7px;
+  color: var(--t4); background: transparent; cursor: pointer;
+}
+.kw-dv-info:hover, .kw-dv-info[aria-expanded='true'] { color: var(--t2); background: rgb(157 143 255 / 0.1); }
+.kw-dv-norepo, .kw-dv-removed { padding: 6px 24px 8px; border-bottom: 1px solid var(--kw-hairline); font-size: 12px; line-height: 18px; color: var(--t3); }
+.kw-dv-norepo-line { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.kw-dv-norepo .kw-dv-repo-form { padding-left: 0; margin-top: 6px; }
+.kw-dv-norepo-act {
+  display: inline-flex; align-items: center; min-height: 24px; padding: 0 4px; margin: 0 -4px; border-radius: 6px;
+  color: var(--accent); font-weight: 600; background: transparent; cursor: pointer;
+}
+.kw-dv-norepo-act:hover { background: rgb(157 143 255 / 0.1); }
+.kw-dv-norepo-act:disabled { opacity: 0.6; cursor: progress; }
+.kw-dv-removed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--t2); }
+.kw-dv-repo-form-help { margin-top: 4px; font-size: 11.5px; color: var(--t3); }
+.kw-dv-repo-form-pick { margin-bottom: 8px; }
+.kw-dv-team-pick { width: 100%; max-width: 280px; font-family: inherit; }
+@media (max-width: 639px) {
+  .kw-dv-norepo, .kw-dv-removed { padding-left: 12px; padding-right: 12px; }
+  .kw-dv-info { width: 44px; height: 44px; }
+  .kw-dv-norepo-act { min-height: 44px; padding: 0 8px; }
+  .kw-dv-disclosure { min-height: 44px; }
+}

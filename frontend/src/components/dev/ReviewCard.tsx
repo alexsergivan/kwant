@@ -449,7 +449,7 @@ const Stamp: React.FC<{ id: string; reviewer: string }> = ({ id, reviewer }) => 
 };
 
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel }) => {
   const [card, setCard] = useState<Review>(given);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(() => Date.now());
@@ -505,9 +505,10 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const summary = findingsSummary(card.findings);
   const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
   const stamp = lgtm(card) && card.reviewer ? card.reviewer.name : null;
+  const repoChip = repoLabel ? repoLabel(card.repo, card.repo_name) : null;
 
   return (
-    <article data-dev-card="review" data-pr={card.pr} aria-labelledby={headingId} className="kw-card relative min-w-0 scroll-mt-3 p-4">
+    <article data-dev-card="review" data-repo={card.repo ?? undefined} data-pr={card.pr} aria-labelledby={headingId} className="kw-card relative min-w-0 scroll-mt-3 p-4">
       {stamp && <Stamp id={card.id || `pr-${card.pr}`} reviewer={stamp} />}
       {/* 1. Header */}
       <header className={`flex items-start gap-3 ${stamp ? 'sm:pr-32' : ''}`}>
@@ -521,6 +522,12 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
             </h3>
             {card.draft && <span className="kw-chip">Draft</span>}
             {sample && <span className="kw-chip kw-chip-info">Sample PR</span>}
+            {repoChip && (
+              <span data-dev-card-repo className="kw-chip font-mono [overflow-wrap:anywhere]" title={repoChip}>
+                <span className="sr-only">Repo {repoChip}</span>
+                <span aria-hidden="true">{repoChip.replace(/\/+$/, '').split('/').pop() || repoChip}</span>
+              </span>
+            )}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-meta text-zinc-400">
             {card.branch && (

@@ -35,6 +35,10 @@ interface CardBase {
   created_at: string | null;
   /** §3.6 item 9: a failed card says why and keeps its rule-based parts. */
   error: string | null;
+  /** 0.7.2: the repo key (`host/owner/name`, lowercased) the card came from; null from an older server. */
+  repo: string | null;
+  /** `owner/name` for the repo chip, from the card's own facts. */
+  repo_name: string | null;
 }
 
 export interface LandedCard extends CardBase {
@@ -224,9 +228,11 @@ export interface LandedListProps {
   /** Epoch ms; tests and shots pass a fixed clock. */
   now?: number;
   /** Opens the PR's review card ("1 finding open in the review · Open review"); the link hides without it. */
-  onOpenReview?: (pr: number) => void;
+  onOpenReview?: (pr: number, repo?: string | null) => void;
   /** `forge` from GET dev_mode: names the link ("Open on GitHub"). */
   forge?: Forge | null;
+  /** 0.7.2: the card's repo chip text, or null with one repo in the space (`cardRepoLabel`). */
+  repoLabel?: (repo: string | null, name?: string | null) => string | null;
 }
 
 export interface ReviewCardProps {
@@ -243,6 +249,8 @@ export interface ReviewCardProps {
   forge?: Forge | null;
   /** `forge_login` from GET dev_mode, for "Posts as {login}." */
   forgeLogin?: string | null;
+  /** 0.7.2: the card's repo chip text, or null with one repo in the space (`cardRepoLabel`). */
+  repoLabel?: (repo: string | null, name?: string | null) => string | null;
 }
 
 export interface ReleaseNotesSheetProps {
@@ -270,6 +278,8 @@ function base(raw: Record<string, unknown>): CardBase {
     status: oneOf(raw.status, STATUSES, 'ready'),
     created_at: str(raw.created_at, 64),
     error: str(raw.error, 400),
+    repo: str(raw.repo, 300),
+    repo_name: str(raw.repo_name, 300),
   };
 }
 

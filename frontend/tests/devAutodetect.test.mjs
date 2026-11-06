@@ -138,39 +138,33 @@ test('typedRepo: GitHub owner/name and URLs normalise; any git URL is kept witho
 
 const text = (l) => l.parts.map((p) => p.text).join('');
 
-test('watching: Mira’s copy, "Watching {repo} on {branch} · from {team}’s folder" or "’s repo link"; Switch only with several sources', () => {
+test('watching: one repo is one line, "Watching {repo} · {branch}" (spec §6); no Switch (0.7.2 watches every repo)', () => {
   const one = m.statusLine(state({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] }));
-  assert.equal(text(one), 'Watching demo-org/demo-web on main · from Web’s folder');
+  assert.equal(text(one), 'Watching demo-org/demo-web · main');
   assert.equal(one.action, null);
   assert.deepEqual(one.parts.filter((p) => p.mono).map((p) => p.text), ['demo-org/demo-web', 'main']);
-  const link = m.statusLine(state({ status: 'watching', repo: 'demo-org/demo-api', branch: 'trunk', sources: [SOURCES[1]] }));
-  assert.equal(text(link), 'Watching demo-org/demo-api on trunk · from API’s repo link');
   const many = m.statusLine(state({ status: 'watching', repo: 'demo-org/demo-api', branch: 'trunk', sources: SOURCES }));
-  assert.equal(text(many), 'Watching demo-org/demo-api on trunk · 1 of 3 repos found');
-  assert.equal(many.action, 'switch');
-  const local = m.statusLine(state({ status: 'watching', repo: 'demo-docs', sources: [SOURCES[2]] }));
-  assert.equal(text(local), 'Docs’s folder has a local repo with no remote. It’s read from the next update. The floor and guards are on now.');
-  const typed = m.statusLine(state({ status: 'watching', repo: 'demo-org/elsewhere', branch: null, sources: [] }));
-  assert.equal(text(typed), 'Watching demo-org/elsewhere on main', 'a typed repo names no team');
+  // An older server with several sources still watches its one repo: one line, no picker.
+  assert.equal(text(many), 'Watching demo-org/demo-api · trunk');
+  assert.equal(many.action, null);
 });
 
-test('not_connected: "Found {repo}. Reviews need your GitHub connection." with Connect GitHub', () => {
+test('not_connected: "{repo} · Needs your GitHub connection" with Connect GitHub', () => {
   const l = m.statusLine(state({ status: 'not_connected', repo: 'demo-org/demo-web', sources: [SOURCES[0]] }));
-  assert.equal(text(l), 'Found demo-org/demo-web. Reviews need your GitHub connection.');
+  assert.equal(text(l), 'demo-org/demo-web · Needs your GitHub connection');
   assert.equal(l.action, 'connect');
 });
 
-test('other_host: "Found {repo}. Repos on {host} are read from the next update. The floor and guards are on now."', () => {
+test('other_host: "{repo} · {host} isn’t read yet", no action', () => {
   const l = m.statusLine(state({ status: 'other_host', repo: 'https://gitlab.example.test/demo/app', sources: [{ team: 'Web', repo: 'https://gitlab.example.test/demo/app', host: 'gitlab.example.test', from: 'folder' }] }));
-  assert.equal(text(l), 'Found https://gitlab.example.test/demo/app. Repos on gitlab.example.test are read from the next update. The floor and guards are on now.');
-  assert.deepEqual(l.parts.filter((p) => p.mono).map((p) => p.text), ['https://gitlab.example.test/demo/app', 'gitlab.example.test']);
+  assert.equal(text(l), 'https://gitlab.example.test/demo/app · gitlab.example.test isn’t read yet');
   assert.equal(l.action, null);
 });
 
-test('no_repo: "No git repo in this space’s folders yet. The floor and guards are on." with Type a repo', () => {
+test('no_repo: "No git repo in this space’s folders yet. The floor and guards are on." with Link a repo', () => {
   const l = m.statusLine(state({ status: 'no_repo', sources: [] }));
   assert.equal(text(l), 'No git repo in this space’s folders yet. The floor and guards are on.');
-  assert.equal(l.action, 'type');
+  assert.equal(l.action, 'link');
 });
 
 test('flow F3: the switch-on toast by status (Mira’s flow copy §3), with its one action', () => {
@@ -275,86 +269,74 @@ test('DOM: Connect opens Loose ends; it hides when the app gives no way there', 
   again.root.unmount();
 });
 
-test('DOM: Switch opens a one-tap list; a tap sends PUT {on: true, repo} and the line follows', async () => {
-  const { root } = await desk({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: SOURCES });
-  const sw = document.querySelector('[data-dv-status-action="switch"]');
-  assert.equal(sw.getAttribute('aria-expanded'), 'false');
-  await click(sw);
-  assert.equal(sw.getAttribute('aria-expanded'), 'true');
-  const picks = [...document.querySelectorAll('[data-dv-pick]')];
-  assert.deepEqual(picks.map((p) => p.dataset.dvPick), ['demo-org/demo-web', 'demo-org/demo-api', 'demo-docs']);
-  assert.equal(picks[0].getAttribute('aria-checked'), 'true');
-  assert.equal(document.activeElement, picks[0], 'focus starts on the watched repo');
-  assert.match(picks[1].textContent, /API’s repo link/);
-  assert.match(picks[2].textContent, /Docs’s folder, no remote/);
-  await click(picks[1]);
+const typeInto = async (input, v) => {
+  Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, v);
+  input.dispatchEvent(new window.Event('input', { bubbles: true }));
   await settle();
-  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , b]) => b), [{ on: true, repo: 'demo-org/demo-api' }]);
-  assert.equal(document.querySelector('[data-dv-picker]'), null, 'the list closes');
-  assert.equal(document.activeElement, sw, 'focus goes back to Switch');
-  assert.match(document.querySelector('[data-dv-status-text]').textContent, /Watching demo-org\/demo-api on main · 1 of 3 repos found/);
+};
+const submitForm = async (form) => {
+  form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await settle();
+};
+
+test('0.7.2: no repo picker. An older server with several sources shows one line and no Switch', async () => {
+  const { root } = await desk({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: SOURCES });
+  assert.equal(document.querySelector('[data-dv-status-action="switch"]'), null);
+  assert.equal(document.querySelector('[data-dv-picker]'), null);
+  assert.equal(document.querySelectorAll('[data-dv-status]').length, 1);
   root.unmount();
 });
 
-test('DOM: tapping the watched repo just closes; Esc closes; a typed git URL is watched without its userinfo', async () => {
-  const { root } = await desk({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: SOURCES });
-  const sw = document.querySelector('[data-dv-status-action="switch"]');
-  await click(sw);
-  await click(document.querySelector('[data-dv-pick="demo-org/demo-web"]'));
-  assert.equal(document.querySelector('[data-dv-picker]'), null);
-  assert.equal(server.calls.filter(([meth]) => meth === 'PUT').length, 0);
-  await click(sw);
-  document.querySelector('[data-dv-picker]').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+test('DOM: Link a repo opens a field; Esc closes it; a typed git URL is linked without its userinfo', async () => {
+  const { root } = await desk({ status: 'no_repo', sources: [] });
+  const link = document.querySelector('[data-dv-status-action="link"]');
+  assert.equal(link.textContent.trim(), 'Link a repo');
+  assert.equal(link.getAttribute('aria-expanded'), 'false');
+  await click(link);
+  assert.equal(link.getAttribute('aria-expanded'), 'true');
+  const form = document.querySelector('[data-dv-link-form="hand"]');
+  assert.equal(document.activeElement, form.querySelector('input'));
+  form.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   await settle();
-  assert.equal(document.querySelector('[data-dv-picker]'), null);
-  assert.equal(document.activeElement, sw);
-  await click(sw);
-  const input = document.querySelector('[data-dv-picker] input');
-  const submit = document.querySelector('[data-dv-picker] button[type="submit"]');
-  const type = async (v) => {
-    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, v);
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await settle();
-  };
-  await type('not a repo');
+  assert.equal(document.querySelector('[data-dv-link-form]'), null);
+  await click(link);
+  const input = document.querySelector('[data-dv-link-form] input');
+  const submit = document.querySelector('[data-dv-link-form] button[type="submit"]');
+  await typeInto(input, 'not a repo');
   assert.equal(submit.disabled, true);
   assert.equal(input.getAttribute('aria-invalid'), 'true');
-  await type('https://demo:not-a-real-token@gitea.example.test/demo/app.git');
+  await typeInto(input, 'https://demo:not-a-real-token@gitea.example.test/demo/app.git');
   assert.equal(submit.disabled, false);
-  input.form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
-  await settle();
-  assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , b]) => b), [{ on: true, repo: 'https://gitea.example.test/demo/app.git' }]);
+  await submitForm(input.form);
+  assert.deepEqual(server.calls.filter(([x]) => x === 'PUT').map(([, , b]) => b), [{ on: true, repo: 'https://gitea.example.test/demo/app.git' }]);
+  assert.ok(!document.body.textContent.includes('not-a-real-token'));
   root.unmount();
 });
 
-test('DOM: a failed switch keeps the list open with the reason', async () => {
-  const { root } = await desk({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: SOURCES });
+test('DOM: a failed link keeps the field open with the reason', async () => {
+  const { root } = await desk({ status: 'no_repo', sources: [] });
   server.fail = 'Bots can’t read that repo.';
-  await click(document.querySelector('[data-dv-status-action="switch"]'));
-  await click(document.querySelector('[data-dv-pick="demo-org/demo-api"]'));
-  await settle();
-  assert.ok(document.querySelector('[data-dv-picker]'));
-  assert.match(document.querySelector('[data-dv-picker]').textContent, /Bots can’t read that repo\./);
+  await click(document.querySelector('[data-dv-status-action="link"]'));
+  const input = document.querySelector('[data-dv-link-form] input');
+  await typeInto(input, 'demo-org/demo-api');
+  await submitForm(input.form);
+  assert.ok(document.querySelector('[data-dv-link-form]'));
+  assert.match(document.querySelector('[data-dv-link-form]').textContent, /Couldn’t find that repo\. Check the name, or connect GitHub first\./);
   root.unmount();
 });
 
-test('DOM: a typed repo the server can’t read (200, repo null, check) keeps the list open with why; Dev mode stays on', async () => {
-  for (const [why, re] of [['not_found', /Couldn’t read demo-org\/nope\. .*Dev mode is on/], ['not_connected', /Connect GitHub so bots can read demo-org\/nope\./]]) {
-    const { root } = await desk({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: SOURCES });
+test('DOM: a typed repo the server can’t read (200, repo null, check) keeps the field open with why; Dev mode stays on', async () => {
+  for (const [why, re] of [['not_found', /Couldn’t find that repo\. Check the name, or connect GitHub first\./], ['not_connected', /Couldn’t find that repo\. Check the name, or connect GitHub first\./]]) {
+    const { root } = await desk({ status: 'no_repo', sources: [] });
     server.unreadable = why;
-    await click(document.querySelector('[data-dv-status-action="switch"]'));
-    const input = document.querySelector('[data-dv-picker] input');
-    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    set.call(input, 'demo-org/nope');
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await settle();
-    input.form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
-    await settle();
+    await click(document.querySelector('[data-dv-status-action="link"]'));
+    const input = document.querySelector('[data-dv-link-form] input');
+    await typeInto(input, 'demo-org/nope');
+    await submitForm(input.form);
     assert.deepEqual(server.calls.filter(([x]) => x === 'PUT').at(-1)[2], { on: true, repo: 'demo-org/nope' });
-    assert.ok(document.querySelector('[data-dv-picker]'), why);
-    assert.match(document.querySelector('[data-dv-picker]').textContent, re);
+    assert.ok(document.querySelector('[data-dv-link-form]'), why);
+    assert.match(document.querySelector('[data-dv-link-form]').textContent, re);
     assert.equal(m.devStore.get('spc_demo').on, true);
-    assert.equal(m.devStore.get('spc_demo').repo, null);
     root.unmount();
   }
 });
@@ -599,21 +581,14 @@ test('F4 DOM: first-visit empty states speak git and never say "Nothing has land
   row.root.unmount();
 });
 
-test('F5 DOM: no_repo’s Type a repo opens the list straight at the field; the toast’s Type a repo lands there too', async () => {
-  const { root } = await desk({ status: 'no_repo', sources: [] });
-  const t = document.querySelector('[data-dv-status-action="type"]');
-  assert.equal(t.textContent.trim(), 'Type a repo');
-  await click(t);
-  const input = document.querySelector('[data-dv-picker] input');
-  assert.ok(input);
-  assert.equal(document.activeElement, input);
-  assert.equal(document.querySelectorAll('[data-dv-pick]').length, 0);
-  root.unmount();
+test('F5 DOM: the toast’s Type a repo lands on the Link a repo field, open and focused, once', async () => {
   reset({ status: 'no_repo', sources: [] });
   m.devStore.set('spc_demo', m.parseDevMode(server.state));
   m.deskIntent.set('spc_demo', 'type');
   const again = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
-  assert.ok(document.querySelector('[data-dv-picker] input'), 'opened from the toast');
+  const input = document.querySelector('[data-dv-link-form] input');
+  assert.ok(input, 'opened from the toast');
+  assert.equal(document.activeElement, input);
   assert.equal(m.deskIntent.take('spc_demo'), null, 'used once');
   again.root.unmount();
 });
