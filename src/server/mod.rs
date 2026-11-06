@@ -21,6 +21,7 @@ pub mod turns;
 pub mod delegation;
 pub mod parked;
 pub mod attachments;
+pub mod video;
 pub mod questions;
 pub mod activity;
 pub mod human_steps;

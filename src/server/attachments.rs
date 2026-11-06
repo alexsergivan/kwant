@@ -4,8 +4,12 @@
 //!
 //! Bytes are stored once per content under `<data dir>/attachments/<sha[0..2]>/<sha>`. A path is
 //! only ever built from a validated sha256, never from a name or id the client sent, and files are
-//! served only through the auth guard with `nosniff`, a sandbox CSP and (except raster images)
-//! `Content-Disposition: attachment`.
+//! served only through the auth guard with `nosniff`, a sandbox CSP and (except raster images and
+//! videos) `Content-Disposition: attachment`.
+//!
+//! Videos (MP4, MOV, WebM by their bytes) may be up to 100 MB; everything else up to 20 MB. A
+//! file the bytes already rule out is refused after its first 16 bytes, not after the last one
+//! (video-drop-073). `read_attachment` looks inside videos with ffmpeg ([`super::video`]).
 
 use super::continuity::SelfScope;
 use super::AppState;
@@ -28,8 +32,15 @@ use std::path::{Path as FsPath, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
-/// Largest file a user can upload or an agent can share.
+/// Largest file a user can upload or an agent can share, unless it is a video.
 pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+/// Largest video (MP4, MOV, WebM by its bytes).
+pub const MAX_VIDEO_BYTES: u64 = 100 * 1024 * 1024;
+/// Bytes of a file's start kept for sniffing; the type is known (or ruled out) once they are in.
+const HEAD_BYTES: usize = 16;
+/// After an early 413/415 the rest of the body is read and dropped, so the browser gets the
+/// answer instead of a connection reset; at most this long.
+const DRAIN_SECS: u64 = 30;
 /// Most files on one message.
 pub const MAX_ATTACHMENTS_PER_MESSAGE: usize = 10;
 /// Small text files are put into the prompt directly, up to this much in total.
@@ -46,8 +57,14 @@ const READ_IMAGE_BYTES: i64 = 5 * 1024 * 1024;
 const MAX_SHARED_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_NAME_CHARS: usize = 120;
 
-/// Raster images: the only types shown inline; everything else downloads.
+/// Raster images: shown inline as images.
 pub(crate) const INLINE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+/// Videos: served inline so a `<video>` can play them. Everything else downloads.
+pub(crate) const INLINE_VIDEO_TYPES: [&str; 3] = ["video/mp4", "video/webm", "video/quicktime"];
+
+pub fn is_video_mime(mime: &str) -> bool {
+    INLINE_VIDEO_TYPES.contains(&mime)
+}
 
 pub fn root(state: &AppState) -> PathBuf {
     state.config.data_dir.join("attachments")
@@ -74,9 +91,23 @@ pub fn clean_name(raw: &str) -> String {
     }
 }
 
-/// The file's type from its first bytes; text when it is all UTF-8 without NUL bytes (its
-/// extension then picks markdown, CSV or JSON). Anything else is refused.
-pub fn sniff(head: &[u8], is_text: bool, name: &str) -> Option<&'static str> {
+/// ISO-BMFF major brands that are video (MP4 and its relatives). Other `ftyp` files (HEIC/AVIF
+/// photos, M4A audio, camera raw) are not videos a browser plays, so they aren't taken as one.
+fn video_brand(brand: &[u8]) -> Option<&'static str> {
+    let b = std::str::from_utf8(brand).ok()?;
+    if b == "qt  " {
+        return Some("video/quicktime");
+    }
+    let mp4 = matches!(b, "isom" | "mp41" | "mp42" | "mp71" | "avc1" | "M4V " | "M4VH" | "M4VP" | "dash" | "mmp4" | "MSNV" | "XAVC" | "f4v ")
+        || (b.starts_with("iso") && matches!(b.as_bytes()[3], b'2'..=b'9'))
+        || (b.starts_with("3gp") && matches!(b.as_bytes()[3], b'4'..=b'9'))
+        || (b.starts_with("3g2") && matches!(b.as_bytes()[3], b'a'..=b'c'));
+    mp4.then_some("video/mp4")
+}
+
+/// The type a file's magic bytes prove: an image, a PDF or a video. `None` for text and for
+/// anything that isn't accepted.
+pub fn sniff_magic(head: &[u8]) -> Option<&'static str> {
     if head.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some("image/png");
     }
@@ -92,11 +123,47 @@ pub fn sniff(head: &[u8], is_text: bool, name: &str) -> Option<&'static str> {
     if head.starts_with(b"%PDF-") {
         return Some("application/pdf");
     }
+    // ISO-BMFF: a box size, then `ftyp` and the major brand (MP4, MOV)
+    if head.len() >= 12 && &head[4..8] == b"ftyp" {
+        return video_brand(&head[8..12]);
+    }
+    // EBML: WebM (and Matroska, which browsers play the same way)
+    if head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return Some("video/webm");
+    }
+    None
+}
+
+/// Extensions that are never text, so a file named so is refused as soon as its first bytes
+/// show no accepted magic, even if they happen to look like text.
+const BINARY_EXTS: &[&str] = &[
+    "7z", "aac", "apk", "avi", "bmp", "bz2", "dll", "dmg", "doc", "docx", "dylib", "exe", "flac", "flv", "gz", "heic", "heif",
+    "ico", "img", "ipa", "iso", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg", "mpg", "msi", "numbers", "odp", "ods",
+    "odt", "ogg", "opus", "pages", "pkg", "ppt", "pptx", "psd", "rar", "so", "tar", "tgz", "tif", "tiff", "wav", "webm", "wmv",
+    "xls", "xlsx", "xz", "zip", "3gp", "avif",
+];
+
+fn extension(name: &str) -> String {
+    name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default()
+}
+
+/// Whether a file can be refused from its first bytes (V3): they carry no accepted magic, and
+/// either they already aren't UTF-8 text or the name's extension is a binary one. Text is
+/// otherwise decided at the end.
+fn ruled_out_early(head: &[u8], text_so_far: bool, name: &str) -> bool {
+    head.len() >= HEAD_BYTES && sniff_magic(head).is_none() && (!text_so_far || BINARY_EXTS.contains(&extension(name).as_str()))
+}
+
+/// The file's type from its first bytes; text when it is all UTF-8 without NUL bytes (its
+/// extension then picks markdown, CSV or JSON). Anything else is refused.
+pub fn sniff(head: &[u8], is_text: bool, name: &str) -> Option<&'static str> {
+    if let Some(m) = sniff_magic(head) {
+        return Some(m);
+    }
     if !is_text {
         return None;
     }
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
-    Some(match ext.as_str() {
+    Some(match extension(name).as_str() {
         "md" | "markdown" => "text/markdown",
         "csv" => "text/csv",
         "json" => "application/json",
@@ -138,23 +205,56 @@ impl Utf8Check {
     fn is_text(&self) -> bool {
         !self.bad && self.carry.is_empty()
     }
+
+    /// No NUL and no invalid UTF-8 so far (a character may still be cut at the end).
+    fn text_so_far(&self) -> bool {
+        !self.bad
+    }
+}
+
+/// Which cap a file passed.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum Cap {
+    /// A video passed 100 MB.
+    Video,
+    /// Anything else passed 20 MB.
+    Other,
+    /// The declared length passed 100 MB before the type was known.
+    Either,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum StoreError {
-    TooLarge,
+    TooLarge(Cap),
     Empty,
     Unsupported,
     Io,
 }
 
+/// Error bodies: `error` (text for people) and a stable `code` (api.md); 413 adds `max_bytes`.
 fn store_error(e: StoreError) -> Response {
+    let coded = |status: StatusCode, code: &str, text: &str, extra: Value| {
+        let mut body = json!({"error": text, "code": code});
+        if let (Some(b), Value::Object(x)) = (body.as_object_mut(), extra) {
+            b.extend(x);
+        }
+        (status, Json(body)).into_response()
+    };
     match e {
-        StoreError::TooLarge => error(StatusCode::PAYLOAD_TOO_LARGE, format!("files can be at most {} MB", MAX_ATTACHMENT_BYTES / 1024 / 1024)),
-        StoreError::Empty => error(StatusCode::BAD_REQUEST, "the file is empty"),
-        StoreError::Unsupported => error(
+        StoreError::TooLarge(cap) => {
+            let (text, max) = match cap {
+                Cap::Video => ("Videos can be at most 100 MB.", MAX_VIDEO_BYTES),
+                Cap::Other => ("Files can be at most 20 MB (videos up to 100 MB).", MAX_ATTACHMENT_BYTES),
+                Cap::Either => ("Files can be at most 100 MB for videos and 20 MB for everything else.", MAX_VIDEO_BYTES),
+            };
+            coded(StatusCode::PAYLOAD_TOO_LARGE, "too_large", text, json!({"max_bytes": max}))
+        }
+        StoreError::Empty => coded(StatusCode::BAD_REQUEST, "empty", "The file is empty.", json!({})),
+        StoreError::Unsupported => coded(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "only images (PNG, JPEG, GIF, WebP), PDFs and text files (UTF-8: txt, md, csv, json, code) can be attached",
+            "unsupported_type",
+            "Only images (PNG, JPEG, GIF, WebP), videos (MP4, MOV, WebM), PDFs and text files (UTF-8: txt, md, csv, json, code) can be attached.",
+            json!({}),
         ),
         StoreError::Io => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -176,11 +276,13 @@ struct Sink {
     size: u64,
     head: Vec<u8>,
     utf8: Utf8Check,
+    /// The display name; only its extension is used, and only to refuse early.
+    name: String,
     kept: bool,
 }
 
 impl Sink {
-    async fn new(root: &FsPath) -> Result<Self, StoreError> {
+    async fn new(root: &FsPath, name: &str) -> Result<Self, StoreError> {
         let dir = root.join("tmp");
         tokio::fs::create_dir_all(&dir).await.map_err(|_| StoreError::Io)?;
         let tmp = dir.join(uuid::Uuid::new_v4().to_string());
@@ -193,29 +295,39 @@ impl Sink {
             size: 0,
             head: Vec::new(),
             utf8: Utf8Check::default(),
+            name: name.to_string(),
             kept: false,
         })
     }
 
+    /// Takes the next chunk. Refuses as soon as the file is over its cap (100 MB once the head
+    /// sniffed as video, else 20 MB) or its bytes rule it out ([`ruled_out_early`]).
     async fn push(&mut self, chunk: &[u8]) -> Result<(), StoreError> {
-        self.size += chunk.len() as u64;
-        if self.size > MAX_ATTACHMENT_BYTES {
-            return Err(StoreError::TooLarge);
-        }
-        if self.head.len() < 16 {
-            let take = (16 - self.head.len()).min(chunk.len());
+        if self.head.len() < HEAD_BYTES {
+            let take = (HEAD_BYTES - self.head.len()).min(chunk.len());
             self.head.extend_from_slice(&chunk[..take]);
         }
-        self.hasher.update(chunk);
+        self.size += chunk.len() as u64;
+        let video = sniff_magic(&self.head).is_some_and(is_video_mime);
+        if video && self.size > MAX_VIDEO_BYTES {
+            return Err(StoreError::TooLarge(Cap::Video));
+        }
+        if !video && self.size > MAX_ATTACHMENT_BYTES {
+            return Err(StoreError::TooLarge(Cap::Other));
+        }
         self.utf8.feed(chunk);
+        if ruled_out_early(&self.head, self.utf8.text_so_far(), &self.name) {
+            return Err(StoreError::Unsupported);
+        }
+        self.hasher.update(chunk);
         self.file.write_all(chunk).await.map_err(|_| StoreError::Io)
     }
 
-    async fn finish(mut self, name: &str) -> Result<Stored, StoreError> {
+    async fn finish(mut self) -> Result<Stored, StoreError> {
         if self.size == 0 {
             return Err(StoreError::Empty);
         }
-        let mime = sniff(&self.head, self.utf8.is_text(), name).ok_or(StoreError::Unsupported)?;
+        let mime = sniff(&self.head, self.utf8.is_text(), &self.name).ok_or(StoreError::Unsupported)?;
         self.file.flush().await.map_err(|_| StoreError::Io)?;
         let sha256 = hex(&std::mem::take(&mut self.hasher).finalize());
         let dest = blob_path(&self.root, &sha256).ok_or(StoreError::Io)?;
@@ -243,7 +355,7 @@ fn hex(bytes: &[u8]) -> String {
 /// Stores a file from disk (an agent's `share_file`).
 async fn store_file(root: &FsPath, path: &FsPath, name: &str) -> Result<Stored, StoreError> {
     let mut file = tokio::fs::File::open(path).await.map_err(|_| StoreError::Io)?;
-    let mut sink = Sink::new(root).await?;
+    let mut sink = Sink::new(root, name).await?;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = file.read(&mut buf).await.map_err(|_| StoreError::Io)?;
@@ -252,13 +364,13 @@ async fn store_file(root: &FsPath, path: &FsPath, name: &str) -> Result<Stored, 
         }
         sink.push(&buf[..n]).await?;
     }
-    sink.finish(name).await
+    sink.finish().await
 }
 
 async fn store_bytes(root: &FsPath, bytes: &[u8], name: &str) -> Result<Stored, StoreError> {
-    let mut sink = Sink::new(root).await?;
+    let mut sink = Sink::new(root, name).await?;
     sink.push(bytes).await?;
-    sink.finish(name).await
+    sink.finish().await
 }
 
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
@@ -284,29 +396,52 @@ pub struct UploadQuery {
     pub name: Option<String>,
 }
 
+/// Reads and drops the rest of a refused upload in the background (at most 100 MB or 30 s), so
+/// the refusal reaches the browser instead of a reset connection it would report as status 0.
+fn drain(mut stream: axum::body::BodyDataStream) {
+    tokio::spawn(async move {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(DRAIN_SECS), async {
+            let mut seen = 0u64;
+            while let Some(Ok(chunk)) = stream.next().await {
+                seen += chunk.len() as u64;
+                if seen > MAX_VIDEO_BYTES {
+                    break;
+                }
+            }
+        })
+        .await;
+    });
+}
+
 /// `POST /api/attachments?name=<file name>` with the file as the raw body. 201 with the
-/// attachment; it stays private to the uploader's UI until sent with a message.
+/// attachment; it stays private to the uploader's UI until sent with a message. Refusals come
+/// as soon as they are known: a declared length over 100 MB before any byte, a file its first
+/// bytes rule out right after them, a cap at the byte that passes it (api.md).
 pub async fn upload(State(state): State<AppState>, Query(q): Query<UploadQuery>, headers: HeaderMap, body: Body) -> Response {
     let declared = headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
-    if declared.is_some_and(|n| n > MAX_ATTACHMENT_BYTES) {
-        return store_error(StoreError::TooLarge);
+    if declared.is_some_and(|n| n > MAX_VIDEO_BYTES) {
+        return store_error(StoreError::TooLarge(Cap::Either));
     }
     let name = clean_name(q.name.as_deref().unwrap_or(""));
     let root = root(&state);
-    let mut sink = match Sink::new(&root).await {
+    let mut sink = match Sink::new(&root, &name).await {
         Ok(s) => s,
         Err(e) => return store_error(e),
     };
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
         let Ok(chunk) = chunk else {
-            return error(StatusCode::BAD_REQUEST, "the upload was interrupted");
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "The upload was interrupted.", "code": "interrupted"}))).into_response();
         };
         if let Err(e) = sink.push(&chunk).await {
+            if matches!(e, StoreError::Unsupported | StoreError::TooLarge(_)) {
+                drop(sink);
+                drain(stream);
+            }
             return store_error(e);
         }
     }
-    let stored = match sink.finish(&name).await {
+    let stored = match sink.finish().await {
         Ok(s) => s,
         Err(e) => return store_error(e),
     };
@@ -411,7 +546,7 @@ pub async fn content(State(state): State<AppState>, Path(id): Path<String>, Quer
     if !(resp.status().is_success() || resp.status() == StatusCode::NOT_MODIFIED) {
         return resp;
     }
-    let inline = q.download.is_none() && INLINE_TYPES.contains(&a.mime.as_str());
+    let inline = q.download.is_none() && (INLINE_TYPES.contains(&a.mime.as_str()) || is_video_mime(&a.mime));
     let h = resp.headers_mut();
     if let Ok(v) = HeaderValue::from_str(&a.mime) {
         h.insert(header::CONTENT_TYPE, v);
@@ -508,13 +643,14 @@ pub fn tools() -> Vec<Value> {
         json!({
             "name": "read_attachment",
             "description": "Read a file attached in this chat, by id. Text comes back as text, images as images; \
-                a PDF comes back as its text, page by page.",
+                a PDF comes back as its text, page by page; a video as its length, size and up to 6 frames as images.",
             "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
         }),
         json!({
             "name": "share_file",
             "description": "Give the user a file as a download card in this chat. Either `path` (a file in your workspace) \
-                or `content` (text you write, e.g. a CSV or markdown report). Images, PDFs and text files, up to 20 MB.",
+                or `content` (text you write, e.g. a CSV or markdown report). Images, PDFs and text files up to 20 MB; \
+                videos (MP4, MOV, WebM) up to 100 MB.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -601,6 +737,9 @@ pub async fn tool_read(state: &AppState, scope: &SelfScope, args: &Value) -> (Va
         };
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
         return (json!([{"type": "text", "text": a.name}, {"type": "image", "data": data, "mimeType": a.mime}]), false);
+    }
+    if is_video_mime(&a.mime) {
+        return super::video::describe(&a.name, &a.mime, a.size, &path, &root(state).join("tmp")).await;
     }
     if a.mime == "application/pdf" {
         let Ok(bytes) = tokio::fs::read(&path).await else {
@@ -710,9 +849,12 @@ pub async fn tool_share(state: &AppState, scope: &SelfScope, args: &Value) -> (S
     };
     let stored = match stored {
         Ok(s) => s,
-        Err(StoreError::TooLarge) => return ("The file is larger than 20 MB.".into(), true),
+        Err(StoreError::TooLarge(Cap::Video)) => return ("The video is larger than 100 MB.".into(), true),
+        Err(StoreError::TooLarge(_)) => return ("The file is larger than 20 MB (videos up to 100 MB).".into(), true),
         Err(StoreError::Empty) => return ("The file is empty.".into(), true),
-        Err(StoreError::Unsupported) => return ("Only images, PDFs and UTF-8 text files can be shared.".into(), true),
+        Err(StoreError::Unsupported) => {
+            return ("Only images, videos (MP4, MOV, WebM), PDFs and UTF-8 text files can be shared.".into(), true)
+        }
         Err(StoreError::Io) => return ("Could not read or store the file.".into(), true),
     };
     let context = origin.channel_id.clone().or_else(|| origin.thread_id.clone()).or_else(|| origin.direct_kwant_id.clone());
@@ -810,6 +952,47 @@ mod tests {
         assert_eq!(sniff(b"<html>", true, "x.html"), Some("text/plain"));
         assert_eq!(sniff(b"a,b", true, "x.CSV"), Some("text/csv"));
         assert_eq!(sniff(b"{}", true, "x.json"), Some("application/json"));
+    }
+
+    fn ftyp(brand: &[u8; 4]) -> Vec<u8> {
+        let mut h = b"\0\0\0\x20ftyp".to_vec();
+        h.extend_from_slice(brand);
+        h.extend_from_slice(b"\0\0\x02\0");
+        h
+    }
+
+    #[test]
+    fn videos_are_sniffed_from_bytes() {
+        assert_eq!(sniff(&ftyp(b"isom"), false, "x.txt"), Some("video/mp4"));
+        assert_eq!(sniff(&ftyp(b"mp42"), false, "clip.mov"), Some("video/mp4"));
+        assert_eq!(sniff(&ftyp(b"iso5"), false, "x"), Some("video/mp4"));
+        assert_eq!(sniff(&ftyp(b"3gp5"), false, "x"), Some("video/mp4"));
+        assert_eq!(sniff(&ftyp(b"qt  "), false, "clip.mp4"), Some("video/quicktime"));
+        assert_eq!(sniff(b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01webm", false, "clip.mov"), Some("video/webm"));
+        // ftyp files that aren't videos a browser plays: an iPhone photo, a voice memo
+        for b in [b"heic", b"mif1", b"avif", b"M4A ", b"crx "] {
+            assert_eq!(sniff(&ftyp(b), false, "x.mp4"), None, "{}", String::from_utf8_lossy(b));
+        }
+        assert_eq!(sniff(b"\0\0\0\x20ftyp", false, "x.mp4"), None, "no brand yet");
+        assert!(is_video_mime("video/quicktime") && !is_video_mime("image/png") && !is_video_mime("video/x-msvideo"));
+    }
+
+    #[test]
+    fn first_bytes_rule_out_what_cannot_be_accepted() {
+        let zip = b"PK\x03\x04\x14\0\0\0\x08\0\0\0\0\0\0\0";
+        assert!(ruled_out_early(zip, false, "holiday.mp4"), "a zip renamed .mp4");
+        assert!(ruled_out_early(b"ID3\x04\0\0\0\0\0\x23TSSE\0\0\0", false, "song.mp3"));
+        // Text-looking bytes under a binary extension can't become text/plain
+        assert!(ruled_out_early(b"just ascii bytes here", true, "clip.mp4"));
+        assert!(ruled_out_early(&ftyp(b"heic"), false, "IMG_1.HEIC"));
+        // Not yet 16 bytes, or still decided at the end
+        assert!(!ruled_out_early(b"PK\x03\x04", false, "a.zip"));
+        assert!(!ruled_out_early(b"<template>hello</template>", true, "App.vue"));
+        assert!(!ruled_out_early(b"-----BEGIN PRIVATE KEY-----", true, "server.key"));
+        assert!(!ruled_out_early(b"no extension at all here", true, "Makefile"));
+        // Accepted magic is never ruled out, whatever the name
+        assert!(!ruled_out_early(&ftyp(b"isom"), false, "a.zip"));
+        assert!(!ruled_out_early(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0", false, "x.exe"));
     }
 
     #[test]
