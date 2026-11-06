@@ -389,6 +389,23 @@ test('DOM §9b: the quiet line "2 teams have no repo · Link a repo" opens a tea
   root.unmount();
 });
 
+test('§9b (Mira, final): one team says "1 team has no repo"; the line is neutral; Link a repo is 44 px on phone; counts are repos, never teams', async () => {
+  const { root } = await line({ repos: [APP] }, TEAMS);
+  const q = document.querySelector('[data-dv-norepo]');
+  assert.match(q.textContent, /^1 team has no repo·Link a repo$/);
+  assert.equal(!!q.querySelector('.dv-led, [data-s]'), false, 'no dot');
+  root.unmount();
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('../src/styles/devStatus.css', import.meta.url), 'utf8');
+  const rule = css.match(/\.kw-dv-norepo, \.kw-dv-removed \{([^}]*)\}/)[1];
+  assert.match(rule, /color: var\(--t3\)/, 'text-tertiary');
+  assert.doesNotMatch(rule, /warn|amber|#f59e0b/);
+  assert.match(css, /@media \(max-width: 639px\) \{[^@]*\.kw-dv-norepo-act \{ min-height: 44px;/);
+  const teams3 = [...TEAMS, { id: 'tm_mkt', name: 'Marketing' }, { id: 'tm_ops', name: 'Ops' }];
+  assert.equal(m.reposSummary(state({ repos: [APP, SITE] })), 'Watching 2 repos', 'teams without a repo do not change the count');
+  assert.equal(m.teamsWithoutRepo(state({ repos: [APP, SITE] }), teams3).length, 2);
+});
+
 // ---------------------------------------------------------------------------
 // Chips and filters
 
