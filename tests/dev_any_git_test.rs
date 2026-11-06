@@ -148,6 +148,16 @@ async fn a_plain_git_folder_gets_landed_cards_read_in_place() {
     // ...and kwant made no mirror for it
     assert!(!env.tmp.path().join("data/dev").exists() || std::fs::read_dir(env.tmp.path().join("data/dev")).unwrap().flatten().all(|d| std::fs::read_dir(d.path()).map(|mut r| r.next().is_none()).unwrap_or(true)));
 
+    // A git row whose read failed shows its error, never not_connected: it needs no GitHub
+    // connection (this space has none), so connecting one couldn't fix it
+    assert!(env.state.db.set_dev_repo_error(space.as_str(), "local:plain", "git could not read the repo").await.unwrap());
+    let (_, v) = call(&env.app, "GET", &uri, None).await;
+    assert_eq!((v["status"].clone(), v["repos"][0]["status"].clone()), (json!("watching"), json!("error")), "{v}");
+    // ...and the next good read clears it
+    poller::poll_space(&env.state, space.as_str()).await;
+    let (_, v) = call(&env.app, "GET", &uri, None).await;
+    assert_eq!(v["repos"][0]["status"], "watching", "{v}");
+
     // The team stops pointing at a git folder: its row goes, its cards stay
     let teams = env.state.db.list_teams(&space).await.unwrap();
     env.state.db.delete_team(&teams.iter().find(|t| t.name == "Plain").unwrap().id).await.unwrap();
