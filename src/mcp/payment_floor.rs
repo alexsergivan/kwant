@@ -28,10 +28,13 @@ const PAY_WORDS: &[&str] = &[
 const MOVE_VERBS: &[&str] = &["send", "transfer", "withdraw", "wire", "move", "deposit"];
 const MONEY_NOUNS: &[&str] = &[
     "money", "funds", "fund", "cash", "crypto", "bitcoin", "btc", "eth", "ether", "usdc", "usdt", "sol", "usd", "eur", "gbp",
-    "token", "tokens", "coin", "coins", "asset", "assets", "stablecoin",
+    "stablecoin",
 ];
+// `token`, `coin` and `asset` aren't money nouns: `move_asset`, `send_token_email` or
+// `deposit_coin` often move files, logins or game items. A crypto send with those words is caught
+// by its arguments (an amount plus an address or asset, or a swap pair) instead.
 
-/// Argument keys that hold an amount (also any `*_amount`), and keys that say where it goes or
+/// Argument keys that hold an amount (also any `*_amount` and `amount_*`, like `amount_wei`), and keys that say where it goes or
 /// what moves. A write tool moves value, whatever its name or server, when one of each also has
 /// the right shape: a number for the amount, and an account address or a crypto asset for the
 /// other (a crypto wallet's `send_transfer {token, to: "0x…", amount: "5"}`). A swap pair
@@ -61,6 +64,20 @@ const READ_VERBS: &[&str] = &[
     // Pure compute: works something out or moves the view, nothing else
     "calculate", "compute", "format", "translate", "scroll",
 ];
+
+/// A name only reads when its first action word reads, and so does the first word after each
+/// `and`/`then`: `get_quote` reads, `estimate_and_send` sends.
+fn reads_only<S: AsRef<str>>(action: &[S]) -> bool {
+    let mut parts = action.split(|w| matches!(w.as_ref(), "and" | "then")).filter(|p| !p.is_empty()).peekable();
+    parts.peek().is_some() && parts.all(|p| READ_VERBS.contains(&p[0].as_ref()))
+}
+
+/// `check_out` and `checkOut` are `checkout`, not a `check`.
+fn join_checkout(action: &mut Vec<String>) {
+    while let Some(i) = action.windows(2).position(|w| w[0] == "check" && w[1] == "out") {
+        action.splice(i..i + 2, ["checkout".to_string()]);
+    }
+}
 
 /// Tools that type or fill text in a page (any browser MCP): a card number typed there pays.
 const TYPE_WORDS: &[&str] = &["type", "fill", "input", "enter", "keyboard", "insert", "set", "write"];
@@ -330,12 +347,13 @@ fn name_words_reason(server_words: &[String], words: &[String], name: &str) -> O
         .find(|w| MONEY_APPS.contains(&w.as_str()))
         .cloned();
     // The action words: the name without its app prefix
-    let action: Vec<&str> = words
+    let mut action: Vec<String> = words
         .iter()
-        .map(String::as_str)
-        .skip_while(|w| MONEY_APPS.contains(w) || ["composio", "mcp"].contains(w))
+        .skip_while(|w| MONEY_APPS.contains(&w.as_str()) || ["composio", "mcp"].contains(&w.as_str()))
+        .cloned()
         .collect();
-    if action.first().is_some_and(|w| READ_VERBS.contains(w)) {
+    join_checkout(&mut action);
+    if reads_only(&action) {
         return None;
     }
     if let Some(app) = app {
@@ -343,7 +361,7 @@ fn name_words_reason(server_words: &[String], words: &[String], name: &str) -> O
             return Some(format!("{name} changes something in {app}, a payment app"));
         }
     }
-    let has = |list: &[&str]| action.iter().any(|w| list.contains(w));
+    let has = |list: &[&str]| action.iter().any(|w| list.contains(&w.as_str()));
     if has(PAY_WORDS) || (has(MOVE_VERBS) && has(MONEY_NOUNS)) || (has(ORDER_VERBS) && has(ORDER_NOUNS)) {
         return Some(format!("{name} looks like a payment"));
     }
@@ -357,12 +375,13 @@ fn name_words_reason(server_words: &[String], words: &[String], name: &str) -> O
 /// Composio `slug` starts with its app (`SOMEWALLET_GET_QUOTE`), so its first word isn't an
 /// action word.
 fn amount_shape_reason(tool: &str, args: &Value, slug: bool) -> Option<String> {
-    let action: Vec<String> = words(tool)
+    let mut action: Vec<String> = words(tool)
         .into_iter()
         .skip(usize::from(slug))
         .skip_while(|w| MONEY_APPS.contains(&w.as_str()) || ["composio", "mcp"].contains(&w.as_str()))
         .collect();
-    if action.first().is_some_and(|w| READ_VERBS.contains(&w.as_str())) {
+    join_checkout(&mut action);
+    if reads_only(&action) {
         return None;
     }
     let Value::Object(top) = args else { return None };
@@ -376,19 +395,25 @@ fn amount_shape_reason(tool: &str, args: &Value, slug: bool) -> Option<String> {
     let has_key = |key: &str| pairs.iter().any(|(k, _)| k == key);
     let amount = pairs
         .iter()
-        .any(|(k, v)| (AMOUNT_KEYS.contains(&k.as_str()) || k.ends_with("_amount")) && amount_value(v));
+        .any(|(k, v)| (AMOUNT_KEYS.contains(&k.as_str()) || k.ends_with("_amount") || k.starts_with("amount_")) && amount_value(v));
     let destination = pairs.iter().any(|(k, v)| DESTINATION_KEYS.contains(&k.as_str()) && destination_value(v))
         || SWAP_PAIRS.iter().any(|(a, b)| has_key(a) && has_key(b));
     (amount && destination).then(|| format!("{tool} moves an amount to another account or asset"))
 }
 
 /// A number, or a string that is one: `5`, `"0.001"`, `"1,000"`, `"1e18"`, `"0x2386f26fc10000"`,
-/// `"5 USDC"`, or `"max"`/`"all"` (send everything).
+/// `"5 USDC"`, `"$5"`, or `"max"`/`"all"` (send everything). An amount object counts by its
+/// number: `{value: "5", currency: "USDC"}`.
 fn amount_value(v: &Value) -> bool {
     match v {
         Value::Number(_) => true,
+        Value::Object(map) => ["value", "amount", "units", "quantity", "raw", "decimal"]
+            .iter()
+            .filter_map(|k| map.get(*k))
+            .any(|v| !v.is_object() && amount_value(v)),
         Value::String(s) => {
-            let first = s.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+            let s = s.trim_start().trim_start_matches(CURRENCY_SYMBOLS);
+            let first = s.split_whitespace().next().unwrap_or("").trim_end_matches(CURRENCY_SYMBOLS).to_ascii_lowercase();
             if matches!(first.as_str(), "max" | "all") {
                 return true;
             }
@@ -579,13 +604,15 @@ fn has_phrase(text: &str, phrase: &str) -> bool {
     text.contains(&format!(" {phrase} "))
 }
 
+/// Currency signs a price or an amount can start or end with.
+const CURRENCY_SYMBOLS: &[char] = &['$', '€', '£', '¥', '₹', '₩', '₽', '₺', '₴', '₦', '₱', '฿'];
+
 /// `$12.99`, `€5`, `12,99 €`, `USD 10`, `10 eur`.
 fn has_price(text: &str) -> bool {
-    const SYMBOLS: &[char] = &['$', '€', '£', '¥', '₹', '₩', '₽', '₺', '₴', '₦', '₱', '฿'];
     const CODES: &[&str] = &["usd", "eur", "gbp", "jpy", "chf", "cad", "aud", "inr", "pln", "uah", "sek", "nok", "dkk"];
     let chars: Vec<char> = text.chars().collect();
     for (i, c) in chars.iter().enumerate() {
-        if SYMBOLS.contains(c) {
+        if CURRENCY_SYMBOLS.contains(c) {
             let after = chars.get(i + 1..).unwrap_or(&[]).iter().find(|c| !c.is_whitespace());
             let before = chars.get(..i).unwrap_or(&[]).iter().rev().find(|c| !c.is_whitespace());
             if after.is_some_and(|c| c.is_ascii_digit()) || before.is_some_and(|c| c.is_ascii_digit()) {
@@ -892,22 +919,66 @@ mod tests {
             assert!(!destination_value(&json!(no)), "{no}");
         }
         assert!(!destination_value(&json!(5)));
-        for yes in [json!(5), json!(0.5), json!("5"), json!("0.001"), json!("1,000"), json!("1e18"), json!("0x2386f26fc10000"), json!("5 USDC"), json!("max")] {
+        for yes in [json!(5), json!(0.5), json!("5"), json!("0.001"), json!("1,000"), json!("1e18"), json!("0x2386f26fc10000"), json!("5 USDC"), json!("max"), json!("$5"), json!("5€"), json!({"value": "5", "currency": "USDC"})] {
             assert!(amount_value(&yes), "{yes}");
         }
-        for no in [json!("v"), json!("x"), json!("lots"), json!("NaN"), json!("inf"), json!("-"), json!(""), json!(true), json!(null), json!({"a": 1})] {
+        for no in [json!("v"), json!("x"), json!("lots"), json!("NaN"), json!("inf"), json!("-"), json!(""), json!(true), json!(null), json!({"a": 1}), json!("$"), json!("$x"), json!({"value": {"value": 5}})] {
             assert!(!amount_value(&no), "{no}");
         }
     }
 
+    /// Rigel's F7b: `token`, `coin` and `asset` in a name don't pay on their own (files, logins,
+    /// game items); with a wallet send's arguments they do. The older money nouns still pay by name.
     #[test]
-    fn crypto_nouns_are_money() {
-        for name in ["send_tokens", "transfer_token", "withdraw_coins", "move_assets", "send_stablecoin", "deposit_coin"] {
+    fn crypto_nouns_in_a_name_need_the_argument_shape() {
+        let to = "0x52908400098527886E0F7030069857D2E4169EE7";
+        for name in [
+            "move_asset", "transfer_asset", "move_assets", "send_token", "send_token_email", "send_tokens", "deposit_coin",
+            "send_asset_to_review", "move_token", "transfer_token", "withdraw_coins",
+        ] {
+            assert_eq!(mcp("x", name, json!({})), None, "{name} by its name alone");
+            assert_eq!(mcp("x", name, json!({"asset_id": "a1", "to": "review", "path": "/a/b.png", "count": 2})), None, "{name}");
+            assert_eq!(mcp("x", name, json!({"token": "abc123", "to": "a@b.c"})), None, "{name}: a login token by email");
+            assert!(mcp("x", name, json!({"token": "USDC", "to": to, "amount": "5"})).is_some(), "{name}: a wallet send");
+            assert!(mcp("x", name, json!({"token_in": "CENT", "token_out": "XYZ", "amount_in": "5"})).is_some(), "{name}: a swap");
+        }
+        for name in ["send_money", "transfer_funds", "withdraw_cash", "send_crypto", "send_usdc", "send_btc", "send_stablecoin"] {
             assert!(mcp("x", name, json!({})).is_some(), "{name}");
         }
         assert!(mcp("x", "list_tokens", json!({})).is_none());
         assert!(mcp("auth", "create_token", json!({})).is_none(), "no move verb");
         assert!(mcp("x", "get_asset", json!({})).is_none());
+    }
+
+    /// Rigel's F7b misses: an amount object, `amount_wei`, `"$5"`, a read verb before a send, and
+    /// `check_out`.
+    #[test]
+    fn sends_rigel_found_missing() {
+        let to = "0x52908400098527886E0F7030069857D2E4169EE7";
+        let send = |amount: Value| json!({"to": to, "amount": amount});
+        assert!(mcp("w", "send", send(json!({"value": "5", "currency": "USDC"}))).is_some(), "an amount object");
+        assert!(mcp("w", "send", send(json!({"units": 5, "currency": "USD"}))).is_some());
+        assert!(mcp("w", "do", json!({"payment": send(json!({"value": "5", "currency": "USD"}))})).is_some(), "one object down");
+        assert!(mcp("w", "send", send(json!({"currency": "USD"}))).is_none(), "no number in it");
+        assert!(mcp("w", "execute", json!({"to": to, "amount_wei": "1000000000000000000"})).is_some(), "amount_wei");
+        assert!(mcp("w", "execute", json!({"to": to, "amountWei": "1000"})).is_some());
+        assert!(mcp("w", "execute", json!({"to": "bob", "amount_wei": "1000"})).is_none(), "still needs an address");
+        for amount in ["$5", "$ 5", "€1,000.50", "5€", "£0.99"] {
+            assert!(mcp("w", "send", send(json!(amount))).is_some(), "{amount}");
+        }
+        assert!(mcp("w", "send", send(json!("$"))).is_none());
+        let transfer = json!({"token": "USDC", "to": to, "amount": "5"});
+        assert!(mcp("w", "estimate_and_send", transfer.clone()).is_some(), "a read verb, then a send");
+        assert!(mcp("w", "check_then_transfer", transfer.clone()).is_some());
+        assert!(mcp("w", "get_quote_and_execute", json!({"token_in": "USDC", "token_out": "ETH", "amount_in": "5"})).is_some());
+        assert!(mcp("bank", "check_and_send_money", json!({})).is_some(), "by name");
+        assert!(mcp("w", "estimate_fee", transfer.clone()).is_none(), "still only reads");
+        assert!(mcp("w", "get_and_check_balance", transfer).is_none(), "reads all the way");
+        assert!(mcp("stripe", "get_and_refund", json!({})).is_some());
+        assert!(mcp("shop", "check_out", json!({})).is_some(), "check_out is checkout");
+        assert!(mcp("shop", "checkOutCart", json!({})).is_some());
+        assert!(mcp("shop", "check_order_status", json!({})).is_none());
+        assert!(mcp("mail", "check_outbox", json!({})).is_none());
     }
 
     #[test]
