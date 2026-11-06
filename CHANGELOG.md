@@ -8,6 +8,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.7.1] - 2026-11-06
+
+### Added
+- **Post to GitHub.** A Dev mode review card can go onto its pull request as one GitHub review comment, posted as
+  you and pinned to the commit that was reviewed. Findings you didn't dismiss become comments on their lines, and
+  the rest go in the review's text. Only your press posts: kwant never approves, requests changes or merges, and a
+  bot can't post. Secrets are never posted. If your GitHub token can only read, the card says so, and if the pull
+  request got new commits, nothing is posted and a new review is on its way. Posting needs **Pull requests: Read and
+  write** on the token; reading still works with read access. (#340, #338) Guide: docs/dev-mode.md.
+- **A new reviews badge.** The Dev desk row shows how many reviews are ready since you last opened the desk, on the
+  phone and the desktop alike. (#344, #348)
+
+### Changed
+- **Dev mode turns on with one press and finds the repo itself.** There's no setup dialog. kwant looks at the
+  space's teams: each team's repo link, or its folder when that folder is a git checkout. It reads this on your
+  machine with no network, and a token in a remote URL is dropped, never logged or stored. A short note says what it
+  found, with one fix and **Undo**. If no GitHub connection can read the repo, **Connect GitHub** takes you to
+  Connections once, and Dev mode picks the repo up after that with no off and on. **Switch** lists the repos it
+  found, with **Type a repo** last. GitLab, Gitea and other hosts are named, and kwant reads them from 0.7.2.
+  Turning on never fails: with no repo, the production floor and the command guards still work. (#348, #344)
+- **Turning Dev mode off takes two presses.** The first lifts the cover, and the second, within 5 seconds, turns it
+  off. Escape, clicking elsewhere or waiting keeps it on. The off note has **Turn back on**. (#343, #344)
+- **The Dev desk has a new look.** Landed cards show the commit, the pull request link (or "Direct push"), a
+  diffstat for each file and a tests line. Review cards show the branch flow, a "reading the diff" line while the
+  review is written, a light for each security check, and an LGTM stamp when there's nothing to fix. The production
+  floor card, the desk header and its status light match. (#339, #341, #346, #347)
+
+### Fixed
+- **Payments always ask for crypto wallet sends and swaps.** A tool whose arguments carry an amount and an address
+  or a crypto asset now counts as a payment, so it asks in every approval mode, even with approvals off or after
+  "always allow". This catches wallet tools such as Incentiv's `send_transfer` and `send_swap`, which could run
+  without a card before. Tools named with `token`, `coin` or `asset` no longer ask by their name alone. (#342, #349)
+  Guide: docs/payments.md.
+- **A reply that waits on your approval says "Waiting for your OK"** instead of showing a loading skeleton. (#336)
+- **The production floor card reads as a sentence**, such as "git push sends new commits to main.", instead of "This
+  is runs deploy.sh…". (#335)
+
 ## [Mac 0.7.0] - 2026-11-05
 
 ### Added
