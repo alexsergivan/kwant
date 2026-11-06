@@ -31,7 +31,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=18b9a4a8c6">
+<link rel="stylesheet" href="../assets/css/site.css?v=6c3f17b494">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -132,7 +132,7 @@
 <h2 id="payments">Payments always ask</h2>
 <p>Whatever the tier, and even with approvals off, anything that looks like paying shows a card first. The card says why it looks like a payment, and offers only <strong>Allow Once</strong> and <strong>Deny</strong>: allowing a payment covers that one payment, so there's no "Always" button.</p>
 <figure>
-  <div class="frame"><a class="zoom" href="../assets/media/v071-wallet-payment-2880.webp?v=0eb510941c" data-caption="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."><img class="app" src="../assets/media/v071-wallet-payment-1440.webp?v=548c1b9d41" srcset="../assets/media/v071-wallet-payment-1440.webp?v=548c1b9d41 1440w, ../assets/media/v071-wallet-payment-2880.webp?v=0eb510941c 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."></a></div>
+  <div class="frame"><a class="zoom" href="../assets/media/v071-wallet-payment-2880.webp?v=ef348d2337" data-caption="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."><img class="app" src="../assets/media/v071-wallet-payment-1440.webp?v=4c10e6ccd8" srcset="../assets/media/v071-wallet-payment-1440.webp?v=4c10e6ccd8 1440w, ../assets/media/v071-wallet-payment-2880.webp?v=ef348d2337 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."></a></div>
   <figcaption>A payment card has no Always button.</figcaption>
 </figure>
 <p>kwant recognises payment apps and their actions (Stripe, PayPal, Square, Wise, Coinbase and others), commands that post to payment services or send crypto, tools whose arguments carry an amount and a wallet address or crypto asset (such as a wallet's <code>send_transfer</code> or <code>send_swap</code>), and, in its browser, pay buttons, clicks on checkout pages and typed card numbers. It can't catch everything, such as a plain "Continue" on an unusual checkout page or a card a site already saved.</p>
