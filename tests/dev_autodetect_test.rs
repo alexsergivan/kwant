@@ -164,7 +164,10 @@ async fn with_no_connection_it_still_turns_on_and_no_token_leaks() {
 
     let (s, v) = call(&env.app, "GET", &uri(), None).await;
     assert_eq!(s.as_u16(), 200, "{v}");
-    assert_eq!(v["status"], "not_connected", "{v}");
+    // Ops is on a host git reads, so turning on would watch it; Web waits for a connection
+    assert_eq!(v["status"], "watching", "{v}");
+    let by_host = |v: &Value, h: &str| v["repos"].as_array().unwrap().iter().find(|r| r["host"] == h).map(|r| r["status"].clone());
+    assert_eq!((by_host(&v, "github.com"), by_host(&v, "gitlab.example.com")), (Some(json!("not_connected")), Some(json!("watching"))), "{v}");
     assert_eq!(v["repo"], REPO, "the folder's repo is the prefill");
     assert_eq!(
         v["sources"],
@@ -177,28 +180,33 @@ async fn with_no_connection_it_still_turns_on_and_no_token_leaks() {
 
     let (s, v) = call(&env.app, "PUT", &uri(), Some(json!({"on": true}))).await;
     assert_eq!(s.as_u16(), 200, "no connection is not a 409: {v}");
-    assert_eq!((v["on"].clone(), v["repo"].clone(), v["status"].clone()), (json!(true), Value::Null, json!("not_connected")), "{v}");
-    assert_eq!(v["branch"], "main", "the floor still learns the folder's branch");
+    // Ops gets a git row (the poller isn't running here, so nothing is fetched); Web still can't be read
+    assert_eq!((v["on"].clone(), v["repo"].clone(), v["branch"].clone(), v["status"].clone()), (json!(true), json!("group/sub/ops"), json!("trunk"), json!("watching")), "{v}");
+    assert_eq!(by_host(&v, "github.com"), Some(json!("not_connected")), "{v}");
+    let mode = env.state.db.dev_mode(SpaceId::default_space().as_str()).await.unwrap().unwrap();
+    assert_eq!(mode.branch, "main", "the floor still learns the folder's branch");
+    let ops_row = env.state.db.dev_repo(SpaceId::default_space().as_str(), "gitlab.example.com/group/sub/ops").await.unwrap().expect("a git row for Ops");
+    assert_eq!((ops_row.provider.as_str(), ops_row.git_url.as_deref()), ("git", Some("https://gitlab.example.com/group/sub/ops.git")), "stored with no userinfo");
     replies.push(v);
 
     // A repo asked for by name that nothing reads: on anyway, with the check saying why
     let (s, v) = call(&env.app, "PUT", &uri(), Some(json!({"on": true, "repo": format!("https://u:{token}@github.com/{REPO}")}))).await;
     assert_eq!(s.as_u16(), 200, "{v}");
-    assert_eq!((v["on"].clone(), v["repo"].clone(), v["check"]["state"].clone(), v["check"]["repo"].clone()), (json!(true), Value::Null, json!("not_connected"), json!(REPO)), "the token is dropped and the repo still read: {v}");
+    assert_eq!((v["on"].clone(), v["repo"].clone(), v["check"]["state"].clone(), v["check"]["repo"].clone()), (json!(true), json!("group/sub/ops"), json!("not_connected"), json!(REPO)), "the token is dropped and the repo still read: {v}");
     replies.push(v);
     // ...and one with no connection problem but no such repo name says not_found (Pixel's two reasons)
     let (s, v) = call(&env.app, "PUT", &uri(), Some(json!({"on": true, "repo": "not a repo"}))).await;
-    assert_eq!((s.as_u16(), v["on"].clone(), v["repo"].clone(), v["check"]["state"].clone()), (200, json!(true), Value::Null, json!("not_found")), "{v}");
+    assert_eq!((s.as_u16(), v["on"].clone(), v["repo"].clone(), v["check"]["state"].clone()), (200, json!(true), json!("group/sub/ops"), json!("not_found")), "{v}");
     replies.push(v);
     let (_, v) = call(&env.app, "POST", &format!("{}/check", uri()), Some(json!({}))).await;
     assert_eq!((v["state"].clone(), v["repo"].clone()), (json!("not_connected"), json!(REPO)), "the check reads the folder's repo: {v}");
     replies.push(v);
 
-    // A space whose only remotes are on other hosts says so
+    // A space whose only remote is on another host watches it with git (other_host is retired)
     let teams = env.state.db.list_teams(&SpaceId::default_space()).await.unwrap();
     env.state.db.delete_team(&teams.iter().find(|t| t.name == "Web").unwrap().id).await.unwrap();
     let (_, v) = call(&env.app, "GET", &uri(), None).await;
-    assert_eq!((v["status"].clone(), v["sources"][0]["host"].clone()), (json!("other_host"), json!("gitlab.example.com")), "{v}");
+    assert_eq!((v["status"].clone(), v["sources"][0]["host"].clone()), (json!("watching"), json!("gitlab.example.com")), "{v}");
     replies.push(v);
 
     let folder = folders.to_string_lossy().to_string();
@@ -393,7 +401,8 @@ async fn connecting_github_while_on_binds_the_detected_repo_without_off_and_on()
     team_in(&env, &off, "Idle", Some(&web)).await;
 
     // On before any connection: no repo. (The mock's host only counts as GitHub once a connection
-    // names it, so here it reads other_host; on github.com it is not_connected.)
+    // names it, and git never fetches a folder's remote on this machine, so here it reads no_repo;
+    // on github.com it is not_connected.)
     let u = uri_of(&space);
     let (s, v) = call(&env.app, "PUT", &u, Some(json!({"on": true}))).await;
     assert_eq!((s.as_u16(), v["on"].clone(), v["repo"].clone()), (200, json!(true), Value::Null), "{v}");

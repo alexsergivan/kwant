@@ -9,6 +9,7 @@
 pub mod backup;
 pub mod facts;
 pub mod floor;
+pub mod git;
 pub mod generate;
 pub mod landed;
 pub mod notes;

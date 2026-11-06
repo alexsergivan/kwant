@@ -3,6 +3,7 @@
 //! with its teams (team-repos.md T3, T4). Repos are read through the Loose ends GitHub connection
 //! (its vault token and Enterprise `api_base`). kwant writes nothing to GitHub.
 
+use super::git;
 use crate::db::dev_mode::{DevRepoRow, RepoAdd, BY_HAND, BY_MIGRATION, BY_TEAM, MAX_REPOS};
 use crate::db::spaces::SpaceId;
 use crate::server::AppState;
@@ -220,6 +221,11 @@ pub struct Source {
     /// What dedupes sources: `host/repo` lowercased, or the folder for a `local` one.
     #[serde(skip)]
     key: String,
+    /// What git reads it from (any-git.md G1): the link's or remote's URL without its userinfo
+    /// ([`git::fetch_url`]), or the folder itself (an absolute path) for a `local` source.
+    /// `None` when git couldn't read it. Never sent to the browser.
+    #[serde(skip)]
+    pub fetch: Option<String>,
 }
 
 impl Source {
@@ -243,6 +249,12 @@ impl Source {
         } else {
             format!("local:{}", self.team.to_lowercase())
         }
+    }
+
+    /// The key of its watched row: [`Self::key`] for a remote, [`Self::api_key`] for a `local`
+    /// source (so no folder path is stored as a key or shown).
+    pub fn row_key(&self) -> String {
+        self.api_key()
     }
 
     /// What [`check`] takes for this source: `host/owner/name`.
@@ -413,25 +425,29 @@ pub async fn detect_teams(teams: &[TeamRef<'_>], space_dir: &std::path::Path, gh
         let read = read_folder(&folder).await;
         let branch = read.as_ref().and_then(|(_, b)| b.clone());
         let found = if let Some((host, repo)) = link.and_then(|l| source_repo(l, gh_hosts, true)) {
-            Some((Some(host), repo, "repo"))
+            Some((Some(host), repo, "repo", link.and_then(git::remote_url)))
         } else if let Some((url, _)) = &read {
-            match url.as_deref().and_then(|u| source_repo(u, gh_hosts, false)) {
-                Some((host, repo)) => Some((Some(host), repo, "folder")),
+            match url.as_deref().and_then(|u| source_repo(u, gh_hosts, false).map(|hr| (hr, u))) {
+                Some(((host, repo), u)) => Some((Some(host), repo, "folder", git::remote_url(u))),
                 // A checkout with no remote, or one that isn't a URL (another folder)
-                None => folder.file_name().map(|n| (None, n.to_string_lossy().to_string(), "local")),
+                None => folder.file_name().map(|n| (None, n.to_string_lossy().to_string(), "local", None)),
             }
         } else {
             None
         };
-        let Some((host, repo, from)) = found else { continue };
+        let Some((host, repo, from, mut fetch)) = found else { continue };
         let key = match &host {
             Some(h) => format!("{h}/{repo}").to_lowercase(),
-            None => format!("local:{}", std::fs::canonicalize(&folder).unwrap_or(folder.clone()).display()),
+            None => {
+                let real = std::fs::canonicalize(&folder).unwrap_or(folder.clone());
+                fetch = real.to_str().filter(|p| p.starts_with('/')).map(str::to_string);
+                format!("local:{}", real.display())
+            }
         };
         if out.iter().any(|s| s.key == key) {
             continue;
         }
-        out.push(Source { team: t.name.to_string(), team_id: t.id.to_string(), repo, host, from, branch, key });
+        out.push(Source { team: t.name.to_string(), team_id: t.id.to_string(), repo, host, from, branch, key, fetch });
     }
     out
 }
@@ -482,9 +498,12 @@ pub struct Reconciled {
 ///   one GitHub doesn't answer for is added with the folder's branch (the poller says why);
 /// - while on, a row with no branch yet (added while off) gets the repo's default branch.
 ///
+/// - while on and git is on the server, each other source (GitLab, Gitea, a bare git server, a
+///   `local` folder) with no row gets a git row ([`crate::db::dev_mode::GIT`], any-git.md G1): the
+///   poller reads it with git alone and makes landed cards. Without git it gets none (`no_git`).
+///
 /// Existing rows are never checked again here: the poller reports their errors. Off, nothing is
-/// fetched (D12). A space with no Dev mode row is left alone. Non-GitHub and `local` sources never
-/// get a row: they show as `other_host`.
+/// fetched (D12). A space with no Dev mode row is left alone. A removed row's git mirror is deleted.
 pub async fn reconcile(state: &AppState, space: &SpaceId) -> Reconciled {
     let _one = reconcile_lock().lock().await;
     reconciled().lock().unwrap().insert(space.as_str().to_string(), std::time::Instant::now());
@@ -523,11 +542,12 @@ pub async fn reconcile(state: &AppState, space: &SpaceId) -> Reconciled {
     rows = db.dev_repos(sp).await.unwrap_or(rows);
 
     for r in &rows {
-        let source = gh.iter().find(|s| s.key == r.key);
+        let source = if r.is_git() { sources.iter().find(|s| !s.on_github(&hosts) && s.row_key() == r.key) } else { gh.iter().copied().find(|s| s.key == r.key) };
         match (r.added_by.as_str(), source) {
             // A team row whose team no longer points at it
             (BY_TEAM, None) => {
                 if matches!(db.delete_dev_repo(sp, &r.key).await, Ok(true)) {
+                    git::remove_mirror(&state.config.data_dir, sp, &r.key).await;
                     tracing::info!(space = %space, repo = %r.repo, "dev: stopped watching a repo no team points at");
                     out.removed.push(r.key.clone());
                 }
@@ -552,8 +572,9 @@ pub async fn reconcile(state: &AppState, space: &SpaceId) -> Reconciled {
 
     // Rows added while off have no branch yet. One the check can't read keeps no branch (the
     // poller skips it) and records why, so the desk shows an error, not watching (QA g); the next
-    // reconcile checks again, and setting the branch clears the error.
-    for r in rows.iter().filter(|r| r.branch.trim().is_empty()) {
+    // reconcile checks again, and setting the branch clears the error. A git row's branch is read
+    // by the poller, which records its own errors.
+    for r in rows.iter().filter(|r| r.branch.trim().is_empty() && !r.is_git()) {
         let why = match check(state, space, &r.check_input()).await {
             Ok(found) if found.state == "found" => {
                 let branch = found.branch.clone().unwrap_or_else(|| "main".into());
@@ -609,6 +630,31 @@ pub async fn reconcile(state: &AppState, space: &SpaceId) -> Reconciled {
         }
         rows = db.dev_repos(sp).await.unwrap_or(rows);
     }
+    // Repos GitHub's API can't read: git reads them
+    if git::available().await {
+        for s in sources.iter().filter(|s| !s.on_github(&hosts)) {
+            let key = s.row_key();
+            let Some(url) = s.fetch.as_deref() else { continue };
+            if rows.iter().any(|r| r.key == key) {
+                continue;
+            }
+            if rows.len() >= MAX_REPOS {
+                out.too_many.push(key);
+                continue;
+            }
+            let branch = s.branch.as_deref().unwrap_or("");
+            match db.add_dev_repo_git(sp, &key, Some(&s.team_id), &s.repo, s.host.as_deref(), branch, url, BY_TEAM).await {
+                Ok(RepoAdd::Added) => {
+                    tracing::info!(space = %space, repo = %s.repo, "dev: watching a team's repo with git");
+                    out.added.push(key);
+                }
+                Ok(RepoAdd::Kept) => {}
+                Ok(RepoAdd::TooMany) => out.too_many.push(key),
+                Err(e) => tracing::warn!(space = %space, "dev: could not add a repo: {e}"),
+            }
+            rows = db.dev_repos(sp).await.unwrap_or(rows);
+        }
+    }
     if !out.added.is_empty() {
         super::poller::poll_soon(state, sp);
     }
@@ -653,25 +699,31 @@ impl CheckInput for DevRepoRow {
 }
 
 /// The desk's line (plan any-git.md S4), from whether Dev mode is on, the watched repo (`""`:
-/// none), the detected sources and whether a GitHub connection exists:
-/// - `watching`: a repo is watched (or, while off, would be: a GitHub source and a connection);
+/// none), the detected sources, whether a GitHub connection exists and whether git is on the
+/// server ([`git::available`]):
+/// - `watching`: a repo is watched (or, while off, would be: a GitHub source and a connection, or
+///   any other source git reads);
 /// - `no_repo`: no team points at a git repo;
 /// - `not_connected`: a GitHub source that no connection reads;
-/// - `other_host`: only non-GitHub or `local` sources, read from 0.7.2.
-pub fn status(on: bool, watched: &str, sources: &[Source], gh_hosts: &[String], connected: bool) -> &'static str {
+/// - `no_git`: only non-GitHub or `local` sources, and no git on the server to read them
+///   ([`git::INSTALL_HINT`]). 0.7.2's `other_host` is retired: git reads those hosts now.
+pub fn status(on: bool, watched: &str, sources: &[Source], gh_hosts: &[String], connected: bool, git: bool) -> &'static str {
+    let github = sources.iter().any(|s| s.on_github(gh_hosts));
+    let other = sources.iter().any(|s| !s.on_github(gh_hosts) && s.fetch.is_some());
     if !watched.is_empty() {
         "watching"
     } else if sources.is_empty() {
         "no_repo"
-    } else if sources.iter().any(|s| s.on_github(gh_hosts)) {
+    } else if (github && !on && connected) || (other && git) {
+        "watching"
+    } else if github {
         // On with no repo means switching on found none a connection reads
-        if !on && connected {
-            "watching"
-        } else {
-            "not_connected"
-        }
+        "not_connected"
+    } else if git {
+        // Sources git can't fetch from (an unknown URL scheme)
+        "no_repo"
     } else {
-        "other_host"
+        "no_git"
     }
 }
 
@@ -908,18 +960,25 @@ mod tests {
 
     #[test]
     fn the_status_says_what_the_desk_shows() {
-        let src = |host: Option<&str>| Source { team: "T".into(), team_id: "t".into(), repo: "o/r".into(), host: host.map(str::to_string), from: "folder", branch: None, key: String::new() };
+        let src = |host: Option<&str>| Source { team: "T".into(), team_id: "t".into(), repo: "o/r".into(), host: host.map(str::to_string), from: "folder", branch: None, key: String::new(), fetch: Some("https://x.example/o/r".into()) };
         let github = [src(Some("github.com"))];
         let gitlab = [src(Some("gitlab.com")), src(None)];
-        assert_eq!(status(true, "o/r", &github, &gh(), false), "watching");
-        assert_eq!(status(true, "", &[], &gh(), false), "no_repo");
-        assert_eq!(status(false, "", &[], &gh(), true), "no_repo");
-        assert_eq!(status(true, "", &github, &gh(), true), "not_connected", "on with no repo: no connection read it");
-        assert_eq!(status(false, "", &github, &gh(), false), "not_connected");
-        assert_eq!(status(false, "", &github, &gh(), true), "watching", "off: turning on would watch it");
-        assert_eq!(status(true, "", &gitlab, &gh(), true), "other_host");
+        assert_eq!(status(true, "o/r", &github, &gh(), false, true), "watching");
+        assert_eq!(status(true, "", &[], &gh(), false, true), "no_repo");
+        assert_eq!(status(false, "", &[], &gh(), true, true), "no_repo");
+        assert_eq!(status(true, "", &github, &gh(), true, true), "not_connected", "on with no repo: no connection read it");
+        assert_eq!(status(false, "", &github, &gh(), false, true), "not_connected");
+        assert_eq!(status(false, "", &github, &gh(), true, true), "watching", "off: turning on would watch it");
+        assert_eq!(status(true, "", &gitlab, &gh(), true, true), "watching", "git reads other hosts");
+        assert_eq!(status(true, "", &gitlab, &gh(), true, false), "no_git");
+        assert_eq!(status(false, "", &gitlab, &gh(), false, true), "watching", "off: turning on would watch it");
+        let mixed = [src(Some("github.com")), src(Some("gitlab.com"))];
+        assert_eq!(status(true, "", &mixed, &gh(), false, false), "not_connected");
+        assert_eq!(status(true, "", &mixed, &gh(), false, true), "watching");
+        let unread = [Source { fetch: None, ..src(Some("gitlab.com")) }];
+        assert_eq!(status(true, "", &unread, &gh(), false, true), "no_repo", "nothing git can fetch");
         // A GitHub Enterprise host is GitHub
         let ghe = vec!["github.com".to_string(), "gitlab.com".to_string()];
-        assert_eq!(status(true, "", &gitlab, &ghe, false), "not_connected");
+        assert_eq!(status(true, "", &gitlab, &ghe, false, false), "not_connected");
     }
 }

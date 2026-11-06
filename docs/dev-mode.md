@@ -74,8 +74,9 @@ reply carries a `check` that says why. A `branch` the repo doesn't have is a 400
     is added or changed in Loose ends, every space that is on with no repo binds the repo it finds
     and polls soon, with no off and on. The `GET` does the same if nothing else did (at most every
     30 s per space). A repo the person typed or picked is never replaced.
-  - `other_host`: only GitLab, Gitea or other non-GitHub sources, or `local` ones. These are read
-    from 0.7.3.
+  - `no_git`: only GitLab, Gitea or other non-GitHub sources, or `local` ones, and no git 2.31+ on
+    the server to read them. The reply adds `install_hint`. (0.7.2's `other_host` is retired in
+    0.7.3: git reads those repos now, so they show `watching`.)
 - `new_reviews`: review cards ready to read that were made since the desk was last opened (open
   ones only, never landed cards or floor approvals), every watched repo's together: one count for
   the space, with one seen time. A space never opened counts 0.
@@ -102,7 +103,7 @@ and newest tag. The full contract is in the team's `dev-mode/team-repos/api.md`;
   past it is a 409 `too_many`.
 - **`GET` and the `PUT` reply** have `repos[]`: one entry per repo, in team order then hand rows, with
   `key`, `repo`, `host`, `team`, `team_id`, `from`, `branch`, `status` (`watching`, `not_connected`,
-  `other_host`, `error`, `too_many`), `poll_error`, `polled_at`, `last_tag` and `added_by`. The
+  `no_git`, `error`, `too_many`; 0.7.2 also had `other_host`), `poll_error`, `polled_at`, `last_tag` and `added_by`. The
   top-level `repo`, `branch`, `deploy_hint`, `last_seen_sha`, `polled_at` and `poll_error` are the
   first watched repo's, kept for one release only (deprecated). Top-level `status` is `watching` when
   any repo is.
@@ -134,6 +135,38 @@ that doesn't (0.7.1's) and would mark stale, or change the facts of, a card of a
 its own `dev_repos.last_seen_sha` (0.7.1 never writes that table), so what landed meanwhile becomes cards
 once. A repo changed by hand while on 0.7.1 is not carried over (0.7.1 writes it to
 `dev_mode_spaces.repo`); teams' repo links are.
+
+### Any git repo (0.7.3)
+
+Dev mode reads every watched repo's history with git (any-git.md G1-G3). kwant keeps a bare mirror
+of each repo at `<data>/dev/<space>/<key>-<hash>.git` (deleted when the repo stops being watched; its
+cards stay), or reads a `local` team folder's own `.git` in place, never touching its working tree.
+Commits, diffs, file text, tags, path history and the root's names come from git; on GitHub, pull
+requests, checks and review cards still come from the API, and the API answers when a fetch fails.
+A team's repo on GitLab, Gitea, a bare git server or a folder with no remote now gets a row too
+(`provider: "git"`, with the URL git fetches from in `git_url`) and landed cards, with no PR, CI or
+review cards until its forge is added (G4, G5).
+
+Git runs as kwant's own user, so its SSH keys and credential helpers work. A GitHub token goes to git
+only as an `http.extraHeader` in `GIT_CONFIG_*` environment variables, never in argv, a file or a
+log; URL userinfo is stripped before anything else. Each call has no terminal prompt, a timeout,
+`nice` and its own process group, which is killed when it runs over. The Docker image installs git
+and openssh-client. Without git 2.31+, the status is `no_git`.
+
+A remote read from a team's folder or repo link is fetched only over https, http, ssh or git, and
+never from this machine or a link-local address (`localhost`, `127.0.0.0/8`, `::1`, `169.254.0.0/16`,
+`fe80::/10`, `0.0.0.0`): anyone working in the folder can write its remote, so it can't aim kwant at
+the server itself or a cloud metadata address. Such a source shows `no_repo`. LAN hosts (a Gitea on
+`192.168.x`) are fetched. GitHub's own remote, made from the connection the person set up, is exempt.
+
+**New columns, and going back to 0.7.2.** `dev_repos` gains `git_branch` and `git_url` (additive,
+both `NULL` on GitHub rows). A git row keeps `branch = ''` and its real branch in `git_branch`, so
+0.7.2, which ignores the new columns, never polls it (an empty branch waits for reconcile), and its
+reconcile drops the row as one no GitHub source points at. Its cards stay, and 0.7.2 shows them like
+any other repo's. Coming back to 0.7.3 adds the row again; its first poll back-fills the newest
+merges, and a commit that already has a card never gets a second. GitHub rows are unchanged, so 0.7.2
+keeps polling them from their `last_seen_sha`. The mirrors under `<data>/dev/` are left on disk by
+0.7.2 and reused by 0.7.3.
 
 `GET /api/dev/cards/:id` returns one card of any kind, in the same shape as the lists, or 404. The
 desk reads a release notes draft here once its `dev_card` event says it is ready, since no list

@@ -1,0 +1,260 @@
+//! Dev mode reads any git repo (plan dev-mode/plan/any-git.md G1-G3): a team folder that is a plain
+//! git checkout with no remote and no forge gets a watched row and landed cards, read with git in
+//! place, without touching the folder's working tree, index or refs.
+//!
+//! The folder is a throwaway `git init` in a temp dir with commits, a branch, a merge and a tag.
+//! Nothing here touches the network or any remote.
+
+mod common;
+
+use common::*;
+use kwnt::db::dev_mode::{GIT, LANDED};
+use kwnt::db::models::NewTeam;
+use kwnt::db::spaces::SpaceId;
+use kwnt::server::dev::facts::DevFacts;
+use kwnt::server::dev::poller;
+use serde_json::{json, Value};
+use std::path::Path;
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=Lin (kwant bot)", "-c", "user.email=lin-bot@users.noreply.example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn commit(dir: &Path, file: &str, text: &str, message: &str) -> String {
+    std::fs::write(dir.join(file), text).unwrap();
+    git(dir, &["add", "--", file]);
+    git(dir, &["commit", "-q", "-m", message]);
+    git(dir, &["rev-parse", "HEAD"])
+}
+
+/// Everything about the folder a read could change: its files, index, HEAD and every ref.
+fn snapshot(dir: &Path) -> (String, Vec<u8>, String, String) {
+    let index = std::fs::read(dir.join(".git/index")).unwrap();
+    let refs = git(dir, &["for-each-ref", "--format=%(refname) %(objectname)"]);
+    (git(dir, &["status", "--porcelain", "--ignored"]), index, git(dir, &["rev-parse", "HEAD"]), refs)
+}
+
+async fn landed(env: &Env, key: &str) -> Vec<DevFacts> {
+    let space = SpaceId::default_space();
+    let mut rows = env.state.db.dev_cards_in(space.as_str(), Some(key), LANDED, None, 50).await.unwrap();
+    rows.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+    rows.iter().map(|r| serde_json::from_str(&r.facts).unwrap()).collect()
+}
+
+#[tokio::test]
+async fn a_plain_git_folder_gets_landed_cards_read_in_place() {
+    let env = setup().await;
+    let space = SpaceId::default_space();
+    let folder = env.tmp.path().join("folders/plain");
+    std::fs::create_dir_all(&folder).unwrap();
+    git(&folder, &["init", "-q", "-b", "main"]);
+    let root = commit(&folder, "README.md", "# Plain\n", "Start the repo");
+    let second = commit(&folder, "app.rs", "fn main() {}\n", "Add the app\n\nIt does nothing yet.");
+    git(&folder, &["tag", "v0.1.0"]);
+    let third = commit(&folder, "app.rs", "fn main() {\n    println!(\"hi\");\n}\n", "Say hi");
+    // Something the team is in the middle of: kwant must leave it as it is
+    std::fs::write(folder.join("wip.txt"), "not committed\n").unwrap();
+    std::fs::write(folder.join("README.md"), "# Plain\n\nEdited, not staged.\n").unwrap();
+    let before = snapshot(&folder);
+
+    let t = NewTeam {
+        name: "Plain".into(),
+        description: None,
+        icon: None,
+        lead_kwant_id: env.a.clone(),
+        member_kwants: vec![env.a.clone()],
+        workspace_path: Some(folder.to_string_lossy().to_string()),
+        repo_url: None,
+    };
+    env.state.db.create_team(&space, &t).await.unwrap();
+    let uri = format!("/api/spaces/{}/dev_mode", space.as_str());
+
+    // Off: turning on would watch it
+    let (s, v) = call(&env.app, "GET", &uri, None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!((v["status"].clone(), v["sources"].clone()), (json!("watching"), json!([{"team": "Plain", "repo": "plain", "host": null, "from": "local"}])), "{v}");
+
+    // On: the team's folder gets a git row, keyed by the team, never by its path
+    let (s, v) = call(&env.app, "PUT", &uri, Some(json!({"on": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(v["status"], "watching", "{v}");
+    assert_eq!(v["repos"][0]["key"], "local:plain", "{v}");
+    assert_eq!((v["repos"][0]["status"].clone(), v["repos"][0]["from"].clone(), v["repos"][0]["branch"].clone()), (json!("watching"), json!("local"), json!("main")), "{v}");
+    let path = std::fs::canonicalize(&folder).unwrap().to_string_lossy().to_string();
+    assert!(!v.to_string().contains(&path), "the folder path reached a reply: {v}");
+    let rows = env.state.db.dev_repos(space.as_str()).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!((row.provider.as_str(), row.repo.as_str(), row.host.as_deref(), row.branch.as_str()), (GIT, "plain", None, "main"));
+    assert_eq!(row.git_url.as_deref(), Some(path.as_str()));
+
+    // The first poll backfills what's on the branch, oldest first, from git alone
+    poller::poll_space(&env.state, space.as_str()).await;
+    let row = env.state.db.dev_repo(space.as_str(), "local:plain").await.unwrap().unwrap();
+    assert_eq!(row.poll_error, None);
+    assert_eq!(row.last_seen_sha.as_deref(), Some(third.as_str()));
+    assert_eq!(poller::last_tag(space.as_str(), "local:plain").as_deref(), Some("v0.1.0"));
+    let cards = landed(&env, "local:plain").await;
+    assert_eq!(cards.iter().map(|c| c.head_sha.as_str()).collect::<Vec<_>>(), [root.as_str(), second.as_str(), third.as_str()]);
+    let add = &cards[1];
+    assert_eq!((add.title.as_str(), add.body.as_str(), add.pr, add.repo.as_str(), add.base_branch.as_str()), ("Add the app", "It does nothing yet.", None, "plain", "main"));
+    assert_eq!(add.author.name, "Lin (kwant bot)");
+    assert_eq!(add.author.email.as_deref(), Some("lin-bot@users.noreply.example.com"));
+    assert!(add.merged_at.is_some(), "the commit's date");
+    assert_eq!(add.files.len(), 1);
+    assert_eq!((add.files[0].path.as_str(), add.files[0].status.as_str(), add.files[0].additions), ("app.rs", "added", 1));
+    assert!(add.files[0].patch.as_deref().is_some_and(|p| p.contains("+fn main() {}")), "{:?}", add.files[0].patch);
+    assert!(add.checks.is_empty() && add.links.pr.is_none() && add.links.commit.is_none(), "no forge, no host: no PR, CI or web link");
+    let hi = &cards[2];
+    assert_eq!((hi.files[0].status.as_str(), hi.files[0].additions, hi.files[0].deletions), ("modified", 3, 1));
+    assert_eq!(cards[0].files[0].path, "README.md", "the root commit's files");
+
+    // A feature branch merged with a merge commit: one card, with the branch's changes
+    git(&folder, &["stash", "-q", "--include-untracked"]);
+    git(&folder, &["checkout", "-q", "-b", "feature"]);
+    commit(&folder, "lib.rs", "pub fn x() {}\n", "Add lib");
+    commit(&folder, "lib.rs", "pub fn x() -> u8 { 1 }\n", "Return one");
+    git(&folder, &["checkout", "-q", "main"]);
+    git(&folder, &["merge", "-q", "--no-ff", "-m", "Merge feature", "feature"]);
+    let merge = git(&folder, &["rev-parse", "HEAD"]);
+    git(&folder, &["stash", "pop", "-q"]);
+    let before = (before.0, snapshot(&folder).1, merge.clone(), snapshot(&folder).3);
+    poller::poll_space(&env.state, space.as_str()).await;
+    let cards = landed(&env, "local:plain").await;
+    assert_eq!(cards.len(), 4, "only the merge is new on the branch's first-parent line");
+    let m = &cards[3];
+    assert_eq!((m.head_sha.as_str(), m.title.as_str()), (merge.as_str(), "Merge feature"));
+    assert_eq!(m.files.iter().map(|f| (f.path.as_str(), f.status.as_str())).collect::<Vec<_>>(), [("lib.rs", "added")]);
+    assert!(m.files[0].patch.as_deref().is_some_and(|p| p.contains("+pub fn x() -> u8 { 1 }")));
+
+    // Nothing new: nothing announced twice
+    poller::poll_space(&env.state, space.as_str()).await;
+    assert_eq!(landed(&env, "local:plain").await.len(), 4);
+
+    // The folder is as the team left it: files, index, HEAD, refs (no kwant refs)
+    let after = snapshot(&folder);
+    assert_eq!(after, before);
+    assert!(!after.3.contains("refs/kwant"), "{}", after.3);
+    // ...and kwant made no mirror for it
+    assert!(!env.tmp.path().join("data/dev").exists() || std::fs::read_dir(env.tmp.path().join("data/dev")).unwrap().flatten().all(|d| std::fs::read_dir(d.path()).map(|mut r| r.next().is_none()).unwrap_or(true)));
+
+    // The team stops pointing at a git folder: its row goes, its cards stay
+    let teams = env.state.db.list_teams(&space).await.unwrap();
+    env.state.db.delete_team(&teams.iter().find(|t| t.name == "Plain").unwrap().id).await.unwrap();
+    // (the team route does this in the background)
+    kwnt::server::dev::repo::reconcile(&env.state, &space).await;
+    let (_, v) = call(&env.app, "GET", &uri, None).await;
+    assert_eq!((v["status"].clone(), v["repos"].clone()), (json!("no_repo"), Value::Array(vec![])), "{v}");
+    assert_eq!(landed(&env, "local:plain").await.len(), 4);
+    assert_eq!(snapshot(&folder), before, "dropping the row leaves the folder alone too");
+}
+
+/// The forge seam (any-git.md G4): a host with a forge gets its PRs, logins and checks from it and
+/// everything git can read from git. A fake forge over a temp repo stands in for GitHub here (the
+/// mock GitHub can't serve git), so this is the path every GitHub row takes in 0.7.3.
+#[tokio::test]
+async fn with_a_forge_prs_and_checks_come_from_it_and_files_from_git() {
+    use kwnt::db::dev_mode::{BY_HAND, REVIEW};
+    use kwnt::server::dev::facts::{Check, FileDiff};
+    use kwnt::server::dev::git::Repo;
+    use kwnt::server::dev::source::{Change, Forge, History};
+    use kwnt::zombie::github::{EtagCache, GhError};
+    use std::sync::Mutex;
+
+    struct Fake {
+        merged: Change,
+        open: Change,
+        asked_files: Mutex<Vec<u64>>,
+    }
+    #[async_trait::async_trait]
+    impl Forge for Fake {
+        async fn changes_for_commit(&self, sha: &str) -> Result<Vec<Change>, GhError> {
+            Ok(if self.merged.merge_sha.as_deref() == Some(sha) { vec![self.merged.clone()] } else { vec![] })
+        }
+        async fn open_changes(&self, _base: &str, _cache: &EtagCache) -> Result<Vec<Change>, GhError> {
+            Ok(vec![self.open.clone()])
+        }
+        async fn checks(&self, _sha: &str, _cache: &EtagCache) -> Result<Vec<Check>, GhError> {
+            Ok(vec![Check { name: "ci".into(), status: "completed".into(), conclusion: Some("success".into()), url: Some("https://github.com/demo-org/app/actions/runs/1".into()) }])
+        }
+        async fn change_files(&self, number: u64) -> Result<Vec<FileDiff>, GhError> {
+            self.asked_files.lock().unwrap().push(number);
+            Ok(vec![])
+        }
+        fn change_head_ref(&self, number: u64) -> Option<String> {
+            Some(format!("refs/pull/{number}/head"))
+        }
+        async fn commit_login(&self, _sha: &str) -> Option<String> {
+            Some("demo-person".into())
+        }
+    }
+
+    let env = setup().await;
+    let space = SpaceId::default_space();
+    let dir = env.tmp.path().join("app");
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q", "-b", "main"]);
+    commit(&dir, "README.md", "# App\n", "Start");
+    let pushed = commit(&dir, "app.rs", "fn main() {}\n", "Push straight to main");
+    git(&dir, &["checkout", "-q", "-b", "feature"]);
+    let head = commit(&dir, "lib.rs", "pub fn x() {}\n", "Add lib");
+    git(&dir, &["checkout", "-q", "main"]);
+    git(&dir, &["merge", "-q", "--no-ff", "-m", "Merge pull request #7 from demo-org/feature", "feature"]);
+    let merge = git(&dir, &["rev-parse", "HEAD"]);
+    git(&dir, &["checkout", "-q", "-b", "next"]);
+    let open_head = commit(&dir, "next.rs", "pub fn next() {}\n", "Next thing");
+    git(&dir, &["checkout", "-q", "main"]);
+
+    let at = chrono::Utc::now();
+    let change = |n: u64, title: &str, head_branch: &str, head_sha: &str| Change {
+        number: n,
+        title: title.into(),
+        url: Some(format!("https://github.com/demo-org/app/pull/{n}")),
+        author: Some("demo-person".into()),
+        head_branch: head_branch.into(),
+        head_sha: head_sha.into(),
+        base_branch: "main".into(),
+        ..Default::default()
+    };
+    let fake = Fake {
+        merged: Change { merged_at: Some(at), merge_sha: Some(merge.clone()), ..change(7, "Add the lib", "feature", &head) },
+        open: change(8, "Next thing", "next", &open_head),
+        asked_files: Mutex::new(vec![]),
+    };
+    env.state.db.add_dev_repo(space.as_str(), "github.com/demo-org/app", None, "demo-org/app", Some("github.com"), "main", None, BY_HAND).await.unwrap();
+    let row = env.state.db.dev_repo(space.as_str(), "github.com/demo-org/app").await.unwrap().unwrap();
+    let h = History::new(Some(Repo::local(&dir).unwrap()), dir.to_string_lossy().to_string(), None, None, "main", Some("https://github.com/demo-org/app/commit".into()));
+    poller::read(&env.state, &row, &h, Some(&fake)).await.unwrap();
+
+    let cards = landed(&env, "github.com/demo-org/app").await;
+    let by = |sha: &str| cards.iter().find(|c| c.head_sha == sha).unwrap_or_else(|| panic!("no card for {sha}: {cards:?}"));
+    let m = by(&merge);
+    assert_eq!((m.pr, m.title.as_str()), (Some(7), "Add the lib"), "the PR names the merge");
+    assert_eq!(m.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["lib.rs"], "files from git");
+    assert_eq!(m.checks.len(), 1, "checks from the forge");
+    assert_eq!(m.links.pr.as_deref(), Some("https://github.com/demo-org/app/pull/7"));
+    assert_eq!(m.links.commit, Some(format!("https://github.com/demo-org/app/commit/{merge}")));
+    let p = by(&pushed);
+    assert_eq!((p.pr, p.title.as_str(), p.author.login.as_deref()), (None, "Push straight to main", Some("demo-person")), "a direct push asks the forge who wrote it");
+    assert_eq!(p.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["app.rs"]);
+
+    // The open PR's review card: its files from git too (the head is in the repo), never the forge's list
+    let reviews = env.state.db.dev_cards_in(space.as_str(), Some("github.com/demo-org/app"), REVIEW, None, 10).await.unwrap();
+    assert_eq!(reviews.len(), 1);
+    let r: DevFacts = serde_json::from_str(&reviews[0].facts).unwrap();
+    assert_eq!((r.pr, r.head_sha.as_str()), (Some(8), open_head.as_str()));
+    assert_eq!(r.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["next.rs"]);
+    assert!(fake.asked_files.lock().unwrap().is_empty(), "git read every diff");
+    // ...and the repo read in place has no kwant refs
+    assert!(!git(&dir, &["for-each-ref"]).contains("refs/kwant"));
+}

@@ -66,7 +66,7 @@ struct Entry<'a> {
 /// team order (with its row, if any), then hand rows not tied to a source (oldest first), then team
 /// rows no team points at any more.
 fn entries<'a>(rows: &'a [DevRepoRow], sources: &'a [repo::Source]) -> Vec<Entry<'a>> {
-    let mut out: Vec<Entry> = sources.iter().map(|s| Entry { source: Some(s), row: rows.iter().find(|r| s.host.is_some() && r.key == s.key()) }).collect();
+    let mut out: Vec<Entry> = sources.iter().map(|s| Entry { source: Some(s), row: rows.iter().find(|r| r.key == s.row_key()) }).collect();
     let tied = |r: &DevRepoRow| out_has(sources, r);
     out.extend(rows.iter().filter(|r| r.added_by != BY_TEAM && !tied(r)).map(|r| Entry { source: None, row: Some(r) }));
     out.extend(rows.iter().filter(|r| r.added_by == BY_TEAM && !tied(r)).map(|r| Entry { source: None, row: Some(r) }));
@@ -74,7 +74,7 @@ fn entries<'a>(rows: &'a [DevRepoRow], sources: &'a [repo::Source]) -> Vec<Entry
 }
 
 fn out_has(sources: &[repo::Source], r: &DevRepoRow) -> bool {
-    sources.iter().any(|s| s.host.is_some() && s.key() == r.key)
+    sources.iter().any(|s| s.row_key() == r.key)
 }
 
 /// The space's rows in the API's order: the first is the one the deprecated top-level fields,
@@ -100,16 +100,21 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
     // Only while off does a source with no row hang on a connection existing
     let ask = !on && list.iter().any(|e| e.row.is_none() && e.source.is_some_and(|s| s.on_github(&hosts)));
     let connected = ask && repo::clients(state).await.is_ok();
-    // A row whose poll failed because no connection reads GitHub any more (deleted, or the vault
-    // locked) needs the connection, not a retry: it reads not_connected (QA h)
-    let lost = rows.iter().any(|r| r.poll_error.is_some()) && repo::clients(state).await.is_err();
+    // A GitHub row whose poll failed because no connection reads GitHub any more (deleted, or the
+    // vault locked) needs the connection, not a retry: it reads not_connected (QA h). A git row
+    // never needs one.
+    let lost = rows.iter().any(|r| r.poll_error.is_some() && !r.is_git()) && repo::clients(state).await.is_err();
+    let git = super::git::available().await;
     let mut repos = Vec::new();
     for e in &list {
         let status = match (e.row, e.source) {
-            (Some(r), _) if r.poll_error.is_some() && lost => "not_connected",
+            (Some(r), _) if r.poll_error.is_some() && lost && !r.is_git() => "not_connected",
             (Some(r), _) if r.poll_error.is_some() => "error",
             (Some(_), _) => "watching",
-            (None, Some(s)) if !s.on_github(&hosts) => "other_host",
+            // Git reads every other host (any-git.md G1); a row comes at switch-on
+            (None, Some(s)) if !s.on_github(&hosts) && !git => "no_git",
+            (None, Some(s)) if !s.on_github(&hosts) && s.fetch.is_none() => "no_repo",
+            (None, Some(s)) if !s.on_github(&hosts) && (!on || rows.len() < crate::db::dev_mode::MAX_REPOS) => "watching",
             (None, _) if rows.len() >= crate::db::dev_mode::MAX_REPOS => "too_many",
             (None, _) if !on && connected => "watching",
             (None, _) => "not_connected",
@@ -167,8 +172,11 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
     } else if any_unread {
         "not_connected"
     } else {
-        repo::status(on, "", &sources, &hosts, connected)
+        repo::status(on, "", &sources, &hosts, connected, git)
     });
+    if v["status"] == "no_git" {
+        v["install_hint"] = json!(super::git::INSTALL_HINT);
+    }
     v["sources"] = json!(sources);
     v["new_reviews"] = json!(new_reviews(state, row.as_ref()).await);
     // Where a review would be posted, and as whom (post-to-github.md P7 and its amendment)
@@ -298,6 +306,34 @@ async fn branch_exists(state: &AppState, repo_name: &str, branch: &str) -> Resul
     }
 }
 
+/// [`branch_exists`] for a watched row: a git row asks git (its folder, or its remote), a GitHub
+/// row asks GitHub.
+#[allow(clippy::result_large_err)]
+async fn row_branch_exists(state: &AppState, row: &DevRepoRow, branch: &str) -> Result<(), Response> {
+    use super::git::{self, Repo};
+    if !row.is_git() {
+        return branch_exists(state, &row.repo, branch).await;
+    }
+    let from = row.git_url.as_deref().unwrap_or_default();
+    let found = if from.starts_with('/') {
+        match Repo::local(std::path::Path::new(from)) {
+            Ok(g) => g.has_branch("", branch, None).await,
+            Err(e) => Err(e),
+        }
+    } else {
+        match Repo::mirror(&state.config.data_dir, &row.space_id, &row.key).await {
+            Ok(g) => g.has_branch(from, branch, None).await,
+            Err(e) => Err(e),
+        }
+    };
+    match found {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(coded(StatusCode::BAD_REQUEST, "no_branch", format!("{} has no branch {branch}", row.repo))),
+        Err(git::GitError::NoGit) => Err(coded(StatusCode::BAD_GATEWAY, "no_git", git::INSTALL_HINT)),
+        Err(e) => Err(coded(StatusCode::BAD_GATEWAY, "git", e.to_string())),
+    }
+}
+
 pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(body): Json<PutBody>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
@@ -403,7 +439,7 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
             Ok(Some(r)) => {
                 if let Some(b) = asked_branch.filter(|b| *b != r.branch) {
                     if on {
-                        if let Err(resp) = branch_exists(&state, &r.repo, b).await {
+                        if let Err(resp) = row_branch_exists(&state, &r, b).await {
                             return resp;
                         }
                     }
@@ -449,7 +485,7 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
         if let (Some(b), Some(first)) = (asked_branch, ordered_rows(&rows_before, &sources).first()) {
             if b != first.branch {
                 if on {
-                    if let Err(resp) = branch_exists(&state, &first.repo, b).await {
+                    if let Err(resp) = row_branch_exists(&state, first, b).await {
                         return resp;
                     }
                 }
@@ -464,7 +500,7 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
         let rows = state.db.dev_repos(sp).await.unwrap_or_default();
         if let Some(r) = rows.iter().find(|r| r.team.as_deref() == Some(team_id.as_str()) && r.branch != b) {
             if on {
-                if let Err(resp) = branch_exists(&state, &r.repo, b).await {
+                if let Err(resp) = row_branch_exists(&state, r, b).await {
                     return resp;
                 }
             }
