@@ -1,8 +1,9 @@
-//! Dev mode (docs/dev-mode.md, plan 0.7): a space watches one GitHub repo, read only. The poller
+//! Dev mode (docs/dev-mode.md, plan 0.7): a space watches one GitHub repo. It reads it, and posts
+//! a review card to its PR only when the person presses Post (`post`, 0.7.1). The poller
 //! writes a pending card per merge to the watched branch and per open PR head, with its DevFacts;
 //! `generate` turns them into cards. The production floor lives in `crate::mcp::prod_floor`.
 //!
-//! Lin owns `facts`, `routes`, `poller`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
+//! Lin owns `facts`, `routes`, `poller`, `post`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
 //! `review`, `risk`, `tamper` and `notes`; Juno owns `scan`.
 
 pub mod backup;
@@ -12,6 +13,7 @@ pub mod generate;
 pub mod landed;
 pub mod notes;
 pub mod poller;
+pub mod post;
 pub mod repo;
 pub mod review;
 pub mod risk;

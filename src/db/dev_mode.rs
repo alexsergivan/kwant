@@ -119,6 +119,13 @@ pub struct DevCardRow {
     pub card: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Review cards: `{at, login, url, comments}` once posted to GitHub (post-to-github.md P1).
+    /// A column of its own, so a card regenerated after CI keeps it.
+    #[sqlx(default)]
+    pub posted: Option<String>,
+    /// Review cards: `{kind, message}` from the last post that didn't go through.
+    #[sqlx(default)]
+    pub post_error: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq, serde::Serialize)]
@@ -133,12 +140,21 @@ pub struct DevBackupRow {
     pub taken_at: DateTime<Utc>,
 }
 
-const CARD_COLS: &str = "id, space_id, kind, ref, head_sha, status, facts, card, created_at, updated_at";
+const CARD_COLS: &str = "id, space_id, kind, ref, head_sha, status, facts, card, created_at, updated_at, posted, post_error";
 
 impl Database {
     pub(super) async fn migrate_dev_mode(&self) -> Result<(), DbError> {
         for sql in TABLES {
             sqlx::query(sql).execute(&self.pool).await?;
+        }
+        // Posting a review to GitHub came in 0.7.1; older builds name their columns, so they
+        // still read this table
+        for column in ["posted", "post_error"] {
+            let has: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM pragma_table_info('dev_cards') WHERE name = ?").bind(column).fetch_optional(&self.pool).await?;
+            if has.is_none() {
+                sqlx::query(&format!("ALTER TABLE dev_cards ADD COLUMN {column} TEXT")).execute(&self.pool).await?;
+            }
         }
         Ok(())
     }
@@ -327,6 +343,29 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(done.rows_affected() == 1)
+    }
+
+    /// Records a review as posted, only while none is (P6): false when another post got there
+    /// first. Clears `post_error`.
+    pub async fn set_dev_card_posted(&self, id: &str, posted: &str) -> Result<bool, DbError> {
+        let done = sqlx::query("UPDATE dev_cards SET posted = ?2, post_error = NULL, updated_at = ?3 WHERE id = ?1 AND posted IS NULL")
+            .bind(id)
+            .bind(posted)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    /// Records why a post didn't go through (`None` clears it). A posted card keeps no error.
+    pub async fn set_dev_card_post_error(&self, id: &str, error: Option<&str>) -> Result<(), DbError> {
+        sqlx::query("UPDATE dev_cards SET post_error = ?2, updated_at = ?3 WHERE id = ?1 AND posted IS NULL")
+            .bind(id)
+            .bind(error)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// A space's cards of one kind, newest first, created before `before` when given.
