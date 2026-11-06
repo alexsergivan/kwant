@@ -143,7 +143,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   const undo = () => {
     if (!removed || removed.busy) return;
     setRemoved({ ...removed, busy: true, error: null });
-    save(spaceId, undoBody(removed)).then(
+    save(spaceId, { ...undoBody(removed), on: state?.on ?? null }).then(
       ({ state: s, refused }) => {
         devStore.set(spaceId, s);
         setRemoved(refused ? { ...removed, busy: false, error: refused } : null);
@@ -189,7 +189,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
         focusAfter(after);
       }}
       onSubmit={async (repo, t) => {
-        const { state: s, refused } = await save(spaceId, { repo, team: t?.id ?? null });
+        const { state: s, refused } = await save(spaceId, { repo, team: t?.id ?? null, on: state?.on ?? null });
         devStore.set(spaceId, s);
         if (refused) return LINK_ERROR;
         setLinking(null);

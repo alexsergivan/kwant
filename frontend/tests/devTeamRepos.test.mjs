@@ -45,7 +45,7 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
     const repo = body.repo;
     const team = [...TEAMS, { id: 'tm_mkt', name: 'Marketing' }].find((t) => t.id === body.team);
     const row = { ...APP, key: `github.com/${repo}`.toLowerCase(), repo, team: team?.name ?? null, team_id: team?.id ?? null, from: team ? 'repo' : 'hand', added_by: team ? 'team' : 'hand', polled_at: null };
-    server.state = { ...server.state, repos: [...server.state.repos, row] };
+    server.state = { ...server.state, ...(typeof body.on === 'boolean' ? { on: body.on } : {}), repos: [...server.state.repos, row] };
     return json(server.state);
   }
   if (path.endsWith('/dev_mode')) return json(server.state);
@@ -317,6 +317,33 @@ test('DOM: Link a repo for a team PUTs {on, repo, team}; the new row appears', a
   root.unmount();
 });
 
+test('Ada (0.7.2): linking a repo while Dev mode is off sends on: false, and the space stays off', async () => {
+  const { root } = await line({ on: false, repos: [{ ...APP, status: 'not_connected' }] }, TEAMS);
+  await click(document.querySelector('[data-dv-row-action="team:tm_site"]'));
+  const input = document.querySelector('[data-dv-link-form="tm_site"] input');
+  await typeInto(input, 'demo-org/site');
+  input.form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await settle();
+  const puts = server.calls.filter(([x]) => x === 'PUT').map(([, , b]) => b);
+  assert.deepEqual(puts, [{ on: false, repo: 'demo-org/site', team: 'tm_site' }]);
+  assert.equal(server.state.on, false);
+  assert.equal(m.devStore.get('spc_demo').on, false);
+  root.unmount();
+  // With no known state, `on` is left out (the server keeps its current value), never forced on.
+  reset({ on: false, repos: [APP] });
+  await m.devApi.linkRepo('spc_demo', { repo: 'demo-org/docs' });
+  assert.deepEqual(server.calls.filter(([x]) => x === 'PUT').map(([, , b]) => b), [{ repo: 'demo-org/docs' }]);
+  assert.equal(server.state.on, false);
+});
+
+test('Ada (0.7.2): repo rows say "checked 15:30" in the desk header’s 24-hour format', () => {
+  const at = new Date(2026, 10, 6, 15, 30).toISOString();
+  const l = m.statusLine(state({ repos: [{ ...APP, polled_at: at }, SITE] }), TEAMS);
+  assert.equal(l.rows[0].state, 'Watching · checked 15:30');
+  assert.equal(m.checkedTime(at), m.checkedLabel(Date.parse(at)));
+  assert.equal(m.checkedTime(new Date(2026, 10, 6, 9, 5).toISOString()), '09:05');
+});
+
 test('DOM: Esc closes the Link field and puts focus back on its button', async () => {
   const { root } = await line({ repos: [{ ...APP, status: 'not_connected' }] }, TEAMS);
   const btn = document.querySelector('[data-dv-row-action="team:tm_site"]');
@@ -547,6 +574,7 @@ test('DOM answer 2: off, the Will watch chip is neutral and the desk header says
 test('answer 5: Undo after clearing a team’s repo sends PUT {repo: the previous link, team: its id}', async () => {
   assert.deepEqual(m.undoBody({ repo: 'https://github.com/demo-org/site', team: 'tm_site' }), { repo: 'https://github.com/demo-org/site', team: 'tm_site' });
   reset({ repos: [APP] });
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
   await m.devApi.linkRepo('spc_demo', m.undoBody({ repo: 'https://github.com/demo-org/site', team: 'tm_site' }));
   const puts = server.calls.filter(([x]) => x === 'PUT').map(([, , b]) => b);
   assert.deepEqual(puts, [{ on: true, repo: 'https://github.com/demo-org/site', team: 'tm_site' }], 'the team link comes back, never a hand add');
@@ -556,6 +584,7 @@ test('answer 5: Undo after clearing a team’s repo sends PUT {repo: the previou
 test('answer 5: Undo for a hand row stays PUT {repo}, with no team', async () => {
   assert.deepEqual(m.undoBody({ repo: 'demo-org/docs', team: null }), { repo: 'demo-org/docs', team: null });
   reset({ repos: [APP] });
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
   await m.devApi.linkRepo('spc_demo', m.undoBody({ repo: 'demo-org/docs', team: null }));
   const puts = server.calls.filter(([x]) => x === 'PUT').map(([, , b]) => b);
   assert.deepEqual(puts, [{ on: true, repo: 'demo-org/docs' }]);
@@ -565,7 +594,7 @@ test('answer 5: Undo for a hand row stays PUT {repo}, with no team', async () =>
 test('answer 5: the desk’s Undo goes through undoBody, and a removed team link keeps its team id', async () => {
   const { readFile } = await import('node:fs/promises');
   const src = await readFile(new URL('../src/components/DevStatusLine.tsx', import.meta.url), 'utf8');
-  assert.match(src, /save\(spaceId, undoBody\(removed\)\)/);
+  assert.match(src, /save\(spaceId, \{ \.\.\.undoBody\(removed\), on: state\?\.on \?\? null \}\)/);
   assert.doesNotMatch(src, /repo: removed\.repo, team: null/);
   assert.match(src, /added_by === 'team' && repo\.from === 'repo' \? row\.teamId : null/);
 });

@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
-import { DEV_OFF, DevModeState, DevTeamRef, cardRepoLabel, cardsOfRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
+import { DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
@@ -83,11 +83,8 @@ function patchReview(space: string, repo: string | null, card: ShellCard) {
   }
 }
 
-/** "14:32", 24-hour local time. */
-export function checkedLabel(ms: number): string {
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
+/** "14:32", 24-hour local time (now in devMode.ts, shared with the repo rows). */
+export { checkedLabel };
 
 export function useDesk(space: string, on: boolean, repo: string | null = null): DeskData {
   const data = useSyncExternalStore(deskStore.subscribe, () => deskStore.get(space, repo), () => EMPTY);

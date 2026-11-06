@@ -273,10 +273,16 @@ export interface RepoRow {
   action: RowAction | null;
 }
 
-/** "19:58" in the person's locale (24 h when the locale uses it). */
+/** "14:32", 24-hour local time: the desk header's "Checked" format, shared by the repo rows. */
+export function checkedLabel(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+/** A repo row's poll time in the header's format ("15:30"), or null. */
 export const checkedTime = (iso: string | null): string | null => {
   const t = iso ? Date.parse(iso) : NaN;
-  return Number.isFinite(t) ? new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : null;
+  return Number.isFinite(t) ? checkedLabel(t) : null;
 };
 
 /** A poll error for a tooltip: never a URL with a token in it. */
@@ -874,9 +880,12 @@ export const devApi = {
   /**
    * 0.7.2 (T8): `PUT {repo, team}` sets that team's repo link; `PUT {repo}` with no team adds a repo by
    * hand. A repo that can't be read still keeps Dev mode on, and the reply's `check` says why.
+   * Linking never changes Dev mode: it sends the space's current `on` (Ada, 0.7.2). The server defaults a
+   * missing `on` to the current value, so with no known state it is left out.
    */
-  async linkRepo(space: string, body: { repo: string; team?: string | null }): Promise<{ state: DevModeState; refused: string | null }> {
-    const r = await call<unknown>(`/api/spaces/${enc(space)}/dev_mode`, 'PUT', { on: true, repo: body.repo, ...(body.team ? { team: body.team } : {}) });
+  async linkRepo(space: string, body: { repo: string; team?: string | null; on?: boolean | null }): Promise<{ state: DevModeState; refused: string | null }> {
+    const on = body.on ?? devStore.get(space)?.on;
+    const r = await call<unknown>(`/api/spaces/${enc(space)}/dev_mode`, 'PUT', { ...(on != null ? { on } : {}), repo: body.repo, ...(body.team ? { team: body.team } : {}) });
     const s = parseDevMode(r.data);
     if (!s) throw new DevModeError('The server sent Dev mode in a shape this app doesn’t know.', 500);
     const c = parseCheck((r.data as Record<string, unknown>).check);
