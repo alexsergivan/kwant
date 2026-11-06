@@ -159,7 +159,10 @@ test('B1: a direct commit (pr null) parses and draws as a normal landed card nam
   assert.match(out, /data-dev-card="landed"/);
   assert.match(out, /data-commit="c0ffee1"/);
   assert.doesNotMatch(out, /data-pr=/);
-  assert.match(out, /<a href="https:\/\/github\.com\/alexsergivan\/kwant\/commit\/c0ffee1"[^>]*>Commit c0ffee1<\/a>/);
+  // style v2: the commit is a sha chip plus a "Direct push" chip; the GitHub link goes to the commit.
+  assert.match(out, /class="dv-sha[^"]*"><span class="sr-only">Commit <\/span>c0ffee1<\/span>/);
+  assert.match(out, /class="kw-chip">Direct push</);
+  assert.match(out, /<a href="https:\/\/github\.com\/alexsergivan\/kwant\/commit\/c0ffee1"/);
   assert.doesNotMatch(out, /PR #/);
   assert.match(out, /Committed 19:02/);
   assert.doesNotMatch(out, />Verified</);
@@ -183,8 +186,8 @@ test('B1: a direct commit (pr null) parses and draws as a normal landed card nam
 
 test('N2: the PR chip, the checks line and Diff get the phone tap area (kw-hit); the CSS is phone-only', async () => {
   const out = html(m.LandedCard, { card: landed(fx.LANDED_288, { links: { ...fx.LANDED_288.links, ci: 'https://github.com/alexsergivan/kwant/actions/runs/2' } }) });
-  assert.match(out, /class="[^"]*kw-hit[^"]*"[^>]*>PR #288</);
-  assert.match(out, /class="[^"]*kw-hit[^"]*"[^>]*>3 checks passed</);
+  assert.match(out, /aria-label="PR #288" class="[^"]*kw-hit[^"]*"[^>]*>#288</);
+  assert.match(out, /class="[^"]*kw-hit[^"]*"[^>]*>Tests passed</);
   assert.match(out, /class="[^"]*kw-hit[^"]*"[^>]*>Diff</);
   const { readFile } = await import('node:fs/promises');
   const css = await readFile(new URL('../src/styles/modern.css', import.meta.url), 'utf8');
@@ -199,7 +202,7 @@ test('the landed card: plain words, the details fold, a failed card and day sepa
   const c = html(m.LandedCard, { card: landed(fx.LANDED_288) });
   assert.match(c, /What changes for you/);
   assert.match(c, /<details/);
-  assert.match(c, /Under the hood · 4 files, \+249 −15/);
+  assert.match(c, /Under the hood<\/span><span aria-hidden="true">·<\/span><span class="font-mono[^"]*">4 files<\/span><span role="img" aria-label="249 lines added, 15 removed"/);
   assert.match(c, /Merged 18:48 by/);
   assert.match(c, /Pixel<\/span><\/span><span>\(bot · Claude Sonnet\)/);
   const f = html(m.LandedCard, { card: landed(fx.LANDED_NO_TEXT) });
