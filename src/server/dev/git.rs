@@ -219,7 +219,8 @@ struct Opts<'a> {
     pin: &'a [String],
     /// A fetch into a mirror: no file git writes may pass this many bytes (`RLIMIT_FSIZE`), and
     /// what it fetches is kept as one pack, so a fetch stops at the cap instead of after it (G2
-    /// review F3). Passing it is [`GitError::RepoTooBig`].
+    /// review F3). Passing it is [`GitError::RepoTooBig`]. The limit is per file: the pack, its
+    /// `.idx` and its `.rev` can each reach it, so one fetch can briefly write about 3× the cap.
     fsize: Option<u64>,
 }
 

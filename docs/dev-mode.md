@@ -193,11 +193,19 @@ whose git dir doesn't point back at this folder or doesn't sit in its main repo'
 `.git` directory has a `commondir`; when the git dir or its main repo is under `<data>/dev`; or when
 it has `objects/info/alternates` or a symlink among its objects and refs. A real `git worktree add`
 checkout reads as before; a git submodule checkout (whose `.git` file names `.git/modules/…`) is
-refused.
+refused. Team detection follows the same rules, so a folder whose `.git` points at another repo is
+not detected as a source at all, and a submodule checkout used as a team folder is no longer
+detected from its folder: link the repo on the team instead.
+
+The check and git's own read are separate steps. A process that keeps swapping a team folder's
+`.git` can sometimes get another repo read in between, and the next poll doesn't stop that (in a
+review probe, 65 of 131 reads got the other repo). Only give a team folder to people you would let
+read every repo on this server. A sandboxed local read is planned for 0.7.4.
 
 **Mirror size.** A mirror is a full bare copy of the repo. A fetch may not write any file past 1 GB
 (`RLIMIT_FSIZE`, with what it fetches kept as one pack), so a huge or hostile remote stops at the cap
-rather than after it. A fetch stopped there, or a mirror over 1 GB on disk after its fetch, is deleted and a `<mirror>.too-big` note is left beside it; the row reads `error` with "This repo
+rather than after it. The limit is per file, and the pack, its `.idx` and its `.rev` are each
+limited separately, so one fetch can briefly write about 3× the cap before it is stopped. A fetch stopped there, or a mirror over 1 GB on disk after its fetch, is deleted and a `<mirror>.too-big` note is left beside it; the row reads `error` with "This repo
 is too big for Dev mode to read (over 1 GB)." and `poll_code: "too_big"` (a GitHub row falls back to
 the API instead). One answer from git over 16 MB (a commit touching a vast number of files) reads
 `error` with "This repo is too big for Dev mode to read." and the same `poll_code`. The repo
