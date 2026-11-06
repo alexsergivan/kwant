@@ -1,11 +1,14 @@
 // The toast after the switch turns Dev mode on (0.7.1, flow F3, Mira's flow copy §3). The person stays
 // on their page; this says what Dev mode found and offers the one next step, plus Undo, the only
-// one-press way off. role="status", 8 s (held while the pointer or focus is inside), or until dismissed.
+// one-press way off. role="status", 8 s (held while the pointer or focus is on it or on the switch), or
+// until dismissed. Keyboard (K1): the toast sits on the body, so Tab from the switch goes straight to its
+// actions, Shift+Tab from the first goes back, and Tab from the last carries on after the switch. Focus is
+// never moved without a key press.
 // Desktop: bottom-left over the main pane, 360 px. Phone: full width minus 12 px, docked above the chat
 // box so it never covers Send (above the tab bar when there is no chat box). A "checking" toast updates
 // in place when the status arrives, without restarting the 8 s.
 
-import React, { useEffect, useLayoutEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { DevModeState, onToast } from '../devMode';
@@ -23,7 +26,31 @@ export interface DevOnToastProps {
   /** Phone layout: full width above the chat box. */
   phone?: boolean;
   timeout?: number;
+  /** The switch that turned Dev mode on; the toast's actions are its next Tab stops. */
+  anchor?: () => HTMLElement | null;
 }
+
+const TABBABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** The next Tab stop after `from` in page order, skipping `skip` (the toast) and hidden elements. */
+export function nextTabStop(from: HTMLElement, skip: HTMLElement | null): HTMLElement | null {
+  const all = Array.from(document.querySelectorAll<HTMLElement>(TABBABLE)).filter(
+    (el) => el !== from && !skip?.contains(el) && !el.closest('[inert],[aria-hidden="true"]') && !el.closest('[hidden]') && (typeof el.checkVisibility !== 'function' || el.checkVisibility()),
+  );
+  return all.find((el) => from.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) ?? null;
+}
+
+const defaultAnchor = () => (typeof document === 'undefined' ? null : document.querySelector<HTMLElement>('[data-dev-switch]'));
+
+/** Keyboard focus, not a mouse click's leftover focus (a clicked switch keeps focus but nobody is there). */
+const keyboardFocus = (el: HTMLElement): boolean => {
+  if (document.activeElement !== el) return false;
+  try {
+    return el.matches(':focus-visible');
+  } catch {
+    return true;
+  }
+};
 
 /** Bottom offset: 8 px above the chat box if one is on screen, else the shared toast offset. */
 function composerGap(): string | null {
@@ -42,12 +69,67 @@ function paneLeft(): number {
   return r && r.width ? Math.round(r.left + 16) : 16;
 }
 
-export const DevOnToast: React.FC<DevOnToastProps> = ({ state, onOpenDesk, onConnect, onTypeRepo, onUndo, onClose, phone = false, timeout = 8000 }) => {
+export const DevOnToast: React.FC<DevOnToastProps> = ({ state, onOpenDesk, onConnect, onTypeRepo, onUndo, onClose, phone = false, timeout = 8000, anchor = defaultAnchor }) => {
   const t = onToast(state);
   const [undo, setUndo] = useState<'idle' | 'busy' | 'failed'>('idle');
   const [bottom, setBottom] = useState<string | null>(null);
   const [held, setHeld] = useState(false);
   const [left, setLeft] = useState(16);
+  const box = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef(anchor);
+  anchorRef.current = anchor;
+  // The switch holds the toast too: keyboard focus on it, or the pointer over it.
+  const [onSwitch, setOnSwitch] = useState({ focus: false, hover: false });
+
+  useEffect(() => {
+    const a = anchorRef.current();
+    if (!a) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return;
+      const first = box.current?.querySelector<HTMLElement>(TABBABLE);
+      if (!first) return;
+      e.preventDefault();
+      first.focus();
+    };
+    const focus = (v: boolean) => () => setOnSwitch((o) => (o.focus === v ? o : { ...o, focus: v }));
+    const hover = (v: boolean) => () => setOnSwitch((o) => (o.hover === v ? o : { ...o, hover: v }));
+    const fIn = () => setOnSwitch((o) => ({ ...o, focus: keyboardFocus(a) }));
+    const fOut = focus(false);
+    const hIn = hover(true);
+    const hOut = hover(false);
+    a.addEventListener('keydown', onKey);
+    a.addEventListener('focus', fIn);
+    a.addEventListener('blur', fOut);
+    a.addEventListener('pointerenter', hIn);
+    a.addEventListener('pointerleave', hOut);
+    if (keyboardFocus(a)) setOnSwitch((o) => ({ ...o, focus: true }));
+    return () => {
+      a.removeEventListener('keydown', onKey);
+      a.removeEventListener('focus', fIn);
+      a.removeEventListener('blur', fOut);
+      a.removeEventListener('pointerenter', hIn);
+      a.removeEventListener('pointerleave', hOut);
+    };
+  }, []);
+
+  // Inside the toast: Shift+Tab from the first action goes back to the switch; Tab from the last goes on
+  // to whatever follows the switch, as if the toast sat right after it.
+  const onToastKey = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey) return;
+    const a = anchorRef.current();
+    const stops = Array.from(box.current?.querySelectorAll<HTMLElement>(TABBABLE) ?? []);
+    if (!a || !stops.length) return;
+    const at = stops.indexOf(document.activeElement as HTMLElement);
+    if (e.shiftKey && at === 0) {
+      e.preventDefault();
+      a.focus();
+    } else if (!e.shiftKey && at === stops.length - 1) {
+      const next = nextTabStop(a, box.current);
+      if (!next) return;
+      e.preventDefault();
+      next.focus();
+    }
+  };
 
   useLayoutEffect(() => {
     const place = () => {
@@ -65,10 +147,10 @@ export const DevOnToast: React.FC<DevOnToastProps> = ({ state, onOpenDesk, onCon
 
   // 8 s, paused while the pointer is over it or focus is inside (WCAG 2.2.1); it starts again on leave.
   useEffect(() => {
-    if (undo === 'busy' || held) return undefined;
+    if (undo === 'busy' || held || onSwitch.focus || onSwitch.hover) return undefined;
     const h = setTimeout(onClose, undo === 'failed' ? 6000 : timeout);
     return () => clearTimeout(h);
-  }, [undo, held, timeout, onClose]);
+  }, [undo, held, onSwitch.focus, onSwitch.hover, timeout, onClose]);
 
   const fix =
     t.action === 'connect' && onConnect
@@ -100,8 +182,10 @@ export const DevOnToast: React.FC<DevOnToastProps> = ({ state, onOpenDesk, onCon
       data-phone={phone || undefined}
     >
       <div
+        ref={box}
         role="status"
         aria-live="polite"
+        onKeyDown={onToastKey}
         onPointerEnter={() => setHeld(true)}
         onPointerLeave={() => setHeld(false)}
         onFocus={() => setHeld(true)}
@@ -143,7 +227,12 @@ export const DevOnToast: React.FC<DevOnToastProps> = ({ state, onOpenDesk, onCon
         </div>
         <button
           type="button"
-          onClick={onClose}
+          onClick={() => {
+            // Keyboard focus was in the toast: it goes back to the switch, not to the page top.
+            const back = box.current?.contains(document.activeElement) ? anchorRef.current() : null;
+            onClose();
+            back?.focus();
+          }}
           aria-label="Dismiss"
           className={`absolute top-1 right-1 grid place-items-center min-w-[44px] min-h-[44px] sm:min-w-[32px] sm:min-h-[32px] rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-white/5 ${focusRing}`}
         >

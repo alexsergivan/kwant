@@ -282,3 +282,24 @@ export function needsBitwardenFrom(status: number, body: unknown): { message: st
     local_count: num(o.local_count),
   };
 }
+
+/**
+ * Whether a new login (Dev mode's GitHub token) can be saved right now, read before the person types it:
+ * `open`; `store` = this server's store under "Ask only when risky" or "Don't ask" (the 409
+ * needs_bitwarden, audit F-10); `locked` = Bitwarden is the store and is locked.
+ */
+export type SaveGate = 'open' | 'store' | 'locked';
+export const saveGate = (s: StoreStatus | null | undefined): SaveGate =>
+  !s ? 'open' : s.store === 'local' ? (s.approvals_off ? 'store' : 'open') : s.locked ? 'locked' : 'open';
+
+/** The two ways out, before the token field (flow F5). Short; the reason is AUTOFILL_GAP_NOTE.local. */
+export const SAVE_FIRST = {
+  title: 'One step before the token',
+  lockedTitle: 'Bitwarden is locked. Unlock it to save this login there.',
+  bitwarden: 'Connect Bitwarden',
+  unlock: 'Unlock Bitwarden',
+  ask: 'Switch to “Ask before running commands”',
+  asking: 'Switching…',
+  asked: 'Bots ask before running commands now. Add the token below.',
+  connected: 'Bitwarden is connected. Add the token below.',
+} as const;

@@ -420,7 +420,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
   const devMeta = devOn ? (
     <span className="block text-meta text-zinc-400 truncate" data-dev-meta>
-      Dev · <span className="font-mono text-sky-300">{dev?.branch ?? 'main'}</span>
+      Dev ·{' '}
+      {dev?.repo ? (
+        <>
+          <span className="font-mono text-zinc-200" title={dev.repo} data-dev-meta-repo>
+            {dev.repo}
+          </span>{' '}
+          · <span className="font-mono text-sky-300">{dev.branch ?? 'main'}</span>
+        </>
+      ) : (
+        <span>no repo yet</span>
+      )}
     </span>
   ) : null;
   // Phones: section titles stay pinned while their list scrolls, so they are never cut off

@@ -141,7 +141,9 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
         <Code size={14} />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block text-body font-medium truncate">Dev desk</span>
+        <span className="block text-body font-medium truncate">
+          Dev desk<span className="sr-only">, </span>
+        </span>
         <span className="block text-2xs text-zinc-400 truncate" data-dev-desk-status>
           {desk.landed || desk.reviews ? deskStatus(landed, reviews) : desk.error ? 'Couldn’t load' : 'Loading…'}
         </span>

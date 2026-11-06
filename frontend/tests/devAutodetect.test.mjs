@@ -33,6 +33,16 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
     server.state = { ...server.state, on: true, repo: null, status: 'no_repo' };
     return json({ ...server.state, check: { state: server.unreadable, repo: body.repo, branch: null, deploy_hint: null } });
   }
+  // Password store and approvals (B2): demo values only.
+  const path = u.split('?')[0];
+  if (path === '/api/passwords/store') return json(server.store ?? { store: 'local', local_count: 0, approvals_off: false });
+  if (path === '/api/spaces' && method === 'GET') return json(u.includes('archived=1') ? [] : server.spaces ?? []);
+  if (path === '/api/kwants' && method === 'GET') return json([]);
+  if (/^\/api\/spaces\/[^/]+\/approvals$/.test(path) && method === 'PUT') {
+    server.spaces = (server.spaces ?? []).map((sp) => (path.includes(sp.id) ? { ...sp, approvals: body.approvals } : sp));
+    if (server.store && server.spaces.every((sp) => sp.approvals === 'ask')) server.store = { ...server.store, approvals_off: false };
+    return json({ approvals: body.approvals });
+  }
   if (u.includes('/dev_mode')) {
     if (method === 'PUT') server.state = { ...server.state, ...body, status: 'watching' };
     return json(server.state);
@@ -50,7 +60,10 @@ const m = await loadBundled(`
   export { DevStatusLine } from './src/components/DevStatusLine';
   export { DevOnToast } from './src/components/DevOnToast';
   export { DevModeSwitch, DevOffNote } from './src/components/DevModeSwitch';
-  export { LooseSources } from './src/components/LooseEndsView';
+  export { LooseSources, AddSourceForm } from './src/components/LooseEndsView';
+  export { saveGate, SAVE_FIRST } from './src/passwordStore';
+  export { nextTabStop } from './src/components/DevOnToast';
+  export { lastOn } from './src/components/DevModeSwitch';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;
@@ -578,4 +591,198 @@ test('F3 DOM: on desktop the toast starts 16 px inside the main pane, never over
   const again = await toast({ status: 'no_repo', sources: [] });
   assert.equal(document.querySelector('[data-dev-on-toast]').style.left, '16px', 'no pane: 16 px');
   again.root.unmount();
+});
+
+// ---------------------------------------------------------------------------
+// Round 3 (Rigel's round 2: B2, B3, K1 and the minors)
+
+test('B2: saveGate reads the store: this server under approvals off is "store", a locked Bitwarden is "locked", else open', () => {
+  assert.equal(m.saveGate(null), 'open');
+  assert.equal(m.saveGate({ store: 'local', approvals_off: false, locked: false }), 'open');
+  assert.equal(m.saveGate({ store: 'local', approvals_off: true, locked: false }), 'store');
+  assert.equal(m.saveGate({ store: 'bitwarden', approvals_off: true, locked: true }), 'locked');
+  assert.equal(m.saveGate({ store: 'bitwarden', approvals_off: true, locked: false }), 'open');
+});
+
+const frame = () => new Promise((r) => setTimeout(r, 40));
+const connectForm = async (store, spaces) => {
+  reset({});
+  server.store = store;
+  server.spaces = spaces;
+  const r = await mount(h(m.LooseSources, { sources: [], error: null, onChanged: noop, initialAdding: true, initialKind: 'github', onAdded: noop, settled: true }));
+  await frame();
+  await settle();
+  return r;
+};
+
+test('B2 DOM: under "Ask only when risky" Connect offers the two ways out before any token field, and nothing is sent', async () => {
+  const { root } = await connectForm({ store: 'local', local_count: 0, approvals_off: true }, [{ id: 'spc_demo', approvals: 'smart' }]);
+  const gate = document.querySelector('[data-save-first]');
+  assert.ok(gate, 'the ways out show');
+  assert.equal(gate.dataset.saveFirst, 'store');
+  assert.equal(document.querySelector('input[type="password"]'), null, 'no token field to type into yet');
+  assert.match(gate.textContent, /One step before the token/);
+  assert.equal(gate.querySelector('[data-save-first-bitwarden]').textContent.trim(), 'Connect Bitwarden');
+  assert.equal(gate.querySelector('[data-save-first-ask]').textContent.trim(), 'Switch to “Ask before running commands”');
+  assert.ok(document.activeElement === gate.querySelector('[data-save-first-bitwarden]'), 'B3: focus lands on the first way out');
+  assert.equal(document.querySelector('button[type="submit"]').disabled, true);
+  assert.equal(server.calls.filter(([meth, u]) => meth === 'POST' && u.includes('/loose')).length, 0);
+  root.unmount();
+});
+
+test('B2 DOM: "Ask before running commands" switches every space and bot to ask, then the GitHub form is back with the token focused', async () => {
+  const { root } = await connectForm({ store: 'local', local_count: 0, approvals_off: true }, [{ id: 'spc_demo', approvals: 'smart' }]);
+  await click(document.querySelector('[data-save-first-ask]'));
+  await settle(20);
+  await frame();
+  assert.deepEqual(puts(), [{ approvals: 'ask' }]);
+  assert.equal(document.querySelector('[data-save-first]'), null);
+  const tok = document.querySelector('input[type="password"]');
+  assert.ok(tok, 'the token field is back');
+  assert.ok(document.activeElement === tok, 'and focused');
+  assert.equal(document.querySelector('[data-save-ready]').textContent, m.SAVE_FIRST.asked);
+  root.unmount();
+});
+
+test('B2 DOM: Connect Bitwarden opens the existing Bitwarden form in place; a locked Bitwarden offers Unlock only', async () => {
+  const one = await connectForm({ store: 'local', local_count: 0, approvals_off: true }, []);
+  await click(document.querySelector('[data-save-first-bitwarden]'));
+  assert.equal(document.querySelector('[data-save-first-bitwarden]'), null, 'the Bitwarden form replaces the buttons');
+  assert.ok(document.querySelector('[data-save-first] form, [data-save-first] input'), 'Bitwarden sign-in fields show');
+  one.root.unmount();
+  const two = await connectForm({ store: 'bitwarden', local_count: 0, approvals_off: true, bitwarden: { server_url: 'https://vault.bitwarden.com', email: 'demo@example.com', login: 'password', unlocked: false } }, []);
+  const gate = document.querySelector('[data-save-first]');
+  assert.equal(gate.dataset.saveFirst, 'locked');
+  assert.equal(gate.querySelector('[data-save-first-bitwarden]').textContent.trim(), 'Unlock Bitwarden');
+  assert.equal(gate.querySelector('[data-save-first-ask]'), null);
+  two.root.unmount();
+});
+
+test('B3 DOM: Connect lands on the GitHub form once the page has loaded: scrolled into view, token focused; not before', async () => {
+  reset({});
+  const scrolled = [];
+  const proto = window.HTMLElement.prototype;
+  const had = proto.scrollIntoView;
+  proto.scrollIntoView = function (o) {
+    scrolled.push([this.dataset.addSource, o?.block]);
+  };
+  const props = { sources: [], error: null, onChanged: noop, initialAdding: true, initialKind: 'github', onAdded: noop };
+  const { root } = await mount(h(m.LooseSources, { ...props, settled: false }));
+  assert.deepEqual(scrolled, [], 'nothing moves while the cases above are still loading');
+  assert.ok(document.activeElement?.type !== 'password');
+  root.render(h(m.LooseSources, { ...props, settled: true }));
+  await settle(20);
+  await frame();
+  assert.deepEqual(scrolled, [['github', 'start']]);
+  assert.ok(document.activeElement === document.querySelector('input[type="password"]'), 'focus: document.querySelector(\'input[type="password"]\')');
+  root.unmount();
+  proto.scrollIntoView = had;
+});
+
+test('B2/B3: Loose ends opened on its own (not from Connect) checks nothing and moves nothing', async () => {
+  reset({});
+  server.store = { store: 'local', local_count: 0, approvals_off: true };
+  const { root } = await mount(h(m.LooseSources, { sources: [], error: null, onChanged: noop, initialAdding: true, onAdded: noop }));
+  assert.equal(server.calls.filter(([, u]) => u === '/api/passwords/store').length, 0);
+  assert.equal(document.querySelector('[data-save-first]'), null);
+  root.unmount();
+});
+
+const withSwitch = async (props = {}) => {
+  reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] });
+  const page = document.createElement('div');
+  page.innerHTML = '<button data-dev-switch="on" id="sw">dev</button><a href="#x" id="after">Dev desk</a><button id="later">Later</button>';
+  document.body.appendChild(page);
+  const st = m.parseDevMode(server.state);
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  root.render(h(m.DevOnToast, { state: st, onOpenDesk: noop, onTypeRepo: noop, onUndo: async () => {}, onClose: noop, ...props }));
+  await settle();
+  return { root, sw: document.getElementById('sw'), after: document.getElementById('after') };
+};
+const tab = (el, shift = false) => {
+  const e = new window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: shift, bubbles: true, cancelable: true });
+  el.dispatchEvent(e);
+  return e.defaultPrevented;
+};
+
+test('K1 DOM: Tab from the switch goes straight to the toast; Shift+Tab goes back; Tab from Dismiss carries on after the switch', async () => {
+  const { root, sw, after } = await withSwitch();
+  sw.focus();
+  assert.ok(document.activeElement === sw, 'nothing steals focus when the toast opens');
+  assert.equal(tab(sw), true);
+  const action = document.querySelector('[data-dev-on-toast-action]');
+  assert.ok(document.activeElement === action, 'one Tab: Open Dev desk');
+  assert.equal(action.textContent.trim(), 'Open Dev desk');
+  assert.equal(tab(action, true), true);
+  assert.ok(document.activeElement === sw, 'Shift+Tab: back to the switch');
+  const dismiss = document.querySelector('[data-dev-on-toast] [aria-label="Dismiss"]');
+  dismiss.focus();
+  assert.equal(tab(dismiss), true);
+  assert.ok(document.activeElement === after, 'the next stop after the switch, as if the toast sat right after it');
+  const undo = document.querySelector('[data-dev-on-toast-undo]');
+  undo.focus();
+  assert.equal(tab(undo), false, 'Undo → Dismiss is the normal order');
+  root.unmount();
+});
+
+test('K1 DOM: the toast stays while keyboard focus or the pointer is on the switch, and goes after its time once they leave', async () => {
+  let closed = 0;
+  const { root, sw } = await withSwitch({ onClose: () => closed++, timeout: 40 });
+  sw.focus();
+  sw.dispatchEvent(new window.FocusEvent('focus'));
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(closed, 0, 'held while focus is on the switch');
+  sw.blur();
+  sw.dispatchEvent(new window.Event('pointerenter'));
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(closed, 0, 'held while the pointer is over the switch');
+  sw.dispatchEvent(new window.Event('pointerleave'));
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(closed, 1);
+  root.unmount();
+});
+
+test('K1 DOM: Dismiss from the keyboard puts focus back on the switch', async () => {
+  let closed = 0;
+  const { root, sw } = await withSwitch({ onClose: () => closed++ });
+  const dismiss = document.querySelector('[data-dev-on-toast] [aria-label="Dismiss"]');
+  dismiss.focus();
+  await click(dismiss);
+  assert.equal(closed, 1);
+  assert.ok(document.activeElement === sw, 'focus: sw');
+  root.unmount();
+});
+
+test('minor: the Dev desk row reads "Dev desk, 0 landed…" (a separator for screen readers), never "Dev desk0 landed"', async () => {
+  reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] });
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
+  const { root } = await mount(h(m.DevDeskRow, { spaceId: 'spc_demo', active: false, onOpen: noop }));
+  await settle(20);
+  const row = document.querySelector('[data-dev-desk-row]');
+  assert.doesNotMatch(row.textContent, /Dev desk\d/);
+  assert.match(row.textContent, /^Dev desk, /);
+  assert.ok(row.querySelector('.sr-only'), 'the comma is for screen readers only');
+  root.unmount();
+});
+
+test('minor: the switch starts from the last value seen here, so an on space never shows "off" while it loads', async () => {
+  reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] });
+  m.lastOn.set('spc_demo', true);
+  let release;
+  const realFetch = g.fetch;
+  g.fetch = g.window.fetch = (url, init) => (String(url).includes('/dev_mode') ? new Promise((r) => (release = () => r(realFetch(url, init)))) : realFetch(url, init));
+  const { root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
+  assert.equal(document.querySelector('[data-dev-switch]').getAttribute('aria-checked'), 'true', 'on from the first frame');
+  release();
+  await settle(20);
+  assert.equal(document.querySelector('[data-dev-switch]').getAttribute('aria-checked'), 'true');
+  g.fetch = g.window.fetch = realFetch;
+  root.unmount();
+  reset({ on: false });
+  const off = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' } }));
+  await settle(20);
+  assert.equal(m.lastOn.get('spc_demo'), false, 'turned off elsewhere: forgotten');
+  off.root.unmount();
 });

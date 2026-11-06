@@ -58,11 +58,33 @@ export interface DevModeSwitchProps {
   now?: () => number;
 }
 
+/** The last on/off seen per space, kept in this browser only (no repo, no token): the switch's first frame. */
+export const lastOn = {
+  key: (space: string) => `kw-dev-on:${space}`,
+  get(space: string): boolean {
+    try {
+      return localStorage.getItem(lastOn.key(space)) === '1';
+    } catch {
+      return false;
+    }
+  },
+  set(space: string, on: boolean) {
+    try {
+      if (on) localStorage.setItem(lastOn.key(space), '1');
+      else localStorage.removeItem(lastOn.key(space));
+    } catch {
+      /* private mode: the switch just starts off */
+    }
+  },
+};
+
 export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = false, onTurnedOff, onTurnedOn, initial, now = Date.now }) => {
   const reduced = useReducedMotion();
   const known = useDevMode(space.id);
+  // Until this space's state loads, start from the last value seen here, so a space that is on doesn't
+  // show "off" for a moment on every load.
   const [state, setState] = useState<SwitchState>(() =>
-    initialSwitch({ reduced, ...(known ? { on: known.on } : {}), ...initial }),
+    initialSwitch({ reduced, ...(known ? { on: known.on } : lastOn.get(space.id) ? { on: true } : {}), ...initial }),
   );
   // The reducer's truth lives in the ref, written only by dispatch. Copying `state` into it on render
   // would let a render that started before a dispatch (a store update mid-save) put an older state back.
@@ -101,8 +123,10 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
 
   // The store changes (the load above, SSE, Settings): follow it.
   useEffect(() => {
-    if (known) dispatch({ type: 'server', state: known });
-  }, [known, dispatch]);
+    if (!known) return;
+    dispatch({ type: 'server', state: known });
+    lastOn.set(space.id, known.on);
+  }, [known, dispatch, space.id]);
 
   // A lifted cover drops back after 5 s; a flip settles at 450 ms.
   useEffect(() => {
