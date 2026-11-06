@@ -364,6 +364,13 @@ export const SaveFirst: React.FC<{ gate: Exclude<SaveGate, 'open'>; onReady: (no
   const [error, setError] = useState<string | null>(null);
   const first = useRef<HTMLButtonElement>(null);
   const locked = gate === 'locked';
+  const box = useRef<HTMLDivElement>(null);
+  // Connect/Unlock Bitwarden opens its form in place: focus goes to its first field, not back to the page
+  useEffect(() => {
+    if (!step) return undefined;
+    const h = window.setTimeout(() => box.current?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled])')?.focus(), 0);
+    return () => window.clearTimeout(h);
+  }, [step, !!store.status]);
 
   const ask = async () => {
     setBusy(true);
@@ -383,7 +390,7 @@ export const SaveFirst: React.FC<{ gate: Exclude<SaveGate, 'open'>; onReady: (no
   };
 
   return (
-    <div role="group" aria-labelledby={`${id}-t`} className="sm:col-span-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 space-y-2" data-save-first={gate}>
+    <div ref={box} role="group" aria-labelledby={`${id}-t`} className="sm:col-span-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 space-y-2" data-save-first={gate}>
       <p id={`${id}-t`} className="text-xs font-medium text-amber-100">
         {locked ? SAVE_FIRST.lockedTitle : SAVE_FIRST.title}
       </p>
@@ -467,18 +474,23 @@ export const AddSourceForm: React.FC<{
   useEffect(() => {
     if (!connect || !land || gate === 'checking' || kind !== 'github') return undefined;
     if (landed.current === gate) return undefined;
-    landed.current = gate;
-    const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (f: () => void) => setTimeout(f, 0);
-    const h = raf(() => {
+    // Marked only once focus is in: a cancelled frame (StrictMode's second run, a re-render) tries
+    // again, and a way out that renders a frame later (the store panel loading) is waited for.
+    let h = 0;
+    let tries = 0;
+    const step = () => {
       const form = formRef.current;
-      if (!form) return;
+      const target = form && (gate === 'open' ? secretRef.current : form.querySelector<HTMLElement>('[data-land]:not([disabled])'));
+      if (!form || !target) {
+        if (++tries < 30) h = window.setTimeout(step, 50);
+        return;
+      }
+      landed.current = gate;
       form.scrollIntoView?.({ block: 'start', behavior: 'auto' });
-      const target = gate === 'open' ? secretRef.current : form.querySelector<HTMLElement>('[data-land]');
-      target?.focus({ preventScroll: true });
-    });
-    return () => {
-      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(h as number);
+      target.focus({ preventScroll: true });
     };
+    h = window.setTimeout(step, 0);
+    return () => window.clearTimeout(h);
   }, [connect, land, gate, kind]);
 
   const submit = async (e?: React.FormEvent) => {

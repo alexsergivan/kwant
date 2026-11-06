@@ -649,10 +649,13 @@ test('B2 DOM: Connect Bitwarden opens the existing Bitwarden form in place; a lo
   await click(document.querySelector('[data-save-first-bitwarden]'));
   assert.equal(document.querySelector('[data-save-first-bitwarden]'), null, 'the Bitwarden form replaces the buttons');
   assert.ok(document.querySelector('[data-save-first] form, [data-save-first] input'), 'Bitwarden sign-in fields show');
+  await frame();
+  assert.ok(['INPUT', 'SELECT'].includes(document.activeElement?.tagName) && document.activeElement.closest('[data-save-first]'), 'focus goes to its first field: ' + document.activeElement?.outerHTML?.slice(0, 120));
   one.root.unmount();
   const two = await connectForm({ store: 'bitwarden', local_count: 0, approvals_off: true, bitwarden: { server_url: 'https://vault.bitwarden.com', email: 'demo@example.com', login: 'password', unlocked: false } }, []);
   const gate = document.querySelector('[data-save-first]');
   assert.equal(gate.dataset.saveFirst, 'locked');
+  assert.ok(document.activeElement === gate.querySelector('[data-save-first-bitwarden]'), 'Unlock is focused');
   assert.equal(gate.querySelector('[data-save-first-bitwarden]').textContent.trim(), 'Unlock Bitwarden');
   assert.equal(gate.querySelector('[data-save-first-ask]'), null);
   two.root.unmount();
