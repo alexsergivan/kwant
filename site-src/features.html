@@ -51,23 +51,23 @@ card_art: team
     <div class="section-head">
       <p class="kicker">New in 0.7.1</p>
       <h2>Post a review to GitHub, and Dev mode in one press</h2>
-      <p>A bot's review of a pull request can go onto GitHub as your comment, and only when you press it. Dev mode now finds the repo itself, and turning it off takes two presses.</p>
+      <p>A bot's review of a pull request can go onto GitHub as your comment, and only when you press it. Dev mode now finds the repo itself, and turning it off takes two presses. New to Dev mode? <a href="#new-07">Start with 0.7</a>, just below.</p>
     </div>
     <div class="grid two">
       <article class="card" id="post-to-github">
-        <span class="shot">{{shot:v071-post-github|Review card #24 after posting. Its footer says it was posted as @demo-bot with 2 inline comments, with a View on GitHub link.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v071-post-github-card|The findings on review card #24 after posting, ending in a green line: Posted 13:42 as @demo-bot, 2 inline comments, with View on GitHub.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Post to GitHub</h3><p>A review card goes onto its pull request as one review comment, posted as you and pinned to the commit that was reviewed. Findings go on their lines. kwant never approves, requests changes or merges, a bot can't post, and secrets are never posted. <a href="docs/dev-mode.html#post">How posting works</a></p></div>
       </article>
       <article class="card" id="dev-on">
-        <span class="shot">{{shot:v071-dev-on|The Trailhead Outfitters space right after one press on the Dev mode switch. A note in the corner says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
-        <div class="card-body"><h3>One press on, and it finds the repo</h3><p>No setup dialog. kwant looks at the space's teams, their repo links and their folders, on your machine with no network, and says what it found with one fix and Undo. <strong>Switch</strong> lists the repos it found, with <strong>Type a repo</strong> last.</p></div>
+        <span class="shot">{{shot:v071-dev-on-card|The note that appears after one press on the Dev mode switch: Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>One press on, and it finds the repo</h3><p>No setup dialog. kwant looks at the space's teams, their repo links and their folders, on your machine with no network. A note says what it found, with Undo. When it found several repos, none, or no GitHub connection that can read it, the note adds one button for that: <strong>Switch</strong>, <strong>Type a repo</strong> or <strong>Connect GitHub</strong>.</p></div>
       </article>
       <article class="card" id="dev-off">
-        <span class="shot">{{shot:v071-dev-off-armed|The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v071-dev-off-armed-card|The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Two presses to turn it off</h3><p>The first press lifts the cover, the second within 5 seconds turns Dev mode off. Escape, clicking elsewhere or waiting keeps it on, and the off note has <strong>Turn back on</strong>.</p></div>
       </article>
       <article class="card" id="lgtm">
-        <span class="shot">{{shot:v071-lgtm|A review card with no findings, every security light green, and an LGTM stamp in its top right corner.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v071-lgtm-card|Review card #26, Add an order history page: Low risk, Small change, tests nearby, and an LGTM stamp in its top right corner.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>A new look for the Dev desk</h3><p>Landed cards show the commit, the pull request, a diffstat per file and a tests line. Reviews show the branch flow, a light for each security check, and an LGTM stamp when there's nothing to fix.</p></div>
       </article>
     </div>

@@ -185,7 +185,8 @@ def parse(path):
 
 
 # Desktop shots that are close-ups, not the whole app window, so they get no window bar (see img.app in site.css).
-CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-human-check-card"}
+CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-human-check-card",
+            "v071-post-github-card", "v071-dev-on-card", "v071-dev-off-armed-card", "v071-lgtm-card"}
 
 
 def shot(root, name, alt, sizes):
