@@ -35,6 +35,8 @@ export interface LandedListProps {
   forge?: Forge | null;
   /** 0.7.2: the card's repo chip text, or null with one repo in the space (`cardRepoLabel`). */
   repoLabel?: (repo: string | null, name?: string | null) => string | null;
+  /** 0.7.3 (any-git): is this card's repo read with plain git? Then no CI tile and no "Open on {Forge}" link. */
+  gitOnly?: (repo: string | null) => boolean;
 }
 
 export interface ReviewCardProps {
@@ -49,6 +51,8 @@ export interface ReviewCardProps {
   now?: number;
   /** 0.7.2: the card's repo chip text, or null with one repo in the space (`cardRepoLabel`). */
   repoLabel?: (repo: string | null, name?: string | null) => string | null;
+  /** 0.7.3 (any-git): the card's repo is read with plain git: no forge, so no Post button. */
+  gitOnly?: boolean;
 }
 
 export interface ReleaseNotesSheetProps {
@@ -67,14 +71,14 @@ export const Rollup: React.FC<RollupProps> = ({ cards = [], ...rest }) => {
   return <IrisRollup {...rest} needsYouAreas={needs} />;
 };
 
-export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onOpenReview, forge = null, repoLabel }) => {
+export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onOpenReview, forge = null, repoLabel, gitOnly }) => {
   const parsed = useMemo(() => parseLandedCards(cards), [cards]);
   const parsedReviews = useMemo(() => parseReviewCards(reviews), [reviews]);
   // Cards Iris's parser refuses (no PR number and no commit, wrong kind) still show, as the plain fallback row.
   const refused = useMemo(() => cards.filter((c) => parseLanded(c) === null), [cards]);
   return (
     <>
-      {parsed.length > 0 && <IrisLandedList cards={parsed} reviews={parsedReviews} now={now} onOpenReview={onOpenReview} forge={forge} repoLabel={repoLabel} />}
+      {parsed.length > 0 && <IrisLandedList cards={parsed} reviews={parsedReviews} now={now} onOpenReview={onOpenReview} forge={forge} repoLabel={repoLabel} gitOnly={gitOnly} />}
       {refused.map((c) => (
         <CardFallback key={c.id} raw={c} />
       ))}
@@ -82,7 +86,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onO
   );
 };
 
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, forge, forgeLogin, sample, now, repoLabel }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, forge, forgeLogin, sample, now, repoLabel, gitOnly = false }) => {
   const parsed = useMemo(() => parseReview(card), [card]);
   if (!parsed) return <CardFallback raw={card} />;
   const send = async (cardId: string, findingId: string, action: FindingAction): Promise<Review> => {
@@ -90,14 +94,14 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost,
     if (!next) throw new Error('The review came back in a shape this app doesn’t know.');
     return next;
   };
-  const post = onPost
+  const post = onPost && !gitOnly
     ? async (cardId: string): Promise<Review> => {
         const next = parseReview(await onPost(cardId));
         if (!next) throw new Error('The review came back in a shape this app doesn’t know.');
         return next;
       }
     : undefined;
-  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} forge={forge} forgeLogin={forgeLogin} sample={sample} now={now} repoLabel={repoLabel} />;
+  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} forge={gitOnly ? null : forge} forgeLogin={forgeLogin} sample={sample} now={now} repoLabel={repoLabel} />;
 };
 
 export const ReleaseNotesSheet: React.FC<ReleaseNotesSheetProps> = ({ card, onSaveToNotion, onDiscard, onClose }) => {

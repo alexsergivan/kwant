@@ -181,8 +181,10 @@ test('flow F3: the switch-on toast by status (Mira’s flow copy §3), with its 
   assert.deepEqual(t({ status: 'no_repo', sources: [] }), ['Dev mode on · guards are up. No git repo in this space’s folders yet. The floor works now.', 'type']);
   assert.deepEqual(t({}), ['Dev mode on. Looking for a git repo in your teams’ folders…', 'open'], 'checking: no status yet');
   assert.equal(m.onToast(state({})).checking, true);
-  assert.equal(t({ status: 'watching', repo: 'demo-docs', sources: [SOURCES[2]] })[1], 'open', 'a local repo is not watched yet');
-  assert.match(t({ status: 'watching', repo: 'demo-docs', sources: [SOURCES[2]] })[0], /guards are up\. Docs’s folder has a local repo with no remote/);
+  // 0.7.3 (any-git): a folder with no remote is read with git, so it is watched, landed changes only
+  // (copy-073 §1b). An older server's shape names no branch, so none is shown.
+  assert.equal(t({ status: 'watching', repo: 'demo-docs', sources: [SOURCES[2]] })[1], 'open');
+  assert.match(t({ status: 'watching', repo: 'demo-docs', sources: [SOURCES[2]] })[0], /^Dev mode on\. Watching demo-docs\. Landed changes only for now\.$/);
 });
 
 test('first-run block copy (flow copy §5): three numbered lines', () => {

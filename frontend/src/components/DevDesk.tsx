@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
-import { DEV_FEATURES, DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
+import { DEV_FEATURES, DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, gitOnlyRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
@@ -201,6 +201,8 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   const repo = repoPick && filters.some((f) => f.key === repoPick) ? repoPick : null;
   const desk = useDesk(spaceId, true, repo);
   const repoLabel = useCallback((key: string | null, name?: string | null) => cardRepoLabel(dev, key, name), [dev]);
+  // 0.7.3 (any-git): a repo read with plain git has no forge: no CI tile, no Post button, no "Open on" link.
+  const gitOnly = useCallback((key: string | null) => gitOnlyRepo(dev, key), [dev]);
   const [tab, setTab] = useState<Tab>(initialTab);
   // Flow F6: opening the desk clears the row badge on every device. On a deep link to /s/<space>/dev
   // the store is still empty here, so the first state to arrive (fetched before the server saw the
@@ -502,7 +504,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                   />
                 )}
                 {landedCards.length ? (
-                  <LandedList cards={landedCards} reviews={reviews} now={now} onOpenReview={openReview} forge={dev?.forge ?? null} repoLabel={repoLabel} />
+                  <LandedList cards={landedCards} reviews={reviews} now={now} onOpenReview={openReview} forge={dev?.forge ?? null} repoLabel={repoLabel} gitOnly={gitOnly} />
                 ) : dev?.status === 'not_connected' ? (
                   <TermEmpty out="(needs a GitHub connection)" title="Connect GitHub to see what landed." line="The last 5 merges show up here right after." />
                 ) : dev?.status === 'no_repo' ? (
@@ -523,7 +525,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                 )}
               </>
             ) : reviews.length ? (
-              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} now={now} repoLabel={repoLabel} />)
+              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} />)
             ) : (
               desk.reviews && (
                 <TermEmpty

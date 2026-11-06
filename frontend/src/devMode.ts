@@ -34,10 +34,16 @@ export interface DevModeState {
   /** 0.7.2 (team repos, T8): every repo Dev mode watches or found, in team order. On an older server it is
    * built from the deprecated `repo`/`branch` (and `sources`), so the desk reads one shape. */
   repos: DevRepo[];
+  /** 0.7.3 (any-git): with status `no_git`, what to install on the server. null otherwise or on an older server. */
+  install_hint: string | null;
 }
 
 /** 0.7.2: one repo of the space, from a team (its repo link or folder) or added by hand. */
-export type RepoStatus = 'watching' | 'not_connected' | 'other_host' | 'error' | 'too_many';
+/** `other_host` is retired in 0.7.3 (git reads every host) but still comes from a 0.7.1 or 0.7.2 server. */
+/** `no_repo` (0.7.3): a team's folder whose remote kwant won't fetch (on this machine, or not a git URL). */
+export type RepoStatus = 'watching' | 'not_connected' | 'no_git' | 'no_repo' | 'other_host' | 'error' | 'too_many';
+/** Who reads a repo: GitHub (reviews, CI, Post) or plain git (landed changes only, until its forge exists). */
+export type RepoProvider = 'github' | 'git';
 
 export interface DevRepo {
   /** The dedupe key, `host/owner/name` lowercased. Cards carry it as `repo`; `?repo=` filters by it. */
@@ -54,10 +60,14 @@ export interface DevRepo {
   branch: string | null;
   status: RepoStatus;
   poll_error: string | null;
+  /** 0.7.3: a machine code for the poll error when the server sends one (`too_big`), else null. */
+  poll_code: string | null;
   polled_at: string | null;
   last_tag: string | null;
-  /** Only `hand` rows can be removed. null: no row (other_host, too_many). */
+  /** Only `hand` rows can be removed. null: no row (other_host, no_git, too_many). */
   added_by: 'team' | 'hand' | null;
+  /** 0.7.3: `provider` when the server sends it, else `git` for a folder with no remote or a host other than github.com. */
+  provider: RepoProvider;
 }
 
 /** Where a space's repo was found: a team's repo link, a git folder with a remote, or a folder with no remote. */
@@ -71,7 +81,8 @@ export interface DevSource {
   from: SourceFrom;
 }
 
-export type DevStatus = 'watching' | 'no_repo' | 'not_connected' | 'other_host';
+/** `other_host` is retired in 0.7.3 and kept for older servers; `no_git` is new in 0.7.3. */
+export type DevStatus = 'watching' | 'no_repo' | 'not_connected' | 'no_git' | 'other_host';
 
 export type CheckState = 'found' | 'not_found' | 'not_connected';
 
@@ -87,7 +98,7 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? 
 export type Forge = 'github' | 'gitlab' | 'gitea';
 export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'gitlab' || v === 'gitea' ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-const STATUSES: readonly DevStatus[] = ['watching', 'no_repo', 'not_connected', 'other_host'];
+const STATUSES: readonly DevStatus[] = ['watching', 'no_repo', 'not_connected', 'no_git', 'other_host'];
 
 /** Drops userinfo from a URL-looking repo (`https://user:token@host/…`), so a token never reaches the screen. */
 export const stripUserinfo = (repo: string): string => repo.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@\s]*@/i, '$1');
@@ -107,7 +118,14 @@ export function parseSources(v: unknown): DevSource[] {
   return out;
 }
 
-const REPO_STATUSES: readonly RepoStatus[] = ['watching', 'not_connected', 'other_host', 'error', 'too_many'];
+const REPO_STATUSES: readonly RepoStatus[] = ['watching', 'not_connected', 'no_git', 'no_repo', 'other_host', 'error', 'too_many'];
+
+/** A repo's reader: the server's `provider` when sent, else plain git for a local folder or any host but github.com. */
+export const providerOf = (provider: unknown, from: unknown, host: string | null, key = ''): RepoProvider => {
+  if (provider === 'github' || provider === 'git') return provider;
+  if (from === 'local' || key.startsWith('local:')) return 'git';
+  return host && host.toLowerCase() !== 'github.com' ? 'git' : 'github';
+};
 
 /** A key for a repo the server sent no key for (an older server): `host/owner/name`, lowercased. */
 export const repoKey = (repo: string, host: string | null = 'github.com'): string => {
@@ -146,10 +164,12 @@ export function parseRepos(v: unknown): DevRepo[] {
       branch: str(o.branch),
       status,
       poll_error: str(o.poll_error),
+      poll_code: str(o.poll_code),
       polled_at: str(o.polled_at),
       last_tag: str(o.last_tag),
       // A 0.7.1 row migrated without a team reads as hand (api.md T2).
       added_by: o.added_by === 'hand' || o.added_by === 'migrated' || (from === 'hand' && o.added_by !== 'team') ? 'hand' : o.added_by === 'team' ? 'team' : null,
+      provider: providerOf(o.provider, from, host, key),
     });
   }
   return out;
@@ -162,7 +182,7 @@ function legacyRepos(o: Record<string, unknown>, sources: DevSource[], status: D
   const src = repo ? sources.find((x) => x.repo.toLowerCase() === repo.toLowerCase()) ?? null : status === 'not_connected' || status === 'other_host' ? sources.find((x) => status !== 'other_host' || (x.host && x.host !== 'github.com')) ?? sources[0] ?? null : null;
   const name = repo ?? src?.repo ?? null;
   if (!name) return [];
-  const st: RepoStatus = status === 'not_connected' || status === 'other_host' ? status : src?.from === 'local' ? 'other_host' : 'watching';
+  const st: RepoStatus = status === 'not_connected' || status === 'other_host' || status === 'no_git' ? status : 'watching';
   return [
     {
       key: repoKey(name, src?.host ?? 'github.com'),
@@ -174,10 +194,12 @@ function legacyRepos(o: Record<string, unknown>, sources: DevSource[], status: D
       branch: str(o.branch),
       status: st,
       poll_error: str(o.poll_error),
+      poll_code: str(o.poll_code),
       polled_at: str(o.polled_at),
       last_tag: null,
       // An older server has no DELETE route: its typed repo has no Remove.
       added_by: src ? 'team' : null,
+      provider: providerOf(null, src?.from, src?.host ?? null),
     },
   ];
 }
@@ -213,6 +235,7 @@ export function parseDevMode(raw: unknown): DevModeState | null {
       return n === null ? null : Math.max(0, Math.floor(n));
     })(),
     repos: Array.isArray(o.repos) ? parseRepos(o.repos) : legacyRepos(o, sources, status),
+    install_hint: str(o.install_hint),
   };
 }
 
@@ -268,6 +291,8 @@ export interface RepoRow {
   teamNote: string | null;
   /** Tooltip for an error row: the poll error, URLs without their userinfo. */
   title: string | null;
+  /** 0.7.3: the row's quiet second line (Mira's tooltip): read with git, what to install, a refused address, too big. */
+  note: string | null;
   led: Led;
   /** The row's one action, or null. */
   action: RowAction | null;
@@ -293,6 +318,53 @@ export const NEEDS_GITHUB = 'Needs your GitHub connection';
 export const CANT_READ = 'Can’t read it right now. Trying again.';
 export const LOCAL_ONLY = 'Local folder, no remote';
 export const hostNotRead = (host: string | null) => `${host ?? 'This host'} isn’t read yet`;
+// 0.7.3 (any-git) copy: Mira's dev-mode/any-git/copy-073.md. Never "forge", "mirror", "clone", "provider",
+// "poll", "ref" or a remote URL in anything the person sees.
+/** §1a `no_git`: no git 2.31 or newer on the server. */
+export const NEEDS_GIT = 'Needs git on the server';
+/** §1a: the server's `install_hint` as a full sentence (an early #366 sent it lower-case, with no full stop). */
+const hintSentence = (t: string) => {
+  const x = t.trim();
+  return x.charAt(0).toUpperCase() + x.slice(1).replace(/[\s.]*$/, '.');
+};
+/** §1a tooltip: "Dev mode reads this repo with git. {install_hint} Then press Refresh." */
+export const noGitTip = (hint: string | null = null) =>
+  hint?.trim() ? `Dev mode reads this repo with git. ${hintSentence(hint)} Then press Refresh.` : 'Dev mode reads this repo with git. Install git 2.31 or newer on the server, then press Refresh.';
+/** §1b: a repo read with plain git (GitLab, Gitea, a plain git server or a folder): landed cards only. */
+export const LANDED_ONLY = 'Landed changes only';
+/** §1b tooltips. With no branch name (the remote's default branch) it says "its default branch" (not in Mira's file). */
+export const gitTip = (r: Pick<DevRepo, 'from' | 'team' | 'branch'>) => {
+  const branch = r.branch || 'its default branch';
+  return r.from === 'local'
+    ? `Read from ${r.team ?? 'this team'}’s folder on the server: shows what lands on ${branch}. It has no remote, so there are no reviews or CI checks.`
+    : `Watching with git: shows what lands on ${branch}. Reviews and CI checks work on GitHub repos for now.`;
+};
+/** §1c: the server's too-big error (`poll_code: 'too_big'`, or its exact sentence). */
+const TOO_BIG_ERROR = /too big for Dev mode to read/i;
+const isTooBig = (r: DevRepo) => r.status === 'error' && (r.poll_code === 'too_big' || TOO_BIG_ERROR.test(r.poll_error ?? ''));
+/** The size is shown only when the server's own error carries it, so the number always equals its limit. */
+const overGb = (r: DevRepo) => /\(over 1 GB\)/.test(r.poll_error ?? '');
+export const TOO_BIG = 'Too big to read';
+export const TOO_BIG_GB = 'Too big to read (over 1 GB)';
+export const TOO_BIG_TIP = 'Dev mode keeps its own copy of each repo to read it, and stops at 1 GB. This repo is bigger, so no cards come from it.';
+/** §1d `no_repo` row: the repo address points at this server, or isn't a git address. */
+export const CANT_USE = 'Can’t use this repo address';
+export const CANT_USE_SUB = 'Can’t use the repo address';
+export const cantUseTip = (team: string | null) =>
+  `Dev mode only reads https, ssh or git addresses on another computer. This one points at this server, or isn’t a git address. Change it in ${team ?? 'the team'}’s settings or in the folder’s git remote.`;
+/** A row's quiet second line (Mira's tooltip text, shown so keyboard, touch and screen readers get it too). */
+export const repoNote = (r: DevRepo, hint: string | null = null): string | null => {
+  if (r.status === 'no_git') return noGitTip(hint);
+  if (r.status === 'no_repo') return cantUseTip(r.team);
+  if (isTooBig(r)) return overGb(r) ? TOO_BIG_TIP : null;
+  return r.provider === 'git' && r.status === 'watching' ? gitTip(r) : null;
+};
+/** Is this card's repo read with plain git (no forge: no CI tile, no Post button, no "Open on" link)? */
+export const gitOnlyRepo = (s: DevModeState | null, key: unknown): boolean => {
+  if (!s || typeof key !== 'string' || !key.trim()) return false;
+  const k = key.toLowerCase();
+  return s.repos.some((r) => r.key === k && r.provider === 'git');
+};
 export const teamNoteText = (team: string, from: DevRepo['from']) =>
   from === 'folder' ? `Comes from ${team}’s folder. Change it in the team’s settings.` : `Comes from ${team}’s repo link. Change it in the team’s settings.`;
 export const removedText = (repo: string) => `Stopped watching ${repo}. Its cards stay.`;
@@ -310,29 +382,35 @@ export const READY_TITLE = 'Will watch when Dev mode is on';
 export const DEV_OFF = 'Dev mode is off';
 
 const rowState = (r: DevRepo, on = true): { state: string; led: Led } => {
-  if (r.from === 'local') return { state: LOCAL_ONLY, led: 'off' };
   switch (r.status) {
     case 'watching': {
       if (!on) return { state: READY, led: 'off' };
       const t = checkedTime(r.polled_at);
-      return { state: t ? `Watching · checked ${t}` : 'Watching', led: 'ok' };
+      const what = r.provider === 'git' ? LANDED_ONLY : 'Watching';
+      return { state: t ? `${what} · checked ${t}` : what, led: 'ok' };
     }
     case 'not_connected':
       return { state: NEEDS_GITHUB, led: 'warn' };
+    case 'no_git':
+      return { state: NEEDS_GIT, led: 'warn' };
+    case 'no_repo':
+      return { state: CANT_USE, led: 'warn' };
     case 'other_host':
-      return { state: hostNotRead(r.host), led: 'off' };
+      // A 0.7.1/0.7.2 server: a folder with no remote, or a host it doesn't read yet.
+      return { state: r.from === 'local' || !r.host ? LOCAL_ONLY : hostNotRead(r.host), led: 'off' };
     case 'error':
-      return { state: CANT_READ, led: 'bad' };
+      return { state: isTooBig(r) ? (overGb(r) ? TOO_BIG_GB : TOO_BIG) : CANT_READ, led: 'bad' };
     default:
       return { state: TOO_MANY, led: 'off' };
   }
 };
 
 const rowOrigin = (r: DevRepo): string | null =>
-  r.added_by === 'hand' ? 'Added by you' : r.team && r.from === 'repo' ? `From ${r.team}’s repo link` : r.team && r.from === 'folder' ? `From ${r.team}’s folder` : null;
+  r.added_by === 'hand' ? 'Added by you' : r.team && r.from === 'repo' ? `From ${r.team}’s repo link` : r.team && (r.from === 'folder' || r.from === 'local') ? `From ${r.team}’s folder` : null;
 
 /** A row's one action: Connect GitHub when the repo needs it, else Remove for a hand-added repo. */
-const rowAction = (r: DevRepo): RowAction | null => (r.status === 'not_connected' ? 'connect' : r.added_by === 'hand' ? 'remove' : null);
+const rowAction = (r: DevRepo): RowAction | null =>
+  r.status === 'not_connected' ? 'connect' : r.added_by === 'hand' ? 'remove' : r.status === 'no_repo' && (r.team_id || r.team) ? 'link' : null;
 
 /** Does this team bring a repo (a watched one, or one found in its folder)? */
 const teamHasRepo = (s: DevModeState, t: DevTeamRef) => s.repos.some((r) => r.team_id === t.id || r.team === t.name) || s.sources.some((x) => x.team === t.name);
@@ -340,19 +418,20 @@ const teamHasRepo = (s: DevModeState, t: DevTeamRef) => s.repos.some((r) => r.te
 /** The space's teams with no repo at all. */
 export const teamsWithoutRepo = (s: DevModeState | null, teams: DevTeamRef[] = []): DevTeamRef[] => (s ? teams.filter((t) => !teamHasRepo(s, t)) : []);
 
-const repoRow = (r: DevRepo, teams: DevTeamRef[], on = true): RepoRow => ({
+const repoRow = (r: DevRepo, teams: DevTeamRef[], on = true, hint: string | null = null): RepoRow => ({
   id: r.key,
   team: r.team,
   teamId: r.team_id ?? teams.find((t) => t.name === r.team)?.id ?? null,
   repo: r,
   ...rowState(r, on),
   origin: rowOrigin(r),
-  teamNote: r.added_by !== 'hand' && r.team && (r.from === 'repo' || r.from === 'folder') ? teamNoteText(r.team, r.from) : null,
+  teamNote: r.added_by !== 'hand' && r.team && (r.from === 'repo' || r.from === 'folder' || r.from === 'local') ? teamNoteText(r.team, r.from === 'local' ? 'folder' : r.from) : null,
   title: r.status === 'error' ? safeError(r.poll_error) : null,
+  note: repoNote(r, hint),
   action: rowAction(r),
 });
 
-const noRepoRow = (t: DevTeamRef): RepoRow => ({ id: `team:${t.id}`, team: t.name, teamId: t.id, repo: null, state: 'No repo', origin: null, teamNote: null, title: null, led: 'off', action: 'link' });
+const noRepoRow = (t: DevTeamRef): RepoRow => ({ id: `team:${t.id}`, team: t.name, teamId: t.id, repo: null, state: 'No repo', origin: null, teamNote: null, title: null, note: null, led: 'off', action: 'link' });
 
 /**
  * The Dev desk's repo list (0.7.2, spec §6 and §9b): one row per repo in team order. Teams with no repo
@@ -360,7 +439,7 @@ const noRepoRow = (t: DevTeamRef): RepoRow => ({ id: `team:${t.id}`, team: t.nam
  */
 export function repoRows(s: DevModeState | null, teams: DevTeamRef[] = []): RepoRow[] {
   if (!s) return [];
-  const rows = s.repos.map((r) => repoRow(r, teams, s.on));
+  const rows = s.repos.map((r) => repoRow(r, teams, s.on, s.install_hint));
   if (!s.repos.some((r) => r.status === 'watching')) rows.push(...teamsWithoutRepo(s, teams).map(noRepoRow));
   return rows;
 }
@@ -381,17 +460,20 @@ export interface StatusLine {
   collapsed: boolean;
   /** §9b: teams with no repo while some repo is watched, folded into one quiet last line. */
   noRepoTeams: DevTeamRef[];
+  /** 0.7.3, one repo: the quiet line under it (see repoNote). */
+  note: string | null;
 }
 
 const NO_REPO = 'No git repo in this space’s folders yet. The floor and guards are on.';
 
 /** Repos that need the person: not connected or failing (spec §9b: teams with no repo never count). */
-export const needsYouCount = (s: DevModeState) => s.repos.filter((r) => r.status === 'not_connected' || r.status === 'error').length;
+export const needsYouCount = (s: DevModeState) =>
+  s.repos.filter((r) => r.status === 'not_connected' || r.status === 'error' || r.status === 'no_git' || r.status === 'no_repo').length;
 
 /** The summary over several repos: "Watching 4 repos", or "Watching 3 of 4 repos · 1 needs you". */
 export function reposSummary(s: DevModeState): string {
   const total = s.repos.length;
-  const n = s.repos.filter((r) => r.status === 'watching' && r.from !== 'local').length;
+  const n = s.repos.filter((r) => r.status === 'watching').length;
   if (!total) return 'No repos yet';
   const need = needsYouCount(s);
   // Off (answer 2): the same count reads as ready, never as watched.
@@ -409,13 +491,15 @@ export function reposSummary(s: DevModeState): string {
 export const noRepoTeamsText = (n: number) => (n === 1 ? '1 team has no repo' : `${n} teams have no repo`);
 
 /** One repo as a single line, as in 0.7.1: "Watching demo-org/app · main". */
-function singleLine(r: DevRepo, on = true): Omit<StatusLine, 'rows' | 'collapsed' | 'noRepoTeams'> {
+function singleLine(r: DevRepo, on = true): Omit<StatusLine, 'rows' | 'collapsed' | 'noRepoTeams' | 'note'> {
   const { state, led } = rowState(r, on);
   const action = rowAction(r);
-  if (r.status === 'watching' && r.from !== 'local' && !on)
-    return { status: 'watching', led, action, parts: [{ text: r.repo, mono: true }, { text: ' · ' }, { text: r.branch || 'main', mono: true, branch: true }, { text: ` · ${READY}` }] };
-  if (r.status === 'watching' && r.from !== 'local')
-    return { status: 'watching', led, action, parts: [{ text: 'Watching ' }, { text: r.repo, mono: true }, { text: ' · ' }, { text: r.branch || 'main', mono: true, branch: true }] };
+  // A git row's branch can be '' (the remote's default, name unknown): no branch, never "main" (copy-073 §3.2).
+  const git = r.provider === 'git';
+  const branch: StatusLine['parts'] = git && !r.branch ? [] : [{ text: ' · ' }, { text: r.branch || 'main', mono: true, branch: true }];
+  if (r.status === 'watching' && !on) return { status: 'watching', led, action, parts: [{ text: r.repo, mono: true }, ...branch, { text: ` · ${READY}` }] };
+  if (r.status === 'watching')
+    return { status: 'watching', led, action, parts: [{ text: 'Watching ' }, { text: r.repo, mono: true }, ...branch, ...(git ? [{ text: ' · landed changes only' }] : [])] };
   return { status: r.status, led, action, parts: [{ text: r.repo, mono: true }, { text: ` · ${state}` }] };
 }
 
@@ -426,15 +510,18 @@ export function statusLine(s: DevModeState | null, teams: DevTeamRef[] = []): St
   const noRepoTeams = s.repos.some((r) => r.status === 'watching') ? teamsWithoutRepo(s, teams) : [];
   // GitHub isn't connected and no repo was read yet: Connect first, as in 0.7.1.
   if (rows.length === 0 && s.status === 'not_connected')
-    return { status: 'not_connected', parts: [{ text: 'Reviews need your GitHub connection.' }], action: 'connect', led: 'warn', rows: [], collapsed: false, noRepoTeams };
-  if (rows.length === 0) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false, noRepoTeams };
+    return { status: 'not_connected', parts: [{ text: 'Reviews need your GitHub connection.' }], action: 'connect', led: 'warn', rows: [], collapsed: false, noRepoTeams, note: null };
+  // 0.7.3: the server can't read a repo without git, and none is watched yet.
+  if (rows.length === 0 && s.status === 'no_git')
+    return { status: 'no_git', parts: [{ text: NEEDS_GIT }], action: null, led: 'warn', rows: [], collapsed: false, noRepoTeams, note: noGitTip(s.install_hint) };
+  if (rows.length === 0) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false, noRepoTeams, note: null };
   if (rows.length === 1) {
     const r = rows[0];
-    if (!r.repo) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false, noRepoTeams };
-    return { ...singleLine(r.repo, s.on), rows: [], collapsed: false, noRepoTeams };
+    if (!r.repo) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false, noRepoTeams, note: null };
+    return { ...singleLine(r.repo, s.on), rows: [], collapsed: false, noRepoTeams, note: repoNote(r.repo, s.install_hint) };
   }
   const led: Led = rows.some((r) => r.led === 'bad') ? 'bad' : rows.some((r) => r.led === 'warn') ? 'warn' : rows.some((r) => r.led === 'ok') ? 'ok' : 'off';
-  return { status: s.status, parts: [{ text: reposSummary(s) }], action: null, led, rows, collapsed: rows.length > LIST_OPEN_MAX, noRepoTeams };
+  return { status: s.status, parts: [{ text: reposSummary(s) }], action: null, led, rows, collapsed: rows.length > LIST_OPEN_MAX, noRepoTeams, note: null };
 }
 
 /** The toast after the switch turns Dev mode on (flow F3, Mira's flow copy §3). `action` is the
@@ -459,8 +546,13 @@ export function onToast(s: DevModeState | null): OnToast {
       const watched = s.repos.filter((r) => r.status === 'watching');
       const first = watched[0] ?? s.repos.find((r) => r.from === 'local') ?? null;
       if (watched.length > 1) return { title: ON, body: [{ text: `${reposSummary(s)}.` }], action: 'open', checking: false };
-      if (first?.from === 'local')
+      // A 0.7.2 server watches nothing in a folder with no remote; 0.7.3 reads it with git (a watching row).
+      if (first?.from === 'local' && first.status !== 'watching')
         return { title: GUARDS, body: [{ text: `${first.team ?? 'This team'}’s folder has a local repo with no remote. The floor works now.` }], action: 'open', checking: false };
+      if (first?.provider === 'git') {
+        const on: OnToast['body'] = first.branch ? [{ text: ' on ' }, { text: first.branch, mono: true }] : [];
+        return { title: ON, body: [{ text: 'Watching ' }, { text: first.repo, mono: true }, ...on, { text: '. Landed changes only for now.' }], action: 'open', checking: false };
+      }
       return {
         title: ON,
         body: [{ text: 'Watching ' }, { text: first?.repo ?? s.repo ?? '', mono: true }, { text: ' on ' }, { text: first?.branch || s.branch || 'main', mono: true }, { text: '.' }],
@@ -477,6 +569,15 @@ export function onToast(s: DevModeState | null): OnToast {
         checking: false,
       };
     }
+    case 'no_git': {
+      const repo = s.repos.find((r) => r.status === 'no_git')?.repo ?? s.repo ?? s.sources[0]?.repo;
+      return {
+        title: GUARDS,
+        body: repo ? [{ text: 'Needs git on the server to read ' }, { text: repo, mono: true }, { text: '. The floor works now.' }] : [{ text: 'Needs git on the server to read this repo. The floor works now.' }],
+        action: 'open',
+        checking: false,
+      };
+    }
     case 'other_host': {
       const host = s.repos.find((r) => r.status === 'other_host' && r.host)?.host ?? s.sources.find((x) => x.host && x.host !== 'github.com')?.host;
       return {
@@ -486,8 +587,12 @@ export function onToast(s: DevModeState | null): OnToast {
         checking: false,
       };
     }
-    default:
+    default: {
+      // copy-073 §1d: the team has a repo, but its address was refused.
+      const refused = s.repos.find((r) => r.status === 'no_repo');
+      if (refused) return { title: GUARDS, body: [{ text: 'Can’t use ' }, { text: refused.repo, mono: true }, { text: '’s address. The floor works now.' }], action: 'open', checking: false };
       return { title: GUARDS, body: [{ text: 'No git repo in this space’s folders yet. The floor works now.' }], action: 'type', checking: false };
+    }
   }
 }
 
@@ -496,7 +601,7 @@ export function onToast(s: DevModeState | null): OnToast {
 
 /** The short name on a filter chip: the repo's last part ("app"), or owner/name when two share it. */
 export function repoFilters(s: DevModeState | null): Array<{ key: string; label: string; repo: string }> {
-  const list = (s?.repos ?? []).filter((r) => r.status !== 'too_many' && r.status !== 'other_host');
+  const list = (s?.repos ?? []).filter((r) => r.status !== 'too_many' && r.status !== 'other_host' && r.status !== 'no_git' && r.status !== 'no_repo');
   if (list.length < 2) return [];
   const short = (r: DevRepo) => r.repo.replace(/\/+$/, '').split('/').pop() || r.repo;
   const counts = new Map<string, number>();
@@ -763,7 +868,7 @@ export const EXPLAINER = {
   notOwner: 'Only the space owner can turn on Dev mode.',
 } as const;
 
-export type DevSubState = 'loading' | 'off' | 'disabled' | 'watching' | 'several' | 'partial' | 'no_repo' | 'not_connected' | 'other_host' | 'error' | 'armed';
+export type DevSubState = 'loading' | 'off' | 'disabled' | 'watching' | 'several' | 'partial' | 'no_repo' | 'not_connected' | 'no_git' | 'no_address' | 'other_host' | 'error' | 'armed';
 export type DevSubAction = 'repos' | 'link' | 'connect';
 
 export interface DevSub {
@@ -799,7 +904,8 @@ export const devListPending = (s: DevModeState | null, o: { loading?: boolean; t
 
 /**
  * The Dev mode row's one line under the label (spec §2). Which state wins: armed, then if any
- * repo is watched several / partial / watching, else error, not_connected, other_host, no_repo. Counts
+ * repo is watched several / partial / watching, else error, not_connected, no_git, a refused address
+ * (no_address), other_host, no_repo. Counts
  * come straight from repos[]; nothing is added up beyond counting rows.
  */
 export function devSubLine(s: DevModeState | null, o: { armed?: boolean; disabled?: boolean; turningOn?: boolean; loading?: boolean } = {}): DevSub {
@@ -818,6 +924,8 @@ export function devSubLine(s: DevModeState | null, o: { armed?: boolean; disable
   if (watching.length) {
     if (repos.length === 1) {
       const r = watching[0];
+      // copy-073 §3.2: a git row with no branch name shows none, never "main".
+      if (r.provider === 'git' && !r.branch) return sub('watching', 'ok', [{ text: 'Watching ' }, { text: r.repo, repo: true }]);
       return sub('watching', 'ok', [{ text: 'Watching ' }, { text: r.repo, repo: true }, { text: ' · ' }, { text: r.branch ?? 'main', branch: true }]);
     }
     if (watching.length === repos.length) return sub('several', 'ok', `Watching ${watching.length} repos`, 'repos');
@@ -826,6 +934,8 @@ export function devSubLine(s: DevModeState | null, o: { armed?: boolean; disable
   const failed = repos.filter((r) => r.status === 'error').length;
   if (failed) return sub('error', 'bad', failed === 1 ? 'Can’t read a repo' : `Can’t read ${failed} repos`, 'repos');
   if (repos.some((r) => r.status === 'not_connected')) return sub('not_connected', 'warn', 'Needs GitHub', 'connect');
+  if (repos.some((r) => r.status === 'no_git') || s.status === 'no_git') return sub('no_git', 'warn', NEEDS_GIT, 'repos');
+  if (repos.some((r) => r.status === 'no_repo')) return sub('no_address', 'warn', CANT_USE_SUB, 'repos');
   const other = repos.find((r) => r.status === 'other_host');
   if (other) {
     if (other.from === 'local' || !other.host) return sub('other_host', 'off', 'Local folder, no remote');
@@ -1126,6 +1236,7 @@ export const devStore = {
 };
 
 export const emptyState = (): DevModeState => ({
+  install_hint: null,
   on: false,
   repo: null,
   branch: null,

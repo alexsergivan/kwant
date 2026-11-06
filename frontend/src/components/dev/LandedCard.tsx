@@ -11,13 +11,14 @@ const TESTS_TONE = { passed: 'text-ok', failed: 'text-bad', none: 'text-zinc-400
 const TESTS_LED = { passed: 'ok', failed: 'bad', none: 'off', unknown: 'off' } as const;
 
 /** One merge in plain words (design §4). A commit pushed without a PR (`pr: null`) is the same card, named by its commit. */
-export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number, repo?: string | null) => void; forge?: Forge | null; onRail?: boolean; repoLabel?: (repo: string | null, name?: string | null) => string | null }> = ({
+export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number, repo?: string | null) => void; forge?: Forge | null; onRail?: boolean; repoLabel?: (repo: string | null, name?: string | null) => string | null; gitOnly?: boolean }> = ({
   card,
   reviews = [],
   onOpenReview,
   forge = null,
   onRail = false,
   repoLabel,
+  gitOnly = false,
 }) => {
   const repoChip = repoLabel ? repoLabel(card.repo, card.repo_name) : null;
   const verified = showVerified(card, reviews);
@@ -35,11 +36,12 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
   const diff = card.links.commit ?? (card.links.pr ? `${card.links.pr}/files` : null);
   const headingId = `landed-${card.id || pr || card.sha}-h`;
   const MergeIcon = pr === null ? GitCommitHorizontal : GitMerge;
-  const github = card.links.pr ?? (pr === null ? card.links.commit : null);
+  // 0.7.3: a plain-git repo has no forge to open the change on.
+  const github = gitOnly ? null : card.links.pr ?? (pr === null ? card.links.commit : null);
   const node = landedNode(card);
 
   return (
-    <article data-dev-card="landed" data-repo={card.repo ?? undefined} data-pr={pr ?? undefined} data-commit={pr === null ? card.sha : undefined} data-verified={verified || undefined} aria-labelledby={headingId} className="kw-card relative min-w-0 p-4">
+    <article data-dev-card="landed" data-git-only={gitOnly || undefined} data-repo={card.repo ?? undefined} data-pr={pr ?? undefined} data-commit={pr === null ? card.sha : undefined} data-verified={verified || undefined} aria-labelledby={headingId} className="kw-card relative min-w-0 p-4">
       {onRail && (
         <>
           {pr !== null && <span aria-hidden="true" data-rail-arc className="dv-arc" />}
@@ -173,28 +175,30 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
       )}
 
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hairline pt-2.5 text-meta">
-        <span data-tests={card.tests.state} className={`inline-flex items-center gap-[7px] ${TESTS_TONE[card.tests.state]}`}>
-          <Led s={TESTS_LED[card.tests.state]} />
-          {card.tests.state === 'failed' ? (
-            <span>
-              {tests}
-              {card.links.ci && (
-                <>
-                  {' · '}
-                  <a href={card.links.ci} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded text-sky-300 hover:underline">
-                    see CI
-                  </a>
-                </>
-              )}
-            </span>
-          ) : card.links.ci ? (
-            <a href={card.links.ci} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded hover:underline">
-              {tests}
-            </a>
-          ) : (
-            <span>{tests}</span>
-          )}
-        </span>
+        {!gitOnly && (
+          <span data-tests={card.tests.state} className={`inline-flex items-center gap-[7px] ${TESTS_TONE[card.tests.state]}`}>
+            <Led s={TESTS_LED[card.tests.state]} />
+            {card.tests.state === 'failed' ? (
+              <span>
+                {tests}
+                {card.links.ci && (
+                  <>
+                    {' · '}
+                    <a href={card.links.ci} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded text-sky-300 hover:underline">
+                      see CI
+                    </a>
+                  </>
+                )}
+              </span>
+            ) : card.links.ci ? (
+              <a href={card.links.ci} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit rounded hover:underline">
+                {tests}
+              </a>
+            ) : (
+              <span>{tests}</span>
+            )}
+          </span>
+        )}
         <span className="text-zinc-400">{card.reviewed_by ? `Reviewed by ${card.reviewed_by}` : 'No bot review'}</span>
         {nothingToDo && <span className="text-zinc-400">Nothing to do for you.</span>}
         {findingsOpen > 0 && (
@@ -220,7 +224,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
           </span>
         )}
         <span className="flex items-center gap-3 sm:ml-auto">
-          {diff && diff !== github && (
+          {!gitOnly && diff && diff !== github && (
             <a href={diff} target="_blank" rel="noreferrer noopener" className="kw-focus kw-hit inline-flex min-h-[44px] items-center rounded text-sky-300 hover:text-sky-200 sm:min-h-0">
               Diff
             </a>
@@ -237,7 +241,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
 };
 
 /** What landed: one git rail down the left (style v2 §5), day labels sitting on it, a node per card. */
-export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now(), onOpenReview, forge = null, repoLabel }) => (
+export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now(), onOpenReview, forge = null, repoLabel, gitOnly }) => (
   <div data-dev-landed-list className="dv-rail space-y-3">
     {byDay(cards, now).map((day) => (
       <section key={day.label} aria-label={day.label} className="space-y-3">
@@ -246,7 +250,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Da
           <span aria-hidden="true" className="h-px flex-1 bg-[var(--kw-hairline)]" />
         </h3>
         {day.cards.map((c) => (
-          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} repoLabel={repoLabel} onRail />
+          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} repoLabel={repoLabel} gitOnly={gitOnly?.(c.repo ?? null) ?? false} onRail />
         ))}
       </section>
     ))}
