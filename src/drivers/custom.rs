@@ -175,10 +175,16 @@ pub fn parse_models(body: &serde_json::Value, model: Option<&str>) -> Option<Vec
             if id.is_empty() || id.len() > MAX_MODEL_LEN {
                 return None;
             }
-            let label = m["display_name"].as_str().or_else(|| m["name"].as_str()).unwrap_or(id);
+            // A server-sent name is masked like any server text. Without one the label is the id,
+            // which is kept and shown as is anyway: masking it would turn long ids such as
+            // NVIDIA's `nvidia/nemotron-3.5-super-vl-120b-a12b` into "[redacted]".
+            let label = match m["display_name"].as_str().or_else(|| m["name"].as_str()) {
+                Some(name) => crate::profiles::classify::redact_detail(name, 120),
+                None => id.to_string(),
+            };
             Some(EngineModel {
                 id: id.to_string(),
-                label: crate::profiles::classify::redact_detail(label, 120),
+                label,
                 default: model.is_some_and(|d| d.eq_ignore_ascii_case(id)),
                 tier: tier_from_name(id),
             })
@@ -388,7 +394,8 @@ mod tests {
         let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids[1], "nvidia/nemotron-3.5-super-vl-120b-a12b");
         assert_eq!(models.len(), 5);
-        assert_eq!(models[1].label, models[1].id);
+        // No `name` in NVIDIA's list: the label is the id, never "[redacted]".
+        assert!(models.iter().all(|m| m.label == m.id));
         assert!(models[4].default && !models[0].default);
     }
 }
