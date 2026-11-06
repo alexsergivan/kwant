@@ -38,17 +38,23 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 
 ---
 
-## New in 0.6
+## New in 0.7
 
-- **The right bot answers, and says why** (0.6.4). kwant picks the bot by its [rules](docs/channel-routing.md): a name or @mention, small talk to the last speaker, what you taught it, then the words in your message. In `#general`, a question no bot fits goes to the Concierge. One line under the reply says why that bot answers. **Wrong bot?** sends your message to the bot you pick, and kwant remembers it for next time. On a close call between two bots, you choose.
-- **Rules per bot** (0.6.4). **Good for** and **Not for** lists say what each bot should and shouldn't get. **Browser sites** sets which sites its browser may open, which it never opens, and whether it may reach your local network.
-- **One Inbox, one bot list, one Settings** (0.6.3). The Inbox shows what's waiting on you, what finished and what failed, with Loose ends as its second tab. Bots are listed once, grouped by team. Settings has two tabs: This space and All spaces.
-- **Linux app (beta)** (0.6.1). A `.deb` and an AppImage for x86_64 that update themselves with signed updates, like the Mac app.
-- **Mission board on by default** (0.6.2). Hand-offs, routine runs and loose ends show up as cards, and a finished hand-off goes to Review.
-- **Insights** (0.6.0). Verified results per week and what each one cost. When a run reports no cost, the board says "Not reported", never $0.
-- **Flight School and Truth Ledger** (0.6.0, on by default since 0.6.5; every bot starts at Act, and you can switch either off in Settings). Bots earn more freedom per kind of work with scorecards, and only you grant it. Facts that disagree show side by side for you to settle.
+- **Dev mode** (0.7.0; every team's repo since 0.7.2). For spaces where bots write code. One press turns it on, and kwant finds and watches each team's GitHub repo, read only, up to 10 per space. A **Dev desk** at the top of the sidebar has two tabs. **What landed** has one plain-words card per merge, a *Since you last looked* roll-up and **Draft release notes**. **Reviews** has one card per open pull request. The **?** next to the switch says what Dev mode does. [Guide](docs/dev-mode.md)
+- **Reviews by a bot that didn't write the code** (0.7.0). Each card shows a risk badge with its reasons, whether the pull request does what its task asked, and whether a test was weakened. Gitleaks and a registry check run on every pull request: a found secret or a made-up package always makes it High risk. Send a finding back with **Fix it** or **Dismiss** it. A merge gets the **Verified** sticker only when CI is green, another bot reviewed it, and every finding is fixed or dismissed.
+- **Post to GitHub** (0.7.1). One press puts a review card on its pull request as one GitHub review, posted as you, with findings on their lines. kwant never approves, requests changes or merges, a bot can't post, and secrets are never posted.
+- **The production floor** (0.7.0). In a Dev mode space, pushes to the watched or a protected branch, force pushes, deploys, destructive data commands and connections you marked production always ask first, with no "always allow". A step that can change production data waits until the space has a backup from the last 10 minutes. Dev mode cards run with no tools at all, so text in a pull request can't make a bot act.
+- **The Idea jar** (0.7.0). Drop an idea in from the sidebar's **+**, the phone's **Jar** tab or `/idea`. When a bot is free, it writes its take: a verdict, the effort, the risks and a short plan. **Do it** turns a take into a draft mission that still waits for your OK. [Guide](docs/idea-jar.md)
+- **Crypto sends and swaps always ask** (0.7.1). A tool whose arguments carry an amount and an address or a crypto asset counts as a payment, so it asks in every approval mode. [Guide](docs/payments.md)
 
-Every change is in the [CHANGELOG](CHANGELOG.md).
+<table>
+  <tr>
+    <td width="50%"><img src="site/assets/media/v07-dev-review-1440.webp" alt="A Dev desk review card for pull request #24, Speed up cart totals, written by Ben on Claude Sonnet and reviewed by Cody on Codex, a different engine. It has a Medium risk badge because a test was loosened, two warnings that a test was made easier to pass with the lines that did it, and security checks showing no secrets found and all new packages real."><br><sub><b>Reviews</b>: a bot that didn't write the code checks the pull request, tests and secrets included.</sub></td>
+    <td width="50%"><img src="site/assets/media/v072-dev-repos-four-1440.webp" alt="The Dev desk watching 3 of 4 team repos: Shop, Storefront and Payments are watching, and Ops needs a GitHub connection, with a Connect GitHub button on its row. Below, What landed filters by repo and says 5 changes landed on main and 2 need you, grouped as Code, Account, Checkout and Cart, with Draft release notes."><br><sub><b>What landed</b>: every team's repo on one desk, in plain words.</sub></td>
+  </tr>
+</table>
+
+0.6 added picking the bot that fits each message (and saying why), rules per bot, one Inbox, the Linux app, Insights, Flight School and the Truth Ledger. Every change is in the [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -56,6 +62,7 @@ Every change is in the [CHANGELOG](CHANGELOG.md).
 
 - **A team, not a chat tab.** Each bot has its own role, voice ("soul") and model. Bots @mention each other to hand work on, and a team lead runs short discussions and posts one summary. In a channel, kwant picks the bot that fits each message and shows why. The [Laya](#laya-model-router) router picks the model and effort for bots set to `auto`.
 - **"Done" means checked.** The [Mission board](docs/mission-control.md) turns work into cards, one per hand-off. A card turns **Verified** only when kwant runs the check itself, such as a test or a file check, and the card keeps the receipt. Files a bot attaches are evidence to look at, never proof on their own.
+- **Dev mode for code.** When bots write code, the [Dev desk](docs/dev-mode.md) shows what landed in each team's repo in plain words, and a bot that didn't write a pull request reviews it, tests and secrets included. Pushes to main, deploys and other production steps always ask first.
 - **Facts with sources.** Bots back web facts with a link that opens the page at the exact quote. kwant checks the quote is on the page word for word and refuses one that isn't.
 - **Spaces.** Separate spaces for work, a side project and home. Each has its own bots, teams, channels, routines, accounts, approval rule and hiring rule.
 - **Every account you have.** Several accounts per engine: Claude, Codex or Grok CLI logins, Anthropic, OpenAI or xAI keys, and your own OpenAI- or Anthropic-compatible server. Set a default and a priority order. When an account runs out of usage, the turn moves to the next one and the chat says so. You can pin a bot to one account.
