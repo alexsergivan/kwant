@@ -1,6 +1,7 @@
 title: Self-host a Grok Bot alternative for free on Oracle Cloud
 description: Run kwant free on Oracle Cloud's Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.
 date: 2026-11-05
+updated: 2026-11-06
 tags: grok, claude, chatgpt, self-hosted, how-to, vps, oracle-cloud, ai-agents
 card_title: Self-host a Grok Bot alternative for free
 card: Oracle's Always Free Arm server plus kwant, step by step.
@@ -9,7 +10,7 @@ card_art: scene
 
 Grok Bot is xAI's agent app. According to [launch coverage](https://www.igeeksblog.com/grok-bot-macos-ios-launch/), its agents are always on, each with its own computer in the cloud. If you would rather keep your agents on a server you control, you can do that without paying for the server: Oracle Cloud's Always Free tier includes an Arm server with 2 CPUs and 12 GB of memory, and kwant, the open-source AI agent team we build, runs on it with one Docker command.
 
-This guide goes from a new Oracle account to a bot team you open in your browser, running on Claude, ChatGPT, Grok or another model you connect. The longest wait is kwant's first build, which took about 20 minutes in our test.
+This guide goes from a new Oracle account to a bot team you open in your browser, running on Claude, ChatGPT, Grok or another model you connect. The longest wait is kwant's first build, which took about 20 minutes in our test. If you use an AI coding tool such as Claude Code or Codex, the [bonus prompt](#bonus-hand-this-guide-to-your-ai-coding-tool) at the end has it run the server steps for you.
 
 **How we checked this guide.** The Oracle Cloud steps follow Oracle's own Free Tier tutorial and documentation, linked in each step and read on 2026-11-05. We ran every command from step 5 onwards on 2026-11-05, in a fresh Ubuntu 24.04 container on an Oracle Ampere A1 server, limited to 2 CPUs and 12 GB of memory, the Always Free size. The timings, memory figures and screenshots below come from that run. We started the Grok sign-in and checked what it asks for, but did not finish it with a real xAI account. We did not connect Claude, ChatGPT, an API key, a custom server or Ollama on this server: those parts of step 8 follow kwant's [accounts docs](https://kwant.si/docs/accounts) and what the app showed in our run.
 
@@ -296,6 +297,33 @@ The SSH tunnel is fine from a laptop, but not from a phone. For that, give the s
 - Sign-in links work once and expire after 15 minutes ([install guide](https://kwant.si/docs/install)). Don't paste them, or the token from `kwnt token --raw`, anywhere else.
 - Oracle's default network rules let SSH (port 22) in, and Oracle recommends limiting inbound rules to the addresses that need them ([Oracle docs](https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securitylists.htm)). kwant needs no other port open for this setup.
 - Membership in the `docker` group gives root-level access to the server, Docker's docs warn. Only add users you trust.
+
+## Bonus: hand this guide to your AI coding tool
+
+If you use an AI coding tool that runs commands in your terminal, such as Claude Code, Codex or Cursor's agent, it can do steps 4 to 7 for you and talk you through the rest. Steps 1 to 3 happen in Oracle's web console with your card, so you still click through those yourself, with the tool telling you what to pick. Copy this prompt into the tool on your computer:
+
+```prompt
+Help me set up kwant, an open-source AI agent team, on a free Oracle Cloud Arm server. Follow this guide: https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud
+Read the whole guide first. If you can't open web pages, tell me and I'll paste it in.
+
+Steps 1 to 3 happen in Oracle's web console, so I do them myself. Guide me through them one at a time and wait for me after each. Remind me to choose my home region carefully, to pick the Always Free Ampere A1 shape with 2 OCPUs and 12 GB of memory, and to save the private key. When I'm done, I'll give you the server's public IP address and the path to the private key.
+
+Then do the rest from my terminal, following the guide:
+- Step 4: set the key's permissions to 400 and connect as ubuntu@<IP>. Accept the server's host key on the first connection.
+- Step 5: install Docker with the guide's commands, add the ubuntu user to the docker group, reconnect and run docker run hello-world.
+- Step 6: ask me which of claude, codex and grok to put in KWNT_CLIS, then clone kwant and build it. The first build takes about 20 minutes, so start it in a way that survives a dropped connection or your own command time limit, such as nohup with a log file on the server, and check the log until it finishes.
+- Check: run docker compose ps and docker compose exec kwnt kwnt doctor, and tell me in plain words what they say. "Not signed in" warnings are expected at this point.
+- Step 7: start the SSH tunnel in the background and keep it running. Run kwnt signin-link on the server, replace <this-host> with 127.0.0.1, and give me the link to open in my browser.
+- Step 8: walk me through connecting the AI account I choose. I sign in or paste the key into kwant myself.
+
+Rules:
+- Use the guide's commands. If one fails, show me the error and the fix you suggest, and wait for my OK.
+- Don't open any port to the internet and don't change Oracle's network rules. kwant stays on 127.0.0.1, reached through the tunnel.
+- Don't create, change or upgrade anything in my Oracle account.
+- The private key, the sign-in link and any API key are secrets. Never put them in files, commits or other websites, and don't ask me to paste an API key into this chat.
+```
+
+Most tools ask before they run each command, depending on your settings. Read each one before you allow it: they run on your computer and on your server. The prompt covers the same steps we tested above, but we haven't run it through every AI tool, so you stay the one who checks the output.
 
 A note on the name: "kwant" here means the open-source AI agent team at kwant.si. It is not the Kwant physics package or Kwant.ai, and kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google, Apple or Oracle.
 

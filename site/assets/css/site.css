@@ -366,10 +366,12 @@ dialog.lightbox button { min-height: 40px; padding: 0 16px; border: 0; border-ra
 .prose figcaption { margin-top: 10px; color: var(--dim); font-size: 14px; }
 pre { position: relative; margin: 20px 0 0; padding: 18px 20px; overflow-x: auto; background: var(--panel); color: #f1edff; border-radius: 12px; font-size: 14px; line-height: 1.6; }
 pre code { font-size: 14px; }
+pre.prompt { white-space: pre-wrap; overflow-wrap: anywhere; padding-top: 46px; }
 pre .c { color: var(--v7); }
 .copy { position: absolute; top: 8px; right: 8px; padding: 4px 10px; border: 0; border-radius: 6px; background: var(--frame); color: #fff; font: 500 12.5px var(--sans); cursor: pointer; }
 .copy:hover { background: var(--v5); }
 @media (hover: hover) { pre .copy { opacity: 0; } pre:hover .copy, pre .copy:focus-visible { opacity: 1; } }
+@media (hover: hover) { pre.prompt .copy { opacity: 1; } }
 .table-wrap { margin: 20px 0 0; overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
 .table-wrap table { min-width: 560px; }
 table { width: 100%; border-collapse: collapse; font-size: 15px; }
