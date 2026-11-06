@@ -24,10 +24,10 @@ export interface DevStatusLineProps {
   /** Opens Loose ends (Connect GitHub). Connect hides without it. */
   onConnect?: () => void;
   /** Test hook. */
-  save?: typeof devApi.put;
+  save?: typeof devApi.putRepo;
 }
 
-export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, onConnect, save = devApi.put }) => {
+export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, onConnect, save = devApi.putRepo }) => {
   const line = statusLine(state);
   // The toast's "Type a repo" lands here with the list open and its input focused.
   const [open, setOpen] = useState<false | 'list' | 'type'>(() => (deskIntent.take(spaceId) ? 'type' : false));
@@ -91,7 +91,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, on
 // ---------------------------------------------------------------------------
 // Switch: a one-tap list of the detected repos, and a typed repo below it.
 
-const SourcePicker: React.FC<{ spaceId: string; state: DevModeState; save: typeof devApi.put; focusInput?: boolean; onClose: (refocus: boolean) => void }> = ({
+const SourcePicker: React.FC<{ spaceId: string; state: DevModeState; save: typeof devApi.putRepo; focusInput?: boolean; onClose: (refocus: boolean) => void }> = ({
   spaceId,
   state,
   save,
@@ -121,8 +121,14 @@ const SourcePicker: React.FC<{ spaceId: string; state: DevModeState; save: typeo
     setBusy(repo);
     setError(null);
     save(spaceId, { on: true, repo }).then(
-      (s) => {
+      ({ state: s, refused }) => {
         devStore.set(spaceId, s);
+        // Dev mode is on either way; a repo it can't read keeps the list open with why (Juno's check).
+        if (refused) {
+          setBusy(null);
+          setError(refused);
+          return;
+        }
         onClose(true);
       },
       (e: unknown) => {

@@ -111,6 +111,13 @@ export function parseDevMode(raw: unknown): DevModeState | null {
   };
 }
 
+/** Why a typed repo wasn't watched, from the PUT reply's `check`. Dev mode is on either way. */
+export function putRefusal(c: RepoCheck | null, asked: string): string {
+  const repo = stripUserinfo(c?.repo ?? asked);
+  if (c?.state === 'not_connected') return `Connect GitHub so bots can read ${repo}. Dev mode is on, with the floor and guards.`;
+  return `Couldn’t read ${repo}. Check the name, or that your GitHub connection can see it. Dev mode is on, with the floor and guards.`;
+}
+
 export function parseCheck(raw: unknown): RepoCheck | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
@@ -558,6 +565,17 @@ export const devApi = {
     const s = parseDevMode(r.data);
     if (!s) throw new DevModeError('The server sent Dev mode in a shape this app doesn’t know.', 500);
     return s;
+  },
+  /**
+   * PUT with a typed repo (Juno, 0.7.1): a repo that can't be read still turns Dev mode on, with no
+   * repo, and the reply's `check` says why. Returns the state and that reason (null when it's watched).
+   */
+  async putRepo(space: string, body: { on: true; repo: string; branch?: string | null }): Promise<{ state: DevModeState; refused: string | null }> {
+    const r = await call<unknown>(`/api/spaces/${enc(space)}/dev_mode`, 'PUT', body);
+    const s = parseDevMode(r.data);
+    if (!s) throw new DevModeError('The server sent Dev mode in a shape this app doesn’t know.', 500);
+    const c = parseCheck((r.data as Record<string, unknown>).check);
+    return { state: s, refused: s.repo ? null : putRefusal(c, body.repo) };
   },
   async check(space: string, repo: string): Promise<RepoCheck> {
     const r = await call<unknown>(`/api/spaces/${enc(space)}/dev_mode/check`, 'POST', { repo });

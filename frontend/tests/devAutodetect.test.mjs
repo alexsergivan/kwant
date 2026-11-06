@@ -29,6 +29,10 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
   server.calls.push([method, u.split('?')[0], body]);
   const json = (b, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
   if (server.fail && method === 'PUT') return json({ error: server.fail }, 422);
+  if (server.unreadable && method === 'PUT' && body?.repo) {
+    server.state = { ...server.state, on: true, repo: null, status: 'no_repo' };
+    return json({ ...server.state, check: { state: server.unreadable, repo: body.repo, branch: null, deploy_hint: null } });
+  }
   if (u.includes('/dev_mode')) {
     if (method === 'PUT') server.state = { ...server.state, ...body, status: 'watching' };
     return json(server.state);
@@ -288,6 +292,27 @@ test('DOM: a failed switch keeps the list open with the reason', async () => {
   assert.ok(document.querySelector('[data-dv-picker]'));
   assert.match(document.querySelector('[data-dv-picker]').textContent, /Bots can’t read that repo\./);
   root.unmount();
+});
+
+test('DOM: a typed repo the server can’t read (200, repo null, check) keeps the list open with why; Dev mode stays on', async () => {
+  for (const [why, re] of [['not_found', /Couldn’t read demo-org\/nope\. .*Dev mode is on/], ['not_connected', /Connect GitHub so bots can read demo-org\/nope\./]]) {
+    const { root } = await desk({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: SOURCES });
+    server.unreadable = why;
+    await click(document.querySelector('[data-dv-status-action="switch"]'));
+    const input = document.querySelector('[data-dv-picker] input');
+    const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    set.call(input, 'demo-org/nope');
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await settle();
+    input.form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    assert.deepEqual(server.calls.filter(([x]) => x === 'PUT').at(-1)[2], { on: true, repo: 'demo-org/nope' });
+    assert.ok(document.querySelector('[data-dv-picker]'), why);
+    assert.match(document.querySelector('[data-dv-picker]').textContent, re);
+    assert.equal(m.devStore.get('spc_demo').on, true);
+    assert.equal(m.devStore.get('spc_demo').repo, null);
+    root.unmount();
+  }
 });
 
 // ---------------------------------------------------------------------------
