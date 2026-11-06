@@ -148,7 +148,7 @@ pub async fn check(state: &AppState, space: &SpaceId, input: &str) -> Result<Che
         let hosts = github_hosts(state).await;
         detect(state, space).await.into_iter().find(|s| s.on_github(&hosts)).map(|s| s.check_input()).unwrap_or_default()
     } else {
-        input.to_string()
+        strip_userinfo(input)
     };
     let Some((host, repo)) = normalize(&input) else {
         return Ok(Check::of("not_found", None));
@@ -539,7 +539,10 @@ mod tests {
         vec!["github.com".into()]
     }
 
-    fn brief(s: &[Source]) -> Vec<(String, String, Option<String>, &'static str, Option<String>)> {
+    /// A source as `(team, repo, host, from, branch)`, for comparing in one assert.
+    type Brief = (String, String, Option<String>, &'static str, Option<String>);
+
+    fn brief(s: &[Source]) -> Vec<Brief> {
         s.iter().map(|s| (s.team.clone(), s.repo.clone(), s.host.clone(), s.from, s.branch.clone())).collect()
     }
 

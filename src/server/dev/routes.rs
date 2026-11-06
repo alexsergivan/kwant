@@ -204,7 +204,9 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
             return error(StatusCode::BAD_REQUEST, "that isn't a branch name");
         }
     }
-    let asked_repo = body.repo.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    // Any user:token@ part of a typed URL is dropped before it is read or kept (plan any-git.md S2)
+    let asked_owned = body.repo.as_deref().map(repo::strip_userinfo);
+    let asked_repo = asked_owned.as_deref().map(str::trim).filter(|r| !r.is_empty());
     let kept_repo = before.as_ref().map(|r| r.repo.clone()).filter(|r| !r.is_empty());
     let asked_branch = body.branch.as_deref().map(str::trim).filter(|b| !b.is_empty());
     let sources = repo::detect(&state, &space).await;

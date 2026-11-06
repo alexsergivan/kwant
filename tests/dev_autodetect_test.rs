@@ -183,7 +183,11 @@ async fn with_no_connection_it_still_turns_on_and_no_token_leaks() {
     // A repo asked for by name that nothing reads: on anyway, with the check saying why
     let (s, v) = call(&env.app, "PUT", &uri(), Some(json!({"on": true, "repo": format!("https://u:{token}@github.com/{REPO}")}))).await;
     assert_eq!(s.as_u16(), 200, "{v}");
-    assert_eq!((v["on"].clone(), v["repo"].clone(), v["check"]["state"].clone()), (json!(true), Value::Null, json!("not_found")), "{v}");
+    assert_eq!((v["on"].clone(), v["repo"].clone(), v["check"]["state"].clone(), v["check"]["repo"].clone()), (json!(true), Value::Null, json!("not_connected"), json!(REPO)), "the token is dropped and the repo still read: {v}");
+    replies.push(v);
+    // ...and one with no connection problem but no such repo name says not_found (Pixel's two reasons)
+    let (s, v) = call(&env.app, "PUT", &uri(), Some(json!({"on": true, "repo": "not a repo"}))).await;
+    assert_eq!((s.as_u16(), v["on"].clone(), v["repo"].clone(), v["check"]["state"].clone()), (200, json!(true), Value::Null, json!("not_found")), "{v}");
     replies.push(v);
     let (_, v) = call(&env.app, "POST", &format!("{}/check", uri()), Some(json!({}))).await;
     assert_eq!((v["state"].clone(), v["repo"].clone()), (json!("not_connected"), json!(REPO)), "the check reads the folder's repo: {v}");
