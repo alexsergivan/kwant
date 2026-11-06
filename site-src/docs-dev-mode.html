@@ -8,20 +8,25 @@ card_art: avatar:devops
 ---
 <p class="kicker">Docs</p>
 <h1>Dev mode: code review and a safety floor for your repo</h1>
-<p class="intro">Dev mode points a space at the GitHub repo its team works on. kwant reads the repo and writes a card for every merge and every open pull request, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
+<p class="intro">Dev mode watches the GitHub repo of every team in a space. kwant reads each repo and writes a card for every merge and every open pull request, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
 <figure>
-  <div class="frame">{{shot:v071-dev-on|The Trailhead Outfitters space right after one press on the Dev mode switch. A note in the corner says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v071-dev-on|The Trailhead Outfitters space right after one press on the Dev mode switch, which now reads On. A note above the message box says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>One press turns it on. A note says which repo kwant found, with Undo.</figcaption>
 </figure>
 
 <h2 id="turn-on">Turn it on</h2>
-<p>The <strong>Dev mode</strong> switch is at the top of the sidebar, under the space's name. One press turns it on, with no setup to fill in. kwant looks at the space's teams for the repo: each team's repo link, or its folder when that folder is a git checkout. It reads this on your machine, with no network. A sign-in token inside a remote address is dropped and never logged or stored.</p>
+<p>The <strong>Dev mode</strong> switch is at the top of the sidebar, under the space's name. One press turns it on, with no setup to fill in. kwant finds each team's repo: the team's repo link, or its folder when that folder is a git checkout. It watches all of them, up to 10 per space. It reads this on your machine, with no network. A sign-in token inside a remote address is dropped and never logged or stored.</p>
 <ul>
-  <li><strong>A short note says what it found</strong>, such as the repo and branch, with <strong>Open Dev desk</strong> and <strong>Undo</strong>. When it found several repos, no repo, or no GitHub connection that can read it, the note adds one button for that.</li>
-  <li><strong>Switch</strong> lists the repos it found in the space, with <strong>Type a repo</strong> last.</li>
+  <li><strong>A short note says what it found</strong>, such as <strong>Watching 3 repos</strong>, with <strong>Open Dev desk</strong> and <strong>Undo</strong>. When a repo needs you, such as no GitHub connection that can read it, the note adds one button for that.</li>
+  <li><strong>A team with no repo</strong> shows as one quiet line on the Dev desk, with <strong>Link a repo</strong>. Linking a repo never turns Dev mode on by itself.</li>
   <li><strong>Connect GitHub</strong> shows when no GitHub connection can read the repo. It takes you to Connections once, and Dev mode picks the repo up as soon as the connection is saved, without turning it off and on.</li>
   <li><strong>Turning on never fails.</strong> With no repo, the production floor and the command guards still work, and the desk waits for one.</li>
 </ul>
+<p>On the Dev desk, one line says how many repos are watched and how many need you. <strong>Show repos</strong> opens the list: each team's repo with its branch, where kwant found it, and its state. A repo that needs you has one button for its fix, and the others keep going.</p>
+<figure>
+  <div class="frame">{{shot:v072-dev-repos-card|The repo list on the Dev desk, under the line Watching 3 of 4 repos, 1 needs you. The Shop, Storefront and Payments teams' repos each read Watching, checked 19:00. The Ops team's demo-org/warehouse-ops says Needs your GitHub connection in amber.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Every team's repo, each checked on its own.</figcaption>
+</figure>
 <p>Dev mode reads GitHub. A GitLab or Gitea repo is named in the note, but kwant doesn't read it yet.</p>
 <figure>
   <div class="frame">{{video:clip-v071-dev-on|Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words.}}</div>
@@ -35,7 +40,7 @@ card_art: avatar:devops
 <h2 id="landed">What landed</h2>
 <p>The <strong>Dev desk</strong> sits at the top of the sidebar. Its first tab, <strong>What landed</strong>, has one card per commit that reaches the watched branch: what changed in plain words, how risky it is, the commit, the pull request it came from (or "Direct push"), a diffstat for each file, and whether tests passed.</p>
 <figure>
-  <div class="frame">{{shot:v07-dev-landed|The What landed tab of the Dev desk: a Since you last looked note saying nothing new landed since the last look, above yesterday's landed cards. Each card has a short commit sha, a pull request number, a risk badge, a line count and Tests passed, and two wear the Verified sticker.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v07-dev-landed|The What landed tab of the Dev desk, watching demo-org/demo-app on main: a Since you last looked note saying 3 changes landed on main and 2 need you, grouped as Account, Checkout and Cart, above yesterday's landed cards. Each card has a short commit sha, a pull request number, a risk badge and a line count, and both shown wear the Verified sticker.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Every merge as a card, with a roll-up of what came in since you last looked.</figcaption>
 </figure>
 <ul>
@@ -48,7 +53,7 @@ card_art: avatar:devops
 <h2 id="reviews">Reviews</h2>
 <p>The <strong>Reviews</strong> tab has one card per open pull request, written by a bot that didn't write the code, on a different engine when the space has one. A new push to the pull request gets a new review.</p>
 <figure>
-  <div class="frame">{{shot:v07-dev-review|Review card #24, Speed up cart totals, from a feature branch into main: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass, a light for each security check, and two findings, each with Fix it and Dismiss. The footer has Post to GitHub, and nothing is posted until you press it.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v07-dev-review|Review card #24, Speed up cart totals, from ben-cart-speed into main, written by Ben on Claude Sonnet and reviewed by Cody on Codex: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass with their lines, a light for each security check, and the start of the findings, 1 high and 1 medium.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>A second bot's review. Nothing goes to GitHub until you press it.</figcaption>
 </figure>
 <ul>
@@ -107,17 +112,17 @@ card_art: avatar:devops
 <p>Anyone who can open a pull request writes its title, text and diff. So the bot that writes a Dev mode card runs with no tools at all, on every engine: no MCP servers, no browser, no shell, files or web search. A turn that can't run that way fails instead of running with tools, and the card keeps its rule-based parts.</p>
 
 <h2 id="turn-off">Turn it off</h2>
-<p>Turning Dev mode off takes two presses. The first lifts the switch's cover and the second, within 5 seconds, turns it off. Escape, clicking elsewhere or waiting keeps it on. The off note has <strong>Turn back on</strong>.</p>
+<p>Turning Dev mode off takes two presses. The first press changes the switch to <strong>Off?</strong> and says <em>Press again to turn off</em>. A second press within 5 seconds turns it off. Escape, clicking elsewhere or waiting keeps it on. The off note has <strong>Turn back on</strong>.</p>
 <figure>
-  <div class="frame">{{shot:v071-dev-off-armed-card|The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on.|(max-width: 860px) 100vw, 760px}}</div>
-  <figcaption>The first press only lifts the cover.</figcaption>
+  <div class="frame">{{shot:v071-dev-off-armed-card|The Dev mode row after one press on its switch: the switch is ringed in amber with an open lock and reads Off?, an amber hint says Press again to turn off, with an Esc key cap beside it, and the Approvals row below shows Ask.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The first press only asks.</figcaption>
 </figure>
 <p>Off stops the checks, the reviews and the production floor. The cards stay readable, and your approval settings stay as they were.</p>
 
 <h2 id="phone">On your phone</h2>
 <p>The Dev desk works on a phone too. Its row in the sidebar counts the reviews that are ready since you last opened the desk, and the count is the same on the phone and the desktop.</p>
 <figure>
-  <div class="phone">{{shot:phone-v071-dev-desk|The Dev desk on a phone: the status line says it is watching demo-org/demo-app on main, above a landed card with its commit, pull request and tests line.|300px}}</div>
+  <div class="phone">{{shot:phone-v071-dev-desk|The Dev desk on a phone: the status line says Watching demo-org/demo-app on main, above the Since you last looked note, 3 changes landed on main, 2 need you, and the first landed card, Shoppers can see their past orders, with the Verified sticker.|300px}}</div>
   <figcaption>The desk on a phone.</figcaption>
 </figure>
 <div class="note"><strong>Only you can see it.</strong> Bots can't read the Dev desk, its settings or its cards, because the settings hold the backup command and the cards hold the repo's diffs. None of it is in a space or bot export.</div>
