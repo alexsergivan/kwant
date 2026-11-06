@@ -114,8 +114,8 @@ test('the dev_mode parse reads forge and forge_login; unknown forge and a stray 
 
 test('N counts every finding not dismissed; the label pluralises and drops a zero count', () => {
   assert.equal(m.postCount([{ state: 'open' }, { state: 'sent' }, { state: 'dismissed' }]), 2);
-  assert.equal(m.postLabel(3, 'github'), 'Post to GitHub · 3 comments');
-  assert.equal(m.postLabel(1, 'github'), 'Post to GitHub · 1 comment');
+  assert.equal(m.postLabel(3, 'github'), 'Post to GitHub · 3 findings');
+  assert.equal(m.postLabel(1, 'github'), 'Post to GitHub · 1 finding');
   assert.equal(m.postLabel(0, 'github'), 'Post to GitHub');
   assert.equal(m.postLine('octocat'), 'Nothing is posted until you press it. Posts as @octocat.');
   assert.equal(m.postLine(null), 'Nothing is posted until you press it.');
@@ -130,7 +130,10 @@ test('postState: posted wins, then posting, then the error; pending and the samp
   assert.equal(m.postState(c({ posted: POSTED }), { canPost: false, posting: false, forge: 'github' }).kind, 'posted', 'a posted card says so even without the call');
   assert.equal(m.postState(c({ post_error: { kind: 'read_only', message: null } }), on).kind, 'read_only');
   assert.equal(m.postState(c({ post_error: { kind: 'stale', message: null } }), on).kind, 'stale');
-  assert.deepEqual(m.postState(c({ post_error: { kind: 'failed', message: 'GitHub said 502' } }), on), { kind: 'failed', message: 'GitHub said 502' });
+  assert.deepEqual(m.postState(c({ post_error: { kind: 'failed', message: 'GitHub said 502' } }), on), { kind: 'failed', message: 'GitHub said 502', retry: true });
+  assert.deepEqual(m.postState(c({ post_error: { kind: 'failed', message: 'no review' } }), { ...on, noReview: true }), { kind: 'failed', message: 'no review', retry: false }, 'F4: a 409 is final');
+  assert.equal(m.postState(c({ status: 'failed' }), on).kind, 'no_review', 'F4: a review that failed to generate has nothing to post');
+  assert.equal(m.postState(c({ status: 'failed', posted: POSTED }), on).kind, 'posted');
   assert.equal(m.postState(c({ status: 'pending' }), on).kind, 'none');
   assert.equal(m.postState(c(), { canPost: false, posting: false, forge: 'github' }).kind, 'none');
 });
@@ -147,7 +150,7 @@ test('ready: the line with @login in mono, primary Post to GitHub · N comments,
   assert.match(f.innerHTML, /<span class="font-mono text-zinc-100">@oleks-i<\/span>/, 'login in mono');
   assert.equal(!!f.querySelector('svg.lucide-lock'), false, 'v2: no lock icon');
   const b = button(f, 'Post to GitHub');
-  assert.equal(flat(b), 'Post to GitHub · 3 comments', 'the dismissed fourth finding is not counted');
+  assert.equal(flat(b), 'Post to GitHub · 3 findings', 'the dismissed fourth finding is not counted');
   assert.equal(b.disabled, false);
   assert.match(b.className, /kw-btn-primary/, 'the primary button');
   assert.match(f.innerHTML, /Open on GitHub/);
@@ -183,13 +186,13 @@ test('posting: spinner, button disabled and busy, a second press sends nothing; 
   await settle();
   f = footer(host);
   assert.equal(f.dataset.postState, 'posted');
-  assert.match(flat(f), /^Posted 19:58 as @oleks-i · 3 comments\s*View on GitHub/);
+  assert.match(flat(f), /^Posted 19:58 as @oleks-i · 3 inline comments\s*View on GitHub/);
   assert.equal(f.querySelector('.dv-led').dataset.s, 'ok', 'ok LED');
   const a = f.querySelector('a[href="https://github.com/o/r/pull/294#pullrequestreview-1"]');
   assert.ok(a, 'View on GitHub links to the review');
   assert.equal(a.getAttribute('target'), '_blank');
   assert.equal(!!button(f, 'Post to GitHub'), false, 'no button once posted');
-  assert.equal(f.querySelector('[role="status"]').textContent, 'Posted 19:58 as @oleks-i · 3 comments');
+  assert.equal(f.querySelector('[role="status"]').textContent, 'Posted 19:58 as @oleks-i · 3 inline comments');
 });
 
 test('posted from the server (SSE refetch): the card prop alone switches the footer', async () => {
@@ -212,23 +215,67 @@ test('posted without a url: "Posted 19:58" and no link', () => {
   assert.doesNotMatch(out, /View on GitHub/);
 });
 
-test('read_only: warn LED line naming the scope, the button aria-disabled with the tooltip and focusable', async () => {
+test('read_only (F1): warn LED line naming the scope, and Try again, which reaches the server once the token is fixed', async () => {
   const calls = [];
   const card = { ...base(), post_error: { kind: 'read_only', message: 'Resource not accessible by personal access token' } };
-  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async (id) => (calls.push(id), card), forge: 'github', forgeLogin: LOGIN, now: NOW });
-  const f = footer(host);
+  const onPost = async (id) => (calls.push(id), { ...base(), posted: POSTED, post_error: null });
+  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost, forge: 'github', forgeLogin: LOGIN, now: NOW });
+  let f = footer(host);
   assert.equal(f.dataset.postState, 'read_only');
-  const b = button(f, 'Post to GitHub');
-  assert.equal(b.getAttribute('aria-disabled'), 'true');
-  assert.equal(b.getAttribute('title'), 'Your GitHub connection is read only');
-  assert.equal(b.disabled, false, 'kept focusable so the tooltip words are reachable');
+  const b = button(f, 'Try again');
+  assert.ok(b, 'Try again');
+  assert.equal(b.getAttribute('aria-disabled'), null, 'not sticky: the press is live');
+  assert.equal(!!f.querySelector('[data-post-disabled]'), false);
   const why = f.querySelector(`#${b.getAttribute('aria-describedby').replace(/([:.])/g, '\\$1')}`);
   assert.equal(flat(why), m.readOnlyLine('github'), 'screen readers hear why');
   assert.equal(flat(why), 'Your GitHub connection is read only. Give the token pull_requests: write to post.');
   assert.match(why.innerHTML, /<code class="dv-code">pull_requests: write<\/code>/);
   assert.equal(f.querySelector('.dv-led').dataset.s, 'warn');
   await click(b);
-  assert.deepEqual(calls, [], 'pressing it posts nothing');
+  assert.deepEqual(calls, ['dvr_294'], 'the press reaches the API');
+  f = footer(host);
+  assert.equal(f.dataset.postState, 'posted');
+});
+
+test('read_only that is still read only: the press comes back read_only, the line stays', async () => {
+  const card = { ...base(), post_error: { kind: 'read_only', message: null } };
+  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'github', forgeLogin: LOGIN, now: NOW });
+  await click(button(footer(host), 'Try again'));
+  assert.equal(footer(host).dataset.postState, 'read_only');
+  assert.match(flat(footer(host)), /Your GitHub connection is read only/);
+});
+
+test('F4: a review that failed to generate has no Post footer, only its link', async () => {
+  const card = { ...base(), status: 'failed', error: 'Ann couldn’t write the card’s text.' };
+  const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'github', forgeLogin: LOGIN, now: NOW });
+  const f = footer(host);
+  assert.equal(f.dataset.postState, 'no_review');
+  assert.equal(!!host.querySelector('[data-post-button], [data-post-disabled], [data-post-retry]'), false, 'no Post, no Try again');
+  assert.doesNotMatch(flat(f), /Nothing is posted|Posts as|Post to/);
+  assert.match(flat(f), /^Open on GitHub/);
+  const bare = await mount(m.ReviewCard, { card: { ...card, links: { ...card.links, pr: null } }, onFinding: async () => card, onPost: async () => card, forge: 'github', now: NOW });
+  assert.equal(footer(bare), null, 'no link either: no footer at all');
+});
+
+test('F4: a 409 from kwant is "Couldn’t post" with no Try again', async () => {
+  const calls = [];
+  const err = Object.assign(new Error('This card has no review to post.'), { status: 409 });
+  const host = await mount(m.ReviewCard, {
+    card: base(),
+    onFinding: async () => base(),
+    onPost: async (id) => {
+      calls.push(id);
+      throw err;
+    },
+    forge: 'github', forgeLogin: LOGIN, now: NOW,
+  });
+  await click(button(footer(host), 'Post to GitHub'));
+  const f = footer(host);
+  assert.equal(f.dataset.postState, 'failed');
+  assert.match(flat(f), /Couldn’t post: This card has no review to post\./);
+  assert.equal(!!button(f, 'Try again'), false);
+  assert.equal(!!button(f, 'Post to GitHub'), false);
+  assert.deepEqual(calls, ['dvr_294']);
 });
 
 test('stale: run LED line and a disabled button', async () => {
@@ -339,7 +386,7 @@ test('forge null but already posted: still says Posted, with the forge from post
 
 test('the label, tooltip and links come from a map on forge (GitLab, Gitea)', async () => {
   assert.equal(m.FORGE_NAME.github, 'GitHub');
-  assert.equal(m.postLabel(2, 'gitlab'), 'Post to GitLab · 2 comments');
+  assert.equal(m.postLabel(2, 'gitlab'), 'Post to GitLab · 2 findings');
   assert.equal(m.postLabel(0, 'gitea'), 'Post to Gitea');
   assert.equal(m.readOnlyTip('github'), 'Your GitHub connection is read only');
   assert.equal(m.readOnlyTip('gitlab'), 'Your GitLab connection is read only');
@@ -347,16 +394,15 @@ test('the label, tooltip and links come from a map on forge (GitLab, Gitea)', as
   const card = { ...base(), post_error: { kind: 'read_only', message: null } };
   const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge: 'gitlab', forgeLogin: LOGIN, now: NOW });
   const f = footer(host);
-  const b = button(f, 'Post to GitLab');
-  assert.ok(b, 'Post to GitLab');
-  assert.equal(b.getAttribute('title'), 'Your GitLab connection is read only');
+  assert.ok(button(f, 'Try again'), 'read only: Try again (F1)');
+  assert.match(flat(f), /Your GitLab connection is read only/);
   assert.match(f.innerHTML, /Open on GitLab/);
   assert.doesNotMatch(flat(f), /GitHub/);
 });
 
 test('F7: the footer reads Post to {Forge} first, then the link Open on {Forge}', async () => {
   for (const [forge, name] of [['github', 'GitHub'], ['gitlab', 'GitLab'], ['gitea', 'Gitea']]) {
-    for (const over of [{}, { post_error: { kind: 'read_only', message: null } }]) {
+    for (const over of [{}]) {
       const card = { ...base(), ...over };
       const host = await mount(m.ReviewCard, { card, onFinding: async () => card, onPost: async () => card, forge, forgeLogin: LOGIN, now: NOW });
       const f = footer(host);

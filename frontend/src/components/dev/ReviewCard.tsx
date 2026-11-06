@@ -339,7 +339,12 @@ const PostFooter: React.FC<{
         </>,
         { 'data-post-read-only': '' },
       );
-      action = off(readOnlyTip(forge));
+      // F1 (QA 0.7.1): read_only is cleared only by a post, so the press must reach the server once the token is fixed.
+      action = (
+        <button type="button" onClick={onPost} aria-describedby={lineId} data-post-retry className={`kw-btn-ghost ${btn}`}>
+          Try again
+        </button>
+      );
       break;
     case 'stale':
       line = withLed('run', STALE_LINE, { 'data-post-stale': '' });
@@ -347,11 +352,11 @@ const PostFooter: React.FC<{
       break;
     case 'failed':
       line = withLed('bad', <>Couldn’t post: {state.message}</>, { 'data-post-failed': '' });
-      action = (
+      action = state.retry ? (
         <button type="button" onClick={onPost} data-post-retry className={`kw-btn-ghost ${btn}`}>
           Try again
         </button>
-      );
+      ) : null;
       break;
     default: {
       const busy = state.kind === 'posting';
@@ -372,6 +377,15 @@ const PostFooter: React.FC<{
   }
   // F7 (user-flow.md): Post first, then "Open on {Forge}". Not after posting: View on {Forge} replaces it.
   const link = !!prLink && state.kind !== 'posted';
+  // F4: no review, no Post footer; the card keeps only its link to the PR.
+  if (state.kind === 'no_review')
+    return link ? (
+      <footer data-review-footer data-post-state="no_review" className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3 text-[12.5px] text-zinc-400">
+        <span data-forge-link className="text-meta">
+          <OutLink href={prLink!} className="min-h-[44px] sm:min-h-0">{`Open on ${name}`}</OutLink>
+        </span>
+      </footer>
+    ) : null;
   return (
     <footer data-review-footer data-post-state={state.kind} className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3 text-[12.5px] text-zinc-400">
       <div id={lineId} className="min-w-0 flex-1 basis-full sm:basis-0">{line}</div>
@@ -428,14 +442,17 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   };
 
   const [posting, setPosting] = useState(false);
+  // F4: the server answers 409 when the card has no review; that press is final, no Try again.
+  const [noReview, setNoReview] = useState(false);
   const post = async () => {
-    if (!onPost || posting || card.posted) return;
+    if (!onPost || posting || noReview || card.posted) return;
     setPosting(true);
     try {
       setCard(await onPost(card.id));
     } catch (err) {
       // The route answers 200 with post_error for the forge's refusals; a throw is the network or a 4xx from kwant.
       const message = err instanceof Error && err.message ? err.message : 'it didn’t go through';
+      if ((err as { status?: unknown } | null)?.status === 409) setNoReview(true);
       setCard((c) => ({ ...c, post_error: { kind: 'failed', message } }));
     } finally {
       setPosting(false);
@@ -611,7 +628,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       {/* 7. Footer: Post to {Forge} (design §5.7) */}
       <PostFooter
         id={headingId}
-        state={postState(card, { canPost: !!onPost && !sample, posting, forge })}
+        state={postState(card, { canPost: !!onPost && !sample, posting, forge, noReview })}
         forge={card.posted?.forge ?? forge}
         count={postCount(card.findings)}
         login={forgeLogin}

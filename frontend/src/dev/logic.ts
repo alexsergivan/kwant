@@ -356,7 +356,8 @@ export const postCount = (findings: Pick<DevFinding, 'state'>[]): number => find
 /** Display names for `forge` (amendment, 21:50): posting is GitHub-only in 0.7.1, GitLab and Gitea come in 0.7.2. */
 export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
 
-/** "Post to GitHub · 3 comments"; no count when nothing is open (the review is then its body only). */
+/** "Post to GitHub · 3 findings"; no count when nothing is open (the review is then its body only). F6: findings, not
+ * comments, because a finding outside the diff goes in the review body; the posted line counts inline comments. */
 /** The link to the PR (or a direct commit) on its forge: "Open on GitHub". Landed cards keep the link with no
  *  forge (the URL is in the card), named plainly; the review footer hides it instead (user-flow.md F7). */
 export const forgeOpen = (forge: Forge | null, what: 'pr' | 'commit' = 'pr'): string =>
@@ -364,7 +365,7 @@ export const forgeOpen = (forge: Forge | null, what: 'pr' | 'commit' = 'pr'): st
 
 export function postLabel(n: number, forge: Forge): string {
   const to = `Post to ${FORGE_NAME[forge]}`;
-  return n === 0 ? to : `${to} · ${n} ${n === 1 ? 'comment' : 'comments'}`;
+  return n === 0 ? to : `${to} · ${n} ${n === 1 ? 'finding' : 'findings'}`;
 }
 
 /** "Nothing is posted until you press it. Posts as octocat." (the second sentence only with a login). */
@@ -372,8 +373,9 @@ export function postLine(login: string | null | undefined): string {
   return login ? `Nothing is posted until you press it. Posts as @${login}.` : 'Nothing is posted until you press it.';
 }
 
-/** "3 comments", "1 comment", or null for none or unknown (the line then drops it). */
-export const commentsWord = (n: number | null | undefined): string | null => (n ? `${n} ${n === 1 ? 'comment' : 'comments'}` : null);
+/** "3 inline comments", "1 inline comment", or null for none or unknown (the line then drops it). `posted.comments`
+ * counts only the comments on diff lines (F6, QA 0.7.1). */
+export const commentsWord = (n: number | null | undefined): string | null => (n ? `${n} inline ${n === 1 ? 'comment' : 'comments'}` : null);
 
 export const readOnlyTip = (forge: Forge): string => `Your ${FORGE_NAME[forge]} connection is read only`;
 /** Style v2 §7: what to give the token. The scope name is GitHub's; other forges get plain words. */
@@ -384,12 +386,13 @@ export const STALE_LINE = 'This PR has new commits. A new review is on its way.'
 
 export type PostState =
   | { kind: 'none' } // no Post button: the sample PR, or a card still being written
+  | { kind: 'no_review' } // F4: the review failed to generate, so there is nothing to post (no lock line, no button)
   | { kind: 'ready' }
   | { kind: 'posting' }
   | { kind: 'posted'; at: string | null; url: string | null; login: string | null; comments: number | null }
   | { kind: 'read_only' }
   | { kind: 'stale' }
-  | { kind: 'failed'; message: string };
+  | { kind: 'failed'; message: string; retry: boolean };
 
 /**
  * Which footer to draw. `posted` wins over everything (the server never posts twice, P6); then the
@@ -397,15 +400,18 @@ export type PostState =
  */
 export function postState(
   card: { status: string; posted: { at: string | null; url: string | null; login?: string | null; comments?: number | null } | null; post_error: { kind: string; message: string | null } | null },
-  opts: { canPost: boolean; posting: boolean; forge: Forge | null },
+  opts: { canPost: boolean; posting: boolean; forge: Forge | null; noReview?: boolean },
 ): PostState {
   if (card.posted) return { kind: 'posted', at: card.posted.at, url: card.posted.url, login: card.posted.login ?? null, comments: card.posted.comments ?? null };
   if (!opts.canPost || !opts.forge || card.status === 'pending') return { kind: 'none' };
+  // F4: a card whose review didn't finish has nothing to post.
+  if (card.status === 'failed') return { kind: 'no_review' };
   if (opts.posting) return { kind: 'posting' };
   const e = card.post_error;
   if (e?.kind === 'read_only') return { kind: 'read_only' };
   if (e?.kind === 'stale') return { kind: 'stale' };
-  if (e) return { kind: 'failed', message: e.message ?? `${FORGE_NAME[opts.forge]} didn’t say why.` };
+  // noReview: the server answered 409 (no review on this card): say why, but offer no repost.
+  if (e) return { kind: 'failed', message: e.message ?? `${FORGE_NAME[opts.forge]} didn’t say why.`, retry: !opts.noReview };
   return { kind: 'ready' };
 }
 
