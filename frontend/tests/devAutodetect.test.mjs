@@ -47,7 +47,7 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
     if (method === 'PUT') server.state = { ...server.state, ...body, status: 'watching' };
     return json(server.state);
   }
-  if (u.includes('/dev/landed')) return json({ cards: [], rollup: { count: 0, areas: [] }, last_tag: null, last_merge: null });
+  if (u.includes('/dev/landed')) return json(server.landed ?? { cards: [], rollup: { count: 0, areas: [] }, last_tag: null, last_merge: null });
   if (u.includes('/dev/reviews')) return json({ cards: [] });
   return json({});
 };
@@ -64,6 +64,8 @@ const m = await loadBundled(`
   export { saveGate, SAVE_FIRST } from './src/passwordStore';
   export { nextTabStop } from './src/components/DevOnToast';
   export { lastOn } from './src/components/DevModeSwitch';
+  export { Rollup as IrisRollup } from './src/components/dev/Rollup';
+  export * as fx from './src/dev/fixtures';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;
@@ -228,6 +230,35 @@ test('DOM: each status renders one status line under the header; an older server
   const { root } = await desk({ repo: 'demo-org/demo-web', branch: 'main' });
   assert.equal(document.querySelector('[data-dv-status]'), null);
   assert.ok(document.querySelector('[data-dev-repo-chip]'));
+  root.unmount();
+});
+
+test('PX-2 (style-v2 §3/§4): header chip and subtitle, LED per status, Checked in the status line, Refresh 44 px on phone', async () => {
+  const want = { watching: 'ok', not_connected: 'warn', other_host: 'off', no_repo: 'off' };
+  for (const [st, extra] of [
+    ['watching', { repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] }],
+    ['not_connected', { repo: 'demo-org/demo-web', sources: [SOURCES[0]] }],
+    ['other_host', { repo: 'https://gitlab.example.test/demo/app', sources: [{ team: 'Web', repo: 'https://gitlab.example.test/demo/app', host: 'gitlab.example.test', from: 'folder' }] }],
+    ['no_repo', { sources: [] }],
+  ]) {
+    const { root } = await desk({ status: st, ...extra }, { onOpenLooseEnds() {} });
+    const line = document.querySelector('[data-dv-status]');
+    assert.equal(line.querySelector('[data-dv-led]').dataset.s, want[st], `${st}: LED`);
+    assert.match(line.querySelector('[data-dev-checked]').textContent, /^Checked \d\d:\d\d$/, `${st}: Checked lives in the status line`);
+    assert.equal(document.querySelectorAll('[data-dev-checked]').length, 1, `${st}: not in the header too`);
+    root.unmount();
+  }
+  const { root } = await desk({ status: 'watching', repo: 'demo-org/demo-web', branch: 'trunk', sources: [SOURCES[0]] });
+  const glyph = document.querySelector('.kw-dv-glyph');
+  assert.equal(glyph.textContent.trim(), '</>');
+  const sub = [...document.querySelectorAll('[data-dev-desk] p')].find((p) => p.textContent === 'What landed and what needs a look');
+  assert.ok(sub && sub.classList.contains('hidden') && sub.classList.contains('sm:block'), 'subtitle hides under 640');
+  const refresh = document.querySelector('[data-dev-refresh]');
+  assert.equal(refresh.getAttribute('aria-label'), 'Refresh');
+  assert.ok(refresh.classList.contains('max-sm:w-11') && refresh.classList.contains('max-sm:h-11'), 'icon-only 44x44 on phone');
+  const text = document.querySelector('[data-dv-status-text]');
+  assert.equal(text.querySelector('b').textContent, 'demo-org/demo-web', 'repo reads as a bold name');
+  assert.equal(text.querySelector('code.dv-code').textContent, 'trunk', 'branch is code');
   root.unmount();
 });
 
@@ -518,6 +549,30 @@ test('F4 DOM: the first-run block shows on the first visit only, and Got it hide
   const two = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
   assert.equal(document.querySelector('[data-dev-intro]'), null, 'second visit: gone');
   two.root.unmount();
+});
+
+test('PX-3 (style-v2 §9): later visits say "Nothing new on main" and "No open changes to review"; the first run reads $ kwant dev --on', async () => {
+  reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]], polled_at: '2026-11-05T09:00:00Z' });
+  localStorage.setItem('kwnt.dev.intro.spc_demo', '1');
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
+  const later = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+  assert.equal(document.querySelector('[data-dev-intro]'), null);
+  const e = document.querySelector('[data-dev-empty-term]');
+  assert.ok(e.textContent.includes('$ git log main --since="your last look"'));
+  assert.ok(e.textContent.includes('(nothing new)'));
+  assert.ok(e.textContent.includes('Nothing new on main'));
+  assert.doesNotMatch(document.body.textContent, /No merges on main yet|Nothing has landed yet/);
+  await click(document.querySelector('[data-dev-tab="reviews"]'));
+  const r = document.querySelector('[data-dev-empty-term]');
+  assert.ok(r.textContent.includes('$ kwant reviews --open'));
+  assert.ok(r.textContent.includes('0 open changes'));
+  assert.ok(r.textContent.includes('No open changes to review'));
+  later.root.unmount();
+  const first = await desk({ status: 'no_repo', sources: [] });
+  assert.match(document.querySelector('[data-dev-intro]').textContent, /\$ kwant dev --on/);
+  // no repo: no "nothing landed" rollup above the empty that says why
+  assert.doesNotMatch(document.body.textContent, /Nothing landed since you last looked/);
+  first.root.unmount();
 });
 
 test('F4 DOM: first-visit empty states speak git and never say "Nothing has landed yet"; 9+ caps the badge', async () => {
@@ -823,5 +878,77 @@ test('F8-R3-1: a space never seen in this browser shows the switch as loading (n
   assert.equal(sw().querySelector('.kw-dv-node').hasAttribute('visibility'), false);
   assert.equal(m.lastOn.get('spc_demo'), true, 'the next load starts on');
   g.fetch = g.window.fetch = realFetch;
+  root.unmount();
+});
+
+// ---------------------------------------------------------------------------
+// Style-v2 review fixes (Mira, 23:30): the rollup, the tab count and the list agree
+
+const landedDesk = async (landed, { later = true } = {}) => {
+  reset({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]], polled_at: '2026-11-05T09:00:00Z' });
+  server.landed = landed;
+  if (later) localStorage.setItem('kwnt.dev.intro.spc_demo', '1');
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
+  return mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo' }));
+};
+const ZERO = { since: '2026-11-05T18:00:00Z', until: '2026-11-05T21:00:00Z', count: 0, needs_you: 0, main_green: true, areas: [] };
+
+test('fix 2: a first visit has no "Since you last looked" rollup, only the first-run block and "No merges on main yet."', async () => {
+  const { root } = await landedDesk({ cards: [], rollup: ZERO, last_tag: null }, { later: false });
+  assert.equal(!!document.querySelector('[data-dev-intro]'), true);
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), false, 'no rollup on a first visit');
+  assert.doesNotMatch(document.body.textContent, /Since you last looked|Nothing landed since/);
+  assert.match(document.querySelector('[data-dev-empty-term]').textContent, /No merges on main yet\./);
+  root.unmount();
+});
+
+test('fix 2: a first visit with merges still has no rollup, but shows the cards', async () => {
+  const { root } = await landedDesk({ cards: m.fx.LANDED_ROUTE.cards, rollup: { ...m.fx.ROLLUP_QUIET }, last_tag: null }, { later: false });
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), false);
+  assert.equal(!!document.querySelector('[data-dev-empty-term]'), false);
+  root.unmount();
+});
+
+test('fix 3: "Nothing new on main" shows only with a zero rollup, and then without a repeating rollup card', async () => {
+  const zero = await landedDesk({ cards: [], rollup: ZERO, last_tag: null });
+  assert.match(document.querySelector('[data-dev-empty-term]').textContent, /Nothing new on main/);
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), false, 'the empty card alone says it');
+  zero.root.unmount();
+  const odd = await landedDesk({ cards: [], rollup: { ...ZERO, count: 3, areas: [] }, last_tag: null });
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), false, 'no "3 changes landed" with no cards to show');
+  assert.equal(!!document.querySelector('[data-dev-empty-term]'), false, 'and no "Nothing new on main" either');
+  odd.root.unmount();
+  const real = await landedDesk({ cards: m.fx.LANDED_ROUTE.cards, rollup: { ...m.fx.ROLLUP_QUIET }, last_tag: null });
+  assert.equal(!!document.querySelector('[data-dev-rollup]'), true, 'later visit with cards: the rollup is back');
+  assert.equal(!!document.querySelector('[data-dev-empty-term]'), false);
+  real.root.unmount();
+});
+
+test('fix 4: rollup actions stack full width on one line below 640 px, Draft release notes first; no count caption', () => {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  root.render(h(m.IrisRollup, { rollup: m.fx.ROLLUP_QUIET, last_tag: 'v0.7.0', branch: 'main', onDraftNotes() {}, onMarkSeen() {} }));
+  return settle().then(() => {
+    const row = host.querySelector('[data-dev-rollup-actions]');
+    assert.match(row.className, /(^| )flex-col( |$)/);
+    assert.match(row.className, /sm:flex-row/);
+    const btns = [...row.querySelectorAll('button')];
+    assert.deepEqual(btns.map((b) => b.textContent.trim()), ['Draft release notes', 'Mark all seen']);
+    for (const b of btns) {
+      assert.match(b.className, /max-sm:w-full/);
+      assert.match(b.className, /whitespace-nowrap/);
+      assert.match(b.className, /min-h-\[44px\]/);
+    }
+    assert.equal(row.querySelectorAll('p').length, 0, 'no "N changes" caption');
+    assert.doesNotMatch(host.textContent, /\d+ changes? since|v0\.7\.0/);
+    root.unmount();
+  });
+});
+
+test('first-run Got it: the same ghost style as the off note\'s Turn back on, 44 px on phone', async () => {
+  const { root } = await landedDesk({ cards: [], rollup: ZERO, last_tag: null }, { later: false });
+  const b = document.querySelector('[data-dev-intro-close]');
+  for (const c of ['min-h-[44px]', 'sm:min-h-[28px]', 'text-sky-300', 'hover:bg-sky-500/10', 'rounded-lg', 'font-semibold']) assert.ok(b.className.includes(c), c);
   root.unmount();
 });

@@ -70,6 +70,8 @@ const mount = async (el) => {
 };
 const desk = async () => {
   m.deskStore._reset();
+  // A later visit: the first visit has no "since you last looked" rollup (style-v2 review fix 2).
+  localStorage.setItem('kwnt.dev.intro.spc_demo', '1');
   const host = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo', now: fx.FIXTURE_NOW }));
   await settle();
   return host;
@@ -83,7 +85,7 @@ const click = async (el) => {
 test('slot swap: What landed draws Iris’s rollup and landed cards; a card she can’t draw gets her fallback row', async () => {
   const host = await desk();
   assert.ok(host.querySelector('[data-dev-landed-list]'), 'Iris’s LandedList');
-  assert.equal(host.querySelector('[data-dev-slot]'), null, 'no placeholder cards are left');
+  assert.equal(!!host.querySelector('[data-dev-slot]'), false, 'no placeholder cards are left');
   assert.match(host.textContent, /changes? landed on main/, 'Iris’s rollup title, with the branch');
   const prs = [...host.querySelectorAll('[data-dev-card="landed"][data-pr]')].map((c) => Number(c.getAttribute('data-pr')));
   assert.deepEqual(prs.sort(), [288, 289, 290, 301, 303]);
@@ -92,7 +94,7 @@ test('slot swap: What landed draws Iris’s rollup and landed cards; a card she 
   assert.ok(direct, 'the direct commit draws as a landed card');
   assert.match(direct.textContent, /Fix typo in README/);
   assert.match(direct.textContent, /Commit c0ffee1/);
-  assert.equal(direct.querySelector('[data-verified]'), null);
+  assert.equal(!!direct.querySelector('[data-verified]'), false);
   const fallback = host.querySelectorAll('[data-dev-card="fallback"]');
   assert.equal(fallback.length, 1);
   assert.match(fallback[0].textContent, /A card without a PR · This card couldn’t be shown\./);
@@ -118,7 +120,7 @@ test('Open review: switches to Reviews, scrolls to that PR’s card and focuses 
   assert.equal(reviewsTab.getAttribute('aria-selected'), 'true');
   const card = host.querySelector('[data-dev-card="review"][data-pr="289"]');
   const heading = card.querySelector('h3');
-  assert.equal(document.activeElement, heading, 'focus is on #289’s heading, not <body>');
+  assert.equal(document.activeElement === heading, true, 'focus is on #289’s heading, not <body>');
   assert.equal(heading.getAttribute('tabindex'), '-1', 'focusable by script, not a tab stop');
   assert.deepEqual(scrolled, [['289', { block: 'start', behavior: 'smooth' }]]);
 });
@@ -143,7 +145,7 @@ test('Open review: when that PR’s card isn’t on the desk, focus goes to the 
   await click(open);
   const reviewsTab = host.querySelector('[data-dev-tab="reviews"]');
   assert.equal(reviewsTab.getAttribute('aria-selected'), 'true');
-  assert.equal(document.activeElement, reviewsTab);
+  assert.equal(document.activeElement === reviewsTab, true);
   assert.deepEqual(scrolled, []);
 });
 
@@ -182,7 +184,7 @@ test('ProdFloorCard: a backup from the secondary Back up first that fails puts f
     const main = host.querySelector('[data-floor-main]');
     assert.equal(main.getAttribute('data-floor-main'), 'retry');
     assert.equal(main.textContent.trim(), 'Try the backup again');
-    assert.equal(document.activeElement, main, `${failure}: focus is on Try again, not <body>`);
+    assert.equal(document.activeElement === main, true, `${failure}: focus is on Try again, not <body>`);
     mounted.pop()();
     host.remove();
   }
@@ -225,7 +227,7 @@ for (const outcome of ['ok', 'throws', 'not ok']) {
     composer.focus();
     release();
     await settle();
-    assert.equal(document.activeElement, composer, 'focus is not taken from the composer');
+    assert.equal(document.activeElement === composer, true, 'focus is not taken from the composer');
     composer.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
     composer.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
     await settle();
@@ -242,7 +244,7 @@ test('M1: with focus still in the card, a good backup lands focus on Allow this 
   await settle();
   const main = host.querySelector('[data-floor-main]');
   assert.equal(main.textContent.trim(), 'Allow this deploy');
-  assert.equal(document.activeElement, main);
+  assert.equal(document.activeElement === main, true);
 });
 
 test('S1: the secondary Back up first keeps focus during the backup and ignores presses while busy', async () => {
@@ -251,7 +253,7 @@ test('S1: the secondary Back up first keeps focus during the backup and ignores 
   await click(secondary);
   assert.equal(secondary.hasAttribute('disabled'), false, 'not disabled, so focus does not drop to <body>');
   assert.equal(secondary.getAttribute('aria-disabled'), 'true');
-  assert.equal(document.activeElement, secondary);
+  assert.equal(document.activeElement === secondary, true);
   assert.equal(host.querySelector('[data-floor-case]').getAttribute('data-floor-case'), 'taking');
   // A second press while busy does nothing: still one backup in flight, still taking.
   const before = host.innerHTML;
