@@ -99,8 +99,14 @@ pub struct DevModeRow {
     pub last_seen_sha: Option<String>,
     pub polled_at: Option<DateTime<Utc>>,
     pub poll_error: Option<String>,
+    /// When the person last looked at what landed ("Mark seen"): the desk's rollup counts cards
+    /// after it.
     pub seen_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
+    /// When the person last opened the desk (flow F6): the row badge counts review cards after it.
+    /// Its own column since 0.7.2, so opening the desk no longer empties the landed rollup.
+    #[sqlx(default)]
+    pub reviews_seen_at: Option<DateTime<Utc>>,
 }
 
 /// One card: what landed, a review of an open PR head, or a release-notes draft.
@@ -140,6 +146,13 @@ pub struct DevBackupRow {
     pub taken_at: DateTime<Utc>,
 }
 
+/// Adds `dev_mode_spaces.reviews_seen_at` and fills it from `seen_at` (run once, see
+/// `migrate_dev_mode`). Additive only: older builds keep reading and writing the table.
+const MIGRATE_REVIEWS_SEEN: [&str; 2] = [
+    "ALTER TABLE dev_mode_spaces ADD COLUMN reviews_seen_at TIMESTAMP",
+    "UPDATE dev_mode_spaces SET reviews_seen_at = seen_at WHERE reviews_seen_at IS NULL",
+];
+
 const CARD_COLS: &str = "id, space_id, kind, ref, head_sha, status, facts, card, created_at, updated_at, posted, post_error";
 
 impl Database {
@@ -155,6 +168,18 @@ impl Database {
             if has.is_none() {
                 sqlx::query(&format!("ALTER TABLE dev_cards ADD COLUMN {column} TEXT")).execute(&self.pool).await?;
             }
+        }
+        // 0.7.2: the badge's "seen" (desk opened) apart from the rollup's (Mark seen). Added once,
+        // with the backfill in the same transaction, so a database from before keeps its badge
+        // state and a later start never copies a Mark seen into the badge.
+        let has: Option<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('dev_mode_spaces') WHERE name = 'reviews_seen_at'")
+            .fetch_optional(&self.pool)
+            .await?;
+        if has.is_none() {
+            let mut tx = self.pool.begin().await?;
+            sqlx::query(MIGRATE_REVIEWS_SEEN[0]).execute(&mut *tx).await?;
+            sqlx::query(MIGRATE_REVIEWS_SEEN[1]).execute(&mut *tx).await?;
+            tx.commit().await?;
         }
         Ok(())
     }
@@ -249,8 +274,16 @@ impl Database {
         Ok(())
     }
 
+    /// "Mark seen" on what landed: the rollup starts over from `at`. The badge is left alone.
     pub async fn dev_mode_seen(&self, space_id: &str, at: DateTime<Utc>) -> Result<(), DbError> {
         sqlx::query("UPDATE dev_mode_spaces SET seen_at = ?2 WHERE space_id = ?1").bind(space_id).bind(at).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// The desk was opened (flow F6): the review badge starts over from `at`. The rollup is left
+    /// alone, so what landed since the last Mark seen still shows.
+    pub async fn dev_mode_reviews_seen(&self, space_id: &str, at: DateTime<Utc>) -> Result<(), DbError> {
+        sqlx::query("UPDATE dev_mode_spaces SET reviews_seen_at = ?2 WHERE space_id = ?1").bind(space_id).bind(at).execute(&self.pool).await?;
         Ok(())
     }
 
