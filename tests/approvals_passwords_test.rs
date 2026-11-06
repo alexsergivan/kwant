@@ -8,6 +8,8 @@
 //! - While any space or bot is on "Ask only when risky" or "Don't ask", saving into the built-in store answers 409 and going back
 //!   from Bitwarden to the built-in store answers 409 unless it is empty.
 //! - An install already in that state shows `exposed: true` and keeps its approvals.
+//! - 0.7.3 A1: archived spaces, and bots in them, don't count. A2: the person (never a bot's turn
+//!   token) can accept the risk once (`accept_risk: true`), and then none of these refuse.
 
 use axum::{
     body::{to_bytes, Body},
@@ -132,6 +134,8 @@ fn assert_needs_bitwarden(s: StatusCode, v: &Value, count: Option<u64>) {
     if let Some(n) = count {
         assert_eq!(v["local_count"], n, "{v}");
     }
+    // 0.7.3 A2: the person may accept the risk instead
+    assert_eq!(v["can_accept"], true, "{v}");
     assert!(!v.to_string().contains("DUMMY"), "no password in a refusal: {v}");
 }
 
@@ -331,4 +335,212 @@ async fn ask_only_when_risky_follows_the_same_rule_as_off() {
     e.local_password().await;
     let (s, v) = e.bot_approvals("inherit").await;
     assert_needs_bitwarden(s, &v, Some(1));
+}
+
+// ---- 0.7.3 A1 and A2 (github-connect-073/spec.md) ----
+
+use kwnt::{
+    db::{models::NewKwant, spaces::NewSpace},
+    server::{
+        continuity::{SelfScope, TurnOrigin},
+        mcp_runtime,
+        passwords::RISK_ACCEPTED,
+    },
+};
+
+impl Env {
+    async fn as_bot(&self, token: &str, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"));
+        let body = body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty);
+        let resp = self.app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+        let status = resp.status();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+    /// A bot's turn token in #general, as a running turn holds it.
+    async fn bot_token(&self) -> String {
+        let space = SpaceId::default_space();
+        let general = self.state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap();
+        let scope = SelfScope {
+            kwant_id: self.bot.id.clone(),
+            kwant_name: self.bot.name.clone(),
+            origin: Some(TurnOrigin { channel_id: Some(general.id.clone()), ..Default::default() }),
+            turn_id: Some("t-risk".into()),
+            ..Default::default()
+        };
+        mcp_runtime::prepare_turn_with_self(&self.state, &self.bot, Some("t-risk".into()), None, Some(scope)).await.unwrap().1
+    }
+    async fn space(&self, approvals: &str) -> SpaceId {
+        let input = NewSpace { name: "Old".into(), icon: "x".into(), color: None, this_machine_enabled: true };
+        SpaceId::new(self.state.db.create_space_with_approvals(&input, approvals).await.unwrap().id)
+    }
+    async fn accepted(&self) -> Option<String> {
+        self.state.db.get_setting(RISK_ACCEPTED).await.unwrap().filter(|v| !v.is_empty())
+    }
+    async fn archived(&self, space: &SpaceId) -> bool {
+        self.state.db.get_space(space).await.unwrap().unwrap().archived_at.is_some()
+    }
+}
+
+#[tokio::test]
+async fn an_archived_space_on_ask_only_when_risky_does_not_count() {
+    // Oleks's dead end: an archived space on smart refused every save, with no way to see why
+    let e = setup(false).await;
+    let old = e.space("smart").await;
+    assert_eq!(e.store().await["approvals_off"], true);
+    let (s, v) = e.save("DUMMY-PW-A1").await;
+    assert_needs_bitwarden(s, &v, None);
+
+    let (s, v) = e.person("PATCH", &format!("/api/spaces/{}", old.as_str()), Some(json!({"archived": true}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(!e.state.db.any_approvals_off().await.unwrap());
+    let st = e.store().await;
+    assert_eq!((st["approvals_off"].clone(), st["risk_accepted"].clone()), (json!(false), json!(false)), "{st}");
+    let (s, v) = e.save("DUMMY-PW-A1").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+
+    // Restoring it would bring the risk back: the same 409, nothing restored
+    let uri = format!("/api/spaces/{}", old.as_str());
+    let (s, v) = e.person("PATCH", &uri, Some(json!({"archived": false}))).await;
+    assert_needs_bitwarden(s, &v, Some(1));
+    assert!(e.archived(&old).await, "still archived");
+    // A bot can't accept it on the person's behalf
+    let token = e.bot_token().await;
+    let (s, v) = e.as_bot(&token, "PATCH", &uri, Some(json!({"archived": false, "accept_risk": true}))).await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert!(e.archived(&old).await);
+    assert_eq!(e.accepted().await, None);
+    // The person accepts and restores
+    let (s, v) = e.person("PATCH", &uri, Some(json!({"archived": false, "accept_risk": true}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(!e.archived(&old).await);
+    let st = e.store().await;
+    assert_eq!(st["risk_accepted"], true, "{st}");
+    assert_eq!(st["exposed"], true, "accepting doesn't hide the exposure: {st}");
+}
+
+#[tokio::test]
+async fn restoring_a_space_that_asks_is_never_refused() {
+    let e = setup(false).await;
+    e.local_password().await;
+    let old = e.space("ask").await;
+    let uri = format!("/api/spaces/{}", old.as_str());
+    assert_eq!(e.person("PATCH", &uri, Some(json!({"archived": true}))).await.0, StatusCode::OK);
+    let (s, v) = e.person("PATCH", &uri, Some(json!({"archived": false}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(e.accepted().await, None, "nothing accepted");
+}
+
+#[tokio::test]
+async fn a_bot_override_in_an_archived_space_does_not_count() {
+    let e = setup(false).await;
+    let old = e.space("ask").await;
+    let input = NewKwant {
+        name: "Oldie".into(),
+        title: "t".into(),
+        persona_prompt: "p".into(),
+        soul: String::new(),
+        avatar_sprite: "architect".into(),
+        driver_type: "api".into(),
+        preferred_model: "auto".into(),
+    };
+    let oldie = e.state.db.create_kwant(&old, &input).await.unwrap();
+    e.state.db.set_kwant_approvals(&oldie.id, "smart").await.unwrap();
+    assert!(e.state.db.any_approvals_off().await.unwrap());
+    e.state.db.archive_space(&old).await.unwrap();
+    assert!(!e.state.db.any_approvals_off().await.unwrap());
+    let (s, v) = e.save("DUMMY-PW-A1B").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    // Restoring it is refused while the built-in store holds that password
+    let uri = format!("/api/spaces/{}", old.as_str());
+    let (s, v) = e.person("PATCH", &uri, Some(json!({"archived": false}))).await;
+    assert_needs_bitwarden(s, &v, Some(1));
+}
+
+#[tokio::test]
+async fn accepting_the_risk_on_save_lets_every_later_step_through() {
+    let e = setup(false).await;
+    assert_eq!(e.bot_approvals("smart").await.0, StatusCode::OK);
+    let (s, v) = e.save("DUMMY-PW-R1").await;
+    assert_needs_bitwarden(s, &v, None);
+    assert_eq!(e.store().await["local_count"], 0);
+
+    let body = json!({"origin": "https://a.test", "username": "u", "password": "DUMMY-PW-R1", "accept_risk": true});
+    let (s, v) = e.person("POST", &format!("/api/sandbox/{}/passwords", e.team), Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let at = e.accepted().await.expect("acceptance saved");
+    assert!(chrono::DateTime::parse_from_rfc3339(&at).is_ok(), "{at}");
+    let st = e.store().await;
+    assert_eq!(st["risk_accepted"], true, "{st}");
+    assert_eq!(st["local_count"], 1);
+    assert_eq!(st["exposed"], true, "{st}");
+    assert!(!st.to_string().contains("DUMMY"), "{st}");
+    kwnt::server::passwords::warn_if_exposed(&e.state).await;
+
+    // Later saves and relaxing approvals need no flag
+    let (s, v) = e.save("DUMMY-PW-R2").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = e.space_approvals("off").await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(e.state.db.space_approvals(&SpaceId::default_space()).await.unwrap(), "off");
+    // Accepted once: a second acceptance keeps the first time
+    let (s, v) = e.person("POST", "/api/passwords/store/accept_risk", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(e.accepted().await.as_deref(), Some(at.as_str()));
+}
+
+#[tokio::test]
+async fn the_accept_route_and_the_approvals_flag_accept_too() {
+    let e = setup(false).await;
+    e.local_password().await;
+    let (s, v) = e.person("POST", "/api/passwords/store/accept_risk", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["risk_accepted"], true, "the store reply: {v}");
+    assert_eq!(v["store"], "local", "{v}");
+    assert_eq!(e.space_approvals("smart").await.0, StatusCode::OK);
+
+    let e = setup(false).await;
+    e.local_password().await;
+    let uri = format!("/api/spaces/{}/approvals", SpaceId::default_space().as_str());
+    let (s, v) = e.person("PUT", &uri, Some(json!({"approvals": "smart", "accept_risk": true}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(e.accepted().await.is_some());
+    // Without the flag nothing is accepted: a plain refusal
+    let e = setup(false).await;
+    e.local_password().await;
+    let (s, v) = e.person("PUT", &uri, Some(json!({"approvals": "smart", "accept_risk": false}))).await;
+    assert_needs_bitwarden(s, &v, Some(1));
+    assert_eq!(e.accepted().await, None);
+}
+
+#[tokio::test]
+async fn a_bot_turn_token_can_never_accept_the_risk() {
+    let e = setup(false).await;
+    e.local_password().await;
+    let token = e.bot_token().await;
+    let save = json!({"origin": "https://a.test", "username": "u", "password": "DUMMY-PW-BOT", "accept_risk": true});
+    let space = format!("/api/spaces/{}/approvals", SpaceId::default_space().as_str());
+    let bot = format!("/api/kwants/{}/approvals", e.bot.id);
+    let calls = [
+        ("POST", "/api/passwords/store/accept_risk".to_string(), None),
+        ("POST", format!("/api/sandbox/{}/passwords", e.team), Some(save)),
+        ("POST", format!("/api/sandbox/{}/passwords/pending", e.team), Some(json!({"accept_risk": true}))),
+        ("PUT", space, Some(json!({"approvals": "off", "accept_risk": true}))),
+        ("PUT", bot, Some(json!({"approvals": "smart", "accept_risk": true}))),
+        ("DELETE", "/api/passwords/bitwarden".to_string(), Some(json!({"accept_risk": true}))),
+        ("POST", "/api/zombie/sources".to_string(), Some(json!({"kind": "github", "accept_risk": true}))),
+    ];
+    for (method, uri, body) in calls {
+        let (s, v) = e.as_bot(&token, method, &uri, body).await;
+        // The person-only routes stop it at the door (401/403); the rest in accept_risk (403)
+        assert!(matches!(s, StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED), "{method} {uri}: {s} {v}");
+        assert_eq!(e.accepted().await, None, "{method} {uri}");
+    }
+    assert_eq!(e.effective().await, "ask", "nothing relaxed");
+    assert_eq!(e.store().await["local_count"], 1, "nothing saved");
+    assert_eq!(e.store().await["risk_accepted"], false);
 }

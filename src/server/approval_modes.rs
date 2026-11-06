@@ -39,6 +39,9 @@ fn relaxes(mode: &str) -> bool {
 #[derive(Deserialize)]
 pub struct ModeBody {
     pub approvals: String,
+    /// The person accepts the built-in password store's risk (`passwords::accept_risk`).
+    #[serde(default)]
+    pub accept_risk: bool,
 }
 
 /// A bot's setting as the API shows it, next to its other fields.
@@ -94,6 +97,9 @@ pub async fn put_space(
         return error(StatusCode::BAD_REQUEST, "approvals must be \"ask\", \"smart\" or \"off\"");
     }
     if relaxes(mode) {
+        if let Err(r) = super::passwords::accept_risk(&state, &headers, body.accept_risk).await {
+            return r;
+        }
         if let Some(r) = super::passwords::refuse_approvals_off(&state).await {
             return r;
         }
@@ -152,6 +158,9 @@ pub async fn put_kwant(
     let turns_off = relaxes(mode)
         || (mode == INHERIT && state.db.space_approvals(&space).await.map_or(true, |m| relaxes(&m)));
     if turns_off {
+        if let Err(r) = super::passwords::accept_risk(&state, &headers, body.accept_risk).await {
+            return r;
+        }
         if let Some(r) = super::passwords::refuse_approvals_off(&state).await {
             return r;
         }
