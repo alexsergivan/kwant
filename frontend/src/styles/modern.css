@@ -674,3 +674,128 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-dv-sheet { animation: kw-dv-sheet-in 180ms var(--kw-ease) both; }
 @keyframes kw-dv-sheet-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .kw-dv-sheet { animation: none; } }
+
+/* =================================================================================================
+   Dev mode style v2 (Mira, dev-mode/design/style-v2/tokens.css, dark only). Verbatim from tokens.css:
+   the --t1..--t5 and --accent aliases the classes use, the new --dv-* tokens, and the .dv-* component classes.
+   Shared by Pixel (PX-*) and Iris (IR-*); keep this block identical on every branch.
+   ================================================================================================= */
+:root {
+  --t1: #f7f6ff; --t2: #ecebfa; --t3: #bcb7de; --t4: #9a94c4; --t5: #8d87b8;
+  --accent: #b8adff;            /* sky-300: accent text */
+  --accent-strong: #9d8fff;     /* sky-400: working / accent strokes */
+  --accent-fill: #6c58e0;       /* sky-600: toggles on */
+  --accent-gradient: linear-gradient(135deg, #7a62f0 0%, #5b47d6 100%);
+  --accent-soft: linear-gradient(135deg, rgb(122 98 240 / .22) 0%, rgb(91 71 214 / .10) 100%);
+  /* new Dev tokens (style v2) */
+  --dv-code-bg: rgb(10 7 25 / .72);          /* command boxes, diff excerpts, sha chips */
+  --dv-add: #5eead4;  --dv-add-bg: rgb(94 234 212 / .10);
+  --dv-del: #fda4af;  --dv-del-bg: rgb(253 164 175 / .12);
+  --dv-led-ok: #5eead4; --dv-led-run: #9d8fff; --dv-led-warn: #fcd34d; --dv-led-bad: #fda4af; --dv-led-off: #8d87b8;
+  --dv-rail: rgb(157 143 255 / .38);         /* git rail line */
+  --dv-hazard: #fbbf24;                      /* production floor edge only */
+  --dv-stamp: #5eead4;                       /* LGTM ink */
+  --dv-kbd-bg: #231d4b; --dv-kbd-bd: rgb(255 255 255 / .18);
+  --dv-caret: #b8adff;
+  --dv-armed: #fcd34d;                       /* the switch's armed state (amber = "press again") */
+  --dv-warn-bd: rgb(252 211 77 / .35); --dv-warn-bg: rgb(252 211 77 / .10);
+  --dv-bad-bd: rgb(253 164 175 / .35); --dv-bad-bg: rgb(253 164 175 / .10);
+  --dv-ok-bd: rgb(94 234 212 / .30); --dv-ok-bg: rgb(94 234 212 / .08);
+  --dv-floor-bd: rgb(245 158 11 / .30); --dv-floor-bg: rgb(69 26 3 / .20);
+  --dv-allow: #d97706;
+}
+
+/* §2.1 LED: an 8 px dot with a crisp 2 px ring in its own colour at 28 %. Never a glow blob.
+   off is hollow, so off vs on is shape as well as colour. Always next to words. */
+.dv-led { position: relative; display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--c); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c) 28%, transparent); --c: var(--dv-led-off); }
+.dv-led[data-s="ok"] { --c: var(--dv-led-ok); }
+.dv-led[data-s="run"] { --c: var(--dv-led-run); }
+.dv-led[data-s="warn"] { --c: var(--dv-led-warn); }
+.dv-led[data-s="bad"] { --c: var(--dv-led-bad); }
+.dv-led[data-s="off"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--c); }
+/* run: a ring that grows and fades, 1.2 s, only while the thing is actually running */
+.dv-led[data-s="run"]::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--c);
+  animation: dv-ping 1.2s var(--kw-ease) infinite; }
+/* ping: one 200 ms pop when a check finishes (the "Checked 14:32" moment) */
+.dv-led[data-ping]::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--c); animation: dv-ping 200ms var(--kw-ease) 1 both; }
+@keyframes dv-ping { from { transform: scale(1); opacity: .9; } to { transform: scale(2.4); opacity: 0; } }
+
+/* §2.2 Diff stat: mono numbers plus a 32x4 split bar (add | del). Our own shape, not a block meter. */
+.dv-stat { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px/1 'JetBrains Mono', monospace; white-space: nowrap; }
+.dv-stat .a { color: var(--dv-add); } .dv-stat .d { color: var(--dv-del); }
+.dv-bar { display: inline-flex; gap: 1px; width: 32px; height: 4px; border-radius: 2px; overflow: hidden; background: var(--kw-hairline-strong); }
+.dv-bar i { display: block; height: 100%; }
+.dv-bar i.a { background: var(--dv-add); } .dv-bar i.d { background: var(--dv-del); }
+
+/* §2.3 Mono chips: sha, branch flow, path, login */
+.dv-sha { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--kw-hairline); background: var(--dv-code-bg);
+  font: 500 11px/1 'JetBrains Mono', monospace; color: var(--t3); white-space: nowrap; }
+button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); border-color: var(--kw-hairline-strong); }
+.dv-branch { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--kw-hairline); background: var(--dv-code-bg);
+  font: 500 11px/1 'JetBrains Mono', monospace; color: var(--t3); min-width: 0; }
+.dv-branch .h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--t2); }
+.dv-branch .arr { color: var(--t5); }
+.dv-branch svg.i { width: 11px; height: 11px; color: var(--accent); }
+.dv-code { font: 500 0.92em/1 'JetBrains Mono', monospace; color: var(--accent); }
+
+/* §2.4 kbd */
+.dv-kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 5px;
+  background: var(--dv-kbd-bg); border: 1px solid var(--dv-kbd-bd); border-bottom-width: 2px; font: 600 10.5px/1 'JetBrains Mono', monospace; color: var(--t2); vertical-align: middle; }
+
+/* §2.5 Caret: blinks 4 times (900 ms steps) then stays solid. Static under reduced motion. */
+.dv-caret { display: inline-block; width: 7px; height: 14px; margin-left: 2px; vertical-align: -2px; background: var(--dv-caret); border-radius: 1px; animation: dv-blink 900ms steps(1) 4; }
+@keyframes dv-blink { 50% { opacity: 0; } }
+
+/* §3 Status line (S5) */
+.dv-statusline { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; min-height: 40px; padding: 8px 24px; border-bottom: 1px solid var(--kw-hairline);
+  background: color-mix(in srgb, var(--kw-surface-side) 70%, transparent); font-size: 12.5px; line-height: 18px; color: var(--t3); }
+.dv-statusline .txt { flex: 1 1 260px; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.dv-statusline .txt > span { min-width: 0; }
+.dv-statusline b { color: var(--t1); font-weight: 600; }
+.dv-statusline .act { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 8px; border-radius: 7px; color: var(--accent); font-weight: 500; border: 1px solid var(--kw-hairline-strong); background: transparent; font-size: 12px; cursor: pointer; }
+.dv-statusline .checked { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--t5); font-variant-numeric: tabular-nums; }
+
+/* §4 git rail: a line down the left of What landed, one node per card */
+.dv-rail { position: relative; padding-left: 30px; }
+.dv-rail::before { content: ''; position: absolute; left: 11px; top: 4px; bottom: 4px; width: 2px; border-radius: 1px; background: var(--dv-rail); }
+.dv-node { position: absolute; left: -25px; top: 22px; width: 12px; height: 12px; border-radius: 50%; background: var(--kw-surface-main); box-shadow: inset 0 0 0 2px var(--c); --c: var(--dv-led-off); }
+.dv-node[data-s="ok"] { --c: var(--dv-led-ok); background: var(--c); box-shadow: 0 0 0 3px var(--kw-surface-main); }
+.dv-node[data-s="bad"] { --c: var(--dv-led-bad); background: var(--c); box-shadow: 0 0 0 3px var(--kw-surface-main); }
+.dv-node[data-s="bad"]::after { content: ''; position: absolute; inset: 3px; background: var(--kw-surface-main); clip-path: polygon(20% 0,50% 30%,80% 0,100% 20%,70% 50%,100% 80%,80% 100%,50% 70%,20% 100%,0 80%,30% 50%,0 20%); }
+.dv-node[data-s="run"] { --c: var(--dv-led-run); }
+.dv-node[data-s="run"]::before { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--c); animation: dv-ping 1.2s var(--kw-ease) infinite; }
+/* merge arc: the PR's branch joining the line. Direct pushes have no arc. */
+.dv-arc { position: absolute; left: -19px; top: 6px; width: 14px; height: 20px; border: 2px solid var(--dv-rail); border-left: 0; border-bottom: 0; border-top-right-radius: 12px; }
+.dv-arc::after { content: ''; position: absolute; right: -5px; top: -5px; width: 8px; height: 8px; border-radius: 50%; background: var(--kw-surface-main); box-shadow: inset 0 0 0 2px var(--dv-rail); }
+
+/* §5 LGTM stamp: ink, not foil. Teal, double rule, -6deg, one 180 ms stamp-in. Not a sticker. */
+.dv-stamp { display: inline-flex; flex-direction: column; align-items: center; padding: 3px 9px 2px; border: 2px solid var(--dv-stamp); border-radius: 7px; color: var(--dv-stamp);
+  transform: rotate(-6deg); outline: 1px solid var(--dv-stamp); outline-offset: -5px; line-height: 1; user-select: none;
+  -webkit-mask-image: radial-gradient(circle at 30% 40%, #000 0 58%, rgb(0 0 0 / .82) 59% 61%, #000 62%), repeating-linear-gradient(115deg, #000 0 3px, rgb(0 0 0 / .86) 3px 4px);
+  -webkit-mask-composite: source-in; mask-composite: intersect;
+  animation: dv-stamp 180ms var(--kw-ease) 1 both; }
+.dv-stamp b { font: 800 13px/1 'JetBrains Mono', monospace; letter-spacing: .14em; padding: 3px 0 1px; }
+.dv-stamp small { font: 600 8.5px/1 'JetBrains Mono', monospace; letter-spacing: .06em; text-transform: uppercase; padding-bottom: 2px; opacity: .9; }
+@keyframes dv-stamp { from { transform: rotate(-6deg) scale(1.3); opacity: 0; } to { transform: rotate(-6deg) scale(1); opacity: 1; } }
+
+/* §6 terminal empty state */
+.dv-term { border: 1px dashed var(--kw-hairline-strong); border-radius: 12px; padding: 18px 20px 20px; }
+.dv-term pre { margin: 0 0 12px; font: 500 12px/20px 'JetBrains Mono', monospace; color: var(--t4); white-space: pre-wrap; overflow-wrap: anywhere; }
+.dv-term .ps { color: var(--accent); }
+.dv-term .out { color: var(--t3); }
+.dv-term h4 { margin: 0; font-size: 14px; font-weight: 600; color: var(--t1); }
+.dv-term p { margin: 2px 0 0; font-size: 12.5px; color: var(--t4); }
+
+/* §7 production floor edge: 4 px hazard tape across the top of the floor card. Only on the floor. */
+.dv-floor { position: relative; overflow: hidden; border: 1px solid var(--dv-floor-bd); background: var(--dv-floor-bg); border-radius: 10px; }
+.dv-floor::before { content: ''; display: block; height: 4px; background: repeating-linear-gradient(-45deg, var(--dv-hazard) 0 6px, transparent 6px 12px); opacity: .8; }
+.dv-cmd { border: 1px solid var(--kw-hairline); background: var(--dv-code-bg); border-radius: 8px; overflow: hidden; }
+.dv-cmd .bar { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--kw-hairline); font: 500 11px/1 'JetBrains Mono', monospace; color: var(--t5); }
+.dv-cmd pre { margin: 0; padding: 9px 10px; font: 500 12px/19px 'JetBrains Mono', monospace; color: var(--t1); white-space: pre-wrap; word-break: break-all; }
+.dv-cmd pre .ps { color: var(--accent); user-select: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dv-led::after, .dv-led[data-ping]::after, .dv-node::before, .dv-caret, .dv-stamp { animation: none !important; }
+  .dv-led[data-s="run"]::after { opacity: .5; transform: scale(1.6); }
+}

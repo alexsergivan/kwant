@@ -155,7 +155,7 @@ test('B1: a direct commit (pr null) parses and draws as a normal landed card nam
   assert.equal(c.verified, false, 'no PR review, so never verified, whatever the server says');
   assert.equal(m.showVerified({ ...c, verified: true }), false, 'the sticker rule refuses a pr-less card too');
   assert.equal(m.parseLanded({ ...fx.LANDED_DIRECT, headline: null }).headline, 'Commit c0ffee1', 'headline falls back to the commit');
-  const out = html(m.LandedCard, { card: c, reviews: [{ ...m.parseReview(fx.REVIEW_289), pr: 0 }], onOpenReview: () => {} });
+  const out = html(m.LandedCard, { card: c, reviews: [{ ...m.parseReview(fx.REVIEW_289), pr: 0 }], onOpenReview: () => {}, forge: 'github' });
   assert.match(out, /data-dev-card="landed"/);
   assert.match(out, /data-commit="c0ffee1"/);
   assert.doesNotMatch(out, /data-pr=/);
@@ -169,6 +169,12 @@ test('B1: a direct commit (pr null) parses and draws as a normal landed card nam
   assert.match(out, /Fix typo in README/);
   assert.match(out, /What changes for you/);
   assert.match(out, /Open on GitHub/, 'GitHub link goes to the commit');
+  assert.match(html(m.LandedCard, { card: c, forge: 'gitlab' }), /Open on GitLab/, 'F7: named from forge');
+  const bare = html(m.LandedCard, { card: c, forge: null });
+  assert.doesNotMatch(bare, /Open on/, 'no forge: no forge name');
+  assert.match(bare, /Open commit/, 'the commit link stays, named plainly');
+  assert.match(html(m.LandedCard, { card: landed(fx.LANDED_289) }), /Open pull request/);
+  assert.match(html(m.LandedList, { cards: [landed(fx.LANDED_289)], reviews: [], now: NOW, forge: 'gitea' }), /Open on Gitea/, 'the list passes forge on');
   assert.doesNotMatch(out, />Diff</, 'no second link to the same commit');
   assert.doesNotMatch(out, /This card couldn/);
   const list = html(m.LandedList, { cards: [landed(fx.LANDED_DIRECT), landed(fx.LANDED_288)], reviews: [], now: NOW });
@@ -515,8 +521,8 @@ test('Fix it sends the finding and offers Undo for 10 s', async () => {
   assert.deepEqual(actions, [['f1', 'fix'], ['f1', 'undo_fix']]);
 });
 
-test('the review card: sample chip, tamper, security tiles in 0.7.x, read-only footer', () => {
-  const out = html(m.ReviewCard, { card: review(fx.REVIEW_294), onFinding: async () => review(fx.REVIEW_294), sample: true, now: NOW });
+test('the review card: sample chip, tamper, security tiles in 0.7.x, no Post button on the sample', () => {
+  const out = html(m.ReviewCard, { card: review(fx.REVIEW_294), onFinding: async () => review(fx.REVIEW_294), sample: true, forge: 'github', now: NOW });
   assert.match(out, /Sample PR/);
   assert.match(out, /A test was made easier to pass/);
   assert.match(out, /Different engine from the author/);
@@ -524,7 +530,8 @@ test('the review card: sample chip, tamper, security tiles in 0.7.x, read-only f
   assert.match(out, /data-sec="Semgrep" data-state="later"/);
   assert.equal((out.match(/in 0\.7\.x/g) ?? []).length >= 2, true);
   assert.doesNotMatch(out, /Post to GitHub/, 'S2: no button that can never be pressed');
-  assert.match(out, /Read only: nothing is posted to GitHub in this version\./);
+  assert.match(out, /Nothing is posted until you press it\./);
+  assert.match(out, /data-post-state="none"/);
   assert.match(out, /<footer data-review-footer[^>]*>[\s\S]*Open on GitHub[\s\S]*<\/footer>/);
   assert.match(out, /Did less than asked/);
   assert.match(out, /Did more than asked/);
@@ -620,7 +627,7 @@ test('B2: a backup started from the secondary Back up first puts focus on the ma
   assert.notEqual(secondary, host.querySelector('[data-floor-main]'));
   secondary.focus();
   await click(secondary);
-  assert.equal(button(host, 'Back up first'), undefined, 'the secondary button is gone');
+  assert.equal(!!button(host, 'Back up first'), false, 'the secondary button is gone');
   assert.equal(document.activeElement, host.querySelector('[data-floor-main]'), 'focus is on the main button, not <body>');
 });
 

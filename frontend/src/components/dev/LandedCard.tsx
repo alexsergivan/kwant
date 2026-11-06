@@ -1,8 +1,8 @@
 import React from 'react';
 import { AlertTriangle, Check, ChevronRight, FileText, FlaskConical, GitCommitHorizontal, GitMerge, Minus, ShieldCheck, X } from 'lucide-react';
 import { Sticker } from '../Sticker';
-import type { LandedCard as Landed, LandedListProps, ReviewCard } from '../../dev/types';
-import { byDay, clock, openFindings, riskReasons, showVerified } from '../../dev/logic';
+import type { Forge, LandedCard as Landed, LandedListProps, ReviewCard } from '../../dev/types';
+import { byDay, clock, forgeOpen, openFindings, riskReasons, showVerified } from '../../dev/logic';
 import { OutLink, RiskChip, Who, personText } from './parts';
 
 const isTest = (path: string) => /(^|\/)(tests?|__tests__|e2e)\/|\.(test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(path);
@@ -11,7 +11,12 @@ const TESTS_ICON = { passed: Check, failed: X, none: Minus, unknown: Minus } as 
 const TESTS_TONE = { passed: 'text-ok', failed: 'text-bad', none: 'text-zinc-400', unknown: 'text-zinc-400' } as const;
 
 /** One merge in plain words (design §4). A commit pushed without a PR (`pr: null`) is the same card, named by its commit. */
-export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number) => void }> = ({ card, reviews = [], onOpenReview }) => {
+export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number) => void; forge?: Forge | null }> = ({
+  card,
+  reviews = [],
+  onOpenReview,
+  forge = null,
+}) => {
   const verified = showVerified(card, reviews);
   const writer = personText(card.written_by);
   const merged = clock(card.merged_at);
@@ -187,7 +192,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
           )}
           {github && (
             <OutLink href={github} className="min-h-[44px] sm:min-h-0">
-              Open on GitHub
+              {forgeOpen(forge, card.links.pr ? 'pr' : 'commit')}
             </OutLink>
           )}
         </span>
@@ -197,7 +202,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
 };
 
 /** What landed: the cards under "Today", "Yesterday" and date separators. */
-export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now(), onOpenReview }) => (
+export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now(), onOpenReview, forge = null }) => (
   <div data-dev-landed-list className="space-y-3">
     {byDay(cards, now).map((day) => (
       <section key={day.label} aria-label={day.label} className="space-y-3">
@@ -206,7 +211,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Da
           <span aria-hidden="true" className="h-px flex-1 bg-hairline" />
         </h3>
         {day.cards.map((c) => (
-          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} />
+          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} />
         ))}
       </section>
     ))}

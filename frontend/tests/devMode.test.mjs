@@ -553,7 +553,7 @@ test('round 2: the setup footer is sticky, says nothing is posted, and its butto
   const footer = document.querySelector('[data-dv-setup-footer]');
   assert.ok(footer.classList.contains('sticky') && footer.classList.contains('bottom-0'));
   assert.ok(footer.classList.contains('pb-[max(16px,env(safe-area-inset-bottom))]'));
-  assert.match(footer.textContent, /Only you can turn this on or off\. Nothing is posted to GitHub\./);
+  assert.match(footer.textContent, /Only you can turn this on or off\. Nothing is posted to GitHub unless you press Post\./);
   assert.doesNotMatch(document.body.textContent, /without asking/);
   for (const btn of footer.querySelectorAll('button')) assert.ok(btn.classList.contains('min-h-[44px]'), btn.textContent);
   root.unmount();

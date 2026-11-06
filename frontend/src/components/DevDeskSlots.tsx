@@ -5,7 +5,7 @@
 import React, { useMemo } from 'react';
 import type { FindingAction, LandedRollup, ShellCard } from '../dev/shellTypes';
 import { parseLanded, parseReleaseNotes, parseReview } from '../dev/types';
-import type { LandedCard as Landed, ReviewCard as Review } from '../dev/types';
+import type { Forge, LandedCard as Landed, ReviewCard as Review } from '../dev/types';
 import { needsYouAreas } from '../dev/logic';
 import { CardFallback } from './dev/parts';
 import { LandedList as IrisLandedList } from './dev/LandedCard';
@@ -31,11 +31,18 @@ export interface LandedListProps {
   reviews: ShellCard[];
   now?: number;
   onOpenReview?: (pr: number) => void;
+  /** `forge` from GET dev_mode: names the "Open on {Forge}" link. */
+  forge?: Forge | null;
 }
 
 export interface ReviewCardProps {
   card: ShellCard;
   onFinding: (cardId: string, findingId: string, action: FindingAction) => Promise<ShellCard>;
+  /** 0.7.1 Post to {Forge} (`POST /api/dev/cards/:id/post`). */
+  onPost?: (cardId: string) => Promise<ShellCard>;
+  /** `forge` and `forge_login` from GET dev_mode; no forge, no Post button. */
+  forge?: Forge | null;
+  forgeLogin?: string | null;
   sample?: boolean;
   now?: number;
 }
@@ -56,14 +63,14 @@ export const Rollup: React.FC<RollupProps> = ({ cards = [], ...rest }) => {
   return <IrisRollup {...rest} needsYouAreas={needs} />;
 };
 
-export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onOpenReview }) => {
+export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onOpenReview, forge = null }) => {
   const parsed = useMemo(() => parseLandedCards(cards), [cards]);
   const parsedReviews = useMemo(() => parseReviewCards(reviews), [reviews]);
   // Cards Iris's parser refuses (no PR number and no commit, wrong kind) still show, as the plain fallback row.
   const refused = useMemo(() => cards.filter((c) => parseLanded(c) === null), [cards]);
   return (
     <>
-      {parsed.length > 0 && <IrisLandedList cards={parsed} reviews={parsedReviews} now={now} onOpenReview={onOpenReview} />}
+      {parsed.length > 0 && <IrisLandedList cards={parsed} reviews={parsedReviews} now={now} onOpenReview={onOpenReview} forge={forge} />}
       {refused.map((c) => (
         <CardFallback key={c.id} raw={c} />
       ))}
@@ -71,7 +78,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onO
   );
 };
 
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, sample, now }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, forge, forgeLogin, sample, now }) => {
   const parsed = useMemo(() => parseReview(card), [card]);
   if (!parsed) return <CardFallback raw={card} />;
   const send = async (cardId: string, findingId: string, action: FindingAction): Promise<Review> => {
@@ -79,7 +86,14 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, sample,
     if (!next) throw new Error('The review came back in a shape this app doesn’t know.');
     return next;
   };
-  return <IrisReviewCard card={parsed} onFinding={send} sample={sample} now={now} />;
+  const post = onPost
+    ? async (cardId: string): Promise<Review> => {
+        const next = parseReview(await onPost(cardId));
+        if (!next) throw new Error('The review came back in a shape this app doesn’t know.');
+        return next;
+      }
+    : undefined;
+  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} forge={forge} forgeLogin={forgeLogin} sample={sample} now={now} />;
 };
 
 export const ReleaseNotesSheet: React.FC<ReleaseNotesSheetProps> = ({ card, onSaveToNotion, onDiscard, onClose }) => {

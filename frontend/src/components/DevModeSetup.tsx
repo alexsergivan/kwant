@@ -222,7 +222,7 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
         <footer className="sticky bottom-0 -mx-6 px-6 bg-[#120e26] border-t border-white/[0.07] pt-3 pb-[max(16px,env(safe-area-inset-bottom))] flex flex-col sm:flex-row sm:items-center gap-3" data-dv-setup-footer>
           <p className="flex-1 flex items-start gap-1.5 text-meta text-zinc-500">
             <Lock size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
-            Only you can turn this on or off. Nothing is posted to GitHub.
+            Only you can turn this on or off. Nothing is posted to GitHub unless you press Post.
           </p>
           <div className="flex gap-2 justify-end">
             <button

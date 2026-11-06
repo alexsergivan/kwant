@@ -6,6 +6,7 @@ import type {
   BackupResult,
   DevFinding,
   DismissReason,
+  Forge,
   FloorBackup,
   LandedCard,
   ProdFloor,
@@ -356,3 +357,105 @@ export function findingsSummary(findings: DevFinding[]): string {
     .map(([s, n]) => `${n} ${s}`)
     .join(', ');
 }
+
+// ---------------------------------------------------------------------------------------------------
+// Post to {Forge} (0.7.1, plan/post-to-github.md + amendment): the review card footer's one state
+
+/** Findings the post turns into comments: every one not dismissed (design §5.7 "N = open findings"). */
+export const postCount = (findings: Pick<DevFinding, 'state'>[]): number => findings.filter((f) => f.state !== 'dismissed').length;
+
+/** Display names for `forge` (amendment, 21:50): posting is GitHub-only in 0.7.1, GitLab and Gitea come in 0.7.2. */
+export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
+
+/** "Post to GitHub · 3 findings"; no count when nothing is open (the review is then its body only). F6: findings, not
+ * comments, because a finding outside the diff goes in the review body; the posted line counts inline comments. */
+/** The link to the PR (or a direct commit) on its forge: "Open on GitHub". Landed cards keep the link with no
+ *  forge (the URL is in the card), named plainly; the review footer hides it instead (user-flow.md F7). */
+export const forgeOpen = (forge: Forge | null, what: 'pr' | 'commit' = 'pr'): string =>
+  forge ? `Open on ${FORGE_NAME[forge]}` : what === 'pr' ? 'Open pull request' : 'Open commit';
+
+export function postLabel(n: number, forge: Forge): string {
+  const to = `Post to ${FORGE_NAME[forge]}`;
+  return n === 0 ? to : `${to} · ${n} ${n === 1 ? 'finding' : 'findings'}`;
+}
+
+/** "Nothing is posted until you press it. Posts as octocat." (the second sentence only with a login). */
+export function postLine(login: string | null | undefined): string {
+  return login ? `Nothing is posted until you press it. Posts as @${login}.` : 'Nothing is posted until you press it.';
+}
+
+/** "3 inline comments", "1 inline comment", or null for none or unknown (the line then drops it). `posted.comments`
+ * counts only the comments on diff lines (F6, QA 0.7.1). */
+export const commentsWord = (n: number | null | undefined): string | null => (n ? `${n} inline ${n === 1 ? 'comment' : 'comments'}` : null);
+
+export const readOnlyTip = (forge: Forge): string => `Your ${FORGE_NAME[forge]} connection is read only`;
+/** Style v2 §7: what to give the token. The scope name is GitHub's; other forges get plain words. */
+export const readOnlyFix = (forge: Forge): string => (forge === 'github' ? 'pull_requests: write' : 'write access');
+/** The whole read-only line, for screen readers and tests: "Your GitHub connection is read only. Give the token pull_requests: write to post." */
+export const readOnlyLine = (forge: Forge): string => `${readOnlyTip(forge)}. Give the token ${readOnlyFix(forge)} to post.`;
+export const STALE_LINE = 'This PR has new commits. A new review is on its way.';
+
+export type PostState =
+  | { kind: 'none' } // no Post button: the sample PR, or a card still being written
+  | { kind: 'no_review' } // F4: the review failed to generate, so there is nothing to post (no lock line, no button)
+  | { kind: 'ready' }
+  | { kind: 'posting' }
+  | { kind: 'posted'; at: string | null; url: string | null; login: string | null; comments: number | null }
+  | { kind: 'read_only' }
+  | { kind: 'stale' }
+  | { kind: 'failed'; message: string; retry: boolean };
+
+/**
+ * Which footer to draw. `posted` wins over everything (the server never posts twice, P6); then the
+ * in-flight press; then the last error; a pending card has no review to post yet.
+ */
+export function postState(
+  card: { status: string; posted: { at: string | null; url: string | null; login?: string | null; comments?: number | null } | null; post_error: { kind: string; message: string | null } | null },
+  opts: { canPost: boolean; posting: boolean; forge: Forge | null; noReview?: boolean },
+): PostState {
+  if (card.posted) return { kind: 'posted', at: card.posted.at, url: card.posted.url, login: card.posted.login ?? null, comments: card.posted.comments ?? null };
+  if (!opts.canPost || !opts.forge || card.status === 'pending') return { kind: 'none' };
+  // F4: a card whose review didn't finish has nothing to post.
+  if (card.status === 'failed') return { kind: 'no_review' };
+  if (opts.posting) return { kind: 'posting' };
+  const e = card.post_error;
+  if (e?.kind === 'read_only') return { kind: 'read_only' };
+  if (e?.kind === 'stale') return { kind: 'stale' };
+  // noReview: the server answered 409 (no review on this card): say why, but offer no repost.
+  if (e) return { kind: 'failed', message: e.message ?? `${FORGE_NAME[opts.forge]} didn’t say why.`, retry: !opts.noReview };
+  return { kind: 'ready' };
+}
+
+/** "Posted 19:58 as @oleks-i · 3 comments"; the time, login and count each drop out when unknown. */
+export const postedLine = (at: string | null, login: string | null = null, comments: number | null = null): string => {
+  const t = clock(at);
+  const n = commentsWord(comments);
+  return `Posted${t ? ` ${t}` : ''}${login ? ` as @${login}` : ''}${n ? ` · ${n}` : ''}`;
+};
+// Style v2 parts (Mira, style-v2.md §2): pure helpers behind <Led>, <DiffStat> and <Sha>
+
+export type LedState = 'ok' | 'run' | 'warn' | 'bad' | 'off';
+
+/**
+ * The 32×4 split bar: px for the add part and the del part (1 px gap between them when both show).
+ * Add share = round(31·a/(a+d)), at least 3 px when a > 0 and at least 3 px left for del when d > 0.
+ */
+export function diffBar(add: number, del: number): { add: number; del: number } {
+  const a = Math.max(0, add);
+  const d = Math.max(0, del);
+  if (a + d === 0) return { add: 0, del: 0 };
+  if (d === 0) return { add: 32, del: 0 };
+  if (a === 0) return { add: 0, del: 32 };
+  const ap = Math.min(28, Math.max(3, Math.round((31 * a) / (a + d))));
+  return { add: ap, del: 31 - ap };
+}
+
+/** "157 lines added, 15 removed" (one line / no lines read right). */
+export function diffLabel(add: number, del: number): string {
+  const l = (n: number) => (n === 1 ? 'line' : 'lines');
+  return `${add} ${l(add)} added, ${del} removed`;
+}
+
+/** The first 7 characters of a commit sha. */
+export const shortSha = (sha: string): string => sha.trim().slice(0, 7);
+

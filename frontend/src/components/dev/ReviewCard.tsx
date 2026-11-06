@@ -5,7 +5,7 @@ import {
   FlaskConical,
   GitPullRequest,
   KeyRound,
-  Lock,
+  Loader2,
   Package,
   ShieldAlert,
   ShieldCheck,
@@ -15,7 +15,7 @@ import {
   Bug,
   Code2,
 } from 'lucide-react';
-import type { DevFinding, FindingAction, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
+import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
   DISMISS_REASONS,
   clock,
@@ -23,10 +23,20 @@ import {
   dismissReducer,
   dismissedLine,
   findingsSummary,
+  FORGE_NAME,
+  readOnlyFix,
+  commentsWord,
+  readOnlyTip,
+  STALE_LINE,
+  postCount,
+  postLabel,
+  postState,
+  postedLine,
   riskReasons,
   undoLeft,
 } from '../../dev/logic';
-import { OutLink, SectionHead, Who, modelLabel, personText } from './parts';
+import type { LedState, PostState } from '../../dev/logic';
+import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
 const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
@@ -248,8 +258,160 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
 
 // ---------------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------------
+// 7. Footer: Post to {Forge} (0.7.1, design §5.7, plan/post-to-github.md + amendment). With no forge there is
+// no Post button and no lock line.
+
+const PostFooter: React.FC<{
+  id: string;
+  state: PostState;
+  forge: Forge | null;
+  count: number;
+  login: string | null;
+  prLink: string | null;
+  onPost: () => void;
+}> = ({ id, state, forge, count, login, prLink, onPost }) => {
+  // Style v2 §7: forge null means no footer at all (nothing to post, nowhere named to open).
+  if (!forge) return null;
+  const name = FORGE_NAME[forge];
+  const label = postLabel(count, forge);
+  const lineId = `${id}-post-line`;
+  const At = ({ who }: { who: string }) => <span className="font-mono text-zinc-100">@{who}</span>;
+  const withLed = (s: LedState, body: React.ReactNode, attr: Record<string, string>) => (
+    <span {...attr} className="inline-flex min-w-0 items-start gap-[7px]">
+      <Led s={s} className="mt-[5px] shrink-0" />
+      <span className="min-w-0 [overflow-wrap:anywhere]">{body}</span>
+    </span>
+  );
+  // Phone: the button gets its own full-width row at 44 px; from 640 px it sits on the right of the line.
+  const btn = 'min-h-[44px] w-full justify-center px-3 py-1 text-xs sm:min-h-[32px] sm:w-auto';
+  let line: React.ReactNode;
+  let action: React.ReactNode = null;
+  const lockLine = (who: string | null) => (
+    <span>
+      Nothing is posted until you press it.
+      {who && (
+        <>
+          {' '}Posts as <At who={who} />.
+        </>
+      )}
+    </span>
+  );
+  // A disabled Post button (read only, stale): aria-disabled so it stays focusable and its title is reachable.
+  const off = (title?: string) => (
+    <button
+      type="button"
+      aria-disabled="true"
+      aria-describedby={lineId}
+      title={title}
+      data-post-disabled
+      onClick={(e) => e.preventDefault()}
+      className={`kw-btn-ghost ${btn} cursor-not-allowed opacity-60 hover:bg-white/[0.03] hover:text-zinc-200`}
+    >
+      {label}
+    </button>
+  );
+  switch (state.kind) {
+    case 'none':
+      line = lockLine(null);
+      break;
+    case 'posted':
+      line = withLed(
+        'ok',
+        <>
+          Posted{clock(state.at) ? ` ${clock(state.at)}` : ''}
+          {state.login && (
+            <>
+              {' '}as <At who={state.login} />
+            </>
+          )}
+          {commentsWord(state.comments) && <> · {commentsWord(state.comments)}</>}
+        </>,
+        { 'data-post-done': '' },
+      );
+      if (state.url) action = <OutLink href={state.url} className="min-h-[44px] sm:min-h-0">{`View on ${name}`}</OutLink>;
+      break;
+    case 'read_only':
+      line = withLed(
+        'warn',
+        <>
+          {readOnlyTip(forge)}. Give the token <code className="dv-code">{readOnlyFix(forge)}</code> to post.
+        </>,
+        { 'data-post-read-only': '' },
+      );
+      // F1 (QA 0.7.1): read_only is cleared only by a post, so the press must reach the server once the token is fixed.
+      action = (
+        <button type="button" onClick={onPost} aria-describedby={lineId} data-post-retry className={`kw-btn-ghost ${btn}`}>
+          Try again
+        </button>
+      );
+      break;
+    case 'stale':
+      line = withLed('run', STALE_LINE, { 'data-post-stale': '' });
+      action = off();
+      break;
+    case 'failed':
+      line = withLed('bad', <>Couldn’t post: {state.message}</>, { 'data-post-failed': '' });
+      action = state.retry ? (
+        <button type="button" onClick={onPost} data-post-retry className={`kw-btn-ghost ${btn}`}>
+          Try again
+        </button>
+      ) : null;
+      break;
+    default: {
+      const busy = state.kind === 'posting';
+      line = lockLine(login);
+      action = (
+        <button type="button" disabled={busy} aria-busy={busy || undefined} onClick={onPost} data-post-button className={`kw-btn-primary ${btn} disabled:cursor-wait`}>
+          {busy ? (
+            <>
+              <Loader2 size={12} aria-hidden="true" className="motion-safe:animate-spin" />
+              Posting…
+            </>
+          ) : (
+            label
+          )}
+        </button>
+      );
+    }
+  }
+  // F7 (user-flow.md): Post first, then "Open on {Forge}". Not after posting: View on {Forge} replaces it.
+  const link = !!prLink && state.kind !== 'posted';
+  // F4: no review, no Post footer; the card keeps only its link to the PR.
+  if (state.kind === 'no_review')
+    return link ? (
+      <footer data-review-footer data-post-state="no_review" className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3 text-[12.5px] text-zinc-400">
+        <span data-forge-link className="text-meta">
+          <OutLink href={prLink!} className="min-h-[44px] sm:min-h-0">{`Open on ${name}`}</OutLink>
+        </span>
+      </footer>
+    ) : null;
+  return (
+    <footer data-review-footer data-post-state={state.kind} className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3 text-[12.5px] text-zinc-400">
+      <div id={lineId} className="min-w-0 flex-1 basis-full sm:basis-0">{line}</div>
+      {action && <div className="flex basis-full sm:basis-auto">{action}</div>}
+      {link && (
+        <span data-forge-link className="text-meta">
+          <OutLink href={prLink!} className="min-h-[44px] sm:min-h-0">{`Open on ${name}`}</OutLink>
+        </span>
+      )}
+      <span role="status" aria-live="polite" className="sr-only">
+        {state.kind === 'posted'
+          ? postedLine(state.at, state.login, state.comments)
+          : state.kind === 'failed'
+            ? `Couldn’t post: ${state.message}`
+            : state.kind === 'stale'
+              ? STALE_LINE
+              : state.kind === 'posting'
+                ? 'Posting…'
+                : ''}
+      </span>
+    </footer>
+  );
+};
+
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null }) => {
   const [card, setCard] = useState<Review>(given);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(() => Date.now());
@@ -276,6 +438,24 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       setCard((c) => ({ ...c, findings: c.findings.map((x) => (x.id === f.id ? { ...x, send_error: msg } : x)) }));
     } finally {
       setBusy(null);
+    }
+  };
+
+  const [posting, setPosting] = useState(false);
+  // F4: the server answers 409 when the card has no review; that press is final, no Try again.
+  const [noReview, setNoReview] = useState(false);
+  const post = async () => {
+    if (!onPost || posting || noReview || card.posted) return;
+    setPosting(true);
+    try {
+      setCard(await onPost(card.id));
+    } catch (err) {
+      // The route answers 200 with post_error for the forge's refusals; a throw is the network or a 4xx from kwant.
+      const message = err instanceof Error && err.message ? err.message : 'it didn’t go through';
+      if ((err as { status?: unknown } | null)?.status === 409) setNoReview(true);
+      setCard((c) => ({ ...c, post_error: { kind: 'failed', message } }));
+    } finally {
+      setPosting(false);
     }
   };
 
@@ -445,18 +625,16 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
 
       {card.cut && <p className="mt-3 text-2xs text-zinc-400">{card.cut}</p>}
 
-      {/* 7. Footer: 0.7.0 is read only (D4), so there is no Post to GitHub button. */}
-      <footer data-review-footer className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3">
-        <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-zinc-400">
-          <Lock size={13} aria-hidden="true" className="shrink-0" />
-          Read only: nothing is posted to GitHub in this version.
-        </span>
-        {card.links.pr && (
-          <span className="text-meta sm:ml-auto">
-            <OutLink href={card.links.pr}>Open on GitHub</OutLink>
-          </span>
-        )}
-      </footer>
+      {/* 7. Footer: Post to {Forge} (design §5.7) */}
+      <PostFooter
+        id={headingId}
+        state={postState(card, { canPost: !!onPost && !sample, posting, forge, noReview })}
+        forge={card.posted?.forge ?? forge}
+        count={postCount(card.findings)}
+        login={forgeLogin}
+        prLink={card.links.pr}
+        onPost={() => void post()}
+      />
     </article>
   );
 };
