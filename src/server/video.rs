@@ -7,8 +7,9 @@
 //!   no format probing, no playlists, no external data references; `-protocol_whitelist file`;
 //! - `-max_pixels` refuses frames with absurd dimensions, `-threads 2`, `ffmpeg -nostdin` (ffprobe
 //!   has no such flag: it gets a closed stdin like ffmpeg);
-//! - an empty environment, its own session and process group, `nice 10`, `RLIMIT_FSIZE`,
-//!   `RLIMIT_CORE` 0 and `RLIMIT_AS`, as the git reader (`dev::git`) plus a memory cap;
+//! - an empty environment, its own session and process group, `nice 10`, `RLIMIT_FSIZE` and
+//!   `RLIMIT_CORE` 0, as the git reader (`dev::git`), plus a 2 GB memory cap (`RLIMIT_AS`) on
+//!   Linux only: macOS can't lower it, so there it is tried and skipped;
 //! - output only into a fresh temp dir that is removed however the read ends;
 //! - one deadline (20 s, as a PDF) for the whole read; on it the process group is killed;
 //! - at most two video reads at once.
@@ -26,6 +27,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub const READ_SECS: u64 = 20;
 /// The line a bot gets when the server has no ffmpeg.
 pub const NO_FFMPEG: &str = "Install ffmpeg on the server to let bots look inside videos.";
+/// Why a read stopped when ffmpeg or ffprobe couldn't be started.
+const NO_START: &str = "ffmpeg couldn't start on this server.";
 const MAX_FRAMES: usize = 6;
 /// Longest side of a frame the bot gets.
 const FRAME_EDGE: u32 = 1280;
@@ -190,7 +193,11 @@ fn input_opts(mime: &str) -> Vec<&'static str> {
 #[derive(Debug, PartialEq)]
 enum RunError {
     Timeout,
+    /// It ran and failed (or wrote too much): blame the file.
     Failed,
+    /// It never started (missing, not executable, missing libraries, a limit refused): blame
+    /// the server, not the file.
+    Spawn,
 }
 
 /// A temp dir removed when dropped, however the read ends.
@@ -238,17 +245,31 @@ async fn run(bin: &Path, args: &[OsString], cwd: &Path, until: Instant) -> Resul
             // Its own process group, so a timeout kills everything it started
             libc::setsid();
             libc::nice(10);
-            for (res, cap) in [(libc::RLIMIT_FSIZE, OUT_FSIZE), (libc::RLIMIT_CORE, 0), (libc::RLIMIT_AS, MAX_AS)] {
+            let limit = |res, cap: u64| {
                 let lim = libc::rlimit { rlim_cur: cap as libc::rlim_t, rlim_max: cap as libc::rlim_t };
-                if libc::setrlimit(res, &lim) != 0 {
+                libc::setrlimit(res, &lim)
+            };
+            // Required everywhere, as in dev::git: no ffmpeg runs without them
+            for (res, cap) in [(libc::RLIMIT_FSIZE, OUT_FSIZE), (libc::RLIMIT_CORE, 0)] {
+                if limit(res, cap) != 0 {
                     return Err(std::io::Error::last_os_error());
                 }
             }
+            // The memory cap is required on Linux, where RLIMIT_AS is enforced. macOS rejects
+            // lowering it (EINVAL; Darwin maps it to RSS and doesn't enforce it), and Mac is the
+            // main platform, so elsewhere it is best-effort: a refusal must not stop every video
+            // read. The 20 s deadline, -max_pixels and -threads 2 still bound the work there.
+            #[cfg(target_os = "linux")]
+            if limit(libc::RLIMIT_AS, MAX_AS) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = limit(libc::RLIMIT_AS, MAX_AS);
             libc::signal(libc::SIGXFSZ, libc::SIG_DFL);
             Ok(())
         });
     }
-    let mut child = cmd.spawn().map_err(|_| RunError::Failed)?;
+    let mut child = cmd.spawn().map_err(|_| RunError::Spawn)?;
     let mut group = crate::drivers::cli::ProcessGroup::of(&child);
     let out = child.stdout.take();
     let work = async {
@@ -322,12 +343,14 @@ pub async fn describe_with(
         Err(RunError::Timeout) => {
             return (text(format!("Couldn't look inside {label}: reading it took longer than {} seconds.", limit.as_secs())), true)
         }
+        Err(RunError::Spawn) => return (text(format!("Couldn't look inside {label}: {NO_START}")), true),
     };
 
     let times = frame_times(info.duration);
     let scale = format!("scale=w='min({FRAME_EDGE},iw)':h='min({FRAME_EDGE},ih)':force_original_aspect_ratio=decrease");
     let mut frames: Vec<(f64, Vec<u8>)> = Vec::new();
     let mut timed_out = false;
+    let mut no_start = false;
     for (i, t) in times.iter().enumerate() {
         let out = dir.0.join(format!("f{i}.jpg"));
         let mut args = os(&["-nostdin", "-v", "error", "-hide_banner", "-threads", "2"]);
@@ -343,6 +366,11 @@ pub async fn describe_with(
                 break;
             }
             Err(RunError::Failed) => continue,
+            // ffprobe ran but ffmpeg can't: the same for every frame
+            Err(RunError::Spawn) => {
+                no_start = true;
+                break;
+            }
         }
         if let Ok(meta) = tokio::fs::metadata(&out).await {
             if meta.len() > 0 && meta.len() <= MAX_FRAME_BYTES {
@@ -359,6 +387,7 @@ pub async fn describe_with(
     let mut head = format!("--- {label} ---\n{}", summary(&info));
     head.push_str(&match (frames.len(), timed_out) {
         (0, true) => format!("\nNo frames: making them took longer than {} seconds.", limit.as_secs()),
+        (0, false) if no_start => format!("\nNo frames: {NO_START}"),
         (0, false) => "\nNo frames could be taken from it.".to_string(),
         (n, true) => format!("\n{n} of {} frames (the rest took longer than {} seconds):", times.len(), limit.as_secs()),
         (1, false) => "\n1 frame:".to_string(),
@@ -436,6 +465,30 @@ mod tests {
         assert!(!err);
         assert_eq!(v[0]["text"], format!("clip.mp4 is a video (video/mp4, 8.0 MB). {NO_FFMPEG}"));
         assert_eq!(v.as_array().unwrap().len(), 1);
+    }
+
+    /// A binary that can't be started (gone since the lookup, not executable, missing libraries)
+    /// is the server's problem: the bot isn't told the file is damaged.
+    #[tokio::test]
+    async fn an_ffmpeg_that_cannot_start_is_not_blamed_on_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blob = tmp.path().join("blob");
+        std::fs::write(&blob, b"\0\0\0\x20ftypisom").unwrap();
+        let not_exec = tmp.path().join("ffprobe");
+        std::fs::write(&not_exec, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&not_exec, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        for ffprobe in [tmp.path().join("missing/ffprobe"), not_exec] {
+            let tools = Tools { ffprobe: ffprobe.clone(), ffmpeg: tmp.path().join("missing/ffmpeg") };
+            let (v, err) = describe_with(Some(tools), "clip.mp4", "video/mp4", 2048, &blob, tmp.path(), Duration::from_secs(5)).await;
+            assert!(err, "{ffprobe:?}");
+            assert_eq!(v[0]["text"], "Couldn't look inside clip.mp4 (video/mp4, 2 KB): ffmpeg couldn't start on this server.");
+        }
+        let left: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("video-")).collect();
+        assert!(left.is_empty(), "temp dirs removed");
     }
 
     /// A hostile file that makes ffprobe (or ffmpeg) hang: the read stops at its deadline, the
