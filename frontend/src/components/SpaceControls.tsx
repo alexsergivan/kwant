@@ -212,10 +212,15 @@ export const DevExplainer: React.FC<ExplainerProps> = ({ id, space, on, disabled
     return () => window.removeEventListener('resize', place);
   }, [phone, anchor]);
 
-  // Focus the primary button when it opens (or the first control when there is none).
+  // Focus the primary button when it opens (or the first control when there is none). The desktop popover
+  // is hidden until it is placed, and a hidden button can't take focus, so wait for its position.
+  const focused = useRef(false);
+  const ready = phone || pos !== null;
   useEffect(() => {
+    if (!ready || focused.current) return;
+    focused.current = true;
     (primary.current ?? focusables(card.current)[0])?.focus();
-  }, []);
+  }, [ready]);
 
   // Outside click closes the popover; focus returns to "?" only if it was inside the card.
   useEffect(() => {
