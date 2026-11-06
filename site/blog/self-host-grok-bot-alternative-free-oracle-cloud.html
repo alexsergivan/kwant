@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Self-host a Grok Bot alternative for free: Oracle&#x27;s Always Free Arm server plus kwant, step by step.">
 <meta property="article:published_time" content="2026-11-05">
-<meta property="article:modified_time" content="2026-11-05">
+<meta property="article:modified_time" content="2026-11-06">
 <meta property="article:tag" content="grok">
 <meta property="article:tag" content="claude">
 <meta property="article:tag" content="chatgpt">
@@ -40,7 +40,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=e4d74c5a9d">
+<link rel="stylesheet" href="../assets/css/site.css?v=56c8dbb2f4">
 </head>
 <body class="page-blog">
 <a class="skip" href="#main">Skip to content</a>
@@ -62,14 +62,14 @@
     <p class="kicker">grok, claude, chatgpt, self-hosted, how-to, vps, oracle-cloud, ai-agents</p>
     <h1>Self-host a Grok Bot alternative for free on Oracle Cloud</h1>
     <p class="lede">Run kwant free on Oracle Cloud&#x27;s Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.</p>
-    <p class="post-meta">The kwant team · <time datetime="2026-11-05">November 5, 2026</time> · 17 min read</p>
+    <p class="post-meta">The kwant team · <time datetime="2026-11-05">November 5, 2026</time> · Updated <time datetime="2026-11-06">November 6, 2026</time> · 18 min read</p>
   </div>
 </section>
 
 <div class="wrap">
   <article class="prose solo post">
 <p>Grok Bot is xAI's agent app. According to <a href="https://www.igeeksblog.com/grok-bot-macos-ios-launch/" rel="noopener">launch coverage</a>, its agents are always on, each with its own computer in the cloud. If you would rather keep your agents on a server you control, you can do that without paying for the server: Oracle Cloud's Always Free tier includes an Arm server with 2 CPUs and 12 GB of memory, and kwant, the open-source AI agent team we build, runs on it with one Docker command.</p>
-<p>This guide goes from a new Oracle account to a bot team you open in your browser, running on Claude, ChatGPT, Grok or another model you connect. The longest wait is kwant's first build, which took about 20 minutes in our test.</p>
+<p>This guide goes from a new Oracle account to a bot team you open in your browser, running on Claude, ChatGPT, Grok or another model you connect. The longest wait is kwant's first build, which took about 20 minutes in our test. If you use an AI coding tool such as Claude Code or Codex, the <a href="#bonus-hand-this-guide-to-your-ai-coding-tool">bonus prompt</a> at the end has it follow this guide with you.</p>
 <p><strong>How we checked this guide.</strong> The Oracle Cloud steps follow Oracle's own Free Tier tutorial and documentation, linked in each step and read on 2026-11-05. We ran every command from step 5 onwards on 2026-11-05, in a fresh Ubuntu 24.04 container on an Oracle Ampere A1 server, limited to 2 CPUs and 12 GB of memory, the Always Free size. The timings, memory figures and screenshots below come from that run. We started the Grok sign-in and checked what it asks for, but did not finish it with a real xAI account. We did not connect Claude, ChatGPT, an API key, a custom server or Ollama on this server: those parts of step 8 follow kwant's <a href="https://kwant.si/docs/accounts">accounts docs</a> and what the app showed in our run.</p>
 <h2 id="what-free-covers">What "free" covers</h2>
 <div class="table-wrap"><table><thead><tr><th scope="col">Part</th><th scope="col">What it costs</th></tr></thead><tbody><tr><td>The server: Oracle's Always Free Arm instance</td><td>Nothing, as long as you stay within the Always Free limits</td></tr><tr><td>kwant</td><td>Nothing. It is open source under AGPL-3.0</td></tr><tr><td>The AI model</td><td>Your own Claude, ChatGPT or Grok plan, or an API key, on that provider's terms and prices</td></tr></tbody></table></div>
@@ -212,6 +212,13 @@ docker compose exec kwnt grok login --device-auth</code></pre>
 <p>The SSH tunnel is fine from a laptop, but not from a phone. For that, give the server a domain name and HTTPS in front of kwant, then add your phone under <strong>Settings → All spaces → Signed-in devices</strong>. The <a href="https://kwant.si/docs/install">install guide</a> covers the HTTPS setup, and our <a href="https://kwant.si/blog/claude-code-on-a-vps">VPS and phone guide</a> walks through the options. You will also need to let HTTPS traffic through Oracle's network rules, which this guide does not cover.</p>
 <h2 id="security-checklist">Security checklist</h2>
 <ul><li>Keep the private key from step 3 safe. Anyone who has it can log in to your server, and Oracle cannot show it to you again.</li><li>Leave kwant's port closed to the internet. The Docker setup publishes it on <code>127.0.0.1</code> only, which is why you use the tunnel.</li><li>Sign-in links work once and expire after 15 minutes (<a href="https://kwant.si/docs/install">install guide</a>). Don't paste them, or the token from <code>kwnt token --raw</code>, anywhere else.</li><li>Oracle's default network rules let SSH (port 22) in, and Oracle recommends limiting inbound rules to the addresses that need them (<a href="https://docs.oracle.com/en-us/iaas/Content/Network/Concepts/securitylists.htm" rel="noopener">Oracle docs</a>). kwant needs no other port open for this setup.</li><li>Membership in the <code>docker</code> group gives root-level access to the server, Docker's docs warn. Only add users you trust.</li></ul>
+<h2 id="bonus-hand-this-guide-to-your-ai-coding-tool">Bonus: hand this guide to your AI coding tool</h2>
+<p>If you use an AI coding tool that runs commands in your terminal, such as Claude Code, Codex or Cursor's agent, paste this prompt into it. It reads this page and follows it with you:</p>
+<pre class="prompt"><code>Read this guide and follow it to set up kwant for me on a free Oracle Cloud server:
+https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud
+
+Steps 1 to 3 happen in Oracle's web console, so guide me through them and wait for me after each. Then run the rest from my terminal with the guide's commands. If a command fails, show me the error and ask before trying a fix of your own. Keep my private key, sign-in link and API keys out of files and this chat.</code></pre>
+<p>Read each command before you allow it: it runs on your computer and on your server.</p>
 <p>A note on the name: "kwant" here means the open-source AI agent team at kwant.si. It is not the Kwant physics package or Kwant.ai, and kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google, Apple or Oracle.</p>
 <p>Ready to try it? Start with the <a href="https://kwant.si/docs/install">install guide</a> or the <a href="https://kwant.si/docs/quickstart">quickstart</a>.</p>
     <aside class="post-cta" aria-label="Try kwant">
@@ -264,7 +271,7 @@ docker compose exec kwnt grok login --device-auth</code></pre>
 </footer>
 <script src="../assets/js/site.js?v=63f328cd53" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"BlogPosting","@id":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud#post","headline":"Self-host a Grok Bot alternative for free on Oracle Cloud","description":"Run kwant free on Oracle Cloud's Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.","url":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud","mainEntityOfPage":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud","image":"https://kwant.si/assets/og/blog-self-host-grok-bot-alternative-free-oracle-cloud.png?v=b7f7b9673f","inLanguage":"en","datePublished":"2026-11-05","dateModified":"2026-11-05","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"wordCount":4315,"isPartOf":{"@id":"https://kwant.si/blog/#blog"},"about":{"@id":"https://kwant.si/#app"},"keywords":["grok","claude","chatgpt","self-hosted","how-to","vps","oracle-cloud","ai-agents"]},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://kwant.si/blog/"},{"@type":"ListItem","position":3,"name":"Self-host a Grok Bot alternative for free on Oracle Cloud","item":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"BlogPosting","@id":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud#post","headline":"Self-host a Grok Bot alternative for free on Oracle Cloud","description":"Run kwant free on Oracle Cloud's Always Free Arm server with Docker, connect Claude, ChatGPT, Grok or another model, and bring your Grok bots across.","url":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud","mainEntityOfPage":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud","image":"https://kwant.si/assets/og/blog-self-host-grok-bot-alternative-free-oracle-cloud.png?v=b7f7b9673f","inLanguage":"en","datePublished":"2026-11-05","dateModified":"2026-11-06","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"wordCount":4508,"isPartOf":{"@id":"https://kwant.si/blog/#blog"},"about":{"@id":"https://kwant.si/#app"},"keywords":["grok","claude","chatgpt","self-hosted","how-to","vps","oracle-cloud","ai-agents"]},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Blog","item":"https://kwant.si/blog/"},{"@type":"ListItem","position":3,"name":"Self-host a Grok Bot alternative for free on Oracle Cloud","item":"https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

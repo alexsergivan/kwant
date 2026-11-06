@@ -585,7 +585,8 @@ BLOG_HELP = """A post's header keys (one `key: value` per line, then a line with
   draft: yes                                left out of the site, the sitemap, the feed and llms.txt
 Markdown: ## and ### headings (h2 get an id from their text), paragraphs, - and 1. lists, **bold**, *italic*, `code`,
 [links](url), > quotes, ``` code blocks, | pipe | tables |, and a ```compare block (a comparison table that turns into
-one card per row on phones; first row = column names, yes / no / partial cells get a mark and words). A line that
+one card per row on phones; first row = column names, yes / no / partial cells get a mark and words), and a ```prompt
+block (a code block that wraps its lines, for prose such as a prompt to copy into an AI tool). A line that
 starts with < is passed through as HTML, and the page shortcodes ({{root}}, {{shot:…}}, …) work too."""
 
 _SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -676,6 +677,8 @@ def markdown(text):
             block, i = lines[i + 1:j], j + 1
             if lang == "compare":
                 out.append(compare_table(block))
+            elif lang == "prompt":
+                out.append(f'<pre class="prompt"><code>{html.escape(chr(10).join(block), quote=False)}</code></pre>')
             else:
                 out.append(f"<pre><code>{html.escape(chr(10).join(block), quote=False)}</code></pre>")
             continue
