@@ -4,6 +4,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, GitMerge, Loader2, Lock, ShieldAlert } from 'lucide-react';
+import { openGitHubConnect } from './GitHubConnect';
 import { CheckerUpdate, DevModeState, FieldState, createRepoChecker, deployLabel, devApi, fieldView, normaliseRepo, RepoCheck } from '../devMode';
 
 export interface DevModeSetupProps {
@@ -11,8 +12,8 @@ export interface DevModeSetupProps {
   initial?: DevModeState | null;
   onCancel: () => void;
   onDone: (s: DevModeState) => void;
-  /** Opens Connections (Connect GitHub, Mark production keys). Hidden when not given. */
-  onOpenConnections?: () => void;
+  /** Connect GitHub. Defaults to the shared connect form, opened in place (0.7.3 B1). */
+  onOpenConnections?: (anchor?: HTMLElement) => void;
   /** Test hooks. */
   check?: (repo: string) => Promise<RepoCheck>;
   save?: (body: { on: boolean; repo: string; branch: string | null }) => Promise<DevModeState>;
@@ -161,8 +162,8 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
             ) : (
               view.help
             )}
-            {view.connect && onOpenConnections && (
-              <button type="button" onClick={onOpenConnections} className="ml-2 font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline">
+            {view.connect && (
+              <button type="button" onClick={(e) => (onOpenConnections ? onOpenConnections(e.currentTarget) : openGitHubConnect({ space: space.id, anchor: e.currentTarget }))} data-dv-connect className="ml-2 font-medium text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline">
                 Connect GitHub
               </button>
             )}
@@ -186,7 +187,7 @@ export const DevModeSetup: React.FC<DevModeSetupProps> = ({ space, initial, onCa
             <Tile label="Production keys" hint={!onOpenConnections && !productionCount ? 'Mark them in Connections' : undefined}>
               <span className={productionCount ? '' : 'text-zinc-500'}>{productionCount ? `${productionCount} marked` : 'None marked'}</span>
               {onOpenConnections ? (
-                <button type="button" onClick={onOpenConnections} className="ml-1.5 text-meta font-medium text-sky-300 hover:text-sky-200">
+                <button type="button" onClick={(e) => onOpenConnections(e.currentTarget)} className="ml-1.5 text-meta font-medium text-sky-300 hover:text-sky-200">
                   Mark
                 </button>
               ) : null}

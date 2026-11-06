@@ -3,6 +3,8 @@
 
 import { parseView, viewSegment, type SpaceView } from './nav';
 import { pickedLine, serverReason } from './routeReason';
+import { NeedsBitwardenError } from './approvalMode';
+import { needsBitwardenFrom } from './passwordStore';
 
 export interface SpaceCounts {
   bots: number;
@@ -40,6 +42,8 @@ export interface SpacePatch {
   icon?: string;
   color?: string | null;
   archived?: boolean;
+  /** 0.7.3: restore a space that doesn't ask while passwords are on this server (the one-time confirm). */
+  accept_risk?: boolean;
 }
 
 export const DEFAULT_SPACE_ID = 'spc_default';
@@ -361,5 +365,16 @@ export const spacesApi = {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-    }).then((r) => json<Space>(r, 'Couldn’t save the space')),
+    }).then(async (r) => {
+      // A space that doesn't ask, coming back while passwords are on this server: the same one-time choice.
+      if (r.status === 409) {
+        const body = await r
+          .clone()
+          .json()
+          .catch(() => null);
+        const needs = needsBitwardenFrom(r.status, body);
+        if (needs) throw new NeedsBitwardenError(needs.message, needs.local_count, needs.can_accept);
+      }
+      return json<Space>(r, 'Couldn’t save the space');
+    }),
 };

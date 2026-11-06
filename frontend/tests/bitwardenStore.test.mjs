@@ -36,9 +36,9 @@ const buttons = (html) => [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g
 const inputs = (html) => [...html.matchAll(/<input[^>]*>/g)].map((x) => x[0]);
 const login = (p) => ({ id: 'c1', origin: 'https://example.com', domain: 'example.com', username: 'alice', created_at: null, last_used: null, ...p });
 const bw = (p) => ({ server_url: 'https://vault.bitwarden.com', email: 'dummy@example.com', login: 'password', client_id: null, unlocked: true, unlocked_at: 't', item_count: 4, last_sync: 't', ...p });
-const LOCAL = { store: 'local', locked: false, local_count: 3, bitwarden: null, approvals_off: false, exposed: false };
-const UNLOCKED = { store: 'bitwarden', locked: false, local_count: 0, bitwarden: bw(), approvals_off: false, exposed: false };
-const LOCKED = { store: 'bitwarden', locked: true, local_count: 0, bitwarden: bw({ unlocked: false, unlocked_at: null, item_count: null }), approvals_off: false, exposed: false };
+const LOCAL = { store: 'local', locked: false, local_count: 3, bitwarden: null, approvals_off: false, exposed: false, risk_accepted: false };
+const UNLOCKED = { store: 'bitwarden', locked: false, local_count: 0, bitwarden: bw(), approvals_off: false, exposed: false, risk_accepted: false };
+const LOCKED = { store: 'bitwarden', locked: true, local_count: 0, bitwarden: bw({ unlocked: false, unlocked_at: null, item_count: null }), approvals_off: false, exposed: false, risk_accepted: false };
 
 // ---------------------------------------------------------------- the model
 
@@ -49,7 +49,7 @@ test('store status: local, Bitwarden unlocked, Bitwarden locked (also when only 
   assert.equal(u.bitwarden.email, 'dummy@example.com');
   assert.equal(m.parseStoreStatus({ store: 'bitwarden', locked: false, bitwarden: bw({ unlocked: false }) }).locked, true);
   assert.equal(m.parseStoreStatus({ store: 'bitwarden', locked: true, bitwarden: bw() }).locked, true);
-  assert.deepEqual(m.parseStoreStatus(null), { store: 'local', locked: false, local_count: 0, bitwarden: null, approvals_off: false, exposed: false });
+  assert.deepEqual(m.parseStoreStatus(null), { store: 'local', locked: false, local_count: 0, bitwarden: null, approvals_off: false, exposed: false, risk_accepted: false });
   assert.equal(m.parseStoreStatus({ store: 'local', bitwarden: bw({ login: 'api_key', client_id: 'user.x' }) }).bitwarden.login, 'api_key');
 });
 
@@ -174,7 +174,7 @@ test('the store bar: this server, Bitwarden unlocked with Lock, Bitwarden locked
 test('the picker: two choices, said plainly; Bitwarden opens the connect form', () => {
   const html = m.bar(LOCAL, { initialOpen: true });
   assert.match(text(html), /Where passwords are kept, for every bot/);
-  assert.match(text(html), /Saved on this server Encrypted here\. Works only while every space and bot is on “Ask before running commands”; otherwise use Bitwarden\./);
+  assert.match(text(html), /Saved on this server Encrypted here\. While some bots run commands without asking, you confirm this once for this server; Bitwarden keeps passwords out of their reach\./);
   assert.match(text(html), /Bitwarden In your own Bitwarden account/);
   assert.equal(inputs(html).filter((i) => /type="radio"/.test(i)).length, 2);
   const connecting = m.bar(LOCAL, { initialOpen: true, initialConnecting: true });
@@ -228,7 +228,7 @@ test('two-step login and new-device code are asked for in the same form', () => 
   assert.doesNotMatch(text(only), /Method/, 'no picker for one method');
   const passkey = m.form({ mode: 'unlock', status: LOCKED, initialStep: { kind: 'two-factor', providers: m.twoFactorChoices(['7']) }, initialProblem: { kind: 'two-factor', providers: m.twoFactorChoices(['7']) } });
   assert.match(text(passkey), /Use an API key instead/);
-  assert.match(passkey, /<button type="submit" disabled=""/);
+  assert.match(passkey, /<button type="button" disabled=""[^>]*>Continue/);
   const device = m.form({ mode: 'unlock', status: LOCKED, initialStep: { kind: 'new-device-code' } });
   assert.match(text(device), /Code from Bitwarden's email/);
   const wrong = m.form({ mode: 'unlock', status: LOCKED, initialProblem: { kind: 'wrong-password' } });
