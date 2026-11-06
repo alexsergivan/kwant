@@ -55,15 +55,15 @@ card_art: team
     </div>
     <div class="grid two">
       <article class="card" id="post-to-github">
-        <span class="shot">{{shot:v071-post-github|A Dev mode review card after posting. Its footer reads Posted at the time, with a View on GitHub link.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v071-post-github|Review card #24 after posting. Its footer says it was posted as @demo-bot with 2 inline comments, with a View on GitHub link.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Post to GitHub</h3><p>A review card goes onto its pull request as one review comment, posted as you and pinned to the commit that was reviewed. Findings go on their lines. kwant never approves, requests changes or merges, a bot can't post, and secrets are never posted. <a href="docs/dev-mode.html#post">How posting works</a></p></div>
       </article>
       <article class="card" id="dev-on">
-        <span class="shot">{{shot:v071-dev-on|The Trailhead Outfitters space right after Dev mode was switched on with one press. A note says it found demo-org/demo-app on main, with Switch and Undo.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v071-dev-on|The Trailhead Outfitters space right after one press on the Dev mode switch. A note in the corner says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>One press on, and it finds the repo</h3><p>No setup dialog. kwant looks at the space's teams, their repo links and their folders, on your machine with no network, and says what it found with one fix and Undo. <strong>Switch</strong> lists the repos it found, with <strong>Type a repo</strong> last.</p></div>
       </article>
       <article class="card" id="dev-off">
-        <span class="shot">{{shot:v071-dev-off-armed|The Dev mode switch after one press: its cover is lifted with an amber ring, the label reads off?, and a hint says Press again to turn Dev mode off.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v071-dev-off-armed|The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Two presses to turn it off</h3><p>The first press lifts the cover, the second within 5 seconds turns Dev mode off. Escape, clicking elsewhere or waiting keeps it on, and the off note has <strong>Turn back on</strong>.</p></div>
       </article>
       <article class="card" id="lgtm">
@@ -76,7 +76,7 @@ card_art: team
         <h3>On, and the last five merges written up</h3>
         <p>One press on the switch. kwant names the repo it found, reads the last five merges and writes a plain-words card for each.</p>
       </div>
-      <div class="frame">{{video:clip-v071-dev-on|Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it found demo-org/demo-app, the desk shows Reading the last 5 merges, and landed cards appear one by one.}}</div>
+      <div class="frame">{{video:clip-v071-dev-on|Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words.}}</div>
     </div>
     <ul class="flist">
       <li id="wallet-payments"><h3>Crypto wallet sends always ask</h3><p>A tool whose arguments carry an amount and a wallet address or crypto asset now counts as a payment, so it asks in every approval mode, even with approvals off. <a href="docs/flight-school.html#payments">Payments always ask</a></p></li>
@@ -95,15 +95,15 @@ card_art: team
     </div>
     <div class="grid two">
       <article class="card" id="dev-landed">
-        <span class="shot">{{shot:v07-dev-landed|The What landed tab of the Dev desk: a Since you last looked roll-up above landed cards, each with a commit, a pull request number, a risk badge, per-file line counts and a tests line.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v07-dev-landed|The What landed tab of the Dev desk: a Since you last looked note saying nothing new landed since the last look, above yesterday's landed cards. Each card has a short commit sha, a pull request number, a risk badge, a line count and Tests passed, and two wear the Verified sticker.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>What landed, in plain words</h3><p>One card per merge to the watched branch: what changed, how risky it is, and whether tests passed. <strong>Verified</strong> only when CI is green, another bot reviewed it and every finding was handled. <strong>Draft release notes</strong> writes them from the cards. <a href="docs/dev-mode.html">Dev mode</a></p></div>
       </article>
       <article class="card" id="dev-review">
-        <span class="shot">{{shot:v07-dev-review|A review card for a pull request: a risk badge with its reasons, whether the change does what its task asked, a light for each security check, and findings with Fix it and Dismiss.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v07-dev-review|Review card #24, Speed up cart totals, from a feature branch into main: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass, a light for each security check, and two findings, each with Fix it and Dismiss. The footer has Post to GitHub, and nothing is posted until you press it.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>A second bot reviews every pull request</h3><p>Written by a bot that didn't write the code: risk with reasons, whether it does what was asked, weakened tests, found secrets and made-up packages. <strong>Fix it</strong> sends a finding back to the bot that wrote it.</p></div>
       </article>
       <article class="card" id="prod-floor">
-        <span class="shot">{{shot:v07-floor|A production floor approval card for a deploy, saying in one sentence what the command does and where it goes, with Back up first next to Allow and Deny.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v07-floor|A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>A floor under production</h3><p>Pushes to main, force pushes, deploys, production migrations and destructive data commands always ask, with no "always allow". A step that can change production data needs a fresh backup first. <a href="docs/dev-mode.html#floor">The production floor</a></p></div>
       </article>
       <article class="card" id="idea-jar">
@@ -460,7 +460,7 @@ card_art: team
         <div class="card-body"><h3>On from the start, at Act</h3><p>Since 0.6.5 Flight School is on and every bot starts at Act, so nothing new asks: it keeps scorecards and proposes tiers. Want new bots to start lower? Pick Sandbox or Observe in Settings.</p></div>
       </article>
       <article class="card" id="payments">
-        <span class="shot">{{shot:v3-payment-card|An approval card for a command that posts a payment to Stripe. It says this looks like a payment and why, with only Deny and Allow Once.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v071-wallet-payment|An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Payments always ask</h3><p>Anything that looks like paying shows a card, at every tier and even with approvals off. It says why, and has no Always button.</p></div>
       </article>
       <article class="card" id="approvals-off">

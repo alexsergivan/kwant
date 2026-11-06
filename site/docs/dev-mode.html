@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dev mode: AI code review and a production safety floor · kwant</title>
+<meta name="description" content="Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
+<meta name="theme-color" content="#f4f1ff">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://kwant.si/docs/dev-mode">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="kwant">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Dev mode: AI code review and a production safety floor · kwant">
+<meta property="og:description" content="Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
+<meta property="og:url" content="https://kwant.si/docs/dev-mode">
+<meta property="og:image" content="https://kwant.si/assets/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Dev mode: Plain-words cards for every merge, a second bot&#x27;s review on every pull request, and a floor under production.">
+<meta property="article:published_time" content="2026-11-06">
+<meta property="article:modified_time" content="2026-11-06">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Dev mode: AI code review and a production safety floor · kwant">
+<meta name="twitter:description" content="Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
+<meta name="twitter:image" content="https://kwant.si/assets/og.png">
+<meta name="twitter:image:alt" content="Dev mode: Plain-words cards for every merge, a second bot&#x27;s review on every pull request, and a floor under production.">
+<link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
+<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css?v=56c8dbb2f4">
+</head>
+<body class="page-docs">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart" aria-current="page">Docs</a>
+      <a href="/blog/">Blog</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <div class="docs-group"><h3>Get started</h3><ul><li><a href="/docs/quickstart">Quickstart</a></li><li><a href="/docs/install">Install &amp; run</a></li></ul></div>
+    <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="/docs/spaces">Spaces</a></li><li><a href="/docs/bots-and-teams">Bots &amp; teams</a></li><li><a href="/docs/accounts">Accounts &amp; profiles</a></li><li><a href="/docs/models">Models &amp; routing</a></li><li><a href="/docs/approvals">Approvals &amp; passwords</a></li><li><a href="/docs/flight-school">Flight School</a></li><li><a href="/docs/smart-results">Smart Results</a></li><li><a href="/docs/dev-mode" aria-current="page">Dev mode</a></li></ul></div>
+    <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="/docs/mission-board">Mission board</a></li><li><a href="/docs/goals">Goals</a></li><li><a href="/docs/idea-jar">Idea jar</a></li><li><a href="/docs/routines">Routines &amp; bot actions</a></li><li><a href="/docs/memory-skills">Memory, skills &amp; search</a></li><li><a href="/docs/lessons">Lessons</a></li><li><a href="/docs/truth-ledger">Truth Ledger</a></li><li><a href="/docs/loose-ends">Loose ends &amp; letters</a></li><li><a href="/docs/parallel-universe">Parallel Universe</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/browser">Browser</a></li></ul></div>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Dev mode: code review and a safety floor for your repo</h1>
+<p class="intro">Dev mode points a space at the GitHub repo its team works on. kwant reads the repo and writes a card for every merge and every open pull request, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v071-dev-on-2880.webp?v=fbbf9f3beb" data-caption="The Trailhead Outfitters space right after one press on the Dev mode switch. A note in the corner says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."><img class="app" src="../assets/media/v071-dev-on-1440.webp?v=0566376e72" srcset="../assets/media/v071-dev-on-1440.webp?v=0566376e72 1440w, ../assets/media/v071-dev-on-2880.webp?v=fbbf9f3beb 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Trailhead Outfitters space right after one press on the Dev mode switch. A note in the corner says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."></a></div>
+  <figcaption>One press turns it on. kwant says which repo it found, with one fix and Undo.</figcaption>
+</figure>
+
+<h2 id="turn-on">Turn it on</h2>
+<p>The <strong>Dev mode</strong> switch is in the space header. One press turns it on, with no setup to fill in. kwant looks at the space's teams for the repo: each team's repo link, or its folder when that folder is a git checkout. It reads this on your machine, with no network. A sign-in token inside a remote address is dropped and never logged or stored.</p>
+<ul>
+  <li><strong>A short note says what it found</strong>, such as the repo and branch, with one fix and <strong>Undo</strong>.</li>
+  <li><strong>Switch</strong> lists the repos it found in the space, with <strong>Type a repo</strong> last.</li>
+  <li><strong>Connect GitHub</strong> shows when no GitHub connection can read the repo. It takes you to Connections once, and Dev mode picks the repo up as soon as the connection is saved, without turning it off and on.</li>
+  <li><strong>Turning on never fails.</strong> With no repo, the production floor and the command guards still work, and the desk waits for one.</li>
+</ul>
+<p>Dev mode reads GitHub. A GitLab or Gitea repo is named in the note, but kwant doesn't read it yet.</p>
+<figure>
+  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v071-dev-on-poster.webp?v=051a0205b0" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="../assets/media/clip-v071-dev-on.mp4?v=5a38a2deb8" type="video/mp4"></video></div>
+  <figcaption>On, the repo found, and the last five merges written up.</figcaption>
+</figure>
+
+<h2 id="before">Before you turn it on</h2>
+<p>Dev mode reads GitHub through the GitHub connection in <a href="/docs/loose-ends">Loose ends</a>, so it needs a GitHub token. Reading works with a read-only token; <a href="#post">posting a review</a> needs <strong>Pull requests: Read and write</strong> on a fine-grained token.</p>
+<div class="note"><strong>Where the token is kept.</strong> kwant's built-in password store only saves a GitHub token while every space and every bot is on <strong>Ask before running commands</strong> (new installs start on <strong>Ask only when risky</strong>). Switch them to Ask, or connect Bitwarden. While the token is in the built-in store, approvals can't go back to Off or Ask only when risky. See <a href="/docs/approvals">Approvals &amp; passwords</a>.</div>
+
+<h2 id="landed">What landed</h2>
+<p>The <strong>Dev desk</strong> sits at the top of the sidebar. Its first tab, <strong>What landed</strong>, has one card per commit that reaches the watched branch: what changed in plain words, how risky it is, the commit, the pull request it came from (or "Direct push"), a diffstat for each file, and whether tests passed.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v07-dev-landed-2880.webp?v=8475f9c126" data-caption="The What landed tab of the Dev desk: a Since you last looked note saying nothing new landed since the last look, above yesterday&#x27;s landed cards. Each card has a short commit sha, a pull request number, a risk badge, a line count and Tests passed, and two wear the Verified sticker."><img class="app" src="../assets/media/v07-dev-landed-1440.webp?v=921e33309d" srcset="../assets/media/v07-dev-landed-1440.webp?v=921e33309d 1440w, ../assets/media/v07-dev-landed-2880.webp?v=8475f9c126 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The What landed tab of the Dev desk: a Since you last looked note saying nothing new landed since the last look, above yesterday&#x27;s landed cards. Each card has a short commit sha, a pull request number, a risk badge, a line count and Tests passed, and two wear the Verified sticker."></a></div>
+  <figcaption>Every merge as a card, with a roll-up of what came in since you last looked.</figcaption>
+</figure>
+<ul>
+  <li><strong>Since you last looked</strong> rolls up what's new, and <strong>Mark all seen</strong> clears it.</li>
+  <li><strong>Draft release notes</strong> writes notes from every landed card since the last tag.</li>
+  <li><strong>Verified</strong> goes on a merge only when another bot reviewed that exact head in kwant, every finding was fixed or dismissed, and CI on the merge is green. A pull request merged before its review was ready stays "not verified": the sticker says what was checked before the change landed, not after.</li>
+</ul>
+<p>kwant checks the repo every 5 minutes. The first check writes up the last 5 merges. Card text is written by one of the space's bots, at most 30 model calls per space per day; the risk, the test checks and CI come from rules and need no model.</p>
+
+<h2 id="reviews">Reviews</h2>
+<p>The <strong>Reviews</strong> tab has one card per open pull request, written by a bot that didn't write the code, on a different engine when the space has one. A new push to the pull request gets a new review.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v07-dev-review-2880.webp?v=97e059c3ae" data-caption="Review card #24, Speed up cart totals, from a feature branch into main: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass, a light for each security check, and two findings, each with Fix it and Dismiss. The footer has Post to GitHub, and nothing is posted until you press it."><img class="app" src="../assets/media/v07-dev-review-1440.webp?v=d382f95a45" srcset="../assets/media/v07-dev-review-1440.webp?v=d382f95a45 1440w, ../assets/media/v07-dev-review-2880.webp?v=97e059c3ae 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Review card #24, Speed up cart totals, from a feature branch into main: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass, a light for each security check, and two findings, each with Fix it and Dismiss. The footer has Post to GitHub, and nothing is posted until you press it."></a></div>
+  <figcaption>A second bot's review. Nothing goes to GitHub until you press it.</figcaption>
+</figure>
+<ul>
+  <li><strong>Risk</strong> with its reasons, from rules, not from the bot's opinion.</li>
+  <li><strong>Does it do what was asked</strong>: what the task asked for, what's missing, and what wasn't asked for.</li>
+  <li><strong>Tests weakened</strong>: a removed or loosened test is flagged with the lines.</li>
+  <li><strong>Secrets and packages</strong>: Gitleaks runs over the pull request, and every new package is checked against its registry. A found secret or a package that doesn't exist always makes the card High risk. The secret itself is never shown.</li>
+  <li><strong>Findings</strong>: <strong>Fix it</strong> sends a finding to the bot that wrote the pull request, and <strong>Dismiss</strong> sets it aside.</li>
+</ul>
+<p>When the reviewer found nothing to fix, the card gets an <strong>LGTM</strong> stamp.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v071-lgtm-2880.webp?v=4ce2721fd6" data-caption="A review card with no findings, every security light green, and an LGTM stamp in its top right corner: Looks good to me, the reviewer found nothing to fix."><img class="app" src="../assets/media/v071-lgtm-1440.webp?v=7d511f3cb8" srcset="../assets/media/v071-lgtm-1440.webp?v=7d511f3cb8 1440w, ../assets/media/v071-lgtm-2880.webp?v=4ce2721fd6 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A review card with no findings, every security light green, and an LGTM stamp in its top right corner: Looks good to me, the reviewer found nothing to fix."></a></div>
+  <figcaption>Nothing to fix: the card says so with a stamp.</figcaption>
+</figure>
+
+<h2 id="post">Post to GitHub</h2>
+<p><strong>Post to GitHub</strong> puts a review card on its pull request as one GitHub review comment, posted as you and pinned to the commit that was reviewed. Findings you didn't dismiss go on their lines when the lines are in the diff; the rest go in the review's text.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v071-post-github-2880.webp?v=181f938639" data-caption="Review card #24 after posting. Its footer says it was posted as @demo-bot with 2 inline comments, with a View on GitHub link."><img class="app" src="../assets/media/v071-post-github-1440.webp?v=3c2848bbe9" srcset="../assets/media/v071-post-github-1440.webp?v=3c2848bbe9 1440w, ../assets/media/v071-post-github-2880.webp?v=181f938639 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Review card #24 after posting. Its footer says it was posted as @demo-bot with 2 inline comments, with a View on GitHub link."></a></div>
+  <figcaption>Posted once, as you, with a link to the review.</figcaption>
+</figure>
+<ul>
+  <li><strong>Only your press posts.</strong> kwant never approves, requests changes or merges, and a bot can't post.</li>
+  <li><strong>Secrets are never posted.</strong> A found secret is posted only as "Possible secret in" its file and line, and keys and tokens in a finding are replaced with [redacted].</li>
+  <li><strong>Once only.</strong> A double click makes one review, and a posted card stays posted.</li>
+  <li><strong>New commits?</strong> If the pull request moved on since the review, nothing is posted, and a new review is on its way.</li>
+  <li><strong>Read-only token?</strong> The card says your GitHub connection is read only, and nothing is posted.</li>
+</ul>
+
+<h2 id="floor">The production floor</h2>
+<p>In a space with Dev mode on, these steps always show an approval card first, whatever the space's or the bot's approvals say, and even after "always allow":</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Step</th><th>For example</th><th>Needs a backup</th></tr></thead>
+  <tbody>
+    <tr><td>Push to the watched or a protected branch</td><td><code>git push</code> to main, master, production and the like, or <code>gh pr merge</code></td><td>No</td></tr>
+    <tr><td>Force push</td><td><code>git push --force</code> to a protected branch</td><td>No</td></tr>
+    <tr><td>Delete a branch or tag</td><td>Deleting a protected branch or a release tag</td><td>No</td></tr>
+    <tr><td>Deploy</td><td>wrangler, fly, vercel <code>--prod</code>, kubectl, terraform apply, a script named deploy, ship or release</td><td>No</td></tr>
+    <tr><td>Migrate production</td><td>A migration that names a production database or environment</td><td><strong>Yes</strong></td></tr>
+    <tr><td>Destroy data</td><td><code>DROP</code>, <code>TRUNCATE</code>, a <code>DELETE</code> with no <code>WHERE</code>, <code>docker volume rm</code></td><td><strong>Yes</strong></td></tr>
+    <tr><td>Use a production connection</td><td>Any tool on a connection you marked <strong>production</strong></td><td>No</td></tr>
+  </tbody>
+</table></div>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v07-floor-2880.webp?v=eb116b94c6" data-caption="A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny."><img class="app" src="../assets/media/v07-floor-1440.webp?v=fae585f012" srcset="../assets/media/v07-floor-1440.webp?v=fae585f012 1440w, ../assets/media/v07-floor-2880.webp?v=eb116b94c6 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny."></a></div>
+  <figcaption>The card says what the step does and where it lands, in one sentence.</figcaption>
+</figure>
+<ul>
+  <li><strong>No "always allow".</strong> Allowing a floor card covers that one call, and the next one asks again.</li>
+  <li><strong>Back up first.</strong> A step that can change production data can't be allowed until the space has a backup from the last 10 minutes. The card's <strong>Back up first</strong> runs the space's backup command, and kwant checks that it wrote a new backup file.</li>
+  <li><strong>Mark a connection production</strong> in Connections to make every one of its tools ask, such as a GitHub app that could write to main directly.</li>
+</ul>
+<p>The floor reads commands and tool calls, never what a bot says about them. It can't see inside a script with a harmless name, a command built from variables, or a deploy done through a provider's API from code. When a connection can reach production, mark it production.</p>
+
+<h2 id="no-tools">Bots can't act on a pull request's text</h2>
+<p>Anyone who can open a pull request writes its title, text and diff. So the bot that writes a Dev mode card runs with no tools at all, on every engine: no MCP servers, no browser, no shell, files or web search. A turn that can't run that way fails instead of running with tools, and the card keeps its rule-based parts.</p>
+
+<h2 id="turn-off">Turn it off</h2>
+<p>Turning Dev mode off takes two presses. The first lifts the switch's cover and the second, within 5 seconds, turns it off. Escape, clicking elsewhere or waiting keeps it on. The off note has <strong>Turn back on</strong>.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v071-dev-off-armed-2880.webp?v=e9b513a6a1" data-caption="The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on."><img class="app" src="../assets/media/v071-dev-off-armed-1440.webp?v=8758028f69" srcset="../assets/media/v071-dev-off-armed-1440.webp?v=8758028f69 1440w, ../assets/media/v071-dev-off-armed-2880.webp?v=e9b513a6a1 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on."></a></div>
+  <figcaption>The first press only lifts the cover.</figcaption>
+</figure>
+<p>Off stops the checks, the reviews and the production floor. The cards stay readable, and your approval settings stay as they were.</p>
+
+<h2 id="phone">On your phone</h2>
+<p>The Dev desk works on a phone too. Its row in the sidebar counts the reviews that are ready since you last opened the desk, and the count is the same on the phone and the desktop.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/phone-v071-dev-desk-780.webp?v=c2db57d052" data-caption="The Dev desk on a phone: the status line says it is watching demo-org/demo-app on main, above a landed card with its commit, pull request and tests line."><img src="../assets/media/phone-v071-dev-desk-390.webp?v=9da14fc16e" srcset="../assets/media/phone-v071-dev-desk-390.webp?v=9da14fc16e 390w, ../assets/media/phone-v071-dev-desk-780.webp?v=c2db57d052 780w" sizes="(max-width: 860px) 100vw, 380px" width="390" height="844" loading="lazy" decoding="async" alt="The Dev desk on a phone: the status line says it is watching demo-org/demo-app on main, above a landed card with its commit, pull request and tests line."></a></div>
+  <figcaption>The desk on a phone.</figcaption>
+</figure>
+<div class="note"><strong>Only you can see it.</strong> Bots can't read the Dev desk, its settings or its cards, because the settings hold the backup command and the cards hold the repo's diffs. None of it is in a space or bot export.</div>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="/docs/smart-results"><small>Previous</small>Smart Results</a><a class="next" href="/docs/mission-board"><small>Next</small>Mission board</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot-brand">
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="https://github.com/alexsergivan/kwant" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+    </div>
+    <nav aria-label="Product">
+      <h2>Product</h2>
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Quickstart</a>
+      <a href="/docs/install">Install &amp; run</a>
+      <a href="/self-hosted-ai-agents">Self-hosted AI agents</a>
+      <a href="/blog/">Blog</a>
+      <a href="/docs/mcp">MCP tools</a>
+    </nav>
+    <nav aria-label="Using kwant">
+      <h2>Using kwant</h2>
+      <a href="/docs/spaces">Spaces</a>
+      <a href="/docs/accounts">Accounts</a>
+      <a href="/docs/approvals">Approvals</a>
+      <a href="/docs/routines">Routines</a>
+    </nav>
+    <nav aria-label="Project">
+      <h2>Project</h2>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+      <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Issues</a>
+      <a href="https://github.com/alexsergivan/kwant/blob/main/SECURITY.md" rel="noopener">Security</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <nav aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms of use</a>
+      <a href="/terms#license">License</a>
+    </nav>
+    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+  </div>
+</footer>
+<script src="../assets/js/site.js?v=63f328cd53" defer></script>
+<script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/dev-mode#article","headline":"Dev mode: AI code review and a production safety floor","description":"Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.","url":"https://kwant.si/docs/dev-mode","mainEntityOfPage":"https://kwant.si/docs/dev-mode","image":"https://kwant.si/assets/og.png","inLanguage":"en","datePublished":"2026-11-06","dateModified":"2026-11-06","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Dev mode","item":"https://kwant.si/docs/dev-mode"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
+</body>
+</html>

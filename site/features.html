@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Features: self-hosted AI agent orchestration · kwant</title>
-<meta name="description" content="Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
+<meta name="description" content="Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 <link rel="canonical" href="https://kwant.si/features">
@@ -12,7 +12,7 @@
 <meta property="og:site_name" content="kwant">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Features: self-hosted AI agent orchestration · kwant">
-<meta property="og:description" content="Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
+<meta property="og:description" content="Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
 <meta property="og:url" content="https://kwant.si/features">
 <meta property="og:image" content="https://kwant.si/assets/og/features.png?v=6c9323bb00">
 <meta property="og:image:type" content="image/png">
@@ -21,7 +21,7 @@
 <meta property="og:image:alt" content="Features: Teams, spaces, routines, approvals, memory and more, in one binary.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Features: self-hosted AI agent orchestration · kwant">
-<meta name="twitter:description" content="Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
+<meta name="twitter:description" content="Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.">
 <meta name="twitter:image" content="https://kwant.si/assets/og/features.png?v=6c9323bb00">
 <meta name="twitter:image:alt" content="Features: Teams, spaces, routines, approvals, memory and more, in one binary.">
 <link rel="icon" href="favicon.svg?v=0abbeedab4" type="image/svg+xml">
@@ -58,6 +58,8 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-071">New in 0.7.1</a></li>
+        <li><a href="#new-07">New in 0.7</a></li>
         <li><a href="#new-0611">New in 0.6.11</a></li>
         <li><a href="#new-069">New in 0.6.9</a></li>
         <li><a href="#new-065">New in 0.6.5</a></li>
@@ -83,6 +85,86 @@
     </div>
   </div>
 </nav>
+
+<section id="new-071" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7.1</p>
+      <h2>Post a review to GitHub, and Dev mode in one press</h2>
+      <p>A bot's review of a pull request can go onto GitHub as your comment, and only when you press it. Dev mode now finds the repo itself, and turning it off takes two presses.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="post-to-github">
+        <span class="shot"><a class="zoom" href="assets/media/v071-post-github-2880.webp?v=181f938639" data-caption="Review card #24 after posting. Its footer says it was posted as @demo-bot with 2 inline comments, with a View on GitHub link."><img class="app" src="assets/media/v071-post-github-1440.webp?v=3c2848bbe9" srcset="assets/media/v071-post-github-1440.webp?v=3c2848bbe9 1440w, assets/media/v071-post-github-2880.webp?v=181f938639 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Review card #24 after posting. Its footer says it was posted as @demo-bot with 2 inline comments, with a View on GitHub link."></a></span>
+        <div class="card-body"><h3>Post to GitHub</h3><p>A review card goes onto its pull request as one review comment, posted as you and pinned to the commit that was reviewed. Findings go on their lines. kwant never approves, requests changes or merges, a bot can't post, and secrets are never posted. <a href="/docs/dev-mode#post">How posting works</a></p></div>
+      </article>
+      <article class="card" id="dev-on">
+        <span class="shot"><a class="zoom" href="assets/media/v071-dev-on-2880.webp?v=fbbf9f3beb" data-caption="The Trailhead Outfitters space right after one press on the Dev mode switch. A note in the corner says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."><img class="app" src="assets/media/v071-dev-on-1440.webp?v=0566376e72" srcset="assets/media/v071-dev-on-1440.webp?v=0566376e72 1440w, assets/media/v071-dev-on-2880.webp?v=fbbf9f3beb 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Trailhead Outfitters space right after one press on the Dev mode switch. A note in the corner says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."></a></span>
+        <div class="card-body"><h3>One press on, and it finds the repo</h3><p>No setup dialog. kwant looks at the space's teams, their repo links and their folders, on your machine with no network, and says what it found with one fix and Undo. <strong>Switch</strong> lists the repos it found, with <strong>Type a repo</strong> last.</p></div>
+      </article>
+      <article class="card" id="dev-off">
+        <span class="shot"><a class="zoom" href="assets/media/v071-dev-off-armed-2880.webp?v=e9b513a6a1" data-caption="The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on."><img class="app" src="assets/media/v071-dev-off-armed-1440.webp?v=8758028f69" srcset="assets/media/v071-dev-off-armed-1440.webp?v=8758028f69 1440w, assets/media/v071-dev-off-armed-2880.webp?v=e9b513a6a1 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on."></a></span>
+        <div class="card-body"><h3>Two presses to turn it off</h3><p>The first press lifts the cover, the second within 5 seconds turns Dev mode off. Escape, clicking elsewhere or waiting keeps it on, and the off note has <strong>Turn back on</strong>.</p></div>
+      </article>
+      <article class="card" id="lgtm">
+        <span class="shot"><a class="zoom" href="assets/media/v071-lgtm-2880.webp?v=4ce2721fd6" data-caption="A review card with no findings, every security light green, and an LGTM stamp in its top right corner."><img class="app" src="assets/media/v071-lgtm-1440.webp?v=7d511f3cb8" srcset="assets/media/v071-lgtm-1440.webp?v=7d511f3cb8 1440w, assets/media/v071-lgtm-2880.webp?v=4ce2721fd6 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A review card with no findings, every security light green, and an LGTM stamp in its top right corner."></a></span>
+        <div class="card-body"><h3>A new look for the Dev desk</h3><p>Landed cards show the commit, the pull request, a diffstat per file and a tests line. Reviews show the branch flow, a light for each security check, and an LGTM stamp when there's nothing to fix.</p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>On, and the last five merges written up</h3>
+        <p>One press on the switch. kwant names the repo it found, reads the last five merges and writes a plain-words card for each.</p>
+      </div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v071-dev-on-poster.webp?v=051a0205b0" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="assets/media/clip-v071-dev-on.mp4?v=5a38a2deb8" type="video/mp4"></video></div>
+    </div>
+    <ul class="flist">
+      <li id="wallet-payments"><h3>Crypto wallet sends always ask</h3><p>A tool whose arguments carry an amount and a wallet address or crypto asset now counts as a payment, so it asks in every approval mode, even with approvals off. <a href="/docs/flight-school#payments">Payments always ask</a></p></li>
+      <li id="reviews-badge"><h3>A count of new reviews</h3><p>The Dev desk row shows how many reviews are ready since you last opened it, on the phone and the desktop alike.</p></li>
+      <li id="waiting-ok"><h3>Waiting for your OK</h3><p>A reply paused on an approval says so, instead of showing a loading skeleton.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-07" class="fgroup" data-covers="0.6.12 0.6.13">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7</p>
+      <h2>Dev mode and the Idea jar</h2>
+      <p>Point a space at its GitHub repo: every merge becomes a plain-words card, a second bot reviews every pull request, and anything that can reach production asks first. And drop the ideas you're not ready for in a jar, for a free bot to think through.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="dev-landed">
+        <span class="shot"><a class="zoom" href="assets/media/v07-dev-landed-2880.webp?v=8475f9c126" data-caption="The What landed tab of the Dev desk: a Since you last looked note saying nothing new landed since the last look, above yesterday&#x27;s landed cards. Each card has a short commit sha, a pull request number, a risk badge, a line count and Tests passed, and two wear the Verified sticker."><img class="app" src="assets/media/v07-dev-landed-1440.webp?v=921e33309d" srcset="assets/media/v07-dev-landed-1440.webp?v=921e33309d 1440w, assets/media/v07-dev-landed-2880.webp?v=8475f9c126 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The What landed tab of the Dev desk: a Since you last looked note saying nothing new landed since the last look, above yesterday&#x27;s landed cards. Each card has a short commit sha, a pull request number, a risk badge, a line count and Tests passed, and two wear the Verified sticker."></a></span>
+        <div class="card-body"><h3>What landed, in plain words</h3><p>One card per merge to the watched branch: what changed, how risky it is, and whether tests passed. <strong>Verified</strong> only when CI is green, another bot reviewed it and every finding was handled. <strong>Draft release notes</strong> writes them from the cards. <a href="/docs/dev-mode">Dev mode</a></p></div>
+      </article>
+      <article class="card" id="dev-review">
+        <span class="shot"><a class="zoom" href="assets/media/v07-dev-review-2880.webp?v=97e059c3ae" data-caption="Review card #24, Speed up cart totals, from a feature branch into main: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass, a light for each security check, and two findings, each with Fix it and Dismiss. The footer has Post to GitHub, and nothing is posted until you press it."><img class="app" src="assets/media/v07-dev-review-1440.webp?v=d382f95a45" srcset="assets/media/v07-dev-review-1440.webp?v=d382f95a45 1440w, assets/media/v07-dev-review-2880.webp?v=97e059c3ae 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Review card #24, Speed up cart totals, from a feature branch into main: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass, a light for each security check, and two findings, each with Fix it and Dismiss. The footer has Post to GitHub, and nothing is posted until you press it."></a></span>
+        <div class="card-body"><h3>A second bot reviews every pull request</h3><p>Written by a bot that didn't write the code: risk with reasons, whether it does what was asked, weakened tests, found secrets and made-up packages. <strong>Fix it</strong> sends a finding back to the bot that wrote it.</p></div>
+      </article>
+      <article class="card" id="prod-floor">
+        <span class="shot"><a class="zoom" href="assets/media/v07-floor-2880.webp?v=eb116b94c6" data-caption="A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny."><img class="app" src="assets/media/v07-floor-1440.webp?v=fae585f012" srcset="assets/media/v07-floor-1440.webp?v=fae585f012 1440w, assets/media/v07-floor-2880.webp?v=eb116b94c6 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny."></a></span>
+        <div class="card-body"><h3>A floor under production</h3><p>Pushes to main, force pushes, deploys, production migrations and destructive data commands always ask, with no "always allow". A step that can change production data needs a fresh backup first. <a href="/docs/dev-mode#floor">The production floor</a></p></div>
+      </article>
+      <article class="card" id="idea-jar">
+        <span class="shot"><a class="zoom" href="assets/media/v07-idea-jar-2880.webp?v=7a2362679e" data-caption="The Idea jar with a few ideas waiting and one opened with a bot&#x27;s take: a Worth it verdict, why it matters, the effort, the risks and a short plan, with Do it and Later."><img class="app" src="assets/media/v07-idea-jar-1440.webp?v=06cf0f159d" srcset="assets/media/v07-idea-jar-1440.webp?v=06cf0f159d 1440w, assets/media/v07-idea-jar-2880.webp?v=7a2362679e 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Idea jar with a few ideas waiting and one opened with a bot&#x27;s take: a Worth it verdict, why it matters, the effort, the risks and a short plan, with Do it and Later."></a></span>
+        <div class="card-body"><h3>The Idea jar</h3><p>Drop an idea with <strong>+</strong>, the phone's <strong>Jar</strong> tab or <code>/idea</code>. A free bot writes its take: worth it or not, the effort, the risks and a plan. <strong>Do it</strong> makes a draft mission you approve. <a href="/docs/idea-jar">Idea jar</a></p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>From an idea to a draft mission</h3>
+        <p>Drop an idea with /idea. When a bot is free, its take comes in, and Do it turns the plan into a mission that waits for your OK.</p>
+      </div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v07-idea-jar-poster.webp?v=6367bffed7" width="1280" height="800" aria-label="Demo: an idea is dropped in with /idea in the message box. A bot&#x27;s take appears with its verdict, effort and plan, and Do it turns it into a draft mission that waits for your OK."><source src="assets/media/clip-v07-idea-jar.mp4?v=2de1551606" type="video/mp4"></video></div>
+    </div>
+    <ul class="flist">
+      <li id="no-tools"><h3>Bots can't act on a pull request's text</h3><p>Dev mode cards and idea takes run with no tools at all, on every engine. A turn that can't run that way fails instead.</p></li>
+      <li id="phone-0613"><h3>More room on a phone (0.6.13)</h3><p>The header steps aside while you type, the Chats tab puts <strong>Needs you</strong> first, and approval cards, the Mission board and taking over a bot's browser all fit a phone.</p></li>
+      <li id="captcha-chat"><h3>Human checks in the right chat (0.6.12)</h3><p>A CAPTCHA card comes up in the chat and thread of the bot that met it, even when bots share one browser.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-0611" class="fgroup alt">
   <div class="wrap">
@@ -418,7 +500,7 @@
         <div class="card-body"><h3>On from the start, at Act</h3><p>Since 0.6.5 Flight School is on and every bot starts at Act, so nothing new asks: it keeps scorecards and proposes tiers. Want new bots to start lower? Pick Sandbox or Observe in Settings.</p></div>
       </article>
       <article class="card" id="payments">
-        <span class="shot"><a class="zoom" href="assets/media/v3-payment-card-2880.webp?v=ced099d7c9" data-caption="An approval card for a command that posts a payment to Stripe. It says this looks like a payment and why, with only Deny and Allow Once."><img class="app" src="assets/media/v3-payment-card-1440.webp?v=ecb2664e23" srcset="assets/media/v3-payment-card-1440.webp?v=ecb2664e23 1440w, assets/media/v3-payment-card-2880.webp?v=ced099d7c9 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="An approval card for a command that posts a payment to Stripe. It says this looks like a payment and why, with only Deny and Allow Once."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v071-wallet-payment-2880.webp?v=0eb510941c" data-caption="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."><img class="app" src="assets/media/v071-wallet-payment-1440.webp?v=548c1b9d41" srcset="assets/media/v071-wallet-payment-1440.webp?v=548c1b9d41 1440w, assets/media/v071-wallet-payment-2880.webp?v=0eb510941c 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."></a></span>
         <div class="card-body"><h3>Payments always ask</h3><p>Anything that looks like paying shows a card, at every tier and even with approvals off. It says why, and has no Always button.</p></div>
       </article>
       <article class="card" id="approvals-off">
@@ -772,7 +854,7 @@
 </footer>
 <script src="assets/js/site.js?v=63f328cd53" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-05","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-06","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

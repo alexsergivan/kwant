@@ -10,7 +10,7 @@ card_art: avatar:devops
 <h1>Dev mode: code review and a safety floor for your repo</h1>
 <p class="intro">Dev mode points a space at the GitHub repo its team works on. kwant reads the repo and writes a card for every merge and every open pull request, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
 <figure>
-  <div class="frame">{{shot:v071-dev-on|The Trailhead Outfitters space right after Dev mode was switched on with one press. A note says it found demo-org/demo-app on main from the team's folder, with Switch and Undo, and the Dev desk is open at the top of the sidebar.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v071-dev-on|The Trailhead Outfitters space right after one press on the Dev mode switch. A note in the corner says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>One press turns it on. kwant says which repo it found, with one fix and Undo.</figcaption>
 </figure>
 
@@ -24,7 +24,7 @@ card_art: avatar:devops
 </ul>
 <p>Dev mode reads GitHub. A GitLab or Gitea repo is named in the note, but kwant doesn't read it yet.</p>
 <figure>
-  <div class="frame">{{video:clip-v071-dev-on|Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it found demo-org/demo-app, the desk shows Reading the last 5 merges, and landed cards appear one by one.}}</div>
+  <div class="frame">{{video:clip-v071-dev-on|Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words.}}</div>
   <figcaption>On, the repo found, and the last five merges written up.</figcaption>
 </figure>
 
@@ -35,7 +35,7 @@ card_art: avatar:devops
 <h2 id="landed">What landed</h2>
 <p>The <strong>Dev desk</strong> sits at the top of the sidebar. Its first tab, <strong>What landed</strong>, has one card per commit that reaches the watched branch: what changed in plain words, how risky it is, the commit, the pull request it came from (or "Direct push"), a diffstat for each file, and whether tests passed.</p>
 <figure>
-  <div class="frame">{{shot:v07-dev-landed|The What landed tab of the Dev desk: a Since you last looked roll-up above three landed cards, each with a short commit sha, a pull request number, a risk badge, per-file added and removed line counts, and a Tests passed line. One card wears the Verified sticker.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v07-dev-landed|The What landed tab of the Dev desk: a Since you last looked note saying nothing new landed since the last look, above yesterday's landed cards. Each card has a short commit sha, a pull request number, a risk badge, a line count and Tests passed, and two wear the Verified sticker.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Every merge as a card, with a roll-up of what came in since you last looked.</figcaption>
 </figure>
 <ul>
@@ -48,7 +48,7 @@ card_art: avatar:devops
 <h2 id="reviews">Reviews</h2>
 <p>The <strong>Reviews</strong> tab has one card per open pull request, written by a bot that didn't write the code, on a different engine when the space has one. A new push to the pull request gets a new review.</p>
 <figure>
-  <div class="frame">{{shot:v07-dev-review|A review card for a pull request from a feature branch into main: a Medium risk badge with its reasons, whether the change does what its task asked, a light for each security check, and two findings with Fix it and Dismiss. The footer reads Nothing is posted until you press it, with a Post to GitHub button.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v07-dev-review|Review card #24, Speed up cart totals, from a feature branch into main: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass, a light for each security check, and two findings, each with Fix it and Dismiss. The footer has Post to GitHub, and nothing is posted until you press it.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>A second bot's review. Nothing goes to GitHub until you press it.</figcaption>
 </figure>
 <ul>
@@ -67,7 +67,7 @@ card_art: avatar:devops
 <h2 id="post">Post to GitHub</h2>
 <p><strong>Post to GitHub</strong> puts a review card on its pull request as one GitHub review comment, posted as you and pinned to the commit that was reviewed. Findings you didn't dismiss go on their lines when the lines are in the diff; the rest go in the review's text.</p>
 <figure>
-  <div class="frame">{{shot:v071-post-github|The same review card after posting. Its footer reads Posted at the time, with a View on GitHub link.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v071-post-github|Review card #24 after posting. Its footer says it was posted as @demo-bot with 2 inline comments, with a View on GitHub link.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Posted once, as you, with a link to the review.</figcaption>
 </figure>
 <ul>
@@ -93,7 +93,7 @@ card_art: avatar:devops
   </tbody>
 </table></div>
 <figure>
-  <div class="frame">{{shot:v07-floor|A production floor approval card for a deploy. It says in one sentence what the command does, lists where it goes and what changes, and has Back up first next to Allow and Deny.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v07-floor|A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>The card says what the step does and where it lands, in one sentence.</figcaption>
 </figure>
 <ul>
@@ -109,7 +109,7 @@ card_art: avatar:devops
 <h2 id="turn-off">Turn it off</h2>
 <p>Turning Dev mode off takes two presses. The first lifts the switch's cover and the second, within 5 seconds, turns it off. Escape, clicking elsewhere or waiting keeps it on. The off note has <strong>Turn back on</strong>.</p>
 <figure>
-  <div class="frame">{{shot:v071-dev-off-armed|The Dev mode switch after one press: its cover is lifted with an amber ring, the label reads off?, and a hint says Press again to turn Dev mode off, or Escape to keep it on.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v071-dev-off-armed|The Dev mode switch at the top of the sidebar after one press: outlined in amber, it reads off?, and a hint below says Press again to turn Dev mode off, with Esc to keep it on.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>The first press only lifts the cover.</figcaption>
 </figure>
 <p>Off stops the checks, the reviews and the production floor. The cards stay readable, and your approval settings stay as they were.</p>
