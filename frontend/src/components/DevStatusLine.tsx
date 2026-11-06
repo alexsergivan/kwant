@@ -1,18 +1,39 @@
-// The Dev desk's status (0.7.2, team repos). The repo belongs to the team, not the space: Dev mode
-// watches every team's repo. One repo reads as one line, as in 0.7.1. Several repos are a list, one row
-// per repo (team · owner/name · branch · status), each with at most one action: Connect GitHub, Link a
-// repo (a team with none), or Remove (a repo added by hand). More than three rows fold behind
-// "Watching N repos". Nothing here blocks anything: the production floor and the command guards are on
-// in every status.
+// The Dev desk's status (0.7.2, team repos; copy: dev-mode-explainer/spec.md §6 and §9b). The repo belongs
+// to the team, not the space: Dev mode watches every team's repo. One repo reads as one line, as in 0.7.1.
+// Several repos are a list, one row per repo (team · owner/name · branch · status, then where it comes
+// from), each with at most one action: Connect GitHub, Link a repo (a team with none), or Remove (a repo
+// added by you). A team's repo has no Remove: an info note says where to change it. More than three rows
+// fold behind "Watching N repos" with Show repos / Hide repos. Teams with no repo get rows only while no
+// repo is watched; otherwise they are one quiet last line. Nothing here blocks anything: the production
+// floor and the command guards are on in every status.
 
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
-import { DevModeState, DevTeamRef, RepoRow, RowAction, StatusLine, deskIntent, devApi, devStore, statusLine, typedRepo } from '../devMode';
+import { ChevronDown, Info } from 'lucide-react';
+import {
+  DevModeError,
+  DevModeState,
+  DevTeamRef,
+  LINK_ERROR,
+  LINK_HELP,
+  LINK_HELP_HAND,
+  LINK_PLACEHOLDER,
+  RepoRow,
+  RowAction,
+  StatusLine,
+  deskIntent,
+  devApi,
+  devStore,
+  noRepoTeamsText,
+  removedText,
+  statusLine,
+  teamNoteText,
+  typedRepo,
+} from '../devMode';
 
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 
 /** style-v2 §4: the LED mirrors the status. ok only while a remote repo is really watched. */
-export const statusLed = (line: StatusLine): 'ok' | 'warn' | 'off' => line.led;
+export const statusLed = (line: StatusLine): StatusLine['led'] => line.led;
 
 const ACTION_TEXT: Record<RowAction, string> = { connect: 'Connect GitHub', link: 'Link a repo', remove: 'Remove' };
 
@@ -31,53 +52,95 @@ export interface DevStatusLineProps {
   remove?: typeof devApi.removeRepo;
 }
 
-/** Where the Link form is open: a team row (`team:{id}`), or the single line (`line`). */
+/** Where the Link form is open: a team row (`team:{id}`), the quiet no-repo line (`norepo`), or the single line (`line`). */
 type Linking = string | null;
+
+/** A refused or unknown repo reads as Mira's one error; anything else keeps the server's plain sentence. */
+const linkError = (e: unknown): string => {
+  if (e instanceof DevModeError && e.code && e.code !== 'bad_repo' && e.code !== 'no_branch') return e.message;
+  if (e instanceof DevModeError && !e.code && e.status === 0) return e.message;
+  return LINK_ERROR;
+};
 
 export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, teams = [], onConnect, checked = null, checkedAt = null, save = devApi.linkRepo, remove = devApi.removeRepo }) => {
   const line = statusLine(state, teams);
   const listId = useId();
-  // The toast's "Type a repo" lands on the first Link form, open and focused.
-  const [linking, setLinking] = useState<Linking>(() => (deskIntent.take(spaceId) ? 'intent' : null));
+  // The header's "Link a repo" / the toast's "Type a repo" open the first Link form, focused; "See repos"
+  // opens the list and scrolls to it.
+  const [intent] = useState(() => deskIntent.take(spaceId));
+  const [linking, setLinking] = useState<Linking>(() => (intent === 'type' ? 'intent' : null));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<{ id: string; text: string } | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(intent === 'repos');
+  const [note, setNote] = useState<string | null>(null);
+  const [removed, setRemoved] = useState<{ repo: string; busy: boolean; error: string | null } | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   // One 200 ms ping when a check lands, not on first paint.
   const firstCheck = useRef(checkedAt);
   const ping = checkedAt != null && checkedAt !== firstCheck.current;
+  useEffect(() => {
+    if (intent === 'repos') requestAnimationFrame(() => wrap.current?.scrollIntoView?.({ block: 'start' }));
+  }, [intent]);
+  // The Remove toast leaves after 10 s unless the person is on it.
+  useEffect(() => {
+    if (!removed || removed.busy || removed.error) return;
+    const t = setTimeout(() => setRemoved(null), 10000);
+    return () => clearTimeout(t);
+  }, [removed]);
   if (!line || !state) return null;
 
   const rows = line.rows;
-  // The intent opens on the first team with no repo, or on the single line.
-  const linkingId = linking === 'intent' ? rows.find((r) => r.action === 'link')?.id ?? 'line' : linking;
-  const open = !line.collapsed || expanded || (linkingId !== null && linkingId !== 'line');
+  const noRepo = line.noRepoTeams;
+  // The intent opens on the first team with no repo (a row, or the quiet line), or on the single line.
+  const linkingId = linking === 'intent' ? rows.find((r) => r.action === 'link')?.id ?? (noRepo.length ? 'norepo' : 'line') : linking;
+  const open = !line.collapsed || expanded || (linkingId !== null && linkingId !== 'line' && linkingId !== 'norepo');
   const single = rows.length === 0;
-  const singleRow: RepoRow | null = single && state.repos.length === 1 ? { id: state.repos[0].key, team: state.repos[0].team, teamId: null, repo: state.repos[0], state: '', led: line.led, action: line.action } : null;
+  const singleRow: RepoRow | null =
+    single && state.repos.length === 1
+      ? { id: state.repos[0].key, team: state.repos[0].team, teamId: null, repo: state.repos[0], state: '', origin: null, teamNote: null, title: null, led: line.led, action: line.action }
+      : null;
   // The single line's Link: the one team with none, if there is exactly one; else a repo added by hand.
   const loneTeam = single && line.action === 'link' ? teams.find((t) => !state.repos.some((r) => r.team === t.name)) ?? null : null;
 
   const focusAfter = (id: string) => {
     requestAnimationFrame(() => {
-      const el = [...(wrap.current?.querySelectorAll<HTMLElement>('[data-dv-row-action], [data-dv-status-action]') ?? [])].find((b) => b.dataset.dvRowAction === id || (id === 'line' && b.dataset.dvStatusAction));
+      const el = [...(wrap.current?.querySelectorAll<HTMLElement>('[data-dv-row-action], [data-dv-status-action], [data-dv-norepo-action]') ?? [])].find(
+        (b) => b.dataset.dvRowAction === id || (id === 'line' && b.dataset.dvStatusAction) || (id === 'norepo' && b.dataset.dvNorepoAction !== undefined),
+      );
       el?.focus();
     });
   };
 
   const doRemove = (row: RepoRow) => {
     if (!row.repo || busy) return;
+    const repo = row.repo;
     setBusy(row.id);
     setError(null);
-    remove(spaceId, row.repo.key).then(
+    remove(spaceId, repo.key).then(
       (s) => {
         devStore.set(spaceId, s);
         setBusy(null);
-        requestAnimationFrame(() => wrap.current?.querySelector<HTMLElement>('[data-dv-row-action], [data-dv-status-action], [data-dv-disclosure]')?.focus());
+        setRemoved({ repo: repo.repo, busy: false, error: null });
+        requestAnimationFrame(() => wrap.current?.querySelector<HTMLElement>('[data-dv-undo]')?.focus());
       },
       (e: unknown) => {
         setBusy(null);
-        setError({ id: row.id, text: e instanceof Error ? e.message : 'Couldn’t remove the repo.' });
+        // 409 team_repo: the row comes from a team; say where to change it (spec §6).
+        const text = e instanceof DevModeError && e.code === 'team_repo' ? teamNoteText(row.team ?? 'this team', repo.from) : e instanceof Error ? e.message : 'Couldn’t remove the repo.';
+        setError({ id: row.id, text });
       },
+    );
+  };
+
+  const undo = () => {
+    if (!removed || removed.busy) return;
+    setRemoved({ ...removed, busy: true, error: null });
+    save(spaceId, { repo: removed.repo, team: null }).then(
+      ({ state: s, refused }) => {
+        devStore.set(spaceId, s);
+        setRemoved(refused ? { ...removed, busy: false, error: refused } : null);
+      },
+      (e: unknown) => setRemoved({ ...removed, busy: false, error: e instanceof Error ? e.message : 'Couldn’t add it back.' }),
     );
   };
 
@@ -99,7 +162,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
         onClick={() => act(row, action, id)}
         disabled={busy === id}
         aria-expanded={expandedAttr}
-        aria-label={action === 'remove' ? `Remove ${label}` : action === 'link' && row?.team ? `Link a repo for ${row.team}` : undefined}
+        aria-label={action === 'remove' ? `Stop watching ${label}` : action === 'link' && row?.team ? `Link a repo for ${row.team}` : undefined}
         {...(isLine ? { 'data-dv-status-action': action } : { 'data-dv-row-action': id, 'data-action': action })}
         className={`act kw-dv-status-act ${focusRing}`}
       >
@@ -108,18 +171,19 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
     );
   };
 
-  const linkForm = (id: string, team: DevTeamRef | null, after: string) => (
+  const linkForm = (id: string, team: DevTeamRef | null, after: string, pick?: DevTeamRef[]) => (
     <LinkForm
       key={id}
       team={team}
+      pick={pick}
       onCancel={() => {
         setLinking(null);
         focusAfter(after);
       }}
-      onSubmit={async (repo) => {
-        const { state: s, refused } = await save(spaceId, { repo, team: team?.id ?? null });
+      onSubmit={async (repo, t) => {
+        const { state: s, refused } = await save(spaceId, { repo, team: t?.id ?? null });
         devStore.set(spaceId, s);
-        if (refused) return refused;
+        if (refused) return LINK_ERROR;
         setLinking(null);
         return null;
       }}
@@ -131,7 +195,22 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
       <div role="status" className="dv-statusline kw-dv-statusline" data-dv-status={line.status} data-dv-repos={state.repos.length}>
         <p className="txt" data-dv-status-text>
           <span key={checkedAt ?? 0} className="dv-led" data-s={line.led} data-ping={ping || undefined} data-dv-led={line.led} aria-hidden="true" />
-          {line.collapsed ? (
+          <span className="min-w-0">
+            {line.parts.map((p, i) =>
+              p.branch ? (
+                <code key={i} className="dv-code">
+                  {p.text}
+                </code>
+              ) : p.mono ? (
+                <b key={i} className="font-mono text-[12px] break-all">
+                  {p.text}
+                </b>
+              ) : (
+                <React.Fragment key={i}>{p.text}</React.Fragment>
+              ),
+            )}
+          </span>
+          {line.collapsed && (
             <button
               type="button"
               aria-expanded={open}
@@ -143,28 +222,9 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
               data-dv-disclosure
               className={`kw-dv-disclosure ${focusRing}`}
             >
-              <span>{line.parts.map((p) => p.text).join('')}</span>
+              <span>{open ? 'Hide repos' : 'Show repos'}</span>
               <ChevronDown size={13} aria-hidden="true" className={open ? 'rotate-180' : ''} />
             </button>
-          ) : (
-            <span>
-              {line.parts.map((p, i) =>
-                p.mono ? (
-                  // The branch follows " on "; the repo and host read as names.
-                  /\bon $/.test(line.parts[i - 1]?.text ?? '') ? (
-                    <code key={i} className="dv-code">
-                      {p.text}
-                    </code>
-                  ) : (
-                    <b key={i} className="font-mono text-[12px] break-all">
-                      {p.text}
-                    </b>
-                  )
-                ) : (
-                  <React.Fragment key={i}>{p.text}</React.Fragment>
-                ),
-              )}
-            </span>
           )}
         </p>
         {single && actionButton(singleRow, line.action, singleRow?.id ?? 'line', singleRow?.repo?.repo ?? '', true)}
@@ -175,7 +235,11 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
         )}
       </div>
       {single && linkingId === 'line' && line.action === 'link' && <div className="kw-dv-repo-form-wrap">{linkForm('line', loneTeam, 'line')}</div>}
-      {single && error && <p className="kw-dv-repo-err" role="alert">{error.text}</p>}
+      {single && error && (
+        <p className="kw-dv-repo-err" role="alert">
+          {error.text}
+        </p>
+      )}
       {!single && open && (
         <ul id={listId} className="kw-dv-repos" aria-label="Repos Dev mode watches" data-dv-repos-list>
           {rows.map((r) => (
@@ -183,53 +247,126 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
               <div className="kw-dv-repo-line">
                 <span className="dv-led" data-s={r.led} aria-hidden="true" />
                 <span className="kw-dv-repo-cells">
-                  <span className="kw-dv-repo-team">{r.team ?? 'Added by hand'}</span>
+                  {r.team && <span className="kw-dv-repo-team">{r.team}</span>}
                   {r.repo ? (
                     <>
-                      <span className="kw-dv-repo-sep" aria-hidden="true">·</span>
+                      {r.team && (
+                        <span className="kw-dv-repo-sep" aria-hidden="true">
+                          ·
+                        </span>
+                      )}
                       <b className="kw-dv-repo-name">{r.repo.repo}</b>
                       {r.repo.branch && r.repo.status !== 'other_host' && r.repo.status !== 'too_many' && (
                         <>
-                          <span className="kw-dv-repo-sep" aria-hidden="true">·</span>
+                          <span className="kw-dv-repo-sep" aria-hidden="true">
+                            ·
+                          </span>
                           <code className="dv-code">{r.repo.branch}</code>
                         </>
                       )}
                     </>
                   ) : null}
-                  <span className="kw-dv-repo-sep" aria-hidden="true">·</span>
-                  <span className="kw-dv-repo-state" data-dv-repo-state>
+                  <span className="kw-dv-repo-sep" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="kw-dv-repo-state" data-dv-repo-state title={r.title ?? undefined}>
                     {r.state}
                   </span>
                 </span>
+                {r.teamNote && (
+                  <button
+                    type="button"
+                    aria-label={r.teamNote}
+                    aria-expanded={note === r.id}
+                    title={r.teamNote}
+                    onClick={() => setNote((n) => (n === r.id ? null : r.id))}
+                    data-dv-team-note={r.id}
+                    className={`kw-dv-info ${focusRing}`}
+                  >
+                    <Info size={14} aria-hidden="true" />
+                  </button>
+                )}
                 {actionButton(r, r.action, r.id, r.repo?.repo ?? r.team ?? '', false)}
               </div>
+              {r.origin && (
+                <p className="kw-dv-repo-origin" data-dv-repo-origin>
+                  {r.origin}
+                </p>
+              )}
+              {note === r.id && r.teamNote && (
+                <p className="kw-dv-repo-origin" data-dv-team-note-text>
+                  {r.teamNote}
+                </p>
+              )}
               {r.action === 'link' && linkingId === r.id && linkForm(r.id, r.teamId && r.team ? { id: r.teamId, name: r.team } : null, r.id)}
-              {error?.id === r.id && <p className="kw-dv-repo-err" role="alert">{error.text}</p>}
+              {error?.id === r.id && (
+                <p className="kw-dv-repo-err" role="alert">
+                  {error.text}
+                </p>
+              )}
             </li>
           ))}
         </ul>
+      )}
+      {noRepo.length > 0 && (
+        <div className="kw-dv-norepo" data-dv-norepo={noRepo.length}>
+          <p className="kw-dv-norepo-line">
+            <span>{noRepoTeamsText(noRepo.length)}</span>
+            <span className="kw-dv-repo-sep" aria-hidden="true">
+              ·
+            </span>
+            <button
+              type="button"
+              aria-expanded={linkingId === 'norepo'}
+              onClick={() => setLinking((l) => (l === 'norepo' || (l === 'intent' && linkingId === 'norepo') ? null : 'norepo'))}
+              data-dv-norepo-action
+              className={`kw-dv-norepo-act ${focusRing}`}
+            >
+              Link a repo
+            </button>
+          </p>
+          {linkingId === 'norepo' && linkForm('norepo', noRepo.length === 1 ? noRepo[0] : null, 'norepo', noRepo.length > 1 ? noRepo : undefined)}
+        </div>
+      )}
+      {removed && (
+        <div role="status" className="kw-dv-removed" data-dv-removed>
+          <span>{removed.error ?? removedText(removed.repo)}</span>
+          {!removed.error && (
+            <button type="button" onClick={undo} disabled={removed.busy} data-dv-undo className={`kw-dv-norepo-act ${focusRing}`}>
+              {removed.busy ? 'Adding back…' : 'Undo'}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
 };
 
 // ---------------------------------------------------------------------------
-// Link a repo: one field. With a team it becomes that team's repo link (PUT {repo, team}); without one
-// it is added by hand (PUT {repo}).
+// Link a repo (spec §6): one field. With a team it becomes that team's repo link (PUT {repo, team});
+// with several teams to choose from (the quiet "N teams have no repo" line) a team picker comes first;
+// with none it is added by hand (PUT {repo}).
 
-const LinkForm: React.FC<{ team: DevTeamRef | null; onSubmit: (repo: string) => Promise<string | null>; onCancel: () => void }> = ({ team, onSubmit, onCancel }) => {
+const LinkForm: React.FC<{ team: DevTeamRef | null; pick?: DevTeamRef[]; onSubmit: (repo: string, team: DevTeamRef | null) => Promise<string | null>; onCancel: () => void }> = ({
+  team,
+  pick,
+  onSubmit,
+  onCancel,
+}) => {
   const id = useId();
-  const input = useRef<HTMLInputElement>(null);
+  const first = useRef<HTMLSelectElement & HTMLInputElement>(null);
+  const [picked, setPicked] = useState<DevTeamRef | null>(team ?? pick?.[0] ?? null);
   const [typed, setTyped] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => input.current?.focus(), []);
+  useEffect(() => first.current?.focus(), []);
   const ok = typed.trim() ? typedRepo(typed) : null;
-  const typedErr = typed.trim() && !ok ? 'Paste a repo URL, or owner/name for GitHub.' : null;
+  const typedErr = typed.trim() && !ok ? LINK_ERROR : null;
+  const shown = error ?? typedErr;
   return (
     <form
       className="kw-dv-repo-form"
-      data-dv-link-form={team?.id ?? 'hand'}
+      data-dv-link-form={picked?.id ?? 'hand'}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.stopPropagation();
@@ -241,47 +378,71 @@ const LinkForm: React.FC<{ team: DevTeamRef | null; onSubmit: (repo: string) => 
         if (!ok || busy) return;
         setBusy(true);
         setError(null);
-        onSubmit(ok).then(
+        onSubmit(ok, picked).then(
           (refused) => {
             setBusy(false);
             if (refused) setError(refused);
           },
           (err: unknown) => {
             setBusy(false);
-            setError(err instanceof Error ? err.message : 'Couldn’t link the repo.');
+            setError(linkError(err));
           },
         );
       }}
     >
+      {pick && pick.length > 1 && (
+        <div className="kw-dv-repo-form-pick">
+          <label htmlFor={`${id}-team`} className="kw-dv-repo-form-label">
+            Team
+          </label>
+          <select
+            ref={first}
+            id={`${id}-team`}
+            value={picked?.id ?? ''}
+            onChange={(e) => setPicked(pick.find((t) => t.id === e.target.value) ?? null)}
+            className="kw-dv-picker-input kw-dv-team-pick"
+            data-dv-team-pick
+          >
+            {pick.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <label htmlFor={`${id}-repo`} className="kw-dv-repo-form-label">
-        {team ? `Repo for ${team.name}` : 'Repo to watch'}
+        {picked ? `Repo for ${picked.name}` : 'Repo to watch'}
       </label>
       <div className="kw-dv-repo-form-row">
         <input
-          ref={input}
+          ref={pick && pick.length > 1 ? undefined : first}
           id={`${id}-repo`}
           value={typed}
           onChange={(e) => {
             setTyped(e.target.value);
             setError(null);
           }}
-          placeholder="owner/repo or a git URL"
+          placeholder={LINK_PLACEHOLDER}
           spellCheck={false}
           autoCapitalize="off"
           autoComplete="off"
-          aria-invalid={!!typedErr || undefined}
-          aria-describedby={`${id}-err`}
+          aria-invalid={!!shown || undefined}
+          aria-describedby={`${id}-help ${id}-err`}
           className="kw-dv-picker-input"
         />
         <button type="submit" disabled={!ok || busy} className={`kw-dv-status-btn kw-dv-status-btn-primary ${focusRing}`}>
-          {busy ? 'Linking…' : 'Link'}
+          {busy ? 'Saving…' : 'Save'}
         </button>
         <button type="button" onClick={onCancel} className={`kw-dv-status-btn ${focusRing}`}>
           Cancel
         </button>
       </div>
+      <p id={`${id}-help`} className="kw-dv-repo-form-help">
+        {picked ? LINK_HELP : LINK_HELP_HAND}
+      </p>
       <p id={`${id}-err`} className="kw-dv-repo-form-err" aria-live="polite">
-        {error ?? typedErr}
+        {shown}
       </p>
     </form>
   );

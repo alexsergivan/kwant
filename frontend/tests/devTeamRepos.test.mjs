@@ -43,7 +43,7 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
   if (path.endsWith('/dev_mode') && method === 'PUT') {
     if (server.fail) return json({ error: server.fail }, 422);
     const repo = body.repo;
-    const team = TEAMS.find((t) => t.id === body.team);
+    const team = [...TEAMS, { id: 'tm_mkt', name: 'Marketing' }].find((t) => t.id === body.team);
     const row = { ...APP, key: `github.com/${repo}`.toLowerCase(), repo, team: team?.name ?? null, team_id: team?.id ?? null, from: team ? 'repo' : 'hand', added_by: team ? 'team' : 'hand', polled_at: null };
     server.state = { ...server.state, repos: [...server.state.repos, row] };
     return json(server.state);
@@ -143,7 +143,7 @@ test('parseDevMode: an older server (no repos[]) falls back to one row from the 
 
 test('one repo: today’s single line, no list', () => {
   const l = m.statusLine(state({ repos: [APP] }));
-  assert.equal(text(l), 'Watching demo-org/app on main · from App’s folder');
+  assert.equal(text(l), 'Watching demo-org/app · main');
   assert.deepEqual(l.rows, []);
   assert.equal(l.action, null);
   assert.equal(l.led, 'ok');
@@ -153,45 +153,71 @@ test('two repos: "Watching 2 repos" over two rows, open', () => {
   const l = m.statusLine(state({ repos: [APP, SITE] }), TEAMS);
   assert.equal(text(l), 'Watching 2 repos');
   assert.equal(l.collapsed, false);
-  assert.deepEqual(l.rows.map((r) => [r.team, r.repo.repo, r.repo.branch, r.state, r.action]), [
-    ['App', 'demo-org/app', 'main', 'Watching', null],
-    ['Site', 'demo-org/site', 'trunk', 'Watching', null],
+  assert.deepEqual(l.rows.map((r) => [r.team, r.repo.repo, r.repo.branch, r.state.replace(/\d\d:\d\d( [AP]M)?/, 'HH:MM'), r.origin, r.action]), [
+    ['App', 'demo-org/app', 'main', 'Watching · checked HH:MM', 'From App’s folder', null],
+    ['Site', 'demo-org/site', 'trunk', 'Watching · checked HH:MM', 'From Site’s repo link', null],
   ]);
+  assert.equal(l.rows[0].teamNote, 'Comes from App’s folder. Change it in the team’s settings.');
+  assert.equal(l.rows[1].teamNote, 'Comes from Site’s repo link. Change it in the team’s settings.');
+  assert.equal(m.statusLine(state({ repos: [APP, DOCS] })).rows[1].origin, 'Added by you');
+  assert.equal(m.statusLine(state({ repos: [APP, DOCS] })).rows[1].teamNote, null, 'a hand row has Remove, not the team note');
 });
 
 test('four rows fold behind the summary; each status has its words, LED and at most one action', () => {
   const s = state({ repos: [APP, { ...SITE, status: 'not_connected' }, { ...DOCS, status: 'error', poll_error: 'rate limited' }, LAB, { ...APP, key: 'github.com/demo-org/eleven', repo: 'demo-org/eleven', team: 'Extra', status: 'too_many' }] });
   const l = m.statusLine(s);
   assert.equal(l.collapsed, true);
-  assert.equal(text(l), 'Watching 1 repo');
-  assert.equal(l.led, 'warn', 'any warn row lights the line amber');
-  assert.deepEqual(l.rows.map((r) => [r.state, r.led, r.action]), [
-    ['Watching', 'ok', null],
-    ['Needs GitHub', 'warn', 'connect'],
-    ['Can’t read: rate limited', 'warn', 'remove'],
-    ['Read from the next update', 'off', null],
+  assert.equal(text(l), 'Watching 1 of 5 repos · 2 need you', 'needs you = not_connected + error');
+  assert.equal(l.led, 'bad', 'a failing repo lights the line red');
+  assert.deepEqual(l.rows.map((r) => [r.state.replace(/\d\d:\d\d( [AP]M)?/, 'HH:MM'), r.led, r.action]), [
+    ['Watching · checked HH:MM', 'ok', null],
+    ['Needs your GitHub connection', 'warn', 'connect'],
+    ['Can’t read it right now. Trying again.', 'bad', 'remove'],
+    ['gitlab.example.test isn’t read yet', 'off', null],
     ['Not watched: 10 repos is the limit', 'off', null],
   ]);
+  assert.equal(l.rows[2].title, 'rate limited', 'the poll error is the tooltip');
+  assert.equal(m.statusLine(state({ repos: [{ ...LAB, from: 'local', host: null }, APP] })).rows[0].state, 'Local folder, no remote');
+  assert.equal(m.reposSummary(state({ repos: [APP, SITE, DOCS, { ...APP, key: 'github.com/demo-org/api' }] })), 'Watching 4 repos');
+  assert.equal(m.reposSummary(state({ repos: [APP, SITE, DOCS, { ...APP, key: 'github.com/demo-org/api', status: 'error' }] })), 'Watching 3 of 4 repos · 1 needs you');
+  assert.equal(m.reposSummary(state({ repos: [APP, SITE, DOCS, { ...APP, key: 'github.com/demo-org/api', status: 'too_many' }] })), 'Watching 3 of 4 repos', 'too_many does not need you');
+});
+
+test('poll errors never show a URL with its token', () => {
+  const l = m.statusLine(state({ repos: [APP, { ...SITE, status: 'error', poll_error: 'fetch https://demo:not-a-real-token@github.com/demo-org/site failed' }] }));
+  assert.equal(l.rows[1].title, 'fetch https://github.com/demo-org/site failed');
 });
 
 test('single-line copy for error and too_many; not_connected with no repo still offers Connect', () => {
-  assert.equal(text(m.statusLine(state({ repos: [{ ...APP, status: 'error', poll_error: 'rate limited' }] }))), 'Can’t read demo-org/app: rate limited. The floor and guards are on.');
-  assert.equal(text(m.statusLine(state({ repos: [{ ...APP, status: 'too_many' }] }))), 'Found demo-org/app. Dev mode watches 10 repos at most.');
+  assert.equal(text(m.statusLine(state({ repos: [{ ...APP, status: 'error', poll_error: 'rate limited' }] }))), 'demo-org/app · Can’t read it right now. Trying again.');
+  assert.equal(text(m.statusLine(state({ repos: [{ ...APP, status: 'too_many' }] }))), 'demo-org/app · Not watched: 10 repos is the limit');
+  assert.equal(text(m.statusLine(state({ repos: [{ ...APP, status: 'not_connected' }] }))), 'demo-org/app · Needs your GitHub connection');
   const nc = m.statusLine(state({ status: 'not_connected', repos: [] }));
   assert.equal(nc.action, 'connect');
   assert.equal(m.statusLine(state({ status: 'no_repo', repos: [] })).action, 'link');
 });
 
 test('team_id matches a row to its team even after a rename; only a team with no repo gets Link a repo', () => {
-  const l2 = m.statusLine(state({ repos: [{ ...APP, team: 'App (old name)', team_id: 'tm_app' }] }), TEAMS);
+  const l2 = m.statusLine(state({ repos: [{ ...APP, team: 'App (old name)', team_id: 'tm_app', status: 'not_connected' }] }), TEAMS);
   assert.deepEqual(l2.rows.map((r) => r.id), [APP.key, 'team:tm_site']);
   assert.equal(l2.rows[0].teamId, 'tm_app');
 });
 
-test('a team with no repo gets a "No repo yet" row with Link a repo', () => {
-  const l = m.statusLine(state({ repos: [APP] }), TEAMS);
+test('§9b: no repo watched at all, every team with none gets a "No repo" row with Link a repo', () => {
+  const l = m.statusLine(state({ repos: [{ ...APP, status: 'not_connected' }] }), TEAMS);
   assert.equal(l.rows.length, 2);
-  assert.deepEqual([l.rows[1].id, l.rows[1].team, l.rows[1].state, l.rows[1].action], ['team:tm_site', 'Site', 'No repo yet', 'link']);
+  assert.deepEqual([l.rows[1].id, l.rows[1].team, l.rows[1].state, l.rows[1].action], ['team:tm_site', 'Site', 'No repo', 'link']);
+  assert.deepEqual(l.noRepoTeams, []);
+});
+
+test('§9b: with a repo watched, teams with no repo fold into one quiet line and never count as needing you', () => {
+  const teams = [...TEAMS, { id: 'tm_mkt', name: 'Marketing' }, { id: 'tm_ops', name: 'Ops' }];
+  const l = m.statusLine(state({ repos: [APP] }), teams);
+  assert.deepEqual(l.rows, [], 'one repo stays a single line');
+  assert.deepEqual(l.noRepoTeams.map((t) => t.name), ['Site', 'Marketing', 'Ops']);
+  assert.equal(m.noRepoTeamsText(3), '3 teams have no repo');
+  assert.equal(m.noRepoTeamsText(1), '1 team has no repo');
+  assert.equal(text(m.statusLine(state({ repos: [APP, SITE, DOCS, { ...APP, key: 'github.com/demo-org/api' }] }), teams)), 'Watching 4 repos');
 });
 
 // ---------------------------------------------------------------------------
@@ -213,10 +239,16 @@ test('DOM 2 repos: a labelled list, one row each: team · owner/name · branch �
   assert.equal(list.getAttribute('aria-label'), 'Repos Dev mode watches');
   const rows = [...list.querySelectorAll('[data-dv-repo-row]')];
   assert.equal(rows.length, 2);
-  assert.match(rows[0].textContent, /App.*demo-org\/app.*main.*Watching/);
-  assert.match(rows[1].textContent, /Site.*demo-org\/site.*trunk.*Watching/);
+  assert.match(rows[0].textContent, /App.*demo-org\/app.*main.*Watching.*From App’s folder/);
+  assert.match(rows[1].textContent, /Site.*demo-org\/site.*trunk.*Watching.*From Site’s repo link/);
   assert.equal(rows[0].querySelector('code.dv-code').textContent, 'main');
-  assert.equal(rows[0].querySelectorAll('button').length, 0, 'a watched team row has no action');
+  assert.equal(rows[0].querySelectorAll('[data-action]').length, 0, 'a watched team row has no action');
+  const info = rows[1].querySelector('[data-dv-team-note]');
+  assert.equal(info.getAttribute('aria-label'), 'Comes from Site’s repo link. Change it in the team’s settings.');
+  assert.equal(info.getAttribute('aria-expanded'), 'false');
+  await click(info);
+  assert.equal(info.getAttribute('aria-expanded'), 'true');
+  assert.match(rows[1].querySelector('[data-dv-team-note-text]').textContent, /Change it in the team’s settings/);
   assert.equal(has('[data-dv-disclosure]'), false, 'two rows stay open');
   root.unmount();
 });
@@ -229,11 +261,13 @@ test('DOM 4 repos: folded behind "Watching N repos"; the disclosure works by key
   assert.equal(d.getAttribute('aria-expanded'), 'false');
   assert.equal(has('[data-dv-repos-list]'), false);
   assert.match(document.querySelector('[data-dv-status-text]').textContent, /Watching 4 repos/);
+  assert.equal(d.textContent, 'Show repos');
   await click(d);
   assert.equal(d.getAttribute('aria-expanded'), 'true');
   const list = document.querySelector('[data-dv-repos-list]');
   assert.equal(d.getAttribute('aria-controls'), list.id);
   assert.equal(list.querySelectorAll('[data-dv-repo-row]').length, 4);
+  assert.equal(d.textContent, 'Hide repos');
   await click(d);
   assert.equal(has('[data-dv-repos-list]'), false);
   root.unmount();
@@ -249,15 +283,19 @@ test('DOM states: not_connected rows offer Connect GitHub, error shows why, othe
   assert.equal(row(APP.key).querySelector('[data-action]').textContent.trim(), 'Connect GitHub');
   await click(row(APP.key).querySelector('[data-action]'));
   assert.equal(connected, 1);
-  assert.match(row(SITE.key).textContent, /Can’t read: rate limited/);
-  assert.equal(row(SITE.key).querySelectorAll('button').length, 0);
-  assert.equal(row(LAB.key).querySelectorAll('button').length, 0);
-  assert.match(row(LAB.key).textContent, /Read from the next update/);
+  assert.match(row(SITE.key).textContent, /Can’t read it right now\. Trying again\./);
+  assert.equal(row(SITE.key).querySelector('[data-dv-repo-state]').getAttribute('title'), 'rate limited');
+  assert.equal(row(SITE.key).querySelectorAll('[data-action]').length, 0);
+  // A team folder row has no action and no Remove: only the info note (spec §6).
+  assert.equal(row(LAB.key).querySelectorAll('[data-action]').length, 0);
+  assert.equal(row(LAB.key).querySelectorAll('button').length, 1);
+  assert.equal(row(LAB.key).querySelectorAll('[data-dv-team-note]').length, 1);
+  assert.match(row(LAB.key).textContent, /gitlab\.example\.test isn’t read yet/);
   root.unmount();
 });
 
 test('DOM: Link a repo for a team PUTs {on, repo, team}; the new row appears', async () => {
-  const { root } = await line({ repos: [APP] }, TEAMS);
+  const { root } = await line({ repos: [{ ...APP, status: 'not_connected' }] }, TEAMS);
   const btn = document.querySelector('[data-dv-row-action="team:tm_site"]');
   assert.equal(btn.textContent.trim(), 'Link a repo');
   assert.equal(btn.getAttribute('aria-label'), 'Link a repo for Site');
@@ -265,7 +303,10 @@ test('DOM: Link a repo for a team PUTs {on, repo, team}; the new row appears', a
   await click(btn);
   const form = document.querySelector('[data-dv-link-form="tm_site"]');
   assert.match(form.textContent, /Repo for Site/);
+  assert.match(form.textContent, /Saved as this team’s repo link\. Bots only read it\./);
+  assert.match(form.textContent, /Save.*Cancel/);
   const input = form.querySelector('input');
+  assert.equal(input.getAttribute('placeholder'), 'owner/name or its URL');
   assert.equal(document.activeElement === input, true, 'focus goes to the field');
   await typeInto(input, 'demo-org/site');
   input.form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
@@ -277,7 +318,7 @@ test('DOM: Link a repo for a team PUTs {on, repo, team}; the new row appears', a
 });
 
 test('DOM: Esc closes the Link field and puts focus back on its button', async () => {
-  const { root } = await line({ repos: [APP] }, TEAMS);
+  const { root } = await line({ repos: [{ ...APP, status: 'not_connected' }] }, TEAMS);
   const btn = document.querySelector('[data-dv-row-action="team:tm_site"]');
   await click(btn);
   document.querySelector('[data-dv-link-form] input').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -292,14 +333,59 @@ test('DOM: Remove on a hand row sends DELETE …/dev_mode/repos/:key; team rows 
   const { root } = await line({ repos: [APP, SITE, DOCS] });
   assert.equal(document.querySelectorAll('[data-action="remove"]').length, 1);
   const rm = document.querySelector(`[data-dv-row-action="${DOCS.key}"]`);
-  assert.equal(rm.getAttribute('aria-label'), 'Remove demo-org/docs');
+  assert.equal(rm.getAttribute('aria-label'), 'Stop watching demo-org/docs');
   await click(rm);
   await frame();
+  assert.equal(document.querySelector('[data-dv-removed]').getAttribute('role'), 'status');
+  assert.match(document.querySelector('[data-dv-removed]').textContent, /^Stopped watching demo-org\/docs\. Its cards stay\.Undo$/);
+  assert.equal(document.activeElement === document.querySelector('[data-dv-undo]'), true, 'focus lands on Undo');
   const del = server.calls.filter(([x]) => x === 'DELETE');
   assert.equal(del.length, 1);
   assert.equal(new URL(del[0][1], 'http://localhost').pathname, `/api/spaces/spc_demo/dev_mode/repos/${encodeURIComponent(DOCS.key)}`);
   assert.equal(m.devStore.get('spc_demo').repos.length, 2);
   assert.equal(document.querySelectorAll('[data-dv-repo-row]').length, 2);
+  // Undo puts it back by hand (PUT {repo}, no team).
+  await click(document.querySelector('[data-dv-undo]'));
+  const puts = server.calls.filter(([x]) => x === 'PUT').map(([, , b]) => b);
+  assert.deepEqual(puts, [{ on: true, repo: 'demo-org/docs' }]);
+  assert.equal(has('[data-dv-removed]'), false);
+  assert.equal(document.querySelectorAll('[data-dv-repo-row]').length, 3);
+  root.unmount();
+});
+
+test('DOM: a 409 team_repo on Remove shows the team note as the error', async () => {
+  const { root } = await line({ repos: [APP, SITE, DOCS] });
+  server.state = { ...server.state, repos: server.state.repos.map((r) => (r.key === DOCS.key ? { ...r, added_by: 'team', team: 'Docs' } : r)) };
+  const realFetch = g.fetch;
+  g.fetch = g.window.fetch = async (url, init = {}) =>
+    init.method === 'DELETE' ? new Response(JSON.stringify({ error: 'That repo comes from a team.', code: 'team_repo' }), { status: 409, headers: { 'Content-Type': 'application/json' } }) : realFetch(url, init);
+  await click(document.querySelector(`[data-dv-row-action="${DOCS.key}"]`));
+  await frame();
+  g.fetch = g.window.fetch = realFetch;
+  assert.match(document.querySelector('[role="alert"]').textContent, /Comes from .*’s repo link\. Change it in the team’s settings\./);
+  root.unmount();
+});
+
+test('DOM §9b: the quiet line "2 teams have no repo · Link a repo" opens a team picker, then the repo field', async () => {
+  const teams = [...TEAMS, { id: 'tm_mkt', name: 'Marketing' }];
+  const { root } = await line({ repos: [APP] }, teams);
+  const q = document.querySelector('[data-dv-norepo]');
+  assert.match(q.textContent, /^2 teams have no repo·Link a repo$/);
+  const b = q.querySelector('[data-dv-norepo-action]');
+  await click(b);
+  assert.equal(b.getAttribute('aria-expanded'), 'true');
+  const pick = q.querySelector('[data-dv-team-pick]');
+  assert.deepEqual([...pick.options].map((o) => o.textContent), ['Site', 'Marketing']);
+  await frame();
+  assert.equal(document.activeElement === pick, true, 'the picker comes first');
+  pick.value = 'tm_mkt';
+  pick.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  assert.match(q.textContent, /Repo for Marketing/);
+  await typeInto(q.querySelector('input'), 'demo-org/brand');
+  q.querySelector('form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await settle();
+  assert.deepEqual(server.calls.filter(([x]) => x === 'PUT').map(([, , b2]) => b2), [{ on: true, repo: 'demo-org/brand', team: 'tm_mkt' }]);
   root.unmount();
 });
 
@@ -347,7 +433,10 @@ test('DOM desk, 2 repos: All · app · site filter chips; a pick loads both list
   assert.deepEqual(chips.map((c) => c.getAttribute('aria-pressed')), ['true', 'false', 'false']);
   assert.equal(document.querySelectorAll('[data-dev-card="landed"]').length, 2);
   // Each card names its repo.
-  assert.deepEqual([...document.querySelectorAll('[data-dev-card="landed"] [data-dev-card-repo]')].map((c) => c.textContent).sort(), ['Repo demo-org/app', 'Repo demo-org/site']);
+  assert.deepEqual([...document.querySelectorAll('[data-dev-card="landed"] [data-dev-card-repo]')].map((c) => [c.textContent, c.title]).sort(), [
+    ['Repo demo-org/appapp', 'demo-org/app'],
+    ['Repo demo-org/sitesite', 'demo-org/site'],
+  ], 'the chip says the repo name; screen readers and the title get owner/name');
   assert.equal(document.querySelectorAll('[data-dev-card="review"] [data-dev-card-repo]').length, 0, 'reviews are on the other tab');
   server.calls = [];
   await click(chips[2]);

@@ -49,9 +49,9 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
       <div className="flex flex-wrap items-center gap-1.5">
         {card.area && <span className="kw-chip">{card.area}</span>}
         {repoChip && (
-          <span data-dev-card-repo className="kw-chip font-mono [overflow-wrap:anywhere]" title={card.repo ?? undefined}>
-            <span className="sr-only">Repo </span>
-            {repoChip}
+          <span data-dev-card-repo className="kw-chip font-mono [overflow-wrap:anywhere]" title={repoChip}>
+            <span className="sr-only">Repo {repoChip}</span>
+            <span aria-hidden="true">{repoChip.replace(/\/+$/, '').split('/').pop() || repoChip}</span>
           </span>
         )}
         <Sha sha={card.sha} />

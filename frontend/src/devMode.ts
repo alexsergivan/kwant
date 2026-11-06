@@ -237,7 +237,7 @@ export interface DevTeamRef {
 }
 
 export type RowAction = 'connect' | 'link' | 'remove';
-export type Led = 'ok' | 'warn' | 'off';
+export type Led = 'ok' | 'warn' | 'bad' | 'off';
 
 /** One row of the Dev desk's repo list: a repo, or a team with no repo yet. */
 export interface RepoRow {
@@ -246,28 +246,61 @@ export interface RepoRow {
   team: string | null;
   teamId: string | null;
   repo: DevRepo | null;
-  /** Short words for the row's status cell. */
+  /** The row's status words (Mira's spec §6). */
   state: string;
+  /** The row's second line: "From {team}'s repo link", "From {team}'s folder" or "Added by you". */
+  origin: string | null;
+  /** A team's repo can't be removed here: the info note says where to change it. */
+  teamNote: string | null;
+  /** Tooltip for an error row: the poll error, URLs without their userinfo. */
+  title: string | null;
   led: Led;
   /** The row's one action, or null. */
   action: RowAction | null;
 }
 
+/** "19:58" in the person's locale (24 h when the locale uses it). */
+export const checkedTime = (iso: string | null): string | null => {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) ? new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : null;
+};
+
+/** A poll error for a tooltip: never a URL with a token in it. */
+export const safeError = (e: string | null): string | null => (e ? e.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1') : null);
+
+export const TOO_MANY = 'Not watched: 10 repos is the limit';
+export const NEEDS_GITHUB = 'Needs your GitHub connection';
+export const CANT_READ = 'Can’t read it right now. Trying again.';
+export const LOCAL_ONLY = 'Local folder, no remote';
+export const hostNotRead = (host: string | null) => `${host ?? 'This host'} isn’t read yet`;
+export const teamNoteText = (team: string, from: DevRepo['from']) =>
+  from === 'folder' ? `Comes from ${team}’s folder. Change it in the team’s settings.` : `Comes from ${team}’s repo link. Change it in the team’s settings.`;
+export const removedText = (repo: string) => `Stopped watching ${repo}. Its cards stay.`;
+export const LINK_HELP = 'Saved as this team’s repo link. Bots only read it.';
+export const LINK_HELP_HAND = 'Added by you. Bots only read it.';
+export const LINK_ERROR = 'Couldn’t find that repo. Check the name, or connect GitHub first.';
+export const LINK_PLACEHOLDER = 'owner/name or its URL';
+
 const rowState = (r: DevRepo): { state: string; led: Led } => {
-  if (r.from === 'local') return { state: 'Local repo, no remote', led: 'off' };
+  if (r.from === 'local') return { state: LOCAL_ONLY, led: 'off' };
   switch (r.status) {
-    case 'watching':
-      return { state: 'Watching', led: 'ok' };
+    case 'watching': {
+      const t = checkedTime(r.polled_at);
+      return { state: t ? `Watching · checked ${t}` : 'Watching', led: 'ok' };
+    }
     case 'not_connected':
-      return { state: 'Needs GitHub', led: 'warn' };
+      return { state: NEEDS_GITHUB, led: 'warn' };
     case 'other_host':
-      return { state: 'Read from the next update', led: 'off' };
+      return { state: hostNotRead(r.host), led: 'off' };
     case 'error':
-      return { state: r.poll_error ? `Can’t read: ${r.poll_error}` : 'Can’t read it right now', led: 'warn' };
+      return { state: CANT_READ, led: 'bad' };
     default:
-      return { state: 'Not watched: 10 repos is the limit', led: 'off' };
+      return { state: TOO_MANY, led: 'off' };
   }
 };
+
+const rowOrigin = (r: DevRepo): string | null =>
+  r.added_by === 'hand' ? 'Added by you' : r.team && r.from === 'repo' ? `From ${r.team}’s repo link` : r.team && r.from === 'folder' ? `From ${r.team}’s folder` : null;
 
 /** A row's one action: Connect GitHub when the repo needs it, else Remove for a hand-added repo. */
 const rowAction = (r: DevRepo): RowAction | null => (r.status === 'not_connected' ? 'connect' : r.added_by === 'hand' ? 'remove' : null);
@@ -275,11 +308,31 @@ const rowAction = (r: DevRepo): RowAction | null => (r.status === 'not_connected
 /** Does this team bring a repo (a watched one, or one found in its folder)? */
 const teamHasRepo = (s: DevModeState, t: DevTeamRef) => s.repos.some((r) => r.team_id === t.id || r.team === t.name) || s.sources.some((x) => x.team === t.name);
 
-/** The Dev desk's repo list (0.7.2): one row per repo in team order, then each team with no repo yet. */
+/** The space's teams with no repo at all. */
+export const teamsWithoutRepo = (s: DevModeState | null, teams: DevTeamRef[] = []): DevTeamRef[] => (s ? teams.filter((t) => !teamHasRepo(s, t)) : []);
+
+const repoRow = (r: DevRepo, teams: DevTeamRef[]): RepoRow => ({
+  id: r.key,
+  team: r.team,
+  teamId: r.team_id ?? teams.find((t) => t.name === r.team)?.id ?? null,
+  repo: r,
+  ...rowState(r),
+  origin: rowOrigin(r),
+  teamNote: r.added_by !== 'hand' && r.team && (r.from === 'repo' || r.from === 'folder') ? teamNoteText(r.team, r.from) : null,
+  title: r.status === 'error' ? safeError(r.poll_error) : null,
+  action: rowAction(r),
+});
+
+const noRepoRow = (t: DevTeamRef): RepoRow => ({ id: `team:${t.id}`, team: t.name, teamId: t.id, repo: null, state: 'No repo', origin: null, teamNote: null, title: null, led: 'off', action: 'link' });
+
+/**
+ * The Dev desk's repo list (0.7.2, spec §6 and §9b): one row per repo in team order. Teams with no repo
+ * get their own "No repo" row only while no repo is watched at all; otherwise they fold into one quiet line.
+ */
 export function repoRows(s: DevModeState | null, teams: DevTeamRef[] = []): RepoRow[] {
   if (!s) return [];
-  const rows: RepoRow[] = s.repos.map((r) => ({ id: r.key, team: r.team, teamId: r.team_id ?? teams.find((t) => t.name === r.team)?.id ?? null, repo: r, ...rowState(r), action: rowAction(r) }));
-  for (const t of teams) if (!teamHasRepo(s, t)) rows.push({ id: `team:${t.id}`, team: t.name, teamId: t.id, repo: null, state: 'No repo yet', led: 'off', action: 'link' });
+  const rows = s.repos.map((r) => repoRow(r, teams));
+  if (!s.repos.some((r) => r.status === 'watching')) rows.push(...teamsWithoutRepo(s, teams).map(noRepoRow));
   return rows;
 }
 
@@ -289,7 +342,7 @@ export const LIST_OPEN_MAX = 3;
 export interface StatusLine {
   status: DevStatus | RepoStatus;
   /** Plain text for the line; `{repo}` parts are marked so the view can set them in mono. */
-  parts: Array<{ text: string; mono?: boolean }>;
+  parts: Array<{ text: string; mono?: boolean; branch?: boolean }>;
   /** The line's one action (a single row): Connect GitHub, Link a repo, or Remove. */
   action: RowAction | null;
   led: Led;
@@ -297,59 +350,53 @@ export interface StatusLine {
   rows: RepoRow[];
   /** More than LIST_OPEN_MAX rows: the list starts folded behind the line. */
   collapsed: boolean;
+  /** §9b: teams with no repo while some repo is watched, folded into one quiet last line. */
+  noRepoTeams: DevTeamRef[];
 }
 
 const NO_REPO = 'No git repo in this space’s folders yet. The floor and guards are on.';
 
-/** The summary over several rows: "Watching 2 repos", or "Found 2 repos" when none can be read yet. */
+/** Repos that need the person: not connected or failing (spec §9b: teams with no repo never count). */
+export const needsYouCount = (s: DevModeState) => s.repos.filter((r) => r.status === 'not_connected' || r.status === 'error').length;
+
+/** The summary over several repos: "Watching 4 repos", or "Watching 3 of 4 repos · 1 needs you". */
 export function reposSummary(s: DevModeState): string {
+  const total = s.repos.length;
   const n = s.repos.filter((r) => r.status === 'watching' && r.from !== 'local').length;
-  if (n) return `Watching ${n} ${n === 1 ? 'repo' : 'repos'}`;
-  const f = s.repos.length;
-  return f ? `Found ${f} ${f === 1 ? 'repo' : 'repos'}` : 'No repos yet';
+  if (!total) return 'No repos yet';
+  const need = needsYouCount(s);
+  const head = n === total ? `Watching ${n} ${n === 1 ? 'repo' : 'repos'}` : `Watching ${n} of ${total} repos`;
+  return need ? `${head} · ${need} ${need === 1 ? 'needs' : 'need'} you` : head;
 }
 
-/** One repo as today's single line (Mira's style-v2 §4 copy). */
-function singleLine(r: DevRepo): Omit<StatusLine, 'rows' | 'collapsed'> {
-  const { led } = rowState(r);
+/** "1 team has no repo", "3 teams have no repo". */
+export const noRepoTeamsText = (n: number) => (n === 1 ? '1 team has no repo' : `${n} teams have no repo`);
+
+/** One repo as a single line, as in 0.7.1: "Watching demo-org/app · main". */
+function singleLine(r: DevRepo): Omit<StatusLine, 'rows' | 'collapsed' | 'noRepoTeams'> {
+  const { state, led } = rowState(r);
   const action = rowAction(r);
-  if (r.from === 'local')
-    return { status: r.status, led, action, parts: [{ text: `${r.team ?? 'This team'}’s folder has a local repo with no remote. It’s read from the next update. The floor and guards are on now.` }] };
-  switch (r.status) {
-    case 'watching': {
-      const parts: StatusLine['parts'] = [{ text: 'Watching ' }, { text: r.repo, mono: true }, { text: ' on ' }, { text: r.branch || 'main', mono: true }];
-      if (r.team && (r.from === 'repo' || r.from === 'folder')) parts.push({ text: r.from === 'repo' ? ` · from ${r.team}’s repo link` : ` · from ${r.team}’s folder` });
-      return { status: 'watching', led, action, parts };
-    }
-    case 'not_connected':
-      return { status: 'not_connected', led, action, parts: [{ text: 'Found ' }, { text: r.repo, mono: true }, { text: '. Reviews need your GitHub connection.' }] };
-    case 'other_host': {
-      const parts: StatusLine['parts'] = [{ text: 'Found ' }, { text: r.repo, mono: true }, { text: '. ' }];
-      parts.push(...(r.host ? [{ text: 'Repos on ' }, { text: r.host, mono: true }, { text: ' are read from the next update. The floor and guards are on now.' }] : [{ text: 'Repos on this host are read from the next update. The floor and guards are on now.' }]));
-      return { status: 'other_host', led, action, parts };
-    }
-    case 'error':
-      return { status: 'error', led, action, parts: [{ text: 'Can’t read ' }, { text: r.repo, mono: true }, { text: r.poll_error ? `: ${r.poll_error}. ` : ' right now. ' }, { text: 'The floor and guards are on.' }] };
-    default:
-      return { status: 'too_many', led, action, parts: [{ text: 'Found ' }, { text: r.repo, mono: true }, { text: '. Dev mode watches 10 repos at most.' }] };
-  }
+  if (r.status === 'watching' && r.from !== 'local')
+    return { status: 'watching', led, action, parts: [{ text: 'Watching ' }, { text: r.repo, mono: true }, { text: ' · ' }, { text: r.branch || 'main', mono: true, branch: true }] };
+  return { status: r.status, led, action, parts: [{ text: r.repo, mono: true }, { text: ` · ${state}` }] };
 }
 
 /** The Dev desk's status: one line for one repo (as in 0.7.1), a list for several. null on a server older than 0.7.1. */
 export function statusLine(s: DevModeState | null, teams: DevTeamRef[] = []): StatusLine | null {
   if (!s || !s.status) return null;
   const rows = repoRows(s, teams);
+  const noRepoTeams = s.repos.some((r) => r.status === 'watching') ? teamsWithoutRepo(s, teams) : [];
   // GitHub isn't connected and no repo was read yet: Connect first, as in 0.7.1.
   if (rows.length === 0 && s.status === 'not_connected')
-    return { status: 'not_connected', parts: [{ text: 'Reviews need your GitHub connection.' }], action: 'connect', led: 'warn', rows: [], collapsed: false };
-  if (rows.length === 0) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false };
+    return { status: 'not_connected', parts: [{ text: 'Reviews need your GitHub connection.' }], action: 'connect', led: 'warn', rows: [], collapsed: false, noRepoTeams };
+  if (rows.length === 0) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false, noRepoTeams };
   if (rows.length === 1) {
     const r = rows[0];
-    if (!r.repo) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false };
-    return { ...singleLine(r.repo), rows: [], collapsed: false };
+    if (!r.repo) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false, noRepoTeams };
+    return { ...singleLine(r.repo), rows: [], collapsed: false, noRepoTeams };
   }
-  const led: Led = rows.some((r) => r.led === 'warn') ? 'warn' : rows.some((r) => r.led === 'ok') ? 'ok' : 'off';
-  return { status: s.status, parts: [{ text: reposSummary(s) }], action: null, led, rows, collapsed: rows.length > LIST_OPEN_MAX };
+  const led: Led = rows.some((r) => r.led === 'bad') ? 'bad' : rows.some((r) => r.led === 'warn') ? 'warn' : rows.some((r) => r.led === 'ok') ? 'ok' : 'off';
+  return { status: s.status, parts: [{ text: reposSummary(s) }], action: null, led, rows, collapsed: rows.length > LIST_OPEN_MAX, noRepoTeams };
 }
 
 /** The toast after the switch turns Dev mode on (flow F3, Mira's flow copy §3). `action` is the
@@ -424,6 +471,13 @@ export function repoFilters(s: DevModeState | null): Array<{ key: string; label:
 export function cardRepoLabel(s: DevModeState | null, key: unknown, name?: unknown): string | null {
   if (!s || s.repos.length < 2 || typeof key !== 'string' || !key.trim()) return null;
   if (typeof name === 'string' && name.trim()) return stripUserinfo(name.trim());
+  return cardRepoFull(s, key);
+}
+
+/** spec §6: the chip says the repo name only ("app"); its title is owner/name. */
+export const shortRepo = (full: string) => full.replace(/\/+$/, '').split('/').pop() || full;
+
+function cardRepoFull(s: DevModeState, key: string): string {
   const k = key.toLowerCase();
   const r = s.repos.find((x) => x.key === k);
   if (r) return r.repo;
@@ -744,7 +798,7 @@ export const approvalsWord = (a: string | undefined) => (a === 'off' ? 'Off' : a
 // API
 
 export class DevModeError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(message: string, public status: number, public code: string | null = null) {
     super(message);
   }
 }
@@ -766,7 +820,8 @@ async function call<T>(url: string, method = 'GET', body?: unknown, send: typeof
   const err = data && typeof data === 'object' ? (data as Record<string, unknown>).error : null;
   if (res.status === 403) throw new DevModeError('Only the space owner can change Dev mode.', 403);
   if (res.status === 404 && !err) throw new DevModeError('This server doesn’t have Dev mode yet. Update the app.', 404);
-  throw new DevModeError(typeof err === 'string' && err.trim() ? err : `Something went wrong (HTTP ${res.status}).`, res.status);
+  const code = data && typeof data === 'object' && typeof (data as Record<string, unknown>).code === 'string' ? ((data as Record<string, unknown>).code as string) : null;
+  throw new DevModeError(typeof err === 'string' && err.trim() ? err : `Something went wrong (HTTP ${res.status}).`, res.status, code);
 }
 
 const enc = encodeURIComponent;
@@ -836,11 +891,13 @@ export async function turnDevMode(space: string, on: boolean, put: typeof devApi
   return s;
 }
 
-/** What the desk should open with once it mounts: the Link a repo field, focused (the toast's "Type a repo"). */
-const deskIntents = new Map<string, 'type'>();
+/** What the desk should open with once it mounts: the Link a repo field, focused (the toast's "Type a repo",
+ * the header's "Link a repo"), or the repo list expanded and in view (the header's "See repos"). */
+export type DeskIntent = 'type' | 'repos';
+const deskIntents = new Map<string, DeskIntent>();
 export const deskIntent = {
-  set: (space: string, what: 'type') => void deskIntents.set(space, what),
-  take(space: string): 'type' | null {
+  set: (space: string, what: DeskIntent) => void deskIntents.set(space, what),
+  take(space: string): DeskIntent | null {
     const v = deskIntents.get(space) ?? null;
     deskIntents.delete(space);
     return v;

@@ -138,33 +138,26 @@ test('typedRepo: GitHub owner/name and URLs normalise; any git URL is kept witho
 
 const text = (l) => l.parts.map((p) => p.text).join('');
 
-test('watching: Mira’s copy, "Watching {repo} on {branch} · from {team}’s folder" or "’s repo link"; no Switch (0.7.2 watches every repo)', () => {
+test('watching: one repo is one line, "Watching {repo} · {branch}" (spec §6); no Switch (0.7.2 watches every repo)', () => {
   const one = m.statusLine(state({ status: 'watching', repo: 'demo-org/demo-web', branch: 'main', sources: [SOURCES[0]] }));
-  assert.equal(text(one), 'Watching demo-org/demo-web on main · from Web’s folder');
+  assert.equal(text(one), 'Watching demo-org/demo-web · main');
   assert.equal(one.action, null);
   assert.deepEqual(one.parts.filter((p) => p.mono).map((p) => p.text), ['demo-org/demo-web', 'main']);
-  const link = m.statusLine(state({ status: 'watching', repo: 'demo-org/demo-api', branch: 'trunk', sources: [SOURCES[1]] }));
-  assert.equal(text(link), 'Watching demo-org/demo-api on trunk · from API’s repo link');
   const many = m.statusLine(state({ status: 'watching', repo: 'demo-org/demo-api', branch: 'trunk', sources: SOURCES }));
   // An older server with several sources still watches its one repo: one line, no picker.
-  assert.equal(text(many), 'Watching demo-org/demo-api on trunk · from API’s repo link');
+  assert.equal(text(many), 'Watching demo-org/demo-api · trunk');
   assert.equal(many.action, null);
-  const local = m.statusLine(state({ status: 'watching', repo: 'demo-docs', sources: [SOURCES[2]] }));
-  assert.equal(text(local), 'Docs’s folder has a local repo with no remote. It’s read from the next update. The floor and guards are on now.');
-  const typed = m.statusLine(state({ status: 'watching', repo: 'demo-org/elsewhere', branch: null, sources: [] }));
-  assert.equal(text(typed), 'Watching demo-org/elsewhere on main', 'a typed repo names no team');
 });
 
-test('not_connected: "Found {repo}. Reviews need your GitHub connection." with Connect GitHub', () => {
+test('not_connected: "{repo} · Needs your GitHub connection" with Connect GitHub', () => {
   const l = m.statusLine(state({ status: 'not_connected', repo: 'demo-org/demo-web', sources: [SOURCES[0]] }));
-  assert.equal(text(l), 'Found demo-org/demo-web. Reviews need your GitHub connection.');
+  assert.equal(text(l), 'demo-org/demo-web · Needs your GitHub connection');
   assert.equal(l.action, 'connect');
 });
 
-test('other_host: "Found {repo}. Repos on {host} are read from the next update. The floor and guards are on now."', () => {
+test('other_host: "{repo} · {host} isn’t read yet", no action', () => {
   const l = m.statusLine(state({ status: 'other_host', repo: 'https://gitlab.example.test/demo/app', sources: [{ team: 'Web', repo: 'https://gitlab.example.test/demo/app', host: 'gitlab.example.test', from: 'folder' }] }));
-  assert.equal(text(l), 'Found https://gitlab.example.test/demo/app. Repos on gitlab.example.test are read from the next update. The floor and guards are on now.');
-  assert.deepEqual(l.parts.filter((p) => p.mono).map((p) => p.text), ['https://gitlab.example.test/demo/app', 'gitlab.example.test']);
+  assert.equal(text(l), 'https://gitlab.example.test/demo/app · gitlab.example.test isn’t read yet');
   assert.equal(l.action, null);
 });
 
@@ -328,12 +321,12 @@ test('DOM: a failed link keeps the field open with the reason', async () => {
   await typeInto(input, 'demo-org/demo-api');
   await submitForm(input.form);
   assert.ok(document.querySelector('[data-dv-link-form]'));
-  assert.match(document.querySelector('[data-dv-link-form]').textContent, /Bots can’t read that repo\./);
+  assert.match(document.querySelector('[data-dv-link-form]').textContent, /Couldn’t find that repo\. Check the name, or connect GitHub first\./);
   root.unmount();
 });
 
 test('DOM: a typed repo the server can’t read (200, repo null, check) keeps the field open with why; Dev mode stays on', async () => {
-  for (const [why, re] of [['not_found', /Couldn’t read demo-org\/nope\. .*Dev mode is on/], ['not_connected', /Connect GitHub so bots can read demo-org\/nope\./]]) {
+  for (const [why, re] of [['not_found', /Couldn’t find that repo\. Check the name, or connect GitHub first\./], ['not_connected', /Couldn’t find that repo\. Check the name, or connect GitHub first\./]]) {
     const { root } = await desk({ status: 'no_repo', sources: [] });
     server.unreadable = why;
     await click(document.querySelector('[data-dv-status-action="link"]'));

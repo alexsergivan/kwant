@@ -257,3 +257,33 @@
 @media (max-width: 639px) {
   .kw-dv-filter { min-height: 44px; padding: 2px 14px; }
 }
+
+/* 0.7.2 final copy (dev-mode-explainer/spec.md §6, §9b): second line, team note, the quiet no-repo line
+   and the Remove toast. Muted text is --t3 (AA on the side surface); actions are --accent. */
+.kw-dv-repo-origin { margin: -4px 0 6px 18px; font-size: 12px; line-height: 18px; color: var(--t3); overflow-wrap: anywhere; }
+.kw-dv-repo-state { overflow-wrap: anywhere; }
+.kw-dv-repo[data-s='error'] .kw-dv-repo-state { color: var(--dv-led-bad); }
+.kw-dv-info {
+  flex: none; display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 7px;
+  color: var(--t4); background: transparent; cursor: pointer;
+}
+.kw-dv-info:hover, .kw-dv-info[aria-expanded='true'] { color: var(--t2); background: rgb(157 143 255 / 0.1); }
+.kw-dv-norepo, .kw-dv-removed { padding: 6px 24px 8px; border-bottom: 1px solid var(--kw-hairline); font-size: 12px; line-height: 18px; color: var(--t3); }
+.kw-dv-norepo-line { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.kw-dv-norepo .kw-dv-repo-form { padding-left: 0; margin-top: 6px; }
+.kw-dv-norepo-act {
+  display: inline-flex; align-items: center; min-height: 24px; padding: 0 4px; margin: 0 -4px; border-radius: 6px;
+  color: var(--accent); font-weight: 600; background: transparent; cursor: pointer;
+}
+.kw-dv-norepo-act:hover { background: rgb(157 143 255 / 0.1); }
+.kw-dv-norepo-act:disabled { opacity: 0.6; cursor: progress; }
+.kw-dv-removed { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; color: var(--t2); }
+.kw-dv-repo-form-help { margin-top: 4px; font-size: 11.5px; color: var(--t3); }
+.kw-dv-repo-form-pick { margin-bottom: 8px; }
+.kw-dv-team-pick { width: 100%; max-width: 280px; font-family: inherit; }
+@media (max-width: 639px) {
+  .kw-dv-norepo, .kw-dv-removed { padding-left: 12px; padding-right: 12px; }
+  .kw-dv-info { width: 44px; height: 44px; }
+  .kw-dv-norepo-act { min-height: 44px; padding: 0 8px; }
+  .kw-dv-disclosure { min-height: 44px; }
+}

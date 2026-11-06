@@ -523,9 +523,9 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
             {card.draft && <span className="kw-chip">Draft</span>}
             {sample && <span className="kw-chip kw-chip-info">Sample PR</span>}
             {repoChip && (
-              <span data-dev-card-repo className="kw-chip font-mono [overflow-wrap:anywhere]" title={card.repo ?? undefined}>
-                <span className="sr-only">Repo </span>
-                {repoChip}
+              <span data-dev-card-repo className="kw-chip font-mono [overflow-wrap:anywhere]" title={repoChip}>
+                <span className="sr-only">Repo {repoChip}</span>
+                <span aria-hidden="true">{repoChip.replace(/\/+$/, '').split('/').pop() || repoChip}</span>
               </span>
             )}
           </div>
