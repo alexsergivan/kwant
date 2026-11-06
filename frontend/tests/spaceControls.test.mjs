@@ -35,9 +35,9 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
 const m = await loadBundled(`
   export { default as React } from 'react';
   export { createRoot } from 'react-dom/client';
-  export { devSubLine, parseDevMode, devStore, DEV_GUIDE_URL, EXPLAINER } from './src/devMode';
+  export { devSubLine, devListPending, parseDevMode, devStore, DEV_GUIDE_URL, EXPLAINER } from './src/devMode';
   export { approvalsRow } from './src/approvalMode';
-  export { SpaceControls, SHEET_CLOSE_MS } from './src/components/SpaceControls';
+  export { SpaceControls, SHEET_CLOSE_MS, APPROVALS_WAIT_MS } from './src/components/SpaceControls';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;
@@ -102,9 +102,15 @@ test('§2 sub-line: GitHub not connected, other hosts, a local folder, no repo, 
   assert.equal(text(local), 'Local folder, no remote');
   const none = m.devSubLine(S({ repos: [], status: 'no_repo' }));
   assert.deepEqual([none.state, text(none), none.action], ['no_repo', 'No repo yet', 'link']);
-  // Answer 1: no "checking" sub-line. On with no repos yet and no poll is plain "No repo yet".
-  const fresh = m.devSubLine(m.parseDevMode({ ...off, on: true, repos: [] }));
-  assert.deepEqual([fresh.state, text(fresh), fresh.led], ['no_repo', 'No repo yet', 'off']);
+  // Answer 1 + addendum 3: no "checking" words. Until the first repo list arrives the line is a skeleton,
+  // never "No repo yet": no state yet, on with neither a status nor a repo, or a press on still saving.
+  for (const [s, o] of [[null, { loading: true }], [m.parseDevMode({ ...off, on: true, repos: [] }), {}], [m.parseDevMode(off), { turningOn: true }]]) {
+    const l = m.devSubLine(s, o);
+    assert.deepEqual([l.state, text(l), l.led, l.action], ['loading', '', null, null]);
+  }
+  assert.equal(m.devSubLine(null, { disabled: true }).state, 'disabled', 'not the owner never waits on a list');
+  assert.equal(m.devSubLine(m.parseDevMode(off)).state, 'off');
+  assert.equal(m.devSubLine(null).state, 'off', 'a failed first load stops waiting');
 });
 
 test('§2 sub-line: armed beats everything, off says what it is for, not-owner is its own state', () => {
@@ -352,6 +358,57 @@ test('answer 3: while approvals load, the row is a same-height skeleton with no 
   const row = host.querySelector('[data-sc-row="approvals"]');
   assert.equal(row.hasAttribute('data-sc-skeleton'), false);
   assert.match(row.textContent, /Ask/);
+  root.unmount();
+});
+
+test('answer 3: an older server never sends approvals, so the skeleton goes and no row is drawn', async () => {
+  reset({ ...off });
+  const { host, root } = await mount({ space: { id: 'spc_demo', name: 'Demo' } });
+  assert.ok(host.querySelector('[data-sc-skeleton]'));
+  await wait(m.APPROVALS_WAIT_MS + 60);
+  assert.equal(!!host.querySelector('[data-sc-row="approvals"]'), false);
+  root.unmount();
+});
+
+test('addendum 3: a same-height skeleton sub-line until the first repo list arrives; never a flash of "No repo yet"', async () => {
+  reset({ ...off, on: true, status: 'no_repo', repos: [] });
+  let release;
+  const realFetch = g.fetch;
+  g.fetch = g.window.fetch = async (url, init = {}) => {
+    if ((init.method ?? 'GET') === 'GET' && String(url).includes('/dev_mode')) await new Promise((r) => (release = r));
+    return realFetch(url, init);
+  };
+  const seen = [];
+  const obs = new window.MutationObserver(() => seen.push(document.body.textContent));
+  obs.observe(document.body, { subtree: true, childList: true, characterData: true });
+  try {
+    const { host, root } = await mount({});
+    const sk = host.querySelector('[data-dev-sub]');
+    assert.equal(sk.dataset.devSub, 'loading');
+    assert.ok(sk.classList.contains('kw-sc-sub'), 'the sub-line class, so the same height');
+    assert.equal(sk.getAttribute('aria-hidden'), 'true');
+    assert.equal(sk.textContent, '');
+    assert.ok(host.querySelector('[data-sc-skeleton] .kw-sc-skel-sub'));
+    assert.ok(seen.every((t) => !/No repo yet/.test(t)), 'no "No repo yet" while the list loads');
+    release();
+    await settle(20);
+    assert.equal(host.querySelector('[data-dev-sub]').dataset.devSub, 'no_repo');
+    assert.match(host.querySelector('[data-dev-sub]').textContent, /No repo yet/);
+    root.unmount();
+  } finally {
+    obs.disconnect();
+    g.fetch = g.window.fetch = realFetch;
+  }
+});
+
+test('addendum 3: a failed first load stops the skeleton (the off line shows), it never waits forever', async () => {
+  reset({ ...off });
+  server.fail = { method: 'GET', path: '/dev_mode', status: 500 };
+  const { host, root } = await mount({});
+  await settle(20);
+  const sub = host.querySelector('[data-dev-sub]');
+  assert.equal(sub.dataset.devSub, 'off');
+  assert.equal(sub.textContent, 'For bots that write code');
   root.unmount();
 });
 

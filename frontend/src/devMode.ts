@@ -763,7 +763,7 @@ export const EXPLAINER = {
   notOwner: 'Only the space owner can turn on Dev mode.',
 } as const;
 
-export type DevSubState = 'off' | 'disabled' | 'watching' | 'several' | 'partial' | 'no_repo' | 'not_connected' | 'other_host' | 'error' | 'armed';
+export type DevSubState = 'loading' | 'off' | 'disabled' | 'watching' | 'several' | 'partial' | 'no_repo' | 'not_connected' | 'other_host' | 'error' | 'armed';
 export type DevSubAction = 'repos' | 'link' | 'connect';
 
 export interface DevSub {
@@ -793,13 +793,23 @@ const sub = (state: DevSubState, led: DevSub['led'], text: string | DevSub['part
   action,
 });
 
+/** The repo list hasn't come yet (addendum 3): no state, a press on still saving, or on with no status and no repos. */
+export const devListPending = (s: DevModeState | null, o: { loading?: boolean; turningOn?: boolean } = {}): boolean =>
+  s ? (!!o.turningOn && !s.on) || (s.on && !s.status && s.repos.length === 0) : !!o.loading;
+
 /**
  * The Dev mode row's one line under the label (spec §2). Which state wins: armed, then if any
  * repo is watched several / partial / watching, else error, not_connected, other_host, no_repo. Counts
  * come straight from repos[]; nothing is added up beyond counting rows.
  */
-export function devSubLine(s: DevModeState | null, o: { armed?: boolean; disabled?: boolean } = {}): DevSub {
+export function devSubLine(s: DevModeState | null, o: { armed?: boolean; disabled?: boolean; turningOn?: boolean; loading?: boolean } = {}): DevSub {
   if (o.armed) return sub('armed', null, ARMED_SUB, null, 'warn');
+  // Not the owner (403) never brings a state: say so rather than wait on a list.
+  if (o.disabled && !s?.on) return sub('disabled', null, OFF_DESCRIBE);
+  // Ada's addendum 3 (0.7.2): until the first repo list arrives the line is a skeleton, never "No repo
+  // yet" (or the off line) for a moment: the first load still in flight, the switch already flipped on,
+  // or an on state that carries neither a status nor a repo. A failed load falls back to the off line.
+  if (devListPending(s, o)) return sub('loading', null, []);
   if (!s?.on) return sub(o.disabled ? 'disabled' : 'off', null, OFF_DESCRIBE);
   // No "checking" line (Ada's answer 1, 0.7.2): the PUT reply already carries the repos, so there is no
   // in-between state; only the switch shows a spinner, while its request is in flight.

@@ -28,16 +28,19 @@ export interface SpaceControlsProps {
   onOpenSettings: () => void;
 }
 
+/** How long the Approvals row waits for a space's approvals before taking it for an older server. */
+export const APPROVALS_WAIT_MS = 1500;
+
 export const SpaceControls: React.FC<SpaceControlsProps> = ({ space, phone = false, bots, onTurnedOn, onTurnedOff, onOpenDevDesk, onSeeRepos, onLinkRepo, onConnect, onOpenSettings }) => {
   const dev = useDevMode(space.id);
-  const [look, setLook] = useState({ armed: false, disabled: false, on: false });
-  const onLook = useCallback((l: { armed: boolean; disabled: boolean; on: boolean }) => setLook(l), []);
+  const [look, setLook] = useState({ armed: false, disabled: false, on: false, failed: false });
+  const onLook = useCallback((l: { armed: boolean; disabled: boolean; on: boolean; failed: boolean }) => setLook(l), []);
   const [open, setOpen] = useState(false);
   const help = useRef<HTMLButtonElement>(null);
   const switchBtn = useRef<HTMLButtonElement | null>(null);
   useEffect(() => setOpen(false), [space.id]);
 
-  const sub = devSubLine(dev, { armed: look.armed, disabled: look.disabled });
+  const sub = devSubLine(dev, { armed: look.armed, disabled: look.disabled, turningOn: look.on, loading: !dev && !look.failed });
   const lbl = `dv-lbl-${space.id}`;
   const subId = `dv-sub-${space.id}`;
   const dlg = `dvx-${space.id}`;
@@ -45,6 +48,15 @@ export const SpaceControls: React.FC<SpaceControlsProps> = ({ space, phone = fal
   const actions: Record<DevSubAction, (() => void) | undefined> = { repos: onSeeRepos, link: onLinkRepo, connect: onConnect };
   const act = sub.action ? actions[sub.action] : undefined;
   const appr = approvalsRow(space.approvals, bots, on);
+  // Answer 3: a skeleton while the space's approvals may still arrive. An older server never sends them,
+  // so after APPROVALS_WAIT_MS with none the row isn't drawn (as before). Never in a static render.
+  const [apprWaiting, setApprWaiting] = useState(false);
+  useEffect(() => {
+    if (space.approvals !== undefined) return undefined;
+    setApprWaiting(true);
+    const t = window.setTimeout(() => setApprWaiting(false), APPROVALS_WAIT_MS);
+    return () => window.clearTimeout(t);
+  }, [space.id, space.approvals]);
 
   const close = useCallback((refocus: boolean) => {
     setOpen(false);
@@ -86,7 +98,7 @@ export const SpaceControls: React.FC<SpaceControlsProps> = ({ space, phone = fal
         <DevSubLine id={subId} sub={sub} phone={phone} onAction={act} />
       </div>
       {/* Answer 3: while the space's approvals are still loading, a skeleton the row's height, no text. */}
-      {!appr && space.approvals === undefined && (
+      {!appr && space.approvals === undefined && apprWaiting && (
         <div className="kw-sc-row kw-sc-row-skeleton" data-sc-row="approvals" data-sc-skeleton aria-hidden="true">
           <span className="kw-sc-skel kw-sc-skel-icon" />
           <span className="kw-sc-skel kw-sc-skel-line" />
@@ -145,7 +157,14 @@ export const SpaceControls: React.FC<SpaceControlsProps> = ({ space, phone = fal
 };
 
 /** The Dev mode row's second line (spec §2): an LED, the text, and at most one action on the right. */
-const DevSubLine: React.FC<{ id: string; sub: DevSub; phone: boolean; onAction?: () => void }> = ({ id, sub, phone, onAction }) => (
+const DevSubLine: React.FC<{ id: string; sub: DevSub; phone: boolean; onAction?: () => void }> = ({ id, sub, phone, onAction }) =>
+  sub.state === 'loading' ? (
+    // Addendum 3: the line's height, no text, until the first repo list arrives. The id stays so the switch's
+    // aria-describedby still resolves (to nothing to read).
+    <div className="kw-sc-sub" data-dev-sub="loading" data-sc-skeleton aria-hidden="true">
+      <span id={id} className="kw-sc-skel kw-sc-skel-sub" />
+    </div>
+  ) : (
   <div className="kw-sc-sub" data-dev-sub={sub.state} data-tone={sub.tone ?? undefined}>
     {sub.led && <span className="dv-led kw-sc-led" data-s={sub.led} aria-hidden="true" />}
     <span id={id} className="kw-sc-sub-text" data-dev-sub-text>
@@ -176,7 +195,7 @@ const DevSubLine: React.FC<{ id: string; sub: DevSub; phone: boolean; onAction?:
       </button>
     )}
   </div>
-);
+  );
 
 interface ExplainerProps {
   id: string;

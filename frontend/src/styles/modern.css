@@ -646,6 +646,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-sc-skel-icon { width: 16px; height: 16px; border-radius: 5px; }
 .kw-sc-skel-line { width: 72px; height: 10px; }
 .kw-sc-skel-chip { width: 56px; height: 24px; }
+.kw-sc-skel-sub { width: 120px; height: 8px; margin-block: 5px; }
 .kw-sc-phone .kw-sc-skel-chip { margin-block: 10px; }
 @keyframes kw-sc-skel { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 .kw-sc-act {
@@ -712,9 +713,10 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 }
 @keyframes kw-dvx-up { from { transform: translateY(100%); } to { transform: none; } }
 /* Answer 1: the switch's knob turns into a small spinner only while its request is in flight. */
-.kw-dv[data-saving] .kw-dv-knob {
-  background: conic-gradient(currentColor 0 75%, transparent 75% 100%) !important; animation: kw-dv-saving 800ms linear infinite;
-  -webkit-mask: radial-gradient(circle, transparent 4px, #000 4.5px); mask: radial-gradient(circle, transparent 4px, #000 4.5px);
+/* Answer 1: the knob carries a plain border spinner while the PUT is in flight (no gradient). */
+.kw-dv[data-saving] .kw-dv-knob::after {
+  content: ''; position: absolute; left: 2px; top: 2px; width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%;
+  background: none; border: 2px solid #6c58e0; border-top-color: transparent; animation: kw-dv-saving 800ms linear infinite;
 }
 @keyframes kw-dv-saving { to { rotate: 360deg; } }
 /* Answer 4: closing mirrors the open, 150 ms down (none under reduced motion, below). */
@@ -731,7 +733,7 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   .kw-dv-track, .kw-dv-knob { transition: none !important; }
   .kw-dvx-pop, .kw-dvx-sheet, .kw-dvx-scrim, .kw-dvx-sheet[data-closing], .kw-dvx-scrim[data-closing] { animation: none; }
   .kw-sc-skel { animation: none; }
-  .kw-dv[data-saving] .kw-dv-knob { animation: none; }
+  .kw-dv[data-saving] .kw-dv-knob::after { animation: none; }
 }
 /* The flip note under the space header: HEAD → dev / merged into main, one caret blink */
 .kw-dv-note { animation: kw-dv-hint 150ms var(--kw-ease) both; }

@@ -57,7 +57,7 @@ export interface DevModeSwitchProps {
   labelledBy?: string;
   describedBy?: string;
   /** Armed (press 1 of 2) and not-the-owner, for the row's sub-line and the explainer. */
-  onLook?: (look: { armed: boolean; disabled: boolean; on: boolean }) => void;
+  onLook?: (look: { armed: boolean; disabled: boolean; on: boolean; failed: boolean }) => void;
   /** The button, so the explainer's "Turn on Dev mode" can press it and give it focus. */
   buttonRef?: React.MutableRefObject<HTMLButtonElement | null>;
   /** Test hooks: start in a given state, and a clock. */
@@ -97,6 +97,8 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   // Never seen here and not loaded yet: neither on nor off (no node on the graph, busy) until dev_mode
   // answers, so an on space never reads "off" for a moment (QA F8-R3-1).
   const [loading, setLoading] = useState(() => !known && !initial && lastOn.get(space.id) === null);
+  // The first load failed: the row's sub-line stops waiting for a repo list (addendum 3).
+  const [failed, setFailed] = useState(false);
   // The reducer's truth lives in the ref, written only by dispatch. Copying `state` into it on render
   // would let a render that started before a dispatch (a store update mid-save) put an older state back.
   const ref = useRef(state);
@@ -125,6 +127,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
       (e: unknown) => {
         if (!live) return;
         setLoading(false);
+        setFailed(true);
         dispatch({ type: 'server', state: null, disabled: e instanceof DevModeError && (e.status === 403 || e.status === 404) });
       },
     );
@@ -180,7 +183,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   const descId = useId();
   const armed = look.look === 'armed';
   const disabled = state.disabled;
-  useEffect(() => onLook?.({ armed, disabled, on: state.on }), [onLook, armed, disabled, state.on]);
+  useEffect(() => onLook?.({ armed, disabled, on: state.on, failed }), [onLook, armed, disabled, state.on, failed]);
   const setBtn = useCallback(
     (el: HTMLButtonElement | null) => {
       btn.current = el;
