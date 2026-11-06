@@ -498,6 +498,13 @@ impl Database {
         Ok(done.rows_affected() == 1)
     }
 
+    /// Records why a row can't be read without marking it polled (a row added while off whose
+    /// repo the switch-on check didn't find).
+    pub async fn set_dev_repo_error(&self, space_id: &str, key: &str, error: &str) -> Result<bool, DbError> {
+        let done = sqlx::query("UPDATE dev_repos SET poll_error = ?3 WHERE space_id = ?1 AND key = ?2").bind(space_id).bind(key).bind(error).execute(&self.pool).await?;
+        Ok(done.rows_affected() == 1)
+    }
+
     /// Sets a row's deploy hint (from its root files, when GitHub was read).
     pub async fn set_dev_repo_hint(&self, space_id: &str, key: &str, hint: Option<&str>) -> Result<(), DbError> {
         sqlx::query("UPDATE dev_repos SET deploy_hint = ?3 WHERE space_id = ?1 AND key = ?2").bind(space_id).bind(key).bind(hint).execute(&self.pool).await?;

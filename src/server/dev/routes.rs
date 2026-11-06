@@ -100,9 +100,13 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
     // Only while off does a source with no row hang on a connection existing
     let ask = !on && list.iter().any(|e| e.row.is_none() && e.source.is_some_and(|s| s.on_github(&hosts)));
     let connected = ask && repo::clients(state).await.is_ok();
+    // A row whose poll failed because no connection reads GitHub any more (deleted, or the vault
+    // locked) needs the connection, not a retry: it reads not_connected (QA h)
+    let lost = rows.iter().any(|r| r.poll_error.is_some()) && repo::clients(state).await.is_err();
     let mut repos = Vec::new();
     for e in &list {
         let status = match (e.row, e.source) {
+            (Some(r), _) if r.poll_error.is_some() && lost => "not_connected",
             (Some(r), _) if r.poll_error.is_some() => "error",
             (Some(_), _) => "watching",
             (None, Some(s)) if !s.on_github(&hosts) => "other_host",
@@ -157,7 +161,14 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
         "calls_cap": super::call_cap(),
     });
     let any_watching = repos.iter().any(|r| matches!(r["status"].as_str(), Some("watching" | "error")));
-    v["status"] = json!(if any_watching { "watching" } else { repo::status(on, "", &sources, &hosts, connected) });
+    let any_unread = repos.iter().any(|r| r["status"] == "not_connected");
+    v["status"] = json!(if any_watching {
+        "watching"
+    } else if any_unread {
+        "not_connected"
+    } else {
+        repo::status(on, "", &sources, &hosts, connected)
+    });
     v["sources"] = json!(sources);
     v["new_reviews"] = json!(new_reviews(state, row.as_ref()).await);
     // Where a review would be posted, and as whom (post-to-github.md P7 and its amendment)
@@ -504,6 +515,8 @@ pub async fn delete_repo(State(state): State<AppState>, headers: HeaderMap, Path
         Ok(_) => tracing::info!(space = %space, repo = %row.repo, "the person stopped watching a repo"),
         Err(e) => return internal(e),
     }
+    // The freed place goes to a team repo left out at the cap now, not at the next read (QA c)
+    repo::reconcile(&state, &space).await;
     mode_reply(&state, &space).await
 }
 

@@ -417,3 +417,124 @@ async fn the_routes_say_what_went_wrong() {
     assert_eq!((s.as_u16(), v["code"].clone()), (400, json!("no_branch")), "{v}");
     gh.assert_read_only();
 }
+
+// ---- QA 0.7.2 (qa-072.md) h, c, g ------------------------------------------------------------
+
+/// QA h: a GitHub connection deleted after a poll leaves the rows reading `not_connected` (Needs
+/// GitHub, Connect), not an error about a refused token; connecting again recovers to watching.
+#[tokio::test]
+async fn a_lost_connection_reads_as_not_connected_and_reconnecting_recovers() {
+    let env = setup().await;
+    let gh = MockGithub::start(&[0]).await;
+    seed(&gh, APP);
+    seed(&gh, SITE);
+    let sp = space(&env, &gh, "Lost").await;
+    team(&env, &sp, "App", &gh, Some(APP)).await;
+    team(&env, &sp, "Site", &gh, Some(SITE)).await;
+    let (s, v) = call(&env.app, "PUT", &uri(&sp), Some(json!({"on": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    poller::poll_space(&env.state, sp.id.as_str()).await;
+    let (_, v) = call(&env.app, "GET", &uri(&sp), None).await;
+    assert_eq!(rows(&v), vec![row(APP, "App", "watching", "team"), row(SITE, "Site", "watching", "team")], "{v}");
+
+    // The connection goes; the next poll can't read either repo
+    let (_, list) = call(&env.app, "GET", "/api/zombie/sources", None).await;
+    let ids: Vec<String> = list["sources"].as_array().unwrap_or_else(|| panic!("{list}")).iter().filter(|s| s["kind"] == "github").map(|s| s["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(ids.len(), 1, "{list}");
+    let (s, v) = call(&env.app, "DELETE", &format!("/api/zombie/sources/{}", ids[0]), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    poller::poll_space(&env.state, sp.id.as_str()).await;
+    for r in env.state.db.dev_repos(sp.id.as_str()).await.unwrap() {
+        let e = r.poll_error.unwrap_or_else(|| panic!("{}: the failed poll is recorded", r.key));
+        assert!(!e.contains("401") && !e.contains("refused the token"), "no connection isn't a refused token: {e}");
+    }
+    let (_, v) = call(&env.app, "GET", &uri(&sp), None).await;
+    assert_eq!(rows(&v), vec![row(APP, "App", "not_connected", "team"), row(SITE, "Site", "not_connected", "team")], "{v}");
+    assert_eq!(v["status"], "not_connected", "{v}");
+
+    // Connecting again: watching after the next poll, errors cleared
+    let token = canary_token();
+    gh.require_token(&token);
+    let (s, v) = call(&env.app, "POST", "/api/zombie/sources", Some(json!({"kind": "github", "label": "GitHub", "config": {"api_base": gh.base}, "secret": token}))).await;
+    assert_eq!(s.as_u16(), 201, "{v}");
+    poller::poll_space(&env.state, sp.id.as_str()).await;
+    let (_, v) = call(&env.app, "GET", &uri(&sp), None).await;
+    assert_eq!(rows(&v), vec![row(APP, "App", "watching", "team"), row(SITE, "Site", "watching", "team")], "{v}");
+    assert_eq!(v["status"], "watching", "{v}");
+    assert!(v["repos"].as_array().unwrap().iter().all(|r| r["poll_error"].is_null()), "{v}");
+    gh.assert_read_only();
+}
+
+/// QA c: at the cap, removing a hand row gives its place to the team repo that was left out right
+/// away, not at a read 30 s later.
+#[tokio::test]
+async fn removing_a_hand_repo_at_the_cap_watches_the_team_repo_left_out() {
+    let env = setup().await;
+    let gh = MockGithub::start(&[0]).await;
+    let sp = space(&env, &gh, "Cap").await;
+    let names: Vec<String> = (0..MAX_REPOS).map(|i| format!("demo-org/r{i:02}")).collect();
+    for n in &names {
+        seed(&gh, n);
+    }
+    seed(&gh, TOOLS);
+    // Nine teams with a repo, and a tenth with none yet
+    for (i, n) in names.iter().enumerate() {
+        team(&env, &sp, &format!("Team {i:02}"), &gh, (i + 1 < MAX_REPOS).then_some(n.as_str())).await;
+    }
+    let (s, v) = call(&env.app, "PUT", &uri(&sp), Some(json!({"on": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let (s, v) = call(&env.app, "PUT", &uri(&sp), Some(json!({"repo": format!("{}/{TOOLS}", gh.base)}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(env.state.db.dev_repos(sp.id.as_str()).await.unwrap().len(), MAX_REPOS, "{v}");
+    // The tenth team links its repo: no place left
+    let last = &names[MAX_REPOS - 1];
+    let team10 = format!("Team {:02}", MAX_REPOS - 1);
+    let (s, v) = call(&env.app, "PUT", &uri(&sp), Some(json!({"repo": format!("{}/{last}", gh.base), "team": team10}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let got = rows(&v);
+    assert!(got.contains(&row(last, &team10, "too_many", "-")), "{v}");
+
+    // Removing the hand repo: the tenth team's repo is watched in the same reply
+    let tools_key = repo_key(&host(&gh), TOOLS);
+    let (s, v) = call(&env.app, "DELETE", &format!("{}/repos/{}", uri(&sp), enc(&tools_key)), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let got = rows(&v);
+    assert_eq!(got.len(), MAX_REPOS, "{v}");
+    assert!(got.contains(&row(last, &team10, "watching", "team")), "{v}");
+    assert!(env.state.db.dev_repo(sp.id.as_str(), &repo_key(&host(&gh), last)).await.unwrap().is_some());
+    gh.assert_read_only();
+}
+
+/// QA g: a repo added while off that GitHub doesn't have reads as an error after switch-on, not
+/// watching with no branch; once it exists, the next reconcile reads its branch and clears it.
+#[tokio::test]
+async fn a_missing_repo_added_while_off_reads_as_an_error_at_switch_on() {
+    let env = setup().await;
+    let gh = MockGithub::start(&[0]).await;
+    seed(&gh, APP);
+    let sp = space(&env, &gh, "Ghost").await;
+    team(&env, &sp, "App", &gh, Some(APP)).await;
+    const GHOST: &str = "demo-org/ghost";
+    let (s, v) = call(&env.app, "PUT", &uri(&sp), Some(json!({"repo": format!("{}/{GHOST}", gh.base)}))).await;
+    assert_eq!(s.as_u16(), 200, "off keeps it as given: {v}");
+    let key = repo_key(&host(&gh), GHOST);
+    assert_eq!(env.state.db.dev_repo(sp.id.as_str(), &key).await.unwrap().map(|r| r.branch), Some(String::new()));
+
+    let (s, v) = call(&env.app, "PUT", &uri(&sp), Some(json!({"on": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(rows(&v), vec![row(APP, "App", "watching", "team"), row(GHOST, "-", "error", "hand")], "{v}");
+    let ghost = &v["repos"][1];
+    assert!(ghost["poll_error"].as_str().is_some_and(|e| e.contains("no such repo")), "{v}");
+    assert!(ghost["branch"].is_null(), "{v}");
+    assert_eq!(v["status"], "watching", "the other repo is still watched: {v}");
+    // A poll leaves the error (the row has no branch to read) and the other repo is read
+    poller::poll_space(&env.state, sp.id.as_str()).await;
+    assert!(env.state.db.dev_repo(sp.id.as_str(), &key).await.unwrap().unwrap().poll_error.is_some());
+
+    // It appears: the next reconcile fills its branch and clears the error
+    seed(&gh, GHOST);
+    repo::reconcile(&env.state, &sp.id).await;
+    let r = env.state.db.dev_repo(sp.id.as_str(), &key).await.unwrap().unwrap();
+    assert_eq!((r.branch.as_str(), r.poll_error.as_deref()), ("main", None));
+    gh.assert_read_only();
+}
