@@ -887,6 +887,7 @@ mod tests {
             (&get, "/api/spaces/s1/dev_mode"),
             (&put, "/api/spaces/s1/dev_mode"),
             (&post, "/api/spaces/s1/dev_mode/check"),
+            (&post, "/api/spaces/s1/dev_mode/seen"),
             (&get, "/api/spaces/s1/dev/landed?before=2026-11-05T00:00:00Z"),
             (&post, "/api/spaces/s1/dev/landed/seen"),
             (&get, "/api/spaces/s1/dev/reviews"),

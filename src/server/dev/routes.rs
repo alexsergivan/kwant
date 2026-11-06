@@ -41,16 +41,21 @@ async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceI
 // ---------------------------------------------------------------------------------------------
 // Settings
 
-/// `GET /api/spaces/:id/dev_mode` reply. With no row yet: off, the team's repo as a prefill.
+/// `GET /api/spaces/:id/dev_mode` reply. With no row yet: off, the first detected GitHub repo as
+/// a prefill. Always with the detected `sources` and the desk's `status` (plan any-git.md S4).
 #[allow(clippy::result_large_err)]
 pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Response> {
+    // On with no repo and a connection now: bind the detected repo before answering (QA B1)
+    bind_on_read(state, space).await;
     let row = state.db.dev_mode(space.as_str()).await.map_err(internal)?;
     let calls = state.db.dev_calls_today(space.as_str()).await.map_err(internal)?;
-    let mut v = match row {
-        Some(r) => row_json(&r, calls),
+    let sources = repo::detect(state, space).await;
+    let hosts = repo::github_hosts(state).await;
+    let mut v = match &row {
+        Some(r) => row_json(r, calls),
         None => json!({
             "on": false,
-            "repo": repo::prefill(state, space).await,
+            "repo": sources.iter().find(|s| s.on_github(&hosts)).map(|s| s.repo.clone()),
             "branch": null,
             "deploy_hint": null,
             "backup_command": null,
@@ -61,12 +66,42 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             "calls_cap": super::call_cap(),
         }),
     };
+    with_sources(state, row.as_ref(), sources, &hosts, &mut v).await;
     // Where a review would be posted, and as whom (post-to-github.md P7 and its amendment)
     let has_repo = v["repo"].as_str().is_some_and(|r| !r.is_empty());
     let (forge, login) = super::post::forge_json(state, has_repo).await;
     v["forge"] = forge;
     v["forge_login"] = login;
     Ok(v)
+}
+
+/// Adds `sources` (`[{team, repo, host, from}]`, no paths) and `status` to a settings reply.
+async fn with_sources(state: &AppState, row: Option<&DevModeRow>, sources: Vec<repo::Source>, hosts: &[String], v: &mut Value) {
+    let on = row.is_some_and(|r| r.on);
+    let watched = row.map(|r| r.repo.as_str()).unwrap_or("");
+    // Only while off with nothing watched does the answer hang on a connection existing
+    let ask = !on && watched.is_empty() && sources.iter().any(|s| s.on_github(hosts));
+    let connected = ask && repo::clients(state).await.is_ok();
+    v["status"] = json!(repo::status(on, watched, &sources, hosts, connected));
+    v["sources"] = json!(sources);
+    v["new_reviews"] = json!(new_reviews(state, row).await);
+}
+
+/// Review cards ready to read that were made after the person last opened the desk (plan
+/// user-flow.md F6): the open ones only (newest of each PR, not stale), never landed cards or
+/// floor approvals. A space that was never seen counts nothing, so an update shows no surprise
+/// badge.
+async fn new_reviews(state: &AppState, row: Option<&DevModeRow>) -> usize {
+    let Some((space, seen)) = row.and_then(|r| Some((r.space_id.as_str(), r.seen_at?))) else {
+        return 0;
+    };
+    match open_reviews(state, &SpaceId::new(space)).await {
+        Ok(rows) => rows.iter().filter(|r| r.status == READY && r.created_at > seen).count(),
+        Err(e) => {
+            tracing::warn!("dev: {e}");
+            0
+        }
+    }
 }
 
 fn row_json(r: &DevModeRow, calls: i64) -> Value {
@@ -146,6 +181,83 @@ pub fn valid_branch(b: &str) -> bool {
         && b.chars().all(|c| !c.is_control() && !c.is_whitespace() && !"~^:?*[\\".contains(c))
 }
 
+/// How often a GET may try to bind a detected repo for one space (the source hooks don't wait).
+const BIND_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn bind_tried() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static T: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+/// A space that is on with no repo watches the first detected GitHub source a connection now
+/// reads, the same choice as turning on, and the poller wakes (QA B1: a GitHub connection added
+/// while on). A space off, or with a repo, is never touched. True when a repo was bound.
+pub async fn bind_detected(state: &AppState, space: &SpaceId) -> bool {
+    let Ok(Some(row)) = state.db.dev_mode(space.as_str()).await else { return false };
+    if !row.on || !row.repo.is_empty() {
+        return false;
+    }
+    bind_tried().lock().unwrap().insert(space.as_str().to_string(), std::time::Instant::now());
+    let hosts = repo::github_hosts(state).await;
+    let mut seen: Vec<String> = Vec::new();
+    for s in repo::detect(state, space).await.into_iter().filter(|s| s.on_github(&hosts)) {
+        let key = s.check_input().to_lowercase();
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let Ok(found) = repo::check(state, space, &s.check_input()).await else { continue };
+        if found.state != "found" {
+            continue;
+        }
+        let full = found.repo.clone().unwrap_or_default();
+        let default = found.branch.clone().unwrap_or_else(|| "main".into());
+        // The branch the space already names (a folder's or the person's) when the repo has it
+        let branch = match row.branch.trim() {
+            b if b.is_empty() || b == default => default.clone(),
+            b => match repo::client_for(state, &full).await {
+                Ok((c, _)) if matches!(c.dev_branch_exists(&full, b).await, Ok(true)) => b.to_string(),
+                _ => default.clone(),
+            },
+        };
+        return match state.db.bind_dev_repo(space.as_str(), &full, &branch, found.deploy_hint).await {
+            Ok(true) => {
+                tracing::info!(space = %space, repo = %full, branch = %branch, "dev: bound the detected repo");
+                poller::poll_soon(state, space.as_str());
+                true
+            }
+            Ok(false) => false,
+            Err(e) => {
+                tracing::warn!("dev: {e}");
+                false
+            }
+        };
+    }
+    false
+}
+
+/// [`bind_detected`] for every space that is on with no repo: after a GitHub source is added or
+/// changed.
+pub async fn bind_detected_all(state: &AppState) {
+    for row in state.db.dev_mode_on_spaces().await.unwrap_or_default().into_iter().filter(|r| r.repo.is_empty()) {
+        bind_detected(state, &SpaceId::new(&row.space_id)).await;
+    }
+}
+
+/// The GET fallback: on, no repo, a GitHub source detected and a connection there, at most once
+/// per [`BIND_COOLDOWN`] for the space.
+async fn bind_on_read(state: &AppState, space: &SpaceId) -> bool {
+    let Ok(Some(row)) = state.db.dev_mode(space.as_str()).await else { return false };
+    if !row.on || !row.repo.is_empty() {
+        return false;
+    }
+    let recent = bind_tried().lock().unwrap().get(space.as_str()).is_some_and(|t| t.elapsed() < BIND_COOLDOWN);
+    if recent || repo::clients(state).await.is_err() {
+        return false;
+    }
+    bind_detected(state, space).await
+}
+
 pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(body): Json<PutBody>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
@@ -171,36 +283,84 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
             return error(StatusCode::BAD_REQUEST, "that isn't a branch name");
         }
     }
-    let asked_repo = body.repo.as_deref().map(str::trim).filter(|r| !r.is_empty());
+    // Any user:token@ part of a typed URL is dropped before it is read or kept (plan any-git.md S2)
+    let asked_owned = body.repo.as_deref().map(repo::strip_userinfo);
+    let asked_repo = asked_owned.as_deref().map(str::trim).filter(|r| !r.is_empty());
     let kept_repo = before.as_ref().map(|r| r.repo.clone()).filter(|r| !r.is_empty());
+    let asked_branch = body.branch.as_deref().map(str::trim).filter(|b| !b.is_empty());
+    let sources = repo::detect(&state, &space).await;
+    let hosts = repo::github_hosts(&state).await;
+    let mut asked_check = None;
     let (repo_name, branch, hint) = if body.on {
-        // Turning on (or staying on) needs a repo GitHub finds, through the person's connection
-        let input = asked_repo.map(str::to_string).or(kept_repo.clone()).unwrap_or_default();
-        let found = match repo::check(&state, &space, &input).await {
-            Ok(c) => c,
-            Err(e) => return error(StatusCode::BAD_GATEWAY, e),
-        };
-        if found.state != "found" {
-            return (StatusCode::CONFLICT, Json(json!({"error": "Dev mode needs a repo kwant can read", "check": found}))).into_response();
+        // Turning on always works (plan any-git.md S3): the repo asked for, else the one watched,
+        // else the first detected source a connection reads. With none, it's on with no repo.
+        let kept_on = before.as_ref().filter(|b| b.on && !b.repo.is_empty() && asked_repo.is_none_or(|a| repo::normalize(a).is_some_and(|(_, n)| n.eq_ignore_ascii_case(&b.repo))));
+        let mut candidates: Vec<String> = Vec::new();
+        if let Some(a) = asked_repo {
+            candidates.push(a.to_string());
+        } else if let Some(b) = kept_on {
+            candidates.push(b.repo.clone());
+        } else {
+            candidates.extend(kept_repo.clone());
+            candidates.extend(sources.iter().filter(|s| s.on_github(&hosts)).map(|s| s.check_input()));
         }
-        let full = found.repo.clone().unwrap_or_default();
-        let same_repo = before.as_ref().is_some_and(|r| r.repo.eq_ignore_ascii_case(&full));
-        let branch = match body.branch.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
-            Some(b) => b.to_string(),
-            None if same_repo && !before.as_ref().unwrap().branch.is_empty() => before.as_ref().unwrap().branch.clone(),
-            None => found.branch.clone().unwrap_or_else(|| "main".into()),
-        };
-        if Some(&branch) != found.branch.as_ref() {
-            match repo::client_for(&state, &full).await {
-                Ok((c, _)) => match c.dev_branch_exists(&full, &branch).await {
-                    Ok(true) => {}
-                    Ok(false) => return error(StatusCode::CONFLICT, format!("{full} has no branch {branch}")),
-                    Err(e) => return error(StatusCode::BAD_GATEWAY, e.to_string()),
-                },
-                Err(e) => return error(StatusCode::BAD_GATEWAY, e.to_string()),
+        let mut found = None;
+        let mut unanswered = None;
+        let mut seen: Vec<String> = Vec::new();
+        for c in candidates {
+            let key = repo::normalize(&c).map(|(_, n)| n.to_lowercase()).unwrap_or_default();
+            if !key.is_empty() && seen.contains(&key) {
+                continue;
+            }
+            seen.push(key);
+            match repo::check(&state, &space, &c).await {
+                Ok(ch) if ch.state == "found" => {
+                    found = Some(ch);
+                    break;
+                }
+                Ok(ch) => {
+                    if asked_repo.is_some() {
+                        asked_check = Some(ch);
+                    }
+                }
+                // GitHub didn't answer (a rate limit, an outage): kept for the poller to retry
+                Err(_) => {
+                    unanswered.get_or_insert(c);
+                }
             }
         }
-        (full, branch, found.deploy_hint.map(str::to_string))
+        if let Some(found) = found {
+            let full = found.repo.clone().unwrap_or_default();
+            let same_repo = before.as_ref().is_some_and(|r| r.repo.eq_ignore_ascii_case(&full));
+            let branch = match asked_branch {
+                Some(b) => b.to_string(),
+                None if same_repo && !before.as_ref().unwrap().branch.is_empty() => before.as_ref().unwrap().branch.clone(),
+                None => found.branch.clone().unwrap_or_else(|| "main".into()),
+            };
+            if Some(&branch) != found.branch.as_ref() {
+                match repo::client_for(&state, &full).await {
+                    Ok((c, _)) => match c.dev_branch_exists(&full, &branch).await {
+                        Ok(true) => {}
+                        Ok(false) => return error(StatusCode::BAD_REQUEST, format!("{full} has no branch {branch}")),
+                        Err(e) => return error(StatusCode::BAD_GATEWAY, e.to_string()),
+                    },
+                    Err(e) => return error(StatusCode::BAD_GATEWAY, e.to_string()),
+                }
+            }
+            (full, branch, found.deploy_hint.map(str::to_string))
+        } else if let Some(b) = kept_on {
+            // A watched repo stays watched through a failed read; the poller says why
+            (b.repo.clone(), asked_branch.map(str::to_string).unwrap_or_else(|| b.branch.clone()), b.deploy_hint.clone())
+        } else if let Some((_, name)) = unanswered.as_deref().and_then(repo::normalize) {
+            let source_branch = sources.iter().find(|s| s.repo.eq_ignore_ascii_case(&name)).and_then(|s| s.branch.clone());
+            let branch = asked_branch.map(str::to_string).or(source_branch).unwrap_or_else(|| "main".into());
+            (name, branch, None)
+        } else {
+            // On with no repo: the floor and guards work, the poller idles. The branch, when a
+            // team folder says it, still tells the floor which branch is the main one.
+            let branch = asked_branch.map(str::to_string).or_else(|| sources.iter().find_map(|s| s.branch.clone())).unwrap_or_default();
+            (String::new(), branch, None)
+        }
     } else {
         // Off: settings are kept as given, nothing is fetched (D12)
         let repo_name = match asked_repo {
@@ -232,7 +392,13 @@ pub async fn put_mode(State(state): State<AppState>, headers: HeaderMap, Path(id
         }
     }
     let calls = state.db.dev_calls_today(space.as_str()).await.unwrap_or(0);
-    Json(row_json(&row, calls)).into_response()
+    let mut v = row_json(&row, calls);
+    with_sources(&state, Some(&row), sources, &hosts, &mut v).await;
+    if let Some(c) = asked_check {
+        // The repo asked for wasn't read: Dev mode is on without it, and this says why
+        v["check"] = json!(c);
+    }
+    Json(v).into_response()
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -219,6 +219,25 @@ impl Database {
         Ok(self.dev_mode(space_id).await?.expect("just written"))
     }
 
+    /// Binds a repo to a space that is on with none (plan any-git.md S3, QA B1), and only then: a
+    /// space turned off or given a repo meanwhile is left as the person set it. True when bound.
+    pub async fn bind_dev_repo(&self, space_id: &str, repo: &str, branch: &str, deploy_hint: Option<&str>) -> Result<bool, DbError> {
+        let _writes = self.dev_on.writes.lock().await;
+        let done = sqlx::query(
+            "UPDATE dev_mode_spaces SET repo = ?2, branch = ?3, deploy_hint = ?4, last_seen_sha = NULL, polled_at = NULL,
+               poll_error = NULL, updated_at = ?5
+             WHERE space_id = ?1 AND on_ = 1 AND repo = ''",
+        )
+        .bind(space_id)
+        .bind(repo)
+        .bind(branch)
+        .bind(deploy_hint)
+        .bind(Utc::now())
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
     pub async fn dev_mode_polled(&self, space_id: &str, last_seen_sha: Option<&str>, error: Option<&str>) -> Result<(), DbError> {
         sqlx::query("UPDATE dev_mode_spaces SET last_seen_sha = COALESCE(?2, last_seen_sha), polled_at = ?3, poll_error = ?4 WHERE space_id = ?1")
             .bind(space_id)

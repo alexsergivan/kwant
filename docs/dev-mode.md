@@ -1,8 +1,9 @@
 # Dev mode
 
-Dev mode (0.7) points a space at one GitHub repo and branch. kwnt then reads the repo and turns what
-happens there into cards. It writes to GitHub only when the person presses **Post to GitHub** on a
-review card (0.7.1, see [Posting to GitHub](#posting-to-github)); nothing else is ever sent there.
+Dev mode (0.7) points a space at one GitHub repo and branch, found in the space's team folders and
+repo links. kwnt then reads the repo and turns what happens there into cards. It writes to GitHub
+only when the person presses **Post to GitHub** on a review card (0.7.1, see
+[Posting to GitHub](#posting-to-github)); nothing else is ever sent there.
 
 - **Landed**: one card per commit that reaches the watched branch, saying what changed and how risky it is.
 - **Review**: one card per open pull request head, with findings. The person can press **Fix it**
@@ -43,6 +44,41 @@ See [Saved passwords](saved-passwords.md#approvals-off-needs-bitwarden) for why.
 `POST …/dev_mode/check` looks the repo up through the Loose ends GitHub connection and answers
 `found`, `not_found` or `not_connected`. A new repo or branch starts the watch over. The same one
 keeps its place.
+
+### The repo comes from the space (0.7.1)
+
+Turning Dev mode on never asks for a repo. kwnt goes through the space's teams in order and takes
+each team's repo link, or else its folder when that folder is a git checkout. For a folder it reads
+`git remote get-url origin` (or the first remote) and the default branch (`origin/HEAD`, else the
+checked-out branch). It does this locally, with no network, no prompt and a 3 second limit. A
+checkout with no remote is a `local` source. Two teams on the same repo count once. The user and
+password part of a remote URL (`https://user:token@host/…`) is dropped before the URL is read, and
+it is never logged, returned or stored.
+
+`PUT {on: true}` with no `repo` watches the first detected source a GitHub connection can read. If
+none can, or the space has none, Dev mode still turns on with no repo. The production floor and the
+command guards work without one, and the poller waits. A watched repo stays watched when GitHub
+fails to answer. A `repo` asked for that can't be read also turns Dev mode on, with no repo, and the
+reply carries a `check` that says why. A `branch` the repo doesn't have is a 400.
+
+`GET` (and the `PUT` reply) add:
+
+- `sources`: `[{team, repo, host, from}]`. `from` is `repo` (the team's repo link), `folder` (its
+  folder's remote) or `local`. `repo` is `owner/name` on GitHub and the whole path on other hosts. A
+  `local` source has the folder's own name and no host. Folder paths are never returned.
+- `status`:
+  - `watching`: a repo is watched. While off, it means turning on would watch one.
+  - `no_repo`: no team points at a git repo.
+  - `not_connected`: there's a GitHub source, but no connection reads it. Once a GitHub connection
+    is added or changed in Loose ends, every space that is on with no repo binds the repo it finds
+    and polls soon, with no off and on. The `GET` does the same if nothing else did (at most every
+    30 s per space). A repo the person typed or picked is never replaced.
+  - `other_host`: only GitLab, Gitea or other non-GitHub sources, or `local` ones. These are read
+    from 0.7.2.
+- `new_reviews`: review cards ready to read that were made since the desk was last opened (open
+  ones only, never landed cards or floor approvals). A space never opened counts 0.
+  `POST /api/spaces/:id/dev_mode/seen` marks the desk opened now (the same stored time as
+  `POST …/dev/landed/seen`), so phone and desktop agree.
 
 `GET /api/dev/cards/:id` returns one card of any kind, in the same shape as the lists, or 404. The
 desk reads a release notes draft here once its `dev_card` event says it is ready, since no list

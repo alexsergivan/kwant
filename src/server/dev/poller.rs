@@ -66,6 +66,16 @@ pub fn poll_soon(_state: &AppState, space_id: &str) {
     wake().notify_one();
 }
 
+/// Whether `space_id` waits for the next wake, ahead of the timer.
+pub fn is_due_soon(space_id: &str) -> bool {
+    shared().lock().unwrap().soon.contains(space_id)
+}
+
+/// Takes `space_id` off the wake list; true when it was on it.
+pub fn take_due_soon(space_id: &str) -> bool {
+    shared().lock().unwrap().soon.remove(space_id)
+}
+
 /// The newest tag the last poll saw on the space's repo.
 pub fn last_tag(space_id: &str) -> Option<String> {
     shared().lock().unwrap().tags.get(space_id).map(|(t, _)| t.clone())
@@ -164,6 +174,10 @@ pub async fn poll_logged(state: &AppState, row: DevModeRow) {
 /// One poll of one space. Merges are recorded as `last_seen_sha` one by one, so a failure part
 /// way keeps the ones done.
 pub async fn poll(state: &AppState, mode: &DevModeRow) -> Result<(), GhError> {
+    // On with no repo (plan any-git.md S3): nothing to read, and nothing to report as an error
+    if mode.repo.trim().is_empty() {
+        return Ok(());
+    }
     let space = SpaceId::new(&mode.space_id);
     let (client, _) = repo::client_for(state, &mode.repo).await?;
     let kwants = state.db.list_kwants(&space).await.unwrap_or_default();
