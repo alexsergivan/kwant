@@ -491,42 +491,46 @@ test('devApi: Draft release notes, landed and reviews send ?repo= when a repo is
 });
 
 // ---------------------------------------------------------------------------
-// Ada's answers (2026-11-06): 2, Dev mode off reads "Ready", never watched; 5, Undo brings a repo back
+// Ada's answers (2026-11-06): 2, Dev mode off reads "Will watch" (Mira's copy), never watched; 5, Undo brings a repo back
 // the way it came.
 
-test('answer 2: Dev mode off, a watching repo is a neutral "Ready" (no green); other statuses stay', () => {
+test('answer 2: Dev mode off, a watching repo is a neutral "Will watch" (no green); other statuses stay', () => {
   const off = (repos) => m.statusLine(state({ on: false, repos }), TEAMS);
   const l = off([APP, SITE, { ...DOCS, status: 'not_connected' }, { ...DOCS, key: 'github.com/demo-org/err', repo: 'demo-org/err', status: 'error' }]);
   assert.deepEqual(l.rows.map((r) => [r.state, r.led]), [
-    ['Ready', 'off'],
-    ['Ready', 'off'],
+    ['Will watch', 'off'],
+    ['Will watch', 'off'],
     ['Needs your GitHub connection', 'warn'],
     ['Can’t read it right now. Trying again.', 'bad'],
   ]);
-  assert.equal(text(l), '2 of 4 repos ready · 2 need you');
-  assert.equal(text(off([APP, SITE])), '2 repos ready');
+  assert.equal(text(l), 'Will watch 2 of 4 repos · 2 need you');
+  assert.equal(text(off([APP, SITE])), 'Will watch 2 repos');
   assert.equal(off([APP, SITE]).led, 'off', 'no green LED while off');
   const one = off([APP]);
-  assert.deepEqual([text(one), one.led], ['demo-org/app · main · Ready', 'off']);
+  assert.deepEqual([text(one), one.led], ['demo-org/app · main · Will watch', 'off']);
   const tooMany = m.statusLine(state({ on: false, repos: [{ ...APP, status: 'too_many' }] }));
   assert.deepEqual([text(tooMany), tooMany.led], ['demo-org/app · Not watched: 10 repos is the limit', 'off']);
   // On, nothing changes.
   assert.equal(text(m.statusLine(state({ repos: [APP, SITE] }), TEAMS)), 'Watching 2 repos');
 });
 
-test('DOM answer 2: off, the Ready chip is neutral and the desk header says "Dev mode is off"', async () => {
+test('DOM answer 2: off, the Will watch chip is neutral and the desk header says "Dev mode is off"', async () => {
   const { root } = await line({ on: false, repos: [APP, SITE] });
   const chips = [...document.querySelectorAll('[data-dv-repo-state]')];
   assert.deepEqual(chips.map((c) => [c.textContent, c.dataset.tone]), [
-    ['Ready', 'neutral'],
-    ['Ready', 'neutral'],
+    ['Will watch', 'neutral'],
+    ['Will watch', 'neutral'],
   ]);
+  for (const c of chips) {
+    assert.equal(c.getAttribute('title'), 'Will watch when Dev mode is on');
+    assert.equal(c.getAttribute('aria-label'), 'Will watch when Dev mode is on');
+  }
   assert.deepEqual([...document.querySelectorAll('[data-dv-repo-row] .dv-led')].map((d) => d.dataset.s), ['off', 'off']);
   root.unmount();
   const { readFile } = await import('node:fs/promises');
   const css = await readFile(new URL('../src/styles/devStatus.css', import.meta.url), 'utf8');
   const rule = css.match(/\.kw-dv-repo-state\[data-tone='neutral'\] \{([^}]*)\}/)[1];
-  assert.doesNotMatch(rule, /ok|green/, 'the Ready chip is never green');
+  assert.doesNotMatch(rule, /ok|green/, 'the Will watch chip is never green');
 
   reset({ on: false, repos: [APP] });
   m.devStore.set('spc_demo', m.parseDevMode(server.state));
@@ -564,4 +568,22 @@ test('answer 5: the desk’s Undo goes through undoBody, and a removed team link
   assert.match(src, /save\(spaceId, undoBody\(removed\)\)/);
   assert.doesNotMatch(src, /repo: removed\.repo, team: null/);
   assert.match(src, /added_by === 'team' && repo\.from === 'repo' \? row\.teamId : null/);
+});
+
+test('addendum 4: clearing a team’s link toasts "Cleared {team}’s repo link." with Undo; both toasts last 5 s', async () => {
+  assert.equal(m.clearedText('Site'), 'Cleared Site’s repo link.');
+  assert.equal(m.UNDO_TOAST_MS, 5000);
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../src/components/DevStatusLine.tsx', import.meta.url), 'utf8');
+  assert.match(src, /removed\.team \? clearedText\(removed\.teamName/);
+  assert.match(src, /setTimeout\(\(\) => setRemoved\(null\), UNDO_TOAST_MS\)/);
+  // The hand Remove toast goes after 5 s.
+  const { root } = await line({ repos: [APP, SITE, DOCS] });
+  await click(document.querySelector(`[data-dv-row-action="${DOCS.key}"]`));
+  await frame();
+  assert.ok(document.querySelector('[data-dv-removed]'));
+  await new Promise((r) => setTimeout(r, m.UNDO_TOAST_MS + 50));
+  await settle();
+  assert.equal(!!document.querySelector('[data-dv-removed]'), false);
+  root.unmount();
 });

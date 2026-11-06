@@ -18,6 +18,9 @@ import {
   LINK_HELP_HAND,
   LINK_PLACEHOLDER,
   READY,
+  READY_TITLE,
+  UNDO_TOAST_MS,
+  clearedText,
   RemovedRepo,
   RepoRow,
   RowAction,
@@ -84,10 +87,10 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   useEffect(() => {
     if (intent === 'repos') requestAnimationFrame(() => wrap.current?.scrollIntoView?.({ block: 'start' }));
   }, [intent]);
-  // The Remove toast leaves after 10 s unless the person is on it.
+  // The Remove / Clear toast leaves after UNDO_TOAST_MS unless the person is on it.
   useEffect(() => {
     if (!removed || removed.busy || removed.error) return;
-    const t = setTimeout(() => setRemoved(null), 10000);
+    const t = setTimeout(() => setRemoved(null), UNDO_TOAST_MS);
     return () => clearTimeout(t);
   }, [removed]);
   if (!line || !state) return null;
@@ -125,7 +128,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
         setBusy(null);
         // A team's repo link comes back as that team's link; a hand row as a hand row (answer 5).
         const team = repo.added_by === 'team' && repo.from === 'repo' ? row.teamId : null;
-        setRemoved({ repo: repo.repo, team, busy: false, error: null });
+        setRemoved({ repo: repo.repo, team, teamName: team ? row.team : null, busy: false, error: null });
         requestAnimationFrame(() => wrap.current?.querySelector<HTMLElement>('[data-dv-undo]')?.focus());
       },
       (e: unknown) => {
@@ -274,7 +277,13 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
                   <span className="kw-dv-repo-sep" aria-hidden="true">
                     ·
                   </span>
-                  <span className="kw-dv-repo-state" data-dv-repo-state data-tone={r.state === READY ? 'neutral' : undefined} title={r.title ?? undefined}>
+                  <span
+                    className="kw-dv-repo-state"
+                    data-dv-repo-state
+                    data-tone={r.state === READY ? 'neutral' : undefined}
+                    title={r.state === READY ? READY_TITLE : r.title ?? undefined}
+                    aria-label={r.state === READY ? READY_TITLE : undefined}
+                  >
                     {r.state}
                   </span>
                 </span>
@@ -335,7 +344,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
       )}
       {removed && (
         <div role="status" className="kw-dv-removed" data-dv-removed>
-          <span>{removed.error ?? removedText(removed.repo)}</span>
+          <span>{removed.error ?? (removed.team ? clearedText(removed.teamName || 'the team') : removedText(removed.repo))}</span>
           {!removed.error && (
             <button type="button" onClick={undo} disabled={removed.busy} data-dv-undo className={`kw-dv-norepo-act ${focusRing}`}>
               {removed.busy ? 'Adding back…' : 'Undo'}

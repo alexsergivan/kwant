@@ -246,8 +246,10 @@ export type Led = 'ok' | 'warn' | 'bad' | 'off';
 export interface RemovedRepo {
   /** The repo as it was: a team's link URL, or the hand row's repo. */
   repo: string;
-  /** The team whose link was cleared; null for a hand row. */
+  /** The team whose link was cleared (its id, for the PUT); null for a hand row. */
   team: string | null;
+  /** That team's name, for the toast. */
+  teamName?: string | null;
 }
 export const undoBody = (r: RemovedRepo): { repo: string; team: string | null } => ({ repo: r.repo, team: r.team });
 
@@ -288,12 +290,17 @@ export const hostNotRead = (host: string | null) => `${host ?? 'This host'} isn�
 export const teamNoteText = (team: string, from: DevRepo['from']) =>
   from === 'folder' ? `Comes from ${team}’s folder. Change it in the team’s settings.` : `Comes from ${team}’s repo link. Change it in the team’s settings.`;
 export const removedText = (repo: string) => `Stopped watching ${repo}. Its cards stay.`;
+/** Mira's copy (0.7.2): the toast after a team's repo link was cleared, with Undo. */
+export const clearedText = (team: string) => `Cleared ${team}’s repo link.`;
+/** The Remove and Clear toasts stay this long unless the person is on them (Ada's addendum: 5 s). */
+export const UNDO_TOAST_MS = 5000;
 export const LINK_HELP = 'Saved as this team’s repo link. Bots only read it.';
 export const LINK_HELP_HAND = 'Added by you. Bots only read it.';
 export const LINK_ERROR = 'Couldn’t find that repo. Check the name, or connect GitHub first.';
 export const LINK_PLACEHOLDER = 'owner/name or its URL';
-/** Ada's answer 2 (0.7.2): with Dev mode off a `watching` repo is ready, not watched: a neutral chip. */
-export const READY = 'Ready';
+/** Ada's answer 2 with Mira's copy (0.7.2): with Dev mode off a `watching` repo isn't watched yet: a neutral chip. */
+export const READY = 'Will watch';
+export const READY_TITLE = 'Will watch when Dev mode is on';
 export const DEV_OFF = 'Dev mode is off';
 
 const rowState = (r: DevRepo, on = true): { state: string; led: Led } => {
@@ -384,8 +391,8 @@ export function reposSummary(s: DevModeState): string {
   // Off (answer 2): the same count reads as ready, never as watched.
   const head = !s.on
     ? n === total
-      ? `${n} ${n === 1 ? 'repo' : 'repos'} ready`
-      : `${n} of ${total} repos ready`
+      ? `Will watch ${n} ${n === 1 ? 'repo' : 'repos'}`
+      : `Will watch ${n} of ${total} repos`
     : n === total
       ? `Watching ${n} ${n === 1 ? 'repo' : 'repos'}`
       : `Watching ${n} of ${total} repos`;

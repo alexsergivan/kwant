@@ -313,6 +313,8 @@ test('DOM: on → off with two presses saves PUT {on:false}, announces, and call
   assert.ok(host.querySelector('[data-dv-hint]'));
   await click(b);
   await click(b); // the double-click's third press: ignored while settling
+  // The save resolves on the event loop; a busy CI runner can take more than a few ticks, so wait for it
+  for (let i = 0; i < 100 && (turnedOff === 0 || !/Dev mode off for Demo/.test(host.querySelector('[data-dv-live]').textContent)); i++) await wait(20);
   assert.deepEqual(
     server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body),
     [{ on: false }],
