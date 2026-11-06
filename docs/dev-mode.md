@@ -75,7 +75,7 @@ reply carries a `check` that says why. A `branch` the repo doesn't have is a 400
     and polls soon, with no off and on. The `GET` does the same if nothing else did (at most every
     30 s per space). A repo the person typed or picked is never replaced.
   - `other_host`: only GitLab, Gitea or other non-GitHub sources, or `local` ones. These are read
-    from 0.7.2.
+    from 0.7.3.
 - `new_reviews`: review cards ready to read that were made since the desk was last opened (open
   ones only, never landed cards or floor approvals), every watched repo's together: one count for
   the space, with one seen time. A space never opened counts 0.

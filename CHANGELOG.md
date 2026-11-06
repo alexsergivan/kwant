@@ -8,7 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Dev mode watches every team's repo.** A space no longer has one watched repo. Dev mode watches each team's
+  repo (its repo link, or its folder when that folder is a git checkout), up to 10 per space. When there's more
+  than one, every card shows its repo, and Landed and Reviews filter by repo (All · app · site). Each repo is
+  checked on its own: a repo that loses its GitHub connection or can't be found shows on its own row with one fix
+  (**Connect GitHub**, **Link a repo** or **Remove**), and the others keep going. The production floor, the command
+  guards, approvals and the daily review limit stay the same for the whole space. **Switch** is gone, because
+  there's nothing to switch between. (#359, #356, #362)
+- **What Dev mode is, in the app.** Dev mode and Approvals have their own rows under the space header. The **?**
+  next to Dev mode says in plain words what it does, as a popover on the desktop and a sheet on the phone, with a
+  link to the guide. (#360)
+
 ### Changed
+- **A new Dev mode switch.** It's a track with a knob and the word Off, On or **Off?**. The first press to turn
+  it off shows **Off?**, and a second press within 5 seconds turns it off. Escape or waiting keeps it on. (#360)
+- **The Approvals row shows the approval mode,** and "Off for N bots" when some bots skip approvals. The amber
+  Dev mode pill in the sidebar and on the desk is gone. (#360)
+- **GitLab, Gitea and other git hosts are read from 0.7.3,** not 0.7.2 as 0.7.1 said. Until then the desk names
+  them, and the production floor and guards work for them.
 - **Once 0.7.2 runs, don't go back to 0.7.1:** Dev mode stops making new cards there (nothing is lost; updating
   again fixes it). (#359)
 
@@ -16,6 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **The Dev desk badge and the "what landed" rollup each keep their own seen time.** Opening the desk clears the
   new reviews badge, and **Mark seen** starts the rollup over. Before, opening the desk also emptied the rollup, so
   it almost always said "Nothing landed since you last looked". (#357)
+- **Opening the Dev desk from a link clears the new-reviews badge** without a reload, and a review that arrives
+  while the desk is open still counts. (#361)
 
 ## [Mac 0.7.1] - 2026-11-06
 
