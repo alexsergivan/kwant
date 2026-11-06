@@ -239,6 +239,18 @@ export interface DevTeamRef {
 export type RowAction = 'connect' | 'link' | 'remove';
 export type Led = 'ok' | 'warn' | 'bad' | 'off';
 
+/**
+ * What Undo sends after a repo left the list (Ada's answer 5): a team's link comes back as that team's
+ * link (`{repo, team}`), never as a hand row; a hand row comes back as `{repo}`.
+ */
+export interface RemovedRepo {
+  /** The repo as it was: a team's link URL, or the hand row's repo. */
+  repo: string;
+  /** The team whose link was cleared; null for a hand row. */
+  team: string | null;
+}
+export const undoBody = (r: RemovedRepo): { repo: string; team: string | null } => ({ repo: r.repo, team: r.team });
+
 /** One row of the Dev desk's repo list: a repo, or a team with no repo yet. */
 export interface RepoRow {
   /** The repo key, or `team:{id}` for a team with none. */
@@ -280,11 +292,15 @@ export const LINK_HELP = 'Saved as this team’s repo link. Bots only read it.';
 export const LINK_HELP_HAND = 'Added by you. Bots only read it.';
 export const LINK_ERROR = 'Couldn’t find that repo. Check the name, or connect GitHub first.';
 export const LINK_PLACEHOLDER = 'owner/name or its URL';
+/** Ada's answer 2 (0.7.2): with Dev mode off a `watching` repo is ready, not watched: a neutral chip. */
+export const READY = 'Ready';
+export const DEV_OFF = 'Dev mode is off';
 
-const rowState = (r: DevRepo): { state: string; led: Led } => {
+const rowState = (r: DevRepo, on = true): { state: string; led: Led } => {
   if (r.from === 'local') return { state: LOCAL_ONLY, led: 'off' };
   switch (r.status) {
     case 'watching': {
+      if (!on) return { state: READY, led: 'off' };
       const t = checkedTime(r.polled_at);
       return { state: t ? `Watching · checked ${t}` : 'Watching', led: 'ok' };
     }
@@ -311,12 +327,12 @@ const teamHasRepo = (s: DevModeState, t: DevTeamRef) => s.repos.some((r) => r.te
 /** The space's teams with no repo at all. */
 export const teamsWithoutRepo = (s: DevModeState | null, teams: DevTeamRef[] = []): DevTeamRef[] => (s ? teams.filter((t) => !teamHasRepo(s, t)) : []);
 
-const repoRow = (r: DevRepo, teams: DevTeamRef[]): RepoRow => ({
+const repoRow = (r: DevRepo, teams: DevTeamRef[], on = true): RepoRow => ({
   id: r.key,
   team: r.team,
   teamId: r.team_id ?? teams.find((t) => t.name === r.team)?.id ?? null,
   repo: r,
-  ...rowState(r),
+  ...rowState(r, on),
   origin: rowOrigin(r),
   teamNote: r.added_by !== 'hand' && r.team && (r.from === 'repo' || r.from === 'folder') ? teamNoteText(r.team, r.from) : null,
   title: r.status === 'error' ? safeError(r.poll_error) : null,
@@ -331,7 +347,7 @@ const noRepoRow = (t: DevTeamRef): RepoRow => ({ id: `team:${t.id}`, team: t.nam
  */
 export function repoRows(s: DevModeState | null, teams: DevTeamRef[] = []): RepoRow[] {
   if (!s) return [];
-  const rows = s.repos.map((r) => repoRow(r, teams));
+  const rows = s.repos.map((r) => repoRow(r, teams, s.on));
   if (!s.repos.some((r) => r.status === 'watching')) rows.push(...teamsWithoutRepo(s, teams).map(noRepoRow));
   return rows;
 }
@@ -365,7 +381,14 @@ export function reposSummary(s: DevModeState): string {
   const n = s.repos.filter((r) => r.status === 'watching' && r.from !== 'local').length;
   if (!total) return 'No repos yet';
   const need = needsYouCount(s);
-  const head = n === total ? `Watching ${n} ${n === 1 ? 'repo' : 'repos'}` : `Watching ${n} of ${total} repos`;
+  // Off (answer 2): the same count reads as ready, never as watched.
+  const head = !s.on
+    ? n === total
+      ? `${n} ${n === 1 ? 'repo' : 'repos'} ready`
+      : `${n} of ${total} repos ready`
+    : n === total
+      ? `Watching ${n} ${n === 1 ? 'repo' : 'repos'}`
+      : `Watching ${n} of ${total} repos`;
   return need ? `${head} · ${need} ${need === 1 ? 'needs' : 'need'} you` : head;
 }
 
@@ -373,9 +396,11 @@ export function reposSummary(s: DevModeState): string {
 export const noRepoTeamsText = (n: number) => (n === 1 ? '1 team has no repo' : `${n} teams have no repo`);
 
 /** One repo as a single line, as in 0.7.1: "Watching demo-org/app · main". */
-function singleLine(r: DevRepo): Omit<StatusLine, 'rows' | 'collapsed' | 'noRepoTeams'> {
-  const { state, led } = rowState(r);
+function singleLine(r: DevRepo, on = true): Omit<StatusLine, 'rows' | 'collapsed' | 'noRepoTeams'> {
+  const { state, led } = rowState(r, on);
   const action = rowAction(r);
+  if (r.status === 'watching' && r.from !== 'local' && !on)
+    return { status: 'watching', led, action, parts: [{ text: r.repo, mono: true }, { text: ' · ' }, { text: r.branch || 'main', mono: true, branch: true }, { text: ` · ${READY}` }] };
   if (r.status === 'watching' && r.from !== 'local')
     return { status: 'watching', led, action, parts: [{ text: 'Watching ' }, { text: r.repo, mono: true }, { text: ' · ' }, { text: r.branch || 'main', mono: true, branch: true }] };
   return { status: r.status, led, action, parts: [{ text: r.repo, mono: true }, { text: ` · ${state}` }] };
@@ -393,7 +418,7 @@ export function statusLine(s: DevModeState | null, teams: DevTeamRef[] = []): St
   if (rows.length === 1) {
     const r = rows[0];
     if (!r.repo) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false, noRepoTeams };
-    return { ...singleLine(r.repo), rows: [], collapsed: false, noRepoTeams };
+    return { ...singleLine(r.repo, s.on), rows: [], collapsed: false, noRepoTeams };
   }
   const led: Led = rows.some((r) => r.led === 'bad') ? 'bad' : rows.some((r) => r.led === 'warn') ? 'warn' : rows.some((r) => r.led === 'ok') ? 'ok' : 'off';
   return { status: s.status, parts: [{ text: reposSummary(s) }], action: null, led, rows, collapsed: rows.length > LIST_OPEN_MAX, noRepoTeams };

@@ -489,3 +489,79 @@ test('devApi: Draft release notes, landed and reviews send ?repo= when a repo is
   const qs = server.calls.map(([meth, u]) => `${meth} ${new URL(u, 'http://localhost').pathname.split('/').pop()} ${new URL(u, 'http://localhost').searchParams.get('repo')}`);
   assert.deepEqual(qs, [`POST release_notes ${SITE.key}`, 'POST release_notes null', `GET landed ${SITE.key}`, 'GET reviews null']);
 });
+
+// ---------------------------------------------------------------------------
+// Ada's answers (2026-11-06): 2, Dev mode off reads "Ready", never watched; 5, Undo brings a repo back
+// the way it came.
+
+test('answer 2: Dev mode off, a watching repo is a neutral "Ready" (no green); other statuses stay', () => {
+  const off = (repos) => m.statusLine(state({ on: false, repos }), TEAMS);
+  const l = off([APP, SITE, { ...DOCS, status: 'not_connected' }, { ...DOCS, key: 'github.com/demo-org/err', repo: 'demo-org/err', status: 'error' }]);
+  assert.deepEqual(l.rows.map((r) => [r.state, r.led]), [
+    ['Ready', 'off'],
+    ['Ready', 'off'],
+    ['Needs your GitHub connection', 'warn'],
+    ['Can’t read it right now. Trying again.', 'bad'],
+  ]);
+  assert.equal(text(l), '2 of 4 repos ready · 2 need you');
+  assert.equal(text(off([APP, SITE])), '2 repos ready');
+  assert.equal(off([APP, SITE]).led, 'off', 'no green LED while off');
+  const one = off([APP]);
+  assert.deepEqual([text(one), one.led], ['demo-org/app · main · Ready', 'off']);
+  const tooMany = m.statusLine(state({ on: false, repos: [{ ...APP, status: 'too_many' }] }));
+  assert.deepEqual([text(tooMany), tooMany.led], ['demo-org/app · Not watched: 10 repos is the limit', 'off']);
+  // On, nothing changes.
+  assert.equal(text(m.statusLine(state({ repos: [APP, SITE] }), TEAMS)), 'Watching 2 repos');
+});
+
+test('DOM answer 2: off, the Ready chip is neutral and the desk header says "Dev mode is off"', async () => {
+  const { root } = await line({ on: false, repos: [APP, SITE] });
+  const chips = [...document.querySelectorAll('[data-dv-repo-state]')];
+  assert.deepEqual(chips.map((c) => [c.textContent, c.dataset.tone]), [
+    ['Ready', 'neutral'],
+    ['Ready', 'neutral'],
+  ]);
+  assert.deepEqual([...document.querySelectorAll('[data-dv-repo-row] .dv-led')].map((d) => d.dataset.s), ['off', 'off']);
+  root.unmount();
+  const { readFile } = await import('node:fs/promises');
+  const css = await readFile(new URL('../src/styles/devStatus.css', import.meta.url), 'utf8');
+  const rule = css.match(/\.kw-dv-repo-state\[data-tone='neutral'\] \{([^}]*)\}/)[1];
+  assert.doesNotMatch(rule, /ok|green/, 'the Ready chip is never green');
+
+  reset({ on: false, repos: [APP] });
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
+  const desk = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo', now: m.fx.FIXTURE_NOW }));
+  assert.equal(document.querySelector('[data-dev-desk-sub]').textContent, 'Dev mode is off');
+  desk.root.unmount();
+  reset({ repos: [APP] });
+  m.devStore.set('spc_demo', m.parseDevMode(server.state));
+  const onDesk = await mount(h(m.DevDeskView, { spaceId: 'spc_demo', spaceName: 'Demo', now: m.fx.FIXTURE_NOW }));
+  assert.equal(document.querySelector('[data-dev-desk-sub]').textContent, 'What landed and what needs a look');
+  onDesk.root.unmount();
+});
+
+test('answer 5: Undo after clearing a team’s repo sends PUT {repo: the previous link, team: its id}', async () => {
+  assert.deepEqual(m.undoBody({ repo: 'https://github.com/demo-org/site', team: 'tm_site' }), { repo: 'https://github.com/demo-org/site', team: 'tm_site' });
+  reset({ repos: [APP] });
+  await m.devApi.linkRepo('spc_demo', m.undoBody({ repo: 'https://github.com/demo-org/site', team: 'tm_site' }));
+  const puts = server.calls.filter(([x]) => x === 'PUT').map(([, , b]) => b);
+  assert.deepEqual(puts, [{ on: true, repo: 'https://github.com/demo-org/site', team: 'tm_site' }], 'the team link comes back, never a hand add');
+  assert.equal(server.state.repos.at(-1).added_by, 'team');
+});
+
+test('answer 5: Undo for a hand row stays PUT {repo}, with no team', async () => {
+  assert.deepEqual(m.undoBody({ repo: 'demo-org/docs', team: null }), { repo: 'demo-org/docs', team: null });
+  reset({ repos: [APP] });
+  await m.devApi.linkRepo('spc_demo', m.undoBody({ repo: 'demo-org/docs', team: null }));
+  const puts = server.calls.filter(([x]) => x === 'PUT').map(([, , b]) => b);
+  assert.deepEqual(puts, [{ on: true, repo: 'demo-org/docs' }]);
+  assert.equal(server.state.repos.at(-1).added_by, 'hand');
+});
+
+test('answer 5: the desk’s Undo goes through undoBody, and a removed team link keeps its team id', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const src = await readFile(new URL('../src/components/DevStatusLine.tsx', import.meta.url), 'utf8');
+  assert.match(src, /save\(spaceId, undoBody\(removed\)\)/);
+  assert.doesNotMatch(src, /repo: removed\.repo, team: null/);
+  assert.match(src, /added_by === 'team' && repo\.from === 'repo' \? row\.teamId : null/);
+});

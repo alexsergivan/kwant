@@ -17,6 +17,8 @@ import {
   LINK_HELP,
   LINK_HELP_HAND,
   LINK_PLACEHOLDER,
+  READY,
+  RemovedRepo,
   RepoRow,
   RowAction,
   StatusLine,
@@ -28,6 +30,7 @@ import {
   statusLine,
   teamNoteText,
   typedRepo,
+  undoBody,
 } from '../devMode';
 
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
@@ -73,7 +76,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   const [error, setError] = useState<{ id: string; text: string } | null>(null);
   const [expanded, setExpanded] = useState(intent === 'repos');
   const [note, setNote] = useState<string | null>(null);
-  const [removed, setRemoved] = useState<{ repo: string; busy: boolean; error: string | null } | null>(null);
+  const [removed, setRemoved] = useState<(RemovedRepo & { busy: boolean; error: string | null }) | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   // One 200 ms ping when a check lands, not on first paint.
   const firstCheck = useRef(checkedAt);
@@ -120,7 +123,9 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
       (s) => {
         devStore.set(spaceId, s);
         setBusy(null);
-        setRemoved({ repo: repo.repo, busy: false, error: null });
+        // A team's repo link comes back as that team's link; a hand row as a hand row (answer 5).
+        const team = repo.added_by === 'team' && repo.from === 'repo' ? row.teamId : null;
+        setRemoved({ repo: repo.repo, team, busy: false, error: null });
         requestAnimationFrame(() => wrap.current?.querySelector<HTMLElement>('[data-dv-undo]')?.focus());
       },
       (e: unknown) => {
@@ -135,7 +140,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   const undo = () => {
     if (!removed || removed.busy) return;
     setRemoved({ ...removed, busy: true, error: null });
-    save(spaceId, { repo: removed.repo, team: null }).then(
+    save(spaceId, undoBody(removed)).then(
       ({ state: s, refused }) => {
         devStore.set(spaceId, s);
         setRemoved(refused ? { ...removed, busy: false, error: refused } : null);
@@ -269,7 +274,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
                   <span className="kw-dv-repo-sep" aria-hidden="true">
                     ·
                   </span>
-                  <span className="kw-dv-repo-state" data-dv-repo-state title={r.title ?? undefined}>
+                  <span className="kw-dv-repo-state" data-dv-repo-state data-tone={r.state === READY ? 'neutral' : undefined} title={r.title ?? undefined}>
                     {r.state}
                   </span>
                 </span>

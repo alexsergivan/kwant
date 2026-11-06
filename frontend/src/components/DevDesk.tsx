@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
-import { DevModeState, DevTeamRef, cardRepoLabel, cardsOfRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
+import { DEV_OFF, DevModeState, DevTeamRef, cardRepoLabel, cardsOfRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
@@ -369,7 +369,9 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
         </span>
         <div className="min-w-0 flex-1">
           <h2 className="text-[17px] leading-6 font-semibold text-zinc-50 truncate">Dev desk</h2>
-          <p className="hidden sm:block text-meta text-zinc-400 truncate">What landed and what needs a look</p>
+          <p className="hidden sm:block text-meta text-zinc-400 truncate" data-dev-desk-sub>
+            {dev && !dev.on ? DEV_OFF : 'What landed and what needs a look'}
+          </p>
         </div>
         {dev?.repo && !dev.status && (
           <span className="hidden sm:inline-flex shrink-0 font-mono text-[11px] text-zinc-300 px-2 py-0.5 rounded-md bg-white/[0.04] border border-zinc-700/60" data-dev-repo-chip>
