@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
-import { DevModeState, devApi, devStore, deskStatus, firstRun, statusLine } from '../devMode';
+import { DevModeState, DevTeamRef, cardRepoLabel, cardsOfRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
@@ -35,6 +35,8 @@ export interface DeskData {
 
 const EMPTY: DeskData = { landed: null, reviews: null, loading: false, error: null, checkedAt: null };
 const desks = new Map<string, DeskData>();
+/** The cache key: the space, or the space and one repo (0.7.2 `?repo=`). The row reads the space's. */
+const deskKey = (space: string, repo: string | null = null) => (repo ? `${space}\u0000${repo}` : space);
 const deskListeners = new Set<() => void>();
 const inflight = new Map<string, Promise<void>>();
 
@@ -44,30 +46,42 @@ function setDesk(space: string, patch: Partial<DeskData>) {
 }
 
 export const deskStore = {
-  get: (space: string): DeskData => desks.get(space) ?? EMPTY,
+  get: (space: string, repo: string | null = null): DeskData => desks.get(deskKey(space, repo)) ?? EMPTY,
   subscribe(l: () => void) {
     deskListeners.add(l);
     return () => void deskListeners.delete(l);
   },
-  /** Loads both lists; concurrent calls share one request. */
-  load(space: string): Promise<void> {
-    const running = inflight.get(space);
+  /** Loads both lists, of the whole space or of one repo; concurrent calls share one request. */
+  load(space: string, repo: string | null = null): Promise<void> {
+    const key = deskKey(space, repo);
+    const running = inflight.get(key);
     if (running) return running;
-    setDesk(space, { loading: true });
-    const p = Promise.all([devApi.landed(space), devApi.reviews(space)])
-      .then(([l, r]) => setDesk(space, { landed: parseLandedPage(l), reviews: parseCards(r), loading: false, error: null, checkedAt: Date.now() }))
-      .catch((e: unknown) => setDesk(space, { loading: false, error: e instanceof Error ? e.message : 'The Dev desk couldn’t load.' }))
-      .finally(() => inflight.delete(space));
-    inflight.set(space, p);
+    setDesk(key, { loading: true });
+    const p = Promise.all([devApi.landed(space, undefined, repo), devApi.reviews(space, repo)])
+      .then(([l, r]) => {
+        const page = parseLandedPage(l);
+        setDesk(key, { landed: { ...page, cards: cardsOfRepo(page.cards, repo) }, reviews: cardsOfRepo(parseCards(r), repo), loading: false, error: null, checkedAt: Date.now() });
+      })
+      .catch((e: unknown) => setDesk(key, { loading: false, error: e instanceof Error ? e.message : 'The Dev desk couldn’t load.' }))
+      .finally(() => inflight.delete(key));
+    inflight.set(key, p);
     return p;
   },
-  /** Tests and shots. */
-  _set: setDesk,
+  /** Tests and shots: `space`, or `space` and a repo key. */
+  _set: (space: string, patch: Partial<DeskData>, repo: string | null = null) => setDesk(deskKey(space, repo), patch),
   _reset() {
     desks.clear();
     inflight.clear();
   },
 };
+
+/** A finding or post changed a review card: the space's list and the filtered one both show it. */
+function patchReview(space: string, repo: string | null, card: ShellCard) {
+  for (const r of repo ? [null, repo] : [null]) {
+    const list = deskStore.get(space, r).reviews;
+    if (list) deskStore._set(space, { reviews: list.map((c) => (c.id === card.id ? card : c)) }, r);
+  }
+}
 
 /** "14:32", 24-hour local time. */
 export function checkedLabel(ms: number): string {
@@ -75,18 +89,18 @@ export function checkedLabel(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function useDesk(space: string, on: boolean): DeskData {
-  const data = useSyncExternalStore(deskStore.subscribe, () => deskStore.get(space), () => EMPTY);
+export function useDesk(space: string, on: boolean, repo: string | null = null): DeskData {
+  const data = useSyncExternalStore(deskStore.subscribe, () => deskStore.get(space, repo), () => EMPTY);
   useEffect(() => {
     if (!on) return undefined;
-    void deskStore.load(space);
+    void deskStore.load(space, repo);
     const onCard = (e: Event) => {
       const d = (e as CustomEvent<DevCardEvent>).detail;
-      if (d?.space_id === space && d.kind !== 'release_notes') void deskStore.load(space);
+      if (d?.space_id === space && d.kind !== 'release_notes') void deskStore.load(space, repo);
     };
     window.addEventListener(DEV_CARD_EVENT, onCard);
     return () => window.removeEventListener(DEV_CARD_EVENT, onCard);
-  }, [space, on]);
+  }, [space, on, repo]);
   return data;
 }
 
@@ -97,7 +111,7 @@ export const rowBadge = (dev: DevModeState | null, openReviewCount: number): num
 
 /** Flow F4: while the first poll reads the last merges, the desk shows still placeholder cards. */
 export const firstPolling = (dev: DevModeState | null, landedCount: number): boolean =>
-  !!dev?.on && dev.status === 'watching' && !dev.polled_at && landedCount === 0;
+  !!dev?.on && dev.status === 'watching' && !dev.polled_at && !dev.repos.some((r) => r.polled_at) && landedCount === 0;
 
 // ---------------------------------------------------------------------------
 // The sidebar row
@@ -178,11 +192,18 @@ export interface DevDeskViewProps {
   now?: number;
   /** Opens Loose ends, for the status line's Connect. */
   onOpenLooseEnds?: () => void;
+  /** The space's teams, so a team with no repo gets "Link a repo" in the repo list. */
+  teams?: DevTeamRef[];
 }
 
-export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds }) => {
-  const desk = useDesk(spaceId, true);
+export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams }) => {
   const dev = useDevMode(spaceId);
+  // 0.7.2: with several repos, both lists filter by one (All · app · site) through `?repo=`.
+  const filters = repoFilters(dev);
+  const [repoPick, setRepoPick] = useState<string | null>(null);
+  const repo = repoPick && filters.some((f) => f.key === repoPick) ? repoPick : null;
+  const desk = useDesk(spaceId, true, repo);
+  const repoLabel = useCallback((key: string | null, name?: string | null) => cardRepoLabel(dev, key, name), [dev]);
   const [tab, setTab] = useState<Tab>(initialTab);
   // Flow F6: opening the desk clears the row badge on every device.
   useEffect(() => {
@@ -207,17 +228,20 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   const notesId = notes?.id ?? null;
   // "Open review" on a landed card: the PR whose review card gets scrolled to and focused once the
   // Reviews tab has rendered.
-  const [openPr, setOpenPr] = useState<number | null>(null);
+  const [openPr, setOpenPr] = useState<{ pr: number; repo: string | null } | null>(null);
 
-  const openReview = useCallback((pr: number) => {
+  const openReview = useCallback((pr: number, repoKey: string | null = null) => {
     setTab('reviews');
-    setOpenPr(pr);
+    setOpenPr({ pr, repo: repoKey });
   }, []);
 
   useEffect(() => {
     if (openPr === null || tab !== 'reviews') return;
     const panel = panelRef.current;
-    const card = panel?.querySelector<HTMLElement>(`[data-dev-card="review"][data-pr="${openPr}"]`);
+    // The same PR number can be open in two repos: the landed card's repo picks which.
+    const card =
+      (openPr.repo ? panel?.querySelector<HTMLElement>(`[data-dev-card="review"][data-pr="${openPr.pr}"][data-repo="${openPr.repo.replace(/["\\]/g, '')}"]`) : null) ??
+      panel?.querySelector<HTMLElement>(`[data-dev-card="review"][data-pr="${openPr.pr}"]`);
     const heading = card?.querySelector<HTMLElement>('h3');
     setOpenPr(null);
     if (!card || !heading) {
@@ -263,15 +287,15 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
     setActionError(null);
     devApi
       .seen(spaceId)
-      .then(() => deskStore.load(spaceId))
+      .then(() => Promise.all([deskStore.load(spaceId), repo ? deskStore.load(spaceId, repo) : undefined]))
       .catch((e: unknown) => setActionError(e instanceof Error ? e.message : 'Couldn’t mark them seen.'))
       .finally(() => setMarking(false));
-  }, [spaceId, marking]);
+  }, [spaceId, marking, repo]);
 
   const draftNotes = useCallback(() => {
     setActionError(null);
     setNotesError(null);
-    devApi.releaseNotes(spaceId).then(
+    devApi.releaseNotes(spaceId, repo).then(
       (raw) => {
         const c = asCard(raw);
         if (c) setNotes(c);
@@ -279,28 +303,26 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
       },
       (e: unknown) => setActionError(e instanceof Error ? e.message : 'Couldn’t start the draft.'),
     );
-  }, [spaceId]);
+  }, [spaceId, repo]);
 
   const onFinding = useCallback(
     async (cardId: string, findingId: string, action: FindingAction): Promise<ShellCard> => {
       const card = asCard(await devApi.finding(cardId, findingId, action));
       if (!card) throw new Error('The review came back in a shape this app doesn’t know.');
-      const reviews = deskStore.get(spaceId).reviews ?? [];
-      deskStore._set(spaceId, { reviews: reviews.map((c) => (c.id === card.id ? card : c)) });
+      patchReview(spaceId, repo, card);
       return card;
     },
-    [spaceId],
+    [spaceId, repo],
   );
 
   const onPost = useCallback(
     async (cardId: string): Promise<ShellCard> => {
       const card = asCard(await devApi.post(cardId));
       if (!card) throw new Error('The review came back in a shape this app doesn’t know.');
-      const reviews = deskStore.get(spaceId).reviews ?? [];
-      deskStore._set(spaceId, { reviews: reviews.map((c) => (c.id === card.id ? card : c)) });
+      patchReview(spaceId, repo, card);
       return card;
     },
-    [spaceId],
+    [spaceId, repo],
   );
 
   const landed = desk.landed;
@@ -362,7 +384,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
         )}
         <button
           type="button"
-          onClick={() => void deskStore.load(spaceId)}
+          onClick={() => void deskStore.load(spaceId, repo)}
           disabled={desk.loading}
           aria-label="Refresh"
           data-dev-refresh
@@ -375,6 +397,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
       <DevStatusLine
         spaceId={spaceId}
         state={dev}
+        teams={teams}
         onConnect={onOpenLooseEnds}
         checked={desk.checkedAt != null ? checkedLabel(desk.checkedAt) : null}
         checkedAt={desk.checkedAt ?? null}
@@ -383,7 +406,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
       <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6" aria-busy={desk.loading}>
         <div className="max-w-[760px] mx-auto space-y-4">
           {intro && dev?.on && (
-            <DevIntro cmd="kwant dev --on" repo={(dev.status ?? (dev.repo ? 'watching' : 'no_repo')) === 'watching' ? dev.repo : null} onClose={() => setIntro(false)} />
+            <DevIntro cmd="kwant dev --on" repo={(dev.status ?? (dev.repo ? 'watching' : 'no_repo')) !== 'watching' ? null : dev.repos.length > 1 ? reposSummary(dev).replace(/^Watching /, '') : dev.repos[0]?.repo ?? dev.repo} onClose={() => setIntro(false)} />
           )}
           <div role="tablist" aria-label="Dev desk" className="kw-dv-tabs">
             {tabs.map((t, i) => {
@@ -410,11 +433,29 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
             })}
           </div>
 
+          {filters.length > 1 && (
+            <div role="group" aria-label="Show cards from" className="kw-dv-filters" data-dev-repo-filters>
+              {[{ key: null as string | null, label: 'All', repo: 'All repos' }, ...filters].map((f) => (
+                <button
+                  key={f.key ?? 'all'}
+                  type="button"
+                  aria-pressed={repo === f.key}
+                  title={f.key ? f.repo : undefined}
+                  onClick={() => setRepoPick(f.key)}
+                  data-dev-repo-filter={f.key ?? 'all'}
+                  className={`kw-dv-filter ${focusRing}`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {(desk.error || actionError) && (
             <div role="alert" className="px-3 py-2 rounded-lg border border-rose-400/30 bg-rose-500/10 flex flex-wrap items-center gap-2 text-xs text-rose-100">
               <span className="min-w-0 flex-1">{actionError ?? desk.error}</span>
               {desk.error && !actionError && (
-                <button type="button" onClick={() => void deskStore.load(spaceId)} className={`px-2 py-0.5 rounded border border-rose-400/40 hover:bg-rose-500/10 min-h-[32px] ${focusRing}`}>
+                <button type="button" onClick={() => void deskStore.load(spaceId, repo)} className={`px-2 py-0.5 rounded border border-rose-400/40 hover:bg-rose-500/10 min-h-[32px] ${focusRing}`}>
                   Try again
                 </button>
               )}
@@ -438,7 +479,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                     last_tag={landed.last_tag}
                     last_merge={lastMerge}
                     cards={landedCards}
-                    branch={dev?.branch || 'main'}
+                    branch={(repo ? dev?.repos.find((r) => r.key === repo)?.branch : null) || dev?.branch || dev?.repos[0]?.branch || 'main'}
                     onMarkSeen={markSeen}
                     onDraftNotes={draftNotes}
                     drafting={!!notes && notes.status === 'pending'}
@@ -446,7 +487,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                   />
                 )}
                 {landedCards.length ? (
-                  <LandedList cards={landedCards} reviews={reviews} now={now} onOpenReview={openReview} forge={dev?.forge ?? null} />
+                  <LandedList cards={landedCards} reviews={reviews} now={now} onOpenReview={openReview} forge={dev?.forge ?? null} repoLabel={repoLabel} />
                 ) : dev?.status === 'not_connected' ? (
                   <TermEmpty out="(needs a GitHub connection)" title="Connect GitHub to see what landed." line="The last 5 merges show up here right after." />
                 ) : dev?.status === 'no_repo' ? (
@@ -467,7 +508,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                 )}
               </>
             ) : reviews.length ? (
-              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} now={now} />)
+              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} now={now} repoLabel={repoLabel} />)
             ) : (
               desk.reviews && (
                 <TermEmpty

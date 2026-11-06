@@ -11,13 +11,15 @@ const TESTS_TONE = { passed: 'text-ok', failed: 'text-bad', none: 'text-zinc-400
 const TESTS_LED = { passed: 'ok', failed: 'bad', none: 'off', unknown: 'off' } as const;
 
 /** One merge in plain words (design §4). A commit pushed without a PR (`pr: null`) is the same card, named by its commit. */
-export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number) => void; forge?: Forge | null; onRail?: boolean }> = ({
+export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpenReview?: (pr: number, repo?: string | null) => void; forge?: Forge | null; onRail?: boolean; repoLabel?: (repo: string | null, name?: string | null) => string | null }> = ({
   card,
   reviews = [],
   onOpenReview,
   forge = null,
   onRail = false,
+  repoLabel,
 }) => {
+  const repoChip = repoLabel ? repoLabel(card.repo, card.repo_name) : null;
   const verified = showVerified(card, reviews);
   const writer = personText(card.written_by);
   const merged = clock(card.merged_at);
@@ -27,7 +29,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
   const openFollowUps = card.follow_ups;
   // S1: a finding still open in this PR's review is something to do, even when CI and follow-ups are clear.
   const pr = card.pr;
-  const findingsOpen = pr === null ? 0 : openFindings(reviews.find((r) => r.pr === pr));
+  const findingsOpen = pr === null ? 0 : openFindings(reviews.find((r) => r.pr === pr && (!card.repo || !r.repo || r.repo === card.repo)));
   const nothingToDo = openFollowUps.length === 0 && card.tests.state === 'passed' && findingsOpen === 0;
   const tests = testsWords(card.tests.state);
   const diff = card.links.commit ?? (card.links.pr ? `${card.links.pr}/files` : null);
@@ -37,7 +39,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
   const node = landedNode(card);
 
   return (
-    <article data-dev-card="landed" data-pr={pr ?? undefined} data-commit={pr === null ? card.sha : undefined} data-verified={verified || undefined} aria-labelledby={headingId} className="kw-card relative min-w-0 p-4">
+    <article data-dev-card="landed" data-repo={card.repo ?? undefined} data-pr={pr ?? undefined} data-commit={pr === null ? card.sha : undefined} data-verified={verified || undefined} aria-labelledby={headingId} className="kw-card relative min-w-0 p-4">
       {onRail && (
         <>
           {pr !== null && <span aria-hidden="true" data-rail-arc className="dv-arc" />}
@@ -46,6 +48,12 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
       )}
       <div className="flex flex-wrap items-center gap-1.5">
         {card.area && <span className="kw-chip">{card.area}</span>}
+        {repoChip && (
+          <span data-dev-card-repo className="kw-chip font-mono [overflow-wrap:anywhere]" title={card.repo ?? undefined}>
+            <span className="sr-only">Repo </span>
+            {repoChip}
+          </span>
+        )}
         <Sha sha={card.sha} />
         {pr !== null ? (
           card.links.pr ? (
@@ -202,7 +210,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
                 </span>
                 <button
                   type="button"
-                  onClick={() => onOpenReview(pr)}
+                  onClick={() => onOpenReview(pr, card.repo)}
                   className="kw-focus inline-flex min-h-[44px] items-center rounded text-sky-300 hover:text-sky-200 hover:underline sm:min-h-0"
                 >
                   Open review
@@ -229,7 +237,7 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
 };
 
 /** What landed: one git rail down the left (style v2 §5), day labels sitting on it, a node per card. */
-export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now(), onOpenReview, forge = null }) => (
+export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Date.now(), onOpenReview, forge = null, repoLabel }) => (
   <div data-dev-landed-list className="dv-rail space-y-3">
     {byDay(cards, now).map((day) => (
       <section key={day.label} aria-label={day.label} className="space-y-3">
@@ -238,7 +246,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Da
           <span aria-hidden="true" className="h-px flex-1 bg-[var(--kw-hairline)]" />
         </h3>
         {day.cards.map((c) => (
-          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} onRail />
+          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} repoLabel={repoLabel} onRail />
         ))}
       </section>
     ))}
