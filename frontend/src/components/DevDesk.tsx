@@ -202,11 +202,27 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   const desk = useDesk(spaceId, true, repo);
   const repoLabel = useCallback((key: string | null, name?: string | null) => cardRepoLabel(dev, key, name), [dev]);
   const [tab, setTab] = useState<Tab>(initialTab);
-  // Flow F6: opening the desk clears the row badge on every device.
+  // Flow F6: opening the desk clears the row badge on every device. On a deep link to /s/<space>/dev
+  // the store is still empty here, so the first state to arrive (fetched before the server saw the
+  // desk) is cleared too, and again once the server has it.
   useEffect(() => {
-    const s = devStore.get(spaceId);
-    if (s?.new_reviews) devStore.set(spaceId, { ...s, new_reviews: 0 });
-    devApi.deskSeen(spaceId).catch(() => undefined);
+    let live = true;
+    const clear = () => {
+      const s = devStore.get(spaceId);
+      if (live && s?.new_reviews) devStore.set(spaceId, { ...s, new_reviews: 0 });
+    };
+    let waiting = !devStore.get(spaceId);
+    clear();
+    const stop = devStore.subscribe(() => {
+      if (!waiting || !devStore.get(spaceId)) return;
+      waiting = false;
+      clear();
+    });
+    devApi.deskSeen(spaceId).then(clear, () => undefined);
+    return () => {
+      live = false;
+      stop();
+    };
   }, [spaceId]);
   // Flow F4: what Dev mode does, on the first visit only; it can be closed and stays gone.
   const [intro, setIntro] = useState(() => !firstRun.introSeen(spaceId));
