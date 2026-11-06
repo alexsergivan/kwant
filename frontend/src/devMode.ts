@@ -707,8 +707,9 @@ export interface SwitchLook {
 
 export const OFF_TOOLTIP = 'Dev mode: plain-words merges, code reviews, production floor';
 export const ON_TOOLTIP = 'Dev mode is on. Press twice to turn it off.';
-export const OWNER_TOOLTIP = 'Only the space owner can change Dev mode.';
-export const OFF_DESCRIBE = 'Turns on reviews, the ship gate and the production floor.';
+export const OWNER_TOOLTIP = 'Only the space owner can turn Dev mode on or off.';
+/** Explainer spec §2: the off sub-line, also the switch's description when it stands alone. */
+export const OFF_DESCRIBE = 'For bots that write code';
 export const ON_DESCRIBE = 'Press twice to turn off.';
 export const ARMED_HINT = 'Press again to turn Dev mode off';
 
@@ -732,6 +733,105 @@ function switchParts(s: SwitchState): Omit<SwitchLook, 'look' | 'glyph'> {
     default:
       return { coverOpen: false, knobRight: s.on, fill: s.on ? 1 : 0, ring: s.on && !s.disabled, hint: null, ...common };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Space controls (explainer spec §2, §4): the Dev mode row's sub-line and the explainer's copy.
+
+/** What Dev mode does, in three lines: the explainer card and the Dev desk's first-run block share it. */
+export const DEV_FEATURES = [
+  { key: 'landed', n: '01', title: 'What landed.', line: 'Every merge to main in plain words, and when main is ready to ship.' },
+  { key: 'reviews', n: '02', title: 'Reviews.', line: 'A second bot reads each pull request before you merge it.' },
+  { key: 'floor', n: '03', title: 'Production floor.', line: 'Pushes to main, deploys and deleting data always wait for your OK, even with approvals off.' },
+] as const;
+
+export const DEV_GUIDE_URL = 'https://kwant.si/docs/dev-mode.html';
+
+/** Explainer spec §4, final copy. The kicker is upper-cased by CSS, so screen readers read words. */
+export const EXPLAINER = {
+  title: 'Dev mode: when your bots write code',
+  kickerOff: 'For spaces that build software',
+  kickerOn: (space: string) => `On in ${space}`,
+  leadOff: 'Turn it on in a space where your teams work on code. Dev mode watches each team’s repo. Everywhere else, leave it off.',
+  leadOn: 'It’s on in this space. Dev mode watches each team’s repo and shows what changed on the Dev desk.',
+  trustLead: 'Bots only read your repo. Nothing is posted to it unless you press ',
+  trustPost: 'Post',
+  turnOn: 'Turn on Dev mode',
+  openDesk: 'Open Dev desk',
+  guide: 'Read the guide',
+  noteOn: 'To turn it off, press the switch twice.',
+  notOwner: 'Only the space owner can turn on Dev mode.',
+} as const;
+
+export type DevSubState = 'loading' | 'off' | 'disabled' | 'watching' | 'several' | 'partial' | 'no_repo' | 'not_connected' | 'other_host' | 'error' | 'armed';
+export type DevSubAction = 'repos' | 'link' | 'connect';
+
+export interface DevSub {
+  state: DevSubState;
+  /** null: no LED (off, armed). 'off' is the hollow ring. */
+  led: 'ok' | 'warn' | 'bad' | 'off' | null;
+  /** The text in pieces: `repo` truncates first, `branch` never does. */
+  parts: Array<{ text: string; repo?: boolean; branch?: boolean }>;
+  /** warn: the armed line. */
+  tone: 'warn' | null;
+  action: DevSubAction | null;
+}
+
+export const SUB_ACTION_TEXT: Record<DevSubAction, { text: string; label: string }> = {
+  repos: { text: 'See repos', label: 'See repos on the Dev desk' },
+  link: { text: 'Link a repo', label: 'Link a repo on the Dev desk' },
+  connect: { text: 'Connect', label: 'Connect GitHub' },
+};
+
+export const ARMED_SUB = 'Press again to turn off';
+
+const sub = (state: DevSubState, led: DevSub['led'], text: string | DevSub['parts'], action: DevSubAction | null = null, tone: DevSub['tone'] = null): DevSub => ({
+  state,
+  led,
+  parts: typeof text === 'string' ? [{ text }] : text,
+  tone,
+  action,
+});
+
+/** The repo list hasn't come yet (addendum 3): no state, a press on still saving, or on with no status and no repos. */
+export const devListPending = (s: DevModeState | null, o: { loading?: boolean; turningOn?: boolean } = {}): boolean =>
+  s ? (!!o.turningOn && !s.on) || (s.on && !s.status && s.repos.length === 0) : !!o.loading;
+
+/**
+ * The Dev mode row's one line under the label (spec §2). Which state wins: armed, then if any
+ * repo is watched several / partial / watching, else error, not_connected, other_host, no_repo. Counts
+ * come straight from repos[]; nothing is added up beyond counting rows.
+ */
+export function devSubLine(s: DevModeState | null, o: { armed?: boolean; disabled?: boolean; turningOn?: boolean; loading?: boolean } = {}): DevSub {
+  if (o.armed) return sub('armed', null, ARMED_SUB, null, 'warn');
+  // Not the owner (403) never brings a state: say so rather than wait on a list.
+  if (o.disabled && !s?.on) return sub('disabled', null, OFF_DESCRIBE);
+  // Ada's addendum 3 (0.7.2): until the first repo list arrives the line is a skeleton, never "No repo
+  // yet" (or the off line) for a moment: the first load still in flight, the switch already flipped on,
+  // or an on state that carries neither a status nor a repo. A failed load falls back to the off line.
+  if (devListPending(s, o)) return sub('loading', null, []);
+  if (!s?.on) return sub(o.disabled ? 'disabled' : 'off', null, OFF_DESCRIBE);
+  // No "checking" line (Ada's answer 1, 0.7.2): the PUT reply already carries the repos, so there is no
+  // in-between state; only the switch shows a spinner, while its request is in flight.
+  const repos = s.repos;
+  const watching = repos.filter((r) => r.status === 'watching');
+  if (watching.length) {
+    if (repos.length === 1) {
+      const r = watching[0];
+      return sub('watching', 'ok', [{ text: 'Watching ' }, { text: r.repo, repo: true }, { text: ' · ' }, { text: r.branch ?? 'main', branch: true }]);
+    }
+    if (watching.length === repos.length) return sub('several', 'ok', `Watching ${watching.length} repos`, 'repos');
+    return sub('partial', 'warn', `${watching.length} of ${repos.length} watched`, 'repos');
+  }
+  const failed = repos.filter((r) => r.status === 'error').length;
+  if (failed) return sub('error', 'bad', failed === 1 ? 'Can’t read a repo' : `Can’t read ${failed} repos`, 'repos');
+  if (repos.some((r) => r.status === 'not_connected')) return sub('not_connected', 'warn', 'Needs GitHub', 'connect');
+  const other = repos.find((r) => r.status === 'other_host');
+  if (other) {
+    if (other.from === 'local' || !other.host) return sub('other_host', 'off', 'Local folder, no remote');
+    return sub('other_host', 'off', [{ text: other.host, repo: true }, { text: ' isn’t read yet' }]);
+  }
+  return sub('no_repo', 'off', 'No repo yet', 'link');
 }
 
 // ---------------------------------------------------------------------------

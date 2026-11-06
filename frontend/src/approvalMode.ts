@@ -103,6 +103,36 @@ export function spaceOffLine(space: SpaceApprovals | undefined, bots: Array<{ ap
   return off ? `Approvals off for ${off} ${off === 1 ? 'bot' : 'bots'}` : null;
 }
 
+/** Explainer spec §2, Approvals row: the chip, its tone and the one line under it (or null). */
+export interface ApprovalsRow {
+  value: SpaceApprovals;
+  chip: 'Ask' | 'When risky' | 'Off';
+  tone: 'neutral' | 'warn';
+  sub: string | null;
+  /** The value button's name: "Approvals: Off. Change in space settings". */
+  label: string;
+  /** Desktop tooltip, only when approvals are off. */
+  title: string | null;
+}
+
+const CHIP: Record<SpaceApprovals, ApprovalsRow['chip']> = { ask: 'Ask', smart: 'When risky', off: 'Off' };
+export const APPROVALS_OFF_TITLE = 'Bots here act without asking, including deletions, publishing and sign-ins. Payments still ask you. Change it in Settings › This space.';
+export const APPROVALS_OFF_TITLE_DEV = ' With Dev mode on, pushes to main, deploys and deleting data still ask.';
+
+/** null on an older server that doesn't say the space's approvals: the row isn't drawn rather than guessed. */
+export function approvalsRow(space: SpaceApprovals | undefined, bots: Array<{ approvals_effective?: string | null }>, devOn: boolean): ApprovalsRow | null {
+  if (space !== 'ask' && space !== 'smart' && space !== 'off') return null;
+  const chip = CHIP[space];
+  const label = `Approvals: ${chip}. Change in space settings`;
+  if (space === 'off') {
+    const asking = bots.filter((b) => b.approvals_effective === 'ask' || b.approvals_effective === 'smart').length;
+    const sub = asking ? (asking === 1 ? '1 bot still asks' : `${asking} bots still ask`) : devOn ? 'Main and deploys still ask' : 'Bots act without asking';
+    return { value: space, chip, tone: 'warn', sub, label, title: APPROVALS_OFF_TITLE + (devOn ? APPROVALS_OFF_TITLE_DEV : '') };
+  }
+  const off = bots.filter(approvalsOff).length;
+  return { value: space, chip, tone: 'neutral', sub: off ? `Off for ${off} ${off === 1 ? 'bot' : 'bots'}` : null, label, title: null };
+}
+
 async function errorText(res: Response, fallback: string): Promise<string | NeedsBitwardenError> {
   try {
     const body = await res.json();

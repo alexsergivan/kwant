@@ -577,58 +577,164 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 }
 /* ---- Dev mode (0.7): the switch, the </> badge, the hard hat and the blueprint grid. design.md §1–§2.
    Under reduced motion nothing animates. */
-/* The switch (style v2 §10, the Branch switch): a tiny git line. The knob is a commit node.
-   Off: a hollow node on the line, no cover. One press: the node hops onto a solid violet fork, then
-   a 1 px violet cover closes. Off takes two: armed is a dashed amber fork, a halo and `off?`. 32 px tall
-   (44 on phones), mono label + a 44×24 graph. Not colour alone: node position, fork drawn/dashed/
-   absent and the label word all change. */
+/* The switch v3 (explainer spec §3): the state word Off / On / Off? next to a 40×22 track and a 16 px
+   knob. Off: a hollow node at the left. On: the knob at the right with a violet pip, a small lock in the
+   track. Armed (press 1 of 2 to turn off): amber ring and open lock, no halo, no pulse. 32 px tall (44 on
+   phones). Not colour alone: the word, the knob's side and the lock all change. */
 .kw-dv {
-  position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  height: 32px; min-width: 44px; padding: 0 6px; border-radius: 10px; flex-shrink: 0; cursor: pointer;
-  background: transparent; transition: background-color 120ms var(--kw-ease);
+  position: relative; display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px;
+  height: 32px; min-width: 44px; padding: 0 2px; border-radius: 10px; flex-shrink: 0; cursor: pointer; background: transparent;
 }
 .kw-dv.h-11 { height: 44px; } /* phone: a 44 px target */
-.kw-dv:not(:disabled):hover { background: rgb(247 246 255 / 0.06); }
-.kw-dv:disabled { opacity: 0.4; cursor: not-allowed; }
-.kw-dv-lbl {
-  font: 600 11px/1 'JetBrains Mono', ui-monospace, monospace; color: theme('colors.zinc.400');
-  min-width: 4ch; text-align: right; transition: color 120ms var(--kw-ease);
+.kw-dv:focus-visible { outline: 2px solid #9d8fff; outline-offset: 2px; }
+.kw-dv[aria-disabled='true'], .kw-dv:disabled { opacity: 0.4; cursor: not-allowed; }
+.kw-dv-hint, .kw-dv-lbl { display: none; } /* 0.7.1 parts, gone in v3 */
+.kw-dv-val { font: 600 11px/16px Inter, ui-sans-serif, system-ui, sans-serif; min-width: 22px; text-align: right; color: theme('colors.zinc.400'); }
+.kw-dv[data-on] .kw-dv-val { color: theme('colors.sky.300'); }
+.kw-dv[data-armed] .kw-dv-val { color: var(--dv-armed); }
+.kw-dv-track {
+  position: relative; display: block; width: 40px; height: 22px; border-radius: 11px; flex-shrink: 0;
+  background: #2c2552; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14); transition: background-color 160ms var(--kw-ease), box-shadow 160ms var(--kw-ease);
 }
-.kw-dv[data-on] .kw-dv-lbl { color: theme('colors.sky.300'); }
-.kw-dv[data-armed] .kw-dv-lbl { color: var(--dv-armed); }
-.kw-dv-lock { color: theme('colors.zinc.400'); flex-shrink: 0; }
-.kw-dv[data-on]:not(:disabled) .kw-dv-lock { color: theme('colors.sky.300'); }
+.kw-dv:not([aria-disabled='true']):hover .kw-dv-track { background: #3f3868; }
+.kw-dv[data-on] .kw-dv-track { background: #6c58e0; box-shadow: none; }
+.kw-dv[data-on]:not([aria-disabled='true']):hover .kw-dv-track { background: #8270f5; }
+.kw-dv[data-armed] .kw-dv-track, .kw-dv[data-armed]:hover .kw-dv-track {
+  background: color-mix(in srgb, var(--dv-armed) 12%, var(--kw-surface-side)); box-shadow: inset 0 0 0 2px var(--dv-armed);
+}
+.kw-dv-knob {
+  position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--kw-surface-side); box-shadow: inset 0 0 0 2px theme('colors.zinc.300');
+  transition: transform 160ms var(--kw-ease);
+}
+.kw-dv[data-knob='right'] .kw-dv-knob { transform: translateX(18px); }
+.kw-dv[data-on] .kw-dv-knob { background: theme('colors.zinc.50'); box-shadow: none; }
+.kw-dv[data-on] .kw-dv-knob::after { content: ''; position: absolute; left: 5px; top: 5px; width: 6px; height: 6px; border-radius: 50%; background: #6c58e0; }
+.kw-dv[data-armed] .kw-dv-knob { background: color-mix(in srgb, var(--dv-armed) 25%, var(--kw-surface-side)); box-shadow: inset 0 0 0 2px var(--dv-armed); }
+.kw-dv[data-armed] .kw-dv-knob::after { display: none; }
+.kw-dv-lock { position: absolute; left: 6px; top: 6px; color: rgb(247 246 255 / 0.85); }
 .kw-dv[data-armed] .kw-dv-lock { color: var(--dv-armed); }
-/* The cover (flow F1/F2): only while on. A 1 px violet ring closes 160 ms after the node lands
-   (guards locked in); armed lifts it to a 2 px amber ring at once. Off and not-the-owner: none. */
-.kw-dv::after {
-  content: ''; position: absolute; inset: 0; border-radius: 10px; pointer-events: none; opacity: 0;
-  box-shadow: inset 0 0 0 1px rgb(157 143 255 / 0.45); transition: opacity 160ms var(--kw-ease);
-}
-.kw-dv[data-covered]::after { opacity: 1; transition-delay: 160ms; }
-.kw-dv[data-armed]::after { opacity: 1; box-shadow: inset 0 0 0 2px var(--dv-armed); transition-delay: 0s; }
-.kw-dv:disabled::after { opacity: 0; }
-.kw-dv-graph { display: block; width: 44px; height: 24px; overflow: visible; }
-.kw-dv-base { fill: none; stroke: theme('colors.zinc.500'); stroke-width: 2; stroke-linecap: round; transition: opacity 160ms var(--kw-ease); }
-.kw-dv[data-on] .kw-dv-base { opacity: 0.55; }
-.kw-dv-fork { fill: none; stroke: theme('colors.sky.400'); stroke-width: 2; stroke-linecap: round; opacity: 0; transition: opacity 160ms var(--kw-ease); }
-.kw-dv[data-on] .kw-dv-fork { opacity: 1; }
-.kw-dv[data-armed] .kw-dv-fork { opacity: 1; stroke: var(--dv-armed); stroke-dasharray: 2.5 3; }
-.kw-dv-node { transition: transform 160ms var(--kw-ease); }
-.kw-dv[data-on] .kw-dv-node { transform: translate(22px, -10px); }
-.kw-dv-dot { fill: var(--kw-surface-side); stroke: theme('colors.zinc.300'); stroke-width: 2; transition: fill 160ms var(--kw-ease), stroke 160ms var(--kw-ease); }
-.kw-dv[data-on] .kw-dv-dot { fill: theme('colors.sky.400'); stroke: theme('colors.sky.400'); }
-.kw-dv[data-armed] .kw-dv-dot { stroke: var(--dv-armed); fill: color-mix(in srgb, var(--dv-armed) 25%, var(--kw-surface-side)); }
-.kw-dv-pip { fill: var(--kw-surface-side); opacity: 0; transition: opacity 160ms var(--kw-ease); }
-.kw-dv[data-on] .kw-dv-pip { opacity: 1; }
-.kw-dv-halo { fill: none; stroke: var(--dv-armed); stroke-width: 1.5; opacity: 0; transform-box: fill-box; transform-origin: center; }
-.kw-dv[data-armed] .kw-dv-halo { animation: kw-dv-halo 900ms var(--kw-ease) infinite; }
-@keyframes kw-dv-halo { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(2); } }
-/* Reduced motion: the same shapes, instant, no halo */
-.kw-dv-rm, .kw-dv-rm *, .kw-dv-rm::after { transition: none !important; }
-.kw-dv-rm .kw-dv-halo { animation: none !important; opacity: 0 !important; }
-.kw-dv-hint { animation: kw-dv-hint 150ms var(--kw-ease) both; }
+/* Reduced motion: the same shapes, instant */
+.kw-dv-rm, .kw-dv-rm * { transition: none !important; }
 @keyframes kw-dv-hint { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+/* The space controls block (explainer spec §1): two identical rows, Dev mode and Approvals. Full
+   sidebar content width, so it lines up with the nav rows below. */
+.kw-sc { margin-top: 6px; border: 1px solid rgb(255 255 255 / 0.07); border-radius: 12px; background: rgb(255 255 255 / 0.025); }
+.kw-sc-row { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; min-height: 40px; padding: 6px 6px 6px 10px; }
+.kw-sc-row + .kw-sc-row { border-top: 1px solid rgb(255 255 255 / 0.07); }
+.kw-sc-icon { display: block; }
+.kw-sc-label { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 14px; line-height: 20px; font-weight: 500; color: theme('colors.zinc.100'); }
+.kw-sc-help {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 6px; flex-shrink: 0;
+  color: theme('colors.zinc.500');
+}
+.kw-sc-help:hover { color: theme('colors.zinc.300'); }
+.kw-sc-help[data-open] { color: theme('colors.sky.300'); background: rgb(157 143 255 / 0.14); }
+.kw-sc-help:focus-visible { outline: 2px solid theme('colors.sky.400'); outline-offset: 1px; }
+.kw-sc-sub {
+  grid-column: 2 / 4; display: flex; align-items: center; gap: 6px; min-width: 0;
+  font-size: 12px; line-height: 18px; color: theme('colors.zinc.400');
+}
+.kw-sc-sub[data-tone='warn'] { color: var(--dv-led-warn); }
+.kw-sc-sub-text { display: flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+.kw-sc-repo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: theme('colors.zinc.200'); font-weight: 400; }
+.kw-sc-branch { flex-shrink: 0; color: theme('colors.sky.300'); font-weight: 500; }
+.kw-sc-led[data-s='off'] { background: transparent; box-shadow: inset 0 0 0 1.5px theme('colors.zinc.500'); }
+/* Answer 3: the Approvals row while loading. Same grid and height as the row, no text. */
+.kw-sc-skel { display: block; border-radius: 9999px; background: rgb(255 255 255 / 0.06); animation: kw-sc-skel 1.4s ease-in-out infinite; }
+.kw-sc-skel-icon { width: 16px; height: 16px; border-radius: 5px; }
+.kw-sc-skel-line { width: 72px; height: 10px; }
+.kw-sc-skel-chip { width: 56px; height: 24px; }
+.kw-sc-skel-sub { width: 120px; height: 8px; margin-block: 5px; }
+.kw-sc-phone .kw-sc-skel-chip { margin-block: 10px; }
+@keyframes kw-sc-skel { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+.kw-sc-act {
+  margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; min-height: 24px; padding: 0 2px; border-radius: 6px;
+  font-size: 12px; line-height: 18px; font-weight: 600; color: theme('colors.sky.300');
+}
+.kw-sc-act:hover { color: theme('colors.sky.200'); }
+.kw-sc-act:focus-visible, .kw-sc-value:focus-visible { outline: 2px solid theme('colors.sky.400'); outline-offset: 2px; }
+.kw-sc-value { display: inline-flex; align-items: center; gap: 2px; border-radius: 9999px; padding-left: 0; }
+.kw-sc-chip {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 9999px; font-size: 12px; line-height: 18px; font-weight: 500;
+  background: rgb(255 255 255 / 0.04); box-shadow: inset 0 0 0 1px var(--kw-hairline-strong, rgb(255 255 255 / 0.14)); color: theme('colors.zinc.200');
+}
+.kw-sc-value:hover .kw-sc-chip { background: rgb(255 255 255 / 0.07); }
+.kw-sc-chip[data-tone='warn'] { background: rgb(252 211 77 / 0.10); box-shadow: inset 0 0 0 1px rgb(252 211 77 / 0.30); color: #fcd34d; }
+.kw-sc-phone .kw-sc-row { min-height: 52px; padding: 4px 4px 4px 12px; }
+.kw-sc-phone .kw-sc-sub { margin-top: -6px; padding-bottom: 4px; }
+.kw-sc-phone .kw-sc-help { margin: -10px; width: 44px; height: 44px; }
+.kw-sc-phone .kw-sc-help[data-open] { background: none; }
+.kw-sc-phone .kw-sc-act { min-height: 44px; padding: 0 4px; margin-block: -12px; }
+.kw-sc-phone .kw-sc-value { min-height: 44px; }
+
+/* The explainer (spec §4): a popover beside the sidebar on desktop, a bottom sheet on phones. */
+.kw-dvx {
+  background: #231d4b; border: 1px solid rgb(255 255 255 / 0.14); color: theme('colors.zinc.300');
+  box-shadow: 0 18px 48px -12px rgb(6 3 20 / 0.85), inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+.kw-dvx-pop { position: fixed; z-index: 60; width: 368px; border-radius: 16px; padding: 16px 16px 14px; animation: kw-dvx-in 160ms var(--kw-ease) both; }
+@keyframes kw-dvx-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.kw-dvx-arrow {
+  position: absolute; left: -6px; width: 11px; height: 11px; background: #231d4b; transform: rotate(45deg);
+  border-left: 1px solid rgb(255 255 255 / 0.14); border-bottom: 1px solid rgb(255 255 255 / 0.14);
+}
+.kw-dvx-kicker { font: 600 10.5px/16px 'JetBrains Mono', ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; color: theme('colors.sky.300'); padding-right: 28px; }
+.kw-dvx-title { margin-top: 4px; font-size: 17px; line-height: 24px; font-weight: 600; color: theme('colors.zinc.50'); padding-right: 20px; }
+.kw-dvx-lead { margin-top: 8px; font-size: 14px; line-height: 22px; color: theme('colors.zinc.300'); }
+.kw-dvx-list { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgb(255 255 255 / 0.08); display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; line-height: 18px; color: theme('colors.zinc.400'); }
+.kw-dvx-list li { display: flex; gap: 10px; align-items: baseline; }
+.kw-dvx-list strong { font-weight: 600; color: theme('colors.zinc.100'); }
+.kw-dvx-n { font: 600 10.5px/18px 'JetBrains Mono', ui-monospace, monospace; color: theme('colors.sky.300'); flex-shrink: 0; }
+.kw-dvx-trust { margin-top: 12px; display: flex; gap: 8px; padding: 8px 10px; border-radius: 10px; background: rgb(255 255 255 / 0.04); font-size: 12px; line-height: 18px; color: theme('colors.zinc.400'); }
+.kw-dvx-trust strong { font-weight: 600; color: theme('colors.zinc.100'); }
+.kw-dvx-actions { margin-top: 14px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.kw-dvx-primary {
+  display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 14px; border-radius: 10px;
+  background: linear-gradient(135deg, #7a62f0, #5b47d6); color: #fff; font-size: 14px; font-weight: 600;
+}
+.kw-dvx-primary:hover { filter: brightness(1.08); }
+.kw-dvx-guide { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; font-weight: 600; color: theme('colors.sky.300'); border-radius: 6px; }
+.kw-dvx-guide:hover { color: theme('colors.sky.200'); }
+.kw-dvx-owner { font-size: 12px; line-height: 18px; color: theme('colors.zinc.400'); }
+.kw-dvx-note { margin-top: 10px; font-size: 12px; line-height: 18px; color: theme('colors.zinc.500'); }
+.kw-dvx-close {
+  position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: theme('colors.zinc.400');
+}
+.kw-dvx-close:hover { color: theme('colors.zinc.100'); background: rgb(255 255 255 / 0.06); }
+.kw-dvx-primary:focus-visible, .kw-dvx-guide:focus-visible, .kw-dvx-close:focus-visible { outline: 2px solid theme('colors.sky.400'); outline-offset: 2px; }
+.kw-dvx-layer { position: fixed; inset: 0; z-index: 70; display: flex; flex-direction: column; justify-content: flex-end; }
+.kw-dvx-scrim { position: absolute; inset: 0; background: rgb(6 3 20 / 0.6); animation: kw-dvx-fade 200ms var(--kw-ease) both; }
+@keyframes kw-dvx-fade { from { opacity: 0; } to { opacity: 1; } }
+.kw-dvx-sheet {
+  position: relative; width: 100%; max-height: 88vh; overflow-y: auto; overscroll-behavior: contain; border-radius: 20px 20px 0 0; border-bottom: 0;
+  padding: 12px 20px calc(20px + env(safe-area-inset-bottom)); animation: kw-dvx-up 200ms var(--kw-ease) both;
+}
+@keyframes kw-dvx-up { from { transform: translateY(100%); } to { transform: none; } }
+/* Answer 1: the switch's knob turns into a small spinner only while its request is in flight. */
+/* Answer 1: the knob carries a plain border spinner while the PUT is in flight (no gradient). */
+.kw-dv[data-saving] .kw-dv-knob::after {
+  content: ''; position: absolute; left: 2px; top: 2px; width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%;
+  background: none; border: 2px solid #6c58e0; border-top-color: transparent; animation: kw-dv-saving 800ms linear infinite;
+}
+@keyframes kw-dv-saving { to { rotate: 360deg; } }
+/* Answer 4: closing mirrors the open, 150 ms down (none under reduced motion, below). */
+.kw-dvx-sheet[data-closing] { animation: kw-dvx-down 150ms var(--kw-ease) both; }
+.kw-dvx-scrim[data-closing] { animation: kw-dvx-fade-out 150ms var(--kw-ease) both; }
+@keyframes kw-dvx-down { from { transform: none; } to { transform: translateY(100%); } }
+@keyframes kw-dvx-fade-out { from { opacity: 1; } to { opacity: 0; } }
+.kw-dvx-grab { display: block; width: 36px; height: 4px; border-radius: 2px; margin: 0 auto 12px; background: theme('colors.zinc.600'); }
+.kw-dvx-sheet .kw-dvx-close { top: 6px; right: 6px; width: 44px; height: 44px; }
+.kw-dvx-sheet .kw-dvx-actions { flex-direction: column; align-items: stretch; gap: 8px; }
+.kw-dvx-sheet .kw-dvx-primary { height: 44px; width: 100%; }
+.kw-dvx-sheet .kw-dvx-guide { justify-content: center; min-height: 44px; }
+@media (prefers-reduced-motion: reduce) {
+  .kw-dv-track, .kw-dv-knob { transition: none !important; }
+  .kw-dvx-pop, .kw-dvx-sheet, .kw-dvx-scrim, .kw-dvx-sheet[data-closing], .kw-dvx-scrim[data-closing] { animation: none; }
+  .kw-sc-skel { animation: none; }
+  .kw-dv[data-saving] .kw-dv-knob::after { animation: none; }
+}
 /* The flip note under the space header: HEAD → dev / merged into main, one caret blink */
 .kw-dv-note { animation: kw-dv-hint 150ms var(--kw-ease) both; }
 .kw-dv-note .dv-caret { animation-iteration-count: 1; }
@@ -672,9 +778,8 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 @keyframes kw-dv-grid { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .kw-dv, .kw-dv *, .kw-dv::after { transition: none !important; }
-  .kw-dv-halo { animation: none !important; opacity: 0 !important; }
-  .kw-dv-hint, .kw-dv-note, .kw-dev-badge, .kw-dev-hat, .kw-blueprint::before { animation: none; }
+  .kw-dv, .kw-dv * { transition: none !important; }
+  .kw-dv-note, .kw-dev-badge, .kw-dev-hat, .kw-blueprint::before { animation: none; }
   .kw-dev-caret { animation: none; }
 }
 

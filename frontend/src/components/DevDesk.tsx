@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
-import { DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
+import { DEV_FEATURES, DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
@@ -585,11 +585,8 @@ const TermEmpty: React.FC<{ cmd?: string; out: string; title: string; line: stri
 // First run (flow copy §5): a terminal-style block above the cards on the first visit only. Got it hides
 // it for good; it is the only control.
 
-export const DEV_FEATURES = [
-  { key: 'landed', n: '01', title: 'What landed.', line: 'Every merge to main in plain words, and when main is ready to ship.' },
-  { key: 'reviews', n: '02', title: 'Reviews.', line: 'A second bot reads each pull request before you merge it.' },
-  { key: 'floor', n: '03', title: 'Production floor.', line: 'Deploys and live-database commands wait for your OK.' },
-] as const;
+/** Shared with the explainer card (spec §4); re-exported for callers. */
+export { DEV_FEATURES };
 
 // cmd is the terminal line the intro types out (copy.md §5), not prose.
 const DevIntro: React.FC<{ repo: string | null; onClose: () => void; cmd: string }> = ({ repo, onClose, cmd }) => (

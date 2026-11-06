@@ -272,13 +272,13 @@ test('QA d: nothing tells the person to look in Settings → Profiles any more',
   }
 });
 
-test('desktop header: the Dev switch has its own row under the name; phones keep it in the name row', () => {
-  const html = ui.sidebar(base);
-  const header = html.slice(html.indexOf('data-space-header'), html.indexOf('data-dev-switch-row'));
-  assert.doesNotMatch(header, /data-dev-switch[ =>]/, 'no switch in the desktop name row');
-  assert.match(html, /class="h-8 flex items-center pl-12" data-dev-switch-row/);
-  assert.match(html.slice(html.indexOf('data-dev-switch-row')), /data-dev-switch/);
-  const phone = ui.sidebar({ ...base, phone: true, section: 'chats' });
-  assert.doesNotMatch(phone, /data-dev-switch-row/);
-  assert.match(phone, /data-dev-switch/);
+test('header (dev-mode-explainer §1): the name row holds no switch; the Space controls block under it holds Dev mode, on desktop and phone', () => {
+  for (const html of [ui.sidebar(base), ui.sidebar({ ...base, phone: true, section: 'chats' })]) {
+    const header = html.slice(0, html.indexOf('data-space-controls'));
+    assert.doesNotMatch(header, /data-dev-switch[ =>]/, 'no switch in the name row');
+    assert.doesNotMatch(html, /data-dev-switch-row|data-dev-meta/);
+    const block = html.slice(html.indexOf('data-space-controls'));
+    assert.match(block, /data-sc-row="dev"[\s\S]*data-dev-switch/);
+    assert.match(header, />0 bots · no account yet</, 'the subtitle stays the space summary');
+  }
 });

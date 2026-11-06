@@ -1,9 +1,9 @@
-// The Dev mode switch in the sidebar space header (style v2 §10, flow F1/F2/F9): the Branch switch.
-// Off has no cover: one press turns it on (F1). On is covered by a 1 px violet ring and a lock; turning
-// it off takes two presses (F2): press 1 arms (2 px amber ring, open lock, `off?`), press 2 within 5 s
-// turns it off. Armed drops back after 5 s, on Esc or when focus leaves. Presses are ignored while a
-// flip settles (450 ms), so a double-click on Off can't turn it on and arm it. 0.7.1 (any-git S5):
-// there is no setup sheet; the server finds the repo and the Dev desk says what it found.
+// The Dev mode switch in the space controls (explainer spec §3, flow F1/F2/F9): switch v3, a state word
+// (Off / On / Off?) next to a track and knob. One press turns it on (F1). Turning it off takes two presses
+// (F2): press 1 arms (amber track ring, open lock, "Off?"), press 2 within 5 s turns it off. Armed drops
+// back after 5 s, on Esc or when focus leaves. Presses are ignored while a flip settles (450 ms), so a
+// double-click on Off can't turn it on and arm it. The armed line itself is the Dev mode row's sub-line;
+// the polite live region here still announces it.
 
 import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { Lock, LockOpen, X } from 'lucide-react';
@@ -53,6 +53,13 @@ export interface DevModeSwitchProps {
   onTurnedOff?: () => void;
   /** The person turned it on here (flow F3): the sidebar shows the toast. Never for a space already on. */
   onTurnedOn?: (s: DevModeState) => void;
+  /** In the space controls: the row's label and sub-line name and describe the switch (spec §5). */
+  labelledBy?: string;
+  describedBy?: string;
+  /** Armed (press 1 of 2) and not-the-owner, for the row's sub-line and the explainer. */
+  onLook?: (look: { armed: boolean; disabled: boolean; on: boolean; failed: boolean }) => void;
+  /** The button, so the explainer's "Turn on Dev mode" can press it and give it focus. */
+  buttonRef?: React.MutableRefObject<HTMLButtonElement | null>;
   /** Test hooks: start in a given state, and a clock. */
   initial?: Partial<SwitchState>;
   now?: () => number;
@@ -79,7 +86,7 @@ export const lastOn = {
   },
 };
 
-export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = false, onTurnedOff, onTurnedOn, initial, now = Date.now }) => {
+export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = false, onTurnedOff, onTurnedOn, labelledBy, describedBy, onLook, buttonRef, initial, now = Date.now }) => {
   const reduced = useReducedMotion();
   const known = useDevMode(space.id);
   // Until this space's state loads, start from the last value seen here, so a space that is on doesn't
@@ -90,10 +97,12 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
   // Never seen here and not loaded yet: neither on nor off (no node on the graph, busy) until dev_mode
   // answers, so an on space never reads "off" for a moment (QA F8-R3-1).
   const [loading, setLoading] = useState(() => !known && !initial && lastOn.get(space.id) === null);
+  // The first load failed: the row's sub-line stops waiting for a repo list (addendum 3).
+  const [failed, setFailed] = useState(false);
   // The reducer's truth lives in the ref, written only by dispatch. Copying `state` into it on render
   // would let a render that started before a dispatch (a store update mid-save) put an older state back.
   const ref = useRef(state);
-  const btn = useRef<HTMLButtonElement>(null);
+  const btn = useRef<HTMLButtonElement | null>(null);
 
   const dispatch = useCallback(
     (a: SwitchAction): SwitchState => {
@@ -118,6 +127,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
       (e: unknown) => {
         if (!live) return;
         setLoading(false);
+        setFailed(true);
         dispatch({ type: 'server', state: null, disabled: e instanceof DevModeError && (e.status === 403 || e.status === 404) });
       },
     );
@@ -171,83 +181,69 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
 
   const look = switchLook(state);
   const descId = useId();
-  const hint = look.hint && (
-    <span
-      role="presentation"
-      className={
-        phone
-          ? 'kw-dv-hint fixed inset-x-4 mx-auto w-fit max-w-[calc(100vw-32px)] text-center leading-snug bottom-[calc(56px+env(safe-area-inset-bottom)+12px)] z-40 rounded-lg border border-white/14 bg-surface-overlay px-2.5 py-1.5 text-meta text-zinc-100 shadow-raised'
-          : 'kw-dv-hint absolute -left-[52px] top-full mt-1.5 z-30 whitespace-nowrap rounded-lg border border-white/14 bg-surface-overlay px-2 py-1.5 text-meta text-zinc-100 shadow-raised'
-      }
-      aria-hidden="true"
-      data-dv-hint
-    >
-      {look.hint}
-      {!phone && <kbd className="dv-kbd ml-1.5">Esc</kbd>}
-    </span>
+  const armed = look.look === 'armed';
+  const disabled = state.disabled;
+  useEffect(() => onLook?.({ armed, disabled, on: state.on, failed }), [onLook, armed, disabled, state.on, failed]);
+  const setBtn = useCallback(
+    (el: HTMLButtonElement | null) => {
+      btn.current = el;
+      if (buttonRef) buttonRef.current = el;
+    },
+    [buttonRef],
   );
 
-  const common = {
-    ref: btn,
-    type: 'button' as const,
-    onClick: press,
-    onKeyDown: (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape' && ref.current.phase === 'lifted') {
-        e.stopPropagation();
-        dispatch({ type: 'escape' });
-      }
-    },
-    onBlur: () => dispatch({ type: 'blur' }),
-    disabled: state.disabled || loading,
-    'aria-busy': loading || undefined,
-    role: 'switch' as const,
-    'aria-checked': state.on,
-    'aria-label': look.label,
-    'aria-describedby': descId,
-    title: look.tooltip,
-    'data-dev-switch': loading ? 'loading' : state.phase,
-    'data-look': look.look,
-    'data-on': state.on || undefined,
-    'data-ring': look.ring || undefined,
-    'data-knob': look.knobRight ? 'right' : 'left',
-    'data-cover': look.coverOpen ? 'open' : 'closed',
-    style: { ['--kw-dv-fill' as string]: String(look.fill) } as React.CSSProperties,
-  };
-
-  // The Branch switch (style v2 §10): a mono label and a tiny git graph. The node sits on the line
-  // when off and hops onto the fork when on; then the cover (a 1 px violet ring, ::after) closes and a
-  // lock shows. Armed (only ever while on) lifts it: 2 px amber ring, open lock, the fork dashed amber
-  // with a halo on the node, `off?`. Reduced motion keeps the same shapes, instantly (kw-dv-rm).
-  const armed = look.look === 'armed';
-  const word = armed ? 'off?' : 'dev';
+  // Switch v3 (spec §3): the state word, then a 40×22 track with a 16 px knob. Off: a hollow node at the
+  // left. On: the knob at the right with a pip, a small lock in the track. Armed: amber ring, open lock,
+  // "Off?". Not colour alone: the word, the knob's side and the lock all change.
+  const word = loading ? '' : armed ? 'Off?' : state.on ? 'On' : 'Off';
   const button = (
     <button
-      {...common}
+      ref={setBtn}
+      type="button"
+      onClick={press}
+      onKeyDown={(e: React.KeyboardEvent) => {
+        if (e.key === 'Escape' && ref.current.phase === 'lifted') {
+          e.stopPropagation();
+          dispatch({ type: 'escape' });
+        }
+      }}
+      onBlur={() => dispatch({ type: 'blur' })}
+      // Not the owner: still focusable so the reason (title) can be read; presses do nothing (reducer).
+      disabled={loading}
+      aria-disabled={disabled || undefined}
+      aria-busy={loading || state.saving || undefined}
+      role="switch"
+      aria-checked={state.on}
+      {...(labelledBy ? { 'aria-labelledby': labelledBy } : { 'aria-label': look.label })}
+      aria-describedby={describedBy ?? descId}
+      title={look.tooltip}
+      data-dev-switch={loading ? 'loading' : state.phase}
+      data-look={look.look}
+      data-on={state.on || undefined}
+      data-ring={look.ring || undefined}
+      data-knob={look.knobRight ? 'right' : 'left'}
+      data-cover={look.coverOpen ? 'open' : 'closed'}
       data-armed={armed || undefined}
+      // Answer 1 (0.7.2): the only "busy" sign is this spinner, and only while the PUT is in flight.
+      data-saving={state.saving || undefined}
       data-covered={(look.ring && !armed) || undefined}
-      className={`kw-dv${state.reduced ? ' kw-dv-rm' : ''}${phone ? ' h-11' : ''} focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400`}
+      className={`kw-dv${state.reduced ? ' kw-dv-rm' : ''}${phone ? ' h-11' : ''}`}
     >
-      {look.glyph === 'locked' && <Lock size={10} strokeWidth={2.5} className="kw-dv-lock" aria-hidden="true" data-dv-glyph="locked" />}
-      {look.glyph === 'unlocked' && <LockOpen size={10} strokeWidth={2.5} className="kw-dv-lock" aria-hidden="true" data-dv-glyph="unlocked" />}
-      <span className="kw-dv-lbl" aria-hidden="true" data-dv-word>
+      <span className="kw-dv-val" aria-hidden="true" data-dv-word>
         {word}
       </span>
-      <svg className="kw-dv-graph" viewBox="0 0 44 24" aria-hidden="true" data-dv-graph>
-        <path className="kw-dv-base" d="M2 17H42" />
-        <path className="kw-dv-fork" d="M12 17C19 17 18 7 26 7H42" />
-        <g className="kw-dv-node" visibility={loading ? 'hidden' : undefined}>
-          <circle className="kw-dv-halo" cx="12" cy="17" r="5" />
-          <circle className="kw-dv-dot" cx="12" cy="17" r="5" />
-          <circle className="kw-dv-pip" cx="12" cy="17" r="1.6" />
-        </g>
-      </svg>
+      <span className="kw-dv-track" aria-hidden="true" data-dv-track>
+        {look.glyph === 'locked' && state.on && <Lock size={10} strokeWidth={2.5} className="kw-dv-lock" data-dv-glyph="locked" />}
+        {look.glyph === 'locked' && !state.on && <span className="sr-only" data-dv-glyph="locked" />}
+        {look.glyph === 'unlocked' && <LockOpen size={10} strokeWidth={2.5} className="kw-dv-lock" data-dv-glyph="unlocked" />}
+        <span className="kw-dv-knob" data-dv-knob style={loading ? { visibility: 'hidden' } : undefined} />
+      </span>
     </button>
   );
 
   return (
     <span className={`relative inline-flex shrink-0 items-center justify-center ${phone ? 'min-w-[44px] min-h-[44px]' : ''}`} data-dev-switch-wrap>
       {button}
-      {hint}
       <span id={descId} className="sr-only" data-dv-describe>
         {look.describe}
       </span>
@@ -255,7 +251,7 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
         {state.announce ? <span key={state.announce.seq}>{state.announce.text}</span> : null}
       </span>
       {state.error && !state.saving && state.phase === 'covered' && (
-        <span role="alert" className="absolute right-0 top-full mt-1.5 z-30 w-56 rounded-lg border border-rose-300/30 bg-surface-overlay px-2.5 py-1.5 text-meta text-bad">
+        <span role="alert" className="absolute right-0 top-full mt-1.5 z-30 w-56 max-w-[calc(100vw-32px)] rounded-lg border border-rose-300/30 bg-surface-overlay px-2.5 py-1.5 text-meta text-bad">
           {state.error}
         </span>
       )}
