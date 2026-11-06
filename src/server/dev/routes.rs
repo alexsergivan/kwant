@@ -152,7 +152,7 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             "status": status,
             "poll_error": e.row.and_then(|r| r.poll_error.clone()),
             // A code for the one error the desk words differently; null for the rest
-            "poll_code": e.row.and_then(|r| r.poll_error.as_deref()).filter(|m| *m == super::git::GitError::RepoTooBig.to_string()).map(|_| "too_big"),
+            "poll_code": e.row.and_then(|r| r.poll_error.as_deref()).and_then(super::git::GitError::poll_code),
             "polled_at": e.row.and_then(|r| r.polled_at),
             "last_tag": e.row.and_then(|r| poller::last_tag(space.as_str(), &r.key)),
             "added_by": e.row.map(|r| r.added_by_shown()),
@@ -325,7 +325,7 @@ async fn row_branch_exists(state: &AppState, row: &DevRepoRow, branch: &str) -> 
     }
     let from = row.git_url.as_deref().unwrap_or_default();
     let found = if from.starts_with('/') {
-        match Repo::local(std::path::Path::new(from)) {
+        match Repo::local(std::path::Path::new(from), &state.config.data_dir).await {
             Ok(g) => g.has_branch("", branch, None).await,
             Err(e) => Err(e),
         }

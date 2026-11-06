@@ -104,7 +104,7 @@ and newest tag. The full contract is in the team's `dev-mode/team-repos/api.md`;
 - **`GET` and the `PUT` reply** have `repos[]`: one entry per repo, in team order then hand rows, with
   `key`, `repo`, `host`, `team`, `team_id`, `from`, `provider` (0.7.3: `github` when it's read
   through a GitHub connection, GitHub Enterprise too, `git` when git alone reads it), `branch`, `status` (`watching`, `not_connected`,
-  `no_git`, `error`, `too_many`; 0.7.2 also had `other_host`), `poll_error`, `poll_code` (0.7.3: `too_big` for a repo over the mirror cap, else null),
+  `no_git`, `error`, `too_many`; 0.7.2 also had `other_host`), `poll_error`, `poll_code` (0.7.3: `too_big` for a repo over the mirror cap or an answer from git too big to read, else null),
   `polled_at`, `last_tag` and `added_by`. The
   top-level `repo`, `branch`, `deploy_hint`, `last_seen_sha`, `polled_at` and `poll_error` are the
   first watched repo's, kept for one release only (deprecated). Top-level `status` is `watching` when
@@ -165,7 +165,9 @@ the server itself or a cloud metadata address. Such a source shows `no_repo`. LA
 
 Right before every fetch or remote read (GitHub's too), kwant looks the host up itself and refuses it
 if any address is loopback, unspecified, `0.0.0.0/8`, link-local (`169.254.0.0/16`, so
-`169.254.169.254`, and `fe80::/10`), broadcast, or one of these inside an IPv6 address (IPv4-mapped
+`169.254.169.254`, and `fe80::/10`), broadcast, the cloud metadata addresses outside link-local
+(`100.100.100.200` and `fd00:ec2::254` exactly; `100.64.0.0/10`, Tailscale's, stays allowed), or one
+of these inside an IPv6 address (IPv4-mapped
 or -compatible, NAT64): a name that resolves to the server is refused like the address itself. The
 row reads `error` ("Dev mode can’t use this repo address or branch name."). Private LAN ranges stay
 allowed. Over http(s) git is then pinned to the addresses checked with
@@ -175,10 +177,30 @@ follows an HTTP redirect, since it would lead to a host the check didn't see: a 
 (say `http://` to `https://`) reads as an error until its URL is the one the host serves. A GitHub
 remote kwant can't fetch falls back to the API, as any failed fetch does.
 
-**Mirror size.** A mirror is a full bare copy of the repo. After each fetch, a mirror over 1 GB on
-disk is deleted and a `<mirror>.too-big` note is left beside it; the row reads `error` with "This repo
+The address check and the pin don't cover what the server's admin set up for git outside kwant: a
+proxy (`http_proxy`, `https_proxy`, `ALL_PROXY` in kwant's environment, or `http.proxy` in the
+admin's git config) gets the request and looks the host up itself, so it bypasses the pin and the
+check; and an ssh host alias or `ProxyCommand` in kwant's `~/.ssh/config` connects to an address the
+check never saw. Over ssh, git always runs `ssh` (or the admin's `GIT_SSH`/`GIT_SSH_COMMAND`), never a
+command a repo's own config names; a host whose key isn't in kwant's `known_hosts` fails ("The repo’s
+host said no"), so the admin adds it first. DNS can still change between the check and the connect
+over ssh, git:// and git older than 2.37 (the check stands alone there).
+
+**Team folders.** A `local` team folder is read only if its `.git` is its own, checked again on every
+poll because anyone working in the folder can change it. The row reads `error` ("Dev mode can’t use
+this repo address or branch name.") when `.git` is a symlink; when it is a file (a linked worktree)
+whose git dir doesn't point back at this folder or doesn't sit in its main repo's `worktrees/`; when a
+`.git` directory has a `commondir`; when the git dir or its main repo is under `<data>/dev`; or when
+it has `objects/info/alternates` or a symlink among its objects and refs. A real `git worktree add`
+checkout reads as before; a git submodule checkout (whose `.git` file names `.git/modules/…`) is
+refused.
+
+**Mirror size.** A mirror is a full bare copy of the repo. A fetch may not write any file past 1 GB
+(`RLIMIT_FSIZE`, with what it fetches kept as one pack), so a huge or hostile remote stops at the cap
+rather than after it. A fetch stopped there, or a mirror over 1 GB on disk after its fetch, is deleted and a `<mirror>.too-big` note is left beside it; the row reads `error` with "This repo
 is too big for Dev mode to read (over 1 GB)." and `poll_code: "too_big"` (a GitHub row falls back to
-the API instead). The repo
+the API instead). One answer from git over 16 MB (a commit touching a vast number of files) reads
+`error` with "This repo is too big for Dev mode to read." and the same `poll_code`. The repo
 isn't fetched again for a day, or until it is removed and added again, which deletes the note.
 
 **Tags and merges.** `last_tag` is the nearest tag reachable from the watched branch (`git describe`),

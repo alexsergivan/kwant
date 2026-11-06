@@ -101,6 +101,15 @@ impl std::fmt::Display for GitError {
 
 impl std::error::Error for GitError {}
 
+impl GitError {
+    /// The `poll_code` for a row whose `poll_error` is `message`: `too_big` for either too-big
+    /// error (a mirror over the cap, or one answer from git over [`MAX_OUT`]), so the desk never
+    /// matches strings; `None` for the rest.
+    pub fn poll_code(message: &str) -> Option<&'static str> {
+        [GitError::RepoTooBig, GitError::TooBig].iter().any(|e| e.to_string() == message).then_some("too_big")
+    }
+}
+
 /// Sorts git's stderr. The text itself goes no further.
 fn classify(stderr: &[u8]) -> GitError {
     let e = String::from_utf8_lossy(stderr).to_lowercase();
@@ -176,7 +185,6 @@ const SAFE_CONFIG: &[&str] = &[
     "core.hooksPath=/dev/null",
     "core.askPass=",
     "core.quotePath=false",
-    "core.sshCommand=",
     "log.showSignature=false",
     "gc.autoDetach=false",
     "maintenance.autoDetach=false",
@@ -189,6 +197,17 @@ const SAFE_CONFIG: &[&str] = &[
     "protocol.git.allow=always",
 ];
 
+/// The `core.sshCommand` every call gets (G2 review F1): plain `ssh` from `PATH`, or the admin's
+/// `GIT_SSH` program, so a repo's own config can never choose the command. (An empty value would
+/// make git try to run `''` and break every ssh remote; `GIT_SSH_COMMAND` still wins over this.)
+fn ssh_command(git_ssh: Option<&std::ffi::OsStr>) -> String {
+    match git_ssh.and_then(|s| s.to_str()).filter(|s| !s.is_empty()) {
+        // Single-quoted for the shell git runs it with: a `'` inside becomes `'\''`
+        Some(prog) => format!("core.sshCommand='{}'", prog.replace('\'', "'\\''")),
+        None => "core.sshCommand=ssh".to_string(),
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Opts<'a> {
     timeout: Duration,
@@ -198,11 +217,15 @@ struct Opts<'a> {
     file: bool,
     /// `-c` settings from [`check_remote`] that pin git to the addresses it checked.
     pin: &'a [String],
+    /// A fetch into a mirror: no file git writes may pass this many bytes (`RLIMIT_FSIZE`), and
+    /// what it fetches is kept as one pack, so a fetch stops at the cap instead of after it (G2
+    /// review F3). Passing it is [`GitError::RepoTooBig`].
+    fsize: Option<u64>,
 }
 
 impl Opts<'static> {
     fn read() -> Self {
-        Opts { timeout: READ_TIMEOUT, max_out: MAX_OUT, auth: None, file: false, pin: &[] }
+        Opts { timeout: READ_TIMEOUT, max_out: MAX_OUT, auth: None, file: false, pin: &[], fsize: None }
     }
 }
 
@@ -215,6 +238,11 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
     cmd.arg("--no-pager");
     for c in SAFE_CONFIG {
         cmd.arg("-c").arg(c);
+    }
+    cmd.arg("-c").arg(ssh_command(std::env::var_os("GIT_SSH").as_deref()));
+    if o.fsize.is_some() {
+        // One pack file, not loose objects each under the limit on their own
+        cmd.args(["-c", "fetch.unpackLimit=1", "-c", "transfer.unpackLimit=1"]);
     }
     if o.file {
         cmd.args(["-c", "protocol.file.allow=always"]);
@@ -256,13 +284,27 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
     cmd.current_dir(git_dir.filter(|d| d.is_dir()).unwrap_or(Path::new("/")));
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     #[cfg(unix)]
-    // SAFETY: setsid(2) and nice(2) are async-signal-safe and touch no memory of this process
+    let fsize = o.fsize;
+    #[cfg(unix)]
+    // SAFETY: setsid(2), nice(2), setrlimit(2) and signal(2) are async-signal-safe and touch no
+    // memory of this process
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
             // Its own session: no controlling terminal for ssh to prompt on, and one process
             // group the timeout can kill whole
             libc::setsid();
             libc::nice(10);
+            if let Some(cap) = fsize {
+                // A write past the cap stops git (SIGXFSZ, inherited by index-pack)
+                let lim = libc::rlimit { rlim_cur: cap as libc::rlim_t, rlim_max: cap as libc::rlim_t };
+                if libc::setrlimit(libc::RLIMIT_FSIZE, &lim) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                libc::signal(libc::SIGXFSZ, libc::SIG_DFL);
+                // ...without a core file
+                let none = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                libc::setrlimit(libc::RLIMIT_CORE, &none);
+            }
             Ok(())
         });
     }
@@ -278,9 +320,26 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
     group.disarm();
     if status.success() {
         Ok(out)
+    } else if o.fsize.is_some() && hit_size_limit(&status, &err) {
+        Err(GitError::RepoTooBig)
     } else {
         Err(classify(&err))
     }
+}
+
+/// Whether a size-limited git (or the index-pack it ran) stopped at `RLIMIT_FSIZE`: killed by
+/// SIGXFSZ, or told "File too large" if that signal is ignored.
+fn hit_size_limit(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if status.signal() == Some(libc::SIGXFSZ) {
+            return true;
+        }
+    }
+    let _ = status;
+    let e = String::from_utf8_lossy(stderr).to_lowercase();
+    e.contains(&format!("died of signal {}", libc::SIGXFSZ)) || e.contains("file too large")
 }
 
 /// Reads all of `r`, or [`GitError::TooBig`] as soon as it passes `cap`.
@@ -429,12 +488,18 @@ fn remote_host(url: &str) -> (String, Option<u16>) {
     }
 }
 
+/// Cloud metadata services outside link-local (G2 review F6): Alibaba's `100.100.100.200` and AWS's
+/// IPv6 `fd00:ec2::254`. Only these addresses, not their ranges: `100.64.0.0/10` is Tailscale.
+const METADATA_V4: Ipv4Addr = Ipv4Addr::new(100, 100, 100, 200);
+const METADATA_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254);
+
 /// An address kwant never lets git connect to: this machine (loopback, unspecified, `0.0.0.0/8`),
-/// link-local (`169.254.0.0/16`, where cloud metadata lives, and `fe80::/10`), broadcast, or any of
-/// these inside an IPv6 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`). Private LAN
-/// ranges are allowed: people run Gitea at home.
+/// link-local (`169.254.0.0/16`, where cloud metadata lives, and `fe80::/10`), broadcast, the cloud
+/// metadata addresses outside link-local ([`METADATA_V4`], [`METADATA_V6`]), or any of these inside
+/// an IPv6 address (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`). Private LAN ranges are
+/// allowed: people run Gitea at home.
 pub fn blocked(ip: IpAddr) -> bool {
-    let v4 = |ip: Ipv4Addr| ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || ip.octets()[0] == 0;
+    let v4 = |ip: Ipv4Addr| ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() || ip.is_broadcast() || ip.octets()[0] == 0 || ip == METADATA_V4;
     match ip {
         IpAddr::V4(ip) => v4(ip),
         IpAddr::V6(ip) => {
@@ -446,6 +511,7 @@ pub fn blocked(ip: IpAddr) -> bool {
             };
             ip.is_loopback()
                 || ip.is_unspecified()
+                || ip == METADATA_V6
                 || (s[0] & 0xffc0) == 0xfe80
                 || ip.to_ipv4_mapped().is_some_and(v4)
                 || (s[..6] == [0; 6] && v4(embedded(ip)))
@@ -642,6 +708,24 @@ fn disk_use(dir: &Path) -> u64 {
     total
 }
 
+/// The biggest single file under `dir` (links not followed).
+fn largest_file(dir: &Path) -> u64 {
+    let mut most = 0;
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let Ok(list) = std::fs::read_dir(&d) else { continue };
+        for e in list.flatten() {
+            let Ok(m) = e.path().symlink_metadata() else { continue };
+            if m.is_dir() {
+                todo.push(e.path());
+            } else {
+                most = most.max(m.len());
+            }
+        }
+    }
+    most
+}
+
 /// Deletes the mirror of a repo no longer watched (its cards stay), and any note that it was too
 /// big, so adding the repo again fetches it afresh.
 pub async fn remove_mirror(data_dir: &Path, space: &str, key: &str) {
@@ -653,6 +737,100 @@ pub async fn remove_mirror(data_dir: &Path, space: &str, key: &str) {
             tracing::warn!(space = %space, "dev: could not remove a repo mirror: {}", e.kind());
         }
     }
+}
+
+/// The git dir of team folder `folder`, only if it is that folder's own (G2 review F2): the folder
+/// is writable by anyone working in it, so its `.git` could otherwise point kwant at another
+/// space's repo or at one of kwant's own mirrors, and its cards would show that repo. Refused
+/// ([`GitError::Refused`]):
+/// - a `.git` that is a symlink;
+/// - a `.git` file (a linked worktree) unless the git dir it names points back at this folder's
+///   `.git` (its `gitdir` file, which `git worktree add` writes) and sits in its main repo's
+///   `worktrees/`, so only that repo can have made it;
+/// - a `.git` directory with a `commondir` (it would borrow another repo's objects and refs);
+/// - a git dir, or its main repo, under `<data>/dev` (kwant's mirrors);
+/// - `objects/info/alternates`, and any symlink among the objects and refs git reads.
+///
+/// No `.git` at all is [`GitError::NotFound`].
+pub fn local_git_dir(folder: &Path, data_dir: &Path) -> Result<PathBuf, GitError> {
+    let folder = std::fs::canonicalize(folder).map_err(|_| GitError::NotFound)?;
+    let dot_git = folder.join(".git");
+    let meta = std::fs::symlink_metadata(&dot_git).map_err(|_| GitError::NotFound)?;
+    let canon = |p: &Path| std::fs::canonicalize(p).map_err(|_| GitError::Refused);
+    let (git_dir, common) = if meta.file_type().is_symlink() {
+        return Err(GitError::Refused);
+    } else if meta.is_dir() {
+        if dot_git.join("commondir").exists() {
+            return Err(GitError::Refused);
+        }
+        (dot_git.clone(), dot_git.clone())
+    } else if meta.is_file() {
+        // `gitdir: <main>/.git/worktrees/<name>`, relative to the folder if not absolute
+        let text = read_small(&dot_git)?;
+        let target = text.trim_end_matches(['\n', '\r']).strip_prefix("gitdir: ").filter(|t| !t.is_empty()).ok_or(GitError::Refused)?;
+        let git_dir = canon(&folder.join(target))?;
+        // git writes `<git dir>/gitdir` = this worktree's `.git` file
+        let back = read_small(&git_dir.join("gitdir"))?;
+        let back = Path::new(back.trim_end_matches(['\n', '\r']));
+        let back = if back.is_absolute() { back.to_path_buf() } else { git_dir.join(back) };
+        if canon(&back)? != dot_git {
+            return Err(GitError::Refused);
+        }
+        let common = read_small(&git_dir.join("commondir"))?;
+        let common = Path::new(common.trim_end_matches(['\n', '\r']));
+        let common = canon(&if common.is_absolute() { common.to_path_buf() } else { git_dir.join(common) })?;
+        if git_dir.parent() != Some(common.join("worktrees").as_path()) {
+            return Err(GitError::Refused);
+        }
+        (git_dir, common)
+    } else {
+        return Err(GitError::Refused);
+    };
+    if let Ok(mirrors) = std::fs::canonicalize(data_dir.join("dev")) {
+        if git_dir.starts_with(&mirrors) || common.starts_with(&mirrors) {
+            return Err(GitError::Refused);
+        }
+    }
+    for d in [&git_dir, &common] {
+        if d.join("objects/info/alternates").symlink_metadata().is_ok() || has_symlink(d) {
+            return Err(GitError::Refused);
+        }
+    }
+    Ok(git_dir)
+}
+
+/// A small text file (a `.git` file, `gitdir`, `commondir`), refused if it is a symlink or big.
+fn read_small(p: &Path) -> Result<String, GitError> {
+    let m = std::fs::symlink_metadata(p).map_err(|_| GitError::Refused)?;
+    if !m.is_file() || m.len() > 4096 {
+        return Err(GitError::Refused);
+    }
+    std::fs::read_to_string(p).map_err(|_| GitError::Refused)
+}
+
+/// Whether any of the entries git reads its history from in `git_dir` (`HEAD`, `packed-refs`,
+/// `objects/`, `refs/`) is, or holds, a symlink.
+fn has_symlink(git_dir: &Path) -> bool {
+    let mut todo = Vec::new();
+    for name in ["HEAD", "packed-refs", "objects", "refs"] {
+        let p = git_dir.join(name);
+        match p.symlink_metadata() {
+            Ok(m) if m.file_type().is_symlink() => return true,
+            Ok(m) if m.is_dir() => todo.push(p),
+            _ => {}
+        }
+    }
+    while let Some(d) = todo.pop() {
+        let Ok(list) = std::fs::read_dir(&d) else { continue };
+        for e in list.flatten() {
+            match e.file_type() {
+                Ok(t) if t.is_symlink() => return true,
+                Ok(t) if t.is_dir() => todo.push(e.path()),
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 /// A git repo kwant reads: a bare mirror it keeps, or a team folder's `.git`.
@@ -686,12 +864,12 @@ impl Repo {
         Ok(Repo { dir, local: false, _held: Some(held) })
     }
 
-    /// A team folder's own git, read in place: `<folder>/.git` (a directory, or a worktree's file).
-    pub fn local(folder: &Path) -> Result<Repo, GitError> {
-        let dir = folder.join(".git");
-        if !dir.exists() {
-            return Err(GitError::NotFound);
-        }
+    /// A team folder's own git, read in place: `<folder>/.git` (a directory, or a worktree's file),
+    /// once [`local_git_dir`] has checked it's really this folder's. Called on every poll, since
+    /// anyone working in the folder can change it.
+    pub async fn local(folder: &Path, data_dir: &Path) -> Result<Repo, GitError> {
+        let (folder, data_dir) = (folder.to_path_buf(), data_dir.to_path_buf());
+        let dir = tokio::task::spawn_blocking(move || local_git_dir(&folder, &data_dir)).await.map_err(|_| GitError::Failed)??;
         Ok(Repo { dir, local: true, _held: None })
     }
 
@@ -720,8 +898,27 @@ impl Repo {
         let pin = checked(url).await?;
         let heads = format!("+refs/heads/{branch}:refs/heads/{branch}");
         let args = ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--prune", "--", url, &heads, "+refs/tags/*:refs/tags/*"];
-        let done = run("git", Some(&self.dir), &args, Opts { timeout: FETCH_TIMEOUT, max_out: MAX_OUT, auth, file: false, pin: &pin }).await.map(|_| ());
-        self.cap(crate::server::dev::mirror_cap()).await?;
+        self.fetch_capped(&args, Opts { timeout: FETCH_TIMEOUT, max_out: MAX_OUT, auth, file: false, pin: &pin, fsize: None }, crate::server::dev::mirror_cap()).await
+    }
+
+    /// Runs one `git fetch` into this mirror with no file allowed past `cap` bytes, then
+    /// [`Self::cap`]: a fetch stopped at the cap, or a mirror over it, ends as
+    /// [`GitError::RepoTooBig`] with the mirror deleted and its note left.
+    async fn fetch_capped(&self, args: &[&str], o: Opts<'_>, cap: u64) -> Result<(), GitError> {
+        let mut done = run("git", Some(&self.dir), args, Opts { fsize: Some(cap), ..o }).await.map(|_| ());
+        if done.is_err() && done != Err(GitError::RepoTooBig) {
+            // git 2.43 says only "invalid index-pack output" when the limit stops index-pack: a
+            // file left at the cap (within one write) is the sign
+            let dir = self.dir.clone();
+            if tokio::task::spawn_blocking(move || largest_file(&dir)).await.unwrap_or(0) >= cap.saturating_sub(64 << 10) {
+                done = Err(GitError::RepoTooBig);
+            }
+        }
+        self.cap(cap).await?;
+        if done == Err(GitError::RepoTooBig) {
+            // Stopped at the limit, though what it left (if anything) is under the cap
+            self.too_big().await;
+        }
         done
     }
 
@@ -749,11 +946,18 @@ impl Repo {
         if used <= cap {
             return Ok(());
         }
+        self.too_big().await;
+        Err(GitError::RepoTooBig)
+    }
+
+    /// Deletes this mirror and leaves the note that it was too big.
+    async fn too_big(&self) {
         if let Err(e) = tokio::fs::remove_dir_all(&self.dir).await {
-            tracing::warn!("dev: could not remove a repo mirror over the size cap: {}", e.kind());
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!("dev: could not remove a repo mirror over the size cap: {}", e.kind());
+            }
         }
         let _ = tokio::fs::write(too_big_mark(&self.dir), b"").await;
-        Err(GitError::RepoTooBig)
     }
 
     /// Fetches one ref of `url` (a PR head, `refs/pull/7/head`) into `to` (`refs/kwant/…`); the sha
@@ -766,9 +970,7 @@ impl Repo {
         let pin = checked(url).await?;
         let spec = format!("+{from}:{to}");
         let args = ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", url, &spec];
-        let done = run("git", Some(&self.dir), &args, Opts { timeout: FETCH_TIMEOUT, max_out: MAX_OUT, auth, file: false, pin: &pin }).await;
-        self.cap(crate::server::dev::mirror_cap()).await?;
-        done?;
+        self.fetch_capped(&args, Opts { timeout: FETCH_TIMEOUT, max_out: MAX_OUT, auth, file: false, pin: &pin, fsize: None }, crate::server::dev::mirror_cap()).await?;
         self.resolve(to).await
     }
 
@@ -788,7 +990,7 @@ impl Repo {
                 return Err(GitError::Refused);
             }
             let pin = checked(url).await?;
-            let out = run("git", Some(&self.dir), &["ls-remote", "--symref", "--", url, "HEAD"], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin }).await?;
+            let out = run("git", Some(&self.dir), &["ls-remote", "--symref", "--", url, "HEAD"], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin, fsize: None }).await?;
             let out = String::from_utf8_lossy(&out).into_owned();
             out.lines().find_map(|l| l.strip_prefix("ref: ").and_then(|r| r.strip_suffix("\tHEAD")).map(str::to_string)).ok_or(GitError::NotFound)?
         };
@@ -808,7 +1010,7 @@ impl Repo {
             return Err(GitError::Refused);
         }
         let pin = checked(url).await?;
-        let out = run("git", Some(&self.dir), &["ls-remote", "--heads", "--", url, &name], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin }).await?;
+        let out = run("git", Some(&self.dir), &["ls-remote", "--heads", "--", url, &name], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin, fsize: None }).await?;
         Ok(String::from_utf8_lossy(&out).lines().any(|l| l.split('\t').nth(1) == Some(name.as_str())))
     }
 
@@ -1218,7 +1420,7 @@ mod tests {
         write(&w, "README.md", b"uncommitted\n");
         let status_before = sh(&w, &["status", "--porcelain"]);
         let index_before = std::fs::read(w.join(".git/index")).unwrap();
-        let repo = Repo::local(&w).unwrap();
+        let repo = Repo::local(&w, &tmp.path().join("data")).await.unwrap();
         assert!(repo.is_local());
         assert_eq!(repo.default_branch("", None).await.unwrap(), "main");
         assert!(repo.has_branch("", "feature", None).await.unwrap());
@@ -1230,7 +1432,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(w.join("README.md")).unwrap(), "uncommitted\n");
         assert_eq!(sh(&w, &["status", "--porcelain"]), status_before);
         assert_eq!(std::fs::read(w.join(".git/index")).unwrap(), index_before, "the index wasn't refreshed");
-        assert_eq!(Repo::local(&tmp.path().join("nothing")).unwrap_err(), GitError::NotFound);
+        assert_eq!(Repo::local(&tmp.path().join("nothing"), tmp.path()).await.unwrap_err(), GitError::NotFound);
     }
 
     #[tokio::test]
@@ -1581,7 +1783,7 @@ mod tests {
         assert_eq!(repo.not_too_big().await, Ok(()));
 
         // A team folder is never capped: kwant didn't copy it
-        let local = Repo::local(&w).unwrap();
+        let local = Repo::local(&w, &data).await.unwrap();
         assert_eq!(local.cap(1).await, Ok(()));
         assert!(w.join(".git/HEAD").is_file());
     }
@@ -1613,5 +1815,230 @@ mod tests {
         let p = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/y b/y\nBinary files a/y and b/y differ\ndiff --git a/z b/z\nold mode 100644\nnew mode 100755\n";
         assert_eq!(split_patches(p), [Some("@@ -1 +1 @@\n-a\n+b".to_string()), None, None]);
         assert!(split_patches("").is_empty());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // G2 review (Lin, at 6dd0243): one test per probe.
+
+    fn exe(path: &Path, text: &str) {
+        std::fs::write(path, text).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    /// F1 (probe P1): an ssh remote runs `ssh`, never an empty command, whatever the repo's own
+    /// config says. A fake `ssh` first on PATH logs what git asked it for.
+    #[tokio::test]
+    async fn ssh_remotes_run_ssh_and_never_the_repos_own_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = tmp.path().join("ssh.log");
+        exe(&bin.join("ssh"), &format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n", log.display()));
+        // git itself, with the fake ssh first on its PATH
+        let wrap = tmp.path().join("git-with-fake-ssh");
+        exe(&wrap, &format!("#!/bin/sh\nPATH='{}':\"$PATH\"\nexport PATH\nexec git \"$@\"\n", bin.display()));
+        // A mirror whose config names another command: `-c` must beat it
+        let data = tmp.path().join("data");
+        let repo = Repo::mirror(&data, "s1", "gitea.example.org/o/n").await.unwrap();
+        let canary = tmp.path().join("canary");
+        sh(&repo.dir, &["config", "core.sshCommand", &format!("touch '{}'", canary.display())]);
+        let w = wrap.to_str().unwrap();
+        for url in ["ssh://git@gitea.example.org/o/n.git", "git@gitea.example.org:o/n.git"] {
+            let r = run(w, Some(&repo.dir), &["ls-remote", "--", url], Opts { timeout: REMOTE_TIMEOUT, ..Opts::read() }).await;
+            assert!(r.is_err(), "the fake ssh says no");
+        }
+        let seen = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(seen.contains("git@gitea.example.org git-upload-pack '/o/n.git'"), "ssh:// ran ssh: {seen:?}");
+        assert!(seen.contains("git@gitea.example.org git-upload-pack 'o/n.git'"), "scp-style ran ssh: {seen:?}");
+        assert!(!canary.exists(), "the repo's own sshCommand never ran");
+        // The admin's GIT_SSH program is kept, quoted for the shell
+        assert_eq!(ssh_command(None), "core.sshCommand=ssh");
+        assert_eq!(ssh_command(Some(std::ffi::OsStr::new(""))), "core.sshCommand=ssh");
+        assert_eq!(ssh_command(Some(std::ffi::OsStr::new("/opt/my ssh/plink"))), "core.sshCommand='/opt/my ssh/plink'");
+        assert_eq!(ssh_command(Some(std::ffi::OsStr::new("/x/it's"))), "core.sshCommand='/x/it'\\''s'");
+    }
+
+    /// A team folder at `root/<name>` with one commit of its own.
+    fn team_folder(root: &Path, name: &str) -> PathBuf {
+        let f = root.join(name);
+        std::fs::create_dir_all(&f).unwrap();
+        sh(&f, &["init", "-q"]);
+        write(&f, "mine.txt", b"ours\n");
+        commit_all(&f, "Our own work");
+        f
+    }
+
+    /// F2 (probe P3, setup 1): a `.git` file naming another repo's git dir (another team's, or a
+    /// kwant mirror fetched with another space's token) is refused, not read.
+    #[tokio::test]
+    async fn a_git_file_naming_another_repo_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (victim, _) = upstream(tmp.path());
+        let data = tmp.path().join("data");
+        let mirror = Repo::mirror(&data, "space-b", "github.com/b/private").await.unwrap();
+        let mirror_dir = mirror.dir.clone();
+        drop(mirror);
+        let a = tmp.path().join("team-a");
+        std::fs::create_dir_all(&a).unwrap();
+        for target in [victim.join(".git"), mirror_dir] {
+            std::fs::write(a.join(".git"), format!("gitdir: {}\n", target.display())).unwrap();
+            assert_eq!(Repo::local(&a, &data).await.unwrap_err(), GitError::Refused, "{}", target.display());
+        }
+        // Relative works the same
+        std::fs::write(a.join(".git"), "gitdir: ../work/.git\n").unwrap();
+        assert_eq!(Repo::local(&a, &data).await.unwrap_err(), GitError::Refused);
+    }
+
+    /// F2 (probe P3, setup 2): a `.git` symlink is refused.
+    #[tokio::test]
+    async fn a_git_symlink_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (victim, _) = upstream(tmp.path());
+        let b = tmp.path().join("team-b");
+        std::fs::create_dir_all(&b).unwrap();
+        std::os::unix::fs::symlink(victim.join(".git"), b.join(".git")).unwrap();
+        assert_eq!(Repo::local(&b, &tmp.path().join("data")).await.unwrap_err(), GitError::Refused);
+    }
+
+    /// F2 (probe P3, setup 3): a repo borrowing another's objects through
+    /// `objects/info/alternates` is refused.
+    #[tokio::test]
+    async fn alternates_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (victim, _) = upstream(tmp.path());
+        let c = team_folder(tmp.path(), "team-c");
+        let data = tmp.path().join("data");
+        assert!(Repo::local(&c, &data).await.is_ok(), "its own repo reads");
+        std::fs::write(c.join(".git/objects/info/alternates"), format!("{}\n", victim.join(".git/objects").display())).unwrap();
+        assert_eq!(Repo::local(&c, &data).await.unwrap_err(), GitError::Refused);
+    }
+
+    /// F2: the same reach by other routes: a `.git` directory with a `commondir`, or with its
+    /// objects or refs a symlink to another repo's.
+    #[tokio::test]
+    async fn a_git_dir_borrowing_another_repos_objects_or_refs_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (victim, _) = upstream(tmp.path());
+        let data = tmp.path().join("data");
+        let d = team_folder(tmp.path(), "team-d");
+        std::fs::write(d.join(".git/commondir"), format!("{}\n", victim.join(".git").display())).unwrap();
+        assert_eq!(Repo::local(&d, &data).await.unwrap_err(), GitError::Refused, "commondir");
+        for (name, what) in [("team-e", "objects"), ("team-f", "refs"), ("team-g", "objects/pack")] {
+            let f = team_folder(tmp.path(), name);
+            std::fs::remove_dir_all(f.join(".git").join(what)).unwrap();
+            std::os::unix::fs::symlink(victim.join(".git").join(what), f.join(".git").join(what)).unwrap();
+            assert_eq!(Repo::local(&f, &data).await.unwrap_err(), GitError::Refused, "{what}");
+        }
+    }
+
+    /// F2: a folder under kwant's own mirrors (`<data>/dev`) is never read as a team's.
+    #[tokio::test]
+    async fn kwants_own_mirrors_are_never_read_as_a_team_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tmp.path().join("data");
+        let inside = team_folder(&data.join("dev/space-b"), "checkout");
+        assert_eq!(Repo::local(&inside, &data).await.unwrap_err(), GitError::Refused);
+    }
+
+    /// F2: a real linked worktree (`git worktree add`) still reads; a hand-made one that names
+    /// another repo as its main repo doesn't (only that repo can make a worktree of itself).
+    #[tokio::test]
+    async fn a_real_worktree_still_reads_and_a_forged_one_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, c) = upstream(tmp.path());
+        let data = tmp.path().join("data");
+        let wt = tmp.path().join("wt");
+        sh(&main, &["worktree", "add", "-q", "-b", "wt-branch", wt.to_str().unwrap()]);
+        let repo = Repo::local(&wt, &data).await.expect("a real worktree reads");
+        assert_eq!(repo.resolve("refs/heads/main").await.unwrap(), c[4]);
+
+        // Forged: a git dir in the team's own folder that points back at it, with the victim as
+        // its main repo
+        let (victim, _) = upstream(&tmp.path().join("v"));
+        let f = tmp.path().join("team-h");
+        let gd = f.join("fake");
+        std::fs::create_dir_all(&gd).unwrap();
+        std::fs::write(gd.join("gitdir"), format!("{}\n", f.join(".git").display())).unwrap();
+        std::fs::write(gd.join("commondir"), format!("{}\n", victim.join(".git").display())).unwrap();
+        std::fs::write(gd.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(f.join(".git"), format!("gitdir: {}\n", gd.display())).unwrap();
+        assert_eq!(Repo::local(&f, &data).await.unwrap_err(), GitError::Refused);
+    }
+
+    /// Bytes that don't compress, so a pack of them is as big as they are.
+    fn noise(n: usize) -> Vec<u8> {
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        (0..n)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x as u8
+            })
+            .collect()
+    }
+
+    /// F3 (probe P7): a fetch stops at the cap, not after it, and ends as too big: the mirror
+    /// deleted, its note left, no ref written. (A tiny cap stands in for 1 GB; the source is a
+    /// local repo with a 3 MB blob, so there's no network.)
+    #[tokio::test]
+    async fn a_fetch_stops_at_the_cap_and_ends_as_too_big() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = team_folder(tmp.path(), "big");
+        write(&src, "noise.bin", &noise(3 << 20));
+        commit_all(&src, "Three megabytes");
+        let data = tmp.path().join("data");
+        let key = "gitea.example.org/o/big";
+        let dir = mirror_dir(&data, "s1", key);
+        let cap: u64 = 500_000;
+        let from = src.to_str().unwrap();
+        let args = ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--", from, "+refs/heads/main:refs/heads/main"];
+
+        // The limit itself: git is stopped with no file past the cap and no ref
+        let repo = Repo::mirror(&data, "s1", key).await.unwrap();
+        let r = run("git", Some(&repo.dir), &args, Opts { timeout: FETCH_TIMEOUT, file: true, fsize: Some(cap), ..Opts::read() }).await;
+        assert!(r.is_err(), "stopped");
+        assert!(largest_file(&dir) <= cap, "a file passed the cap: {}", largest_file(&dir));
+        assert!(largest_file(&dir) > cap / 2, "it was the limit that stopped it");
+        assert_eq!(repo.resolve("refs/heads/main").await, Err(GitError::NotFound), "no ref written");
+
+        // A mirror's fetch: too big, the mirror deleted and the note left
+        assert_eq!(repo.fetch_capped(&args, Opts { timeout: FETCH_TIMEOUT, file: true, ..Opts::read() }, cap).await, Err(GitError::RepoTooBig));
+        assert!(!dir.exists(), "the mirror is deleted");
+        assert!(too_big_mark(&dir).is_file(), "the note is left");
+        assert_eq!(GitError::poll_code(&GitError::RepoTooBig.to_string()), Some("too_big"));
+        drop(repo);
+
+        // Under the cap it fetches as before
+        std::fs::remove_file(too_big_mark(&dir)).unwrap();
+        let repo = Repo::mirror(&data, "s1", key).await.unwrap();
+        assert_eq!(repo.fetch_capped(&args, Opts { timeout: FETCH_TIMEOUT, file: true, ..Opts::read() }, MIRROR_CAP).await, Ok(()));
+        assert!(repo.resolve("refs/heads/main").await.is_ok());
+    }
+
+    /// F6: cloud metadata addresses outside link-local are refused (exactly, not their ranges).
+    #[test]
+    fn cloud_metadata_outside_link_local_is_refused() {
+        for a in ["100.100.100.200", "fd00:ec2::254", "::ffff:100.100.100.200", "64:ff9b::6464:64c8"] {
+            assert!(blocked(ip(a)), "{a}");
+        }
+        for a in ["100.100.100.201", "100.64.0.1", "100.127.255.254", "fd00:ec2::253", "fd00::254"] {
+            assert!(!blocked(ip(a)), "{a}");
+        }
+    }
+
+    /// Both too-big errors give the desk `poll_code: "too_big"`; no other error does.
+    #[test]
+    fn both_too_big_errors_have_the_too_big_poll_code() {
+        assert_eq!(GitError::poll_code(&GitError::TooBig.to_string()), Some("too_big"));
+        assert_eq!(GitError::poll_code(&GitError::RepoTooBig.to_string()), Some("too_big"));
+        for e in [GitError::NoGit, GitError::Auth, GitError::NotFound, GitError::Unreachable, GitError::Timeout, GitError::Refused, GitError::Failed] {
+            assert_eq!(GitError::poll_code(&e.to_string()), None, "{e:?}");
+        }
+        assert_eq!(GitError::poll_code("anything else"), None);
     }
 }

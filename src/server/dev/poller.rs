@@ -233,7 +233,7 @@ async fn poll_git(state: &AppState, mode: &DevRepoRow) -> Result<(), GhError> {
     }
     let from = mode.git_url.as_deref().unwrap_or_default();
     let (g, url) = if from.starts_with('/') {
-        (Repo::local(std::path::Path::new(from))?, String::new())
+        (Repo::local(std::path::Path::new(from), &state.config.data_dir).await?, String::new())
     } else {
         let url = git::remote_url(from).filter(|u| u == from).ok_or(GitError::Refused)?;
         (Repo::mirror(&state.config.data_dir, &mode.space_id, &mode.key).await?, url)

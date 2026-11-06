@@ -248,7 +248,7 @@ async fn with_a_forge_prs_and_checks_come_from_it_and_files_from_git() {
     };
     env.state.db.add_dev_repo(space.as_str(), "github.com/demo-org/app", None, "demo-org/app", Some("github.com"), "main", None, BY_HAND).await.unwrap();
     let row = env.state.db.dev_repo(space.as_str(), "github.com/demo-org/app").await.unwrap().unwrap();
-    let h = History::new(Some(Repo::local(&dir).unwrap()), dir.to_string_lossy().to_string(), None, None, "main", Some("https://github.com/demo-org/app/commit".into()));
+    let h = History::new(Some(Repo::local(&dir, &env.state.config.data_dir).await.unwrap()), dir.to_string_lossy().to_string(), None, None, "main", Some("https://github.com/demo-org/app/commit".into()));
     poller::read(&env.state, &row, &h, Some(&fake)).await.unwrap();
 
     let cards = landed(&env, "github.com/demo-org/app").await;
@@ -363,4 +363,74 @@ async fn a_repo_too_big_to_copy_reads_as_an_error_until_it_is_added_again() {
     env.state.db.delete_team(&teams.iter().find(|t| t.name == "Big").unwrap().id).await.unwrap();
     kwnt::server::dev::repo::reconcile(&env.state, &space).await;
     assert!(!git::too_big_mark(&dir).exists() && !dir.exists());
+}
+
+/// G2 review F2: the folder check runs on every poll, not only when the repo was added. A team
+/// folder that read fine is pointed at another team's repo (its `.git` swapped for a symlink): the
+/// next poll reads `error` and makes no card from the other repo's commits; put back, it reads
+/// again.
+#[tokio::test]
+async fn a_team_folder_pointed_at_another_repo_reads_as_an_error_on_the_next_poll() {
+    let env = setup().await;
+    let space = SpaceId::default_space();
+    let folder = env.tmp.path().join("folders/ours");
+    std::fs::create_dir_all(&folder).unwrap();
+    git(&folder, &["init", "-q", "-b", "main"]);
+    let ours = commit(&folder, "README.md", "# Ours\n", "Our start");
+    let victim = env.tmp.path().join("elsewhere/theirs");
+    std::fs::create_dir_all(&victim).unwrap();
+    git(&victim, &["init", "-q", "-b", "main"]);
+    let theirs = commit(&victim, "s.txt", "SECRET-OTHER-TEAM\n", "other team secret");
+    let t = NewTeam {
+        name: "Ours".into(),
+        description: None,
+        icon: None,
+        lead_kwant_id: env.a.clone(),
+        member_kwants: vec![env.a.clone()],
+        workspace_path: Some(folder.to_string_lossy().to_string()),
+        repo_url: None,
+    };
+    env.state.db.create_team(&space, &t).await.unwrap();
+    let uri = format!("/api/spaces/{}/dev_mode", space.as_str());
+    let (s, v) = call(&env.app, "PUT", &uri, Some(json!({"on": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let key = v["repos"][0]["key"].as_str().unwrap().to_string();
+    poller::poll_space(&env.state, space.as_str()).await;
+    assert_eq!(landed(&env, &key).await.iter().map(|c| c.head_sha.clone()).collect::<Vec<_>>(), std::slice::from_ref(&ours));
+
+    // Someone working in the folder points its .git at the other repo
+    std::fs::rename(folder.join(".git"), env.tmp.path().join("ours.git")).unwrap();
+    std::os::unix::fs::symlink(victim.join(".git"), folder.join(".git")).unwrap();
+    poller::poll_space(&env.state, space.as_str()).await;
+    let row = env.state.db.dev_repo(space.as_str(), &key).await.unwrap().unwrap();
+    assert_eq!(row.poll_error.as_deref(), Some(git::GitError::Refused.to_string().as_str()));
+    let cards = landed(&env, &key).await;
+    assert!(cards.iter().all(|c| c.head_sha != theirs && !c.title.contains("other team")), "{cards:?}");
+    let (_, v) = call(&env.app, "GET", &uri, None).await;
+    assert_eq!(v["repos"][0]["status"], "error", "{v}");
+    assert!(!v.to_string().contains("SECRET") && !v.to_string().contains("other team"), "{v}");
+
+    // Put back, it reads again
+    std::fs::remove_file(folder.join(".git")).unwrap();
+    std::fs::rename(env.tmp.path().join("ours.git"), folder.join(".git")).unwrap();
+    poller::poll_space(&env.state, space.as_str()).await;
+    assert_eq!(env.state.db.dev_repo(space.as_str(), &key).await.unwrap().unwrap().poll_error, None);
+}
+
+/// The second too-big error (one answer from git over the output cap, `GitError::TooBig`) can
+/// still happen, so its row gets `poll_code: "too_big"` too, as the 1 GB one does.
+#[tokio::test]
+async fn both_too_big_errors_read_as_poll_code_too_big() {
+    let env = setup().await;
+    let space = SpaceId::default_space();
+    remote_team(&env, "Wide", "https://gitlab.example.com/group/wide.git").await;
+    let uri = format!("/api/spaces/{}/dev_mode", space.as_str());
+    let (s, v) = call(&env.app, "PUT", &uri, Some(json!({"on": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let key = "gitlab.example.com/group/wide";
+    for (e, code) in [(git::GitError::TooBig, json!("too_big")), (git::GitError::RepoTooBig, json!("too_big")), (git::GitError::Unreachable, Value::Null)] {
+        assert!(env.state.db.set_dev_repo_error(space.as_str(), key, &e.to_string()).await.unwrap());
+        let (_, v) = call(&env.app, "GET", &uri, None).await;
+        assert_eq!((v["repos"][0]["status"].clone(), v["repos"][0]["poll_code"].clone()), (json!("error"), code), "{e:?}: {v}");
+    }
 }
