@@ -611,6 +611,7 @@ mod tests {
             poll_error: None,
             seen_at: None,
             updated_at: Utc::now(),
+            reviews_seen_at: None,
         };
         let c = commit("m1");
         let mut p = pull(7, Some("m1"), true, "main");

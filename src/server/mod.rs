@@ -253,7 +253,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/approvals", get(approval_modes::get_space).put(approval_modes::put_space))
         .route("/api/spaces/:id/dev_mode", get(dev::routes::get_mode).put(dev::routes::put_mode))
         .route("/api/spaces/:id/dev_mode/check", post(dev::routes::check))
-        .route("/api/spaces/:id/dev_mode/seen", post(dev::routes::seen))
+        .route("/api/spaces/:id/dev_mode/seen", post(dev::routes::desk_seen))
         .route("/api/spaces/:id/dev/landed", get(dev::routes::landed))
         .route("/api/spaces/:id/dev/landed/seen", post(dev::routes::seen))
         .route("/api/spaces/:id/dev/reviews", get(dev::routes::reviews))

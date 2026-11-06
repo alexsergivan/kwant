@@ -89,10 +89,10 @@ async fn with_sources(state: &AppState, row: Option<&DevModeRow>, sources: Vec<r
 
 /// Review cards ready to read that were made after the person last opened the desk (plan
 /// user-flow.md F6): the open ones only (newest of each PR, not stale), never landed cards or
-/// floor approvals. A space that was never seen counts nothing, so an update shows no surprise
-/// badge.
+/// floor approvals. A space whose desk was never opened counts nothing, so an update shows no
+/// surprise badge. Reads `reviews_seen_at`, never the rollup's `seen_at`.
 async fn new_reviews(state: &AppState, row: Option<&DevModeRow>) -> usize {
-    let Some((space, seen)) = row.and_then(|r| Some((r.space_id.as_str(), r.seen_at?))) else {
+    let Some((space, seen)) = row.and_then(|r| Some((r.space_id.as_str(), r.reviews_seen_at?))) else {
         return 0;
     };
     match open_reviews(state, &SpaceId::new(space)).await {
@@ -527,6 +527,8 @@ pub fn rollup(landed: &[DevCardRow], reviews: &[DevCardRow], since: Option<DateT
     })
 }
 
+/// `POST /api/spaces/:id/dev/landed/seen` ("Mark seen"): the rollup starts over. The badge is
+/// left alone.
 pub async fn seen(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
@@ -534,6 +536,21 @@ pub async fn seen(State(state): State<AppState>, headers: HeaderMap, Path(id): P
     };
     let now = Utc::now();
     if let Err(e) = state.db.dev_mode_seen(space.as_str(), now).await {
+        return internal(e);
+    }
+    Json(json!({"seen_at": now})).into_response()
+}
+
+/// `POST /api/spaces/:id/dev_mode/seen` (the desk was opened, flow F6): the review badge starts
+/// over. The rollup is left alone, so what landed since the last Mark seen still shows. Replies
+/// `seen_at` like before 0.7.2.
+pub async fn desk_seen(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+    let space = match guard(&state, &headers, &id).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let now = Utc::now();
+    if let Err(e) = state.db.dev_mode_reviews_seen(space.as_str(), now).await {
         return internal(e);
     }
     Json(json!({"seen_at": now})).into_response()
