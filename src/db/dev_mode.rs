@@ -1043,6 +1043,95 @@ mod tests {
         assert_eq!(db.stale_dev_reviews_in(SPACE, site, "pr:12", None).await.unwrap(), vec![site_review.id.clone()]);
     }
 
+    /// Every Dev mode table's schema and rows, to compare two states of the database exactly.
+    async fn dev_state(db: &Database) -> Vec<String> {
+        let mut out: Vec<String> = sqlx::query_scalar(
+            "SELECT type || ' ' || name || ' ' || COALESCE(sql, '') FROM sqlite_master WHERE name LIKE '%dev_%' ORDER BY type, name",
+        )
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        for t in ["dev_mode_spaces", "dev_cards", "dev_repos"] {
+            let has: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?").bind(t).fetch_one(&db.pool).await.unwrap();
+            if has == 1 {
+                let cols: Vec<String> = sqlx::query_scalar(&format!("SELECT name FROM pragma_table_info('{t}') ORDER BY cid")).fetch_all(&db.pool).await.unwrap();
+                let quoted: Vec<String> = cols.iter().map(|c| format!("quote(\"{c}\")")).collect();
+                let dump: Vec<String> =
+                    sqlx::query_scalar(&format!("SELECT {} FROM {t} ORDER BY 1", quoted.join(" || ',' || "))).fetch_all(&db.pool).await.unwrap();
+                out.extend(dump.into_iter().map(|r| format!("{t}: {r}")));
+            }
+        }
+        out
+    }
+
+    /// #357's `dev_mode_spaces.reviews_seen_at`, there or not, so both start orders are covered.
+    async fn with_reviews_seen(db: &Database, there: bool) {
+        let has: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('dev_mode_spaces') WHERE name = 'reviews_seen_at'").fetch_one(&db.pool).await.unwrap();
+        let sql = match (there, has == 1) {
+            (true, false) => "ALTER TABLE dev_mode_spaces ADD COLUMN reviews_seen_at TIMESTAMP",
+            (false, true) => "ALTER TABLE dev_mode_spaces DROP COLUMN reviews_seen_at",
+            _ => return,
+        };
+        sqlx::query(sql).execute(&db.pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_migration_runs_again_without_changing_anything_whether_357_ran_first_or_not() {
+        for seen_first in [false, true] {
+            let (db, _tmp) = db().await;
+            as_071(&db).await;
+            with_reviews_seen(&db, seen_first).await;
+            db.migrate_dev_mode().await.unwrap();
+            let once = dev_state(&db).await;
+            assert!(once.iter().any(|l| l.starts_with("dev_repos: ")), "migrated (#357 first: {seen_first})");
+            // A second and a third start change nothing and don't fail
+            db.migrate_dev_mode().await.unwrap();
+            db.migrate_dev_mode().await.unwrap();
+            assert_eq!(dev_state(&db).await, once, "#357 first: {seen_first}");
+        }
+    }
+
+    async fn same_clock(db: &Database) {
+        sqlx::query("UPDATE dev_cards SET created_at = '2026-11-06 00:00:00', updated_at = '2026-11-06 00:00:00'")
+            .execute(&db.pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_migration_that_dies_halfway_leaves_the_071_shape_and_the_next_start_redoes_it() {
+        let (db, _tmp) = db().await;
+        as_071(&db).await;
+        with_reviews_seen(&db, true).await;
+        let before = dev_state(&db).await;
+        // Halfway: the repo copy has run when making the new cards table fails (a name in the way
+        // stands in for the crash). Everything the migration did must be undone.
+        sqlx::query("CREATE TABLE dev_cards_v2 (x)").execute(&db.pool).await.unwrap();
+        assert!(db.migrate_dev_mode().await.is_err());
+        sqlx::query("DROP TABLE dev_cards_v2").execute(&db.pool).await.unwrap();
+        let after: Vec<String> = dev_state(&db).await;
+        // Only what runs before the transaction is new: the empty 0.7.2 tables and indexes that
+        // 0.7.1 never reads (CREATE ... IF NOT EXISTS). No row was copied, no card was moved.
+        let old: Vec<&String> = before.iter().collect();
+        let kept: Vec<&String> = after.iter().filter(|l| !l.starts_with("table dev_repos") && !l.starts_with("index sqlite_autoindex_dev_repos")).collect();
+        assert_eq!(kept, old, "the 0.7.1 shape is intact");
+        assert!(!after.iter().any(|l| l.starts_with("dev_repos: ")), "the repo copy was rolled back");
+        assert!(!db.dev_cards_has("repo").await.unwrap());
+        // The next start redoes it cleanly, as if nothing had happened
+        db.migrate_dev_mode().await.unwrap();
+        let fresh = {
+            let (clean, _t) = super::tests::db().await;
+            as_071(&clean).await;
+            with_reviews_seen(&clean, true).await;
+            clean.migrate_dev_mode().await.unwrap();
+            same_clock(&clean).await;
+            dev_state(&clean).await
+        };
+        // The two copies were seeded a moment apart; only their cards' clocks may differ
+        same_clock(&db).await;
+        assert_eq!(dev_state(&db).await, fresh);
+        assert_eq!(db.dev_repos(SPACE).await.unwrap().len(), 1);
+        assert_eq!(db.dev_card("dvc_review").await.unwrap().unwrap().repo, "github.com/demo-org/app");
+    }
+
     #[tokio::test]
     async fn a_fresh_database_needs_no_migration_and_reopens() {
         let tmp = tempfile::tempdir().unwrap();
