@@ -103,8 +103,11 @@ is on purpose. Verified says what was checked before the change landed, not afte
 `POST /api/dev/cards/:id/post` (0.7.1) puts one review card on its pull request as **one GitHub PR
 review** with `event: "COMMENT"`. kwnt never approves or requests changes, never merges, and never
 posts on its own: only the person's press posts, and the route refuses a bot's turn token like every
-Dev mode route. Landed and release notes cards can't be posted (400). An unknown card is 404, and a
-review that isn't written yet is 409.
+Dev mode route. Landed and release notes cards can't be posted (400). An unknown card is 404. A
+review that didn't finish is 409 and makes no GitHub call: one still being written (`pending`), one
+that `failed` (its card keeps only the rule checks, so it would read as a hollow "Low" review), or
+one with no card text. The error is "This review didn't finish, so there's nothing to post. Run the
+review again first." Nothing is stored, so the card shows no `post_error`.
 
 **What is posted.** The review is pinned to the card's head (`commit_id`). Its body has the risk
 level and its reasons, the intent check (done, missing, not asked for), the test-tamper flags with

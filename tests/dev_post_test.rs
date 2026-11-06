@@ -10,7 +10,7 @@ mod common;
 mod mock_github;
 
 use common::*;
-use kwnt::db::dev_mode::{READY, RELEASE_NOTES, REVIEW, STALE};
+use kwnt::db::dev_mode::{FAILED, READY, RELEASE_NOTES, REVIEW, STALE};
 use kwnt::db::spaces::SpaceId;
 use kwnt::server::continuity::{SelfScope, TurnOrigin};
 use kwnt::server::mcp_runtime;
@@ -373,4 +373,34 @@ async fn no_connection_is_a_failed_post_and_no_forge() {
     assert!(v["post_error"]["message"].as_str().unwrap().contains("Connect GitHub in Loose ends"), "{v}");
     let (_, m) = call(&env.app, "GET", &format!("/api/spaces/{}/dev_mode", SpaceId::default_space().as_str()), None).await;
     assert_eq!((m["forge"].clone(), m["forge_login"].clone()), (Value::Null, Value::Null), "{m}");
+}
+
+/// Rigel's F4: a review that failed keeps a rule-only card ("Risk: Low", "the reviewer didn't
+/// answer"). Pressing Post on it, or on one still being written, is a 409 and never reaches GitHub.
+#[tokio::test]
+async fn a_review_that_did_not_finish_is_409_and_posts_nothing() {
+    let env = setup().await;
+    let gh = MockGithub::start(&PORTS).await;
+    connect(&env, &gh).await;
+    seed(&gh);
+    gh.clear_hits();
+    let space = SpaceId::default_space();
+
+    let failed = env.state.db.insert_dev_card(space.as_str(), REVIEW, "pr:24", &head(), &facts().to_string()).await.unwrap().unwrap();
+    let mut text = card(vec![finding("f1", "review", "src/app.rs", 11, "Unchecked unwrap", "This panics on an empty list.")]);
+    text["error"] = json!("The review didn't finish: Ann couldn't write the card's text twice in a row.");
+    env.state.db.set_dev_card(&failed.id, FAILED, Some(&text.to_string())).await.unwrap();
+
+    let pending = env.state.db.insert_dev_card(space.as_str(), REVIEW, "pr:25", &head(), &facts().to_string()).await.unwrap().unwrap();
+
+    for id in [&failed.id, &pending.id] {
+        for _ in 0..2 {
+            let (s, v) = press(&env, id).await;
+            assert_eq!(s, 409, "{v}");
+            assert_eq!(v["error"], "This review didn't finish, so there's nothing to post. Run the review again first.");
+        }
+        let row = env.state.db.dev_card(id).await.unwrap().unwrap();
+        assert!(row.posted.is_none() && row.post_error.is_none(), "a 409 stores nothing");
+    }
+    assert!(gh.hits().is_empty() && gh.writes().is_empty(), "no GitHub call: {:?}", gh.hits());
 }

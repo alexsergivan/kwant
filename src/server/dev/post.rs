@@ -13,7 +13,7 @@
 use super::facts::DevFacts;
 use super::routes::{card_json, REFUSAL};
 use super::{notify_card, repo};
-use crate::db::dev_mode::{DevCardRow, REVIEW, STALE};
+use crate::db::dev_mode::{DevCardRow, FAILED, PENDING, REVIEW, STALE};
 use crate::server::missions::autofix::redact;
 use crate::server::spaces::active_space;
 use crate::server::AppState;
@@ -328,8 +328,24 @@ async fn client_for_pull(state: &AppState, repo_name: &str, number: u64) -> Resu
     Err(gh_error(last))
 }
 
+const NOT_FINISHED: &str = "This review didn't finish, so there's nothing to post. Run the review again first.";
+
+/// A review that finished: not pending or failed, with card text and no `error` in it. A failed
+/// review keeps the rule-only card (risk "Low", "the reviewer didn't answer"), which must never be
+/// posted as if it were a review (Rigel's F4).
+fn finished(row: &DevCardRow) -> bool {
+    if row.status == PENDING || row.status == FAILED {
+        return false;
+    }
+    let card: Option<Value> = row.card.as_deref().and_then(|c| serde_json::from_str(c).ok());
+    card.is_some_and(|c| c.get("error").is_none_or(Value::is_null))
+}
+
 /// Posts `card` (a review card row) to its PR: P1–P5, P7. Doesn't touch the database.
 pub async fn post_review(state: &AppState, row: &DevCardRow) -> Result<Posted, PostError> {
+    if !finished(row) {
+        return Err(PostError::failed(NOT_FINISHED));
+    }
     if row.status == STALE {
         return Err(PostError::new(ErrorKind::Stale, STALE_MESSAGE));
     }
@@ -402,7 +418,7 @@ fn internal(e: impl std::fmt::Display) -> Response {
 }
 
 /// `POST /api/dev/cards/:id/post`: the card, 200, with `posted` or `post_error` set. 404 for no
-/// such card, 400 for a card that isn't a review, 409 for a review not written yet.
+/// such card, 400 for a card that isn't a review, 409 for a review that didn't finish (pending, failed, or no text).
 pub async fn post(State(state): State<AppState>, headers: HeaderMap, Path(card_id): Path<String>) -> Response {
     if let Err(r) = super::super::mcp_suggest::refuse_agent_tokens(&state, &headers, REFUSAL).await {
         return r;
@@ -423,6 +439,9 @@ pub async fn post(State(state): State<AppState>, headers: HeaderMap, Path(card_i
     if row.posted.is_some() {
         return Json(card_json(&row)).into_response();
     }
+    if !finished(&row) {
+        return error(StatusCode::CONFLICT, NOT_FINISHED);
+    }
     let lock = card_lock(&row.id);
     let _held = lock.lock().await;
     // Read again under the lock: the press before this one may have posted
@@ -434,8 +453,8 @@ pub async fn post(State(state): State<AppState>, headers: HeaderMap, Path(card_i
     if row.posted.is_some() {
         return Json(card_json(&row)).into_response();
     }
-    if row.card.is_none() {
-        return error(StatusCode::CONFLICT, "this review isn't written yet");
+    if !finished(&row) {
+        return error(StatusCode::CONFLICT, NOT_FINISHED);
     }
     let saved = match post_review(&state, &row).await {
         Ok(p) => state.db.set_dev_card_posted(&row.id, &json!(p).to_string()).await.map(|_| ()),
