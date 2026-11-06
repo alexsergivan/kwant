@@ -308,7 +308,7 @@ async fn a_detected_repo_wakes_the_poller_counts_new_reviews_and_never_replaces_
     gh.json(&format!("/repos/{other}"), repo(other, "main")).json(&format!("/repos/{other}/contents"), json!([]));
     let (s, v) = call(&env.app, "POST", "/api/zombie/sources", Some(json!({"kind": "github", "label": "GitHub", "config": {"api_base": gh.base}, "secret": token}))).await;
     assert_eq!(s.as_u16(), 201, "{v}");
-    let host = gh.base.trim_start_matches("http://");
+    let host = gh.base.trim_start_matches("http://").split(':').next().unwrap();
     let web = checkout(&env.tmp.path().join("folders/shop"), Some(&format!("{}/{REPO}.git", gh.base)));
     team_in(&env, &space, "Shop", Some(&web)).await;
     let u = uri_of(&space);

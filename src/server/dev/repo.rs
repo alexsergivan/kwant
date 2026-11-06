@@ -294,7 +294,7 @@ fn source_repo(raw: &str, gh_hosts: &[String], shorthand: bool) -> Option<(Strin
             (host.strip_prefix("www.").unwrap_or(&host).to_string(), repo)
         }
     };
-    if gh_hosts.iter().any(|g| *g == host) {
+    if gh_hosts.contains(&host) {
         // GitHub URLs go on past the repo (`/tree/main`, `/pull/3`)
         let mut it = path.split('/');
         let (o, n) = (it.next()?, it.next()?);

@@ -72,6 +72,10 @@ reply carries a `check` that says why. A `branch` the repo doesn't have is a 400
   - `not_connected`: there's a GitHub source, but no connection reads it.
   - `other_host`: only GitLab, Gitea or other non-GitHub sources, or `local` ones. These are read
     from 0.7.2.
+- `new_reviews`: review cards ready to read that were made since the desk was last opened (open
+  ones only, never landed cards or floor approvals). A space never opened counts 0.
+  `POST /api/spaces/:id/dev_mode/seen` marks the desk opened now (the same stored time as
+  `POST …/dev/landed/seen`), so phone and desktop agree.
 
 `GET /api/dev/cards/:id` returns one card of any kind, in the same shape as the lists, or 404. The
 desk reads a release notes draft here once its `dev_card` event says it is ready, since no list
