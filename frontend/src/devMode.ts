@@ -342,8 +342,9 @@ export const gitTip = (r: Pick<DevRepo, 'from' | 'team' | 'branch'>) => {
 /** §1c: the server's too-big error (`poll_code: 'too_big'`, or its exact sentence). */
 const TOO_BIG_ERROR = /too big for Dev mode to read/i;
 const isTooBig = (r: DevRepo) => r.status === 'error' && (r.poll_code === 'too_big' || TOO_BIG_ERROR.test(r.poll_error ?? ''));
-/** The size is shown only when the server's own error carries it, so the number always equals its limit. */
-const overGb = (r: DevRepo) => /\(over 1 GB\)/.test(r.poll_error ?? '');
+/** The size is shown only when the server says it: `poll_code: 'too_big'` is its 1 GB cap (#366 6dd0243), else
+ * an older server's own sentence carries it, so the number always equals the server's limit. */
+const overGb = (r: DevRepo) => r.poll_code === 'too_big' || /\(over 1 GB\)/.test(r.poll_error ?? '');
 export const TOO_BIG = 'Too big to read';
 export const TOO_BIG_GB = 'Too big to read (over 1 GB)';
 export const TOO_BIG_TIP = 'Dev mode keeps its own copy of each repo to read it, and stops at 1 GB. This repo is bigger, so no cards come from it.';

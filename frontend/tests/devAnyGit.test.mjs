@@ -23,6 +23,8 @@ const m = await loadBundled(`
   export * as fx from './src/dev/fixtures';
   export { LandedCard } from './src/components/dev/LandedCard';
   export { DevStatusLine } from './src/components/DevStatusLine';
+  export { Rollup } from './src/components/DevDeskSlots';
+  export { parseLandedPage } from './src/dev/shellTypes';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createElement } from 'react';
 `);
@@ -30,13 +32,15 @@ const h = m.createElement;
 const html = (C, props) => m.renderToStaticMarkup(h(C, props));
 
 const row = (over) => ({ team: null, team_id: null, from: 'folder', branch: 'main', status: 'watching', poll_error: null, polled_at: '2026-11-06T09:00:00Z', last_tag: null, added_by: 'team', ...over });
-const APP = row({ key: 'github.com/demo-org/app', repo: 'demo-org/app', host: 'github.com', team: 'App', team_id: 'tm_app' });
-const LAB = row({ key: 'gitlab.example.test/demo/lab', repo: 'https://gitlab.example.test/demo/lab', host: 'gitlab.example.test', team: 'Lab', team_id: 'tm_lab', branch: 'trunk' });
-const NOTES = row({ key: 'local:notes', repo: 'notes', host: null, team: 'Notes', team_id: 'tm_notes', from: 'local' });
-const NO_GIT = row({ key: 'gitea.example.test/demo/wiki', repo: 'https://gitea.example.test/demo/wiki', host: 'gitea.example.test', team: 'Wiki', team_id: 'tm_wiki', branch: null, status: 'no_git', polled_at: null, added_by: null });
-const NO_FETCH = row({ key: 'local:ops', repo: 'file:///srv/ops.git', host: null, team: 'Ops', team_id: 'tm_ops', branch: null, status: 'no_repo', polled_at: null, added_by: null });
-const OLD_LAB = row({ ...LAB, branch: null, status: 'other_host', polled_at: null, added_by: null });
-const OLD_LOCAL = row({ ...NOTES, branch: null, status: 'other_host', polled_at: null, added_by: null });
+const APP = row({ provider: 'github', key: 'github.com/demo-org/app', repo: 'demo-org/app', host: 'github.com', team: 'App', team_id: 'tm_app' });
+const LAB = row({ provider: 'git', key: 'gitlab.example.test/demo/lab', repo: 'https://gitlab.example.test/demo/lab', host: 'gitlab.example.test', team: 'Lab', team_id: 'tm_lab', branch: 'trunk' });
+const NOTES = row({ provider: 'git', key: 'local:notes', repo: 'notes', host: null, team: 'Notes', team_id: 'tm_notes', from: 'local' });
+const NO_GIT = row({ provider: 'git', key: 'gitea.example.test/demo/wiki', repo: 'https://gitea.example.test/demo/wiki', host: 'gitea.example.test', team: 'Wiki', team_id: 'tm_wiki', branch: null, status: 'no_git', polled_at: null, added_by: null });
+const NO_FETCH = row({ provider: 'git', key: 'local:ops', repo: 'file:///srv/ops.git', host: null, team: 'Ops', team_id: 'tm_ops', branch: null, status: 'no_repo', polled_at: null, added_by: null });
+const OLD_LAB = row({ ...LAB, provider: undefined, branch: null, status: 'other_host', polled_at: null, added_by: null });
+const OLD_LOCAL = row({ ...NOTES, provider: undefined, branch: null, status: 'other_host', polled_at: null, added_by: null });
+// A server before 6dd0243: no provider, the desk guesses from the host.
+const noProvider = ({ provider, ...r }) => r;
 const HINT = 'Install git 2.31 or newer on the server.';
 // Mira's copy-073.md §1a–§1d.
 const NO_GIT_TIP = 'Dev mode reads this repo with git. Install git 2.31 or newer on the server. Then press Refresh.';
@@ -66,12 +70,30 @@ test('parse: no_git and no_repo rows are kept, install_hint and poll_code are re
 
 test('provider: the server’s value wins; else git for a local folder or any host but github.com', () => {
   const [app, lab, notes] = state({ repos: [APP, LAB, NOTES] }).repos;
-  assert.equal(app.provider, 'github');
-  assert.equal(lab.provider, 'git');
-  assert.equal(notes.provider, 'git');
-  const ghe = state({ repos: [{ ...LAB, provider: 'github' }] }).repos[0];
-  assert.equal(ghe.provider, 'github', 'a GitHub Enterprise host the server names stays on GitHub');
+  assert.deepEqual([app.provider, lab.provider, notes.provider], ['github', 'git', 'git']);
   assert.equal(state({ repos: [{ ...APP, provider: 'git' }] }).repos[0].provider, 'git');
+  // Fallback for a server before 6dd0243 (no provider): the host guess.
+  const [oApp, oLab, oNotes] = state({ repos: [APP, LAB, NOTES].map(noProvider) }).repos;
+  assert.deepEqual([oApp.provider, oLab.provider, oNotes.provider], ['github', 'git', 'git']);
+  assert.equal(state({ repos: [{ ...LAB, provider: 'gitlab' }] }).repos[0].provider, 'git', 'an unknown value falls back to the guess');
+});
+
+test('provider beats the host guess: a GitHub Enterprise host the server calls github keeps CI, Post and its link', () => {
+  const GHE = row({ provider: 'github', key: 'ghe.example.test/demo/core', repo: 'demo/core', host: 'ghe.example.test', team: 'Core', team_id: 'tm_core' });
+  const s = state({ repos: [GHE] });
+  assert.equal(s.repos[0].provider, 'github');
+  assert.equal(m.gitOnlyRepo(s, 'ghe.example.test/demo/core'), false);
+  assert.equal(m.statusLine(s).note, null, 'no plain-git line');
+  assert.deepEqual(texts(m.statusLine(s).parts), ['Watching ', 'demo/core', ' · ', 'main']);
+  assert.equal(m.repoRows(state({ repos: [APP, GHE] }))[1].state, 'Watching · checked 09:00');
+  // The same row from an older server is guessed as plain git.
+  assert.ok(m.gitOnlyRepo(state({ repos: [noProvider(GHE)] }), 'ghe.example.test/demo/core'));
+  // Rendered: what the desk passes to the card for this repo keeps the CI tile and Post.
+  const card = { ...m.parseLanded(m.fx.LANDED_DIRECT), repo: 'ghe.example.test/demo/core' };
+  const out = html(m.LandedCard, { card, forge: 'github', gitOnly: m.gitOnlyRepo(s, card.repo) });
+  assert.match(out, /data-tests="passed"/);
+  assert.match(out, /Open on GitHub/);
+  assert.doesNotMatch(out, /data-git-only/);
 });
 
 test('watching (plain git): "Watching {repo} · {branch} · landed changes only", the tooltip line, no action', () => {
@@ -192,8 +214,17 @@ test('too big (error): "Too big to read (over 1 GB)" only when the server says t
   const r = m.repoRows(s)[1];
   assert.deepEqual([r.state, r.led, r.note], ['Too big to read (over 1 GB)', 'bad', TOO_BIG_TIP]);
   assert.deepEqual(texts(m.statusLine(state({ repos: [big] })).parts), ['https://gitlab.example.test/demo/lab', ' · Too big to read (over 1 GB)']);
-  const coded = m.repoRows(state({ repos: [APP, { ...LAB, status: 'error', poll_code: 'too_big', poll_error: 'This repo is too big for Dev mode to read.' }] }))[1];
-  assert.deepEqual([coded.state, coded.note, coded.title], ['Too big to read', null, 'This repo is too big for Dev mode to read.']);
+  // 6dd0243: poll_code too_big is the 1 GB cap; the code wins over the sentence.
+  const SERVER_BIG = { ...LAB, status: 'error', poll_code: 'too_big', poll_error: 'This repo is too big for Dev mode to read (over 1 GB).' };
+  const coded = m.repoRows(state({ repos: [APP, SERVER_BIG] }))[1];
+  assert.deepEqual([coded.state, coded.led, coded.note, coded.title], ['Too big to read (over 1 GB)', 'bad', TOO_BIG_TIP, 'This repo is too big for Dev mode to read (over 1 GB).']);
+  const reworded = m.repoRows(state({ repos: [APP, { ...SERVER_BIG, poll_error: 'Some other wording.' }] }))[1];
+  assert.deepEqual([reworded.state, reworded.note], ['Too big to read (over 1 GB)', TOO_BIG_TIP], 'keyed off the code, not the sentence');
+  // Fallback, no code: the exact sentence; the size only when the sentence carries it.
+  const bare = m.repoRows(state({ repos: [APP, { ...LAB, status: 'error', poll_error: 'This repo is too big for Dev mode to read.' }] }))[1];
+  assert.deepEqual([bare.state, bare.note], ['Too big to read', null]);
+  // A code on a non-error row changes nothing.
+  assert.equal(m.repoRows(state({ repos: [APP, { ...LAB, poll_code: 'too_big' }] }))[1].state, 'Landed changes only · checked 09:00');
   // Any other error keeps "Can't read it right now".
   assert.equal(m.repoRows(state({ repos: [APP, { ...LAB, status: 'error', poll_error: 'Couldn’t reach the repo’s host.' }] }))[1].state, 'Can’t read it right now. Trying again.');
   assert.equal(m.devSubLine(state({ repos: [big] })).parts[0].text, 'Can’t read a repo');
@@ -222,4 +253,28 @@ test('a plain-git repo’s landed card: no CI tile, no "Open on GitHub", no Diff
   assert.match(gh, /data-tests="passed"/);
   assert.match(gh, /Open on GitHub/);
   assert.doesNotMatch(gh, /data-git-only/);
+});
+
+test('main_green null (6dd0243: only git-only repos landed): no green or red chip, nothing faked; true and false still show', () => {
+  const page = (main_green, repo) => m.parseLandedPage({
+    cards: [{ ...m.fx.LANDED_DIRECT, repo }],
+    rollup: { since: '2026-11-06T00:00:00Z', until: '2026-11-06T15:00:00Z', count: 1, needs_you: 0, main_green, areas: [{ area: 'Docs', count: 1, first_headline: 'Fix typo' }] },
+    last_tag: null, last_merge: null,
+  });
+  const chip = (p) => html(m.Rollup, { rollup: p.rollup, last_merge: null, branch: 'trunk', cards: p.cards });
+  const gitOnly = page(null, 'gitlab.example.test/demo/lab');
+  assert.equal(gitOnly.rollup.main_green, null);
+  const out = chip(gitOnly);
+  assert.match(out, /data-dev-rollup=/);
+  assert.doesNotMatch(out, /is green|is red|kw-chip-ok|kw-chip-bad/);
+  assert.equal(m.parseLandedPage({ rollup: { count: 0, needs_you: 0, areas: [] } }).rollup.main_green, null, 'a missing field reads as null, not false');
+  assert.match(chip(page(true, 'github.com/demo-org/app')), /trunk is green/);
+  assert.match(chip(page(false, 'github.com/demo-org/app')), /trunk is red/);
+});
+
+test('no_git with 6dd0243’s full-sentence install_hint: one full stop, never two', () => {
+  const tip = m.statusLine(state({ status: 'no_git', install_hint: 'Install git 2.31 or newer on the server.', repos: [NO_GIT] })).note;
+  assert.equal(tip, NO_GIT_TIP);
+  assert.doesNotMatch(tip, /\.\./);
+  assert.equal(m.noGitTip('Install git 2.31 or newer on the server. '), NO_GIT_TIP);
 });
