@@ -22,7 +22,8 @@ import {
 } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { playSfx } from '../audio/chiptune';
-import { storeApi } from '../passwordStore';
+import { SAVE_FIRST, SaveGate, saveGate, storeApi } from '../passwordStore';
+import { approvalModeApi } from '../approvalMode';
 import { BitwardenLoginForm, usePasswordStore } from './PasswordStorePanel';
 import { AddLetterForm, LetterPage } from './LetterView';
 import {
@@ -350,12 +351,103 @@ export const NeedsBitwarden: React.FC<{ message: string; locked: boolean; onRead
   );
 };
 
+/**
+ * Dev mode's Connect (flow F5): when the token couldn't be saved right now (this server's store under
+ * "Ask only when risky" or "Don't ask", or a locked Bitwarden), the two ways out come before the token
+ * field, so nobody types a token and then hits the 409. The rule itself (audit F-10) stays on the server.
+ */
+export const SaveFirst: React.FC<{ gate: Exclude<SaveGate, 'open'>; onReady: (note: string) => void }> = ({ gate, onReady }) => {
+  const id = useId();
+  const store = usePasswordStore(true, true);
+  const [step, setStep] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const first = useRef<HTMLButtonElement>(null);
+  const locked = gate === 'locked';
+  const box = useRef<HTMLDivElement>(null);
+  // Connect/Unlock Bitwarden opens its form in place: focus goes to its first field, not back to the page
+  useEffect(() => {
+    if (!step) return undefined;
+    const h = window.setTimeout(() => box.current?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled])')?.focus(), 0);
+    return () => window.clearTimeout(h);
+  }, [step, !!store.status]);
+
+  const ask = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await approvalModeApi.turnAllOn();
+      const next = await storeApi.peek();
+      store.set(next);
+      if (saveGate(next) === 'open') onReady(SAVE_FIRST.asked);
+      else if (r.failed) setError(`${r.failed} ${r.failed === 1 ? 'setting' : 'settings'} couldn’t be changed. An archived space keeps its approvals until you restore it.`);
+      else setError('A space or bot still runs without asking. Try again.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Couldn’t change approvals.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div ref={box} role="group" aria-labelledby={`${id}-t`} className={`sm:col-span-2 rounded-xl border p-3 space-y-2 ${step ? 'border-white/10 bg-white/[0.03]' : 'border-amber-500/40 bg-amber-500/10'}`} data-save-first={gate} data-save-first-step={step || undefined}>
+      <p id={`${id}-t`} className="text-xs font-medium text-amber-100">
+        {locked ? SAVE_FIRST.lockedTitle : SAVE_FIRST.title}
+      </p>
+      {!locked && <p className="text-[11px] text-amber-100/80 leading-snug" data-save-first-why>{SAVE_FIRST.why}</p>}
+      {!step ? (
+        <>
+        <div className="flex flex-wrap gap-2">
+          <button ref={first} type="button" onClick={() => setStep(true)} disabled={!store.status} className={`${actionBtn} w-full sm:w-auto justify-center bg-sky-500 hover:bg-sky-400 text-zinc-950 font-semibold`} data-save-first-bitwarden data-land>
+            {locked ? SAVE_FIRST.unlock : SAVE_FIRST.bitwarden}
+          </button>
+          {!locked && (
+            <button type="button" onClick={ask} disabled={busy} className={`${quietBtn} w-full sm:w-auto justify-center`} data-save-first-ask>
+              {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+              {busy ? SAVE_FIRST.asking : SAVE_FIRST.ask}
+            </button>
+          )}
+        </div>
+        {!locked && <p className="text-[11px] text-amber-100/70 leading-snug" data-save-first-scope>{SAVE_FIRST.askScope}</p>}
+        </>
+      ) : (
+        store.status && (
+          <BitwardenLoginForm
+            mode={locked ? 'unlock' : 'connect'}
+            status={store.status}
+            plainTitle
+            onCancel={() => setStep(false)}
+            onDone={async (next) => {
+              store.set(next);
+              setStep(false);
+              try {
+                if (next.local_count > 0) await storeApi.migrate();
+                onReady(SAVE_FIRST.connected);
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Couldn’t move the passwords.');
+              }
+            }}
+          />
+        )
+      )}
+      {error && <p role="alert" className="text-[11px] text-rose-300">{error}</p>}
+    </div>
+  );
+};
+
 const EMPTY_IMAP: ImapFields = { label: '', host: '', port: '', security: 'tls', username: '', folders: '', accept_invalid_certs: false };
 
 /** Add an IMAP mailbox or GitHub. The password or token is read from its field at submit and never kept in state. */
-export const AddSourceForm: React.FC<{ onAdded: (s: LooseSource) => void; onCancel: () => void }> = ({ onAdded, onCancel }) => {
+export const AddSourceForm: React.FC<{
+  onAdded: (s: LooseSource) => void;
+  onCancel: () => void;
+  initialKind?: 'imap' | 'github';
+  /** Dev mode's Connect (flow F5): check the password store first, and land on the first field once `land` is true. */
+  connect?: boolean;
+  land?: boolean;
+}> = ({ onAdded, onCancel, initialKind = 'imap', connect = false, land = false }) => {
   const id = useId();
-  const [kind, setKind] = useState<'imap' | 'github'>('imap');
+  const [kind, setKind] = useState<'imap' | 'github'>(initialKind);
   const [imap, setImap] = useState<ImapFields>(EMPTY_IMAP);
   const [ghLabel, setGhLabel] = useState('');
   const [ghBase, setGhBase] = useState('');
@@ -363,7 +455,47 @@ export const AddSourceForm: React.FC<{ onAdded: (s: LooseSource) => void; onCanc
   const [error, setError] = useState<string | null>(null);
   const [vault, setVault] = useState<{ message: string; locked: boolean } | null>(null);
   const secretRef = useRef<HTMLInputElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const local = isLoopbackHost(imap.host);
+  // Connect reads the store before the token field shows ('checking' until it answers; a failed read
+  // leaves the form as it was, and the 409 card still catches it).
+  const [gate, setGate] = useState<SaveGate | 'checking'>(connect ? 'checking' : 'open');
+  const [ready, setReady] = useState<string | null>(null);
+  useEffect(() => {
+    if (!connect) return undefined;
+    let live = true;
+    storeApi.peek().then(
+      (s) => live && setGate(saveGate(s)),
+      () => live && setGate('open'),
+    );
+    return () => {
+      live = false;
+    };
+  }, [connect]);
+  // Land (B3): once the page has loaded, bring the form into view and focus its first control: the
+  // token, or the first way out when the token can't be saved yet. Again after a way out is taken.
+  const landed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!connect || !land || gate === 'checking' || kind !== 'github') return undefined;
+    if (landed.current === gate) return undefined;
+    // Marked only once focus is in: a cancelled frame (StrictMode's second run, a re-render) tries
+    // again, and a way out that renders a frame later (the store panel loading) is waited for.
+    let h = 0;
+    let tries = 0;
+    const step = () => {
+      const form = formRef.current;
+      const target = form && (gate === 'open' ? secretRef.current : form.querySelector<HTMLElement>('[data-land]:not([disabled])'));
+      if (!form || !target) {
+        if (++tries < 30) h = window.setTimeout(step, 50);
+        return;
+      }
+      landed.current = gate;
+      form.scrollIntoView?.({ block: 'start', behavior: 'auto' });
+      target.focus({ preventScroll: true });
+    };
+    h = window.setTimeout(step, 0);
+    return () => window.clearTimeout(h);
+  }, [connect, land, gate, kind]);
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -397,7 +529,7 @@ export const AddSourceForm: React.FC<{ onAdded: (s: LooseSource) => void; onCanc
   );
 
   return (
-    <form onSubmit={submit} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:p-4 space-y-3" aria-labelledby={`${id}-h`}>
+    <form ref={formRef} onSubmit={submit} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:p-4 space-y-3 scroll-mt-4" aria-labelledby={`${id}-h`} data-add-source={kind}>
       <div className="flex items-center justify-between gap-2">
         <h4 id={`${id}-h`} className="text-xs font-semibold text-zinc-200">
           Add a source
@@ -464,8 +596,19 @@ export const AddSourceForm: React.FC<{ onAdded: (s: LooseSource) => void; onCanc
             </label>
           )}
         </div>
+      ) : gate === 'checking' ? (
+        <p className="flex items-center gap-2 text-xs text-zinc-400" data-save-checking>
+          <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Checking where the token goes…
+        </p>
+      ) : gate !== 'open' ? (
+        <SaveFirst gate={gate} onReady={(note) => (setReady(note), setGate('open'))} />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {ready && (
+            <p role="status" className="sm:col-span-2 text-xs text-emerald-300" data-save-ready>
+              {ready}
+            </p>
+          )}
           <div className="sm:col-span-2">
             {label(`${id}-tok`, 'Token')}
             <input id={`${id}-tok`} ref={secretRef} type="password" className={field} autoComplete="new-password" aria-describedby={`${id}-tok-hint`} />
@@ -497,7 +640,7 @@ export const AddSourceForm: React.FC<{ onAdded: (s: LooseSource) => void; onCanc
         <button type="button" onClick={onCancel} className={quietBtn}>
           Cancel
         </button>
-        <button type="submit" disabled={busy} className={`${actionBtn} bg-sky-500 hover:bg-sky-400 text-zinc-950 font-semibold`}>
+        <button type="submit" disabled={busy || (kind === 'github' && gate !== 'open')} className={`${actionBtn} bg-sky-500 hover:bg-sky-400 text-zinc-950 font-semibold disabled:opacity-50`}>
           {busy ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Plus size={13} aria-hidden="true" />}
           {busy ? 'Testing…' : 'Test and add'}
         </button>
@@ -511,10 +654,16 @@ export const LooseSources: React.FC<{
   sources: LooseSource[] | null;
   error: string | null;
   onChanged: () => void;
-  /** Tests open the form. */
+  /** Tests open the form; Dev mode's Connect opens it on GitHub (flow F5). */
   initialAdding?: boolean;
-}> = ({ sources, error, onChanged, initialAdding = false }) => {
+  initialKind?: 'imap' | 'github';
+  /** Called after a source is added, with it. */
+  onAdded?: (s: LooseSource) => void;
+  /** The page above has finished loading: Connect lands on the GitHub form now (B3), not before the cases push it down. */
+  settled?: boolean;
+}> = ({ sources, error, onChanged, initialAdding = false, initialKind, onAdded, settled = true }) => {
   const [adding, setAdding] = useState(initialAdding);
+  const connect = initialAdding && initialKind === 'github';
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
@@ -559,11 +708,15 @@ export const LooseSources: React.FC<{
       </div>
       {adding && (
         <AddSourceForm
+          initialKind={initialKind}
+          connect={connect}
+          land={connect && settled}
           onCancel={() => setAdding(false)}
           onAdded={(s) => {
             setAdding(false);
             setNote({ text: `Added ${s.label}. It’s read at the next scan.`, error: false });
             onChanged();
+            onAdded?.(s);
           }}
         />
       )}
@@ -895,7 +1048,13 @@ export const AddLetterButton: React.FC<{ onClick: () => void }> = ({ onClick }) 
 );
 
 /** Loads cases and sources, runs the card actions and scans. */
-export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantId: string, threadId: string) => void }> = ({ onBack, onOpenChat }) => {
+export const LooseEndsPage: React.FC<{
+  onBack?: () => void;
+  onOpenChat?: (kwantId: string, threadId: string) => void;
+  /** Dev mode's Connect (flow F5): open the add form on GitHub, and say when a GitHub source is added. */
+  connectGitHub?: boolean;
+  onGitHubAdded?: () => void;
+}> = ({ onBack, onOpenChat, connectGitHub = false, onGitHubAdded }) => {
   const [cases, setCases] = useState<LooseCase[] | null>(null);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1044,7 +1203,17 @@ export const LooseEndsPage: React.FC<{ onBack?: () => void; onOpenChat?: (kwantI
       }
       onBack={onBack}
       owner={<LooseOwnerSetting />}
-      sources={<LooseSources sources={sources} error={sourcesError} onChanged={() => (loadSources(), load())} />}
+      sources={
+        <LooseSources
+          sources={sources}
+          error={sourcesError}
+          onChanged={() => (loadSources(), load())}
+          initialAdding={connectGitHub}
+          initialKind={connectGitHub ? 'github' : undefined}
+          onAdded={(s) => s.kind === 'github' && onGitHubAdded?.()}
+          settled={!loading || cases !== null || error !== null}
+        />
+      }
     />
   );
 };

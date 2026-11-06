@@ -1,4 +1,4 @@
-// Dev mode (0.7): the switch's safety cover, the first-switch-on setup, the per-space store and the
+// Dev mode (0.7): the switch's safety cover, the detected repos (0.7.1), the per-space store and the
 // API client. Person-only on the server: a bot's token gets 403, so the switch shows disabled.
 // Contract: dev-mode/plan/plan.md §3.2 and §3.6, the route JSON in dev-mode/impl/lin.md.
 
@@ -25,7 +25,26 @@ export interface DevModeState {
   forge: Forge | null;
   /** 0.7.1: that forge connection's login, for "Posts as {login}." on review cards. */
   forge_login: string | null;
+  /** 0.7.1 (any-git S4): the repos found in the space's teams, in team order. [] on an older server. */
+  sources: DevSource[];
+  /** 0.7.1: what Dev mode can read right now. null on an older server (then the desk shows the repo chip). */
+  status: DevStatus | null;
+  /** 0.7.1 (flow F6): review cards new since the person last opened the Dev desk. null on an older server. */
+  new_reviews: number | null;
 }
+
+/** Where a space's repo was found: a team's repo link, a git folder with a remote, or a folder with no remote. */
+export type SourceFrom = 'repo' | 'folder' | 'local';
+
+/** One detected repo. Team name only: the server never sends folder paths. */
+export interface DevSource {
+  team: string;
+  repo: string;
+  host: string | null;
+  from: SourceFrom;
+}
+
+export type DevStatus = 'watching' | 'no_repo' | 'not_connected' | 'other_host';
 
 export type CheckState = 'found' | 'not_found' | 'not_connected';
 
@@ -41,6 +60,26 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? 
 export type Forge = 'github' | 'gitlab' | 'gitea';
 export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'gitlab' || v === 'gitea' ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const STATUSES: readonly DevStatus[] = ['watching', 'no_repo', 'not_connected', 'other_host'];
+
+/** Drops userinfo from a URL-looking repo (`https://user:token@host/…`), so a token never reaches the screen. */
+export const stripUserinfo = (repo: string): string => repo.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@\s]*@/i, '$1');
+
+export function parseSources(v: unknown): DevSource[] {
+  if (!Array.isArray(v)) return [];
+  const out: DevSource[] = [];
+  for (const x of v) {
+    if (!x || typeof x !== 'object') continue;
+    const o = x as Record<string, unknown>;
+    const team = str(o.team);
+    const repo = str(o.repo);
+    const from = o.from === 'repo' || o.from === 'folder' || o.from === 'local' ? o.from : null;
+    if (!team || !repo || !from) continue;
+    out.push({ team, repo: stripUserinfo(repo), host: str(o.host), from });
+  }
+  return out;
+}
+
 const hint = (v: unknown): DeployHint => (v === 'docker' || v === 'cloudflare_pages' || v === 'fly' ? v : null);
 
 export function parseDevMode(raw: unknown): DevModeState | null {
@@ -49,7 +88,10 @@ export function parseDevMode(raw: unknown): DevModeState | null {
   if (typeof o.on !== 'boolean') return null;
   return {
     on: o.on,
-    repo: str(o.repo),
+    repo: (() => {
+      const r = str(o.repo);
+      return r ? stripUserinfo(r) : null;
+    })(),
     branch: str(o.branch),
     deploy_hint: hint(o.deploy_hint),
     backup_command: str(o.backup_command),
@@ -60,7 +102,20 @@ export function parseDevMode(raw: unknown): DevModeState | null {
     calls_cap: num(o.calls_cap),
     forge: forgeOf(o.forge),
     forge_login: str(o.forge_login),
+    sources: parseSources(o.sources),
+    status: STATUSES.includes(o.status as DevStatus) ? (o.status as DevStatus) : null,
+    new_reviews: (() => {
+      const n = num(o.new_reviews);
+      return n === null ? null : Math.max(0, Math.floor(n));
+    })(),
   };
+}
+
+/** Why a typed repo wasn't watched, from the PUT reply's `check`. Dev mode is on either way. */
+export function putRefusal(c: RepoCheck | null, asked: string): string {
+  const repo = stripUserinfo(c?.repo ?? asked);
+  if (c?.state === 'not_connected') return `Connect GitHub so bots can read ${repo}. Dev mode is on, with the floor and guards.`;
+  return `Couldn’t read ${repo}. Check the name, or that your GitHub connection can see it. Dev mode is on, with the floor and guards.`;
 }
 
 export function parseCheck(raw: unknown): RepoCheck | null {
@@ -70,8 +125,114 @@ export function parseCheck(raw: unknown): RepoCheck | null {
   return { state: o.state, repo: str(o.repo), branch: str(o.branch), deploy_hint: hint(o.deploy_hint) };
 }
 
-/** A space that was never switched on (or has no repo) gets the setup sheet on its first switch-on. */
-export const needsSetup = (s: DevModeState | null): boolean => !s || !s.repo || (!s.on && !s.polled_at && !s.last_seen_sha);
+/** The source Dev mode is watching: the one whose repo is the space's repo. */
+export const watchedSource = (s: DevModeState): DevSource | null => (s.repo ? s.sources.find((x) => x.repo.toLowerCase() === s.repo!.toLowerCase()) ?? null : null);
+
+export interface StatusLine {
+  status: DevStatus;
+  /** Plain text for the line; `{repo}` parts are marked so the view can set them in mono. */
+  parts: Array<{ text: string; mono?: boolean }>;
+  /** The one action on the line, if any: Switch (several repos), Connect GitHub, or Type a repo. */
+  action: 'switch' | 'connect' | 'type' | null;
+}
+
+/** The Dev desk header's one status line: Mira's signed-off copy (style-v2 §4). null on an older server. */
+export function statusLine(s: DevModeState | null): StatusLine | null {
+  if (!s || !s.status) return null;
+  const many = s.sources.length > 1;
+  switch (s.status) {
+    case 'watching': {
+      const src = watchedSource(s);
+      if (src?.from === 'local')
+        return {
+          status: 'watching',
+          parts: [{ text: `${src.team}’s folder has a local repo with no remote. It’s read from the next update. The floor and guards are on now.` }],
+          action: many ? 'switch' : null,
+        };
+      const parts: StatusLine['parts'] = [{ text: 'Watching ' }, { text: s.repo ?? '', mono: true }, { text: ' on ' }, { text: s.branch || 'main', mono: true }];
+      if (many) parts.push({ text: ` · 1 of ${s.sources.length} repos found` });
+      else if (src) parts.push({ text: src.from === 'repo' ? ` · from ${src.team}’s repo link` : ` · from ${src.team}’s folder` });
+      return { status: 'watching', parts, action: many ? 'switch' : null };
+    }
+    case 'not_connected': {
+      const repo = s.repo || s.sources[0]?.repo;
+      const parts: StatusLine['parts'] = repo ? [{ text: 'Found ' }, { text: repo, mono: true }, { text: '. Reviews need your GitHub connection.' }] : [{ text: 'Reviews need your GitHub connection.' }];
+      return { status: 'not_connected', parts, action: 'connect' };
+    }
+    case 'other_host': {
+      const src = watchedSource(s) ?? s.sources.find((x) => x.host && x.host !== 'github.com') ?? null;
+      const repo = s.repo || src?.repo;
+      const host = src?.host ?? null;
+      const parts: StatusLine['parts'] = repo ? [{ text: 'Found ' }, { text: repo, mono: true }, { text: '. ' }] : [];
+      parts.push(...(host ? [{ text: 'Repos on ' }, { text: host, mono: true }, { text: ' are read from the next update. The floor and guards are on now.' }] : [{ text: 'Repos on this host are read from the next update. The floor and guards are on now.' }]));
+      return { status: 'other_host', parts, action: many ? 'switch' : null };
+    }
+    default:
+      return { status: 'no_repo', parts: [{ text: 'No git repo in this space’s folders yet. The floor and guards are on.' }], action: 'type' };
+  }
+}
+
+/** The toast after the switch turns Dev mode on (flow F3, Mira's flow copy §3). `action` is the
+ * status's one fix; watching, other_host and "checking" offer Open Dev desk. Undo is always there. */
+export interface OnToast {
+  /** "Dev mode on", or "Dev mode on · guards are up" when reviews can't run yet. */
+  title: string;
+  /** Line 2; `mono` parts are a repo, branch or host. */
+  body: Array<{ text: string; mono?: boolean }>;
+  action: 'open' | 'connect' | 'type';
+  /** The response came before detection finished (no status yet): the same toast updates in place. */
+  checking: boolean;
+}
+
+const ON = 'Dev mode on';
+const GUARDS = 'Dev mode on · guards are up';
+
+export function onToast(s: DevModeState | null): OnToast {
+  if (!s?.status) return { title: ON, body: [{ text: 'Looking for a git repo in your teams’ folders…' }], action: 'open', checking: true };
+  const src = watchedSource(s);
+  switch (s.status) {
+    case 'watching':
+      if (src?.from === 'local')
+        return { title: GUARDS, body: [{ text: `${src.team}’s folder has a local repo with no remote. The floor works now.` }], action: 'open', checking: false };
+      return {
+        title: ON,
+        body: [{ text: 'Watching ' }, { text: s.repo ?? '', mono: true }, { text: ' on ' }, { text: s.branch || 'main', mono: true }, { text: '.' }],
+        action: 'open',
+        checking: false,
+      };
+    case 'not_connected': {
+      const repo = s.repo || s.sources[0]?.repo;
+      return {
+        title: GUARDS,
+        body: repo ? [{ text: 'Found ' }, { text: repo, mono: true }, { text: '. Connect GitHub to get reviews.' }] : [{ text: 'Connect GitHub to get reviews.' }],
+        action: 'connect',
+        checking: false,
+      };
+    }
+    case 'other_host': {
+      const host = (src ?? s.sources.find((x) => x.host && x.host !== 'github.com'))?.host;
+      return {
+        title: GUARDS,
+        body: host ? [{ text: host, mono: true }, { text: ' repos are read from the next update. The floor works now.' }] : [{ text: 'Repos on this host are read from the next update. The floor works now.' }],
+        action: 'open',
+        checking: false,
+      };
+    }
+    default:
+      return { title: GUARDS, body: [{ text: 'No git repo in this space’s folders yet. The floor works now.' }], action: 'type', checking: false };
+  }
+}
+
+export const onToastText = (t: OnToast) => `${t.title}. ${t.body.map((p) => p.text).join('')}`;
+
+/** The typed repo in the Switch list: a GitHub `owner/name` or URL, or any git URL with its userinfo dropped. */
+export function typedRepo(input: string): string | null {
+  const gh = normaliseRepo(input);
+  if (gh) return gh;
+  const s = stripUserinfo(input.trim());
+  if (/^(?:https?|ssh|git):\/\/[^\s/]+\/\S+$/i.test(s) || /^[\w.-]+@[\w.-]+:\S+$/.test(s)) return s.replace(/\/+$/, '');
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Repo input: a URL, `owner/name` or `git@github.com:owner/name.git`, normalised to `owner/name`
@@ -100,7 +261,7 @@ export const RECOVER_MS = 5000;
 export const SETTLE_MS = 450;
 export const DROP_MS = 150;
 
-export type SwitchPhase = 'covered' | 'lifted' | 'pending' | 'settling';
+export type SwitchPhase = 'covered' | 'lifted' | 'settling';
 
 export interface SwitchState {
   /** The committed value, as the server last said (or as just pressed, while saving). */
@@ -110,8 +271,6 @@ export interface SwitchState {
   liftedAt: number | null;
   /** Presses are ignored until this time (the settle after a flip). */
   settleUntil: number;
-  /** The space hasn't been set up: the second press asks for the setup sheet. */
-  setup: boolean;
   /** Not the person (403), or the server doesn't have Dev mode. */
   disabled: boolean;
   /** Under prefers-reduced-motion every change is instant, so there is nothing to settle. */
@@ -129,8 +288,6 @@ export type SwitchAction =
   | { type: 'escape' }
   | { type: 'blur' }
   | { type: 'settled'; now: number }
-  | { type: 'setup_done'; now: number }
-  | { type: 'setup_cancel' }
   | { type: 'saved'; on: boolean }
   | { type: 'save_failed'; error: string }
   | { type: 'server'; state: DevModeState | null; disabled?: boolean }
@@ -141,7 +298,6 @@ export const initialSwitch = (over: Partial<SwitchState> = {}): SwitchState => (
   phase: 'covered',
   liftedAt: null,
   settleUntil: 0,
-  setup: true,
   disabled: false,
   reduced: false,
   announce: null,
@@ -169,15 +325,10 @@ export function switchReducer(s: SwitchState, a: SwitchAction, space = 'this spa
   switch (a.type) {
     case 'press': {
       if (s.disabled || s.saving) return s;
-      if (s.phase === 'pending') return s;
       // A fast double-click: the second press lands while the cover settles, and is ignored.
       if (s.phase === 'settling' || a.now < s.settleUntil) return s;
-      // Flow F1: on only adds guards, so off has no cover and one press turns it on (or opens the
-      // setup the first time, on a server that still needs it).
-      if (!s.on) {
-        if (s.setup) return { ...s, phase: 'pending', liftedAt: null, error: null, announce: say(s, 'Dev mode, setting up.') };
-        return flip(s, true, a.now, space);
-      }
+      // Flow F1: on only adds guards, so off has no cover and one press turns it on.
+      if (!s.on) return flip(s, true, a.now, space);
       // F2: off removes the guards, so it takes two presses: arm, then confirm within 5 s.
       if (s.phase === 'covered') return { ...s, phase: 'lifted', liftedAt: a.now, error: null, announce: say(s, ARMED_TEXT) };
       return flip(s, false, a.now, space);
@@ -192,14 +343,8 @@ export function switchReducer(s: SwitchState, a: SwitchAction, space = 'this spa
     case 'settled':
       if (s.phase !== 'settling' || a.now < s.settleUntil) return s;
       return { ...s, phase: 'covered' };
-    case 'setup_done':
-      if (s.phase !== 'pending') return s;
-      return flip({ ...s, setup: false }, true, a.now, space);
-    case 'setup_cancel':
-      if (s.phase !== 'pending') return s;
-      return { ...s, phase: 'covered', liftedAt: null, announce: null };
     case 'saved':
-      return { ...s, saving: false, on: a.on, setup: a.on ? false : s.setup };
+      return { ...s, saving: false, on: a.on };
     case 'save_failed':
       // The press didn't take: back to what it was, covered, with the reason.
       return { ...s, saving: false, on: !s.on, phase: 'covered', liftedAt: null, settleUntil: 0, error: a.error, announce: say(s, a.error) };
@@ -207,8 +352,8 @@ export function switchReducer(s: SwitchState, a: SwitchAction, space = 'this spa
       const disabled = a.disabled ?? s.disabled;
       if (!a.state) return { ...s, disabled };
       // A save in flight, or a cover the person is holding open, keeps what they see.
-      if (s.saving || s.phase === 'pending') return { ...s, disabled, setup: needsSetup(a.state) };
-      return { ...s, disabled, on: a.state.on, setup: needsSetup(a.state), phase: s.phase === 'lifted' && a.state.on !== s.on ? 'covered' : s.phase };
+      if (s.saving) return { ...s, disabled };
+      return { ...s, disabled, on: a.state.on, phase: s.phase === 'lifted' && a.state.on !== s.on ? 'covered' : s.phase };
     }
     case 'reduced':
       return { ...s, reduced: a.reduced };
@@ -229,10 +374,9 @@ function flip(s: SwitchState, on: boolean, now: number, space: string): SwitchSt
   };
 }
 
-/** What the switch looks like: cover open or closed, knob side, fill opacity, ring and hint. */
-/** The visual state the switch draws: off, armed (first press), on, pending (setup sheet open),
- * disabled. Styles key off this (data-look), so a new look is CSS plus the glyph map. */
-export type SwitchLookName = 'off' | 'armed' | 'on' | 'pending' | 'disabled';
+/** The visual state the switch draws: off, armed (first press), on, disabled. 0.7.1: no pending
+ * look, since there is no setup sheet. Styles key off this (data-look), so a new look is CSS plus the glyph map. */
+export type SwitchLookName = 'off' | 'armed' | 'on' | 'disabled';
 /** The icon in the knob: the code mark at rest, an open lock when armed, a closed lock when disabled. */
 export type SwitchGlyph = 'code' | 'unlocked' | 'locked';
 
@@ -260,7 +404,7 @@ export const ARMED_HINT = 'Press again to turn Dev mode off';
 
 export function switchLook(s: SwitchState): SwitchLook {
   const base = switchParts(s);
-  const look: SwitchLookName = s.disabled ? 'disabled' : s.phase === 'pending' ? 'pending' : s.phase === 'lifted' ? 'armed' : s.on ? 'on' : 'off';
+  const look: SwitchLookName = s.disabled ? 'disabled' : s.phase === 'lifted' ? 'armed' : s.on ? 'on' : 'off';
   // The lock: shut while on and covered (guards locked in) or not the owner, open while armed.
   const glyph: SwitchGlyph = s.disabled ? 'locked' : s.phase === 'lifted' ? 'unlocked' : s.on ? 'locked' : 'code';
   return { look, glyph, ...base };
@@ -273,8 +417,6 @@ function switchParts(s: SwitchState): Omit<SwitchLook, 'look' | 'glyph'> {
   switch (s.phase) {
     case 'lifted':
       return { coverOpen: true, knobRight: true, fill: 1, ring: true, hint: ARMED_HINT, ...common };
-    case 'pending':
-      return { coverOpen: true, knobRight: true, fill: 0.45, ring: false, hint: null, ...common, describe: 'Setting up.' };
     case 'settling':
       return { coverOpen: !s.on, knobRight: s.on, fill: s.on ? 1 : 0, ring: false, hint: null, ...common };
     default:
@@ -424,6 +566,17 @@ export const devApi = {
     if (!s) throw new DevModeError('The server sent Dev mode in a shape this app doesn’t know.', 500);
     return s;
   },
+  /**
+   * PUT with a typed repo (Juno, 0.7.1): a repo that can't be read still turns Dev mode on, with no
+   * repo, and the reply's `check` says why. Returns the state and that reason (null when it's watched).
+   */
+  async putRepo(space: string, body: { on: true; repo: string; branch?: string | null }): Promise<{ state: DevModeState; refused: string | null }> {
+    const r = await call<unknown>(`/api/spaces/${enc(space)}/dev_mode`, 'PUT', body);
+    const s = parseDevMode(r.data);
+    if (!s) throw new DevModeError('The server sent Dev mode in a shape this app doesn’t know.', 500);
+    const c = parseCheck((r.data as Record<string, unknown>).check);
+    return { state: s, refused: s.repo ? null : putRefusal(c, body.repo) };
+  },
   async check(space: string, repo: string): Promise<RepoCheck> {
     const r = await call<unknown>(`/api/spaces/${enc(space)}/dev_mode/check`, 'POST', { repo });
     const c = parseCheck(r.data);
@@ -433,6 +586,8 @@ export const devApi = {
   landed: (space: string, before?: string) =>
     call<unknown>(`/api/spaces/${enc(space)}/dev/landed?limit=30${before ? `&before=${enc(before)}` : ''}`).then((r) => r.data),
   seen: (space: string) => call<{ seen_at: string }>(`/api/spaces/${enc(space)}/dev/landed/seen`, 'POST').then((r) => r.data),
+  /** Flow F6 (Juno): the person opened the Dev desk, so new_reviews goes back to 0 on every device. */
+  deskSeen: (space: string) => call<unknown>(`/api/spaces/${enc(space)}/dev_mode/seen`, 'POST').then((r) => r.data),
   reviews: (space: string) => call<unknown>(`/api/spaces/${enc(space)}/dev/reviews`).then((r) => r.data),
   finding: (card: string, fid: string, body: { action: string; reason?: string; note?: string }) =>
     call<unknown>(`/api/dev/cards/${enc(card)}/findings/${enc(fid)}`, 'POST', body).then((r) => r.data),
@@ -446,6 +601,66 @@ export const devApi = {
 };
 
 export const _call = call;
+
+/** One press from outside the switch (the toast's Undo, the off note's Turn back on): save, then the
+ * store tells the switch, the desk and the badge. */
+export async function turnDevMode(space: string, on: boolean, put: typeof devApi.put = devApi.put): Promise<DevModeState> {
+  const s = await put(space, { on });
+  devStore.set(space, s);
+  return s;
+}
+
+/** What the desk should open with once it mounts: the Switch list with "Type a repo" focused. */
+const deskIntents = new Map<string, 'type'>();
+export const deskIntent = {
+  set: (space: string, what: 'type') => void deskIntents.set(space, what),
+  take(space: string): 'type' | null {
+    const v = deskIntents.get(space) ?? null;
+    deskIntents.delete(space);
+    return v;
+  },
+};
+
+/** Connect from the Dev desk or the toast: Loose ends opens on the GitHub form, and after a GitHub
+ * source is added the app returns to this space's Dev desk (flow F5). */
+let connectReturn: string | null = null;
+export const devConnect = {
+  start: (space: string) => void (connectReturn = space),
+  pending: () => connectReturn,
+  /** A source was added: the space to return to, once. */
+  finish(): string | null {
+    const v = connectReturn;
+    connectReturn = null;
+    return v;
+  },
+  cancel: () => void (connectReturn = null),
+};
+
+// First-visit marks, per space and per device (they only steer hints, never what is on).
+const mark = (key: string): boolean => {
+  try {
+    if (localStorage.getItem(key)) return false;
+    localStorage.setItem(key, '1');
+    return true;
+  } catch {
+    return false;
+  }
+};
+const marked = (key: string): boolean => {
+  try {
+    return !!localStorage.getItem(key);
+  } catch {
+    return true;
+  }
+};
+export const firstRun = {
+  /** True the first time the desk opens in this space; it stays shown until dismissed this visit. */
+  claimIntro: (space: string) => mark(`kwnt.dev.intro.${space}`),
+  introSeen: (space: string) => marked(`kwnt.dev.intro.${space}`),
+  /** True the first time the Dev desk row shows in this space: one soft highlight. */
+  claimRow: (space: string) => mark(`kwnt.dev.row.${space}`),
+  rowSeen: (space: string) => marked(`kwnt.dev.row.${space}`),
+};
 
 // ---------------------------------------------------------------------------
 // The per-space store: the header, rail badge, hard hats and grid all read it
@@ -499,6 +714,9 @@ export const emptyState = (): DevModeState => ({
   calls_cap: null,
   forge: null,
   forge_login: null,
+  sources: [],
+  status: null,
+  new_reviews: null,
 });
 
 // ---------------------------------------------------------------------------

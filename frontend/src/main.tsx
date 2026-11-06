@@ -10,6 +10,7 @@ import './styles/stream.css';
 import './styles/needsYou.css';
 import './styles/ideas.css';
 import './styles/ideaShell.css';
+import './styles/devStatus.css';
 
 registerServiceWorker();
 captureInstallPrompt();
