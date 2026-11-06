@@ -1,5 +1,5 @@
 title: Features: self-hosted AI agent orchestration
-description: Teams and @mention handoffs, Smart Results, Goals, automatic model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.
+description: Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.
 path: features.html
 active: features
 card: Teams, spaces, routines, approvals, memory and more, in one binary.
@@ -18,6 +18,8 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-071">New in 0.7.1</a></li>
+        <li><a href="#new-07">New in 0.7</a></li>
         <li><a href="#new-0611">New in 0.6.11</a></li>
         <li><a href="#new-069">New in 0.6.9</a></li>
         <li><a href="#new-065">New in 0.6.5</a></li>
@@ -43,6 +45,86 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-071" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7.1</p>
+      <h2>Post a review to GitHub, and Dev mode in one press</h2>
+      <p>A bot's review of a pull request can go onto GitHub as your comment, and only when you press it. Dev mode now finds the repo itself, and turning it off takes two presses.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="post-to-github">
+        <span class="shot">{{shot:v071-post-github|A Dev mode review card after posting. Its footer reads Posted at the time, with a View on GitHub link.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Post to GitHub</h3><p>A review card goes onto its pull request as one review comment, posted as you and pinned to the commit that was reviewed. Findings go on their lines. kwant never approves, requests changes or merges, a bot can't post, and secrets are never posted. <a href="docs/dev-mode.html#post">How posting works</a></p></div>
+      </article>
+      <article class="card" id="dev-on">
+        <span class="shot">{{shot:v071-dev-on|The Trailhead Outfitters space right after Dev mode was switched on with one press. A note says it found demo-org/demo-app on main, with Switch and Undo.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>One press on, and it finds the repo</h3><p>No setup dialog. kwant looks at the space's teams, their repo links and their folders, on your machine with no network, and says what it found with one fix and Undo. <strong>Switch</strong> lists the repos it found, with <strong>Type a repo</strong> last.</p></div>
+      </article>
+      <article class="card" id="dev-off">
+        <span class="shot">{{shot:v071-dev-off-armed|The Dev mode switch after one press: its cover is lifted with an amber ring, the label reads off?, and a hint says Press again to turn Dev mode off.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Two presses to turn it off</h3><p>The first press lifts the cover, the second within 5 seconds turns Dev mode off. Escape, clicking elsewhere or waiting keeps it on, and the off note has <strong>Turn back on</strong>.</p></div>
+      </article>
+      <article class="card" id="lgtm">
+        <span class="shot">{{shot:v071-lgtm|A review card with no findings, every security light green, and an LGTM stamp in its top right corner.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A new look for the Dev desk</h3><p>Landed cards show the commit, the pull request, a diffstat per file and a tests line. Reviews show the branch flow, a light for each security check, and an LGTM stamp when there's nothing to fix.</p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>On, and the last five merges written up</h3>
+        <p>One press on the switch. kwant names the repo it found, reads the last five merges and writes a plain-words card for each.</p>
+      </div>
+      <div class="frame">{{video:clip-v071-dev-on|Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it found demo-org/demo-app, the desk shows Reading the last 5 merges, and landed cards appear one by one.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="wallet-payments"><h3>Crypto wallet sends always ask</h3><p>A tool whose arguments carry an amount and a wallet address or crypto asset now counts as a payment, so it asks in every approval mode, even with approvals off. <a href="docs/flight-school.html#payments">Payments always ask</a></p></li>
+      <li id="reviews-badge"><h3>A count of new reviews</h3><p>The Dev desk row shows how many reviews are ready since you last opened it, on the phone and the desktop alike.</p></li>
+      <li id="waiting-ok"><h3>Waiting for your OK</h3><p>A reply paused on an approval says so, instead of showing a loading skeleton.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-07" class="fgroup" data-covers="0.6.12 0.6.13">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7</p>
+      <h2>Dev mode and the Idea jar</h2>
+      <p>Point a space at its GitHub repo: every merge becomes a plain-words card, a second bot reviews every pull request, and anything that can reach production asks first. And drop the ideas you're not ready for in a jar, for a free bot to think through.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="dev-landed">
+        <span class="shot">{{shot:v07-dev-landed|The What landed tab of the Dev desk: a Since you last looked roll-up above landed cards, each with a commit, a pull request number, a risk badge, per-file line counts and a tests line.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>What landed, in plain words</h3><p>One card per merge to the watched branch: what changed, how risky it is, and whether tests passed. <strong>Verified</strong> only when CI is green, another bot reviewed it and every finding was handled. <strong>Draft release notes</strong> writes them from the cards. <a href="docs/dev-mode.html">Dev mode</a></p></div>
+      </article>
+      <article class="card" id="dev-review">
+        <span class="shot">{{shot:v07-dev-review|A review card for a pull request: a risk badge with its reasons, whether the change does what its task asked, a light for each security check, and findings with Fix it and Dismiss.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A second bot reviews every pull request</h3><p>Written by a bot that didn't write the code: risk with reasons, whether it does what was asked, weakened tests, found secrets and made-up packages. <strong>Fix it</strong> sends a finding back to the bot that wrote it.</p></div>
+      </article>
+      <article class="card" id="prod-floor">
+        <span class="shot">{{shot:v07-floor|A production floor approval card for a deploy, saying in one sentence what the command does and where it goes, with Back up first next to Allow and Deny.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A floor under production</h3><p>Pushes to main, force pushes, deploys, production migrations and destructive data commands always ask, with no "always allow". A step that can change production data needs a fresh backup first. <a href="docs/dev-mode.html#floor">The production floor</a></p></div>
+      </article>
+      <article class="card" id="idea-jar">
+        <span class="shot">{{shot:v07-idea-jar|The Idea jar with a few ideas waiting and one opened with a bot's take: a Worth it verdict, why it matters, the effort, the risks and a short plan, with Do it and Later.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>The Idea jar</h3><p>Drop an idea with <strong>+</strong>, the phone's <strong>Jar</strong> tab or <code>/idea</code>. A free bot writes its take: worth it or not, the effort, the risks and a plan. <strong>Do it</strong> makes a draft mission you approve. <a href="docs/idea-jar.html">Idea jar</a></p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>From an idea to a draft mission</h3>
+        <p>Drop an idea with /idea. When a bot is free, its take comes in, and Do it turns the plan into a mission that waits for your OK.</p>
+      </div>
+      <div class="frame">{{video:clip-v07-idea-jar|Demo: an idea is dropped in with /idea in the message box. A bot's take appears with its verdict, effort and plan, and Do it turns it into a draft mission that waits for your OK.}}</div>
+    </div>
+    <ul class="flist">
+      <li id="no-tools"><h3>Bots can't act on a pull request's text</h3><p>Dev mode cards and idea takes run with no tools at all, on every engine. A turn that can't run that way fails instead.</p></li>
+      <li id="phone-0613"><h3>More room on a phone (0.6.13)</h3><p>The header steps aside while you type, the Chats tab puts <strong>Needs you</strong> first, and approval cards, the Mission board and taking over a bot's browser all fit a phone.</p></li>
+      <li id="captcha-chat"><h3>Human checks in the right chat (0.6.12)</h3><p>A CAPTCHA card comes up in the chat and thread of the bot that met it, even when bots share one browser.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-0611" class="fgroup alt">
   <div class="wrap">

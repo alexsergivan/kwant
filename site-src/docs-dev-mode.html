@@ -1,0 +1,123 @@
+title: Dev mode: AI code review and a production safety floor
+description: Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.
+card_title: Dev mode
+path: docs/dev-mode.html
+nav: dev-mode
+card: Plain-words cards for every merge, a second bot's review on every pull request, and a floor under production.
+card_art: avatar:devops
+---
+<p class="kicker">Docs</p>
+<h1>Dev mode: code review and a safety floor for your repo</h1>
+<p class="intro">Dev mode points a space at the GitHub repo its team works on. kwant reads the repo and writes a card for every merge and every open pull request, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
+<figure>
+  <div class="frame">{{shot:v071-dev-on|The Trailhead Outfitters space right after Dev mode was switched on with one press. A note says it found demo-org/demo-app on main from the team's folder, with Switch and Undo, and the Dev desk is open at the top of the sidebar.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>One press turns it on. kwant says which repo it found, with one fix and Undo.</figcaption>
+</figure>
+
+<h2 id="turn-on">Turn it on</h2>
+<p>The <strong>Dev mode</strong> switch is in the space header. One press turns it on, with no setup to fill in. kwant looks at the space's teams for the repo: each team's repo link, or its folder when that folder is a git checkout. It reads this on your machine, with no network. A sign-in token inside a remote address is dropped and never logged or stored.</p>
+<ul>
+  <li><strong>A short note says what it found</strong>, such as the repo and branch, with one fix and <strong>Undo</strong>.</li>
+  <li><strong>Switch</strong> lists the repos it found in the space, with <strong>Type a repo</strong> last.</li>
+  <li><strong>Connect GitHub</strong> shows when no GitHub connection can read the repo. It takes you to Connections once, and Dev mode picks the repo up as soon as the connection is saved, without turning it off and on.</li>
+  <li><strong>Turning on never fails.</strong> With no repo, the production floor and the command guards still work, and the desk waits for one.</li>
+</ul>
+<p>Dev mode reads GitHub. A GitLab or Gitea repo is named in the note, but kwant doesn't read it yet.</p>
+<figure>
+  <div class="frame">{{video:clip-v071-dev-on|Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it found demo-org/demo-app, the desk shows Reading the last 5 merges, and landed cards appear one by one.}}</div>
+  <figcaption>On, the repo found, and the last five merges written up.</figcaption>
+</figure>
+
+<h2 id="before">Before you turn it on</h2>
+<p>Dev mode reads GitHub through the GitHub connection in <a href="loose-ends.html">Loose ends</a>, so it needs a GitHub token. Reading works with a read-only token; <a href="#post">posting a review</a> needs <strong>Pull requests: Read and write</strong> on a fine-grained token.</p>
+<div class="note"><strong>Where the token is kept.</strong> kwant's built-in password store only saves a GitHub token while every space and every bot is on <strong>Ask before running commands</strong> (new installs start on <strong>Ask only when risky</strong>). Switch them to Ask, or connect Bitwarden. While the token is in the built-in store, approvals can't go back to Off or Ask only when risky. See <a href="approvals.html">Approvals &amp; passwords</a>.</div>
+
+<h2 id="landed">What landed</h2>
+<p>The <strong>Dev desk</strong> sits at the top of the sidebar. Its first tab, <strong>What landed</strong>, has one card per commit that reaches the watched branch: what changed in plain words, how risky it is, the commit, the pull request it came from (or "Direct push"), a diffstat for each file, and whether tests passed.</p>
+<figure>
+  <div class="frame">{{shot:v07-dev-landed|The What landed tab of the Dev desk: a Since you last looked roll-up above three landed cards, each with a short commit sha, a pull request number, a risk badge, per-file added and removed line counts, and a Tests passed line. One card wears the Verified sticker.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Every merge as a card, with a roll-up of what came in since you last looked.</figcaption>
+</figure>
+<ul>
+  <li><strong>Since you last looked</strong> rolls up what's new, and <strong>Mark all seen</strong> clears it.</li>
+  <li><strong>Draft release notes</strong> writes notes from every landed card since the last tag.</li>
+  <li><strong>Verified</strong> goes on a merge only when another bot reviewed that exact head in kwant, every finding was fixed or dismissed, and CI on the merge is green. A pull request merged before its review was ready stays "not verified": the sticker says what was checked before the change landed, not after.</li>
+</ul>
+<p>kwant checks the repo every 5 minutes. The first check writes up the last 5 merges. Card text is written by one of the space's bots, at most 30 model calls per space per day; the risk, the test checks and CI come from rules and need no model.</p>
+
+<h2 id="reviews">Reviews</h2>
+<p>The <strong>Reviews</strong> tab has one card per open pull request, written by a bot that didn't write the code, on a different engine when the space has one. A new push to the pull request gets a new review.</p>
+<figure>
+  <div class="frame">{{shot:v07-dev-review|A review card for a pull request from a feature branch into main: a Medium risk badge with its reasons, whether the change does what its task asked, a light for each security check, and two findings with Fix it and Dismiss. The footer reads Nothing is posted until you press it, with a Post to GitHub button.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A second bot's review. Nothing goes to GitHub until you press it.</figcaption>
+</figure>
+<ul>
+  <li><strong>Risk</strong> with its reasons, from rules, not from the bot's opinion.</li>
+  <li><strong>Does it do what was asked</strong>: what the task asked for, what's missing, and what wasn't asked for.</li>
+  <li><strong>Tests weakened</strong>: a removed or loosened test is flagged with the lines.</li>
+  <li><strong>Secrets and packages</strong>: Gitleaks runs over the pull request, and every new package is checked against its registry. A found secret or a package that doesn't exist always makes the card High risk. The secret itself is never shown.</li>
+  <li><strong>Findings</strong>: <strong>Fix it</strong> sends a finding to the bot that wrote the pull request, and <strong>Dismiss</strong> sets it aside.</li>
+</ul>
+<p>When the reviewer found nothing to fix, the card gets an <strong>LGTM</strong> stamp.</p>
+<figure>
+  <div class="frame">{{shot:v071-lgtm|A review card with no findings, every security light green, and an LGTM stamp in its top right corner: Looks good to me, the reviewer found nothing to fix.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Nothing to fix: the card says so with a stamp.</figcaption>
+</figure>
+
+<h2 id="post">Post to GitHub</h2>
+<p><strong>Post to GitHub</strong> puts a review card on its pull request as one GitHub review comment, posted as you and pinned to the commit that was reviewed. Findings you didn't dismiss go on their lines when the lines are in the diff; the rest go in the review's text.</p>
+<figure>
+  <div class="frame">{{shot:v071-post-github|The same review card after posting. Its footer reads Posted at the time, with a View on GitHub link.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Posted once, as you, with a link to the review.</figcaption>
+</figure>
+<ul>
+  <li><strong>Only your press posts.</strong> kwant never approves, requests changes or merges, and a bot can't post.</li>
+  <li><strong>Secrets are never posted.</strong> A found secret is posted only as "Possible secret in" its file and line, and keys and tokens in a finding are replaced with [redacted].</li>
+  <li><strong>Once only.</strong> A double click makes one review, and a posted card stays posted.</li>
+  <li><strong>New commits?</strong> If the pull request moved on since the review, nothing is posted, and a new review is on its way.</li>
+  <li><strong>Read-only token?</strong> The card says your GitHub connection is read only, and nothing is posted.</li>
+</ul>
+
+<h2 id="floor">The production floor</h2>
+<p>In a space with Dev mode on, these steps always show an approval card first, whatever the space's or the bot's approvals say, and even after "always allow":</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Step</th><th>For example</th><th>Needs a backup</th></tr></thead>
+  <tbody>
+    <tr><td>Push to the watched or a protected branch</td><td><code>git push</code> to main, master, production and the like, or <code>gh pr merge</code></td><td>No</td></tr>
+    <tr><td>Force push</td><td><code>git push --force</code> to a protected branch</td><td>No</td></tr>
+    <tr><td>Delete a branch or tag</td><td>Deleting a protected branch or a release tag</td><td>No</td></tr>
+    <tr><td>Deploy</td><td>wrangler, fly, vercel <code>--prod</code>, kubectl, terraform apply, a script named deploy, ship or release</td><td>No</td></tr>
+    <tr><td>Migrate production</td><td>A migration that names a production database or environment</td><td><strong>Yes</strong></td></tr>
+    <tr><td>Destroy data</td><td><code>DROP</code>, <code>TRUNCATE</code>, a <code>DELETE</code> with no <code>WHERE</code>, <code>docker volume rm</code></td><td><strong>Yes</strong></td></tr>
+    <tr><td>Use a production connection</td><td>Any tool on a connection you marked <strong>production</strong></td><td>No</td></tr>
+  </tbody>
+</table></div>
+<figure>
+  <div class="frame">{{shot:v07-floor|A production floor approval card for a deploy. It says in one sentence what the command does, lists where it goes and what changes, and has Back up first next to Allow and Deny.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The card says what the step does and where it lands, in one sentence.</figcaption>
+</figure>
+<ul>
+  <li><strong>No "always allow".</strong> Allowing a floor card covers that one call, and the next one asks again.</li>
+  <li><strong>Back up first.</strong> A step that can change production data can't be allowed until the space has a backup from the last 10 minutes. The card's <strong>Back up first</strong> runs the space's backup command, and kwant checks that it wrote a new backup file.</li>
+  <li><strong>Mark a connection production</strong> in Connections to make every one of its tools ask, such as a GitHub app that could write to main directly.</li>
+</ul>
+<p>The floor reads commands and tool calls, never what a bot says about them. It can't see inside a script with a harmless name, a command built from variables, or a deploy done through a provider's API from code. When a connection can reach production, mark it production.</p>
+
+<h2 id="no-tools">Bots can't act on a pull request's text</h2>
+<p>Anyone who can open a pull request writes its title, text and diff. So the bot that writes a Dev mode card runs with no tools at all, on every engine: no MCP servers, no browser, no shell, files or web search. A turn that can't run that way fails instead of running with tools, and the card keeps its rule-based parts.</p>
+
+<h2 id="turn-off">Turn it off</h2>
+<p>Turning Dev mode off takes two presses. The first lifts the switch's cover and the second, within 5 seconds, turns it off. Escape, clicking elsewhere or waiting keeps it on. The off note has <strong>Turn back on</strong>.</p>
+<figure>
+  <div class="frame">{{shot:v071-dev-off-armed|The Dev mode switch after one press: its cover is lifted with an amber ring, the label reads off?, and a hint says Press again to turn Dev mode off, or Escape to keep it on.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The first press only lifts the cover.</figcaption>
+</figure>
+<p>Off stops the checks, the reviews and the production floor. The cards stay readable, and your approval settings stay as they were.</p>
+
+<h2 id="phone">On your phone</h2>
+<p>The Dev desk works on a phone too. Its row in the sidebar counts the reviews that are ready since you last opened the desk, and the count is the same on the phone and the desktop.</p>
+<figure>
+  <div class="frame">{{shot:phone-v071-dev-desk|The Dev desk on a phone: the status line says it is watching demo-org/demo-app on main, above a landed card with its commit, pull request and tests line.|(max-width: 860px) 100vw, 380px}}</div>
+  <figcaption>The desk on a phone.</figcaption>
+</figure>
+<div class="note"><strong>Only you can see it.</strong> Bots can't read the Dev desk, its settings or its cards, because the settings hold the backup command and the cards hold the repo's diffs. None of it is in a space or bot export.</div>

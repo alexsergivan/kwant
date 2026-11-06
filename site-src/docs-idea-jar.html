@@ -1,0 +1,72 @@
+title: Idea jar: drop an idea, a free AI agent writes its take
+description: Drop an idea in kwant's Idea jar. When a bot is free, it writes a take: worth it or not, the effort, the risks and a short plan. Do it turns it into a draft mission you approve.
+card_title: Idea jar
+path: docs/idea-jar.html
+nav: idea-jar
+card: Drop an idea now, and a free bot writes its take: a verdict, the effort, the risks and a plan.
+card_art: avatar:research
+---
+<p class="kicker">Docs</p>
+<h1>Idea jar: ideas you're not ready to act on yet</h1>
+<p class="intro">The Idea jar is where you drop an idea you don't want to act on yet. When a bot in the space has nothing on, it picks up the oldest idea and writes its take: is it worth it, how big is it, what could go wrong, and a short plan. You decide what happens next. Nothing starts until you say so.</p>
+<figure>
+  <div class="frame">{{shot:v07-idea-jar|The Idea jar in the Trailhead Outfitters space: a few ideas waiting in the jar, and one opened with a bot's take showing a Worth it verdict, why it matters, the effort, the risks, a numbered plan and who should do it, with Do it and Later.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>An idea with a bot's take, and the choice of what happens next.</figcaption>
+</figure>
+
+<h2 id="drop">Drop an idea in</h2>
+<ul>
+  <li><strong>The sidebar's +</strong> next to Idea jar, on a computer.</li>
+  <li><strong>The Jar tab</strong> on a phone.</li>
+  <li><strong><code>/idea</code></strong> followed by the idea, in any message box. It goes straight into the jar: no chat message is saved, no turn starts, and no bot sees it there.</li>
+</ul>
+<p>An idea is up to 2,000 characters. Put <code>@</code> and a bot's name in it to have that bot look first.</p>
+
+<h2 id="take">A bot's take</h2>
+<p>A take is short and always has the same parts:</p>
+<ul>
+  <li><strong>A verdict</strong>: Worth it, Maybe or Not now.</li>
+  <li><strong>Why it matters</strong>, in a sentence or two.</li>
+  <li><strong>The effort</strong>: S, M or L.</li>
+  <li><strong>The risks</strong>, and the questions it would ask you.</li>
+  <li><strong>A plan</strong> of at most 6 steps, and <strong>who should do it</strong>.</li>
+</ul>
+<figure>
+  <div class="frame">{{video:clip-v07-idea-jar|Demo: an idea is dropped in with /idea in the message box. A bot's take appears with its verdict, effort and plan, and Do it turns it into a draft mission that waits for your OK.}}</div>
+  <figcaption>From an idea to a draft mission, and nothing runs until you approve it.</figcaption>
+</figure>
+
+<h2 id="next">What you do next</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Button</th><th>What happens</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Do it</strong></td><td>Turns the plan into a <strong>draft</strong> mission led by the bot the take suggested, one task per step. A draft runs nothing: you still approve it on the <a href="mission-board.html">Mission board</a>, like any other plan.</td></tr>
+    <tr><td><strong>Later</strong></td><td>Moves the idea to the Later shelf. You can restore it with its take.</td></tr>
+    <tr><td><strong>Edit</strong></td><td>Saves new text and puts the idea back in the jar for a fresh take.</td></tr>
+    <tr><td><strong>Look now</strong></td><td>Asks a free bot to look straight away, without waiting for the jar.</td></tr>
+    <tr><td><strong>Delete</strong></td><td>Deletes the idea and its takes, with Undo.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="who">Who looks, and how often</h2>
+<p>Every 10 minutes kwant checks each space's jar and gives the oldest new idea to the first free bot: the bot named in the idea first, then the space's lead, then the rest. A bot is free when nothing of its own is running and its last turn ended at least 10 minutes ago. Only one idea per space is looked at at a time.</p>
+<p>By default the jar starts up to <strong>3 takes per space a day</strong>, and the jar shows how many are left today. Change it in Settings, up to 10, or set it to 0 to turn the jar's own looking off. <strong>Look now</strong> is you asking, so it doesn't count against the cap, but it still needs a free bot. A take may use at most 30,000 tokens and 5 minutes.</p>
+
+<h2 id="no-tools">Takes run with no tools</h2>
+<p>A take treats your idea as text to think about, never as instructions. It runs as one hidden turn with no tools at all, the same way <a href="dev-mode.html#no-tools">Dev mode</a> writes its cards: no MCP servers, no browser, no shell, files or web search. The reply must fit the take's shape, or the bot gets one retry. The only thing a take can lead to is a draft mission that you approve.</p>
+
+<h2 id="fails">When a take fails</h2>
+<p>An idea whose take failed says why in plain words, and <strong>Look now</strong> tries again.</p>
+<ul>
+  <li><strong>Every model is out of usage.</strong> The take fails at once and doesn't run again by itself; the idea says when the limit resets. Press Look now after that.</li>
+  <li><strong>The bot's engine can't run with every tool off.</strong> The idea fails without running that bot, and Look now tries again with the first free bot. Claude, Codex and Grok all can.</li>
+  <li><strong>kwant restarted</strong> during a take. The idea goes back in the jar to be looked at again.</li>
+</ul>
+<p>When a take fails for one of these reasons, it doesn't count against the day's takes, and the jar pauses its own looking in that space for an hour, so an outage can't use up the day.</p>
+
+<h2 id="phone">On your phone</h2>
+<figure>
+  <div class="frame">{{shot:phone-v07-idea-jar|The Jar tab on a phone, listing a few ideas, each with when it was dropped, and one with a Worth it take ready to read.|(max-width: 860px) 100vw, 380px}}</div>
+  <figcaption>The Jar tab: drop an idea in and read the takes on the go.</figcaption>
+</figure>
+<div class="note"><strong>The jar is yours.</strong> Bots can't read the jar or its takes. Nothing in it is in a space or bot export, so ideas stay on this kwant.</div>
