@@ -342,12 +342,11 @@ export const gitTip = (r: Pick<DevRepo, 'from' | 'team' | 'branch'>) => {
 /** §1c: the server's too-big error (`poll_code: 'too_big'`, or its exact sentence). */
 const TOO_BIG_ERROR = /too big for Dev mode to read/i;
 const isTooBig = (r: DevRepo) => r.status === 'error' && (r.poll_code === 'too_big' || TOO_BIG_ERROR.test(r.poll_error ?? ''));
-/** The size is shown only when the server says it: `poll_code: 'too_big'` is its 1 GB cap (#366 6dd0243), else
- * an older server's own sentence carries it, so the number always equals the server's limit. */
-const overGb = (r: DevRepo) => r.poll_code === 'too_big' || /\(over 1 GB\)/.test(r.poll_error ?? '');
 export const TOO_BIG = 'Too big to read';
-export const TOO_BIG_GB = 'Too big to read (over 1 GB)';
-export const TOO_BIG_TIP = 'Dev mode keeps its own copy of each repo to read it, and stops at 1 GB. This repo is bigger, so no cards come from it.';
+/** §1c no-number sentence: the quiet line when the server sends no words. The size is only ever the server's own
+ * words (the 1 GB cap says "(over 1 GB)", a single git answer over 16 MB doesn't), never matched or added here. */
+export const TOO_BIG_SENTENCE = 'This repo is too big for Dev mode to read.';
+const tooBigNote = (r: DevRepo) => safeError(r.poll_error)?.trim() || TOO_BIG_SENTENCE;
 /** §1d `no_repo` row: the repo address points at this server, or isn't a git address. */
 export const CANT_USE = 'Can’t use this repo address';
 export const CANT_USE_SUB = 'Can’t use the repo address';
@@ -357,7 +356,7 @@ export const cantUseTip = (team: string | null) =>
 export const repoNote = (r: DevRepo, hint: string | null = null): string | null => {
   if (r.status === 'no_git') return noGitTip(hint);
   if (r.status === 'no_repo') return cantUseTip(r.team);
-  if (isTooBig(r)) return overGb(r) ? TOO_BIG_TIP : null;
+  if (isTooBig(r)) return tooBigNote(r);
   return r.provider === 'git' && r.status === 'watching' ? gitTip(r) : null;
 };
 /** Is this card's repo read with plain git (no forge: no CI tile, no Post button, no "Open on" link)? */
@@ -400,7 +399,7 @@ const rowState = (r: DevRepo, on = true): { state: string; led: Led } => {
       // A 0.7.1/0.7.2 server: a folder with no remote, or a host it doesn't read yet.
       return { state: r.from === 'local' || !r.host ? LOCAL_ONLY : hostNotRead(r.host), led: 'off' };
     case 'error':
-      return { state: isTooBig(r) ? (overGb(r) ? TOO_BIG_GB : TOO_BIG) : CANT_READ, led: 'bad' };
+      return { state: isTooBig(r) ? TOO_BIG : CANT_READ, led: 'bad' };
     default:
       return { state: TOO_MANY, led: 'off' };
   }
@@ -427,7 +426,7 @@ const repoRow = (r: DevRepo, teams: DevTeamRef[], on = true, hint: string | null
   ...rowState(r, on),
   origin: rowOrigin(r),
   teamNote: r.added_by !== 'hand' && r.team && (r.from === 'repo' || r.from === 'folder' || r.from === 'local') ? teamNoteText(r.team, r.from === 'local' ? 'folder' : r.from) : null,
-  title: r.status === 'error' ? safeError(r.poll_error) : null,
+  title: r.status === 'error' ? (isTooBig(r) ? tooBigNote(r) : safeError(r.poll_error)) : null,
   note: repoNote(r, hint),
   action: rowAction(r),
 });

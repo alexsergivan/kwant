@@ -48,7 +48,6 @@ const NO_GIT_TIP_OLD = 'Dev mode reads this repo with git. Install git 2.31 or n
 const GIT_TIP = 'Watching with git: shows what lands on trunk. Reviews and CI checks work on GitHub repos for now.';
 const LOCAL_TIP = 'Read from Notes’s folder on the server: shows what lands on main. It has no remote, so there are no reviews or CI checks.';
 const CANT_USE_TIP = 'Dev mode only reads https, ssh or git addresses on another computer. This one points at this server, or isn’t a git address. Change it in Ops’s settings or in the folder’s git remote.';
-const TOO_BIG_TIP = 'Dev mode keeps its own copy of each repo to read it, and stops at 1 GB. This repo is bigger, so no cards come from it.';
 
 const state = (over = {}) => m.parseDevMode({ on: true, repo: null, branch: null, sources: [], status: 'watching', forge: 'github', forge_login: 'kwant-bot', ...over });
 const texts = (parts) => parts.map((p) => p.text);
@@ -208,26 +207,41 @@ test('no_repo row (a refused address): "Can’t use this repo address", needs yo
   assert.match(out, /Link a repo/);
 });
 
-test('too big (error): "Too big to read (over 1 GB)" only when the server says the size; else "Too big to read"', () => {
-  const big = { ...LAB, status: 'error', poll_error: 'This repo is too big for Dev mode to read (over 1 GB).' };
-  const s = state({ repos: [APP, big] });
-  const r = m.repoRows(s)[1];
-  assert.deepEqual([r.state, r.led, r.note], ['Too big to read (over 1 GB)', 'bad', TOO_BIG_TIP]);
-  assert.deepEqual(texts(m.statusLine(state({ repos: [big] })).parts), ['https://gitlab.example.test/demo/lab', ' · Too big to read (over 1 GB)']);
-  // 6dd0243: poll_code too_big is the 1 GB cap; the code wins over the sentence.
-  const SERVER_BIG = { ...LAB, status: 'error', poll_code: 'too_big', poll_error: 'This repo is too big for Dev mode to read (over 1 GB).' };
-  const coded = m.repoRows(state({ repos: [APP, SERVER_BIG] }))[1];
-  assert.deepEqual([coded.state, coded.led, coded.note, coded.title], ['Too big to read (over 1 GB)', 'bad', TOO_BIG_TIP, 'This repo is too big for Dev mode to read (over 1 GB).']);
-  const reworded = m.repoRows(state({ repos: [APP, { ...SERVER_BIG, poll_error: 'Some other wording.' }] }))[1];
-  assert.deepEqual([reworded.state, reworded.note], ['Too big to read (over 1 GB)', TOO_BIG_TIP], 'keyed off the code, not the sentence');
-  // Fallback, no code: the exact sentence; the size only when the sentence carries it.
-  const bare = m.repoRows(state({ repos: [APP, { ...LAB, status: 'error', poll_error: 'This repo is too big for Dev mode to read.' }] }))[1];
-  assert.deepEqual([bare.state, bare.note], ['Too big to read', null]);
+test('too big (error): the row always reads "Too big to read"; the quiet line is the server\'s own words', () => {
+  const CAP = 'This repo is too big for Dev mode to read (over 1 GB).';
+  const ONE = 'This repo is too big for Dev mode to read.';
+  // 679fe98: both too-big errors carry poll_code too_big. The 1 GB mirror cap:
+  const cap = { ...LAB, status: 'error', poll_code: 'too_big', poll_error: CAP };
+  const r = m.repoRows(state({ repos: [APP, cap] }))[1];
+  assert.deepEqual([r.state, r.led, r.note, r.title], ['Too big to read', 'bad', CAP, CAP]);
+  assert.deepEqual(texts(m.statusLine(state({ repos: [cap] })).parts), ['https://gitlab.example.test/demo/lab', ' · Too big to read']);
+  assert.equal(m.statusLine(state({ repos: [cap] })).note, CAP);
+  // A single git answer over 16 MB: same row, no size anywhere.
+  const one = m.repoRows(state({ repos: [APP, { ...cap, poll_error: ONE }] }))[1];
+  assert.deepEqual([one.state, one.note, one.title], ['Too big to read', ONE, ONE]);
+  // Keyed off the code, not the words; empty words fall back to Mira's no-number sentence.
+  assert.equal(m.repoRows(state({ repos: [APP, { ...cap, poll_error: 'Some other wording.' }] }))[1].state, 'Too big to read');
+  for (const e of ['', '   ', null]) {
+    const x = m.repoRows(state({ repos: [APP, { ...cap, poll_error: e }] }))[1];
+    assert.deepEqual([x.state, x.note, x.title], ['Too big to read', ONE, ONE]);
+  }
+  // Fallback, older server with no code: the exact sentence, and the row text is still just "Too big to read".
+  for (const e of [CAP, ONE]) {
+    const old = m.repoRows(state({ repos: [APP, { ...LAB, status: 'error', poll_error: e }] }))[1];
+    assert.deepEqual([old.state, old.note], ['Too big to read', e]);
+  }
+  // Nothing the desk writes in the row says "(over 1 GB)".
+  for (const rows of [[APP, cap], [cap]]) {
+    const s = state({ repos: rows });
+    const out = html(m.DevStatusLine, { spaceId: 'spc_demo', state: s, teams: [] });
+    assert.doesNotMatch([...m.repoRows(s).map((x) => x.state), ...texts(m.statusLine(s).parts)].join(' '), /over 1 GB/);
+    assert.match(out, /Too big to read/);
+  }
   // A code on a non-error row changes nothing.
   assert.equal(m.repoRows(state({ repos: [APP, { ...LAB, poll_code: 'too_big' }] }))[1].state, 'Landed changes only · checked 09:00');
   // Any other error keeps "Can't read it right now".
   assert.equal(m.repoRows(state({ repos: [APP, { ...LAB, status: 'error', poll_error: 'Couldn’t reach the repo’s host.' }] }))[1].state, 'Can’t read it right now. Trying again.');
-  assert.equal(m.devSubLine(state({ repos: [big] })).parts[0].text, 'Can’t read a repo');
+  assert.equal(m.devSubLine(state({ repos: [cap] })).parts[0].text, 'Can’t read a repo');
 });
 
 test('other_host from an older server shows as before: "{host} isn’t read yet", a folder "Local folder, no remote"', () => {
