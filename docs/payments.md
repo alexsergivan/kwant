@@ -29,14 +29,22 @@ every MCP tool, through claude's permission prompt and the MCP gateway), in
   `search`, …): Stripe, PayPal, Square, Wise, Coinbase, Braintree, Adyen, Revolut, Mollie,
   Paddle, Lemon Squeezy, Razorpay, GoCardless, Klarna, Venmo, Cash App, Chargebee, Recurly,
   Payoneer, Checkout.com, Authorize.net, Plaid, MoonPay, Kraken, Binance.
-- Any other tool whose name has a pay word (`pay`, `payment`, `payout`, `purchase`, `checkout`,
-  `buy`, `charge`, `donate`, …), a money move (`send`/`transfer`/`withdraw` with `money`,
-  `funds`, `crypto`, `btc`, `usd`, `token`, `coin`, `asset`, `stablecoin`, …), or an order step
-  (`place`/`submit`/`confirm` with `order`, `purchase`, `booking`, `subscription`).
+- Any other tool whose name has a pay word (`pay`, `payment`, `payout`, `purchase`, `checkout`
+  or `check_out`, `buy`, `charge`, `donate`, …), a money move (`send`/`transfer`/`withdraw` with
+  `money`, `funds`, `cash`, `crypto`, `btc`, `usdc`, `usd`, `stablecoin`, …), or an order step
+  (`place`/`submit`/`confirm` with `order`, `purchase`, `booking`, `subscription`). `token`,
+  `coin` and `asset` don't count in a name: `move_asset`, `send_token_email` or `deposit_coin`
+  usually move files, logins or game items. A crypto send named that way asks by its arguments
+  (next rule).
+
+  A name only reads when its first action word is a read verb and so is the first word after
+  each `and`/`then`: `get_quote` reads, `estimate_and_send` and `check_then_transfer` don't.
 - Any tool that doesn't start with a read verb whose arguments (top level, or one object down;
   any spelling: `amountIn`, `amount-in`) have both:
-  - an amount: a number (`5`, `"0.001"`, `"1e18"`, `"0x2386…"`, `"5 USDC"`, `"max"`) under
-    `amount`, `amount_in`, `amount_out`, `value`, `quantity`, `sum` or any `*_amount`;
+  - an amount: a number (`5`, `"0.001"`, `"1e18"`, `"0x2386…"`, `"5 USDC"`, `"$5"`, `"5€"`,
+    `"max"`) or an amount object with one (`{value: "5", currency: "USDC"}`, also `units`,
+    `quantity`, `raw`, `decimal`) under `amount`, `amount_in`, `amount_out`, `value`,
+    `quantity`, `sum`, any `*_amount` or any `amount_*` (`amount_wei`);
   - and a destination or asset: under `to`, `recipient`, `destination`, `to_address`, `address`,
     `token`, `token_in`, `token_out`, `asset`, `currency` or `coin`, a value that looks like an
     account address (EVM `0x` + 40 or 64 hex, ENS `*.eth`, bech32 `bc1…`/`cosmos1…`, base58
@@ -131,17 +139,20 @@ classified here.
 - Payment services, MCP tools and wallets missing from the lists, and tools whose names don't
   say what they do and whose arguments don't carry an amount and a destination or asset in
   reach (e.g. `{order: {lines: [{amount, to}]}}`, two levels down, or an amount under another
-  key name such as `units`).
+  key name such as `units` outside an amount object).
 - A send whose destination is a name or handle rather than an address (`to: "bob"`), with a
   token missing from the list, or a fiat send to an account number that isn't an IBAN, unless
-  its name says it pays (`send_money`, `transfer_funds`) or its app is a money app.
+  its name says it pays (`send_money`, `transfer_funds`) or its app is a money app. A
+  `send_tokens` or `withdraw_coins` with such arguments doesn't ask either: `token` and `coin`
+  in a name aren't enough on their own.
 - Codex's own shell, which kwnt never sees. Its sandbox has no network, so it can't reach a
   payment service.
 - Someone else's browser tools the bot drives through an MCP server, unless the tool's label or
   typed text matches the rules above.
 
 It also asks for some things that aren't payments, e.g. an "Upgrade" link in docs, any click on
-a `/billing` page, a wallet's unsigned `build_transfer`/`build_swap` (no key moves), or an
+a `/billing` page, a git tool named `checkout`/`check_out` (`git_checkout`, `check_out_branch`),
+a wallet's unsigned `build_transfer`/`build_swap` (no key moves), or an
 ordinary write that happens to hold a number and an address-shaped value (e.g. a key-value
 store's `set_limit {token: "<32-character base58 key>", value: 100}`). That's accepted: an extra card costs a tap, a missed payment costs money.
 

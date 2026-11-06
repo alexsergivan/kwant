@@ -338,8 +338,9 @@ async fn a_wallet_mcp_send_asks_with_approvals_off_and_after_always_allow() {
     assert!(reasons.contains(&"send_swap moves an amount to another account or asset"), "{reasons:?}");
 }
 
-/// Rigel's F7 shapes: ordinary tools whose argument names look like an amount and a destination
-/// run without a card with approvals off; the wallet's own sends still ask.
+/// Rigel's F7 and F7b shapes: ordinary tools whose argument names look like an amount and a
+/// destination, or whose names say token, coin or asset, run without a card with approvals off;
+/// wallet sends still ask, including the shapes F7b found missing.
 #[tokio::test]
 async fn ordinary_tools_with_amount_like_keys_run_with_approvals_off() {
     let e = setup().await;
@@ -360,6 +361,16 @@ async fn ordinary_tools_with_amount_like_keys_run_with_approvals_off() {
         ("kv", "put_secret", json!({"token": "abc", "value": "v"})),
         ("ratelimit", "set_limit", json!({"token": "t", "value": 100})),
         ("http", "http_request", json!({"method": "POST", "url": "https://x", "body": {"amount": 5, "to": "x"}})),
+        // F7b: crypto nouns in the name, ordinary arguments
+        ("dam", "move_asset", json!({"asset_id": "a1", "folder": "/b"})),
+        ("dam", "transfer_asset", json!({"asset_id": "a1", "to": "team-b"})),
+        ("dam", "move_assets", json!({"ids": ["a1", "a2"], "to": "archive"})),
+        ("auth", "send_token", json!({"to": "a@b.c"})),
+        ("auth", "send_token_email", json!({"email": "a@b.c"})),
+        ("auth", "send_tokens", json!({"users": ["u1"]})),
+        ("game", "deposit_coin", json!({"player": "p1", "count": 3})),
+        ("dam", "send_asset_to_review", json!({"asset_id": "a1"})),
+        ("figma", "move_token", json!({"token": "color.primary", "to": "brand"})),
     ] {
         let req = request(&e, server, tool, args.clone());
         assert_eq!(payment_floor::reason(&req, None), None, "{server}/{tool} {args}");
@@ -372,6 +383,11 @@ async fn ordinary_tools_with_amount_like_keys_run_with_approvals_off() {
         ("send_swap", json!({"request_id": "r", "token_in": "USDC", "token_out": "ETH", "amount_in": "5"})),
         ("send_swap", json!({"request_id": "r", "token_in": "CENT", "token_out": to, "amount_in": "5", "minimum_out": "0.001", "slippage_bps": 50})),
         ("build_transfer", json!({"token": "USDC", "to": to, "amount": "5"})),
+        ("send_token", json!({"token": "USDC", "to": to, "amount": "5"})),
+        ("estimate_and_send", json!({"token": "USDC", "to": to, "amount": "5"})),
+        ("execute", json!({"to": to, "amount_wei": "1000000000000000000"})),
+        ("send", json!({"to": to, "amount": "$5"})),
+        ("send", json!({"to": to, "amount": {"value": "5", "currency": "USDC"}})),
     ] {
         let req = request(&e, "incentiv", tool, args.clone());
         assert!(payment_floor::reason(&req, None).is_some(), "{tool} {args}");
