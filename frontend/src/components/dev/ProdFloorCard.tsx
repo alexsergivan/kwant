@@ -2,7 +2,7 @@ import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Database, Loader2, ShieldAlert, Target, X, Check } from 'lucide-react';
 import type { BackupResult, ProdFloor } from '../../dev/types';
 import { parseBackupResult } from '../../dev/types';
-import { allowReady, floorHeader, floorReducer, floorSubline, floorView, initialFloorUi, type RowTone } from '../../dev/logic';
+import { allowReady, floorHeader, floorReducer, floorSentence, floorSubline, floorView, initialFloorUi, type RowTone } from '../../dev/logic';
 
 export type FloorDecision = 'allow_once' | 'deny';
 
@@ -72,6 +72,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
   const allowLabel = isDeploy ? 'Allow this deploy' : 'Allow';
   const off = disabled || view.busy;
   const headingId = `floor-${id}-h`;
+  const why = floorSentence(floor.why);
   const mainRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -133,7 +134,7 @@ export const ProdFloorCard: React.FC<ProdFloorCardProps> = ({ id, floor, bot, co
       <p className="mb-3 text-[11px] text-zinc-400 sm:pl-6">{floorSubline(floor)}</p>
 
       <div className="mb-3 space-y-2 rounded-lg border border-zinc-800 bg-zinc-900/90 p-3 text-xs">
-        {floor.why && <p className="text-zinc-300 [overflow-wrap:anywhere]">This is {floor.why}.</p>}
+        {why && <p className="text-zinc-300 [overflow-wrap:anywhere]">{why}</p>}
         <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-all rounded-md border border-zinc-800 bg-zinc-950/70 p-2 font-mono text-[12px] text-zinc-100">
           {command || '(empty command)'}
         </pre>

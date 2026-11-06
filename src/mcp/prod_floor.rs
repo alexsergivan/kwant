@@ -50,6 +50,9 @@ impl FloorKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Floor {
     pub kind: FloorKind,
+    /// One sentence with its own subject and no closing period: a command or tool name
+    /// ("git push sends new commits to main") or a capitalised "This …" ("This command runs
+    /// deploy.sh, a deploy script"). The card shows it as its own sentence.
     pub why: String,
     /// `(label, value)`, labels from: Where, What changes, Downtime, Data, Key used, Migration,
     /// If it fails. Serialised as `[label, value]` pairs.
@@ -245,7 +248,7 @@ fn mcp_reason(server: &str, tool: &str, args: &Value, ctx: &DevCtx) -> Option<Fl
             continue;
         }
         if w.iter().any(|x| DEPLOY_TOOL_WORDS.contains(&x.as_str())) && (infra || w.iter().any(|x| x == "deploy" || x == "redeploy" || x == "rollout")) {
-            add(ctx.deploy(format!("{slug} deploys")).row("Where", server.to_string()));
+            add(ctx.deploy(format!("{slug} starts a deploy")).row("Where", server.to_string()));
         }
         if infra && w.iter().any(|x| DESTROY_WORDS.contains(&x.as_str())) {
             add(Floor::new(FloorKind::Destructive, format!("{slug} deletes or rebuilds something on {server}")).row("Data", "Can't be undone without a backup."));
@@ -392,7 +395,7 @@ fn shell_reason_at(command: &str, ctx: &DevCtx, depth: usize, over_ssh: bool) ->
     // SQL through a database client anywhere in the command
     if DB_CLIENTS.iter().any(|c| lower.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')).any(|w| w == *c)) {
         if let Some(why) = destructive_sql(command) {
-            add(Floor::new(FloorKind::Destructive, format!("a database command that runs {why}")).row("Data", "Can't be undone without a backup."));
+            add(Floor::new(FloorKind::Destructive, format!("This database command runs {why}")).row("Data", "Can't be undone without a backup."));
         }
     }
     let mut ssh_host: Option<String> = None;
@@ -624,7 +627,7 @@ fn ssh_target<'a>(args: &[&'a str]) -> Option<(String, Vec<&'a str>)> {
 fn script_reason(script: &str, ctx: &DevCtx) -> Option<Floor> {
     let name = script.rsplit('/').next().unwrap_or(script).to_lowercase();
     let ws = words(&name);
-    ws.iter().any(|w| SHIP_WORDS.contains(&w.as_str())).then(|| ctx.deploy(format!("runs {script}, a deploy script")))
+    ws.iter().any(|w| SHIP_WORDS.contains(&w.as_str())).then(|| ctx.deploy(format!("This command runs {script}, a deploy script")))
 }
 
 fn has(args: &[&str], x: &str) -> bool {
@@ -657,10 +660,10 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool, over_
             ),
             ("workflow", "run") => {
                 let name = pos.get(2).copied().unwrap_or("");
-                ship_name(name).then(|| ctx.deploy(format!("starts the {name} workflow")))
+                ship_name(name).then(|| ctx.deploy(format!("gh workflow run starts the {name} workflow")))
             }
             ("release", "create") => Some(ctx.deploy("gh release create makes a release, which can start a deploy".into())),
-            ("release", "delete") | ("repo", "delete") => Some(destroy(format!("gh {sub} delete removes it from GitHub"))),
+            ("release", "delete") | ("repo", "delete") => Some(destroy(format!("gh {sub} delete removes the {sub} from GitHub"))),
             _ => None,
         },
         "fly" | "flyctl" => {
@@ -668,7 +671,13 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool, over_
             let f = match (sub, sub2) {
                 ("deploy", _) | ("releases", "rollback") => Some(ctx.deploy(format!("{program} deploy ships the app"))),
                 ("apps", "destroy") | ("volumes", "destroy") | ("volumes", "delete") | ("destroy", _) | ("postgres", "destroy") => {
-                    Some(destroy(format!("{program} {sub} {sub2} destroys it")))
+                    let what = match sub {
+                        "volumes" => "a volume",
+                        "postgres" => "a Postgres cluster",
+                        _ => "the app",
+                    };
+                    let cmd = [program, sub, sub2].iter().filter(|w| !w.is_empty()).copied().collect::<Vec<_>>().join(" ");
+                    Some(destroy(format!("{cmd} deletes {what}")))
                 }
                 ("machine", "destroy") | ("machines", "destroy") => Some(destroy(format!("{program} {sub} destroy removes a machine"))),
                 ("secrets", "set") | ("secrets", "unset") => Some(Floor::new(FloorKind::Deploy, format!("{program} secrets {sub2} restarts the app"))),
@@ -704,7 +713,7 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool, over_
         "docker" | "docker-compose" | "podman" => docker_reason(program, a, ctx, over_ssh),
         "kubectl" | "oc" => match sub {
             "apply" | "rollout" | "set" | "replace" | "patch" | "scale" | "create" => Some(ctx.deploy(format!("{program} {sub} changes the cluster"))),
-            "delete" | "drain" => Some(destroy(format!("{program} {sub} removes it from the cluster"))),
+            "delete" | "drain" => Some(destroy(format!("{program} {sub} removes resources from the cluster"))),
             _ => None,
         },
         "helm" => match sub {
@@ -722,7 +731,7 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool, over_
             "destroy" => Some(destroy("pulumi destroy removes infrastructure".into())),
             _ => None,
         },
-        "vercel" => (has(a, "--prod") || sub == "promote" || sub == "rollback" || (sub == "deploy" && has(a, "--prod"))).then(|| ctx.deploy("vercel ships to production".into())),
+        "vercel" => (has(a, "--prod") || sub == "promote" || sub == "rollback" || (sub == "deploy" && has(a, "--prod"))).then(|| ctx.deploy("vercel ships the app to production".into())),
         "netlify" => (sub == "deploy" && has(a, "--prod")).then(|| ctx.deploy("netlify deploy --prod ships the site".into())),
         "firebase" => (sub == "deploy").then(|| ctx.deploy("firebase deploy ships the project".into())),
         "railway" => (sub == "up" || sub == "redeploy").then(|| ctx.deploy(format!("railway {sub} ships the app"))),
@@ -738,13 +747,13 @@ fn program_reason(program: &str, a: &[&str], ctx: &DevCtx, env_prod: bool, over_
             if a.contains(&"deploy") || a.contains(&"update-service") || a.contains(&"update-function-code") {
                 Some(ctx.deploy("aws … changes a running service".into()))
             } else if (sub == "s3" && (sub2 == "rb" || (sub2 == "rm" && has(a, "--recursive")))) || a.iter().any(|x| x.starts_with("delete-") || x.starts_with("terminate-")) {
-                Some(destroy("an aws command that deletes resources or data".into()))
+                Some(destroy("This aws command deletes resources or data".into()))
             } else {
                 None
             }
         }
         "gsutil" => ((sub == "rm" && (has(a, "-r") || has(a, "-rf"))) || sub == "rb").then(|| destroy("gsutil deletes a bucket or its objects".into())),
-        "make" | "just" | "task" | "mage" | "rake" => pos.iter().find(|t| ship_name(t)).map(|t| ctx.deploy(format!("{program} {t}"))),
+        "make" | "just" | "task" | "mage" | "rake" => pos.iter().find(|t| ship_name(t)).map(|t| ctx.deploy(format!("{program} {t} runs a deploy step"))),
         "npm" | "yarn" | "pnpm" | "bun" => {
             let script = if sub == "run" || sub == "run-script" { sub2 } else { sub };
             ship_name(script).then(|| ctx.deploy(format!("{program} runs the {script} script")))
@@ -1013,9 +1022,9 @@ fn git_reason(a: &[&str], ctx: &DevCtx) -> Option<Floor> {
         } else if tag {
             add(ctx.deploy(format!("git push sends the tag {shown}, which can start a release")));
         } else if protected && force {
-            add(Floor::new(FloorKind::ForcePush, format!("a force-push to {shown}")).row("What changes", format!("{shown} is rewritten; commits others have can be lost.")));
+            add(Floor::new(FloorKind::ForcePush, format!("This force-push rewrites {shown}")).row("What changes", format!("{shown} is rewritten; commits others have can be lost.")));
         } else if protected {
-            add(Floor::new(FloorKind::PushMain, format!("git push to {shown}")).row("What changes", format!("New commits land on {shown}.")));
+            add(Floor::new(FloorKind::PushMain, format!("git push sends new commits to {shown}")).row("What changes", format!("New commits land on {shown}.")));
         }
     }
     best
@@ -1509,6 +1518,110 @@ mod tests {
             ("python manage.py migrate --settings=app.products", None),
         ] {
             assert_eq!(kind(cmd, &c), want, "{cmd}");
+        }
+    }
+
+    /// The card shows `why` as its own sentence (it read "This is runs deploy.sh, a deploy
+    /// script." in 0.7.0). Every constructor: a subject of its own, a verb, no closing period.
+    #[test]
+    fn every_why_reads_as_a_sentence_with_its_own_subject() {
+        const BARE: &[&str] = &["a", "an", "the", "runs", "starts", "changes", "deploys", "ships", "makes", "removes", "pushes", "deletes", "destroys", "sends", "rewrites"];
+        const VERBS: &[&str] = &[
+            "runs", "starts", "changes", "deploys", "ships", "makes", "removes", "pushes", "deletes", "destroys", "sends", "rewrites", "lands", "goes", "restarts",
+            "empties", "writes", "formats", "migrates", "stops",
+        ];
+        let check = |input: &str, f: Option<Floor>| {
+            let f = f.unwrap_or_else(|| panic!("{input}: no floor"));
+            let why = f.why.as_str();
+            let ws: Vec<&str> = why.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).collect();
+            let first = ws.first().copied().unwrap_or("");
+            assert!(!why.ends_with('.') && !why.contains("  ") && why.trim() == why, "{input}: {why:?}");
+            assert!(!BARE.contains(&first.to_lowercase().as_str()), "{input}: no subject: {why:?}");
+            let named = input.split(|c: char| c.is_whitespace() || c == '\'' || c == '"').any(|w| w == first);
+            assert!(first.starts_with(char::is_uppercase) || named, "{input}: starts with neither a capital nor the command: {why:?}");
+            assert!(ws.iter().skip(1).any(|w| VERBS.contains(w)), "{input}: no verb: {why:?}");
+        };
+        let c = ctx();
+        let shell = [
+            "./deploy.sh",
+            "psql -c 'DROP TABLE users'",
+            "gh pr merge 301 --squash",
+            "gh workflow run deploy.yml",
+            "gh release create v1.0.0",
+            "gh release delete v1.0.0",
+            "gh repo delete me/x",
+            "fly deploy",
+            "fly apps destroy myapp",
+            "fly volumes destroy vol_1",
+            "fly destroy myapp",
+            "fly machine destroy 123",
+            "fly secrets set A=b",
+            "wrangler deploy",
+            "wrangler d1 execute db --command 'DROP TABLE x'",
+            "wrangler r2 object delete b/k",
+            "kubectl apply -f x.yaml",
+            "kubectl delete pod x",
+            "helm upgrade app chart",
+            "helm uninstall app",
+            "terraform apply",
+            "terraform apply -destroy",
+            "terraform destroy",
+            "pulumi up",
+            "pulumi destroy",
+            "vercel --prod",
+            "netlify deploy --prod",
+            "firebase deploy",
+            "railway up",
+            "kamal deploy",
+            "serverless deploy",
+            "heroku restart",
+            "heroku pg:reset",
+            "gcloud run deploy svc",
+            "aws ecs update-service --cluster c",
+            "aws s3 rb s3://b",
+            "gsutil rm -r gs://b",
+            "make deploy",
+            "npm run deploy",
+            "truncate -s 0 app.db",
+            "dd if=x of=/dev/sda",
+            "mkfs.ext4 /dev/sdb",
+            "dropdb prod",
+            "redis-cli flushall",
+            "python manage.py migrate --settings=app.settings.production",
+            "rm app.db",
+            "rm -rf /",
+            "rm -rf data/uploads",
+            "docker compose down -v",
+            "docker compose up -d",
+            "docker volume rm v",
+            "docker system prune --volumes",
+            "docker rm -v c",
+            "docker stack deploy -c x.yml s",
+            "docker service rm s",
+            "docker run -d --name web --restart always img",
+            "docker restart web",
+            "git push heroku main",
+            "git push --tags",
+            "git push --all origin",
+            "git push origin :main",
+            "git push origin v1.2.3",
+            "git push -f origin main",
+            "git push origin main",
+        ];
+        for cmd in shell {
+            check(cmd, shell_reason(cmd, &c));
+        }
+        let unknown = DevCtx { head_branch: None, ..ctx() };
+        check("git push", shell_reason("git push", &unknown));
+        check("git push -f", shell_reason("git push -f", &unknown));
+        let prod = DevCtx { prod_connections: vec!["stripe".into()], ..ctx() };
+        for (server, tool, args, c) in [
+            ("fly", "deploy_app", json!({}), &c),
+            ("digitalocean-droplets", "droplet-delete", json!({}), &c),
+            ("supabase", "execute_sql", json!({"query": "DROP TABLE users"}), &c),
+            ("stripe", "create_refund", json!({}), &prod),
+        ] {
+            check(&format!("{server} {tool}"), reason(&req(server, tool, args), c));
         }
     }
 }
