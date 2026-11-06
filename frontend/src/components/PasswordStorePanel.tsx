@@ -131,8 +131,20 @@ export const BitwardenLoginForm: React.FC<{
     [],
   );
 
-  const submit = async (e: React.FormEvent) => {
+  const noUsableTwoFactor = step?.kind === 'two-factor' && !step.providers.some((p) => p.usable);
+  // Enter in a field connects, and never reaches a form this one sits in.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const t = e.target as HTMLElement;
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing || t.tagName !== 'INPUT') return;
     e.preventDefault();
+    e.stopPropagation();
+    void submit();
+  };
+
+  // Not a <form>: this form is shown inside other forms (GitHub, IMAP, the approvals confirm), and a
+  // nested <form> is dropped by the browser, so its submit became the outer form's (a page reload).
+  const submit = async () => {
+    if (busy || noUsableTwoFactor) return;
     setFormError(null);
     let serverUrl: string | undefined;
     if (mode === 'connect') {
@@ -184,7 +196,6 @@ export const BitwardenLoginForm: React.FC<{
     }
   };
 
-  const noUsableTwoFactor = step?.kind === 'two-factor' && !step.providers.some((p) => p.usable);
   // The hint describes the field rather than naming it, so screen readers hear the label alone first.
   const label = (text: string, input: React.ReactElement, hint?: React.ReactNode) => {
     const hintId = `${id}-${text.replace(/\W+/g, '-').toLowerCase()}-hint`;
@@ -200,7 +211,7 @@ export const BitwardenLoginForm: React.FC<{
   };
 
   return (
-    <form onSubmit={submit} className="space-y-2 text-xs" aria-labelledby={`${id}-t`} data-bitwarden-form={mode} noValidate>
+    <div role="group" onKeyDown={onKeyDown} className="space-y-2 text-xs" aria-labelledby={`${id}-t`} data-bitwarden-form={mode}>
       <p id={`${id}-t`} className={plainTitle ? 'text-xs font-medium text-zinc-100 flex items-center gap-1.5' : 'text-[11px] font-semibold text-sky-400 flex items-center gap-1.5'}>
         {mode === 'connect' ? <KeyRound size={12} aria-hidden="true" /> : <LockOpen size={12} aria-hidden="true" />}
         {mode === 'connect' ? 'Connect Bitwarden' : 'Unlock Bitwarden'}
@@ -314,12 +325,12 @@ export const BitwardenLoginForm: React.FC<{
         <button type="button" onClick={onCancel} className={btnQuiet}>
           Cancel
         </button>
-        <button type="submit" disabled={busy || noUsableTwoFactor} className={btnMain}>
+        <button type="button" onClick={() => void submit()} disabled={busy || noUsableTwoFactor} className={btnMain}>
           {busy && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
           {busy ? (mode === 'connect' ? 'Connecting…' : 'Unlocking…') : step ? 'Continue' : mode === 'connect' ? 'Connect' : 'Unlock'}
         </button>
       </div>
-    </form>
+    </div>
   );
 };
 
@@ -534,7 +545,7 @@ export const PasswordStoreBar: React.FC<{
               />
               <span>
                 <span className="block text-[11px] text-zinc-200 font-medium">Saved on this server</span>
-                <span className="block text-[10px] text-zinc-500 leading-snug">Encrypted here. Works only while every space and bot is on “Ask before running commands”; otherwise use Bitwarden.</span>
+                <span className="block text-[10px] text-zinc-500 leading-snug">Encrypted here. While some bots run commands without asking, you confirm this once for this server; Bitwarden keeps passwords out of their reach.</span>
               </span>
             </label>
             <label className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer ${onBitwarden || connecting ? 'border-sky-500/60 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-700'}`}>

@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A token form waiting on Bitwarden or approvals checks again when you come back to the window, so connecting Bitwarden in another tab unblocks it.
 
 ### Fixed
+- Connect in the Bitwarden form inside the GitHub or email form no longer reloads the page, and restoring an archived space offers the same one-time "Save it on this server" choice.
 - A custom server's models that have no name now show their id in the model picker instead of "[redacted]" (#365).
 
 ## [Mac 0.7.2] - 2026-11-06

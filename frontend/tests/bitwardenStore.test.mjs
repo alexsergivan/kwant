@@ -174,7 +174,7 @@ test('the store bar: this server, Bitwarden unlocked with Lock, Bitwarden locked
 test('the picker: two choices, said plainly; Bitwarden opens the connect form', () => {
   const html = m.bar(LOCAL, { initialOpen: true });
   assert.match(text(html), /Where passwords are kept, for every bot/);
-  assert.match(text(html), /Saved on this server Encrypted here\. Works only while every space and bot is on “Ask before running commands”; otherwise use Bitwarden\./);
+  assert.match(text(html), /Saved on this server Encrypted here\. While some bots run commands without asking, you confirm this once for this server; Bitwarden keeps passwords out of their reach\./);
   assert.match(text(html), /Bitwarden In your own Bitwarden account/);
   assert.equal(inputs(html).filter((i) => /type="radio"/.test(i)).length, 2);
   const connecting = m.bar(LOCAL, { initialOpen: true, initialConnecting: true });
@@ -228,7 +228,7 @@ test('two-step login and new-device code are asked for in the same form', () => 
   assert.doesNotMatch(text(only), /Method/, 'no picker for one method');
   const passkey = m.form({ mode: 'unlock', status: LOCKED, initialStep: { kind: 'two-factor', providers: m.twoFactorChoices(['7']) }, initialProblem: { kind: 'two-factor', providers: m.twoFactorChoices(['7']) } });
   assert.match(text(passkey), /Use an API key instead/);
-  assert.match(passkey, /<button type="submit" disabled=""/);
+  assert.match(passkey, /<button type="button" disabled=""[^>]*>Continue/);
   const device = m.form({ mode: 'unlock', status: LOCKED, initialStep: { kind: 'new-device-code' } });
   assert.match(text(device), /Code from Bitwarden's email/);
   const wrong = m.form({ mode: 'unlock', status: LOCKED, initialProblem: { kind: 'wrong-password' } });

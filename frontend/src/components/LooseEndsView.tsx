@@ -691,9 +691,15 @@ export const AddSourceForm: React.FC<{
   land?: boolean;
 }> = ({ onAdded, onCancel, initialKind = 'imap', connect = false, land = false }) => {
   const [kind, setKind] = useState<'imap' | 'github'>(initialKind);
+  // Choosing GitHub in the picker lands on its first control (the token, or the card), like Connect does.
+  const [picked, setPicked] = useState(false);
+  const onKind = (k: 'imap' | 'github') => {
+    setKind(k);
+    setPicked(k === 'github');
+  };
   if (kind === 'github')
-    return <GitHubConnectForm heading="Add a source" above={<KindPicker kind={kind} onKind={setKind} />} onAdded={onAdded} onCancel={onCancel} land={connect && land} />;
-  return <ImapSourceForm picker={<KindPicker kind={kind} onKind={setKind} />} onAdded={onAdded} onCancel={onCancel} />;
+    return <GitHubConnectForm heading="Add a source" above={<KindPicker kind={kind} onKind={onKind} />} onAdded={onAdded} onCancel={onCancel} land={(connect && land) || picked} />;
+  return <ImapSourceForm picker={<KindPicker kind={kind} onKind={onKind} />} onAdded={onAdded} onCancel={onCancel} />;
 };
 
 const ImapSourceForm: React.FC<{ picker: React.ReactNode; onAdded: (s: LooseSource) => void; onCancel: () => void }> = ({ picker, onAdded, onCancel }) => {

@@ -19,6 +19,7 @@ let phone = false;
 window.matchMedia = (q) => ({ matches: q.includes('max-width: 767px') ? phone : false, media: q, addEventListener() {}, removeEventListener() {} });
 
 let server;
+const OLD_SPACE = { id: 'spc_old', name: 'Old', icon: 'box', color: null, archived_at: '2026-10-01T00:00:00Z', counts: { bots: 2 } };
 const json = (b, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
 g.fetch = g.window.fetch = async (url, init = {}) => {
   const u = String(url);
@@ -33,6 +34,11 @@ g.fetch = g.window.fetch = async (url, init = {}) => {
     return json({ source: { id: 'src_demo', kind: 'github', label: body.label || 'GitHub', enabled: true }, test: null });
   }
   if (/\/dev_mode$/.test(path)) return json(server.dev ?? { on: false, repos: [] });
+  if (path === '/api/spaces' && method === 'GET') return json([OLD_SPACE]);
+  if (path === `/api/spaces/${OLD_SPACE.id}` && method === 'PATCH') {
+    if (!body.accept_risk) return json({ error: 'Passwords are kept on this server and bots in this space run commands without asking.', needs_bitwarden: true, can_accept: true, local_count: 2 }, 409);
+    return json({ ...OLD_SPACE, archived_at: null });
+  }
   return json({});
 };
 
@@ -44,7 +50,10 @@ const m = await loadBundled(`
   export { GitHubConnectForm, NeedsBitwarden, GITHUB_ALSO_DEV, LooseSources } from './src/components/LooseEndsView';
   export { GitHubConnectHost, openGitHubConnect, popoverPlace, GITHUB_CONNECT_EVENT, GITHUB_CONNECTED_EVENT } from './src/components/GitHubConnect';
   export { TeamRepoDevLine, teamRepoLine, repoKeyOf, TEAM_REPO_LINES } from './src/components/TeamRepoDevLine';
-  export { BitwardenLoginForm } from './src/components/PasswordStorePanel';
+  export { BitwardenLoginForm, MoveToBitwardenFirst } from './src/components/PasswordStorePanel';
+  export { AddSourceForm } from './src/components/LooseEndsView';
+  export { ArchivedSpacesModal } from './src/components/Spaces';
+  export { acceptRiskText } from './src/passwordStore';
   export { parseDevMode, devStore } from './src/devMode';
 `);
 const { React, createRoot } = m;
@@ -399,7 +408,7 @@ test('C5 DOM: a wrong password on bitwarden.eu names bitwarden.com, for the serv
   await settle();
   const pw = [...form.querySelectorAll('input[type="password"]')].pop();
   pw.value = 'demo-not-a-password';
-  form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  [...form.querySelectorAll('button')].find((b) => b.textContent === 'Connect').click();
   await settle(20);
   const unlock = server.calls.find(([, p]) => p === '/api/passwords/bitwarden/unlock');
   assert.equal(unlock[2].server_url, 'https://vault.bitwarden.eu');
@@ -408,5 +417,145 @@ test('C5 DOM: a wrong password on bitwarden.eu names bitwarden.com, for the serv
   typeIn(form.querySelector('select'), 'https://vault.bitwarden.com');
   await settle();
   assert.equal(document.querySelector('[data-bw-other-cloud]')?.textContent, 'Is your account on bitwarden.com? Choose it under Server.');
+  root.unmount();
+});
+
+// ---------------------------------------------------------------- F1: no form inside a form
+
+const nested = () => [...document.querySelectorAll('form')].filter((f) => f.parentElement?.closest('form'));
+const unlocks = () => server.calls.filter(([meth, p]) => meth === 'POST' && p === '/api/passwords/bitwarden/unlock');
+const fillBitwarden = async (bw) => {
+  typeIn(bw.querySelector('input[type="email"]'), 'demo@example.com');
+  await settle();
+  [...bw.querySelectorAll('input[type="password"]')].pop().value = 'demo-not-a-password';
+};
+
+test('F1: the Bitwarden login form is never a <form>, so it can sit inside one', () => {
+  for (const mode of ['connect', 'unlock']) {
+    const html = m.renderToStaticMarkup(h(m.BitwardenLoginForm, { mode, status: null, onDone: noop, onCancel: noop }));
+    assert.doesNotMatch(html, /<form/, mode);
+    assert.match(html, /role="group"/);
+    assert.doesNotMatch(html, /type="submit"/, `${mode}: no submit button to reach an outer form`);
+  }
+});
+
+test('F1 DOM: GitHub > Use Bitwarden: no nested form; Connect and Enter each send exactly one unlock and never submit the GitHub form', async () => {
+  reset();
+  const submits = [];
+  const onSubmit = (e) => submits.push(e.target.getAttribute('data-add-source') ?? e.target.tagName);
+  document.addEventListener('submit', onSubmit, true);
+  const { root } = await mount(h(m.GitHubConnectForm, { onAdded: noop, onCancel: noop, land: true, scroll: false }));
+  await frame();
+  await click(document.querySelector('[data-save-first-bitwarden]'));
+  const bw = document.querySelector('[data-bitwarden-form="connect"]');
+  assert.ok(bw.closest('form[data-github-connect]'), 'shown inside the GitHub form');
+  assert.equal(bw.tagName, 'DIV');
+  assert.deepEqual(nested(), []);
+  await fillBitwarden(bw);
+  [...bw.querySelectorAll('button')].find((b) => b.textContent === 'Connect').click();
+  await settle(20);
+  assert.equal(unlocks().length, 1, 'Connect: one unlock');
+  // Enter in the master password field: one more unlock, and the key never reaches the GitHub form.
+  const pw = [...bw.querySelectorAll('input[type="password"]')].pop();
+  pw.value = 'demo-not-a-password';
+  const enter = new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+  pw.dispatchEvent(enter);
+  await settle(20);
+  assert.equal(enter.defaultPrevented, true, 'no implicit submit of the outer form');
+  assert.equal(unlocks().length, 2, 'Enter: one more unlock');
+  // Enter in the Server picker does nothing.
+  bw.querySelector('select').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+  await settle(20);
+  assert.equal(unlocks().length, 2);
+  assert.deepEqual(submits, [], 'no form was submitted');
+  assert.deepEqual(posts(), [], 'nothing saved to Loose ends');
+  document.removeEventListener('submit', onSubmit, true);
+  root.unmount();
+});
+
+test('F1 DOM: GitHub > 409 > Move to Bitwarden (NeedsBitwarden in the GitHub form): no nested form', async () => {
+  reset({ store: { ...STORE_OFF, approvals_off: false }, refuse: true });
+  const { root } = await mount(h(m.GitHubConnectForm, { onAdded: noop, onCancel: noop, land: true, scroll: false }));
+  await frame();
+  document.querySelector('[data-github-connect] input[type="password"]').value = 'demo-token-not-real';
+  document.querySelector('[data-github-connect]').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await settle(20);
+  await click([...document.querySelectorAll('[data-needs-bitwarden] button')].find((b) => b.textContent === 'Move to Bitwarden'));
+  assert.ok(document.querySelector('[data-github-connect] [data-bitwarden-form]'));
+  assert.deepEqual(nested(), []);
+  root.unmount();
+});
+
+test('F1 DOM: IMAP > 409 > Move to Bitwarden: no nested form, and Connect sends one unlock without submitting the IMAP form', async () => {
+  reset({ store: { ...STORE_OFF, approvals_off: false }, refuse: true });
+  const submits = [];
+  const onSubmit = () => submits.push(1);
+  const { root } = await mount(h(m.AddSourceForm, { onAdded: noop, onCancel: noop }));
+  const form = document.querySelector('form[data-add-source="imap"]');
+  const inputs = [...form.querySelectorAll('input')];
+  typeIn(inputs.find((i) => i.placeholder === 'imap.gmail.com'), 'imap.example.test');
+  typeIn(inputs.find((i) => i.placeholder === 'you@example.com'), 'demo@example.test');
+  form.querySelector('input[type="password"]').value = 'demo-not-a-password';
+  await settle();
+  form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await settle(20);
+  await click([...form.querySelectorAll('[data-needs-bitwarden] button')].find((b) => b.textContent === 'Move to Bitwarden'));
+  const bw = form.querySelector('[data-bitwarden-form="connect"]');
+  assert.ok(bw);
+  assert.deepEqual(nested(), []);
+  document.addEventListener('submit', onSubmit, true);
+  await fillBitwarden(bw);
+  [...bw.querySelectorAll('button')].find((b) => b.textContent === 'Connect').click();
+  await settle(20);
+  assert.equal(unlocks().length, 1);
+  assert.deepEqual(submits, []);
+  document.removeEventListener('submit', onSubmit, true);
+  root.unmount();
+});
+
+test('F1 DOM: Move to Bitwarden first (the approvals confirm) has no form in a form', async () => {
+  reset();
+  const status = m.parseStoreStatus({ ...STORE_OFF, local_count: 3 });
+  const { root } = await mount(h('form', null, h(m.MoveToBitwardenFirst, { store: { status, problem: null, reload: noop, set: noop }, label: 'Move them to Bitwarden first', initialStep: 'connect' })));
+  assert.ok(document.querySelector('[data-move-first] [data-bitwarden-form="connect"]'));
+  assert.deepEqual(nested(), []);
+  root.unmount();
+});
+
+// ---------------------------------------------------------------- F2: restoring an archived space
+
+test('F2 DOM: restore 409 → the one-time choice (A3 copy) → Save it on this server restores with accept_risk', async () => {
+  reset({ store: { ...STORE_OFF, local_count: 2 } });
+  const restored = [];
+  const { root } = await mount(h(m.ArchivedSpacesModal, { onClose: noop, onRestored: (s) => restored.push(s) }));
+  await settle(20);
+  await click([...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Restore'));
+  await settle(20);
+  const card = document.querySelector('[data-restore-accept-risk]');
+  assert.ok(card, 'the choice, not the raw 409 sentence');
+  assert.equal(document.querySelector('[role="alert"]'), null, 'no error line');
+  assert.match(card.textContent, new RegExp(m.acceptRiskText(2).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(card.querySelector('[data-restore-save]').textContent, 'Save it on this server');
+  assert.ok([...card.querySelectorAll('button')].some((b) => b.textContent.includes('Use Bitwarden')), 'Use Bitwarden');
+  assert.equal(restored.length, 0);
+  await click(card.querySelector('[data-restore-save]'));
+  await settle(20);
+  const patches = server.calls.filter(([meth, p]) => meth === 'PATCH' && p === '/api/spaces/spc_old').map(([, , b]) => b);
+  assert.deepEqual(patches, [{ archived: false }, { archived: false, accept_risk: true }]);
+  assert.equal(restored.length, 1);
+  assert.equal(document.querySelector('[data-restore-accept-risk]'), null);
+  root.unmount();
+});
+
+// ---------------------------------------------------------------- N4
+
+test('N4 DOM: choosing GitHub in Add a source focuses its first control', async () => {
+  reset({ store: { ...STORE_OFF, approvals_off: false } });
+  const { root } = await mount(h(m.AddSourceForm, { onAdded: noop, onCancel: noop }));
+  await click([...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'GitHub'));
+  await frame();
+  await settle(20);
+  assert.equal(document.activeElement?.getAttribute('type'), 'password', 'the token field');
+  assert.ok(document.activeElement.closest('[data-github-connect]'));
   root.unmount();
 });
