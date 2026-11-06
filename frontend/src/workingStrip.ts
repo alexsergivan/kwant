@@ -41,6 +41,20 @@ export function waitingOn(s: WorkingState): 'question' | 'approval' | null {
   return open?.kind === 'approval' && open.status === 'waiting' ? 'approval' : null;
 }
 
+/**
+ * What the live reply bubble holds before its first words. A turn paused on an approval card (the
+ * production floor, a shell command) is waiting for the person, not loading, so it gets a line that
+ * points at the card instead of the "first words" skeleton (0.7.1, D6 footage).
+ */
+export type LiveBubble = 'queued' | 'text' | 'question' | 'browser' | 'approval' | 'starting';
+
+export function liveBubble(s: WorkingState): LiveBubble {
+  if (s.queued) return 'queued';
+  if (s.writing) return 'text';
+  if (s.awaitingAnswer) return s.awaitingBrowser ? 'browser' : 'question';
+  return waitingOn(s) === 'approval' ? 'approval' : 'starting';
+}
+
 /** The strip's clock; the saved card header uses the same one. */
 export const formatElapsed = formatClock;
 

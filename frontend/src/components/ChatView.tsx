@@ -62,7 +62,7 @@ import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../ro
 import { SmartActionsSlot, actionClass } from './results/SmartActions';
 import { WorkingStrip } from './WorkingStrip';
 import { ScrollRow } from './ScrollRow';
-import { waitingOn } from '../workingStrip';
+import { liveBubble, waitingOn } from '../workingStrip';
 import { COMPOSE_PREFILL_EVENT, withPrefill } from './results/SmartResult';
 import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
@@ -634,6 +634,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Phone (0.6.13 spec A3/C2): the working strip is the one live line, so the stream drops what repeats it.
   // (`phone` is the A1 PHONE_QUERY flag above).
   const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
+  // What the live bubble holds before its first words: a pending approval reads as "waiting for your OK", not loading.
+  const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing: !!streamingText });
   // The strip's "Answer ↑": the open question card, else the approval card, fully in view.
   const showWaitingCard = (on: 'question' | 'approval') => {
     if (on === 'approval') return showApproval();
@@ -1640,10 +1642,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
                     Queued
                   </span>
-                ) : awaitingAnswer && !phone ? (
+                ) : (awaitingAnswer || bubble === 'approval') && !phone ? (
                   <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
-                    {awaitingBrowser ? 'Waiting for you in the browser' : 'Waiting for your answer'}
+                    {bubble === 'approval' ? 'Waiting for your OK' : awaitingBrowser ? 'Waiting for you in the browser' : 'Waiting for your answer'}
                   </span>
                 ) : discussionState?.inProgress ? (
                   <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
@@ -1681,6 +1683,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     {awaitingBrowser
                       ? 'Paused on the browser step above. Do it in the browser panel and press Done; this reply carries on from it.'
                       : 'Paused on the question above. Answer it there; this reply carries on from it.'}
+                  </p>
+                ) : bubble === 'approval' ? (
+                  <p className="text-zinc-400" role="status" data-live-bubble="approval">
+                    Paused on the approval below. Allow or deny it there; this reply carries on from it.
                   </p>
                 ) : (
                   <div className="space-y-2.5 py-1" role="status" aria-label="Waiting for the first words">
