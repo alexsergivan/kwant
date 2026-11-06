@@ -742,17 +742,34 @@ pub async fn remove_mirror(data_dir: &Path, space: &str, key: &str) {
 /// The git dir of team folder `folder`, only if it is that folder's own (G2 review F2): the folder
 /// is writable by anyone working in it, so its `.git` could otherwise point kwant at another
 /// space's repo or at one of kwant's own mirrors, and its cards would show that repo. Refused
-/// ([`GitError::Refused`]):
+/// ([`GitError::Refused`]): everything [`own_git_dir`] refuses, and a git dir, or its main repo,
+/// under `<data>/dev` (kwant's mirrors). No `.git` at all is [`GitError::NotFound`].
+pub fn local_git_dir(folder: &Path, data_dir: &Path) -> Result<PathBuf, GitError> {
+    let (git_dir, common) = own_git_dirs(folder)?;
+    if let Ok(mirrors) = std::fs::canonicalize(data_dir.join("dev")) {
+        if git_dir.starts_with(&mirrors) || common.starts_with(&mirrors) {
+            return Err(GitError::Refused);
+        }
+    }
+    Ok(git_dir)
+}
+
+/// The git dir of `folder` if it is that folder's own (G2 delta D1; team detection reads a
+/// folder's remote and branch only through this). Refused ([`GitError::Refused`]):
 /// - a `.git` that is a symlink;
 /// - a `.git` file (a linked worktree) unless the git dir it names points back at this folder's
 ///   `.git` (its `gitdir` file, which `git worktree add` writes) and sits in its main repo's
-///   `worktrees/`, so only that repo can have made it;
+///   `worktrees/`, so only that repo can have made it (a submodule checkout is refused);
 /// - a `.git` directory with a `commondir` (it would borrow another repo's objects and refs);
-/// - a git dir, or its main repo, under `<data>/dev` (kwant's mirrors);
 /// - `objects/info/alternates`, and any symlink among the objects and refs git reads.
 ///
 /// No `.git` at all is [`GitError::NotFound`].
-pub fn local_git_dir(folder: &Path, data_dir: &Path) -> Result<PathBuf, GitError> {
+pub fn own_git_dir(folder: &Path) -> Result<PathBuf, GitError> {
+    own_git_dirs(folder).map(|(git_dir, _)| git_dir)
+}
+
+/// [`own_git_dir`] and the main repo's git dir (the same dir unless `folder` is a worktree).
+fn own_git_dirs(folder: &Path) -> Result<(PathBuf, PathBuf), GitError> {
     let folder = std::fs::canonicalize(folder).map_err(|_| GitError::NotFound)?;
     let dot_git = folder.join(".git");
     let meta = std::fs::symlink_metadata(&dot_git).map_err(|_| GitError::NotFound)?;
@@ -786,18 +803,14 @@ pub fn local_git_dir(folder: &Path, data_dir: &Path) -> Result<PathBuf, GitError
     } else {
         return Err(GitError::Refused);
     };
-    if let Ok(mirrors) = std::fs::canonicalize(data_dir.join("dev")) {
-        if git_dir.starts_with(&mirrors) || common.starts_with(&mirrors) {
-            return Err(GitError::Refused);
-        }
-    }
     for d in [&git_dir, &common] {
         if d.join("objects/info/alternates").symlink_metadata().is_ok() || has_symlink(d) {
             return Err(GitError::Refused);
         }
     }
-    Ok(git_dir)
+    Ok((git_dir, common))
 }
+
 
 /// A small text file (a `.git` file, `gitdir`, `commondir`), refused if it is a symlink or big.
 fn read_small(p: &Path) -> Result<String, GitError> {

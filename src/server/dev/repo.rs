@@ -381,7 +381,10 @@ async fn git(dir: &std::path::Path, args: &[&str]) -> Option<String> {
 /// What a team folder's git says: its remote's URL (`origin`, else the first remote; `None` when
 /// it has none) and its default branch. `None` when the folder isn't a git checkout.
 pub async fn read_folder(dir: &std::path::Path) -> Option<(Option<String>, Option<String>)> {
-    if !dir.join(".git").exists() {
+    // Only the folder's own repo: a `.git` symlink or `gitdir:` file naming another repo would
+    // show that repo's remote and branch here (G2 delta D1)
+    let d = dir.to_path_buf();
+    if !matches!(tokio::task::spawn_blocking(move || git::own_git_dir(&d)).await, Ok(Ok(_))) {
         return None;
     }
     // A folder git can't open (dubious ownership, a broken .git) counts as no checkout
@@ -956,6 +959,73 @@ mod tests {
         let n = checkout(root, "n", "main", &[]).to_string_lossy().to_string();
         let got = detect_teams(&[team("X", Some(&n), None), team("Y", Some(&n), None)], root, &gh()).await;
         assert_eq!(got.len(), 1);
+    }
+
+    /// Another team's private checkout (G2 delta D1): its remote carries a token and its branch a
+    /// name only that team should see.
+    fn victim(root: &std::path::Path) -> std::path::PathBuf {
+        let t = fake_token();
+        checkout(root, "victim", "b-private-branch", &[("origin", &format!("https://bob:{t}@git.example.org/b/private.git"))])
+    }
+
+    /// What a team's folder detection must never show: the other repo, its branch or its token.
+    fn shows_nothing_of(got: &[Source], what: &str) {
+        let out = format!("{got:?}");
+        assert!(got.is_empty(), "{what}: detected {out}");
+        for leak in ["private", "b-private-branch", "git.example.org", &fake_token()] {
+            assert!(!out.contains(leak), "{what}: {leak} leaked");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_team_folder_whose_git_is_a_symlink_to_another_repo_is_not_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let v = victim(root);
+        let a = root.join("team-a");
+        std::fs::create_dir_all(&a).unwrap();
+        std::os::unix::fs::symlink(v.join(".git"), a.join(".git")).unwrap();
+        let a = a.to_string_lossy();
+        shows_nothing_of(&detect_teams(&[team("A", Some(&a), None)], root, &gh()).await, ".git symlink");
+        assert!(read_folder(std::path::Path::new(&*a)).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_team_folder_whose_git_file_names_another_repo_is_not_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let v = victim(root);
+        let a = root.join("team-a");
+        let r = root.join("team-r");
+        for (dir, target) in [(&a, v.join(".git").to_string_lossy().to_string()), (&r, "../victim/.git".to_string())] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join(".git"), format!("gitdir: {target}\n")).unwrap();
+        }
+        let (a, r) = (a.to_string_lossy(), r.to_string_lossy());
+        shows_nothing_of(&detect_teams(&[team("A", Some(&a), None)], root, &gh()).await, "gitdir: absolute");
+        shows_nothing_of(&detect_teams(&[team("R", Some(&r), None)], root, &gh()).await, "gitdir: relative");
+    }
+
+    #[tokio::test]
+    async fn a_real_worktree_is_still_detected_and_one_borrowing_its_gitdir_is_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let main = checkout(root, "main", "main", &[("origin", "https://git.example.org/team/app.git")]);
+        sh_git(&main, &["-c", "user.name=t", "-c", "user.email=t@example.org", "commit", "-q", "--allow-empty", "-m", "first"]);
+        let wt = root.join("wt");
+        sh_git(&main, &["worktree", "add", "-q", "-b", "feature", wt.to_str().unwrap()]);
+        assert!(wt.join(".git").is_file(), "git wrote a .git file");
+        // Same `gitdir:` line as the real worktree, but the git dir points back at `wt`, not here
+        let forged = root.join("forged");
+        std::fs::create_dir_all(&forged).unwrap();
+        std::fs::copy(wt.join(".git"), forged.join(".git")).unwrap();
+        let (w, f) = (wt.to_string_lossy(), forged.to_string_lossy());
+        // The forged team comes first: had it been detected, it would take the repo from `wt`
+        let got = detect_teams(&[team("Forged", Some(&f), None), team("Wt", Some(&w), None)], root, &gh()).await;
+        assert_eq!(brief(&got), vec![("Wt".into(), "team/app".into(), Some("git.example.org".into()), "folder", Some("feature".into()))]);
+        // An ordinary checkout still reads as before
+        let m = main.to_string_lossy();
+        assert_eq!(brief(&detect_teams(&[team("Main", Some(&m), None)], root, &gh()).await), vec![("Main".into(), "team/app".into(), Some("git.example.org".into()), "folder", Some("main".into()))]);
     }
 
     #[test]
