@@ -8,7 +8,7 @@ use kwnt::db::dev_mode::{PENDING, READY, RELEASE_NOTES};
 use kwnt::db::spaces::SpaceId;
 use kwnt::server::continuity::{SelfScope, TurnOrigin};
 use kwnt::server::mcp_runtime;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// A turn token of bot `a`, as its CLI holds it.
 async fn turn_token(env: &Env) -> String {
@@ -37,7 +37,9 @@ async fn a_release_notes_draft_is_read_by_id() {
     let (s, v) = call(&env.app, "GET", &uri, None).await;
     assert_eq!(s.as_u16(), 200, "{v}");
     assert_eq!((v["id"].as_str(), v["kind"].as_str(), v["status"].as_str()), (Some(row.id.as_str()), Some(RELEASE_NOTES), Some(PENDING)));
-    assert!(v["created_at"].is_string() && v.get("markdown").is_none() && v.get("repo").is_none(), "{v}");
+    assert!(v["created_at"].is_string() && v.get("markdown").is_none() && v.get("since_tag").is_none() && v.get("cards").is_none(), "{v}");
+    // 0.7.2: every card names its repo (key, label, team); a 0.7.1 card made with no repo has key ""
+    assert_eq!((v["repo"].clone(), v["repo_name"].clone(), v["team"].clone()), (json!(""), json!("demo-org/demo-app"), Value::Null), "{v}");
 
     // Ready: the draft's text, with the row's id, kind, status and created_at winning
     let card = json!({"since_tag": "v1.0.0", "markdown": "## What's new\n- Faster sign-in", "whats_new": ["Faster sign-in"], "id": "spoof", "status": "spoof"});

@@ -1,13 +1,14 @@
-//! The Dev mode poller (plan §3.3, D4, D5, D8): every [`EVERY`] (and right after the switch goes
-//! on, or the repo or branch moves) it reads each Dev mode space's repo, read only, and writes a
-//! pending `dev_cards` row with its [`DevFacts`] per merge to the watched branch and per open PR
-//! head, then hands it to [`super::generate`]. Draft PRs are skipped; diffs are cut at
-//! [`DIFF_CHARS`]. Lists go through ETags; a 403/429 rate limit backs the space off until GitHub
-//! says it may ask again.
+//! The Dev mode poller (plan §3.3, D4, D5, D8; team-repos.md T5): every [`EVERY`] (and right after
+//! the switch goes on, or a repo or branch moves) it reads each repo a Dev mode space watches, read
+//! only, and writes a pending `dev_cards` row with its [`DevFacts`] per merge to the watched branch
+//! and per open PR head, then hands it to [`super::generate`]. Each repo is polled on its own and
+//! keeps its own last seen commit, poll error and tag: one failing repo never stops the others.
+//! Draft PRs are skipped; diffs are cut at [`DIFF_CHARS`]. Lists go through ETags; a 403/429 rate
+//! limit backs the whole space off (it's one token) until GitHub says it may ask again.
 
 use super::facts::{Author, CiState, Check, DevFacts, FileDiff, Kind, KwantRef, Links, DIFF_CHARS};
 use super::repo;
-use crate::db::dev_mode::{DevCardRow, DevModeRow, LANDED, PENDING, REVIEW, STALE};
+use crate::db::dev_mode::{DevCardRow, DevRepoRow, LANDED, PENDING, REVIEW, STALE};
 use crate::db::models::Kwant;
 use crate::db::spaces::SpaceId;
 use crate::server::AppState;
@@ -41,7 +42,7 @@ struct Shared {
     soon: HashSet<String>,
     /// A space backed off after a rate limit is left alone until then.
     resume_at: HashMap<String, DateTime<Utc>>,
-    /// The newest tag of each space's repo, and when its commit was made.
+    /// The newest tag of each watched repo (by [`tag_key`]), and when its commit was made.
     tags: HashMap<String, (String, Option<DateTime<Utc>>)>,
 }
 
@@ -60,7 +61,8 @@ fn etags() -> &'static EtagCache {
     C.get_or_init(EtagCache::default)
 }
 
-/// Polls `space_id` now instead of at the next tick (the switch went on, the repo moved).
+/// Polls every repo of `space_id` now instead of at the next tick (the switch went on, a repo
+/// was added or moved).
 pub fn poll_soon(_state: &AppState, space_id: &str) {
     shared().lock().unwrap().soon.insert(space_id.to_string());
     wake().notify_one();
@@ -76,14 +78,18 @@ pub fn take_due_soon(space_id: &str) -> bool {
     shared().lock().unwrap().soon.remove(space_id)
 }
 
-/// The newest tag the last poll saw on the space's repo.
-pub fn last_tag(space_id: &str) -> Option<String> {
-    shared().lock().unwrap().tags.get(space_id).map(|(t, _)| t.clone())
+fn tag_key(space_id: &str, repo_key: &str) -> String {
+    format!("{space_id}\n{repo_key}")
 }
 
-/// When the newest tag's commit was made: release notes cover the landed cards after it.
-pub fn last_tag_at(space_id: &str) -> Option<DateTime<Utc>> {
-    shared().lock().unwrap().tags.get(space_id).and_then(|(_, at)| *at)
+/// The newest tag the last poll saw on one watched repo (by its key).
+pub fn last_tag(space_id: &str, repo_key: &str) -> Option<String> {
+    shared().lock().unwrap().tags.get(&tag_key(space_id, repo_key)).map(|(t, _)| t.clone())
+}
+
+/// When that tag's commit was made: release notes cover the repo's landed cards after it.
+pub fn last_tag_at(space_id: &str, repo_key: &str) -> Option<DateTime<Utc>> {
+    shared().lock().unwrap().tags.get(&tag_key(space_id, repo_key)).and_then(|(_, at)| *at)
 }
 
 /// Starts the poller, after picking up what a restart left: pending cards go to `generate`
@@ -105,7 +111,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) {
                         if shutdown.is_cancelled() {
                             return;
                         }
-                        poll_logged(&state, row).await;
+                        poll_space(&state, &row.space_id).await;
                     }
                 }
                 Err(e) => tracing::warn!("dev: could not list Dev mode spaces: {e}"),
@@ -149,9 +155,22 @@ async fn recover(state: &AppState) {
     }
 }
 
-/// [`poll`] with its outcome recorded: the poll error on the settings, and a back-off after a
-/// rate limit. Public for the leak tests (`tests/dev_github_test.rs`).
-pub async fn poll_logged(state: &AppState, row: DevModeRow) {
+/// Polls every repo `space_id` watches, one after another. A repo that fails records its error
+/// and the next one is still read (T5).
+pub async fn poll_space(state: &AppState, space_id: &str) {
+    match state.db.dev_repos(space_id).await {
+        Ok(rows) => {
+            for row in rows {
+                poll_logged(state, row).await;
+            }
+        }
+        Err(e) => tracing::warn!(space = %space_id, "dev: could not list the watched repos: {e}"),
+    }
+}
+
+/// [`poll`] with its outcome recorded: the poll error on the repo's row, and a back-off of the
+/// space after a rate limit. Public for the leak tests (`tests/dev_github_test.rs`).
+pub async fn poll_logged(state: &AppState, row: DevRepoRow) {
     let space = row.space_id.clone();
     if shared().lock().unwrap().resume_at.get(&space).is_some_and(|t| *t > Utc::now()) {
         return;
@@ -166,16 +185,16 @@ pub async fn poll_logged(state: &AppState, row: DevModeRow) {
         Err(e) => Some(e.to_string()),
     };
     if let Some(e) = &error {
-        tracing::info!(space = %space, "dev: poll failed: {e}");
-        let _ = state.db.dev_mode_polled(&space, None, Some(e)).await;
+        tracing::info!(space = %space, repo = %row.key, "dev: poll failed: {e}");
+        let _ = state.db.dev_repo_polled(&space, &row.key, None, Some(e)).await;
     }
 }
 
-/// One poll of one space. Merges are recorded as `last_seen_sha` one by one, so a failure part
-/// way keeps the ones done.
-pub async fn poll(state: &AppState, mode: &DevModeRow) -> Result<(), GhError> {
-    // On with no repo (plan any-git.md S3): nothing to read, and nothing to report as an error
-    if mode.repo.trim().is_empty() {
+/// One poll of one watched repo. Merges are recorded as `last_seen_sha` one by one, so a failure
+/// part way keeps the ones done.
+pub async fn poll(state: &AppState, mode: &DevRepoRow) -> Result<(), GhError> {
+    // A row whose branch isn't known yet (added while off): reconcile fills it at switch-on
+    if mode.repo.trim().is_empty() || mode.branch.trim().is_empty() {
         return Ok(());
     }
     let space = SpaceId::new(&mode.space_id);
@@ -195,7 +214,7 @@ pub async fn poll(state: &AppState, mode: &DevModeRow) -> Result<(), GhError> {
         landed(state, &client, mode, &kwants, &c).await?;
         last = Some(c.sha.clone());
     }
-    state.db.dev_mode_polled(&mode.space_id, last.as_deref(), None).await.map_err(|e| GhError::Other(e.to_string()))?;
+    state.db.dev_repo_polled(&mode.space_id, &mode.key, last.as_deref(), None).await.map_err(|e| GhError::Other(e.to_string()))?;
 
     // Open PRs
     let pulls = client.dev_open_pulls(&mode.repo, &mode.branch, cache).await?;
@@ -206,19 +225,20 @@ pub async fn poll(state: &AppState, mode: &DevModeRow) -> Result<(), GhError> {
     Ok(())
 }
 
-async fn update_tag(client: &GithubSource, mode: &DevModeRow, tag: Option<(String, Option<String>)>) {
+async fn update_tag(client: &GithubSource, mode: &DevRepoRow, tag: Option<(String, Option<String>)>) {
+    let key = tag_key(&mode.space_id, &mode.key);
     let Some((name, sha)) = tag else {
-        shared().lock().unwrap().tags.remove(&mode.space_id);
+        shared().lock().unwrap().tags.remove(&key);
         return;
     };
-    if shared().lock().unwrap().tags.get(&mode.space_id).is_some_and(|(t, at)| *t == name && at.is_some()) {
+    if shared().lock().unwrap().tags.get(&key).is_some_and(|(t, at)| *t == name && at.is_some()) {
         return;
     }
     let at = match sha {
         Some(s) => client.dev_commit(&mode.repo, &s).await.ok().and_then(|c| c.commit.committer.date.or(c.commit.author.date)),
         None => None,
     };
-    shared().lock().unwrap().tags.insert(mode.space_id.clone(), (name, at));
+    shared().lock().unwrap().tags.insert(key, (name, at));
 }
 
 /// Which of the new commits (oldest first) become cards: the newest [`BACKFILL`] on a space's
@@ -244,8 +264,8 @@ pub(crate) fn merged_pr<'a>(pulls: &'a [GhPull], sha: &str, branch: &str) -> Res
     }
 }
 
-async fn landed(state: &AppState, client: &GithubSource, mode: &DevModeRow, kwants: &[Kwant], c: &GhCommit) -> Result<(), GhError> {
-    if state.db.dev_cards_of_ref(&mode.space_id, LANDED, &c.sha).await.map(|v| !v.is_empty()).unwrap_or(false) {
+async fn landed(state: &AppState, client: &GithubSource, mode: &DevRepoRow, kwants: &[Kwant], c: &GhCommit) -> Result<(), GhError> {
+    if state.db.dev_cards_of_ref_in(&mode.space_id, &mode.key, LANDED, &c.sha).await.map(|v| !v.is_empty()).unwrap_or(false) {
         return Ok(());
     }
     let pulls = client.dev_pulls_for_commit(&mode.repo, &c.sha).await.unwrap_or_default();
@@ -259,11 +279,11 @@ async fn landed(state: &AppState, client: &GithubSource, mode: &DevModeRow, kwan
     let until = pr.and_then(|p| p.merged_at).or(full.commit.committer.date).unwrap_or_else(Utc::now) - Duration::seconds(1);
     let first = first_edits(client, mode, &files, until).await;
     let facts = landed_facts(mode, &full, pr, files, checks, kwants, first);
-    insert(state, &mode.space_id, LANDED, &c.sha, &c.sha, &facts).await;
+    insert(state, mode, LANDED, &c.sha, &c.sha, &facts).await;
     Ok(())
 }
 
-async fn reviews(state: &AppState, client: &GithubSource, mode: &DevModeRow, kwants: &[Kwant], pulls: &[GhPull]) -> Result<(), GhError> {
+async fn reviews(state: &AppState, client: &GithubSource, mode: &DevRepoRow, kwants: &[Kwant], pulls: &[GhPull]) -> Result<(), GhError> {
     let mut open = HashSet::new();
     let mut read = 0;
     for p in pulls {
@@ -271,12 +291,12 @@ async fn reviews(state: &AppState, client: &GithubSource, mode: &DevModeRow, kwa
         open.insert(ref_.clone());
         if p.draft {
             // Drafts are skipped (D8); a PR that went back to draft loses its card
-            stale(state, &mode.space_id, &ref_, None).await;
+            stale(state, mode, &ref_, None).await;
             continue;
         }
-        let have = state.db.dev_cards_of_ref(&mode.space_id, REVIEW, &ref_).await.unwrap_or_default();
+        let have = state.db.dev_cards_of_ref_in(&mode.space_id, &mode.key, REVIEW, &ref_).await.unwrap_or_default();
         if have.iter().any(|c| c.head_sha == p.head.sha) {
-            stale(state, &mode.space_id, &ref_, Some(&p.head.sha)).await;
+            stale(state, mode, &ref_, Some(&p.head.sha)).await;
             continue;
         }
         if read >= MAX_REVIEWS {
@@ -293,30 +313,31 @@ async fn reviews(state: &AppState, client: &GithubSource, mode: &DevModeRow, kwa
         let security = super::scan::for_review(&state.config.data_dir, client, &mode.repo, &p.head.sha, &mut files, capped).await;
         let mut facts = review_facts(mode, p, head.as_ref(), files, checks, kwants, first);
         facts.security = Some(security);
-        insert(state, &mode.space_id, REVIEW, &ref_, &p.head.sha, &facts).await;
-        stale(state, &mode.space_id, &ref_, Some(&p.head.sha)).await;
+        insert(state, mode, REVIEW, &ref_, &p.head.sha, &facts).await;
+        stale(state, mode, &ref_, Some(&p.head.sha)).await;
     }
-    // A PR that closed or merged: its review cards go stale
-    if let Ok(cards) = state.db.dev_cards(&mode.space_id, REVIEW, None, 200).await {
+    // A PR of this repo that closed or merged: its review cards go stale
+    if let Ok(cards) = state.db.dev_cards_in(&mode.space_id, Some(&mode.key), REVIEW, None, 200).await {
         let gone: HashSet<String> = cards.into_iter().filter(|c| c.status != STALE && !open.contains(&c.ref_)).map(|c| c.ref_).collect();
         for r in gone {
-            stale(state, &mode.space_id, &r, None).await;
+            stale(state, mode, &r, None).await;
         }
     }
     Ok(())
 }
 
-async fn stale(state: &AppState, space_id: &str, ref_: &str, keep: Option<&str>) {
-    for id in state.db.stale_dev_reviews(space_id, ref_, keep).await.unwrap_or_default() {
+async fn stale(state: &AppState, mode: &DevRepoRow, ref_: &str, keep: Option<&str>) {
+    for id in state.db.stale_dev_reviews_in(&mode.space_id, &mode.key, ref_, keep).await.unwrap_or_default() {
         if let Ok(Some(row)) = state.db.dev_card(&id).await {
             super::notify_card(state, &row);
         }
     }
 }
 
-async fn insert(state: &AppState, space_id: &str, kind: &str, ref_: &str, head: &str, facts: &DevFacts) {
+async fn insert(state: &AppState, mode: &DevRepoRow, kind: &str, ref_: &str, head: &str, facts: &DevFacts) {
+    let space_id = &mode.space_id;
     let Ok(json) = serde_json::to_string(facts) else { return };
-    match state.db.insert_dev_card(space_id, kind, ref_, head, &json).await {
+    match state.db.insert_dev_card_in(space_id, &mode.key, kind, ref_, head, &json).await {
         Ok(Some(row)) => {
             super::notify_card(state, &row);
             tokio::spawn(super::generate(state.clone(), row.id));
@@ -328,11 +349,11 @@ async fn insert(state: &AppState, space_id: &str, kind: &str, ref_: &str, head: 
 
 /// Landed and review cards made in the last [`CI_RECHECK_HOURS`] whose CI was pending: read the
 /// checks again, and when they changed, store them and run `generate` again.
-async fn recheck_ci(state: &AppState, client: &GithubSource, mode: &DevModeRow) {
+async fn recheck_ci(state: &AppState, client: &GithubSource, mode: &DevRepoRow) {
     let since = Utc::now() - Duration::hours(CI_RECHECK_HOURS);
     let mut rows: Vec<DevCardRow> = Vec::new();
     for kind in [LANDED, REVIEW] {
-        rows.extend(state.db.dev_cards(&mode.space_id, kind, None, 50).await.unwrap_or_default());
+        rows.extend(state.db.dev_cards_in(&mode.space_id, Some(&mode.key), kind, None, 50).await.unwrap_or_default());
     }
     let mut done = 0;
     for row in rows.into_iter().filter(|r| r.created_at >= since && r.status != STALE && r.status != PENDING) {
@@ -362,7 +383,7 @@ async fn recheck_ci(state: &AppState, client: &GithubSource, mode: &DevModeRow) 
 
 /// The changed files (not new ones) nobody committed to in the last [`FIRST_EDIT_DAYS`] before
 /// `until`, reading at most [`FIRST_EDIT_FILES`] histories.
-async fn first_edits(client: &GithubSource, mode: &DevModeRow, files: &[GhFile], until: DateTime<Utc>) -> Vec<String> {
+async fn first_edits(client: &GithubSource, mode: &DevRepoRow, files: &[GhFile], until: DateTime<Utc>) -> Vec<String> {
     let since = until - Duration::days(FIRST_EDIT_DAYS);
     let mut out = Vec::new();
     for f in files.iter().filter(|f| f.status != "added").take(FIRST_EDIT_FILES) {
@@ -451,7 +472,7 @@ fn author_of(commit: Option<&GhCommit>, pr: Option<&GhPull>, kwants: &[Kwant]) -
     Author { login, name, email, bot }
 }
 
-pub fn landed_facts(mode: &DevModeRow, c: &GhCommit, pr: Option<&GhPull>, files: Vec<GhFile>, checks: Vec<GhCheck>, kwants: &[Kwant], first: Vec<String>) -> DevFacts {
+pub fn landed_facts(mode: &DevRepoRow, c: &GhCommit, pr: Option<&GhPull>, files: Vec<GhFile>, checks: Vec<GhCheck>, kwants: &[Kwant], first: Vec<String>) -> DevFacts {
     let (msg_title, msg_body) = split_message(&c.commit.message);
     let (files, cut) = cut_diffs(files);
     let checks = to_checks(checks);
@@ -480,7 +501,7 @@ pub fn landed_facts(mode: &DevModeRow, c: &GhCommit, pr: Option<&GhPull>, files:
     }
 }
 
-pub fn review_facts(mode: &DevModeRow, p: &GhPull, head: Option<&GhCommit>, files: Vec<GhFile>, checks: Vec<GhCheck>, kwants: &[Kwant], first: Vec<String>) -> DevFacts {
+pub fn review_facts(mode: &DevRepoRow, p: &GhPull, head: Option<&GhCommit>, files: Vec<GhFile>, checks: Vec<GhCheck>, kwants: &[Kwant], first: Vec<String>) -> DevFacts {
     let (files, cut) = cut_diffs(files);
     let checks = to_checks(checks);
     DevFacts {
@@ -598,20 +619,20 @@ mod tests {
 
     #[test]
     fn landed_facts_prefer_the_pr_and_keep_links_https() {
-        let mode = DevModeRow {
+        let mode = DevRepoRow {
             space_id: "s1".into(),
-            on: true,
+            key: "github.com/demo-org/app".into(),
+            team: None,
             provider: "github".into(),
             repo: "demo-org/app".into(),
+            host: Some("github.com".into()),
             branch: "main".into(),
             deploy_hint: None,
-            backup_command: None,
             last_seen_sha: None,
             polled_at: None,
             poll_error: None,
-            seen_at: None,
-            updated_at: Utc::now(),
-            reviews_seen_at: None,
+            added_by: "team".into(),
+            added_at: Utc::now(),
         };
         let c = commit("m1");
         let mut p = pull(7, Some("m1"), true, "main");

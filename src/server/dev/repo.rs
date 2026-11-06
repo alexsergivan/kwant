@@ -1,7 +1,9 @@
-//! The repo check (plan §3.2 `POST /dev_mode/check`, D4): one GitHub repo per space, read
-//! through the Loose ends GitHub connection (its vault token and Enterprise `api_base`).
-//! kwant writes nothing to GitHub.
+//! The repo check (plan §3.2 `POST /dev_mode/check`, D4), detection of the repos a space's teams
+//! point at (any-git.md S1, S2), and [`reconcile`], which keeps a space's watched repos in step
+//! with its teams (team-repos.md T3, T4). Repos are read through the Loose ends GitHub connection
+//! (its vault token and Enterprise `api_base`). kwant writes nothing to GitHub.
 
+use crate::db::dev_mode::{DevRepoRow, RepoAdd, BY_HAND, BY_MIGRATION, BY_TEAM, MAX_REPOS};
 use crate::db::spaces::SpaceId;
 use crate::server::AppState;
 use crate::zombie::github::{GhError, GithubConfig, GithubSource};
@@ -85,11 +87,14 @@ pub struct Check {
     pub repo: Option<String>,
     pub branch: Option<String>,
     pub deploy_hint: Option<&'static str>,
+    /// The web host of the connection that found it (never in a reply).
+    #[serde(skip)]
+    pub host: Option<String>,
 }
 
 impl Check {
-    fn of(state: &'static str, repo: Option<String>) -> Self {
-        Check { state, repo, branch: None, deploy_hint: None }
+    pub(crate) fn of(state: &'static str, repo: Option<String>) -> Self {
+        Check { state, repo, branch: None, deploy_hint: None, host: None }
     }
 }
 
@@ -171,7 +176,7 @@ pub async fn check(state: &AppState, space: &SpaceId, input: &str) -> Result<Che
         match client.dev_repo(&repo).await {
             Ok(r) => {
                 let root = client.dev_root_names(&r.full_name, &r.default_branch).await.unwrap_or_default();
-                answer = Check { state: "found", repo: Some(r.full_name.clone()), branch: Some(r.default_branch.clone()), deploy_hint: deploy_hint(&root) };
+                answer = Check { state: "found", repo: Some(r.full_name.clone()), branch: Some(r.default_branch.clone()), deploy_hint: deploy_hint(&root), host: Some(web_host(&cfg)) };
                 return Ok(answer);
             }
             Err(GhError::NotFound | GhError::Forbidden) => {}
@@ -196,6 +201,9 @@ pub async fn check(state: &AppState, space: &SpaceId, input: &str) -> Result<Che
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Source {
     pub team: String,
+    /// The team's id: a team row's `dev_repos.team`.
+    #[serde(skip)]
+    pub team_id: String,
     /// `owner/name` on a GitHub host, the whole path (`group/sub/name`) on another host, and the
     /// folder's own name for a `local` source.
     pub repo: String,
@@ -217,6 +225,22 @@ impl Source {
     /// connection in `hosts`).
     pub fn on_github(&self, hosts: &[String]) -> bool {
         self.host.as_deref().is_some_and(|h| hosts.iter().any(|g| g == h))
+    }
+
+    /// Its watched-repo key: `host/repo` lowercased (as [`repo_key`]), or `local:…` for a folder
+    /// with no remote (never shown; see [`Self::api_key`]).
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// The key the API shows: [`Self::key`], except `local:<team name lowercased>` for a `local`
+    /// source, so no folder path leaves the server.
+    pub fn api_key(&self) -> String {
+        if self.host.is_some() {
+            self.key.clone()
+        } else {
+            format!("local:{}", self.team.to_lowercase())
+        }
     }
 
     /// What [`check`] takes for this source: `host/owner/name`.
@@ -283,7 +307,7 @@ pub fn parse_remote(raw: &str) -> Option<(String, String)> {
 /// `(host, repo)` of what a team's repo link or folder remote says: `owner/name` on a GitHub
 /// host in `gh_hosts`, the whole path on any other. In a repo link (`shorthand`), a plain
 /// `owner/name` is github.com's; to git, that's a folder.
-fn source_repo(raw: &str, gh_hosts: &[String], shorthand: bool) -> Option<(String, String)> {
+pub(crate) fn source_repo(raw: &str, gh_hosts: &[String], shorthand: bool) -> Option<(String, String)> {
     let (host, path) = match parse_remote(raw) {
         Some(hp) => hp,
         None if !shorthand => return None,
@@ -370,6 +394,7 @@ pub async fn read_folder(dir: &std::path::Path) -> Option<(Option<String>, Optio
 
 /// One team as detection reads it: its name, folder setting and repo link.
 pub struct TeamRef<'a> {
+    pub id: &'a str,
     pub name: &'a str,
     pub workspace_path: Option<&'a str>,
     pub repo_url: Option<&'a str>,
@@ -404,7 +429,7 @@ pub async fn detect_teams(teams: &[TeamRef<'_>], space_dir: &std::path::Path, gh
         if out.iter().any(|s| s.key == key) {
             continue;
         }
-        out.push(Source { team: t.name.to_string(), repo, host, from, branch, key });
+        out.push(Source { team: t.name.to_string(), team_id: t.id.to_string(), repo, host, from, branch, key });
     }
     out
 }
@@ -412,9 +437,208 @@ pub async fn detect_teams(teams: &[TeamRef<'_>], space_dir: &std::path::Path, gh
 /// The repos `space`'s teams already point at, in team order (plan any-git.md S1).
 pub async fn detect(state: &AppState, space: &SpaceId) -> Vec<Source> {
     let teams = state.db.list_teams(space).await.unwrap_or_default();
-    let refs: Vec<TeamRef> = teams.iter().map(|t| TeamRef { name: &t.name, workspace_path: t.workspace_path.as_deref(), repo_url: t.repo_url.as_deref() }).collect();
+    let refs: Vec<TeamRef> = teams.iter().map(|t| TeamRef { id: &t.id, name: &t.name, workspace_path: t.workspace_path.as_deref(), repo_url: t.repo_url.as_deref() }).collect();
     let dir = crate::db::spaces::space_data_dir(&state.config.data_dir, space);
     detect_teams(&refs, &dir, &github_hosts(state).await).await
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reconcile (team-repos.md T3, T4): the rows of `dev_repos` follow the teams.
+
+/// One reconcile at a time, server-wide: two would both see a source with no row and check it twice.
+fn reconcile_lock() -> &'static tokio::sync::Mutex<()> {
+    static L: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// How often a GET may reconcile one space (the hooks and PUT don't wait for it).
+pub const RECONCILE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn reconciled() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    static T: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+/// What one reconcile did, for logs and tests.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Reconciled {
+    /// Keys of rows added for a team source.
+    pub added: Vec<String>,
+    /// Keys of team rows removed because no team points at them any more.
+    pub removed: Vec<String>,
+    /// Keys of GitHub sources left without a row because the space watches [`MAX_REPOS`].
+    pub too_many: Vec<String>,
+}
+
+/// Brings `space`'s watched repos in line with its teams (T3):
+/// - a migrated 0.7.1 row becomes its team's row (re-keyed if that team's repo is the same
+///   `owner/name` on a GitHub Enterprise host), else a hand row;
+/// - a team row no team points at any more is removed (its cards stay);
+/// - a hand row names the team that now points at it, if any;
+/// - while on, each GitHub source with no row is checked and gets a team row, up to
+///   [`MAX_REPOS`] (T4); a source GitHub says isn't there (or no connection reads) gets none, and
+///   one GitHub doesn't answer for is added with the folder's branch (the poller says why);
+/// - while on, a row with no branch yet (added while off) gets the repo's default branch.
+///
+/// Existing rows are never checked again here: the poller reports their errors. Off, nothing is
+/// fetched (D12). A space with no Dev mode row is left alone. Non-GitHub and `local` sources never
+/// get a row: they show as `other_host`.
+pub async fn reconcile(state: &AppState, space: &SpaceId) -> Reconciled {
+    let _one = reconcile_lock().lock().await;
+    reconciled().lock().unwrap().insert(space.as_str().to_string(), std::time::Instant::now());
+    let mut out = Reconciled::default();
+    let Ok(Some(mode)) = state.db.dev_mode(space.as_str()).await else { return out };
+    let hosts = github_hosts(state).await;
+    let sources = detect(state, space).await;
+    let gh: Vec<&Source> = sources.iter().filter(|s| s.on_github(&hosts)).collect();
+    let Ok(mut rows) = state.db.dev_repos(space.as_str()).await else { return out };
+    let db = &state.db;
+    let sp = space.as_str();
+
+    // 0.7.1 rows: the team that points at the same owner/name takes them
+    for r in rows.iter().filter(|r| r.added_by == BY_MIGRATION) {
+        match gh.iter().find(|s| s.repo.eq_ignore_ascii_case(&r.repo)) {
+            Some(s) => {
+                let mut key = r.key.clone();
+                if s.key != r.key {
+                    let host = s.host.clone().unwrap_or_default();
+                    match db.rekey_dev_repo(sp, &r.key, &s.key, &host).await {
+                        Ok(true) => key = s.key.clone(),
+                        // The team's key has its own row already: this one stays a hand row
+                        _ => {
+                            let _ = db.set_dev_repo_owner(sp, &r.key, BY_HAND, None).await;
+                            continue;
+                        }
+                    }
+                }
+                let _ = db.set_dev_repo_owner(sp, &key, BY_TEAM, Some(&s.team_id)).await;
+            }
+            None => {
+                let _ = db.set_dev_repo_owner(sp, &r.key, BY_HAND, None).await;
+            }
+        }
+    }
+    rows = db.dev_repos(sp).await.unwrap_or(rows);
+
+    for r in &rows {
+        let source = gh.iter().find(|s| s.key == r.key);
+        match (r.added_by.as_str(), source) {
+            // A team row whose team no longer points at it
+            (BY_TEAM, None) => {
+                if matches!(db.delete_dev_repo(sp, &r.key).await, Ok(true)) {
+                    tracing::info!(space = %space, repo = %r.repo, "dev: stopped watching a repo no team points at");
+                    out.removed.push(r.key.clone());
+                }
+            }
+            (BY_TEAM, Some(s)) if r.team.as_deref() != Some(s.team_id.as_str()) => {
+                let _ = db.set_dev_repo_owner(sp, &r.key, BY_TEAM, Some(&s.team_id)).await;
+            }
+            (BY_TEAM, Some(_)) => {}
+            // A hand row: names the team that points at it now, or none
+            (_, s) => {
+                let team = s.map(|s| s.team_id.as_str());
+                if r.team.as_deref() != team {
+                    let _ = db.set_dev_repo_owner(sp, &r.key, BY_HAND, team).await;
+                }
+            }
+        }
+    }
+    if !mode.on {
+        return out;
+    }
+    let mut rows = db.dev_repos(sp).await.unwrap_or_default();
+
+    // Rows added while off have no branch yet
+    for r in rows.iter().filter(|r| r.branch.trim().is_empty()) {
+        if let Ok(found) = check(state, space, &r.check_input()).await {
+            if found.state == "found" {
+                let branch = found.branch.clone().unwrap_or_else(|| "main".into());
+                let _ = db.set_dev_repo_branch(sp, &r.key, &branch).await;
+                let _ = db.set_dev_repo_hint(sp, &r.key, found.deploy_hint).await;
+            }
+        }
+    }
+
+    for s in gh {
+        if rows.iter().any(|r| r.key == s.key) {
+            continue;
+        }
+        if rows.len() >= MAX_REPOS {
+            out.too_many.push(s.key.clone());
+            continue;
+        }
+        let (repo, branch, hint) = match check(state, space, &s.check_input()).await {
+            Ok(found) if found.state == "found" => {
+                let full = found.repo.clone().unwrap_or_else(|| s.repo.clone());
+                let default = found.branch.clone().unwrap_or_else(|| "main".into());
+                // The folder's branch when the repo has it, else the default (0.7.1's choice)
+                let branch = match s.branch.as_deref() {
+                    Some(b) if b != default => match client_for(state, &full).await {
+                        Ok((c, _)) if matches!(c.dev_branch_exists(&full, b).await, Ok(true)) => b.to_string(),
+                        _ => default,
+                    },
+                    _ => default,
+                };
+                (full, branch, found.deploy_hint)
+            }
+            // Not there, or no connection reads it: no row; the desk says not_connected
+            Ok(_) => continue,
+            // GitHub didn't answer: watched anyway, the poller retries and says why
+            Err(_) => (s.repo.clone(), s.branch.clone().unwrap_or_else(|| "main".into()), None),
+        };
+        let host = s.host.as_deref();
+        match db.add_dev_repo(sp, &s.key, Some(&s.team_id), &repo, host, &branch, hint, BY_TEAM).await {
+            Ok(RepoAdd::Added) => {
+                tracing::info!(space = %space, repo = %repo, branch = %branch, "dev: watching a team's repo");
+                out.added.push(s.key.clone());
+            }
+            Ok(RepoAdd::Kept) => {}
+            Ok(RepoAdd::TooMany) => out.too_many.push(s.key.clone()),
+            Err(e) => tracing::warn!(space = %space, "dev: could not add a repo: {e}"),
+        }
+        rows = db.dev_repos(sp).await.unwrap_or(rows);
+    }
+    if !out.added.is_empty() {
+        super::poller::poll_soon(state, sp);
+    }
+    out
+}
+
+/// [`reconcile`] for a GET: at most once per [`RECONCILE_COOLDOWN`] for the space.
+pub async fn reconcile_on_read(state: &AppState, space: &SpaceId) {
+    let recent = reconciled().lock().unwrap().get(space.as_str()).is_some_and(|t| t.elapsed() < RECONCILE_COOLDOWN);
+    if !recent {
+        reconcile(state, space).await;
+    }
+}
+
+/// [`reconcile`] for every space with Dev mode on: after a GitHub connection is added or changed.
+pub async fn reconcile_all(state: &AppState) {
+    for row in state.db.dev_mode_on_spaces().await.unwrap_or_default() {
+        reconcile(state, &SpaceId::new(&row.space_id)).await;
+    }
+}
+
+/// [`reconcile`] in the background, after a team is made, changed or deleted: the team route
+/// doesn't wait on GitHub.
+pub fn reconcile_soon(state: &AppState, space: &SpaceId) {
+    let (state, space) = (state.clone(), space.clone());
+    tokio::spawn(async move {
+        reconcile(&state, &space).await;
+    });
+}
+
+trait CheckInput {
+    fn check_input(&self) -> String;
+}
+
+impl CheckInput for DevRepoRow {
+    fn check_input(&self) -> String {
+        match &self.host {
+            Some(h) => format!("{h}/{}", self.repo),
+            None => self.repo.clone(),
+        }
+    }
 }
 
 /// The desk's line (plan any-git.md S4), from whether Dev mode is on, the watched repo (`""`:
@@ -532,7 +756,7 @@ mod tests {
     }
 
     fn team<'a>(name: &'a str, folder: Option<&'a str>, link: Option<&'a str>) -> TeamRef<'a> {
-        TeamRef { name, workspace_path: folder, repo_url: link }
+        TeamRef { id: name, name, workspace_path: folder, repo_url: link }
     }
 
     fn gh() -> Vec<String> {
@@ -673,7 +897,7 @@ mod tests {
 
     #[test]
     fn the_status_says_what_the_desk_shows() {
-        let src = |host: Option<&str>| Source { team: "T".into(), repo: "o/r".into(), host: host.map(str::to_string), from: "folder", branch: None, key: String::new() };
+        let src = |host: Option<&str>| Source { team: "T".into(), team_id: "t".into(), repo: "o/r".into(), host: host.map(str::to_string), from: "folder", branch: None, key: String::new() };
         let github = [src(Some("github.com"))];
         let gitlab = [src(Some("gitlab.com")), src(None)];
         assert_eq!(status(true, "o/r", &github, &gh(), false), "watching");

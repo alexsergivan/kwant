@@ -1,7 +1,8 @@
 # Dev mode
 
-Dev mode (0.7) points a space at one GitHub repo and branch, found in the space's team folders and
-repo links. kwnt then reads the repo and turns what happens there into cards. It writes to GitHub
+Dev mode (0.7) points a space at the GitHub repos its teams work in: from 0.7.2 every team's repo,
+up to 10 a space (see [Every team's repo](#every-teams-repo-072)), found in the team folders and repo
+links. kwnt then reads each repo and turns what happens there into cards. It writes to GitHub
 only when the person presses **Post to GitHub** on a review card (0.7.1, see
 [Posting to GitHub](#posting-to-github)); nothing else is ever sent there.
 
@@ -16,7 +17,7 @@ always ask (see below).
 
 Everything in Dev mode belongs to the person. Every route is refused for a bot's turn token, reads
 included, because the settings hold the backup command and the cards hold the repo's diffs. The
-tables (`dev_mode_spaces`, `dev_cards`, `dev_backups`, `dev_model_calls`, `dev_prod_connections`)
+tables (`dev_mode_spaces`, `dev_repos`, `dev_cards`, `dev_backups`, `dev_model_calls`, `dev_prod_connections`)
 are left out of exports, like approval modes.
 
 ## Before you turn it on
@@ -82,6 +83,45 @@ reply carries a `check` that says why. A `branch` the repo doesn't have is a 400
   landed rollup counts from, and never clears the badge. Before 0.7.2 both routes shared
   `seen_at`, so opening the desk emptied the rollup; a database from then starts with
   `reviews_seen_at` copied from `seen_at`, so its badge is unchanged.
+
+### Every team's repo (0.7.2)
+
+A space watches every team's GitHub repo at once, not just the first. Each watched repo is a row of
+`dev_repos`, keyed `host/owner/name` (lowercased), with its own branch, last seen commit, poll state
+and newest tag. The full contract is in the team's `dev-mode/team-repos/api.md`; in short:
+
+- **Rows follow the teams.** Turning on, a team's repo link changing, a team made, changed or deleted,
+  a GitHub connection added or changed, and a `GET` (at most every 30 s per space) reconcile the rows:
+  a row for each team source a connection reads (`added_by: "team"`), and a team row whose team no
+  longer points at it is dropped (its cards stay). The person can add more by hand (`PUT {repo}`,
+  `added_by: "hand"`) and remove those with `DELETE /api/spaces/:id/dev_mode/repos/:key` (the key
+  URL-encoded as one segment). A team row can't be deleted (409 `team_repo`): change or clear the
+  team's link with `PUT {repo, team}` (`repo: ""` clears it).
+- **At most 10 repos a space.** A team source past the cap shows `too_many` and has no row; a hand repo
+  past it is a 409 `too_many`.
+- **`GET` and the `PUT` reply** have `repos[]`: one entry per repo, in team order then hand rows, with
+  `key`, `repo`, `host`, `team`, `team_id`, `from`, `branch`, `status` (`watching`, `not_connected`,
+  `other_host`, `error`, `too_many`), `poll_error`, `polled_at`, `last_tag` and `added_by`. The
+  top-level `repo`, `branch`, `deploy_hint`, `last_seen_sha`, `polled_at` and `poll_error` are the
+  first watched repo's, kept for one release only (deprecated). Top-level `status` is `watching` when
+  any repo is.
+- **Polling** reads each repo in turn. A repo that fails records its own `poll_error` and the next is
+  still read. A rate limit is the token's, so it backs the whole space off.
+- **Cards** carry `repo` (the key), `repo_name` and `team`. PR #12 in two repos is two cards. The lists
+  take `?repo=<key>` (`/dev/landed`, `/dev/reviews`, and `POST /dev/release_notes` for that repo's
+  notes); an unknown key is an empty list. **Post to GitHub** writes to the card's own repo and host.
+- **Space-wide, unchanged:** the production floor, the command guards, approvals, backups and the 30
+  model calls a day.
+- **Errors** are `{error, code}`: `bad_repo`, `bad_branch`, `no_branch`, `unknown_team`,
+  `backup_too_long` (400); `unknown_repo` (404); `team_repo`, `too_many`, `no_repo`, `off` (409);
+  `github` (502); `internal` (500).
+
+**Upgrading from 0.7.1** rebuilds `dev_cards` once with a `repo` column (the unique key becomes
+`(space_id, repo, kind, ref, head_sha)`) and turns each space's one repo into a `dev_repos` row keyed
+`github.com/owner/name`, with its branch, last seen commit and poll state, so nothing is announced
+again. The first reconcile hands it to the team that points at it, re-keying it and its cards if that
+team's repo is on a GitHub Enterprise host. A 0.7.1 build can still read the database afterwards, but
+can't add cards to it.
 
 `GET /api/dev/cards/:id` returns one card of any kind, in the same shape as the lists, or 404. The
 desk reads a release notes draft here once its `dev_card` event says it is ready, since no list
@@ -297,7 +337,14 @@ Run these focused tests:
 ```sh
 cargo test --lib -- server::dev:: prod_floor auth::tests::person_only zombie::github connections::tests::only_mcp
 cargo test --test dev_post_test --test dev_github_test
+cargo test --lib -- db::dev_mode::tests
+cargo test --test dev_team_repos_test --test dev_autodetect_test
 ```
+
+`tests/dev_team_repos_test.rs` covers 0.7.2's repos: two teams' repos with PR #12 in both (two cards,
+each posted to its own repo, `?repo=` filters), a failing repo next to a working one, the 10-repo cap,
+a migrated row taken over by its team, and the routes' error codes. The 0.7.1 → 0.7.2 migration is
+tested on a 0.7.1-shaped database in `src/db/dev_mode.rs`.
 
 The no-tools turns have their own: `cargo test --lib -- no_tools`.
 

@@ -246,7 +246,7 @@ async fn the_github_token_never_leaves_the_vault() {
     let (_, v) = call(&env.app, "POST", &format!("/api/spaces/{}/dev_mode/check", space.as_str()), Some(json!({"repo": REPO}))).await;
     replies.push(v);
 
-    let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+    let mode = env.state.db.dev_repos(space.as_str()).await.unwrap().remove(0);
     poller::poll(&env.state, &mode).await.expect("a clean poll");
     let landed = env.state.db.dev_cards(space.as_str(), LANDED, None, 50).await.unwrap();
     let reviews = env.state.db.dev_cards(space.as_str(), REVIEW, None, 50).await.unwrap();
@@ -256,10 +256,10 @@ async fn the_github_token_never_leaves_the_vault() {
     let mut errors = Vec::new();
     for fault in [Fault::Server(502), Fault::Unauthorized, Fault::Forbidden] {
         gh.fault(R, fault.clone());
-        let mode = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+        let mode = env.state.db.dev_repos(space.as_str()).await.unwrap().remove(0);
         errors.push(format!("{:?}", poller::poll(&env.state, &mode).await.unwrap_err()));
         poller::poll_logged(&env.state, mode).await;
-        let after = env.state.db.dev_mode(space.as_str()).await.unwrap().unwrap();
+        let after = env.state.db.dev_repos(space.as_str()).await.unwrap().remove(0);
         errors.push(after.poll_error.clone().unwrap_or_else(|| panic!("{fault:?} left no poll error")));
     }
     gh.heal(R);

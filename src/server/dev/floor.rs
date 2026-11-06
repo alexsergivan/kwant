@@ -18,13 +18,24 @@ pub async fn ctx_for_kwant(db: &Database, kwant_id: &str, cwd: Option<&Path>) ->
     }
     let kwant = db.get_kwant(kwant_id).await.ok().flatten()?;
     let mode = db.dev_mode(&kwant.space_id).await.ok().flatten().filter(|m| m.on)?;
+    // Every watched repo's branch is protected (T9: the floor stays space-wide). The first
+    // repo's is the main one; with none, the branch a team folder named at switch-on.
+    let repos = db.dev_repos(&kwant.space_id).await.unwrap_or_default();
+    let mut branches: Vec<String> = Vec::new();
+    for b in repos.iter().map(|r| r.branch.trim()).filter(|b| !b.is_empty()) {
+        if !branches.iter().any(|x| x == b) {
+            branches.push(b.to_string());
+        }
+    }
+    let branch = if branches.is_empty() { mode.branch.clone() } else { branches.remove(0) };
+    let deploy_hint = repos.iter().find_map(|r| r.deploy_hint.clone()).or(mode.deploy_hint.clone());
     let marked = db.prod_connections(&kwant.space_id).await.unwrap_or_default();
     let servers = db.list_mcp_servers(&crate::db::spaces::SpaceId::new(&kwant.space_id)).await.unwrap_or_default();
     let prod_connections = prod_names(&marked, servers.iter().map(|s| (s.id.as_str(), s.name.as_str())));
     let ctx = DevCtx {
-        branch: mode.branch.clone(),
-        protected: Vec::new(),
-        deploy_hint: mode.deploy_hint.clone(),
+        branch,
+        protected: branches,
+        deploy_hint,
         prod_connections,
         head_branch: cwd.and_then(head_branch),
         migration: None,
