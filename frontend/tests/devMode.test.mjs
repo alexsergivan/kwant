@@ -136,6 +136,24 @@ test('armed drops back after 5 s with nothing changed, not before: "Dev mode sta
   assert.equal(s.announce.text, 'Dev mode stays on.');
 });
 
+test('a clock that steps back never leaves the switch settling, lifted, or ignoring presses', () => {
+  // Settling: a timer firing 1 ms early is ignored (the component tries again), but a clock that
+  // stepped back further than SETTLE_MS can't be waited out, so it settles, and presses work again.
+  const T = 1_762_500_000_000; // a real Date.now()
+  let s = { ...R(m.initialSwitch({ on: true }), { type: 'press', now: T }), on: true };
+  s = { ...R(s, { type: 'press', now: T + 100 }), saving: false };
+  assert.equal(s.phase, 'settling');
+  assert.equal(R(s, { type: 'settled', now: T + 100 + m.SETTLE_MS - 1 }), s, 'a millisecond early: unchanged');
+  const back = R(s, { type: 'settled', now: T + 100 - 60_000 });
+  assert.equal(back.phase, 'covered', 'clock stepped back a minute: settled anyway');
+  assert.equal(back.settleUntil, 0);
+  assert.equal(R(back, { type: 'press', now: T + 100 - 59_000 }).on, true, 'the next press is not ignored');
+  // Lifted: a clock before liftedAt drops the cover.
+  const lifted = R(m.initialSwitch({ on: true }), { type: 'press', now: T + 50_000 });
+  assert.equal(R(lifted, { type: 'recover', now: T + 50_000 + m.RECOVER_MS - 1 }), lifted, 'early: unchanged');
+  assert.equal(R(lifted, { type: 'recover', now: T + 10_000 }).phase, 'covered', 'clock stepped back: covered');
+});
+
 test('Esc and blur re-cover an armed switch; they do nothing when covered', () => {
   const lifted = R(m.initialSwitch({ on: true, setup: false }), { type: 'press', now: 0 });
   for (const type of ['escape', 'blur']) {
@@ -333,6 +351,79 @@ test('DOM: on → off with two presses saves PUT {on:false}, announces, and call
   await click(b); // a render mid-save once left the switch stuck; the next press still turns it on (one press)
   assert.equal(b.dataset.on, 'true');
   assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: false }, { on: true }]);
+  root.unmount();
+});
+
+test('DOM: the settle timer firing early, a third press while settling and a save that resolves after SETTLE_MS never leave the switch stuck', async () => {
+  reset({ ...off, on: true, repo: 'demo-org/demo-app', branch: 'main', polled_at: '2026-11-05T08:00:00Z' });
+  // A clock the test moves by hand: the real timer fires after SETTLE_MS, but the clock still reads
+  // "not yet", as a timer that fires a millisecond early (Node, and a browser whose clock stepped back) does.
+  let clock = 1000;
+  // Hold the PUT until the test lets it go, so the save resolves after the settle.
+  let release;
+  const held = new Promise((r) => (release = r));
+  const realFetch = g.fetch;
+  g.fetch = g.window.fetch = async (url, init = {}) => {
+    if ((init.method ?? 'GET') === 'PUT') await held;
+    return realFetch(url, init);
+  };
+  try {
+    let turnedOff = 0;
+    const { host, root } = await mount(h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, now: () => clock, onTurnedOff: () => turnedOff++ }));
+    const b = switchEl(host);
+    await click(b);
+    assert.equal(b.dataset.devSwitch, 'lifted');
+    await click(b);
+    assert.equal(b.dataset.devSwitch, 'settling');
+    assert.equal(b.dataset.saving, 'true');
+    clock += 100;
+    await click(b); // the third press lands while settling: ignored
+    assert.equal(b.dataset.devSwitch, 'settling');
+    // The settle timer fires (real time) while the clock is 1 ms short of settleUntil.
+    clock = 1000 + m.SETTLE_MS - 1;
+    await wait(m.SETTLE_MS + 60);
+    assert.equal(b.dataset.devSwitch, 'settling', 'early: not settled yet');
+    // The clock catches up; a re-armed timer settles it. The save is still in flight.
+    clock = 1000 + m.SETTLE_MS;
+    for (let i = 0; i < 100 && b.dataset.devSwitch !== 'covered'; i++) await wait(20);
+    assert.equal(b.dataset.devSwitch, 'covered', 'the switch settles even though its first timer fired early');
+    assert.equal(b.dataset.saving, 'true', 'the save is still in flight');
+    assert.equal(b.dataset.on, undefined, 'it shows the pressed value (off) while saving');
+    // Now the save resolves, after SETTLE_MS.
+    release();
+    for (let i = 0; i < 100 && turnedOff === 0; i++) await wait(20);
+    assert.equal(turnedOff, 1);
+    assert.equal(b.dataset.devSwitch, 'covered');
+    assert.equal(b.dataset.saving, undefined);
+    assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: false }]);
+    // And the next press works: off → on is one press.
+    clock += 1000;
+    await click(b);
+    for (let i = 0; i < 100 && server.calls.filter(([meth]) => meth === 'PUT').length < 2; i++) await wait(20);
+    assert.equal(b.dataset.on, 'true');
+    assert.deepEqual(server.calls.filter(([meth]) => meth === 'PUT').map(([, , body]) => body), [{ on: false }, { on: true }]);
+    root.unmount();
+  } finally {
+    g.fetch = g.window.fetch = realFetch;
+  }
+});
+
+test('DOM: the 5 s re-cover firing early still drops the cover', async () => {
+  reset({ ...off, on: true, repo: 'demo-org/demo-app', branch: 'main', polled_at: '2026-11-05T08:00:00Z' });
+  // Mount lifted 200 ms before the re-cover is due, then let the timer fire 1 ms early by the clock.
+  let clock = 1000 + m.RECOVER_MS - 200;
+  const { host, root } = await mount(
+    h(m.DevModeSwitch, { space: { id: 'spc_demo', name: 'Demo' }, now: () => clock, initial: { on: true, phase: 'lifted', liftedAt: 1000 } }),
+  );
+  const b = switchEl(host);
+  assert.equal(b.dataset.devSwitch, 'lifted');
+  clock = 1000 + m.RECOVER_MS - 1;
+  await wait(260);
+  assert.equal(b.dataset.devSwitch, 'lifted', 'early: still lifted');
+  clock = 1000 + m.RECOVER_MS;
+  for (let i = 0; i < 100 && b.dataset.devSwitch !== 'covered'; i++) await wait(20);
+  assert.equal(b.dataset.devSwitch, 'covered', 'the cover drops even though its first timer fired early');
+  assert.match(host.querySelector('[data-dv-live]').textContent, /Dev mode stays on\./);
   root.unmount();
 });
 

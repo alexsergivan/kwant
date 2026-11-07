@@ -42,6 +42,7 @@ import { DevModeSettings } from './DevModeSettings';
 import type { SettingsScope, SpaceSettingsTab } from '../nav';
 import { InstallAppButton } from './InstallAppButton';
 import { editorProps, useEscapeLayer } from '../escape';
+import { devTeamRefs } from '../devMode';
 
 export type { SettingsScope, SpaceSettingsTab };
 
@@ -358,7 +359,7 @@ const ImportTab: React.FC<TabProps> = ({ space, kwants, onOpenImport, onImported
   );
 };
 
-const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, onSpaceSaved, onArchived, onApprovalsChanged }) => {
+const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSaved, onArchived, onApprovalsChanged }) => {
   const [name, setName] = useState(space.name);
   const [icon, setIcon] = useState(space.icon);
   // "amber" from the server shows as its swatch.
@@ -485,7 +486,7 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, onSpaceSaved, onAr
         onChanged={() => onApprovalsChanged?.()}
       />
 
-      <DevModeSettings key={`dev-${space.id}`} spaceId={space.id} spaceName={space.name} approvals={space.approvals} />
+      <DevModeSettings key={`dev-${space.id}`} spaceId={space.id} spaceName={space.name} approvals={space.approvals} teams={devTeamRefs(teams, kwants)} />
 
       <div className={`${card} p-4 space-y-3`}>
         <p className="flex items-center gap-2 text-xs font-medium text-zinc-200">

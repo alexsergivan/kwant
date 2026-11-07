@@ -232,6 +232,12 @@ impl Opts<'static> {
 
 /// Runs `git [--git-dir <dir>] <args>` as described in the module docs. Its stdout on success.
 async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> Result<Vec<u8>, GitError> {
+    run_with(bin, git_dir, args, o, false).await.map(|(out, _)| out)
+}
+
+/// [`run`]; with `head`, stdout past `o.max_out` isn't an error: reading stops there (git then
+/// stops at a closed pipe) and the first `o.max_out` bytes come back with `true`.
+async fn run_with(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>, head: bool) -> Result<(Vec<u8>, bool), GitError> {
     let mut cmd = tokio::process::Command::new(bin);
     if let Some(d) = git_dir {
         cmd.arg("--git-dir").arg(d);
@@ -313,14 +319,16 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
     let mut group = crate::drivers::cli::ProcessGroup::of(&child);
     let (so, se) = (child.stdout.take(), child.stderr.take());
     let work = async {
-        let (out, err) = tokio::try_join!(read_capped(so, o.max_out), async { Ok(drain(se, MAX_ERR).await) })?;
+        let (out, err) = tokio::try_join!(read_head(so, o.max_out, head), async { Ok(drain(se, MAX_ERR).await) })?;
         let status = child.wait().await.map_err(|_| GitError::Failed)?;
         Ok::<_, GitError>((out, err, status))
     };
-    let (out, err, status) = tokio::time::timeout(o.timeout, work).await.map_err(|_| GitError::Timeout)??;
+    let ((out, cut), err, status) = tokio::time::timeout(o.timeout, work).await.map_err(|_| GitError::Timeout)??;
     group.disarm();
-    if status.success() {
-        Ok(out)
+    if cut {
+        Ok((out, true))
+    } else if status.success() {
+        Ok((out, false))
     } else if o.fsize.is_some() && hit_size_limit(&status, &err) {
         Err(GitError::RepoTooBig)
     } else {
@@ -341,6 +349,29 @@ fn hit_size_limit(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
     let _ = status;
     let e = String::from_utf8_lossy(stderr).to_lowercase();
     e.contains(&format!("died of signal {}", libc::SIGXFSZ)) || e.contains("file too large")
+}
+
+/// [`read_capped`]; with `head`, the first `cap` bytes and `true` once it passes `cap` (and `r`
+/// is closed, so the writer stops).
+async fn read_head<R: AsyncRead + Unpin>(r: Option<R>, cap: usize, head: bool) -> Result<(Vec<u8>, bool), GitError> {
+    if !head {
+        return read_capped(r, cap).await.map(|out| (out, false));
+    }
+    let Some(mut r) = r else { return Ok((Vec::new(), false)) };
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; 64 << 10];
+    loop {
+        let n = r.read(&mut buf).await.map_err(|_| GitError::Failed)?;
+        if n == 0 {
+            return Ok((out, false));
+        }
+        if out.len() + n > cap {
+            let room = cap - out.len();
+            out.extend_from_slice(&buf[..room]);
+            return Ok((out, true));
+        }
+        out.extend_from_slice(&buf[..n]);
+    }
 }
 
 /// Reads all of `r`, or [`GitError::TooBig`] as soon as it passes `cap`.
@@ -1000,6 +1031,12 @@ impl Repo {
 
     /// The default branch of `url` (what its `HEAD` points at), or of a team folder.
     pub async fn default_branch(&self, url: &str, auth: Option<&Auth>) -> Result<String, GitError> {
+        self.default_branch_within(url, auth, REMOTE_TIMEOUT).await
+    }
+
+    /// [`Self::default_branch`], with the remote's `ls-remote` given at most `timeout` (Suggest
+    /// gives it what is left of its 10 s, R-HANG).
+    pub async fn default_branch_within(&self, url: &str, auth: Option<&Auth>, timeout: Duration) -> Result<String, GitError> {
         let branch = if self.local {
             self.text(&["symbolic-ref", "--quiet", "HEAD"]).await?
         } else {
@@ -1007,7 +1044,7 @@ impl Repo {
                 return Err(GitError::Refused);
             }
             let pin = checked(url).await?;
-            let out = run("git", Some(&self.dir), &["ls-remote", "--symref", "--", url, "HEAD"], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin, fsize: None }).await?;
+            let out = run("git", Some(&self.dir), &["ls-remote", "--symref", "--", url, "HEAD"], Opts { timeout, max_out: 1 << 16, auth, file: false, pin: &pin, fsize: None }).await?;
             let out = String::from_utf8_lossy(&out).into_owned();
             out.lines().find_map(|l| l.strip_prefix("ref: ").and_then(|r| r.strip_suffix("\tHEAD")).map(str::to_string)).ok_or(GitError::NotFound)?
         };
@@ -1229,6 +1266,56 @@ impl Repo {
         let (s, u) = (format!("--since={}", since.to_rfc3339()), format!("--until={}", until.to_rfc3339()));
         let out = self.text(&["log", "--format=%H", "--max-count=2", &s, &u, "--end-of-options", &head, "--", path]).await?;
         Ok(out.lines().filter(|l| is_sha(l.trim())).count())
+    }
+
+    /// The commit `HEAD` names (a team folder's checkout, a mirror's default branch). `NotFound`
+    /// for a repo with no commits yet.
+    pub async fn head(&self) -> Result<String, GitError> {
+        let sha = match self.text(&["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"]).await {
+            Ok(s) => s.trim().to_string(),
+            Err(GitError::Failed) => return Err(GitError::NotFound),
+            Err(e) => return Err(e),
+        };
+        if is_sha(&sha) {
+            Ok(sha)
+        } else {
+            Err(GitError::NotFound)
+        }
+    }
+
+    /// Every path tracked at `rev` (a full sha), as `ls-tree -r -l -z` records
+    /// (`<mode> <type> <id> <size>\t<path>`, size `-` for a submodule), up to `max_out` bytes of
+    /// them: `true` when there were more (D2's path limit). A record cut at the limit is the
+    /// caller's to drop.
+    pub async fn tree(&self, rev: &str, max_out: usize, timeout: Duration) -> Result<(Vec<u8>, bool), GitError> {
+        if !is_sha(rev) {
+            return Err(GitError::Refused);
+        }
+        let o = Opts { file: self.local, max_out, timeout, ..Opts::read() };
+        run_with("git", Some(&self.dir), &["ls-tree", "-r", "-l", "-z", "--full-tree", "--end-of-options", rev], o, true).await
+    }
+
+    /// The bytes of blob `id` (a full sha from [`Self::tree`]), or [`GitError::TooBig`] past `max_out`.
+    pub async fn blob(&self, id: &str, max_out: usize, timeout: Duration) -> Result<Vec<u8>, GitError> {
+        if !is_sha(id) {
+            return Err(GitError::Refused);
+        }
+        run("git", Some(&self.dir), &["cat-file", "blob", id], Opts { file: self.local, max_out, timeout, ..Opts::read() }).await
+    }
+
+    /// Fetches only the tip of `branch` from `url` (depth 1, no tags) into this mirror, within
+    /// `timeout`, and returns its sha: what a team Suggest reads (D2, D7). The mirror cap applies.
+    pub async fn fetch_tip(&self, url: &str, branch: &str, auth: Option<&Auth>, timeout: Duration) -> Result<String, GitError> {
+        if self.local || !ok_branch(branch) || fetch_url(url).as_deref() != Some(url) {
+            return Err(GitError::Refused);
+        }
+        let pin = checked(url).await?;
+        let to = "refs/kwant/suggest";
+        let spec = format!("+refs/heads/{branch}:{to}");
+        let args = ["fetch", "--quiet", "--depth=1", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", url, &spec];
+        let o = Opts { timeout, max_out: MAX_OUT, auth, file: false, pin: &pin, fsize: None };
+        self.fetch_capped(&args, o, crate::server::dev::mirror_cap()).await?;
+        self.resolve(to).await
     }
 
     /// The names at the root of `branch` (files and folders).

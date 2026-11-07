@@ -34,6 +34,8 @@ export interface QueryTarget {
   spaceId: string | null;
   channelId: string | null;
   botId: string | null;
+  /** `&live=1` (W2): open the chat with its browser panel showing. */
+  live?: boolean;
   /** `?notify=<kind>`: a notification about no bot or chat (spend_stopped, app_update, loose ends…). */
   notify?: string;
 }
@@ -50,7 +52,7 @@ export function targetFromQuery(search: string): QueryTarget | null {
   const channelId = q.get('channel');
   const botId = channelId ? null : q.get('kwant');
   if (!spaceId && !channelId && !botId) return null;
-  return { spaceId, channelId, botId };
+  return q.get('live') === '1' && (channelId || botId) ? { spaceId, channelId, botId, live: true } : { spaceId, channelId, botId };
 }
 
 /** A tap on a notification that opens today's spending stop (it names no bot or chat). */

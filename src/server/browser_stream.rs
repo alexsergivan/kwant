@@ -7,6 +7,7 @@
 //! wait behind a bot's command.
 use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit};
 use super::{routes::get_or_create_browser_controller, AppState};
+use super::show_once::{capture as recorder, stage::{Act, StageRecorder}};
 use crate::sandbox::app_links::{self, AppLinkWatch, Verdict};
 use crate::sandbox::browser::{web_address, BrowserController, BrowserError, HeldPointer, ViewClaim, ViewRelease, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
 use crate::sandbox::browser_history::HistoryDirection;
@@ -288,7 +289,7 @@ impl Cdp {
 fn wanted(event: &Value) -> bool {
     let method = event["method"].as_str().unwrap_or_default();
     match method {
-        "Runtime.bindingCalled" => event["params"]["name"] == app_links::BINDING,
+        "Runtime.bindingCalled" => event["params"]["name"] == app_links::BINDING || event["params"]["name"] == recorder::BINDING,
         "Log.entryAdded" => event["params"]["entry"]["text"].as_str().is_some_and(|text| text.starts_with(app_links::REFUSED_LOG)),
         _ => !method.starts_with("Runtime.") && !method.starts_with("Log."),
     }
@@ -373,6 +374,9 @@ struct Shared {
     cursor_at: std::sync::Mutex<Option<Instant>>,
     /// Asks to read the page's address and title again.
     location: Latest<()>,
+    /// The Show it once recorder is installed on this connection (a recording is live): a pick in
+    /// kwnt's drawn option list is handed to it ([`recorder::record_pick`]).
+    recording: AtomicBool,
 }
 
 /// Keeps only the newest value offered and makes sure exactly one runner drains it, so a value
@@ -735,6 +739,15 @@ impl Worker {
                     "arguments": [{"value": indexes}], "returnByValue": true,
                 }), PROBE_WAIT).await?;
                 if result["result"]["value"] != true { return Err(protocol("That option can't be picked")); }
+                // Show it once: the page saw an untrusted change, which the recorder ignores; the
+                // person's pick goes to the recorder in its own world as a `select` step
+                if self.shared.recording.load(Ordering::SeqCst) {
+                    let cdp = &self.cdp;
+                    let call = |method: &'static str, params: Value| async move { cdp.call(method, params, PROBE_WAIT).await.ok() };
+                    if !recorder::record_pick(call, &object, &indexes).await {
+                        tracing::debug!("show it once: a pick in the drawn list wasn't recorded");
+                    }
+                }
                 self.close_select();
                 let _ = self.client.send(ack(id, json!({})));
             }
@@ -890,12 +903,21 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
         cursor_moves: Latest::new(),
         cursor_at: std::sync::Mutex::new(None),
         location: Latest::new(),
+        recording: AtomicBool::new(false),
     });
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<Value>();
     let (jobs, jobs_rx) = mpsc::unbounded_channel::<Job>();
     let worker = Worker { ctrl: ctrl.clone(), cdp: cdp.clone(), shared: shared.clone(), client: client_tx.clone(), swallowed: 0, open_select: None };
     let worker = tokio::spawn(worker.run(jobs_rx));
-    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &shared, &client_tx, &mut client_rx, &jobs).await;
+    let mut rec = StageRecorder::new(state.clone(), id.clone(), shared.socket);
+    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &shared, &client_tx, &mut client_rx, &jobs, &mut rec).await;
+    // a recording live on this socket stops here (Show it once: `closed`), its steps kept, after
+    // the edit still pending in the page, if the page can still be reached
+    if rec.is_live() {
+        let pending = flush_recorder(&cdp).await;
+        let _ = rec.on_flushed(&pending).await;
+    }
+    rec.closed().await;
     // Let go of anything held and put the viewport back, then drop the lease so bot actions
     // resume even on disconnect or timeout.
     worker.abort();
@@ -917,8 +939,11 @@ async fn stream(
     client_tx: &mpsc::UnboundedSender<Value>,
     client_rx: &mut mpsc::UnboundedReceiver<Value>,
     jobs: &mpsc::UnboundedSender<Job>,
+    rec: &mut StageRecorder,
 ) -> (Result<(), BrowserError>, Option<OwnedRwLockWriteGuard<()>>) {
     let mut lease: Option<OwnedRwLockWriteGuard<()>> = None;
+    // the Show it once recorder's script on new documents, while a recording is live
+    let mut recorder_script: Option<String> = None;
     let result = async {
         cdp.call("Page.enable", json!({}), Duration::from_secs(10)).await?;
         // A Chrome window behind other apps on a Mac doesn't have the OS's focus, so its page
@@ -970,6 +995,15 @@ async fn stream(
                     if let Some(next) = next { send(socket, next).await?; }
                     // a fallback for title changes no page event announces
                     refresh_location(cdp, ctrl, shared, client_tx);
+                    // Show it once: the 30-minute limit and the 28:00 warning
+                    let acts = rec.tick().await;
+                    recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
+                }
+                cmd = rec.next_cmd() => {
+                    if let Some(cmd) = cmd {
+                        let acts = rec.on_cmd(cmd).await;
+                        recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
+                    }
                 }
                 Some(value) = client_rx.recv() => send(socket, value).await?,
                 event = events.recv() => {
@@ -981,6 +1015,10 @@ async fn stream(
                     // a new document: the old title goes now, the new one follows on DOMContentLoaded
                     if let Some(url) = navigated_to(method, params) {
                         let _ = client_tx.send(json!({"type":"location","url":url,"title":""}));
+                        if rec.is_live() {
+                            let acts = rec.on_navigated(&url).await;
+                            recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
+                        }
                     }
                     if moves_location(method, params) { refresh_location(cdp, ctrl, shared, client_tx); }
                     match method {
@@ -994,6 +1032,10 @@ async fn stream(
                             if let Some(scheme) = scheme.filter(|_| app_links.may_notice(Instant::now())) {
                                 send(socket, app_link_notice(&app_links::stopped_text(&scheme))).await?;
                             }
+                        }
+                        "Runtime.bindingCalled" if params["name"] == recorder::BINDING => {
+                            let acts = rec.on_binding(params["payload"].as_str().unwrap_or_default()).await;
+                            recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
                         }
                         "Page.screencastFrame" => {
                             let session = params["sessionId"].as_i64().unwrap_or_default();
@@ -1039,6 +1081,8 @@ async fn stream(
                                 match ctrl.take_control().await {
                                     Ok(guard) => {
                                         lease = Some(guard);
+                                        // Show it once can start on this stage now
+                                        rec.claim().await;
                                         // a button left down by an earlier view would turn the
                                         // person's first click into a drag
                                         let held = ctrl.pointer_held_slot().lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -1051,11 +1095,18 @@ async fn stream(
                             send(socket, json!({"type":"control","active":true,"viewport":{"width":vw,"height":vh}})).await?;
                         }
                         "release_control" => {
+                            // Show it once: the edit still pending in the page is a step first
+                            if rec.is_live() {
+                                recorder_acts(socket, ctrl, cdp, shared, rec, vec![Act::Flush], &mut recorder_script).await?;
+                            }
                             let (done, wait) = oneshot::channel();
                             if jobs.send(Job::HandBack(Some(done))).is_ok() {
                                 let _ = timeout(Duration::from_secs(8), wait).await;
                             }
                             lease = None;
+                            // Show it once: Hand back stops a live recording (`handed_back`)
+                            let acts = rec.handed_back().await;
+                            recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
                             let (vw, vh) = shared.view();
                             send(socket, json!({"type":"control","active":false,"viewport":{"width":vw,"height":vh}})).await?;
                         }
@@ -1114,6 +1165,84 @@ async fn guard_app_links(cdp: &Cdp) {
     ] {
         if let Err(e) = cdp.call(method, params, PROBE_WAIT).await { tracing::debug!(method, "app link guard: {}", e); }
     }
+}
+
+/// Does what the Show it once recorder asks of this socket (see [`super::show_once::stage`]): the
+/// recorder goes into kwnt's isolated world only, where the page's scripts can't reach it.
+async fn recorder_acts(
+    socket: &mut WebSocket,
+    ctrl: &BrowserController,
+    cdp: &Cdp,
+    shared: &Shared,
+    rec: &mut StageRecorder,
+    acts: Vec<Act>,
+    script: &mut Option<String>,
+) -> Result<(), BrowserError> {
+    let mut queue: std::collections::VecDeque<Act> = acts.into();
+    while let Some(act) = queue.pop_front() {
+        match act {
+            Act::Send(frame) => send(socket, frame).await?,
+            Act::Install => {
+                shared.recording.store(true, Ordering::SeqCst);
+                if script.is_none() {
+                    let binding = json!({"name": recorder::BINDING, "executionContextName": recorder::WORLD});
+                    if let Err(e) = cdp.call("Runtime.addBinding", binding, PROBE_WAIT).await { tracing::debug!("recorder binding: {}", e); }
+                    let source = json!({"source": recorder::recorder_js(), "worldName": recorder::WORLD, "runImmediately": true});
+                    match cdp.call("Page.addScriptToEvaluateOnNewDocument", source, PROBE_WAIT).await {
+                        Ok(added) => *script = added["identifier"].as_str().map(str::to_string),
+                        Err(e) => tracing::warn!("show it once: the recorder wasn't installed: {}", e),
+                    }
+                }
+                if let Some(url) = current_url(cdp).await { queue.extend(rec.on_installed(&url).await); }
+            }
+            Act::Uninstall => {
+                shared.recording.store(false, Ordering::SeqCst);
+                if let Some(identifier) = script.take() {
+                    let _ = cdp.call("Page.removeScriptToEvaluateOnNewDocument", json!({"identifier": identifier}), PROBE_WAIT).await;
+                }
+            }
+            Act::Navigate(url) => {
+                // the person's own navigation: never held to a bot's site rules (W-T10)
+                ctrl.site_guard.set_actor(crate::sandbox::site_guard::Actor::Person);
+                let opened = match cdp.call("Page.navigate", json!({"url": url}), Duration::from_secs(10)).await {
+                    Ok(r) => r["errorText"].as_str().is_none_or(str::is_empty),
+                    Err(e) => { tracing::debug!("recorder start page: {}", e); false }
+                };
+                if !opened { queue.extend(rec.on_start_failed(current_url(cdp).await.as_deref()).await); }
+            }
+            Act::Flush => {
+                let pending = flush_recorder(cdp).await;
+                queue.extend(rec.on_flushed(&pending).await);
+            }
+            Act::Stop { reason, done } => {
+                queue.extend(rec.stop_now(&reason).await);
+                done.fire();
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The Show it once recorder's pending field edits, taken from its isolated world (the same world
+/// the recorder script was added to on this connection). Nothing when the page can't be reached.
+async fn flush_recorder(cdp: &Cdp) -> Vec<String> {
+    let Ok(tree) = cdp.call("Page.getFrameTree", json!({}), PROBE_WAIT).await else { return vec![] };
+    let Some(frame) = tree["frameTree"]["frame"]["id"].as_str() else { return vec![] };
+    let world = json!({"frameId": frame, "worldName": recorder::WORLD});
+    let Ok(world) = cdp.call("Page.createIsolatedWorld", world, PROBE_WAIT).await else { return vec![] };
+    let Some(context) = world["executionContextId"].as_i64() else { return vec![] };
+    let eval = json!({"expression": recorder::FLUSH, "contextId": context, "returnByValue": true});
+    let Ok(r) = cdp.call("Runtime.evaluate", eval, PROBE_WAIT).await else { return vec![] };
+    r["result"]["value"].as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(super::show_once::stage::MAX_FLUSHED).collect())
+        .unwrap_or_default()
+}
+
+/// The address of the page open in the tab now.
+async fn current_url(cdp: &Cdp) -> Option<String> {
+    let history = cdp.call("Page.getNavigationHistory", json!({}), PROBE_WAIT).await.ok()?;
+    let index = history["currentIndex"].as_u64()? as usize;
+    history["entries"].get(index)?["url"].as_str().map(str::to_string)
 }
 
 /// Recovers the tab from Chrome's "Open <app>?" prompt off the loop and tells the person, or

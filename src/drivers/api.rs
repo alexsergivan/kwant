@@ -1225,6 +1225,11 @@ impl Driver for ApiDriver {
                 "this turn must run with no tools, but it was given MCP servers, so kwnt didn't run it".into(),
             ));
         }
+        // A read-only turn (a Dev mode brief, J7) runs only on claude or codex, which can be held
+        // to reading; never on an API account
+        if input.read_only {
+            return Err(DriverError::Execution("this turn may only read, and kwnt doesn't run those on an API account".into()));
+        }
         let target_model = input
             .model_override
             .as_deref()
@@ -1819,6 +1824,7 @@ mod tests {
             teammates: vec![],
             mcp: None,
             no_tools: false,
+            read_only: false,
         }
     }
 

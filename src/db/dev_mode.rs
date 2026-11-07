@@ -321,6 +321,8 @@ impl Database {
         for sql in CARD_INDEXES {
             sqlx::query(sql).execute(&self.pool).await?;
         }
+        // 0.7.6: briefs of Jira tickets (dev_ticket_briefs.rs)
+        self.migrate_ticket_briefs().await?;
         Ok(())
     }
 
@@ -643,7 +645,8 @@ impl Database {
 
     async fn delete_dev_rows(&self, space_id: &str) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
-        for t in ["dev_mode_spaces", "dev_repos", "dev_cards", "dev_backups", "dev_model_calls", "dev_prod_connections"] {
+        let tables = ["dev_mode_spaces", "dev_repos", "dev_cards", "dev_backups", "dev_model_calls", "dev_prod_connections"];
+        for t in tables.into_iter().chain(super::dev_ticket_briefs::BRIEF_TABLES) {
             sqlx::query(&format!("DELETE FROM {t} WHERE space_id = ?")).bind(space_id).execute(&mut *tx).await?;
         }
         tx.commit().await?;

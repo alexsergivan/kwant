@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CalendarClock,
@@ -380,7 +380,12 @@ export const NeedsBitwarden: React.FC<{
  * server), Use Bitwarden, or Make every bot ask first. A locked Bitwarden offers Unlock only.
  * `onReady(note, acceptRisk)` shows the token field.
  */
-export const SaveFirst: React.FC<{ gate: Exclude<SaveGate, 'open'>; onReady: (note: string | null, acceptRisk?: boolean) => void }> = ({ gate, onReady }) => {
+export const SaveFirst: React.FC<{
+  gate: Exclude<SaveGate, 'open'>;
+  onReady: (note: string | null, acceptRisk?: boolean) => void;
+  /** 0.7.6: the card's reason line for another token (Jira names its own scoped token). Defaults to the GitHub line. */
+  why?: string;
+}> = ({ gate, onReady, why }) => {
   const id = useId();
   const store = usePasswordStore(true, true);
   const [step, setStep] = useState(false);
@@ -417,7 +422,7 @@ export const SaveFirst: React.FC<{ gate: Exclude<SaveGate, 'open'>; onReady: (no
         {!step && <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" />}
         {locked ? SAVE_FIRST.lockedTitle : SAVE_FIRST.title}
       </p>
-      {!locked && <p className="text-[11px] text-amber-100/80 leading-snug" data-save-first-why>{SAVE_FIRST.why}</p>}
+      {!locked && <p className="text-[11px] text-amber-100/80 leading-snug" data-save-first-why>{why ?? SAVE_FIRST.why}</p>}
       {!step ? (
         <div className="flex flex-wrap gap-2">
           {!locked && (
@@ -533,6 +538,16 @@ export const GitHubConnectForm: React.FC<{
   const [choiceOpen, setChoiceOpen] = useState(false);
   const [cantTell, setCantTell] = useState<string | null>(null);
   const choiceRef = useRef<HTMLDivElement>(null);
+  // Set by a can't-tell 400; the first choice takes focus once the open choice is on screen. A timer
+  // set in the catch could run before React draws it and find no radio.
+  const focusChoice = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusChoice.current || !choiceOpen) return;
+    const first = choiceRef.current?.querySelector<HTMLElement>('[role="radio"]');
+    if (!first) return;
+    focusChoice.current = false;
+    first.focus();
+  });
   const [ghLabel, setGhLabel] = useState('');
   const [ghBase, setGhBase] = useState('');
   const [busy, setBusy] = useState(false);
@@ -630,8 +645,8 @@ export const GitHubConnectForm: React.FC<{
       else if (isForge && cantTellForge(err)) {
         // The server's own words, then the choice opens with its first option in focus.
         setCantTell(cantTellText((err as Error).message));
+        focusChoice.current = true;
         setChoiceOpen(true);
-        window.setTimeout(() => choiceRef.current?.querySelector<HTMLElement>('[role="radio"]')?.focus(), 0);
       } else if (isForge && err instanceof LooseEndsError && err.status === 409) setError(forgeTakenText(forgeHost(String((req as { config: Record<string, unknown> }).config.url ?? ''))));
       else setError(err instanceof Error ? err.message : 'Couldn’t add it.');
     } finally {
@@ -1322,7 +1337,9 @@ export const LooseEndsPage: React.FC<{
   /** Dev mode's Connect (flow F5): open the add form on GitHub, and say when a GitHub source is added. */
   connectGitHub?: boolean;
   onGitHubAdded?: () => void;
-}> = ({ onBack, onOpenChat, connectGitHub = false, onGitHubAdded }) => {
+  /** 0.7.7 T5: the Inbox team's "Connect email" opens the add form on IMAP. */
+  addImap?: boolean;
+}> = ({ onBack, onOpenChat, connectGitHub = false, onGitHubAdded, addImap = false }) => {
   const [cases, setCases] = useState<LooseCase[] | null>(null);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1476,8 +1493,8 @@ export const LooseEndsPage: React.FC<{
           sources={sources}
           error={sourcesError}
           onChanged={() => (loadSources(), load())}
-          initialAdding={connectGitHub}
-          initialKind={connectGitHub ? 'github' : undefined}
+          initialAdding={connectGitHub || addImap}
+          initialKind={connectGitHub ? 'github' : addImap ? 'imap' : undefined}
           onAdded={(s) => s.kind === 'github' && onGitHubAdded?.()}
           settled={!loading || cases !== null || error !== null}
         />

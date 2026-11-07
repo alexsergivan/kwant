@@ -70,7 +70,13 @@ async fn build(state: &AppState, row: &DevCardRow, cap: i64) -> (&'static str, V
             match facts.kind {
                 Kind::Review => {
                     let mut model = picked.as_ref().map(|p| model_on(p.bot.clone()));
-                    review::card(&facts, picked.as_ref(), model.as_mut()).await
+                    // J12: a PR on a ticket with a brief is checked against its done-when lines
+                    let ticket = super::tickets::brief::ticket_check(state, &row.space_id, &facts).await;
+                    let (status, card) = review::card_for(&facts, picked.as_ref(), model.as_mut(), ticket.as_ref()).await;
+                    if let (Some(t), Some(v)) = (&ticket, review::matches_verdict(&card)) {
+                        super::tickets::hooks::reviewed(state, &row.space_id, &t.key, v).await;
+                    }
+                    (status, card)
                 }
                 Kind::Landed => {
                     // The text is written by the reviewer pick, else by the author's own bot
@@ -208,7 +214,7 @@ async fn close_cards(state: &AppState, kwant_id: &str, since: chrono::DateTime<c
     for (id, _) in state.db.open_audit_cards(Some(kwant_id), PURPOSE, Some(since)).await.unwrap_or_default() {
         state.broker.cancel(&id).await;
         if state.db.expire_open_approval(&id).await.unwrap_or(false) {
-            let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::ApprovalWithdrawn { id });
+            let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::approval_withdrawn(id, "expired", None));
         }
     }
 }
@@ -299,7 +305,7 @@ pub(super) fn cut_of(facts: &DevFacts, left_out: usize) -> Option<String> {
 /// `</task>` tag in it made harmless (`<` becomes `&lt;`), in any case and spacing, so nothing in
 /// it can close the fence it sits in. `<pre>`, `<prompt>`, `<tasks>` stay as they are.
 pub(super) fn fence_safe(text: &str) -> String {
-    const TAGS: [&str; 2] = ["pr", "task"];
+    const TAGS: [&str; 3] = ["pr", "task", "ticket"];
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(i) = rest.find('<') {

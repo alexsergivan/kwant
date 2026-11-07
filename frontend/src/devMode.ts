@@ -270,9 +270,33 @@ export function parseCheck(raw: unknown): RepoCheck | null {
 }
 
 /** A team of the space, for "Link a repo" on a team that has none. */
+/** A bot as a team row shows it: name and avatar sprite. */
+export interface DevBotRef {
+  id: string;
+  name: string;
+  avatar: string;
+}
+
 export interface DevTeamRef {
   id: string;
   name: string;
+  /** The lead, when the roster is known (the avatar and "Ann leads"). */
+  lead?: DevBotRef | null;
+  /** Every bot on the team, lead first (the avatar stack). */
+  members?: DevBotRef[];
+}
+
+/** Teams as Dev mode shows them, with the lead and members resolved from the roster. */
+export function devTeamRefs(
+  teams: Array<{ id: string; name: string; lead_kwant_id?: string; member_kwants?: string[] }>,
+  kwants: Array<{ id: string; name: string; avatar_sprite: string }>,
+): DevTeamRef[] {
+  const byId = new Map(kwants.map((k) => [k.id, { id: k.id, name: k.name, avatar: k.avatar_sprite }]));
+  return teams.map((t) => {
+    const lead = (t.lead_kwant_id && byId.get(t.lead_kwant_id)) || null;
+    const ids = [...(t.lead_kwant_id ? [t.lead_kwant_id] : []), ...(t.member_kwants ?? []).filter((m) => m !== t.lead_kwant_id)];
+    return { id: t.id, name: t.name, lead, members: ids.map((m) => byId.get(m)).filter((k): k is DevBotRef => !!k) };
+  });
 }
 
 export type RowAction = 'connect' | 'link' | 'remove';
@@ -798,15 +822,18 @@ export function switchReducer(s: SwitchState, a: SwitchAction, space = 'this spa
       return flip(s, false, a.now, space);
     }
     case 'recover':
-      if (s.phase !== 'lifted' || s.liftedAt === null || a.now - s.liftedAt < RECOVER_MS) return s;
+      // a.now before liftedAt: the clock stepped back, so the 5 s can't be measured; drop the cover.
+      if (s.phase !== 'lifted' || s.liftedAt === null || (a.now - s.liftedAt < RECOVER_MS && a.now >= s.liftedAt)) return s;
       return { ...s, phase: 'covered', liftedAt: null, announce: say(s, STAYS_ON_TEXT) };
     case 'escape':
     case 'blur':
       if (s.phase !== 'lifted') return s;
       return { ...s, phase: 'covered', liftedAt: null, announce: say(s, STAYS_ON_TEXT) };
     case 'settled':
-      if (s.phase !== 'settling' || a.now < s.settleUntil) return s;
-      return { ...s, phase: 'covered' };
+      // Further than SETTLE_MS short: the clock stepped back, and waiting for it would leave presses ignored.
+      if (s.phase !== 'settling' || (a.now < s.settleUntil && s.settleUntil - a.now <= SETTLE_MS)) return s;
+      // settleUntil goes back to 0, so a clock that stepped back can't keep ignoring presses after this.
+      return { ...s, phase: 'covered', settleUntil: 0 };
     case 'saved':
       return { ...s, saving: false, on: a.on };
     case 'save_failed':

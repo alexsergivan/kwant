@@ -58,7 +58,10 @@ pub mod goals;
 pub mod app_update_routes;
 pub mod smart_results;
 pub mod dev;
+pub mod show_once;
 pub mod agents_connect;
+pub mod teams;
+pub mod telegram;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -248,6 +251,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/channels", get(routes::list_channels).post(routes::create_channel))
         .route("/api/channels/:id/messages", get(routes::list_messages))
         .route("/api/teams", get(routes::list_teams).post(routes::create_team))
+        .route("/api/team-templates", get(teams::catalogue))
+        .route("/api/team-templates/:id/preview", get(teams::preview))
+        .route("/api/teams/from-template", post(teams::from_template))
+        .route("/api/teams/suggest", post(teams::suggest))
+        .route("/api/teams/:id/template", get(teams::team_template))
         .route(
             "/api/teams/:id",
             get(routes::get_team).put(routes::update_team).patch(continuity::patch_team).delete(routes::delete_team),
@@ -266,6 +274,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/dev/reviews", get(dev::routes::reviews))
         .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
         .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
+        .merge(dev::tickets::routes::router())
         .route("/api/dev/cards/:id", get(dev::routes::card))
         .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/dev/cards/:id/post", post(dev::post::post))
@@ -337,6 +346,15 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/parallel/runs/:id", get(parallel_routes::get_run))
         .route("/api/connections", get(connections::list))
         .route("/api/connections/:id/production", put(connections::put_production))
+        .route(
+            "/api/connections/telegram",
+            get(telegram::routes::get).patch(telegram::routes::patch).delete(telegram::routes::delete),
+        )
+        .route("/api/connections/telegram/token", put(telegram::routes::put_token))
+        .route("/api/connections/telegram/pair", post(telegram::routes::pair))
+        .route("/api/connections/telegram/unpair", post(telegram::routes::unpair))
+        .route("/api/connections/telegram/unpair/undo", post(telegram::routes::undo_unpair))
+        .route("/api/connections/telegram/test", post(telegram::routes::test))
         .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/connections/composio/apps", get(connections::search_composio_apps))
         .route("/api/connections/composio/apps/:slug/connect", post(connections::connect_composio_app))
@@ -502,6 +520,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/away", get(away::get))
         .route("/api/away/seen", post(away::seen))
         .route("/api/events", get(sse::sse_handler))
+        .merge(show_once::routes::router())
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), spaces::row_guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))

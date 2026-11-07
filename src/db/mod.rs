@@ -18,6 +18,7 @@ pub mod mcp_suggestions;
 pub mod bot_actions;
 pub mod hires;
 pub mod imports;
+pub mod team_templates;
 pub mod approval_modes;
 pub mod parked;
 pub mod waiting;
@@ -43,8 +44,12 @@ pub mod reactions;
 pub mod routing;
 pub mod smart_results;
 pub mod dev_mode;
+pub mod dev_ticket_briefs;
 pub mod spend;
 pub mod agent_connections;
+pub mod dev_jira;
+pub mod telegram;
+pub mod show_once;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -218,6 +223,7 @@ impl Database {
             db.migrate_bot_actions().await?;
             db.migrate_hires().await?;
             db.migrate_imports().await?;
+            db.migrate_team_templates().await?;
             db.repair_team_channels().await?;
             db.migrate_approval_modes(fresh, data_dir).await?;
         }
@@ -246,6 +252,12 @@ impl Database {
         db.migrate_dev_mode().await?;
         // 0.7.4: connected coding agents (add-only)
         db.migrate_agent_connections().await?;
+        db.migrate_dev_jira().await?;
+        // 0.7.8: Telegram bridge (add-only)
+        db.migrate_telegram().await?;
+        // 0.7.9: Show it once recordings (add-only). After every step that can rebuild `kwants`
+        // or `skills`, which would drop its delete triggers
+        db.migrate_show_once().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal

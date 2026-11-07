@@ -171,6 +171,10 @@ pub struct Approval {
     pub parameters: String, // JSON string
     pub status: String,     // 'pending', 'allowed', 'denied'
     pub created_at: Option<DateTime<Utc>>,
+    /// Where it was answered: "telegram", or `None` (in kwant, or not answered).
+    #[sqlx(default)]
+    #[serde(default)]
+    pub answered_via: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

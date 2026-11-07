@@ -113,3 +113,69 @@ export function approvalsForChat(list: ChatApproval[], chat: OpenChat | null): C
     return chat.kind === 'kwant' ? chat.kwantId === a.kwant_id : chat.memberIds.includes(a.kwant_id);
   });
 }
+
+// ---- Approvals answered in Telegram (0.7.8, telegram-api.md §3) ----
+
+/** What closed a card, from `ApprovalWithdrawn` or a `GET /api/approvals` row. Old events are `{id}` only. */
+export interface ApprovalClosed {
+  answered_via?: string | null;
+  outcome?: string | null;
+}
+
+/** Whether a closed card was allowed in Telegram. Only Allow once is offered there (A22). */
+export const allowedInTelegram = (c: ApprovalClosed | null | undefined): boolean =>
+  !!c && c.answered_via === 'telegram' && (c.outcome == null || c.outcome === 'allowed_once');
+
+/** A row of `GET /api/approvals`. */
+export interface ApprovalRecord {
+  id: string;
+  kwant_id?: string | null;
+  tool_name?: string | null;
+  status?: string | null;
+  answered_via?: string | null;
+  created_at?: string | null;
+  details?: unknown;
+}
+
+/** How long after it was asked a Telegram-allowed approval is still drawn after a reload. */
+export const SETTLED_KEEP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The rows to draw again after a reload: allowed once in Telegram, asked in the last day. The
+ * card comes from the row's own (masked) details, so it reads like the live one.
+ */
+export function settledFromRecords(rows: unknown, now = Date.now()): ChatApproval[] {
+  if (!Array.isArray(rows)) return [];
+  const out: ChatApproval[] = [];
+  for (const r of rows as ApprovalRecord[]) {
+    if (!r || typeof r.id !== 'string' || !allowedInTelegram({ answered_via: r.answered_via, outcome: r.status })) continue;
+    const at = str(r.created_at) ? Date.parse(r.created_at as string) : NaN;
+    if (!Number.isFinite(at) || now - at > SETTLED_KEEP_MS) continue;
+    const details = r.details && typeof r.details === 'object' && !Array.isArray(r.details) ? (r.details as Record<string, unknown>) : {};
+    const kwantId = str(r.kwant_id) ?? str(details.kwant_id);
+    if (!kwantId) continue; // no chat to put it in
+    out.push({ id: r.id, tool_name: str(r.tool_name) ?? 'tool', details, kwant_id: kwantId, link: null, asked_at: r.created_at as string });
+  }
+  return out.reverse(); // the server sends newest first; the chat reads oldest first
+}
+
+/** Adds settled cards once each, keeping the order they came in. */
+export function addSettled(list: ChatApproval[], more: ChatApproval[]): ChatApproval[] {
+  const seen = new Set(list.map((a) => a.id));
+  const add = more.filter((a) => !seen.has(a.id) && (seen.add(a.id), true));
+  return add.length ? [...list, ...add] : list;
+}
+
+/**
+ * `ApprovalWithdrawn {id, answered_via?, outcome?}`: the card always closes; when it was allowed
+ * in Telegram it is kept as a settled line. Old `{id}`-only events only close it.
+ */
+export function withdrawApproval(pending: ChatApproval[], settled: ChatApproval[], data: unknown): { pending: ChatApproval[]; settled: ChatApproval[] } {
+  const d = (data && typeof data === 'object' ? data : {}) as { id?: unknown } & ApprovalClosed;
+  if (typeof d.id !== 'string') return { pending, settled };
+  const card = pending.find((a) => a.id === d.id);
+  return {
+    pending: card ? withoutApproval(pending, d.id) : pending,
+    settled: card && allowedInTelegram(d) ? addSettled(settled, [card]) : settled,
+  };
+}
