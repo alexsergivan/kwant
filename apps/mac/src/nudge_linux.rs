@@ -9,7 +9,7 @@
 use crate::nudge::{self, Change};
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
-use tauri::{image::Image, tray::TrayIcon, AppHandle, Manager, UserAttentionType};
+use tauri::{image::Image, tray::TrayIcon, AppHandle, UserAttentionType};
 
 const NORMAL_DARK: &[u8] = include_bytes!("../icons/linux/tray-normal-dark.png");
 const NORMAL_LIGHT: &[u8] = include_bytes!("../icons/linux/tray-normal-light.png");
@@ -73,9 +73,12 @@ pub fn escape_markup(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-/// The `image-data` hint (`(iiibiiay)`: width, height, rowstride, has alpha, bits per sample,
-/// channels, RGBA bytes) for a PNG.
-pub fn image_data(png: &[u8]) -> Option<(i32, i32, i32, bool, i32, i32, Vec<u8>)> {
+/// The `image-data` hint's shape (`(iiibiiay)`): width, height, rowstride, has alpha, bits per
+/// sample, channels, RGBA bytes.
+pub type ImageData = (i32, i32, i32, bool, i32, i32, Vec<u8>);
+
+/// The `image-data` hint for a PNG.
+pub fn image_data(png: &[u8]) -> Option<ImageData> {
     let img = Image::from_bytes(png).ok()?;
     let (w, h) = (i32::try_from(img.width()).ok()?, i32::try_from(img.height()).ok()?);
     let rgba = img.rgba().to_vec();
@@ -112,20 +115,22 @@ impl Nudger {
                 self.showing_needs_you = needs_you;
             }
         }
-        if !show || change.arrived.is_empty() || crate::main_focused(handle) {
+        if !show || change.arrived.is_empty() || crate::kwant_focused(handle) {
             return;
         }
-        if let Some(main) = handle.get_webview_window(crate::MAIN) {
+        let from = change.arrived.first().map(|i| i.place.as_str());
+        if let Some(main) = crate::place_window(handle, from) {
             let _ = main.request_user_attention(Some(UserAttentionType::Informational));
         }
         // One notification per poll: several at once say how many and open the Inbox
-        if let Some(p) = nudge::pill(&change.arrived) {
+        if let Some(p) = nudge::pill(&nudge::one_place(&change.arrived)) {
             let _ = self.notify.send(p);
         }
     }
 }
 
-type Targets = Arc<Mutex<HashMap<u32, String>>>;
+/// A notification's place (`Place::key`) and item, by its id.
+type Targets = Arc<Mutex<HashMap<u32, (String, String)>>>;
 
 fn notify_loop(handle: AppHandle, rx: mpsc::Receiver<nudge::Pill>) {
     let conn = match zbus::blocking::Connection::session() {
@@ -177,7 +182,7 @@ fn notify_loop(handle: AppHandle, rx: mpsc::Receiver<nudge::Pill>) {
                     if t.len() > 100 {
                         t.clear();
                     }
-                    t.insert(id, p.target);
+                    t.insert(id, (p.place, p.target));
                 }
             }
             Err(e) => tracing::info!(error = %e, "the notification wasn't shown"),
@@ -193,9 +198,9 @@ fn listen_for_clicks(handle: AppHandle, proxy: zbus::blocking::Proxy<'static>, t
             let Ok(signals) = proxy.receive_signal("ActionInvoked") else { return };
             for msg in signals {
                 let Ok((id, _action)) = msg.body().deserialize::<(u32, String)>() else { continue };
-                let Some(target) = targets.lock().unwrap().remove(&id) else { continue };
+                let Some((place, target)) = targets.lock().unwrap().remove(&id) else { continue };
                 let h = handle.clone();
-                let _ = handle.run_on_main_thread(move || crate::open_window_at(&h, Some(&target)));
+                let _ = handle.run_on_main_thread(move || crate::open_place_at(&h, &place, Some(&target)));
             }
         })
         .expect("notification click thread");

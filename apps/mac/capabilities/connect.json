@@ -1,13 +1,14 @@
 {
   "identifier": "connect",
-  "description": "The bundled pages (the loading page and the connect page) may check and save the server the app opens. Local only: a server's own pages get no commands.",
+  "description": "The bundled pages (the loading page in each place's window and the Add a server window) may list, add and remove places. Local only: a server's own pages get no commands.",
   "local": true,
-  "windows": ["main"],
+  "windows": ["main", "server-*", "connect"],
   "permissions": [
-    "allow-connect-state",
+    "allow-places-state",
     "allow-check-server",
-    "allow-connect-server",
-    "allow-use-this-computer",
+    "allow-add-server",
+    "allow-remove-server",
+    "allow-set-this-mac",
     "allow-close-connect",
     "allow-retry-start"
   ]

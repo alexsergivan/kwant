@@ -1,18 +1,14 @@
-//! The commands behind "Connect to a server" (api.md in the connect-server folder describes
-//! them for the page). Only the bundled pages can call them: the capability in
-//! capabilities/connect.json is local-only, and each command that checks or saves also looks at
-//! the address of the page that called it. A server's own pages get no commands at all.
+//! The commands behind the bundled pages: "Add a server" (connect.html) and "Starting kwant…"
+//! (index.html). spec.md in next-075/side-by-side lists them. Only the bundled pages can call
+//! them: the capability in capabilities/connect.json is local-only, and each command also looks
+//! at the address of the page that called it. A server's own pages get no commands at all.
 
-use crate::target::{parse_address, Home, Origin, Saved};
-use crate::{links, remote, Connecting, Nudges, Target, MAIN};
+use crate::places::{Place, THIS_MAC};
+use crate::target::{parse_address, Origin};
+use crate::{links, remote, Shared, ToggleRefused, CONNECT};
 use serde_json::{json, Value};
-use std::time::{Duration, Instant};
+use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Manager, Runtime, Url, Webview};
-
-/// How long the app waits for a server to set its sign-in cookie after a sign-in link.
-const SIGN_IN_WAIT: Duration = Duration::from_secs(45);
-/// Lets the page show "Restarting…" before the app goes.
-const RESTART_DELAY: Duration = Duration::from_millis(400);
 
 /// A bundled page: `connect.html`, `index.html`.
 pub fn bundled(page: &str) -> Url {
@@ -20,7 +16,7 @@ pub fn bundled(page: &str) -> Url {
     format!("{base}/{page}").parse().expect("a bundled page address")
 }
 
-fn error(code: &str, message: impl Into<String>, host: Option<String>) -> Value {
+pub(crate) fn error(code: &str, message: impl Into<String>, host: Option<String>) -> Value {
     json!({ "code": code, "message": message.into(), "host": host })
 }
 
@@ -40,29 +36,49 @@ fn app_name() -> &'static str {
     }
 }
 
-/// Where the app points now, and the server used last.
+/// Every place, which windows show, and the place of the window that asks.
 #[tauri::command]
-pub fn connect_state<R: Runtime>(app: AppHandle<R>, webview: Webview<R>) -> Result<Value, Value> {
+pub fn places_state<R: Runtime>(app: AppHandle<R>, webview: Webview<R>) -> Result<Value, Value> {
     bundled_only(&webview)?;
-    let target = app.state::<Target>();
-    let (mode, origin) = match &target.home {
-        Home::Local { .. } => ("local", None),
-        Home::Remote { origin } => ("remote", Some(origin)),
+    let places = crate::current(&app);
+    let shared = app.state::<Shared>();
+    let reach = shared.reach.lock().unwrap().clone();
+    let shown = |place: &Place| {
+        app.get_webview_window(&place.window_label())
+            .and_then(|w| w.is_visible().ok())
+            .unwrap_or(false)
     };
-    let last = target.last.as_ref().or(origin);
+    let servers: Vec<Value> = places
+        .servers
+        .iter()
+        .map(|o| {
+            json!({
+                "origin": o.as_str(),
+                "host": o.host(),
+                "open": shown(&Place::Server(o.clone())),
+                "reach": reach.get(&o.as_str()).map(|r| r.as_str()),
+            })
+        })
+        .collect();
+    let place = places.by_window(webview.label()).map(|p| match &p {
+        Place::ThisMac => json!({ "key": THIS_MAC, "kind": "this_mac", "host": null }),
+        Place::Server(o) => json!({ "key": o.as_str(), "kind": "server", "host": o.host() }),
+    });
+    let local_kwant = {
+        let local = shared.local.lock().unwrap();
+        match (places.this_mac, local.port, local.server.is_some()) {
+            (true, Some(_), true) => Some("app"),
+            (true, Some(_), false) => Some("outside"),
+            _ => None,
+        }
+    };
     Ok(json!({
-        "mode": mode,
-        "origin": origin.map(Origin::as_str),
-        "host": origin.map(Origin::host),
-        "last_origin": last.map(Origin::as_str),
-        "last_host": last.map(Origin::host),
-        // Local mode: "app" when this app started kwant (its bots pause while connected),
-        // "outside" when kwant was already running (it keeps running)
-        "local_kwant": match (&target.home, target.started_kwant) {
-            (Home::Local { .. }, true) => Some("app"),
-            (Home::Local { .. }, false) => Some("outside"),
-            (Home::Remote { .. }, _) => None,
-        },
+        "this_mac": places.this_mac,
+        "servers": servers,
+        "last_origin": places.servers.last().map(Origin::as_str),
+        "place": place,
+        "local_kwant": local_kwant,
+        "started_kwant": shared.started_kwant.load(Ordering::Relaxed),
         "app": app_name(),
         "version": app.package_info().version.to_string(),
     }))
@@ -92,97 +108,77 @@ pub async fn check_server<R: Runtime>(webview: Webview<R>, address: String) -> R
     }))
 }
 
-/// Checks the server, saves its origin and relaunches the app on it. With a pasted sign-in
-/// link, the window first opens the link once, so the server sets its cookie, and the app
-/// relaunches once the cookie is there (or after `SIGN_IN_WAIT`).
+/// Checks the server, lists it and opens its window (a listed one is focused). A pasted
+/// sign-in link opens once in that window, so the server sets its cookie there. The Add a
+/// server window closes. Nothing relaunches.
 #[tauri::command]
-pub async fn connect_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, address: String) -> Result<Value, Value> {
+pub async fn add_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, address: String) -> Result<Value, Value> {
     bundled_only(&webview)?;
     let (address, _) = checked(&address).await?;
     let origin = address.origin;
     let host = origin.host();
-    if let Err(e) = Saved::Remote(origin.clone()).save(&app.state::<Nudges>().data_dir) {
-        tracing::warn!(error = %e, "couldn't save the server choice");
-        return Err(error("save_failed", "kwant couldn't save the server. Check that ~/.kwnt can be written.", Some(host)));
-    }
-    tracing::info!(host = %host, "connecting to a kwant server; relaunching");
-    let signing_in = address.sign_in.is_some();
-    match (address.sign_in, app.get_webview_window(MAIN)) {
-        (Some(link), Some(window)) => {
-            *app.state::<Connecting>().0.lock().unwrap() = Some(origin.clone());
-            // a cookie from an earlier session would end the wait at the first look, before
-            // the link has even loaded: clear it, and ignore one that couldn't be cleared
-            crate::clear_token(&app, &origin);
-            let stale = crate::read_token(&app, &origin);
-            if window.navigate(link.url().clone()).is_err() {
-                tracing::warn!(host = %host, "couldn't open the sign-in link");
-            }
-            std::thread::spawn(move || {
-                let started = Instant::now();
-                while started.elapsed() < SIGN_IN_WAIT {
-                    std::thread::sleep(Duration::from_millis(500));
-                    if crate::read_token(&app, &origin).is_some_and(|t| Some(&t) != stale.as_ref()) {
-                        tracing::info!(host = %host, "signed in");
-                        break;
-                    }
-                }
-                std::thread::sleep(RESTART_DELAY);
-                app.restart();
-            });
-        }
-        _ => {
-            std::thread::spawn(move || {
-                std::thread::sleep(RESTART_DELAY);
-                app.restart();
-            });
-        }
-    }
-    Ok(json!({ "restarting": true, "signing_in": signing_in }))
+    let link = address.sign_in.map(|l| l.url().clone());
+    let added = crate::add_place(&app, origin.clone(), link).map_err(|e| {
+        tracing::warn!(error = %e, "couldn't save the server list");
+        error("save_failed", "kwant couldn't save the server. Check that ~/.kwnt can be written.", Some(host.clone()))
+    })?;
+    Ok(json!({ "added": added, "origin": origin.as_str(), "host": host }))
 }
 
-/// Back to the kwant on this computer. In Remote mode it saves that and relaunches; in Local
-/// mode it just leaves the connect page.
+/// Takes a listed server out of the app (its window, its sign-in cookie, its line in the file).
+/// The page asks first; this doesn't.
 #[tauri::command]
-pub fn use_this_computer<R: Runtime>(app: AppHandle<R>, webview: Webview<R>) -> Result<Value, Value> {
+pub async fn remove_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, origin: String) -> Result<Value, Value> {
     bundled_only(&webview)?;
-    let origin = match &app.state::<Target>().home {
-        Home::Remote { origin } => origin.clone(),
-        Home::Local { .. } => {
-            crate::show_home(&app);
-            return Ok(json!({ "restarting": false }));
-        }
+    let listed = crate::current(&app).servers.into_iter().find(|o| o.as_str() == origin);
+    let Some(origin) = listed else {
+        return Ok(json!({ "removed": false }));
     };
-    use_this_computer_from(&app, origin)?;
-    Ok(json!({ "restarting": true }))
+    // async commands run off the main thread, where the cookie store may be read
+    Ok(json!({ "removed": crate::remove_place(&app, &origin) }))
 }
 
-/// Saves "this computer" (keeping the server as the last one) and relaunches.
-pub fn use_this_computer_from<R: Runtime>(app: &AppHandle<R>, origin: Origin) -> Result<(), Value> {
-    if let Err(e) = (Saved::Local { last: Some(origin) }).save(&app.state::<Nudges>().data_dir) {
-        tracing::warn!(error = %e, "couldn't save the choice of this computer");
-        return Err(error("save_failed", "kwant couldn't save the choice. Check that ~/.kwnt can be written.", None));
+/// "Run kwant on this Mac".
+#[tauri::command]
+pub fn set_this_mac<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, on: bool) -> Result<Value, Value> {
+    bundled_only(&webview)?;
+    crate::set_local(&app, on).map_err(|refused| match refused {
+        ToggleRefused::LastPlace => error(
+            "last_place",
+            format!("Add a server before you stop kwant on {}.", this_machine()),
+            None,
+        ),
+        ToggleRefused::SaveFailed => {
+            error("save_failed", "kwant couldn't save the change. Check that ~/.kwnt can be written.", None)
+        }
+    })?;
+    Ok(json!({ "this_mac": crate::current(&app).this_mac }))
+}
+
+fn this_machine() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "this Mac"
+    } else {
+        "this computer"
     }
-    tracing::info!("switching to the kwant on this computer; relaunching");
-    let app = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(RESTART_DELAY);
-        app.restart();
-    });
-    Ok(())
 }
 
-/// Leaves the connect page for kwant's own page, unchanged.
+/// Closes the Add a server window.
 #[tauri::command]
 pub fn close_connect<R: Runtime>(app: AppHandle<R>, webview: Webview<R>) -> Result<(), Value> {
     bundled_only(&webview)?;
-    crate::show_home(&app);
+    if let Some(w) = app.get_webview_window(CONNECT) {
+        let _ = w.close();
+    }
     Ok(())
 }
 
-/// The loading page's Try again: checks the server (or the local kwant) again.
+/// The loading page's Try again: the window's own place, checked (or started) again.
 #[tauri::command]
 pub fn retry_start<R: Runtime>(app: AppHandle<R>, webview: Webview<R>) -> Result<(), Value> {
     bundled_only(&webview)?;
-    crate::show_home(&app);
+    if let Some(place) = crate::current(&app).by_window(webview.label()) {
+        crate::show_home(&app, &place);
+    }
     Ok(())
 }

@@ -10,7 +10,7 @@
 use kwnt::app_update::{Available, State, Status, UpdateHub, Updater};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 const RELEASES: &str = "https://github.com/alexsergivan/kwant/releases";

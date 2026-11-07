@@ -22,7 +22,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
                font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Cantarell, sans-serif; }
-  main { width: 460px; max-width: calc(100vw - 48px); margin: 0 auto; padding: 40px 0 32px; }
+  main { width: 460px; max-width: calc(100vw - 48px); margin: 0 auto; padding: 28px 0 24px; }
   h1 { margin: 0 0 6px; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -.2px; }
   .lead { margin: 0 0 24px; color: var(--muted); }
   label { display: block; margin: 0 0 6px; font-size: 13px; line-height: 18px; font-weight: 600; }
@@ -59,14 +59,9 @@
   .status.bad b, .status.bad svg { color: var(--bad); }
   .status.ok b, .status.ok svg { color: var(--ok); }
   .status.busy svg { color: var(--accent); }
+  .status.info b { font-weight: 500; }
+  .status.info svg { color: var(--accent); }
   .status { animation: fade 160ms linear backwards; }
-
-  .notice { display: flex; gap: 12px; margin: 24px 0 0; padding: 14px 16px; border: 1px solid var(--card-edge);
-            border-radius: 12px; background: var(--card); font-size: 14px; line-height: 21px; overflow-wrap: anywhere; }
-  .notice svg { flex: none; margin-top: 2px; color: var(--accent); }
-  .notice p { margin: 0; }
-  .notice p + p { margin-top: 8px; color: var(--muted); }
-  .notice b { font-weight: 600; }
 
   .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin: 24px 0 0; }
   button.btn { height: 40px; padding: 0 16px; border-radius: 10px; font: inherit; font-weight: 600; cursor: pointer;
@@ -89,15 +84,15 @@
     .spin, .status { animation: none; }
     input, button.btn { transition: none; }
   }
-  /* A small window: the tallest state (a link, then an error) must not scroll at 520×600. */
-  @media (max-height: 620px) { main { padding: 24px 0 16px; } }
+  /* The window is 520×420 (design.md §3.1); a short one still never clips. */
+  @media (max-height: 400px) { main { padding: 16px 0 12px; } }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
   <h1>Add a server</h1>
-  <p class="lead">Open a kwant that runs on another machine, such as your VPS.</p>
+  <p class="lead">Open a kwant that runs on another machine, such as your VPS. It gets a window of its own.</p>
 
   <form id="form" novalidate>
     <label for="address">Server address</label>
@@ -117,14 +112,6 @@
 
     <div id="status" role="status" aria-live="polite"></div>
 
-    <div class="notice" id="notice">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="11" rx="2"/><path d="M9 19h11a2 2 0 0 0 2-2V9"/></svg>
-      <div>
-        <p><b><span id="notice-host">The server</span> opens in its own window.</b> <span id="notice-local">kwant on this computer keeps running beside it.</span></p>
-        <p>It stays in the kwant menu in the <span id="where">menu bar</span> until you remove it there.</p>
-      </div>
-    </div>
-
     <div class="actions">
       <button type="button" class="btn secondary" id="cancel">Cancel</button>
       <button type="submit" class="btn primary" id="go" disabled>Connect</button>
@@ -142,19 +129,16 @@
 
   var link = null;      // the whole pasted sign-in link, in memory only
   var linkOrigin = null;
-  var phase = 'edit';   // edit | checking | connected (added, or already listed)
+  var phase = 'edit';   // edit | checking | connected (the app is opening or showing its window)
   var errored = false;  // an error is showing (cleared by the next edit)
   var removed = false;  // Remove was pressed: show the help lines until the next edit
   var run = 0;          // the current check; Stop bumps it so a late answer is ignored
-  var ADDED_MS = 600;   // "Added": long enough to read, then the server's own window has it
-  var LISTED_MS = 1500; // "Already in this app": a little longer, it is news
-  var listed = [];      // origins already in the app (places_state), so a known one skips the network
-  var thisMac = true;   // places_state.this_mac: the notice's second sentence
+  var listed = [];      // origins already in the app (places_state().servers), checked on each input
 
   var LOOPBACK = /^(localhost|127\.0\.0\.1|\[::1\])(:\d*)?$/i;
   var TOKEN = /(^|[#&?])kwnt_token=/i;
 
-  // What the app will save (api.md table), for the preview, the notice and the checks the app
+  // What the app will save (api.md table), for the preview, the "already" line and the checks the app
   // answers without the network. The app's answer is what counts.
   function parse(raw) {
     var text = String(raw || '').trim();
@@ -189,8 +173,11 @@
     not_kwant: function (h) { return ["That isn't a kwant server", h + ' answered, but not as kwant. Use the address you open kwant at in a browser.']; },
     http_not_allowed: function () { return ['Use an https:// address', 'http:// works only for this computer (localhost or 127.0.0.1), for example through an SSH tunnel.']; },
     userinfo: function () { return ['Leave out the part before @', 'Type just the server address, like kwant.example.com.']; },
-    not_an_address: function () { return ["That isn't a server address", 'Type it like kwant.example.com or https://kwant.example.com.']; }
+    not_an_address: function () { return ["That isn't a server address", 'Type it like kwant.example.com or https://kwant.example.com.']; },
+    save_failed: function () { return ["kwant couldn't save the server. Check that ~/.kwnt can be written.", '']; }
   };
+  // Any other failure the page has no words of its own for (not_allowed, a code added later).
+  var OTHER = ["Couldn't add the server.", 'Try again. If it keeps failing, details are in the app log.'];
 
   var SVG = 'http://www.w3.org/2000/svg';
   function icon(kind) {
@@ -199,7 +186,8 @@
     s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-linecap', 'round');
     s.setAttribute('stroke-linejoin', 'round'); s.setAttribute('aria-hidden', 'true');
     s.setAttribute('stroke-width', kind === 'bad' ? '2' : '2.5');
-    var paths = kind === 'busy' ? ['M21 12a9 9 0 1 1-6.2-8.56'] : kind === 'ok' ? ['m7.5 12.5 3 3 6-6'] : ['M12 7v6M12 16.5v.5'];
+    var paths = kind === 'busy' ? ['M21 12a9 9 0 1 1-6.2-8.56'] : kind === 'ok' ? ['m7.5 12.5 3 3 6-6']
+      : kind === 'info' ? ['M12 11v6M12 7.5v.5'] : ['M12 7v6M12 16.5v.5'];
     if (kind !== 'busy') { var c = document.createElementNS(SVG, 'circle'); c.setAttribute('cx', '12'); c.setAttribute('cy', '12'); c.setAttribute('r', '10'); s.appendChild(c); }
     else s.setAttribute('class', 'spin');
     paths.forEach(function (d) { var p = document.createElementNS(SVG, 'path'); p.setAttribute('d', d); s.appendChild(p); });
@@ -237,17 +225,23 @@
     if (showPreview) $('preview-origin').textContent = p.origin;
     chip.hidden = !showChip;
     unlink.hidden = phase === 'connected';
-    $('notice-host').textContent = (!errored && p.code === 'ok') ? p.host : 'The server';
-    $('notice-local').hidden = !thisMac;
     if (phase === 'edit') {
+      var known = isListed(p);
       go.disabled = !text;
       field.readOnly = false;
       cancel.hidden = false;
       cancel.textContent = 'Cancel';
-      setGo('Connect', false);
-      if (!errored) field.setAttribute('aria-invalid', 'false');
+      setGo(known && !link ? 'Show it' : 'Connect', false); // design.md §3.2 P5.already.btn
+      if (!errored) {
+        field.setAttribute('aria-invalid', 'false');
+        // P5.already / P5.already.link: decided here, from places_state, with no network call
+        if (known) setStatus('info', p.host + ' is already in this app.', link ? 'Connect signs its window in again with the link.' : '');
+        else if (statusBox.querySelector('.status.info')) setStatus(null);
+      }
     }
   }
+
+  function isListed(p) { return p.code === 'ok' && listed.indexOf(p.origin) >= 0; }
 
   function dropLink() { link = null; linkOrigin = null; }
 
@@ -282,9 +276,7 @@
   function showError(code, host, message) {
     phase = 'edit';
     errored = true;
-    var words = WORDS[code] ? WORDS[code](host || 'that server')
-      : (code === 'save_failed' || code === 'not_allowed') ? [message || "Couldn't add the server.", 'Try again. If it keeps failing, details are in the app log.']
-      : WORDS.timeout(host || 'that server'); // unknown failures read as "didn't answer" (design §3.6)
+    var words = WORDS[code] ? WORDS[code](host || 'that server') : OTHER;
     render();
     field.setAttribute('aria-invalid', 'true');
     setStatus('bad', words[0], words[1]);
@@ -305,7 +297,7 @@
     if (p.code !== 'ok') { showError(p.code, null); return; } // answered here, no network
     var address = link || field.value.trim();
     var mine = ++run;
-    if (!link && listed.indexOf(p.origin) >= 0) { add(p.host, address, mine); return; } // just focus it
+    if (!link && isListed(p)) { show(p.host, address, mine); return; } // Show it: no check, just its window
     phase = 'checking';
     errored = false; removed = false;
     field.readOnly = true;
@@ -321,45 +313,43 @@
     }, function (e) {
       if (mine !== run) return;
       var f = failure(e, p.host);
-      showError(f.code, f.host, f.message);
+      showError(WORDS[f.code] ? f.code : 'other', f.host, f.message);
     });
   }
 
+  // Show it: the server is listed and no link was pasted. add_server focuses its window.
+  function show(host, address, mine) {
+    phase = 'checking';
+    field.readOnly = true;
+    go.disabled = true;
+    cancel.hidden = true;
+    add(host, address, mine);
+  }
+
   // The check passed (or the server is already listed): add it. The app opens or focuses its
-  // window, and with a link that window opens the link once. Then this window closes.
+  // window, and with a link that window opens the link once. Then this window closes at once
+  // (design.md §3.1: no hold, no "Restarting…").
   function add(host, address, mine) {
     ipc.invoke('add_server', { address: address }).then(function (r) {
       if (mine !== run) return;
       dropLink(); // the app has it now
-      var h = (r && r.host) || host;
       if (r && r.origin && listed.indexOf(r.origin) < 0) listed.push(r.origin);
-      var fresh = !(r && r.added === false);
-      done(fresh ? 'Added ' + h : h + ' is already in this app',
-        fresh ? 'Opening it in its own window…' : 'Showing its window.', mine, fresh ? ADDED_MS : LISTED_MS);
+      phase = 'connected';
+      field.readOnly = true;
+      cancel.hidden = true;
+      go.disabled = true;
+      render();
+      ipc.invoke('close_connect').catch(function () {
+        // The window stayed open: let the person add another or close it themselves.
+        phase = 'edit'; field.value = ''; setStatus(null); render(); field.focus();
+      });
     }, function (e) {
       if (mine !== run) return;
       var f = failure(e, host);
-      // add_server checks too (a server not yet listed); any code without its own words,
-      // open_failed included, reads "Couldn't add the server."
-      showError(WORDS[f.code] ? f.code : 'save_failed', f.host, WORDS[f.code] ? f.message : null);
+      // add_server checks a new server too, so its codes are the check's; save_failed has its
+      // own sentence; anything else reads "Couldn't add the server."
+      showError(WORDS[f.code] ? f.code : 'other', f.host, f.message);
     });
-  }
-
-  function done(title, detail, mine, ms) {
-    phase = 'connected';
-    field.readOnly = true;
-    cancel.hidden = true;
-    go.disabled = true;
-    setGo('Connect', false);
-    render();
-    setStatus('ok', title, detail);
-    setTimeout(function () {
-      if (mine !== run) return;
-      ipc.invoke('close_connect').catch(function () {
-        // The window stayed open: let the person add another or close it themselves.
-        phase = 'edit'; field.value = ''; render(); field.focus();
-      });
-    }, ms);
   }
 
   function stop() {
@@ -412,14 +402,8 @@
   if (!ipc) return;
   ipc.invoke('places_state').then(function (s) {
     if (!s) return;
-    thisMac = s.this_mac !== false;
     listed = (s.servers || []).map(function (v) { return v && v.origin; }).filter(Boolean);
-    if (s.app === 'linux') $('where').textContent = 'tray';
     render();
-  }).catch(function () {});
-  // The tray wording on Linux. Older builds answer connect_state; a missing command changes nothing.
-  ipc.invoke('connect_state').then(function (s) {
-    if (s && s.app === 'linux') $('where').textContent = 'tray';
   }).catch(function () {});
 })();
 </script>

@@ -35,7 +35,6 @@
   .unreachable h1 { margin: 0 0 8px; font-size: 20px; line-height: 26px; font-weight: 600; }
   .unreachable h1 svg { vertical-align: -3px; margin-right: 8px; color: var(--bad); }
   .why { color: var(--muted); }
-  .paused { margin-top: 16px !important; font-size: 13px; line-height: 18px; color: var(--muted); }
   .logline { margin-top: 24px !important; font-size: 13px; line-height: 18px; color: var(--faint); }
   .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 24px; }
   button.btn { height: 40px; padding: 0 16px; border-radius: 10px; font: inherit; font-weight: 600; cursor: pointer;
@@ -71,21 +70,23 @@
     <p class="why" id="why"></p>
     <div class="actions">
       <button type="button" class="btn primary" id="retry">Try again</button>
+      <button type="button" class="btn secondary" id="remove" hidden>Remove this server…</button>
     </div>
-    <p class="paused">Your other kwant windows keep working. Try again checks only this server.</p>
     <p class="logline">Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
   </section>
 <script>
 // One page per window. A server's window: the app checks that server natively and either opens
 // it or sets, on <body>, data-host, data-code, data-message and last data-state="unreachable"
-// (api.md). This Mac's window is driven as before (data-state="failed"). connect_state answers
-// for the window that asks. Try again (retry_start) re-checks only this window's place.
+// (api.md). This Mac's window is driven as before (data-state="failed"). places_state().place is
+// the place of the window that asks. Try again (retry_start) re-checks only this window's place.
+// Remove this server… calls remove_server {origin}; the app asks with its own dialog (design.md §6).
 // The page never reads its own URL.
 (function () {
   'use strict';
   var ipc = window.__TAURI_INTERNALS__;
   var body = document.body;
   if (!ipc) return;
+  var origin = null; // this window's server, from places_state().place.key
   var $ = function (id) { return document.getElementById(id); };
   // design.md §4: [title, why]
   var WORDS = {
@@ -116,11 +117,15 @@
     $('retry-local').disabled = false;
   }
   new MutationObserver(function () { render(); renderFailed(); }).observe(body, { attributes: true, attributeFilter: ['data-state'] });
-  ipc.invoke('connect_state').then(function (s) {
+  ipc.invoke('places_state').then(function (s) {
     if (!s) return;
     if (s.app === 'linux') document.querySelectorAll('.log').forEach(function (e) { e.textContent = '~/.kwnt/desktop-app.log'; });
-    if (s.mode === 'remote' && !body.dataset.state) {
-      setHost(body.dataset.host || s.host || 'the server');
+    var place = s.place;
+    if (!place || place.kind !== 'server') return;
+    origin = place.key || null;
+    $('remove').hidden = !origin;
+    if (!body.dataset.state) {
+      setHost(body.dataset.host || place.host || 'the server');
       body.dataset.state = 'connecting';
     }
   }).catch(function () {});
@@ -129,6 +134,14 @@
     busy(true);
     body.dataset.state = 'connecting';
     ipc.invoke('retry_start').catch(function () { body.dataset.state = 'unreachable'; });
+  });
+  $('remove').addEventListener('click', function () {
+    if (!origin) return;
+    busy(true);
+    // The app confirms first. Removed: it closes this window. Cancelled or failed: back to the page.
+    ipc.invoke('remove_server', { origin: origin }).then(function (r) {
+      if (!(r && r.removed)) { busy(false); $('remove').focus(); }
+    }, function () { busy(false); $('remove').focus(); });
   });
   // This Mac's window: start the local kwant again (retry_start re-checks only this window's place).
   $('retry-local').addEventListener('click', function () {
