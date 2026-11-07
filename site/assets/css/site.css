@@ -684,3 +684,6 @@ td code { white-space: nowrap; }
 .prose .mac-first-doc .mf-steps li { margin: 0; }
 .prose .mac-first-doc .mf-fig { margin: 14px 0 0; }
 .prose .mac-first-doc .mf-after { margin: 12px 0 0; color: var(--muted); }
+.prose .mac-first-doc .mf-steps li { font-size: 17px; line-height: 26px; }
+.prose .mac-first-doc .mf-steps li::before { margin-top: 1px; }
+.prose .mac-first-doc .mf-after { font-size: 15px; line-height: 24px; }
