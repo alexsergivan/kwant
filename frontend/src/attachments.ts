@@ -90,33 +90,52 @@ const TEXT_EXTS = new Set(
     'gitignore gitattributes editorconfig dockerfile lock patch diff tex bib rst adoc org srt vtt'
   ).split(' '),
 );
-/** Common extension-less text files. */
-const TEXT_NAMES = new Set(['makefile', 'dockerfile', 'readme', 'license', 'licence', 'changelog', 'procfile', 'gemfile', 'rakefile', 'vagrantfile', 'justfile']);
+/**
+ * Known binary formats kwant can't keep: refused in the browser. Not `key`: server.key is PEM text,
+ * and a Keynote .key gets the server's 415 anyway.
+ */
+const BINARY_EXTS = new Set(
+  (
+    'zip 7z rar gz tgz bz2 xz zst tar iso dmg pkg exe msi dll so dylib apk ipa jar class wasm bin ' +
+    'heic heif avif tif tiff bmp ico psd mp3 wav m4a aac flac ogg opus aiff mkv avi wmv flv mpg mpeg 3gp ' +
+    'doc docx xls xlsx ppt pptx odt ods odp pages numbers sqlite woff woff2 ttf otf eot'
+  ).split(' '),
+);
+const BINARY_MIMES = new Set(
+  (
+    'application/zip application/x-zip-compressed application/gzip application/x-gzip application/x-tar ' +
+    'application/x-7z-compressed application/x-rar-compressed application/vnd.rar application/x-bzip2 application/x-xz ' +
+    'application/x-msdownload application/x-msdos-program application/x-apple-diskimage application/x-iso9660-image ' +
+    'application/java-archive application/vnd.android.package-archive application/msword'
+  ).split(' '),
+);
+const BINARY_MIME_PREFIXES = ['audio/', 'font/', 'image/', 'video/', 'application/vnd.ms-', 'application/vnd.openxmlformats-officedocument.', 'application/vnd.oasis.opendocument.'];
+const isBinaryMime = (mime: string) => BINARY_MIMES.has(mime) || BINARY_MIME_PREFIXES.some((p) => mime.startsWith(p));
 
 const extOf = (name: string) => /\.([a-z0-9]{1,12})$/i.exec(name)?.[1]?.toLowerCase() ?? '';
 
 export type AttachKind = 'image' | 'pdf' | 'text' | 'video';
 
 /**
- * What kind of file this is, from the browser's MIME type and then the extension, or null when
- * kwant can't take it. Extension first for code: browsers call `.ts` "video/mp2t".
+ * What kind of file this is, or null when kwant surely can't take it. Extension first: browsers call
+ * `.ts` "video/mp2t". Only known binary formats are refused here; anything else goes up as text and
+ * the server's byte check decides (a binary file gets a 415 within its first bytes).
  */
 export function attachKind(f: { name: string; type?: string }): AttachKind | null {
   const mime = (f.type || '').toLowerCase().split(';')[0].trim();
-  const name = (f.name || '').toLowerCase();
-  const ext = extOf(name);
+  const ext = extOf((f.name || '').toLowerCase());
   if (TEXT_EXTS.has(ext)) return 'text';
   if (IMAGE_EXTS.has(ext)) return 'image';
   if (VIDEO_EXTS.has(ext)) return 'video';
   if (ext === 'pdf') return 'pdf';
+  if (BINARY_EXTS.has(ext)) return null;
   if (IMAGE_MIMES.has(mime)) return 'image';
   if (VIDEO_MIMES.has(mime)) return 'video';
   if (mime === 'application/pdf') return 'pdf';
   if (mime.startsWith('text/') || mime === 'application/json') return 'text';
-  // No extension and nothing the browser recognised (a pasted snippet, a Makefile): let the server look.
-  if (!ext && (!mime || mime === 'application/octet-stream')) return 'text';
-  if (!ext && TEXT_NAMES.has(name)) return 'text';
-  return null;
+  if (isBinaryMime(mime)) return null;
+  // An unknown extension or none (server.key, main.tf, a Makefile, a pasted snippet): let the server look.
+  return 'text';
 }
 
 /** The one line shown when a file's type can't be attached. */

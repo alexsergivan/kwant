@@ -119,10 +119,23 @@ test('P1: supported types pass, everything else is refused before upload', () =>
     ['main.ts', 'video/mp2t'], ['App.tsx', ''], ['lib.rs', ''], ['run.py', 'text/x-python'], ['Makefile', ''], ['pasted', ''],
   ];
   for (const [name, type] of ok) assert.equal(a.preflightFile({ name, type, size: 1000 }), null, `${name} (${type || 'no type'})`);
+  // F1: text files with an extension we don't list still go up as text; the server's byte check decides.
+  const unlisted = [
+    ['server.key', ''], ['cert.pem', 'application/x-x509-ca-cert'], ['api.proto', 'application/octet-stream'], ['main.tf', ''],
+    ['schema.graphql', ''], ['.env.local', ''], ['build.zig', 'application/octet-stream'], ['flake.nix', ''], ['app.csproj', ''],
+    ['tsconfig.jsonc', ''], ['page.mdx', ''], ['Token.sol', 'application/octet-stream'], ['build.groovy', ''],
+  ];
+  for (const [name, type] of unlisted) {
+    assert.equal(a.attachKind({ name, type }), 'text', `${name} (${type || 'no type'})`);
+    assert.equal(a.preflightFile({ name, type, size: 1000 }), null, name);
+  }
+  assert.match(a.preflightFile({ name: 'main.tf', type: '', size: 21 * MB }), /Max 20 MB/);
   const refused = [
     ['a.zip', 'application/zip'], ['setup.exe', 'application/x-msdownload'], ['r.docx', ''], ['photo.heic', 'image/heic'],
     ['song.mp3', 'audio/mpeg'], ['film.mkv', 'video/x-matroska'], ['clip.avi', 'video/x-msvideo'], ['x.bin', 'application/octet-stream'],
     ['noext', 'application/zip'],
+    // a binary mime on an unknown extension, and a known binary extension with no mime
+    ['data.foo', 'application/zip'], ['installer.dmg', ''], ['tune.xyz', 'audio/ogg'], ['deck.abc', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
   ];
   for (const [name, type] of refused) {
     const why = a.preflightFile({ name, type, size: 1000 });
@@ -131,6 +144,8 @@ test('P1: supported types pass, everything else is refused before upload', () =>
   }
   assert.equal(a.attachKind({ name: 'main.ts', type: 'video/mp2t' }), 'text');
   assert.equal(a.attachKind({ name: 'v.mov', type: 'video/quicktime' }), 'video');
+  assert.equal(a.attachKind({ name: 'data.foo', type: 'application/zip' }), null);
+  assert.equal(a.attachKind({ name: 'installer.dmg', type: '' }), null);
 });
 
 test('P1: videos may be 100 MB, everything else 20 MB', () => {
@@ -140,6 +155,7 @@ test('P1: videos may be 100 MB, everything else 20 MB', () => {
   assert.match(a.preflightFile({ name: 'v.webm', type: 'video/webm', size: 0 }), /empty/);
   // the type is checked first: a huge zip says the type, not the size
   assert.match(a.preflightFile({ name: 'big.zip', type: 'application/zip', size: 500 * MB }), /can't be attached/);
+  assert.match(a.preflightFile({ name: 'data.csv', type: 'text/csv', size: 25 * MB }), /data\.csv is too big \(25\.0 MB\)\. Max 20 MB/);
 });
 
 test('P4: chips show uploaded MB of total', () => {
