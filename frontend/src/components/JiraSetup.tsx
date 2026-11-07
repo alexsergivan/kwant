@@ -424,14 +424,21 @@ export const JiraSetupForm: React.FC<{
   const showToken = gate === 'open' && !!kind;
 
   // The address: Cloud is known from its host; anything else asks the server (a check with no token).
+  // D5: the check runs once per address. Enter, then a click into Email, blurs the address again; a
+  // second check put the "dc" guess back first, which unmounted Email (and moved Token) under the click.
+  const detectedFor = useRef<string | null>(site ? normaliseJiraUrl(jiraHost(site.jira_url)) : null);
+  const detectSeq = useRef(0);
   const detect = useCallback(async () => {
+    const u = normaliseJiraUrl(address);
+    if (u && u === detectedFor.current) return;
     setAddrErr(null);
     if (!address.trim()) return;
-    const u = normaliseJiraUrl(address);
     if (!u) {
       setAddrErr('Paste your Jira address, like yourcompany.atlassian.net.');
       return;
     }
+    detectedFor.current = u;
+    const n = ++detectSeq.current;
     const k = kindFromHost(u);
     if (k) {
       setKind(k);
@@ -442,7 +449,9 @@ export const JiraSetupForm: React.FC<{
     setConfirmed(false);
     try {
       const c = await jiraApi.detect(space, u);
+      if (n !== detectSeq.current) return; // the address changed meanwhile
       if (c.result === 'not_jira' || c.result === 'unreachable') {
+        detectedFor.current = null;
         setAddrErr(JIRA_COPY.notJira);
         setKind(null);
       } else if (c.kind) {
@@ -670,6 +679,8 @@ export const JiraSetupForm: React.FC<{
             value={address}
             onChange={(e) => {
               setAddress(e.target.value);
+              detectedFor.current = null;
+              detectSeq.current++;
               setAddrErr(null);
               setConfirmed(false);
               setKind(null);

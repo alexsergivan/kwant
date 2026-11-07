@@ -303,6 +303,81 @@ test('Not right? Change flips the kind', async () => {
   s.unmount();
 });
 
+// D5 (Rigel, #395 QA): the address check ran again when the address lost focus to a click into
+// Email, put the Data Center guess back first, and so unmounted Email under the click.
+const press = async (el, key) => {
+  el.dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  await settle();
+};
+const clickInto = async (from, to) => {
+  // A mouse click: the old field blurs, the new one gets focus (no settle between, as in a browser).
+  from.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true, relatedTarget: to }));
+  from.dispatchEvent(new window.FocusEvent('blur', { relatedTarget: to }));
+  to.focus();
+  to.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+};
+
+test('D5: Enter runs the address check, then a click into Email keeps what you type there', async () => {
+  const s = await openSheet({ detectKind: 'cloud', delayMs: 15 });
+  const addr = s.$('[data-jira-address]');
+  addr.focus();
+  typeIn(addr, 'jira.example.com');
+  await settle();
+  await press(addr, 'Enter');
+  await wait(40);
+  await settle();
+  assert.equal(s.$('[data-jira-kind]').dataset.jiraKind, 'cloud', 'the server said Cloud');
+  const probes = () => s.calls.filter((c) => c.path.endsWith('/jira/check')).length;
+  assert.equal(probes(), 1);
+  const mail = s.$('[data-jira-email]');
+  assert.ok(mail, 'Email shows once the check resolved');
+  await clickInto(addr, mail);
+  typeIn(mail, 'oleks@example.com');
+  await wait(40);
+  await settle();
+  assert.equal(s.$('[data-jira-email]')?.value, 'oleks@example.com', 'what you typed into Email is still there');
+  assert.equal(s.$('[data-jira-email]'), mail, 'Email stays the same field');
+  assert.equal(document.activeElement, mail, 'focus stays in Email');
+  assert.equal(probes(), 1, 'the same address is not checked twice');
+  // The token field too: type it, go back to the address and out again, nothing moves or empties.
+  const tok = s.$('[data-jira-token]');
+  await clickInto(mail, tok);
+  typeIn(tok, FAKE);
+  await clickInto(tok, addr);
+  await clickInto(addr, tok);
+  await wait(40);
+  await settle();
+  assert.equal(s.$('[data-jira-token]'), tok);
+  assert.equal(tok.value, FAKE);
+  assert.equal(s.$('[data-jira-email]').value, 'oleks@example.com');
+  assert.equal(probes(), 1);
+  // A changed address is checked again.
+  typeIn(addr, 'jira2.example.com');
+  await settle();
+  await press(addr, 'Enter');
+  await wait(40);
+  await settle();
+  assert.equal(probes(), 2);
+  s.unmount();
+});
+
+test('D5: an answer for an address that changed meanwhile is dropped', async () => {
+  const s = await openSheet({ delayMs: 150 });
+  const addr = s.$('[data-jira-address]');
+  typeIn(addr, 'jira.example.com');
+  await settle();
+  await press(addr, 'Enter');
+  typeIn(addr, 'yourcompany.atlassian.net');
+  await settle();
+  await press(addr, 'Enter');
+  assert.equal(s.$('[data-jira-kind]').dataset.jiraKind, 'cloud');
+  await wait(250);
+  await settle();
+  assert.equal(s.$('[data-jira-kind]').dataset.jiraKind, 'cloud', 'the late Data Center answer does not win');
+  assert.ok(s.$('[data-jira-email]'));
+  s.unmount();
+});
+
 test('errors: a rejected token, an address with no Jira, no projects visible (its own error), slow down', async () => {
   let s = await openSheet({ check: 'auth_failed' });
   await step1(s);

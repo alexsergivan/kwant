@@ -202,6 +202,8 @@ export type FxScenario = {
   /** The site GET jira answers with; null = never connected; 'missing' = an older server (404). */
   site?: Record<string, unknown> | null | 'missing';
   tickets?: unknown;
+  /** The kind the token-less detection answers (default: Cloud for atlassian.net, else Data Center). */
+  detectKind?: 'cloud' | 'dc';
   /** Hold every check this long (the Checking state). */
   delayMs?: number;
   /** Rate-limit time for "Trying again at …". */
@@ -238,7 +240,7 @@ export function fxTransport(sc: FxScenario = {}, calls: FxCall[] = []) {
       const kind: 'cloud' | 'dc' = raw?.kind === 'dc' || raw?.kind === 'cloud' ? (raw.kind as 'cloud' | 'dc') : /atlassian\.net/.test(address) ? 'cloud' : 'dc';
       let out: Record<string, unknown>;
       if (/yourcompny|example\.invalid/.test(address)) out = fxNotJira();
-      else if (raw?.detect === true && method !== 'PUT') out = fxDetected(kind);
+      else if (raw?.detect === true && method !== 'PUT') out = fxDetected(sc.detectKind ?? kind);
       else if (sc.check === 'auth_failed') out = fxAuthFailed(kind);
       else if (sc.check === 'no_projects') out = fxNoProjects(kind);
       else if (sc.check === 'rate_limited') out = fxRateLimited(kind, sc.retryAt ?? '2026-11-07T10:09:00Z');
