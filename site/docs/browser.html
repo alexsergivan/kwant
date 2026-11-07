@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Browser: A bot browser shown live in the app: your own Chrome, or isolated in Docker.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-11-05">
+<meta property="article:modified_time" content="2026-11-07">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="AI agent browser: your Chrome or Docker · kwant">
 <meta name="twitter:description" content="Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.">
@@ -53,7 +53,7 @@
     <div class="docs-group"><h3>Get started</h3><ul><li><a href="/docs/quickstart">Quickstart</a></li><li><a href="/docs/install">Install &amp; run</a></li></ul></div>
     <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="/docs/spaces">Spaces</a></li><li><a href="/docs/bots-and-teams">Bots &amp; teams</a></li><li><a href="/docs/accounts">Accounts &amp; profiles</a></li><li><a href="/docs/models">Models &amp; routing</a></li><li><a href="/docs/approvals">Approvals &amp; passwords</a></li><li><a href="/docs/flight-school">Flight School</a></li><li><a href="/docs/smart-results">Smart Results</a></li><li><a href="/docs/dev-mode">Dev mode</a></li></ul></div>
     <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="/docs/mission-board">Mission board</a></li><li><a href="/docs/goals">Goals</a></li><li><a href="/docs/idea-jar">Idea jar</a></li><li><a href="/docs/routines">Routines &amp; bot actions</a></li><li><a href="/docs/memory-skills">Memory, skills &amp; search</a></li><li><a href="/docs/lessons">Lessons</a></li><li><a href="/docs/truth-ledger">Truth Ledger</a></li><li><a href="/docs/loose-ends">Loose ends &amp; letters</a></li><li><a href="/docs/parallel-universe">Parallel Universe</a></li></ul></div>
-    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/agents-connect">Coding agents</a></li><li><a href="/docs/browser" aria-current="page">Browser</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/agents-connect">Coding agents</a></li><li><a href="/docs/telegram">Telegram</a></li><li><a href="/docs/browser" aria-current="page">Browser</a></li></ul></div>
   </nav>
   <article class="prose">
 <p class="kicker">Docs</p>
@@ -84,6 +84,32 @@
   <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v69-takeover-poster.webp?v=6373f2c311" width="1280" height="800" aria-label="Demo: Rook needs a sign-in. Take over opens the page on a large stage, the email sam@example.com and a password are typed in, and Done, I&#x27;m signed in hands the browser back to Rook: the card reads Done. Rook is carrying on, and the pane is back to Watching on Northwind&#x27;s billing page."><source src="../assets/media/clip-v69-takeover.mp4?v=fbc4cfffb6" type="video/mp4"></video></div>
   <figcaption>Take over, sign in on the page, then Done.</figcaption>
 </figure>
+
+<h2 id="watch-live">Watch a bot's browser live</h2>
+<p>A globe on a chat's row means its bot is using the browser right now. Click it to watch the page as the bot works. <strong>Watch</strong> on the chat's working line does the same.</p>
+<figure>
+  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v075-watch-live-poster.webp?v=6d871711be" width="1280" height="800" aria-label="Demo: a message asks Ann to check the tent page. The globe appears on Ann&#x27;s row, it opens her live browser, and the shop&#x27;s tent page loads under a Watching badge."><source src="../assets/media/clip-v075-watch-live.mp4?v=612ef971ed" type="video/mp4"></video></div>
+  <figcaption>From the globe on a chat's row to the bot's live page.</figcaption>
+</figure>
+<ul>
+  <li>Each chat's live view has its own <code>/live</code> address, and a notification can open it directly.</li>
+  <li>With two or more chats browsing, the panel's name becomes a switcher. Chats that need you come first.</li>
+  <li>Watching changes nothing. To act on the page yourself, use <a href="#take-over">Take over</a>.</li>
+</ul>
+
+<h2 id="show-once">Show it once</h2>
+<p>Some tasks are quicker to show than to explain. Do the task once in a bot's browser while kwant writes the steps down, and the bot turns them into a skill.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v075-show-once-2880.webp?v=60445f3868" data-caption="A &quot;Check the steps&quot; dialog over a shop&#x27;s orders page, listing four recorded steps: open the orders page, choose Paid, choose Last 7 days and click Export CSV."><img class="app" src="../assets/media/v075-show-once-1440.webp?v=c0232d86bf" srcset="../assets/media/v075-show-once-1440.webp?v=c0232d86bf 1440w, ../assets/media/v075-show-once-2880.webp?v=60445f3868 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A &quot;Check the steps&quot; dialog over a shop&#x27;s orders page, listing four recorded steps: open the orders page, choose Paid, choose Last 7 days and click Export CSV."></a></div>
+  <figcaption>Check the steps before the bot writes the skill.</figcaption>
+</figure>
+<ol>
+  <li><strong>Start</strong> from <strong>Show it once</strong> in the bot's Skills tab, or press <strong>Record steps</strong> while you've taken over its browser.</li>
+  <li><strong>Do the task.</strong> Clicks, typing and picks from a dropdown are recorded, and each field is named by its own label. Add a note after a step if it needs one.</li>
+  <li><strong>Stop and check the steps.</strong> Discard, keep recording, or choose <strong>Write the skill</strong>.</li>
+  <li><strong>Review the draft</strong> under To review in the bot's Skills tab. Edit it, then press <strong>Try it once</strong> to run it in the bot's chat. The trial never changes the skill. Approve it when it's right.</li>
+</ol>
+<p class="note">Passwords, one-time codes, card details, secrets and anything filled in by a saved login or a script are recorded as placeholders, never as their text.</p>
 
 <h2 id="sign-in">Bots ask you to sign in</h2>
 <p>Ask a bot to log in to one of your accounts and it opens the site's sign-in page in its browser. If you're already signed in, it carries on. Otherwise it posts a sign-in card: <strong>Open browser</strong> takes you straight to the page with control, you sign in yourself, and <strong>Done</strong> lets the bot look again. Bots never ask for a password or one-time code in chat.</p>
@@ -185,7 +211,7 @@ docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker</code></pr
 </table></div>
 <p>Saved website logins for the browser are covered in <a href="/docs/approvals#passwords">Approvals &amp; saved passwords</a>.</p>
 
-    <nav class="pager" aria-label="Docs pages"><a class="prev" href="/docs/agents-connect"><small>Previous</small>Coding agents</a></nav>
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="/docs/telegram"><small>Previous</small>Telegram</a></nav>
   </article>
 </div>
 </main>
@@ -231,7 +257,7 @@ docker build -t kwnt-executor:v1 -f docker/executor.Dockerfile docker</code></pr
 </footer>
 <script src="../assets/js/site.js?v=63f328cd53" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/browser#article","headline":"AI agent browser: your Chrome or Docker","description":"Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.","url":"https://kwant.si/docs/browser","mainEntityOfPage":"https://kwant.si/docs/browser","image":"https://kwant.si/assets/og/docs-browser.png?v=7175e8f75c","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-05","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Browser","item":"https://kwant.si/docs/browser"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/browser#article","headline":"AI agent browser: your Chrome or Docker","description":"Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.","url":"https://kwant.si/docs/browser","mainEntityOfPage":"https://kwant.si/docs/browser","image":"https://kwant.si/assets/og/docs-browser.png?v=7175e8f75c","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Browser","item":"https://kwant.si/docs/browser"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
