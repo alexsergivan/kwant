@@ -154,9 +154,12 @@ pub async fn fail(state: &AppState, space_id: &str, key: &str, code: FailCode) -
     store::fail(state, space_id, key, code, None).await.unwrap_or(false)
 }
 
-/// Remembers the Ask on Jira comment, so the reporter's reply after it counts as the answer.
+/// Remembers the Ask on Jira comment on both rows (D3): the card's `asked_comment_id` (pickup
+/// watches for the reporter's reply after it) and the brief's (the reply that answers it).
 pub async fn set_asked(state: &AppState, space_id: &str, key: &str, comment_id: &str) -> bool {
-    state.db.set_ticket_brief_field(space_id, key, "asked_comment_id", Some(comment_id)).await.is_ok()
+    let card = state.db.set_dev_ticket_asked(space_id, key, comment_id).await.unwrap_or(false);
+    let brief = state.db.set_ticket_brief_field(space_id, key, "asked_comment_id", Some(comment_id)).await.is_ok();
+    card && brief
 }
 
 /// The ticket key a branch or PR title carries (`TRAIL-102-orders-export`, "TRAIL-102: Orders

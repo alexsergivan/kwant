@@ -770,7 +770,7 @@ async fn post_ask(state: &AppState, space: &SpaceId, key: &str, body: &AskBody, 
     }
     match p.writer.ask(key, p.to.as_ref(), &p.rest).await {
         Ok(posted) => {
-            let _ = state.db.set_dev_ticket_asked(space.as_str(), key, &posted.comment.id).await;
+            super::seam::set_asked(state, space.as_str(), key, &posted.comment.id).await;
             super::hooks::asked_on_jira(state, space.as_str(), key, &posted.url, p.to.as_ref().map(|m| m.display_name.as_str())).await;
             if let Ok(Some(t)) = state.db.dev_ticket(space.as_str(), key).await {
                 store::notify(state, space.as_str(), key, &t.state);
