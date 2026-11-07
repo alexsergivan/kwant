@@ -100,7 +100,7 @@ async fn save(state: &AppState, space_id: &str, key: &str, b: &Brief) -> Brief {
 
 async fn fail(state: &AppState, space_id: &str, key: &str, note: &str) {
     let _ = state.db.set_ticket_brief_field(space_id, key, "note", Some(note)).await;
-    seam::set_state(state, space_id, key, "failed").await;
+    seam::fail(state, space_id, key, super::store::FailCode::BriefFailed).await;
 }
 
 async fn open_questions(state: &AppState, space_id: &str, key: &str) -> Vec<TicketQuestion> {

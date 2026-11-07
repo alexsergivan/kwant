@@ -10,6 +10,7 @@
 //! no tickets, so with Jira off nothing changes.
 
 use super::source::{TicketSource, TicketWriter};
+use super::store::{self, FailCode};
 use crate::db::dev_jira::JiraSiteRow;
 use crate::server::AppState;
 use std::sync::Arc;
@@ -119,40 +120,38 @@ pub fn unregister_for_test(site_id: &str) {
     test_sites::drop_site(site_id);
 }
 
-/// The ticket row states (api.md 1.4).
-pub const STATES: [&str; 11] = ["waiting", "picked_up", "reading", "needs_answer", "brief_ready", "working", "in_review", "landed", "taken_back", "closed", "failed"];
-const ACTIVE: [&str; 6] = ["picked_up", "reading", "needs_answer", "brief_ready", "working", "in_review"];
+/// The ticket row states (api.md 1.4): the card row's, which the brief row mirrors.
+pub use crate::db::dev_jira::STATES;
 
-/// Whether the row may move `from` → `to` (api.md 1.4): a late `brief_ready` must not overwrite
-/// `taken_back`.
+/// Whether the card may move `from` → `to` (api.md 1.4): a late `brief_ready` must not overwrite
+/// `taken_back`. The one table, `dev_jira::allowed`.
 pub fn allowed(from: &str, to: &str) -> bool {
-    match to {
-        "picked_up" => matches!(from, "waiting" | "taken_back" | "failed"),
-        "reading" => matches!(from, "picked_up" | "needs_answer"),
-        "needs_answer" => from == "reading",
-        "brief_ready" => matches!(from, "reading" | "needs_answer"),
-        "working" => matches!(from, "brief_ready" | "picked_up"),
-        "in_review" => matches!(from, "working" | "brief_ready"),
-        "landed" => matches!(from, "in_review" | "working"),
-        "taken_back" => !matches!(from, "closed" | "landed" | "taken_back"),
-        "closed" => from != "closed",
-        "failed" => ACTIVE.contains(&from),
-        _ => false,
-    }
+    crate::db::dev_jira::allowed(from, to)
 }
 
-/// Moves the ticket's row to `to` if allowed; false (and nothing written) when it isn't.
+/// Moves the ticket to `to` if the card row allows it; false (and nothing written) when it
+/// doesn't. The card row (`dev_tickets.state`) is the one truth (D2): the move goes through
+/// `store::set_state` (so `dev_ticket_events` gets its row and `dev_ticket` is sent) and the
+/// brief row's `state` is mirrored in the same call. `failed` goes through [`fail`].
 pub async fn set_state(state: &AppState, space_id: &str, key: &str, to: &str) -> bool {
-    let Ok(Some(row)) = state.db.ticket_brief(space_id, key).await else { return false };
-    if !allowed(&row.state, to) {
-        tracing::info!(%key, from = %row.state, %to, "dev: ticket move refused");
+    if to == "failed" {
+        return fail(state, space_id, key, FailCode::Failed).await;
+    }
+    let Ok(Some(card)) = state.db.dev_ticket(space_id, key).await else { return false };
+    if !allowed(&card.state, to) {
+        tracing::info!(%key, from = %card.state, %to, "dev: ticket move refused");
         return false;
     }
-    let moved = state.db.move_ticket_brief(space_id, key, &[row.state.as_str()], to).await.unwrap_or(false);
+    let moved = store::set_state(state, space_id, key, to, None).await.unwrap_or(false);
     if moved {
-        tracing::info!(%key, from = %row.state, %to, "dev: ticket moved");
+        tracing::info!(%key, from = %card.state, %to, "dev: ticket moved");
     }
     moved
+}
+
+/// Fails the ticket with `code` (card row, its event and `dev_ticket`; the brief row mirrors it).
+pub async fn fail(state: &AppState, space_id: &str, key: &str, code: FailCode) -> bool {
+    store::fail(state, space_id, key, code, None).await.unwrap_or(false)
 }
 
 /// Remembers the Ask on Jira comment, so the reporter's reply after it counts as the answer.
@@ -209,5 +208,6 @@ mod tests {
         assert!(allowed("reading", "failed"));
         assert!(!allowed("landed", "taken_back"));
         assert!(!allowed("reading", "nonsense"));
+        assert!(!allowed("working", "working"), "no move to where it is");
     }
 }

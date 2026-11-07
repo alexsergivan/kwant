@@ -137,7 +137,7 @@ pub async fn start(state: &AppState, site: &Site, row: &BriefRow, b: &Brief) -> 
         Err(e) => {
             tracing::warn!(key = %row.key, error = %e, "dev: could not start the work from a brief");
             let _ = state.db.set_ticket_brief_field(&row.space_id, &row.key, "note", Some("The work couldn't start; press Start to try again.")).await;
-            seam::set_state(state, &row.space_id, &row.key, "failed").await;
+            seam::fail(state, &row.space_id, &row.key, super::store::FailCode::WorkFailed).await;
             return false;
         }
     };
