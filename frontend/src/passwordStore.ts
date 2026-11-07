@@ -29,6 +29,8 @@ export interface StoreStatus {
   /** Approvals off while passwords are still saved here (an install from before the block): any
    * bot that can run commands can read them. Nothing changes it on its own. */
   exposed: boolean;
+  /** 0.7.3 (A2): the person accepted keeping logins on this server once; nothing refuses a save again. false on an older server. */
+  risk_accepted: boolean;
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -59,6 +61,7 @@ export function parseStoreStatus(raw: unknown): StoreStatus {
     bitwarden,
     approvals_off,
     exposed: o.exposed === true,
+    risk_accepted: o.risk_accepted === true,
   };
 }
 
@@ -68,6 +71,16 @@ export const BITWARDEN_CLOUDS = [
   { value: 'https://vault.bitwarden.eu', label: 'bitwarden.eu' },
 ] as const;
 export const DEFAULT_BITWARDEN_SERVER = BITWARDEN_CLOUDS[0].value;
+
+/**
+ * 0.7.3 C5: a wrong password on one Bitwarden cloud is often an account on the other one (both answer
+ * "wrong email or master password"). The line naming the other cloud, or null for a self-hosted server.
+ */
+export function otherCloudHint(server: string): string | null {
+  const i = BITWARDEN_CLOUDS.findIndex((c) => c.value === server);
+  if (i < 0) return null;
+  return `Is your account on ${BITWARDEN_CLOUDS[1 - i].label}? Choose it under Server.`;
+}
 
 /** A short name for the account's server: "bitwarden.com", or the self-hosted host. */
 export function serverLabel(serverUrl: string): string {
@@ -273,35 +286,44 @@ export const exposedText = (n: number) =>
   `A space or bot is on “Ask only when risky” or “Don’t ask” and ${passwords(n)} ${n === 1 ? 'is' : 'are'} still on this server, so any bot that can run commands can read ${n === 1 ? 'it' : 'them'}.`;
 
 /** A 409 that says the server wants Bitwarden first: its sentence, and how many passwords are here. */
-export function needsBitwardenFrom(status: number, body: unknown): { message: string; local_count: number | null } | null {
+export function needsBitwardenFrom(status: number, body: unknown): { message: string; local_count: number | null; can_accept: boolean } | null {
   const o = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
   if (status !== 409 || o.needs_bitwarden !== true) return null;
   const msg = str(o.error)?.trim();
   return {
     message: msg ? capitalise(msg.endsWith('.') ? msg : `${msg}.`) : 'Move the passwords on this server to Bitwarden first.',
     local_count: num(o.local_count),
+    /** 0.7.3 (A2): the person can accept the risk and save here anyway (`accept_risk: true`). */
+    can_accept: o.can_accept === true,
   };
 }
 
 /**
  * Whether a new login (Dev mode's GitHub token) can be saved right now, read before the person types it:
- * `open`; `store` = this server's store under "Ask only when risky" or "Don't ask" (the 409
- * needs_bitwarden, audit F-10); `locked` = Bitwarden is the store and is locked.
+ * `open`; `store` = this server's store while some bot runs without asking, and the person hasn't
+ * accepted that yet (0.7.3 A2: a warning, not a wall); `locked` = Bitwarden is the store and is locked.
  */
 export type SaveGate = 'open' | 'store' | 'locked';
 export const saveGate = (s: StoreStatus | null | undefined): SaveGate =>
-  !s ? 'open' : s.store === 'local' ? (s.approvals_off ? 'store' : 'open') : s.locked ? 'locked' : 'open';
+  !s ? 'open' : s.store === 'local' ? (s.approvals_off && !s.risk_accepted ? 'store' : 'open') : s.locked ? 'locked' : 'open';
 
-/** The two ways out, before the token field (flow F5). `ask` changes every space and bot, so `askScope` says so. */
+/** The card before the token field (0.7.3 A3): a warning with three ways on. Save sends `accept_risk`, once per server. */
 export const SAVE_FIRST = {
-  title: 'One step before the token',
+  title: 'Before you save the token',
   lockedTitle: 'Bitwarden is locked. Unlock it to save this login there.',
-  bitwarden: 'Connect Bitwarden',
+  why: 'Some bots here run commands without asking, so one of them could read a token saved on this server. A read-only token limited to the repos you need keeps that risk small.',
+  save: 'Save it on this server',
+  bitwarden: 'Use Bitwarden',
   unlock: 'Unlock Bitwarden',
-  why: 'Some bots here run commands without asking, so they could read a token saved on this server. Keep it in Bitwarden, or make every bot ask first.',
   ask: 'Make every bot ask first',
   askScope: 'Turns on “Ask before running commands” in every space. You can change it back in each space’s settings.',
   asking: 'Switching…',
   asked: 'Every bot now asks before running commands. Add the token below.',
+  askLeft: 'A space or bot still runs without asking. Try again, or save it on this server.',
   connected: 'Bitwarden is connected. Add the token below.',
 } as const;
+
+/** The approvals switch, with passwords on this server and the risk not yet accepted (0.7.3 A3): one confirm, once per server. */
+export const acceptRiskText = (n: number) =>
+  `${capitalise(passwords(n))} ${n === 1 ? 'is' : 'are'} kept on this server. Under “Ask only when risky” or “Don’t ask”, a bot that can run commands could read ${n === 1 ? 'it' : 'them'}. You confirm this once for this server; Bitwarden keeps ${n === 1 ? 'it' : 'them'} out of reach.`;
+export const acceptRiskLabel = (n: number) => `Keep ${n === 1 ? 'it' : 'them'} here and turn off approvals`;

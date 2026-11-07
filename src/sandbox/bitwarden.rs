@@ -66,6 +66,23 @@ pub enum UnlockError {
     Unsupported(String),
 }
 
+impl UnlockError {
+    /// A short name for the log line of a failed unlock (spec C3); never the message, which can
+    /// quote the server.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            UnlockError::Wrong => "wrong",
+            UnlockError::TwoFactor(_) => "two_factor",
+            UnlockError::NewDeviceOtp => "new_device_otp",
+            UnlockError::OtherAccount => "other_account",
+            UnlockError::Invalid(_) => "invalid",
+            UnlockError::Unreachable(_) => "unreachable",
+            UnlockError::Server(_) => "server",
+            UnlockError::Unsupported(_) => "unsupported",
+        }
+    }
+}
+
 #[derive(Debug)]
 struct CryptoFail;
 
@@ -158,16 +175,32 @@ pub enum Kdf {
 
 impl Kdf {
     /// From a prelogin or token response, within limits that keep a hostile server from making
-    /// kwnt spend minutes or gigabytes on one unlock.
+    /// kwnt spend minutes or gigabytes on one unlock. The flat `kdf`/`kdfIterations` members, else
+    /// a nested `kdfSettings` object (newer servers).
     pub fn from_json(v: &Value) -> Result<Self, UnlockError> {
+        if field(v, "kdfIterations").is_none() {
+            if let Some(settings) = field(v, "kdfSettings") {
+                return Self::from_settings(settings);
+            }
+        }
+        Self::parse(v, ["kdf", "kdfIterations", "kdfMemory", "kdfParallelism"])
+    }
+
+    /// From a `{kdfType, iterations, memory, parallelism}` object: prelogin's `kdfSettings`, or
+    /// the token response's `UserDecryptionOptions.MasterPasswordUnlock.Kdf`.
+    pub fn from_settings(v: &Value) -> Result<Self, UnlockError> {
+        Self::parse(v, ["kdfType", "iterations", "memory", "parallelism"])
+    }
+
+    fn parse(v: &Value, [kind, iters, memory, parallel]: [&str; 4]) -> Result<Self, UnlockError> {
         let num = |name: &str| field(v, name).and_then(Value::as_u64).map(|n| n.min(u32::MAX as u64) as u32);
-        let iterations = num("kdfIterations").ok_or_else(|| UnlockError::Server("no KDF settings".into()))?;
-        let kdf = match num("kdf").unwrap_or(0) {
+        let iterations = num(iters).ok_or_else(|| UnlockError::Server("no KDF settings".into()))?;
+        let kdf = match num(kind).unwrap_or(0) {
             0 => Kdf::Pbkdf2 { iterations },
             1 => Kdf::Argon2id {
                 iterations,
-                memory_mib: num("kdfMemory").unwrap_or(64),
-                parallelism: num("kdfParallelism").unwrap_or(4),
+                memory_mib: num(memory).unwrap_or(64),
+                parallelism: num(parallel).unwrap_or(4),
             },
             other => return Err(UnlockError::Unsupported(format!("KDF type {other}"))),
         };
@@ -185,9 +218,19 @@ impl Kdf {
     }
 }
 
-/// The account's master key from its master password and email.
+/// The account's master key from its master password and email (the salt older accounts use).
 pub fn master_key(password: &str, email: &str, kdf: Kdf) -> Result<Zeroizing<[u8; 32]>, UnlockError> {
-    let salt = email.trim().to_lowercase();
+    master_key_salted(password, &email_salt(email), kdf)
+}
+
+/// The salt of an account whose server names none: its email, trimmed and lowercased.
+pub fn email_salt(email: &str) -> String {
+    email.trim().to_lowercase()
+}
+
+/// The master key with the salt as the server gives it (prelogin's `salt`, spec C1): Bitwarden is
+/// decoupling the salt from the email, so it is used as is, never lowercased again.
+pub fn master_key_salted(password: &str, salt: &str, kdf: Kdf) -> Result<Zeroizing<[u8; 32]>, UnlockError> {
     let mut key = Zeroizing::new([0u8; 32]);
     match kdf {
         Kdf::Pbkdf2 { iterations } => {
@@ -205,6 +248,18 @@ pub fn master_key(password: &str, email: &str, kdf: Kdf) -> Result<Zeroizing<[u8
         }
     }
     Ok(key)
+}
+
+/// The master key and the login hash, off the async threads (a KDF takes a while).
+async fn derive(password: &Zeroizing<String>, salt: &str, kdf: Kdf) -> Result<(Zeroizing<[u8; 32]>, Zeroizing<String>), UnlockError> {
+    let (password, salt) = (password.clone(), salt.to_string());
+    tokio::task::spawn_blocking(move || {
+        let mk = master_key_salted(&password, &salt, kdf)?;
+        let hash = auth_hash(&mk, &password);
+        Ok::<_, UnlockError>((mk, hash))
+    })
+    .await
+    .map_err(|e| UnlockError::Server(e.to_string()))?
 }
 
 /// What the server checks at login: PBKDF2(master key, salt = master password, 1 round).
@@ -347,6 +402,8 @@ struct Session {
     expires: Instant,
     user_key: SymKey,
     kdf: Kdf,
+    /// The master key's salt (prelogin's, else the email; spec C1).
+    salt: String,
     auth_hash: Zeroizing<String>,
     folder_id: Option<String>,
     /// The account's id, which new items name as `encryptedFor`.
@@ -444,7 +501,24 @@ impl BitwardenStore {
 
     /// Logs in to Bitwarden and unlocks the vault. The first unlock sets the account up; after
     /// that only the same server and email are accepted (see [`Self::forget`]).
+    /// A failed unlock logs one line: its kind, the last HTTP status and the server's host, never
+    /// the email, password, codes or a body (spec C3).
     pub async fn unlock(&self, req: UnlockRequest) -> Result<BitwardenStatus, UnlockError> {
+        let server = req.server_url.clone().filter(|s| !s.trim().is_empty()).or_else(|| self.config().map(|c| c.server_url));
+        let mut status = None;
+        let result = self.try_unlock(req, &mut status).await;
+        if let Err(e) = &result {
+            let host = endpoints(server.as_deref().unwrap_or_default())
+                .ok()
+                .and_then(|(base, _)| url::Url::parse(&base).ok()?.host_str().map(str::to_string))
+                .unwrap_or_else(|| "invalid".into());
+            let http = status.map_or_else(|| "none".to_string(), |s: u16| s.to_string());
+            tracing::warn!(kind = e.kind(), http_status = %http, server = %host, "Bitwarden connect or unlock failed");
+        }
+        result
+    }
+
+    async fn try_unlock(&self, req: UnlockRequest, status: &mut Option<u16>) -> Result<BitwardenStatus, UnlockError> {
         let existing = self.config();
         let server = req.server_url.clone().filter(|s| !s.trim().is_empty())
             .or_else(|| existing.as_ref().map(|c| c.server_url.clone()))
@@ -479,18 +553,9 @@ impl BitwardenStore {
             device_id: existing.as_ref().map(|c| c.device_id.clone()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         };
 
-        let kdf = self.prelogin(&ep, &email).await?;
+        let (kdf, salt) = self.prelogin(&ep, &email, status).await?;
         let password = Zeroizing::new(req.master_password.clone());
-        let (mk, hash) = {
-            let (password, email) = (password.clone(), email.clone());
-            tokio::task::spawn_blocking(move || {
-                let mk = master_key(&password, &email, kdf)?;
-                let hash = auth_hash(&mk, &password);
-                Ok::<_, UnlockError>((mk, hash))
-            })
-            .await
-            .map_err(|e| UnlockError::Server(e.to_string()))??
-        };
+        let (mk, hash) = derive(&password, &salt, kdf).await?;
 
         let mut form: Vec<(&str, String)> = self.device_form(&cfg);
         match (&client_id, &client_secret) {
@@ -522,9 +587,30 @@ impl BitwardenStore {
                 }
             }
         }
-        let token = self.token_request(&ep, &email, form).await?;
+        let token = self.token_request(&ep, &email, form, status).await?;
 
-        let protected = field_str(&token, "Key").ok_or_else(|| UnlockError::Unsupported("the account has no key".into()))?;
+        // The account key: top-level `Key`, else the newer UserDecryptionOptions.MasterPasswordUnlock,
+        // whose own KDF and salt (when given) are what that key is wrapped with (spec C2)
+        let (protected, mk, hash, kdf, salt) = match field_str(&token, "Key") {
+            Some(k) => (k.to_string(), mk, hash, kdf, salt),
+            None => {
+                let unlock = field(&token, "UserDecryptionOptions").and_then(|o| field(o, "MasterPasswordUnlock"));
+                let key = unlock
+                    .and_then(|u| field_str(u, "MasterKeyEncryptedUserKey"))
+                    .ok_or_else(|| UnlockError::Unsupported("the account has no key".into()))?
+                    .to_string();
+                let unlock = unlock.expect("the key came from it");
+                let kdf2 = field(unlock, "Kdf").map(Kdf::from_settings).transpose()?.unwrap_or(kdf);
+                let salt2 = field_str(unlock, "Salt").filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| salt.clone());
+                if kdf2 == kdf && salt2 == salt {
+                    (key, mk, hash, kdf, salt)
+                } else {
+                    let (mk, hash) = derive(&password, &salt2, kdf2).await?;
+                    (key, mk, hash, kdf2, salt2)
+                }
+            }
+        };
+        let protected = protected.as_str();
         // With an API key the server never saw the master password: a MAC failure here is a wrong one
         let user_key = SymKey::stretch(&mk)
             .decrypt(protected)
@@ -542,6 +628,7 @@ impl BitwardenStore {
             expires: Instant::now() + Duration::from_secs(expires_in),
             user_key,
             kdf,
+            salt,
             auth_hash: hash,
             folder_id: None,
             user_id: None,
@@ -551,6 +638,8 @@ impl BitwardenStore {
             unlocked_at: now,
             wrong_passwords: 0,
         };
+        // A failed sync has no status of its own: don't log the token's 200 with it
+        *status = None;
         self.sync(&mut session).await.map_err(|e| match e {
             ApiError::Auth => UnlockError::Server("the new session was refused".into()),
             ApiError::Other(m) => UnlockError::Unreachable(m),
@@ -566,14 +655,14 @@ impl BitwardenStore {
     /// Checks the master password against the unlocked vault. After
     /// [`MAX_WRONG_PASSWORDS`] wrong ones in a row the vault locks.
     pub async fn verify_master_password(&self, password: &str) -> Result<bool, StoreError> {
-        let (email, kdf, expected) = {
+        let (salt, kdf, expected) = {
             let guard = self.session.lock().await;
             let s = guard.as_ref().ok_or(StoreError::Locked)?;
-            (s.cfg.email.clone(), s.kdf, s.auth_hash.clone())
+            (s.salt.clone(), s.kdf, s.auth_hash.clone())
         };
         let password = Zeroizing::new(password.to_string());
         let ok = tokio::task::spawn_blocking(move || {
-            master_key(&password, &email, kdf)
+            master_key_salted(&password, &salt, kdf)
                 .map(|mk| same_secret(auth_hash(&mk, &password).as_bytes(), expected.as_bytes()))
                 .unwrap_or(false)
         })
@@ -633,7 +722,9 @@ impl BitwardenStore {
             .header("Bitwarden-Client-Version", CLIENT_VERSION)
     }
 
-    async fn prelogin(&self, ep: &Endpoints, email: &str) -> Result<Kdf, UnlockError> {
+    /// The account's KDF and master-key salt: the server's `salt` when it gives a non-empty one,
+    /// else the email (spec C1).
+    async fn prelogin(&self, ep: &Endpoints, email: &str, status: &mut Option<u16>) -> Result<(Kdf, String), UnlockError> {
         let mut last = String::new();
         for url in [format!("{}/accounts/prelogin", ep.identity), format!("{}/accounts/prelogin", ep.api)] {
             let resp = Self::client_headers(self.http.post(&url))
@@ -641,16 +732,18 @@ impl BitwardenStore {
                 .send()
                 .await
                 .map_err(|e| UnlockError::Unreachable(short(&e.without_url().to_string())))?;
+            *status = Some(resp.status().as_u16());
             if resp.status().is_success() {
                 let v: Value = resp.json().await.map_err(|_| UnlockError::Server("unreadable KDF settings".into()))?;
-                return Kdf::from_json(&v);
+                let salt = field_str(&v, "salt").filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| email_salt(email));
+                return Ok((Kdf::from_json(&v)?, salt));
             }
             last = resp.status().to_string();
         }
         Err(UnlockError::Server(format!("prelogin failed: {last}")))
     }
 
-    async fn token_request(&self, ep: &Endpoints, email: &str, form: Vec<(&str, String)>) -> Result<Value, UnlockError> {
+    async fn token_request(&self, ep: &Endpoints, email: &str, form: Vec<(&str, String)>, status_out: &mut Option<u16>) -> Result<Value, UnlockError> {
         let mut rb = Self::client_headers(self.http.post(format!("{}/connect/token", ep.identity))).form(&form);
         if form.iter().any(|(k, v)| *k == "grant_type" && v == "password") {
             rb = rb.header("Auth-Email", URL_SAFE_NO_PAD.encode(email));
@@ -658,6 +751,7 @@ impl BitwardenStore {
         drop(form);
         let resp = rb.send().await.map_err(|e| UnlockError::Unreachable(short(&e.without_url().to_string())))?;
         let status = resp.status();
+        *status_out = Some(status.as_u16());
         let body: Value = resp.json().await.unwrap_or(Value::Null);
         if status.is_success() {
             return Ok(body);
@@ -708,7 +802,7 @@ impl BitwardenStore {
         } else {
             return Err(ApiError::Auth);
         }
-        let token = self.token_request(&s.ep, &s.cfg.email, form).await.map_err(|e| match e {
+        let token = self.token_request(&s.ep, &s.cfg.email, form, &mut None).await.map_err(|e| match e {
             UnlockError::Unreachable(m) => ApiError::Other(m),
             _ => ApiError::Auth,
         })?;

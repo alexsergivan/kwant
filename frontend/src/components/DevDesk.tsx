@@ -9,6 +9,7 @@ import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPa
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
 import { DevStatusLine } from './DevStatusLine';
+import { openGitHubConnect } from './GitHubConnect';
 
 /** App re-sends the `dev_card` SSE as this window event: detail `{space_id, id, kind, status}`. */
 export const DEV_CARD_EVENT = 'kwant:dev-card';
@@ -187,14 +188,16 @@ export interface DevDeskViewProps {
   onSaveToNotion?: (markdown: string) => Promise<void>;
   initialTab?: Tab;
   now?: number;
-  /** Opens Loose ends, for the status line's Connect. */
-  onOpenLooseEnds?: () => void;
+  /** Connect GitHub (the status line and the empty state). Defaults to the shared connect form in place (0.7.3 B1);
+   * the name stays from when it opened Loose ends. */
+  onOpenLooseEnds?: (anchor?: HTMLElement) => void;
   /** The space's teams, so a team with no repo gets "Link a repo" in the repo list. */
   teams?: DevTeamRef[];
 }
 
 export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams }) => {
   const dev = useDevMode(spaceId);
+  const connect = (anchor?: HTMLElement) => (onOpenLooseEnds ? onOpenLooseEnds(anchor) : openGitHubConnect({ space: spaceId, anchor }));
   // 0.7.2: with several repos, both lists filter by one (All · app · site) through `?repo=`.
   const filters = repoFilters(dev);
   const [repoPick, setRepoPick] = useState<string | null>(null);
@@ -415,7 +418,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
         spaceId={spaceId}
         state={dev}
         teams={teams}
-        onConnect={onOpenLooseEnds}
+        onConnect={connect}
         checked={desk.checkedAt != null ? checkedLabel(desk.checkedAt) : null}
         checkedAt={desk.checkedAt ?? null}
       />
@@ -506,7 +509,11 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                 {landedCards.length ? (
                   <LandedList cards={landedCards} reviews={reviews} now={now} onOpenReview={openReview} forge={dev?.forge ?? null} repoLabel={repoLabel} gitOnly={gitOnly} />
                 ) : dev?.status === 'not_connected' ? (
-                  <TermEmpty out="(needs a GitHub connection)" title="Connect GitHub to see what landed." line="The last 5 merges show up here right after." />
+                  <TermEmpty out="(needs a GitHub connection)" title="Connect GitHub to see what landed." line="The last 5 merges show up here right after.">
+                    <button type="button" onClick={(e) => connect(e.currentTarget)} className="kw-btn-primary mt-3" data-dev-empty-connect>
+                      Connect GitHub
+                    </button>
+                  </TermEmpty>
                 ) : dev?.status === 'no_repo' ? (
                   <TermEmpty out="(no repo yet)" title="Cards show up once there’s a repo." line="The production floor already works." />
                 ) : (
@@ -586,7 +593,7 @@ const SkeletonCards: React.FC<{ line?: string; n?: number }> = ({ line = 'Readin
 );
 
 /** Flow copy §6: a first-visit empty state as a tiny terminal, `$ git log main -5` and its output. */
-const TermEmpty: React.FC<{ cmd?: string; out: string; title: string; line: string }> = ({ cmd = 'git log main -5', out, title, line }) => (
+const TermEmpty: React.FC<{ cmd?: string; out: string; title: string; line: string; children?: React.ReactNode }> = ({ cmd = 'git log main -5', out, title, line, children }) => (
   <div className="rounded-2xl border border-dashed border-hairline-strong px-5 py-6" data-dev-empty data-dev-empty-term>
     <p className="font-mono text-[12px] text-zinc-500 break-words" aria-hidden="true">
       <span className="text-sky-300">$</span> {cmd}
@@ -596,6 +603,7 @@ const TermEmpty: React.FC<{ cmd?: string; out: string; title: string; line: stri
     </p>
     <p className="mt-3 text-body font-medium text-zinc-200">{title}</p>
     <p className="mt-1 text-meta text-zinc-400">{line}</p>
+    {children}
   </div>
 );
 

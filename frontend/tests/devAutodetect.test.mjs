@@ -258,16 +258,28 @@ test('PX-2 (style-v2 §3/§4): header chip and subtitle, LED per status, Checked
   root.unmount();
 });
 
-test('DOM: Connect opens Loose ends; it hides when the app gives no way there', async () => {
-  let opened = 0;
-  const { root } = await desk({ status: 'not_connected', repo: 'demo-org/demo-web', sources: [SOURCES[0]] }, { onOpenLooseEnds: () => opened++ });
+test('B1 DOM: Connect opens the shared GitHub form in place, next to the button; the app’s handler gets the button', async () => {
+  let opened = null;
+  const { root } = await desk({ status: 'not_connected', repo: 'demo-org/demo-web', sources: [SOURCES[0]] }, { onOpenLooseEnds: (a) => (opened = a) });
   const connect = document.querySelector('[data-dv-status-action="connect"]');
   assert.equal(connect.textContent.trim(), 'Connect GitHub');
   await click(connect);
-  assert.equal(opened, 1);
+  assert.ok(opened === connect, 'anchored to the button');
   root.unmount();
+  const seen = [];
+  const on = (e) => seen.push(e.detail);
+  window.addEventListener('kwnt:github-connect', on);
   const again = await desk({ status: 'not_connected', sources: [] });
-  assert.equal(document.querySelector('[data-dv-status-action]'), null);
+  const b = document.querySelector('[data-dv-status-action="connect"]');
+  assert.ok(b, 'no handler given: still offered, it opens the shared form');
+  await click(b);
+  const empty = document.querySelector('[data-dev-empty-connect]');
+  if (empty) await click(empty);
+  window.removeEventListener('kwnt:github-connect', on);
+  assert.ok(seen.length >= 1);
+  assert.equal(seen[0].space, 'spc_demo');
+  assert.ok(seen[0].anchor === b);
+  assert.equal(server.calls.filter(([, u]) => u.includes('/loose')).length, 0, 'nothing navigates to Loose ends');
   again.root.unmount();
 });
 
@@ -647,23 +659,23 @@ const connectForm = async (store, spaces) => {
   return r;
 };
 
-test('B2 DOM: under "Ask only when risky" Connect offers the two ways out before any token field, and nothing is sent', async () => {
+test('A3 DOM: under "Ask only when risky" Connect shows the warning card before any token field, and nothing is sent', async () => {
   const { root } = await connectForm({ store: 'local', local_count: 0, approvals_off: true }, [{ id: 'spc_demo', approvals: 'smart' }]);
   const gate = document.querySelector('[data-save-first]');
-  assert.ok(gate, 'the ways out show');
+  assert.ok(gate, 'the card shows');
   assert.equal(gate.dataset.saveFirst, 'store');
   assert.equal(document.querySelector('input[type="password"]'), null, 'no token field to type into yet');
-  assert.match(gate.textContent, /One step before the token/);
-  assert.equal(gate.querySelector('[data-save-first-bitwarden]').textContent.trim(), 'Connect Bitwarden');
+  assert.match(gate.textContent, /^Before you save the token/);
+  assert.equal(gate.querySelector('[data-save-first-why]').textContent, 'Some bots here run commands without asking, so one of them could read a token saved on this server. A read-only token limited to the repos you need keeps that risk small.');
+  assert.equal(gate.querySelector('[data-save-first-save]').textContent.trim(), 'Save it on this server');
+  assert.equal(gate.querySelector('[data-save-first-bitwarden]').textContent.trim(), 'Use Bitwarden');
   assert.equal(gate.querySelector('[data-save-first-ask]').textContent.trim(), 'Make every bot ask first');
-  assert.equal(gate.querySelector('[data-save-first-why]').textContent, 'Some bots here run commands without asking, so they could read a token saved on this server. Keep it in Bitwarden, or make every bot ask first.', 'M2: its own reason line');
-  assert.equal(gate.querySelector('[data-save-first-scope]').textContent, 'Turns on “Ask before running commands” in every space. You can change it back in each space’s settings.', 'M1: the scope is said');
-  assert.match(gate.querySelector('[data-save-first-scope]').className, /text-\[11px\] text-amber-100\/70/);
-  for (const b of gate.querySelectorAll('[data-save-first-bitwarden], [data-save-first-ask]')) assert.match(b.className, /w-full sm:w-auto/, 'S2: equal width when stacked');
-  assert.match(gate.className, /border-amber-500\/40 bg-amber-500\/10/, 'amber while it needs you');
-  assert.ok(document.activeElement === gate.querySelector('[data-save-first-bitwarden]'), 'B3: focus lands on the first way out');
+  assert.match(gate.querySelector('[data-save-first-save]').className, /bg-sky-500/, 'Save is the primary');
+  assert.equal(gate.querySelector('[data-save-first-scope]').textContent, 'Turns on “Ask before running commands” in every space. You can change it back in each space’s settings.');
+  for (const b of gate.querySelectorAll('[data-save-first-save], [data-save-first-bitwarden], [data-save-first-ask]')) assert.match(b.className, /w-full sm:w-auto/, 'equal width when stacked');
+  assert.ok(document.activeElement === gate.querySelector('[data-save-first-save]'), 'focus lands on Save');
   assert.equal(document.querySelector('button[type="submit"]').disabled, true);
-  assert.equal(server.calls.filter(([meth, u]) => meth === 'POST' && u.includes('/loose')).length, 0);
+  assert.equal(server.calls.filter(([meth, u]) => meth === 'POST' && u.includes('/zombie')).length, 0);
   root.unmount();
 });
 
@@ -681,7 +693,7 @@ test('B2 DOM: "Ask before running commands" switches every space and bot to ask,
   root.unmount();
 });
 
-test('B2 DOM: Connect Bitwarden opens the existing Bitwarden form in place; a locked Bitwarden offers Unlock only', async () => {
+test('B2 DOM: Use Bitwarden opens the existing Bitwarden form in place; a locked Bitwarden offers Unlock only', async () => {
   const one = await connectForm({ store: 'local', local_count: 0, approvals_off: true }, []);
   await click(document.querySelector('[data-save-first-bitwarden]'));
   assert.equal(document.querySelector('[data-save-first-bitwarden]'), null, 'the Bitwarden form replaces the buttons');

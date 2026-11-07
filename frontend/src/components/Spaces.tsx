@@ -14,6 +14,9 @@ import {
   spacesApi,
 } from '../spaces';
 import { useEscapeLayer } from '../escape';
+import { NeedsBitwardenError } from '../approvalMode';
+import { SAVE_FIRST, acceptRiskText } from '../passwordStore';
+import { MoveToBitwardenFirst, usePasswordStore } from './PasswordStorePanel';
 import { devApi, devStore } from '../devMode';
 import { DevBadge } from './DevModeSwitch';
 
@@ -444,20 +447,25 @@ export const ArchivedSpacesModal: React.FC<{ onClose: () => void; onRestored: (s
   const [list, setList] = useState<Space[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  // The server wants the one-time choice before this space comes back (0.7.3 A3, as in the approvals confirm).
+  const [risk, setRisk] = useState<{ id: string; message: string; count: number | null } | null>(null);
+  const passwords = usePasswordStore(!!risk, true);
   useEffect(() => {
     spacesApi.archived().then(setList, (e) => setError(e instanceof Error ? e.message : 'Couldn’t load archived spaces.'));
   }, []);
 
-  const restore = async (s: Space) => {
+  const restore = async (s: Space, acceptRisk = false) => {
     setBusy(s.id);
     setError(null);
     try {
-      const restored = await spacesApi.patch(s.id, { archived: false });
+      const restored = await spacesApi.patch(s.id, acceptRisk ? { archived: false, accept_risk: true } : { archived: false });
+      setRisk(null);
       setList((prev) => prev?.filter((x) => x.id !== s.id) ?? null);
       playSfx('coin');
       onRestored(restored);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Couldn’t restore the space.');
+      if (e instanceof NeedsBitwardenError && e.canAccept && !acceptRisk) setRisk({ id: s.id, message: e.message, count: e.localCount });
+      else setError(e instanceof Error ? e.message : 'Couldn’t restore the space.');
     } finally {
       setBusy(null);
     }
@@ -472,7 +480,7 @@ export const ArchivedSpacesModal: React.FC<{ onClose: () => void; onRestored: (s
       {list?.length === 0 && <p className="text-xs text-zinc-500">No archived spaces.</p>}
       <ul className="space-y-1.5">
         {list?.map((s) => (
-          <li key={s.id} className="flex items-center gap-3 p-2.5 rounded-xl border border-zinc-800 bg-zinc-950/50">
+          <li key={s.id} className="flex flex-wrap items-center gap-3 p-2.5 rounded-xl border border-zinc-800 bg-zinc-950/50">
             <SpaceTile space={s} size={32} />
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium text-zinc-200 truncate">{s.name}</p>
@@ -492,6 +500,27 @@ export const ArchivedSpacesModal: React.FC<{ onClose: () => void; onRestored: (s
               {busy === s.id ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" /> : <RotateCcw size={12} />}
               Restore
             </button>
+            {risk?.id === s.id && (
+              <div role="group" aria-label={`Restore ${s.name}`} className="basis-full rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 space-y-2" data-restore-accept-risk>
+                <p className="text-[11px] text-amber-100 leading-snug">{risk.count ? acceptRiskText(risk.count) : risk.message}</p>
+                <div className="flex flex-wrap items-start gap-2">
+                  <button
+                    type="button"
+                    autoFocus
+                    disabled={busy === s.id}
+                    onClick={() => restore(s, true)}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-zinc-950 bg-sky-500 hover:bg-sky-400 disabled:opacity-50"
+                    data-restore-save
+                  >
+                    {SAVE_FIRST.save}
+                  </button>
+                  <MoveToBitwardenFirst store={passwords} label={SAVE_FIRST.bitwarden} onMoved={() => restore(s)} />
+                  <button type="button" onClick={() => setRisk(null)} className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </li>
         ))}
       </ul>

@@ -434,6 +434,9 @@ pub struct NewSource {
     pub label: String,
     pub config: Value,
     pub secret: String,
+    /// The person accepts the built-in password store's risk (`passwords::accept_risk`).
+    #[serde(default)]
+    pub accept_risk: bool,
 }
 
 pub async fn add_source(State(state): State<AppState>, headers: HeaderMap, Json(b): Json<NewSource>) -> Res {
@@ -445,6 +448,7 @@ pub async fn add_source(State(state): State<AppState>, headers: HeaderMap, Json(
     if state.credentials.is_locked().await {
         return Err(vault_error(StoreError::Locked));
     }
+    super::passwords::accept_risk(&state, &headers, b.accept_risk).await?;
     // Before the connection test, so a refused save never reaches the server
     if let Some(refused) = super::passwords::refuse_local_save(&state).await {
         return Err(refused);
@@ -480,6 +484,9 @@ pub struct SourcePatch {
     pub enabled: Option<bool>,
     pub config: Option<Value>,
     pub secret: Option<String>,
+    /// The person accepts the built-in password store's risk (`passwords::accept_risk`).
+    #[serde(default)]
+    pub accept_risk: bool,
 }
 
 async fn source_or_404(state: &AppState, id: &str) -> Result<SourceRow, Response> {
@@ -497,6 +504,7 @@ pub async fn update_source(State(state): State<AppState>, headers: HeaderMap, Pa
     }
     let mut test = None;
     if b.config.is_some() || b.secret.is_some() {
+        super::passwords::accept_risk(&state, &headers, b.accept_risk).await?;
         // Before the connection test, so a refused save never reaches the server
         if let Some(refused) = super::passwords::refuse_local_save(&state).await {
             return Err(refused);

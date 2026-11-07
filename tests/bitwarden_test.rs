@@ -396,3 +396,157 @@ fn kwnt_is_not_dumpable() {
     assert_eq!(environ.uid(), 0, "/proc/<kwnt>/environ belongs to root");
     assert!(!readable, "kwnt's environment is unreadable to its own user");
 }
+
+// ---- 0.7.3 C1, C2, C4 (github-connect-073/spec.md): a mock Bitwarden on this machine ----
+
+mod mock {
+    use axum::{extract::State, routing::{get, post}, Form, Json, Router};
+    use kwnt::sandbox::bitwarden::{self, Kdf, SymKey};
+    use ring::rand::SystemRandom;
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    pub const PASSWORD: &str = "DUMMY-master-pw-073";
+    pub const EMAIL: &str = "dummy073@kwnt.test";
+    const ITERATIONS: u32 = 5000;
+
+    #[derive(Clone)]
+    struct Mock {
+        prelogin: Value,
+        hash: String,
+        token: Value,
+    }
+
+    /// How the account's key comes back from `/connect/token`.
+    pub enum KeyIn {
+        TopLevel,
+        /// Only `UserDecryptionOptions.MasterPasswordUnlock`; `camel` names its members as newer
+        /// servers do.
+        MasterPasswordUnlock { camel: bool },
+    }
+
+    /// Serves prelogin, token and sync for one account whose master-key salt is `salt`.
+    /// `prelogin_salt`: what prelogin says about it (None: nothing, as older servers).
+    pub async fn serve(salt: &str, prelogin_salt: Option<&str>, key_in: KeyIn) -> String {
+        let rng = SystemRandom::new();
+        let kdf = Kdf::Pbkdf2 { iterations: ITERATIONS };
+        let mk = bitwarden::master_key_salted(PASSWORD, salt, kdf).unwrap();
+        let user_key = SymKey::stretch(&mk).encrypt(&[7u8; 64], &rng).unwrap();
+        let mut prelogin = json!({"kdf": 0, "kdfIterations": ITERATIONS, "kdfMemory": null, "kdfParallelism": null});
+        if let Some(s) = prelogin_salt {
+            prelogin["salt"] = json!(s);
+            prelogin["kdfSettings"] = json!({"kdfType": 0, "iterations": ITERATIONS});
+        }
+        let mut token = json!({"access_token": "DUMMY-ACCESS", "expires_in": 3600, "refresh_token": "DUMMY-REFRESH", "token_type": "Bearer"});
+        match key_in {
+            KeyIn::TopLevel => token["Key"] = json!(user_key),
+            KeyIn::MasterPasswordUnlock { camel: false } => {
+                token["UserDecryptionOptions"] = json!({"HasMasterPassword": true, "MasterPasswordUnlock": {
+                    "Kdf": {"KdfType": 0, "Iterations": ITERATIONS, "Memory": null, "Parallelism": null},
+                    "MasterKeyEncryptedUserKey": user_key, "Salt": salt}});
+            }
+            KeyIn::MasterPasswordUnlock { camel: true } => {
+                token["userDecryptionOptions"] = json!({"hasMasterPassword": true, "masterPasswordUnlock": {
+                    "kdf": {"kdfType": 0, "iterations": ITERATIONS},
+                    "masterKeyEncryptedUserKey": user_key, "salt": salt}});
+            }
+        }
+        let state = Arc::new(Mock { prelogin, hash: bitwarden::auth_hash(&mk, PASSWORD).to_string(), token });
+        let app = Router::new()
+            .route("/identity/accounts/prelogin", post(|State(m): State<Arc<Mock>>| async move { Json(m.prelogin.clone()) }))
+            .route(
+                "/identity/connect/token",
+                post(|State(m): State<Arc<Mock>>, Form(f): Form<HashMap<String, String>>| async move {
+                    if f.get("password") == Some(&m.hash) {
+                        (axum::http::StatusCode::OK, Json(m.token.clone()))
+                    } else {
+                        let wrong = json!({"error": "invalid_grant", "error_description": "invalid_username_or_password",
+                            "ErrorModel": {"Message": "Username or password is incorrect. Try again."}});
+                        (axum::http::StatusCode::BAD_REQUEST, Json(wrong))
+                    }
+                }),
+            )
+            .route("/api/sync", get(|| async { Json(json!({"profile": {"id": "u-073"}, "folders": [], "ciphers": []})) }))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        format!("http://{addr}")
+    }
+}
+
+fn unlock_req(server: &str, password: &str) -> bitwarden::UnlockRequest {
+    // Not `..Default::default()`: the request wipes itself on drop
+    let mut req = bitwarden::UnlockRequest::default();
+    req.server_url = Some(server.into());
+    req.email = Some(mock::EMAIL.into());
+    req.master_password = password.into();
+    req
+}
+
+#[tokio::test]
+async fn the_servers_salt_is_used_when_it_differs_from_the_email() {
+    let salt = "Salt-Not-The-Email-7f3a";
+    let server = mock::serve(salt, Some(salt), mock::KeyIn::TopLevel).await;
+    let dir = tempdir().unwrap();
+    let store = bitwarden::BitwardenStore::open(dir.path());
+    let status = store.unlock(unlock_req(&server, mock::PASSWORD)).await.expect("unlocks with prelogin's salt, as given");
+    assert_eq!(status.email, mock::EMAIL);
+    assert!(store.is_unlocked().await);
+    // Checking the master password later (reveal, forget) uses the same salt
+    assert!(store.verify_master_password(mock::PASSWORD).await.unwrap());
+    assert!(!store.verify_master_password("DUMMY-not-it").await.unwrap());
+
+    // The same account behind a server that names no salt: the email salt can't open it
+    let server = mock::serve(salt, None, mock::KeyIn::TopLevel).await;
+    let dir = tempdir().unwrap();
+    let store = bitwarden::BitwardenStore::open(dir.path());
+    let err = store.unlock(unlock_req(&server, mock::PASSWORD)).await.expect_err("refused");
+    assert_eq!(err.kind(), "wrong");
+    // An empty salt falls back to the email
+    let server = mock::serve(&bitwarden::email_salt(mock::EMAIL), Some(""), mock::KeyIn::TopLevel).await;
+    let store = bitwarden::BitwardenStore::open(dir.path());
+    store.unlock(unlock_req(&server, mock::PASSWORD)).await.expect("email salt");
+}
+
+#[tokio::test]
+async fn the_account_key_can_come_only_from_master_password_unlock() {
+    for camel in [false, true] {
+        let salt = "Another-Salt-c2";
+        let server = mock::serve(salt, Some(salt), mock::KeyIn::MasterPasswordUnlock { camel }).await;
+        let dir = tempdir().unwrap();
+        let store = bitwarden::BitwardenStore::open(dir.path());
+        store.unlock(unlock_req(&server, mock::PASSWORD)).await.unwrap_or_else(|e| panic!("camel {camel}: {e}"));
+        assert!(store.is_unlocked().await);
+        assert!(dir.path().join(bitwarden::CONFIG_FILE).exists(), "set up");
+        assert!(store.verify_master_password(mock::PASSWORD).await.unwrap());
+    }
+}
+
+#[tokio::test]
+async fn a_failed_connect_sets_nothing_up() {
+    let salt = bitwarden::email_salt(mock::EMAIL);
+    let server = mock::serve(&salt, Some(&salt), mock::KeyIn::TopLevel).await;
+    let e = setup().await;
+    let config = e.data.join(kwnt::sandbox::credentials::VAULT_DIR).join(bitwarden::CONFIG_FILE);
+    for (server, password, status) in [
+        (server.as_str(), "DUMMY-wrong-pw", StatusCode::UNAUTHORIZED),
+        ("http://127.0.0.1:9", mock::PASSWORD, StatusCode::BAD_GATEWAY),
+    ] {
+        let body = json!({"server_url": server, "email": mock::EMAIL, "master_password": password});
+        let (s, v) = e.person("POST", "/api/passwords/bitwarden/unlock", Some(body)).await;
+        assert_eq!(s, status, "{server}: {v}");
+        assert!(!v.to_string().contains("DUMMY"), "{v}");
+        assert!(!config.exists(), "{server}: no bitwarden.json");
+        assert_eq!(e.state.credentials.store_name(), "local", "{server}");
+        assert!(!e.state.credentials.bitwarden().is_configured());
+    }
+    no_file_contains(&e.data, "DUMMY-wrong-pw");
+    // The right password then connects
+    let body = json!({"server_url": server, "email": mock::EMAIL, "master_password": mock::PASSWORD});
+    let (s, v) = e.person("POST", "/api/passwords/bitwarden/unlock", Some(body)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["store"], "bitwarden", "{v}");
+    assert!(config.exists());
+}
