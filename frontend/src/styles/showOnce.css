@@ -206,7 +206,9 @@ textarea.so-input { height: auto; padding: 8px 10px; line-height: 20px; resize: 
 .so-draft h6 { margin: 10px 0 3px; font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--so-t4); }
 .so-draft h6:first-child { margin-top: 0; }
 .so-draft p { margin: 0; }
-.so-draft ol { margin: 0; padding-left: 18px; list-style: decimal; display: flex; flex-direction: column; gap: 3px; }
+.so-draft ol, .so-draft ul { margin: 0; padding-left: 18px; list-style: decimal; display: flex; flex-direction: column; gap: 3px; }
+.so-draft ul { list-style: disc; }
+.so-draft p + p, .so-draft p + ul, .so-draft ul + p { margin-top: 3px; }
 .so-draft code { font: 500 11px/16px var(--so-mono); color: #d3ccff; background: rgb(184 173 255 / 0.08); padding: 0 4px; border-radius: 4px; }
 .so-draft .so-mask { font-size: 10.5px; line-height: 15px; white-space: normal; }
 .so-in { width: 100%; border-collapse: collapse; font-size: 11.5px; }
