@@ -128,6 +128,7 @@ import { needsYouRows } from './chatsTab';
 import { Space, eventsUrl, getCurrentSpace, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
+import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
@@ -350,6 +351,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const engines = useEngines(true);
   const canRun = canRunNow(engines.engines);
   const offerClaude = canRun === false && claudeNeedsSignIn(engines.engines);
+  // Claude Code isn't here but kwant can install it: "Set up Claude" installs, then signs in, in one go.
+  const claudeMissing = canRun === false && !!engines.engines?.some((e) => e.id === 'claude' && e.status === 'not_installed' && e.enabled !== false);
+  const [claudeInstallable, setClaudeInstallable] = useState(false);
+  useEffect(() => {
+    if (!claudeMissing) return;
+    let gone = false;
+    setupApi
+      .status()
+      .then((items) => !gone && setClaudeInstallable(canInstall(items, 'claude') === true))
+      .catch(() => !gone && setClaudeInstallable(false));
+    return () => void (gone = true);
+  }, [claudeMissing]);
+  const offerSetup = claudeMissing && claudeInstallable;
+  const setupLabel = offerSetup ? 'Set up Claude' : offerClaude ? 'Sign in with Claude' : 'Add an account';
+  const setupAction = offerSetup || offerClaude ? openClaudeSignIn : openSettings;
   // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
   useSettingsCover(!!spaceSettingsTab, contentRef);
@@ -3356,11 +3372,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         </div>
         <button
           type="button"
-          onClick={offerClaude ? openClaudeSignIn : openSettings}
+          onClick={setupAction}
+          data-setup-action={offerSetup ? 'install-claude' : offerClaude ? 'sign-in-claude' : 'add-account'}
           className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
         >
           <KeyRound size={13} aria-hidden="true" />
-          {offerClaude ? 'Sign in with Claude' : 'Add an account'}
+          {setupLabel}
         </button>
       </div>
     ) : null;
@@ -3686,7 +3703,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 canRun={canRun !== false}
                 personPosts={messages.filter((m) => m.sender_role === 'user').length}
                 refreshKey={settingsClosedCount}
-                onAddAccount={offerClaude ? openClaudeSignIn : openSettings}
+                onAddAccount={setupAction}
                 onOpenNeed={(opens) => openTeamNeed(opens, currentTeam)}
               />
             ) : undefined
@@ -3696,8 +3713,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               <>
                 <FirstRunWelcome
                   bots={kwants}
-                  actionLabel={offerClaude ? 'Sign in with Claude' : 'Add an account'}
-                  onAction={offerClaude ? openClaudeSignIn : openSettings}
+                  actionLabel={setupLabel}
+                  onAction={setupAction}
                 />
                 <ReadyTeamsWelcome onBlank={() => setIsNewTeamOpen(true)} />
               </>
