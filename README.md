@@ -116,7 +116,7 @@ The quickest way is the app for Mac or Linux: download it, add an AI account you
 
 ### What you need
 
-- **A Mac** (Apple silicon or Intel) **or a Linux x86_64 desktop** for the app. Nothing to build.
+- **A Mac** (Apple silicon or Intel) **or a Linux x86_64 desktop** for the app.
 - **At least one AI account.** Any one of these is enough:
   - the [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI, installed. You don't need to sign it in first: kwant has a **Sign in with Claude** button;
   - the `codex` or `grok` CLI, signed in on the same machine (`codex login`, `grok login`);
@@ -124,7 +124,7 @@ The quickest way is the app for Mac or Linux: download it, add an AI account you
 - To [build from source](#run-from-a-fresh-clone) instead: **Rust** (stable), installed with [rustup](https://rustup.rs), and **Node.js 20 or newer** with npm, to build the web app. The finished binary doesn't need Node.
 - Optional: **Docker** for VM mode and the bots' shared browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router.
 
-`kwnt doctor` (`cargo run -- doctor` from a clone) checks all of these and prints the install command for whatever is missing on your machine; `kwnt setup` installs it (see [Without Docker](#without-docker-kwnt-setup)).
+If you build from source, `kwnt doctor` (`cargo run -- doctor` from a clone) checks all of these and prints the install command for whatever is missing on your machine; `kwnt setup` installs it (see [Without Docker](#without-docker-kwnt-setup)).
 
 ### On a Mac: the app
 
@@ -149,7 +149,7 @@ cd kwant
 make run          # builds the web app (frontend/dist), then runs `cargo run -- serve`
 ```
 
-Open **http://127.0.0.1:8799**. If no account works yet, kwant shows a **Get ready** banner with an **Add an account** button. A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
+Open **http://127.0.0.1:8799**. Until an account works, a banner above the chat says **One step left: add an account**, with a button to add one. A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
 
 The binary embeds `frontend/dist`, so on a fresh clone `cargo build`, `cargo test` and `cargo run -- serve` fail to compile until you've run `make run` or `make frontend` once.
 
