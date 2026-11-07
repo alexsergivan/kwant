@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import type { SwitchEntry } from '../watchLive';
 import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
@@ -200,6 +201,10 @@ export interface ChatViewProps {
   vmCaptchaStep?: HumanStep | null;
   /** The newest open step (any kind) holding this browser. */
   vmHumanStep?: HumanStep | null;
+  /** W1: set while this chat's browser is active; the working strip offers Watch when the panel is closed. */
+  onWatchBrowser?: () => void;
+  /** W3: the panel's switcher between browsing chats. */
+  vmSwitcher?: { entries: SwitchEntry[]; current: string; onPick: (owner: string) => void } | null;
   /** Answers that step as done from the browser; resolves to an error message on failure. */
   onVmStepDone?: (id: string) => Promise<string | void> | void;
   vmSolveRequest?: number;
@@ -420,6 +425,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   vmApprovalsOff,
   vmCaptchaStep,
   vmHumanStep,
+  onWatchBrowser,
+  vmSwitcher,
   onVmStepDone,
   vmSolveRequest,
   pinned = [],
@@ -1760,6 +1767,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         awaitingBrowser={!!awaitingBrowser}
         writing={!!streamingText}
         onAnswer={showWaitingCard}
+        onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       />
 
       {/* Modern Composer Input Bar */}
@@ -1767,14 +1775,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
         className={`px-3 ${phone ? 'pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]' : 'pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]'} sm:p-4 border-t border-hairline bg-surface-side/60`}
       >
         {teamMembers && teamMembers.length > 0 && (
-          <ScrollRow className="kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none" role="group" aria-label="Ask a member">
+          <ScrollRow
+            className={
+              phone
+                ? // Phone: 28 px chips that tap like 44 px. The row scrolls sideways, which clips
+                  // anything sticking out of it, so it carries 8 px above and below for the chips'
+                  // kws-hit areas and gives the same space back in its margins (row stays 28 px).
+                  'kw-scroll-row max-w-4xl mx-auto -mt-1.5 mb-0.5 py-2 flex items-center gap-1.5 overflow-x-auto text-xs select-none'
+                : 'kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none'
+            }
+            role="group"
+            aria-label="Ask a member"
+          >
             <span className="shrink-0 text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
             {teamMembers.map((m) => (
               <button
                 key={m.id}
                 type="button"
                 onClick={() => handleInsertTag(`@${m.name}`)}
-                className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                data-compact={phone ? '' : undefined}
+                className={
+                  phone
+                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                }
                 title={`Ask ${m.name}`}
               >
                 <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} kwantId={m.id} />
@@ -1785,7 +1809,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleInsertTag(`@${teamName}`)}
-                className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                data-compact={phone ? '' : undefined}
+                className={
+                  phone
+                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                }
                 title={`Ask whole team @${teamName}`}
               >
                 <Users size={12} className="text-sky-400" />
@@ -2137,6 +2166,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       approvalsOff={vmApprovalsOff}
       captchaStep={vmCaptchaStep}
       humanStep={vmHumanStep}
+      switcher={vmSwitcher}
       onStepDone={onVmStepDone}
       solveRequest={vmSolveRequest}
     />
