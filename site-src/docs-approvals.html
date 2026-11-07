@@ -57,8 +57,8 @@ card_art: avatar:qa
     <tr><td><strong>Bitwarden</strong></td><td>Your own Bitwarden or Vaultwarden account, folder <code>kwnt</code>, after you unlock it once.</td></tr>
   </tbody>
 </table></div>
-<p>The built-in store protects against copies of the data folder. It doesn't protect against a bot running as the same user with approvals off, because that bot could read the key. So kwant enforces one rule:</p>
-<div class="note"><strong>Approvals off, or "Ask only when risky", needs Bitwarden</strong> while the built-in store holds any password. Move them to Bitwarden first (<code>POST /api/passwords/migrate</code>): each one is deleted locally only after Bitwarden has it.</div>
+<p>The built-in store protects against copies of the data folder. It doesn't protect against a bot running as the same user with approvals off, because that bot could read the key. So kwant warns you before the two meet:</p>
+<div class="note"><strong>Approvals off, or "Ask only when risky", with passwords in the built-in store is your choice, once per server.</strong> Saving a password or token while some bots don't ask first shows <strong>Before you save the token</strong>, with <strong>Save it on this server</strong>, <strong>Use Bitwarden</strong> or <strong>Make every bot ask first</strong>. Turning approvals off with passwords on this server asks the same once. Only you can choose to keep them here; a bot never can, and the warning that they are exposed stays. To move them, connect Bitwarden (<code>POST /api/passwords/migrate</code>): each one is deleted locally only after Bitwarden has it. Archived spaces, and the bots in them, don't count.</div>
 
 <h3 id="bitwarden">How the Bitwarden store works</h3>
 <ul>

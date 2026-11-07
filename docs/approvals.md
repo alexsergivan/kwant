@@ -24,8 +24,8 @@ is refused and recorded as `denied`. Calls that run without a card are recorded 
 `auto_allowed` (`GET /api/approvals?status=auto_allowed`); under `smart` the row's
 `details.smart_reason` says why it was safe (e.g. "runs inside the bot's folder and does nothing risky"), and a card's `details.smart_reason` says why it asked.
 
-`smart` and `off` both need Bitwarden while the built-in password store holds passwords: see
-[saved-passwords.md](saved-passwords.md).
+`smart` and `off` both need Bitwarden while the built-in password store holds passwords, unless the
+person accepts the risk once for the server (0.7.3): see [saved-passwords.md](saved-passwords.md).
 
 **`smart` is a guard against accidents, not a sandbox.** Scripts in the bot's folder (`./run.sh`,
 `bash x.sh`, `python data.py`), `make`, `cargo run`/`cargo build` (build scripts), and

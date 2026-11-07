@@ -9,9 +9,11 @@ Kwnt can fill website logins in a team's, channel's or bot's browser. The passwo
 
 The built-in store protects against copies of the data folder. It does **not** protect against a bot that runs as the same Linux user with approvals off. That bot can read the key file, and the API token next to it, and with them every built-in saved password (audit F-10, 2026-10-20). Kwnt's name filter on those files is not enough: shell wildcards get past it.
 
-## Approvals off needs Bitwarden
+## Approvals off and the built-in store
 
-Since 2026-10-20, approvals off and passwords in the built-in store are not allowed together. The server enforces this:
+Since 2026-10-20, approvals off and passwords in the built-in store don't mix without the person's say. Since 0.7.3 it is a warning, not a wall: every 409 below carries `can_accept: true`, and the person can accept the risk once for this server, with `accept_risk: true` on the refused call or `POST /api/passwords/store/accept_risk`. That sets `local_store_risk_accepted_at`; from then on none of them refuses. A bot's turn token can never accept. `exposed` and the startup warning stay, so the risk stays visible. In the app, the card "Before you save the token" offers **Save it on this server** (accepts), **Use Bitwarden** or **Make every bot ask first** (turns on "Ask before running commands" in every space), and the approvals switch asks once, with "Keep them here and turn off approvals". Archived spaces, and the bots in them, don't count (0.7.3).
+
+Until the person accepts, the server enforces this:
 
 "Ask only when risky" (`smart`, 2026-10-21) counts as off everywhere in this section. It runs commands like `cargo test` or `python3 x.py` in the bot's folder without a card, and that code can read the data folder like any other. `approvals_off` and `exposed` below are true for `smart` too.
 

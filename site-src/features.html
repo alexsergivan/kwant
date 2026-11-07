@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-073">New in 0.7.3</a></li>
         <li><a href="#new-072">New in 0.7.2</a></li>
         <li><a href="#new-071">New in 0.7.1</a></li>
         <li><a href="#new-07">New in 0.7</a></li>
@@ -46,6 +47,46 @@ card_art: team
     </div>
   </div>
 </nav>
+
+<section id="new-073" class="fgroup alt">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7.3</p>
+      <h2>Videos in chat, and Dev mode reads any git repo</h2>
+      <p>Send a video and it plays right in the chat, without the long wait first. Dev mode reads repos on GitLab, Gitea or any git server. Connect GitHub opens where you press it, and saving a token while some bots don't ask first is your choice. New to Dev mode? <a href="#new-07">Start with 0.7</a>, further down.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="videos-in-chat">
+        <span class="shot">{{shot:v073-video-chat-card|ALT_TODO_VIDEO|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Videos play in the chat</h3><p>MP4, MOV and WebM files up to 100 MB can be attached, and bots can share them too. They play right in the chat and never start on their own. A video the browser can't play shows as a file card. Other files stay at 20 MB.</p></div>
+      </article>
+      <article class="card" id="any-git">
+        <span class="shot">{{shot:v073-any-git-card|ALT_TODO_ANYGIT|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Any git repo</h3><p>A team's repo on GitLab, Gitea or any git server, or a team folder with no remote, is watched with git, and every merge gets its plain-words card. Reviews, CI checks and Post to GitHub still work on GitHub repos only. The server needs git 2.31 or newer; without it, the desk says "Needs git on the server". <a href="docs/dev-mode.html#any-git">How it reads repos</a></p></div>
+      </article>
+      <article class="card" id="connect-github">
+        <span class="shot">{{shot:v073-connect-github-card|ALT_TODO_CONNECT|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Connect GitHub where you press it</h3><p>Every <strong>Connect GitHub</strong> opens the same form right there: a popover on the desktop, a sheet on the phone. It no longer jumps to Loose ends, and the GitHub row in Loose ends says "Also used by Dev mode". Under a team's repo link, one line says what Dev mode does with it.</p></div>
+      </article>
+      <article class="card" id="save-choice">
+        <span class="shot">{{shot:v073-save-choice-card|ALT_TODO_SAVE|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Saving a token is your choice</h3><p>When some bots run commands without asking, one of them could read a token saved on this server. <strong>Before you save the token</strong> says so and offers three ways on: <strong>Save it on this server</strong>, <strong>Use Bitwarden</strong> or <strong>Make every bot ask first</strong>. Only you can choose to keep it here, once for the server, and the warning stays. <a href="docs/approvals.html#passwords">Where passwords are kept</a></p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Three videos, without the wait</h3>
+        <p>ROW_TODO</p>
+      </div>
+      <div class="frame">{{video:clip-v073-videos|ALT_TODO_CLIP}}</div>
+    </div>
+    <ul class="flist">
+      <li id="nvidia"><h3>NVIDIA's free models</h3><p>A preset for custom servers fills in build.nvidia.com's address. Paste an NVIDIA API key (it starts with nvapi-) and pick a model. <a href="docs/models.html#engines">Engines</a></p></li>
+      <li id="bots-watch-video"><h3>Bots can look at a video</h3><p>With ffmpeg on the server, a bot reading a video gets its length and size and up to 6 frames. Without ffmpeg, the bot is told to install it.</p></li>
+      <li id="bitwarden-fixes"><h3>Bitwarden connects again</h3><p>Connect inside the GitHub, email and approvals forms works again, and accounts whose key salt isn't their email connect. After a wrong master password, the form asks whether the account is on bitwarden.com or bitwarden.eu.</p></li>
+    </ul>
+  </div>
+</section>
 
 <section id="new-072" class="fgroup">
   <div class="wrap">
@@ -649,7 +690,7 @@ card_art: team
       </article>
       <article class="card">
         <span class="shot">{{shot:v2-passwords-bitwarden|The warning shown when turning off approvals for every bot in a space, offering to move 3 saved passwords to Bitwarden first or keep asking.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
-        <div class="card-body"><h3>Saved passwords</h3><p>Website logins in kwant's encrypted vault or your own Bitwarden. Turning approvals off requires Bitwarden.</p></div>
+        <div class="card-body"><h3>Saved passwords</h3><p>Website logins in kwant's encrypted vault or your own Bitwarden. With approvals off, kwant asks you once whether to keep them on this server or move them to Bitwarden.</p></div>
       </article>
     </div>
     <ul class="flist">
