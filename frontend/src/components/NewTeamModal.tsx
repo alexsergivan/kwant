@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { TeamRepoDevLine } from './TeamRepoDevLine';
 import { X, Users, AlertCircle, Folder, GitBranch, FolderSearch } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { Kwant, Team } from './Sidebar';
@@ -382,8 +383,9 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
                   placeholder="https://github.com/owner/repository.git"
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
                 />
+                <TeamRepoDevLine url={repoUrl} />
                 <p className="text-[11px] text-zinc-500 mt-1">
-                  Repository will be cloned and managed in team workspace directory on first run.
+                  Bots clone it into the team’s folder on first run.
                 </p>
               </div>
             )}

@@ -292,6 +292,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/sandbox/:team_id/passwords/:id", delete(passwords::remove))
         .route("/api/sandbox/:team_id/passwords/:id/reveal", post(passwords::reveal))
         .route("/api/passwords/store", get(passwords::store_status))
+        .route("/api/passwords/store/accept_risk", post(passwords::accept_store_risk))
         .route("/api/passwords/bitwarden", delete(passwords::forget_bitwarden))
         .route("/api/passwords/bitwarden/unlock", post(passwords::unlock_bitwarden))
         .route("/api/passwords/bitwarden/lock", post(passwords::lock_bitwarden))

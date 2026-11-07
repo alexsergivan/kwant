@@ -39,6 +39,13 @@
 //!
 //! and switching approvals off answers 409 while the built-in store holds any password (see
 //! [`refuse_approvals_off`]). An install already in that state is reported as `exposed: true`.
+//! Archived spaces, and the bots in them, don't count: they can't run anything (0.7.3 A1).
+//!
+//! A warning, not a wall (0.7.3 A2): every one of those 409s carries `can_accept: true`, and the
+//! person can accept the risk once for this server, with `accept_risk: true` on the refused call
+//! or `POST /api/passwords/store/accept_risk`. That sets the setting [`RISK_ACCEPTED`]; from then
+//! on none of them refuses. Bots' turn tokens can never accept. `exposed` and the startup warning
+//! stay as they are, so the person still sees the risk they took.
 //! "Ask only when risky" (`smart`) counts as off here: it runs scripts in the bot's folder
 //! without a card, and those can read the data folder just the same.
 //! `local_count` counts every file in the built-in store, those of deleted teams, channels and
@@ -58,6 +65,10 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 const REFUSAL: &str = "only the person manages saved passwords";
+
+/// The setting that holds when the person accepted keeping passwords in the built-in store while
+/// some bots don't ask before running commands (RFC 3339). Missing or blank: not accepted.
+pub const RISK_ACCEPTED: &str = "local_store_risk_accepted_at";
 
 fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({"error": message}))).into_response()
@@ -195,6 +206,9 @@ pub struct SaveBody {
     pub domain: Option<String>,
     pub username: String,
     pub password: String,
+    /// The person accepts the built-in store's risk (see [`accept_risk`]).
+    #[serde(default)]
+    pub accept_risk: bool,
 }
 
 pub async fn save(
@@ -209,6 +223,9 @@ pub async fn save(
     };
     if body.password.is_empty() {
         return error(StatusCode::BAD_REQUEST, "password is empty");
+    }
+    if let Err(r) = accept_risk(&state, &headers, body.accept_risk).await {
+        return r;
     }
     if let Some(r) = refuse_local_save(&state).await {
         return r;
@@ -295,11 +312,26 @@ pub async fn remove(State(state): State<AppState>, headers: HeaderMap, Path((id,
     }
 }
 
-pub async fn save_pending(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+/// An optional body that only says whether the person accepts the built-in store's risk.
+#[derive(Deserialize, Default)]
+pub struct AcceptRiskBody {
+    #[serde(default)]
+    pub accept_risk: bool,
+}
+
+/// `{accept_risk}` from a body that may be empty or missing.
+pub fn accept_risk_of(body: &[u8]) -> bool {
+    serde_json::from_slice::<AcceptRiskBody>(body).unwrap_or_default().accept_risk
+}
+
+pub async fn save_pending(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, body: axum::body::Bytes) -> Response {
     let owner = match owner_or_404(&state, &headers, &id).await {
         Ok(o) => o,
         Err(r) => return r,
     };
+    if let Err(r) = accept_risk(&state, &headers, accept_risk_of(&body)).await {
+        return r;
+    }
     let Some(ctrl) = open_controller(&state, &id, &owner).await else {
         return error(StatusCode::NOT_FOUND, "no password is waiting to be saved");
     };
@@ -333,9 +365,11 @@ pub async fn discard_pending(State(state): State<AppState>, headers: HeaderMap, 
 
 /// `{store: "local" | "bitwarden", locked, bitwarden: null | {server_url, email, login:
 /// "password" | "api_key", client_id, unlocked, unlocked_at, item_count, last_sync},
-/// local_count, approvals_off, exposed}`. `local_count` is how many passwords the built-in store
-/// still holds (what `migrate` would move). `approvals_off`: any space or bot has approvals off.
-/// `exposed`: both at once, so a bot could read those passwords; nothing changes it on its own.
+/// local_count, approvals_off, exposed, risk_accepted}`. `local_count` is how many passwords the
+/// built-in store still holds (what `migrate` would move). `approvals_off`: any space or bot that
+/// isn't archived has approvals off or "Ask only when risky". `exposed`: both at once, so a bot
+/// could read those passwords; nothing changes it on its own, accepting the risk included.
+/// `risk_accepted`: the person accepted that risk for this server, so nothing refuses a save.
 async fn store_json(state: &AppState) -> Value {
     let vault = &state.credentials;
     let local_count = local_count(state).await;
@@ -347,7 +381,54 @@ async fn store_json(state: &AppState) -> Value {
         "local_count": local_count,
         "approvals_off": approvals_off,
         "exposed": approvals_off && local_count > 0,
+        "risk_accepted": risk_accepted(state).await,
     })
+}
+
+/// Whether the person accepted keeping passwords in the built-in store while some bots don't ask
+/// before commands. A failed read counts as not accepted.
+pub async fn risk_accepted(state: &AppState) -> bool {
+    matches!(state.db.get_setting(RISK_ACCEPTED).await, Ok(Some(v)) if !v.trim().is_empty())
+}
+
+/// With `asked` (`accept_risk: true` in the body): the person accepts the built-in store's risk
+/// for this server, once. A bot's turn token is refused (403) and accepts nothing. The first
+/// acceptance is logged, with counts only. `Err` is the response to send.
+#[allow(clippy::result_large_err)]
+pub async fn accept_risk(state: &AppState, headers: &HeaderMap, asked: bool) -> Result<(), Response> {
+    if !asked {
+        return Ok(());
+    }
+    super::mcp_suggest::refuse_agent_tokens(state, headers, "only the person can accept this risk").await?;
+    match state.db.set_setting_if_blank(RISK_ACCEPTED, &chrono::Utc::now().to_rfc3339()).await {
+        Ok(true) => {
+            // Awaited first: a future awaited inside the macro isn't Send
+            let (count, off) = (local_count(state).await, approvals_off_anywhere(state).await);
+            tracing::warn!(
+                local_count = count,
+                approvals_off = off,
+                "the person accepted saving passwords in this server's built-in password store while some bots run commands without asking"
+            );
+            Ok(())
+        }
+        Ok(false) => Ok(()),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not save the accepted password-store risk");
+            Err(error(StatusCode::INTERNAL_SERVER_ERROR, "could not save that choice"))
+        }
+    }
+}
+
+/// `POST /api/passwords/store/accept_risk`: the person accepts the built-in store's risk before
+/// typing anything (the "Save it on this server" button) → the store status.
+pub async fn accept_store_risk(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = person(&state, &headers).await {
+        return r;
+    }
+    if let Err(r) = accept_risk(&state, &headers, true).await {
+        return r;
+    }
+    Json(store_json(&state).await).into_response()
 }
 
 /// How many passwords the built-in store holds, deleted owners' files included (audit F-11). In
@@ -370,17 +451,18 @@ pub async fn forget_deleted_owners(state: &AppState, ids: &[&str]) {
     }
 }
 
-/// Whether any space or bot has approvals off or "Ask only when risky". A failed read counts as off.
+/// Whether any space or bot that isn't archived has approvals off or "Ask only when risky". A
+/// failed read counts as off.
 pub async fn approvals_off_anywhere(state: &AppState) -> bool {
     state.db.any_approvals_off().await.unwrap_or(true)
 }
 
 /// The 409 for switching approvals off while the built-in store holds passwords: a bot with
 /// approvals off could read them (audit F-10). Bitwarden mode with nothing left in the built-in
-/// store is fine. `None` when approvals may go off.
+/// store is fine, and so is a server whose person accepted the risk. `None` when approvals may go off.
 pub async fn refuse_approvals_off(state: &AppState) -> Option<Response> {
     let n = local_count(state).await;
-    if n == 0 {
+    if n == 0 || risk_accepted(state).await {
         return None;
     }
     tracing::info!(local_count = n, "refused to switch approvals off while the built-in store holds passwords");
@@ -390,6 +472,7 @@ pub async fn refuse_approvals_off(state: &AppState) -> Option<Response> {
             Json(json!({
                 "error": "approvals can't be switched off, or to \"Ask only when risky\", while passwords are saved on this server: a bot that can run commands could read them. Move them to Bitwarden first.",
                 "needs_bitwarden": true,
+                "can_accept": true,
                 "local_count": n,
             })),
         )
@@ -399,9 +482,9 @@ pub async fn refuse_approvals_off(state: &AppState) -> Option<Response> {
 
 /// The 409 for saving into the built-in store while any space or bot is on "Ask only when risky" or
 /// "Don't ask" (both count as off here). Zombie Hunter's
-/// mailbox and GitHub logins go through it too.
+/// mailbox and GitHub logins go through it too. Never once the person accepted the risk.
 pub(crate) async fn refuse_local_save(state: &AppState) -> Option<Response> {
-    if state.credentials.store_name() != "local" || !approvals_off_anywhere(state).await {
+    if state.credentials.store_name() != "local" || !approvals_off_anywhere(state).await || risk_accepted(state).await {
         return None;
     }
     Some(
@@ -410,6 +493,7 @@ pub(crate) async fn refuse_local_save(state: &AppState) -> Option<Response> {
             Json(json!({
                 "error": "this server's built-in password store only takes passwords while every space and bot is on \"Ask before running commands\": under \"Ask only when risky\" or \"Don't ask\", a bot that can run commands could read them. Connect Bitwarden, or switch every space and bot to \"Ask before running commands\".",
                 "needs_bitwarden": true,
+                "can_accept": true,
             })),
         )
             .into_response(),
@@ -460,7 +544,7 @@ pub async fn unlock_bitwarden(State(state): State<AppState>, headers: HeaderMap,
                 UnlockError::Invalid(_) | UnlockError::Unsupported(_) => (StatusCode::BAD_REQUEST, json!({})),
                 UnlockError::Unreachable(_) | UnlockError::Server(_) => (StatusCode::BAD_GATEWAY, json!({})),
             };
-            tracing::warn!(error = %message, "Bitwarden unlock failed");
+            // Logged once by the store, by kind: the message can quote the server (spec C3)
             let mut body = extra;
             body["error"] = json!(message);
             (status, Json(body)).into_response()
@@ -486,12 +570,16 @@ pub async fn forget_bitwarden(State(state): State<AppState>, headers: HeaderMap,
     }
     // Back to the built-in store would expose what it still holds to bots with approvals off
     let n = local_count(&state).await;
-    if n > 0 && approvals_off_anywhere(&state).await {
+    if let Err(r) = accept_risk(&state, &headers, accept_risk_of(&body)).await {
+        return r;
+    }
+    if n > 0 && approvals_off_anywhere(&state).await && !risk_accepted(&state).await {
         return (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": "this server can't go back to its built-in password store while it still holds passwords and a space or bot is on \"Ask only when risky\" or \"Don't ask\": a bot that can run commands could read them. Switch every space and bot to \"Ask before running commands\" first.",
                 "needs_bitwarden": true,
+                "can_accept": true,
                 "local_count": n,
             })),
         )

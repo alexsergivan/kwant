@@ -202,6 +202,8 @@ export class LooseEndsError extends Error {
     public locked = false,
     /** The server's `code`, e.g. `busy` on a 409. */
     public code: string | null = null,
+    /** 0.7.3 (A2): with needsBitwarden, the person may save here anyway (`accept_risk`). */
+    public canAccept = false,
   ) {
     super(message);
   }
@@ -230,7 +232,7 @@ export async function call<T>(url: string, method = 'GET', body?: unknown): Prom
   const answer = await res.json().catch(() => null);
   if (res.ok) return answer as T;
   const needs = needsBitwardenFrom(res.status, answer);
-  if (needs) throw new LooseEndsError(needs.message, 409, true);
+  if (needs) throw new LooseEndsError(needs.message, 409, true, false, null, needs.can_accept);
   const err = answer && typeof answer === 'object' ? (answer as Record<string, unknown>).error : null;
   const code = answer && typeof answer === 'object' && typeof (answer as Record<string, unknown>).code === 'string' ? ((answer as Record<string, unknown>).code as string) : null;
   const msg = typeof err === 'string' && err.trim() ? sentence(err) : `Something went wrong (HTTP ${res.status}).`;
@@ -285,7 +287,8 @@ export const looseApi = {
   cases: () => call<{ cases: LooseCase[]; running: boolean }>('/api/zombie/cases'),
   act: (id: string, action: CaseAction, body?: unknown) => call<LooseCase>(`/api/zombie/cases/${enc(id)}/${action}`, 'POST', body ?? {}),
   sources: () => call<{ sources: LooseSource[]; vault_locked: boolean }>('/api/zombie/sources'),
-  addSource: (s: NewSource) => call<{ source: LooseSource; test: unknown }>('/api/zombie/sources', 'POST', s),
+  /** `acceptRisk` (0.7.3 A2): keep the login on this server although some bot runs without asking. Once per server. */
+  addSource: (s: NewSource, acceptRisk = false) => call<{ source: LooseSource; test: unknown }>('/api/zombie/sources', 'POST', acceptRisk ? { ...s, accept_risk: true } : s),
   setEnabled: (id: string, enabled: boolean) => call<{ source: LooseSource }>(`/api/zombie/sources/${enc(id)}`, 'PATCH', { enabled }),
   removeSource: (id: string) => call<{ deleted: boolean; cases_removed: number }>(`/api/zombie/sources/${enc(id)}`, 'DELETE'),
   testSource: (id: string) => call<{ ok: boolean; test: unknown }>(`/api/zombie/sources/${enc(id)}/test`, 'POST'),
