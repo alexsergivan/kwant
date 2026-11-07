@@ -1,18 +1,17 @@
 title: Quickstart: run a team of AI agents locally
-description: Build kwant from a fresh clone, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.
+description: Download the kwant app for Mac or Linux, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.
 path: docs/quickstart.html
 nav: quickstart
-card: Build kwant from a fresh clone and ask your first team of bots a question.
+card: Download the app, add an AI account and ask your first team of bots a question.
 card_art: avatar:brand
 ---
 <p class="kicker">Docs</p>
 <h1>Quickstart: run kwant locally</h1>
-<p class="intro">Go from a fresh clone to a team of bots answering in your browser. On most machines it takes a few minutes, plus a one-time model download in the background.</p>
+<p class="intro">Download the app, add an AI account you already have and ask your first question. There's nothing to build. You can also <a href="#run">build kwant from source</a>.</p>
 
 <h2 id="requirements">What you need</h2>
 <ul>
-  <li><strong>Rust</strong> (stable), installed with <a href="https://rustup.rs" rel="noopener">rustup</a>.</li>
-  <li><strong>Node.js 20 or newer</strong> with npm, to build the web app. The finished binary doesn't need it.</li>
+  <li><strong>A Mac</strong> (Apple silicon or Intel) <strong>or a Linux x86_64 desktop</strong> for the app. On other machines, or on a server, <a href="#run">build from source</a> or use Docker (see <a href="install.html">Install &amp; run</a>).</li>
   <li><strong>At least one AI account</strong> for your bots. Any one of these is enough:
     <ul>
       <li>the <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener"><code>claude</code> CLI</a>, installed. You don't need to sign it in first, because kwant has a <strong>Sign in with Claude</strong> button;</li>
@@ -23,12 +22,22 @@ card_art: avatar:brand
   <li>Optional: <strong>Docker</strong> for VM mode and the bots' shared browser, and <a href="https://docs.astral.sh/uv/" rel="noopener"><code>uv</code></a> or <code>python3</code> for the Laya router.</li>
 </ul>
 
-<h2 id="run">1. Run from a fresh clone</h2>
+<h2 id="app">1. Download the app</h2>
+<ul>
+  <li><strong>Mac:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">download the Mac app</a> (a universal <code>.dmg</code> for Apple silicon and Intel), open it and drag kwant to Applications.</li>
+  <li><strong>Ubuntu 22.04 or newer, Debian 12 or newer:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">download the <code>.deb</code></a>, then install it with <code>sudo apt install ./kwant_amd64.deb</code>.</li>
+  <li><strong>Other Linux distributions:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">download the AppImage</a>, then <code>chmod +x kwant_x86_64.AppImage</code> and run it. It needs a normal GTK desktop and FUSE.</li>
+</ul>
+<p>Open kwant. The app runs kwant on your computer and keeps an icon in the menu bar (Mac) or the tray (Linux). Until an account works, a banner above the chat says <strong>One step left: add an account</strong>, with a button to add one.</p>
+<p class="note warn">The Mac app is signed ad hoc, not notarized by Apple, so macOS stops it the first time. Click Done, open <b>System Settings › Privacy &amp; Security</b>, scroll down and click <b>Open Anyway</b> next to kwant. On macOS 14 or earlier, right-click the app and choose <b>Open</b> instead.</p>
+<div class="note"><strong>The first start takes a few minutes.</strong> kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer in the meantime, picked by keyword.</div>
+
+<h3 id="run">Or build from a fresh clone</h3>
+<p>You need <strong>Rust</strong> (stable), installed with <a href="https://rustup.rs" rel="noopener">rustup</a>, and <strong>Node.js 20 or newer</strong> with npm, to build the web app. The finished binary doesn't need Node.</p>
 <pre><code>git clone https://github.com/alexsergivan/kwant.git
 cd kwant
 make run   <span class="c"># builds the web app, then runs `cargo run -- serve`</span></code></pre>
-<p>Open <strong><a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a></strong>. On your own computer there's nothing to sign in to. If no account works yet, kwant shows a <strong>Get ready</strong> banner with an <strong>Add an account</strong> button.</p>
-<div class="note"><strong>The first start takes a few minutes.</strong> kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer in the meantime, picked by keyword. To skip Laya, run <code>cargo run -- serve --no-laya</code>.</div>
+<p>Open <strong><a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a></strong>. On your own computer there's nothing to sign in to. To skip the Laya router, run <code>cargo run -- serve --no-laya</code>.</p>
 <p><code>cargo run -- serve</code> on its own works only once <code>frontend/dist</code> exists, because the binary embeds the web app. After the first <code>make run</code> (or <code>make frontend</code>) you can use either.</p>
 
 <h2 id="account">2. Add an account</h2>

@@ -112,38 +112,19 @@ Screenshots come from a demo space with sample data.
 
 ## Quickstart
 
+The quickest way is the app for Mac or Linux: download it, add an AI account you already have and ask your first question. There's nothing to build. On a server, see [Self-hosting on a VPS](#self-hosting-on-a-vps).
+
 ### What you need
 
-- **Rust** (stable), installed with [rustup](https://rustup.rs).
-- **Node.js 20 or newer** with npm, to build the web app. The finished binary doesn't need it.
+- **A Mac** (Apple silicon or Intel) **or a Linux x86_64 desktop** for the app.
 - **At least one AI account.** Any one of these is enough:
   - the [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI, installed. You don't need to sign it in first: kwant has a **Sign in with Claude** button;
   - the `codex` or `grok` CLI, signed in on the same machine (`codex login`, `grok login`);
   - an Anthropic, OpenAI or xAI API key, which you add in the app under **Settings → This space → Accounts**.
+- To [build from source](#run-from-a-fresh-clone) instead: **Rust** (stable), installed with [rustup](https://rustup.rs), and **Node.js 20 or newer** with npm, to build the web app. The finished binary doesn't need Node.
 - Optional: **Docker** for VM mode and the bots' shared browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router.
 
-`kwnt doctor` (`cargo run -- doctor` from a clone) checks all of these and prints the install command for whatever is missing on your machine; `kwnt setup` installs it (see [Without Docker](#without-docker-kwnt-setup)).
-
-### Run from a fresh clone
-
-```bash
-git clone https://github.com/alexsergivan/kwant.git
-cd kwant
-make run          # builds the web app (frontend/dist), then runs `cargo run -- serve`
-```
-
-Open **http://127.0.0.1:8799**. If no account works yet, kwant shows a **Get ready** banner with an **Add an account** button. A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
-
-The binary embeds `frontend/dist`, so on a fresh clone `cargo build`, `cargo test` and `cargo run -- serve` fail to compile until you've run `make run` or `make frontend` once.
-
-**The first start takes a few minutes:** kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer meanwhile, and the routing rules still pick who answers. To skip Laya, run `cargo run -- serve --no-laya`.
-
-### Build a release binary
-
-```bash
-make build                 # web app + cargo build --release
-./target/release/kwnt serve
-```
+If you build from source, `kwnt doctor` (`cargo run -- doctor` from a clone) checks all of these and prints the install command for whatever is missing on your machine; `kwnt setup` installs it (see [Without Docker](#without-docker-kwnt-setup)).
 
 ### On a Mac: the app
 
@@ -159,6 +140,27 @@ The Linux app is for x86_64. Like the Mac app, it runs its own kwant, uses the s
 - **Other distributions:** download [`kwant_x86_64.AppImage`](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage), then `chmod +x kwant_x86_64.AppImage` and run it. It needs a normal GTK desktop and FUSE.
 
 Updates arrive in the app, which checks each one's signature before it installs it; with the `.deb`, your system asks for your password. `sudo apt remove kwant` removes the `.deb`, and your data in `~/.kwnt` stays. It's a beta: tested in containers on Ubuntu 22.04, Ubuntu 24.04 and Debian 12, not yet on real desktops, so the tray icon, Wayland and HiDPI may vary. There's no ARM Linux or Windows app yet.
+
+### Run from a fresh clone
+
+```bash
+git clone https://github.com/alexsergivan/kwant.git
+cd kwant
+make run          # builds the web app (frontend/dist), then runs `cargo run -- serve`
+```
+
+Open **http://127.0.0.1:8799**. Until an account works, a banner above the chat says **One step left: add an account**, with a button to add one. A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
+
+The binary embeds `frontend/dist`, so on a fresh clone `cargo build`, `cargo test` and `cargo run -- serve` fail to compile until you've run `make run` or `make frontend` once.
+
+**The first start takes a few minutes:** kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer meanwhile, and the routing rules still pick who answers. To skip Laya, run `cargo run -- serve --no-laya`.
+
+### Build a release binary
+
+```bash
+make build                 # web app + cargo build --release
+./target/release/kwnt serve
+```
 
 ### Install the web app
 
