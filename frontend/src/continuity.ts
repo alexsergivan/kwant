@@ -120,7 +120,8 @@ export type NotifyKind =
   | 'work_ahead'
   | 'automation_suggested'
   | 'tier_proposed'
-  | 'fact_disputed';
+  | 'fact_disputed'
+  | 'spend_stopped';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A bot finished replying' },
   { id: 'approval_needed', label: 'A bot needs your approval' },
@@ -145,12 +146,16 @@ export const AUTOMATION_SUGGESTED_KIND: { id: NotifyKind; label: string } = { id
 /** Sent by servers with Flight School (C4) when a bot asks for a higher tier. A Needs-you item. */
 export const TIER_PROPOSED_KIND: { id: NotifyKind; label: string } = { id: 'tier_proposed', label: 'A bot asks for a higher tier' };
 
+/** Sent by servers with today's spending stop (0.7.4): the first thing it holds each day. A Needs-you item. */
+export const SPEND_STOPPED_KIND: { id: NotifyKind; label: string } = { id: 'spend_stopped', label: 'Today’s spending stop held new work' };
+
 /**
  * The checkboxes under "Tell me when": App updates only in the Mac app, work ahead and suggested
  * routines only where the server has them, tier requests only with Flight School on.
  */
-export const notifyKindsFor = (appUpdates: boolean, workAhead = false, discovery = false, tiers = false) => [
+export const notifyKindsFor = (appUpdates: boolean, workAhead = false, discovery = false, tiers = false, spendStop = false) => [
   ...NOTIFY_KINDS,
+  ...(spendStop ? [SPEND_STOPPED_KIND] : []),
   ...(tiers ? [TIER_PROPOSED_KIND] : []),
   ...(workAhead ? [WORK_AHEAD_KIND] : []),
   ...(discovery ? [AUTOMATION_SUGGESTED_KIND] : []),
@@ -161,9 +166,10 @@ export const notifyKindsFor = (appUpdates: boolean, workAhead = false, discovery
  * What to save: never a kind the server doesn't know (it would refuse the whole list). `flightSchool`
  * is whether the server has Flight School at all: a hidden tier-request choice is kept while it's off.
  */
-export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean, workAhead = false, discovery = false, flightSchool = false) =>
+export const notifyOnToSave = (on: NotifyKind[], appUpdates: boolean, workAhead = false, discovery = false, flightSchool = false, spendStop = false) =>
   on.filter(
     (k) =>
+      (k !== SPEND_STOPPED_KIND.id || spendStop) &&
       (k !== APP_UPDATE_KIND.id || appUpdates) &&
       (k !== WORK_AHEAD_KIND.id || workAhead) &&
       (k !== AUTOMATION_SUGGESTED_KIND.id || discovery) &&
@@ -530,7 +536,7 @@ export function shouldShowOsNotification(opts: {
   hidden: boolean;
   kind: string;
 }): boolean {
-  const known = NOTIFY_KINDS.some((k) => k.id === opts.kind) || opts.kind === WORK_AHEAD_KIND.id || opts.kind === AUTOMATION_SUGGESTED_KIND.id;
+  const known = NOTIFY_KINDS.some((k) => k.id === opts.kind) || opts.kind === WORK_AHEAD_KIND.id || opts.kind === AUTOMATION_SUGGESTED_KIND.id || opts.kind === SPEND_STOPPED_KIND.id;
   return opts.enabled && opts.permission === 'granted' && opts.hidden && known;
 }
 

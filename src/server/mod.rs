@@ -16,6 +16,7 @@ pub mod continuity;
 pub mod goals_remediation;
 pub mod model_usage;
 pub mod budget;
+pub mod spend_stop;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
@@ -127,6 +128,8 @@ pub struct AppState {
     pub app_update: Arc<crate::app_update::UpdateHub>,
     /// Missions with a runner turn going (at most `missions::runner::MAX_RUNNING`).
     pub mission_runs: Arc<missions::runner::RunningMissions>,
+    /// The daily spending stop's clock (a test fixes it; see [`spend_stop::Clock`]).
+    pub spend: Arc<spend_stop::Clock>,
 }
 
 impl AppState {
@@ -176,6 +179,7 @@ impl AppState {
             push: Arc::new(push::Push::load(&config_data_dir)),
             app_update: crate::app_update::UpdateHub::shared(),
             mission_runs: Arc::default(),
+            spend: Arc::default(),
         }
     }
 
@@ -369,6 +373,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/kwants/:id/lessons", get(missions::lessons::get_lessons))
         .route("/api/kwants/:id/model-usage", get(model_usage::get_usage))
         .route("/api/usage/daily", get(model_usage::get_daily))
+        .route("/api/usage/today", get(spend_stop::get_today))
+        .route("/api/usage/today/continue", post(spend_stop::continue_today))
         .route("/api/chains/:id/continue", post(budget::continue_chain))
         .route(
             "/api/kwants/:id/memories/:mid",

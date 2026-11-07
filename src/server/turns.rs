@@ -279,6 +279,11 @@ impl TurnRegistry {
             .sum()
     }
 
+    /// Fresh tokens the engine reported so far in the turn (0 when it reported none).
+    pub fn usage_seen(&self, turn_id: &str) -> u64 {
+        self.lock().meters.get(turn_id).map_or(0, |m| m.seen)
+    }
+
     /// Fresh tokens of the turn not booked yet, now marked booked: what a task the bot hands in
     /// mid-turn pays for at that moment.
     pub fn book_usage(&self, turn_id: &str) -> u64 {
@@ -522,6 +527,7 @@ mod tests {
         assert_eq!(reg.book_usage("t"), 0, "nothing reported, nothing booked");
         reg.saw_usage("t", 100);
         reg.saw_usage("t", 80); // an older report never shrinks the count
+        assert_eq!(reg.usage_seen("t"), 100);
         assert_eq!(reg.book_usage("t"), 100);
         assert_eq!(reg.book_usage("t"), 0, "booking twice books nothing new");
         reg.saw_usage("t", 150);

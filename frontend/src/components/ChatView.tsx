@@ -51,6 +51,8 @@ import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSugg
 import { routeChipLabel, routeReasonText } from '../routeReason';
 import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
+import { parseSpendStopped } from '../spendStop';
+import { SpendStoppedNotice } from './SpendStop';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
 import { ideaBlockedLine, ideaLength } from '../ideaShell';
@@ -245,6 +247,8 @@ export interface ChatViewProps {
   onSendToOtherBot?: (question: ChatMessage, kwantId: string) => Promise<string | void>;
   /** Opens Space settings → Accounts; turns a "nothing can run" reply into a card with a button. */
   onOpenAccounts?: () => void;
+  /** Opens Settings › All spaces › Usage at the daily spending stop. */
+  onOpenUsage?: () => void;
   /** Whether anything can run a bot in this space now (null while unknown). */
   canRun?: boolean | null;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
@@ -440,6 +444,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   rerouteTargets = [],
   onSendToOtherBot,
   onOpenAccounts,
+  onOpenUsage,
   canRun = null,
   awaitingAnswer,
   awaitingBrowser,
@@ -1111,6 +1116,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
             flash={flashId === msg.id}
           />
         </div>
+      );
+    const spend = parseSpendStopped(msg.meta);
+    if (spend)
+      return (
+        <SpendStoppedNotice
+          key={msg.id}
+          messageId={msg.id}
+          text={msg.text}
+          meta={spend}
+          onOpenSettings={onOpenUsage}
+          flash={flashId === msg.id}
+        />
       );
     const paused = parseBudgetPaused(msg.meta);
     if (paused)

@@ -298,5 +298,5 @@ test('tier requests can notify, only with Flight School on, and open the board',
   assert.match(app, /n\.kind === 'tier_proposed'\) openBoardForTier\(\)/);
   assert.match(app, /case 'capability_changed':/);
   assert.match(src('components/MissionBoardView.tsx'), /<TierRequests names=\{names\} now=\{now\} \/>/);
-  assert.match(src('components/SettingsModal.tsx'), /notifyOnToSave\(notifyOn, appUpdates, !!proactive, !!discovery, flightSchool !== null\)/);
+  assert.match(src('components/SettingsModal.tsx'), /notifyOnToSave\(notifyOn, appUpdates, !!proactive, !!discovery, flightSchool !== null, spendStop !== null\)/);
 });
