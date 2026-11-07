@@ -286,6 +286,8 @@ export const UndoTeamConfirm: React.FC<{
   skills: number;
   routine: boolean;
   messages: number;
+  /** The team's name: the server renames its chat to #archived-team-<name> (a number added when taken). */
+  teamName: string;
   /** "Drafter is also in @support; it will leave that team." */
   alsoIn?: { bot: string; team: string }[];
   /** Starter skills the person edited; Undo removes them too (Q-T2). */
@@ -294,7 +296,7 @@ export const UndoTeamConfirm: React.FC<{
   error?: string | null;
   onKeep: () => void;
   onUndo: () => void;
-}> = ({ label, handle, botNames, skills, routine, messages, alsoIn = [], editedSkills = [], busy, error, onKeep, onUndo }) => {
+}> = ({ label, handle, botNames, skills, routine, messages, teamName, alsoIn = [], editedSkills = [], busy, error, onKeep, onUndo }) => {
   const phone = useMedia(PHONE_QUERY);
   const ref = useRef<HTMLDivElement>(null);
   const keep = useRef<HTMLButtonElement>(null);
@@ -337,7 +339,11 @@ export const UndoTeamConfirm: React.FC<{
               You edited {editedSkills.join(', ')}. {editedSkills.length === 1 ? 'It’s' : 'They’re'} removed too.
             </p>
           )}
-          {messages > 0 && <p className="mt-2">The chat has {plural(messages, 'message')}, so it’s archived, not deleted. Find it under Archived chats.</p>}
+          {messages > 0 && (
+            <p className="mt-2">
+              The chat has {plural(messages, 'message')}, so it’s kept, not deleted: it moves under Channels as #archived-team-{teamName}.
+            </p>
+          )}
           {error && (
             <p role="alert" className="mt-2 text-rose-300">
               {error}

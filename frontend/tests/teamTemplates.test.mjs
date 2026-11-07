@@ -615,11 +615,21 @@ test('a template team this browser did not make: the Needs card comes from GET /
 });
 
 test('the Undo confirm names edited skills and other teams, and skips the archive line for an empty chat', async () => {
-  const v = await mount(h(m.UndoTeamConfirm, { label: 'Inbox', handle: 'inbox', botNames: ['InboxManager', 'Drafter'], skills: 2, routine: true, messages: 0, alsoIn: [{ bot: 'Drafter', team: 'support' }], editedSkills: ['Draft a reply'], onKeep() {}, onUndo() {} }));
+  const v = await mount(h(m.UndoTeamConfirm, { label: 'Inbox', handle: 'inbox', botNames: ['InboxManager', 'Drafter'], skills: 2, routine: true, messages: 0, teamName: 'inbox', alsoIn: [{ bot: 'Drafter', team: 'support' }], editedSkills: ['Draft a reply'], onKeep() {}, onUndo() {} }));
   const d = document.querySelector('[data-undo-confirm]');
   assert.match(d.textContent, /Drafter is also in @support; it will leave that team\./);
   assert.match(d.textContent, /You edited Draft a reply\. It’s removed too\./);
   assert.doesNotMatch(d.textContent, /archived/);
+  v.unmount();
+});
+
+test('the Undo confirm says where a chat with messages goes: under Channels as #archived-team-<name>', async () => {
+  const v = await mount(h(m.UndoTeamConfirm, { label: 'Inbox', handle: 'mail', teamName: 'inbox', botNames: ['Drafter'], skills: 1, routine: false, messages: 4, onKeep() {}, onUndo() {} }));
+  const d = document.querySelector('[data-undo-confirm]');
+  assert.match(d.textContent, /The chat has 4 messages, so it’s kept, not deleted: it moves under Channels as #archived-team-inbox\./);
+  assert.doesNotMatch(d.textContent, /Archived chats/, 'no such place exists');
+  await v.rerender(h(m.UndoTeamConfirm, { label: 'Inbox', handle: 'mail', teamName: 'inbox', botNames: ['Drafter'], skills: 1, routine: false, messages: 1, onKeep() {}, onUndo() {} }));
+  assert.match(document.querySelector('[data-undo-confirm]').textContent, /The chat has 1 message, so/);
   v.unmount();
 });
 

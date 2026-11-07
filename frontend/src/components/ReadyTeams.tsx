@@ -352,6 +352,7 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
           skills={confirm.info.removes.skills}
           routine={confirm.info.removes.routines > 0}
           messages={confirm.info.chat_messages}
+          teamName={confirm.team.name}
           alsoIn={confirm.info.other_teams}
           editedSkills={confirm.info.edited_skills}
           busy={busy}
