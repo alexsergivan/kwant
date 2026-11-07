@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { ArrowUp, Check, CheckCircle2, Clock, HelpCircle, Loader2, MinusCircle } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { ViaTelegram } from './TelegramMarks';
 import { ANSWER_MAX, Question, QuestionMeta, answerTextError, questionView } from '../questions';
 import { whyYouText } from '../decideFirst';
 
@@ -78,6 +79,14 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({ meta, messageId, kwa
     view.status === 'cancelled' ? (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
         <MinusCircle size={13} aria-hidden="true" /> Dismissed: {kwantName} was told you skipped it
+      </span>
+    ) : !open && view.status === 'answered' && view.answered_via === 'telegram' ? (
+      // Answered in Telegram (G4): the record says where the decision came from.
+      <span className="inline-flex flex-wrap items-center gap-1.5 text-emerald-300" data-answered-via="telegram">
+        <CheckCircle2 size={13} aria-hidden="true" />
+        <b className="font-semibold">{answer && view.choices.includes(answer) ? `You picked ${answer}` : 'You answered'}</b>
+        <span aria-hidden="true">·</span>
+        <ViaTelegram />
       </span>
     ) : !open ? (
       <span className="inline-flex items-center gap-1.5 text-emerald-300">

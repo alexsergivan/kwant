@@ -194,7 +194,15 @@ pub fn reason(req: &ToolApprovalRequest, ctx: &DevCtx) -> Option<Floor> {
 
 /// The connection a call goes through, when it's marked production.
 fn prod_key(server: &str, tool: &str, args: &Value, ctx: &DevCtx) -> Option<Floor> {
-    if ctx.prod_connections.is_empty() || server.is_empty() || server == super::SELF_SERVER_NAME {
+    let hit = production_connection(server, tool, args, &ctx.prod_connections)?;
+    Some(Floor::new(FloorKind::ProdKey, format!("{tool} goes through {hit}, a connection marked production")).row("Key used", format!("{hit} · production")))
+}
+
+/// The connection in `marks` (the space's production marks) that a call goes through: its MCP
+/// server, or a Composio toolkit named by the tool or its arguments. Public so Telegram can keep
+/// such a call link-only in any space, Dev mode or not (Q-G6).
+pub fn production_connection(server: &str, tool: &str, args: &Value, marks: &[String]) -> Option<String> {
+    if marks.is_empty() || server.is_empty() || server == super::SELF_SERVER_NAME {
         return None;
     }
     let s = server.to_lowercase();
@@ -208,8 +216,7 @@ fn prod_key(server: &str, tool: &str, args: &Value, ctx: &DevCtx) -> Option<Floo
             names.push(first.to_string());
         }
     }
-    let hit = ctx.prod_connections.iter().find(|p| names.iter().any(|n| n == &p.to_lowercase()))?;
-    Some(Floor::new(FloorKind::ProdKey, format!("{tool} goes through {hit}, a connection marked production")).row("Key used", format!("{hit} · production")))
+    marks.iter().find(|p| names.iter().any(|n| n == &p.to_lowercase())).cloned()
 }
 
 /// Composio-style slugs in the arguments (`tool_slug`, `tools: [{tool_slug}]`).

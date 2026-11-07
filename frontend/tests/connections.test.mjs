@@ -143,7 +143,8 @@ test('empty groups say so instead of leaving a gap', () => {
   const html = ui.view(viewProps({ data: list({ connections: [], catalog: [] }) }));
   assert.ok(html.includes('Nothing connected yet'));
   for (const t of ['No tool servers yet.', 'No engine accounts yet.', 'No saved website logins.', 'No mail or GitHub sources.']) assert.ok(html.includes(t));
-  assert.ok(!html.includes('Optional connectors'));
+  // 0.7.8: Telegram lives in Optional connectors, so that group shows even on an empty page.
+  assert.ok(html.includes('Optional connectors') && html.includes('data-catalog="telegram"'));
 });
 
 const apps = [

@@ -45,6 +45,7 @@ pub mod smart_results;
 pub mod dev_mode;
 pub mod spend;
 pub mod agent_connections;
+pub mod telegram;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -246,6 +247,8 @@ impl Database {
         db.migrate_dev_mode().await?;
         // 0.7.4: connected coding agents (add-only)
         db.migrate_agent_connections().await?;
+        // 0.7.8: Telegram bridge (add-only)
+        db.migrate_telegram().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal

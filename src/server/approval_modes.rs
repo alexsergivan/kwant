@@ -201,6 +201,7 @@ pub async fn list(State(state): State<AppState>, Scope(space): Scope, Query(q): 
                 "kwant_id": a.kwant_id,
                 "tool_name": a.tool_name,
                 "status": a.status,
+                "answered_via": a.answered_via,
                 "created_at": a.created_at,
                 "details": super::away::masked_details(details),
             })
