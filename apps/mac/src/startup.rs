@@ -166,6 +166,8 @@ mod tests {
         PORTS.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    // The Mac/Linux PATH (`:`-joined, Homebrew); Windows has its own, tested below
+    #[cfg(unix)]
     #[test]
     fn login_path_comes_first_then_current_then_extras_without_repeats() {
         let home = PathBuf::from("/Users/o");
@@ -176,6 +178,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn finder_launch_without_a_shell_answer_still_gets_homebrew_and_local_bin() {
         let merged = merged_path(None, "/usr/bin:/bin:/usr/sbin:/sbin", Path::new("/Users/o"));

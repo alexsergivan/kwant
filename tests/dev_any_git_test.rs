@@ -382,6 +382,8 @@ async fn a_repo_too_big_to_copy_reads_as_an_error_until_it_is_added_again() {
 /// folder that read fine is pointed at another team's repo (its `.git` swapped for a symlink): the
 /// next poll reads `error` and makes no card from the other repo's commits; put back, it reads
 /// again.
+// Swaps `.git` for a symlink, which Windows only allows with Developer Mode or admin rights
+#[cfg(unix)]
 #[tokio::test]
 async fn a_team_folder_pointed_at_another_repo_reads_as_an_error_on_the_next_poll() {
     let env = setup().await;
