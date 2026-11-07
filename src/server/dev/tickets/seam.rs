@@ -142,16 +142,25 @@ pub async fn set_state(state: &AppState, space_id: &str, key: &str, to: &str) ->
         tracing::info!(%key, from = %card.state, %to, "dev: ticket move refused");
         return false;
     }
-    let moved = store::set_state(state, space_id, key, to, None).await.unwrap_or(false);
-    if moved {
-        tracing::info!(%key, from = %card.state, %to, "dev: ticket moved");
+    match store::set_state(state, space_id, key, to, None).await {
+        Ok(true) => {
+            tracing::info!(%key, from = %card.state, %to, "dev: ticket moved");
+            true
+        }
+        Ok(false) => false,
+        Err(e) => {
+            tracing::warn!(%key, from = %card.state, %to, error = %e, "dev: could not move a ticket");
+            false
+        }
     }
-    moved
 }
 
 /// Fails the ticket with `code` (card row, its event and `dev_ticket`; the brief row mirrors it).
 pub async fn fail(state: &AppState, space_id: &str, key: &str, code: FailCode) -> bool {
-    store::fail(state, space_id, key, code, None).await.unwrap_or(false)
+    store::fail(state, space_id, key, code, None).await.unwrap_or_else(|e| {
+        tracing::warn!(%key, error = %e, "dev: could not fail a ticket");
+        false
+    })
 }
 
 /// Remembers the Ask on Jira comment on both rows (D3): the card's `asked_comment_id` (pickup

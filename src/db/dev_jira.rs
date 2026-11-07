@@ -777,13 +777,16 @@ impl Database {
             return Ok(None);
         }
         let now = Utc::now();
-        let mut tx = self.pool.begin().await?;
+        // It reads before it writes: take the write lock at BEGIN, or a brief turn and the poller
+        // moving two tickets at once fail the second write with "database is locked"
+        let mut tx = self.begin_write().await?;
         let Some((current,)) = sqlx::query_as::<_, (String,)>("SELECT state FROM dev_tickets WHERE space_id = ? AND key = ?")
             .bind(space_id)
             .bind(key)
             .fetch_optional(&mut *tx)
             .await?
         else {
+            tx.rollback().await?;
             return Ok(None);
         };
         // A person's move is limited to its own table (`PersonMove::from`), which may reopen a
@@ -793,6 +796,7 @@ impl Database {
             None => allowed(&current, to),
         };
         if !ok {
+            tx.rollback().await?;
             return Ok(None);
         }
         let done = sqlx::query(
@@ -817,6 +821,7 @@ impl Database {
         .execute(&mut *tx)
         .await?;
         if done.rows_affected() == 0 {
+            tx.rollback().await?;
             return Ok(None);
         }
         sqlx::query("INSERT INTO dev_ticket_events (space_id, key, kind, from_state, to_state, detail, at) VALUES (?, ?, 'state', ?, ?, ?, ?)")
@@ -930,6 +935,39 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn many_tickets_moving_at_once_all_move() {
+        // Brief turns and the poller move different tickets at the same moment: each move reads
+        // the row, then writes, so it must hold the write lock from BEGIN (a deferred transaction
+        // fails at once with "database is locked" when another write lands between)
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::init_with_busy_timeout(dir.path(), std::time::Duration::from_secs(60)).await.unwrap();
+        let keys: Vec<String> = (1..=12).map(|i| format!("TRAIL-{i}")).collect();
+        for k in &keys {
+            let f = TicketFacts { key: k.clone(), project: "TRAIL".into(), url: format!("https://acme.atlassian.net/browse/{k}"), ..Default::default() };
+            assert!(db.insert_dev_ticket("s1", "site1", &f, PICKED_UP, Some("team1"), Some("label")).await.unwrap());
+        }
+        let mut handles = Vec::new();
+        for k in keys.clone() {
+            let db = db.clone();
+            handles.push(tokio::spawn(async move {
+                for to in [READING, BRIEF_READY, WORKING] {
+                    assert!(db.set_dev_ticket_state("s1", &k, to).await.unwrap(), "{k} to {to}");
+                }
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+        for k in &keys {
+            assert_eq!(db.dev_ticket("s1", k).await.unwrap().unwrap().state, WORKING);
+            assert_eq!(db.dev_ticket_events("s1", k, 10).await.unwrap().iter().filter(|e| e.kind == "state").count(), 4, "{k}: one event per move");
+        }
+        // A refused move leaves the lock free for the next writer
+        assert!(!db.set_dev_ticket_state("s1", "TRAIL-1", PICKED_UP).await.unwrap());
+        assert!(db.set_dev_ticket_state("s1", "TRAIL-2", IN_REVIEW).await.unwrap());
+    }
 
     #[test]
     fn the_persons_moves_are_api_md_1_4() {
