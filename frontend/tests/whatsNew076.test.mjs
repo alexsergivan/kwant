@@ -173,10 +173,10 @@ const click = async (el) => {
   await settle();
 };
 
-test('host: an upgrade shows "What’s new in kwant 0.7.6" once, "Updated from 0.7.5", and stores the version', async () => {
+test('host: an upgrade shows "What’s new in kwant bots 0.7.6" once, "Updated from 0.7.5", and stores the version', async () => {
   localStorage.setItem(ui.SEEN_KEY, '0.7.5');
   await host({ established: null });
-  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant 0.7.6');
+  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant bots 0.7.6');
   assert.match(document.querySelector('[data-whats-new-eyebrow]').textContent, /^Updated from 0\.7\.5 · Nov 14$/);
   assert.equal(localStorage.getItem(ui.SEEN_KEY), '0.7.6');
   assert.equal(document.activeElement, sheet(), 'focus moves into the sheet');
@@ -233,7 +233,7 @@ test('host: the banner and Settings open a version by hand; Show me opens the pl
   assert.equal(sheet(), null);
   await act(async () => ui.openWhatsNew('0.7.5'));
   await settle();
-  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant 0.7.5');
+  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant bots 0.7.5');
   assert.equal(document.querySelector('[data-whats-new-eyebrow]').textContent, 'Nov 7', 'opened by hand: just the date');
   const show = [...sheet().querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Show me: Ready-made teams');
   await click(show);
@@ -320,5 +320,5 @@ test('Settings › About: What’s new in the latest version, then earlier versi
   await act(async () => root.render(React.createElement(ui.WhatsNewAbout)));
   await settle();
   await click(el.querySelector('button[aria-label="What’s new in 0.7.5"]'));
-  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant 0.7.5');
+  assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant bots 0.7.5');
 });
