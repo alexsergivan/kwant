@@ -128,7 +128,7 @@ export const EngineInstall: React.FC<{
   if (installable === true) {
     return (
       <div data-engine-install="can-install" className="space-y-1.5">
-        <p className="text-[11px] text-zinc-400 leading-snug">{name} isn’t on this computer yet. kwant can install it for you.</p>
+        <p className="text-[11px] text-zinc-400 leading-snug">{name} isn’t on this computer yet. This app can install it for you.</p>
         <button
           ref={btn}
           type="button"
