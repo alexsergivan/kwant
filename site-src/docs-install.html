@@ -92,9 +92,9 @@ docker compose exec kwnt kwnt token --raw             <span class="c"># the toke
 
 <h2 id="deps">Without Docker: <code>kwnt setup</code>, then <code>kwnt doctor</code></h2>
 <p><code>kwnt setup</code> installs what kwant needs on this machine: Chromium or Chrome for the bots' browser, Laya (in kwant's data folder, with its own <code>uv</code> if there's no Python) and a CLI (<code>claude</code> unless you name others with <code>--clis</code>). It asks before each step (<code>--yes</code> skips the questions), never runs <code>sudo</code> itself (it prints the command for you), installs into your home folder where it can, skips Docker unless you pass <code>--docker</code>, and is safe to run again. The app has the same checklist under <strong>Setup</strong>.</p>
-<pre><code><span class="c"># Mac app: download the .dmg from GitHub Releases (test builds for now), open it, then</span>
+<pre><code><span class="c"># Mac or Linux app: install it (above), open it, then</span>
 kwnt doctor
-<span class="c"># Mac or Linux, command line (no prebuilt binary yet: needs Rust and Node)</span>
+<span class="c"># Mac or Linux, from source (needs Rust and Node)</span>
 git clone https://github.com/alexsergivan/kwant.git &amp;&amp; cd kwant &amp;&amp; make build
 ./target/release/kwnt setup &amp;&amp; ./target/release/kwnt doctor
 <span class="c"># Debian or Ubuntu, system packages only</span>

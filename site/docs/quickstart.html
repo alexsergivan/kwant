@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quickstart: run a team of AI agents locally · kwant</title>
-<meta name="description" content="Build kwant from a fresh clone, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.">
+<meta name="description" content="Download the kwant app for Mac or Linux, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.">
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 <link rel="canonical" href="https://kwant.si/docs/quickstart">
@@ -12,20 +12,20 @@
 <meta property="og:site_name" content="kwant">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Quickstart: run a team of AI agents locally · kwant">
-<meta property="og:description" content="Build kwant from a fresh clone, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.">
+<meta property="og:description" content="Download the kwant app for Mac or Linux, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.">
 <meta property="og:url" content="https://kwant.si/docs/quickstart">
-<meta property="og:image" content="https://kwant.si/assets/og/docs-quickstart.png?v=c651993171">
+<meta property="og:image" content="https://kwant.si/assets/og/docs-quickstart.png?v=351be984e5">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Quickstart: Build kwant from a fresh clone and ask your first team of bots a question.">
+<meta property="og:image:alt" content="Quickstart: Download the app, add an AI account and ask your first team of bots a question.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-11-01">
+<meta property="article:modified_time" content="2026-11-07">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Quickstart: run a team of AI agents locally · kwant">
-<meta name="twitter:description" content="Build kwant from a fresh clone, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.">
-<meta name="twitter:image" content="https://kwant.si/assets/og/docs-quickstart.png?v=c651993171">
-<meta name="twitter:image:alt" content="Quickstart: Build kwant from a fresh clone and ask your first team of bots a question.">
+<meta name="twitter:description" content="Download the kwant app for Mac or Linux, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.">
+<meta name="twitter:image" content="https://kwant.si/assets/og/docs-quickstart.png?v=351be984e5">
+<meta name="twitter:image:alt" content="Quickstart: Download the app, add an AI account and ask your first team of bots a question.">
 <link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
 <link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
@@ -58,12 +58,11 @@
   <article class="prose">
 <p class="kicker">Docs</p>
 <h1>Quickstart: run kwant locally</h1>
-<p class="intro">Go from a fresh clone to a team of bots answering in your browser. On most machines it takes a few minutes, plus a one-time model download in the background.</p>
+<p class="intro">Download the app, add an AI account you already have and ask your first question. There's nothing to build: it takes a few minutes, plus a one-time model download in the background. You can also <a href="#run">build kwant from source</a>.</p>
 
 <h2 id="requirements">What you need</h2>
 <ul>
-  <li><strong>Rust</strong> (stable), installed with <a href="https://rustup.rs" rel="noopener">rustup</a>.</li>
-  <li><strong>Node.js 20 or newer</strong> with npm, to build the web app. The finished binary doesn't need it.</li>
+  <li><strong>A Mac</strong> (Apple silicon or Intel) <strong>or a Linux x86_64 desktop</strong> for the app. On other machines, or on a server, <a href="#run">build from source</a> or use Docker (see <a href="/docs/install">Install &amp; run</a>).</li>
   <li><strong>At least one AI account</strong> for your bots. Any one of these is enough:
     <ul>
       <li>the <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener"><code>claude</code> CLI</a>, installed. You don't need to sign it in first, because kwant has a <strong>Sign in with Claude</strong> button;</li>
@@ -74,12 +73,22 @@
   <li>Optional: <strong>Docker</strong> for VM mode and the bots' shared browser, and <a href="https://docs.astral.sh/uv/" rel="noopener"><code>uv</code></a> or <code>python3</code> for the Laya router.</li>
 </ul>
 
-<h2 id="run">1. Run from a fresh clone</h2>
+<h2 id="app">1. Download the app</h2>
+<ul>
+  <li><strong>Mac:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">download the Mac app</a> (a universal <code>.dmg</code> for Apple silicon and Intel), open it and drag kwant to Applications.</li>
+  <li><strong>Ubuntu 22.04 or newer, Debian 12 or newer:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">download the <code>.deb</code></a>, then install it with <code>sudo apt install ./kwant_amd64.deb</code>.</li>
+  <li><strong>Other Linux distributions:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">download the AppImage</a>, then <code>chmod +x kwant_x86_64.AppImage</code> and run it. It needs a normal GTK desktop and FUSE.</li>
+</ul>
+<p>Open kwant. The app runs its own kwant bots on your computer, with an icon in the menu bar (Mac) or the tray (Linux). If no account works yet, kwant shows a <strong>Get ready</strong> banner with an <strong>Add an account</strong> button.</p>
+<p class="note warn">The Mac app is signed ad hoc, not notarized by Apple, so macOS stops it the first time. Click Done, open <b>System Settings › Privacy &amp; Security</b>, scroll down and click <b>Open Anyway</b> next to kwant. On macOS 14 or earlier, right-click the app and choose <b>Open</b> instead.</p>
+<div class="note"><strong>The first start takes a few minutes.</strong> kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer in the meantime, picked by keyword.</div>
+
+<h3 id="run">Or build from a fresh clone</h3>
+<p>You need <strong>Rust</strong> (stable), installed with <a href="https://rustup.rs" rel="noopener">rustup</a>, and <strong>Node.js 20 or newer</strong> with npm, to build the web app. The finished binary doesn't need Node.</p>
 <pre><code>git clone https://github.com/alexsergivan/kwant.git
 cd kwant
 make run   <span class="c"># builds the web app, then runs `cargo run -- serve`</span></code></pre>
-<p>Open <strong><a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a></strong>. On your own computer there's nothing to sign in to. If no account works yet, kwant shows a <strong>Get ready</strong> banner with an <strong>Add an account</strong> button.</p>
-<div class="note"><strong>The first start takes a few minutes.</strong> kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer in the meantime, picked by keyword. To skip Laya, run <code>cargo run -- serve --no-laya</code>.</div>
+<p>Open <strong><a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a></strong>. On your own computer there's nothing to sign in to. To skip the Laya router, run <code>cargo run -- serve --no-laya</code>.</p>
 <p><code>cargo run -- serve</code> on its own works only once <code>frontend/dist</code> exists, because the binary embeds the web app. After the first <code>make run</code> (or <code>make frontend</code>) you can use either.</p>
 
 <h2 id="account">2. Add an account</h2>
@@ -166,7 +175,7 @@ cd frontend &amp;&amp; npm test  <span class="c"># web app tests</span></code></
 </footer>
 <script src="../assets/js/site.js?v=63f328cd53" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/quickstart#article","headline":"Quickstart: run a team of AI agents locally","description":"Build kwant from a fresh clone, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.","url":"https://kwant.si/docs/quickstart","mainEntityOfPage":"https://kwant.si/docs/quickstart","image":"https://kwant.si/assets/og/docs-quickstart.png?v=c651993171","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-01","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Quickstart","item":"https://kwant.si/docs/quickstart"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/quickstart#article","headline":"Quickstart: run a team of AI agents locally","description":"Download the kwant app for Mac or Linux, add a Claude, Codex or Grok login or an API key, and ask your first team of AI bots a question.","url":"https://kwant.si/docs/quickstart","mainEntityOfPage":"https://kwant.si/docs/quickstart","image":"https://kwant.si/assets/og/docs-quickstart.png?v=351be984e5","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Quickstart","item":"https://kwant.si/docs/quickstart"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
