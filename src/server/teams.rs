@@ -35,6 +35,9 @@ const MAX_SUGGESTIONS: usize = 256;
 const MAX_READING: usize = 2;
 /// `ls-tree` bytes kept (about [`discover::MAX_LISTED`] records).
 const MAX_TREE_BYTES: usize = 16 << 20;
+/// How far past its deadline a remote read may run (killing a stalled git, cleaning up) before
+/// it is cut off; each step's own timeout normally ends it first.
+const REMOTE_GRACE: Duration = Duration::from_millis(500);
 /// Longest `Idempotency-Key`.
 const MAX_KEY_LEN: usize = 200;
 
@@ -147,10 +150,12 @@ pub async fn from_template(State(state): State<AppState>, headers: HeaderMap, ur
         Ok(k) => k,
         Err(r) => return r,
     };
-    // A repeated key answers what the first request made, before anything else is checked.
+    // A repeated key answers what the first request made, before anything else is checked;
+    // the same key with another body is refused, never replayed (L-IDEM).
+    let body_sha = request_sha256(&body);
     if let Some(k) = &key {
         match state.db.team_creation_by_key(&space, k).await {
-            Ok(Some(c)) => return created_response(&state, &c).await,
+            Ok(Some(c)) => return replay(&state, &c, &body_sha).await,
             Ok(None) => {}
             Err(_) => return internal(),
         }
@@ -175,7 +180,7 @@ pub async fn from_template(State(state): State<AppState>, headers: HeaderMap, ur
     };
     let tz = state.db.get_setting(super::bot_actions::TIMEZONE_SETTING).await.ok().flatten().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "UTC".into());
 
-    let (plan, checked_out) = match (template_id, suggestion_id) {
+    let (mut plan, checked_out) = match (template_id, suggestion_id) {
         (None, None) => return fail(StatusCode::BAD_REQUEST, "bad_request", "send template_id or suggestion_id"),
         (Some(tid), None) => {
             if req.contains_key("edits") {
@@ -233,6 +238,9 @@ pub async fn from_template(State(state): State<AppState>, headers: HeaderMap, ur
         }
     }
 
+    if key.is_some() {
+        plan.request_sha256 = Some(body_sha.clone());
+    }
     let handle_field = if checked_out.is_some() { "edits.handle" } else { "handle" };
     let result = state.db.create_team_from_plan(&space, &plan, None).await;
     if result.is_err() {
@@ -254,7 +262,7 @@ pub async fn from_template(State(state): State<AppState>, headers: HeaderMap, ur
             // Two requests with one key at once: the second's insert fails, and the first answers
             if let Some(k) = &key {
                 if let Ok(Some(c)) = state.db.team_creation_by_key(&space, k).await {
-                    return created_response(&state, &c).await;
+                    return replay(&state, &c, &body_sha).await;
                 }
             }
             tracing::warn!(error = %e, "making a ready-made team failed; nothing was made");
@@ -271,6 +279,27 @@ fn idempotency_key(headers: &HeaderMap) -> Result<Option<String>, Response> {
         return Err(bad());
     }
     Ok(Some(s.to_string()))
+}
+
+/// SHA-256 (hex) of a create's body, as JSON with its keys sorted, so spacing and key order
+/// don't make two equal requests differ; a body that isn't JSON is hashed as sent.
+fn request_sha256(body: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let canonical = serde_json::from_slice::<Value>(body).map(|v| v.to_string().into_bytes()).unwrap_or_else(|_| body.to_vec());
+    Sha256::digest(&canonical).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A repeated `Idempotency-Key`: the first create's 201 for the same body, else 422
+/// `idempotency_key_reused`. A row from before bodies were hashed replays.
+async fn replay(state: &AppState, c: &Creation, body_sha: &str) -> Response {
+    if c.request_sha256.as_deref().is_some_and(|h| h != body_sha) {
+        return fail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "idempotency_key_reused",
+            "this Idempotency-Key was used for another request; send a new key for a new team",
+        );
+    }
+    created_response(state, c).await
 }
 
 /// The 201 body (api.md §3), the same for a first create and a repeated key.
@@ -358,6 +387,7 @@ fn template_plan(t: &Template, req: &Map<String, Value>, key: Option<String>, tz
         template_id: Some(t.id.clone()),
         suggestion_id: None,
         idempotency_key: key,
+        request_sha256: None,
         target: Target::New {
             handle,
             icon: t.icon.clone(),
@@ -539,6 +569,7 @@ async fn suggestion_plan(
         template_id: coding.then(|| "coding".to_string()),
         suggestion_id: Some(s.id.clone()),
         idempotency_key: key,
+        request_sha256: None,
         target,
         bots,
         skills,
@@ -689,6 +720,14 @@ pub async fn suggest(State(state): State<AppState>, headers: HeaderMap, Scope(sp
             None => return fail_at(StatusCode::BAD_REQUEST, "bad_repo_url", "Dev mode can't use this repo address", "repo_url"),
         }
     };
+
+    // A folder another space already works in can't become a new team's (U-5): say so now,
+    // before anything is read, not at Create. A team's own folder (Manage team) is its own.
+    if let (Source::Folder(p), None) = (&source, &team_id) {
+        if let Err(r) = super::spaces::folder_in_use(&state, &space, None, &handle, p.to_str(), None).await {
+            return r;
+        }
+    }
 
     let started = Instant::now();
     let Ok(_permit) = reading().acquire().await else { return internal() };
@@ -866,13 +905,15 @@ async fn read_remote(state: &AppState, space: &SpaceId, url: &str, deadline: Ins
     let auth = client.as_ref().and_then(|c| c.git_auth(url));
     let key = format!("suggest-{}", &new_suggestion_id()[4..20]);
     let data_dir = state.config.data_dir.clone();
-    let result = async {
+    // Every remote step gets only what is left of the budget (§4, R-HANG), and the whole read
+    // stops at the deadline whatever step it is in (a host that resolves slowly included).
+    let steps = async {
         let repo = Repo::mirror(&data_dir, space.as_str(), &key).await?;
-        let branch = repo.default_branch(url, auth.as_ref()).await?;
+        let branch = repo.default_branch_within(url, auth.as_ref(), left(deadline)).await?;
         let tip = repo.fetch_tip(url, &branch, auth.as_ref(), left(deadline)).await?;
         read_rev(&repo, &tip, deadline).await
-    }
-    .await;
+    };
+    let result = tokio::time::timeout(left(deadline) + REMOTE_GRACE, steps).await.unwrap_or(Err(GitError::Timeout));
     git::remove_mirror(&data_dir, space.as_str(), &key).await;
     result.map_err(|e| match e {
         GitError::Auth | GitError::NotFound => (

@@ -1031,6 +1031,12 @@ impl Repo {
 
     /// The default branch of `url` (what its `HEAD` points at), or of a team folder.
     pub async fn default_branch(&self, url: &str, auth: Option<&Auth>) -> Result<String, GitError> {
+        self.default_branch_within(url, auth, REMOTE_TIMEOUT).await
+    }
+
+    /// [`Self::default_branch`], with the remote's `ls-remote` given at most `timeout` (Suggest
+    /// gives it what is left of its 10 s, R-HANG).
+    pub async fn default_branch_within(&self, url: &str, auth: Option<&Auth>, timeout: Duration) -> Result<String, GitError> {
         let branch = if self.local {
             self.text(&["symbolic-ref", "--quiet", "HEAD"]).await?
         } else {
@@ -1038,7 +1044,7 @@ impl Repo {
                 return Err(GitError::Refused);
             }
             let pin = checked(url).await?;
-            let out = run("git", Some(&self.dir), &["ls-remote", "--symref", "--", url, "HEAD"], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin, fsize: None }).await?;
+            let out = run("git", Some(&self.dir), &["ls-remote", "--symref", "--", url, "HEAD"], Opts { timeout, max_out: 1 << 16, auth, file: false, pin: &pin, fsize: None }).await?;
             let out = String::from_utf8_lossy(&out).into_owned();
             out.lines().find_map(|l| l.strip_prefix("ref: ").and_then(|r| r.strip_suffix("\tHEAD")).map(str::to_string)).ok_or(GitError::NotFound)?
         };

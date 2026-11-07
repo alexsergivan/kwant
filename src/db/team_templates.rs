@@ -25,6 +25,9 @@ pub struct Plan {
     pub template_id: Option<String>,
     pub suggestion_id: Option<String>,
     pub idempotency_key: Option<String>,
+    /// SHA-256 of the request body, kept with the key: the same key with another body is
+    /// refused rather than replayed (L-IDEM).
+    pub request_sha256: Option<String>,
     pub target: Target,
     pub bots: Vec<PlanBot>,
     pub skills: Vec<PlanSkill>,
@@ -148,6 +151,8 @@ pub struct Creation {
     pub created: Created,
     pub status: String,
     pub created_at: DateTime<Utc>,
+    /// The body hash stored with its `Idempotency-Key`; `None` on rows from before it was kept.
+    pub request_sha256: Option<String>,
 }
 
 impl Creation {
@@ -312,6 +317,7 @@ impl Database {
                 template_id TEXT,
                 suggestion_id TEXT,
                 idempotency_key TEXT,
+                request_sha256 TEXT,
                 created TEXT NOT NULL,
                 status TEXT NOT NULL CHECK (status IN ('applied', 'undone')),
                 created_at TIMESTAMP NOT NULL,
@@ -322,6 +328,13 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS team_creations_by_key ON team_creations (space_id, idempotency_key)",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
+        }
+        // Databases made by an earlier 0.7.7 build lack the body hash.
+        let (has,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pragma_table_info('team_creations') WHERE name = 'request_sha256'")
+            .fetch_one(&self.pool)
+            .await?;
+        if has == 0 {
+            sqlx::query("ALTER TABLE team_creations ADD COLUMN request_sha256 TEXT").execute(&self.pool).await?;
         }
         Ok(())
     }
@@ -800,8 +813,8 @@ async fn create_in(tx: &mut Tx, space: &SpaceId, plan: &Plan, fail_after: Option
 
     let id = Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO team_creations (id, space_id, team_id, action_id, template_id, suggestion_id, idempotency_key, created, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?)",
+        "INSERT INTO team_creations (id, space_id, team_id, action_id, template_id, suggestion_id, idempotency_key, request_sha256, created, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?)",
     )
     .bind(&id)
     .bind(space.as_str())
@@ -810,6 +823,7 @@ async fn create_in(tx: &mut Tx, space: &SpaceId, plan: &Plan, fail_after: Option
     .bind(&plan.template_id)
     .bind(&plan.suggestion_id)
     .bind(&plan.idempotency_key)
+    .bind(&plan.request_sha256)
     .bind(serde_json::to_string(&created)?)
     .bind(now())
     .execute(&mut **tx)
@@ -817,7 +831,9 @@ async fn create_in(tx: &mut Tx, space: &SpaceId, plan: &Plan, fail_after: Option
     Ok(id)
 }
 
-/// The new bots that now lead a team or chat this create didn't make.
+/// The new bots that now lead a team or chat this create didn't make. An archived team chat
+/// (`archived-team-…`, left by a team delete) doesn't count: nobody can pick its lead any
+/// more, and the Undo hands it on like any other chat the bot led (T-U10).
 async fn blocked_by(conn: &mut sqlx::SqliteConnection, c: &Creation, new_ids: &[&str]) -> Result<Vec<Blocked>, DbError> {
     let mut out = Vec::new();
     let mine: Vec<&str> = [Some(c.team_id.as_str()), c.created.channel_id.as_deref(), c.created.general_id.as_deref()]
@@ -833,6 +849,9 @@ async fn blocked_by(conn: &mut sqlx::SqliteConnection, c: &Creation, new_ids: &[
             let rows: Vec<(String, String)> =
                 sqlx::query_as(&format!("SELECT id, name FROM {table} WHERE lead_kwant_id = ? ORDER BY name")).bind(id).fetch_all(&mut *conn).await?;
             for (row_id, row_name) in rows {
+                if table == "channels" && is_archived_team_chat(&row_name) {
+                    continue;
+                }
                 // For an existing team the team itself isn't "mine" to delete, but the lead
                 // didn't change: a new bot can't lead it unless the person made it so.
                 let own = mine.contains(&row_id.as_str()) && (c.created.new_team || row_id != c.team_id);
@@ -843,6 +862,11 @@ async fn blocked_by(conn: &mut sqlx::SqliteConnection, c: &Creation, new_ids: &[
         }
     }
     Ok(out)
+}
+
+/// A chat [`super::archive_team_chat`] renamed when its team was deleted.
+fn is_archived_team_chat(name: &str) -> bool {
+    name.get(..14).is_some_and(|p| p.eq_ignore_ascii_case("archived-team-"))
 }
 
 async fn undo_in(tx: &mut Tx, c: &Creation) -> Result<(), UndoError> {
@@ -955,6 +979,7 @@ struct CreationRow {
     suggestion_id: Option<String>,
     #[allow(dead_code)]
     idempotency_key: Option<String>,
+    request_sha256: Option<String>,
     created: String,
     status: String,
     created_at: DateTime<Utc>,
@@ -974,6 +999,7 @@ impl TryFrom<CreationRow> for Creation {
             created: serde_json::from_str(&r.created)?,
             status: r.status,
             created_at: r.created_at,
+            request_sha256: r.request_sha256,
         })
     }
 }

@@ -324,6 +324,38 @@ fn f2_frontend_only_is_led_by_frontend_with_no_backend_row() {
     assert!(r.bots.iter().chain(&r.also_possible).all(|b| b.preset != "backend"));
 }
 
+/// N-1 (Rigel's F8): every dependency a bot's reason cites is in the facts list, dev-only ones
+/// included (Storybook here, a devDependency).
+#[test]
+fn every_dependency_a_reason_cites_is_a_fact() {
+    let mut files = vec![
+        f("package.json", r#"{"dependencies":{"vue":"^3.4.0"},"devDependencies":{"vite":"^5.0.0","vitest":"^1.2.0","@storybook/vue3-vite":"^8.0.0","express":"^4.0.0"}}"#),
+        f("design/tokens.json", "{}"),
+    ];
+    files.extend(many(12, "src/components", "vue"));
+    let found = scan(&files);
+    let r = roster(&found, &Mode::New);
+    let details: Vec<&str> = found.facts.iter().map(|f| f.detail.as_str()).collect();
+    assert!(found.facts.iter().any(|f| f.name.starts_with("Storybook")), "{:?}", found.facts);
+    let mut cited = 0;
+    for row in r.bots.iter().chain(&r.also_possible) {
+        // A cited dependency is "<name>[ <major>] in " followed by its manifest path
+        for pair in row.reason_parts.windows(2) {
+            let (Part::Text(text), Part::Path(_)) = (&pair[0], &pair[1]) else { continue };
+            let Some(head) = text.strip_suffix(" in ") else { continue };
+            // "Found vue 3", "… and @storybook/vue3-vite 8": the name, then its major if any
+            let words: Vec<&str> = head.split(' ').collect();
+            let major = words.last().is_some_and(|w| w.parse::<u32>().is_ok());
+            let name = words[words.len() - 1 - usize::from(major && words.len() > 1)];
+            if KNOWN.iter().any(|k| k.name == name) {
+                cited += 1;
+                assert!(details.iter().any(|d| d.starts_with(&format!("{name} in "))), "{} cites {name} but facts are {:?}", row.key, found.facts);
+            }
+        }
+    }
+    assert!(cited >= 2, "the fixture cites dependencies: {:?}", r.bots);
+}
+
 #[test]
 fn a_lone_find_is_padded_to_two_from_the_coding_roster() {
     let r = roster(&scan(&many(10, "web", "tsx")), &Mode::New);

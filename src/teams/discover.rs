@@ -1265,7 +1265,10 @@ fn facts(deps: &[Dep], entries: &[Entry], counted: &[&str], top_ext: Option<(&st
         }
     };
     let shown = |p: &str| show_path(p).unwrap_or_else(|| file_name(p).chars().filter(|c| c.is_ascii_alphanumeric() || ".-_".contains(*c)).take(MAX_NAME).collect());
-    for d in deps.iter().filter(|d| !d.dev || d.known.tag == Test || d.known.tag == Build) {
+    // A dev dependency is a fact when a reason can cite it (N-1): tests, build tools, Storybook,
+    // and the only find of its kind ("It's only in devDependencies").
+    let cited = |d: &Dep| !d.dev || matches!(d.known.tag, Test | Build | Story) || !deps.iter().any(|o| !o.dev && o.known.tag == d.known.tag);
+    for d in deps.iter().filter(|d| cited(d)) {
         let name = match d.major {
             Some(m) => format!("{} {m}", d.known.label),
             None => d.known.label.to_string(),

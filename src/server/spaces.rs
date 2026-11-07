@@ -574,8 +574,23 @@ pub async fn check_workspace(
             return Err(error(StatusCode::BAD_REQUEST, why));
         }
     }
+    folder_in_use(state, space, team_id, &team.name, team.workspace_path.as_deref(), team.repo_url.as_deref()).await
+}
+
+/// 400 `folder_in_use` (field `workspace_path`) when the folder a team called `name` would work
+/// in overlaps another space's work folder or one of its teams' folders: spaces never share a
+/// folder. `team_id` is the team being edited, which never clashes with itself. Suggest asks
+/// this before it reads a folder, so the person learns it before ticking anyone (U-5).
+pub async fn folder_in_use(
+    state: &AppState,
+    space: &SpaceId,
+    team_id: Option<&str>,
+    name: &str,
+    workspace_path: Option<&str>,
+    repo_url: Option<&str>,
+) -> Result<(), Response> {
     let data_dir = normalize(&state.config.data_dir);
-    let mine = team_folder(&data_dir, space, &team.name, team.workspace_path.as_deref(), team.repo_url.as_deref());
+    let mine = team_folder(&data_dir, space, name, workspace_path, repo_url);
     let Ok(spaces) = state.db.list_spaces().await else {
         return Err(internal());
     };
@@ -598,10 +613,8 @@ pub async fn check_workspace(
 
 fn collision(other: &SpaceId, spaces: &[Space], what: &str) -> Response {
     let name = spaces.iter().find(|s| s.id == other.as_str()).map(|s| s.name.as_str()).unwrap_or("another space");
-    error(
-        StatusCode::BAD_REQUEST,
-        format!("that folder overlaps {what} in the space \"{name}\"; spaces never share a folder"),
-    )
+    let message = format!("that folder overlaps {what} in the space \"{name}\"; spaces never share a folder");
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": message, "code": "folder_in_use", "field": "workspace_path" }))).into_response()
 }
 
 #[cfg(test)]

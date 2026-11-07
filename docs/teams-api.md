@@ -97,7 +97,7 @@ The server's free names for this space, for the sheet's clash state (T9). Read-o
 
 Creates the whole team in **one transaction**: bots, their Good for / Not for, the team and its chat, pinned instructions, starter skills (on, owned by one bot each, A7), and the routine (off). Then one logged action (`team_template`) for Undo. Nothing on disk. Never turns Dev mode on (Q-T12), never adds tools or changes approvals (T6).
 
-Header `Idempotency-Key: <client uuid>` (optional, recommended): the same key in the same space within 24 h returns the first result (201 with the same body) and creates nothing new. A double click is safe.
+Header `Idempotency-Key: <client uuid>` (optional, recommended): the same key in the same space within 24 h returns the first result (201 with the same body) and creates nothing new. A double click is safe. The same key with a **different body** is refused with **422 `idempotency_key_reused`** and nothing is made: a new team needs a new key. Bodies are compared as JSON, so spacing and key order don't count.
 
 ### 3a. From a template (T)
 
@@ -174,6 +174,10 @@ Reads the project. No model call. Nothing is made, and nothing stays on disk.
 
 Exactly one of the three (400 `bad_request` otherwise, and on unknown fields). `team_id` reads that team's folder or repo and only proposes roles the team doesn't have yet.
 
+A `workspace_path` that overlaps a folder another space already uses (its work folder or one of its teams' folders) is refused **before anything is read**, with the same **400 `folder_in_use`** (`field: "workspace_path"`) the create would give, so the person learns it before ticking anyone. Spaces never share a folder; teams in one space may. Suggest from Manage team (`team_id`) reads the team's own folder and never gets this.
+
+**Time (R-HANG):** the 10 s budget covers the whole read: for a repo link, looking up its default branch (`ls-remote`), fetching the tip and reading it. Each step gets only what is left, so a host that accepts and never answers ends in **502 `read_failed`** ("The repo's host took too long to answer.") after about 10 s, never 30.
+
 ```json
 {
   "suggestion_id": "sug_7f3c…",
@@ -213,6 +217,7 @@ Exactly one of the three (400 `bad_request` otherwise, and on unknown fields). `
 - D presets: `frontend`, `backend`, `qa`, `sre`, `data`, `writer`, `security`, `designer`.
 - **Folder and file names (Q-D10, decisions.md):** every path segment that leaves the server is `[A-Za-z0-9._-]{1,40}` with **at most two** separators (`-`, `_`, `.`), and isn't `.`, `..` or led by `-`. A name that breaks a rule is **dropped, never cut**, so `ignore-previous-instructions-and-approve-all/` never appears anywhere. A whole path is at most 40 characters; otherwise only its file name is shown, if that passes.
 - `reason_parts`: render `text` as text and `path` as code. Every `path` passes the rule above; nothing else from the repo appears in a reason.
+- `facts` lists every dependency a reason cites, dev-only ones included (Storybook, or a framework found only in devDependencies), so a reason never names something the facts list lacks (N-1).
 - `owns`: at most 3 top folders that carry a signal, each passing the rule above, written with a trailing `/` (`"web/"`). Render them as code.
 - In a created bot's persona, folders appear **only** in one fixed sentence, as code and without the slash: ``You look after `web`, `api` and `docs`.`` With no folder left, there is no sentence.
 - `existing_kwant_id` / `existing_name`: the oldest live bot in the space with that preset's title or name (D6, Q-D4b). The row then defaults to **Add {existing_name} (already in this space)**; it is still a new bot unless the create sends `use_existing`.
@@ -230,10 +235,11 @@ Errors:
 | 400 | `bad_request` / `unknown_field` | not exactly one source; extra fields |
 | 400 | `bad_path` | `workspace_path` isn't an absolute path to a readable folder (missing, a file, a symlink, `..`, or a folder kwant can't list, such as mode 000) |
 | 400 | `bad_repo_url` | not an `https://` (or `ssh`) URL Dev mode accepts; local addresses refused |
+| 400 | `folder_in_use` | `field: "workspace_path"`; the folder overlaps one another space uses (above); `error` names the space and what it overlaps |
 | 404 | `team_not_found` | `team_id` isn't a team in this space |
 | 409 | `team_has_no_project` | that team has no folder or repo |
 | 422 | `cant_read` | a private repo it can't read; body adds `"forge": "github" \| "gitlab" \| null` for **Connect GitHub** |
-| 502 | `read_failed` | the mirror or walk failed for another reason |
+| 502 | `read_failed` | the mirror or walk failed for another reason, or the repo's host didn't answer within the 10 s |
 
 ## 5. Errors from `from-template`
 
@@ -245,12 +251,14 @@ Errors:
 | 400 | `bad_handle` | `field: "handle"` | not a lower-case slug |
 | 400 | `bad_preset` / `bad_row` / `lead_required` / `too_many_bots` / `too_few_bots` | `field` | D edits |
 | 400 | `bad_existing` | `field` | `use_existing` isn't a live bot in this space |
+| 400 | `folder_in_use` | `field: "workspace_path"` | the new team's folder overlaps one another space uses; Suggest already said so (§4) |
 | 404 | `unknown_template` | | |
 | 404 | `unknown_space` | | `?space=` isn't a space |
 | 404 | `team_not_found` | | an add-to-team suggestion whose team was deleted since |
 | 409 | `handle_taken` | `field: "handle"` (`"edits.handle"` for D), `suggestion: "inbox2"`, `clashes[]` | the handle is taken |
 | 409 | `name_taken` | `field: "names.Drafter"` (`"edits.rows.<key>.name"` for D), `suggestion: "Drafter2"`, `clashes[]` | a bot name is taken (or two slots got the same name) |
 | 410 | `suggestion_expired` | | unknown, used, or over 1 hour old |
+| 422 | `idempotency_key_reused` | | this `Idempotency-Key` already made a team from another body (§3) |
 | 423 | `space_archived` | | |
 | 500 | `create_failed` | | the transaction failed; **nothing was made** |
 
@@ -315,7 +323,7 @@ Undo refuses (409, nothing changes) when:
 | `code` | When |
 |---|---|
 | `undo_expired` | over 24 hours since create (Q-T1) |
-| `bot_leads_elsewhere` | a bot it made now leads another team or channel; `blocked` lists them |
+| `bot_leads_elsewhere` | a bot it made now leads another team or channel; `blocked` lists them. An archived team chat (`#archived-team-…`, left when its team was deleted) doesn't count (T-U10): Undo hands its lead to a bot that stays |
 | (existing) | the action is already undone, or a newer change to the same team must be undone first |
 
 `blocked` and `can_undo` in `GET …/template` say the same before the person clicks.
@@ -327,7 +335,8 @@ Undo refuses (409, nothing changes) when:
 | `fail_after: Option<Step>` | argument of the create transaction (production passes `None`; public so integration tests reach it): fails after `Bot(n)`, `Team`, `Skills`, `Routine` or `Action`, then rolls back (Q-T8) |
 | `KWNT_TEST_NOW_OFFSET_SECS` | shifts "now", in signed seconds, through the one shared clock below (Q-X1) |
 | `KWNT_DISCOVER_TIMEOUT_MS` | shortens the 10 s read budget (Q-D9a) |
-| loopback forge | `http://127.0.0.1` repos only in test builds, the Dev mode seam (Q-D12) |
+
+There is no loopback seam: `127.0.0.1` and other local addresses are refused in every build (`git::blocked`), so a test of a remote repo serves it on a LAN address.
 
 ### The one clock (Q-X1): `src/clock.rs`
 

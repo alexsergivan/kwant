@@ -323,6 +323,82 @@ async fn the_same_idempotency_key_replays_the_first_create() {
     assert_eq!(counts(&e).await, after_first);
     let (s, v) = call(&e.app, "POST", "/api/teams/from-template", &[("idempotency-key", "")], Some(json!({"template_id": "inbox"}))).await;
     assert_eq!((s, v["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")));
+
+    // L-IDEM: the same key with another body is refused, not answered with the first team
+    let (s, v) = call(&e.app, "POST", "/api/teams/from-template", &key, Some(json!({"template_id": "sales"}))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("idempotency_key_reused")), "{v}");
+    let (s, v) = call(&e.app, "POST", "/api/teams/from-template", &key, Some(json!({"template_id": "inbox", "handle": "inbox-b"}))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("idempotency_key_reused")), "{v}");
+    assert_eq!(counts(&e).await, after_first);
+    // The same body sent with other spacing and key order is the same request
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/teams/from-template")
+        .header("content-type", "application/json")
+        .header("idempotency-key", "tap-8b1c")
+        .body(Body::from(r#"{ "names" : {"Prospector":"Scout"},  "template_id":"sales", "handle":"sales-c" }"#))
+        .unwrap();
+    let first = e.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED, "a sales team (no names shared with the inbox)");
+    let first: Value = serde_json::from_slice(&to_bytes(first.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let (s, again) = call(
+        &e.app,
+        "POST",
+        "/api/teams/from-template",
+        &[("idempotency-key", "tap-8b1c")],
+        Some(json!({"handle": "sales-c", "template_id": "sales", "names": {"Prospector": "Scout"}})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{again}");
+    assert_eq!(first["action_id"], again["action_id"]);
+}
+
+/// T-U10 (Rigel): a new bot that led another team's chat no longer blocks Undo once that team
+/// is deleted, since its chat is only kept as `#archived-team-…`, which nobody can re-lead.
+#[tokio::test]
+async fn undo_is_not_blocked_by_an_archived_chat_of_a_deleted_team() {
+    let e = setup().await;
+    let (s, inbox) = create(&e, json!({"template_id": "inbox"})).await;
+    assert_eq!(s, StatusCode::CREATED, "{inbox}");
+    let researcher = inbox["bots"].as_array().unwrap().iter().find(|b| b["slot"] == "Researcher").unwrap()["id"].as_str().unwrap().to_string();
+    let (s, lab) = call(
+        &e.app,
+        "POST",
+        "/api/teams",
+        &[],
+        Some(json!({"name": "research-lab", "description": "x", "member_kwants": [], "lead_kwant_id": researcher})),
+    )
+    .await;
+    assert!(s.is_success(), "{s} {lab}");
+    let team_id = inbox["team"]["id"].as_str().unwrap();
+    let action = inbox["action_id"].as_str().unwrap();
+
+    // While research-lab exists the refusal is right, and changes nothing
+    let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!(t["can_undo"], false, "{t}");
+    let before = counts(&e).await;
+    let (s, v) = undo(&e, action).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::CONFLICT, Some("bot_leads_elsewhere")), "{v}");
+    assert_eq!(counts(&e).await, before);
+
+    // Delete research-lab: its chat stays as #archived-team-research-lab, still led by Researcher
+    let (s, v) = call(&e.app, "DELETE", &format!("/api/teams/{}", lab["id"].as_str().unwrap()), &[], None).await;
+    assert!(s.is_success(), "{s} {v}");
+    let archived = e.state.db.list_channels(&e.space).await.unwrap().into_iter().find(|c| c.name.starts_with("archived-team-research-lab"));
+    if let Some(a) = &archived {
+        assert_eq!(a.lead_kwant_id, researcher, "the precondition of T-U10");
+    }
+    let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!(t["can_undo"], true, "{t}");
+    assert_eq!(t["blocked"], json!([]), "{t}");
+    let (s, v) = undo(&e, action).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(e.state.db.get_kwant(&researcher).await.unwrap().is_none());
+    // The archived chat is handed on to a bot that stays
+    if let Some(a) = archived {
+        let a = e.state.db.list_channels(&e.space).await.unwrap().into_iter().find(|c| c.id == a.id).expect("the archived chat is kept");
+        assert_ne!(a.lead_kwant_id, researcher);
+    }
 }
 
 #[tokio::test]
@@ -374,6 +450,7 @@ fn plan(e: &Env, handle: &str, key: Option<&str>) -> Plan {
         template_id: Some("coding".into()),
         suggestion_id: None,
         idempotency_key: key.map(str::to_string),
+        request_sha256: None,
         target: Target::New {
             handle: handle.into(),
             icon: "🛠️".into(),

@@ -486,3 +486,81 @@ async fn a_folder_kwant_cant_list_is_a_bad_path() {
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["fallback"], json!(false), "{v}");
 }
+
+/// Rigel R-HANG: a host that accepts the connection and never answers held Suggest far past the
+/// 10 s of §4, because `ls-remote` had a budget of its own. Every remote step now shares what is
+/// left of the 10 s, and the read stops at the deadline: 502 `read_failed` in about 10 s.
+#[tokio::test]
+async fn a_host_that_never_answers_is_read_failed_within_the_budget() {
+    let git_ok = std::process::Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success());
+    if !git_ok {
+        eprintln!("git isn't installed; skipped");
+        return;
+    }
+    // Loopback is refused in every build, so the silent host listens on this machine's LAN address
+    let lan = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|u| u.connect("192.0.2.1:9").map(|_| u))
+        .and_then(|u| u.local_addr())
+        .map(|a| a.ip());
+    let ip = match lan {
+        Ok(ip) if !ip.is_loopback() && !ip.is_unspecified() => ip,
+        _ => {
+            eprintln!("no LAN address; skipped");
+            return;
+        }
+    };
+    let listener = std::net::TcpListener::bind((ip, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for c in listener.incoming().flatten() {
+            held.push(c); // accepted, never answered
+        }
+    });
+    let e = setup().await;
+    let started = std::time::Instant::now();
+    let (s, v) = suggest(&e, json!({ "repo_url": format!("http://{ip}:{port}/hang/shop.git") })).await;
+    let took = started.elapsed();
+    assert_eq!((s, v["code"].as_str()), (StatusCode::BAD_GATEWAY, Some("read_failed")), "{v}");
+    assert!(took >= std::time::Duration::from_secs(9), "gave up early: {took:?}");
+    assert!(took < std::time::Duration::from_secs(13), "the 10 s budget was not kept: {took:?}");
+    assert!(v.get("suggestion_id").is_none(), "{v}");
+}
+
+/// U-5: a folder another space works in is refused before it is read, with the code Pixel's form
+/// puts on the folder field; making a team there is refused the same way. A team's own folder is
+/// never in use by itself, so Manage team suggestions still read it.
+#[tokio::test]
+async fn a_folder_another_space_uses_is_folder_in_use_before_it_is_read() {
+    let e = setup().await;
+    let lab = e.state.db.create_space(&kwnt::db::spaces::NewSpace { name: "Lab".into(), icon: "L".into(), color: None, this_machine_enabled: true }).await.unwrap().id;
+    let tmp = tempdir().unwrap();
+    let shop = folder(tmp.path(), "shop", &shop_files(None));
+    let path = shop.to_str().unwrap();
+
+    // Lab makes a team in the folder
+    let (s, sug) = call(&e.app, "POST", &format!("/api/teams/suggest?space={lab}"), Some(json!({ "workspace_path": path }))).await;
+    assert_eq!(s, StatusCode::OK, "{sug}");
+    let (s, made) = call(&e.app, "POST", &format!("/api/teams/from-template?space={lab}"), Some(json!({ "suggestion_id": sug["suggestion_id"], "edits": { "rows": renamed(&sug, "Lab") } }))).await;
+    assert_eq!(s, StatusCode::CREATED, "{made}");
+    let team_id = made["team"]["id"].as_str().unwrap().to_string();
+
+    // The default space: the folder and a folder inside it
+    let teams_before = e.state.db.list_teams(&e.space).await.unwrap().len();
+    for p in [path.to_string(), format!("{path}/web")] {
+        let (s, v) = suggest(&e, json!({ "workspace_path": p })).await;
+        assert_eq!((s, v["code"].as_str(), v["field"].as_str()), (StatusCode::BAD_REQUEST, Some("folder_in_use"), Some("workspace_path")), "{p}: {v}");
+        assert!(v["error"].as_str().unwrap().contains("\"Lab\""), "{v}");
+        assert!(v.get("suggestion_id").is_none() && v.get("read").is_none(), "{v}");
+    }
+    let (s, v) = call(&e.app, "POST", "/api/teams", Some(json!({ "name": "shop-too", "lead_kwant_id": "nobody", "member_kwants": [], "workspace_path": path }))).await;
+    assert_eq!((s, v["code"].as_str(), v["field"].as_str()), (StatusCode::BAD_REQUEST, Some("folder_in_use"), Some("workspace_path")), "{v}");
+    assert_eq!(e.state.db.list_teams(&e.space).await.unwrap().len(), teams_before);
+
+    // Lab itself reads its folder, fresh or for the team it already has
+    let (s, v) = call(&e.app, "POST", &format!("/api/teams/suggest?space={lab}"), Some(json!({ "workspace_path": path }))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = call(&e.app, "POST", &format!("/api/teams/suggest?space={lab}"), Some(json!({ "team_id": team_id }))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["team_id"], team_id.as_str());
+}
