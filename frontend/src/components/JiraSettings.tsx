@@ -4,7 +4,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Pencil, Power, Ticket as TicketIcon } from 'lucide-react';
 import type { DevTeamRef } from '../devMode';
-import { JIRA_CHANGED_EVENT, JIRA_COPY, JiraState, hhmm, jiraApi, jiraHost, jiraStore, ticketSummary } from '../dev/jiraSetup';
+import { JIRA_CHANGED_EVENT, JIRA_COPY, JiraState, hhmm, jiraApi, jiraHint, jiraHost, jiraStore, ticketSummary } from '../dev/jiraSetup';
 import { openJiraSetup } from './JiraSetup';
 
 /** This space's Jira state: null until GET jira answered (and on any error, which reads as off). */
@@ -36,7 +36,9 @@ export const JiraHint: React.FC<{
   phone?: boolean;
 }> = ({ space, teams, phone }) => {
   const jira = useJira(space);
-  if (!jira || jira.site) return null;
+  const [hidden, setHidden] = useState(() => jiraHint.hidden(space));
+  useEffect(() => setHidden(jiraHint.hidden(space)), [space]);
+  if (!jira || jira.site || hidden) return null;
   return (
     <p className="mt-4 pt-3 border-t border-white/[0.06] flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] leading-[18px] text-zinc-400" data-jira-hint>
       <span>{JIRA_COPY.hint}</span>
@@ -48,6 +50,18 @@ export const JiraHint: React.FC<{
       >
         <TicketIcon size={13} aria-hidden="true" />
         {JIRA_COPY.hintButton}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          jiraHint.hide(space);
+          setHidden(true);
+        }}
+        className={`ml-auto text-zinc-500 hover:text-zinc-200 rounded ${phone ? 'py-3 -my-3 px-2 -mx-2' : ''} ${focusRing}`}
+        aria-label={JIRA_COPY.hintHideLabel}
+        data-jira-hint-hide
+      >
+        {JIRA_COPY.hintHide}
       </button>
     </p>
   );

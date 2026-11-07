@@ -195,6 +195,28 @@ test('never connected: no hint or row until GET jira answers; an older server (4
   r.unmount();
 });
 
+test('the hint hides per space and stays hidden; the settings row stays the way back', async () => {
+  m.jiraStore._reset();
+  localStorage.clear();
+  form({ site: null });
+  let r = await mount(h('div', null, h(m.JiraHint, { space: 'spc_a' }), h(m.JiraSettings, { space: 'spc_a' })));
+  await settle();
+  const hide = r.host.querySelector('[data-jira-hint-hide]');
+  assert.equal(hide.textContent, 'Hide');
+  assert.equal(hide.getAttribute('aria-label'), 'Hide the Jira hint for this space');
+  await click(hide);
+  assert.equal(r.host.querySelector('[data-jira-hint]'), null);
+  assert.equal(localStorage.getItem('kwnt:jira-hint-hidden:spc_a'), '1');
+  assert.ok(r.host.querySelector('[data-jira-settings="off"]'), 'Settings still offers Set up');
+  r.unmount();
+  // a remount in the same space keeps it hidden; another space still shows it
+  r = await mount(h('div', null, h(m.JiraHint, { space: 'spc_a' }), h(m.JiraHint, { space: 'spc_b' })));
+  await settle();
+  assert.equal(r.host.querySelectorAll('[data-jira-hint]').length, 1);
+  r.unmount();
+  localStorage.clear();
+});
+
 // ---------------------------------------------------------------------------------------------------
 // The sheet
 
@@ -257,6 +279,7 @@ test('Data Center: asked of the server ("Looks like" until it answers), then the
   const probe = s.calls.find((c) => c.path.endsWith('/jira/check'));
   assert.ok(probe, 'a non-Cloud host is probed');
   assert.equal(probe.body.token, undefined, 'the probe sends no token');
+  assert.equal(probe.body.detect, true, 'the probe asks for detection only (api-decisions §8)');
   assert.match(s.$('[data-jira-kind]').textContent, /Found Jira Data Center \(your company runs it\)\./);
   assert.equal(s.$('[data-jira-email]'), null, 'Data Center signs in with a personal access token only');
   assert.match(s.$('label[for$="-tok"]').textContent, /Personal access token/);

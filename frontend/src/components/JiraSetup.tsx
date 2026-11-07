@@ -15,6 +15,7 @@ import { popoverPlace } from './GitHubConnect';
 import { SaveFirst } from './LooseEndsView';
 import {
   CheckOutcome,
+  DEFAULT_LABEL,
   Handover,
   JIRA_CHANGED_EVENT,
   JIRA_COPY,
@@ -357,7 +358,7 @@ export const JiraSetupForm: React.FC<{
   const [projects, setProjects] = useState<string[]>(site?.projects ?? []);
   const [moreProjects, setMoreProjects] = useState(false);
   const [handover, setHandover] = useState<Handover>(site?.handover ?? 'label');
-  const [label] = useState(site?.label ?? 'kwant');
+  const [label] = useState(site?.label ?? DEFAULT_LABEL);
   const [assignee, setAssignee] = useState<{ id: string; name: string } | null>(site?.assignee_id ? { id: site.assignee_id, name: site.assignee_name ?? site.assignee_id } : null);
   const [userQuery, setUserQuery] = useState('');
   const [users, setUsers] = useState<JiraUser[]>([]);
@@ -435,7 +436,7 @@ export const JiraSetupForm: React.FC<{
     setKind('dc');
     setConfirmed(false);
     try {
-      const c = await jiraApi.check(space, { jira_url: u });
+      const c = await jiraApi.detect(space, u);
       if (c.result === 'not_jira' || c.result === 'unreachable') {
         setAddrErr(JIRA_COPY.notJira);
         setKind(null);
@@ -1061,13 +1062,13 @@ export const JiraSetupForm: React.FC<{
   );
 
   const step4 = (
-    <Step n={4} title="How much kwant does on its own">
+    <Step n={4} title="How much your bots do on their own">
       <CheckRow name="wait" on={waitOk} onChange={setWaitOk} title="Wait for my OK before building" text={JIRA_COPY.waitForOk} />
       <CheckRow name="comment" on={comment} onChange={setComment} title="Comment on the ticket when work starts and when the PR is ready" text={JIRA_COPY.comment} />
       <details className="group mt-3 border-t border-white/[0.06] pt-2.5" data-jira-advanced open={jql !== null || undefined}>
         <summary className="list-none [&::-webkit-details-marker]:hidden inline-flex items-center gap-1 min-h-7 text-[12.5px] text-zinc-300 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#9d8fff]/70 rounded">
           <ChevronRight size={12} className="transition-transform group-open:rotate-90 motion-reduce:transition-none" aria-hidden="true" />
-          Advanced: the Jira search kwant runs
+          Advanced: the Jira search your bots run
         </summary>
         <label htmlFor={`${id}-jql`} className="sr-only">
           The Jira search

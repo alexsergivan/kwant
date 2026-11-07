@@ -3,6 +3,8 @@
 // yourcompany.atlassian.net / jira.example.com / confluence.example.com, oleks@example.com. No token
 // appears here: the transport below answers by what was asked, never by echoing a token back.
 
+import { DEFAULT_LABEL } from './jiraSetup';
+
 export const FX_EMAIL = 'oleks@example.com';
 export const FX_CLOUD = 'https://yourcompany.atlassian.net';
 export const FX_DC = 'https://jira.example.com';
@@ -83,7 +85,7 @@ export function fxFound(
     },
     projects: PROJECTS,
     confluence: { result: 'ok', spaces: SPACES },
-    jql: projects ? `project in (${projects.join(', ')}) AND labels = "kwant" AND statusCategory != Done` : null,
+    jql: projects ? `project in (${projects.join(', ')}) AND labels = ${JSON.stringify(DEFAULT_LABEL)} AND statusCategory != Done` : null,
     count,
     sample: count ? SAMPLE.slice(0, Math.min(3, count)) : [],
     reads: ['jira', 'confluence'],
@@ -121,13 +123,12 @@ export const fxRateLimited = (kind: 'cloud' | 'dc', retryAt: string) => ({
   jira_url: kind === 'cloud' ? FX_CLOUD : FX_DC,
   retry_at: retryAt,
 });
-/** A check sent with only the address: the server runs its type detection, then asks for the token. */
+/** `POST jira/check {jira_url, detect: true}`: only the type detection runs (api-decisions §8). */
 export const fxDetected = (kind: 'cloud' | 'dc') => ({
   ...blank,
-  result: 'invalid',
+  result: 'detected',
   kind,
   jira_url: kind === 'cloud' ? FX_CLOUD : FX_DC,
-  message: 'paste the token',
 });
 
 /** The row as GET jira sends it today (JSON-string lists, `on_`, `either`). */
@@ -147,7 +148,7 @@ export const fxSiteRow = (o: Record<string, unknown> = {}) => ({
   assignee_id: null,
   assignee_key: null,
   assignee_name: null,
-  label: 'kwant',
+  label: DEFAULT_LABEL,
   jql: null,
   team_id: 'team_shop',
   spaces: '["SHOP","ENG"]',
@@ -231,7 +232,7 @@ export function fxTransport(sc: FxScenario = {}, calls: FxCall[] = []) {
       const kind: 'cloud' | 'dc' = raw?.kind === 'dc' || raw?.kind === 'cloud' ? (raw.kind as 'cloud' | 'dc') : /atlassian\.net/.test(address) ? 'cloud' : 'dc';
       let out: Record<string, unknown>;
       if (/yourcompny|example\.invalid/.test(address)) out = fxNotJira();
-      else if (!raw?.token && method !== 'PUT') out = fxDetected(kind);
+      else if (raw?.detect === true && method !== 'PUT') out = fxDetected(kind);
       else if (sc.check === 'auth_failed') out = fxAuthFailed(kind);
       else if (sc.check === 'no_projects') out = fxNoProjects(kind);
       else if (sc.check === 'rate_limited') out = fxRateLimited(kind, sc.retryAt ?? '2026-11-07T10:09:00Z');

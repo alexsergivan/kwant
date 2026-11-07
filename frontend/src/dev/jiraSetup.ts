@@ -19,6 +19,28 @@ const str = (v: unknown, max = 500): string | null => (typeof v === 'string' && 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const bool = (v: unknown, fallback = false): boolean => (typeof v === 'boolean' ? v : fallback);
 
+/** The Dev desk hint, once hidden, stays hidden in this space (design §1 "hasn't been dismissed"). Settings is the way back. */
+export const hintHiddenKey = (space: string) => `kwnt:jira-hint-hidden:${space}`;
+export const jiraHint = {
+  hidden(space: string): boolean {
+    try {
+      return localStorage.getItem(hintHiddenKey(space)) === '1';
+    } catch {
+      return false;
+    }
+  },
+  hide(space: string): void {
+    try {
+      localStorage.setItem(hintHiddenKey(space), '1');
+    } catch {
+      // storage off: it hides for this view only
+    }
+  },
+};
+
+/** The hand-over label when none is set (Juno's backend default). */
+export const DEFAULT_LABEL = 'kwant';
+
 // ---------------------------------------------------------------------------------------------------
 // Copy (design.md §1, §2, §7). Kept here so tests and the components read the same words.
 
@@ -27,10 +49,12 @@ export const JIRA_COPY = {
   sub: 'Hand a ticket to your bots in Jira. They read it, ask what’s unclear, and build it. You stay in charge: Jira only changes when you say so.',
   hint: 'Use Jira? Your bots can take tickets you hand them.',
   hintButton: 'Take work from Jira',
+  hintHide: 'Hide',
+  hintHideLabel: 'Hide the Jira hint for this space',
   /** The 0.7.4 "Before you save the token" card, with the one Jira sentence (design §2, spec change 8). */
   saveFirstWhy: 'Some bots here run commands without asking, so one of them could read a token saved on this server. A scoped token that can only read Jira and Confluence keeps that risk small.',
-  cloudHelp: 'Make one in your Atlassian account, under Security › API tokens. kwant sees what you can see in Jira.',
-  dcHelp: 'In Jira, open your profile › Personal Access Tokens. kwant sees what you can see in Jira.',
+  cloudHelp: 'Make one in your Atlassian account, under Security › API tokens. Your bots see what you can see in Jira.',
+  dcHelp: 'In Jira, open your profile › Personal Access Tokens. Your bots see what you can see in Jira.',
   nothingSaved: 'Nothing is saved until the check passes.',
   checking: 'Checking with Jira…',
   notJira: 'No Jira answered at this address. Check the spelling, or ask your Jira admin for it.',
@@ -40,7 +64,7 @@ export const JIRA_COPY = {
   confluenceCloud: 'Uses the same sign-in as Jira.',
   confluenceDc: 'Data Center keeps Confluence separate, so it needs its own token.',
   waitForOk: 'Off: the lead writes the brief, asks if something is unclear, then builds. On: you OK every brief first.',
-  comment: 'Off: Jira only changes when you post a question there yourself. kwant never moves or closes tickets.',
+  comment: 'Off: Jira only changes when you post a question there yourself. Your bots never move or close tickets.',
   advancedHelp: 'Built from your choices above. Edit it and the choices above show “Set by your search”.',
   laterNote: 'Change any of this later in Dev mode settings.',
   settingsBlurb: 'Hand Jira tickets to your bots. They read the ticket and Confluence, ask what’s unclear, then build.',
@@ -61,7 +85,7 @@ export const hhmm = (iso: string): string => {
 
 // ---------------------------------------------------------------------------------------------------
 // The address: Cloud is known from the host; anything else is asked of the server (a check with no token
-// runs only the type detection, api.md §2.3).
+// runs only the type detection: `detect: true`, api-decisions.md §8).
 
 export type JiraKind = 'cloud' | 'dc';
 export type Handover = 'label' | 'assignee' | 'jql';
@@ -110,8 +134,8 @@ export function kindFromHost(url: string | null): JiraKind | null {
 // ---------------------------------------------------------------------------------------------------
 // The check (POST jira/check) and its answer
 
-export type CheckResult = 'found' | 'auth_failed' | 'not_jira' | 'unreachable' | 'rate_limited' | 'no_projects' | 'invalid';
-const CHECK_RESULTS: readonly CheckResult[] = ['found', 'auth_failed', 'not_jira', 'unreachable', 'rate_limited', 'no_projects', 'invalid'];
+export type CheckResult = 'found' | 'detected' | 'auth_failed' | 'not_jira' | 'unreachable' | 'rate_limited' | 'no_projects' | 'invalid';
+const CHECK_RESULTS: readonly CheckResult[] = ['found', 'detected', 'auth_failed', 'not_jira', 'unreachable', 'rate_limited', 'no_projects', 'invalid'];
 
 export interface JiraProject {
   key: string;
@@ -220,6 +244,7 @@ export type Step1Error = {
 export function step1Error(c: CheckOutcome, kind: JiraKind, email: string | null): Step1Error | null {
   switch (c.result) {
     case 'found':
+    case 'detected':
     case 'no_projects':
     case 'rate_limited':
       return null;
@@ -247,7 +272,7 @@ const bare = (s: string) => (/^[A-Za-z0-9_]+$/.test(s) ? s : q(s));
 
 export function builtJql(c: { projects: string[]; handover: Handover; label: string; assignee_id: string | null }): string {
   const ps = c.projects.length === 1 ? `project = ${c.projects[0]}` : `project in (${c.projects.join(', ')})`;
-  const who = c.handover === 'assignee' ? (c.assignee_id ? `assignee = ${q(c.assignee_id)}` : 'assignee = …') : `labels = ${bare(c.label || 'kwant')}`;
+  const who = c.handover === 'assignee' ? (c.assignee_id ? `assignee = ${q(c.assignee_id)}` : 'assignee = …') : `labels = ${bare(c.label || DEFAULT_LABEL)}`;
   return `${ps} AND ${who} AND statusCategory != Done ORDER BY created ASC`;
 }
 
@@ -296,7 +321,7 @@ export function parseSite(v: unknown): JiraSite | null {
     handover: h,
     assignee_id: str(v.assignee_id, 200),
     assignee_name: str(v.assignee_name, 120),
-    label: str(v.label, 100) ?? 'kwant',
+    label: str(v.label, 100) ?? DEFAULT_LABEL,
     jql: str(v.jql, 2000),
     team_id: str(v.team_id, 120),
     spaces: strList(v.spaces, 20),
@@ -405,6 +430,11 @@ export const jiraApi = {
   },
   async check(space: string, form: JiraForm): Promise<CheckOutcome> {
     const r = await call(`${base(space)}/jira/check`, 'POST', clean({ ...form }));
+    return parseCheck(r.data);
+  },
+  /** The token-less type detection (api-decisions §8): `{result: "detected", kind}` or not_jira / unreachable / rate_limited. */
+  async detect(space: string, jira_url: string): Promise<CheckOutcome> {
+    const r = await call(`${base(space)}/jira/check`, 'POST', { jira_url, detect: true });
     return parseCheck(r.data);
   },
   async save(space: string, form: JiraForm, settings: JiraSettings): Promise<{ site: JiraSite | null; check: CheckOutcome }> {
