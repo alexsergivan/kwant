@@ -4,91 +4,153 @@
 <meta charset="utf-8">
 <title>kwant</title>
 <style>
+  /* One copy per window (spec P3). This Mac's window: today's two lines, unchanged. */
   :root { color-scheme: light dark; }
   body { margin: 0; height: 100vh; display: grid; place-items: center;
          font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #11151c; color: #ece5d6; }
-  .failed, .connecting, .unreachable { display: none; }
-  .failed { color: #ef7d62; }
-  body[data-state="failed"] .starting,
+  .failed { display: none; color: #ef7d62; }
+  body[data-state="failed"] .starting { display: none; }
+  body[data-state="failed"] .failed { display: block; }
+  p { text-align: center; line-height: 1.5; }
+
+  /* A server's window (design.md §4). The app sets data-state="connecting" or "unreachable". */
+  .connecting, .unreachable { display: none; }
   body[data-state="connecting"] .starting,
   body[data-state="unreachable"] .starting { display: none; }
-  body[data-state="failed"] .failed { display: block; }
   body[data-state="connecting"] .connecting { display: block; }
   body[data-state="unreachable"] .unreachable { display: block; }
-  p { text-align: center; line-height: 1.5; }
-  .unreachable { width: 520px; max-width: calc(100vw - 48px); }
-  .unreachable h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
-  .unreachable h1::before { content: "ⓘ "; color: #ef7d62; }
-  .unreachable p { text-align: left; margin: 0 0 16px; }
-  .muted { color: #a9a294; }
-  .small { font-size: 13px; }
-  .faint { color: #7d786d; }
-  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
-  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid #3a4150;
-           background: #1b212b; color: inherit; cursor: pointer; }
-  button.primary { background: #ece5d6; color: #11151c; border-color: #ece5d6; }
-  button:disabled { opacity: .45; cursor: default; }
+  .remote {
+    --ink: #ece5d6; --muted: #a8a294; --faint: #8a8478;
+    --btn2: #1c222d; --btn2-edge: #2f3644; --btn2-hover: #232a37; --accent: #b8adff;
+    --fill: #6c58e0; --fill-hover: #5b47d6; --fill-active: #5845bd; --bad: #ef7d62;
+    color-scheme: dark;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Cantarell, sans-serif;
+    line-height: 1.5;
+  }
+  .connecting { margin: 0; }
+  .wait { display: inline-flex; align-items: center; gap: 10px; }
+  .wait svg { flex: none; color: var(--accent); }
+  .unreachable { width: 520px; max-width: calc(100vw - 48px); text-align: center; overflow-wrap: anywhere; }
+  .unreachable p { margin: 0; }
+  .unreachable h1 { margin: 0 0 8px; font-size: 20px; line-height: 26px; font-weight: 600; }
+  .unreachable h1 svg { vertical-align: -3px; margin-right: 8px; color: var(--bad); }
+  .why { color: var(--muted); }
+  .logline { margin-top: 24px !important; font-size: 13px; line-height: 18px; color: var(--faint); }
+  .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 24px; }
+  button.btn { height: 40px; padding: 0 16px; border-radius: 10px; font: inherit; font-weight: 600; cursor: pointer;
+               transition: background-color 120ms linear, opacity 120ms linear; }
+  button.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.secondary { border: 1px solid var(--btn2-edge); background: var(--btn2); color: var(--ink); }
+  .btn.secondary:hover { background: var(--btn2-hover); }
+  .btn.primary { border: 0; background: var(--fill); color: #fff; }
+  .btn.primary:hover { background: var(--fill-hover); }
+  .btn.primary:active { background: var(--fill-active); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .spin { animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  body[data-state="unreachable"] .unreachable { animation: fade 160ms linear backwards; }
+  @keyframes fade { from { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .spin, body[data-state="unreachable"] .unreachable { animation: none; }
+    button.btn { transition: none; }
+  }
 </style>
 </head>
 <body>
   <p class="starting">Starting kwant…</p>
-  <p class="failed">kwant didn't start.<br>Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
-  <p class="connecting">Connecting to <span class="host">the server</span>…</p>
-  <section class="unreachable" role="alert">
-    <h1 id="title">Couldn't reach <span class="host">the server</span></h1>
-    <p class="muted" id="why"></p>
+  <div class="failed remote" role="alert">
+    <p>kwant didn't start.<br>Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
+    <div class="actions"><button type="button" class="btn secondary" id="retry-local">Try again</button></div>
+  </div>
+
+  <p class="remote connecting" role="status"><span class="wait"><svg class="spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg><span>Connecting to <span class="host">the server</span>…</span></span></p>
+
+  <section class="remote unreachable" role="alert" aria-labelledby="title">
+    <h1><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 7v6M12 16.5v.5"/></svg><span id="title"></span></h1>
+    <p class="why" id="why"></p>
     <div class="actions">
-      <button class="primary" id="retry">Try again</button>
+      <button type="button" class="btn primary" id="retry">Try again</button>
+      <button type="button" class="btn secondary" id="remove" hidden>Remove this server…</button>
     </div>
-    <p class="faint small">Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
+    <p class="logline">Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
   </section>
 <script>
-// A server's window: the app checks the server and either opens it or sets
-// data-state="unreachable" with data-host, data-code and data-message. Try again calls the app's
-// retry_start for this window's own place (spec.md, next-075/side-by-side).
+// One page per window. A server's window: the app checks that server natively and either opens
+// it or sets, on <body>, data-host, data-code, data-message and last data-state="unreachable"
+// (api.md). This Mac's window is driven as before (data-state="failed"). places_state().place is
+// the place of the window that asks. Try again (retry_start) re-checks only this window's place.
+// Remove this server… calls remove_server {origin} and waits. The app shows the one native confirm
+// (design.md §4.1) and any "Removed {host}" message itself, then answers {removed, revoked, cancelled}.
+// The page builds no confirm and shows nothing more.
+// The page never reads its own URL.
 (function () {
+  'use strict';
   var ipc = window.__TAURI_INTERNALS__;
   var body = document.body;
   if (!ipc) return;
-  var why = {
-    timeout: function () { return "It didn't answer in 10 seconds. The server may be off, or this computer may be offline."; },
-    dns: function () { return "This computer couldn't find that address. Check that you're online."; },
-    tls: function () { return "Its security certificate isn't valid, so the app stopped."; },
-    refused: function () { return "The machine is there, but kwant isn't answering. It may be restarting or stopped."; },
-    not_kwant: function () { return "It answered, but not as kwant. The address may have moved."; }
+  var origin = null; // this window's server, from places_state().place.key
+  var $ = function (id) { return document.getElementById(id); };
+  // design.md §4: [title, why]
+  var WORDS = {
+    timeout: function (h) { return ["Couldn't reach " + h, "It didn't answer in 10 seconds. The server may be off, or this computer may be offline."]; },
+    dns: function (h) { return ["Couldn't reach " + h, "This computer couldn't find that address. Check that you're online."]; },
+    tls: function (h) { return ["Couldn't connect safely to " + h, "Its security certificate isn't valid, so the app stopped."]; },
+    refused: function (h) { return ["Couldn't reach " + h, "The machine is there, but kwant isn't answering. It may be restarting or stopped."]; },
+    not_kwant: function (h) { return [h + " isn't a kwant server now", 'It answered, but not as kwant. The address may have moved.']; }
   };
   function setHost(host) {
     document.querySelectorAll('.host').forEach(function (e) { e.textContent = host; });
   }
   function busy(on) {
-    document.querySelectorAll('button').forEach(function (b) { b.disabled = on; });
+    document.querySelectorAll('.unreachable button').forEach(function (b) { b.disabled = on; });
   }
   function render() {
     if (body.dataset.state !== 'unreachable') return;
     var host = body.dataset.host || 'the server';
-    var code = body.dataset.code;
+    var words = (WORDS[body.dataset.code] || WORDS.timeout)(host); // unknown codes read as "didn't answer"
     setHost(host);
-    var title = document.getElementById('title');
-    if (code === 'tls') title.textContent = "Couldn't connect safely to " + host;
-    else if (code === 'not_kwant') title.textContent = host + " isn't a kwant server now";
-    else title.textContent = "Couldn't reach " + host;
-    document.getElementById('why').textContent = (why[code] || why.timeout)();
+    $('title').textContent = words[0];
+    $('why').textContent = words[1];
     busy(false);
-    document.getElementById('retry').focus();
+    $('retry').focus();
   }
-  new MutationObserver(render).observe(body, { attributes: true, attributeFilter: ['data-state'] });
+  function renderFailed() {
+    if (body.dataset.state !== 'failed') return;
+    $('retry-local').disabled = false;
+  }
+  new MutationObserver(function () { render(); renderFailed(); }).observe(body, { attributes: true, attributeFilter: ['data-state'] });
   ipc.invoke('places_state').then(function (s) {
+    if (!s) return;
     if (s.app === 'linux') document.querySelectorAll('.log').forEach(function (e) { e.textContent = '~/.kwnt/desktop-app.log'; });
-    if (s.place && s.place.kind === 'server' && !body.dataset.state) {
-      setHost(s.place.host);
+    var place = s.place;
+    if (!place || place.kind !== 'server') return;
+    origin = place.key || null;
+    $('remove').hidden = !origin;
+    if (!body.dataset.state) {
+      setHost(body.dataset.host || place.host || 'the server');
       body.dataset.state = 'connecting';
     }
   }).catch(function () {});
-  document.getElementById('retry').onclick = function () {
+  render(); // in case the app answered before this script ran
+  $('retry').addEventListener('click', function () {
     busy(true);
     body.dataset.state = 'connecting';
-    ipc.invoke('retry_start').catch(function () { busy(false); });
-  };
+    ipc.invoke('retry_start').catch(function () { body.dataset.state = 'unreachable'; });
+  });
+  $('remove').addEventListener('click', function () {
+    if (!origin) return;
+    busy(true);
+    // Removed: the app closes this window. Cancelled ({cancelled:true}), unlisted or failed: back to the page.
+    ipc.invoke('remove_server', { origin: origin }).then(function (r) {
+      if (!(r && r.removed)) { busy(false); $('remove').focus(); }
+    }, function () { busy(false); $('remove').focus(); });
+  });
+  // This Mac's window: start the local kwant again (retry_start re-checks only this window's place).
+  $('retry-local').addEventListener('click', function () {
+    $('retry-local').disabled = true;
+    body.dataset.state = '';
+    ipc.invoke('retry_start').catch(function () { body.dataset.state = 'failed'; });
+  });
 })();
 </script>
 </body>
