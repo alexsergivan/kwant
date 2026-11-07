@@ -35,7 +35,7 @@ const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-1
 const primaryBtn = `${actionBtn} text-white bg-sky-600 hover:bg-sky-500 shadow-sm`;
 const dangerGhost = `${actionBtn} border border-rose-500/40 text-rose-200 hover:bg-rose-500/10`;
 const dangerBtn = `${actionBtn} text-white bg-rose-600 hover:bg-rose-500`;
-const textBtn = `inline-flex items-center min-h-[44px] sm:min-h-0 px-1 rounded text-xs font-medium text-sky-300 hover:text-sky-200 hover:underline underline-offset-2 ${focusRing}`;
+const textBtn = `inline-flex items-center min-h-[44px] max-sm:-my-[13px] align-middle sm:min-h-0 px-1 rounded text-xs font-medium text-sky-300 hover:text-sky-200 hover:underline underline-offset-2 ${focusRing}`;
 const spin = 'animate-spin motion-reduce:animate-none';
 
 /** Sheets, dialogs and toasts sit over the page, outside the card list. */
