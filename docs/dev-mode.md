@@ -155,7 +155,13 @@ log; URL userinfo is stripped before anything else. http(s) and git:// addresses
 ssh keeps a user name (`ssh://deploy@host/x.git`, `deploy@host:x.git`) and never a password, and
 `git_url` is never logged. Each call has no terminal prompt, a timeout,
 `nice` and its own process group, which is killed when it runs over. The Docker image installs git
-and openssh-client. Without git 2.31+, the status is `no_git`.
+and openssh-client. Without git 2.31+, the status is `no_git`, and a repo that was already watched
+reads "Needs git on the server" until git is back.
+
+The team's repo link itself is kept as typed. A link like `https://user:token@host/…` is stored that
+way, and `GET /api/teams` returns it with the token in it, as 0.7.2 did for GitHub links. Git never
+gets that token, since the userinfo is stripped before the fetch, so it is better left out: use the
+server's SSH key or a git credential helper instead. A later release will strip it when it's saved.
 
 A remote read from a team's folder or repo link is fetched only over https, http, ssh or git, and
 never from this machine or a link-local address (`localhost`, `127.0.0.0/8`, `::1`, `169.254.0.0/16`,
@@ -205,7 +211,10 @@ read every repo on this server. A sandboxed local read is planned for 0.7.4.
 **Mirror size.** A mirror is a full bare copy of the repo. A fetch may not write any file past 1 GB
 (`RLIMIT_FSIZE`, with what it fetches kept as one pack), so a huge or hostile remote stops at the cap
 rather than after it. The limit is per file, and the pack, its `.idx` and its `.rev` are each
-limited separately, so one fetch can briefly write about 3× the cap before it is stopped. A fetch stopped there, or a mirror over 1 GB on disk after its fetch, is deleted and a `<mirror>.too-big` note is left beside it; the row reads `error` with "This repo
+limited separately, so one fetch can briefly write about 3× the cap before it is stopped. Everything
+git starts during a fetch inherits the limit, including the admin's `GIT_SSH`/`GIT_SSH_COMMAND` and
+credential helpers: a wrapper that writes a log file past 1 GB stops the fetch, and the repo reads as
+too big. A plain `ssh` only writes `known_hosts`. A fetch stopped there, or a mirror over 1 GB on disk after its fetch, is deleted and a `<mirror>.too-big` note is left beside it; the row reads `error` with "This repo
 is too big for Dev mode to read (over 1 GB)." and `poll_code: "too_big"` (a GitHub row falls back to
 the API instead). One answer from git over 16 MB (a commit touching a vast number of files) reads
 `error` with "This repo is too big for Dev mode to read." and the same `poll_code`. The repo

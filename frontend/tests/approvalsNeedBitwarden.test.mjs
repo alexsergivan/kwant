@@ -39,7 +39,7 @@ const BW = st({ store: 'bitwarden', bitwarden: bw() });
 const BW_LEFTOVER = st({ store: 'bitwarden', bitwarden: bw(), local_count: 2 });
 const BW_LOCKED = st({ store: 'bitwarden', locked: true, bitwarden: bw({ unlocked: false }), local_count: 3 });
 const EXPOSED = st({ local_count: 3, approvals_off: true, exposed: true });
-const LOCAL_NOTE = "Unless every space and bot is on “Ask before running commands”, any bot that can run commands could read passwords saved on this server, so they can't be saved here: use Bitwarden.";
+const LOCAL_NOTE = "Unless every space and bot is on “Ask before running commands”, any bot that can run commands could read passwords saved on this server, so Bitwarden is the safer place for them.";
 const BW_NOTE = 'While a password is being filled into a page, a bot that can run commands can read it.';
 
 // ---------------------------------------------------------------- the model
