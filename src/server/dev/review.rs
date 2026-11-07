@@ -224,7 +224,7 @@ fn prompt(facts: &DevFacts, reviewer: &Kwant, rules: &Risk, flags: &[Flag]) -> (
     let p = format!(
         "You are {name}, reviewing a pull request in {repo} that another bot or person wrote. Read it as a careful reviewer.\n\n\
 {task}\n\n\
-<pr>\n#{pr} {title}\nBranch {branch} into {base}\n\n{body}\n\nThe diff{cut_note}:\n{diff}</pr>\n\n\
+<pr>\n{heading}\nBranch {branch} into {base}\n\n{body}\n\nThe diff{cut_note}:\n{diff}</pr>\n\n\
 kwant's rules already found: risk {level:?} ({reasons}); test-tamper flags: {flags}. Don't repeat those as findings.\n\n\
 Reply with this JSON object:\n\
 {{\"intent\": {{\"asked\": \"what the task (or the PR text) asked for, one sentence\", \
@@ -236,8 +236,11 @@ something asked for that the diff doesn't do (missing), or something the diff do
 broken behaviour), none for style; an empty list is fine. `line` is a line number in the PR's version of `file`.\n\n{DATA_RULES}",
         name = reviewer.name,
         repo = facts.repo,
-        pr = facts.pr.unwrap_or(0),
-        title = fence_safe(&facts.title),
+        // A pushed branch with no forge (G5) has no number
+        heading = match facts.pr {
+            Some(n) => format!("#{n} {}", fence_safe(&facts.title)),
+            None => fence_safe(&facts.title).to_string(),
+        },
         branch = fence_safe(facts.head_branch.as_deref().unwrap_or("?")),
         base = facts.base_branch,
         cut_note = cut.as_ref().map(|c| format!(" ({c})")).unwrap_or_default(),

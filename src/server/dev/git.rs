@@ -521,6 +521,9 @@ pub fn blocked(ip: IpAddr) -> bool {
     }
 }
 
+/// The most branches [`Repo::heads`] lists.
+pub const MAX_HEADS: usize = 200;
+
 /// Looks a remote's host up: the seam [`check_remote`] is tested through, with no network.
 #[async_trait::async_trait]
 pub trait Resolver: Send + Sync {
@@ -1026,6 +1029,45 @@ impl Repo {
         let pin = checked(url).await?;
         let out = run("git", Some(&self.dir), &["ls-remote", "--heads", "--", url, &name], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 16, auth, file: false, pin: &pin, fsize: None }).await?;
         Ok(String::from_utf8_lossy(&out).lines().any(|l| l.split('\t').nth(1) == Some(name.as_str())))
+    }
+
+    /// The branches of `url` (or of a team folder) and their heads, at most [`MAX_HEADS`], sorted
+    /// by name; names [`ok_branch`] refuses are left out. A mirror asks the remote (`ls-remote`,
+    /// through the same pin as a fetch) without fetching anything.
+    pub async fn heads(&self, url: &str, auth: Option<&Auth>) -> Result<Vec<(String, String)>, GitError> {
+        let out = if self.local {
+            self.text(&["for-each-ref", "--format=%(objectname)\t%(refname)", "refs/heads/"]).await?
+        } else {
+            if fetch_url(url).as_deref() != Some(url) {
+                return Err(GitError::Refused);
+            }
+            let pin = checked(url).await?;
+            let out = run("git", Some(&self.dir), &["ls-remote", "--heads", "--", url], Opts { timeout: REMOTE_TIMEOUT, max_out: 1 << 20, auth, file: false, pin: &pin, fsize: None }).await?;
+            String::from_utf8_lossy(&out).into_owned()
+        };
+        let mut heads: Vec<(String, String)> = out
+            .lines()
+            .filter_map(|l| {
+                let (sha, name) = l.split_once('\t')?;
+                let name = name.trim().strip_prefix("refs/heads/")?;
+                (is_sha(sha.trim()) && ok_branch(name)).then(|| (name.to_string(), sha.trim().to_string()))
+            })
+            .collect();
+        heads.sort();
+        heads.truncate(MAX_HEADS);
+        Ok(heads)
+    }
+
+    /// Whether `a` is `b` or an ancestor of it.
+    pub async fn is_ancestor(&self, a: &str, b: &str) -> Result<bool, GitError> {
+        if !(is_sha(a) || ok_ref(a)) || !(is_sha(b) || ok_ref(b)) {
+            return Err(GitError::Refused);
+        }
+        match self.git(&["merge-base", "--is-ancestor", "--end-of-options", a, b]).await {
+            Ok(_) => Ok(true),
+            Err(GitError::Failed) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// The commit a ref or sha names.

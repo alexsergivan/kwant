@@ -4,11 +4,12 @@
 //! `generate` turns them into cards. The production floor lives in `crate::mcp::prod_floor`.
 //!
 //! Lin owns `facts`, `routes`, `poller`, `post`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
-//! `review`, `risk`, `tamper`, `notes` and `source`; Juno owns `scan`.
+//! `review`, `risk`, `tamper`, `notes` and `source`; Juno owns `scan` and `forge`.
 
 pub mod backup;
 pub mod facts;
 pub mod floor;
+pub mod forge;
 pub mod git;
 pub mod generate;
 pub mod landed;

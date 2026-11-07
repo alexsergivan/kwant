@@ -355,9 +355,16 @@ pub async fn post_review(state: &AppState, row: &DevCardRow) -> Result<Posted, P
     }
     let facts: DevFacts = serde_json::from_str(&row.facts).map_err(|_| PostError::failed("kwant could not read this card's facts"))?;
     let card: Value = row.card.as_deref().and_then(|c| serde_json::from_str(c).ok()).ok_or_else(|| PostError::failed("this review isn't written yet"))?;
+    if facts.no_forge {
+        return Err(PostError::failed("this branch has no pull request to post to"));
+    }
     let Some(number) = facts.pr else {
         return Err(PostError::failed("this card has no pull request"));
     };
+    // GitLab and Gitea are read since 0.7.4; posting to them comes with G7
+    if let Some(k) = facts.forge.as_deref().and_then(super::forge::ForgeKind::parse).filter(|k| *k != super::forge::ForgeKind::Github) {
+        return Err(PostError::failed(format!("Posting to {} comes in a later kwant version", k.name())));
+    }
     let host = row.repo.split_once('/').map(|(h, _)| h).filter(|h| !h.starts_with("local:"));
     let (client, pull) = client_for_pull(state, host, &facts.repo, number).await?;
     if pull.head.sha != row.head_sha {
