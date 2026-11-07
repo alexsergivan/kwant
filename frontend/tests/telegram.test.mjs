@@ -20,7 +20,8 @@ const m = await loadBundled(`
   export { flushSync } from 'react-dom';
   export * from './src/telegram';
   export { TelegramConnection, SetupSheet, ConnectedCard, CatalogCard, AllowConfirm } from './src/components/TelegramCard';
-  export { ViaTelegram, SentToTelegram, ResolvedViaTelegram } from './src/components/TelegramMarks';
+  export { ViaTelegram, SentToTelegram, ResolvedViaTelegram, AllowedFromTelegram, ALLOWED_FROM_TELEGRAM } from './src/components/TelegramMarks';
+  export { withdrawApproval, settledFromRecords, approvalsForChat, addSettled } from './src/approvals';
 `);
 const { React } = m;
 const h = React.createElement;
@@ -415,4 +416,58 @@ test('chat marks: via Telegram, sent to Telegram too, and a decision made there'
   const row = $('[data-resolved-via="telegram"]');
   assert.match(row.textContent, /Drafter asked “Which day\?” · You picked Monday/);
   assert.ok(row.querySelector('[data-via-telegram]'));
+});
+
+// ---- G4: an approval allowed in Telegram (ApprovalWithdrawn {id, answered_via?, outcome?}) ----
+const card = (id, kwant = 'k_drafter') => ({ id, tool_name: 'Bash', details: { kwant_id: kwant, kwant_name: 'Drafter', command: 'npm test' }, kwant_id: kwant, link: null });
+const drawSettled = async (settled) => mount(h('div', null, settled.map((a) => h(m.AllowedFromTelegram, { key: a.id, lead: 'Drafter wanted to use Bash' }))));
+
+test('live: allowed once in Telegram closes the card and keeps "✓ Allowed once from Telegram", with no time', async () => {
+  const pending = [card('ap_1'), card('ap_2')];
+  const r = m.withdrawApproval(pending, [], { id: 'ap_1', answered_via: 'telegram', outcome: 'allowed_once' });
+  assert.deepEqual(r.pending.map((a) => a.id), ['ap_2']);
+  assert.deepEqual(r.settled.map((a) => a.id), ['ap_1']);
+  // The same event again (a reconnect replay) adds nothing.
+  assert.equal(m.withdrawApproval(pending, r.settled, { id: 'ap_1', answered_via: 'telegram', outcome: 'allowed_once' }).settled.length, 1);
+  // answered_via without an outcome (a server between versions) still reads as allowed once.
+  assert.equal(m.withdrawApproval(pending, [], { id: 'ap_1', answered_via: 'telegram' }).settled.length, 1);
+  await drawSettled(r.settled);
+  const row = $('[data-resolved-via="telegram"]');
+  assert.equal(row.textContent, 'Drafter wanted to use Bash · ✓ Allowed once from Telegram');
+  assert.equal(m.ALLOWED_FROM_TELEGRAM, '✓ Allowed once from Telegram');
+  assert.doesNotMatch(row.textContent, /\d{1,2}:\d{2}/, 'no time: kwant stores none');
+  assert.equal(row.querySelector('svg').getAttribute('aria-hidden'), 'true');
+});
+
+test('old {id}-only events, kwant answers and other outcomes close the card without a Telegram line', () => {
+  const pending = [card('ap_1')];
+  for (const data of [{ id: 'ap_1' }, { id: 'ap_1', outcome: 'allowed_once' }, { id: 'ap_1', outcome: 'denied' }, { id: 'ap_1', outcome: 'expired' }, { id: 'ap_1', outcome: 'cancelled' }, { id: 'ap_1', answered_via: 'telegram', outcome: 'denied' }]) {
+    const r = m.withdrawApproval(pending, [], data);
+    assert.deepEqual(r.pending, [], JSON.stringify(data));
+    assert.deepEqual(r.settled, [], JSON.stringify(data));
+  }
+  // An unknown id or a malformed event changes nothing.
+  assert.equal(m.withdrawApproval(pending, [], { id: 'ap_9', answered_via: 'telegram' }).pending.length, 1);
+  assert.equal(m.withdrawApproval(pending, [], null).pending.length, 1);
+});
+
+test('after a reload: GET /api/approvals rows allowed in Telegram come back as the same line, in their chat', async () => {
+  const now = Date.parse('2026-11-07T12:00:00Z');
+  const rows = [ // newest first, as the server sends them
+    { id: 'ap_3', kwant_id: 'k_drafter', tool_name: 'Bash', status: 'allowed_once', answered_via: 'telegram', created_at: '2026-11-07T11:00:00Z', details: { kwant_name: 'Drafter' } },
+    { id: 'ap_2', kwant_id: 'k_drafter', tool_name: 'Bash', status: 'allowed_once', answered_via: null, created_at: '2026-11-07T10:30:00Z', details: {} },
+    { id: 'ap_1', kwant_id: 'k_drafter', tool_name: 'Write', status: 'allowed_once', answered_via: 'telegram', created_at: '2026-11-07T10:00:00Z', details: {} },
+    { id: 'ap_0', kwant_id: 'k_drafter', tool_name: 'Bash', status: 'allowed_once', answered_via: 'telegram', created_at: '2026-11-05T10:00:00Z', details: {} },
+    { id: 'ap_x', tool_name: 'Bash', status: 'allowed_once', answered_via: 'telegram', created_at: '2026-11-07T11:30:00Z', details: {} },
+  ];
+  const settled = m.settledFromRecords(rows, now);
+  assert.deepEqual(settled.map((a) => a.id), ['ap_1', 'ap_3'], 'Telegram only, the last day, oldest first, never without a bot');
+  assert.equal(settled[1].kwant_id, 'k_drafter');
+  // A live line and the reloaded one are drawn once.
+  assert.equal(m.addSettled([card('ap_3')], settled).length, 2);
+  assert.deepEqual(m.approvalsForChat(settled, { kind: 'kwant', kwantId: 'k_other' }), []);
+  assert.equal(m.approvalsForChat(settled, { kind: 'kwant', kwantId: 'k_drafter' }).length, 2);
+  assert.deepEqual(m.settledFromRecords({ error: 'x' }, now), []);
+  await drawSettled(settled);
+  assert.deepEqual([...document.querySelectorAll('[data-resolved-via="telegram"]')].map((r) => r.textContent), Array(2).fill('Drafter wanted to use Bash · ✓ Allowed once from Telegram'));
 });

@@ -55,7 +55,7 @@ import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToa
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings, Sparkles } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
-import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { ChatApproval, OpenChat, addSettled, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { NewChannelModal } from './components/NewChannelModal';
@@ -290,7 +290,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [pendingApprovals, setPendingApprovals] = useState<ChatApproval[]>([]);
   const pendingRef = useRef<ChatApproval[]>([]);
   pendingRef.current = pendingApprovals;
-  const [settledApprovals, setSettledApprovals] = useState<{ approval: ChatApproval; at: string }[]>([]);
+  // Approvals allowed in Telegram, kept in their chat as one line (live, and from the server after a reload).
+  const [settledApprovals, setSettledApprovals] = useState<ChatApproval[]>([]);
   // Seen live since the last server list: kept even if that list was fetched just before.
   const liveApprovalIdsRef = useRef<Set<string>>(new Set());
   const dropApproval = (id: string) => {
@@ -726,6 +727,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const hydrateFromServer = async () => {
     skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
     refreshAwayCount();
+    awayApi.approvals('allowed_once').then((rows) => setSettledApprovals((prev) => addSettled(prev, settledFromRecords(rows))), () => undefined);
     questionsApi.listOpen().then((list) => {
       // Closed ones seen live stay; open ones come from the server.
       setQuestions((prev) => {
@@ -1286,12 +1288,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           case 'ApprovalWithdrawn': {
             // Answered in Telegram (when the server says so): kept in the chat as a resolved row (G4).
-            const id = event.data?.id;
-            if (event.data?.answered_via === 'telegram') {
-              const card = pendingRef.current.find((a) => a.id === id);
-              if (card) setSettledApprovals((prev) => (prev.some((p) => p.approval.id === id) ? prev : [...prev, { approval: card, at: new Date().toISOString() }]));
-            }
-            dropApproval(id);
+            // Allowed in Telegram: the card stays as one line. Old {id}-only events just close it.
+            const { settled } = withdrawApproval(pendingRef.current, [], event.data);
+            if (settled.length) setSettledApprovals((prev) => addSettled(prev, settled));
+            dropApproval(event.data?.id);
             break;
           }
           case 'telegram.status':
@@ -3375,7 +3375,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           streamingText={isCurrentContextStreaming ? streamingText : ''}
           streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
           pendingApprovals={approvalsHere}
-          settledApprovals={settledApprovals.filter((x) => approvalsForChat([x.approval], openChat).length > 0)}
+          settledApprovals={approvalsForChat(settledApprovals, openChat)}
           home={chatHome}
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}

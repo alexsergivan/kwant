@@ -193,6 +193,8 @@ export const awayApi = {
   seen: () => call<{ last_seen: string }>('POST', '/api/away/seen'),
   answer: (id: string, choice: number) => call<unknown>('POST', `/api/questions/${enc(id)}/answer`, { choice }),
   resolve: (id: string, decision: ApprovalDecision) => call<unknown>('POST', `/api/approvals/${enc(id)}/resolve`, { decision }),
+  /** Approval records with this stored status, newest first (`answered_via` says where). */
+  approvals: (status: string) => call<unknown>('GET', `/api/approvals?status=${enc(status)}`),
 };
 
 /** SSE events that can change what the page shows, so the badge re-counts. */

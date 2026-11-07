@@ -21,7 +21,7 @@ import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
-import { ResolvedViaTelegram, ViaTelegram } from './TelegramMarks';
+import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
@@ -168,7 +168,7 @@ export interface ChatViewProps {
   /** Tool approvals waiting in this chat, oldest first. */
   pendingApprovals: PendingApproval[];
   /** Approvals answered in Telegram while this chat was open (G4): kept as a resolved row. */
-  settledApprovals?: { approval: PendingApproval; at: string }[];
+  settledApprovals?: PendingApproval[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -1736,9 +1736,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
 
-        {/* Approvals answered in Telegram (G4): "Allowed once · via Telegram" */}
-        {settledApprovals.map(({ approval, at }) => (
-          <ResolvedViaTelegram key={approval.id} kind="approval" lead={approvalLead(approval)} outcome="Allowed once" at={at} />
+        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
+        {settledApprovals.map((approval) => (
+          <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
         ))}
 
         {/* Pending Security Approval Ticket */}

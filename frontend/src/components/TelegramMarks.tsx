@@ -3,6 +3,9 @@ import React from 'react';
 import { CheckCircle2, Send, ShieldCheck } from 'lucide-react';
 import { localClock } from '../clock';
 
+/** The line the chat keeps for an approval allowed in Telegram. No time: kwant stores none. */
+export const ALLOWED_FROM_TELEGRAM = '✓ Allowed once from Telegram';
+
 /** "via Telegram": after the time on a message the person sent from Telegram. */
 export const ViaTelegram: React.FC = () => (
   <span className="tg-via" data-via-telegram="">
@@ -19,6 +22,19 @@ export const SentToTelegram: React.FC = () => (
     <Send size={11} className="sm:hidden" aria-hidden="true" />
     <span className="sr-only sm:hidden">sent to Telegram too</span>
   </span>
+);
+
+/**
+ * An approval allowed in Telegram, kept in the chat: "Drafter wanted to use Bash · ✓ Allowed once
+ * from Telegram". No time: kwant stores none, so the line reads the same live and after a reload.
+ */
+export const AllowedFromTelegram: React.FC<{ lead: string }> = ({ lead }) => (
+  <div className="tg-done flex items-start gap-2 ml-0 sm:ml-[50px] max-w-3xl px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-900/50 text-xs text-zinc-400" data-resolved-via="telegram">
+    <ShieldCheck size={14} className="mt-0.5 shrink-0 text-violet-300" aria-hidden="true" />
+    <p className="min-w-0 break-words leading-5">
+      {lead} · <b className="font-semibold text-zinc-100">{ALLOWED_FROM_TELEGRAM}</b>
+    </p>
+  </div>
 );
 
 /**
