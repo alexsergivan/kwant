@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Added
+- **Use kwant from your coding agent.** Claude Code, Codex, Cursor and other MCP clients can ask your bots for work through `POST /api/mcp/agents` and get the reply back. Each connection is made in Settings, has its own `kag_` token (shown once, stored only as a hash), reaches only the spaces and bots you pick, and is revoked at once. The agent is never the person: its messages are marked as the agent's, it can't approve anything (it sees `waiting_on_person`), and its token gets a 403 on every other route. Each connection gets up to 60 asks an hour and 3 turns at once, and its turns count toward the chain budget and the spend stop. See [docs/agents-connect.md](docs/agents-connect.md). (0.7.4)
 - NVIDIA preset for custom servers: free models from build.nvidia.com (#365).
 - **Dev mode reads any git repo.** Repos on GitLab, Gitea or any git server, and team folders with no remote, are watched with git, and what lands there shows on the Dev desk. Reviews, CI checks and Post to GitHub still work on GitHub repos only. The server needs git 2.31 or newer; without it, the desk says "Needs git on the server". (#366, #368)
 

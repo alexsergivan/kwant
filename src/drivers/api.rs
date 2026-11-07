@@ -262,7 +262,10 @@ fn summary_request(bot: &str, earlier: Option<&str>, messages: &[crate::db::mode
             "kwant" if m.sender_id == bot => format!("{bot} (you)"),
             "kwant" => m.sender_id.clone(),
             "system" => "kwnt notice".into(),
-            _ => "Person".into(),
+            _ => match super::from_agent(m) {
+                Some(agent) => format!("Outside agent {} (not the person)", agent.replace(['[', ']', '\n', '\r'], " ")),
+                None => "Person".into(),
+            },
         };
         let text = crate::mcp::truncate_text(&m.text, SUMMARY_MESSAGE_MAX_CHARS);
         transcript.push_str(&format!("[{who}]: {text}\n\n"));
@@ -1327,7 +1330,7 @@ impl Driver for ApiDriver {
                         // kwnt's own notices stay where they happened, so a new one doesn't
                         // change the cached prefix before it
                         "system" => ("user", format!("[kwnt notice]: {}", msg.text)),
-                        _ => ("user", msg.text.clone()),
+                        _ => ("user", super::user_history_text(msg)),
                     };
                     messages.push(json!({"role": role, "content": content}));
                 }
@@ -1351,7 +1354,7 @@ impl Driver for ApiDriver {
                         // Teammates' replies are context from other speakers, not this kwant's own turns
                         "kwant" => ("user", super::peer_message(&msg.sender_id, &msg.text)),
                         "system" => ("system", msg.text.clone()),
-                        _ => ("user", msg.text.clone()),
+                        _ => ("user", super::user_history_text(msg)),
                     };
                     messages.push(json!({"role": role, "content": content}));
                 }
