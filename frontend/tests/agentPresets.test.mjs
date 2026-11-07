@@ -47,3 +47,9 @@ test('lifestyle personas include a travel planner and safety boundaries', () => 
   assert.match(byId.fitness.persona_prompt, /not a doctor/);
   assert.match(byId.budget.persona_prompt, /not a licensed financial advisor/);
 });
+
+test('the server copy of the presets (src/teams/presets.json) matches; regenerate with scripts/gen-team-data.mjs', async () => {
+  const server = JSON.parse(await readFile(new URL('../../src/teams/presets.json', import.meta.url), 'utf8'));
+  const want = AGENT_PRESETS.map(({ id, name, title, avatar_sprite, persona_prompt, soul }) => ({ id, name, title, avatar_sprite, persona_prompt, soul }));
+  assert.deepEqual(server, want);
+});

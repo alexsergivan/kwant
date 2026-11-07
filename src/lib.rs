@@ -1,6 +1,7 @@
 pub mod app_update;
 pub mod automation_discovery;
 pub mod broker;
+pub mod clock;
 pub mod config;
 pub mod db;
 pub mod doctor;
@@ -17,6 +18,7 @@ pub mod sandbox;
 pub mod serve;
 pub mod setup;
 pub mod server;
+pub mod teams;
 pub mod tools;
 pub mod zombie;
 
