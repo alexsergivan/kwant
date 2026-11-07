@@ -109,22 +109,28 @@ async fn open_questions(state: &AppState, space_id: &str, key: &str) -> Vec<Tick
     qs
 }
 
-/// The ticket's turn has come (api.md 1.3). A ticket with a brief resumes from it (its open
-/// questions, or a new mission); otherwise the lead reads it. Nothing happens for a space or
-/// site Jira isn't connected to.
+/// The ticket's turn has come (api.md 1.3). Only a ticket whose card is `picked_up` starts (the
+/// card row is the one truth, D2). A ticket with a brief resumes from it (its open questions, or a
+/// new mission, J14), whatever its brief row was left at when it was taken back, closed or failed
+/// (D4); otherwise the lead reads it. Nothing happens for a ticket the board doesn't have.
 pub async fn start(state: &AppState, space_id: &str, t: TicketRef) {
     if !valid_key(&t.key) {
         return;
     }
-    let Some(site) = seam::site(state, space_id, &t.site_id).await else { return };
+    let Ok(Some(card)) = state.db.dev_ticket(space_id, &t.key).await else { return };
+    if card.state != crate::db::dev_jira::PICKED_UP {
+        return;
+    }
+    let Some(site) = seam::site(state, space_id, &t.site_id).await else {
+        // Its site can't be built (gone, or its token unreadable): fail it, so it doesn't hold a
+        // slot in picked_up forever. Retry starts it again.
+        tracing::warn!(key = %t.key, "dev: no site to read a ticket from");
+        seam::fail(state, space_id, &t.key, super::store::FailCode::BriefFailed).await;
+        return;
+    };
     if let Some(r) = row(state, space_id, &t.key).await {
-        // Already going, or done with
-        if !matches!(r.state.as_str(), "picked_up" | "taken_back" | "failed" | "waiting") {
-            return;
-        }
-        if r.state != "picked_up" && !seam::set_state(state, space_id, &t.key, "picked_up").await {
-            return;
-        }
+        // Handed over again: the brief row comes back with its card
+        super::store::mirror(state, space_id, &t.key, crate::db::dev_jira::PICKED_UP).await;
         if let Some(b) = parse(&r) {
             resume(state, &site, space_id, &t.key, b).await;
             return;
@@ -779,6 +785,11 @@ pub async fn stopped(state: &AppState, space_id: &str, key: &str, why: Why) {
         Why::Closed => "Closed in Jira",
     };
     let _ = state.db.set_ticket_brief_field(space_id, key, "note", Some(text)).await;
+    // The card moved first (pickup or the person's Stop/Close); the brief row stays where it went
+    // (D4), so a late brief turn can't move it on, and a later Start resumes from the kept brief.
+    if let Ok(Some(card)) = state.db.dev_ticket(space_id, key).await {
+        super::store::mirror(state, space_id, key, &card.state).await;
+    }
     mission::stop(state, &r, text).await;
     if why == Why::Closed {
         // Its questions won't be answered: their cards close with their defaults, which start nothing
@@ -790,8 +801,6 @@ pub async fn stopped(state: &AppState, space_id: &str, key: &str, why: Why) {
     tracing::info!(%key, why = text, "dev: a ticket's work stopped");
 }
 
-/// A Jira site was deleted from the space (api.md 1.7, brief.md §10). Juno's `DELETE …/dev/jira`
-/// calls this after the ticket rows are gone: the site's briefs and their questions go too.
 /// What the ticket row's `work` object needs from the brief side (api-decisions 11, api.md 1.3):
 /// the ticket's mission, and the Matches the ticket verdict.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -829,6 +838,8 @@ pub fn mount(r: axum::Router<AppState>) -> axum::Router<AppState> {
         .route("/api/spaces/:id/dev/tickets/:key/ok", post(b::ok))
 }
 
+/// A Jira site was deleted from the space (api.md 1.7, brief.md §10). Juno's `DELETE …/dev/jira`
+/// calls this after the ticket rows are gone: the site's briefs and their questions go too.
 /// Missions and chats the briefs started stay.
 pub async fn site_deleted(state: &AppState, space_id: &str, site_id: &str) {
     match brief::forget_site(&state.db, space_id, site_id).await {
