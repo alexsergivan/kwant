@@ -148,13 +148,41 @@ test('inline code wraps anywhere and keeps its box on every line', () => {
 const live = (steps) => ({ turnId: 't1', thinking: {}, steps });
 const step = (over = {}) => ({ id: 's1', kind: 'tool', status: 'running', title: 'Using `web_search`', started_at: '2026-11-05T10:00:00Z', ...over });
 
-test('on a phone the strip is the one live line: 44 px, 14 px text, words not tool names', () => {
+test('on a phone the strip is one quiet line: no card, 28 px, 12 px text, 16 px avatar, space above the composer', () => {
   const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), phone: true });
-  assert.match(html, /min-h-\[44px\]/);
-  assert.match(html, /text-sm leading-5/);
-  assert.match(html, /tabular-nums[^"]*text-\[#a39dcc\]|text-\[#a39dcc\][^"]*tabular-nums/);
+  const wrap = /<div class="(kws-strip[^"]*)"/.exec(html)[1];
+  // Bottom spacing so it never sits on the composer's border; the composer's own 12 px side padding.
+  for (const c of ['kws-strip-phone', 'px-3', 'pt-1', 'pb-1.5']) assert.ok(wrap.split(' ').includes(c), c);
+  const line = /data-working-strip=""><div class="([^"]*)"/.exec(html)[1];
+  assert.ok(line.split(' ').includes('h-7'), 'about 28 px tall');
+  // No card: no border, background, shadow or rounding on the phone.
+  assert.doesNotMatch(wrap + ' ' + line, /\bborder\b|\bbg-|shadow|rounded|min-h-\[44px\]/);
+  assert.doesNotMatch(html, /text-sm/);
+  assert.match(html, /style="width:16px;height:16px"/);
+  assert.match(html, /class="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite"/);
+  assert.match(html, /<span class="font-medium text-zinc-300">Architect<\/span>/);
+  assert.match(html, /tabular-nums text-xs leading-4 text-zinc-500/);
+  assert.match(html, /class="shrink-0 inline-flex kw-avatar-working"/, 'the working pulse stays');
   assert.match(text(html), /Architect is searching the web/);
   assert.doesNotMatch(text(html), /_/);
+});
+
+test('phone strip buttons are 28 px to look at and 44 px to tap: data-compact plus the kws-hit area', () => {
+  const css = readFileSync(new URL('../src/styles/modern.css', import.meta.url), 'utf8');
+  const before = /\.kws-hit::before\s*\{([^}]*)\}/.exec(css)[1];
+  assert.match(before, /inset:\s*-8px 0/);
+  assert.match(before, /min-width:\s*44px/);
+  assert.match(/\.kws-hit\s*\{([^}]*)\}/.exec(css)[1], /position:\s*relative/);
+  // 28 px + 8 px above + 8 px below = 44 px
+  const html = m.strip({ active: true, name: 'QA', title: 'QA', awaitingAnswer: true, phone: true, onAnswer: noop, onStop: noop });
+  for (const b of buttons(html)) {
+    assert.match(b.attrs, /data-compact/, b.label);
+    assert.match(b.attrs, /kws-hit/, b.label);
+    assert.match(b.attrs, /\bh-7\b/, b.label);
+    assert.match(b.attrs, /text-xs/, b.label);
+  }
+  // Stop is muted; Answer is the one amber thing.
+  assert.match(buttons(html).find((b) => b.label === 'Stop').attrs, /text-zinc-400/);
 });
 
 test('waiting on a question, the strip says so and offers Answer, which goes to the card', () => {
@@ -164,10 +192,19 @@ test('waiting on a question, the strip says so and offers Answer, which goes to 
   assert.match(html, /data-waiting-on="question"/);
   const answer = buttons(html).find((b) => b.label === 'Answer');
   assert.ok(answer, 'Answer button');
-  assert.match(answer.attrs, /min-h-\[44px\]/);
+  assert.match(answer.attrs, /text-xs font-semibold text-amber-200/);
   assert.match(answer.attrs, /data-strip-answer/);
+  assert.doesNotMatch(html, /data-working-elapsed/, 'the time hides behind Answer');
   // Desktop keeps its old strip: no Answer button there.
   assert.ok(!buttons(m.strip({ active: true, name: 'QA', title: 'QA', awaitingAnswer: true, phone: false, onAnswer: noop })).some((b) => b.label === 'Answer'));
+});
+
+test('desktop strip is unchanged: the bordered card, 24 px avatar, no hit-area classes', () => {
+  const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), onStop: noop, phone: false });
+  assert.match(html, /<div class="kws-strip px-3 sm:px-6 pt-2" data-working-strip="">/);
+  assert.match(html, /rounded-xl border border-zinc-700\/60 bg-zinc-900\/80 shadow-\[var\(--kws-shadow\)\] gap-3 px-3 py-1\.5/);
+  assert.match(html, /style="width:24px;height:24px"/);
+  assert.doesNotMatch(html, /kws-hit|data-compact|kws-strip-phone/);
 });
 
 test('on a phone the steps panel is one 44 px row, the engine note behind an info button', () => {
