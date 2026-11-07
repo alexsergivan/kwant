@@ -29,7 +29,8 @@ shot() {
   else command -v import > /dev/null && import -window root "$out/$1.png" || true; fi
 }
 
-# Window titles, and on macOS the two windows moved apart so the screenshot shows both.
+# Window titles, and on macOS the two windows moved apart so the screenshot shows both: GitHub's
+# Mac screen is 1024x768, so two 480x680 windows at x=20 and x=520 fit without covering each other.
 windows() {
   if [ $mac = 1 ]; then
     osascript > "$out/$1.txt" 2>&1 <<'OSA' || true
@@ -39,8 +40,8 @@ tell application "System Events"
   set i to 0
   repeat with w in ws
     try
-      set position of w to {40 + i * 560, 60 + i * 140}
-      set size of w to {1100, 720}
+      set position of w to {20 + i * 500, 40}
+      set size of w to {480, 680}
     end try
     set i to i + 1
   end repeat
@@ -51,6 +52,27 @@ OSA
     xwininfo -root -tree 2> /dev/null | grep -o '"kwant[^"]*"' | sort -u > "$out/$1.txt" || true
   fi
   note "windows: $(tr '\n' ' ' < "$out/$1.txt")"
+}
+
+# Both windows are open: one titled This Mac (macOS) or This computer (Linux), one with the
+# server's host:port. This Mac answers /api/health without a window, so the health check alone
+# can't tell. macOS gives one comma-separated line; Linux one quoted title per line, plus GTK's
+# title-less "kwant" leader window, which is ignored.
+windows_check() {
+  local want=${origin#http://}
+  python3 -I - "$out/$1.txt" "$want" <<'PY'
+import re, sys
+raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+titles = [t.strip().strip('"') for line in raw.splitlines() for t in line.split(", ")]
+titles = [t for t in titles if t and t != "kwant"]
+local = [t for t in titles if "This Mac" in t or "This computer" in t]
+server = [t for t in titles if re.search(re.escape(sys.argv[2]) + r"(?![0-9])", t)]
+print("titles:", titles)
+missing = (["This Mac/This computer"] if not local else []) + ([sys.argv[2]] if not server else [])
+if missing:
+    print("missing:", ", ".join(missing))
+    sys.exit(1)
+PY
 }
 
 quit_app() {
@@ -180,6 +202,7 @@ run() {
   sleep 3
   kill -0 "$pid" 2> /dev/null || fail "run $n: the app exited within 20 s"
   windows "windows-$n"
+  windows_check "windows-$n" || fail "run $n: the windows aren't This Mac/This computer and ${origin#http://}: $(tr '\n' ' ' < "$out/windows-$n.txt")"
   sleep 2
   shot "side-by-side-$n"
   quit_app "$pid" || note "run $n: quit by Apple event/SIGTERM didn't end it"
