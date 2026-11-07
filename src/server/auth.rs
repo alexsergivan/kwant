@@ -333,6 +333,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "documents", ..] => true,
         // Setup installs software on this machine and shows what is signed in
         ["", "api", "setup", ..] => true,
+        // Signing the machine's own AI accounts in or out (0.7.6: Claude, ChatGPT, Grok)
+        ["", "api", "engines", _, "login", ..] | ["", "api", "engines", _, "logout"] => true,
         // Sign-in links, device approvals and sessions: who else may sign in as the person
         ["", "api", "signin", ..] => true,
         // Web Push: where the person's notifications go
@@ -895,6 +897,12 @@ mod tests {
     fn person_only_routes() {
         let (get, post, put, del) = (Method::GET, Method::POST, Method::PUT, Method::DELETE);
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
+        assert!(person_only(&post, "/api/engines/codex/login"));
+        assert!(person_only(&get, "/api/engines/grok/login/login_1"));
+        assert!(person_only(&post, "/api/engines/claude/login/login_1/code"));
+        assert!(person_only(&post, "/api/engines/claude/logout"));
+        assert!(!person_only(&get, "/api/engines"));
+        assert!(!person_only(&post, "/api/engines/recheck"));
         assert!(person_only(&post, "/api/sandbox/t1/passwords/c1/reveal"));
         assert!(person_only(&del, "/api/sandbox/t1/passwords/c1"));
         assert!(person_only(&post, "/api/sandbox/t1/interact"));
