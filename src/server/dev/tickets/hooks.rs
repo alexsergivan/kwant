@@ -196,7 +196,8 @@ async fn read(state: &AppState, site: &Site, space_id: &str, t: &TicketRef) {
     session.task_id = task_id;
     session.saw_ticket(&issue, &comments);
     tools::open(session);
-    tools::progress(state, space_id, key, "ticket", "done", &issue.summary.chars().take(80).collect::<String>());
+    // Fixed words only: the event reaches every client of the space, and ticket text is untrusted (api.md 1.7)
+    tools::progress(state, space_id, key, "ticket", "done", tools::ticket_detail(&issue));
     let n = comments.len();
     tools::progress(state, space_id, key, "comments", "done", &format!("{n} comment{}", if n == 1 { "" } else { "s" }));
     let text = prompt::brief_prompt(&issue, &comments, workspace.as_deref(), site.confluence);
@@ -681,6 +682,17 @@ pub async fn stopped(state: &AppState, space_id: &str, key: &str, why: Why) {
         }
     }
     tracing::info!(%key, why = text, "dev: a ticket's work stopped");
+}
+
+/// A Jira site was deleted from the space (api.md 1.7, brief.md §10). Juno's `DELETE …/dev/jira`
+/// calls this after the ticket rows are gone: the site's briefs and their questions go too.
+/// Missions and chats the briefs started stay.
+pub async fn site_deleted(state: &AppState, space_id: &str, site_id: &str) {
+    match brief::forget_site(&state.db, space_id, site_id).await {
+        Ok(n) => tracing::info!(%site_id, briefs = n, "dev: a Jira site's briefs were forgotten"),
+        Err(e) => tracing::warn!(%site_id, error = %e, "dev: couldn't forget a Jira site's briefs"),
+    }
+    seam::unregister(site_id);
 }
 
 #[cfg(test)]

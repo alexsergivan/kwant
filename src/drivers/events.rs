@@ -297,7 +297,7 @@ pub enum RuntimeEvent {
     DevMode { space_id: String, on: bool },
     /// A brief's reading checklist moved (jira-tickets brief.md, design.md 03): `step` is
     /// `ticket`, `comments`, `links`, `confluence` or `code`; `state` `running`, `done` or
-    /// `skipped`; `detail` a short plain line ("2 pages read"). Never ticket text.
+    /// `skipped`; `detail` a short plain line ("2 pages read"), kwant's own words (api.md 1.7). Never ticket, comment or page text.
     #[serde(rename = "dev_ticket_progress", alias = "DevTicketProgress")]
     DevTicketProgress { space_id: String, key: String, step: String, state: String, detail: String },
     /// An idea in the idea jar changed (dropped in, peeked at, picked, edited, shelved, deleted:
