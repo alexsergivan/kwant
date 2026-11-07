@@ -97,9 +97,13 @@ pub fn link_only_reason(details: &Value) -> Option<&'static str> {
     if set("tier_reason") {
         return Some("This bot's tier needs you to approve it.");
     }
-    // A turn that read outside text asks for everything: an injected request is likeliest there
-    if details["always_ask"] == true {
+    // A turn that read outside text: an injected request is likeliest there
+    if details["tainted"] == true {
         return Some("This bot read text from outside in this turn.");
+    }
+    // A turn kwant started on its own (loose ends, a mission): nobody asked for this step
+    if details["always_ask"] == true {
+        return Some("kwant started this turn on its own, not from your message.");
     }
     let kind = ApprovalKind::of(details);
     if !TELEGRAM_APPROVABLE.contains(&kind) {
@@ -598,8 +602,12 @@ mod tests {
             (json!({"source": "claude_builtin", "tool": "SomeNewTool", "outside_folder": false}), "This kind of step can't be approved from Telegram."),
             (json!({"source": "mcp", "server": "kwnt_tools", "tool": "browser_click"}), "This is one of kwant's own tools."),
             (json!({"source": "mcp", "tool": "no_server"}), "This is one of kwant's own tools."),
-            (json!({"source": "mcp", "server": "files", "tool": "x", "always_ask": true}), "This bot read text from outside in this turn."),
-            (json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "always_ask": true}), "This bot read text from outside in this turn."),
+            (json!({"source": "mcp", "server": "files", "tool": "x", "tainted": true}), "This bot read text from outside in this turn."),
+            (json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "tainted": true}), "This bot read text from outside in this turn."),
+            (json!({"source": "mcp", "server": "files", "tool": "x", "always_ask": true}), "kwant started this turn on its own, not from your message."),
+            (json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "always_ask": true}), "kwant started this turn on its own, not from your message."),
+            // Both: the outside text is the sharper reason
+            (json!({"source": "mcp", "server": "files", "tool": "x", "always_ask": true, "tainted": true}), "This bot read text from outside in this turn."),
         ];
         for (d, why) in cases {
             assert_eq!(link_only_reason(&d), Some(why), "{d}");

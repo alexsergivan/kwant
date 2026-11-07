@@ -208,7 +208,7 @@ impl BrokerApprover {
         let audit_call = req.server == mcp::SELF_SERVER_NAME && super::missions::auditor::TOOL_NAMES.contains(&req.tool.as_str());
         let off = !forced && (!self.always_ask || audit_call) && mode.as_ref().is_some_and(|m| m.is_off());
         // "Ask only when risky": what the caller made of this call; nothing known asks. A turn that
-        // always asks (it read outside text) still lets claude's plain read tools through.
+        // always asks (kwant started it on its own) still lets claude's plain read tools through.
         let smart = mode
             .as_ref()
             .is_some_and(|m| m.is_smart())
@@ -247,7 +247,12 @@ impl BrokerApprover {
         if let Some((_, card)) = &floor {
             details["prod_floor"] = card.clone();
         }
-        // A turn that read outside text: Telegram keeps its cards link-only (Q-G6)
+        // Telegram keeps these cards link-only (Q-G6), each with its own line: a turn that read
+        // outside text (an injected request is likeliest there), and a turn kwant started on its
+        // own rather than from the person's message.
+        if super::missions::truth_ledger::is_tainted(&req.turn_id) {
+            details["tainted"] = json!(true);
+        }
         if self.always_ask {
             details["always_ask"] = json!(true);
         }

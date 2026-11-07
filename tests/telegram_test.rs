@@ -649,3 +649,66 @@ async fn long_bot_replies_are_split_for_telegram() {
     assert!(first.text().contains("(1/2)"), "{}", first.text());
     assert!(first.text().chars().count() <= 4096 && second.text().chars().count() <= 4096);
 }
+
+/// A real [`BrokerApprover`] for `turn`, its card waiting in a task the test drops.
+fn ask_through_the_approver(env: &Env, turn: &str, tool: &str, always_ask: bool) -> tokio::task::JoinHandle<kwnt::mcp::ApprovalOutcome> {
+    use kwnt::mcp::ToolApprover;
+    let approver = kwnt::server::mcp_runtime::BrokerApprover {
+        db: env.state.db.clone(),
+        data_dir: env.state.config.data_dir.clone(),
+        broker: env.state.broker.clone(),
+        events: env.state.event_sender.clone(),
+        timeout: Duration::from_secs(120),
+        conversation: env.a.clone(),
+        chat: Some(json!({"direct_kwant_id": env.a})),
+        always_ask,
+    };
+    let req = kwnt::mcp::ToolApprovalRequest {
+        kwant_id: env.a.clone(),
+        kwant_name: "A".into(),
+        turn_id: turn.into(),
+        tool_name: format!("mcp__files__{tool}"),
+        server: "files".into(),
+        tool: tool.into(),
+        arguments: json!({}),
+        builtin: None,
+        smart: None,
+        payment: None,
+    };
+    tokio::spawn(async move { approver.decide(req).await })
+}
+
+// Ada's M2 (#399): the two reasons a turn's cards stay link-only, each with its own line
+#[tokio::test]
+async fn a_turn_that_read_outside_text_or_that_kwant_started_has_no_allow_once() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 43).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // The same call in a plain chat turn: Allow once
+    let plain = ask_through_the_approver(&env, "turn-tg-plain", "plain_lookup", false);
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>plain_lookup</code>")).await;
+    assert_eq!(card.callbacks().len(), 1, "{:?}", card.buttons());
+
+    // An ordinary chat turn (not kwant-started) that read outside text: link-only, first line
+    kwnt::server::missions::truth_ledger::taint("turn-tg-taint");
+    let tainted = ask_through_the_approver(&env, "turn-tg-taint", "tainted_lookup", false);
+    let t = tg.wait_send(&bot, |c| c.text().contains("<code>tainted_lookup</code>")).await;
+    assert!(t.callbacks().is_empty(), "{:?}", t.buttons());
+    assert!(t.text().contains("This bot read text from outside in this turn. Approve it in kwant."), "{}", t.text());
+    assert!(!t.text().contains("kwant started this turn"), "{}", t.text());
+
+    // A turn kwant started on its own, nothing read from outside: link-only, second line
+    let started = ask_through_the_approver(&env, "turn-tg-started", "started_lookup", true);
+    let k = tg.wait_send(&bot, |c| c.text().contains("<code>started_lookup</code>")).await;
+    assert!(k.callbacks().is_empty(), "{:?}", k.buttons());
+    assert!(k.text().contains("kwant started this turn on its own, not from your message. Approve it in kwant."), "{}", k.text());
+    assert!(!k.text().contains("read text from outside"), "{}", k.text());
+
+    kwnt::server::missions::truth_ledger::end_turn("turn-tg-taint");
+    for h in [plain, tainted, started] {
+        h.abort();
+    }
+}

@@ -594,17 +594,23 @@ impl Database {
     /// reply window's sweep, A19). `messages.created_at` is SQLite's second-precision text, so
     /// both sides are compared through `datetime()`. Within one second, messages go in the order
     /// they were written (rowid), not by their random ids: the person's kwant message must close
-    /// the window before a reply written in the same second is looked at.
+    /// the window before a reply written in the same second is looked at. When the cursor's
+    /// message is gone (a bot deleted it), its rowid can't be read, so that second falls back to
+    /// comparing ids as before rather than sending the whole second again (Lin's nit on 505280d).
     pub async fn telegram_channel_since(&self, channel_id: &str, at: DateTime<Utc>, id: &str, limit: i64) -> Result<Vec<crate::db::models::Message>, DbError> {
         Ok(sqlx::query_as::<_, crate::db::models::Message>(
             "SELECT * FROM messages WHERE channel_id = ? AND thread_id IS NULL
                AND (datetime(created_at) > datetime(?) OR (datetime(created_at) = datetime(?)
-                    AND rowid > COALESCE((SELECT rowid FROM messages WHERE id = ?), 0)))
+                    AND CASE WHEN EXISTS (SELECT 1 FROM messages c WHERE c.id = ?)
+                             THEN rowid > (SELECT c.rowid FROM messages c WHERE c.id = ?)
+                             ELSE id > ? END))
              ORDER BY datetime(created_at), rowid LIMIT ?",
         )
         .bind(channel_id)
         .bind(at)
         .bind(at)
+        .bind(id)
+        .bind(id)
         .bind(id)
         .bind(limit)
         .fetch_all(&self.pool)
@@ -643,5 +649,33 @@ mod tests {
         assert_eq!(ids(db.telegram_channel_since("ch", at, "", 20).await.unwrap()), ["zzz-person", "aaa-reply", "mmm-later"]);
         assert_eq!(ids(db.telegram_channel_since("ch", at, "zzz-person", 20).await.unwrap()), ["aaa-reply", "mmm-later"]);
         assert_eq!(ids(db.telegram_channel_since("ch", at, "aaa-reply", 20).await.unwrap()), ["mmm-later"]);
+    }
+
+    // Lin's nit on 505280d: the cursor's message was deleted (a bot delete removes it), so its
+    // rowid is gone; that second compares ids as before instead of being swept again from the start
+    #[tokio::test]
+    async fn a_deleted_cursor_message_falls_back_to_comparing_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let second = "2026-11-07 12:00:00";
+        for id in ["bbb", "mmm-cursor", "aaa", "zzz"] {
+            sqlx::query("INSERT INTO messages (id, channel_id, sender_role, sender_id, text, created_at) VALUES (?, 'ch', 'kwant', 'x', 't', ?)")
+                .bind(id)
+                .bind(second)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO messages (id, channel_id, sender_role, sender_id, text, created_at) VALUES ('next-second', 'ch', 'kwant', 'x', 't', '2026-11-07 12:00:01')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let at: DateTime<Utc> = "2026-11-07T12:00:00Z".parse().unwrap();
+        let ids = |v: Vec<crate::db::models::Message>| v.into_iter().map(|m| m.id).collect::<Vec<_>>();
+        // Still there: written order
+        assert_eq!(ids(db.telegram_channel_since("ch", at, "mmm-cursor", 20).await.unwrap()), ["aaa", "zzz", "next-second"]);
+        sqlx::query("DELETE FROM messages WHERE id = 'mmm-cursor'").execute(&db.pool).await.unwrap();
+        // Gone: ids after the cursor's, in written order; bbb and aaa aren't sent again
+        assert_eq!(ids(db.telegram_channel_since("ch", at, "mmm-cursor", 20).await.unwrap()), ["zzz", "next-second"]);
     }
 }
