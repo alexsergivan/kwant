@@ -472,12 +472,19 @@ impl Database {
         Ok(row.map(|r| r.0))
     }
 
-    /// The last bot reply in a thread (for `list_threads`).
-    pub async fn last_kwant_text_in_thread(&self, thread_id: &str) -> Result<Option<String>, DbError> {
+    /// The newest bot reply in a thread to one of `connection_id`'s own asks there (for
+    /// `list_threads`): a reply saved with that connection's agent turn id in its meta. Replies to
+    /// what the person typed in the thread, or to another connection's turn, never count; None
+    /// when no ask of this connection has a reply yet.
+    pub async fn last_agent_reply_in_thread(&self, connection_id: &str, thread_id: &str) -> Result<Option<String>, DbError> {
         let row: Option<(String,)> = sqlx::query_as(
-            "SELECT text FROM messages WHERE thread_id = ? AND sender_role = 'kwant' ORDER BY rowid DESC LIMIT 1",
+            "SELECT m.text FROM messages m
+               JOIN agent_turns t ON t.id = CASE WHEN json_valid(m.meta) THEN json_extract(m.meta, '$.agent_turn_id') END
+             WHERE m.thread_id = ?1 AND m.sender_role = 'kwant' AND t.connection_id = ?2 AND t.thread_id = ?1
+             ORDER BY m.rowid DESC LIMIT 1",
         )
         .bind(thread_id)
+        .bind(connection_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|r| r.0))

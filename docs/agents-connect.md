@@ -73,7 +73,7 @@ These setups were checked against each tool's own docs on 2026-11-07:
 | `list_bots` | Lists the bots this connection may ask, with each one's id, name, role, team, space, and whether it's busy or idle. |
 | `ask` | Sends a bot a message (up to 8,000 characters) and waits up to `wait_seconds` (0–300, default 120) for the reply. |
 | `get_reply` | Checks a turn that `ask` started, by `turn_id`. |
-| `list_threads` | Lists the threads this connection started, newest first, with the last reply (first 500 characters). |
+| `list_threads` | Lists the threads this connection started, newest first, with the bot's last reply to this connection's own asks (first 500 characters). Replies to what the person types in the thread are left out. |
 
 `ask` posts into a thread with the bot called **From \<connection name\>**. There's one standing thread per
 connection and bot, so the bot keeps the context. `thread: "new"` starts a fresh thread, and a `thread_id`
