@@ -186,7 +186,16 @@ pub async fn on_rejected(state: &AppState, skill_id: &str) {
 /// Runs the sweep once (api.md §7): ends recordings past their 30 minutes (telling a live stage),
 /// purges steps past their undo or their 7 days, and tells each bot's context what changed.
 pub async fn sweep(state: &AppState) -> crate::db::show_once::SweepCounts {
-    let counts = match state.db.sweep_recordings(now()).await {
+    // a live stage stops its own overdue recording, taking the pending edit first
+    let t = now();
+    let mut by_stage = 0;
+    for rec in state.db.live_recordings().await.unwrap_or_default() {
+        if rec.elapsed_at(t) >= crate::db::show_once::LIMIT_SECS && stage::stop_live(&rec.stage, &rec.id, "limit_time").await {
+            let stopped = state.db.get_recording(&rec.id).await.ok().flatten();
+            by_stage += stopped.is_some_and(|r| r.state == "stopped") as u64;
+        }
+    }
+    let mut counts = match state.db.sweep_recordings(now()).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("show it once: sweep failed: {e}");
@@ -197,6 +206,7 @@ pub async fn sweep(state: &AppState) -> crate::db::show_once::SweepCounts {
         stage::recording_ended(id, "limit_time");
         emit_id(state, id).await;
     }
+    counts.stopped += by_stage;
     counts
 }
 

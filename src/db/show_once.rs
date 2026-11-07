@@ -390,6 +390,47 @@ impl Database {
         self.get_recording(id).await?.ok_or(ShowOnceError::NotFound)
     }
 
+    /// The live recordings, on any stage (the sweep asks their stages to stop them).
+    pub async fn live_recordings(&self) -> Result<Vec<Recording>, DbError> {
+        Ok(sqlx::query_as::<_, Recording>("SELECT * FROM skill_recordings WHERE state = 'recording'")
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// The field edit still pending in the page when the recording stops (api.md §3), stored just
+    /// before the stop. The time limit doesn't apply (it may be the reason for the stop) but the
+    /// 200-step cap does: with 200 steps stored it's dropped (`None`), and the recording isn't
+    /// stopped here, so the stop's own reason stands.
+    pub async fn add_final_step(&self, id: &str, step: &NewStep, now: i64) -> Result<Option<StepRow>, ShowOnceError> {
+        let mut tx = self.begin_write().await?;
+        let rec: Recording = sqlx::query_as("SELECT * FROM skill_recordings WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(ShowOnceError::NotFound)?;
+        if rec.state != "recording" {
+            tx.rollback().await?;
+            return Err(ShowOnceError::WrongState(rec.state));
+        }
+        if rec.step_count >= LIMIT_STEPS {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+        let step_id = insert_step(&mut tx, id, step, None, now).await?;
+        let mut origins = rec.origin_list();
+        if let Some(o) = step.origin.as_ref().filter(|o| !origins.contains(o)) {
+            origins.push(o.clone());
+        }
+        sqlx::query("UPDATE skill_recordings SET step_count = step_count + 1, origins = ? WHERE id = ?")
+            .bind(serde_json::to_string(&origins).unwrap_or_else(|_| "[]".into()))
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        let row = get_step_in(&mut tx, step_id).await?;
+        tx.commit().await?;
+        Ok(Some(row))
+    }
+
     /// Adds one recorded action (not a note) to a live recording, enforcing both limits: an action
     /// past 200 steps or 30 minutes stops the recording instead of being stored.
     pub async fn add_step(&self, id: &str, step: &NewStep, now: i64) -> Result<Added, ShowOnceError> {

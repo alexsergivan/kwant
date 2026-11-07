@@ -4,6 +4,11 @@
 //! recorder in kwnt's isolated world ([`super::capture::WORLD`]) when a recording starts and takes
 //! it off when it stops; this side turns what arrives into steps and frames for the person.
 //!
+//! Every stop first takes the field edit still pending in the page (typed but not yet committed
+//! by leaving the field, Enter or a click) as its `type` step, masked by the same rules
+//! ([`Act::Flush`]); a page that can't be reached is skipped. The routes, the sweep and another
+//! window ask the linked socket for that with [`Cmd::Stop`] and wait a moment ([`stop_live`]).
+//!
 //! A stage runs one bot's recording at a time. Hand back (the person releasing Take over) stops it
 //! with `handed_back`; Take over ending without that (the tab closed, the socket gone, the computer
 //! slept, another window taking over) stops it with `closed`; a restart stops it (`restart`, see
@@ -15,8 +20,37 @@ use crate::db::show_once::{Added, NewStep, Recording, ShowOnceError, StepRow};
 use crate::server::AppState;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-use tokio::sync::mpsc;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot};
+
+/// How long a stop waits for the stage to take the pending edit first.
+pub const STOP_WAIT: Duration = Duration::from_secs(3);
+/// Most pending edits taken from a page at a stop.
+pub const MAX_FLUSHED: usize = 20;
+
+/// Fired once a [`Cmd::Stop`] is done (or dropped unfired, which counts the same).
+#[derive(Debug, Clone, Default)]
+pub struct Done(Arc<Mutex<Option<oneshot::Sender<()>>>>);
+
+impl Done {
+    pub fn new() -> (Done, oneshot::Receiver<()>) {
+        let (tx, rx) = oneshot::channel();
+        (Done(Arc::new(Mutex::new(Some(tx)))), rx)
+    }
+
+    pub fn fire(&self) {
+        if let Some(tx) = self.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = tx.send(());
+        }
+    }
+}
+
+impl PartialEq for Done {
+    fn eq(&self, _: &Done) -> bool {
+        true
+    }
+}
 
 /// What the routes ask the linked socket to do.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,7 +58,11 @@ pub enum Cmd {
     /// Start (or Keep recording): install the recorder, open `start_url` as the person's own
     /// navigation, and record the page it's on.
     Begin { recording_id: String, start_url: Option<String> },
-    /// The recording stopped elsewhere (Stop, Discard, the sweep): take the recorder off.
+    /// Stop this recording here: take the pending edit, then stop with `reason` (first reason
+    /// wins) and fire `done`.
+    Stop { recording_id: String, reason: String, done: Done },
+    /// The recording stopped elsewhere (Discard, or a stop the stage didn't answer in time): take
+    /// the recorder off.
     End { recording_id: String, reason: String },
     /// A frame for the person on this socket (`skill.recording.state` after a note, a delete...).
     Frame(Value),
@@ -41,8 +79,14 @@ pub enum Act {
     /// Take the script off future pages. The page that's open keeps a recorder nobody listens
     /// to: what it sends is dropped here, never stored.
     Uninstall,
-    /// Open this address as the person's own navigation.
+    /// Open this address as the person's own navigation. If it can't be opened, read the page
+    /// that's open into [`StageRecorder::on_start_failed`].
     Navigate(String),
+    /// Take the field edits still pending in the page (the recorder's flush, in its world) into
+    /// [`StageRecorder::on_flushed`]; nothing when the page can't be reached.
+    Flush,
+    /// Then stop with this reason ([`StageRecorder::stop_now`]) and fire `done`.
+    Stop { reason: String, done: Done },
 }
 
 struct Link {
@@ -66,7 +110,27 @@ pub fn send(stage: &str, cmd: Cmd) -> bool {
     links().get(stage).is_some_and(|l| l.tx.send(cmd).is_ok())
 }
 
-/// Tells whichever stage runs `recording_id` that it ended (the sweep's time limit, Discard).
+/// Asks the socket holding Take over on `stage` to stop `recording_id` with `reason`, taking the
+/// pending edit first, and waits up to [`STOP_WAIT`]. False when no socket is linked there; the
+/// caller stops it in the database either way (a no-op when the stage did).
+pub async fn stop_live(stage: &str, recording_id: &str, reason: &str) -> bool {
+    let tx = match links().get(stage) {
+        Some(link) => link.tx.clone(),
+        None => return false,
+    };
+    stop_via(&tx, recording_id, reason).await
+}
+
+async fn stop_via(tx: &mpsc::UnboundedSender<Cmd>, recording_id: &str, reason: &str) -> bool {
+    let (done, wait) = Done::new();
+    if tx.send(Cmd::Stop { recording_id: recording_id.into(), reason: reason.into(), done }).is_err() {
+        return false;
+    }
+    let _ = tokio::time::timeout(STOP_WAIT, wait).await;
+    true
+}
+
+/// Tells whichever stage runs `recording_id` that it ended (Discard, a late sweep).
 pub fn recording_ended(recording_id: &str, reason: &str) {
     for link in links().values() {
         let _ = link.tx.send(Cmd::End { recording_id: recording_id.into(), reason: reason.into() });
@@ -83,11 +147,14 @@ pub struct StageRecorder {
     live: Option<String>,
     /// The page last recorded, so a reload or a same-page event isn't a new page step.
     last_page: Option<(String, String)>,
+    /// Start opened a `start_url` that hasn't loaded yet: the page the browser was on before
+    /// isn't a step, the start page is the first one.
+    start_pending: bool,
 }
 
 impl StageRecorder {
     pub fn new(state: AppState, stage: String, socket: u64) -> Self {
-        StageRecorder { state, stage, socket, rx: None, live: None, last_page: None }
+        StageRecorder { state, stage, socket, rx: None, live: None, last_page: None, start_pending: false }
     }
 
     /// Whether a recording is live on this socket.
@@ -107,10 +174,17 @@ impl StageRecorder {
         if self.live.as_deref() == Some(rec.id.as_str()) {
             return;
         }
-        let _ = self.state.db.stop_recording(&rec.id, "closed", now()).await;
-        let stopped = self.state.db.get_recording(&rec.id).await.ok().flatten().unwrap_or(rec);
-        emit(&self.state, &stopped).await;
-        if let Some(old) = old.filter(|l| l.socket != self.socket) {
+        let old = old.filter(|l| l.socket != self.socket);
+        // the other window takes the pending edit and stops it, if it still can
+        if let Some(old) = old.as_ref() {
+            stop_via(&old.tx, &rec.id, "closed").await;
+        }
+        if let Ok(true) = self.state.db.stop_recording(&rec.id, "closed", now()).await {
+            let stopped = self.state.db.get_recording(&rec.id).await.ok().flatten().unwrap_or(rec.clone());
+            emit(&self.state, &stopped).await;
+        }
+        if let Some(old) = old {
+            let stopped = self.state.db.get_recording(&rec.id).await.ok().flatten().unwrap_or(rec);
             let reason = stopped.stop_reason.clone().unwrap_or_else(|| "closed".into());
             let _ = old.tx.send(Cmd::End { recording_id: stopped.id.clone(), reason });
         }
@@ -146,11 +220,19 @@ impl StageRecorder {
                 let Some(rec) = open.filter(|r| r.state == "recording" && r.stage == self.stage) else { return vec![] };
                 self.live = Some(rec.id.clone());
                 self.last_page = None;
+                self.start_pending = start_url.is_some();
                 let mut acts = vec![Act::Install, Act::Send(state_frame(&rec))];
                 if let Some(url) = start_url {
                     acts.push(Act::Navigate(url));
                 }
                 acts
+            }
+            Cmd::Stop { recording_id, reason, done } => {
+                if self.live.as_deref() != Some(recording_id.as_str()) {
+                    done.fire();
+                    return vec![];
+                }
+                vec![Act::Flush, Act::Stop { reason, done }]
             }
             Cmd::End { recording_id, reason } => {
                 if self.live.as_deref() != Some(recording_id.as_str()) {
@@ -163,11 +245,29 @@ impl StageRecorder {
         }
     }
 
-    /// A top-level page loaded (or the recorder was just installed on one): a `page` step, unless
-    /// it's the page already recorded.
+    /// The recorder was just installed on the page at `url`: that page is the first step, unless
+    /// Start opens a `start_url` next (B1), whose own load is the first page step.
+    pub async fn on_installed(&mut self, url: &str) -> Vec<Act> {
+        if self.start_pending {
+            return vec![];
+        }
+        self.on_navigated(url).await
+    }
+
+    /// The `start_url` couldn't be opened: the page the browser is on is the first step after all.
+    pub async fn on_start_failed(&mut self, url: Option<&str>) -> Vec<Act> {
+        self.start_pending = false;
+        match url {
+            Some(url) => self.on_navigated(url).await,
+            None => vec![],
+        }
+    }
+
+    /// A top-level page loaded: a `page` step, unless it's the page already recorded.
     pub async fn on_navigated(&mut self, url: &str) -> Vec<Act> {
         let Some(id) = self.live.clone() else { return vec![] };
         let Some(page) = scrub::scrub(url) else { return vec![] };
+        self.start_pending = false;
         let key = (page.origin.clone(), page.path.clone());
         if self.last_page.as_ref() == Some(&key) {
             return vec![];
@@ -182,6 +282,32 @@ impl StageRecorder {
         let Some(id) = self.live.clone() else { return vec![] };
         let Some(captured) = capture::parse(payload) else { return vec![] };
         self.add(&id, captured.step).await
+    }
+
+    /// What the recorder's flush returned at a stop: each pending field edit, as the payload the
+    /// binding would have carried, goes through the same parse (mask, address rules) and becomes a
+    /// `type` step. Anything else is dropped, and so is an edit past the 200-step cap.
+    pub async fn on_flushed(&mut self, payloads: &[String]) -> Vec<Act> {
+        let Some(id) = self.live.clone() else { return vec![] };
+        let mut acts = vec![];
+        for payload in payloads.iter().take(MAX_FLUSHED) {
+            let Some(captured) = capture::parse(payload).filter(|c| c.step.kind == "type") else { continue };
+            let t = now();
+            match self.state.db.add_final_step(&id, &captured.step, t).await {
+                Ok(Some(step)) => {
+                    let n = self.number_of(&id, &step, t).await;
+                    acts.push(Act::Send(json!({"type":"skill.recording.step","recording_id":id,"step":step_json(&step, n, t)})));
+                }
+                Ok(None) => break,
+                Err(ShowOnceError::WrongState(_)) | Err(ShowOnceError::NotFound) => {
+                    self.live = None;
+                    acts.push(Act::Uninstall);
+                    break;
+                }
+                Err(e) => tracing::warn!("show it once: a pending edit wasn't saved at the stop: {e:?}"),
+            }
+        }
+        acts
     }
 
     async fn add(&mut self, id: &str, step: NewStep) -> Vec<Act> {
@@ -241,12 +367,20 @@ impl StageRecorder {
             return vec![Act::Uninstall];
         }
         if rec.limit_reached(t) == Some("limit_time") {
-            return self.stop(&id, "limit_time").await;
+            return vec![Act::Flush, Act::Stop { reason: "limit_time".into(), done: Done::default() }];
         }
         if rec.near_sent == 0 && rec.near_at(t) && self.state.db.mark_near_sent(&id).await.unwrap_or(false) {
             return self.near_frame(&id, t).await;
         }
         vec![]
+    }
+
+    /// Stops the live recording with `reason` (after [`Act::Flush`]); the first reason wins.
+    pub async fn stop_now(&mut self, reason: &str) -> Vec<Act> {
+        match self.live.clone() {
+            Some(id) => self.stop(&id, reason).await,
+            None => vec![],
+        }
     }
 
     async fn stop(&mut self, id: &str, reason: &str) -> Vec<Act> {
@@ -264,7 +398,8 @@ impl StageRecorder {
         }
     }
 
-    /// Hand back: the recording stops (`handed_back`) and the socket is no longer the stage's.
+    /// Hand back: the recording stops (`handed_back`) and the socket is no longer the stage's. The
+    /// socket takes the pending edit ([`Act::Flush`]) before calling this.
     pub async fn handed_back(&mut self) -> Vec<Act> {
         self.unlink();
         match self.live.clone() {
@@ -274,7 +409,8 @@ impl StageRecorder {
     }
 
     /// The socket went away without Hand back (tab closed, connection lost, the computer slept): a
-    /// live recording stops with `closed`, the steps kept for review. After Hand back nothing is
+    /// live recording stops with `closed`, the steps kept for review. The socket takes the pending
+    /// edit ([`Act::Flush`]) before calling this, if the page can still be reached. After Hand back nothing is
     /// live here any more, so its `handed_back` stands.
     pub async fn closed(&mut self) {
         self.unlink();

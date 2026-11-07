@@ -269,12 +269,16 @@ pub async fn stop(State(state): State<AppState>, Path(id): Path<String>, body: B
         Ok(r) => r,
         Err(r) => return r,
     };
+    // the stage takes the field edit still pending in the page, then stops it (and tells the chat)
+    if rec.state == "recording" {
+        stage::stop_live(&rec.stage, &id, reason).await;
+    }
     match state.db.stop_recording(&id, reason, now()).await {
         Ok(true) => {
             stage::send(&rec.stage, Cmd::End { recording_id: id.clone(), reason: reason.into() });
             emit_id(&state, &id).await;
         }
-        // Stop twice: a no-op
+        // Stop twice, or the stage stopped it: a no-op here
         Ok(false) => {}
         Err(e) => return show_once_error(e),
     }

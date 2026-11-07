@@ -898,7 +898,12 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
     let worker = tokio::spawn(worker.run(jobs_rx));
     let mut rec = StageRecorder::new(state.clone(), id.clone(), shared.socket);
     let result = stream(&mut socket, &ctrl, &cdp, &mut events, &shared, &client_tx, &mut client_rx, &jobs, &mut rec).await;
-    // a recording live on this socket stops here (Show it once: `closed`), its steps kept
+    // a recording live on this socket stops here (Show it once: `closed`), its steps kept, after
+    // the edit still pending in the page, if the page can still be reached
+    if rec.is_live() {
+        let pending = flush_recorder(&cdp).await;
+        let _ = rec.on_flushed(&pending).await;
+    }
     rec.closed().await;
     // Let go of anything held and put the viewport back, then drop the lease so bot actions
     // resume even on disconnect or timeout.
@@ -1077,6 +1082,10 @@ async fn stream(
                             send(socket, json!({"type":"control","active":true,"viewport":{"width":vw,"height":vh}})).await?;
                         }
                         "release_control" => {
+                            // Show it once: the edit still pending in the page is a step first
+                            if rec.is_live() {
+                                recorder_acts(socket, ctrl, cdp, rec, vec![Act::Flush], &mut recorder_script).await?;
+                            }
                             let (done, wait) = oneshot::channel();
                             if jobs.send(Job::HandBack(Some(done))).is_ok() {
                                 let _ = timeout(Duration::from_secs(8), wait).await;
@@ -1169,7 +1178,7 @@ async fn recorder_acts(
                         Err(e) => tracing::warn!("show it once: the recorder wasn't installed: {}", e),
                     }
                 }
-                if let Some(url) = current_url(cdp).await { queue.extend(rec.on_navigated(&url).await); }
+                if let Some(url) = current_url(cdp).await { queue.extend(rec.on_installed(&url).await); }
             }
             Act::Uninstall => {
                 if let Some(identifier) = script.take() {
@@ -1179,11 +1188,38 @@ async fn recorder_acts(
             Act::Navigate(url) => {
                 // the person's own navigation: never held to a bot's site rules (W-T10)
                 ctrl.site_guard.set_actor(crate::sandbox::site_guard::Actor::Person);
-                if let Err(e) = cdp.call("Page.navigate", json!({"url": url}), Duration::from_secs(10)).await { tracing::debug!("recorder start page: {}", e); }
+                let opened = match cdp.call("Page.navigate", json!({"url": url}), Duration::from_secs(10)).await {
+                    Ok(r) => r["errorText"].as_str().is_none_or(str::is_empty),
+                    Err(e) => { tracing::debug!("recorder start page: {}", e); false }
+                };
+                if !opened { queue.extend(rec.on_start_failed(current_url(cdp).await.as_deref()).await); }
+            }
+            Act::Flush => {
+                let pending = flush_recorder(cdp).await;
+                queue.extend(rec.on_flushed(&pending).await);
+            }
+            Act::Stop { reason, done } => {
+                queue.extend(rec.stop_now(&reason).await);
+                done.fire();
             }
         }
     }
     Ok(())
+}
+
+/// The Show it once recorder's pending field edits, taken from its isolated world (the same world
+/// the recorder script was added to on this connection). Nothing when the page can't be reached.
+async fn flush_recorder(cdp: &Cdp) -> Vec<String> {
+    let Ok(tree) = cdp.call("Page.getFrameTree", json!({}), PROBE_WAIT).await else { return vec![] };
+    let Some(frame) = tree["frameTree"]["frame"]["id"].as_str() else { return vec![] };
+    let world = json!({"frameId": frame, "worldName": recorder::WORLD});
+    let Ok(world) = cdp.call("Page.createIsolatedWorld", world, PROBE_WAIT).await else { return vec![] };
+    let Some(context) = world["executionContextId"].as_i64() else { return vec![] };
+    let eval = json!({"expression": recorder::FLUSH, "contextId": context, "returnByValue": true});
+    let Ok(r) = cdp.call("Runtime.evaluate", eval, PROBE_WAIT).await else { return vec![] };
+    r["result"]["value"].as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(super::show_once::stage::MAX_FLUSHED).collect())
+        .unwrap_or_default()
 }
 
 /// The address of the page open in the tab now.

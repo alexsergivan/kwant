@@ -11,6 +11,10 @@ use serde::Deserialize;
 /// The binding the recorder calls, and the isolated world it lives in.
 pub const BINDING: &str = "kwntRecord";
 pub const WORLD: &str = "kwnt-recorder";
+/// Run in the recorder's world at a stop: the pending edits' payloads (a list of strings), or an
+/// empty list where the recorder isn't installed.
+pub const FLUSH: &str =
+    "typeof globalThis.__kwntRecorderFlush === 'function' ? globalThis.__kwntRecorderFlush() : []";
 /// Largest payload read; anything bigger is dropped.
 pub const MAX_PAYLOAD: usize = 16 * 1024;
 pub const MAX_NAME: usize = 120;

@@ -397,7 +397,7 @@ async fn live_recording(env: &Env, stage: &mut kwnt::server::show_once::stage::S
     let (s, v) = call(&env.app, "POST", "/api/show-once/recordings", Some(json!({"bot": env.b, "first_note": "watch me"}))).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let id = v["recording"]["id"].as_str().unwrap().to_string();
-    let cmd = stage.next_cmd().await.unwrap();
+    let cmd = next_cmd_for(stage, &id).await;
     assert!(matches!(&cmd, Cmd::Begin { recording_id, .. } if *recording_id == id), "{cmd:?}");
     stage.on_cmd(cmd).await;
     assert!(stage.is_live());
@@ -540,23 +540,39 @@ async fn another_window_taking_over_stops_the_recording_as_closed() {
     let mut first = StageRecorder::new(env.state.clone(), env.b.clone(), 21);
     let id = live_recording(&env, &mut first).await;
 
-    // A second window takes Take over on the same stage
+    assert!(first.on_installed(LOGIN).await.iter().any(is_step));
+
+    // A second window takes Take over on the same stage while Email still has focus in the first:
+    // the first window takes that edit (B2), then stops with `closed`
     let mut second = StageRecorder::new(env.state.clone(), env.b.clone(), 22);
-    second.claim().await;
+    let ((), acts) = tokio::join!(second.claim(), async {
+        let cmd = next_cmd_for(&mut first, &id).await;
+        assert!(matches!(&cmd, Cmd::Stop { recording_id, reason, .. } if *recording_id == id && reason == "closed"), "{cmd:?}");
+        let acts = first.on_cmd(cmd).await;
+        drive(&mut first, acts, &[pending("Email", "email", Some("ops@example.com"))]).await
+    });
     let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
     assert_eq!((r.state.as_str(), r.stop_reason.as_deref()), ("stopped", Some("closed")));
     assert!(!second.is_live());
+    let last = env.state.db.list_steps(&id, now()).await.unwrap().pop().unwrap();
+    assert_eq!((last.kind.as_str(), last.value.as_deref()), ("type", Some("ops@example.com")));
 
-    // The first window is told, takes its recorder off and shows `closed`
-    let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), first.next_cmd()).await.unwrap().unwrap();
-    assert_eq!(cmd, Cmd::End { recording_id: id.clone(), reason: "closed".into() });
-    let acts = first.on_cmd(cmd).await;
+    // The first window takes its recorder off and shows `closed`; the End after it changes nothing
     assert!(acts.contains(&Act::Uninstall), "{acts:?}");
     assert!(acts.iter().any(|a| matches!(a, Act::Send(f) if f["type"] == "skill.recording.stopped" && f["reason"] == "closed")), "{acts:?}");
     assert!(!first.is_live());
+    let cmd = next_cmd_for(&mut first, &id).await;
+    assert_eq!(cmd, Cmd::End { recording_id: id.clone(), reason: "closed".into() });
+    assert!(first.on_cmd(cmd).await.is_empty());
     // Its link is gone: one None, then nothing (no busy loop)
-    let none = tokio::time::timeout(std::time::Duration::from_secs(5), first.next_cmd()).await.unwrap();
-    assert!(none.is_none());
+    // (skipping other tests' Discards that reached it before its link went)
+    let none = loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), first.next_cmd()).await.unwrap() {
+            Some(Cmd::End { recording_id, .. }) if recording_id != id => continue,
+            other => break other,
+        }
+    };
+    assert!(none.is_none(), "{none:?}");
     assert!(tokio::time::timeout(std::time::Duration::from_millis(200), first.next_cmd()).await.is_err());
     // The first window closing later changes nothing: the first reason wins and the second keeps the stage
     first.closed().await;
@@ -579,4 +595,203 @@ async fn another_window_taking_over_stops_the_recording_as_closed() {
     fourth.claim().await;
     let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
     assert_eq!(r.stop_reason.as_deref(), Some("handed_back"));
+}
+
+/// Where the B1/B2 tests' browser is (Iris's mock shop).
+const LOGIN: &str = "http://127.0.0.1:9483/shop/login.html";
+
+fn is_step(a: &kwnt::server::show_once::stage::Act) -> bool {
+    matches!(a, kwnt::server::show_once::stage::Act::Send(f) if f["type"] == "skill.recording.step")
+}
+
+/// What the recorder's flush returns for a field edited but not committed yet (its focus is still
+/// there). A password field's payload carries a value too, which the server must drop.
+fn pending(label: &str, input_type: &str, value: Option<&str>) -> String {
+    let password = input_type == "password";
+    let mut p = json!({
+        "kind": "type", "url": LOGIN, "trusted": true, "label": label,
+        "masked": if password { json!("password") } else { Value::Null },
+        "field": {"type": input_type, "ever_password": password, "autocomplete": "", "name": "",
+                  "id": label.to_lowercase(), "labels": [label], "script_filled": false},
+    });
+    if let Some(v) = value {
+        p["value"] = json!(v);
+    }
+    p.to_string()
+}
+
+/// Does what the stream socket does with the stage's acts, without a browser: a flush returns
+/// `pending`, a stop stops and fires its `done`. The rest (frames, recorder on/off) comes back.
+async fn drive(
+    stage: &mut kwnt::server::show_once::stage::StageRecorder,
+    acts: Vec<kwnt::server::show_once::stage::Act>,
+    pending: &[String],
+) -> Vec<kwnt::server::show_once::stage::Act> {
+    use kwnt::server::show_once::stage::Act;
+    let mut queue: std::collections::VecDeque<Act> = acts.into();
+    let mut out = vec![];
+    while let Some(act) = queue.pop_front() {
+        match act {
+            Act::Flush => queue.extend(stage.on_flushed(pending).await),
+            Act::Stop { reason, done } => {
+                queue.extend(stage.stop_now(&reason).await);
+                done.fire();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+async fn steps_of(env: &Env, id: &str) -> Vec<(String, Option<String>)> {
+    let steps = env.state.db.list_steps(id, now()).await.unwrap();
+    steps.into_iter().map(|s| (s.kind, s.path)).collect()
+}
+
+#[tokio::test]
+async fn a_start_url_is_the_first_page_and_the_page_before_isnt_a_step() {
+    use kwnt::server::show_once::stage::{Act, StageRecorder};
+    let env = env().await;
+    let start = "http://127.0.0.1:9483/";
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 31);
+    stage.claim().await;
+    let body = json!({"bot": env.b, "first_note": "watch me", "start_url": start});
+    let (s, v) = call(&env.app, "POST", "/api/show-once/recordings", Some(body)).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["recording"]["id"].as_str().unwrap().to_string();
+    let cmd = next_cmd_for(&mut stage, &id).await;
+    let acts = stage.on_cmd(cmd).await;
+    assert!(acts.contains(&Act::Install) && acts.contains(&Act::Navigate(start.into())), "{acts:?}");
+
+    // B1: the recorder goes on while the browser is still on the orders page: not a step
+    assert!(stage.on_installed("http://127.0.0.1:9483/shop/orders.html").await.is_empty());
+    // the start page loads: the first page step; then the person's own clicks and pages
+    assert!(stage.on_navigated(start).await.iter().any(is_step));
+    let click = json!({"kind": "click", "url": start, "trusted": true, "role": "link", "name": "Orders"});
+    assert!(stage.on_binding(&click.to_string()).await.iter().any(is_step));
+    assert!(stage.on_navigated("http://127.0.0.1:9483/shop/orders.html").await.iter().any(is_step));
+    let steps = steps_of(&env, &id).await;
+    let kinds: Vec<&str> = steps.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(kinds, ["note", "page", "click", "page"], "{steps:?}");
+    assert_eq!(steps[1].1.as_deref(), Some("/"));
+    assert_eq!(steps[3].1.as_deref(), Some("/shop/orders.html"));
+    stage.handed_back().await;
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+
+    // Without start_url the page the browser is on is the first page step, as before
+    let id = live_recording(&env, &mut stage).await;
+    assert!(stage.on_installed("http://127.0.0.1:9483/shop/orders.html").await.iter().any(is_step));
+    let steps = steps_of(&env, &id).await;
+    assert_eq!(steps.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["note", "page"], "{steps:?}");
+    assert_eq!(steps[1].1.as_deref(), Some("/shop/orders.html"));
+    stage.handed_back().await;
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+
+    // A start_url that can't be opened: the page the browser stayed on is the first step after all
+    stage.claim().await;
+    let body = json!({"bot": env.b, "first_note": "watch me", "start_url": "http://127.0.0.1:9483/gone"});
+    let (s, v) = call(&env.app, "POST", "/api/show-once/recordings", Some(body)).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["recording"]["id"].as_str().unwrap().to_string();
+    let cmd = next_cmd_for(&mut stage, &id).await;
+    stage.on_cmd(cmd).await;
+    assert!(stage.on_installed("http://127.0.0.1:9483/shop/orders.html").await.is_empty());
+    assert!(stage.on_start_failed(Some("http://127.0.0.1:9483/shop/orders.html")).await.iter().any(is_step));
+    let steps = steps_of(&env, &id).await;
+    assert_eq!(steps.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["note", "page"], "{steps:?}");
+}
+
+#[tokio::test]
+async fn every_stop_takes_the_pending_edit_first_masked_and_within_the_cap() {
+    use kwnt::server::show_once::stage::{Cmd, Done, StageRecorder};
+    let env = env().await;
+    let reason_of = |r: &kwnt::db::show_once::Recording| (r.state.clone(), r.stop_reason.clone());
+
+    // The socket drops (tab closed) with "ops@example.com" typed in Email, focus still there
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 41);
+    let id = live_recording(&env, &mut stage).await;
+    stage.on_installed(LOGIN).await;
+    let acts = stage.on_flushed(&[pending("Email", "email", Some("ops@example.com"))]).await;
+    assert!(acts.iter().any(is_step), "{acts:?}");
+    stage.closed().await;
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!(reason_of(&r), ("stopped".into(), Some("closed".into())));
+    let last = env.state.db.list_steps(&id, now()).await.unwrap().pop().unwrap();
+    assert_eq!(
+        (last.kind.as_str(), last.label.as_deref(), last.value.as_deref(), last.masked.as_deref(), last.path.as_deref()),
+        ("type", Some("Email"), Some("ops@example.com"), None, Some("/shop/login.html"))
+    );
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+
+    // Stop (the route) with a password typed: the stage takes it, masked with no value, then stops
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 42);
+    let id = live_recording(&env, &mut stage).await;
+    stage.on_installed(LOGIN).await;
+    let stop = format!("/api/show-once/recordings/{id}/stop");
+    let ((s, v), acts) = tokio::join!(call(&env.app, "POST", &stop, None), async {
+        let cmd = next_cmd_for(&mut stage, &id).await;
+        assert!(matches!(&cmd, Cmd::Stop { reason, .. } if reason == "stop"), "{cmd:?}");
+        let acts = stage.on_cmd(cmd).await;
+        drive(&mut stage, acts, &[pending("Password", "password", Some("hunter2"))]).await
+    });
+    assert_eq!((s, v["recording"]["stop_reason"].as_str()), (StatusCode::OK, Some("stop")), "{v}");
+    assert!(acts.iter().any(|a| matches!(a, kwnt::server::show_once::stage::Act::Send(f) if f["type"] == "skill.recording.stopped" && f["reason"] == "stop")), "{acts:?}");
+    let last = env.state.db.list_steps(&id, now()).await.unwrap().pop().unwrap();
+    assert_eq!((last.kind.as_str(), last.value.as_deref(), last.masked.as_deref()), ("type", None, Some("password")));
+    assert_eq!(v["recording"]["step_count"], 2, "page + the masked type step");
+    stage.closed().await;
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+
+    // The 30-minute limit: the edit is still taken (the time limit doesn't refuse it), reason limit_time
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 43);
+    stage.claim().await;
+    let bot = env.state.db.get_kwant(&env.b).await.unwrap().unwrap();
+    let limit = kwnt::db::show_once::LIMIT_SECS;
+    let rec = env.state.db.start_recording(&bot.id, &bot.space_id, &env.b, now() - limit - 5).await.unwrap();
+    stage.on_cmd(Cmd::Begin { recording_id: rec.id.clone(), start_url: None }).await;
+    assert!(stage.is_live());
+    let acts = stage.tick().await;
+    assert!(matches!(acts.as_slice(), [kwnt::server::show_once::stage::Act::Flush, kwnt::server::show_once::stage::Act::Stop { reason, .. }] if reason == "limit_time"), "{acts:?}");
+    drive(&mut stage, acts, &[pending("Email", "email", Some("ops@example.com"))]).await;
+    let r = env.state.db.get_recording(&rec.id).await.unwrap().unwrap();
+    assert_eq!(reason_of(&r), ("stopped".into(), Some("limit_time".into())));
+    let last = env.state.db.list_steps(&rec.id, now()).await.unwrap().pop().unwrap();
+    assert_eq!((last.kind.as_str(), last.value.as_deref()), ("type", Some("ops@example.com")));
+    stage.handed_back().await;
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{}", rec.id), None).await;
+
+    // 200 steps already: the edit would be step 201, so it's dropped and the stop's reason stands
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 44);
+    let id = live_recording(&env, &mut stage).await;
+    let click = NewStep { kind: "click".into(), origin: Some("http://127.0.0.1:9483".into()), path: Some("/".into()),
+        role: Some("button".into()), name: Some("Next".into()), ..Default::default() };
+    while env.state.db.get_recording(&id).await.unwrap().unwrap().step_count < kwnt::db::show_once::LIMIT_STEPS {
+        env.state.db.add_step(&id, &click, now()).await.unwrap();
+    }
+    assert!(stage.on_flushed(&[pending("Email", "email", Some("ops@example.com"))]).await.is_empty());
+    stage.closed().await;
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!(reason_of(&r), ("stopped".into(), Some("closed".into())));
+    assert_eq!(r.step_count, kwnt::db::show_once::LIMIT_STEPS);
+
+    // A stop for a recording that isn't live on the stage just fires its done
+    let (done, wait) = Done::new();
+    assert!(stage.on_cmd(Cmd::Stop { recording_id: id, reason: "stop".into(), done }).await.is_empty());
+    assert!(wait.await.is_ok());
+}
+
+/// The stage's next command about recording `id`. Discard tells every linked stage (tests run in
+/// parallel), so commands about other tests' recordings are skipped.
+async fn next_cmd_for(stage: &mut kwnt::server::show_once::stage::StageRecorder, id: &str) -> kwnt::server::show_once::stage::Cmd {
+    use kwnt::server::show_once::stage::Cmd;
+    loop {
+        let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), stage.next_cmd()).await.unwrap().unwrap();
+        let about = match &cmd {
+            Cmd::Begin { recording_id, .. } | Cmd::Stop { recording_id, .. } | Cmd::End { recording_id, .. } => Some(recording_id.as_str()),
+            Cmd::Frame(_) => None,
+        };
+        if about.is_none_or(|r| r == id) {
+            return cmd;
+        }
+    }
 }

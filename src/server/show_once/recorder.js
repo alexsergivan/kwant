@@ -63,20 +63,32 @@
   function valueOf(el) { return el.isContentEditable && el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA' ? el.innerText : el.value; }
   function label(f) { return f.labels[0] || f.name || f.id || ''; }
 
-  function commit(el) {
-    if (!dirty.has(el)) return;
+  // the `type` step for a field the person edited since its last commit, or null
+  function take(el) {
+    if (!dirty.has(el)) return null;
     dirty.delete(el);
     var value = String(valueOf(el) || '');
     // a script changed the value after the person's last keystroke: the vault, or the page
     if (lastTrusted.has(el) && lastTrusted.get(el) !== value) scripted.add(el);
-    if (committed.get(el) === value) return;
+    if (committed.get(el) === value) return null;
     committed.set(el, value);
     var f = facts(el), m = mask(f);
     var step = { kind: 'type', field: f, label: label(f), masked: m };
     if (!m) step.value = value.slice(0, 600);
-    post(step);
+    return step;
   }
+  function commit(el) { var step = take(el); if (step) post(step); }
   function commitAll() { Array.from(dirty).forEach(commit); }
+  // The recording is stopping (api.md §3): kwnt takes the edits still pending (the focused
+  // field's, typed but not committed yet) as their payloads, from this world only.
+  Object.defineProperty(globalThis, '__kwntRecorderFlush', { value: function () {
+    var out = [];
+    Array.from(dirty).forEach(function (el) {
+      var step = take(el);
+      if (step) { step.url = location.href; step.trusted = true; out.push(JSON.stringify(step)); }
+    });
+    return out;
+  } });
 
   // a show-password toggle keeps the field masked for good
   new MutationObserver(function (list) {
