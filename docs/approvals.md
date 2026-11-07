@@ -55,7 +55,8 @@ earlier in the same turn. Choose `ask` for bots or folders you don't trust.
     argument that is a URL or `user@host:path`, and git commands that touch global config or run a
     command (`rebase -x/--exec`, `--upload-pack`, `ext::`, `grep -O`, …); publish and login
     commands of npm/pnpm/yarn/bun/cargo/pip/uv/gem/poetry/twine/go; `npx`, `bunx`,
-    `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x` (they download and run package code);
+    `npm exec`/`npm x`, `pnpm dlx`, `yarn dlx`, `bun x` wherever the verb sits (`npm --prefix x
+    exec …` too; so `npm run x` asks as well), because they download and run package code;
   - adding a package the project doesn't list yet, because it downloads the package and runs
     its code (npm-style install scripts at once, the others when the project builds):
     `npm install|i|add <pkg>`, `pnpm add|install <pkg>`, `yarn add <pkg>`,
@@ -64,8 +65,9 @@ earlier in the same turn. Choose `ask` for bots or folders you don't trust.
     `github:…` or a URL counts; a local path (`npm install ./lib`, `cargo add --path ./x`) is
     judged like any other path. Installing what the project already lists runs without a card:
     a bare `npm install`/`npm i`/`npm ci`, `pnpm install`, `yarn`/`yarn install`,
-    `bun install`, `deno install`, with only options. `pip install`, `uv pip install`,
-    `poetry install`, `gem install`, `go install` and `cargo install` ask in every form (they
+    `bun install`, `deno install`, with only options. pip and poetry always ask: every
+    `pip install` (`pip install -r requirements.txt` too), `uv pip install` and `poetry install`
+    or `add`, even a bare one. So do `gem install`, `go install` and `cargo install` (they
     install outside the folder, or kwnt can't tell what they add);
   - `find -exec/-delete`, `sed` scripts beyond print/delete/substitute (`w`, `e`, `-f`), `awk`
     programs that redirect `print`, pipe, read `ENVIRON` or call `system`/`getline`, and awk

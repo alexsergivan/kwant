@@ -667,17 +667,18 @@ fn packages(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
     if args.iter().any(|a| matches!(a.text.as_str(), "-g" | "--global" | "global")) {
         return Err(format!("`{name}` installs for the whole account"));
     }
-    // `npm exec`/`npm x`, `pnpm dlx`, `yarn dlx`, `bun x` fetch a package and run it
-    if let Some(a) = args.iter().find(|a| !a.text.starts_with('-')) {
-        let runs = match name {
-            "npm" => matches!(a.text.as_str(), "exec" | "x"),
-            "pnpm" | "yarn" => a.text == "dlx",
-            "bun" => a.text == "x",
-            _ => false,
-        };
-        if runs {
-            return Err(format!("`{name} {}` can download and run a package's code", a.text));
-        }
+    // `npm exec`/`npm x`, `pnpm dlx`, `yarn dlx`, `bun x` fetch a package and run it. Any word
+    // counts, not only the first that isn't an option: a valued option ahead of the verb
+    // (`npm --prefix x exec cowsay`, `pnpm -C dir dlx cowsay`) must not hide it. Fails closed, so
+    // `npm run x` asks too.
+    let runner = |a: &&Word| match name {
+        "npm" => matches!(a.text.as_str(), "exec" | "x"),
+        "pnpm" | "yarn" => a.text == "dlx",
+        "bun" => a.text == "x",
+        _ => false,
+    };
+    if let Some(a) = args.iter().find(runner) {
+        return Err(format!("`{name} {}` can download and run a package's code", a.text));
     }
     new_package(name, args)?;
     all_paths_inside(args, ctx)
@@ -1434,6 +1435,11 @@ mod tests {
         "RUST_BACKTRACE=1 cargo test db::",
         "npm test",
         "npm run build",
+        "npm --prefix src run build",
+        "npm -w app test",
+        "pnpm -C src run build",
+        "yarn --cwd src build",
+        "bun --cwd src run build",
         "git status",
         "git diff HEAD~1 -- src/main.rs",
         "git log --oneline -5",
@@ -1652,6 +1658,14 @@ mod tests {
         "bunx cowsay",
         "bun x cowsay",
         "npm exec cowsay",
+        // A valued option ahead of the runner verb doesn't hide it
+        "npm --prefix x exec cowsay",
+        "npm -w app exec cowsay",
+        "pnpm -C dir dlx cowsay",
+        "yarn --cwd d dlx cowsay",
+        "bun --cwd d x cowsay",
+        "npm --prefix=x x cowsay",
+        "npm run x",
         "tar --checkpoint=1 --checkpoint-action=exec=id -cf out.tar src",
         "tar -cf out.tar --to-command=id src",
         "tar -I gzip -cf x src",
@@ -1869,5 +1883,6 @@ mod tests {
             classify("cargo add serde --features derive", &ws),
             SmartVerdict::Ask("`cargo add serde` downloads a new package, whose code runs when the project builds or runs".into())
         );
+        assert_eq!(classify("pnpm -C dir dlx cowsay", &ws), SmartVerdict::Ask("`pnpm dlx` can download and run a package's code".into()));
     }
 }
