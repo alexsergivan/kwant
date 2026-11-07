@@ -217,6 +217,48 @@ test('the draft card: inputs with the run’s examples, the site rule and “Sho
   unmount();
 });
 
+test('Checks and What can go wrong keep their lines: “- ” and “* ” lines are list items, the rest paragraphs', () => {
+  assert.deepEqual(m.textBlocks('- a\n- b'), [{ t: 'ul', items: ['a', 'b'] }]);
+  assert.deepEqual(m.textBlocks('* a\n* b'), [{ t: 'ul', items: ['a', 'b'] }]);
+  assert.deepEqual(m.textBlocks('Plain words\non two lines.'), [{ t: 'p', text: 'Plain words on two lines.' }]);
+  assert.deepEqual(m.textBlocks('Before:\n- a\n  goes on\n- b\n\nAfter.'), [
+    { t: 'p', text: 'Before:' },
+    { t: 'ul', items: ['a goes on', 'b'] },
+    { t: 'p', text: 'After.' },
+  ]);
+  assert.deepEqual(m.textBlocks('-not a list'), [{ t: 'p', text: '-not a list' }], 'a dash needs a space after it');
+  assert.deepEqual(m.textBlocks(''), []);
+  const d = m.parseSkillSections('## Goal\nG\n## Steps\n1. x\n## Checks\n- a\n- b\n## What can go wrong\n* c\n* d\n');
+  assert.equal(d.checks, '- a\n- b');
+  assert.equal(d.wrong, '* c\n* d');
+});
+
+test('the draft card shows list items in Checks and What can go wrong as a list, like Steps', async () => {
+  const body = '## Goal\nG\n## Steps\n1. Open it\n2. Click `Export`\n## Checks\nAfter the import:\n- the page says it finished\n- the count is `42`\n## What can go wrong\n- the code expires\n- the export is empty\n\nAsk the person then.\n## Sites\nshop.example.com\n';
+  const { host, unmount } = await mount(h(m.DraftSections, { body, shown: shown(), label: 'Draft' }));
+  const after = (title) => {
+    const out = [];
+    let n = [...host.querySelectorAll('h6')].find((x) => x.textContent === title).nextElementSibling;
+    while (n && n.tagName !== 'H6') {
+      out.push(n);
+      n = n.nextElementSibling;
+    }
+    return out;
+  };
+  const checks = after('Checks');
+  assert.deepEqual(checks.map((x) => x.tagName), ['P', 'UL']);
+  assert.equal(checks[0].textContent, 'After the import:');
+  assert.deepEqual([...checks[1].querySelectorAll('li')].map((x) => x.textContent), ['the page says it finished', 'the count is 42']);
+  assert.equal(checks[1].querySelector('code').textContent, '42', 'items keep inline code');
+  const wrong = after('What can go wrong');
+  assert.deepEqual(wrong.map((x) => x.tagName), ['UL', 'P']);
+  assert.deepEqual([...wrong[0].querySelectorAll('li')].map((x) => x.textContent), ['the code expires', 'the export is empty']);
+  assert.equal(wrong[1].textContent, 'Ask the person then.');
+  assert.ok(!host.textContent.includes('- the'), 'no dash left in the text');
+  assert.equal(after('Steps')[0].tagName, 'OL');
+  unmount();
+});
+
 // ---------------------------------------------------------------- the store
 
 test('frames from the stage land in the session; another recording’s are ignored', async () => {
