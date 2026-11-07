@@ -4,7 +4,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Loader2, Pencil, Power, RefreshCw, Ticket as TicketIcon } from 'lucide-react';
 import type { DevTeamRef } from '../devMode';
-import { JIRA_CHANGED_EVENT, JIRA_COPY, JiraState, hhmm, jiraApi, jiraHint, jiraHost, jiraNames, jiraStore, ticketSummary, tokenLine } from '../dev/jiraSetup';
+import { JIRA_CHANGED_EVENT, JIRA_COPY, JiraState, hhmm, jiraApi, jiraHint, jiraHost, jiraStore, ticketSummary, tokenLine } from '../dev/jiraSetup';
 import { storeApi } from '../passwordStore';
 import { TeamFaces } from './TeamFaces';
 import { openJiraSetup } from './JiraSetup';
@@ -155,7 +155,6 @@ export const JiraSettings: React.FC<{
   };
   const team = teams?.find((t) => t.id === site.team_id);
   const rejected = site.token_rejected_at;
-  const names = jiraNames.get(space);
   const chip = 'inline-block px-1.5 py-px rounded-md border border-[#3f3868] bg-[#9d8fff]/10 font-mono text-[11px] leading-4 font-semibold text-[#b4a9ff]';
   const kv: [string, React.ReactNode][] = [
     [
@@ -175,7 +174,7 @@ export const JiraSettings: React.FC<{
           {site.projects.map((k) => (
             <span key={k} className="inline-flex items-center gap-1.5">
               <code className={chip}>{k}</code>
-              {names.projects[k] && <span>{names.projects[k]}</span>}
+              {site.project_names[k] && <span>{site.project_names[k]}</span>}
             </span>
           ))}
         </span>
@@ -207,7 +206,7 @@ export const JiraSettings: React.FC<{
         'The space’s lead bot'
       ),
     ],
-    ['Confluence', site.spaces.length ? site.spaces.map((k) => (names.spaces[k] ? `${k} ${names.spaces[k]}` : k)).join(', ') : 'Off'],
+    ['Confluence', site.spaces.length ? site.spaces.map((k) => (site.space_names[k] ? `${k} ${site.space_names[k]}` : k)).join(', ') : 'Off'],
     ['On its own', `${site.wait_for_ok ? 'Waits for your OK before building' : 'Builds without waiting for your OK'} · ${site.comment_progress ? 'Comments on tickets' : 'No comments on tickets'}`],
     [
       'Token',

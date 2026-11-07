@@ -77,35 +77,6 @@ export const waitForOkText = (lead?: string | null): string => `Off: ${lead || '
 export const tokenLine = (store: 'local' | 'bitwarden' | null, scopeNote: string | null): string =>
   `${store === 'bitwarden' ? 'Saved in Bitwarden' : 'Saved on this server'}${scopeNote ? ` · ${scopeNote}` : ''}`;
 
-/**
- * Project and Confluence space names for the Settings row. The saved site keeps keys only, so the names
- * from the last check or save in this browser are kept here (non-secret; keys show alone without them).
- */
-export const jiraNamesKey = (space: string) => `kwnt:jira-names:${space}`;
-export type JiraNames = { projects: Record<string, string>; spaces: Record<string, string> };
-export const jiraNames = {
-  get(space: string): JiraNames {
-    try {
-      const o: unknown = JSON.parse(localStorage.getItem(jiraNamesKey(space)) || 'null');
-      if (isObj(o) && isObj(o.projects) && isObj(o.spaces)) return o as JiraNames;
-    } catch {
-      // unreadable: keys only
-    }
-    return { projects: {}, spaces: {} };
-  },
-  put(space: string, check: Pick<CheckOutcome, 'projects' | 'confluence'> | null | undefined): void {
-    if (!check) return;
-    const cur = jiraNames.get(space);
-    for (const p of check.projects) if (p.key && p.name) cur.projects[p.key] = p.name.slice(0, 120);
-    for (const sp of check.confluence?.spaces ?? []) if (sp.key && sp.name) cur.spaces[sp.key] = sp.name.slice(0, 120);
-    try {
-      localStorage.setItem(jiraNamesKey(space), JSON.stringify(cur));
-    } catch {
-      // storage off: keys only
-    }
-  },
-};
-
 export const tokenRejected = (kind: JiraKind, email: string | null): string =>
   `Jira didn’t accept this token. Check it was copied whole${kind === 'cloud' && email ? ` and belongs to ${email}` : ''}. Nothing was saved.`;
 export const noProjectsText = (email: string | null): string => `This token can’t see any projects. Ask a Jira admin to give ${email || 'you'} access to the project, then tap Check now.`;
@@ -341,7 +312,21 @@ export interface JiraSite {
   token_rejected_at: string | null;
   /** "scoped: reads Jira and Confluence" when Juno's check verified a scoped token; null otherwise. */
   scope_note: string | null;
+  /** Names next to keys, from the server (api-decisions 23): `{}` until listed. A key without a name shows alone. */
+  project_names: Record<string, string>;
+  space_names: Record<string, string>;
 }
+
+/** `{KEY: name}` from the server: untrusted text, so strings only, capped. */
+const nameMap = (v: unknown): Record<string, string> => {
+  const out: Record<string, string> = {};
+  if (!isObj(v)) return out;
+  for (const [k, n] of Object.entries(v).slice(0, 100)) {
+    const name = str(n, 120);
+    if (/^[A-Za-z0-9_~-]{1,100}$/.test(k) && name) out[k] = name;
+  }
+  return out;
+};
 
 export function parseSite(v: unknown): JiraSite | null {
   if (!isObj(v)) return null;
@@ -372,6 +357,8 @@ export function parseSite(v: unknown): JiraSite | null {
     backoff_until: str(v.backoff_until, 40),
     token_rejected_at: str(v.token_rejected_at, 40),
     scope_note: str(v.scope_note, 120),
+    project_names: nameMap(v.project_names),
+    space_names: nameMap(v.space_names),
   };
 }
 
@@ -477,7 +464,9 @@ export const jiraApi = {
     return parseCheck(r.data);
   },
   async save(space: string, form: JiraForm, settings: JiraSettings): Promise<{ site: JiraSite | null; check: CheckOutcome }> {
-    const r = await call(`${base(space)}/jira`, 'PUT', clean({ ...form, ...settings }));
+    // The server owns the names (api-decisions 23): never send them back.
+    const { project_names: _p, space_names: _s, ...body } = { ...form, ...settings } as JiraForm & JiraSettings & { project_names?: unknown; space_names?: unknown };
+    const r = await call(`${base(space)}/jira`, 'PUT', clean(body));
     const o = isObj(r.data) ? r.data : {};
     return { site: parseSite(o.site), check: parseCheck(o.check) };
   },

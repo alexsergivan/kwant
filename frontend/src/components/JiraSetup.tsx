@@ -28,7 +28,6 @@ import {
   builtJql,
   jiraApi,
   jiraHost,
-  jiraNames,
   jiraStore,
   kindFromHost,
   waitForOkText,
@@ -612,8 +611,7 @@ export const JiraSetupForm: React.FC<{
     }
     setSaving(true);
     try {
-      jiraNames.put(space, check);
-      const saved = await jiraApi.save(
+      await jiraApi.save(
         space,
         form({
           projects,
@@ -632,7 +630,6 @@ export const JiraSetupForm: React.FC<{
           accept_risk: acceptRisk || undefined,
         },
       );
-      jiraNames.put(space, saved.check);
       token.current = '';
       confToken.current = '';
       onSaved();

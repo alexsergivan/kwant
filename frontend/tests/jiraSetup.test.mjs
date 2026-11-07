@@ -466,10 +466,46 @@ test('A2: hiding the hint says so politely, and nothing visual is left', async (
   r.unmount();
 });
 
+test('23: a fresh browser shows project and space names straight from GET jira, with no setup check first', async () => {
+  m.jiraStore._reset();
+  localStorage.clear();
+  const calls = form({ site: fx.fxSiteRow() });
+  const r = await mount(h(m.JiraSettings, { space: 'spc_demo', teams: [] }));
+  await settle(20);
+  const box = r.host.querySelector('[data-jira-settings="on"]');
+  assert.match(box.querySelector('[data-jira-projects]').textContent, /TRAIL\s*Storefront/);
+  assert.match(box.textContent, /SHOP Shop handbook, ENG Engineering/);
+  assert.ok(!calls.some((c) => c.path.endsWith('/dev/jira/check')), 'no check was needed for the names');
+  assert.equal(Object.keys(localStorage).filter((k) => /jira-names/.test(k)).length, 0, 'nothing remembered in the browser');
+  r.unmount();
+});
+
+test('23: a key with no name shows alone; names are parsed as untrusted text', async () => {
+  const site = m.parseSite(fx.fxSiteRow({ projects: '["TRAIL","SUP"]', project_names: { TRAIL: 'Storefront', 'bad key': 'x', SUP: 7 }, space_names: null }));
+  assert.deepEqual(site.project_names, { TRAIL: 'Storefront' });
+  assert.deepEqual(site.space_names, {});
+  m.jiraStore._reset();
+  form({ site: fx.fxSiteRow({ projects: '["TRAIL","SUP"]', project_names: { TRAIL: 'Storefront' }, space_names: {} }) });
+  const r = await mount(h(m.JiraSettings, { space: 'spc_demo', teams: [] }));
+  await settle(20);
+  const box = r.host.querySelector('[data-jira-settings="on"]');
+  assert.match(box.querySelector('[data-jira-projects]').textContent, /^TRAIL\s*StorefrontSUP$/);
+  assert.match(box.textContent, /ConfluenceSHOP, ENG/);
+  r.unmount();
+});
+
+test('23: PUT jira never sends project_names or space_names back', async () => {
+  const calls = form({});
+  const f = { jira_url: 'https://yourcompany.atlassian.net', kind: 'cloud', email: 'oleks@example.com', token: 't', projects: ['TRAIL'], handover: 'label', label: 'kwant' };
+  await m.jiraApi.save('spc_demo', f, { spaces: [], team_id: null, comment_progress: false, wait_for_ok: false, poll_secs: 300, project_names: { TRAIL: 'x' }, space_names: { SHOP: 'y' } });
+  const put = calls.find((c) => c.method === 'PUT');
+  assert.ok(put);
+  assert.ok(!('project_names' in put.body) && !('space_names' in put.body));
+});
+
 test('8: the settings box names where the token lives, its scope, projects, spaces and the lead; Check now runs a pass', async () => {
   m.jiraStore._reset();
   localStorage.clear();
-  m.jiraNames.put('spc_demo', m.parseCheck(fx.fxFound('cloud')));
   const calls = form({ site: fx.fxSiteRow() });
   const r = await mount(h(m.JiraSettings, { space: 'spc_demo', teams: [{ id: 'team_shop', name: 'Shop team', lead: ANN, members: [ANN] }] }));
   await settle(20);

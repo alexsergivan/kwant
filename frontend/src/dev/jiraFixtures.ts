@@ -132,6 +132,9 @@ export const fxDetected = (kind: 'cloud' | 'dc') => ({
 });
 
 /** The row as GET jira sends it today (JSON-string lists, `on_`, `either`). */
+/** `[{key, name}]` → `{KEY: name}`, as the server stores names from a check. */
+const fxNames = (list: unknown): Record<string, string> => Object.fromEntries((Array.isArray(list) ? (list as { key: string; name: string }[]) : []).map((p) => [p.key, p.name]));
+
 export const fxSiteRow = (o: Record<string, unknown> = {}) => ({
   space_id: 'spc_demo',
   id: 'jira_0a1b2c',
@@ -165,6 +168,8 @@ export const fxSiteRow = (o: Record<string, unknown> = {}) => ({
   unreachable_since: null,
   token_rejected_at: null,
   scope_note: 'scoped: reads Jira and Confluence',
+  project_names: { TRAIL: 'Storefront' },
+  space_names: { SHOP: 'Shop handbook', ENG: 'Engineering' },
   ...o,
 });
 
@@ -254,6 +259,9 @@ export function fxTransport(sc: FxScenario = {}, calls: FxCall[] = []) {
           comment_progress: !!raw?.comment_progress,
           wait_for_ok: !!raw?.wait_for_ok,
           jql: raw?.jql ?? null,
+          // Names come from this save's check, never from the body (api-decisions 23).
+          project_names: fxNames((out as { projects?: unknown }).projects),
+          space_names: fxNames((out as { confluence?: { spaces?: unknown } | null }).confluence?.spaces),
         });
         return json({ site, check: out });
       }
