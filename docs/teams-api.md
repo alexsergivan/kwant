@@ -320,7 +320,7 @@ Undo refuses (409, nothing changes) when:
 
 `blocked` and `can_undo` in `GET …/template` say the same before the person clicks.
 
-## 7. Test seams (debug and test builds only; ignored in release)
+## 7. Test seams (only with the `test-seams` feature; ignored by release and `make run` builds)
 
 | Seam | What |
 |---|---|
@@ -341,8 +341,8 @@ Every window a test has to cross reads "now" from **`kwnt::clock::now()`**. Nobo
 | S (Vega, 0.7.9) | 7-day deletion of unreviewed steps | `clock::now()` |
 
 - `kwnt::clock::now() -> DateTime<Utc>`: `Utc::now()` plus the offset.
-- `kwnt::clock::offset_secs() -> i64`: the offset. It is always 0 in a release build.
-- The offset is `KWNT_TEST_NOW_OFFSET_SECS` (read on every call, so a QA run can move a running debug server) **plus** `kwnt::clock::set_test_offset(secs)` (in-process, for Rust tests; `0` puts it back). Both are ignored unless `debug_assertions` is on, which is true for debug and test builds and false for release builds.
+- `kwnt::clock::offset_secs() -> i64`: the offset. It is always 0 without the `test-seams` feature.
+- The offset is `KWNT_TEST_NOW_OFFSET_SECS` (read on every call, so a QA run can move a running server) **plus** `kwnt::clock::set_test_offset(secs)` (in-process, for Rust tests; `0` puts it back). Both, and `KWNT_DISCOVER_TIMEOUT_MS`, are ignored unless the cargo feature `test-seams` is on. `cargo test` turns it on through Cargo.toml's dev-dependency on kwnt itself; a QA or e2e server that moves the clock must be built with `cargo build --features test-seams` (or `cargo run --features test-seams -- serve`). A plain debug build (`make run`), a release build and the Docker image ignore them, so nobody who can set the server's environment can move the expiry clock (#399 review H1).
 - `set_test_offset` is process-wide, so a test that uses it lives in its own test binary (as `tests/team_expiry_test.rs` does).
 - Store times from `clock::now()` too, so stored and compared times move together.
 - `server::dev::now()` (the Dev mode daily cap, 0.7.x) predates this and is unchanged.

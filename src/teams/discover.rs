@@ -45,9 +45,10 @@ pub const MAX_SEPARATORS: usize = 2;
 /// D-F4: a reason fits one line.
 pub const MAX_REASON: usize = 120;
 
-/// D7's 10 seconds, for the whole Suggest (Q-D9b). Debug builds take `KWNT_DISCOVER_TIMEOUT_MS`.
+/// D7's 10 seconds, for the whole Suggest (Q-D9b). Builds with the `test-seams` feature take
+/// `KWNT_DISCOVER_TIMEOUT_MS`.
 pub fn budget() -> Duration {
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "test-seams")]
     if let Some(ms) = std::env::var("KWNT_DISCOVER_TIMEOUT_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
         return Duration::from_millis(ms);
     }
