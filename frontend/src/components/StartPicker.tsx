@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { ExternalLink, Key, LogIn } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Key, LogIn } from 'lucide-react';
 import { EngineInfo, INSTALL_URL } from '../engines';
 import { playSfx } from '../audio/chiptune';
 import { ClaudeSignIn } from './ClaudeSignIn';
+import { EngineInstall } from './EngineInstall';
 import { NewKeyAccountForm } from './EngineAccounts';
 
 export type StartChoice = 'claude' | 'codex' | 'key';
@@ -31,21 +32,6 @@ const withCode = (text: string) =>
     ),
   );
 
-const InstallLink: React.FC<{ engine: EngineInfo | undefined; name: string }> = ({ engine, name }) => {
-  const url = engine ? INSTALL_URL[engine.id] : undefined;
-  return (
-    <p className="text-[11px] text-zinc-400 leading-snug">
-      {name} isn’t on this computer yet.{' '}
-      {url && (
-        <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-violet-300 hover:text-violet-200 underline-offset-2 hover:underline">
-          Install {name} <ExternalLink size={10} aria-hidden="true" />
-        </a>
-      )}
-      {url && ', then press Re-check.'}
-    </p>
-  );
-};
-
 /** Settings when nothing can run yet: three ways to start, one opened at a time. */
 export const StartPicker: React.FC<{
   engines: EngineInfo[];
@@ -53,20 +39,43 @@ export const StartPicker: React.FC<{
   onKeyAdded: () => void;
   focusClaudeSignIn?: number;
   initial?: StartChoice | null;
-}> = ({ engines, onSignedIn, onKeyAdded, focusClaudeSignIn, initial = null }) => {
+  /** After kwant installs an engine: read the engines again. */
+  onInstalled?: () => void;
+}> = ({ engines, onSignedIn, onKeyAdded, focusClaudeSignIn, initial = null, onInstalled }) => {
   const [choice, setChoice] = useState<StartChoice | null>(initial ?? (focusClaudeSignIn ? 'claude' : null));
   const [keyCard, setKeyCard] = useState<string>('anthropic_api');
   const claude = engines.find((e) => e.id === 'claude');
   const codex = engines.find((e) => e.id === 'codex');
+  // "Sign in with Claude" / "Set up Claude" from the banner or the welcome opens Claude's choice.
+  useEffect(() => {
+    if (focusClaudeSignIn) setChoice('claude');
+  }, [focusClaudeSignIn]);
+  // Claude Code just installed: its sign-in comes next, focused.
+  const [installedAt, setInstalledAt] = useState<number | undefined>(undefined);
 
   const body = () => {
     if (choice === 'claude') {
-      if (!claude || claude.status === 'not_installed') return <InstallLink engine={claude ?? ({ id: 'claude' } as EngineInfo)} name="Claude Code" />;
-      if (claude.enabled === false) return <p className="text-[11px] text-zinc-400">Claude is switched off. Turn it on in its card below.</p>;
-      return <ClaudeSignIn onSignedIn={onSignedIn} focusRequest={focusClaudeSignIn} />;
+      if (claude?.enabled === false) return <p className="text-[11px] text-zinc-400">Claude is switched off. Turn it on in its card below.</p>;
+      // "Set up Claude" (focusClaudeSignIn) installs without a click when it can, then signs in.
+      return (
+        <EngineInstall
+          item="claude"
+          name="Claude Code"
+          url={INSTALL_URL.claude}
+          needed={!claude || claude.status === 'not_installed'}
+          autoStart={focusClaudeSignIn}
+          onInstalled={() => {
+            setInstalledAt(Date.now());
+            onInstalled?.();
+          }}
+        >
+          <ClaudeSignIn onSignedIn={onSignedIn} focusRequest={installedAt ?? focusClaudeSignIn} />
+        </EngineInstall>
+      );
     }
     if (choice === 'codex') {
-      if (!codex || codex.status === 'not_installed') return <InstallLink engine={codex ?? ({ id: 'codex' } as EngineInfo)} name="Codex" />;
+      if (!codex || codex.status === 'not_installed')
+        return <EngineInstall item="codex" name="Codex" url={INSTALL_URL.codex} needed onInstalled={onInstalled} />;
       if (codex.enabled === false) return <p className="text-[11px] text-zinc-400">Codex is switched off. Turn it on in its card below.</p>;
       return (
         <p className="text-[11px] text-zinc-400 leading-snug">
