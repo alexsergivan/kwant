@@ -63,11 +63,11 @@ async fn legacy(dir: &Path) -> SqlitePool {
 }
 
 /// Every row of every table except `spaces` and `llm_profile_endpoints` (both new, the second
-/// from the Custom API change) and the Truth Ledger's backfill (checked on its own), without
+/// from the Custom API change), `team_creations` (new with ready-made teams) and the Truth Ledger's backfill (checked on its own), without
 /// `space_id`, as quoted text.
 async fn snapshot(pool: &SqlitePool) -> BTreeMap<String, Vec<String>> {
     let tables: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('spaces', 'llm_profile_endpoints', 'mcp_suggestions', 'bot_actions', 'hire_proposals', 'hire_policies', 'imports', 'approval_modes', 'knowledge_facts', 'fact_events') ORDER BY name",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('spaces', 'llm_profile_endpoints', 'mcp_suggestions', 'bot_actions', 'hire_proposals', 'hire_policies', 'imports', 'approval_modes', 'knowledge_facts', 'fact_events', 'team_creations') ORDER BY name",
     )
     .fetch_all(pool)
     .await
