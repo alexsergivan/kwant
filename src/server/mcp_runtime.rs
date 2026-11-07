@@ -150,7 +150,7 @@ impl Drop for TicketGuard {
         handle.spawn(async move {
             if broker.cancel(&id).await {
                 let _ = db.update_approval_status(&id, "cancelled").await;
-                let _ = events.send(RuntimeEvent::ApprovalWithdrawn { id });
+                let _ = events.send(RuntimeEvent::approval_withdrawn(id, "cancelled", None));
             }
         });
     }
@@ -208,7 +208,7 @@ impl BrokerApprover {
         let audit_call = req.server == mcp::SELF_SERVER_NAME && super::missions::auditor::TOOL_NAMES.contains(&req.tool.as_str());
         let off = !forced && (!self.always_ask || audit_call) && mode.as_ref().is_some_and(|m| m.is_off());
         // "Ask only when risky": what the caller made of this call; nothing known asks. A turn that
-        // always asks (it read outside text) still lets claude's plain read tools through.
+        // always asks (kwant started it on its own) still lets claude's plain read tools through.
         let smart = mode
             .as_ref()
             .is_some_and(|m| m.is_smart())
@@ -246,6 +246,15 @@ impl BrokerApprover {
         }
         if let Some((_, card)) = &floor {
             details["prod_floor"] = card.clone();
+        }
+        // Telegram keeps these cards link-only (Q-G6), each with its own line: a turn that read
+        // outside text (an injected request is likeliest there), and a turn kwant started on its
+        // own rather than from the person's message.
+        if super::missions::truth_ledger::is_tainted(&req.turn_id) {
+            details["tainted"] = json!(true);
+        }
+        if self.always_ask {
+            details["always_ask"] = json!(true);
         }
         let record = NewApproval {
             turn_id: req.turn_id.clone(),
@@ -355,7 +364,7 @@ impl BrokerApprover {
                     Ok(true) => ApprovalOutcome::Unanswered,
                     _ => {
                         let _ = self.db.update_approval_status(&ticket, "expired").await;
-                        let _ = self.events.send(RuntimeEvent::ApprovalWithdrawn { id: ticket.clone() });
+                        let _ = self.events.send(RuntimeEvent::approval_withdrawn(ticket.clone(), "expired", None));
                         ApprovalOutcome::Denied
                     }
                 }
@@ -424,9 +433,13 @@ pub async fn keep_cards_after_restart(state: &AppState) -> u64 {
 /// the bot to make it again; "always allow" also remembers the tool for that conversation.
 /// Approvals, secrets and the space are checked again when the call is made. Returns the JSON
 /// reply, or `None` when the card isn't waiting (anymore).
-pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: ApprovalDecision, status: &str) -> Option<Value> {
+pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: ApprovalDecision, status: &str, via: Option<&str>) -> Option<Value> {
     let (approval, chat) = state.db.claim_waiting_approval(ticket_id, status).await.ok().flatten()?;
-    let _ = state.event_sender.send(RuntimeEvent::ApprovalWithdrawn { id: ticket_id.to_string() });
+    // Recorded before it's announced, so a reload right after the event reads the same `answered_via`
+    if let Some(via) = via {
+        let _ = state.db.set_answered_via("approvals", ticket_id, via).await;
+    }
+    let _ = state.event_sender.send(RuntimeEvent::approval_withdrawn(ticket_id, status, via));
     if decision == ApprovalDecision::Deny {
         return Some(json!({"ticket_id": ticket_id, "resolved": true, "status": status, "resumed": false}));
     }

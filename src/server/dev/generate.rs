@@ -214,7 +214,7 @@ async fn close_cards(state: &AppState, kwant_id: &str, since: chrono::DateTime<c
     for (id, _) in state.db.open_audit_cards(Some(kwant_id), PURPOSE, Some(since)).await.unwrap_or_default() {
         state.broker.cancel(&id).await;
         if state.db.expire_open_approval(&id).await.unwrap_or(false) {
-            let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::ApprovalWithdrawn { id });
+            let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::approval_withdrawn(id, "expired", None));
         }
     }
 }

@@ -59,7 +59,7 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         | E::Activity { .. } => Vec::new(),
         // Never broadcast: the turn's stall watchdog and spend meter take them
         E::Progress | E::UsageSoFar { .. } => Vec::new(),
-        E::ApprovalRequired { id, .. } | E::ApprovalWithdrawn { id } => vec![Owner::Approval(id.clone())],
+        E::ApprovalRequired { id, .. } | E::ApprovalWithdrawn { id, .. } => vec![Owner::Approval(id.clone())],
         E::TurnComplete { kwant_id, .. } => contexts([kwant_id]),
         E::TurnStarted { kwant_id, context_id, thread_id, .. }
         | E::TurnEnded { kwant_id, context_id, thread_id, .. }
@@ -114,8 +114,13 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         E::RoutineRun { routine_id, .. } => vec![Owner::Routine(routine_id.clone())],
         E::TaskUpdated { task: v } | E::MissionUpdated { mission: v } => fields(v, &["space_id"], Owner::Space),
         E::GoalUpdated { space_id, .. } | E::IdeaUpdated { space_id, .. } => vec![Owner::Space(space_id.clone())],
-        E::DevCard { space_id, .. } | E::DevMode { space_id, .. } | E::DevTicket { space_id, .. }
-        | E::DevTicketProgress { space_id, .. } => vec![Owner::Space(space_id.clone())],
+        E::DevCard { space_id, .. }
+        | E::DevMode { space_id, .. }
+        | E::DevTicket { space_id, .. }
+        | E::DevTicketProgress { space_id, .. }
+        | E::TelegramPaired { space_id, .. }
+        | E::TelegramExpired { space_id }
+        | E::TelegramStatus { space_id } => vec![Owner::Space(space_id.clone())],
         E::Notify { space_id, kwant_id, channel_id, .. } => {
             let mut out: Vec<Owner> = space_id.iter().cloned().map(Owner::Space).collect();
             out.extend(contexts([channel_id, &Some(kwant_id.clone())]));
@@ -220,7 +225,7 @@ mod tests {
             E::Progress,
             E::UsageSoFar { fresh: 1 },
             E::ApprovalRequired { id: s("a"), tool_name: s("x"), details: json!({}) },
-            E::ApprovalWithdrawn { id: s("a") },
+            E::ApprovalWithdrawn { id: s("a"), answered_via: None, outcome: None },
             E::TurnComplete { tokens: 1, duration_ms: 1, kwant_id: Some(s("k")), profile_id: None },
             E::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: None, thread_id: None },
             E::TurnEnded { kwant_id: s("k"), context_id: None, outcome: s("completed"), turn_id: None, thread_id: None, quiet: false },
@@ -304,6 +309,9 @@ mod tests {
             E::DevMode { space_id: s("spc_x"), on: true },
             E::DevTicket { space_id: s("spc_x"), key: s("TRAIL-101"), state: s("waiting") },
             E::DevTicketProgress { space_id: s("spc_x"), key: s("TRAIL-101"), step: s("comments"), state: s("done"), detail: s("2 comments") },
+            E::TelegramPaired { space_id: s("spc_x"), name: s("x"), username: None },
+            E::TelegramExpired { space_id: s("spc_x") },
+            E::TelegramStatus { space_id: s("spc_x") },
             E::IdeaUpdated { id: s("i"), status: s("ready"), space_id: s("spc_x") },
             E::Notify {
                 kind: s("x"),
@@ -365,6 +373,9 @@ mod tests {
                 | E::DevMode { .. }
                 | E::DevTicket { .. }
                 | E::DevTicketProgress { .. }
+                | E::TelegramPaired { .. }
+                | E::TelegramExpired { .. }
+                | E::TelegramStatus { .. }
                 | E::IdeaUpdated { .. }
                 | E::Notify { .. } => {}
             }
