@@ -218,7 +218,7 @@
     var text = field.value.trim();
     var p = parse(field.value);
     var showChip = !!link;
-    var showPreview = phase === 'edit' && !errored && !removed && !link && p.code === 'ok';
+    var showPreview = phase === 'edit' && !errored && !removed && !link && p.code === 'ok' && !isListed(p);
     var showHelp = phase === 'edit' && !errored && !showChip && (!text || removed || p.code !== 'ok');
     $('help1').hidden = $('help2').hidden = !showHelp;
     $('preview').hidden = !showPreview;

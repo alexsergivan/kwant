@@ -128,6 +128,7 @@ test('a listed server: "already in this app" as you type, with no call, and the 
   assert.equal(statusText(p), 'kwant.example.com is already in this app.');
   assert.ok(p.doc.querySelector('#status .status.info'));
   assert.equal(p.$('go').textContent, 'Show it');
+  assert.equal(p.$('preview').hidden, true, 'no Connects to line (mockup #already)');
   assert.deepEqual(names(p), ['places_state'], 'decided locally');
   type(p, 'other.example.com');
   assert.equal(statusText(p), '', 'the line goes when the address changes');
