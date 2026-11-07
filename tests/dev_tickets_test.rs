@@ -472,3 +472,56 @@ async fn with_jira_off_nothing_changes() {
     let (s, _) = call(&w.env.app, "GET", &w.uri("TRAIL-101", "brief"), None).await;
     assert_eq!(s.as_u16(), 404);
 }
+
+/// api.md 1.7: the checklist on the bus. An unknown step or state sends nothing, a detail is one
+/// line of at most 120 characters, and no step carries the ticket's own text (the hostile ticket's
+/// summary and orders never reach other clients).
+#[tokio::test]
+async fn the_checklist_sends_only_known_steps_in_kwants_own_words() {
+    use kwnt::drivers::events::RuntimeEvent;
+    use kwnt::server::dev::tickets::tools;
+    let args = brief_args("Checklist: repair the order link", &["The checklist test order opens"], json!({}));
+    let w = world("Checklist", fixture("", "", &call_tool_marker("submit_brief", args)), false).await;
+    let mut rx = w.env.state.event_sender.subscribe();
+    let (st, sp) = (&w.env.state, w.space.as_str());
+
+    assert!(!tools::progress(st, sp, "TRAIL-9", "poll", "done", "x"), "unknown step");
+    assert!(!tools::progress(st, sp, "TRAIL-9", "ticket", "failed", "x"), "unknown state");
+    assert!(tools::progress(st, sp, "TRAIL-9", "code", "done", &format!("two\n\tlines {}", "y".repeat(300))));
+
+    let mut steps = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        if let RuntimeEvent::DevTicketProgress { key, step, detail, .. } = e {
+            steps.push((key, step, detail));
+        }
+    }
+    assert_eq!(steps.len(), 1, "only the known step was sent: {steps:?}");
+    assert_eq!(steps[0].1, "code");
+    assert!(steps[0].2.starts_with("two lines y") && !steps[0].2.contains('\n') && steps[0].2.chars().count() == 120, "{:?}", steps[0].2);
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let collector = tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(RuntimeEvent::DevTicketProgress { key, step, detail, .. }) => sink.lock().unwrap().push((key, step, detail)),
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(_) => break,
+            }
+        }
+    });
+    w.start("TRAIL-103").await;
+    w.state_is("TRAIL-103", &["working", "failed"]).await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    collector.abort();
+    let steps = seen.lock().unwrap().clone();
+
+    let ticket: Vec<_> = steps.iter().filter(|s| s.0 == "TRAIL-103" && s.1 == "ticket").collect();
+    assert_eq!(ticket.len(), 1, "{steps:?}");
+    assert_eq!(ticket[0].2, "description read");
+    for (_, _, d) in steps.iter().filter(|s| s.0 == "TRAIL-103") {
+        for text in ["Fix the broken order link", "rm -rf", "evil.example.com", "Repro", "never ask"] {
+            assert!(!d.contains(text), "ticket text {text:?} on the bus: {d:?}");
+        }
+    }
+}
