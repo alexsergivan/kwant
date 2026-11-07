@@ -148,13 +148,17 @@ test('inline code wraps anywhere and keeps its box on every line', () => {
 const live = (steps) => ({ turnId: 't1', thinking: {}, steps });
 const step = (over = {}) => ({ id: 's1', kind: 'tool', status: 'running', title: 'Using `web_search`', started_at: '2026-11-05T10:00:00Z', ...over });
 
-test('on a phone the strip is the one live line: 44 px, 14 px text, words not tool names', () => {
+test('on a phone the strip is a quiet live line: no box, 12 px text, space below, words not tool names', () => {
   const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), phone: true });
-  assert.match(html, /min-h-\[44px\]/);
-  assert.match(html, /text-sm leading-5/);
-  assert.match(html, /tabular-nums[^"]*text-\[#a39dcc\]|text-\[#a39dcc\][^"]*tabular-nums/);
+  assert.match(html, /min-h-\[28px\]/);
+  assert.match(html, /text-xs leading-4 text-zinc-400/);
+  assert.match(html, /pb-1\.5/);
+  assert.doesNotMatch(html, /border-zinc-700\/60|bg-zinc-900\/80/);
+  assert.match(html, /tabular-nums[^"]*text-zinc-500|text-zinc-500[^"]*tabular-nums/);
   assert.match(text(html), /Architect is searching the web/);
   assert.doesNotMatch(text(html), /_/);
+  // Desktop keeps its framed strip.
+  assert.match(m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), phone: false }), /border-zinc-700\/60/);
 });
 
 test('waiting on a question, the strip says so and offers Answer, which goes to the card', () => {
