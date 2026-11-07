@@ -12,25 +12,46 @@ use tokio::sync::mpsc;
 /// servers it started would live on. Declare it after the child, so it drops first, while the
 /// child is still unreaped and its group id can't be reused. Disarmed once the CLI has exited,
 /// so anything a finished turn deliberately left running is kept.
-pub(crate) struct ProcessGroup(Option<u32>);
+///
+/// On Windows the "group" is a Job Object holding the CLI and everything it starts
+/// (see [`super::win_job`]); `taskkill /T` is the fallback when Windows refuses the job.
+pub(crate) struct ProcessGroup {
+    pid: Option<u32>,
+    #[cfg(windows)]
+    job: Option<super::win_job::Job>,
+}
 
 impl ProcessGroup {
     pub(crate) fn of(child: &tokio::process::Child) -> Self {
-        Self(child.id())
+        Self {
+            pid: child.id(),
+            #[cfg(windows)]
+            job: child.raw_handle().and_then(super::win_job::Job::holding),
+        }
     }
 
     pub(crate) fn disarm(&mut self) {
-        self.0 = None;
+        self.pid = None;
+        #[cfg(windows)]
+        if let Some(job) = self.job.take() {
+            job.release();
+        }
     }
 }
 
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
-        kill_group(self.0);
+        #[cfg(windows)]
+        if let Some(job) = self.job.take() {
+            job.kill();
+            return;
+        }
+        kill_group(self.pid);
     }
 }
 
 /// SIGKILLs the process group led by `pid` (a CLI started with [`own_process_group`]).
+/// On Windows: `taskkill /T /F`, which ends `pid` and every process it started.
 fn kill_group(pid: Option<u32>) {
     #[cfg(unix)]
     if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()).filter(|p| *p > 0) {
@@ -39,17 +60,29 @@ fn kill_group(pid: Option<u32>) {
             libc::kill(-pid, libc::SIGKILL);
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    if let Some(pid) = pid.filter(|p| *p > 0) {
+        super::win_job::taskkill_tree(pid);
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = pid;
 }
 
 /// Starts the CLI as the leader of its own process group, for [`ProcessGroup`].
+/// On Windows the CLI gets no console window of its own (`CREATE_NO_WINDOW`); its tree is held
+/// by the Job Object [`ProcessGroup::of`] puts it in.
 pub(crate) fn own_process_group(cmd: &mut Command) {
     #[cfg(unix)]
     cmd.process_group(0);
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(not(any(unix, windows)))]
     let _ = cmd;
 }
+
+/// `CREATE_NO_WINDOW`: a console program started by the (windowless) app opens no console window.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 static CLI_BINARY_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>> =
     std::sync::OnceLock::new();
@@ -76,6 +109,93 @@ pub fn forget_cli_binaries() {
     }
 }
 
+#[cfg(windows)]
+fn find_cli_binary_uncached(name: &str) -> Option<String> {
+    // `where` lists PATH hits with every PATHEXT extension; an .exe beats a .cmd shim
+    let on_path: Vec<String> = std::process::Command::new("where")
+        .arg(name)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+        .unwrap_or_default();
+    let env = |k: &str| std::env::var_os(k).map(std::path::PathBuf::from);
+    windows_cli_candidates(name, &on_path, env("USERPROFILE"), env("APPDATA"))
+        .into_iter()
+        .find(|p| Path::new(p).is_file())
+}
+
+/// Where a CLI may be on Windows, best first: a native `.exe` on PATH, Claude's native install
+/// (`%USERPROFILE%\.local\bin\<name>.exe`), a `.cmd`/`.bat` shim on PATH, then npm's own folder
+/// (`%APPDATA%\npm\<name>.cmd`). Plan decision 5.
+#[cfg(any(windows, test))]
+fn windows_cli_candidates(
+    name: &str,
+    on_path: &[String],
+    user_profile: Option<std::path::PathBuf>,
+    app_data: Option<std::path::PathBuf>,
+) -> Vec<String> {
+    let ext = |p: &str| Path::new(p).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let mut out: Vec<String> = on_path.iter().filter(|p| ext(p) == "exe").cloned().collect();
+    if let Some(home) = user_profile {
+        out.push(home.join(".local").join("bin").join(format!("{name}.exe")).display().to_string());
+    }
+    out.extend(on_path.iter().filter(|p| matches!(ext(p).as_str(), "cmd" | "bat")).cloned());
+    if let Some(roaming) = app_data {
+        out.push(roaming.join("npm").join(format!("{name}.cmd")).display().to_string());
+    }
+    out
+}
+
+/// A command that runs the CLI at `bin`. On Windows an npm `.cmd` shim is skipped: its Node script
+/// is run with node directly, since cmd.exe can't safely pass a prompt with line breaks or quotes
+/// on. A shim kwnt can't read runs through Rust's own `.cmd` handling (cmd /C with checked
+/// quoting). Elsewhere, and for an `.exe`, it is just `bin`.
+pub fn cli_command(bin: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[cfg(windows)]
+    if let Some((node, script)) = npm_shim_target(Path::new(bin.as_ref())) {
+        let mut cmd = Command::new(node);
+        cmd.arg(script);
+        return cmd;
+    }
+    Command::new(bin)
+}
+
+/// For an npm `.cmd` shim, the node to use and the script it runs: the shim names it as
+/// `"%dp0%\node_modules\<package>\<script>.js"` (npm's cmd-shim), relative to the shim's folder.
+#[cfg(windows)]
+fn npm_shim_target(bin: &Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let ext = bin.extension()?.to_string_lossy().to_ascii_lowercase();
+    if ext != "cmd" && ext != "bat" {
+        return None;
+    }
+    let dir = bin.parent()?;
+    let script = dir.join(shim_script(&std::fs::read_to_string(bin).ok()?)?);
+    if !script.is_file() {
+        return None;
+    }
+    let own_node = dir.join("node.exe");
+    let node = if own_node.is_file() { own_node } else { "node".into() };
+    Some((node, script))
+}
+
+/// The script path inside an npm cmd-shim, relative to the shim's folder: the quoted
+/// `"%dp0%\..."` that is a `.js` file (the shim also names `"%dp0%\node.exe"`).
+#[cfg(any(windows, test))]
+fn shim_script(shim: &str) -> Option<String> {
+    const MARK: &str = "\"%dp0%\\";
+    shim.match_indices(MARK).find_map(|(at, _)| {
+        let rest = &shim[at + MARK.len()..];
+        let path = &rest[..rest.find('"')?];
+        let lower = path.to_ascii_lowercase();
+        (lower.ends_with(".js") || lower.ends_with(".cjs") || lower.ends_with(".mjs")).then(|| path.to_string())
+    })
+}
+
+#[cfg(not(windows))]
 fn find_cli_binary_uncached(name: &str) -> Option<String> {
     // 1. Try standard which command
     if let Ok(output) = std::process::Command::new("which").arg(name).output() {
@@ -380,7 +500,7 @@ pub async fn codex_user_mcp_servers(
     cwd: Option<&Path>,
     profile_env: Option<&crate::profiles::CliEnv>,
 ) -> Result<Vec<String>, String> {
-    let mut cmd = Command::new(bin);
+    let mut cmd = cli_command(bin);
     cmd.args(["mcp", "list", "--json"]);
     if let Some(env) = profile_env {
         env.apply(&mut cmd);
@@ -582,7 +702,7 @@ impl CliDriver {
         event_tx: &mpsc::Sender<RuntimeEvent>,
     ) -> std::io::Result<GrokRun> {
         let home = super::grok::GrokHome::create(&std::env::temp_dir(), &launch.config)?;
-        let mut cmd = Command::new(launch.bin_path);
+        let mut cmd = cli_command(launch.bin_path);
         if let Some(dir) = launch.input.workspace_dir.as_ref().filter(|d| d.exists()) {
             cmd.current_dir(dir);
         }
@@ -1263,7 +1383,7 @@ impl Driver for CliDriver {
             }
         };
 
-        let mut cmd = Command::new(&bin_path);
+        let mut cmd = cli_command(&bin_path);
         if let Some(ref dir) = input.workspace_dir {
             if dir.exists() {
                 cmd.current_dir(dir);

@@ -21,6 +21,8 @@ pub const UV_VERSION: &str = "0.13.5";
 /// Playwright, whose `install chromium` puts a private Chromium in the person's cache. Pinned.
 pub const PLAYWRIGHT_VERSION: &str = "1.64.1";
 pub const CODEX_NPM: &str = "@openai/codex";
+/// Claude Code's npm package, for Windows (elsewhere its own installer script is used).
+pub const CLAUDE_NPM: &str = "@anthropic-ai/claude-code";
 
 /// A part `kwnt setup` can install.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -369,6 +371,13 @@ pub fn plan(item: ItemId, p: &Probe) -> Plan {
                 },
             }),
         },
+        // Windows: npm and winget only, never curl | bash, apt or sudo (0.7.6 Windows port)
+        ItemId::Claude | ItemId::Codex | ItemId::Grok if cfg!(windows) => {
+            if p.platform != Platform::Docker && p.cli(item.engine().unwrap_or(Engine::Claude)).is_none() {
+                let (npm, git) = windows_tools();
+                steps.extend(windows_cli_steps(item, npm.as_deref(), git));
+            }
+        }
         ItemId::Claude | ItemId::Grok if p.platform == Platform::Docker => {}
         ItemId::Claude | ItemId::Grok if p.cli(item.engine().unwrap_or(Engine::Claude)).is_some() => {}
         ItemId::Claude | ItemId::Grok => {
@@ -638,6 +647,46 @@ fn is_root() -> bool {
 #[cfg(not(unix))]
 fn is_root() -> bool {
     false
+}
+
+/// Windows: npm (`npm.cmd`, which [`which`] can't see) and whether Git for Windows' bash is here.
+#[cfg(windows)]
+fn windows_tools() -> (Option<String>, bool) {
+    (crate::drivers::find_cli_binary("npm"), crate::tools::shell::git_bash().is_some())
+}
+
+#[cfg(not(windows))]
+fn windows_tools() -> (Option<String>, bool) {
+    (None, true)
+}
+
+/// How to install a CLI on Windows: npm into the person's own `%APPDATA%\npm`, Node.js and Git
+/// from winget. Git first when it is missing, since bot commands run in its bash. Pure, so it is
+/// tested on every platform.
+fn windows_cli_steps(item: ItemId, npm: Option<&str>, git: bool) -> Vec<Step> {
+    let mut steps = Vec::new();
+    if !git {
+        steps.push(Step::Manual {
+            label: "Install Git for Windows (bots run their commands in its bash)".into(),
+            command: "winget install --id Git.Git -e".into(),
+        });
+    }
+    let (name, pkg) = match item {
+        ItemId::Claude => ("Claude Code", CLAUDE_NPM),
+        ItemId::Codex => ("the Codex CLI", CODEX_NPM),
+        _ => {
+            steps.push(Step::Manual { label: "Grok CLI".into(), command: "Not available on Windows yet.".into() });
+            return steps;
+        }
+    };
+    steps.push(match npm {
+        Some(npm) => Step::Run(Cmd::new(format!("Install {name} with npm"), &[npm, "install", "-g", pkg])),
+        None => Step::Manual {
+            label: format!("Install Node.js, then {name}"),
+            command: format!("winget install --id OpenJS.NodeJS.LTS -e, then: npm install -g {pkg}"),
+        },
+    });
+    steps
 }
 
 pub fn which(name: &str) -> Option<PathBuf> {

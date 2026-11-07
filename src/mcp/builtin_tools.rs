@@ -531,6 +531,8 @@ mod tests {
             std::os::unix::fs::symlink(ws.join("src"), ws.join("inner")).unwrap();
             assert!(is_inside(&ws, "inner/ok.rs"), "a symlink within the folder stays inside");
         }
+        #[cfg(not(unix))]
+        let _ = tmp;
     }
 
     #[test]

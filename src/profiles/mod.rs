@@ -256,7 +256,7 @@ impl CliEnv {
     /// `bin` run on the profile's home: env applied and [`Self::args`] in place, ready for the
     /// subcommand's own arguments.
     pub fn command(&self, bin: impl AsRef<std::ffi::OsStr>) -> tokio::process::Command {
-        let mut cmd = tokio::process::Command::new(bin);
+        let mut cmd = crate::drivers::cli::cli_command(bin);
         self.apply(&mut cmd);
         cmd.args(&self.args);
         cmd

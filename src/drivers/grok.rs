@@ -89,6 +89,7 @@ impl GrokHome {
     pub fn create(base: &Path, config: &toml::Table) -> std::io::Result<Self> {
         sweep_stale(base);
         let path = base.join(format!("{DIR_PREFIX}{}", uuid::Uuid::new_v4().simple()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
