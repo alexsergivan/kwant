@@ -4,7 +4,7 @@ import { UndoNotice } from './UndoNotice';
 import { Bot, Check, ChevronDown, ChevronRight, CircleDot, Globe2, ListChecks, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
 import { DraftSections, KeepLine, ShownBadge, ShownLine, TryItOnce, shownOf } from './SkillDraft';
 import { ShowOnceStart } from './ShowOnce';
-import { isRecording, showOnce, showOnceApi, useShowOnce, type Recording } from '../showOnce';
+import { isRecording, showOnce, showOnceApi, useShowOnce, waitingRow, type Recording } from '../showOnce';
 import { formatWhen, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -541,8 +541,8 @@ export const ActiveSkill: React.FC<{ skill: Skill; initialPending?: boolean }> =
  * on/off switch, and the rejected/replaced ones for the record. Live through `skill_updated`.
  */
 // Stopped or writing: the review can be opened from here. Live ones belong to the stage
-const waitsForReview = (rec: unknown): rec is Recording =>
-  isRecording(rec) && !(rec as { deleted?: boolean }).deleted && (rec.state === 'stopped' || rec.state === 'writing');
+// Mira §4.1: only `stopped` (a `writing` one's draft arrives in To review instead)
+const waitsForReview = (rec: unknown): rec is Recording => isRecording(rec) && !(rec as { deleted?: boolean }).deleted && rec.state === 'stopped';
 
 export const SkillsPanel: React.FC<{
   kwantId: string;
@@ -555,7 +555,14 @@ export const SkillsPanel: React.FC<{
   const [starting, setStarting] = useState(false);
   const [lastUrl, setLastUrl] = useState<string | null>(null);
   // S-B5: a recording left stopped (Hand back, a closed tab, a reload, a restart) is offered here
-  const [waiting, setWaiting] = useState<Recording | null>(null);
+  const [waiting, setWaitingRaw] = useState<Recording | null>(null);
+  const showOnceBtn = useRef<HTMLButtonElement>(null);
+  const waitBtn = useRef<HTMLButtonElement>(null);
+  // Mira §4.1: when the row goes away with focus on its button, focus moves to Show it once
+  const setWaiting = useCallback((next: Recording | null) => {
+    if (!next && waitBtn.current && document.activeElement === waitBtn.current) requestAnimationFrame(() => showOnceBtn.current?.focus());
+    setWaitingRaw(next);
+  }, []);
   const so = useShowOnce();
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -633,7 +640,7 @@ export const SkillsPanel: React.FC<{
         <>
           <div className="so-entry">
             {onShowOnceStarted && (
-              <button type="button" onClick={() => setStarting(true)} className={quietBtn}>
+              <button ref={showOnceBtn} type="button" data-so-show-once="" onClick={() => setStarting(true)} className={quietBtn}>
                 <CircleDot size={11} className="so-rec-ic" aria-hidden="true" /> Show it once
               </button>
             )}
@@ -643,8 +650,9 @@ export const SkillsPanel: React.FC<{
           </div>
           {onShowOnceStarted && waiting && so?.kwantId !== kwantId && (
             <div className="so-entry-wait">
-              <span>Your last recording is waiting to be checked.</span>
+              <span>{waitingRow(waiting, kwantName).text}</span>
               <button
+                ref={waitBtn}
                 type="button"
                 className={quietBtn}
                 onClick={() => {
@@ -652,7 +660,7 @@ export const SkillsPanel: React.FC<{
                   void showOnce.resumeOpen(kwantId, kwantName, waiting.stage || kwantId);
                 }}
               >
-                <ListChecks size={11} aria-hidden="true" /> Check the steps
+                <ListChecks size={11} aria-hidden="true" /> {waitingRow(waiting, kwantName).button}
               </button>
             </div>
           )}

@@ -275,3 +275,14 @@ textarea.so-input { height: auto; padding: 8px 10px; line-height: 20px; resize: 
 .so-banner.info > svg { color: #b8adff; margin-top: 2px; }
 /* Mira §3: hosts in the Try warning are plain --t1 text, not chips */
 .so-trybox .so-warn .so-host { color: var(--t1); overflow-wrap: anywhere; }
+/* Mira §4.2: a recording discarded in another window or on another device */
+.so-gone { animation: so-gone-in 160ms ease-out; }
+@keyframes so-gone-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .so-gone { animation: none; } }
+.so-gone-strip { padding: 0 12px 8px; }
+.so-gone-strip .so-banner { margin: 8px 0 0; align-items: center; }
+.so-gone-strip .so-icbtn { flex: none; }
+@media (max-width: 639px) {
+  .so-rv-foot > .so-gone-close { flex-basis: 100%; height: 44px; justify-content: center; }
+  .so-gone-strip .so-icbtn { width: 44px; height: 44px; }
+}

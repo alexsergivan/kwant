@@ -140,7 +140,7 @@ test('stop banners are Mira §1 word for word, each ending with what was kept', 
   assert.equal(m.keptSentence(14), 'All 14 steps up to there are kept.');
   assert.deepEqual(b('limit_time', 120), { tone: 'warn', lead: 'Stopped at 30 minutes,', rest: ' the most one recording can take. All 120 steps up to there are kept.' });
   assert.deepEqual(b('limit_steps', 198), { tone: 'warn', lead: 'Stopped at 200 steps,', rest: ' the most one recording can take. All 198 steps up to there are kept.' });
-  assert.deepEqual(b('closed', 1), { tone: 'warn', lead: "The recording stopped when the app's window closed or the computer slept.", rest: ' The 1 step up to there is kept.' });
+  assert.deepEqual(b('closed', 1), { tone: 'warn', lead: "The recording stopped when the app's window closed, the computer slept, or another window took over.", rest: ' The 1 step up to there is kept.' });
   assert.deepEqual(b('restart', 0), { tone: 'warn', lead: 'The recording stopped when the app restarted.', rest: ' Nothing was recorded before it stopped.' });
   assert.deepEqual(b('handed_back', 14), { tone: 'info', lead: 'Stopped when you pressed Hand back.', rest: ' All 14 steps up to there are kept.' }, 'reopened later: the browser is already back');
   assert.equal(full(b('stop', 14, { botName: 'Rook', handedBack: true, holdsStage: true })), 'Stopped when you pressed Hand back. All 14 steps up to there are kept. Rook gets the browser back when you close this.', 'gap 2: this session pressed Hand back, server said stop');
@@ -729,14 +729,102 @@ test('no HTML from data, spinners stop for reduced motion, the dot stops pulsing
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
 });
 
-test('a Discard elsewhere (SSE with deleted: true, api.md §10.1) closes the review here', async () => {
+const goneEvent = (id = 'rec_1') => m.emitContinuity({ type: 'recording_updated', data: { id, kwant_id: 'k_rook', space_id: 'sp1', deleted: true } });
+
+test('Mira §4.2: a Discard elsewhere keeps the review open with only the violet banner and Close', async () => {
+  fake({});
   m.showOnceStore.set(reviewing());
-  m.emitContinuity({ type: 'recording_updated', data: { id: 'rec_other', kwant_id: 'k_rook', space_id: 'sp1', deleted: true } });
-  assert.ok(m.showOnceStore.get(), 'another recording: nothing happens');
-  m.emitContinuity({ type: 'recording_updated', data: { id: 'rec_1', kwant_id: 'k_rook', space_id: 'sp1', deleted: true } });
+  const ended = [];
+  const off = m.showOnceStore.onEnd((e) => ended.push(e));
+  const entry = document.createElement('button');
+  entry.setAttribute('data-so-show-once', '');
+  entry.getClientRects = () => [1];
+  document.body.appendChild(entry);
+  const { host, unmount } = await mount(h(m.StepReview), true);
+  await click(byText(host, '.so-rv-foot button', 'Discard'));
+  assert.ok(host.querySelector('[role="alertdialog"]'), 'an open Discard confirm');
+  goneEvent('rec_other');
+  await settle();
+  assert.equal(m.showOnceStore.get()?.discardedElsewhere, undefined, 'another recording: nothing happens');
+  goneEvent();
+  await settle();
+  const sheet = host.querySelector('.so-rv');
+  assert.ok(sheet, 'the review stays open');
+  assert.equal(sheet.querySelector('h3').textContent, 'Check the steps', 'the header stays');
+  const banner = sheet.querySelector('.so-banner.info[role="status"]');
+  assert.equal(banner.textContent, 'This recording was discarded in another window or on another device. Its steps are deleted, and nothing was written.');
+  assert.equal(banner.querySelector('b').textContent, 'This recording was discarded in another window or on another device.');
+  assert.ok(banner.classList.contains('so-gone'), 'fades in (none under reduced motion)');
+  assert.equal(sheet.querySelector('.so-steps'), null, 'the steps are gone');
+  assert.equal(sheet.querySelector('[role="alertdialog"]'), null, 'the open confirm is dropped');
+  assert.equal(sheet.querySelector('.so-foot-note'), null, 'the lock note is gone');
+  const btns = [...sheet.querySelectorAll('.so-rv-foot button')].map((b) => b.textContent.trim());
+  assert.deepEqual(btns, ['Close']);
+  const close = byText(sheet, '.so-rv-foot button', 'Close');
+  assert.equal(document.activeElement, close, 'focus on Close');
+  assert.equal(document.getElementById(close.getAttribute('aria-describedby')).textContent, banner.querySelector('span').textContent);
+  // later frames and refreshes don't bring the old body back
+  m.emitContinuity({ type: 'recording_updated', data: rec({ state: 'stopped' }) });
+  await settle();
+  assert.equal(host.querySelector('.so-steps'), null);
+  await key('Escape');
+  assert.equal(m.showOnceStore.get(), null);
+  assert.deepEqual(ended, [{ stage: 'k_rook', handBack: false }]);
+  await settle();
+  assert.equal(document.activeElement, entry, 'focus to Show it once');
+  entry.remove();
+  off();
+  unmount();
+});
+
+test('Mira §4.2: this tab’s own Discard closes with no message even when the event comes first; focus to Record steps', async () => {
+  let answer;
+  fake({ [`DELETE ${R}/rec_1`]: () => answer });
+  answer = [204, null];
+  m.showOnceStore.set(reviewing());
+  const stageBtn = document.createElement('button');
+  stageBtn.className = 'so-record-steps';
+  stageBtn.getClientRects = () => [1];
+  document.body.appendChild(stageBtn);
+  const { host, unmount } = await mount(h(m.StepReview), true);
+  // the server's event lands while the DELETE is still out
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (...a) => {
+    goneEvent();
+    return orig(...a);
+  };
+  await click(byText(host, '.so-rv-foot button', 'Discard'));
+  await click(byText(host, '[role="alertdialog"] button', 'Discard'));
   await settle();
   assert.equal(m.showOnceStore.get(), null);
-  reset();
+  assert.equal(host.querySelector('.so-rv'), null, 'no message');
+  assert.equal(document.activeElement, stageBtn);
+  stageBtn.remove();
+  globalThis.fetch = orig;
+  unmount();
+});
+
+test('Mira §4.2: a live recording discarded elsewhere swaps the bar for the banner with a ×; focus stays', async () => {
+  fake({});
+  m.showOnceStore.set(session());
+  const input = document.createElement('input');
+  document.body.appendChild(input);
+  input.focus();
+  const { host, unmount } = await mount(h(m.RecordingStrip, { stage: 'k_rook' }));
+  assert.ok(host.querySelector('.so-bar'));
+  goneEvent();
+  await settle();
+  assert.equal(host.querySelector('.so-bar'), null, 'the recording bar goes away');
+  assert.equal(host.querySelector('.so-banner.info[role="status"]').textContent, 'This recording was discarded in another window or on another device. Its steps are deleted, and nothing was written.');
+  assert.equal(document.activeElement, input, 'focus stays in the page');
+  m.onRecordingFrame({ type: 'skill.recording.stopped', recording_id: 'rec_1' });
+  await settle();
+  assert.equal(m.showOnceStore.get().phase, 'recording', 'later frames are ignored');
+  await click(host.querySelector('button[aria-label="Close"]'));
+  assert.equal(m.showOnceStore.get(), null);
+  assert.equal(host.textContent, '');
+  input.remove();
+  unmount();
 });
 
 test('a plain Stop sends no reason', async () => {
@@ -790,7 +878,7 @@ test('Skills tab: a recording left stopped is offered (S-B5); Check the steps op
   let v = await mount(h(m.SkillsPanel, { kwantId: 'k_rook', kwantName: 'Rook', onShowOnceStarted: () => {} }));
   const row = v.host.querySelector('.so-entry-wait');
   assert.ok(row, 'the waiting row');
-  assert.equal(row.textContent.trim().startsWith('Your last recording is waiting to be checked.'), true);
+  assert.equal(row.querySelector('span').textContent, 'Your recording of 14 steps stopped before you checked it. The steps are kept 7 days after the recording.');
   await click(byText(row, 'button', 'Check the steps'));
   await settle();
   assert.equal(m.showOnceStore.get()?.phase, 'review');
@@ -801,6 +889,41 @@ test('Skills tab: a recording left stopped is offered (S-B5); Check the steps op
   fake({ ['GET /api/skills?kwant_id=k_rook']: [200, []], [`GET ${R}?bot=k_rook`]: [200, { recording: rec({ kwant_id: 'k_rook', state: 'recording' }), last_url: null }] });
   v = await mount(h(m.SkillsPanel, { kwantId: 'k_rook', kwantName: 'Rook', onShowOnceStarted: () => {} }));
   assert.equal(v.host.querySelector('.so-entry-wait'), null, 'a live recording belongs to the stage');
+  v.unmount();
+  reset();
+});
+
+test('Mira §4.1: the Skills row strings, with and without a date, write failed and 0 steps', () => {
+  const at = '2026-11-14T10:04:00Z';
+  assert.deepEqual(m.waitingRow(rec({ state: 'stopped', steps_expire_at: at }), 'Rook'), {
+    text: 'Your recording of 14 steps stopped before you checked it. The steps are kept until Nov 14.',
+    button: 'Check the steps',
+  });
+  assert.deepEqual(m.waitingRow(rec({ state: 'stopped', step_count: 1, steps_expire_at: at, write_error: 'x' }), 'Rook'), {
+    text: "Rook couldn't write the skill from your recording of 1 step. The steps are kept until Nov 14.",
+    button: 'Check the steps',
+  });
+  assert.equal(m.waitingRow(rec({ state: 'stopped', write_error: 'x' }), 'Rook').text, "Rook couldn't write the skill from your recording of 14 steps. The steps are kept 7 days after the recording.");
+  assert.deepEqual(m.waitingRow(rec({ state: 'stopped', step_count: 0, note_count: 2, steps_expire_at: at }), 'Rook'), {
+    text: 'Your recording stopped before any steps were kept.',
+    button: 'Open it',
+  });
+});
+
+test('Mira §4.1: the row goes when the recording is discarded anywhere; focus on its button moves to Show it once; writing shows no row', async () => {
+  const stopped = rec({ kwant_id: 'k_rook', state: 'stopped', step_count: 0 });
+  fake({ ['GET /api/skills?kwant_id=k_rook']: [200, []], [`GET ${R}?bot=k_rook`]: [200, { recording: stopped, last_url: null }] });
+  let v = await mount(h(m.SkillsPanel, { kwantId: 'k_rook', kwantName: 'Rook', onShowOnceStarted: () => {} }));
+  const btn = byText(v.host.querySelector('.so-entry-wait'), 'button', 'Open it');
+  btn.focus();
+  goneEvent();
+  await settle();
+  assert.equal(v.host.querySelector('.so-entry-wait'), null);
+  assert.equal(document.activeElement, byText(v.host.querySelector('.so-entry'), 'button', 'Show it once'));
+  v.unmount();
+  fake({ ['GET /api/skills?kwant_id=k_rook']: [200, []], [`GET ${R}?bot=k_rook`]: [200, { recording: rec({ kwant_id: 'k_rook', state: 'writing' }), last_url: null }] });
+  v = await mount(h(m.SkillsPanel, { kwantId: 'k_rook', kwantName: 'Rook', onShowOnceStarted: () => {} }));
+  assert.equal(v.host.querySelector('.so-entry-wait'), null, 'writing: the draft arrives in To review');
   v.unmount();
   reset();
 });

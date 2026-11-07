@@ -44,6 +44,7 @@ import {
   stepSentence,
   stepsWord,
   stopBanner,
+  DISCARDED_ELSEWHERE,
   lockNote,
   writeFailedTail,
   dayOf,
@@ -220,6 +221,37 @@ export const ShowOnceStart: React.FC<{
 // ---------------------------------------------------------------------------------------------
 // The stage's Record steps button (S1, desktop stage and phone overlay)
 
+/**
+ * Mira §4.2: where focus goes once a review closes after a Discard (here or elsewhere): the stage's
+ * Record steps when the stage is up, else Show it once in Skills, else the Skills tab panel.
+ */
+export function focusAfterDiscard() {
+  requestAnimationFrame(() => {
+    const visible = (el: Element | null): el is HTMLElement => el instanceof HTMLElement && el.getClientRects().length > 0;
+    const rec = Array.from(document.querySelectorAll('.so-record-steps')).find(visible);
+    if (rec) return rec.focus();
+    const entry = Array.from(document.querySelectorAll('[data-so-show-once]')).find(visible);
+    if (entry) return entry.focus();
+    const panel = Array.from(document.querySelectorAll('#agent-panel-skills, [role="tabpanel"]')).find(visible);
+    if (panel) {
+      if (!panel.hasAttribute('tabindex')) panel.setAttribute('tabindex', '-1');
+      panel.focus();
+    }
+  });
+}
+
+/** Mira §4.2: the violet info banner for a recording another tab or device discarded. */
+export const DiscardedBanner: React.FC<{ id?: string; children?: React.ReactNode }> = ({ id, children }) => (
+  <p className="so-banner info so-gone" role="status">
+    <Trash2 size={14} aria-hidden="true" />
+    <span id={id}>
+      <b>{DISCARDED_ELSEWHERE.lead}</b>
+      {DISCARDED_ELSEWHERE.rest}
+    </span>
+    {children}
+  </p>
+);
+
 export const RecordStepsButton: React.FC<{ className: string; onClick: () => void; disabled?: boolean }> = ({ className, onClick, disabled }) => (
   <button type="button" className={`${className} so-record-steps`} onClick={onClick} disabled={disabled}>
     <CircleDot size={14} aria-hidden="true" />
@@ -312,9 +344,31 @@ export const RecordingStrip: React.FC<{ stage: string; phone?: boolean }> = ({ s
   const mine = s && s.stage === stage ? s : null;
   if (!mine) return null;
   if (mine.phase === 'taking' || mine.phase === 'starting') return <StartingStrip s={mine} phone={phone} />;
+  if (mine.phase === 'recording' && mine.rec && mine.discardedElsewhere) return <DiscardedStrip phone={phone} />;
   if (mine.phase === 'recording' && mine.rec) return <RecordingBar s={mine} phone={phone} />;
   return null;
 };
+
+/** Mira §4.2: a live recording discarded elsewhere. Focus stays put: the person may be typing in the page. */
+function DiscardedStrip({ phone }: { phone: boolean }) {
+  return (
+    <div className={`so-gone-strip ${phone ? 'ph' : ''}`}>
+      <DiscardedBanner>
+        <button
+          type="button"
+          className="so-icbtn"
+          aria-label="Close"
+          onClick={() => {
+            showOnce.dismissDiscarded();
+            focusAfterDiscard();
+          }}
+        >
+          <X size={16} aria-hidden="true" />
+        </button>
+      </DiscardedBanner>
+    </div>
+  );
+}
 
 function StartingStrip({ s, phone }: { s: ShowOnceSession; phone: boolean }) {
   return (
@@ -654,10 +708,21 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
   const blocker = writeBlocker(rec, s.steps, bot);
   const engine = engineName(rec.engine);
 
+  const gone = !!s.discardedElsewhere;
+  const goneClose = useRef<HTMLButtonElement>(null);
   useEffect(() => headRef.current?.focus(), []);
+  // Mira §4.2: the body is replaced under the person, so focus moves to the one button left
+  useEffect(() => {
+    if (gone) goneClose.current?.focus();
+  }, [gone]);
 
+  const closeGone = () => {
+    showOnce.dismissDiscarded();
+    focusAfterDiscard();
+  };
   const onEscape = () => {
-    if (writing || written) showOnce.close();
+    if (gone) closeGone();
+    else if (writing || written) showOnce.close();
     else if (confirm) setConfirm(false);
     else setConfirm(true);
   };
@@ -681,6 +746,7 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
     const err = await showOnce.discard();
     setBusy(null);
     if (err) setFootErr(err);
+    else focusAfterDiscard();
   };
 
   const until = dayOf(rec.steps_expire_at, false);
@@ -689,7 +755,16 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
   const writeError = !writing && !written ? rec.write_error ?? (s.error && !footErr ? s.error : null) : null;
 
   let foot: React.ReactNode;
-  if (written) {
+  if (gone) {
+    foot = (
+      <>
+        <span className="so-grow" />
+        <button ref={goneClose} type="button" className="so-btn so-gone-close" aria-describedby={`${id}-gone`} onClick={closeGone}>
+          Close
+        </button>
+      </>
+    );
+  } else if (written) {
     foot = (
       <>
         <p className="so-writing" role="status">
@@ -794,6 +869,11 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
             <X size={16} aria-hidden="true" />
           </button>
         </div>
+        {gone ? (
+          <div className="so-rv-body">
+            <DiscardedBanner id={`${id}-gone`} />
+          </div>
+        ) : (
         <div className="so-rv-body" aria-busy={writing || undefined}>
           {banner && (
             <p className={`so-banner ${banner.tone}`} role="status">
@@ -837,6 +917,7 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
             </ol>
           )}
         </div>
+        )}
         <div className="so-rv-foot">{foot}</div>
       </div>
     </div>

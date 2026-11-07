@@ -346,7 +346,7 @@ export function stopBanner(r: Recording, listed: number, opts: { botName?: strin
     case 'limit_steps':
       return { tone: 'warn', lead: `Stopped at ${limits.steps} steps,`, rest: ` the most one recording can take.${kept}` };
     case 'closed':
-      return { tone: 'warn', lead: "The recording stopped when the app's window closed or the computer slept.", rest: kept };
+      return { tone: 'warn', lead: "The recording stopped when the app's window closed, the computer slept, or another window took over.", rest: kept };
     case 'restart':
       return { tone: 'warn', lead: 'The recording stopped when the app restarted.', rest: kept };
   }
@@ -356,6 +356,23 @@ export function stopBanner(r: Recording, listed: number, opts: { botName?: strin
   }
   return null;
 }
+
+/** Mira §4.1: the Skills row for a recording that stopped before the person checked it (S-B5). */
+export function waitingRow(r: Recording, botName: string): { text: string; button: string } {
+  if (r.step_count <= 0) return { text: 'Your recording stopped before any steps were kept.', button: 'Open it' };
+  const day = dayOf(r.steps_expire_at, false);
+  const kept = day ? `The steps are kept until ${day}.` : 'The steps are kept 7 days after the recording.';
+  const what = r.write_error
+    ? `${botName} couldn't write the skill from your recording of ${stepsWord(r.step_count)}.`
+    : `Your recording of ${stepsWord(r.step_count)} stopped before you checked it.`;
+  return { text: `${what} ${kept}`, button: 'Check the steps' };
+}
+
+/** Mira §4.2: shown in place of the review (or under the stage header) when another tab discarded it. */
+export const DISCARDED_ELSEWHERE = {
+  lead: 'This recording was discarded in another window or on another device.',
+  rest: ' Its steps are deleted, and nothing was written.',
+} as const;
 
 /** Mira §2: the review footer's lock note; `until` is `steps_expire_at` as "Nov 14". */
 export const lockNote = (bot: string, engine: string | null, until: string | null): string =>
@@ -565,6 +582,10 @@ export interface ShowOnceSession {
   syncedAt: number;
   /** The last action's failure, said where it happened */
   error: string | null;
+  /** This tab pressed Discard, so the server's `deleted` event is ours (Mira §4.2) */
+  discarding?: boolean;
+  /** Mira §4.2: another tab or device discarded this recording; the review shows only the banner and Close */
+  discardedElsewhere?: boolean;
 }
 
 type Listener = () => void;
@@ -627,15 +648,15 @@ function mergeStep(steps: RecordedStep[], step: RecordedStep): RecordedStep[] {
 /** GET the recording and its steps: after any edit, so numbers and counts are the server's. */
 async function refresh(): Promise<void> {
   const id = session?.rec?.id;
-  if (!id) return;
+  if (!id || session?.discardedElsewhere) return;
   try {
     const { recording, steps } = await showOnceApi.get(id);
-    if (!session || session.rec?.id !== id || !isRecording(recording)) return;
+    if (!session || session.rec?.id !== id || session.discardedElsewhere || !isRecording(recording)) return;
     const next = applyRecording(session, recording);
     // While a write is out, keep saying "writing" until the server says otherwise
     showOnceStore.set({ ...next, steps: cleanSteps(steps) });
   } catch (e) {
-    if (e instanceof ShowOnceError && e.status === 404 && session?.rec?.id === id) end(false);
+    if (e instanceof ShowOnceError && e.status === 404 && session?.rec?.id === id && !session.discarding && !session.discardedElsewhere) end(false);
   }
 }
 
@@ -658,7 +679,7 @@ function refreshAfterUndo(step: RecordedStep) {
 /** Frames on the stage's stream socket (api.md §5); only the socket that holds Take over gets them. */
 export function onRecordingFrame(m: Record<string, unknown>) {
   const s = session;
-  if (!s?.rec || m.recording_id !== s.rec.id && !(m.type === 'skill.recording.state' && isRecording(m.recording) && m.recording.id === s.rec.id)) return;
+  if (!s?.rec || s.discardedElsewhere || m.recording_id !== s.rec.id && !(m.type === 'skill.recording.state' && isRecording(m.recording) && m.recording.id === s.rec.id)) return;
   switch (m.type) {
     case 'skill.recording.step':
       if (!isStep(m.step)) return;
@@ -687,9 +708,12 @@ onContinuity('recording_updated', (rec) => {
   // api.md §10.1: Discard (here or in another tab) sends only {id, kwant_id, space_id, deleted: true}
   const gone = rec as unknown as { id?: unknown; deleted?: unknown } | null;
   if (session?.rec && gone?.deleted === true && gone.id === session.rec.id) {
-    end(session.handBackAfter);
+    // Our own Discard ends the session when its request returns; another tab's keeps it open with a message
+    if (session.discarding || session.discardedElsewhere) return;
+    showOnceStore.set({ ...session, discardedElsewhere: true, error: null });
     return;
   }
+  if (session?.discardedElsewhere) return;
   if (!session?.rec || !isRecording(rec) || rec.id !== session.rec.id) return;
   const was = session.phase;
   showOnceStore.set(applyRecording(session, rec));
@@ -867,13 +891,20 @@ export const showOnce = {
       end(session?.handBackAfter ?? false);
       return null;
     }
+    if (session) showOnceStore.set({ ...session, discarding: true });
     try {
       await showOnceApi.discard(id);
       end(session?.handBackAfter ?? false);
       return null;
     } catch (e) {
+      if (session) showOnceStore.set({ ...session, discarding: false });
       return errText(e);
     }
+  },
+
+  /** Mira §4.2: Close on the "discarded in another window" message (review or stage). */
+  dismissDiscarded() {
+    if (session?.discardedElsewhere) end(session.handBackAfter);
   },
 
   /** Close while writing or once written: the draft arrives in Skills. Closing hands the browser back. */
