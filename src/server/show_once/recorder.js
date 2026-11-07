@@ -2,7 +2,8 @@
 // can't see it, call it or change it. It sends one line per action the person takes: never a
 // keystroke, never a picture, and never the value of a masked field (decisions.md Q-S1). The
 // server applies the same mask again to whatever arrives. Events a script dispatched
-// (isTrusted false) are never recorded; a field a script filled is masked as a saved login.
+// (isTrusted false) are never recorded; a field whose value isn't all the person's own typing
+// (a script, the vault or the page set any of it) is masked as a saved login.
 (function () {
   if (globalThis.__kwntRecorder) return;
   globalThis.__kwntRecorder = true;
@@ -95,13 +96,25 @@
     list.forEach(function (r) { if (String(r.oldValue).toLowerCase() === 'password') everPassword.add(r.target); });
   }).observe(document, { subtree: true, attributes: true, attributeFilter: ['type'], attributeOldValue: true });
 
+  // Before each edit of the person's: the field must hold exactly what their own edits left,
+  // empty before the first. Anything else (a value a script set with no event, a prefilled
+  // value, the vault) means some of the text isn't theirs, so the field is masked (S-F2).
+  document.addEventListener('beforeinput', function (e) {
+    var el = e.composedPath ? e.composedPath()[0] : e.target;
+    if (!e.isTrusted || !isTextField(el)) return;
+    var now = String(valueOf(el) || '');
+    var theirs = lastTrusted.has(el) ? lastTrusted.get(el) : '';
+    if (now !== theirs) scripted.add(el);
+  }, true);
+
   document.addEventListener('input', function (e) {
     var el = e.composedPath ? e.composedPath()[0] : e.target;
     if (!isTextField(el)) return;
     if (String(el.type).toLowerCase() === 'password') everPassword.add(el);
     if (!e.isTrusted) { scripted.add(el); return; }
     dirty.add(el);
-    // after the page's own handlers (an input mask reformatting is the page, not a script fill)
+    lastTrusted.set(el, String(valueOf(el) || ''));
+    // again after the page's own handlers (an input mask reformatting is the page, not a script fill)
     setTimeout(function () { lastTrusted.set(el, String(valueOf(el) || '')); }, 0);
   }, true);
 

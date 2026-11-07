@@ -171,14 +171,16 @@ fn input_name(raw: &str) -> Option<String> {
 /// the retry and to the person as `write_error`.
 pub fn parse(reply: &str, steps: &[StepRow]) -> Result<Draft, String> {
     let m = json_object(reply)?;
-    let name = text(&m, "name", 200)?;
+    // Everything the engine wrote is masked like any other text kwant keeps (S-F4): a key it
+    // repeated, made up or was handed never reaches the skill
+    let name = masked(text(&m, "name", 200)?);
     let name = clean_skill_name(&name).map_err(|e| format!("\"name\": {e}"))?;
-    let description = text(&m, "description", MAX_SKILL_DESCRIPTION_CHARS)?;
-    let goal = text(&m, "goal", MAX_PARA)?;
-    let when_to_use = text(&m, "when_to_use", MAX_PARA)?;
-    let plan = list(&m, "steps", 1, MAX_STEPS)?;
-    let checks = list(&m, "checks", 1, MAX_CHECKS)?;
-    let risks = list(&m, "what_can_go_wrong", 1, MAX_RISKS)?;
+    let description = masked(text(&m, "description", MAX_SKILL_DESCRIPTION_CHARS)?);
+    let goal = masked(text(&m, "goal", MAX_PARA)?);
+    let when_to_use = masked(text(&m, "when_to_use", MAX_PARA)?);
+    let plan = masked_all(list(&m, "steps", 1, MAX_STEPS)?);
+    let checks = masked_all(list(&m, "checks", 1, MAX_CHECKS)?);
+    let risks = masked_all(list(&m, "what_can_go_wrong", 1, MAX_RISKS)?);
     let raw_inputs = match m.get("inputs") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(a)) => a.clone(),
@@ -199,7 +201,7 @@ pub fn parse(reply: &str, steps: &[StepRow]) -> Result<Draft, String> {
             .and_then(Value::as_str)
             .and_then(input_name)
             .ok_or_else(|| format!("input {at}'s name must be 1 to {MAX_INPUT_NAME} lowercase letters, digits or underscores"))?;
-        let description = text(o, "description", MAX_LINE).map_err(|e| format!("input {at}: {e}"))?;
+        let description = masked(text(o, "description", MAX_LINE).map_err(|e| format!("input {at}: {e}"))?);
         let from = o.get("from_step").and_then(Value::as_u64).ok_or_else(|| format!("input {at} needs \"from_step\", a step number"))?;
         let Some(step) = listed.iter().find(|s| s.n as u64 == from).map(|s| s.step) else {
             return Err(format!("input {at}'s from_step {from} isn't one of the steps"));
@@ -223,6 +225,17 @@ pub fn parse(reply: &str, steps: &[StepRow]) -> Result<Draft, String> {
         inputs.push(Input { name: unique, description, example });
     }
     Ok(Draft { name, description, goal, when_to_use, inputs, steps: plan, checks, risks })
+}
+
+/// Engine text with credentials and key-shaped secrets hidden: the same two maskers as the
+/// rest of kwant's kept text (`key=value` pairs, then keys by shape and label).
+fn masked(s: String) -> String {
+    let (out, _) = crate::import::scrub::scrub_text(&crate::profiles::classify::mask_credentials(&s));
+    out
+}
+
+fn masked_all(v: Vec<String>) -> Vec<String> {
+    v.into_iter().map(masked).collect()
 }
 
 /// The one JSON object in a reply: the whole reply, or inside a ```json fence.
@@ -460,6 +473,30 @@ mod tests {
             "what_can_go_wrong": ["The login expired"],
         })
         .to_string()
+    }
+
+    /// S-F4: a token-shaped secret anywhere in the engine's reply is saved masked.
+    #[test]
+    fn a_secret_in_the_engines_reply_is_masked_before_it_is_saved() {
+        let key = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+        let mut r: Value = serde_json::from_str(&reply(json!([{"name": "date_range", "description": format!("Range, token {key}"), "from_step": 3}]))).unwrap();
+        r["description"] = json!(format!("Export orders with {key}."));
+        r["goal"] = json!("Orders are exported. password=hunter22");
+        r["steps"] = json!(["Open {origin}/admin/orders", format!("Sign in with Bearer {key}"), "Press Export CSV"]);
+        r["checks"] = json!([format!("The key {key} still works")]);
+        r["what_can_go_wrong"] = json!(["AWS key AKIAIOSFODNN7EXAMPLE expired"]);
+        let d = parse(&r.to_string(), &steps()).unwrap();
+        let b = body(&d, &["https://shop.example.com".into()], "Nov 7, 2026", 4);
+        for gone in [key, "hunter22", "AKIAIOSFODNN7EXAMPLE"] {
+            assert!(!b.contains(gone) && !d.description.contains(gone), "{gone} in {b}");
+        }
+        assert!(d.description.starts_with("Export orders with ") && d.description.contains(crate::import::scrub::REDACTED), "{}", d.description);
+        assert!(d.inputs[0].description.contains(crate::import::scrub::REDACTED));
+        assert!(b.contains("Press Export CSV") && b.contains("Example from your run: Last 7 days"), "plain text is kept: {b}");
+        // a reply with no secret is kept as it was
+        let plain = parse(&reply(json!([])), &steps()).unwrap();
+        assert_eq!(plain.description, "Export last week's paid orders to the CRM.");
+        assert_eq!(plain.steps, vec!["Open {origin}/admin/orders", "Pick {date_range}", "Press Export CSV"]);
     }
 
     #[test]
