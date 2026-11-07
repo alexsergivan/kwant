@@ -57,6 +57,8 @@ import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSq
 import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
+import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
+import { ReadyTeamsWelcome } from './components/ReadyTeamsEntry';
 import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -2535,6 +2537,44 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  // 0.7.7 T: a template team was made; open its chat (the server answers with its channel id).
+  const openNewTeamChat = async (created: { id: string; name: string }, channelId: string) => {
+    setSelectedTeamId(created.id);
+    let chan: Channel | undefined;
+    try {
+      const cRes = await fetch('/api/channels');
+      if (cRes.ok) {
+        const freshChannels: Channel[] = await cRes.json();
+        setChannels(freshChannels);
+        chan = freshChannels.find((c) => c.id === channelId) ?? teamChannelOf(freshChannels, created as Team);
+      }
+    } catch {
+      /* the channel event selects nothing; the id alone is enough below */
+    }
+    const id = chan?.id ?? channelId;
+    if (!id) return;
+    setSelectedId(id);
+    selectedIdRef.current = id;
+    setIsChannel(true);
+    isChannelRef.current = true;
+    messagesCacheRef.current[id] = [];
+    setMessages([]);
+    setPage('chat');
+    setPhoneView('chat');
+  };
+  const [looseAddImap, setLooseAddImap] = useState(0);
+  const openTeamNeed = (opens: string, team: ReadyTeam) => {
+    if (opens === 'loose_ends_imap') {
+      setLooseAddImap((n) => n + 1);
+      showPage('inbox', 'loose');
+    } else if (opens === 'connections') openConnections();
+    else if (opens === 'dev_mode_setup') {
+      // The team's repo is set in Manage team (Team settings > Git Repo), where Dev mode's line shows.
+      const t = teams.find((x) => x.id === team.id);
+      if (t) setEditingTeam(t);
+    }
+  };
+
   const handleUpdateTeam = async (
     id: string,
     data: {
@@ -3342,7 +3382,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
   const loose = (
     <LooseEndsPage
+      key={`loose-${looseAddImap}`}
       onOpenChat={openThread}
+      addImap={looseAddImap > 0}
     />
   );
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount} onBack={backToList} newPage={away} loosePage={loose} />;
@@ -3420,13 +3462,28 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           subHeader={subHeader}
           threadLine={isPhone && threadBarProps ? <ThreadPicker {...threadBarProps} /> : undefined}
           notice={setupBanner}
+          topCard={
+            isChannel && currentTeam ? (
+              <TeamNeedsTop
+                team={currentTeam}
+                canRun={canRun !== false}
+                personPosted={messages.some((m) => m.sender_role === 'user')}
+                refreshKey={settingsClosedCount}
+                onAddAccount={offerClaude ? openClaudeSignIn : openSettings}
+                onOpenNeed={(opens) => openTeamNeed(opens, currentTeam)}
+              />
+            ) : undefined
+          }
           welcome={
             setupBanner && isChannel ? (
-              <FirstRunWelcome
-                bots={kwants}
-                actionLabel={offerClaude ? 'Sign in with Claude' : 'Add an account'}
-                onAction={offerClaude ? openClaudeSignIn : openSettings}
-              />
+              <>
+                <FirstRunWelcome
+                  bots={kwants}
+                  actionLabel={offerClaude ? 'Sign in with Claude' : 'Add an account'}
+                  onAction={offerClaude ? openClaudeSignIn : openSettings}
+                />
+                <ReadyTeamsWelcome onBlank={() => setIsNewTeamOpen(true)} />
+              </>
             ) : undefined
           }
           onOpenAccounts={openSettings}
@@ -3537,10 +3594,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
+  const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (
-    // overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
-    // once slid the whole chat under its header (P1-7). Browsers without clip keep hidden.
+    <ReadyTeamsProvider
+      space={space.id}
+      bots={readyBots}
+      teams={teams}
+      onChanged={refreshRoster}
+      onOpenTeam={(t, channelId) => void openNewTeamChat(t, channelId)}
+    >
+    {/* overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
+        once slid the whole chat under its header (P1-7). Browsers without clip keep hidden. */}
     <div className="relative flex-1 min-w-0 h-full flex flex-col bg-surface-main text-zinc-100 overflow-hidden [overflow:clip]" data-space={space.id}>
       <div ref={contentRef} className={`flex-1 min-h-0 flex ${isPhone ? 'flex-col' : 'overflow-hidden'}`}>
         {isPhone ? (
@@ -3809,5 +3874,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       </p>
       <NeedsYouPill items={pill.items} rev={pill.rev} spriteOf={spriteOf} onOpen={openPill} onDismiss={dismissPill} />
     </div>
+    </ReadyTeamsProvider>
   );
 };

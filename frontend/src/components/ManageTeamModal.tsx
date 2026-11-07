@@ -9,6 +9,7 @@ import { MAX_INSTRUCTIONS } from '../continuity';
 import { teamNameToSave } from '../teamChannel';
 import { TeamRepoDevLine } from './TeamRepoDevLine';
 import { useEscapeLayer } from '../escape';
+import { SuggestMembersButton } from './ReadyTeamsEntry';
 
 interface ManageTeamModalProps {
   isOpen: boolean;
@@ -69,6 +70,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  // D1: hidden (not unmounted) while the suggestion sheet is open.
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -116,7 +119,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   };
   const unsaved = !!saved && (Object.keys(saved) as (keyof typeof saved)[]).some((k) => saved[k] !== edited[k]);
   const rootRef = useRef<HTMLDivElement>(null);
-  useEscapeLayer(rootRef, isOpen && !!team, onClose, {
+  useEscapeLayer(rootRef, isOpen && !!team && !sheetOpen, onClose, {
     modal: true,
     unsaved,
     fallback: () => [...document.querySelectorAll<HTMLElement>('[data-composer]')].find((el) => !el.closest('[inert]')),
@@ -240,7 +243,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   };
 
   return (
-    <div className="kw-dialog fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
+    <div className={`kw-dialog fixed inset-0 z-50 bg-black/75 backdrop-blur-sm ${sheetOpen ? 'hidden' : 'flex'} items-center justify-center p-4 select-none animate-in fade-in duration-150`} hidden={sheetOpen}>
       <div ref={rootRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="manage-team-title" className="kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
@@ -449,6 +452,20 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
                   Bots clone it into the team’s folder on first run.
                 </p>
               </div>
+            )}
+
+            {team && (team.workspace_path || team.repo_url) && (
+              <SuggestMembersButton
+                team={{ id: team.id, name: team.name }}
+                workspace_path={team.workspace_path || undefined}
+                repo_url={team.repo_url || undefined}
+                onHide={() => setSheetOpen(true)}
+                onShow={() => setSheetOpen(false)}
+                onDone={() => {
+                  setSheetOpen(false);
+                  onClose();
+                }}
+              />
             )}
 
             {workspaceType === 'default' && (

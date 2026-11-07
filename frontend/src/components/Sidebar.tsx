@@ -23,6 +23,7 @@ import { DevOnToast } from './DevOnToast';
 import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
 import { IdeaJarRow } from './IdeaJarRow';
+import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
 
 export interface Kwant {
   id: string;
@@ -979,6 +980,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ),
             )}
           </div>
+          <ReadyTeamsSidebarBox teamCount={teams.length} />
         </div>
         )}
 

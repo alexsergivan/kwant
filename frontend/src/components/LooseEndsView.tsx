@@ -1322,7 +1322,9 @@ export const LooseEndsPage: React.FC<{
   /** Dev mode's Connect (flow F5): open the add form on GitHub, and say when a GitHub source is added. */
   connectGitHub?: boolean;
   onGitHubAdded?: () => void;
-}> = ({ onBack, onOpenChat, connectGitHub = false, onGitHubAdded }) => {
+  /** 0.7.7 T5: the Inbox team's "Connect email" opens the add form on IMAP. */
+  addImap?: boolean;
+}> = ({ onBack, onOpenChat, connectGitHub = false, onGitHubAdded, addImap = false }) => {
   const [cases, setCases] = useState<LooseCase[] | null>(null);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -1476,8 +1478,8 @@ export const LooseEndsPage: React.FC<{
           sources={sources}
           error={sourcesError}
           onChanged={() => (loadSources(), load())}
-          initialAdding={connectGitHub}
-          initialKind={connectGitHub ? 'github' : undefined}
+          initialAdding={connectGitHub || addImap}
+          initialKind={connectGitHub ? 'github' : addImap ? 'imap' : undefined}
           onAdded={(s) => s.kind === 'github' && onGitHubAdded?.()}
           settled={!loading || cases !== null || error !== null}
         />
