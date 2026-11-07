@@ -798,15 +798,18 @@ export function switchReducer(s: SwitchState, a: SwitchAction, space = 'this spa
       return flip(s, false, a.now, space);
     }
     case 'recover':
-      if (s.phase !== 'lifted' || s.liftedAt === null || a.now - s.liftedAt < RECOVER_MS) return s;
+      // a.now before liftedAt: the clock stepped back, so the 5 s can't be measured; drop the cover.
+      if (s.phase !== 'lifted' || s.liftedAt === null || (a.now - s.liftedAt < RECOVER_MS && a.now >= s.liftedAt)) return s;
       return { ...s, phase: 'covered', liftedAt: null, announce: say(s, STAYS_ON_TEXT) };
     case 'escape':
     case 'blur':
       if (s.phase !== 'lifted') return s;
       return { ...s, phase: 'covered', liftedAt: null, announce: say(s, STAYS_ON_TEXT) };
     case 'settled':
-      if (s.phase !== 'settling' || a.now < s.settleUntil) return s;
-      return { ...s, phase: 'covered' };
+      // Further than SETTLE_MS short: the clock stepped back, and waiting for it would leave presses ignored.
+      if (s.phase !== 'settling' || (a.now < s.settleUntil && s.settleUntil - a.now <= SETTLE_MS)) return s;
+      // settleUntil goes back to 0, so a clock that stepped back can't keep ignoring presses after this.
+      return { ...s, phase: 'covered', settleUntil: 0 };
     case 'saved':
       return { ...s, saving: false, on: a.on };
     case 'save_failed':
