@@ -35,6 +35,32 @@ card_art: avatar:user
   <figcaption>Take over, sign in on the page, then Done.</figcaption>
 </figure>
 
+<h2 id="watch-live">Watch a bot's browser live</h2>
+<p>A globe on a chat's row means its bot is using the browser right now. Click it to watch the page as the bot works. <strong>Watch</strong> on the chat's working line does the same.</p>
+<figure>
+  <div class="frame">{{video:clip-v075-watch-live|Demo: a message asks Ann to check the tent page. The globe appears on Ann's row, it opens her live browser, and the shop's tent page loads under a Watching badge.}}</div>
+  <figcaption>From the globe on a chat's row to the bot's live page.</figcaption>
+</figure>
+<ul>
+  <li>Each chat's live view has its own <code>/live</code> address, and a notification can open it directly.</li>
+  <li>With two or more chats browsing, the panel's name becomes a switcher. Chats that need you come first.</li>
+  <li>Watching changes nothing. To act on the page yourself, use <a href="#take-over">Take over</a>.</li>
+</ul>
+
+<h2 id="show-once">Show it once</h2>
+<p>Some tasks are quicker to show than to explain. Do the task once in a bot's browser while kwant writes the steps down, and the bot turns them into a skill.</p>
+<figure>
+  <div class="frame">{{shot:v075-show-once|A "Check the steps" dialog over a shop's orders page, listing four recorded steps: open the orders page, choose Paid, choose Last 7 days and click Export CSV.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Check the steps before the bot writes the skill.</figcaption>
+</figure>
+<ol>
+  <li><strong>Start</strong> from <strong>Show it once</strong> in the bot's Skills tab, or press <strong>Record steps</strong> while you've taken over its browser.</li>
+  <li><strong>Do the task.</strong> Clicks, typing and picks from a dropdown are recorded, and each field is named by its own label. Add a note after a step if it needs one.</li>
+  <li><strong>Stop and check the steps.</strong> Discard, keep recording, or choose <strong>Write the skill</strong>.</li>
+  <li><strong>Review the draft</strong> under To review in the bot's Skills tab. Edit it, then press <strong>Try it once</strong> to run it in the bot's chat. The trial never changes the skill. Approve it when it's right.</li>
+</ol>
+<p class="note">Passwords, one-time codes, card details, secrets and anything filled in by a saved login or a script are recorded as placeholders, never as their text.</p>
+
 <h2 id="sign-in">Bots ask you to sign in</h2>
 <p>Ask a bot to log in to one of your accounts and it opens the site's sign-in page in its browser. If you're already signed in, it carries on. Otherwise it posts a sign-in card: <strong>Open browser</strong> takes you straight to the page with control, you sign in yourself, and <strong>Done</strong> lets the bot look again. Bots never ask for a password or one-time code in chat.</p>
 <ul>

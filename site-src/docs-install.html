@@ -30,6 +30,22 @@ card_art: avatar:devops
 <p>Updates arrive in the app, which checks each one's signature before installing it. With the <code>.deb</code>, your system asks for your password to install the update. To remove the <code>.deb</code>, run <code>sudo apt remove kwant</code>; your data in <code>~/.kwnt</code> stays.</p>
 <p class="note warn"><strong>The Linux app is a beta.</strong> We've tested it in clean installs of Ubuntu 22.04, Ubuntu 24.04 and Debian 12, but not yet on real desktops, so the tray icon, Wayland and HiDPI screens may behave differently on yours. It's x86_64 only for now: no ARM builds. Something wrong? <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Open an issue</a>.</p>
 
+<h2 id="side-by-side">This Mac and your servers, side by side</h2>
+<p>The Mac and Linux app can open This Mac and every server you use at the same time, each in its own window. Nothing restarts when you go from one to another.</p>
+<figure>
+  <div class="frame">{{shot:v075-side-by-side|kwant's Add a server window with the address kwant.example.com typed in and a Connect button.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Add a server takes an address or a sign-in link.</figcaption>
+</figure>
+<ul>
+  <li><strong>Add a server…</strong> in the menu bar (the tray on Linux) takes the server's address or a sign-in link. Sign in once, and the server stays listed and signed in until you remove it, so you never type it again.</li>
+  <li>The menu bar lists each place with what's waiting there, or "Sign in to see what's waiting", or "Couldn't reach it". Choose a place to open or bring up its window.</li>
+  <li>A link to another listed place opens that place's window. Other links open in your browser.</li>
+  <li>When a server can't be reached, its window says why, with <strong>Try again</strong> and <strong>Remove this server…</strong>.</li>
+  <li><strong>Remove a server</strong> asks first, then signs the app out on that server, so it also disappears from that server's signed-in devices.</li>
+  <li><strong>Run kwant on this Mac</strong> is on by default. Turn it off if you only use servers. You need at least one server added first.</li>
+</ul>
+<p>The list is kept in <code>~/.kwnt/desktop-places.json</code>. It holds addresses only, never a token.</p>
+
 <h2 id="app">Install the web app</h2>
 <p>kwant bots also installs from the browser, so it opens in its own window. In Chrome or Edge, click <b>Install app</b> in <b>Settings → All spaces</b> (or the install icon in the address bar; the sidebar also offers it once, as a tip). In Safari on a Mac, choose <b>File › Add to Dock</b>. On a phone, kwant shows how. Browsers only install pages served over https or from <code>127.0.0.1</code>, so a server needs an <a href="#proxy">HTTPS reverse proxy</a> first.</p>
 

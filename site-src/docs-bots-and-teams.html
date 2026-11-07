@@ -118,6 +118,19 @@ card_art: avatar:tech_lead
 <h3 id="hand-back">Hand-back</h3>
 <p>A bot that kwant picked from your message's words, not one you named, may hand the message back if it isn't its area, with a one-line reason. The message goes to the next bot that fits well, else the Concierge, else the lead, and the new reason line says who handed it back and why. A message can be handed back only once, so it can't bounce between bots.</p>
 
+<h2 id="ready-made">Ready-made teams</h2>
+<p><strong>New team › From a template</strong> offers ready-made Inbox, Sales and Coding teams, so a working team takes one step instead of a bot at a time. Each comes with a lead, helpers, instructions and skills for one job.</p>
+<figure>
+  <div class="frame">{{shot:v075-teams|kwant's New team sheet showing a Coding team suggested from a project folder, listing the frameworks it found and five suggested bots, each with the folders it owns.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A Coding team suggested from a project's code. Nothing is created until you press Create.</figcaption>
+</figure>
+<ul>
+  <li><strong>The preview</strong> shows who's in the team and lets you rename them. It names any clash with bots you already have, and lists the team's starter skills, its routine and what the team will never do.</li>
+  <li><strong>Create</strong> makes the bots, the team chat, the skills and the routine together. The routine is off until you turn it on.</li>
+  <li><strong>One Undo</strong> removes all of it.</li>
+  <li><strong>Suggest members from the code</strong> reads a team's repo or project folder and suggests 2 to 6 bots, each with a reason and the paths it looked at. When it can't read the code, or can't tell, it says so plainly instead of guessing.</li>
+</ul>
+
 <h2 id="handoffs">Handoffs</h2>
 <p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. With the <a href="mission-board.html#lead-review">Mission board</a> on, each hand-off gets a card, and the bot that handed it out reviews the result.</p>
 <ul>

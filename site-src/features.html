@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-075">New in 0.7.5</a></li>
         <li><a href="#new-074">New in 0.7.4</a></li>
         <li><a href="#new-073">New in 0.7.3</a></li>
         <li><a href="#new-072">New in 0.7.2</a></li>
@@ -49,7 +50,58 @@ card_art: team
   </div>
 </nav>
 
-<section id="new-074" class="fgroup">
+<section id="new-075" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7.5</p>
+      <h2>This Mac and your servers side by side, and work from Jira and Telegram</h2>
+      <p>The app opens This Mac and every server you add at the same time, each in its own window. Ready-made teams start in one step. Dev mode takes work from Jira tickets, Telegram brings your bots to your phone, and you can watch a bot's browser live or show it a task once.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="side-by-side">
+        <span class="shot">{{shot:v075-side-by-side-card|kwant's Add a server window with the address kwant.example.com typed in and a Connect button.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>This Mac and your servers, side by side</h3><p>The Mac and Linux app opens This Mac and every server you add, each in its own window, all at the same time. Nothing restarts to switch. <strong>Add a server…</strong> in the menu bar takes an address or a sign-in link, and the server stays listed and signed in until you remove it. The menu bar shows what's waiting in each place. The list keeps addresses only, never a token. <a href="docs/install.html#side-by-side">Add a server</a></p></div>
+      </article>
+      <article class="card" id="ready-teams">
+        <span class="shot">{{shot:v075-teams-card|kwant's New team sheet showing a Coding team suggested from a project folder, listing the frameworks it found and five suggested bots, each with the folders it owns.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Ready-made teams</h3><p>Create an Inbox, Sales or Coding team in one step. The preview shows who's in it and lets you rename them. It also lists the team's skills, its routine (off until you turn it on) and what the team will never do. One Undo removes all of it. <strong>Suggest members from the code</strong> reads a repo and suggests 2 to 6 bots, each with its reason, and says so when it can't tell. <a href="docs/bots-and-teams.html#ready-made">Start a team</a></p></div>
+      </article>
+      <article class="card" id="jira">
+        <span class="shot">{{shot:v075-jira-card|kwant's Dev desk showing a Jira ticket picked up by the Shop team, with a progress line and the brief Ann wrote: goal, done-when checks, code locations and a plan, each linked to its source.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Work from Jira tickets</h3><p>Connect Jira Cloud or Data Center in Dev mode, and the tickets you hand over appear on the Dev desk's <strong>Tickets</strong> tab. A bot reads each one, writes a brief with its sources, asks what's unclear, then builds. The card follows the ticket to landed and says <strong>Matches the ticket</strong> only when every done-when line is met. Your bots never move or close tickets. <a href="docs/dev-mode.html#jira">Connect Jira</a></p></div>
+      </article>
+      <article class="card" id="telegram">
+        <span class="shot">{{shot:v075-telegram-card|A kwant chat where a bot's request to open a pull request shows as allowed once from Telegram.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Your bots in Telegram</h3><p>Pair one Telegram chat with a space. Write to your bots from there, and get their replies and what needs you: questions, approvals, sign-ins and stuck bots. It uses a Telegram bot you make and needs no public address. With <strong>Allow approvals from Telegram</strong> on, some approvals get <strong>Allow once</strong> on the phone, and the rest open in kwant. <a href="docs/telegram.html">Set up Telegram</a></p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Show it once</h3>
+        <p>Do a task once in a bot's browser while kwant writes the steps down. Passwords, one-time codes, card details and anything a saved login fills in are kept as placeholders, never as their text. You check the steps, the bot writes a skill from them, and <strong>Try it once</strong> runs it in the bot's chat before you approve it. Start it from a bot's <strong>Skills</strong> tab, or with <strong>Record steps</strong> while you've taken over its browser.</p>
+      </div>
+      <div class="frame">{{video:clip-v075-show-once|Demo: on a shop's orders page in the bot's browser, a person records three steps: Status set to Paid, Dates set to Last 7 days, then Export CSV. They stop, check the list of steps and choose Write the skill, and the chat says Ann wrote the skill.}}</div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="watch-live">
+        <span class="shot">{{shot:v075-watch-live-card|A kwant chat beside the bot's live browser, which shows a shop's tent product page under a "Watching" badge.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Watch live</h3><p>A globe on a chat's row shows that its bot is using the browser right now. Click it to watch the page, or press <strong>Watch</strong> on the working line. Each chat's live view has its own address, so a notification can open it directly. With two or more chats browsing, the panel's name becomes a switcher, with the chats that need you first. <a href="docs/browser.html#watch-live">Watch a bot's browser</a></p></div>
+      </article>
+      <article class="card" id="show-once-draft">
+        <span class="shot">{{shot:v075-show-once-draft-card|A close-up of a skill draft written from a recording: goal, when to use it, an input called date_range with the example "Last 7 days", and four steps.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A skill you check before it's used</h3><p>The draft waits under <strong>To review</strong> in the bot's Skills tab. Each field is named by its own label, and picks from a dropdown are steps like any other. Edit the steps, try it once in the chat, then approve it. The trial never changes the skill. <a href="docs/browser.html#show-once">How Show it once works</a></p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="install-cli"><h3>Install Claude Code in one click</h3><p>When Claude Code, Codex or Grok's command-line tool is missing and kwant can install it, the start picker and the engine cards show <strong>Install</strong> instead of a link. Sign-in follows straight away. If the install fails, kwant says so, with Try again and the old link.</p></li>
+      <li id="telegram-limits"><h3>What Telegram can't do</h3><p>Production connections, payment floors, human steps and Take over always open the app, and "Always allow" stays in kwant. The bot token stays in the vault, never in replies, logs or a bot's context. Each approval made there is logged as "from Telegram".</p></li>
+      <li id="phone-working-line"><h3>A quieter working line on the phone</h3><p>"… is getting started" is now one small line with space above the message box, and the Ask buttons above it are smaller. Both are just as easy to tap.</p></li>
+      <li id="dev-switch-fix"><h3>The Dev mode switch doesn't get stuck</h3><p>It no longer stays in "settling" and ignores presses. After "Which is it?" in a forge connection form, keyboard focus lands on the first choice.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-074" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.4</p>
@@ -106,7 +158,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-073" class="fgroup alt">
+<section id="new-073" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.3</p>
@@ -146,7 +198,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-072" class="fgroup">
+<section id="new-072" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.2</p>
@@ -186,7 +238,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-071" class="fgroup alt">
+<section id="new-071" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.1</p>
@@ -226,7 +278,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-07" class="fgroup" data-covers="0.6.12 0.6.13">
+<section id="new-07" class="fgroup alt" data-covers="0.6.12 0.6.13">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7</p>
@@ -266,7 +318,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-0611" class="fgroup alt">
+<section id="new-0611" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.11</p>
@@ -301,7 +353,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-069" class="fgroup">
+<section id="new-069" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.9</p>
@@ -348,7 +400,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-065" class="fgroup alt">
+<section id="new-065" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.5</p>
@@ -384,7 +436,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-064" class="fgroup">
+<section id="new-064" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.4 · Who answers</p>
@@ -418,7 +470,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-06" class="fgroup alt">
+<section id="new-06" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6 · Mission Control</p>
@@ -447,7 +499,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-05" class="fgroup">
+<section id="new-05" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.5 · Browser &amp; status</p>
@@ -466,7 +518,7 @@ card_art: team
   </div>
 </section>
 
-<section id="discovery" class="fgroup alt">
+<section id="discovery" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.5 · Automation Discovery</p>
@@ -484,7 +536,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-teams" class="fgroup">
+<section id="new-teams" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Hand-offs &amp; review</p>
@@ -503,7 +555,7 @@ card_art: team
   </div>
 </section>
 
-<section id="performance" class="fgroup alt">
+<section id="performance" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Performance &amp; audits</p>
@@ -530,7 +582,7 @@ card_art: team
   </div>
 </section>
 
-<section id="mission-board" class="fgroup">
+<section id="mission-board" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Mission board</p>
@@ -575,7 +627,7 @@ card_art: team
   </div>
 </section>
 
-<section id="flight-school" class="fgroup alt">
+<section id="flight-school" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Flight School</p>
@@ -618,7 +670,7 @@ card_art: team
   </div>
 </section>
 
-<section id="connect" class="fgroup">
+<section id="connect" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Connect apps</p>
@@ -646,7 +698,7 @@ card_art: team
   </div>
 </section>
 
-<section id="teams" class="fgroup alt">
+<section id="teams" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Teams & chat</p>
@@ -675,7 +727,7 @@ card_art: team
   </div>
 </section>
 
-<section id="spaces" class="fgroup">
+<section id="spaces" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Spaces & accounts</p>
@@ -706,7 +758,7 @@ card_art: team
   </div>
 </section>
 
-<section id="own" class="fgroup alt">
+<section id="own" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Works on its own</p>
@@ -734,7 +786,7 @@ card_art: team
   </div>
 </section>
 
-<section id="safety" class="fgroup">
+<section id="safety" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Safety & control</p>
@@ -765,7 +817,7 @@ card_art: team
   </div>
 </section>
 
-<section id="knowledge" class="fgroup alt">
+<section id="knowledge" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Your bots and knowledge</p>
@@ -792,7 +844,7 @@ card_art: team
   </div>
 </section>
 
-<section id="more" class="fgroup" aria-labelledby="more-title">
+<section id="more" class="fgroup alt" aria-labelledby="more-title">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">And more</p>
@@ -838,7 +890,7 @@ card_art: team
   </div>
 </section>
 
-<section id="running" class="fgroup">
+<section id="running" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Running it</p>
@@ -876,7 +928,7 @@ card_art: team
   </div>
 </section>
 
-<section id="parallel" class="fgroup alt" aria-labelledby="parallel-title">
+<section id="parallel" class="fgroup" aria-labelledby="parallel-title">
   <div class="wrap">
     <div class="row">
       <div class="row-copy">
