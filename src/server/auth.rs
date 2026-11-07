@@ -381,6 +381,11 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // A team's instructions go into every member's prompt (PUT and PATCH both set them), and a
         // channel's PATCH sets its instructions and members: bots change these through their
         // `team_update` / `channel_update` actions, which the person can undo
+        // Ready-made teams and discovery (0.7.7, next-077/api.md): making a team, reading a
+        // project and the Undo preview are the person's; the catalogue stays readable for agents
+        ["", "api", "team-templates", _, "preview"] => true,
+        ["", "api", "teams", "from-template" | "suggest"] => true,
+        ["", "api", "teams", _, "template"] => true,
         ["", "api", "teams", _] => matches!(*method, Method::DELETE | Method::PUT | Method::PATCH),
         ["", "api", "channels", _] => *method == Method::PATCH,
         ["", "api", "kwants", _] => *method == Method::DELETE,
@@ -893,6 +898,14 @@ mod tests {
         assert!(person_only(&post, "/api/sandbox/t1/interact"));
         assert!(!person_only(&post, "/api/sandbox/t1/act"));
         assert!(person_only(&get, "/api/passwords/store"));
+        // 0.7.7 ready-made teams: everything but the catalogue
+        assert!(person_only(&get, "/api/team-templates/inbox/preview"));
+        assert!(person_only(&post, "/api/teams/from-template"));
+        assert!(person_only(&post, "/api/teams/suggest"));
+        assert!(person_only(&get, "/api/teams/t1/template"));
+        assert!(!person_only(&get, "/api/team-templates"));
+        assert!(!person_only(&post, "/api/teams"));
+        assert!(!person_only(&get, "/api/teams/t1"));
         for (m, p) in [
             (&get, "/api/spaces/s1/dev_mode"),
             (&put, "/api/spaces/s1/dev_mode"),

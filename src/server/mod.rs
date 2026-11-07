@@ -59,6 +59,7 @@ pub mod app_update_routes;
 pub mod smart_results;
 pub mod dev;
 pub mod agents_connect;
+pub mod teams;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -248,6 +249,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/channels", get(routes::list_channels).post(routes::create_channel))
         .route("/api/channels/:id/messages", get(routes::list_messages))
         .route("/api/teams", get(routes::list_teams).post(routes::create_team))
+        .route("/api/team-templates", get(teams::catalogue))
+        .route("/api/team-templates/:id/preview", get(teams::preview))
+        .route("/api/teams/from-template", post(teams::from_template))
+        .route("/api/teams/suggest", post(teams::suggest))
+        .route("/api/teams/:id/template", get(teams::team_template))
         .route(
             "/api/teams/:id",
             get(routes::get_team).put(routes::update_team).patch(continuity::patch_team).delete(routes::delete_team),

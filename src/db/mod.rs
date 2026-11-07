@@ -18,6 +18,7 @@ pub mod mcp_suggestions;
 pub mod bot_actions;
 pub mod hires;
 pub mod imports;
+pub mod team_templates;
 pub mod approval_modes;
 pub mod parked;
 pub mod waiting;
@@ -220,6 +221,7 @@ impl Database {
             db.migrate_bot_actions().await?;
             db.migrate_hires().await?;
             db.migrate_imports().await?;
+            db.migrate_team_templates().await?;
             db.repair_team_channels().await?;
             db.migrate_approval_modes(fresh, data_dir).await?;
         }
