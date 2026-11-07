@@ -135,7 +135,7 @@ export interface ReviewCard extends CardBase {
   post_error: PostError | null;
 }
 
-export type Forge = 'github' | 'gitlab' | 'gitea';
+export type Forge = 'github' | 'gitlab' | 'gitea' | 'forgejo';
 
 export interface ReviewPosted {
   /** Where it was posted; "github" in 0.7.1. */
@@ -288,7 +288,7 @@ function base(raw: Record<string, unknown>): CardBase {
     error: str(raw.error, 400),
     repo: str(raw.repo, 300),
     repo_name: str(raw.repo_name, 300),
-    forge: raw.forge === 'github' || raw.forge === 'gitlab' || raw.forge === 'gitea' ? raw.forge : null,
+    forge: raw.forge === 'github' || raw.forge === 'gitlab' || raw.forge === 'gitea' || raw.forge === 'forgejo' ? raw.forge : null,
     no_forge: raw.no_forge === true,
   };
 }
@@ -448,7 +448,7 @@ function posted(v: unknown): ReviewPosted | null {
   const url = str(v.url, 1000);
   const n = num(v.comments);
   const fg = v.forge;
-  return { forge: fg === 'github' || fg === 'gitlab' || fg === 'gitea' ? fg : null, at: str(v.at, 64), login: str(v.login, 80), url: url && /^https:\/\//.test(url) ? url : null, comments: n !== null && n >= 0 ? Math.floor(n) : null };
+  return { forge: fg === 'github' || fg === 'gitlab' || fg === 'gitea' || fg === 'forgejo' ? fg : null, at: str(v.at, 64), login: str(v.login, 80), url: url && /^https:\/\//.test(url) ? url : null, comments: n !== null && n >= 0 ? Math.floor(n) : null };
 }
 
 function postError(v: unknown): PostError | null {

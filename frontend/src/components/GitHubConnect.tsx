@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { useEscapeLayer } from '../escape';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { devApi, devStore } from '../devMode';
-import { forgeConnectedText, forgeHost, type LooseSource } from '../looseEnds';
+import { forgeChoiceName, forgeConnectedText, forgeHost, type LooseSource } from '../looseEnds';
+import type { OtherForge } from '../devMode';
 import { GitHubConnectForm } from './LooseEndsView';
 
 /**
@@ -22,7 +23,7 @@ export interface GitHubConnectRequest {
   /** The button it opens next to (and focus goes back to). Defaults to the focused element. */
   anchor?: HTMLElement | null;
   /** 0.7.4 (G4): a repo row's "Connect GitLab" / "Connect Gitea": the forge form, prefilled with `https://<host>`. */
-  forge?: { forge: 'gitlab' | 'gitea'; url: string } | null;
+  forge?: { forge: OtherForge; url: string } | null;
 }
 
 export function openGitHubConnect(req: GitHubConnectRequest = {}): void {
@@ -32,14 +33,14 @@ export function openGitHubConnect(req: GitHubConnectRequest = {}): void {
 }
 
 /** The same form in place for a GitLab or Gitea host (0.7.4): popover on the desktop, sheet on the phone. */
-export const openForgeConnect = (req: GitHubConnectRequest & { forge: { forge: 'gitlab' | 'gitea'; url: string } }): void => openGitHubConnect(req);
+export const openForgeConnect = (req: GitHubConnectRequest & { forge: { forge: OtherForge; url: string } }): void => openGitHubConnect(req);
 
 /** The layer's name: "Connect GitHub", "Connect GitLab" or "Connect Gitea". */
-export const connectTitle = (req: Pick<GitHubConnectRequest, 'forge'>): string => (req.forge ? `Connect ${req.forge.forge === 'gitlab' ? 'GitLab' : 'Gitea'}` : 'Connect GitHub');
+export const connectTitle = (req: Pick<GitHubConnectRequest, 'forge'>): string => (req.forge ? `Connect ${forgeChoiceName(req.forge.forge) ?? 'server'}` : 'Connect GitHub');
 /** The toast after the in-place form saved. */
 export const connectedToast = (source: LooseSource, test?: unknown): { title: string; body: string } =>
   source.kind === 'forge'
-    ? { title: `${source.config?.forge === 'gitea' ? 'Gitea' : source.config?.forge === 'gitlab' ? 'GitLab' : 'Server'} connected`, body: `${forgeConnectedText(test, forgeHost(String(source.config?.url ?? '')))} Dev mode reads its reviews and CI now.` }
+    ? { title: `${forgeChoiceName(source.config?.forge) ?? 'Server'} connected`, body: `${forgeConnectedText(test, forgeHost(String(source.config?.url ?? '')))} Dev mode reads its reviews and CI now.` }
     : { title: 'GitHub connected', body: 'Loose ends and Dev mode both use it.' };
 
 const WIDTH = 380;

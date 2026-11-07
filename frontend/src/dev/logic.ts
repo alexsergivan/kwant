@@ -379,7 +379,7 @@ export function findingsSummary(findings: DevFinding[]): string {
 export const postCount = (findings: Pick<DevFinding, 'state'>[]): number => findings.filter((f) => f.state !== 'dismissed').length;
 
 /** Display names for `forge` (amendment, 21:50): posting is GitHub-only in 0.7.1, GitLab and Gitea come in 0.7.2. */
-export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
+export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea', forgejo: 'Forgejo' };
 
 /** "Post to GitHub · 3 findings"; no count when nothing is open (the review is then its body only). F6: findings, not
  * comments, because a finding outside the diff goes in the review body; the posted line counts inline comments. */
@@ -398,10 +398,10 @@ export const cardForge = (card: { forge: Forge | null; no_forge: boolean }, spac
 /** Where Post would go: GitHub cards (and older cards) post through the space's GitHub connection; GitLab and Gitea
  * cards name their own forge, so the footer can say posting there comes later. A branch card posts nowhere. */
 export const postForge = (card: { forge: Forge | null; no_forge: boolean }, space: Forge | null): Forge | null =>
-  card.no_forge ? null : card.forge === 'gitlab' || card.forge === 'gitea' ? card.forge : space;
+  card.no_forge ? null : card.forge && card.forge !== 'github' ? card.forge : space;
 /** A GitLab or Gitea card (0.7.4): Post comes in a later version (G7). */
 export const laterForge = (card: { forge?: Forge | null; no_forge?: boolean }): Forge | null =>
-  !card.no_forge && (card.forge === 'gitlab' || card.forge === 'gitea') ? card.forge : null;
+  !card.no_forge && card.forge && card.forge !== 'github' ? card.forge : null;
 /** G7 isn't in yet: the server's words for Post on a GitLab or Gitea card, shown before anyone presses anything. */
 export const postLaterLine = (forge: Forge): string => `Posting to ${FORGE_NAME[forge]} comes in a later update.`;
 /** G5: the line on a review card for a pushed branch with no pull request. */

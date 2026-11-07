@@ -85,9 +85,9 @@ const flat = (el) => el.textContent.replace(/\s+/g, ' ').trim();
 
 // ------------------------------------------------------------------ the request
 
-test('forgeSource: https added, Forgejo sent as gitea, label defaults to the host; bad addresses refused', () => {
+test('forgeSource: https added, Forgejo sent as forgejo, label defaults to the host; bad addresses refused', () => {
   assert.deepEqual(m.le.forgeSource('', 'git.example.test', null, 'tok-demo'), { kind: 'forge', label: 'git.example.test', config: { url: 'https://git.example.test' }, secret: 'tok-demo' });
-  assert.equal(m.le.forgeSource('', 'https://git.example.test/', 'forgejo', 't').config.forge, 'gitea');
+  assert.equal(m.le.forgeSource('', 'https://git.example.test/', 'forgejo', 't').config.forge, 'forgejo');
   assert.equal(m.le.forgeSource('Work', 'https://git.example.test', 'gitlab', 't').config.forge, 'gitlab');
   assert.equal(m.le.forgeSource('Work', 'https://git.example.test', 'gitlab', 't').label, 'Work');
   assert.ok('error' in m.le.forgeSource('', 'https://git.example.test', null, ''), 'needs a token');
@@ -103,7 +103,10 @@ test('forgeConnectedText and the error readers', () => {
   assert.equal(m.le.cantTellText('Not sure which it is.'), 'Not sure which it is.');
   assert.equal(m.le.forgeConnectedText({ login: 'demo-user', forge: 'gitlab' }, 'git.example.test'), 'Connected to GitLab at git.example.test as demo-user.');
   assert.equal(m.le.forgeConnectedText({ login: 'demo-user', forge: 'gitea' }, 'code.example.test'), 'Connected to Gitea at code.example.test as demo-user.');
+  assert.equal(m.le.forgeConnectedText({ login: 'demo-user', forge: 'forgejo' }, 'codeberg.org'), 'Connected to Forgejo at codeberg.org as demo-user.');
   assert.equal(m.le.forgeConnectedText(null, 'git.example.test'), 'Connected to git.example.test.');
+  assert.equal(m.le.sourceKindText({ kind: 'forge', config: { url: 'https://code.example.test', forge: 'forgejo' } }), 'Forgejo · code.example.test');
+  assert.equal(m.le.sourceKindText({ kind: 'forge', config: { url: 'https://code.example.test' } }), 'GitLab, Gitea or Forgejo · code.example.test');
   assert.equal(m.le.forgeTakenText('git.example.test'), 'git.example.test is already connected. To change its token, remove that connection and add it again.');
 });
 
@@ -112,7 +115,7 @@ test('forgeConnectedText and the error readers', () => {
 const CANT = 'kwant couldn\'t tell whether git.example.test runs GitLab, Gitea or Forgejo: set "forge" to gitlab or gitea';
 
 test('form DOM: no choice is sent at first; a can’t-tell 400 shows the server’s words, opens the choice and focuses it; the retry carries the pick', async () => {
-  reset([{ status: 400, body: { error: CANT } }]);
+  reset([{ status: 400, body: { error: CANT, code: 'forge_unknown' } }]);
   const added = [];
   const host = await mount(h(m.GitHubConnectForm, { forge: {}, heading: 'Add a source', onAdded: (s, t) => added.push([s, t]), onCancel() {} }));
   assert.equal(host.querySelector('[data-forge-choice]').dataset.forgeChoice, 'closed');
@@ -132,11 +135,30 @@ test('form DOM: no choice is sent at first; a can’t-tell 400 shows the server�
   await click(host.querySelector('[data-forge-pick="forgejo"]'));
   host.querySelector('[data-forge-token]').value = 'demo-not-a-token';
   await submit(host);
-  assert.equal(posts()[1].config.forge, 'gitea', 'Forgejo goes as gitea');
+  assert.equal(posts()[1].config.forge, 'forgejo', 'Forgejo goes as forgejo (0.7.4, fa7eed5)');
   assert.equal(host.querySelector('[data-forge-cant-tell]'), null, 'cleared on retry');
   assert.equal(added.length, 1);
   assert.deepEqual(added[0][1], { login: 'demo-user', forge: 'gitlab' }, 'the test reaches the caller');
   assert.equal(host.querySelector('[data-forge-token]')?.value ?? '', '', 'the token is never shown again');
+});
+
+test('cantTellForge keys on code forge_unknown, not on the sentence', () => {
+  const E = m.le.LooseEndsError;
+  assert.equal(m.le.cantTellForge(new E('Anything at all', 400, false, false, 'forge_unknown')), true, 'the code decides, whatever the words');
+  assert.equal(m.le.cantTellForge(new E(CANT, 400)), false, 'the same sentence with no code is a plain error');
+  assert.equal(m.le.cantTellForge(new E('GitHub is its own connection: add it as GitHub', 400)), false, 'the GitHub refusal has no code');
+  assert.equal(m.le.cantTellForge(new E(CANT, 409, false, false, 'forge_unknown')), false, 'only a 400');
+});
+
+test('form DOM: a 400 with the can’t-tell sentence but no code stays a plain error, and the choice stays folded', async () => {
+  reset([{ status: 400, body: { error: CANT } }]);
+  const host = await mount(h(m.GitHubConnectForm, { forge: {}, onAdded() {}, onCancel() {} }));
+  typeIn(host.querySelector('[data-forge-url]'), 'git.example.test');
+  host.querySelector('[data-forge-token]').value = 'demo-not-a-token';
+  await submit(host);
+  assert.equal(host.querySelector('[data-forge-cant-tell]'), null);
+  assert.equal(host.querySelector('[data-forge-choice]').dataset.forgeChoice, 'closed');
+  assert.ok([...host.querySelectorAll('[role="alert"]')].some((a) => /couldn.t tell/.test(flat(a))), 'the server’s words still show');
 });
 
 test('form DOM: a 409 says the host is already connected, plainly', async () => {
@@ -154,7 +176,7 @@ test('form DOM: Add a source offers GitLab or Gitea next to GitHub and email', a
   reset();
   const host = await mount(h(m.AddSourceForm, { onAdded() {}, onCancel() {} }));
   const picks = [...host.querySelectorAll('[role="radio"], [data-kind]')].map(flat).join(' | ');
-  assert.match(picks, /GitLab or Gitea/);
+  assert.match(picks, /GitLab, Gitea or Forgejo/);
 });
 
 // ------------------------------------------------------------------ connect in place
@@ -183,9 +205,14 @@ test('repo rows: the forge, and Connect GitLab for an unconnected GitLab host on
   assert.equal(by('demo/x').fix, null);
   assert.equal(m.landedOnly(s.repos[0]), true);
   assert.equal(m.landedOnly(s.repos[1]), false, 'a connected Gitea repo gets reviews');
+  const fj = glRow({ key: 'codeberg.org/demo/fj', repo: 'demo/fj', host: 'codeberg.org', forge: 'forgejo' });
+  assert.equal(m.forgeLabel(fj), 'Forgejo');
+  assert.deepEqual(m.forgeFix(fj), { forge: 'forgejo', url: 'https://codeberg.org', label: 'Connect Forgejo' });
+  assert.match(m.gitTip(fj), /Connect Forgejo for reviews and CI checks\./);
+  assert.equal(m.parseDevMode({ on: true, repos: [fj] }).repos[0].forge, 'forgejo');
   assert.equal(m.gitOnlyRepo(s, 'code.example.test/demo/lib'), false);
   assert.match(m.gitTip(s.repos[0]), /Connect GitLab for reviews and CI checks\./);
-  assert.match(m.gitTip(s.repos[2]), /work on GitHub, GitLab and Gitea repos\./);
+  assert.match(m.gitTip(s.repos[2]), /work on GitHub, GitLab, Gitea and Forgejo repos\./);
   assert.equal(m.forgeFix(glRow({ status: 'not_connected' })), null, 'only a watched row');
 });
 
@@ -217,7 +244,7 @@ test('Team settings: the line reads right for GitLab and Gitea', async () => {
   const url = 'https://git.example.test/demo/app.git';
   assert.equal(m.teamRepoLine(dev({ repos: [glRow()] }), url, 'team_web'), 'forge_connect');
   assert.equal(m.teamRepoLine(dev({ repos: [glRow({ forge_connected: true })] }), url, 'team_web'), 'forge_connected');
-  assert.equal(m.TEAM_REPO_LINES.git, 'Dev mode reads this repo with git. Reviews need GitHub, GitLab or Gitea.');
+  assert.equal(m.TEAM_REPO_LINES.git, 'Dev mode reads this repo with git. Reviews need GitHub, GitLab, Gitea or Forgejo.');
   reset();
   m.devStore.set('spc_demo', dev({ repos: [glRow()] }));
   const host = await mount(h(m.TeamRepoDevLine, { url, teamId: 'team_web', spaceId: 'spc_demo' }));
@@ -234,6 +261,13 @@ test('Team settings: the line reads right for GitLab and Gitea', async () => {
   m.devStore.set('spc_demo', dev({ repos: [glRow({ forge: 'gitea', forge_connected: true })] }));
   await settle();
   assert.equal(flat(host.querySelector('[data-team-repo-dev]')), 'Dev mode watches this repo · Gitea connected');
+  m.devStore.set('spc_demo', dev({ repos: [glRow({ forge: 'forgejo', forge_connected: false })] }));
+  await settle();
+  assert.equal(flat(host.querySelector('[data-team-repo-dev]')).startsWith('Dev mode watches this repo. Connect Forgejo for reviews.'), true);
+  assert.ok(host.querySelector('[data-team-repo-connect="forgejo"]'), 'Connect Forgejo in place');
+  m.devStore.set('spc_demo', dev({ repos: [glRow({ forge: 'forgejo', forge_connected: true })] }));
+  await settle();
+  assert.equal(flat(host.querySelector('[data-team-repo-dev]')), 'Dev mode watches this repo · Forgejo connected');
 });
 
 // ------------------------------------------------------------------ cards
@@ -245,6 +279,11 @@ test('cards: GitLab says MR !7; Post waits for a later update', () => {
   assert.equal(m.prRef('gitlab', 7), '!7');
   assert.equal(m.prName('gitlab', 7), 'MR !7');
   assert.equal(m.prRef('gitea', 7), '#7');
+  assert.equal(m.prRef('forgejo', 7), '#7');
+  assert.equal(m.laterForge({ forge: 'forgejo', no_forge: false }), 'forgejo');
+  assert.equal(m.postLaterLine('forgejo'), 'Posting to Forgejo comes in a later update.');
+  assert.equal(m.connectTitle({ forge: { forge: 'forgejo', url: 'https://codeberg.org' } }), 'Connect Forgejo');
+  assert.equal(m.parseReview({ ...m.fx.REVIEW_294, forge: 'forgejo' }).forge, 'forgejo');
   assert.equal(m.laterForge({ forge: 'gitlab', no_forge: false }), 'gitlab');
   assert.equal(m.laterForge({ forge: 'gitea', no_forge: true }), null);
   assert.equal(m.laterForge({ forge: null, no_forge: false }), null);

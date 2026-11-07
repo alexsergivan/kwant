@@ -319,6 +319,7 @@ async fn a_forge_connection_is_asked_which_forge_it_is_one_per_host() {
     let (s, v) = call(&env.app, "POST", "/api/zombie/sources", Some(json!({"kind": "forge", "label": "What", "config": {"url": other.base}, "secret": token}))).await;
     assert_eq!(s.as_u16(), 400, "{v}");
     assert!(v.to_string().contains("set \\\"forge\\\" to gitlab or gitea") || v.to_string().contains("gitlab or gitea"), "{v}");
+    assert_eq!(v["code"], "forge_unknown", "a stable code beside the sentence: {v}");
 
     // A Gitea answers on /api/v1 only, and its token goes as `token …`
     let gitea = MockGithub::start(&[]).await;
@@ -329,7 +330,30 @@ async fn a_forge_connection_is_asked_which_forge_it_is_one_per_host() {
     assert_eq!(v["test"]["forge"], "gitea", "{v}");
     assert!(gitea.hits_of("/api/v1/version").iter().all(|h| !h.authorized));
     assert!(gitea.hits_of("/api/v1/user").iter().all(|h| h.authorized));
-    for m in [&mock, &other, &gitea] {
+    assert!(!gitea.hits_of("/api/forgejo/v1/version").is_empty(), "a bare version is asked once more");
+
+    // A Forgejo says so in its version (7 and later), or answers Forgejo's own version route
+    let fj = MockGithub::start(&[]).await;
+    fj.json("/api/v1/version", json!({"version": "7.0.0+gitea-1.21.0"}));
+    fj.json("/api/v1/user", json!({"login": "juno-bot"}));
+    let (s, v) = call(&env.app, "POST", "/api/zombie/sources", Some(json!({"kind": "forge", "label": "Our Forgejo", "config": {"url": fj.base}, "secret": token}))).await;
+    assert_eq!((s.as_u16(), v["test"]["forge"].clone()), (201, json!("forgejo")), "{v}");
+    let old = MockGithub::start(&[]).await;
+    old.json("/api/v1/version", json!({"version": "1.21.11-1"}));
+    old.json("/api/forgejo/v1/version", json!({"version": "1.21.11-1+gitea-1.21.11"}));
+    old.json("/api/v1/user", json!({"login": "juno-bot"}));
+    let (s, v) = call(&env.app, "POST", "/api/zombie/sources", Some(json!({"kind": "forge", "label": "Old Forgejo", "config": {"url": old.base}, "secret": token}))).await;
+    assert_eq!((s.as_u16(), v["test"]["forge"].clone()), (201, json!("forgejo")), "{v}");
+    let fj_host = fj.base.trim_start_matches("http://").to_string();
+    let rows = env.state.db.zombie_sources().await.unwrap();
+    let kept = rows.iter().filter_map(|r| serde_json::from_str::<ForgeConfig>(&r.config).ok()).find(|c| c.host().as_deref() == Some(fj_host.as_str())).unwrap();
+    assert_eq!(kept.forge, Some(ForgeKind::Forgejo), "kept as Forgejo");
+    let c = client(&fj, ForgeKind::Forgejo, &token);
+    assert_eq!(c.forge_for("juno/app").kind(), ForgeKind::Forgejo, "its cards say Forgejo");
+    let (_, list) = call(&env.app, "GET", "/api/connections", None).await;
+    let forgejo = list.to_string().matches("\"kind\":\"forgejo\"").count();
+    assert_eq!(forgejo, 2, "Loose ends lists both as Forgejo: {list}");
+    for m in [&mock, &other, &gitea, &fj, &old] {
         m.assert_read_only();
     }
 }

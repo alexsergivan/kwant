@@ -84,7 +84,7 @@ const KINDS: Record<string, { label: string; tone: Tone }> = {
   document_request: { label: 'Letter to deal with', tone: 'sky' },
 };
 
-const SOURCES: Record<string, string> = { imap: 'Email', github: 'GitHub', forge: 'GitLab or Gitea', kwant: 'Bot chats', document: 'Letter' };
+const SOURCES: Record<string, string> = { imap: 'Email', github: 'GitHub', forge: 'GitLab, Gitea or Forgejo', kwant: 'Bot chats', document: 'Letter' };
 
 /** `bank_statement` → `Bank statement`: how an unknown kind or source still reads. */
 export function humanize(s: string): string {
@@ -97,7 +97,7 @@ export const sourceLabel = (source: string): string => SOURCES[source] ?? humani
 /** A saved source's kind line: a forge connection says which forge and its host ("GitLab · git.example.com"). */
 export function sourceKindText(s: Pick<LooseSource, 'kind' | 'config'>): string {
   if (s.kind !== 'forge') return sourceLabel(s.kind);
-  const f = s.config?.forge === 'gitlab' ? 'GitLab' : s.config?.forge === 'gitea' ? 'Gitea' : 'GitLab or Gitea';
+  const f = forgeChoiceName(s.config?.forge) ?? 'GitLab, Gitea or Forgejo';
   const host = forgeHost(typeof s.config?.url === 'string' ? s.config.url : '');
   return host ? `${f} · ${host}` : f;
 }
@@ -367,13 +367,15 @@ export function sourceStatusText(s: LooseSource): { text: string; error: boolean
 // ---------------------------------------------------------------------------
 // 0.7.4 (G4): a GitLab, Gitea or Forgejo connection (kind `forge`), for Loose ends and Dev mode.
 
-/** "Which is it?": Forgejo (and Codeberg) is sent as `gitea`, as the server reads it. */
+/** "Which is it?", sent as `config.forge`; also the forge a connection's test names (Codeberg is `forgejo`). */
 export type ForgeChoice = 'gitlab' | 'gitea' | 'forgejo';
 export const FORGE_CHOICES: Array<{ value: ForgeChoice; label: string }> = [
   { value: 'gitlab', label: 'GitLab' },
   { value: 'gitea', label: 'Gitea' },
   { value: 'forgejo', label: 'Forgejo' },
 ];
+/** GitLab, Gitea or Forgejo for a `forge` value, or null for anything else. */
+export const forgeChoiceName = (v: unknown): string | null => FORGE_CHOICES.find((c) => c.value === v)?.label ?? null;
 export const FORGE_TOKEN_HINT = 'Read access is enough: read_api on GitLab, or read access to repositories and issues on Gitea and Forgejo.';
 
 /** The host of a forge address, or '' when it isn't one. */
@@ -402,29 +404,29 @@ export function forgeSource(label: string, address: string, choice: ForgeChoice 
   if (!token) return { error: 'Enter a token. Read access is enough.' };
   const url = `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`;
   const config: Record<string, unknown> = { url };
-  if (choice) config.forge = choice === 'forgejo' ? 'gitea' : choice;
+  if (choice) config.forge = choice;
   return { kind: 'forge', label: label.trim() || u.host, config, secret: token };
 }
 
 /** The save's test: who the token logs in as, on which forge. */
-export function forgeTest(test: unknown): { login: string; forge: 'gitlab' | 'gitea' | null } | null {
+export function forgeTest(test: unknown): { login: string; forge: ForgeChoice | null } | null {
   if (!test || typeof test !== 'object') return null;
   const t = test as Record<string, unknown>;
   const login = typeof t.login === 'string' && t.login.trim() ? t.login.trim() : null;
   if (!login) return null;
-  return { login, forge: t.forge === 'gitlab' || t.forge === 'gitea' ? t.forge : null };
+  return { login, forge: forgeChoiceName(t.forge) ? (t.forge as ForgeChoice) : null };
 }
 
 /** After saving: "Connected to GitLab at git.example.com as ana." */
 export function forgeConnectedText(test: unknown, host: string): string {
   const t = forgeTest(test);
-  const name = t?.forge === 'gitlab' ? 'GitLab' : t?.forge === 'gitea' ? 'Gitea' : null;
+  const name = forgeChoiceName(t?.forge);
   const where = name ? `${name} at ${host}` : host;
   return t ? `Connected to ${where} as ${t.login}.` : `Connected to ${where}.`;
 }
 
-/** The server couldn't tell GitLab from Gitea (a 400 with no code yet): open "Which is it?". */
-export const cantTellForge = (e: unknown): boolean => e instanceof LooseEndsError && e.status === 400 && /couldn.t tell whether/i.test(e.message);
+/** The server couldn't tell GitLab, Gitea and Forgejo apart (400, `code: "forge_unknown"`): open "Which is it?". */
+export const cantTellForge = (e: unknown): boolean => e instanceof LooseEndsError && e.status === 400 && e.code === 'forge_unknown';
 /** The server's can't-tell sentence without its API advice (`: set "forge" to gitlab or gitea`): the choice below is that. */
 export const cantTellText = (message: string): string => {
   const m = message.replace(/\s*[:;,]\s*set\s+"?forge"?\b.*$/is, '').trim();

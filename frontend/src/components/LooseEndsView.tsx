@@ -482,7 +482,7 @@ export const FORGE_NOTE = 'Dev mode reads reviews and CI with this login. It’s
 export const GITHUB_ALSO_DEV = 'Also used by Dev mode';
 
 export type SourceKind = 'imap' | 'github' | 'forge';
-const KIND_TEXT: Record<SourceKind, string> = { imap: 'Email (IMAP)', github: 'GitHub', forge: 'GitLab or Gitea' };
+const KIND_TEXT: Record<SourceKind, string> = { imap: 'Email (IMAP)', github: 'GitHub', forge: 'GitLab, Gitea or Forgejo' };
 
 const KindPicker: React.FC<{ kind: SourceKind; onKind: (k: SourceKind) => void }> = ({ kind, onKind }) => (
   <div role="radiogroup" aria-label="Kind of source" className="grid grid-cols-1 sm:grid-cols-3 gap-2">

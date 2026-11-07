@@ -21,7 +21,7 @@ export interface DevModeState {
   poll_error: string | null;
   calls_today: number | null;
   calls_cap: number | null;
-  /** 0.7.1: which forge reads the repo ("github" in 0.7.1; gitlab and gitea from 0.7.2), or null: no Post button. */
+  /** 0.7.1: which forge reads the repo ("github" in 0.7.1; gitlab and gitea from 0.7.2, forgejo from 0.7.4), or null: no Post button. */
   forge: Forge | null;
   /** 0.7.1: that forge connection's login, for "Posts as {login}." on review cards. */
   forge_login: string | null;
@@ -68,7 +68,7 @@ export interface DevRepo {
   added_by: 'team' | 'hand' | null;
   /** 0.7.3: `provider` when the server sends it, else `git` for a folder with no remote or a host other than github.com. */
   provider: RepoProvider;
-  /** 0.7.4 (G4): the forge the repo's host runs (`gitea` covers Forgejo and Codeberg), or null: plain git or a folder. */
+  /** 0.7.4 (G4): the forge the repo's host runs (Codeberg is `forgejo`), or null: plain git or a folder. */
   forge: Forge | null;
   /** 0.7.4: a connection reads that forge (GitHub's own, or a Loose ends `forge` connection for the host). */
   forge_connected: boolean;
@@ -99,8 +99,11 @@ export interface RepoCheck {
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
-export type Forge = 'github' | 'gitlab' | 'gitea';
-export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'gitlab' || v === 'gitea' ? v : null);
+export type Forge = 'github' | 'gitlab' | 'gitea' | 'forgejo';
+export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'gitlab' || v === 'gitea' || v === 'forgejo' ? v : null);
+/** 0.7.4: a forge other than GitHub, read through a Loose ends `forge` connection. */
+export type OtherForge = Exclude<Forge, 'github'>;
+export const otherForge = (v: unknown): OtherForge | null => (v === 'gitlab' || v === 'gitea' || v === 'forgejo' ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const STATUSES: readonly DevStatus[] = ['watching', 'no_repo', 'not_connected', 'no_git', 'other_host'];
 
@@ -347,19 +350,21 @@ const hintSentence = (t: string) => {
 /** §1a tooltip: "Dev mode reads this repo with git. {install_hint} Then press Refresh." */
 export const noGitTip = (hint: string | null = null) =>
   hint?.trim() ? `Dev mode reads this repo with git. ${hintSentence(hint)} Then press Refresh.` : 'Dev mode reads this repo with git. Install git 2.31 or newer on the server, then press Refresh.';
-/** The forge's name on a repo row: GitHub, GitLab, Gitea (Forgejo and Codeberg too), or plain git. */
-export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
+/** The forge's name on a repo row: GitHub, GitLab, Gitea, Forgejo (Codeberg too), or plain git. */
+export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea', forgejo: 'Forgejo' };
 export const forgeLabel = (r: Pick<DevRepo, 'forge' | 'from'>): string | null => (r.forge ? FORGE_NAME[r.forge] : r.from === 'local' ? null : 'Plain git');
-/** 0.7.4: a GitLab or Gitea repo kwant has no token for: its row offers "Connect GitLab" (Loose ends, url `https://<host>`). */
+/** 0.7.4: a GitLab, Gitea or Forgejo repo kwant has no token for: its row offers "Connect GitLab" (Loose ends, url `https://<host>`). */
 export interface ForgeFix {
-  forge: 'gitlab' | 'gitea';
+  forge: OtherForge;
   url: string;
   label: string;
 }
-export const forgeFix = (r: DevRepo): ForgeFix | null =>
-  (r.forge === 'gitlab' || r.forge === 'gitea') && !r.forge_connected && r.host && (r.status === 'watching' || r.status === 'error')
-    ? { forge: r.forge, url: `https://${r.host}`, label: `Connect ${FORGE_NAME[r.forge]}` }
+export const forgeFix = (r: DevRepo): ForgeFix | null => {
+  const forge = otherForge(r.forge);
+  return forge && !r.forge_connected && r.host && (r.status === 'watching' || r.status === 'error')
+    ? { forge, url: `https://${r.host}`, label: `Connect ${FORGE_NAME[forge]}` }
     : null;
+};
 /** Read with plain git only: no forge connection reads its reviews and CI (landed cards only). */
 export const landedOnly = (r: Pick<DevRepo, 'provider' | 'forge' | 'forge_connected'>): boolean => r.provider === 'git' && !(r.forge && r.forge_connected);
 /** §1b: a repo read with plain git (GitLab, Gitea, a plain git server or a folder): landed cards only. */
@@ -368,9 +373,10 @@ export const LANDED_ONLY = 'Landed changes only';
 export const gitTip = (r: Pick<DevRepo, 'from' | 'team' | 'branch'> & Partial<Pick<DevRepo, 'forge'>>) => {
   const branch = r.branch || 'its default branch';
   if (r.from === 'local') return `Read from ${r.team ?? 'this team'}’s folder on the server: shows what lands on ${branch}. It has no remote, so there are no reviews or CI checks.`;
-  // 0.7.4: a GitLab or Gitea host with no connection yet: the row's button connects it.
-  if (r.forge === 'gitlab' || r.forge === 'gitea') return `Watching with git: shows what lands on ${branch}. Connect ${FORGE_NAME[r.forge]} for reviews and CI checks.`;
-  return `Watching with git: shows what lands on ${branch}. Reviews and CI checks work on GitHub, GitLab and Gitea repos.`;
+  // 0.7.4: a GitLab, Gitea or Forgejo host with no connection yet: the row's button connects it.
+  const other = otherForge(r.forge);
+  if (other) return `Watching with git: shows what lands on ${branch}. Connect ${FORGE_NAME[other]} for reviews and CI checks.`;
+  return `Watching with git: shows what lands on ${branch}. Reviews and CI checks work on GitHub, GitLab, Gitea and Forgejo repos.`;
 };
 /** §1c: the server's too-big error (`poll_code: 'too_big'`, or its exact sentence). */
 const TOO_BIG_ERROR = /too big for Dev mode to read/i;
