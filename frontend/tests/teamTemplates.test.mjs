@@ -77,7 +77,7 @@ const mount = async (el) => {
   return { host, root, rerender: async (e) => (root.render(e), await settle()), unmount: () => (root.unmount(), host.remove()) };
 };
 const byText = (root, sel, re) => [...root.querySelectorAll(sel)].find((el) => re.test(el.textContent ?? ''));
-const primary = (root) => byText(root, 'button', /^(Create team|Add \d|Add bots|Try again|Creating)/);
+const primary = (root) => byText(root, 'button', /^(Create team|Add \d|Add bots|Try again|Pick another folder|Creating)/);
 const use = (opts) => {
   const calls = [];
   m.setTeamsTransport(fx.fixtureTransport(opts, calls));
@@ -791,5 +791,41 @@ test('U-5: Suggest refused with folder_in_use (or bad_path) shows the server’s
   assert.match(root.textContent, /Couldn’t read the project\./);
   assert.ok(root.textContent.includes('That folder is already the workspace of team @f1; pick another folder. Nothing was created.'));
   assert.doesNotMatch(root.textContent, /The server stopped/);
+  v.unmount();
+});
+
+test('N-5: after folder_in_use the main button picks another folder instead of "Try again"', async () => {
+  const said = 'that folder overlaps team f8 in the space "Lab"; spaces never share a folder';
+  // Suggest refused: Pick another folder, and it calls onPickFolder (no second read of the same folder).
+  let calls = failing(400, { error: said, code: 'folder_in_use', field: 'workspace_path' }, { failSuggest: true });
+  let picked = 0;
+  let v = await mount(sheet({ kind: 'suggest', workspace_path: '/tmp/example-projects/f8' }, { onPickFolder: () => picked++ }).el);
+  let root = document.querySelector('[data-team-sheet="suggest"]');
+  let btn = primary(root);
+  assert.equal(btn.textContent, 'Pick another folder');
+  assert.equal(btn.disabled, false);
+  const reads = calls.filter((c) => c.url.startsWith('/api/teams/suggest')).length;
+  await click(btn);
+  assert.equal(picked, 1);
+  assert.equal(calls.filter((c) => c.url.startsWith('/api/teams/suggest')).length, reads, 'the same folder is not read again');
+  v.unmount();
+  // Create refused after a good read: the same.
+  calls = failing(400, { error: said, code: 'folder_in_use', field: 'workspace_path' });
+  picked = 0;
+  v = await mount(sheet({ kind: 'suggest', workspace_path: '/tmp/example-projects/f8' }, { onPickFolder: () => picked++ }).el);
+  root = document.querySelector('[data-team-sheet="suggest"]');
+  await click(primary(root));
+  assert.match(root.textContent, /Couldn’t create the team\. Nothing was created\./);
+  btn = primary(root);
+  assert.equal(btn.textContent, 'Pick another folder');
+  await click(btn);
+  assert.equal(picked, 1);
+  assert.equal(creates(calls).length, 1, 'no second create with the same folder');
+  v.unmount();
+  // Any other refusal still offers Try again.
+  failing(400, { error: 'that isn’t an absolute path to a folder kwant can read', code: 'bad_path', field: 'workspace_path' }, { failSuggest: true });
+  v = await mount(sheet({ kind: 'suggest', workspace_path: '/tmp/example-projects/f8' }, { onPickFolder: () => picked++ }).el);
+  root = document.querySelector('[data-team-sheet="suggest"]');
+  assert.match(primary(root).textContent, /Try again/);
   v.unmount();
 });

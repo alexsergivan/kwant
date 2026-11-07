@@ -564,6 +564,8 @@ export const undoWindowOver = (e: unknown) =>
   e instanceof TeamsError ? e.code === 'undo_window_over' || e.code === 'undo_expired' : !!e && typeof e === 'object' && ['undo_window_over', 'undo_expired'].includes((e as { code?: string }).code ?? '');
 
 /** The Can't read block (api.md §4): 422 `cant_read` (424 from the §0 draft too). A 403 means the caller isn't the person, never "can't read". */
+/** N-5: another space already works in that folder; the same folder gets the same answer. */
+export const folderInUse = (e: unknown) => e instanceof TeamsError && e.code === 'folder_in_use';
 export const cantRead = (e: unknown) => e instanceof TeamsError && (e.status === 424 || e.code === 'cant_read') && e.status !== 403;
 
 export const readLine = (r: Suggestion['read'], partial: Suggestion['partial']) =>
