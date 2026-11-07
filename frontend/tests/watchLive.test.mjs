@@ -206,7 +206,12 @@ test('working strip: Watch (Eye 13 px) while browsing, labelled for the bot; gon
   assert.match(html, /textbtn/);
   assert.match(html, /width="13"/);
   assert.doesNotMatch(m.strip({ active: true, name: 'Rook', title: 'coder', phone: false }), /data-watch-button/);
-  assert.match(m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: true }), /min-h-\[44px\]/);
+  // Phone: muted and as small as the line (28 px), tapping like 44 px through kws-hit.
+  const phone = m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: true });
+  const watch = /<button[^>]*data-watch-button=""[^>]*>/.exec(phone)[0];
+  for (const c of ['data-compact', 'kws-hit', ' -mr-2 ', 'h-7', 'text-xs', 'text-zinc-400']) assert.ok(watch.includes(c), c);
+  assert.doesNotMatch(watch, /text-\[#b8adff\]|min-h-11/);
+  assert.match(phone, /width="12"/);
 });
 
 // ---------------------------------------------------------------- W3: the switcher

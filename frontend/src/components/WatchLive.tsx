@@ -107,9 +107,14 @@ export const WatchButton: React.FC<{ name: string; phone?: boolean; onWatch: () 
     data-watch-button=""
     onClick={onWatch}
     aria-label={`Watch the page ${name} is on`}
-    className={`textbtn shrink-0 inline-flex items-center gap-1 rounded-lg px-2 font-medium text-[#b8adff] hover:bg-[rgb(157_143_255/.10)] ${phone ? 'min-h-11 text-sm' : 'min-h-8 text-xs'} ${FOCUS}`}
+    data-compact={phone ? '' : undefined}
+    className={
+      phone
+        ? `textbtn kws-hit -mr-2 shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 ${FOCUS}`
+        : `textbtn shrink-0 inline-flex items-center gap-1 rounded-lg px-2 font-medium text-[#b8adff] hover:bg-[rgb(157_143_255/.10)] min-h-8 text-xs ${FOCUS}`
+    }
   >
-    <Eye size={13} aria-hidden="true" />
+    <Eye size={phone ? 12 : 13} aria-hidden="true" />
     Watch
   </button>
 );

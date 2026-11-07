@@ -1822,14 +1822,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
         className={`px-3 ${phone ? 'pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]' : 'pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]'} sm:p-4 border-t border-hairline bg-surface-side/60`}
       >
         {teamMembers && teamMembers.length > 0 && (
-          <ScrollRow className="kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none" role="group" aria-label="Ask a member">
+          <ScrollRow
+            className={
+              phone
+                ? // Phone: 28 px chips that tap like 44 px. The row scrolls sideways, which clips
+                  // anything sticking out of it, so it carries 8 px above and below for the chips'
+                  // kws-hit areas and gives the same space back in its margins (row stays 28 px).
+                  'kw-scroll-row max-w-4xl mx-auto -mt-1.5 mb-0.5 py-2 flex items-center gap-1.5 overflow-x-auto text-xs select-none'
+                : 'kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none'
+            }
+            role="group"
+            aria-label="Ask a member"
+          >
             <span className="shrink-0 text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
             {teamMembers.map((m) => (
               <button
                 key={m.id}
                 type="button"
                 onClick={() => handleInsertTag(`@${m.name}`)}
-                className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                data-compact={phone ? '' : undefined}
+                className={
+                  phone
+                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                }
                 title={`Ask ${m.name}`}
               >
                 <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} kwantId={m.id} />
@@ -1840,7 +1856,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleInsertTag(`@${teamName}`)}
-                className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                data-compact={phone ? '' : undefined}
+                className={
+                  phone
+                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                }
                 title={`Ask whole team @${teamName}`}
               >
                 <Users size={12} className="text-sky-400" />

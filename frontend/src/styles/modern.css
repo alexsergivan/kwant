@@ -140,6 +140,26 @@
   }
 }
 
+/* Small buttons that still tap like 44px (the phone working strip): an invisible hit area 8px
+   above and below a 28px button, and at least 44px wide, so the line itself stays 28px tall. */
+.kws-hit {
+  position: relative;
+}
+.kws-hit::before {
+  content: '';
+  position: absolute;
+  inset: -8px 0;
+  min-width: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+}
+
+/* The phone strip's working avatar: a softer, slower bob than in the stream. */
+.kws-strip-phone .kw-avatar-working .kw-avatar-body {
+  animation-duration: 1.6s;
+}
+
 /* Phones: every control is at least 44px to tap, and text fields are 16px so iOS doesn't zoom
    in on them. Only on touch screens below 768px, so desktop and narrow mouse windows keep the
    compact look. Toggle switches, checkboxes and links inside text keep their size; anything else
