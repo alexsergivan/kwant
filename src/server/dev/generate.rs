@@ -70,7 +70,9 @@ async fn build(state: &AppState, row: &DevCardRow, cap: i64) -> (&'static str, V
             match facts.kind {
                 Kind::Review => {
                     let mut model = picked.as_ref().map(|p| model_on(p.bot.clone()));
-                    review::card(&facts, picked.as_ref(), model.as_mut()).await
+                    // J12: a PR on a ticket with a brief is checked against its done-when lines
+                    let ticket = super::tickets::brief::ticket_check(state, &row.space_id, &facts).await;
+                    review::card_for(&facts, picked.as_ref(), model.as_mut(), ticket.as_ref()).await
                 }
                 Kind::Landed => {
                     // The text is written by the reviewer pick, else by the author's own bot
@@ -299,7 +301,7 @@ pub(super) fn cut_of(facts: &DevFacts, left_out: usize) -> Option<String> {
 /// `</task>` tag in it made harmless (`<` becomes `&lt;`), in any case and spacing, so nothing in
 /// it can close the fence it sits in. `<pre>`, `<prompt>`, `<tasks>` stay as they are.
 pub(super) fn fence_safe(text: &str) -> String {
-    const TAGS: [&str; 2] = ["pr", "task"];
+    const TAGS: [&str; 3] = ["pr", "task", "ticket"];
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(i) = rest.find('<') {

@@ -26,7 +26,7 @@ pub const REFUSAL: &str = "only the person can read or change Dev mode";
 pub const FIX_UNDO_SECS: u64 = 10;
 
 /// `{"error", "code"}` with the code the API contract names.
-fn coded(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
+pub(super) fn coded(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
     (status, Json(json!({"error": message.into(), "code": code}))).into_response()
 }
 
@@ -42,13 +42,13 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
     coded(status, code, message)
 }
 
-fn internal(e: impl std::fmt::Display) -> Response {
+pub(super) fn internal(e: impl std::fmt::Display) -> Response {
     tracing::warn!("dev: {e}");
     coded(StatusCode::INTERNAL_SERVER_ERROR, "internal", "Dev mode could not read or save that")
 }
 
 #[allow(clippy::result_large_err)]
-async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceId, Response> {
+pub(super) async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceId, Response> {
     super::super::mcp_suggest::refuse_agent_tokens(state, headers, REFUSAL).await?;
     active_space(state, id).await
 }
@@ -1033,7 +1033,8 @@ pub fn fix_task(space: &SpaceId, kwant_id: &str, card_id: &str, fid: &str, f: &V
     let s = |k: &str| f[k].as_str().unwrap_or("").trim().to_string();
     // The reviewing model's prose (a finding with no source is one, from before sources): labelled
     // as its words, and cut like the scan's PR text, 40 characters for the title, 200 for the rest.
-    let by_model = matches!(f["source"].as_str(), Some("review") | None);
+    // A ticket finding is the model's words around a Jira line: both untrusted, cut the same way.
+    let by_model = matches!(f["source"].as_str(), Some("review" | "ticket") | None);
     let prose = |k: &str, max: usize| if by_model { cut_chars(&s(k), max) } else { s(k) };
     let title: String = format!("Fix: {}", prose("title", MODEL_TITLE_CHARS)).chars().take(200).collect();
     let mut where_ = s("file");

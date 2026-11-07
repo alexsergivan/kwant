@@ -295,6 +295,11 @@ pub enum RuntimeEvent {
     /// Dev mode was turned on or off in a space.
     #[serde(rename = "dev_mode", alias = "DevMode")]
     DevMode { space_id: String, on: bool },
+    /// A brief's reading checklist moved (jira-tickets brief.md, design.md 03): `step` is
+    /// `ticket`, `comments`, `links`, `confluence` or `code`; `state` `running`, `done` or
+    /// `skipped`; `detail` a short plain line ("2 pages read"). Never ticket text.
+    #[serde(rename = "dev_ticket_progress", alias = "DevTicketProgress")]
+    DevTicketProgress { space_id: String, key: String, step: String, state: String, detail: String },
     /// An idea in the idea jar changed (dropped in, peeked at, picked, edited, shelved, deleted:
     /// `status` is then `deleted`); `GET /api/ideas/:id` has the rest.
     #[serde(rename = "idea_updated", alias = "IdeaUpdated")]

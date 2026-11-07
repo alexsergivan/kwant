@@ -419,7 +419,8 @@ pub async fn answer_with(state: &AppState, id: &str, text: &str) -> Option<(Ques
         Some(tx) => tx.send(Reply::Answer(text.clone())).is_ok(),
         None => false,
     };
-    if !live {
+    // A Dev mode brief's question has no turn behind it: the brief takes the answer instead
+    if !live && !super::dev::tickets::hooks::on_question(state, &q, Some(&text), "card").await {
         resume(state, &q, &text).await;
     }
     Some((q, live))
@@ -499,8 +500,64 @@ pub async fn cancel(State(state): State<AppState>, Path(id): Path<String>) -> Re
     };
     if let Some(tx) = state.questions.take(&q.id) {
         let _ = tx.send(Reply::Dismissed);
+    } else {
+        // A Dev mode brief's question: dismissing it takes its default
+        super::dev::tickets::hooks::on_question(&state, &q, None, "dismissed").await;
     }
     Json(q).into_response()
+}
+
+// Questions kwant asks with no turn waiting (a Dev mode brief's, J8)
+
+/// Saves one open question with its card in `place`, with no turn waiting on it: an answer on the
+/// card, in the chat or elsewhere is taken by whoever asked (see [`super::dev::tickets::hooks`]).
+/// `None` when it couldn't be saved (too long, too many open).
+pub async fn ask_without_waiter(state: &AppState, place: &QuestionPlace, kwant_name: &str, question: &str, choices: &[String], reason: QuestionReason<'_>) -> Option<Question> {
+    let created = state
+        .db
+        .create_question_with_card(place, question, choices, reason, |q| {
+            let text = match choices.is_empty() {
+                true => q.question.clone(),
+                false => format!("{}\n\nChoices: {}", q.question, choices.join(" · ")),
+            };
+            let (msg, extra) = place_message(q, "kwant", &place.kwant_id, text);
+            Some((msg, MessageExtra { meta: Some(card_meta(q)), ..extra }))
+        })
+        .await;
+    let (q, card) = match created {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, kwant_id = %place.kwant_id, "could not save a question");
+            return None;
+        }
+    };
+    if let Some(card) = card {
+        if let Some(t) = &q.thread_id {
+            let _ = state.db.touch_thread(t).await;
+        }
+        let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&card).unwrap_or(Value::Null) });
+    }
+    changed(state, &q).await;
+    notify(
+        state,
+        Notification {
+            kind: "question_asked",
+            kwant_id: place.kwant_id.clone(),
+            kwant_name: kwant_name.to_string(),
+            channel_id: q.channel_id.clone(),
+            title: format!("{kwant_name} has a question"),
+            body: "Open the chat to answer.".into(),
+        },
+    )
+    .await;
+    Some(q)
+}
+
+/// Closes an open question kwant asked without a waiter, answered somewhere other than its card
+/// (the chat, Go with the defaults, Jira): its card shows the answer. `None` if it wasn't open.
+pub async fn close_answered(state: &AppState, id: &str, answer: &str) -> Option<Question> {
+    let answer: String = answer.trim().chars().take(MAX_ANSWER_CHARS).collect();
+    close(state, id, "answered", Some(&answer)).await
 }
 
 // The claude CLI's own question tool

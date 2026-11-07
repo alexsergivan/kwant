@@ -123,7 +123,8 @@ pub struct Built {
 
 /// The findings a review posts: every one not dismissed (open, or sent to the author bot).
 pub fn postable(card: &Value) -> Vec<&Value> {
-    card["findings"].as_array().map_or(Vec::new(), |fs| fs.iter().filter(|f| f["state"].as_str() != Some("dismissed")).collect())
+    // Ticket findings quote a Jira line, which may be private: they stay on the card.
+    card["findings"].as_array().map_or(Vec::new(), |fs| fs.iter().filter(|f| f["state"].as_str() != Some("dismissed") && f["source"] != "ticket").collect())
 }
 
 fn is_secret(f: &Value) -> bool {
@@ -232,13 +233,14 @@ pub fn build(card: &Value, facts: &DevFacts, inline: bool) -> Built {
         b.push_str(&format!("- {r}\n"));
     }
 
-    b.push_str("\n**Intent check**");
     let intent = &card["intent"];
+    b.push_str(if intent["source"] == "ticket" { "\n**Matches the ticket**" } else { "\n**Intent check**" });
     match intent["source"].as_str() {
         Some("task") => b.push_str(" (against the kwant task this PR came from)\n"),
+        Some("ticket") => b.push_str(&format!(" (against the brief's done-when lines for {})\n", intent["key"].as_str().unwrap_or("the ticket"))),
         _ => b.push_str(" (against the PR's own title and description)\n"),
     }
-    if let Some(asked) = intent["asked"].as_str().filter(|a| !a.trim().is_empty()) {
+    if let Some(asked) = intent["asked"].as_str().filter(|a| !a.trim().is_empty() && intent["source"] != "ticket") {
         b.push_str(&format!("Asked: {}\n", asked.trim()));
     }
     let rows: Vec<&Value> = intent["rows"].as_array().map_or(Vec::new(), |r| r.iter().collect());
@@ -250,9 +252,17 @@ pub fn build(card: &Value, facts: &DevFacts, inline: bool) -> Built {
             Some("ok") => "Done",
             Some("missing") => "Missing",
             Some("extra") => "Not asked for",
+            Some("met") => "Met",
+            Some("not_met") => "Not met",
+            Some("unclear") => "Unclear",
             _ => "Note",
         };
-        b.push_str(&format!("- {label}: {}\n", r["text"].as_str().unwrap_or("").trim()));
+        // A Jira ticket may be private and the repo public: its words stay on the card.
+        let text = match (intent["source"].as_str(), r["done_when_index"].as_u64()) {
+            (Some("ticket"), Some(i)) => format!("done-when line {} of the brief", i + 1),
+            _ => r["text"].as_str().unwrap_or("").trim().to_string(),
+        };
+        b.push_str(&format!("- {label}: {text}\n"));
     }
 
     b.push_str("\n**Test tampering**\n");
@@ -609,6 +619,22 @@ mod tests {
         }
         assert!(!b.body.contains("Title f4") && !b.body.contains("Title f1"), "{}", b.body);
         assert!(b.body.contains("Other findings"));
+    }
+
+    #[test]
+    fn a_ticket_check_posts_states_but_never_the_tickets_words() {
+        let mut c = card(vec![json!({"id": "k2", "severity": "medium", "title": "Not met: SECRET-WORDS export as CSV", "file": "src/a.rs", "line": null,
+            "detail": "TRAIL-102 says SECRET-WORDS", "fix": "x", "source": "ticket", "state": "open", "sent_at": null, "dismissed": null})]);
+        c["intent"] = json!({"source": "ticket", "key": "TRAIL-102", "url": "https://yourcompany.atlassian.net/browse/TRAIL-102", "asked": "SECRET-WORDS",
+            "rows": [{"done_when_index": 0, "state": "met", "text": "SECRET-WORDS one", "evidence_text": "SECRET-WORDS", "evidence_paths": ["src/a.rs"]},
+                     {"done_when_index": 1, "state": "not_met", "text": "SECRET-WORDS two", "evidence_text": "", "evidence_paths": []},
+                     {"done_when_index": 2, "state": "unclear", "text": "SECRET-WORDS three", "evidence_text": "", "evidence_paths": []}], "none": false});
+        let b = build(&c, &facts(), true);
+        assert!(b.body.contains("Matches the ticket") && b.body.contains("TRAIL-102"), "{}", b.body);
+        for l in ["- Met: done-when line 1", "- Not met: done-when line 2", "- Unclear: done-when line 3"] {
+            assert!(b.body.contains(l), "{l} missing from:\n{}", b.body);
+        }
+        assert!(!b.body.contains("SECRET-WORDS") && b.comments.iter().all(|c| !c.body.contains("SECRET-WORDS")), "{}", b.body);
     }
 
     #[test]

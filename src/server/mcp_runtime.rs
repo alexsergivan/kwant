@@ -641,6 +641,9 @@ pub async fn prepare_turn_with_opts(
         servers,
         approver: if let Some(log) = opts.rehearse.clone() {
             Arc::new(RehearseApprover { log })
+        } else if opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
+            // A Dev mode brief only reads, whatever the ticket says (J7)
+            Arc::new(super::dev::tickets::tools::BriefApprover { inner: broker_approver })
         } else if self_tools {
             Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver, always_ask: opts.always_ask, browser })
         } else {
