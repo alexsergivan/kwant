@@ -112,8 +112,14 @@ export const PLACEHOLDERS: Record<string, MaskKind> = {
   '[filled from your saved login]': 'saved_login',
 };
 
+// The server names one engine id, or several joined by " or " when the bot isn't pinned
 export const engineName = (engine: string | null | undefined): string | null =>
-  engine ? ENGINE_NAMES[engine as keyof typeof ENGINE_NAMES] ?? engine : null;
+  engine
+    ? engine
+        .split(' or ')
+        .map((e) => ENGINE_NAMES[e as keyof typeof ENGINE_NAMES] ?? e)
+        .join(' or ')
+    : null;
 
 // ---------------------------------------------------------------------------------------------
 // API (api.md §1). Errors are {error: code, message}; the message is what the person reads.

@@ -2,6 +2,7 @@
 // bar on the Take over stage and the Check the steps review. Everything shown comes from the
 // session in showOnce.ts, which holds what Vega's API sent; nothing here counts or renumbers.
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Check,
   CircleDot,
@@ -631,7 +632,9 @@ function StepRow({ step, disabled, noteAfter, onNoteAfter }: { step: RecordedSte
 export const StepReview: React.FC = () => {
   const s = useShowOnce();
   const show = !!s?.rec && (s.phase === 'review' || s.phase === 'writing' || s.phase === 'written');
-  return show ? <ReviewSheet s={s!} /> : null;
+  // Portalled to the body: the Take over stage makes #root inert while it is up (it is portalled
+  // too), and a sheet left inside #root would show over the stage but take no clicks or keys.
+  return show ? createPortal(<ReviewSheet s={s!} />, document.body) : null;
 };
 
 function ReviewSheet({ s }: { s: ShowOnceSession }) {

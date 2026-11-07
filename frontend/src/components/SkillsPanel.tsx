@@ -4,7 +4,7 @@ import { UndoNotice } from './UndoNotice';
 import { Bot, Check, ChevronDown, ChevronRight, CircleDot, Globe2, ListChecks, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
 import { DraftSections, KeepLine, ShownBadge, ShownLine, TryItOnce, shownOf } from './SkillDraft';
 import { ShowOnceStart } from './ShowOnce';
-import { showOnce, showOnceApi } from '../showOnce';
+import { isRecording, showOnce, showOnceApi, useShowOnce, type Recording } from '../showOnce';
 import { formatWhen, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -519,6 +519,10 @@ export const ActiveSkill: React.FC<{ skill: Skill; initialPending?: boolean }> =
  * An agent's skills (its own plus shared ones): proposals to review, the ones in use with an
  * on/off switch, and the rejected/replaced ones for the record. Live through `skill_updated`.
  */
+// Stopped or writing: the review can be opened from here. Live ones belong to the stage
+const waitsForReview = (rec: unknown): rec is Recording =>
+  isRecording(rec) && !(rec as { deleted?: boolean }).deleted && (rec.state === 'stopped' || rec.state === 'writing');
+
 export const SkillsPanel: React.FC<{
   kwantId: string;
   kwantName: string;
@@ -529,6 +533,9 @@ export const SkillsPanel: React.FC<{
 }> = ({ kwantId, kwantName, onShowOnceStarted, browserUrl }) => {
   const [starting, setStarting] = useState(false);
   const [lastUrl, setLastUrl] = useState<string | null>(null);
+  // S-B5: a recording left stopped (Hand back, a closed tab, a reload, a restart) is offered here
+  const [waiting, setWaiting] = useState<Recording | null>(null);
+  const so = useShowOnce();
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
@@ -554,12 +561,22 @@ export const SkillsPanel: React.FC<{
     if (!onShowOnceStarted) return;
     let live = true;
     setLastUrl(null);
+    setWaiting(null);
     showOnceApi
       .current(kwantId)
-      .then((r) => live && setLastUrl(typeof r?.last_url === 'string' && r.last_url.trim() ? r.last_url : null))
+      .then((r) => {
+        if (!live) return;
+        setLastUrl(typeof r?.last_url === 'string' && r.last_url.trim() ? r.last_url : null);
+        setWaiting(waitsForReview(r?.recording) ? r.recording : null);
+      })
       .catch(() => undefined);
+    const off = onContinuity('recording_updated', (rec) => {
+      if (rec.kwant_id !== kwantId) return;
+      setWaiting(waitsForReview(rec) ? rec : null);
+    });
     return () => {
       live = false;
+      off();
     };
   }, [kwantId, !!onShowOnceStarted]);
 
@@ -603,6 +620,21 @@ export const SkillsPanel: React.FC<{
               <Plus size={11} aria-hidden="true" /> Write a skill
             </button>
           </div>
+          {onShowOnceStarted && waiting && so?.kwantId !== kwantId && (
+            <div className="so-entry-wait">
+              <span>Your last recording is waiting to be checked.</span>
+              <button
+                type="button"
+                className={quietBtn}
+                onClick={() => {
+                  playSfx('click');
+                  void showOnce.resumeOpen(kwantId, kwantName, waiting.stage || kwantId);
+                }}
+              >
+                <ListChecks size={11} aria-hidden="true" /> Check the steps
+              </button>
+            </div>
+          )}
           {onShowOnceStarted && (
             <p className="so-entry-help">
               Show it once: do the task in {kwantName}'s browser and {kwantName} writes the steps down for you to check. Passwords and codes are never kept.

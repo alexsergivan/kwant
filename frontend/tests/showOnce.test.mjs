@@ -49,13 +49,14 @@ function fake(routes) {
   return calls;
 }
 
-async function mount(el) {
+// `portal`: the component draws into document.body (the review sheet), so look there
+async function mount(el, portal = false) {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = m.createRoot(host);
   root.render(el);
   await settle();
-  return { host, unmount: () => (root.unmount(), host.remove()) };
+  return { host: portal ? document.body : host, unmount: () => (root.unmount(), host.remove()) };
 }
 const byText = (host, sel, text) => [...host.querySelectorAll(sel)].find((e) => e.textContent.trim() === text || e.textContent.includes(text));
 const click = async (el) => {
@@ -414,7 +415,7 @@ const reviewing = (over = {}) => session({ phase: 'review', rec: rec({ state: 's
 
 test('Check the steps: every step numbered and named, masks as chips, the engine line, focus on the heading', async () => {
   m.showOnceStore.set(reviewing());
-  const { host, unmount } = await mount(h(m.StepReview));
+  const { host, unmount } = await mount(h(m.StepReview), true);
   const dlg = host.querySelector('[role="dialog"]');
   assert.ok(dlg, 'a dialog');
   assert.equal(document.activeElement?.tagName, 'H3');
@@ -434,6 +435,30 @@ test('Check the steps: every step numbered and named, masks as chips, the engine
   reset();
 });
 
+test('the review sits outside #root, so it still takes clicks while the Take over stage makes #root inert', async () => {
+  const appRoot = document.createElement('div');
+  appRoot.id = 'root';
+  document.body.appendChild(appRoot);
+  m.showOnceStore.set(reviewing());
+  const r = m.createRoot(appRoot);
+  r.render(h(m.StepReview));
+  await settle();
+  appRoot.setAttribute('inert', '');
+  const dlg = document.body.querySelector('.so-rv[role="dialog"]');
+  assert.ok(dlg, 'the review is drawn');
+  assert.equal(dlg.closest('#root'), null, 'not inside #root');
+  assert.equal(dlg.closest('[inert]'), null, 'nothing above it is inert');
+  r.unmount();
+  appRoot.remove();
+  reset();
+});
+
+test('engine names: one id or several joined by “or” read as names', () => {
+  assert.equal(m.engineName('claude'), 'Claude');
+  assert.equal(m.engineName('claude or codex'), 'Claude or Codex');
+  assert.equal(m.engineName(null), null);
+});
+
 test('delete a step: “Step n deleted.” with Undo focused; Undo puts it back', async () => {
   const gone = { ...STEPS[4], deleted: true, undo_until: new Date(Date.now() + 60_000).toISOString() };
   const calls = fake({
@@ -441,7 +466,7 @@ test('delete a step: “Step n deleted.” with Undo focused; Undo puts it back'
     [`POST ${R}/rec_1/steps/5/restore`]: [200, { step: STEPS[4] }],
   });
   m.showOnceStore.set(reviewing());
-  const { host, unmount } = await mount(h(m.StepReview));
+  const { host, unmount } = await mount(h(m.StepReview), true);
   await click(host.querySelector('button[aria-label="Delete step 5"]'));
   const row = byText(host, 'li', 'Step 5 deleted.');
   assert.ok(row);
@@ -463,7 +488,7 @@ test('a note after a step goes in with `after`', async () => {
     [`GET ${R}/rec_1`]: [200, { recording: rec({ state: 'stopped', stop_reason: 'stop' }), steps: [...STEPS.slice(0, 7), noteStep, ...STEPS.slice(7)] }],
   });
   m.showOnceStore.set(reviewing());
-  const { host, unmount } = await mount(h(m.StepReview));
+  const { host, unmount } = await mount(h(m.StepReview), true);
   await click(host.querySelector('button[aria-label="Add a note after step 7"]'));
   const ta = host.querySelector('.so-addnote textarea');
   assert.equal(document.activeElement, ta);
@@ -481,7 +506,7 @@ test('Escape asks before discarding; Keep them keeps; Discard deletes and closes
   m.showOnceStore.set(reviewing());
   const ended = [];
   const off = m.showOnceStore.onEnd((e) => ended.push(e));
-  const { host, unmount } = await mount(h(m.StepReview));
+  const { host, unmount } = await mount(h(m.StepReview), true);
   await key('Escape');
   const conf = host.querySelector('[role="alertdialog"]');
   assert.match(conf.textContent, /Discard all 15 steps\? Nothing is written, and the steps are deleted now\./);
@@ -501,7 +526,7 @@ test('Escape asks before discarding; Keep them keeps; Discard deletes and closes
 test('Keep recording goes back to the stage with the same list', async () => {
   fake({ [`POST ${R}/rec_1/resume`]: [200, { recording: rec() }] });
   m.showOnceStore.set(reviewing());
-  const { host, unmount } = await mount(h(m.StepReview));
+  const { host, unmount } = await mount(h(m.StepReview), true);
   await click(byText(host, 'button', 'Keep recording'));
   assert.equal(m.showOnceStore.get().phase, 'recording');
   assert.equal(m.showOnceStore.get().steps.length, 15);
@@ -515,7 +540,7 @@ test('Write: “is writing the skill from 15 steps”, then “wrote the skill�
   m.showOnceStore.set(reviewing());
   const ended = [];
   const off = m.showOnceStore.onEnd((e) => ended.push(e));
-  const { host, unmount } = await mount(h(m.StepReview));
+  const { host, unmount } = await mount(h(m.StepReview), true);
   await click(byText(host, 'button', 'Write the skill'));
   assert.equal(m.showOnceStore.get().phase, 'writing');
   assert.match(host.textContent, /Rook is writing the skill from 15 steps\./);
@@ -533,17 +558,17 @@ test('Write: “is writing the skill from 15 steps”, then “wrote the skill�
 test('a failed write comes back to the review with the reason and Try again', async () => {
   m.showOnceStore.set(reviewing({ write_error: 'The engine stopped before it finished.' }));
   fake({ [`POST ${R}/rec_1/write`]: [202, { recording: rec({ state: 'writing' }) }] });
-  const { host, unmount } = await mount(h(m.StepReview));
+  const { host, unmount } = await mount(h(m.StepReview), true);
   const alert = host.querySelector('.so-banner.bad, [role="alert"]');
   assert.equal(alert.querySelector('span').textContent, "Rook couldn't write the skill. The engine stopped before it finished. Your steps are kept, so try again.");
   unmount();
   m.showOnceStore.set(reviewing({ write_error: 'The engine stopped before it finished.', steps_expire_at: '2026-11-14T10:04:00Z' }));
-  const v = await mount(h(m.StepReview));
+  const v = await mount(h(m.StepReview), true);
   assert.equal(v.host.querySelector('.so-banner.bad span').textContent, "Rook couldn't write the skill. The engine stopped before it finished. Your steps are kept until Nov 14, so try again.");
   assert.match(v.host.textContent, /They're kept until Nov 14, or 7 days after you approve the skill\./);
   v.unmount();
   m.showOnceStore.set(reviewing({ write_error: 'The engine stopped before it finished.' }));
-  const { host: host2, unmount: unmount2 } = await mount(h(m.StepReview));
+  const { host: host2, unmount: unmount2 } = await mount(h(m.StepReview), true);
   const alert2 = host2.querySelector('.so-banner.bad');
   assert.ok(byText(host2, 'button', 'Try again'));
   unmount2();
@@ -552,7 +577,7 @@ test('a failed write comes back to the review with the reason and Try again', as
 
 test('a stop at the limit says so in a banner; no engine blocks Write with the reason', async () => {
   m.showOnceStore.set(reviewing({ stop_reason: 'limit_steps', step_count: 200, engine: null }));
-  const { host, unmount } = await mount(h(m.StepReview));
+  const { host, unmount } = await mount(h(m.StepReview), true);
   assert.match(host.textContent, /Stopped at 200 steps, the most one recording can take\. All 15 steps up to there are kept\./);
   assert.ok(host.querySelector('.so-banner.warn[role="status"]'));
   const w = byText(host, 'button', 'Write the skill');
@@ -575,7 +600,7 @@ test('Hand back while recording stops first, and hands back when the review clos
   await m.showOnce.stop(true);
   assert.equal(m.showOnceStore.get().handBackAfter, true);
   assert.deepEqual(calls.find((c) => c.url === `${R}/rec_1/stop`).body, { reason: 'handed_back' }, '§10: stop says why');
-  const v = await mount(h(m.StepReview));
+  const v = await mount(h(m.StepReview), true);
   const info = v.host.querySelector('.so-banner.info');
   assert.equal(info.getAttribute('role'), 'status', 'the person’s own action: status, not alert');
   assert.ok(info.querySelector('svg.lucide-hand'), 'lucide Hand icon');
@@ -738,6 +763,31 @@ test('Start at is prefilled with the bot’s last page (last_url, §10); null ke
   assert.equal(input.placeholder, 'The page the browser is on');
   await click(byText(document.body, 'button', 'Cancel'));
   v.unmount();
+});
+
+test('Skills tab: a recording left stopped is offered (S-B5); Check the steps opens its review; a live one is not', async () => {
+  const stopped = rec({ kwant_id: 'k_rook', state: 'stopped', stop_reason: 'closed' });
+  fake({
+    ['GET /api/skills?kwant_id=k_rook']: [200, []],
+    [`GET ${R}?bot=k_rook`]: [200, { recording: stopped, last_url: null }],
+    [`GET ${R}/rec_1`]: [200, { recording: stopped, steps: STEPS }],
+  });
+  let v = await mount(h(m.SkillsPanel, { kwantId: 'k_rook', kwantName: 'Rook', onShowOnceStarted: () => {} }));
+  const row = v.host.querySelector('.so-entry-wait');
+  assert.ok(row, 'the waiting row');
+  assert.equal(row.textContent.trim().startsWith('Your last recording is waiting to be checked.'), true);
+  await click(byText(row, 'button', 'Check the steps'));
+  await settle();
+  assert.equal(m.showOnceStore.get()?.phase, 'review');
+  assert.equal(m.showOnceStore.get()?.rec?.id, 'rec_1');
+  assert.equal(v.host.querySelector('.so-entry-wait'), null, 'hidden while its review is open');
+  v.unmount();
+  reset();
+  fake({ ['GET /api/skills?kwant_id=k_rook']: [200, []], [`GET ${R}?bot=k_rook`]: [200, { recording: rec({ kwant_id: 'k_rook', state: 'recording' }), last_url: null }] });
+  v = await mount(h(m.SkillsPanel, { kwantId: 'k_rook', kwantName: 'Rook', onShowOnceStarted: () => {} }));
+  assert.equal(v.host.querySelector('.so-entry-wait'), null, 'a live recording belongs to the stage');
+  v.unmount();
+  reset();
 });
 
 test('trial messages: the marker on the message or in meta; the card goes after the last one once it ended', () => {
