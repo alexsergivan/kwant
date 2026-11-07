@@ -59,7 +59,7 @@ Key facts:
 - [Loose ends: AI that finds unfinished follow-ups](https://kwant.si/docs/loose-ends): kwant finds threads you never finished in chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.
 - [Parallel Universe: compare deployment options](https://kwant.si/docs/parallel-universe): Load-test up to three ways to deploy an app in sealed Docker containers, next to a dated price estimate. No cloud account and no spending.
 - [MCP tools for AI agents: a self-hosted client](https://kwant.si/docs/mcp): Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.
-- [Use kwant from Claude Code, Codex or Cursor over MCP](https://kwant.si/docs/agents-connect): Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, no approvals, revoked at once.
+- [Use kwant from Claude Code, Codex or Cursor over MCP](https://kwant.si/docs/agents-connect): Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can't approve anything, revoked at once.
 - [AI agent browser: your Chrome or Docker](https://kwant.si/docs/browser): Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.
 
 ## Alternatives

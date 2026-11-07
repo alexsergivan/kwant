@@ -31,7 +31,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=6c3f17b494">
+<link rel="stylesheet" href="../assets/css/site.css?v=99f2fc30c3">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -92,7 +92,7 @@
   <li><strong>Reads</strong> outside the folder, unless they touch system data or anything that looks like a credential: <code>.ssh</code>, <code>.aws</code>, <code>.env</code> files, key files, browser profiles, shell histories and more.</li>
   <li><strong>MCP tools</strong> the server marks read-only and not destructive.</li>
 </ul>
-<p id="packages">Since 0.7.4, adding a package the project doesn't list yet asks first, because it downloads code that runs on your computer: <code>npm install &lt;name&gt;</code>, <code>pnpm add</code>, <code>yarn add</code>, <code>bun add</code>, <code>cargo add</code>, <code>uv add</code>, <code>poetry add</code>, <code>go get</code> and <code>dotnet add package</code>. An option or a workspace name in front can't hide it. A plain <code>npm install</code> of what the project already lists still runs on its own. Starters like <code>npm create vite</code>, <code>npx</code>, <code>npm exec</code> and <code>npm run x</code> ask too.</p>
+<p id="packages">Since 0.7.4, adding a package the project doesn't list yet asks first, because it downloads code that runs on your computer: <code>npm install &lt;name&gt;</code>, <code>pnpm add</code>, <code>yarn add</code>, <code>bun add</code>, <code>cargo add</code>, <code>uv add</code>, <code>poetry add</code>, <code>go get</code> and <code>dotnet add package</code>. An option or a workspace name in front can't hide it. A plain <code>npm install</code> of what the project already lists still runs on its own. Starters like <code>npm create vite</code>, <code>npx</code>, <code>npm exec</code> and <code>npm x</code> ask too.</p>
 <figure>
   <div class="frame"><a class="zoom" href="../assets/media/v074-package-ask-2880.webp?v=3bc4212b5e" data-caption="With Ask only when risky on, Ann stops to ask before installing a new package: npm install left-pad. Buttons: Deny, Always this session, Allow once."><img class="app" src="../assets/media/v074-package-ask-1440.webp?v=766ec8a5bc" srcset="../assets/media/v074-package-ask-1440.webp?v=766ec8a5bc 1440w, ../assets/media/v074-package-ask-2880.webp?v=3bc4212b5e 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="With Ask only when risky on, Ann stops to ask before installing a new package: npm install left-pad. Buttons: Deny, Always this session, Allow once."></a></div>
   <figcaption>A new package asks first, even under "Ask only when risky".</figcaption>

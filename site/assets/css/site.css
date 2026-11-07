@@ -372,6 +372,7 @@ pre .c { color: var(--v7); }
 .copy:hover { background: var(--v5); }
 @media (hover: hover) { pre .copy { opacity: 0; } pre:hover .copy, pre .copy:focus-visible { opacity: 1; } }
 @media (hover: hover) { pre.prompt .copy { opacity: 1; } }
+@media (hover: none) { pre { padding-top: 48px; } pre .copy { min-width: 44px; min-height: 44px; } }
 .table-wrap { margin: 20px 0 0; overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
 .table-wrap table { min-width: 560px; }
 table { width: 100%; border-collapse: collapse; font-size: 15px; }
