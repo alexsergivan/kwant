@@ -48,10 +48,10 @@ fn skill_error(e: SkillError) -> Response {
     }
 }
 
-fn changed(state: &AppState, skill: &Skill) {
-    let _ = state.event_sender.send(RuntimeEvent::SkillUpdated {
-        skill: serde_json::to_value(skill).unwrap_or(Value::Null),
-    });
+/// Sends `skill_updated`; a shown draft carries its `shown` facts (see `super::show_once`).
+async fn changed(state: &AppState, skill: &Skill) {
+    let skill = super::show_once::skill_json(state, skill).await;
+    let _ = state.event_sender.send(RuntimeEvent::SkillUpdated { skill });
 }
 
 // Selection
@@ -251,14 +251,14 @@ pub async fn list(State(state): State<AppState>, scope: Scope, Query(q): Query<S
     let kwant_id = q.kwant_id.as_deref().filter(|s| !s.is_empty());
     let space = skill_space(&state, kwant_id, scope).await;
     match state.db.list_skills(&space, kwant_id, status.as_deref()).await {
-        Ok(list) => Json(list).into_response(),
+        Ok(list) => Json(super::show_once::skills_json(&state, &list).await).into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
 pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.db.get_skill(&id).await {
-        Ok(Some(s)) => Json(s).into_response(),
+        Ok(Some(s)) => Json(super::show_once::skill_json(&state, &s).await).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -363,7 +363,7 @@ pub async fn create(
     }
     match state.db.create_user_skill(&space, kwant_id.as_deref(), text).await {
         Ok(s) => {
-            changed(&state, &s);
+            changed(&state, &s).await;
             (StatusCode::CREATED, Json(s)).into_response()
         }
         Err(e) => skill_error(e),
@@ -397,7 +397,7 @@ pub async fn update(State(state): State<AppState>, Path(id): Path<String>, Json(
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         },
     };
-    changed(&state, &skill);
+    changed(&state, &skill).await;
     Json(skill).into_response()
 }
 
@@ -410,13 +410,15 @@ pub async fn approve(State(state): State<AppState>, Path(id): Path<String>, body
     }
     match state.db.approve_skill(&id, &p.edit()).await {
         Ok(s) => {
+            // A shown draft's steps are kept 7 days from now (Show it once, api.md §7)
+            super::show_once::on_approved(&state, &s.id).await;
             if let Some(old) = &s.replaces_id {
                 if let Ok(Some(o)) = state.db.get_skill(old).await {
-                    changed(&state, &o);
+                    changed(&state, &o).await;
                 }
             }
-            changed(&state, &s);
-            Json(s).into_response()
+            changed(&state, &s).await;
+            Json(super::show_once::skill_json(&state, &s).await).into_response()
         }
         Err(e) => skill_error(e),
     }
@@ -426,8 +428,10 @@ pub async fn approve(State(state): State<AppState>, Path(id): Path<String>, body
 pub async fn reject(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.db.set_skill_status(&id, "rejected").await {
         Ok(s) => {
-            changed(&state, &s);
-            Json(s).into_response()
+            // A shown draft's steps go at once (the UI waited out its 10 s Undo first)
+            super::show_once::on_rejected(&state, &s.id).await;
+            changed(&state, &s).await;
+            Json(super::show_once::skill_json(&state, &s).await).into_response()
         }
         Err(e) => skill_error(e),
     }
@@ -486,7 +490,7 @@ pub async fn tool_propose(state: &AppState, scope: &SelfScope, args: &Value) -> 
     };
     match state.db.propose_skill(&scope.kwant_id, text).await {
         Ok(skill) => {
-            changed(state, &skill);
+            changed(state, &skill).await;
             notify(
                 state,
                 Notification {

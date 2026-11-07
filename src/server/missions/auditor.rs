@@ -355,7 +355,7 @@ pub async fn close_cards(state: &AppState, kwant_id: Option<&str>, since: Option
     for (id, tool) in cards {
         state.broker.cancel(&id).await;
         if state.db.expire_open_approval(&id).await.unwrap_or(false) {
-            let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::ApprovalWithdrawn { id });
+            let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::approval_withdrawn(id, "expired", None));
             let short = tool.rsplit("__").next().unwrap_or(&tool).to_string();
             if !tools.contains(&short) {
                 tools.push(short);

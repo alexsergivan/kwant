@@ -45,6 +45,9 @@ pub struct Question {
     /// What the bot checked before asking.
     #[sqlx(default)]
     pub checked: Option<String>,
+    /// Where it was answered: "telegram", or `None` (kwant).
+    #[sqlx(default)]
+    pub answered_via: Option<String>,
 }
 
 fn as_json<S: serde::Serializer>(raw: &str, s: S) -> Result<S::Ok, S::Error> {

@@ -162,6 +162,8 @@
   font: 700 10.5px/1 ui-monospace, 'JetBrains Mono', SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;
 }
+/* 0.7.6 (Jira design §7): amber when a ticket waits on you; #120e26 on #fcd34d is 13.0:1. */
+.kw-dv-row-badge-needs { background: #fcd34d; color: #120e26; }
 .kw-dv-row-badge-pop { animation: kw-dv-badge-pop 160ms ease-out 1; }
 @keyframes kw-dv-badge-pop { from { transform: scale(1.2); } to { transform: scale(1); } }
 

@@ -18,6 +18,8 @@ export interface Question {
   message_id: string | null;
   created_at: string;
   answered_at: string | null;
+  /** Where it was answered when not in kwant ("telegram"); null or absent when answered here. */
+  answered_via?: string | null;
 }
 
 /** `meta` of the card message. */
@@ -32,6 +34,8 @@ export interface QuestionMeta {
   why_you?: string | null;
   /** What the bot already tried; null on older cards. */
   checked?: string | null;
+  /** Where it was answered when not in kwant ("telegram"). */
+  answered_via?: string | null;
 }
 
 export const ANSWER_MAX = 2000;
@@ -63,6 +67,7 @@ export function parseQuestionMeta(raw: unknown): QuestionMeta | null {
     answer: typeof m.answer === 'string' ? m.answer : null,
     why_you: typeof m.why_you === 'string' ? m.why_you : null,
     checked: typeof m.checked === 'string' && m.checked.trim() ? m.checked.trim() : null,
+    answered_via: typeof m.answered_via === 'string' ? m.answered_via : null,
   };
 }
 
@@ -73,7 +78,13 @@ export const questionContextId = (q: Pick<Question, 'thread_id' | 'channel_id' |
 /** Card state: the live record from `question_updated` wins over the (possibly stale) message meta. */
 export function questionView(meta: QuestionMeta, live?: Question | null): QuestionMeta {
   if (!live || live.id !== meta.question_id) return meta;
-  return { ...meta, status: live.status, answer: live.answer, choices: live.choices.length ? live.choices : meta.choices };
+  return {
+    ...meta,
+    status: live.status,
+    answer: live.answer,
+    choices: live.choices.length ? live.choices : meta.choices,
+    answered_via: live.answered_via ?? meta.answered_via ?? null,
+  };
 }
 
 /** Keeps the latest known record per question. */

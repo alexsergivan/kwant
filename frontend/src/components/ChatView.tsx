@@ -1,4 +1,8 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import type { SwitchEntry } from '../watchLive';
+import { trialCardsAfter } from '../showOnce';
+import { onContinuity } from '../continuity';
+import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
@@ -19,7 +23,9 @@ import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
-import { QuestionMeta, parseQuestionMeta } from '../questions';
+import { QuestionMeta, parseMetaObject, parseQuestionMeta } from '../questions';
+import { fromTelegram, sentToTelegram } from '../telegram';
+import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
@@ -106,6 +112,14 @@ export interface QueuedState {
   speaker: string;
 }
 
+/** "Drafter: Write" for a resolved approval row; the card's own words, nothing computed. */
+function approvalLead(a: PendingApproval): string {
+  const d = (a.details ?? {}) as Record<string, unknown>;
+  const who = typeof d.kwant_name === 'string' && d.kwant_name ? d.kwant_name : null;
+  const what = typeof d.summary === 'string' && d.summary ? d.summary : a.tool_name;
+  return who ? `${who}: ${what}` : what;
+}
+
 export interface DiscussionState {
   inProgress: boolean;
   teamId?: string;
@@ -157,6 +171,8 @@ export interface ChatViewProps {
   streamingThinking: string;
   /** Tool approvals waiting in this chat, oldest first. */
   pendingApprovals: PendingApproval[];
+  /** Approvals answered in Telegram while this chat was open (G4): kept as a resolved row. */
+  settledApprovals?: PendingApproval[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -182,6 +198,8 @@ export interface ChatViewProps {
   repoUrl?: string;
   onManageTeam?: () => void;
   onEditKwant?: () => void;
+  /** Open a bot's Skills tab (the trial card's Open in Skills, A29). */
+  onOpenSkills?: (kwantId: string) => void;
   // Grok-style Sandbox VM Pane props
   isVmPaneOpen?: boolean;
   onToggleVmPane?: () => void;
@@ -200,9 +218,15 @@ export interface ChatViewProps {
   vmCaptchaStep?: HumanStep | null;
   /** The newest open step (any kind) holding this browser. */
   vmHumanStep?: HumanStep | null;
+  /** W1: set while this chat's browser is active; the working strip offers Watch when the panel is closed. */
+  onWatchBrowser?: () => void;
+  /** W3: the panel's switcher between browsing chats. */
+  vmSwitcher?: { entries: SwitchEntry[]; current: string; onPick: (owner: string) => void } | null;
   /** Answers that step as done from the browser; resolves to an error message on failure. */
   onVmStepDone?: (id: string) => Promise<string | void> | void;
   vmSolveRequest?: number;
+  /** Show it once: the single bot this chat's browser belongs to (absent in teams and channels). */
+  vmShowOnceBot?: { id: string; name: string };
   /** Pinned team/channel instructions, shown collapsed above the messages. */
   pinned?: PinnedItem[];
   /** Opens the channel's instructions editor; only for channels. */
@@ -222,6 +246,8 @@ export interface ChatViewProps {
   notice?: React.ReactNode;
   /** Drawn in place of an empty chat (the first-run welcome). */
   welcome?: React.ReactNode;
+  /** 0.7.7 T5: first in the message stream (a template team's Needs card); not a message. */
+  topCard?: React.ReactNode;
   /** Next to the title, e.g. "Working on …" while the bot has background turns. */
   titleExtra?: React.ReactNode;
   /** Set while the open chat's turn waits in the queue. */
@@ -387,6 +413,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   streamingText,
   streamingThinking,
   pendingApprovals,
+  settledApprovals = [],
   isStreaming,
   streamingSpeakerName,
   onSendMessage,
@@ -406,6 +433,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   repoUrl,
   onManageTeam,
   onEditKwant,
+  onOpenSkills,
   isVmPaneOpen,
   onToggleVmPane,
   activeUrl,
@@ -420,8 +448,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   vmApprovalsOff,
   vmCaptchaStep,
   vmHumanStep,
+  onWatchBrowser,
+  vmSwitcher,
   onVmStepDone,
   vmSolveRequest,
+  vmShowOnceBot,
   pinned = [],
   onEditInstructions,
   highlightMessageId,
@@ -432,6 +463,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   threadLine,
   notice,
   welcome,
+  topCard,
   titleExtra,
   queued,
   renderDelegation,
@@ -1071,6 +1103,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   }
 
+  // Show it once trials (A29): which trials ended in this tab (SSE); history covers a reload
+  const [endedTrials, setEndedTrials] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => onContinuity('trial_ended', (t) => setEndedTrials((prev) => (prev.has(t.skill_id) ? prev : new Set(prev).add(t.skill_id)))), []);
+  const trialCards = useMemo(() => trialCardsAfter(messages, endedTrials), [messages, endedTrials]);
+
   const renderMessage = (msg: ChatMessage) => {
     const interruption = parseInterruption(msg);
     if (interruption)
@@ -1205,12 +1242,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {isUser ? (
             <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
               <span className="text-zinc-200 shrink-0">{displayName}</span>
+              {fromTelegram(parseMetaObject(msg.meta)) && <ViaTelegram />}
             </div>
           ) : (
             // One line, "Name · 3:42 PM"; the model, account, tokens, steps and reasoning wait behind Details
             <ReplyMeta
               name={displayName}
               at={msg.created_at}
+              sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
               avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={20} kwantId={replyKwantId} /></span>}
               ranOn={ranOn}
               account={account}
@@ -1590,6 +1629,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-label={`Messages in ${title}`}
             aria-busy={isStreaming}
           >
+        {topCard}
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (
           <div className="flex min-h-full items-center justify-center">
@@ -1597,7 +1637,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
         {groupDiscussionThreads(messages).map((item) => {
-          if (item.kind === 'message') return renderMessage(item.message);
+          if (item.kind === 'message') {
+            const trial = trialCards.get(item.message.id);
+            if (!trial) return renderMessage(item.message);
+            return (
+              <Fragment key={item.message.id}>
+                {renderMessage(item.message)}
+                <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
+              </Fragment>
+            );
+          }
           const threadKey = `thread:${item.id}`;
           const isThreadOpen = !!openThoughts[threadKey];
           return (
@@ -1721,6 +1770,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
 
+        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
+        {settledApprovals.map((approval) => (
+          <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
+        ))}
+
         {/* Pending Security Approval Ticket */}
         {pendingApprovals.map((approval) => (
           <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
@@ -1760,6 +1814,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         awaitingBrowser={!!awaitingBrowser}
         writing={!!streamingText}
         onAnswer={showWaitingCard}
+        onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       />
 
       {/* Modern Composer Input Bar */}
@@ -1767,14 +1822,30 @@ export const ChatView: React.FC<ChatViewProps> = ({
         className={`px-3 ${phone ? 'pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]' : 'pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]'} sm:p-4 border-t border-hairline bg-surface-side/60`}
       >
         {teamMembers && teamMembers.length > 0 && (
-          <ScrollRow className="kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none" role="group" aria-label="Ask a member">
+          <ScrollRow
+            className={
+              phone
+                ? // Phone: 28 px chips that tap like 44 px. The row scrolls sideways, which clips
+                  // anything sticking out of it, so it carries 8 px above and below for the chips'
+                  // kws-hit areas and gives the same space back in its margins (row stays 28 px).
+                  'kw-scroll-row max-w-4xl mx-auto -mt-1.5 mb-0.5 py-2 flex items-center gap-1.5 overflow-x-auto text-xs select-none'
+                : 'kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none'
+            }
+            role="group"
+            aria-label="Ask a member"
+          >
             <span className="shrink-0 text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
             {teamMembers.map((m) => (
               <button
                 key={m.id}
                 type="button"
                 onClick={() => handleInsertTag(`@${m.name}`)}
-                className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                data-compact={phone ? '' : undefined}
+                className={
+                  phone
+                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                }
                 title={`Ask ${m.name}`}
               >
                 <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} kwantId={m.id} />
@@ -1785,7 +1856,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <button
                 type="button"
                 onClick={() => handleInsertTag(`@${teamName}`)}
-                className="shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95"
+                data-compact={phone ? '' : undefined}
+                className={
+                  phone
+                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
+                }
                 title={`Ask whole team @${teamName}`}
               >
                 <Users size={12} className="text-sky-400" />
@@ -2137,8 +2213,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
       approvalsOff={vmApprovalsOff}
       captchaStep={vmCaptchaStep}
       humanStep={vmHumanStep}
+      switcher={vmSwitcher}
       onStepDone={onVmStepDone}
       solveRequest={vmSolveRequest}
+      showOnceBot={vmShowOnceBot}
     />
   </div>
 </div>

@@ -701,6 +701,10 @@ pub struct SendChatPayload {
     /// `docs/reactions-and-replies.md`); checked by [`send_chat`].
     #[serde(default)]
     pub reply_to_message_id: Option<String>,
+    /// Where the person wrote it, when not in kwant ("telegram"); saved as the message's
+    /// `meta.source`. Set only by the server, never read from a request.
+    #[serde(skip)]
+    pub source: Option<String>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -721,6 +725,18 @@ async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -
     } else {
         None
     }
+}
+
+/// `meta` with [`TurnOpts::failure_meta`]'s keys added (its own keys, such as `kind`, are kept).
+fn with_failure_meta(meta: Option<serde_json::Value>, extra: &Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let Some(serde_json::Value::Object(extra)) = extra else { return meta };
+    let mut meta = meta.unwrap_or_else(|| json!({}));
+    if let Some(m) = meta.as_object_mut() {
+        for (k, v) in extra {
+            m.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    Some(meta)
 }
 
 /// Longest driver error kept in a saved `turn_failed` message, in bytes.
@@ -1792,6 +1808,9 @@ pub(super) struct TurnOpts {
     pub(super) hook: Option<super::decide::HookSlot>,
     /// Merged into the saved reply's meta.
     pub(super) extra_meta: Option<serde_json::Value>,
+    /// Merged into the meta of a note the turn saves instead of a reply (`turn_failed`, or the note
+    /// a turn that gave up leaves), before the chat is told to refresh.
+    pub(super) failure_meta: Option<serde_json::Value>,
     /// The reply isn't saved (a teammate's view for the decide-first round).
     pub(super) unsaved: bool,
     /// A failed turn saves no `turn_failed` note (the caller posts something else).
@@ -1837,7 +1856,7 @@ impl TurnOpts {
     /// and its retry runs with default options, so a no-tools turn would come back with tools over
     /// the same untrusted text. Its caller gets the "out until" failure and retries itself.
     pub(super) fn no_park(&self) -> bool {
-        self.retried || self.discussion.is_some() || self.no_tools
+        self.retried || self.discussion.is_some() || self.no_tools || self.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE)
     }
 
     /// The link to open in the bot browser before the turn: only a full link in the person's own
@@ -2535,6 +2554,7 @@ async fn run_kwant_turn_inner(
             person: super::bot_actions::person_place(&state.db).await,
             store: Some(state.db.clone()),
             no_tools: opts.no_tools,
+            read_only: opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE),
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -2549,10 +2569,27 @@ async fn run_kwant_turn_inner(
         // Saved with the gave-up reply, so a client can offer Retry without reading its wording
         let mut gave_up_meta: Option<serde_json::Value> = None;
         let mut ran_on: Option<RanOn> = None;
-        // Only Claude's permission hook holds every call of a replay to the scratch folder
-        let rehearse_blocked = opts.rehearse.is_some()
-            && (engine != Some(crate::profiles::Engine::Claude) || mcp_turn.is_none());
-        let attempts = if rehearse_blocked { Vec::new() } else { attempts };
+        // Only Claude's permission hook holds every call of a replay to the scratch folder. A
+        // Dev mode brief (J7) runs on Claude, whose hook holds every call to reading, or on Codex,
+        // in its own read-only sandbox with the gateway's calls held the same way; never on an
+        // engine that can be neither gated nor sandboxed, and never retried on one
+        let brief_turn = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
+        let rehearse_blocked = if brief_turn {
+            !engine.is_some_and(super::dev::tickets::brief_engine) || mcp_turn.is_none()
+        } else {
+            opts.rehearse.is_some() && (engine != Some(crate::profiles::Engine::Claude) || mcp_turn.is_none())
+        };
+        let had_attempts = !attempts.is_empty();
+        let attempts: Vec<Option<LlmProfile>> = if rehearse_blocked {
+            Vec::new()
+        } else if brief_turn {
+            attempts
+                .into_iter()
+                .filter(|p| p.as_ref().and_then(|p| crate::profiles::Engine::parse(&p.engine)).or(engine).is_some_and(super::dev::tickets::brief_engine))
+                .collect()
+        } else {
+            attempts
+        };
         // Every account is known to be out: nothing is tried, the turn waits for the earliest reset
         if let (Some(until), false) = (global.all_out_until, rehearse_blocked) {
             let at = super::profile_turn::clock_text(state, until).await;
@@ -2570,7 +2607,9 @@ async fn run_kwant_turn_inner(
             });
             gave_up = Some(text);
         } else if attempts.is_empty() {
-            let text = if rehearse_blocked {
+            let text = if brief_turn && (rehearse_blocked || had_attempts) {
+                format!("⚠️ [{}] A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on.", target_kwant.name)
+            } else if rehearse_blocked {
                 format!("⚠️ [{}] A skill replay runs only on Claude, with kwant's tool checks on.", target_kwant.name)
             } else {
                 format!(
@@ -2989,7 +3028,8 @@ async fn run_kwant_turn_inner(
                     reasoning_content: with_notices(opts.label.clone()),
                     ..scope.message("kwant", &target_kwant.name, text.clone())
                 };
-                scope.save(&msg, super::activity::with_activity(gave_up_meta, activity)).await;
+                let meta = with_failure_meta(gave_up_meta, &opts.failure_meta);
+                scope.save(&msg, super::activity::with_activity(meta, activity)).await;
             }
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
@@ -3106,7 +3146,8 @@ async fn run_kwant_turn_inner(
                 reasoning_content: with_notices(opts.label.clone()),
                 ..scope.message("kwant", &target_kwant.name, turn_failed_text(&target_kwant.name, &why, &event_broadcast.activity))
             };
-            scope.save(&msg, super::activity::with_activity(Some(json!({"kind": "turn_failed"})), activity)).await;
+            let meta = with_failure_meta(Some(json!({"kind": "turn_failed"})), &opts.failure_meta);
+            scope.save(&msg, super::activity::with_activity(meta, activity)).await;
         }
         if let Some(e) = driver_error {
             event_broadcast.send(e);
@@ -3202,7 +3243,7 @@ async fn idea_from_chat(
     }
 }
 
-async fn send_chat_inner(
+pub(crate) async fn send_chat_inner(
     state: AppState,
     mut payload: SendChatPayload,
     from_person: bool,
@@ -3419,10 +3460,11 @@ async fn send_chat_inner(
         tool_calls: None,
         tokens_used: payload.prompt.len() as i64 / 4,
     };
-    let user_extra = MessageExtra {
-        thread_id: None,
-        meta: (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)})),
-    };
+    let mut user_meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
+    if let Some(source) = &payload.source {
+        user_meta.get_or_insert_with(|| json!({}))["source"] = json!(source);
+    }
+    let user_extra = MessageExtra { thread_id: None, meta: user_meta };
     let saved_user_msg = state
         .db
         .insert_message_with(&user_msg, &user_extra)
@@ -3855,6 +3897,15 @@ async fn send_to_thread(
     let _ = state.db.touch_thread(&thread.id).await;
     super::waiting::person_wrote(&state, None, None, Some(&thread.id)).await;
     let note = super::attachments::attach_to_message(&state, &uploads, &saved.id, None, None, Some(&thread.id)).await;
+    // In a Dev mode brief's chat with open questions, the message answers them (J8): no turn
+    if super::dev::tickets::hooks::answer_in_chat(&state, &thread.id, &payload.prompt).await {
+        return Ok(Json(json!({
+            "status": "answered",
+            "user_message_id": saved.id,
+            "kwant": kwant.name,
+            "thread_id": thread.id,
+        })));
+    }
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
@@ -3888,7 +3939,19 @@ pub async fn resolve_approval(
         "always_allow" => ApprovalDecision::AlwaysAllowSession,
         _ => ApprovalDecision::Deny,
     };
+    let (status, body) = resolve_approval_inner(&state, &ticket_id, decision, None).await;
+    Ok((status, Json(body)).into_response())
+}
 
+/// Answers an approval card: the app's route, and Telegram's Allow once (`via: "telegram"`, which
+/// is recorded as the card's `answered_via`). Same checks either way: the production floor, and
+/// only a card still waiting (or one kwant kept over a restart) can be answered.
+pub(crate) async fn resolve_approval_inner(
+    state: &AppState,
+    ticket_id: &str,
+    decision: ApprovalDecision,
+    via: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
     let status_str = match decision {
         ApprovalDecision::AllowOnce => "allowed_once",
         ApprovalDecision::AlwaysAllowSession => "always_allowed",
@@ -3900,7 +3963,7 @@ pub async fn resolve_approval(
     if decision != ApprovalDecision::Deny {
         let details = state
             .db
-            .get_approval(&ticket_id)
+            .get_approval(ticket_id)
             .await
             .ok()
             .flatten()
@@ -3910,48 +3973,58 @@ pub async fn resolve_approval(
                 refusal["ticket_id"] = json!(ticket_id);
                 refusal["resolved"] = json!(false);
                 refusal["status"] = json!("needs_backup");
-                return Ok((StatusCode::CONFLICT, Json(refusal)).into_response());
+                return (StatusCode::CONFLICT, refusal);
             }
         }
     }
 
     // Only a ticket still waiting can be answered; a withdrawn one (turn ended, expired)
     // keeps its status and its tool never runs
-    let resolved = state.broker.resolve(&ticket_id, decision.clone()).await;
+    let resolved = state.broker.resolve(ticket_id, decision.clone()).await;
     if !resolved {
         // A card whose turn stopped waiting (or that kwant kept over a restart): a late answer,
         // and Allow resumes the work
-        let reply = super::mcp_runtime::resume_late_approval(&state, &ticket_id, decision, status_str).await;
-        super::missions::listener::refresh_needs_you(&state).await;
+        let reply = super::mcp_runtime::resume_late_approval(state, ticket_id, decision, status_str, via).await;
+        super::missions::listener::refresh_needs_you(state).await;
         return match reply {
             Some(mut reply) => {
+                super::telegram::bridge::approval_answered(state, ticket_id, via).await;
                 reply["ticket_id"] = json!(ticket_id);
                 reply["resolved"] = json!(true);
                 reply["status"] = json!(status_str);
-                Ok(Json(reply).into_response())
+                (StatusCode::OK, reply)
             }
-            None => Ok((
+            None => (
                 StatusCode::CONFLICT,
-                Json(json!({
+                json!({
                     "ticket_id": ticket_id,
                     "resolved": false,
                     "status": "expired",
                     "error": "This card expired: the bot is no longer waiting for it. Ask the bot again.",
-                })),
-            )
-                .into_response()),
+                }),
+            ),
         };
     }
-    let _ = state.db.update_approval_status(&ticket_id, status_str).await;
+    let _ = state.db.update_approval_status(ticket_id, status_str).await;
+    if let Some(via) = via {
+        let _ = state.db.set_answered_via("approvals", ticket_id, via).await;
+    }
     // The card is answered: a task that waited on it is working again (Mission Control)
-    super::missions::listener::refresh_needs_you(&state).await;
+    super::missions::listener::refresh_needs_you(state).await;
+    // Telegram edits its copy of the card ("✓ Answered in kwant")
+    super::telegram::bridge::approval_answered(state, ticket_id, via).await;
+    // Every open copy of the card (another window, the app after a Telegram answer) closes,
+    // with where and how it was answered
+    let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::approval_withdrawn(ticket_id, status_str, via));
 
-    Ok(Json(json!({
-        "ticket_id": ticket_id,
-        "resolved": resolved,
-        "status": status_str
-    }))
-    .into_response())
+    (
+        StatusCode::OK,
+        json!({
+            "ticket_id": ticket_id,
+            "resolved": resolved,
+            "status": status_str
+        }),
+    )
 }
 
 #[derive(Serialize)]
@@ -5637,7 +5710,17 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{scrub_urls, turn_failed_text};
+    use super::{scrub_urls, turn_failed_text, with_failure_meta};
+    use serde_json::json;
+
+    #[test]
+    fn a_failure_note_gets_the_callers_meta_but_keeps_its_kind() {
+        let extra = Some(json!({"trial": {"skill_id": "s", "recording_id": "r"}, "kind": "nope"}));
+        let meta = with_failure_meta(Some(json!({"kind": "turn_failed"})), &extra).unwrap();
+        assert_eq!(meta, json!({"kind": "turn_failed", "trial": {"skill_id": "s", "recording_id": "r"}}));
+        assert_eq!(with_failure_meta(None, &extra).unwrap()["trial"]["skill_id"], "s");
+        assert_eq!(with_failure_meta(Some(json!({"kind": "x"})), &None), Some(json!({"kind": "x"})));
+    }
 
     #[test]
     fn a_retry_a_discussion_round_or_a_no_tools_turn_never_parks() {

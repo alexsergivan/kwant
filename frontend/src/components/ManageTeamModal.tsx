@@ -9,6 +9,7 @@ import { MAX_INSTRUCTIONS } from '../continuity';
 import { teamNameToSave } from '../teamChannel';
 import { TeamRepoDevLine } from './TeamRepoDevLine';
 import { useEscapeLayer } from '../escape';
+import { SuggestMembersButton } from './ReadyTeamsEntry';
 
 interface ManageTeamModalProps {
   isOpen: boolean;
@@ -28,6 +29,8 @@ interface ManageTeamModalProps {
     }
   ) => Promise<void>;
   onDeleteTeam: (id: string) => Promise<void>;
+  /** A8 ("Pick a repo"): open with the Team Workspace group in view and its input focused. */
+  focusWorkspace?: boolean;
 }
 
 /**
@@ -55,6 +58,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   onClose,
   onUpdateTeam,
   onDeleteTeam,
+  focusWorkspace = false,
 }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -69,6 +73,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  // D1: hidden (not unmounted) while the suggestion sheet is open.
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -116,7 +122,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   };
   const unsaved = !!saved && (Object.keys(saved) as (keyof typeof saved)[]).some((k) => saved[k] !== edited[k]);
   const rootRef = useRef<HTMLDivElement>(null);
-  useEscapeLayer(rootRef, isOpen && !!team, onClose, {
+  useEscapeLayer(rootRef, isOpen && !!team && !sheetOpen, onClose, {
     modal: true,
     unsaved,
     fallback: () => [...document.querySelectorAll<HTMLElement>('[data-composer]')].find((el) => !el.closest('[inert]')),
@@ -138,7 +144,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
         setWorkspacePath('');
         setRepoUrl(team.repo_url);
       } else {
-        setWorkspaceType('default');
+        // A8: no workspace yet, so "Pick a repo" lands on Git Repo.
+        setWorkspaceType(focusWorkspace ? 'repo' : 'default');
         setWorkspacePath('');
         setRepoUrl('');
       }
@@ -153,7 +160,18 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       setError(null);
       setDeleteError(null);
     }
-  }, [team, kwants, isOpen]);
+  }, [team, kwants, isOpen, focusWorkspace]);
+
+  // A8: after the fields are seeded, bring Team Workspace into view and focus the selected tab's input.
+  const wsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isOpen || !team || !focusWorkspace) return;
+    const id = requestAnimationFrame(() => {
+      wsRef.current?.scrollIntoView?.({ block: 'center' });
+      wsRef.current?.querySelector<HTMLInputElement>('input[data-ws-input]')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isOpen, team, focusWorkspace]);
 
   if (!isOpen || !team) return null;
 
@@ -240,7 +258,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   };
 
   return (
-    <div className="kw-dialog fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 select-none animate-in fade-in duration-150">
+    <div className={`kw-dialog fixed inset-0 z-50 bg-black/75 backdrop-blur-sm ${sheetOpen ? 'hidden' : 'flex'} items-center justify-center p-4 select-none animate-in fade-in duration-150`} hidden={sheetOpen}>
       <div ref={rootRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="manage-team-title" className="kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
@@ -310,7 +328,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
           />
 
           {/* Team Workspace */}
-          <div>
+          <div ref={wsRef} data-team-workspace>
             <label className="block text-xs font-medium text-zinc-400 mb-1.5">
               Team Workspace
             </label>
@@ -363,13 +381,14 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
 
             {workspaceType === 'local' && (
               <div className="space-y-2">
-                <div className="flex gap-2 items-center">
+                <div className="flex flex-wrap sm:flex-nowrap gap-2 items-center">
                   <input
                     type="text"
+                    data-ws-input
                     value={workspacePath}
                     onChange={(e) => setWorkspacePath(e.target.value)}
                     placeholder="e.g. ~/projects/my-app or /path/to/folder"
-                    className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
+                    className="flex-1 min-w-0 basis-full sm:basis-auto bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
                   />
                   <button
                     type="button"
@@ -439,6 +458,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               <div>
                 <input
                   type="text"
+                  data-ws-input
+                  aria-label="Repo URL"
                   value={repoUrl}
                   onChange={(e) => setRepoUrl(e.target.value)}
                   placeholder="https://github.com/owner/repository.git"
@@ -449,6 +470,20 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
                   Bots clone it into the team’s folder on first run.
                 </p>
               </div>
+            )}
+
+            {team && (team.workspace_path || team.repo_url) && (
+              <SuggestMembersButton
+                team={{ id: team.id, name: team.name }}
+                workspace_path={team.workspace_path || undefined}
+                repo_url={team.repo_url || undefined}
+                onHide={() => setSheetOpen(true)}
+                onShow={() => setSheetOpen(false)}
+                onDone={() => {
+                  setSheetOpen(false);
+                  onClose();
+                }}
+              />
             )}
 
             {workspaceType === 'default' && (

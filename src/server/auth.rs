@@ -343,6 +343,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "work-ahead", ..] => true,
         // The idea jar is the person's: what they drop in, Look now, Do it and the shelf
         ["", "api", "ideas", ..] => true,
+        // Show it once (0.7.9): the person's recorded steps, Write and Try it once, every method
+        ["", "api", "show-once", ..] => true,
         // Mission Control: approving plans, verifying, rejecting, retrying and approving checks are
         // the person's calls; bots act on tasks only through their task tools
         ["", "api", "missions" | "tasks" | "checks", ..] => *method != Method::GET && *method != Method::HEAD,
@@ -381,6 +383,11 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // A team's instructions go into every member's prompt (PUT and PATCH both set them), and a
         // channel's PATCH sets its instructions and members: bots change these through their
         // `team_update` / `channel_update` actions, which the person can undo
+        // Ready-made teams and discovery (0.7.7, next-077/api.md): making a team, reading a
+        // project and the Undo preview are the person's; the catalogue stays readable for agents
+        ["", "api", "team-templates", _, "preview"] => true,
+        ["", "api", "teams", "from-template" | "suggest"] => true,
+        ["", "api", "teams", _, "template"] => true,
         ["", "api", "teams", _] => matches!(*method, Method::DELETE | Method::PUT | Method::PATCH),
         ["", "api", "channels", _] => *method == Method::PATCH,
         ["", "api", "kwants", _] => *method == Method::DELETE,
@@ -486,7 +493,7 @@ pub(super) fn require_person_token(state: &AppState, headers: &HeaderMap, peer: 
 fn person_token_required() -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": "this needs the API token: open the sign-in link kwant printed when it started, or run `kwnt token`", "person_only": true })),
+        Json(json!({ "error": "this needs the API token: open the sign-in link kwant printed when it started, or run `kwnt token`", "person_only": true, "code": "person_only" })),
     )
         .into_response()
 }
@@ -527,8 +534,8 @@ pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> R
     } else if api.require != Require::Never && person_only(req.method(), &path) {
         // A bot's turn token (or any bearer that isn't the API token) is a 403, from anywhere;
         // no token a 401 where the token is needed
-        if let Err(refused) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person can do this").await {
-            refused
+        if super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person can do this").await.is_err() {
+            (StatusCode::FORBIDDEN, Json(json!({ "error": "only the person can do this", "code": "person_only" }))).into_response()
         } else if person_token_needed(&api, &headers, peer) && !presented_token_ok(&api, &headers) {
             person_token_required()
         } else {
@@ -893,6 +900,14 @@ mod tests {
         assert!(person_only(&post, "/api/sandbox/t1/interact"));
         assert!(!person_only(&post, "/api/sandbox/t1/act"));
         assert!(person_only(&get, "/api/passwords/store"));
+        // 0.7.7 ready-made teams: everything but the catalogue
+        assert!(person_only(&get, "/api/team-templates/inbox/preview"));
+        assert!(person_only(&post, "/api/teams/from-template"));
+        assert!(person_only(&post, "/api/teams/suggest"));
+        assert!(person_only(&get, "/api/teams/t1/template"));
+        assert!(!person_only(&get, "/api/team-templates"));
+        assert!(!person_only(&post, "/api/teams"));
+        assert!(!person_only(&get, "/api/teams/t1"));
         for (m, p) in [
             (&get, "/api/spaces/s1/dev_mode"),
             (&put, "/api/spaces/s1/dev_mode"),
@@ -930,6 +945,13 @@ mod tests {
         assert!(person_only(&get, "/api/ideas"));
         assert!(person_only(&post, "/api/ideas"));
         assert!(person_only(&get, "/api/ideas/i1"));
+        // Show it once: GET included (the steps are what the person did)
+        assert!(person_only(&get, "/api/show-once/recordings"));
+        assert!(person_only(&get, "/api/show-once/recordings/rec_1"));
+        assert!(person_only(&post, "/api/show-once/recordings/rec_1/write"));
+        assert!(person_only(&del, "/api/show-once/recordings/rec_1/steps/4"));
+        assert!(person_only(&post, "/api/show-once/skills/s1/try"));
+        assert!(person_only(&post, "/api/show-once/test/clock"));
         assert!(person_only(&post, "/api/ideas/i1/pick"));
         assert!(person_only(&post, "/api/ideas/i1/look"));
         assert!(person_only(&del, "/api/ideas/i1"));

@@ -27,6 +27,7 @@ import {
 } from '../connections';
 import { inDesktopApp } from '../externalLinks';
 import { editorProps } from '../escape';
+import { TelegramConnection } from './TelegramCard';
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
@@ -713,12 +714,13 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               );
             })}
 
-          {data && data.catalog.length > 0 && (
+          {data && (
             <section aria-labelledby="conn-catalog" className="space-y-2">
               <h3 id="conn-catalog" className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
                 Optional connectors
               </h3>
               <ul className="space-y-2">
+                <TelegramConnection />
                 {data.catalog.map((entry) => (
                   <ComposioCard
                     key={entry.id}

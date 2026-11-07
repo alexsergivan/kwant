@@ -23,6 +23,7 @@
 use super::routes::TurnScope;
 use super::AppState;
 use crate::db::models::Kwant;
+use crate::db::spaces::SpaceId;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use serde::Serialize;
@@ -179,23 +180,30 @@ fn stop_error(s: &Status) -> String {
 }
 
 /// The status, or the error a turn starting now gets.
-pub async fn check(state: &AppState) -> Result<(), String> {
+pub async fn check(state: &AppState, space: Option<&SpaceId>) -> Result<(), String> {
     let s = status(state).await;
     if !s.stopped {
         return Ok(());
     }
-    tripped(state, &s).await;
+    tripped(state, &s, space).await;
     Err(stop_error(&s))
 }
 
-/// Key in `spend_stop_notices` for the day's one notification.
+/// Key in `spend_stop_notices` for the day's one notification (`notify:<space>` per space).
 const NOTIFY_KEY: &str = "notify";
 
-/// The stop held something: the first time each day, one `spend_stopped` notification (UI,
-/// push, webhook; off when the person unticks it), so routines going quiet overnight are heard.
-/// It names no bot (the stop holds them all); a tap opens Needs you, where Continue is.
-async fn tripped(state: &AppState, s: &Status) {
-    if !state.db.first_spend_notice(&s.day, NOTIFY_KEY).await.unwrap_or(false) {
+/// The stop held something: the first time each day in each space, one `spend_stopped`
+/// notification (UI, push, webhook, the space's Telegram chat; off when the person unticks it),
+/// so routines going quiet overnight are heard. It names no bot (the stop holds them all) but
+/// carries `space`, the held turn's, so Telegram and push know where it belongs (Rigel's F-D1:
+/// without it the Telegram "stuck" message was never sent). A tap opens Needs you, where
+/// Continue is.
+async fn tripped(state: &AppState, s: &Status, space: Option<&SpaceId>) {
+    let key = match space {
+        Some(id) => format!("{NOTIFY_KEY}:{}", id.as_str()),
+        None => NOTIFY_KEY.to_string(),
+    };
+    if !state.db.first_spend_notice(&s.day, &key).await.unwrap_or(false) {
         return;
     }
     let n = super::continuity::Notification {
@@ -206,7 +214,7 @@ async fn tripped(state: &AppState, s: &Status) {
         title: "Today's spending limit is reached".into(),
         body: format!("Used {}, so bots won't start new work until tomorrow. Open to continue today.", used_of(s)),
     };
-    super::continuity::notify(state, n).await;
+    super::continuity::notify_in(state, n, space).await;
 }
 
 /// Before a turn takes its slot (`routes::turn_once`): `Err` when today's spending stop holds new
@@ -219,7 +227,8 @@ pub(super) async fn gate(scope: &TurnScope, speaker: &Kwant, quiet: bool) -> Res
     }
     let context = scope.context_id(speaker);
     tracing::info!(context = %context, day = %s.day, tokens = s.today_tokens, usd = s.today_usd, "daily spending stop: turn not started");
-    tripped(&scope.state, &s).await;
+    let space = scope.state.db.space_of_kwant(&speaker.id).await.ok().flatten();
+    tripped(&scope.state, &s, space.as_ref()).await;
     if !quiet && scope.state.db.first_spend_notice(&s.day, &format!("chat:{context}")).await.unwrap_or(false) {
         let meta = json!({
             "kind": REASON,
@@ -238,10 +247,10 @@ pub(super) async fn gate(scope: &TurnScope, speaker: &Kwant, quiet: bool) -> Res
     Err(stop_error(&s))
 }
 
-/// For routines, missions and AutoFix before they start work: `Some(reason)` when the
-/// stop holds it (the reason starts with [`REASON`]).
-pub async fn held(state: &AppState) -> Option<String> {
-    check(state).await.err()
+/// For routines, missions and AutoFix before they start work in `space`: `Some(reason)` when
+/// the stop holds it (the reason starts with [`REASON`]).
+pub async fn held(state: &AppState, space: &str) -> Option<String> {
+    check(state, Some(&SpaceId::new(space))).await.err()
 }
 
 /// True the first time `key` is skipped today, so a skip is written to its history once a day
