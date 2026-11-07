@@ -37,10 +37,14 @@ import {
   TeamsError,
   carryEdits,
   cleanHandle,
+  fieldKey,
   forgeOf,
   initialEdits,
   nameError,
   newBotCount,
+  botNameByKey,
+  cantRead,
+  partialBody,
   partialHead,
   plural,
   readLine,
@@ -54,6 +58,7 @@ import {
   swapRole,
   teamsApi,
   tickedCount,
+  type Clash,
   type CreatedTeam,
   type CreateRequest,
   type RowSend,
@@ -230,7 +235,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const [phase, setPhase] = useState<'idle' | 'creating' | 'failed'>('idle');
   const [live, setLive] = useState('');
   const seeded = useRef(false);
-  const idemKey = useRef<string | null>(null);
+  /** Rows (and '@handle') the person changed, which a late preview answer must not overwrite. */
+  const touched = useRef(new Set<string>());
+  // api.md §0.3: one idempotency key per sheet open. A retry, a clash fix or a re-read after 410 reuses
+  // it; the server only replays a create that went through, so nothing is made twice.
+  const idemKey = useRef<string>(newIdempotencyKey());
 
   // ---- D state
   const [dPhase, setDPhase] = useState<DPhase>('reading');
@@ -260,7 +269,34 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     setNotes(c.notes);
     setHandle(c.handle);
     setHandleNote(c.handleNote);
-  }, [isD, t, takenNames, takenHandles]);
+    // api.md §0.10: the server's own free names, when it answers; ours stand otherwise. Applied only to
+    // rows the person hasn't renamed yet.
+    const tid = t.id;
+    teamsApi.preview(space, tid).then(
+      (p) => {
+        if (!p || p.template_id !== tid) return;
+        const fresh = (k: string) => !touched.current.has(k);
+        setNames((n) => {
+          const out = { ...n };
+          for (const b of t.bots) if (fresh(b.key) && p.names?.[b.key]) out[b.key] = p.names[b.key];
+          return out;
+        });
+        setNotes(() => {
+          const out: Record<string, string> = {};
+          for (const b of t.bots) {
+            const v = p.names?.[b.key];
+            if (fresh(b.key) && v && v !== b.name) out[b.key] = `${b.name} is taken in this space, so this one is ${v}.`;
+          }
+          return out;
+        });
+        if (fresh('@handle') && p.handle) {
+          setHandle(p.handle);
+          setHandleNote(p.handle !== t.handle ? `@${t.handle} is taken here, so this team is @${p.handle}.` : null);
+        }
+      },
+      () => {},
+    );
+  }, [isD, t, takenNames, takenHandles, space]);
 
   // D: read the project.
   const read = useCallback(
@@ -299,7 +335,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         setLive(`Suggested ${plural(s.bots.length, 'bot')}${s.also_possible.length ? `, ${s.also_possible.length} also possible` : ''}`);
       } catch (e) {
         if (ac.signal.aborted) return;
-        if (e instanceof TeamsError && e.code === 'cant_read') setDPhase('cantread');
+        if (cantRead(e)) setDPhase('cantread');
         else if (e instanceof TeamsError && e.status === 0) setDPhase('offline');
         else setDPhase('error');
       }
@@ -360,6 +396,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     const v = draft.trim();
     if (isD) setEdits((e) => ({ ...e, [key]: { ...e[key], name: v, renamed: true } }));
     else {
+      touched.current.add(key);
       setNames((n) => ({ ...n, [key]: v }));
       setNotes((n) => {
         const { [key]: _drop, ...rest } = n;
@@ -367,6 +404,22 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       });
     }
     setRenaming(null);
+  };
+
+  const applyClashes = (clashes: Clash[], h: string) => {
+    for (const c of clashes) {
+      if (c.field === 'handle') {
+        setHandleNote(`@${c.wanted ?? h} is taken here, so this team is @${c.suggestion}.`);
+        setHandle(c.suggestion);
+        continue;
+      }
+      const key = fieldKey(c.field);
+      if (!key) continue;
+      const was = c.wanted ?? rowName(key);
+      if (isD) setEdits((x) => (x[key] ? { ...x, [key]: { ...x[key], name: c.suggestion } } : x));
+      else setNames((n) => ({ ...n, [key]: c.suggestion }));
+      setNotes((n) => ({ ...n, [key]: `${was} is taken in this space, so this one is ${c.suggestion}.` }));
+    }
   };
 
   // ---- create
@@ -391,20 +444,23 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         }
         rows[b.key] = row;
       }
-      body = { kind: 'suggestion', space, suggestion_id: sug.suggestion_id, rows, handle: manage ? undefined : h };
+      body = {
+        kind: 'suggestion',
+        space,
+        suggestion_id: sug.suggestion_id,
+        rows,
+        ...(manage && mode.kind === 'suggest' && mode.team ? { team_id: mode.team.id } : { handle: h }),
+      };
     } else {
       const ns: Record<string, string> = {};
       for (const b of tBots) if (names[b.key] && names[b.key] !== b.name) ns[b.key] = names[b.key];
       body = { kind: 'template', space, template_id: t.id, handle: h, names: ns };
     }
-    // One key per Create press; a retry after a lost answer reuses it, so nothing is made twice.
-    idemKey.current ??= newIdempotencyKey();
     try {
       const r = await teamsApi.create(body, idemKey.current);
       setLive(`Created @${h}. Undo is available.`);
       onCreated(r, t, h);
     } catch (e) {
-      if (e instanceof TeamsError && (e.status === 409 || e.status === 410)) idemKey.current = null;
       if (e instanceof TeamsError && e.status === 410 && isD) {
         // A17: read again, keep the edits on rows that come back.
         setPhase('idle');
@@ -412,19 +468,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         void read(true);
         return;
       }
-      if (e instanceof TeamsError && e.status === 409 && e.suggestion) {
-        // A10: someone took a name or the handle meanwhile; take the server's suggestion and say so.
+      if (e instanceof TeamsError && e.status === 409 && e.clashes.length) {
+        // A10 + api.md §0.4: names or the handle were taken meanwhile. Take every suggestion and say so.
         setPhase('idle');
-        if (e.field === 'handle') {
-          setHandleNote(`@${h} is taken here, so this team is @${e.suggestion}.`);
-          setHandle(e.suggestion);
-        } else if (e.key) {
-          const was = rowName(e.key);
-          if (isD) setEdits((x) => ({ ...x, [e.key as string]: { ...x[e.key as string], name: e.suggestion as string } }));
-          else setNames((n) => ({ ...n, [e.key as string]: e.suggestion as string }));
-          setNotes((n) => ({ ...n, [e.key as string]: `${was} is taken in this space, so this one is ${e.suggestion}.` }));
-        }
-        setLive('A name was taken. Check the new name and create again.');
+        applyClashes(e.clashes, h);
+        setLive(e.clashes.length > 1 ? `${e.clashes.length} names were taken. Check the new names and create again.` : 'A name was taken. Check the new name and create again.');
         return;
       }
       setPhase('failed');
@@ -570,6 +618,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             aria-describedby={`${titleId}-hh`}
             value={handle}
             onChange={(e) => {
+              touched.current.add('@handle');
               setHandle(slugHandle(e.target.value));
               setHandleNote(null);
             }}
@@ -647,7 +696,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
                     <span className="inline-flex items-center h-[18px] px-1.5 rounded-[5px] text-[10.5px] font-medium text-sky-200 bg-sky-400/15">From the {t.label} template</span>
                   </p>
                   <p className="text-xs text-zinc-400">
-                    {names[t.bots.find((b) => b.name === s.owner)?.key ?? ''] ?? s.owner} · on · {s.description}
+                    {botNameByKey(t, names, s.owner, s.owner_name)} · on · {s.description}
                   </p>
                 </div>
                 <button
@@ -678,7 +727,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
                 <span className="inline-flex items-center h-[18px] px-1.5 rounded-[5px] text-[10.5px] font-medium text-zinc-300 bg-white/[.06]">Off</span>
               </p>
               <p className="text-xs text-zinc-400">
-                {t.routine.when} · {names[t.bots.find((b) => b.name === t.routine!.bot)?.key ?? ''] ?? t.routine.bot}. Turn it on in Routines when you want it.
+                {t.routine.when} · {botNameByKey(t, names, t.routine.bot)}. Turn it on in Routines when you want it.
               </p>
             </div>
           </li>
@@ -751,7 +800,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
               <Choice
                 phone={phone}
                 existingName={existingName}
-                existingRole={existing?.role ?? b.avatar_sprite}
+                existingRole={existing?.role ?? b.existing_avatar ?? b.avatar_sprite}
                 value={e.useExisting ? 'existing' : 'new'}
                 onChange={(v) =>
                   setEdits((x) => {
@@ -763,6 +812,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
                 }
               />
             )}
+            {b.existing_leads_team && e.ticked && e.useExisting && <Note>{existingName} leads @{b.existing_leads_team}. Here it joins as a member.</Note>}
           </div>
         </div>
         {!also && renaming !== b.key && (
@@ -866,7 +916,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         )}
         {ph && (
           <Banner tone="warn" head={ph}>
-            This project is bigger than that, so the suggestions come from those files only.
+            {partialBody(sug.partial)}
           </Banner>
         )}
         {reasonUnknown && (

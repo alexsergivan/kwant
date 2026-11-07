@@ -2,7 +2,7 @@
 // preview sheet from any entry point (welcome, New team, sidebar, Manage team), shows the Created toast
 // and runs Undo. `TeamNeedsTop` is the Needs card at the top of a template team's chat (Q-T5: a client
 // overlay built from live state, not a message). Design: next-077/design/design.md §T, §D. API: api.md.
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { TeamPreviewSheet, type SheetMode } from './TeamPreviewSheet';
 import { TeamCreatedLine, TeamCreatedToast, TeamNeedsCard, UndoTeamConfirm } from './TeamNeedsCard';
 import { openForgeConnect, openGitHubConnect } from './GitHubConnect';
@@ -17,6 +17,8 @@ import {
   TeamsError,
   plural,
   teamsApi,
+  undoWindowOver,
+  type CreatedFrom,
   type CreatedTeam,
   type NeedsContext,
   type TeamTemplate,
@@ -25,8 +27,9 @@ import {
 } from '../teams/teamTemplates';
 
 // ---------------------------------------------------------------------------------------------------
-// Which teams a template made. The server answers `GET /api/teams/:id/template`; a team made here is
-// remembered at once so its card shows before that read.
+// Which teams a template made. The team row says so (api.md §0.8: `created_from_template` and
+// `template_action_id`); a team made here is remembered at once so its card shows before the roster reload.
+// `GET /api/teams/:id/template-undo` is read only when the person presses Undo.
 
 export interface MadeTeam {
   templateId: string | null;
@@ -59,13 +62,24 @@ const forget = (teamId: string) => {
     /* ignore */
   }
 };
-const fromInfo = (i: TeamTemplateInfo, handle: string): MadeTeam => ({
-  templateId: i.template_id,
-  handle: i.removes?.handle || handle,
-  createdAt: Date.parse(i.created_at) || Date.now(),
-  actionId: i.action_id,
-  undoUntil: Date.parse(i.undo_until) || 0,
-});
+const DAY = 86_400_000;
+
+/** A team row → what the Needs card and Undo need; null when no template made it. `undefined` when the
+ * server doesn't send the fields (an older build): the local record decides then. */
+export const madeFromRow = (t: ReadyTeam, local: MadeTeam | null): MadeTeam | null | undefined => {
+  if (t.created_from_template === undefined) return undefined;
+  if (!t.created_from_template || !t.template_action_id) return null;
+  const from: CreatedFrom = t.created_from_template;
+  const createdAt = local?.createdAt ?? (t.created_at ? Date.parse(t.created_at) : NaN);
+  const at = Number.isFinite(createdAt) ? createdAt : Date.now();
+  return {
+    templateId: from === 'suggested' ? null : from,
+    handle: t.name,
+    createdAt: at,
+    actionId: t.template_action_id,
+    undoUntil: at + DAY,
+  };
+};
 
 // ---------------------------------------------------------------------------------------------------
 
@@ -74,6 +88,9 @@ export interface ReadyTeam {
   name: string;
   workspace_path?: string | null;
   repo_url?: string | null;
+  created_at?: string | null;
+  created_from_template?: CreatedFrom;
+  template_action_id?: string | null;
 }
 
 interface OpenOpts {
@@ -149,27 +166,23 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
 
   // ---- made teams (local first, then the server)
   const [made, setMade] = useState<Record<string, MadeTeam | null>>({});
-  const asked = useRef(new Set<string>());
   useEffect(() => {
+    const next: Record<string, MadeTeam | null> = {};
     for (const t of teams) {
-      if (asked.current.has(t.id)) continue;
-      asked.current.add(t.id);
       const local = recall(t.id);
-      if (local) setMade((m) => ({ ...m, [t.id]: local }));
-      teamsApi.templateInfo(t.id).then(
-        (i) => {
-          const m = fromInfo(i, t.name);
-          remember(t.id, m);
-          setMade((x) => ({ ...x, [t.id]: m }));
-        },
-        (e) => {
-          if (e instanceof TeamsError && e.status === 404) {
-            forget(t.id);
-            setMade((x) => ({ ...x, [t.id]: null }));
-          }
-        },
-      );
+      const row = madeFromRow(t, local);
+      if (row === undefined) next[t.id] = local;
+      else {
+        next[t.id] = row;
+        if (row) remember(t.id, row);
+        else if (local) forget(t.id);
+      }
     }
+    setMade((x) => {
+      // A team made a moment ago stays until the roster reload brings its row.
+      for (const [id, m] of Object.entries(x)) if (m && !(id in next)) next[id] = m;
+      return next;
+    });
   }, [teams]);
   const madeOf = useCallback((id: string) => made[id] ?? null, [made]);
 
@@ -192,6 +205,11 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
         setToast((t) => ({ text: `Removed @${handle}.`, n: (t?.n ?? 0) + 1 }));
         onChanged();
       } catch (e) {
+        if (undoWindowOver(e)) {
+          setConfirm(null);
+          setToast((t) => ({ text: `@${handle} is more than 24 hours old, so it can’t be undone. Remove its bots in Manage team.`, n: (t?.n ?? 0) + 1 }));
+          return;
+        }
         const msg = e instanceof Error && e.message ? e.message : 'Something went wrong.';
         if (confirm) setUndoError(`Couldn’t undo the team: ${msg}`);
         else setToast((t) => ({ text: `Couldn’t undo @${handle}: ${msg}`, n: (t?.n ?? 0) + 1 }));
@@ -207,7 +225,7 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
       const m = made[team.id] ?? recall(team.id);
       let info: TeamTemplateInfo | null = null;
       try {
-        info = await teamsApi.templateInfo(team.id);
+        info = await teamsApi.templateInfo(team.id, space);
       } catch {
         info = null;
       }
@@ -218,7 +236,7 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
       const actionId = info?.action_id ?? m?.actionId;
       if (!actionId) return;
       // A6: confirm only when the chat has messages (or a bot is also in another team).
-      if (info && (info.chat_messages > 0 || info.also_in.length > 0)) {
+      if (info && (info.chat_messages > 0 || info.other_teams.length > 0 || info.edited_skills.length > 0)) {
         setUndoError(null);
         setConfirm({ team, info, label: labelOf(info.template_id) });
         return;
@@ -226,13 +244,12 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
       void runUndo(team, actionId, info?.removes.handle || m?.handle || team.name);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [made, runUndo, templates],
+    [made, runUndo, templates, space],
   );
 
   const onCreated = (r: CreatedTeam, _t: TeamTemplate, handle: string) => {
     const m: MadeTeam = { templateId: r.template_id, handle, createdAt: Date.now(), actionId: r.action_id, undoUntil: Date.parse(r.undo_until) || Date.now() + 86_400_000 };
     remember(r.team.id, m);
-    asked.current.add(r.team.id);
     setMade((x) => ({ ...x, [r.team.id]: m }));
     sheet?.opts.onDone?.();
     setSheet(null);
@@ -297,7 +314,8 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
           skills={confirm.info.removes.skills}
           routine={confirm.info.removes.routines > 0}
           messages={confirm.info.chat_messages}
-          alsoIn={confirm.info.also_in}
+          alsoIn={confirm.info.other_teams}
+          editedSkills={confirm.info.edited_skills}
           busy={busy}
           error={undoError}
           onKeep={() => setConfirm(null)}

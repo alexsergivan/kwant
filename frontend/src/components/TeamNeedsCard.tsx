@@ -288,11 +288,13 @@ export const UndoTeamConfirm: React.FC<{
   messages: number;
   /** "Drafter is also in @support; it will leave that team." */
   alsoIn?: { bot: string; team: string }[];
+  /** Starter skills the person edited; Undo removes them too (Q-T2). */
+  editedSkills?: string[];
   busy?: boolean;
   error?: string | null;
   onKeep: () => void;
   onUndo: () => void;
-}> = ({ label, handle, botNames, skills, routine, messages, alsoIn = [], busy, error, onKeep, onUndo }) => {
+}> = ({ label, handle, botNames, skills, routine, messages, alsoIn = [], editedSkills = [], busy, error, onKeep, onUndo }) => {
   const phone = useMedia(PHONE_QUERY);
   const ref = useRef<HTMLDivElement>(null);
   const keep = useRef<HTMLButtonElement>(null);
@@ -300,7 +302,7 @@ export const UndoTeamConfirm: React.FC<{
   useEffect(() => keep.current?.focus(), []);
   const b = phone ? 'h-11 flex-1' : 'h-9';
   return (
-    <div className="fixed inset-0 z-[75] grid place-items-center p-4 bg-[rgb(6_3_20/.62)]" onClick={() => !busy && onKeep()}>
+    <div className="fixed inset-0 z-[75] grid grid-cols-[minmax(0,1fr)] place-items-center p-4 bg-[rgb(6_3_20/.62)]" onClick={() => !busy && onKeep()}>
       <div
         ref={ref}
         tabIndex={-1}
@@ -310,7 +312,7 @@ export const UndoTeamConfirm: React.FC<{
         aria-describedby="undo-team-b"
         onClick={(e) => e.stopPropagation()}
         data-undo-confirm
-        className="w-[420px] max-w-full p-5 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl outline-none animate-[t-rise_180ms_ease-out] motion-reduce:animate-none"
+        className="w-full max-w-[420px] p-5 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl outline-none animate-[t-rise_180ms_ease-out] motion-reduce:animate-none"
       >
         <h3 id="undo-team-h" className="text-[17px] leading-6 font-semibold text-zinc-50">
           Undo the {label} team?
@@ -330,7 +332,12 @@ export const UndoTeamConfirm: React.FC<{
               {a.bot} is also in @{a.team}; it will leave that team.
             </p>
           ))}
-          <p className="mt-2">The chat has {plural(messages, 'message')}, so it’s archived, not deleted. Find it under Archived chats.</p>
+          {editedSkills.length > 0 && (
+            <p className="mt-2">
+              You edited {editedSkills.join(', ')}. {editedSkills.length === 1 ? 'It’s' : 'They’re'} removed too.
+            </p>
+          )}
+          {messages > 0 && <p className="mt-2">The chat has {plural(messages, 'message')}, so it’s archived, not deleted. Find it under Archived chats.</p>}
           {error && (
             <p role="alert" className="mt-2 text-rose-300">
               {error}

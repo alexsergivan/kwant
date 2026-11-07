@@ -46,7 +46,7 @@ const m = await loadBundled(`
   export { TeamPreviewSheet } from './src/components/TeamPreviewSheet';
   export { TeamNeedsCard, TeamCreatedToast, UndoTeamConfirm } from './src/components/TeamNeedsCard';
   export { TemplateWelcome, TemplateTiles, TemplateSidebarBox } from './src/components/TeamTemplatePicks';
-  export { ReadyTeamsProvider } from './src/components/ReadyTeams';
+  export { ReadyTeamsProvider, madeFromRow } from './src/components/ReadyTeams';
   export { ReadyTeamsTiles, SuggestMembersButton, ReadyTeamsSidebarBox } from './src/components/ReadyTeamsEntry';
 `);
 const { React, createRoot, fx } = m;
@@ -105,10 +105,17 @@ const sheet = (mode, extra = {}) => {
 // ---------------------------------------------------------------------------------------------------
 // Pure rules and wire shapes
 
-test('wire → internal: slot becomes key; reason_parts and string reasons both become parts; the stack prefix goes', () => {
+test('wire → internal: bots carry a key (§0.1); reason_parts and string reasons both become parts; the stack prefix goes', () => {
   const t = m.normTemplate(m.TEMPLATES_WIRE[0]);
-  assert.equal(t.bots[0].key, 'InboxManager');
-  assert.equal('slot' in t.bots[0], false);
+  assert.deepEqual(t.bots.map((b) => b.key), ['inboxmanager', 'drafter', 'researcher']);
+  const keys = m.TEMPLATES_WIRE.flatMap((x) => x.bots.map((b) => b.key));
+  assert.deepEqual(keys, ['inboxmanager', 'drafter', 'researcher', 'saleslead', 'prospector', 'outreachwriter', 'techlead', 'frontend', 'backend', 'qa']);
+  // §0.2 and §0.9: skill owners and the routine's bot are keys, not names.
+  assert.equal(t.skills[0].owner, 'inboxmanager');
+  assert.equal(t.skills[0].owner_name, 'InboxManager');
+  assert.equal(t.routine.bot, 'inboxmanager');
+  assert.equal(m.botNameByKey(t, { drafter: 'ReplyWriter' }, 'drafter'), 'ReplyWriter');
+  assert.equal(m.botNameByKey(t, {}, 'inboxmanager'), 'InboxManager');
   const s = fx.SHOP_SUGGESTION;
   assert.equal(s.stack_line, 'Rust (axum), React 18 + TypeScript (Vite), Postgres, Docker');
   assert.deepEqual(s.bots[0].reason[1], { path: 'server/Cargo.toml' });
@@ -117,14 +124,31 @@ test('wire → internal: slot becomes key; reason_parts and string reasons both 
   assert.equal(fx.UNKNOWN_SUGGESTION.fallback, true);
 });
 
-test('createBody sends only the documented fields (the server answers unknown_field otherwise)', () => {
-  assert.deepEqual(m.createBody({ kind: 'template', space: 's', template_id: 'inbox', handle: 'inbox', names: {} }), { template_id: 'inbox', handle: 'inbox', names: {} });
-  assert.deepEqual(m.createBody({ kind: 'suggestion', space: 's', suggestion_id: 'sug_1', rows: { qa: { on: false } } }), { suggestion_id: 'sug_1', edits: { rows: { qa: { on: false } } } });
-  assert.deepEqual(m.createBody({ kind: 'suggestion', space: 's', suggestion_id: 'sug_1', handle: 'shop', rows: {} }), { suggestion_id: 'sug_1', edits: { rows: {}, handle: 'shop' } });
+test('createBody sends only the documented fields, with idempotency_key in the body (§0.3)', () => {
+  const k = 'k1';
+  assert.deepEqual(m.createBody({ kind: 'template', space: 's', template_id: 'inbox', handle: 'inbox', names: {} }, k), { template_id: 'inbox', handle: 'inbox', names: {}, idempotency_key: k });
+  assert.deepEqual(m.createBody({ kind: 'suggestion', space: 's', suggestion_id: 'sug_1', rows: { qa: { on: false } } }, k), { suggestion_id: 'sug_1', edits: { rows: { qa: { on: false } } }, idempotency_key: k });
+  assert.deepEqual(m.createBody({ kind: 'suggestion', space: 's', suggestion_id: 'sug_1', handle: 'shop', rows: {} }, k), { suggestion_id: 'sug_1', edits: { rows: {}, handle: 'shop' }, idempotency_key: k });
+  // A18: team_id at the top level, and never a handle with it.
+  assert.deepEqual(m.createBody({ kind: 'suggestion', space: 's', suggestion_id: 'sug_1', team_id: 'team_1', handle: 'x', rows: {} }, k), { suggestion_id: 'sug_1', edits: { rows: {} }, idempotency_key: k, team_id: 'team_1' });
+});
+
+test('§0.6 existing object flattens onto the row; §0.7 partial "file" has its own copy; §0.5 only 424 is can’t read', () => {
+  const fe = fx.SHOP_SUGGESTION.bots.find((b) => b.key === 'frontend');
+  assert.equal(fe.existing_kwant_id, 'kw_frontend');
+  assert.equal(fe.existing_name, 'Frontend');
+  assert.equal(fe.existing_avatar, 'tech_lead');
+  assert.equal('existing' in fe, false);
+  assert.equal(fx.SHOP_SUGGESTION.bots[0].existing_kwant_id, null);
+  assert.equal(m.partialHead('file'), 'One manifest was too big to read.');
+  assert.match(m.partialBody('file'), /256 KB/);
+  assert.equal(m.cantRead(new m.TeamsError('x', 424, 'cant_read')), true);
+  assert.equal(m.cantRead(new m.TeamsError('only the person can do this', 403)), false);
+  assert.equal(m.cantRead(new m.TeamsError('x', 502, 'read_failed')), false);
 });
 
 test('fieldKey reads the row out of a 409 field', () => {
-  assert.equal(m.fieldKey('names.Drafter'), 'Drafter');
+  assert.equal(m.fieldKey('names.drafter'), 'drafter');
   assert.equal(m.fieldKey('edits.rows.qa.name'), 'qa');
   assert.equal(m.fieldKey('handle'), null);
   assert.equal(m.fieldKey(null), null);
@@ -137,9 +161,9 @@ test('names, handles and clashes (T9)', () => {
   assert.ok(m.nameError('Drafter', ['drafter']));
   assert.equal(m.nameError('Drafter', ['Researcher']), null);
   const c = m.resolveClashes(m.TEMPLATES_FIXTURE[0].bots, 'inbox', ['Drafter'], ['inbox']);
-  assert.equal(c.names.Drafter, 'Drafter2');
+  assert.equal(c.names.drafter, 'Drafter2');
   assert.equal(c.handle, 'inbox2');
-  assert.ok(c.notes.Drafter && c.handleNote);
+  assert.ok(c.notes.drafter && c.handleNote);
 });
 
 test('D rules: initial ticks, the existing bot, size limits, carrying edits after a 410', () => {
@@ -178,7 +202,7 @@ test('needs: each opener reads its own state; open count adds "Add an account" w
 // ---------------------------------------------------------------------------------------------------
 // T: the template preview
 
-test('T: Create sends template_id, handle and only changed names, with an Idempotency-Key', async () => {
+test('T: Create sends template_id, handle and only changed names by key, with idempotency_key in the body', async () => {
   const calls = use({ create: 'ok' });
   const { el, out } = sheet({ kind: 'template', templateId: 'inbox' });
   const v = await mount(el);
@@ -193,8 +217,10 @@ test('T: Create sends template_id, handle and only changed names, with an Idempo
   await click(primary(root));
   const [c] = creates(calls);
   assert.equal(c.url, '/api/teams/from-template?space=spc_demo');
-  assert.deepEqual(c.body, { template_id: 'inbox', handle: 'inbox', names: { Drafter: 'ReplyWriter' } });
-  assert.ok(c.headers['Idempotency-Key']);
+  const { idempotency_key, ...rest } = c.body;
+  assert.deepEqual(rest, { template_id: 'inbox', handle: 'inbox', names: { drafter: 'ReplyWriter' } });
+  assert.match(idempotency_key, /^[0-9a-f-]{36}$|^k/);
+  assert.equal(c.headers, undefined);
   assert.equal(out.created.handle, 'inbox');
   assert.equal(out.created.r.channel_id, 'ch_team_new');
   v.unmount();
@@ -210,7 +236,7 @@ test('T: a name already in the space is renamed before Create and says so', asyn
   v.unmount();
 });
 
-test('T: a 409 name_taken takes the server suggestion, names the row and asks to create again with a new key', async () => {
+test('T: a 409 clash takes the server suggestion, names the row, and the retry keeps the sheet’s key', async () => {
   const calls = use({ create: 'clash' });
   const { el, out } = sheet({ kind: 'template', templateId: 'inbox' });
   const v = await mount(el);
@@ -221,13 +247,13 @@ test('T: a 409 name_taken takes the server suggestion, names the row and asks to
   m.setTeamsTransport(fx.fixtureTransport({ create: 'ok' }, calls));
   await click(primary(root));
   const [a, b] = creates(calls);
-  assert.equal(b.body.names.Drafter, 'Drafter3');
-  assert.notEqual(a.headers['Idempotency-Key'], b.headers['Idempotency-Key']);
+  assert.equal(b.body.names.drafter, 'Drafter3');
+  assert.equal(a.body.idempotency_key, b.body.idempotency_key);
   assert.ok(out.created);
   v.unmount();
 });
 
-test('T: a 409 handle_taken moves the handle and keeps the sheet', async () => {
+test('T: a 409 clash on the handle moves the handle and keeps the sheet', async () => {
   use({ create: 'clash-handle' });
   const { el } = sheet({ kind: 'template', templateId: 'inbox' });
   const v = await mount(el);
@@ -238,7 +264,7 @@ test('T: a 409 handle_taken moves the handle and keeps the sheet', async () => {
   v.unmount();
 });
 
-test('T: a failed create says nothing was created; Try again reuses the same Idempotency-Key', async () => {
+test('T: a failed create says nothing was created; Try again reuses the same idempotency_key', async () => {
   const calls = use({ create: 'fail' });
   const { el, out } = sheet({ kind: 'template', templateId: 'inbox' });
   const v = await mount(el);
@@ -248,8 +274,61 @@ test('T: a failed create says nothing was created; Try again reuses the same Ide
   m.setTeamsTransport(fx.fixtureTransport({ create: 'ok' }, calls));
   await click(primary(root));
   const [a, b] = creates(calls);
-  assert.equal(a.headers['Idempotency-Key'], b.headers['Idempotency-Key']);
+  assert.equal(a.body.idempotency_key, b.body.idempotency_key);
   assert.ok(out.created);
+  v.unmount();
+});
+
+test('T: a 409 with several clashes (§0.4) applies every one, not just the first', async () => {
+  const calls = use({ create: 'clash-many' });
+  const { el, out } = sheet({ kind: 'template', templateId: 'inbox' });
+  const v = await mount(el);
+  const root = document.querySelector('[data-team-sheet="inbox"]');
+  await click(primary(root));
+  assert.equal(out.created, null);
+  assert.equal(root.querySelector('[aria-label="Team handle"]').value, 'inbox3');
+  assert.match(root.textContent, /Drafter is taken in this space, so this one is Drafter3\./);
+  assert.match(root.textContent, /Researcher is taken in this space, so this one is Researcher2\./);
+  assert.match(root.textContent, /3 names were taken/);
+  m.setTeamsTransport(fx.fixtureTransport({ create: 'ok' }, calls));
+  await click(primary(root));
+  const b = creates(calls)[1].body;
+  assert.equal(b.handle, 'inbox3');
+  assert.deepEqual(b.names, { drafter: 'Drafter3', researcher: 'Researcher2' });
+  v.unmount();
+});
+
+test('T: the server preview (§0.10) sets the free names before Create; a 404 keeps the client’s guess', async () => {
+  const preview = { template_id: 'inbox', handle: 'inbox4', handle_wanted: 'inbox', names: { inboxmanager: 'InboxManager', drafter: 'Drafter5', researcher: 'Researcher' }, clashes: [] };
+  const calls = use({ create: 'ok', preview });
+  const { el } = sheet({ kind: 'template', templateId: 'inbox' });
+  const v = await mount(el);
+  const root = document.querySelector('[data-team-sheet="inbox"]');
+  assert.ok(calls.some((c) => c.url === '/api/team-templates/inbox/preview?space=spc_demo'));
+  assert.equal(root.querySelector('[aria-label="Team handle"]').value, 'inbox4');
+  assert.match(root.textContent, /Drafter is taken in this space, so this one is Drafter5\./);
+  await click(primary(root));
+  assert.deepEqual(creates(calls)[0].body.names, { drafter: 'Drafter5' });
+  v.unmount();
+
+  use({ create: 'ok' });
+  const w = await mount(sheet({ kind: 'template', templateId: 'inbox' }, { takenNames: ['Drafter'] }).el);
+  assert.match(document.querySelector('[data-team-sheet="inbox"]').textContent, /Drafter2/);
+  w.unmount();
+});
+
+test('T: skills and the routine show the owner by key, after a rename', async () => {
+  use({ create: 'ok' });
+  const v = await mount(sheet({ kind: 'template', templateId: 'inbox' }).el);
+  const root = document.querySelector('[data-team-sheet="inbox"]');
+  assert.match(root.textContent, /InboxManager · on · Turns new mail/);
+  assert.match(root.textContent, /Weekdays at 8:00 · InboxManager\./);
+  await click(root.querySelector('[aria-label="Rename Drafter"]'));
+  const input = root.querySelector('[aria-label^="Name for"]');
+  typeIn(input, 'ReplyWriter');
+  await settle();
+  await key(input, 'Enter');
+  assert.match(root.textContent, /ReplyWriter · on · Writes a reply/);
   v.unmount();
 });
 
@@ -318,7 +397,9 @@ test('D: Manage team sends team_id, no handle, and labels the button by new bots
   assert.match(root.textContent, /Suggested for @shop/);
   assert.match(primary(root).textContent, /Add 2 bots/);
   await click(primary(root));
-  assert.equal('handle' in creates(calls)[0].body.edits, false);
+  const body = creates(calls)[0].body;
+  assert.equal('handle' in body.edits, false);
+  assert.equal(body.team_id, 'team_shop');
   v.unmount();
 });
 
@@ -358,6 +439,36 @@ test('the sheet closes on Esc and from Close, and not while creating', async () 
 
 // ---------------------------------------------------------------------------------------------------
 // T5: the Needs card, the toast and Undo
+
+test('§0.8 team rows say which template made them; Undo info comes from template-undo (§0.10)', async () => {
+  const base = { id: 'team_1', name: 'inbox', created_at: '2026-11-07T10:00:00Z' };
+  assert.equal(m.madeFromRow(base, null), undefined, 'an older server: no fields, the local record decides');
+  assert.equal(m.madeFromRow({ ...base, created_from_template: null, template_action_id: null }, null), null);
+  const made = m.madeFromRow({ ...base, created_from_template: 'inbox', template_action_id: 'act_1' }, null);
+  assert.deepEqual(made, { templateId: 'inbox', handle: 'inbox', createdAt: Date.parse('2026-11-07T10:00:00Z'), actionId: 'act_1', undoUntil: Date.parse('2026-11-08T10:00:00Z') });
+  assert.equal(m.madeFromRow({ ...base, created_from_template: 'suggested', template_action_id: 'act_2' }, null).templateId, null);
+
+  const calls = [];
+  m.setTeamsTransport(async (url, method) => {
+    calls.push({ url, method });
+    return { status: 200, body: { template_id: 'inbox', action_id: 'act_1', created_at: '', undo_until: '', can_undo: true, blocked: [], removes: { bots: ['Drafter'], skills: 1, routines: 0, handle: 'inbox' }, chat_messages: 0, also_in: [{ bot: 'Drafter', team: 'support' }], edited_skills: ['Draft a reply'] } };
+  });
+  const info = await m.teamsApi.templateInfo('team_1', 'spc_demo');
+  assert.equal(calls[0].url, '/api/teams/team_1/template-undo?space=spc_demo');
+  assert.deepEqual(info.other_teams, [{ bot: 'Drafter', team: 'support' }]);
+  assert.equal(m.undoWindowOver(new m.TeamsError('x', 409, 'undo_window_over')), true);
+  assert.equal(m.undoWindowOver({ code: 'undo_window_over', status: 409 }), true);
+  assert.equal(m.undoWindowOver(new m.TeamsError('x', 409, 'bot_leads_elsewhere')), false);
+});
+
+test('the Undo confirm names edited skills and other teams, and skips the archive line for an empty chat', async () => {
+  const v = await mount(h(m.UndoTeamConfirm, { label: 'Inbox', handle: 'inbox', botNames: ['InboxManager', 'Drafter'], skills: 2, routine: true, messages: 0, alsoIn: [{ bot: 'Drafter', team: 'support' }], editedSkills: ['Draft a reply'], onKeep() {}, onUndo() {} }));
+  const d = document.querySelector('[data-undo-confirm]');
+  assert.match(d.textContent, /Drafter is also in @support; it will leave that team\./);
+  assert.match(d.textContent, /You edited Draft a reply\. It’s removed too\./);
+  assert.doesNotMatch(d.textContent, /archived/);
+  v.unmount();
+});
 
 test('T5: the Needs card lists what is open, opens each, and offers Undo for a day', async () => {
   const inbox = m.TEMPLATES_FIXTURE.find((t) => t.id === 'inbox');

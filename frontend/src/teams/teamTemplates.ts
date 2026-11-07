@@ -8,7 +8,8 @@ import { personFetch } from '../auth';
 // Types. The internal shapes the sheet uses; `Wire*` are api.md's, turned into these by the client.
 
 export interface TemplateBot {
-  /** api.md `slot`: the template's own name for the bot, the key in `names`. Coding has two `backend` bots. */
+  /** api.md §0.1 `key` (inboxmanager, drafter, …, techlead, frontend, backend, qa): the key in `names`.
+   * Never the preset (Coding has two `backend` bots) and never an index (the server refuses those). */
   key: string;
   preset: string;
   name: string;
@@ -29,7 +30,10 @@ export interface TemplateNeed {
 }
 
 export interface TemplateSkill {
+  /** api.md §0.2: the owning bot's `key`. */
   owner: string;
+  /** For display only; the sheet shows the person's rename when there is one. */
+  owner_name?: string;
   name: string;
   description: string;
   body: string;
@@ -38,8 +42,11 @@ export interface TemplateSkill {
 export interface TemplateRoutine {
   name: string;
   when: string;
+  /** api.md §0.9: the bot's `key`. */
   bot: string;
   enabled: false;
+  cron?: string;
+  prompt?: string;
 }
 
 export interface TeamTemplate {
@@ -57,7 +64,7 @@ export interface TeamTemplate {
   used_in_space?: boolean;
 }
 
-export type WireTemplate = Omit<TeamTemplate, 'bots'> & { bots: (Omit<TemplateBot, 'key'> & { slot: string })[] };
+export type WireTemplate = TeamTemplate;
 
 /** One part of a D reason: plain text, or a path shown as inline code. */
 export type ReasonPart = { text: string } | { path: string };
@@ -74,6 +81,17 @@ export interface SuggestedBot {
   /** D6: a bot in this space with the same preset or title; the row offers "Add {name} (already in this space)". */
   existing_kwant_id?: string | null;
   existing_name?: string | null;
+  existing_avatar?: string | null;
+  /** That bot already leads a team, so adding it here makes it a member, not this team's lead. */
+  existing_leads_team?: string | null;
+}
+
+/** api.md §0.6: the wire's `existing` object; the client flattens it onto the row. */
+export interface WireExisting {
+  kwant_id: string;
+  name: string;
+  avatar_sprite?: string | null;
+  leads_team?: string | null;
 }
 
 export interface Suggestion {
@@ -83,8 +101,8 @@ export interface Suggestion {
   bots: SuggestedBot[];
   also_possible: SuggestedBot[];
   read: { files: number; manifests: number; ms: number };
-  /** null, or which limit stopped the read (api.md §4). */
-  partial: null | 'paths' | 'bytes' | 'time';
+  /** null, or which limit stopped the read (api.md §4; "file": one manifest over 256 KiB was skipped, §0.7). */
+  partial: null | 'paths' | 'bytes' | 'time' | 'file';
   /** Without api.md's "This team's code: " lead-in; the sheet prints its own. */
   stack_line: string | null;
   /** Nothing kwant knows, so these are the Coding roster. */
@@ -93,7 +111,12 @@ export interface Suggestion {
   source: string;
 }
 
-type WireSuggested = Omit<SuggestedBot, 'reason' | 'owns'> & { reason_parts?: ReasonPart[]; reason?: string; owns?: string[] };
+type WireSuggested = Omit<SuggestedBot, 'reason' | 'owns' | 'existing_kwant_id' | 'existing_name' | 'existing_avatar' | 'existing_leads_team'> & {
+  reason_parts?: ReasonPart[];
+  reason?: string;
+  owns?: string[];
+  existing?: WireExisting | null;
+};
 export type WireSuggestion = Omit<Suggestion, 'bots' | 'also_possible' | 'source'> & { bots: WireSuggested[]; also_possible: WireSuggested[] };
 
 export interface CreatedTeam {
@@ -101,13 +124,17 @@ export interface CreatedTeam {
   channel_id: string;
   action_id: string;
   template_id: string | null;
-  bots: { slot: string; id: string; name: string; preset: string; lead: boolean; existing: boolean }[];
+  /** `key`: the template bot key, or the suggestion row key. */
+  bots: { key: string; id: string; name: string; preset: string; lead: boolean; existing: boolean }[];
   skills: { id: string; name: string; owner_id: string }[];
   routine: { id: string; name: string; enabled: boolean } | null;
   undo_until: string;
 }
 
-/** GET /api/teams/:id/template, read by the Undo confirm (api.md §6). */
+/** api.md §0.8: what a team row says about the template that made it. */
+export type CreatedFrom = 'inbox' | 'sales' | 'coding' | 'suggested' | null;
+
+/** GET /api/teams/:id/template-undo, read by the Undo confirm (api.md §0.10, §6). */
 export interface TeamTemplateInfo {
   template_id: string | null;
   action_id: string;
@@ -117,8 +144,27 @@ export interface TeamTemplateInfo {
   blocked: unknown[];
   removes: { bots: string[]; skills: number; routines: number; handle: string };
   chat_messages: number;
-  also_in: { bot: string; team: string }[];
+  /** Other teams a bot it made has joined since; it leaves them too. */
+  other_teams: { bot: string; team: string }[];
   edited_skills: string[];
+}
+type WireTemplateInfo = Omit<TeamTemplateInfo, 'other_teams'> & { other_teams?: TeamTemplateInfo['other_teams']; also_in?: TeamTemplateInfo['other_teams'] };
+
+/** GET /api/team-templates/:id/preview: the server's next free names for this space (api.md §0.10, §2). */
+export interface TemplatePreview {
+  template_id: string;
+  handle: string;
+  handle_wanted: string;
+  /** Keyed by bot key. */
+  names: Record<string, string>;
+  clashes: Clash[];
+}
+
+/** One clash: `field` is `handle`, `names.<key>` or `edits.rows.<key>.name`. */
+export interface Clash {
+  field: string;
+  wanted?: string;
+  suggestion: string;
 }
 
 /** One D row as sent (api.md §3b). Only these fields: anything else is a 400. */
@@ -131,7 +177,8 @@ export interface RowSend {
 
 export type CreateRequest =
   | { kind: 'template'; space: string; template_id: string; handle: string; names: Record<string, string> }
-  | { kind: 'suggestion'; space: string; suggestion_id: string; handle?: string; rows: Record<string, RowSend> };
+  /** `team_id` set: A18, add the ticked bots to that existing team (Manage team). */
+  | { kind: 'suggestion'; space: string; suggestion_id: string; handle?: string; team_id?: string; rows: Record<string, RowSend> };
 
 export type SuggestRequest = { space: string } & ({ workspace_path: string } | { repo_url: string } | { team_id: string });
 
@@ -145,12 +192,15 @@ export class TeamsError extends Error {
     public key: string | null = null,
     public suggestion: string | null = null,
     public extra: Record<string, unknown> = {},
+    /** api.md §0.4: every clash in a 409 `clash`; the top-level field and suggestion are the first. */
+    public clashes: Clash[] = [],
   ) {
     super(message);
   }
 }
 
-/** `names.Drafter` → Drafter, `edits.rows.qa.name` → qa, `handle` → null. */
+/** `names.drafter` → drafter, `edits.rows.qa.name` → qa, `handle` → null. */
+
 export function fieldKey(field: string | null): string | null {
   if (!field) return null;
   const m = /^names\.(.+)$/.exec(field) ?? /^edits\.rows\.([^.]+)\./.exec(field);
@@ -190,23 +240,33 @@ async function call<T>(url: string, method = 'GET', body?: unknown, headers?: Re
   const b = (r.body && typeof r.body === 'object' ? r.body : {}) as Record<string, unknown>;
   const s = (k: string) => (typeof b[k] === 'string' ? (b[k] as string) : null);
   const field = s('field');
-  throw new TeamsError(s('error') ?? `Something went wrong (HTTP ${r.status}).`, r.status, s('code'), field, fieldKey(field), s('suggestion'), b);
+  const clashes = Array.isArray(b.clashes)
+    ? (b.clashes as unknown[]).filter((c): c is Clash => !!c && typeof (c as Clash).field === 'string' && typeof (c as Clash).suggestion === 'string')
+    : field && s('suggestion')
+      ? [{ field, suggestion: s('suggestion') as string }]
+      : [];
+  throw new TeamsError(s('error') ?? `Something went wrong (HTTP ${r.status}).`, r.status, s('code'), field, fieldKey(field), s('suggestion'), b, clashes);
 }
 
 const enc = encodeURIComponent;
 
-export const normTemplate = (t: WireTemplate): TeamTemplate => ({
-  ...t,
-  bots: t.bots.map(({ slot, ...b }) => ({ ...b, key: slot })),
-});
+export const normTemplate = (t: WireTemplate): TeamTemplate => t;
+
+/** The display name of a template bot by key, after the person's renames. */
+export const botNameByKey = (t: Pick<TeamTemplate, 'bots'>, names: Record<string, string>, key: string, fallback?: string): string =>
+  names[key] ?? t.bots.find((b) => b.key === key)?.name ?? fallback ?? key;
 
 const STACK_LEAD = /^This team[’']s code:\s*/i;
 
 export function normSuggestion(s: WireSuggestion, source: string): Suggestion {
-  const row = ({ reason_parts, reason, owns, ...b }: WireSuggested): SuggestedBot => ({
+  const row = ({ reason_parts, reason, owns, existing, ...b }: WireSuggested): SuggestedBot => ({
     ...b,
     owns: owns ?? [],
     reason: reason_parts ?? (reason ? [{ text: reason }] : []),
+    existing_kwant_id: existing?.kwant_id ?? null,
+    existing_name: existing?.name ?? null,
+    existing_avatar: existing?.avatar_sprite ?? null,
+    existing_leads_team: existing?.leads_team ?? null,
   });
   return {
     ...s,
@@ -218,13 +278,18 @@ export function normSuggestion(s: WireSuggestion, source: string): Suggestion {
   };
 }
 
-/** api.md §3 bodies: exactly the documented fields, so the strict server never answers unknown_field. */
-export function createBody(r: CreateRequest): Record<string, unknown> {
-  if (r.kind === 'template') return { template_id: r.template_id, handle: r.handle, names: r.names };
+/** api.md §3 bodies: exactly the documented fields, so the strict server never answers unknown_field.
+ * `idempotency_key` is required (§0.3): one UUID per sheet open. */
+export function createBody(r: CreateRequest, idempotencyKey: string): Record<string, unknown> {
+  if (r.kind === 'template') return { template_id: r.template_id, handle: r.handle, names: r.names, idempotency_key: idempotencyKey };
   const edits: Record<string, unknown> = { rows: r.rows };
-  if (r.handle) edits.handle = r.handle;
-  return { suggestion_id: r.suggestion_id, edits };
+  if (r.handle && !r.team_id) edits.handle = r.handle;
+  const out: Record<string, unknown> = { suggestion_id: r.suggestion_id, edits, idempotency_key: idempotencyKey };
+  if (r.team_id) out.team_id = r.team_id;
+  return out;
 }
+
+const normInfo = ({ other_teams, also_in, ...i }: WireTemplateInfo): TeamTemplateInfo => ({ ...i, other_teams: other_teams ?? also_in ?? [], edited_skills: i.edited_skills ?? [] });
 
 const newKey = (): string => {
   try {
@@ -237,12 +302,16 @@ const newKey = (): string => {
 export const teamsApi = {
   templates: (space: string) =>
     call<{ templates: WireTemplate[] }>(`/api/team-templates?space=${enc(space)}`).then((r) => (r.templates ?? []).map(normTemplate)),
-  /** `idempotencyKey`: one per Create press, reused on a retry of the same press (api.md §3). */
-  create: (r: CreateRequest, idempotencyKey: string = newKey()) =>
-    call<CreatedTeam>(`/api/teams/from-template?space=${enc(r.space)}`, 'POST', createBody(r), { 'Idempotency-Key': idempotencyKey }),
+  /** `idempotencyKey`: one per sheet open (api.md §0.3); a retry of the same sheet reuses it. */
+  create: (r: CreateRequest, idempotencyKey: string) =>
+    call<CreatedTeam>(`/api/teams/from-template?space=${enc(r.space)}`, 'POST', createBody(r, idempotencyKey)),
+  /** Optional: the server's free names (api.md §0.10). Callers fall back to their own guess on any error. */
+  preview: (space: string, templateId: string) =>
+    call<TemplatePreview>(`/api/team-templates/${enc(templateId)}/preview?space=${enc(space)}`),
   suggest: ({ space, ...src }: SuggestRequest, source: string) =>
     call<WireSuggestion>(`/api/teams/suggest?space=${enc(space)}`, 'POST', src).then((s) => normSuggestion(s, source)),
-  templateInfo: (teamId: string) => call<TeamTemplateInfo>(`/api/teams/${enc(teamId)}/template`),
+  templateInfo: (teamId: string, space: string) =>
+    call<WireTemplateInfo>(`/api/teams/${enc(teamId)}/template-undo?space=${enc(space)}`).then(normInfo),
 };
 export { newKey as newIdempotencyKey };
 
@@ -468,8 +537,24 @@ export function partialHead(p: Suggestion['partial']): string | null {
   if (p === 'paths') return 'Read the first 20,000 files.';
   if (p === 'time') return 'Stopped at 10 seconds.';
   if (p === 'bytes') return 'Some manifests were too big to read.';
+  if (p === 'file') return 'One manifest was too big to read.';
   return null;
 }
+
+/** The partial banner's second line. */
+export function partialBody(p: Suggestion['partial']): string | null {
+  if (p === 'paths' || p === 'time') return 'This project is bigger than that, so the suggestions come from those files only.';
+  if (p === 'bytes') return 'The suggestions come from the manifests it could read.';
+  if (p === 'file') return 'It was over 256 KB, so the suggestions come from the other manifests.';
+  return null;
+}
+
+/** Undo refused because the 24 hours are up (api.md §0: 409 `undo_window_over`). */
+export const undoWindowOver = (e: unknown) =>
+  e instanceof TeamsError ? e.code === 'undo_window_over' || e.code === 'undo_expired' : !!e && typeof e === 'object' && ['undo_window_over', 'undo_expired'].includes((e as { code?: string }).code ?? '');
+
+/** The Can't read block (api.md §0.5): 424 only. A 403 means the caller isn't the person, never "can't read". */
+export const cantRead = (e: unknown) => e instanceof TeamsError && (e.status === 424 || e.code === 'cant_read') && e.status !== 403;
 
 export const readLine = (r: Suggestion['read'], partial: Suggestion['partial']) =>
   `${partial === 'paths' ? 'Read the first 20,000 file names' : `Read ${plural(r.files, 'file name')}`} and ${plural(r.manifests, 'manifest')} in ${(r.ms / 1000).toFixed(1)} s. No file contents.`;
