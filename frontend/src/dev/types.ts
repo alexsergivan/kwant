@@ -72,7 +72,8 @@ export interface LandedCard extends CardBase {
   meta: string | null;
 }
 
-export type IntentState = 'ok' | 'missing' | 'extra';
+/** ok/missing/extra: against a task or the PR text. met/not_met/unclear: "Matches the ticket" (J12), one row per done-when line of a Jira brief. */
+export type IntentState = 'ok' | 'missing' | 'extra' | 'met' | 'not_met' | 'unclear';
 export type TamperKind = 'deleted_assert' | 'skip' | 'loosened' | 'snapshot' | 'coverage_drop';
 export type ScanState = 'pass' | 'hit' | 'not_run';
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
@@ -86,7 +87,8 @@ export interface DevFinding {
   line: number | null;
   detail: string | null;
   fix: string | null;
-  source: 'review' | 'gitleaks' | 'packages' | 'tamper';
+  /** `ticket`: a done-when line of the ticket's brief that isn't met (id `k{n}`); shown under Matches the ticket. */
+  source: 'review' | 'gitleaks' | 'packages' | 'tamper' | 'ticket';
   state: 'open' | 'sent' | 'dismissed';
   sent_at: string | null;
   /** §3.6 item 4. */
@@ -119,7 +121,15 @@ export interface ReviewCard extends CardBase {
   note: string | null;
   same_engine: boolean;
   risk: DevRisk | null;
-  intent: { source: string; asked: string; rows: { state: IntentState; text: string }[]; none: boolean } | null;
+  /** `source` is task, pr or ticket; a ticket check also has the key and url, and its rows the evidence. */
+  intent: {
+    source: string;
+    asked: string;
+    rows: { state: IntentState; text: string; evidence_text?: string; evidence_paths?: string[] }[];
+    none: boolean;
+    key?: string;
+    url?: string;
+  } | null;
   /** `unread`: files GitHub sent no diff for, so nothing in them was checked (round 3, V-T5). */
   tamper: { flags: TamperFlag[]; unread: string[] };
   security: {
@@ -370,7 +380,7 @@ function finding(v: unknown): DevFinding | null {
     line: num(v.line),
     detail: str(v.detail, 1200),
     fix: str(v.fix, 600),
-    source: oneOf(v.source, ['review', 'gitleaks', 'packages', 'tamper'] as const, 'review'),
+    source: oneOf(v.source, ['review', 'gitleaks', 'packages', 'tamper', 'ticket'] as const, 'review'),
     state: oneOf(v.state, ['open', 'sent', 'dismissed'] as const, 'open'),
     sent_at: str(v.sent_at, 64),
     sent_to: str(v.sent_to, 80),
@@ -414,9 +424,17 @@ export function parseReview(raw: unknown): ReviewCard | null {
           source: str(intent.source, 40) ?? 'pr',
           asked: str(intent.asked, 600) ?? '',
           none: intent.none === true,
+          key: str(intent.key, 40) ?? undefined,
+          url: str(intent.url, 400) ?? undefined,
           rows: arr(intent.rows)
             .filter(isObj)
-            .map((r) => ({ state: oneOf(r.state, ['ok', 'missing', 'extra'] as const, 'ok'), text: str(r.text, 300) ?? '' }))
+            .map((r) => ({
+              // An unknown state is never shown as done
+              state: oneOf(r.state, ['ok', 'missing', 'extra', 'met', 'not_met', 'unclear'] as const, 'unclear'),
+              text: str(r.text, 300) ?? '',
+              evidence_text: str(r.evidence_text, 300) ?? '',
+              evidence_paths: arr(r.evidence_paths).map((p) => str(p, 400)).filter((p): p is string => !!p).slice(0, 5),
+            }))
             .filter((r) => r.text),
         }
       : null,

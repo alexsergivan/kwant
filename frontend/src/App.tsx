@@ -136,6 +136,7 @@ import { devApi, devStore } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
+import { DEV_TICKET_EVENT, DEV_TICKET_PROGRESS_EVENT } from './components/dev/TicketsTab';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
@@ -1162,6 +1163,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const d = event.data ?? {};
             if (typeof d.space_id === 'string' && typeof d.id === 'string') {
               window.dispatchEvent(new CustomEvent<DevCardEvent>(DEV_CARD_EVENT, { detail: { space_id: d.space_id, id: d.id, kind: String(d.kind ?? ''), status: String(d.status ?? '') } }));
+            }
+            break;
+          }
+          // 0.7.6 Work from Jira: the Tickets tab refetches on `dev_ticket`; a reading card folds in `dev_ticket_progress`.
+          case 'dev_ticket':
+          case 'dev_ticket_progress': {
+            const d = event.data ?? {};
+            if (typeof d.space_id === 'string' && typeof d.key === 'string') {
+              window.dispatchEvent(new CustomEvent(event.type === 'dev_ticket' ? DEV_TICKET_EVENT : DEV_TICKET_PROGRESS_EVENT, { detail: d }));
             }
             break;
           }

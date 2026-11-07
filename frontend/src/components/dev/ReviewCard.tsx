@@ -43,6 +43,7 @@ import {
 } from '../../dev/logic';
 import type { LedState, PostState } from '../../dev/logic';
 import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
+import { TicketMatches, isTicketIntent } from './TicketMatches';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
 const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
@@ -516,7 +517,11 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const named = cardForge(card, forge);
   const branchCard = card.no_forge || card.pr === null;
   const tile = card.draft ? 'bg-zinc-500/15 text-zinc-300' : 'bg-teal-400/15 text-teal-300';
-  const summary = findingsSummary(card.findings);
+  // 0.7.6 J12: a PR that maps to a ticket's brief shows "Matches the ticket" instead of the intent section,
+  // and its `k{n}` findings live on those rows (Fix it there), not twice in Findings.
+  const ticketIntent = isTicketIntent(card.intent) ? card.intent : null;
+  const listed = ticketIntent ? card.findings.filter((f) => f.source !== 'ticket') : card.findings;
+  const summary = findingsSummary(listed);
   const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
   const stamp = lgtm(card) && card.reviewer ? card.reviewer.name : null;
   const repoChip = repoLabel ? repoLabel(card.repo, card.repo_name) : null;
@@ -638,8 +643,9 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
         </div>
       )}
 
-      {/* 3. Intent */}
-      {card.intent && (
+      {/* 3. Intent, or Matches the ticket (0.7.6) */}
+      {ticketIntent && <TicketMatches intent={ticketIntent} findings={card.findings} lead={author?.name ?? null} busy={busy !== null} act={act} />}
+      {card.intent && !ticketIntent && (
         <section className="mt-4" aria-label="Did it do what was asked?">
           <SectionHead icon={<Target size={12} aria-hidden="true" />}>Did it do what was asked?</SectionHead>
           {card.intent.none ? (
@@ -719,11 +725,11 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       {/* 6. Findings */}
       <section className="mt-4" aria-label="Findings">
         <SectionHead extra={summary ? <span className="normal-case tracking-normal text-zinc-500">· {summary}</span> : null}>Findings</SectionHead>
-        {card.findings.length === 0 ? (
+        {listed.length === 0 ? (
           <p className="text-meta text-zinc-400">{card.status === 'ready' ? 'No findings.' : 'No findings yet.'}</p>
         ) : (
           <ul role="list" className="space-y-1.5">
-            {card.findings.map((f) => (
+            {listed.map((f) => (
               <FindingRow key={f.id} f={f} author={author?.name ?? null} now={now} busy={busy !== null} act={act} />
             ))}
           </ul>

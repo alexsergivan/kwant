@@ -9,6 +9,7 @@ import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPa
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
 import { DevStatusLine } from './DevStatusLine';
+import { TicketsPanel, useTickets } from './dev/TicketsTab';
 import { openGitHubConnect } from './GitHubConnect';
 
 /** App re-sends the `dev_card` SSE as this window event: detail `{space_id, id, kind, status}`. */
@@ -178,7 +179,7 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
 // ---------------------------------------------------------------------------
 // The page
 
-type Tab = 'landed' | 'reviews';
+type Tab = 'landed' | 'reviews' | 'tickets';
 
 export interface DevDeskViewProps {
   spaceId: string;
@@ -207,6 +208,12 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   // 0.7.3 (any-git): a repo read with plain git has no forge: no CI tile, no Post button, no "Open on" link.
   const gitOnly = useCallback((key: string | null) => gitOnlyRepo(dev, key), [dev]);
   const [tab, setTab] = useState<Tab>(initialTab);
+  // 0.7.6: the Tickets tab exists only while Jira is connected; without it the desk is exactly 0.7.5's.
+  const jira = useTickets(spaceId, !!dev?.on);
+  const ticketsOn = !!jira.site;
+  useEffect(() => {
+    if (tab === 'tickets' && !ticketsOn && !jira.loading) setTab('landed');
+  }, [tab, ticketsOn, jira.loading]);
   // Flow F6: opening the desk clears the row badge on every device. On a deep link to /s/<space>/dev
   // the store is still empty here, so the first state to arrive (fetched before the server saw the
   // desk) is cleared too, and again once the server has it.
@@ -361,9 +368,10 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   const polling = firstPolling(dev, landedCards.length);
   const statusShown = statusLine(dev) !== null;
 
-  const tabs: Array<{ key: Tab; label: string; count: number }> = [
+  const tabs: Array<{ key: Tab; label: string; count: number; tone?: 'needs' }> = [
     { key: 'landed', label: 'What landed', count: unseen },
     { key: 'reviews', label: 'Reviews', count: open },
+    ...(ticketsOn ? [{ key: 'tickets' as Tab, label: 'Tickets', count: jira.needs, tone: 'needs' as const }] : []),
   ];
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
     const n = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : null;
@@ -447,7 +455,12 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                   className={`kw-dv-tab ${focusRing}`}
                 >
                   {t.label}
-                  {t.count > 0 && <span className="kw-dv-tab-count">{t.count}</span>}
+                  {t.count > 0 && (
+                    <span className="kw-dv-tab-count" data-tone={t.tone}>
+                      {t.count}
+                      {t.tone === 'needs' && <span className="sr-only"> {t.count === 1 ? 'needs you' : 'need you'}</span>}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -483,7 +496,9 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
           )}
 
           <div ref={panelRef} role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${tab}`} className="space-y-3">
-            {tab === 'landed' && polling ? (
+            {tab === 'tickets' && ticketsOn ? (
+              <TicketsPanel space={spaceId} data={jira} />
+            ) : tab === 'landed' && polling ? (
               <SkeletonCards />
             ) : first && desk.loading ? (
               // Flow copy §6 on the first visit; style-v2 §9 "Reading main" with 2 cards on later loads.
