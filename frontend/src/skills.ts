@@ -1,5 +1,6 @@
 // Skills: short written procedures an agent proposes and a person reviews (batch 2 / B).
 import { request } from './threads';
+import type { SkillShown } from './showOnce';
 
 export type SkillStatus = 'pending' | 'enabled' | 'disabled' | 'rejected' | 'superseded';
 
@@ -11,13 +12,16 @@ export interface Skill {
   description: string;
   body: string;
   status: SkillStatus;
-  source: 'agent' | 'user';
+  /** `shown`: drafted from a Show it once recording (api.md §4). */
+  source: 'agent' | 'user' | 'shown';
   proposed_by: string | null;
   /** A proposed revision: the enabled skill it replaces once approved. */
   replaces_id: string | null;
   created_at: string;
   updated_at: string;
   reviewed_at: string | null;
+  /** Show it once: set on a skill drafted from a recording (api.md §4). */
+  shown?: SkillShown | null;
 }
 
 /** `skill_updated` after a delete. */

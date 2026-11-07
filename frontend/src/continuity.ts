@@ -1,6 +1,7 @@
 // Agent continuity: pinned instructions, chat search, kwant memory, routines and notifications.
 
 import type { DeletedSkill, Skill } from './skills';
+import type { Recording } from './showOnce';
 
 export const MAX_INSTRUCTIONS = 4000;
 export const MAX_MEMORY = 500;
@@ -560,6 +561,8 @@ export type ContinuityEvent =
   | { type: 'memory_changed'; data: { kwant_id: string } }
   | { type: 'routine_run'; data: { routine_id: string; run_id: string; status: RunStatus } }
   | { type: 'skill_updated'; data: Skill | DeletedSkill }
+  /** Show it once: `skill_recording_updated` (api.md §5), a recording's state changed. It never carries steps. */
+  | { type: 'recording_updated'; data: Recording }
   /** kwant suggested a routine (re-broadcast from its notification), so an open Routines list reloads. */
   | { type: 'automation_suggested'; data: NotifyEvent };
 

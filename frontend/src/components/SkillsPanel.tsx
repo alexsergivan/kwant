@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useUndoableDelete } from '../undoDelete';
 import { UndoNotice } from './UndoNotice';
-import { Bot, Check, ChevronDown, ChevronRight, Globe2, Loader2, Pencil, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, ChevronRight, CircleDot, Globe2, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
+import { DraftSections, KeepLine, ShownBadge, ShownLine, TryItOnce, shownOf } from './SkillDraft';
+import { ShowOnceStart } from './ShowOnce';
+import { showOnce } from '../showOnce';
 import { formatWhen, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -190,7 +193,9 @@ const Badge: React.FC<{ tone: string; children: React.ReactNode }> = ({ tone, ch
 
 const SkillMeta: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, replaces }) => (
   <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-zinc-500">
-    {skill.source === 'agent' ? (
+    {shownOf(skill) ? (
+      <ShownBadge />
+    ) : skill.source === 'agent' ? (
       <Badge tone="bg-violet-500/10 text-violet-300 border-violet-500/20">
         <Bot size={10} aria-hidden="true" /> Proposed
       </Badge>
@@ -209,8 +214,10 @@ const SkillMeta: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, replac
   </div>
 );
 
-export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPending?: boolean }> = ({ skill, replaces, initialPending = false }) => {
+export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPending?: boolean; botName?: string }> = ({ skill, replaces, initialPending = false, botName = 'The bot' }) => {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
+  const [trying, setTrying] = useState(false);
+  const shown = shownOf(skill);
   const [open, setOpen] = useState(true);
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -233,7 +240,14 @@ export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPen
   };
 
   if (rejection.gone) return null;
-  if (rejection.pending) return <UndoNotice as="li" text={`Rejected “${skill.name}”. Nothing was added.`} onUndo={rejection.undo} />;
+  if (rejection.pending)
+    return (
+      <UndoNotice
+        as="li"
+        text={shown ? `Rejected “${skill.name}”. Its recorded steps are deleted when this closes.` : `Rejected “${skill.name}”. Nothing was added.`}
+        onUndo={rejection.undo}
+      />
+    );
 
   return (
     <li className="p-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] space-y-2">
@@ -265,7 +279,11 @@ export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPen
           />
         ) : (
           <>
-            <SkillChanges skill={skill} />
+            {shown && !skill.replaces_id ? (
+              !trying && <DraftSections body={skill.body} shown={shown} label={`Draft of ${skill.name}`} />
+            ) : (
+              <SkillChanges skill={skill} />
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <button type="button" onClick={() => approve().then((e) => e && setError(e))} disabled={!!busy} className={goBtn}>
                 {busy === 'approve' ? <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={11} aria-hidden="true" />}
@@ -277,7 +295,20 @@ export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPen
               <button type="button" onClick={reject} disabled={!!busy} className={dangerBtn}>
                 <X size={11} aria-hidden="true" /> Reject
               </button>
+              {shown && shown.inputs && (
+                <button
+                  type="button"
+                  onClick={() => setTrying((v) => !v)}
+                  disabled={!!busy}
+                  aria-expanded={trying}
+                  className={`${quietBtn} ml-auto ${trying ? 'bg-zinc-700' : ''}`}
+                >
+                  <Play size={11} aria-hidden="true" /> Try it once
+                </button>
+              )}
             </div>
+            {shown && trying && <TryItOnce skill={skill} shown={shown} botName={botName} onClose={() => setTrying(false)} />}
+            {shown && <KeepLine shown={shown} />}
           </>
         )}
         {(error ?? rejection.error) && (
@@ -347,6 +378,7 @@ export const ActiveSkill: React.FC<{ skill: Skill; initialPending?: boolean }> =
           <span className={`absolute top-[2px] w-3 h-3 rounded-full bg-white transition-all ${enabled ? 'left-[16px]' : 'left-[2px]'}`} aria-hidden="true" />
         </button>
       </div>
+      {shownOf(skill) && !editing && <ShownLine skill={skill} shown={shownOf(skill)!} />}
       {open && !editing && (
         <div className="pl-[18px] space-y-1.5">
           <pre className="max-h-56 overflow-auto rounded-lg bg-zinc-950 border border-zinc-800 p-2.5 text-[11px] leading-relaxed text-zinc-300 whitespace-pre-wrap break-words font-mono">
@@ -394,7 +426,15 @@ export const ActiveSkill: React.FC<{ skill: Skill; initialPending?: boolean }> =
  * An agent's skills (its own plus shared ones): proposals to review, the ones in use with an
  * on/off switch, and the rejected/replaced ones for the record. Live through `skill_updated`.
  */
-export const SkillsPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ kwantId, kwantName }) => {
+export const SkillsPanel: React.FC<{
+  kwantId: string;
+  kwantName: string;
+  /** Show it once: the start dialog was confirmed; the host opens the bot's browser (S1). Absent = no entry. */
+  onShowOnceStarted?: () => void;
+  /** The page the bot's browser is on, for the dialog's Start at */
+  browserUrl?: string;
+}> = ({ kwantId, kwantName, onShowOnceStarted, browserUrl }) => {
+  const [starting, setStarting] = useState(false);
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
@@ -444,9 +484,36 @@ export const SkillsPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
           />
         </div>
       ) : (
-        <button type="button" onClick={() => setWriting(true)} className={quietBtn}>
-          <Plus size={11} aria-hidden="true" /> Write a skill
-        </button>
+        <>
+          <div className="so-entry">
+            {onShowOnceStarted && (
+              <button type="button" onClick={() => setStarting(true)} className={quietBtn}>
+                <CircleDot size={11} className="so-rec-ic" aria-hidden="true" /> Show it once
+              </button>
+            )}
+            <button type="button" onClick={() => setWriting(true)} className={quietBtn}>
+              <Plus size={11} aria-hidden="true" /> Write a skill
+            </button>
+          </div>
+          {onShowOnceStarted && (
+            <p className="so-entry-help">
+              Show it once: do the task in {kwantName}'s browser and {kwantName} writes the steps down for you to check. Passwords and codes are never kept.
+            </p>
+          )}
+        </>
+      )}
+      {onShowOnceStarted && (
+        <ShowOnceStart
+          botName={kwantName}
+          open={starting}
+          defaultUrl={browserUrl}
+          onCancel={() => setStarting(false)}
+          onStart={(url, note) => {
+            setStarting(false);
+            showOnce.begin(kwantId, kwantName, kwantId, url, note);
+            onShowOnceStarted();
+          }}
+        />
       )}
 
       {loadError && (
@@ -473,7 +540,7 @@ export const SkillsPanel: React.FC<{ kwantId: string; kwantName: string }> = ({ 
               </h4>
               <ul className="space-y-2">
                 {groups.pending.map((s) => (
-                  <PendingSkill key={s.id} skill={s} replaces={byId(s.replaces_id)} />
+                  <PendingSkill key={s.id} skill={s} replaces={byId(s.replaces_id)} botName={kwantName} />
                 ))}
               </ul>
             </section>

@@ -203,6 +203,8 @@ export interface ChatViewProps {
   /** Answers that step as done from the browser; resolves to an error message on failure. */
   onVmStepDone?: (id: string) => Promise<string | void> | void;
   vmSolveRequest?: number;
+  /** Show it once: the single bot this chat's browser belongs to (absent in teams and channels). */
+  vmShowOnceBot?: { id: string; name: string };
   /** Pinned team/channel instructions, shown collapsed above the messages. */
   pinned?: PinnedItem[];
   /** Opens the channel's instructions editor; only for channels. */
@@ -422,6 +424,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   vmHumanStep,
   onVmStepDone,
   vmSolveRequest,
+  vmShowOnceBot,
   pinned = [],
   onEditInstructions,
   highlightMessageId,
@@ -2139,6 +2142,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       humanStep={vmHumanStep}
       onStepDone={onVmStepDone}
       solveRequest={vmSolveRequest}
+      showOnceBot={vmShowOnceBot}
     />
   </div>
 </div>
