@@ -500,7 +500,7 @@ pub async fn run_now(State(state): State<AppState>, Path(id): Path<String>) -> R
 /// still running. `None` if the run couldn't be recorded.
 pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> Option<RoutineRun> {
     // Today's spending stop holds new turns: the run is skipped, not failed (no AutoFix retry)
-    if let Some(why) = super::spend_stop::held(state).await {
+    if let Some(why) = super::spend_stop::held(state, &routine.space_id).await {
         let run = state.db.start_routine_run(&routine.id, trigger, "skipped", Some(&why)).await.ok()?;
         send_run_event(state, &run);
         return Some(run);

@@ -632,7 +632,7 @@ async fn execute(state: &AppState, a: &Attempt) {
     }
     // Today's spending stop: the attempt stays scheduled ([`run_due`] starts it once it lifts),
     // and the task's history says why once a day
-    if let Some(why) = crate::server::spend_stop::held(state).await {
+    if let Some(why) = crate::server::spend_stop::held(state, &task.space_id).await {
         if crate::server::spend_stop::first_skip_today(state, &format!("autofix:{}", a.id)).await {
             let detail = json!({"reason": crate::server::spend_stop::REASON, "why": why, "autofix_id": a.id});
             let _ = state.db.task_event(&task.id, task.mission_id.as_deref(), "autofix_held", "kwant", &detail).await;

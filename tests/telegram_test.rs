@@ -847,3 +847,93 @@ async fn a_closed_card_says_where_and_how_it_was_answered() {
     assert_eq!(listed(&env, &ended_id).await["status"], "cancelled");
     tg.wait_edit(&bot, |c| c.message_id() == card.message_id() && c.text().contains("No longer waiting")).await;
 }
+
+// --- Stuck: the spending stop (Rigel's F-D1) -------------------------------------------------
+
+/// The spending-stop notifications sent so far: (space_id, title, body).
+fn spend_notifies(rx: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) -> Vec<(Option<String>, String, String)> {
+    let mut n = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let RuntimeEvent::Notify { kind, space_id, title, body, .. } = ev {
+            if kind == "spend_stopped" {
+                n.push((space_id, title, body));
+            }
+        }
+    }
+    n
+}
+
+/// F-D1: the first turn the spending stop holds sends its "stuck" message to the paired chat of
+/// the held turn's space (before, the notification had no space and Telegram never heard it). A
+/// message held in a space with no Telegram pairing sends nothing to another space's chat.
+#[tokio::test]
+async fn the_spending_stop_tells_the_paired_chat_once() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 40).await;
+    let general = general(&env).await;
+    let name = first_name(&env, &env.a).await;
+    let mut rx = env.state.event_sender.subscribe();
+    let (s, v) = call(&env.app, "POST", "/api/settings", Some(json!({"daily_spend_stop_tokens": 10_000}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    kwnt::server::spend_stop::book(&env.state, 18_000, None).await;
+    let stuck = |c: &mock_telegram::Call| c.text().contains("Spending is stopped");
+
+    // Another space, not paired: its held turn's notification names it, and nothing reaches the
+    // default space's chat
+    let (s, v) = call(&env.app, "POST", "/api/spaces", Some(json!({"name": "Side", "this_machine_enabled": true}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let side = v["id"].as_str().unwrap().to_string();
+    let (s, v) = call(&env.app, "POST", &format!("/api/kwants?space={side}"), Some(json!({"name": "Sid", "title": "Sid the tester",
+        "persona_prompt": "Test persona", "avatar_sprite": "s", "driver_type": "api", "preferred_model": "claude"}))).await;
+    assert!(s.is_success(), "{s} {v}");
+    let sid = v["id"].as_str().unwrap().to_string();
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"prompt": "hello REPLYTAG:side40", "sender_id": "user", "kwant_id": sid}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let mut seen = Vec::new();
+    wait_for("the side space's spending-stop notification", || {
+        seen.extend(spend_notifies(&mut rx));
+        let got = !seen.is_empty();
+        async move { got }
+    })
+    .await;
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(seen[0].0.as_deref(), Some(side.as_str()), "the notification carries the held turn's space");
+    assert_eq!(seen[0].1, "Side · Today's spending limit is reached", "two spaces: the title names it");
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert!(!tg.sent(&bot).iter().any(stuck), "nothing to the default space's chat");
+    assert!(common::messages(&env, &sid).await.iter().all(|m| m.sender_role != "kwant"), "no turn in the side space");
+
+    // From Telegram in the paired space: exactly one stuck message, to the paired chat, and no turn
+    tg.text(&bot, &PERSON, &format!("@{name} plan my week REPLYTAG:tg40"));
+    let sent = tg.wait_send(&bot, stuck).await;
+    assert_eq!(sent.chat(), PERSON.id);
+    let home = env.state.db.get_space(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap().unwrap().name;
+    assert_eq!(
+        sent.text(),
+        format!("<b>{home} · Today's spending limit is reached</b>\nSpending is stopped, so your message wasn't run. Press Continue in kwant, then send it again."),
+    );
+    let n = spend_notifies(&mut rx);
+    assert_eq!(n.len(), 1, "{n:?}");
+    assert_eq!(n[0].0.as_deref(), Some(kwnt::db::spaces::SpaceId::default_space().as_str()));
+    assert_eq!(n[0].2, "Used 18k of 10k tokens, so bots won't start new work until tomorrow. Open to continue today.", "the in-app notice is unchanged");
+    // The message is kept in #general with the stop's card, and no bot answered it
+    wait_for("the stop's card in #general", || async {
+        common::messages(&env, &general).await.iter().any(|m| m.sender_role == "system" && m.text.starts_with("Today's spending stop"))
+    })
+    .await;
+    let msgs = common::messages(&env, &general).await;
+    assert!(msgs.iter().any(|m| m.sender_role == "user" && m.text.contains("plan my week")));
+    assert!(msgs.iter().all(|m| m.sender_role != "kwant"), "no turn started");
+
+    // A second message the same day: still held, no second stuck message
+    tg.text(&bot, &PERSON, &format!("@{name} and again REPLYTAG:tg40b"));
+    wait_for("the second message in #general", || async {
+        common::messages(&env, &general).await.iter().any(|m| m.sender_role == "user" && m.text.contains("and again"))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(tg.sent(&bot).iter().filter(|c| stuck(c)).count(), 1, "one stuck message a day");
+    assert!(tg.sent(&bot).iter().all(|c| !c.text().contains("answer tg40")), "no turn, no answer");
+    assert!(common::messages(&env, &general).await.iter().all(|m| m.sender_role != "kwant"));
+}

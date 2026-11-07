@@ -875,6 +875,9 @@ mod tests {
         assert_eq!((p.ttl(), p.urgency()), (3_600, "normal"));
         let p = Payload::new("spend_stopped", "Today's spending limit is reached", "Used 8k of 8k tokens.", None, None, String::new());
         assert_eq!((p.url.as_str(), p.tag.as_str()), ("/?notify=spend_stopped", "kwnt-none-spend_stopped-"));
+        // F-D1: the held turn's space comes along, so the tap opens that space's Needs you
+        let p = Payload::new("spend_stopped", "Today's spending limit is reached", "Used 18k of 10k tokens.", Some("s1".into()), None, String::new());
+        assert_eq!((p.url.as_str(), p.tag.as_str()), ("/?space=s1&notify=spend_stopped", "kwnt-s1-spend_stopped-"));
         assert_eq!((p.ttl(), p.urgency()), (86_400, "high"));
         let huge = Payload { title: "t".repeat(5000), ..p };
         assert!(huge.to_bytes().len() <= MAX_PAYLOAD_BYTES);

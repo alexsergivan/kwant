@@ -743,10 +743,11 @@ Usage. Opt-in: both settings are 0 (off) by default, and a database from before 
 - **Goal checks keep running.** Every check kind (http, command, file) runs without a bot, so it costs
   no tokens. Only what a goal starts after a check (a draft, a fix task, a mission) is a turn, and the
   gate holds that.
-- The first thing the stop holds each day also sends one notification, kind `spend_stopped` ("Today's
+- The first thing the stop holds each day in each space also sends one notification, kind `spend_stopped` ("Today's
   spending limit is reached"; "Used {X} of {Y}, so bots won't start new work until tomorrow. Open to
-  continue today."). It names no bot, since the stop holds them all; a tap opens Needs you, where
-  Continue is (push url `/?notify=spend_stopped`). Its push is kept a day at high urgency, so a phone
+  continue today."). It names no bot, since the stop holds them all, but carries the held turn's space
+  (0.7.5, F-D1), so that space's Telegram chat gets it as a `stuck` message and push opens the right
+  space; a tap opens Needs you, where Continue is (push url `/?space={id}&notify=spend_stopped`). Its push is kept a day at high urgency, so a phone
   that was off overnight still gets it. It's on by default, also for notification lists saved before
   0.7.4, and the person can turn it off like the other kinds; there's no new setting.
 - **Continue today** (`POST /api/usage/today/continue`, person only) lifts the stop until the day ends.

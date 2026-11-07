@@ -187,6 +187,9 @@ pub mod copy {
     pub const NEEDS_BACKUP: &str = "This step needs a fresh backup first. Approve it in kwant.";
     pub const NOT_SENT: &str = "kwant couldn't take that message. Try again, or open kwant.";
     pub const SIGN_INS_IN_KWANT: &str = "Sign-ins happen in kwant, never here.";
+    /// The spending stop held a turn while the person writes from Telegram: their message is
+    /// kept in #general but not run, and not replayed after Continue (0.7.5).
+    pub const SPEND_HELD: &str = "Spending is stopped, so your message wasn't run. Press Continue in kwant, then send it again.";
 
     pub fn paired(space: &str) -> String {
         format!("<b>Paired with kwant · {}.</b> Anything you send here goes to #general. Write @Name to reach one bot. Send /stop to unpair.", super::text::escape(space))
