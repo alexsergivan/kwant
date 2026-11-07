@@ -182,6 +182,11 @@ impl TurnRegistry {
         self.lock().jobs.values().any(|j| j.keys.iter().any(|k| k == key))
     }
 
+    /// Every key of the job holding `key`, its turns' ids among them; empty when no job holds it.
+    pub fn job_keys_holding(&self, key: &str) -> Vec<String> {
+        self.lock().jobs.values().find(|j| j.keys.iter().any(|k| k == key)).map(|j| j.keys.clone()).unwrap_or_default()
+    }
+
     pub fn set_turn(&self, turn: ActiveTurn) {
         self.lock().turns.insert(turn.turn_id.clone(), turn);
     }

@@ -15,6 +15,8 @@ pub const MAX_LIVE_CONNECTIONS: i64 = 10;
 pub const ASKS_PER_HOUR: i64 = 60;
 /// Turns a connection may have running at once.
 pub const TURNS_IN_FLIGHT: i64 = 3;
+/// Activity rows kept per connection; older ones are pruned as each new one is written.
+pub const ACTIVITY_KEPT: i64 = 1000;
 
 #[derive(Debug, Clone, Serialize, FromRow, PartialEq)]
 pub struct AgentConnection {
@@ -136,6 +138,9 @@ impl Database {
                 at TIMESTAMP NOT NULL
             )",
             "CREATE INDEX IF NOT EXISTS agent_connection_calls_by_connection ON agent_connection_calls (connection_id, at)",
+            // A revoked connection keeps its trail; it goes only with the connection's row
+            "CREATE TRIGGER IF NOT EXISTS agent_connection_calls_go_with_connection AFTER DELETE ON agent_connections
+             BEGIN DELETE FROM agent_connection_calls WHERE connection_id = OLD.id; END",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
@@ -237,6 +242,8 @@ impl Database {
         Ok(())
     }
 
+    /// Adds one row to the connection's activity trail and, in the same write, drops its rows
+    /// past the newest [`ACTIVITY_KEPT`].
     pub async fn log_agent_call(
         &self,
         c: &AgentConnection,
@@ -244,6 +251,7 @@ impl Database {
         bot: Option<&str>,
         ok: bool,
     ) -> Result<(), DbError> {
+        let mut tx = self.begin_write().await?;
         sqlx::query(
             "INSERT INTO agent_connection_calls (connection_id, connection_name, tool, bot, outcome, at) VALUES (?, ?, ?, ?, ?, ?)",
         )
@@ -253,8 +261,17 @@ impl Database {
         .bind(bot)
         .bind(if ok { "ok" } else { "refused" })
         .bind(Utc::now())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            "DELETE FROM agent_connection_calls WHERE connection_id = ?1 AND id <=
+               (SELECT id FROM agent_connection_calls WHERE connection_id = ?1 ORDER BY id DESC LIMIT 1 OFFSET ?2)",
+        )
+        .bind(&c.id)
+        .bind(ACTIVITY_KEPT)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -440,15 +457,16 @@ impl Database {
             .await?)
     }
 
-    /// The bot's last reply in `thread_id` after the message `after_message_id`.
-    pub async fn agent_turn_reply_id(&self, thread_id: &str, after_message_id: &str) -> Result<Option<String>, DbError> {
+    /// The bot's reply to the agent turn `agent_turn_id`: the reply saved with that id in its
+    /// meta, never just the newest bot message (the person may be talking in the same thread).
+    pub async fn agent_turn_reply_id(&self, thread_id: &str, agent_turn_id: &str) -> Result<Option<String>, DbError> {
         let row: Option<(String,)> = sqlx::query_as(
             "SELECT id FROM messages WHERE thread_id = ? AND sender_role = 'kwant'
-               AND rowid > (SELECT rowid FROM messages WHERE id = ?)
+               AND CASE WHEN json_valid(meta) THEN json_extract(meta, '$.agent_turn_id') END = ?
              ORDER BY rowid DESC LIMIT 1",
         )
         .bind(thread_id)
-        .bind(after_message_id)
+        .bind(agent_turn_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.map(|r| r.0))
@@ -465,45 +483,52 @@ impl Database {
         Ok(row.map(|r| r.0))
     }
 
-    /// What the person has to answer in `thread_id` for a turn that started at `since`: an open
-    /// question card, or an approval card still waiting, as one line with no parameters.
-    pub async fn agent_turn_waiting_on(&self, thread_id: &str, since: DateTime<Utc>) -> Result<Option<String>, DbError> {
+    /// What the person has to answer for the agent's own turn: an open question card or an
+    /// approval card still waiting that one of `turn_ids` (the bot turns the ask started) raised,
+    /// as one line with no parameters. Cards from the person's own turns in the thread never show.
+    pub async fn agent_turn_waiting_on(&self, thread_id: &str, turn_ids: &[String]) -> Result<Option<String>, DbError> {
+        if turn_ids.is_empty() {
+            return Ok(None);
+        }
+        let ids = serde_json::to_string(turn_ids)?;
         let approval: Option<(String,)> = sqlx::query_as(
             "SELECT tool_name FROM approvals
-             WHERE status IN ('pending', 'waiting')
-               AND (json_extract(resume, '$.thread_id') = ?
-                    OR turn_id IN (SELECT turn_id FROM running_turns WHERE thread_id = ?))
+             WHERE status IN ('pending', 'waiting') AND turn_id IN (SELECT value FROM json_each(?))
              ORDER BY created_at DESC LIMIT 1",
         )
-        .bind(thread_id)
-        .bind(thread_id)
+        .bind(&ids)
         .fetch_optional(&self.pool)
         .await?;
         if let Some((tool,)) = approval {
             return Ok(Some(format!("Waiting for the person to approve a step ({}).", one_line(&tool, 80))));
         }
         let question: Option<(String,)> = sqlx::query_as(
-            "SELECT question FROM questions WHERE thread_id = ? AND status = 'open' AND created_at >= ?
+            "SELECT question FROM questions WHERE thread_id = ? AND status = 'open'
+               AND turn_id IN (SELECT value FROM json_each(?))
              ORDER BY created_at DESC LIMIT 1",
         )
         .bind(thread_id)
-        .bind(since)
+        .bind(&ids)
         .fetch_optional(&self.pool)
         .await?;
         Ok(question.map(|(q,)| format!("The bot asked the person: {}", one_line(&q, 200))))
     }
 
-    /// Attachments the bot shared in `thread_id` since `since`.
+    /// Attachments the bot shared in `thread_id` between `since` and `until` (the turn's end).
     pub async fn agent_turn_attachments(
         &self,
         thread_id: &str,
         since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
     ) -> Result<Vec<super::attachments::Attachment>, DbError> {
         Ok(sqlx::query_as::<_, super::attachments::Attachment>(
-            "SELECT * FROM attachments WHERE thread_id = ? AND source = 'agent' AND created_at >= ? ORDER BY created_at",
+            "SELECT * FROM attachments WHERE thread_id = ? AND source = 'agent' AND created_at >= ?
+               AND (? IS NULL OR created_at <= ?) ORDER BY created_at",
         )
         .bind(thread_id)
         .bind(since)
+        .bind(until)
+        .bind(until)
         .fetch_all(&self.pool)
         .await?)
     }

@@ -397,7 +397,15 @@ async fn an_approval_card_or_a_question_returns_waiting_on_person() {
     // The person answers; the turn finishes and the agent gets the reply
     let pending = env.state.db.list_approvals(&kwnt::db::spaces::SpaceId::default_space(), Some("pending"), Some(&env.a)).await.unwrap();
     let ticket = pending.first().expect("a pending card").id.clone();
-    let (s, _) = call(&env.app, "POST", &format!("/api/approvals/{ticket}/resolve"), Some(json!({"decision": "deny"}))).await;
+    // The card's row is saved just before its waiter is registered; a resolve in that gap is a 409
+    let mut s = StatusCode::CONFLICT;
+    for _ in 0..100 {
+        s = call(&env.app, "POST", &format!("/api/approvals/{ticket}/resolve"), Some(json!({"decision": "deny"}))).await.0;
+        if s != StatusCode::CONFLICT {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     assert_eq!(s, StatusCode::OK);
     let _ = waiter.await;
     let (_, list) = call(&env.app, "GET", &format!("/api/questions?status=open&context_id={thread_id}"), None).await;
@@ -460,4 +468,130 @@ async fn three_turns_in_flight_then_429() {
     assert!(v["error"]["data"]["retry_after"].as_i64().unwrap() > 0);
     assert!(h.get("retry-after").is_some());
     assert!(invocations_with("REPLYTAG:if4").is_empty());
+}
+
+/// Polls get_reply until `done` says so.
+async fn reply_until(env: &Env, token: &str, turn_id: &str, done: impl Fn(&Value) -> bool) -> Value {
+    let mut last = Value::Null;
+    for _ in 0..300 {
+        let (_, err, g) = tool(env, token, "get_reply", json!({"turn_id": turn_id})).await;
+        assert!(!err, "{g}");
+        if done(&g) {
+            return g;
+        }
+        last = g;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("get_reply never got there: {last}");
+}
+
+/// The open question in `thread_id` asking `text`.
+async fn open_question(env: &Env, thread_id: &str, text: &str) -> String {
+    for _ in 0..300 {
+        let (_, list) = call(&env.app, "GET", &format!("/api/questions?status=open&context_id={thread_id}"), None).await;
+        if let Some(q) = list.as_array().into_iter().flatten().find(|q| q["question"] == text) {
+            return q["id"].as_str().unwrap().to_string();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no open question {text:?}");
+}
+
+#[tokio::test]
+async fn the_agent_gets_only_its_own_reply_while_the_person_talks_in_the_same_thread() {
+    let env = setup().await;
+    let (_, token) = connect(&env, "Claude Code", json!("all")).await;
+
+    // The agent asks; its turn stays open on a question card for the person
+    let hold = call_tool_marker(
+        "ask_user",
+        json!({"question": "Agent hold?", "choices": ["yes", "no"], "why_you": "irreversible", "checked": "x"}),
+    );
+    let (s, err, r) =
+        tool(&env, &token, "ask", json!({"bot": env.a, "message": format!("Agent work {hold} REPLYTAG:agentown"), "wait_seconds": 0})).await;
+    assert_eq!((s, err), (StatusCode::OK, false), "{r}");
+    let thread_id = r["thread_id"].as_str().unwrap().to_string();
+    let turn_id = r["turn_id"].as_str().unwrap().to_string();
+    let agent_q = open_question(&env, &thread_id, "Agent hold?").await;
+    let own_wait = "The bot asked the person: Agent hold?";
+    reply_until(&env, &token, &turn_id, |g| g["reply_text"] == own_wait).await;
+
+    // The person types in the same "From …" thread while the ask runs; the bot answers the person
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"thread_id": thread_id, "prompt": "Person here REPLYTAG:personone", "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_reply(&env, &thread_id, "answer personone").await;
+    let (_, _, g) = tool(&env, &token, "get_reply", json!({"turn_id": turn_id})).await;
+    assert_eq!((g["status"].as_str(), g["reply_text"].as_str()), (Some("waiting_on_person"), Some(own_wait)), "{g}");
+
+    // The person's next message makes the bot ask the person something: not the agent's card
+    let person_q = call_tool_marker(
+        "ask_user",
+        json!({"question": "Person-only question?", "choices": ["a", "b"], "why_you": "irreversible", "checked": "x"}),
+    );
+    let (s, _) = call(&env.app, "POST", "/api/chat/send", Some(json!({"thread_id": thread_id, "prompt": format!("Another {person_q} REPLYTAG:persontwo"), "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let person_qid = open_question(&env, &thread_id, "Person-only question?").await;
+    let (_, _, g) = tool(&env, &token, "get_reply", json!({"turn_id": turn_id})).await;
+    assert_eq!((g["status"].as_str(), g["reply_text"].as_str()), (Some("waiting_on_person"), Some(own_wait)), "{g}");
+
+    // The agent's card is answered: the ask ends with its own reply, not the person's
+    let (s, _) = call(&env.app, "POST", &format!("/api/questions/{agent_q}/answer"), Some(json!({"choice": 1}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let done = reply_until(&env, &token, &turn_id, |g| g["status"] != "working" && g["status"] != "waiting_on_person").await;
+    assert_eq!(done["status"], "done", "{done}");
+    let text = done["reply_text"].as_str().unwrap();
+    assert!(text.contains("answer agentown") && !text.contains("person"), "{text}");
+
+    // The person's turn answers after that; the agent's turn still reads its own reply
+    let (s, _) = call(&env.app, "POST", &format!("/api/questions/{person_qid}/answer"), Some(json!({"choice": 1}))).await;
+    assert_eq!(s, StatusCode::OK);
+    wait_reply(&env, &thread_id, "answer persontwo").await;
+    let (_, _, g) = tool(&env, &token, "get_reply", json!({"turn_id": turn_id})).await;
+    assert_eq!(g, done);
+
+    // Only the bot's reply to the ask carries the ask's turn id
+    let tagged: Vec<String> = messages(&env, &thread_id)
+        .await
+        .into_iter()
+        .filter(|m| m.sender_role == "kwant")
+        .filter(|m| m.meta.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).is_some_and(|v| v["agent_turn_id"] == turn_id.as_str()))
+        .map(|m| m.text)
+        .collect();
+    assert_eq!(tagged.len(), 1, "{tagged:?}");
+    assert!(tagged[0].contains("answer agentown"), "{tagged:?}");
+}
+
+#[tokio::test]
+async fn the_activity_trail_keeps_the_newest_1000_rows_per_connection() {
+    use kwnt::db::agent_connections::ACTIVITY_KEPT;
+    let env = setup().await;
+    let (id, token) = connect(&env, "Claude Code", json!("all")).await;
+    let (other_id, _) = connect(&env, "Codex", json!("all")).await;
+    let conn = env.state.db.get_agent_connection(&id).await.unwrap().unwrap();
+    let other = env.state.db.get_agent_connection(&other_id).await.unwrap().unwrap();
+    env.state.db.log_agent_call(&other, "list_bots", Some("theirs"), true).await.unwrap();
+    for i in 0..1004 {
+        env.state.db.log_agent_call(&conn, "ask", Some(&format!("n{i}")), true).await.unwrap();
+    }
+    // The 1,005th goes through the endpoint
+    let (_, err, _) = tool(&env, &token, "list_bots", json!({})).await;
+    assert!(!err);
+
+    let rows = env.state.db.list_agent_calls(&id, 5000).await.unwrap();
+    assert_eq!((ACTIVITY_KEPT, rows.len()), (1000, 1000));
+    assert_eq!(rows[0].tool, "list_bots", "the newest is kept");
+    assert_eq!(rows[1].bot.as_deref(), Some("n1003"));
+    assert_eq!(rows[999].bot.as_deref(), Some("n5"), "the 5 oldest (n0–n4) and nothing newer were pruned");
+    // Another connection's trail is its own
+    assert_eq!(env.state.db.list_agent_calls(&other_id, 5000).await.unwrap().len(), 1);
+
+    // Revoked, the trail stays until the connection's row itself is deleted
+    let (s, _) = call(&env.app, "DELETE", &format!("/api/agent-connections/{id}"), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(env.state.db.list_agent_calls(&id, 5000).await.unwrap().len(), 1000);
+    let db_file = env.state.config.data_dir.join("kwnt.db");
+    let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect(&format!("sqlite://{}", db_file.display())).await.unwrap();
+    sqlx::query("DELETE FROM agent_connections WHERE id = ?").bind(&id).execute(&pool).await.unwrap();
+    assert!(env.state.db.list_agent_calls(&id, 5000).await.unwrap().is_empty());
+    assert_eq!(env.state.db.list_agent_calls(&other_id, 5000).await.unwrap().len(), 1);
 }

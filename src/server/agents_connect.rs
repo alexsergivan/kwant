@@ -685,10 +685,13 @@ async fn start_turn(
     let scope = super::routes::scope_for(state, kwant, None, Some(thread_id.to_string()), &job, 0).await?;
     let mut opts = TurnOpts::default();
     opts.purpose = Some("connected_agent".into());
+    // The reply is found by this, not as the thread's newest bot message: the person may be
+    // talking to the same bot in this thread while the ask runs
+    opts.extra_meta = Some(json!({"agent_turn_id": turn.id}));
     let prompt = format!("{message}\n\n{}", agent_note(&crate::drivers::frame_safe_name(&conn.name)));
     let target = kwant.clone();
     let db = state.db.clone();
-    let (turn_id, thread_id, user_message_id) = (turn.id.clone(), thread_id.to_string(), saved.id.clone());
+    let (turn_id, thread_id) = (turn.id.clone(), thread_id.to_string());
     let (conn_id, conn_name) = (conn.id.clone(), conn.name.clone());
     tracing::info!(connection_id = %conn_id, connection_name = %conn_name, kwant_id = %target.id, agent_turn = %turn_id, "agent ask started");
     tokio::spawn(async move {
@@ -696,7 +699,7 @@ async fn start_turn(
         let result = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
         match result {
             Ok(_) => {
-                let reply = db.agent_turn_reply_id(&thread_id, &user_message_id).await.ok().flatten();
+                let reply = db.agent_turn_reply_id(&thread_id, &turn_id).await.ok().flatten();
                 let _ = db.finish_agent_turn(&turn_id, "done", reply.as_deref(), None).await;
             }
             Err(e) => {
@@ -713,7 +716,7 @@ async fn start_turn(
 async fn turn_view(state: &AppState, t: &AgentTurn) -> Value {
     let attachments: Vec<Value> = state
         .db
-        .agent_turn_attachments(&t.thread_id, t.created_at)
+        .agent_turn_attachments(&t.thread_id, t.created_at, t.ended_at)
         .await
         .unwrap_or_default()
         .into_iter()
@@ -728,7 +731,16 @@ async fn turn_view(state: &AppState, t: &AgentTurn) -> Value {
             ("done", redact(&text))
         }
         "failed" => ("failed", t.error.clone().unwrap_or_else(|| "The turn failed.".into())),
-        _ => match state.db.agent_turn_waiting_on(&t.thread_id, t.created_at).await.ok().flatten() {
+        // Only cards the ask's own bot turns raised: its job holds the agent's message id
+        _ => match async {
+            let turn_ids = match &t.message_id {
+                Some(mid) => state.turns.job_keys_holding(mid),
+                None => Vec::new(),
+            };
+            state.db.agent_turn_waiting_on(&t.thread_id, &turn_ids).await.ok().flatten()
+        }
+        .await
+        {
             Some(summary) => ("waiting_on_person", redact(&summary)),
             None => ("working", String::new()),
         },
