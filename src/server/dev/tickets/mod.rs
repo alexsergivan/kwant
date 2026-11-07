@@ -8,3 +8,4 @@ pub mod pickup;
 pub mod routes;
 pub mod source;
 pub mod store;
+pub mod work;

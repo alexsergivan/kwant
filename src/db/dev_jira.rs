@@ -31,12 +31,85 @@ pub const ACTIVE: &[&str] = &[WAITING, PICKED_UP, READING, NEEDS_ANSWER, BRIEF_R
 /// States that hold one of the 3 slots (J13). `needs_answer` waits on a person and doesn't.
 pub const SLOT_STATES: &[&str] = &[READING, BRIEF_READY, WORKING];
 
+/// The person's lifecycle buttons on a ticket card (api-decisions 12, api.md §1.4). None of them
+/// writes to Jira.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonMove {
+    /// Stop the work, keep the branch → `taken_back`, held: pickup won't re-pick it until Retry.
+    Stop,
+    /// Don't do this one → `closed` (`skipped`); never picked up again until Retry.
+    Skip,
+    /// Mark it done in kwant only → `closed` (`done`).
+    Close,
+    /// Back to the queue → `picked_up`; starts when a slot is free.
+    Retry,
+}
+
+impl PersonMove {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "stop" => Self::Stop,
+            "skip" => Self::Skip,
+            "close" => Self::Close,
+            "retry" => Self::Retry,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Skip => "skip",
+            Self::Close => "close",
+            Self::Retry => "retry",
+        }
+    }
+
+    /// The states each button works from; anything else is 409 `wrong_state`.
+    pub fn from(self) -> &'static [&'static str] {
+        match self {
+            Self::Stop => &[PICKED_UP, READING, NEEDS_ANSWER, BRIEF_READY, WORKING, IN_REVIEW],
+            Self::Skip => &[WAITING, PICKED_UP, READING, NEEDS_ANSWER, BRIEF_READY, TAKEN_BACK, FAILED],
+            Self::Close => &[WAITING, PICKED_UP, READING, NEEDS_ANSWER, BRIEF_READY, WORKING, IN_REVIEW, LANDED, TAKEN_BACK, FAILED],
+            Self::Retry => &[TAKEN_BACK, CLOSED, FAILED],
+        }
+    }
+
+    pub fn to(self) -> &'static str {
+        match self {
+            Self::Stop => TAKEN_BACK,
+            Self::Skip | Self::Close => CLOSED,
+            Self::Retry => PICKED_UP,
+        }
+    }
+
+    /// `closed_resolution` for the two closing moves.
+    pub fn resolution(self) -> Option<&'static str> {
+        match self {
+            Self::Skip => Some("skipped"),
+            Self::Close => Some("done"),
+            _ => None,
+        }
+    }
+
+    /// The event row's note.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::Stop => "stopped by you",
+            Self::Skip => "skipped by you",
+            Self::Close => "closed by you",
+            Self::Retry => "retried by you",
+        }
+    }
+}
+
 /// Whether `from → to` is allowed (api.md §1.4). Moving to the same state is never a move.
 pub fn allowed(from: &str, to: &str) -> bool {
     if from == to {
         return false;
     }
     match to {
+        // A closed row comes back only through the person's Retry (`PersonMove::from`).
         PICKED_UP => matches!(from, WAITING | TAKEN_BACK | FAILED),
         READING => matches!(from, PICKED_UP | NEEDS_ANSWER),
         NEEDS_ANSWER => from == READING,
@@ -83,7 +156,8 @@ const TABLES: &[&str] = &[
         poll_error TEXT,
         backoff_until TIMESTAMP,
         unreachable_since TIMESTAMP,
-        token_rejected_at TIMESTAMP
+        token_rejected_at TIMESTAMP,
+        scope_note TEXT
     )",
     "CREATE TABLE IF NOT EXISTS dev_tickets (
         space_id TEXT NOT NULL,
@@ -119,6 +193,7 @@ const TABLES: &[&str] = &[
         waiting_since_connect INTEGER NOT NULL DEFAULT 0,
         work_comment_at TIMESTAMP,
         pr_comment_at TIMESTAMP,
+        held_by_person INTEGER NOT NULL DEFAULT 0,
         first_seen_at TIMESTAMP NOT NULL,
         updated_at TIMESTAMP NOT NULL,
         PRIMARY KEY (space_id, key)
@@ -153,9 +228,11 @@ pub struct JiraSiteRow {
     pub cloud_id: Option<String>,
     pub me_id: Option<String>,
     pub me_name: Option<String>,
-    /// JSON array of project keys.
+    /// JSON array of project keys in the column; an array on the wire (api-decisions 1).
+    #[serde(serialize_with = "json_list")]
     pub projects: String,
-    /// `label`, `assignee` or `either`.
+    /// `label`, `assignee` or `jql`: the same words `PUT jira` takes (api-decisions 2).
+    #[serde(serialize_with = "wire_handover")]
     pub handover: String,
     /// What JQL takes: Cloud accountId, DC username.
     pub assignee_id: Option<String>,
@@ -167,11 +244,14 @@ pub struct JiraSiteRow {
     /// The person's Advanced JQL (scoped by `jql::scoped_custom`); `None` = built from the choices.
     pub jql: Option<String>,
     pub team_id: Option<String>,
-    /// JSON array of Confluence space keys; `[]` = Confluence off.
+    /// JSON array of Confluence space keys; `[]` = Confluence off. An array on the wire.
+    #[serde(serialize_with = "json_list")]
     pub spaces: String,
     pub comment_progress: bool,
     pub wait_for_ok: bool,
     pub poll_secs: i64,
+    /// `on` on the wire (api-decisions 3).
+    #[serde(rename = "on")]
     pub on_: bool,
     /// J5: false until the first poll after connecting (or turning back on) has marked what was
     /// already there as `waiting`.
@@ -183,6 +263,30 @@ pub struct JiraSiteRow {
     pub backoff_until: Option<DateTime<Utc>>,
     pub unreachable_since: Option<DateTime<Utc>>,
     pub token_rejected_at: Option<DateTime<Utc>>,
+    /// The check's non-secret line for a scoped token ("scoped: reads Jira and Confluence"); `None`
+    /// for a classic token or a PAT (api-decisions 6).
+    #[sqlx(default)]
+    pub scope_note: Option<String>,
+}
+
+/// A JSON-array column as a real array on the wire (`[]` when the column doesn't parse).
+fn json_list<S: serde::Serializer>(v: &str, s: S) -> Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    serde_json::from_str::<Vec<String>>(v).unwrap_or_default().serialize(s)
+}
+
+/// The stored hand-over, in `PUT jira`'s words only. `PUT` stores nothing else; an unknown value
+/// reads as the default `label`.
+pub fn handover_word(v: &str) -> &'static str {
+    match v {
+        "assignee" => "assignee",
+        "jql" => "jql",
+        _ => "label",
+    }
+}
+
+fn wire_handover<S: serde::Serializer>(v: &str, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(handover_word(v))
 }
 
 impl JiraSiteRow {
@@ -221,6 +325,7 @@ impl JiraSiteRow {
             backoff_until: None,
             unreachable_since: None,
             token_rejected_at: None,
+            scope_note: None,
         }
     }
 
@@ -249,7 +354,8 @@ pub struct TicketRow {
     pub priority_rank: Option<i64>,
     pub assignee_id: Option<String>,
     pub assignee_name: Option<String>,
-    /// JSON array.
+    /// JSON array in the column; an array on the wire.
+    #[serde(serialize_with = "json_list")]
     pub labels: String,
     pub reporter_id: Option<String>,
     pub reporter_name: Option<String>,
@@ -273,7 +379,8 @@ pub struct TicketRow {
     /// J14: who took it back in Jira (the display name on the newest change to the assignee or
     /// labels, from the issue's changelog); `None` when Jira didn't say. Untrusted text.
     pub taken_back_by: Option<String>,
-    /// `done` (the status's name is in `status`) or `deleted`.
+    /// `done` (Done in Jira, or the person's Close; the status's name is in `status`), `deleted`
+    /// (gone from Jira) or `skipped` (the person's Skip).
     pub closed_resolution: Option<String>,
     /// J5: the ticket already matched when the site was connected (or turned back on), so it came
     /// in as `waiting` for the person's Start. Kept after Start. Waiting cards never count in the
@@ -281,6 +388,10 @@ pub struct TicketRow {
     pub waiting_since_connect: bool,
     pub work_comment_at: Option<DateTime<Utc>>,
     pub pr_comment_at: Option<DateTime<Utc>>,
+    /// The person pressed Stop: pickup doesn't re-pick this `taken_back` row when it still matches
+    /// in Jira, until the person presses Retry (api-decisions 12). Cleared on `picked_up`.
+    #[sqlx(default)]
+    pub held_by_person: bool,
     pub first_seen_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -342,6 +453,13 @@ impl Database {
         for sql in TABLES {
             sqlx::query(sql).execute(&self.pool).await?;
         }
+        // Add-only columns that came after the tables (a database made by an earlier build).
+        for (table, column, ddl) in [("dev_jira_sites", "scope_note", "scope_note TEXT"), ("dev_tickets", "held_by_person", "held_by_person INTEGER NOT NULL DEFAULT 0")] {
+            let has: Option<(String,)> = sqlx::query_as(&format!("SELECT name FROM pragma_table_info('{table}') WHERE name = ?")).bind(column).fetch_optional(&self.pool).await?;
+            if has.is_none() {
+                sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {ddl}")).execute(&self.pool).await?;
+            }
+        }
         Ok(())
     }
 
@@ -363,13 +481,13 @@ impl Database {
     pub async fn save_dev_jira_site(&self, row: &JiraSiteRow, rule_changed: bool) -> Result<JiraSiteRow, DbError> {
         sqlx::query(
             "INSERT INTO dev_jira_sites (space_id, id, kind, jira_url, confluence_url, email, auth, cloud_id, me_id, me_name, projects, handover,
-               assignee_id, assignee_name, label, jql, team_id, spaces, comment_progress, wait_for_ok, poll_secs, on_, backfill_done, connected_at, updated_at, assignee_key)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 0, ?23, ?23, ?25)
+               assignee_id, assignee_name, label, jql, team_id, spaces, comment_progress, wait_for_ok, poll_secs, on_, backfill_done, connected_at, updated_at, assignee_key, scope_note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, 0, ?23, ?23, ?25, ?26)
              ON CONFLICT(space_id) DO UPDATE SET id = excluded.id, kind = excluded.kind, jira_url = excluded.jira_url, confluence_url = excluded.confluence_url,
                email = excluded.email, auth = excluded.auth, cloud_id = excluded.cloud_id, me_id = excluded.me_id, me_name = excluded.me_name,
                projects = excluded.projects, handover = excluded.handover, assignee_id = excluded.assignee_id, assignee_key = excluded.assignee_key, assignee_name = excluded.assignee_name,
                label = excluded.label, jql = excluded.jql, team_id = excluded.team_id, spaces = excluded.spaces, comment_progress = excluded.comment_progress,
-               wait_for_ok = excluded.wait_for_ok, poll_secs = excluded.poll_secs, updated_at = excluded.updated_at,
+               wait_for_ok = excluded.wait_for_ok, poll_secs = excluded.poll_secs, updated_at = excluded.updated_at, scope_note = excluded.scope_note,
                backfill_done = CASE WHEN ?24 OR (excluded.on_ = 1 AND dev_jira_sites.on_ = 0) THEN 0 ELSE dev_jira_sites.backfill_done END,
                on_ = excluded.on_, poll_error = CASE WHEN ?24 THEN NULL ELSE dev_jira_sites.poll_error END,
                token_rejected_at = NULL, backoff_until = NULL, unreachable_since = NULL",
@@ -399,6 +517,7 @@ impl Database {
         .bind(Utc::now())
         .bind(rule_changed)
         .bind(&row.assignee_key)
+        .bind(&row.scope_note)
         .execute(&self.pool)
         .await?;
         self.dev_jira_site(&row.space_id).await?.ok_or_else(|| DbError::Conflict("the Jira site vanished while saving".into()))
@@ -563,12 +682,25 @@ impl Database {
     /// [`set_dev_ticket_state`](Self::set_dev_ticket_state) with a note on the event row
     /// (`"unassigned"`, `"done: Done"`, `"deleted"`).
     pub async fn set_dev_ticket_state_with(&self, space_id: &str, key: &str, to: &str, detail: Option<&str>) -> Result<bool, DbError> {
+        let resolution = detail.filter(|_| to == CLOSED).map(|d| if d.starts_with("deleted") { "deleted" } else { "done" });
+        Ok(self.write_state(space_id, key, to, detail, None, resolution, false).await?.is_some())
+    }
+
+    /// The person's Stop, Skip, Close or Retry (api-decisions 12): the same writer, limited to
+    /// [`PersonMove::from`]. Ok(Some(from)) when it moved; Ok(None) when there's no such ticket or
+    /// it can't move from where it is (the route's 409 `wrong_state`). Nothing is written to Jira.
+    pub async fn person_move_dev_ticket(&self, space_id: &str, key: &str, mv: PersonMove) -> Result<Option<String>, DbError> {
+        self.write_state(space_id, key, mv.to(), Some(mv.detail()), Some(mv.from()), mv.resolution(), mv == PersonMove::Stop).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn write_state(&self, space_id: &str, key: &str, to: &str, detail: Option<&str>, only_from: Option<&[&str]>, resolution: Option<&str>, hold: bool) -> Result<Option<String>, DbError> {
         if !STATES.contains(&to) {
             return Err(DbError::Conflict(format!("{to} isn't a ticket state")));
         }
         let from: Vec<&str> = STATES.iter().copied().filter(|f| allowed(f, to)).collect();
         if from.is_empty() {
-            return Ok(false);
+            return Ok(None);
         }
         let now = Utc::now();
         let mut tx = self.pool.begin().await?;
@@ -578,10 +710,16 @@ impl Database {
             .fetch_optional(&mut *tx)
             .await?
         else {
-            return Ok(false);
+            return Ok(None);
         };
-        if !allowed(&current, to) {
-            return Ok(false);
+        // A person's move is limited to its own table (`PersonMove::from`), which may reopen a
+        // closed row (Retry); every other writer to `allowed`.
+        let ok = match only_from {
+            Some(f) => current != to && f.contains(&current.as_str()),
+            None => allowed(&current, to),
+        };
+        if !ok {
+            return Ok(None);
         }
         let done = sqlx::query(
             "UPDATE dev_tickets SET state = ?3, updated_at = ?4,
@@ -589,7 +727,8 @@ impl Database {
                misses = 0,
                taken_back_at = CASE WHEN ?3 = 'taken_back' THEN ?4 WHEN ?3 = 'picked_up' THEN NULL ELSE taken_back_at END,
                taken_back_by = CASE WHEN ?3 IN ('taken_back', 'picked_up') THEN NULL ELSE taken_back_by END,
-               closed_resolution = CASE WHEN ?3 = 'closed' THEN COALESCE(?6, 'done') ELSE closed_resolution END
+               closed_resolution = CASE WHEN ?3 = 'closed' THEN COALESCE(?6, 'done') WHEN ?3 = 'picked_up' THEN NULL ELSE closed_resolution END,
+               held_by_person = CASE WHEN ?7 THEN 1 WHEN ?3 = 'picked_up' THEN 0 ELSE held_by_person END
              WHERE space_id = ?1 AND key = ?2 AND state = ?5",
         )
         .bind(space_id)
@@ -597,11 +736,12 @@ impl Database {
         .bind(to)
         .bind(now)
         .bind(&current)
-        .bind(detail.filter(|_| to == CLOSED).map(|d| if d.starts_with("deleted") { "deleted" } else { "done" }))
+        .bind(resolution)
+        .bind(hold)
         .execute(&mut *tx)
         .await?;
         if done.rows_affected() == 0 {
-            return Ok(false);
+            return Ok(None);
         }
         sqlx::query("INSERT INTO dev_ticket_events (space_id, key, kind, from_state, to_state, detail, at) VALUES (?, ?, 'state', ?, ?, ?, ?)")
             .bind(space_id)
@@ -613,7 +753,7 @@ impl Database {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(true)
+        Ok(Some(current))
     }
 
     /// The Ask on Jira comment the reporter's reply must follow (Vega's route, api.md §1.3).
@@ -716,6 +856,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_persons_moves_are_api_md_1_4() {
+        let all = [PersonMove::Stop, PersonMove::Skip, PersonMove::Close, PersonMove::Retry];
+        for mv in all {
+            assert_eq!(PersonMove::parse(mv.as_str()), Some(mv));
+            assert!(!mv.from().contains(&mv.to()), "{} never moves a row to where it is", mv.as_str());
+            for f in mv.from() {
+                // Each move is one the state table allows, but Retry may also reopen a closed row
+                assert!(allowed(f, mv.to()) || (mv == PersonMove::Retry && *f == CLOSED), "{} from {f}", mv.as_str());
+            }
+        }
+        assert_eq!(PersonMove::parse("delete"), None);
+        assert!(!PersonMove::Stop.from().contains(&WAITING), "a waiting row has nothing to stop");
+        assert!(!PersonMove::Skip.from().iter().any(|f| matches!(*f, WORKING | IN_REVIEW | LANDED)), "work under way is stopped or closed, not skipped");
+        assert!(!PersonMove::Retry.from().iter().any(|f| matches!(*f, WAITING | WORKING | LANDED)));
+        assert_eq!((PersonMove::Skip.resolution(), PersonMove::Close.resolution(), PersonMove::Stop.resolution()), (Some("skipped"), Some("done"), None));
+    }
+
+    #[test]
     fn the_state_table_is_api_md_1_4() {
         assert!(allowed(WAITING, PICKED_UP) && allowed(TAKEN_BACK, PICKED_UP) && allowed(FAILED, PICKED_UP));
         assert!(!allowed(READING, PICKED_UP));
@@ -728,6 +886,7 @@ mod tests {
         for s in STATES {
             assert_eq!(allowed(s, TAKEN_BACK), !matches!(*s, CLOSED | LANDED | TAKEN_BACK), "{s} → taken_back");
             assert_eq!(allowed(s, CLOSED), *s != CLOSED, "{s} → closed");
+            assert_eq!(allowed(s, PICKED_UP), matches!(*s, WAITING | TAKEN_BACK | FAILED), "{s} → picked_up: a closed row never comes back by itself");
             assert!(!allowed(s, WAITING), "nothing moves back to waiting");
         }
         assert!(allowed(WORKING, FAILED) && !allowed(WAITING, FAILED) && !allowed(CLOSED, FAILED) && !allowed(LANDED, FAILED));

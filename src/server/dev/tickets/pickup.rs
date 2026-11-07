@@ -276,7 +276,8 @@ async fn run(state: &AppState, site: &JiraSiteRow, report: &mut PollReport) -> P
                 if row.misses != 0 {
                     let _ = state.db.reset_dev_ticket_misses(space, &issue.key).await;
                 }
-                if matches!(row.state.as_str(), dev_jira::TAKEN_BACK | dev_jira::FAILED) {
+                // A row the person stopped stays stopped until they press Retry (api-decisions 12).
+                if matches!(row.state.as_str(), dev_jira::TAKEN_BACK | dev_jira::FAILED) && !row.held_by_person {
                     if let Ok(true) = store::set_state(state, space, &issue.key, dev_jira::PICKED_UP, Some("handed over again")).await {
                         report.resumed += 1;
                     }
@@ -450,6 +451,7 @@ mod tests {
             taken_back_by: None,
             closed_resolution: None,
             waiting_since_connect: false,
+            held_by_person: false,
             work_comment_at: None,
             pr_comment_at: None,
             first_seen_at: t0,

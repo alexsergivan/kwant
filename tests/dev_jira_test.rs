@@ -119,8 +119,9 @@ async fn no_token_anywhere(env: &Env, m: &MockAtlassian) {
 async fn with_no_jira_site_nothing_changes() {
     let env = jira_setup().await;
     dev_mode_on(&env).await;
+    // api-decisions 9: not connected is 200 {site: null, tickets: []}
     let (s, v) = call(&env.app, "GET", &uri("jira"), None).await;
-    assert_eq!((s.as_u16(), v["site"].clone()), (200, Value::Null), "{v}");
+    assert_eq!((s.as_u16(), v.clone()), (200, json!({"site": null, "tickets": []})), "{v}");
     let (s, v) = call(&env.app, "GET", &uri("tickets"), None).await;
     assert_eq!((s.as_u16(), v["tickets"].clone()), (200, json!([])), "{v}");
     let (s, v) = call(&env.app, "POST", &uri("jira/poll"), None).await;
@@ -151,11 +152,16 @@ async fn a_bot_can_not_read_or_change_the_jira_connection() {
         ("DELETE", uri("jira"), None),
         ("GET", uri("tickets"), None),
         ("POST", uri("tickets/TRAIL-101/start"), None),
+        ("POST", uri("tickets/TRAIL-101/stop"), None),
+        ("POST", uri("tickets/TRAIL-101/skip"), None),
+        ("POST", uri("tickets/TRAIL-101/close"), None),
+        ("POST", uri("tickets/TRAIL-101/retry"), None),
+        ("POST", uri("jira/check"), Some(json!({"address": m.base, "detect": true}))),
         ("POST", uri("tickets/TRAIL-101/ask/preview"), Some(json!({"questions": [{"text": "a?"}]}))),
         ("POST", uri("tickets/TRAIL-101/ask"), Some(json!({"questions": [{"text": "a?"}], "digest": "x"}))),
     ] {
         let (s, v) = call_with(&env.app, method, &path, body, &h).await;
-        assert_eq!(s.as_u16(), 403, "{method} {path}: {v}");
+        assert_eq!((s.as_u16(), v["code"].as_str()), (403, Some("person_only")), "{method} {path}: {v}");
     }
     assert!(m.hits().is_empty(), "a refused bot never reached Jira");
     assert!(env.state.db.dev_jira_site(&space()).await.unwrap().is_none());
@@ -203,9 +209,9 @@ async fn the_check_answers_found_auth_failed_not_jira_unreachable_no_projects_an
     let v = check(with(sign_in(&m), json!({"projects": ["TRAIL"], "handover": "label", "label": "kwant"}))).await;
     assert_eq!((v["result"].as_str(), v["count"].as_u64()), (Some("found"), Some(1)), "{v}");
     assert!(v["jql"].as_str().unwrap().contains("labels = \"kwant\""), "{v}");
-    // "Either" is Advanced JQL only (design amendment J4)
-    let v = check(with(sign_in(&m), json!({"projects": ["TRAIL"], "handover": "either"}))).await;
-    assert!(v["jql_error"].is_string() || v["result"] == "invalid", "{v}");
+    // "Either" is Advanced JQL only (design amendment J4): not a hand-over word (api-decisions 2)
+    let (s, v) = call(&env.app, "POST", &uri("jira/check"), Some(with(sign_in(&m), json!({"projects": ["TRAIL"], "handover": "either"})))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (400, Some("bad_request")), "{v}");
 
     // A wrong token
     let v = check(with(sign_in(&m), json!({"token": "mock-wrong-not-a-real-token"}))).await;
@@ -249,6 +255,10 @@ async fn a_scoped_cloud_token_goes_through_the_gateway_and_says_what_it_reads() 
     dev_mode_on(&env).await;
     let v = connect(&env, &m, json!({"token": m.scoped_token(), "spaces": ["ENG"]})).await;
     assert_eq!(v["site"]["auth"], "scoped");
+    // api-decisions 6: the non-secret scope line is kept and shown again
+    assert_eq!(v["site"]["scope_note"], "scoped: reads Jira and Confluence", "{v}");
+    let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;
+    assert_eq!((g["site"]["scope_note"].as_str(), g["site"]["spaces"].clone()), (Some("scoped: reads Jira and Confluence"), json!(["ENG"])), "{g}");
     m.clear_hits();
     m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
     poll(&env).await;
@@ -276,6 +286,7 @@ async fn a_dc_site_is_detected_and_its_confluence_has_its_own_address_and_pat() 
     dev_mode_on(&env).await;
     let v = connect(&env, &m, json!({"confluence_url": m.confluence_url(), "confluence_token": m.confluence_token(), "spaces": ["ENG"]})).await;
     assert_eq!((v["site"]["kind"].as_str(), v["site"]["confluence_url"].as_str()), (Some("dc"), Some(m.confluence_url().as_str())));
+    assert_eq!(v["site"]["scope_note"], Value::Null, "a PAT has no scope line");
     // Saving again without retyping the tokens keeps them
     let v = connect(&env, &m, json!({"token": null, "confluence_url": m.confluence_url(), "spaces": ["ENG"], "poll_secs": 600})).await;
     assert_eq!(v["site"]["poll_secs"], 600);
@@ -517,4 +528,182 @@ async fn ask_on_jira_shows_the_exact_comment_and_posts_it_once_with_a_mention() 
         assert_eq!(r["replies"].as_u64(), Some(0), "once per reply");
         no_token_anywhere(&env, &m).await;
     }
+}
+
+#[tokio::test]
+async fn detect_names_the_jira_kind_with_no_token() {
+    let env = jira_setup().await;
+    let dc = MockAtlassian::dc().await;
+    let _g = gateway_to(&dc);
+    let cloud = MockAtlassian::cloud().await;
+    let detect = |address: String| {
+        let app = env.app.clone();
+        async move { call(&app, "POST", &uri("jira/check"), Some(json!({"address": address, "detect": true}))).await }
+    };
+    let (s, v) = detect(dc.base.clone()).await;
+    assert_eq!((s.as_u16(), v.clone()), (200, json!({"result": "detected", "kind": "dc"})), "{v}");
+    let (s, v) = detect(cloud.base.clone()).await;
+    assert_eq!((s.as_u16(), v.clone()), (200, json!({"result": "detected", "kind": "cloud"})), "{v}");
+    let (_, v) = detect(format!("{}/not-jira", dc.base)).await;
+    assert_eq!(v, json!({"result": "not_jira"}));
+    let (_, v) = detect("http://127.0.0.1:9".into()).await;
+    assert_eq!(v, json!({"result": "unreachable"}));
+    dc.fault("/serverInfo", Fault::TooMany { retry_after: Some(90) });
+    let (_, v) = detect(dc.base.clone()).await;
+    assert_eq!(v["result"], "rate_limited", "{v}");
+    assert!(v["retry_at"].is_string(), "{v}");
+    dc.heal("/serverInfo");
+    // An address that can't be used is a coded 400
+    for bad in ["", "ftp://jira.example.com", "javascript:alert(1)"] {
+        let (s, v) = detect(bad.into()).await;
+        assert_eq!((s.as_u16(), v["code"].as_str()), (400, Some("bad_address")), "{bad}: {v}");
+    }
+    // No token was read, sent or needed; nothing was saved
+    assert!(dc.hits().iter().chain(cloud.hits().iter()).all(|h| h.auth.is_none()), "detect is anonymous");
+    assert!(env.state.db.dev_jira_site(&space()).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn the_site_answer_has_arrays_on_and_puts_hand_over_words_and_every_4xx_is_coded() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app");
+    m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+
+    let v = connect(&env, &m, json!({"handover": "label"})).await;
+    for site in [v["site"].clone(), call(&env.app, "GET", &uri("jira"), None).await.1["site"].clone()] {
+        assert_eq!(site["projects"], json!(["TRAIL"]), "api-decisions 1: {site}");
+        assert_eq!(site["spaces"], json!([]), "{site}");
+        assert_eq!((site["on"].as_bool(), site.get("on_")), (Some(true), None), "api-decisions 3: {site}");
+        assert_eq!(site["handover"], "label", "{site}");
+    }
+    poll(&env).await;
+    let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;
+    let tickets = g["tickets"].as_array().expect("tickets is the rows");
+    assert_eq!(tickets.len(), 1, "{g}");
+    assert_eq!((tickets[0]["labels"].clone(), tickets[0]["work"].clone()), (json!(["kwant"]), Value::Null), "{g}");
+
+    // Assignee is stored and answered in PUT's words; "either" never is
+    let dana = m.add_user("dana", "Dana Park");
+    let v = connect(&env, &m, json!({"handover": "assignee", "assignee_id": dana.account_id})).await;
+    assert_eq!(v["site"]["handover"], "assignee");
+    let (s, v) = call(&env.app, "PUT", &uri("jira"), Some(with(sign_in(&m), json!({"projects": ["TRAIL"], "handover": "either"})))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (400, Some("bad_request")), "{v}");
+    let (s, v) = call(&env.app, "PUT", &uri("jira"), Some(with(sign_in(&m), json!({"projects": ["TRAIL"], "handover": "jql"})))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (400, Some("bad_request")), "jql needs the search: {v}");
+
+    // api-decisions 10: every 4xx is {error, code}
+    let (s, v) = call(&env.app, "GET", "/api/spaces/sp_nope/dev/jira", None).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (404, Some("no_space")), "{v}");
+    assert!(v["error"].is_string());
+    let (s, v) = call(&env.app, "POST", &uri("jira/on"), Some(json!({"on": "yes"}))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (400, Some("bad_request")), "{v}");
+    let (s, v) = call(&env.app, "POST", &uri("tickets/TRAIL-999/ask/preview"), Some(json!({"questions": "not a list"}))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (400, Some("bad_request")), "a body of the wrong shape: {v}");
+    assert!(v["error"].is_string(), "{v}");
+    let (s, v) = call(&env.app, "GET", &uri("tickets/TRAIL-999"), None).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (404, Some("not_found")), "{v}");
+    let key = tickets[0]["key"].as_str().unwrap().to_string();
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/ask/preview")), Some(json!({"questions": [{"text": "a?"}]}))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("wrong_state")), "{v}");
+    let (s, _) = call(&env.app, "POST", &uri(&format!("tickets/{key}/close")), None).await;
+    assert_eq!(s.as_u16(), 200);
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/start")), None).await;
+    assert_eq!((s.as_u16(), v["code"].as_str(), v["state"].as_str()), (409, Some("wrong_state"), Some(dev_jira::CLOSED)), "{v}");
+    no_token_anywhere(&env, &m).await;
+}
+
+#[tokio::test]
+async fn the_person_stops_skips_closes_and_retries_without_writing_to_jira() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app");
+    let old = m.add_issue("TRAIL", "Labelled before connecting", &["kwant"], None);
+    connect(&env, &m, json!({})).await;
+    poll(&env).await;
+    let new = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    poll(&env).await;
+    assert_eq!(ticket(&env, &new).await.state, dev_jira::PICKED_UP);
+    let mv = |key: String, what: &'static str| {
+        let app = env.app.clone();
+        async move { call(&app, "POST", &uri(&format!("tickets/{key}/{what}")), None).await }
+    };
+
+    // Stop: taken back, held; the poller doesn't pick it up again while it still matches
+    let (s, v) = mv(new.clone(), "stop").await;
+    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["held_by_person"].as_bool()), (200, Some(dev_jira::TAKEN_BACK), Some(true)), "{v}");
+    assert!(v["ticket"].get("work").is_some(), "the answer is the row with work: {v}");
+    let e = events(&env, &new).await;
+    assert!(e.contains(&"state:stopped by you".to_string()) && e.contains(&"hook:stopped: taken_back".to_string()), "{e:?}");
+    poll(&env).await;
+    assert_eq!(ticket(&env, &new).await.state, dev_jira::TAKEN_BACK, "a stopped ticket stays stopped");
+    let (s, v) = mv(new.clone(), "stop").await;
+    assert_eq!((s.as_u16(), v["code"].as_str(), v["state"].as_str()), (409, Some("wrong_state"), Some(dev_jira::TAKEN_BACK)), "{v}");
+
+    // Retry: back in the queue (and started, a slot is free), no longer held
+    let (s, v) = mv(new.clone(), "retry").await;
+    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["held_by_person"].as_bool(), v["started"].as_bool()), (200, Some(dev_jira::PICKED_UP), Some(false), Some(true)), "{v}");
+
+    // Skip: closed as skipped, never picked up again even though it still matches
+    let (s, v) = mv(new.clone(), "skip").await;
+    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["closed_resolution"].as_str()), (200, Some(dev_jira::CLOSED), Some("skipped")), "{v}");
+    poll(&env).await;
+    assert_eq!(ticket(&env, &new).await.state, dev_jira::CLOSED);
+    let (s, _) = mv(new.clone(), "skip").await;
+    assert_eq!(s.as_u16(), 409);
+    // Retry from closed
+    let (s, v) = mv(new.clone(), "retry").await;
+    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["closed_resolution"].clone()), (200, Some(dev_jira::PICKED_UP), Value::Null), "{v}");
+
+    // Close: done in kwant only
+    let (s, v) = mv(new.clone(), "close").await;
+    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["closed_resolution"].as_str()), (200, Some(dev_jira::CLOSED), Some("done")), "{v}");
+    let (s, v) = mv(new.clone(), "close").await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("wrong_state")), "{v}");
+    assert_eq!(m.issue(&new).unwrap().status, "To Do", "Close changes nothing in Jira");
+
+    // Skip works on a Waiting card; Stop doesn't (nothing is running)
+    assert_eq!(ticket(&env, &old).await.state, dev_jira::WAITING);
+    let (s, v) = mv(old.clone(), "stop").await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("wrong_state")), "{v}");
+    let (s, v) = mv(old.clone(), "skip").await;
+    assert_eq!((s.as_u16(), v["ticket"]["closed_resolution"].as_str()), (200, Some("skipped")), "{v}");
+    let (s, v) = mv("TRAIL-999".into(), "close").await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (404, Some("not_found")), "{v}");
+
+    assert!(m.writes().is_empty() && m.refused().is_empty(), "no lifecycle button writes to Jira");
+    no_token_anywhere(&env, &m).await;
+}
+
+#[tokio::test]
+async fn a_ticket_at_work_shows_its_branch_pr_and_lead() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app");
+    connect(&env, &m, json!({})).await;
+    poll(&env).await;
+    let key = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    poll(&env).await;
+    let (_, v) = call(&env.app, "GET", &uri("tickets"), None).await;
+    assert_eq!(v["tickets"][0]["work"], Value::Null, "no work before work starts: {v}");
+
+    for to in [dev_jira::READING, dev_jira::BRIEF_READY, dev_jira::WORKING] {
+        assert!(env.state.db.set_dev_ticket_state(&space(), &key, to).await.unwrap(), "{to}");
+    }
+    let facts = json!({"head_branch": format!("feat/{key}-dark-mode"), "title": "Dark mode", "links": {"pr": "https://github.com/acme/trail/pull/7"}});
+    env.state.db.insert_dev_card(&space(), kwnt::db::dev_mode::REVIEW, "pr/7", "abc1234", &facts.to_string()).await.unwrap();
+    let (s, v) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let w = &v["ticket"]["work"];
+    assert_eq!(w["branch"].as_str(), Some(format!("feat/{key}-dark-mode").as_str()), "{v}");
+    assert_eq!((w["pr_url"].as_str(), w["head_sha"].as_str()), (Some("https://github.com/acme/trail/pull/7"), Some("abc1234")), "{v}");
+    assert_eq!((w["builder_ids"].clone(), w["plan"].clone(), w["matches"].clone()), (json!([]), json!([]), Value::Null), "the stub seam has no mission: {v}");
+    let (_, list) = call(&env.app, "GET", &uri("tickets"), None).await;
+    assert_eq!(list["tickets"][0]["work"], *w, "the list and the ticket agree");
 }

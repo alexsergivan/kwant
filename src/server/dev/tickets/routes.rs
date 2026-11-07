@@ -1,15 +1,17 @@
 //! Jira tickets' HTTP API (api.md §2.3). Every route is the person's: `auth::person_only` covers
 //! `/api/spaces/:id/dev/…`, and each handler also refuses a bot's turn token. Tokens come in in a
 //! request body, go to the password vault, and never come back out: no answer, event or log line
-//! carries one. Errors are `{"error", "code"}`.
+//! carries one. Every 4xx and 5xx body is `{"error", "code"}` (api-decisions 10; the codes are in
+//! api.md §2.2), including a refused bot token, an unknown space and a body that isn't JSON.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{FromRequest, Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    Json,
+    routing::{get, post},
+    Json, Router,
 };
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -17,7 +19,8 @@ use zeroize::Zeroizing;
 use super::pickup;
 use super::source::{ask_text, Mention, SourceError, TicketWriter};
 use super::store;
-use crate::db::dev_jira::{self, JiraSiteRow};
+use super::work;
+use crate::db::dev_jira::{self, JiraSiteRow, PersonMove, TicketRow};
 use crate::db::spaces::SpaceId;
 use crate::server::dev::atlassian::{self, check, client, jql};
 use crate::server::spaces::active_space;
@@ -27,6 +30,67 @@ pub const REFUSAL: &str = "only the person can read or change the Jira connectio
 
 fn coded(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
     (status, Json(json!({"error": message.into(), "code": code}))).into_response()
+}
+
+/// The Jira and ticket routes (api.md §2.2), merged into the server's router. Vega's routes
+/// (answer, brief) join through `hooks::mount`.
+pub fn router() -> Router<AppState> {
+    let r = Router::new()
+        .route("/api/spaces/:id/dev/jira", get(get_site).put(put_site).delete(delete_site))
+        .route("/api/spaces/:id/dev/jira/check", post(check_site))
+        .route("/api/spaces/:id/dev/jira/on", post(set_on))
+        .route("/api/spaces/:id/dev/jira/poll", post(poll_now))
+        .route("/api/spaces/:id/dev/jira/users", get(users))
+        .route("/api/spaces/:id/dev/tickets", get(list))
+        .route("/api/spaces/:id/dev/tickets/:key", get(one))
+        .route("/api/spaces/:id/dev/tickets/:key/start", post(start))
+        .route("/api/spaces/:id/dev/tickets/:key/stop", post(stop))
+        .route("/api/spaces/:id/dev/tickets/:key/skip", post(skip))
+        .route("/api/spaces/:id/dev/tickets/:key/close", post(close))
+        .route("/api/spaces/:id/dev/tickets/:key/retry", post(retry))
+        .route("/api/spaces/:id/dev/tickets/:key/ask/preview", post(ask_preview))
+        .route("/api/spaces/:id/dev/tickets/:key/ask", post(ask));
+    super::hooks::mount(r)
+}
+
+/// `Json<T>` whose rejection (not JSON, wrong shape, wrong content type) is a coded 400.
+pub struct Body<T>(pub T);
+
+#[axum::async_trait]
+impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Body<T> {
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Response> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(v)) => Ok(Body(v)),
+            Err(e) => Err(coded(StatusCode::BAD_REQUEST, "bad_request", e.body_text())),
+        }
+    }
+}
+
+/// A shared helper's error answer (`{error}` and maybe more) with `code` added: `code_of` names it
+/// from the status when the body has none.
+async fn with_code(r: Response, code_of: impl Fn(StatusCode) -> &'static str) -> Response {
+    let (parts, body) = r.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024).await.unwrap_or_default();
+    let mut v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    if !v.is_object() {
+        v = json!({"error": String::from_utf8_lossy(&bytes).trim()});
+    }
+    if v.get("code").and_then(Value::as_str).is_none() {
+        v["code"] = json!(code_of(parts.status));
+    }
+    (parts.status, Json(v)).into_response()
+}
+
+/// The codes of `guard`'s refusals: a bot's token, an unknown space, an archived one.
+fn guard_code(s: StatusCode) -> &'static str {
+    match s {
+        StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => "person_only",
+        StatusCode::NOT_FOUND => "no_space",
+        StatusCode::CONFLICT => "space_archived",
+        _ => "internal",
+    }
 }
 
 fn internal(e: impl std::fmt::Display) -> Response {
@@ -52,8 +116,13 @@ fn source_error(e: &SourceError) -> Response {
 
 #[allow(clippy::result_large_err)]
 async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceId, Response> {
-    crate::server::mcp_suggest::refuse_agent_tokens(state, headers, REFUSAL).await?;
-    active_space(state, id).await
+    if let Err(r) = crate::server::mcp_suggest::refuse_agent_tokens(state, headers, REFUSAL).await {
+        return Err(with_code(r, guard_code).await);
+    }
+    match active_space(state, id).await {
+        Ok(s) => Ok(s),
+        Err(r) => Err(with_code(r, guard_code).await),
+    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -83,16 +152,64 @@ fn list_of(body: &Value, field: &str) -> Vec<String> {
 // ---------------------------------------------------------------------------------------------
 // The site
 
-/// `GET /api/spaces/:id/dev/jira` → `{site: row | null, token_saved}`. The row has no secret.
+/// The site row as the API shows it: no secret; `projects`, `spaces` arrays; `on`; `handover` in
+/// `PUT`'s words (`jql` whenever Advanced JQL is set); `scope_note`.
+pub fn site_json(site: &JiraSiteRow) -> Value {
+    let mut v = serde_json::to_value(site).unwrap_or(Value::Null);
+    if site.jql.as_deref().is_some_and(|j| !j.trim().is_empty()) {
+        v["handover"] = json!("jql");
+    }
+    v
+}
+
+/// `GET /api/spaces/:id/dev/jira` → `{site: row | null, tickets: [row with work]}`; 200 with
+/// `{site: null, tickets: []}` when no site is connected (api-decisions 9). The row has no secret.
 pub async fn get_site(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
         Err(r) => return r,
     };
-    match state.db.dev_jira_site(space.as_str()).await {
-        Ok(site) => Json(json!({"site": site, "tickets": state.db.dev_tickets(space.as_str()).await.map(|t| t.len()).unwrap_or(0)})).into_response(),
-        Err(e) => internal(e),
+    let site = match state.db.dev_jira_site(space.as_str()).await {
+        Ok(s) => s,
+        Err(e) => return internal(e),
+    };
+    let rows = match &site {
+        Some(_) => match state.db.dev_tickets(space.as_str()).await {
+            Ok(t) => t,
+            Err(e) => return internal(e),
+        },
+        None => Vec::new(),
+    };
+    let tickets = work::rows_with_work(&state, space.as_str(), &rows).await;
+    Json(json!({"site": site.as_ref().map(site_json), "tickets": tickets})).into_response()
+}
+
+/// `handover` in `PUT`'s words (api-decisions 2): `label` (default), `assignee` or `jql`. A body
+/// with `jql` and no `handover` is `jql`; `jql` is dropped for the other two. Anything else
+/// (`either`) is 400 `bad_request`.
+#[allow(clippy::result_large_err)]
+fn normalize_handover(body: &mut Value) -> Result<(), Response> {
+    let jql = str_of(body, "jql");
+    if body.get("handover").is_some_and(|h| !h.is_null() && !h.is_string()) {
+        return Err(coded(StatusCode::BAD_REQUEST, "bad_request", "handover is a word: label, assignee or jql"));
     }
+    let handover = match (str_of(body, "handover").as_deref(), &jql) {
+        (None, Some(_)) => "jql",
+        (None, None) => "label",
+        (Some(h @ ("label" | "assignee" | "jql")), _) => h,
+        (Some(_), _) => return Err(coded(StatusCode::BAD_REQUEST, "bad_request", "hand over by label or assignee; for anything else, type the search under Advanced (handover: jql)")),
+    }
+    .to_string();
+    if handover == "jql" && jql.is_none() {
+        return Err(coded(StatusCode::BAD_REQUEST, "bad_request", "type the JQL search under Advanced"));
+    }
+    if let Some(o) = body.as_object_mut() {
+        if handover != "jql" {
+            o.remove("jql");
+        }
+        o.insert("handover".into(), json!(handover));
+    }
+    Ok(())
 }
 
 /// The token the person typed, else the saved one when the address (and kind) didn't change.
@@ -142,11 +259,24 @@ async fn branch_names(state: &AppState, space: &str) -> Vec<String> {
 }
 
 /// `POST /api/spaces/:id/dev/jira/check`: the sheet's live check. Nothing is saved.
-pub async fn check_site(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(mut body): Json<Value>) -> Response {
+/// `{address, detect: true}` runs only the anonymous detection, with no token (api-decisions 8):
+/// `{result: "detected", kind}` or `{result: "not_jira" | "unreachable" | "rate_limited",
+/// retry_at?}`; 400 `bad_address` when the address can't be used.
+pub async fn check_site(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Body(mut body): Body<Value>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
         Err(r) => return r,
     };
+    if body["detect"].as_bool() == Some(true) {
+        let address = str_of(&body, "address").or_else(|| str_of(&body, "jira_url")).unwrap_or_default();
+        return match check::probe(&address, atlassian::resolver()).await {
+            Ok(d) => Json(d).into_response(),
+            Err(m) => coded(StatusCode::BAD_REQUEST, "bad_address", m),
+        };
+    }
+    if let Err(r) = normalize_handover(&mut body) {
+        return r;
+    }
     let existing = state.db.dev_jira_site(space.as_str()).await.ok().flatten();
     let input = check_input(&state, existing.as_ref(), &mut body).await;
     let mut out = check::check(input, atlassian::resolver()).await;
@@ -164,11 +294,14 @@ fn new_site_id() -> String {
 /// `PUT /api/spaces/:id/dev/jira`: checks, then saves the token(s) in the vault and the settings
 /// in the row. Body: the check's fields plus `spaces`, `team_id`, `assignee_key`,
 /// `assignee_name`, `comment_progress`, `wait_for_ok`, `poll_secs`, `accept_risk`.
-pub async fn put_site(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(mut body): Json<Value>) -> Response {
+pub async fn put_site(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Body(mut body): Body<Value>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
         Err(r) => return r,
     };
+    if let Err(r) = normalize_handover(&mut body) {
+        return r;
+    }
     let existing = match state.db.dev_jira_site(space.as_str()).await {
         Ok(e) => e,
         Err(e) => return internal(e),
@@ -194,13 +327,13 @@ pub async fn put_site(State(state): State<AppState>, headers: HeaderMap, Path(id
     }
     // The "Before you save the token" card: the built-in store's rules, and a locked vault.
     if let Err(r) = crate::server::passwords::accept_risk(&state, &headers, body["accept_risk"].as_bool().unwrap_or(false)).await {
-        return r;
+        return with_code(r, |s| if s == StatusCode::FORBIDDEN { "person_only" } else { "internal" }).await;
     }
     if let Some(r) = crate::server::passwords::refuse_local_save(&state).await {
-        return r;
+        return with_code(r, |_| "needs_bitwarden").await;
     }
     if state.credentials.is_locked().await {
-        return (StatusCode::LOCKED, Json(json!({"error": "the password vault is locked: unlock it first", "locked": true}))).into_response();
+        return (StatusCode::LOCKED, Json(json!({"error": "the password vault is locked: unlock it first", "code": "vault_locked", "locked": true}))).into_response();
     }
 
     let jira_url = out.jira_url.clone().unwrap_or_default();
@@ -231,6 +364,7 @@ pub async fn put_site(State(state): State<AppState>, headers: HeaderMap, Path(id
     row.me_name = out.me.as_ref().map(|m| m.display_name.clone());
     row.projects = serde_json::to_string(&projects).unwrap_or_else(|_| "[]".into());
     row.handover = str_of(&body, "handover").unwrap_or_else(|| "label".into());
+    row.scope_note = out.scope_note.clone();
     row.assignee_id = str_of(&body, "assignee_id");
     row.assignee_key = str_of(&body, "assignee_key").or_else(|| row.assignee_id.clone());
     row.assignee_name = str_of(&body, "assignee_name").map(|n| super::source::cut(&n, 120).0);
@@ -246,7 +380,7 @@ pub async fn put_site(State(state): State<AppState>, headers: HeaderMap, Path(id
     match state.db.save_dev_jira_site(&row, rule_changed).await {
         Ok(saved) => {
             pickup::poll_soon(space.as_str());
-            Json(json!({"site": saved, "check": out})).into_response()
+            Json(json!({"site": site_json(&saved), "check": out})).into_response()
         }
         Err(e) => internal(e),
     }
@@ -278,7 +412,7 @@ pub async fn delete_site(State(state): State<AppState>, headers: HeaderMap, Path
 }
 
 /// `POST /api/spaces/:id/dev/jira/on` `{on}`: turn pickup off (cards stay) or back on.
-pub async fn set_on(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(body): Json<Value>) -> Response {
+pub async fn set_on(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Body(body): Body<Value>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
         Err(r) => return r,
@@ -340,14 +474,28 @@ pub async fn users(State(state): State<AppState>, headers: HeaderMap, Path(id): 
 // ---------------------------------------------------------------------------------------------
 // Tickets
 
-/// `GET /api/spaces/:id/dev/tickets` → `{tickets: [row]}` (the Tickets tab; newest first).
+/// `GET /api/spaces/:id/dev/tickets` → `{tickets: [row with work], slots}` (the Tickets tab; newest
+/// first).
 pub async fn list(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
         Err(r) => return r,
     };
     match state.db.dev_tickets(space.as_str()).await {
-        Ok(t) => Json(json!({"tickets": t, "slots": pickup::SLOTS})).into_response(),
+        Ok(t) => Json(json!({"tickets": work::rows_with_work(&state, space.as_str(), &t).await, "slots": pickup::SLOTS})).into_response(),
+        Err(e) => internal(e),
+    }
+}
+
+async fn with_work(state: &AppState, space: &str, t: &TicketRow) -> Value {
+    work::rows_with_work(state, space, std::slice::from_ref(t)).await.pop().unwrap_or(Value::Null)
+}
+
+/// 409 `wrong_state` (with the ticket's `state`), or 404 when there's no such ticket.
+async fn wrong_state(state: &AppState, space: &str, key: &str, what: &str) -> Response {
+    match state.db.dev_ticket(space, key).await {
+        Ok(Some(t)) => (StatusCode::CONFLICT, Json(json!({"error": format!("this ticket can't {what} from where it is ({})", t.state), "code": "wrong_state", "state": t.state}))).into_response(),
+        Ok(None) => coded(StatusCode::NOT_FOUND, "not_found", "no such ticket here"),
         Err(e) => internal(e),
     }
 }
@@ -359,7 +507,7 @@ pub async fn one(State(state): State<AppState>, headers: HeaderMap, Path((id, ke
         Err(r) => return r,
     };
     match state.db.dev_ticket(space.as_str(), &key).await {
-        Ok(Some(t)) => Json(json!({"ticket": t, "events": state.db.dev_ticket_events(space.as_str(), &key, 100).await.unwrap_or_default()})).into_response(),
+        Ok(Some(t)) => Json(json!({"ticket": with_work(&state, space.as_str(), &t).await, "events": state.db.dev_ticket_events(space.as_str(), &key, 100).await.unwrap_or_default()})).into_response(),
         Ok(None) => coded(StatusCode::NOT_FOUND, "not_found", "no such ticket here"),
         Err(e) => internal(e),
     }
@@ -380,11 +528,69 @@ pub async fn start(State(state): State<AppState>, headers: HeaderMap, Path((id, 
         Ok(true) => {
             let started = pickup::fill_slots(&state, &site).await;
             let t = state.db.dev_ticket(space.as_str(), &key).await.ok().flatten();
-            Json(json!({"ticket": t, "started": started > 0 && t.as_ref().is_some_and(|t| t.start_called_at.is_some())})).into_response()
+            let started = started > 0 && t.as_ref().is_some_and(|t| t.start_called_at.is_some());
+            let ticket = match &t {
+                Some(t) => with_work(&state, space.as_str(), t).await,
+                None => Value::Null,
+            };
+            Json(json!({"ticket": ticket, "started": started})).into_response()
         }
-        Ok(false) => coded(StatusCode::CONFLICT, "conflict", "this ticket can't be started from where it is"),
+        Ok(false) => wrong_state(&state, space.as_str(), &key, "be started").await,
         Err(e) => internal(e),
     }
+}
+
+/// The person's Stop, Skip, Close and Retry (api-decisions 12, api.md §1.4): `{ticket, started}`
+/// (`started` only for Retry), or 409 `wrong_state`. None of them writes to Jira.
+async fn person_move(state: AppState, headers: HeaderMap, id: String, key: String, mv: PersonMove) -> Response {
+    let space = match guard(&state, &headers, &id).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let site = match site_or_404(&state, &space).await {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    match store::person_move(&state, space.as_str(), &key, mv).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return wrong_state(&state, space.as_str(), &key, mv.as_str()).await,
+        Err(e) => return internal(e),
+    }
+    let mut started = false;
+    match mv {
+        PersonMove::Stop => super::hooks::stopped(&state, space.as_str(), &key, super::hooks::Why::TakenBack).await,
+        PersonMove::Skip | PersonMove::Close => super::hooks::stopped(&state, space.as_str(), &key, super::hooks::Why::Closed).await,
+        PersonMove::Retry => {
+            pickup::fill_slots(&state, &site).await;
+            started = state.db.dev_ticket(space.as_str(), &key).await.ok().flatten().is_some_and(|t| t.start_called_at.is_some());
+        }
+    }
+    let ticket = match state.db.dev_ticket(space.as_str(), &key).await {
+        Ok(Some(t)) => with_work(&state, space.as_str(), &t).await,
+        Ok(None) => Value::Null,
+        Err(e) => return internal(e),
+    };
+    Json(json!({"ticket": ticket, "started": started})).into_response()
+}
+
+/// `POST /api/spaces/:id/dev/tickets/:key/stop`: stop the work, keep the branch → `taken_back`.
+pub async fn stop(State(state): State<AppState>, headers: HeaderMap, Path((id, key)): Path<(String, String)>) -> Response {
+    person_move(state, headers, id, key, PersonMove::Stop).await
+}
+
+/// `POST /api/spaces/:id/dev/tickets/:key/skip`: → `closed` (`skipped`), never picked up again.
+pub async fn skip(State(state): State<AppState>, headers: HeaderMap, Path((id, key)): Path<(String, String)>) -> Response {
+    person_move(state, headers, id, key, PersonMove::Skip).await
+}
+
+/// `POST /api/spaces/:id/dev/tickets/:key/close`: → `closed` (`done`) in kwant only.
+pub async fn close(State(state): State<AppState>, headers: HeaderMap, Path((id, key)): Path<(String, String)>) -> Response {
+    person_move(state, headers, id, key, PersonMove::Close).await
+}
+
+/// `POST /api/spaces/:id/dev/tickets/:key/retry`: a taken back, closed or failed ticket → the queue.
+pub async fn retry(State(state): State<AppState>, headers: HeaderMap, Path((id, key)): Path<(String, String)>) -> Response {
+    person_move(state, headers, id, key, PersonMove::Retry).await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -478,7 +684,7 @@ async fn prepare(state: &AppState, space: &SpaceId, key: &str, body: &AskBody) -
         Err(e) => return Err(internal(e)),
     };
     if !ASK_STATES.contains(&ticket.state.as_str()) {
-        return Err(coded(StatusCode::CONFLICT, "conflict", "this ticket has no open questions"));
+        return Err((StatusCode::CONFLICT, Json(json!({"error": "this ticket has no open questions", "code": "wrong_state", "state": ticket.state}))).into_response());
     }
     if ticket.asked_comment_id.is_some() {
         return Err(coded(StatusCode::CONFLICT, "already_asked", "kwant already asked on this ticket; answer here, or wait for the reply"));
@@ -500,7 +706,7 @@ fn as_whom(site: &JiraSiteRow) -> Value {
 
 /// `POST /api/spaces/:id/dev/tickets/:key/ask/preview` `{questions, team?}` → `{to, text, as,
 /// digest}`. Nothing is posted.
-pub async fn ask_preview(State(state): State<AppState>, headers: HeaderMap, Path((id, key)): Path<(String, String)>, Json(body): Json<AskBody>) -> Response {
+pub async fn ask_preview(State(state): State<AppState>, headers: HeaderMap, Path((id, key)): Path<(String, String)>, Body(body): Body<AskBody>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
         Err(r) => return r,
@@ -518,7 +724,7 @@ fn asking() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
 
 /// `POST /api/spaces/:id/dev/tickets/:key/ask` `{questions, team?, digest}`: posts the previewed
 /// comment once (409 `changed` when it no longer matches the preview) → `{comment_id, url, to, at}`.
-pub async fn ask(State(state): State<AppState>, headers: HeaderMap, Path((id, key)): Path<(String, String)>, Json(body): Json<AskBody>) -> Response {
+pub async fn ask(State(state): State<AppState>, headers: HeaderMap, Path((id, key)): Path<(String, String)>, Body(body): Body<AskBody>) -> Response {
     let space = match guard(&state, &headers, &id).await {
         Ok(s) => s,
         Err(r) => return r,
@@ -564,6 +770,22 @@ mod tests {
 
     fn q(t: &str, c: &[&str]) -> Question {
         Question { text: t.into(), choices: c.iter().map(|s| s.to_string()).collect() }
+    }
+
+    #[test]
+    fn hand_over_is_label_assignee_or_jql_and_never_either() {
+        let norm = |v: Value| {
+            let mut v = v;
+            normalize_handover(&mut v).map(|_| v).map_err(|r| r.status())
+        };
+        assert_eq!(norm(json!({})).unwrap()["handover"], "label", "the default");
+        assert_eq!(norm(json!({"jql": "project = X"})).unwrap()["handover"], "jql", "a search alone means jql");
+        let v = norm(json!({"handover": "assignee", "jql": "project = X"})).unwrap();
+        assert_eq!((v["handover"].as_str(), v.get("jql")), (Some("assignee"), None), "a search is dropped unless handover is jql");
+        assert_eq!(norm(json!({"handover": "jql", "jql": "labels = k"})).unwrap()["jql"], "labels = k");
+        for bad in [json!({"handover": "either"}), json!({"handover": "jql"}), json!({"handover": "jql", "jql": "  "}), json!({"handover": 3, "jql": null})] {
+            assert_eq!(norm(bad.clone()).err(), Some(StatusCode::BAD_REQUEST), "{bad}");
+        }
     }
 
     #[test]

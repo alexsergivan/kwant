@@ -73,6 +73,16 @@ pub async fn set_state(state: &AppState, space_id: &str, key: &str, to: &str, de
     Ok(moved)
 }
 
+/// The person's Stop, Skip, Close or Retry: the DB move, then `dev_ticket`. Ok(None): not from
+/// where the ticket is (or no such ticket); nothing is sent. Never writes to Jira.
+pub async fn person_move(state: &AppState, space_id: &str, key: &str, mv: dev_jira::PersonMove) -> Result<Option<String>, DbError> {
+    let from = state.db.person_move_dev_ticket(space_id, key, mv).await?;
+    if from.is_some() {
+        notify(state, space_id, key, mv.to());
+    }
+    Ok(from)
+}
+
 /// Sends `dev_ticket {space_id, key, state}`.
 pub fn notify(state: &AppState, space_id: &str, key: &str, to: &str) {
     let _ = state.event_sender.send(RuntimeEvent::DevTicket { space_id: space_id.into(), key: key.into(), state: to.into() });

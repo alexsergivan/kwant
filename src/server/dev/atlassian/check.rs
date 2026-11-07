@@ -173,6 +173,33 @@ async fn detect(http: &reqwest::Client, base: &str) -> Result<Kind, SourceError>
     }
 }
 
+/// The answer to `POST jira/check {address, detect: true}` (api-decisions 8): `detected` with
+/// `kind`, or `not_jira`, `unreachable` or `rate_limited` (with `retry_at`).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct Detected {
+    pub result: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<DateTime<Utc>>,
+}
+
+/// Which Jira lives at `address`, with no token and nothing else: only the anonymous detection,
+/// through the same client as [`check`] (pinned resolver, no local addresses unless the address
+/// itself is one, no redirects). Err: the address can't be used (a sentence for the person).
+pub async fn probe(address: &str, resolver: Arc<dyn Resolver>) -> Result<Detected, String> {
+    let base = normalize_base(address)?;
+    let http = forge::client(resolver, forge::loopback_allowed(&base), client::TIMEOUT);
+    Ok(match detect(&http, &base).await {
+        Ok(k) => Detected { result: "detected", kind: Some(k.as_str()), retry_at: None },
+        Err(e) => {
+            let f = CheckOutcome::new("found").failed(&e, None);
+            let result = if matches!(f.result, "unreachable" | "rate_limited") { f.result } else { "not_jira" };
+            Detected { result, kind: None, retry_at: f.retry_at }
+        }
+    })
+}
+
 /// Cloud's site id (for scoped tokens), from the anonymous `/_edge/tenant_info`.
 async fn cloud_id(http: &reqwest::Client, base: &str) -> Option<String> {
     let v: Value = client::send(http, Method::GET, &format!("{base}/_edge/tenant_info"), None, None).await.ok()?;

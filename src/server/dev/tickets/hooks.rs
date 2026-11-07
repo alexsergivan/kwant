@@ -52,3 +52,26 @@ pub async fn site_deleted(_state: &AppState, _space_id: &str, _site_id: &str) {}
 pub async fn stopped(state: &AppState, space_id: &str, key: &str, why: Why) {
     let _ = state.db.add_dev_ticket_event(space_id, key, "hook", Some(&format!("stopped: {}", why.as_str()))).await;
 }
+
+/// What the brief turn knows about a ticket's work (api-decisions 11): the mission it started, and
+/// the Matches the ticket verdict (`met`, `not_met` or `unclear`; anything else reads as `null`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorkSeam {
+    pub mission_id: Option<String>,
+    pub matches: Option<String>,
+}
+
+/// Read by `work::rows_with_work` for every ticket row it answers, so keep it to one indexed read.
+/// Vega's body reads `dev_ticket_briefs` (`mission_id`, and the verdict's word from
+/// `review.matches.verdict`). The stub knows no mission.
+pub async fn work_seam(_state: &AppState, _space_id: &str, _key: &str) -> WorkSeam {
+    WorkSeam::default()
+}
+
+/// Vega's routes join the Jira route table here (api-decisions split: `POST tickets/:key/answer`
+/// and `PUT tickets/:key/brief`), so nothing is mounted twice and `server/mod.rs` stays as is.
+/// Paths are the full `/api/spaces/:id/dev/tickets/:key/…`; every handler is person-only like
+/// `routes::guard`. The stub mounts nothing.
+pub fn mount(r: axum::Router<AppState>) -> axum::Router<AppState> {
+    r
+}

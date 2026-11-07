@@ -545,8 +545,11 @@ async fn answer(State(inner): State<Arc<Mutex<Inner>>>, req: Request) -> Respons
     let hit = Hit { method: method.to_string(), path: full.clone(), auth, gateway };
     i.hits.push(hit.clone());
 
-    // Anonymous endpoints.
+    // Anonymous endpoints. `fault("/serverInfo", …)` reaches the detection too.
     if path == "/rest/api/2/serverInfo" {
+        if let Some(f) = i.faults.get("/serverInfo").cloned() {
+            return fault_reply(f);
+        }
         return match i.flavor {
             Flavor::Cloud => reply(200, json!({"baseUrl": base, "version": "1001.0.0-SNAPSHOT", "deploymentType": "Cloud"})),
             Flavor::Dc => reply(200, json!({"baseUrl": base, "version": "9.12.4", "deploymentType": "Server"})),
@@ -599,22 +602,26 @@ async fn answer(State(inner): State<Arc<Mutex<Inner>>>, req: Request) -> Respons
     }
 
     if let Some(f) = i.faults.iter().find(|(k, _)| k.as_str() == "*" || rest.ends_with(k.as_str())).map(|(_, f)| f.clone()) {
-        return match f {
-            Fault::TooMany { retry_after } => {
-                let mut r = Response::builder().status(429).header("content-type", "application/json");
-                if let Some(s) = retry_after {
-                    r = r.header("retry-after", s.to_string());
-                }
-                r.body(Body::from(json!({"errorMessages": ["Rate limit exceeded."]}).to_string())).unwrap()
-            }
-            Fault::Server(code) => reply(code, json!({"errorMessages": ["Service unavailable"]})),
-            Fault::Unauthorized => reply(401, json!({"errorMessages": ["Unauthorized"]})),
-        };
+        return fault_reply(f);
     }
 
     match realm {
         Realm::Jira => jira(&mut i, &method, &rest, &query, &body, &base, hit),
         Realm::Confluence => confluence(&mut i, &method, &rest, &query, &base),
+    }
+}
+
+fn fault_reply(f: Fault) -> Response {
+    match f {
+        Fault::TooMany { retry_after } => {
+            let mut r = Response::builder().status(429).header("content-type", "application/json");
+            if let Some(s) = retry_after {
+                r = r.header("retry-after", s.to_string());
+            }
+            r.body(Body::from(json!({"errorMessages": ["Rate limit exceeded."]}).to_string())).unwrap()
+        }
+        Fault::Server(code) => reply(code, json!({"errorMessages": ["Service unavailable"]})),
+        Fault::Unauthorized => reply(401, json!({"errorMessages": ["Unauthorized"]})),
     }
 }
 
