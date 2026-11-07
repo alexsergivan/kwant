@@ -1837,7 +1837,7 @@ impl TurnOpts {
     /// and its retry runs with default options, so a no-tools turn would come back with tools over
     /// the same untrusted text. Its caller gets the "out until" failure and retries itself.
     pub(super) fn no_park(&self) -> bool {
-        self.retried || self.discussion.is_some() || self.no_tools
+        self.retried || self.discussion.is_some() || self.no_tools || self.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE)
     }
 
     /// The link to open in the bot browser before the turn: only a full link in the person's own
@@ -2535,6 +2535,7 @@ async fn run_kwant_turn_inner(
             person: super::bot_actions::person_place(&state.db).await,
             store: Some(state.db.clone()),
             no_tools: opts.no_tools,
+            read_only: opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE),
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -2549,10 +2550,27 @@ async fn run_kwant_turn_inner(
         // Saved with the gave-up reply, so a client can offer Retry without reading its wording
         let mut gave_up_meta: Option<serde_json::Value> = None;
         let mut ran_on: Option<RanOn> = None;
-        // Only Claude's permission hook holds every call of a replay to the scratch folder
-        let rehearse_blocked = opts.rehearse.is_some()
-            && (engine != Some(crate::profiles::Engine::Claude) || mcp_turn.is_none());
-        let attempts = if rehearse_blocked { Vec::new() } else { attempts };
+        // Only Claude's permission hook holds every call of a replay to the scratch folder. A
+        // Dev mode brief (J7) runs on Claude, whose hook holds every call to reading, or on Codex,
+        // in its own read-only sandbox with the gateway's calls held the same way; never on an
+        // engine that can be neither gated nor sandboxed, and never retried on one
+        let brief_turn = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
+        let rehearse_blocked = if brief_turn {
+            !engine.is_some_and(super::dev::tickets::brief_engine) || mcp_turn.is_none()
+        } else {
+            opts.rehearse.is_some() && (engine != Some(crate::profiles::Engine::Claude) || mcp_turn.is_none())
+        };
+        let had_attempts = !attempts.is_empty();
+        let attempts: Vec<Option<LlmProfile>> = if rehearse_blocked {
+            Vec::new()
+        } else if brief_turn {
+            attempts
+                .into_iter()
+                .filter(|p| p.as_ref().and_then(|p| crate::profiles::Engine::parse(&p.engine)).or(engine).is_some_and(super::dev::tickets::brief_engine))
+                .collect()
+        } else {
+            attempts
+        };
         // Every account is known to be out: nothing is tried, the turn waits for the earliest reset
         if let (Some(until), false) = (global.all_out_until, rehearse_blocked) {
             let at = super::profile_turn::clock_text(state, until).await;
@@ -2570,7 +2588,9 @@ async fn run_kwant_turn_inner(
             });
             gave_up = Some(text);
         } else if attempts.is_empty() {
-            let text = if rehearse_blocked {
+            let text = if brief_turn && (rehearse_blocked || had_attempts) {
+                format!("⚠️ [{}] A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on.", target_kwant.name)
+            } else if rehearse_blocked {
                 format!("⚠️ [{}] A skill replay runs only on Claude, with kwant's tool checks on.", target_kwant.name)
             } else {
                 format!(
@@ -3855,6 +3875,15 @@ async fn send_to_thread(
     let _ = state.db.touch_thread(&thread.id).await;
     super::waiting::person_wrote(&state, None, None, Some(&thread.id)).await;
     let note = super::attachments::attach_to_message(&state, &uploads, &saved.id, None, None, Some(&thread.id)).await;
+    // In a Dev mode brief's chat with open questions, the message answers them (J8): no turn
+    if super::dev::tickets::hooks::answer_in_chat(&state, &thread.id, &payload.prompt).await {
+        return Ok(Json(json!({
+            "status": "answered",
+            "user_message_id": saved.id,
+            "kwant": kwant.name,
+            "thread_id": thread.id,
+        })));
+    }
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;

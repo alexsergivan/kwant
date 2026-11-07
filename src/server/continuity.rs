@@ -551,6 +551,10 @@ pub async fn browser_act_payment(state: &AppState, target: &str, args: &Value) -
 /// The tools a turn's kwant server lists: `skill_draft` only while the bot has a Skill Foundry
 /// draft run open.
 async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
+    // A Dev mode brief turn gets its four reading tools and nothing else (J6, J7)
+    if super::dev::tickets::tools::brief_thread(state, scope).is_some() {
+        return Value::Array(super::dev::tickets::tools::tools());
+    }
     let board = super::missions::enabled(state).await;
     let mut tools = tool_list(scope, board);
     if super::missions::truth_ledger::on(state).await {
@@ -568,6 +572,9 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
 
 /// The names of the kwant tools `scope`'s turns are offered (without `skill_draft`).
 pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<String> {
+    if super::dev::tickets::tools::brief_thread(state, scope).is_some() {
+        return super::dev::tickets::tools::TOOLS.iter().map(|t| t.to_string()).collect();
+    }
     let board = super::missions::enabled(state).await;
     let mut tools = tool_list(scope, board);
     if super::missions::truth_ledger::on(state).await {
@@ -1045,6 +1052,15 @@ pub async fn self_endpoint(
         "tools/call" => {
             let args = &msg["params"]["arguments"];
             let name = msg["params"]["name"].as_str().unwrap_or("");
+            // A Dev mode brief turn: its four tools run, nothing else does (J7)
+            if let Some(thread) = super::dev::tickets::tools::brief_thread(&state, &scope) {
+                let (text, is_error) = if super::dev::tickets::tools::TOOLS.contains(&name) {
+                    super::dev::tickets::tools::call_checked(&state, &thread, name, args).await
+                } else {
+                    (super::dev::tickets::tools::REFUSED_TEXT.to_string(), true)
+                };
+                return tool_text(id, text, is_error);
+            }
             if name == "read_attachment" && scope.origin.is_some() {
                 let (content, is_error) = super::attachments::tool_read(&state, &scope, args).await;
                 return rpc_result(id, json!({"content": content, "isError": is_error}));

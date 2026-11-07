@@ -269,6 +269,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dev/cards/:id", get(dev::routes::card))
         .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/dev/cards/:id/post", post(dev::post::post))
+        // Juno's branch merges `dev::tickets::routes::router()` here, which ends in `hooks::mount`;
+        // at merge take Juno's line and drop this one (api.md 1.3)
+        .merge(dev::tickets::hooks::mount(Router::new()))
         .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
