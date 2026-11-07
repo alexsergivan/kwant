@@ -715,8 +715,11 @@ Usage. Opt-in: both settings are 0 (off) by default, and a database from before 
   1–10 000 000 000) and `daily_spend_stop_usd` (dollars, 0 or up to 100 000). Anything else is 400.
 - What counts: every finished turn's fresh tokens (`fresh_input + cache_write + output`, cache reads
   left out) for every engine, and its `cost_usd` only when the engine reports one (the Claude CLI
-  does; engines that don't add no dollars, so the dollar limit sees only them). A turn that fails isn't
-  counted, like the hand-off limit. The totals are kept even while the stop is off.
+  does; engines that don't add no dollars, so the dollar limit sees only them). A turn that fails,
+  stalls or is cancelled counts the fresh tokens its engine reported before it ended (the Claude CLI
+  and the API engines stream them; no dollars, which only come with a finished turn); a failed turn
+  on an engine that reports usage only at the end (Codex and the others) isn't counted. The totals
+  are kept even while the stop is off.
 - The day follows the `timezone` setting (UTC when none or an unknown zone is set) and ends at the next
   local midnight (`day_ends_at`). Totals live in the `daily_spend` table, one row per local day, so a
   restart keeps them.
@@ -729,14 +732,21 @@ Usage. Opt-in: both settings are 0 (off) by default, and a database from before 
   day (meta `kind: "spend_stopped"`): "Today's spending stop: used {X} of {Y}. Continue today, or change
   it in Settings › All spaces › Usage." Messages saved while stopped aren't replayed after Continue;
   the person sends again. A hand-off held by the stop ends with a `spend_stopped` error.
-- **Routines, goals, missions and AutoFix** skip with reason `spend_stopped` in their own history,
+- **Routines, missions and AutoFix** skip with reason `spend_stopped` in their own history,
   without starting a turn, and Needs you (`GET /api/waiting` `items`) carries one `spend_stopped` item
-  for the day. A routine run is recorded `skipped` (no "routine failed" notice); a due goal check gets
-  one `skipped` event a day and isn't leased (no fail streak; a met goal may go out of date meanwhile);
-  a mission's next ready task gets one `skipped` event a day and a mission task the stop catches at its
-  turn goes back to `ready` without counting an attempt; a due AutoFix attempt stays scheduled and its
-  task gets one `autofix_held` event a day. None of these is a failure: no AutoFix retry, no goal
-  failure streak.
+  for the day. A routine run is recorded `skipped`, also when the stop comes down while its turn waits
+  for a slot (no "routine failed" notice); a mission's next ready task gets one `skipped` event a day,
+  and a mission task the stop catches at its turn goes back to `ready` with the same `skipped` event,
+  without counting an attempt; a due AutoFix attempt stays scheduled and its task gets one
+  `autofix_held` event a day, and it runs once the stop lifts. None of these is a failure: no AutoFix
+  retry.
+- **Goal checks keep running.** Every check kind (http, command, file) runs without a bot, so it costs
+  no tokens. Only what a goal starts after a check (a draft, a fix task, a mission) is a turn, and the
+  gate holds that.
+- The first thing the stop holds each day also sends one notification, kind `spend_stopped` ("Today's
+  spending stop is on"; "Used {X} of {Y}. New turns, routines and missions wait until the day ends, or
+  continue today from Needs you."). It's on by default, also for notification lists saved before
+  0.7.4, and the person can turn it off like the other kinds; there's no new setting.
 - **Continue today** (`POST /api/usage/today/continue`, person only) lifts the stop until the day ends.
   Changing either limit takes Continue back, so the new limit applies at once; raising a limit past
   today's use lifts the stop on its own.

@@ -10,9 +10,11 @@
 //! a routine, a goal draft, a mission task, AutoFix or a connected agent. Turns already running
 //! finish. Over the limit:
 //! - in a chat, the turn doesn't start and one notice per chat per day says so, with Continue;
-//! - routines, goals, missions and AutoFix skip with reason [`REASON`] in their own history
-//!   before they start a turn, and [`needs_you_item`] puts one item in Needs you for the day.
-//!   These skips are not failures: no AutoFix retry, no goal failure streak.
+//! - routines, missions and AutoFix skip with reason [`REASON`] in their own history before they
+//!   start a turn, and [`needs_you_item`] puts one item in Needs you for the day. These skips are
+//!   not failures: no AutoFix retry;
+//! - goal checks keep running: they never ask a bot, and what a goal starts afterwards is a turn;
+//! - the first thing held each day sends one `spend_stopped` notification (see [`tripped`]).
 //!
 //! The person lifts the stop until the day ends with `POST /api/usage/today/continue`; changing
 //! either limit clears that, so the new limit applies at once (raising it past today's use
@@ -32,7 +34,7 @@ pub const SETTING_TOKENS: &str = "daily_spend_stop_tokens";
 pub const SETTING_USD: &str = "daily_spend_stop_usd";
 pub const MAX_TOKENS: u64 = 10_000_000_000;
 pub const MAX_USD: f64 = 100_000.0;
-/// The skip reason routines, goals, missions and AutoFix record, the notice's meta kind and the
+/// The skip reason routines, missions and AutoFix record, the notice's meta and notification kind, and the
 /// start of the error a stopped turn returns.
 pub const REASON: &str = "spend_stopped";
 
@@ -179,7 +181,31 @@ fn stop_error(s: &Status) -> String {
 /// The status, or the error a turn starting now gets.
 pub async fn check(state: &AppState) -> Result<(), String> {
     let s = status(state).await;
-    if s.stopped { Err(stop_error(&s)) } else { Ok(()) }
+    if !s.stopped {
+        return Ok(());
+    }
+    tripped(state, &s).await;
+    Err(stop_error(&s))
+}
+
+/// Key in `spend_stop_notices` for the day's one notification.
+const NOTIFY_KEY: &str = "notify";
+
+/// The stop held something: the first time each day, one `spend_stopped` notification (UI,
+/// push, webhook; off when the person unticks it), so routines going quiet overnight are heard.
+async fn tripped(state: &AppState, s: &Status) {
+    if !state.db.first_spend_notice(&s.day, NOTIFY_KEY).await.unwrap_or(false) {
+        return;
+    }
+    let n = super::continuity::Notification {
+        kind: REASON,
+        kwant_id: String::new(),
+        kwant_name: "kwant".into(),
+        channel_id: None,
+        title: "Today's spending stop is on".into(),
+        body: format!("Used {}. New turns, routines and missions wait until the day ends, or continue today from Needs you.", used_of(s)),
+    };
+    super::continuity::notify(state, n).await;
 }
 
 /// Before a turn takes its slot (`routes::turn_once`): `Err` when today's spending stop holds new
@@ -192,6 +218,7 @@ pub(super) async fn gate(scope: &TurnScope, speaker: &Kwant, quiet: bool) -> Res
     }
     let context = scope.context_id(speaker);
     tracing::info!(context = %context, day = %s.day, tokens = s.today_tokens, usd = s.today_usd, "daily spending stop: turn not started");
+    tripped(&scope.state, &s).await;
     if !quiet && scope.state.db.first_spend_notice(&s.day, &format!("chat:{context}")).await.unwrap_or(false) {
         let meta = json!({
             "kind": REASON,
@@ -210,7 +237,7 @@ pub(super) async fn gate(scope: &TurnScope, speaker: &Kwant, quiet: bool) -> Res
     Err(stop_error(&s))
 }
 
-/// For routines, goals, missions and AutoFix before they start work: `Some(reason)` when the
+/// For routines, missions and AutoFix before they start work: `Some(reason)` when the
 /// stop holds it (the reason starts with [`REASON`]).
 pub async fn held(state: &AppState) -> Option<String> {
     check(state).await.err()

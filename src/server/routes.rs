@@ -1007,6 +1007,8 @@ pub(super) async fn run_routed_turn(
             Ok(reply_id)
         }
         Err(_) if job.token.is_cancelled() => Err("stopped by the user".into()),
+        // Today's spending stop held the turn: it never ran, so the caller records a skip
+        Err(why) if super::spend_stop::is_stop_error(&why) => Err(why),
         Err(why) => Err(format!("the bot's turn failed: {why}")),
     }
 }
@@ -2955,6 +2957,12 @@ async fn run_kwant_turn_inner(
         }
         if let Some((_, token)) = &mcp_turn {
             super::mcp_runtime::finish_turn(state, token).await;
+        }
+        // A turn that ends without output still used what its engine reported so far (the Claude
+        // CLI and the API engines stream it as they go): it counts toward today's spending stop.
+        // Engines that report usage only at the end add nothing here.
+        if cancelled || gave_up.is_some() || !matches!(driver_result, Some(Ok(Ok(_)))) {
+            super::spend_stop::book(state, state.turns.usage_seen(&tag.turn_id), None).await;
         }
         let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
         // Ends what still runs; kept on the reply so the steps show after a reload

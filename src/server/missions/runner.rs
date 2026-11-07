@@ -264,13 +264,18 @@ pub async fn after_turn(state: &AppState, task_id: &str, err: Option<&str>, star
     }
     // Today's spending stop held the turn before it started: back to ready, no attempt used and
     // no failure, so AutoFix doesn't retry it
-    if err.is_some_and(crate::server::spend_stop::is_stop_error) {
+    if let Some(why) = err.filter(|e| crate::server::spend_stop::is_stop_error(e)) {
         let change = TaskChange {
             kind: "released".into(),
             reason: Some(format!("skipped: {}", crate::server::spend_stop::REASON)),
             ..Default::default()
         };
         let _ = transition(state, &t.id, "working", "ready", Actor::Kwant, "kwant", change).await;
+        // …and its timeline says why, once a day (the same mark [`skip_for_spend`] leaves)
+        if crate::server::spend_stop::first_skip_today(state, &format!("task:{}", t.id)).await {
+            let detail = serde_json::json!({"reason": crate::server::spend_stop::REASON, "why": why});
+            let _ = state.db.task_event(&t.id, t.mission_id.as_deref(), "skipped", "kwant", &detail).await;
+        }
         return;
     }
     let park = super::autofix::parks(state, &t, true).await;

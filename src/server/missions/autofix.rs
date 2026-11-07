@@ -608,10 +608,7 @@ pub async fn run_due(state: &AppState) {
     if mode(state).await == "off" {
         return;
     }
-    // Today's spending stop: scheduled retries wait (still scheduled) until it lifts
-    if crate::server::spend_stop::held(state).await.is_some() {
-        return;
-    }
+    // During today's spending stop [`execute`] leaves each attempt scheduled and notes why
     for a in state.db.due_attempts(Utc::now()).await.unwrap_or_default() {
         if !busy(state, &a.task_id).await {
             execute(state, &a).await;
