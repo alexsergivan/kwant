@@ -975,6 +975,7 @@ mod tests {
     }
 
     /// A pid that is not running: a child that already exited and was reaped.
+    #[cfg(unix)]
     fn dead_pid() -> u32 {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let pid = child.id();
