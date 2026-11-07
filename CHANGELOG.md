@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - A token form waiting on Bitwarden or approvals checks again when you come back to the window, so connecting Bitwarden in another tab unblocks it. (#371)
 
 ### Fixed
+- GitHub Enterprise: paste your server's address as it is (github.yourcompany.com or yourcompany.ghe.com); kwant finds the API itself. Repos on yourcompany.ghe.com now match their connection in Dev mode.
 - **Connect in the Bitwarden form works again.** Inside the GitHub, email and approvals forms, Connect (or Enter) reloaded the page and sent nothing; it now connects. (#371)
 - **Connecting Bitwarden works with accounts whose key salt isn't their email.** kwant now uses the salt Bitwarden's server reports, and also reads the account key from Bitwarden's newer login reply. Each failed connect or unlock logs one line with what went wrong, the HTTP status and the server's host. That line never includes the email, password or codes. (#370)
 - A custom server's models that have no name now show their id in the model picker instead of "[redacted]" (#365).

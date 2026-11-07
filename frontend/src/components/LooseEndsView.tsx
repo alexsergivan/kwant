@@ -643,6 +643,11 @@ export const GitHubConnectForm: React.FC<{
             <p id={`${id}-tok-hint`} className="mt-1 text-[11px] text-zinc-400">
               {GITHUB_TOKEN_HINT}
             </p>
+            {ghBase.trim() && (
+              <p className="mt-1 text-[11px] text-zinc-400" data-ghe-token-hint>
+                Make the token on your Enterprise server: Settings → Developer settings → Personal access tokens.
+              </p>
+            )}
           </div>
           <div>
             <label htmlFor={`${id}-glabel`} className="block text-[11px] text-zinc-400 mb-1">
@@ -652,9 +657,9 @@ export const GitHubConnectForm: React.FC<{
           </div>
           <div>
             <label htmlFor={`${id}-base`} className="block text-[11px] text-zinc-400 mb-1">
-              API address (GitHub Enterprise only)
+              GitHub Enterprise address (leave empty for github.com)
             </label>
-            <input id={`${id}-base`} className={field} value={ghBase} onChange={(e) => setGhBase(e.target.value)} placeholder="https://api.github.com" spellCheck={false} />
+            <input id={`${id}-base`} className={field} value={ghBase} onChange={(e) => setGhBase(e.target.value)} placeholder="https://github.yourcompany.com" spellCheck={false} />
           </div>
         </div>
       )}
