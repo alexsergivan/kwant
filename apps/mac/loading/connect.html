@@ -339,7 +339,9 @@
     }, function (e) {
       if (mine !== run) return;
       var f = failure(e, host);
-      showError(f.code, f.host, f.message);
+      // add_server checks too (a server not yet listed); any code without its own words,
+      // open_failed included, reads "Couldn't add the server."
+      showError(WORDS[f.code] ? f.code : 'save_failed', f.host, WORDS[f.code] ? f.message : null);
     });
   }
 
@@ -412,6 +414,7 @@
     if (!s) return;
     thisMac = s.this_mac !== false;
     listed = (s.servers || []).map(function (v) { return v && v.origin; }).filter(Boolean);
+    if (s.app === 'linux') $('where').textContent = 'tray';
     render();
   }).catch(function () {});
   // The tray wording on Linux. Older builds answer connect_state; a missing command changes nothing.

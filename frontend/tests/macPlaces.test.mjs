@@ -211,6 +211,39 @@ test('Cancel and Escape close the Add a server window; Stop ends a check', async
   assert.ok(names(p).includes('close_connect'));
 });
 
+test('add_server with an unknown code (open_failed) reads "Couldn\'t add the server."', async () => {
+  const p = load('connect.html', {
+    places_state: PLACES,
+    check_server: { host: 'kwant.example.com' },
+    add_server: () => { throw { code: 'open_failed', message: 'x' }; },
+  });
+  await tick();
+  type(p, 'kwant.example.com');
+  submit(p);
+  await tick();
+  assert.match(statusText(p), /Couldn't add the server\./);
+  assert.ok(!/didn't answer/.test(statusText(p)));
+});
+
+test('a dns failure from add_server keeps its own words', async () => {
+  const p = load('connect.html', {
+    places_state: PLACES,
+    check_server: { host: 'kwant.example.com' },
+    add_server: () => { throw { code: 'dns', host: 'kwant.example.com' }; },
+  });
+  await tick();
+  type(p, 'kwant.example.com');
+  submit(p);
+  await tick();
+  assert.match(statusText(p), /Couldn't find kwant\.example\.com/);
+});
+
+test('places_state app linux says tray', async () => {
+  const p = load('connect.html', { places_state: { ...PLACES, app: 'linux' } });
+  await tick();
+  assert.equal(p.$('where').textContent, 'tray');
+});
+
 test('the Linux build says tray', async () => {
   const p = load('connect.html', { places_state: PLACES, connect_state: { app: 'linux' } });
   await tick();
