@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.7.3] - 2026-11-07
+
 ### Added
 - NVIDIA preset for custom servers: free models from build.nvidia.com (#365).
 - **Dev mode reads any git repo.** Repos on GitLab, Gitea or any git server, and team folders with no remote, are watched with git, and what lands there shows on the Dev desk. Reviews, CI checks and Post to GitHub still work on GitHub repos only. The server needs git 2.31 or newer; without it, the desk says "Needs git on the server". (#366, #368)
