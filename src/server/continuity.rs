@@ -1706,11 +1706,21 @@ pub struct Notification {
 /// Sends `n` to the UI, the webhook and push subscriptions, if the user wants this kind. The body never holds chat
 /// text, tool arguments or settings, so nothing secret reaches the phone service.
 pub async fn notify(state: &AppState, n: Notification) {
+    notify_in(state, n, None).await
+}
+
+/// [`notify`] for a notification that names no bot but belongs to `space` (the spending stop:
+/// the space of the turn it held), so the space's Telegram chat and push still get it. With
+/// `None`, the space is the bot's.
+pub async fn notify_in(state: &AppState, n: Notification, space: Option<&crate::db::spaces::SpaceId>) {
     if !notify_on(state).await.iter().any(|k| k == n.kind) {
         return;
     }
     let body = clip(&n.body, NOTIFY_BODY_CHARS);
-    let space = notify_space(state, &n.kwant_id).await;
+    let space = match space {
+        Some(id) => space_named(state, id).await,
+        None => notify_space(state, &n.kwant_id).await,
+    };
     // With more than one space the phone can't tell "Laya finished" apart, so name the space
     let title = match &space {
         Some((_, name, true)) => clip(&format!("{name} · {}", n.title), 120),
@@ -1751,7 +1761,12 @@ pub async fn notify(state: &AppState, n: Notification) {
 /// The kwant's space: id, name and whether other active spaces exist.
 async fn notify_space(state: &AppState, kwant_id: &str) -> Option<(String, String, bool)> {
     let id = state.db.space_of_kwant(kwant_id).await.ok().flatten()?;
-    let space = state.db.get_space(&id).await.ok().flatten()?;
+    space_named(state, &id).await
+}
+
+/// The space `id`: id, name and whether other active spaces exist.
+async fn space_named(state: &AppState, id: &crate::db::spaces::SpaceId) -> Option<(String, String, bool)> {
+    let space = state.db.get_space(id).await.ok().flatten()?;
     let several = state
         .db
         .list_spaces()

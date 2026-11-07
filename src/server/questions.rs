@@ -135,8 +135,16 @@ async fn changed(state: &AppState, q: &Question) {
 
 /// Closes an open question and announces it; `None` if it wasn't open any more.
 async fn close(state: &AppState, id: &str, status: &str, answer: Option<&str>) -> Option<Question> {
+    close_via(state, id, status, answer, None).await
+}
+
+/// [`close`], noting where it was answered (`answered_via`, e.g. "telegram") before it's announced.
+async fn close_via(state: &AppState, id: &str, status: &str, answer: Option<&str>, via: Option<&str>) -> Option<Question> {
     if !state.db.close_question(id, status, answer).await.ok()? {
         return None;
+    }
+    if let Some(via) = via {
+        let _ = state.db.set_answered_via("questions", id, via).await;
     }
     // Nothing waits on the person for it any more, and its reminder (if not sent yet) never goes out
     let _ = state.db.close_waiting_for_question(id).await;
@@ -412,9 +420,19 @@ pub async fn answer(State(state): State<AppState>, Path(id): Path<String>, Json(
 /// asked, and the turn waiting on it gets it (`true`), or a new turn continues with it (`false`;
 /// in a delegation's thread that goes back to the lead). `None` when it wasn't open any more.
 pub async fn answer_with(state: &AppState, id: &str, text: &str) -> Option<(Question, bool)> {
+    answer_via(state, id, text, None).await
+}
+
+/// [`answer_with`] from somewhere other than kwant (`via`: "telegram"): the question records
+/// `answered_via` and the answer message carries `source`.
+pub async fn answer_via(state: &AppState, id: &str, text: &str, via: Option<&str>) -> Option<(Question, bool)> {
     let text: String = text.trim().chars().take(MAX_ANSWER_CHARS).collect();
-    let q = close(state, id, "answered", Some(&text)).await?;
-    save_message(state, &q, "user", "user", text.clone(), json!({"kind": "question_answer", "question_id": q.id})).await;
+    let q = close_via(state, id, "answered", Some(&text), via).await?;
+    let mut meta = json!({"kind": "question_answer", "question_id": q.id});
+    if let Some(via) = via {
+        meta["source"] = json!(via);
+    }
+    save_message(state, &q, "user", "user", text.clone(), meta).await;
     let live = match state.questions.take(&q.id) {
         Some(tx) => tx.send(Reply::Answer(text.clone())).is_ok(),
         None => false,

@@ -291,7 +291,11 @@ bot's approvals are `off`, or `smart` and the server marks the tool `readOnlyHin
    its tier doesn't allow even with approvals `off` or a smart Allow, with `details.tier_reason`; see
    [mission-control.md](mission-control.md) §14.
 3. Unanswered tickets are denied after 300 s, or when the turn ends or is cancelled; kwnt then
-   emits `{"type":"ApprovalWithdrawn","data":{"id":"<ticket>"}}` so the UI can drop the card.
+   emits `{"type":"ApprovalWithdrawn","data":{"id":"<ticket>","outcome":"expired"}}` (or
+   `"cancelled"`) so the UI can drop the card. An answered card sends it too, with `outcome`
+   `"allowed_once"`, `"always_allowed"` or `"denied"` and, when it was answered from Telegram,
+   `"answered_via":"telegram"` (absent when answered in kwant); `GET /api/approvals` returns the
+   same `answered_via`. Older events carry only `id`.
    Resolving a withdrawn (or unknown) ticket returns `409` and changes nothing: its tool never
    runs, and the ticket keeps its `cancelled` or `expired` status. A call the turn ended under is
    recorded with status `cancelled`.

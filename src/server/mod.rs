@@ -59,6 +59,7 @@ pub mod app_update_routes;
 pub mod smart_results;
 pub mod dev;
 pub mod agents_connect;
+pub mod telegram;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -337,6 +338,15 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/parallel/runs/:id", get(parallel_routes::get_run))
         .route("/api/connections", get(connections::list))
         .route("/api/connections/:id/production", put(connections::put_production))
+        .route(
+            "/api/connections/telegram",
+            get(telegram::routes::get).patch(telegram::routes::patch).delete(telegram::routes::delete),
+        )
+        .route("/api/connections/telegram/token", put(telegram::routes::put_token))
+        .route("/api/connections/telegram/pair", post(telegram::routes::pair))
+        .route("/api/connections/telegram/unpair", post(telegram::routes::unpair))
+        .route("/api/connections/telegram/unpair/undo", post(telegram::routes::undo_unpair))
+        .route("/api/connections/telegram/test", post(telegram::routes::test))
         .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/connections/composio/apps", get(connections::search_composio_apps))
         .route("/api/connections/composio/apps/:slug/connect", post(connections::connect_composio_app))

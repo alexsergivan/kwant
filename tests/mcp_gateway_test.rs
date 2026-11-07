@@ -291,7 +291,7 @@ async fn ending_the_turn_cancels_a_call_waiting_for_its_card() {
     // The card is withdrawn, and a late Allow neither runs the tool nor rewrites the ticket
     let withdrawn = loop {
         match tokio::time::timeout(Duration::from_secs(5), events.recv()).await.unwrap().unwrap() {
-            RuntimeEvent::ApprovalWithdrawn { id } => break id,
+            RuntimeEvent::ApprovalWithdrawn { id, .. } => break id,
             _ => continue,
         }
     };
