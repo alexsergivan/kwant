@@ -35,6 +35,7 @@ import {
   typedRepo,
   undoBody,
 } from '../devMode';
+import { openGitHubConnect } from './GitHubConnect';
 
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 
@@ -49,7 +50,8 @@ export interface DevStatusLineProps {
   /** The space's teams, so a team with no repo gets "Link a repo". */
   teams?: DevTeamRef[];
   /** Opens Loose ends (Connect GitHub). Connect hides without it. */
-  onConnect?: () => void;
+  /** Connect GitHub; defaults to the shared connect form, opened in place (0.7.3 B1). */
+  onConnect?: (anchor?: HTMLElement) => void;
   /** "Checked 19:58" at the right (style-v2 §4); the LED pings once each time it changes. */
   checked?: string | null;
   checkedAt?: number | null;
@@ -68,7 +70,7 @@ const linkError = (e: unknown): string => {
   return LINK_ERROR;
 };
 
-export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, teams = [], onConnect, checked = null, checkedAt = null, save = devApi.linkRepo, remove = devApi.removeRepo }) => {
+export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, teams = [], onConnect = (anchor) => openGitHubConnect({ space: spaceId, anchor }), checked = null, checkedAt = null, save = devApi.linkRepo, remove = devApi.removeRepo }) => {
   const line = statusLine(state, teams);
   const listId = useId();
   // The header's "Link a repo" / the toast's "Type a repo" open the first Link form, focused; "See repos"
@@ -154,8 +156,8 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
     );
   };
 
-  const act = (row: RepoRow | null, action: RowAction, id: string) => {
-    if (action === 'connect') return onConnect?.();
+  const act = (row: RepoRow | null, action: RowAction, id: string, anchor?: HTMLElement) => {
+    if (action === 'connect') return onConnect(anchor);
     if (action === 'link') {
       setError(null);
       return setLinking((l) => (l === id || (l === 'intent' && linkingId === id) ? null : id));
@@ -169,7 +171,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
     return (
       <button
         type="button"
-        onClick={() => act(row, action, id)}
+        onClick={(e) => act(row, action, id, e.currentTarget)}
         disabled={busy === id}
         aria-expanded={expandedAttr}
         aria-label={action === 'remove' ? `Stop watching ${label}` : action === 'link' && row?.team ? `Link a repo for ${row.team}` : undefined}

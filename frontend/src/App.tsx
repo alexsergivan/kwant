@@ -130,7 +130,8 @@ import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, showDeviceNotification } from './push';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
-import { devApi, devConnect, devStore } from './devMode';
+import { devApi, devStore } from './devMode';
+import { GitHubConnectHost, openGitHubConnect } from './components/GitHubConnect';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
@@ -370,27 +371,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const isPhoneRef = useRef(isPhone);
   isPhoneRef.current = isPhone;
-  // Dev mode Connect (flow F5): Loose ends opens on the GitHub form; once a GitHub source is added
-  // the person lands back on the Dev desk, which reads Dev mode again.
-  const [devConnecting, setDevConnecting] = useState(0);
-  const connectDevGitHub = () => {
-    if (!devConnect.pending()) devConnect.start(space.id);
-    setDevConnecting((n) => n + 1);
-    showPage('inbox', 'loose');
-  };
-  const devGitHubAdded = () => {
-    const back = devConnect.finish();
-    setDevConnecting(0);
-    if (!back) return;
-    devApi.get(back).then((st) => devStore.set(back, st), () => undefined);
-    if (back === space.id) showPage('dev');
-  };
-  // Leaving Loose ends without connecting drops the trip back.
-  useEffect(() => {
-    if (page === 'inbox' || !devConnecting) return;
-    setDevConnecting(0);
-    devConnect.cancel();
-  }, [page, devConnecting]);
+  // Dev mode Connect (0.7.3 B1): the one GitHub connect form opens in place, next to the button (a
+  // sheet on the phone); the host re-reads this space's Dev mode once the login is added.
+  const connectDevGitHub = (anchor?: HTMLElement) => openGitHubConnect({ space: space.id, anchor });
   // Idea jar (0.7): the ready-takes badge, Open on board's mission, the drop toast and the
   // app-wide live region (a take is announced on any screen; the open jar announces its own).
   const ideaJarCount = useIdeaJarBadge(space.id);
@@ -3323,10 +3306,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
   const loose = (
     <LooseEndsPage
-      key={devConnecting ? `dev-connect-${devConnecting}` : 'loose'}
       onOpenChat={openThread}
-      connectGitHub={devConnecting > 0}
-      onGitHubAdded={devGitHubAdded}
     />
   );
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount} onBack={backToList} newPage={away} loosePage={loose} />;
@@ -3759,6 +3739,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+      <GitHubConnectHost onConnected={() => pushToast('GitHub connected', 'Loose ends and Dev mode both use it.')} />
       {ideaToast && (
         <IdeaDropToast
           key={ideaToast.id}
