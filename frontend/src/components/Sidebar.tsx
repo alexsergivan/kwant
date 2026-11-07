@@ -1049,10 +1049,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {readyCount === null
                 ? 'Checking accounts…'
                 : readyCount === 0
-                  ? offerClaude
-                    ? 'No account yet · Sign in with Claude'
-                    : 'No account yet · Add an account'
-                  : `Runs on ${runsOn[0]}${runsOn.length > 1 ? ` +${runsOn.length - 1}` : ''}`}
+                  ? 'No account yet · Getting started'
+                  : `${runsOn[0]} · signed in${runsOn.length > 1 ? ` +${runsOn.length - 1}` : ''}`}
             </span>
           </button>
         </div>

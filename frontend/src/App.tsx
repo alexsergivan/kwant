@@ -6,7 +6,9 @@ import { InboxPage } from './components/InboxPage';
 import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
 import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
-import { FirstRunWelcome } from './components/FirstRunWelcome';
+import { GetStarted, GetStartedBanner } from './components/GetStarted';
+import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted } from './gettingStarted';
+import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState, SendOptions } from './components/ChatView';
 import { ReactResult, Reaction, optimisticReplyRef, reactionOf, saveReaction, senderLabel } from './reactReply';
@@ -53,13 +55,12 @@ import { ideasApi, takeArrivedText } from './ideas';
 import { JarIcon } from './components/JarIcon';
 import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToast';
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
-import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings, Sparkles } from 'lucide-react';
+import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
 import { ChatApproval, OpenChat, addSettled, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
-import { ReadyTeamsWelcome } from './components/ReadyTeamsEntry';
 import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -364,8 +365,22 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     return () => void (gone = true);
   }, [claudeMissing]);
   const offerSetup = claudeMissing && claudeInstallable;
-  const setupLabel = offerSetup ? 'Set up Claude' : offerClaude ? 'Sign in with Claude' : 'Add an account';
   const setupAction = offerSetup || offerClaude ? openClaudeSignIn : openSettings;
+  // O2: the Get started card in #general (design next-076/onboarding §3–§13). Re-renders when this
+  // browser's getting-started state changes (choice, kept, dismissed).
+  useStartVersion();
+  const gsDismissed = getStartedDismissed(space.id);
+  // C1: on a phone, open #general while getting started is unfinished (not the chats list). Once.
+  const c1Done = useRef(false);
+  useEffect(() => {
+    if (c1Done.current || !isPhone || !loaded || canRun === null) return;
+    c1Done.current = true;
+    if (canRun !== false || gsDismissed || initialView || initialTarget?.channelId || initialTarget?.botId || initialTarget?.live) return;
+    const general = channels.find((c) => c.id === space.general_channel_id) ?? channels.find((c) => c.name === 'general');
+    if (general) handleSelectChannel(general);
+    else setPhoneView('chat');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPhone, loaded, canRun, channels]);
   // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
   useSettingsCover(!!spaceSettingsTab, contentRef);
@@ -1593,6 +1608,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const handleSendMessage = async (text: string, attachments: AttachmentRef[] = [], opts: SendOptions = {}): Promise<boolean | string> => {
     haptic('tap');
     setHistoryWindow(null);
+    // O2 §3: the Get started card goes after the person's first message in any chat, once something can answer.
+    if (canRun !== false && !getStartedDismissed(space.id)) dismissGetStarted(space.id);
     const targetId = openCtx;
     const threadId = openThreadId;
     const isTargetChannel = isChannel;
@@ -3358,28 +3375,28 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const readyAccounts = space.counts?.ready_accounts ?? 0;
   // The space has bots but nothing can run them (a fresh install's starter bots): the checklist's
   // first step, kept above the chat until an account works.
+  // §7.1: outside #general the banner is the card's one-liner; Open goes to #general and the card.
+  const openGetStarted = () => {
+    const general = channels.find((c) => c.id === space.general_channel_id) ?? channels.find((c) => c.name === 'general');
+    if (general) handleSelectChannel(general);
+    window.setTimeout(() => document.querySelector('[data-get-started]')?.scrollIntoView({ block: 'start', behavior: 'auto' }), 60);
+  };
   const setupBanner =
-    loaded && kwants.length > 0 && canRun === false ? (
-      <div
-        role="status"
-        data-setup-banner
-        className="shrink-0 px-3 sm:px-6 py-2.5 border-b border-violet-500/20 bg-violet-500/[0.06] flex flex-wrap items-center gap-x-3 gap-y-2"
-      >
-        <Sparkles size={15} className="shrink-0 text-violet-300" aria-hidden="true" />
-        <div className="flex-1 min-w-[12rem]">
-          <p className="text-xs font-medium text-zinc-100">One step left: add an account</p>
-          <p className="text-[11px] text-zinc-400">Sign in with Claude or ChatGPT, or paste an API key, and your bots can start answering.</p>
-        </div>
-        <button
-          type="button"
-          onClick={setupAction}
-          data-setup-action={offerSetup ? 'install-claude' : offerClaude ? 'sign-in-claude' : 'add-account'}
-          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
-        >
-          <KeyRound size={13} aria-hidden="true" />
-          {setupLabel}
-        </button>
-      </div>
+    loaded && kwants.length > 0 && canRun === false && !gsDismissed ? (
+      <GetStartedBanner space={space.id} engines={engines.engines} onOpen={openGetStarted} />
+    ) : null;
+  const getStartedCard =
+    loaded &&
+    kwants.length > 0 &&
+    isGeneral &&
+    showGetStarted({ dismissed: gsDismissed, canRun, generalMessages: messages.length, teams: teams.length, started: getStartedWasStarted(space.id) }) ? (
+      <GetStarted
+        space={space.id}
+        bots={kwants}
+        engines={engines.engines}
+        reloadEngines={engines.reload}
+        onDismissed={() => undefined}
+      />
     ) : null;
   const setupChecklist = (
     <main className="flex-1 min-w-0 overflow-y-auto flex items-start sm:items-center justify-center p-4 sm:p-8" data-space-checklist>
@@ -3706,20 +3723,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 onAddAccount={setupAction}
                 onOpenNeed={(opens) => openTeamNeed(opens, currentTeam)}
               />
+            ) : getStartedCard && messages.length > 0 ? (
+              getStartedCard
             ) : undefined
           }
-          welcome={
-            setupBanner && isChannel && !selectedTeamId && !currentTeam ? (
-              <>
-                <FirstRunWelcome
-                  bots={kwants}
-                  actionLabel={setupLabel}
-                  onAction={setupAction}
-                />
-                <ReadyTeamsWelcome onBlank={() => setIsNewTeamOpen(true)} />
-              </>
-            ) : undefined
-          }
+          welcome={getStartedCard && messages.length === 0 ? getStartedCard : undefined}
           onOpenAccounts={openSettings}
           onOpenUsage={openUsageSettings}
           canRun={canRun}

@@ -14,6 +14,7 @@ import './styles/devStatus.css';
 import './styles/tickets.css';
 import './styles/telegram.css';
 import './styles/showOnce.css';
+import './styles/gettingStarted.css';
 
 registerServiceWorker();
 captureInstallPrompt();

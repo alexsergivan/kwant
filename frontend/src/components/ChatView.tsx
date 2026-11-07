@@ -1782,7 +1782,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
-      {messages.length <= 1 && suggestions.length > 0 && !showHome && (
+      {/* O2 §6: hidden while nothing can run, instead of shown disabled */}
+      {messages.length <= 1 && suggestions.length > 0 && !showHome && canRun !== false && (
         <ScrollRow
           className="kw-scroll-row px-3 sm:px-6 py-2 flex flex-nowrap sm:flex-wrap items-center gap-2 overflow-x-auto sm:overflow-visible select-none"
           role="group"
@@ -1794,9 +1795,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               key={prompt}
               type="button"
               onClick={() => handlePromptSuggestion(prompt)}
-              disabled={canRun === false}
-              title={canRun === false ? 'Add an account first' : undefined}
-              className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 transition-all shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-zinc-800 disabled:hover:text-zinc-400"
+              className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 transition-all shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
             >
               {prompt}
             </button>
