@@ -454,6 +454,19 @@ fn read_token<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Option<remote:
     )
 }
 
+/// Removes kwant's sign-in cookie for this server from the window (one left from an earlier
+/// session), so it can't pass for the sign-in about to happen.
+fn clear_token<R: Runtime>(app: &AppHandle<R>, origin: &Origin) {
+    let Some(window) = app.get_webview_window(MAIN) else { return };
+    let Ok(cookies) = window.cookies() else { return };
+    for cookie in cookies {
+        let ours = remote::pick_token(origin, [(cookie.name(), cookie.value(), cookie.domain(), cookie.path())]).is_some();
+        if ours && window.delete_cookie(cookie).is_err() {
+            tracing::warn!("couldn't clear an old sign-in cookie");
+        }
+    }
+}
+
 /// The menu-bar icon: Open kwant, a status line, Show nudges, the server items, Quit. The status
 /// counts what waits for the person (questions and approvals); the nudges (`nudge.rs`) follow the
 /// same poll. "Update to x.y.z…" appears at the top while a newer version is on offer.
@@ -764,11 +777,11 @@ fn init_logging(data_dir: &std::path::Path) {
         Ok(file) => tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_ansi(false)
-            .with_writer(Mutex::new(redact::Redacting(file)))
+            .with_writer(Mutex::new(redact::Redacting::new(file)))
             .init(),
         Err(_) => tracing_subscriber::fmt()
             .with_env_filter(filter)
-            .with_writer(|| redact::Redacting(std::io::stderr()))
+            .with_writer(|| redact::Redacting::new(std::io::stderr()))
             .init(),
     }
 }
@@ -859,6 +872,31 @@ mod tests {
                     matches!(&refused, Err(serde_json::Value::String(_))),
                     "{cmd} from {from}: {refused:?}"
                 );
+            }
+        }
+        assert!(!data_dir.join(target::TARGET_FILE).exists(), "nothing was saved");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// Rigel's F7: Tauri's access check compares only the scheme and the host, so a page at the
+    /// bundled host with a port or a user name gets past it. The command's own check then
+    /// refuses it, and nothing is saved.
+    #[test]
+    fn a_bundled_look_alike_with_a_port_or_a_user_name_can_call_no_command() {
+        let (_app, window, data_dir) = app("lookalike");
+        let args = serde_json::json!({ "address": "https://kwant.example.com" });
+        for from in [
+            "http://tauri.localhost:8080/",
+            "tauri://localhost:8080/",
+            "http://u:p@tauri.localhost/",
+            "tauri://u@localhost/",
+        ] {
+            window.navigate(from.parse().unwrap()).unwrap();
+            for cmd in COMMANDS {
+                let refused = invoke(&window, cmd, from, args.clone());
+                let by_acl = matches!(&refused, Err(serde_json::Value::String(_)));
+                let by_command = matches!(&refused, Err(e) if e["code"] == "not_allowed");
+                assert!(by_acl || by_command, "{cmd} from {from}: {refused:?}");
             }
         }
         assert!(!data_dir.join(target::TARGET_FILE).exists(), "nothing was saved");

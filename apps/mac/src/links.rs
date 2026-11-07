@@ -16,13 +16,17 @@ pub enum Link {
     Drop,
 }
 
-/// The bundled pages (tauri://localhost on macOS, http://tauri.localhost elsewhere).
+/// The bundled pages (tauri://localhost on macOS, http://tauri.localhost elsewhere): exactly
+/// that origin, with no port and no user name or password. Tauri's own access check compares
+/// only the scheme and the host, so `tauri://localhost:8080/` or `http://u@tauri.localhost/`
+/// must never count as the app's own page here.
 pub fn is_bundled(url: &Url) -> bool {
-    match url.scheme() {
-        "tauri" => url.host_str() == Some("localhost"),
-        "http" => url.host_str() == Some("tauri.localhost"),
-        _ => false,
-    }
+    let host = match url.scheme() {
+        "tauri" => "localhost",
+        "http" => "tauri.localhost",
+        _ => return false,
+    };
+    url.host_str() == Some(host) && url.port().is_none() && url.username().is_empty() && url.password().is_none()
 }
 
 /// kwant's server itself, which the browser can reach too (not the bundled pages): loopback on
@@ -180,6 +184,33 @@ mod tests {
         assert_eq!(rnav(h, "about:blank"), Link::Stay);
         assert_eq!(rnav(h, "blob:https://kwant.example.com/5f0c"), Link::Stay);
         assert_eq!(rnav(h, "data:text/plain,hi"), Link::Stay);
+    }
+
+    /// Rigel's F7: a port or a user name makes it another page, not the app's own.
+    #[test]
+    fn the_bundled_pages_are_exactly_their_origin() {
+        for s in ["tauri://localhost/connect.html", "http://tauri.localhost/index.html", "http://TAURI.localhost/", "tauri://localhost/../../x"] {
+            assert!(is_bundled(&s.parse().unwrap()), "{s}");
+        }
+        for s in [
+            "http://tauri.localhost:8080/",
+            "http://tauri.localhost:1/x",
+            "tauri://localhost:8080/",
+            "http://u:p@tauri.localhost/",
+            "http://u@tauri.localhost/",
+            "tauri://u@localhost/",
+            "tauri://u:p@localhost/",
+            "https://tauri.localhost/",
+            "http://tauri.localhost./",
+            "tauri://localhost.evil.example/",
+        ] {
+            assert!(!is_bundled(&s.parse().unwrap()), "{s}");
+            for home in [LOCAL, remote("https://kwant.example.com")] {
+                assert_ne!(navigation(&s.parse().unwrap(), &home, None), Link::Stay, "{s} in {home:?}");
+            }
+        }
+        assert_eq!(rnav("https://kwant.example.com", "tauri://localhost:8080/"), Link::Drop);
+        assert_eq!(rnav("https://kwant.example.com", "http://u:p@tauri.localhost/"), Link::Browser);
     }
 
     #[test]
