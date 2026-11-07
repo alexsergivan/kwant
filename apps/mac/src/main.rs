@@ -1,13 +1,17 @@
-//! kwant for Mac (and Linux): the kwant server in this process, its UI in a window, and a
-//! menu-bar (tray) icon. Closing the window keeps kwant running; Quit in the menu stops it.
+//! kwant for Mac (and Linux): every place in its own window, all at once (spec.md in
+//! next-075/side-by-side). A place is the kwant on this Mac (run in this process, or one already
+//! running here) or a kwant server the person added. A menu-bar (tray) icon lists them; closing a
+//! window keeps its place running, and Quit in the menu stops the app. Nothing relaunches.
 
 mod connect;
 mod links;
+mod menu;
 mod nudge;
 #[cfg(target_os = "linux")]
 mod nudge_linux;
 #[cfg(target_os = "macos")]
 mod nudge_mac;
+mod places;
 mod redact;
 mod remote;
 mod startup;
@@ -18,20 +22,25 @@ mod update;
 use nudge_linux as platform;
 #[cfg(target_os = "macos")]
 use nudge_mac as platform;
+use places::{Place, Places};
 use startup::PortChoice;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use target::{Home, Origin, Saved};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use target::{Home, Origin};
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
-    tray::TrayIconBuilder,
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
+    tray::{TrayIcon, TrayIconBuilder},
     webview::NewWindowResponse,
-    AppHandle, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+    AppHandle, Manager, RunEvent, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent, Wry,
 };
 
+/// This Mac's window.
 const MAIN: &str = "main";
+/// The "Add a server" window.
+const CONNECT: &str = "connect";
 
 /// Tells kwant's page it runs in the app, so sign-ins say "finish in your browser". The page
 /// knows these marks (frontend/src/externalLinks.ts DESKTOP_APPS).
@@ -59,6 +68,10 @@ const LOG_FILE: &str = "mac-app.log";
 #[cfg(not(target_os = "macos"))]
 const LOG_FILE: &str = "desktop-app.log";
 
+/// The second half of the remove confirm (Ada's words); the first is its title.
+const REMOVE_DETAIL: &str =
+    "To add it back you'll need a new sign-in link. It stays in that server's Signed-in devices until you remove it there.";
+
 /// The running server, when this app started one (not when it attached to another kwant).
 struct Server {
     stop: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
@@ -79,43 +92,90 @@ impl Server {
     }
 }
 
-/// Where the window points: kwant's own page on loopback, or kwant on a saved server.
-struct Target {
-    home: Home,
-    /// The server used last, offered again by the connect page.
-    last: Option<Origin>,
-    /// In Local mode: this app started kwant (it stops with the app) rather than finding one
-    /// already running (`kwnt serve` in a terminal, a service), which keeps running.
-    started_kwant: bool,
+/// The kwant on this Mac while "Run kwant on this Mac" is on.
+#[derive(Default)]
+struct Local {
+    /// Where it listens; `None` while off or before it started.
+    port: Option<u16>,
+    /// Set when this app started it (it stops with the app or the toggle); an attached kwant
+    /// (`kwnt serve` in a terminal, a service) keeps running.
+    server: Option<Server>,
+    /// It didn't answer within 2 minutes, or couldn't start.
+    failed: bool,
 }
 
-/// A server the connect page is signing in to right now (a pasted sign-in link): the window
-/// may open it before the app relaunches on it.
-#[derive(Default)]
-struct Connecting(Mutex<Option<Origin>>);
+/// How far a server's window got with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    Connecting,
+    Connected,
+    Unreachable,
+}
 
-/// How far the window got with the server (`nudge::REACH_*`), for the tray's server line.
-#[derive(Default)]
-struct Reach(AtomicU8);
-
-fn set_reach<R: Runtime>(app: &AppHandle<R>, reach: u8) {
-    if let Some(state) = app.try_state::<Reach>() {
-        state.0.store(reach, Ordering::Relaxed);
+impl Reach {
+    fn as_str(self) -> &'static str {
+        match self {
+            Reach::Connecting => "connecting",
+            Reach::Connected => "connected",
+            Reach::Unreachable => "unreachable",
+        }
     }
 }
 
-/// How this run of the app starts.
-struct Start {
-    home: Home,
-    last: Option<Origin>,
-    server: Option<Server>,
+/// Everything the windows, the menu and the commands share. Locks are held only to read or
+/// write a value, never across a call into a window: those wait for the main thread, which may
+/// itself be waiting for the same lock in a navigation check.
+struct Shared {
     data_dir: PathBuf,
+    /// kwant's settings, used each time this Mac's kwant starts.
+    config: kwnt::Config,
+    places: Mutex<Places>,
+    local: Mutex<Local>,
+    /// Held while this Mac's kwant starts, so two windows never start two.
+    starting: Mutex<()>,
+    /// A shutdown still running after "Run kwant on this Mac" went off.
+    stopping: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// This app started kwant here at some point (it then offers its own updates).
+    started_kwant: AtomicBool,
+    reach: Mutex<HashMap<String, Reach>>,
+    /// The place window that had the keyboard last (the Dock click shows it).
+    last_focused: Mutex<Option<String>>,
+    /// Wakes the menu's poll after a change.
+    wake: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl Shared {
+    fn new(data_dir: PathBuf, config: kwnt::Config, places: Places) -> Shared {
+        Shared {
+            data_dir,
+            config,
+            places: Mutex::new(places),
+            local: Mutex::new(Local::default()),
+            starting: Mutex::new(()),
+            stopping: Mutex::new(None),
+            started_kwant: AtomicBool::new(false),
+            reach: Mutex::new(HashMap::new()),
+            last_focused: Mutex::new(None),
+            wake: Mutex::new(None),
+        }
+    }
 }
 
 /// "Show nudges" in the tray menu, saved in the data dir.
 struct Nudges {
     data_dir: PathBuf,
     show: AtomicBool,
+}
+
+/// Where a window goes once its place answers.
+#[derive(Debug, Clone)]
+enum Goto {
+    /// The page it shows (kwant's home for a new window).
+    Stay,
+    /// One of kwant's pages, e.g. a nudge's item.
+    Path(String),
+    /// An address on the place itself: a link from another window, a sign-in link.
+    Url(Url),
 }
 
 /// Set (to its start) when the app runs as `--demo-nudge`.
@@ -134,69 +194,80 @@ fn main() {
     }
 
     let demo = std::env::args().any(|a| a == "--demo-nudge");
-    let Start { home, last, server, data_dir } = if demo { demo_start() } else { normal_start() };
+    let (config, places) = if demo { demo_start() } else { normal_start() };
+    let data_dir = config.data_dir.clone();
     let show = nudge::Prefs::load(&data_dir).show_nudges;
-    let remote = matches!(home, Home::Remote { .. });
-    let started_kwant = server.is_some();
 
     let builder = tauri::Builder::default();
-    // A second launch from the app menu focuses this window instead of opening another kwant.
+    // A second launch from the app menu shows a window instead of opening another kwant.
     // (macOS does this itself: a second click on the app reaches RunEvent::Reopen.)
     #[cfg(not(target_os = "macos"))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        open_window(app)
-    }));
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_last(app)));
     let app = builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(Target { home, last, started_kwant })
-        .manage(Connecting::default())
-        .manage(Reach::default())
+        .plugin(tauri_plugin_dialog::init())
+        .manage(Shared::new(data_dir.clone(), config, places))
         .manage(Nudges { data_dir, show: AtomicBool::new(show) })
         .invoke_handler(tauri::generate_handler![
-            connect::connect_state,
+            connect::places_state,
             connect::check_server,
-            connect::connect_server,
-            connect::use_this_computer,
+            connect::add_server,
+            connect::remove_server,
+            connect::set_this_mac,
             connect::close_connect,
             connect::retry_start,
         ])
         .setup(move |app| {
-            if let Some(server) = server {
-                app.manage(server);
+            let handle = app.handle();
+            // This Mac's kwant runs while the toggle is on, window or not
+            if current(handle).this_mac {
+                let h = handle.clone();
+                std::thread::spawn(move || {
+                    ensure_local(&h);
+                    wake(&h);
+                });
             }
-            // The app's own update stays on with a server too; an attached kwant updates itself
-            if !demo && (started_kwant || remote) {
-                update::start(app.handle());
-            }
-            build_tray(app.handle())?;
+            build_tray(handle)?;
             if demo {
                 // hidden, so the pill shows (it never covers a focused kwant window); a click on
                 // the pill shows it
-                make_window(app.handle(), None, false);
-                let h = app.handle().clone();
+                make_window(handle, &Place::ThisMac, Goto::Stay, false);
+                let h = handle.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(nudge::demo::RUNS_FOR);
                     println!("demo-nudge: done");
                     h.exit(0);
                 });
             } else {
-                open_window(app.handle());
+                let places = current(handle);
+                let to_open = places.to_open();
+                if to_open.is_empty() {
+                    show_connect(handle);
+                }
+                for place in to_open {
+                    make_window(handle, &place, Goto::Stay, true);
+                }
             }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                // Closing the window keeps kwant running in the menu bar
+        .on_window_event(|window, event| match event {
+            // Closing a place's window keeps the place running; the Add a server window closes
+            WindowEvent::CloseRequested { api, .. } if window.label() != CONNECT => {
                 api.prevent_close();
                 let _ = window.hide();
             }
+            WindowEvent::Focused(true) if is_place_window(window.label()) => {
+                *window.state::<Shared>().last_focused.lock().unwrap() = Some(window.label().to_string());
+            }
+            _ => {}
         })
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| fatal(&format!("kwant couldn't open its window: {e}")));
 
     app.run(|handle, event| match event {
         #[cfg(target_os = "macos")]
-        RunEvent::Reopen { .. } => open_window(handle),
+        RunEvent::Reopen { .. } => show_last(handle),
+        RunEvent::ExitRequested { .. } => save_open(handle),
         RunEvent::Exit => {
             stop_server(handle);
             if DEMO.get().is_some() {
@@ -207,57 +278,41 @@ fn main() {
     });
 }
 
-/// The app's own kwant (or the one already running here), with the person's settings; or,
-/// when the person connected the app to a server, nothing local at all.
-fn normal_start() -> Start {
+/// The person's settings and places. kwant itself starts in `ensure_local`.
+fn normal_start() -> (kwnt::Config, Places) {
     let mut config = match kwnt::Config::load() {
         Ok(c) => c,
         Err(e) => fatal(&format!("kwant couldn't read its settings: {e}")),
     };
     init_logging(&config.data_dir);
-    let data_dir = config.data_dir.clone();
-    let last = match Saved::load(&data_dir) {
-        Saved::Remote(origin) => {
-            tracing::info!(host = %origin.host(), "connected to a kwant server; not starting kwant here");
-            return Start { home: Home::Remote { origin }, last: None, server: None, data_dir };
-        }
-        Saved::Local { last } => last,
-    };
     // The app is a local window: never listen beyond this machine, whatever config.toml says
     config.host = "127.0.0.1".to_string();
-    let choice = match startup::choose_port(config.port) {
-        Ok(c) => c,
-        Err(e) => fatal(&format!("kwant couldn't find a free port: {e}")),
-    };
-    match choice {
-        PortChoice::Attach(port) => {
-            tracing::info!(port, "kwant already runs here; attaching to it");
-            Start { home: Home::Local { port }, last, server: None, data_dir }
-        }
-        PortChoice::Serve(port) => {
-            config.port = port;
-            Start { home: Home::Local { port }, last, server: Some(start_server(config)), data_dir }
-        }
+    let mut places = Places::load(&config.data_dir);
+    if places.all().is_empty() {
+        // nothing to show at all: This Mac comes back on
+        places.set_this_mac(true);
     }
+    tracing::info!(this_mac = places.this_mac, servers = places.servers.len(), "starting");
+    (config, places)
 }
 
 /// `--demo-nudge`: kwant on a free port with a throwaway data dir, and made-up waiting items
 /// (`nudge::demo`) instead of the real ones, so CI can screenshot the nudges. It prints each
 /// step and where the icon and the pill are, and quits after `nudge::demo::RUNS_FOR`.
-fn demo_start() -> Start {
+fn demo_start() -> (kwnt::Config, Places) {
     let _ = DEMO.set(Instant::now());
     tracing_subscriber::fmt().with_env_filter("info").init();
     let data_dir = std::env::temp_dir().join(format!("kwant-demo-nudge-{}", std::process::id()));
     let port = startup::free_port().unwrap_or_else(|e| fatal(&format!("kwant --demo-nudge: no free port: {e}")));
+    println!("demo-nudge: port {port}");
     let config = kwnt::Config {
-        data_dir: data_dir.clone(),
+        data_dir,
         host: "127.0.0.1".to_string(),
         port,
         laya_managed: false,
         ..Default::default()
     };
-    println!("demo-nudge: port {port}");
-    Start { home: Home::Local { port }, last: None, server: Some(start_server(config)), data_dir }
+    (config, Places::default())
 }
 
 /// Finder (and a Linux app menu) starts apps with a bare PATH, so the claude, codex and grok CLIs
@@ -296,72 +351,256 @@ fn start_server(config: kwnt::Config) -> Server {
     }
 }
 
-/// Stops the server this app started before the app exits. An attached kwant keeps running.
+/// The kwant on this Mac: started by this app, or the one already running here.
+fn start_local(config: &kwnt::Config) -> Local {
+    if DEMO.get().is_some() {
+        return Local { port: Some(config.port), server: Some(start_server(config.clone())), failed: false };
+    }
+    match startup::choose_port(config.port) {
+        Ok(PortChoice::Attach(port)) => {
+            tracing::info!(port, "kwant already runs here; attaching to it");
+            Local { port: Some(port), server: None, failed: false }
+        }
+        Ok(PortChoice::Serve(port)) => {
+            let mut config = config.clone();
+            config.port = port;
+            Local { port: Some(port), server: Some(start_server(config)), failed: false }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "kwant couldn't find a free port");
+            Local { port: None, server: None, failed: true }
+        }
+    }
+}
+
+/// This Mac's port, starting kwant first when the toggle is on and it isn't running. Never on
+/// the main thread: it may wait for a shutdown.
+fn ensure_local<R: Runtime>(app: &AppHandle<R>) -> Option<u16> {
+    let shared = app.state::<Shared>();
+    let _starting = shared.starting.lock().unwrap();
+    if let Some(port) = shared.local.lock().unwrap().port {
+        return Some(port);
+    }
+    if !shared.places.lock().unwrap().this_mac {
+        return None;
+    }
+    // a kwant still stopping holds the port and the database
+    let stopping = shared.stopping.lock().unwrap().take();
+    if let Some(stopping) = stopping {
+        let _ = stopping.join();
+    }
+    let local = start_local(&shared.config);
+    if local.server.is_some() {
+        shared.started_kwant.store(true, Ordering::Relaxed);
+    }
+    let port = local.port;
+    *shared.local.lock().unwrap() = local;
+    port
+}
+
+/// Stops the kwant this app started before the app exits. An attached kwant keeps running.
 fn stop_server<R: Runtime>(handle: &AppHandle<R>) {
-    if let Some(server) = handle.try_state::<Server>() {
+    let Some(shared) = handle.try_state::<Shared>() else { return };
+    let server = shared.local.lock().unwrap().server.take();
+    if let Some(server) = server {
         server.shutdown();
     }
+    let stopping = shared.stopping.lock().unwrap().take();
+    if let Some(stopping) = stopping {
+        let _ = stopping.join();
+    }
 }
 
-/// Shows the window, creating it the first time. It opens on a "Starting kwant…" page and moves
-/// to kwant's own page once /api/health answers.
-fn open_window(handle: &tauri::AppHandle) {
-    open_window_at(handle, None)
+/// A copy of the places (so no lock is held while windows are touched).
+fn current<R: Runtime>(app: &AppHandle<R>) -> Places {
+    app.state::<Shared>().places.lock().unwrap().clone()
 }
 
-/// Shows the window at one of kwant's pages (`path`, e.g. `/s/spc_default/inbox`): a nudge's
-/// item. `None` keeps the page it shows.
-fn open_window_at(handle: &tauri::AppHandle, path: Option<&str>) {
-    let Some(window) = handle.get_webview_window(MAIN) else {
-        make_window(handle, path, true);
+fn place_by_key<R: Runtime>(app: &AppHandle<R>, key: &str) -> Option<Place> {
+    current(app).all().into_iter().find(|p| p.key() == key)
+}
+
+fn is_place_window(label: &str) -> bool {
+    label == MAIN || label.starts_with(places::SERVER_WINDOW_PREFIX)
+}
+
+/// Where a place's kwant answers (`None`: This Mac while its kwant isn't running).
+fn home<R: Runtime>(app: &AppHandle<R>, place: &Place) -> Option<Home> {
+    match place {
+        Place::ThisMac => app.state::<Shared>().local.lock().unwrap().port.map(|port| Home::Local { port }),
+        Place::Server(origin) => Some(Home::Remote { origin: origin.clone() }),
+    }
+}
+
+fn set_reach<R: Runtime>(app: &AppHandle<R>, origin: &Origin, reach: Reach) {
+    app.state::<Shared>().reach.lock().unwrap().insert(origin.as_str(), reach);
+    wake(app);
+}
+
+/// Has the menu look again now.
+fn wake<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(tx) = app.state::<Shared>().wake.lock().unwrap().as_ref() {
+        let _ = tx.send(());
+    }
+}
+
+/// Shows a place's window (creating it when needed), at `goto`.
+fn open_place<R: Runtime>(app: &AppHandle<R>, place: &Place, goto: Goto) {
+    {
+        let shared = app.state::<Shared>();
+        let mut places = shared.places.lock().unwrap();
+        if !places.has(place) {
+            return;
+        }
+        places.set_open(place, true);
+    }
+    let Some(window) = app.get_webview_window(&place.window_label()) else {
+        make_window(app, place, goto, true);
         return;
     };
-    if let Some(url) = path.and_then(|p| handle.state::<Target>().home.page(p)) {
+    let url = match goto {
+        Goto::Stay => None,
+        Goto::Path(path) => home(app, place).and_then(|h| h.page(&path)),
+        Goto::Url(url) => Some(url),
+    };
+    if let Some(url) = url {
         let _ = window.navigate(url);
     }
+    show(&window);
+}
+
+/// A nudge's item (`path`) in its place's window (`key`: `places::Place::key`). A place gone
+/// meanwhile falls back to the first one.
+fn open_place_at(handle: &AppHandle, key: &str, path: Option<&str>) {
+    let Some(place) = place_by_key(handle, key).or_else(|| current(handle).all().into_iter().next()) else {
+        return;
+    };
+    open_place(handle, &place, path.map_or(Goto::Stay, |p| Goto::Path(p.to_string())));
+}
+
+fn show<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
 }
 
-/// Whether the kwant window has the keyboard (the nudges then stay quiet).
-fn main_focused(handle: &tauri::AppHandle) -> bool {
-    handle
-        .get_webview_window(MAIN)
-        .and_then(|w| w.is_focused().ok())
-        .unwrap_or(false)
+/// The Dock click (and a second launch on Linux): the window used last, else the first place's,
+/// else the Add a server window.
+fn show_last<R: Runtime>(app: &AppHandle<R>) {
+    let last = app.state::<Shared>().last_focused.lock().unwrap().clone();
+    if let Some(window) = last.and_then(|l| app.get_webview_window(&l)) {
+        show(&window);
+        return;
+    }
+    match current(app).all().into_iter().next() {
+        Some(place) => open_place(app, &place, Goto::Stay),
+        None => show_connect(app),
+    }
 }
 
-fn make_window(handle: &tauri::AppHandle, path: Option<&str>, visible: bool) {
-    let home = handle.state::<Target>().home.clone();
-    let path = path.unwrap_or("/").to_string();
-    let (nav_home, nav_app) = (home.clone(), handle.clone());
-    let popup_home = home.clone();
-    let window = match WebviewWindowBuilder::new(handle, MAIN, WebviewUrl::App("index.html".into()))
-        .title("kwant")
+/// Whether one of kwant's windows has the keyboard (the nudges then stay quiet).
+fn kwant_focused(handle: &AppHandle) -> bool {
+    handle
+        .webview_windows()
+        .values()
+        .any(|w| is_place_window(w.label()) && w.is_focused().unwrap_or(false))
+}
+
+/// A place's window, for app-wide things (the Dock badge, attention): the one for `key` when it
+/// is there, else any.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+fn place_window(handle: &AppHandle, key: Option<&str>) -> Option<WebviewWindow> {
+    let wanted = key.and_then(|k| place_by_key(handle, k)).map(|p| p.window_label());
+    if let Some(w) = wanted.and_then(|l| handle.get_webview_window(&l)) {
+        return Some(w);
+    }
+    handle.webview_windows().into_values().find(|w| is_place_window(w.label()))
+}
+
+/// Titles follow the places: "kwant" with This Mac alone, else "kwant – This Mac" / "kwant – host".
+fn refresh_titles<R: Runtime>(app: &AppHandle<R>) {
+    let places = current(app);
+    for place in places.all() {
+        if let Some(w) = app.get_webview_window(&place.window_label()) {
+            let _ = w.set_title(&places::window_title(&place, &places));
+        }
+    }
+}
+
+/// Remembers which windows show, for the next launch.
+fn save_open<R: Runtime>(app: &AppHandle<R>) {
+    if DEMO.get().is_some() {
+        return;
+    }
+    let shown: Vec<Place> = current(app)
+        .all()
+        .into_iter()
+        .filter(|p| {
+            app.get_webview_window(&p.window_label())
+                .and_then(|w| w.is_visible().ok())
+                .unwrap_or(false)
+        })
+        .collect();
+    let shared = app.state::<Shared>();
+    let mut places = shared.places.lock().unwrap();
+    for place in places.all() {
+        places.set_open(&place, shown.contains(&place));
+    }
+    if let Err(e) = places.save(&shared.data_dir) {
+        tracing::warn!(error = %e, "couldn't save which windows were open");
+    }
+}
+
+/// What a link in a place's window does (`popup`: it asked for a new window). A link to another
+/// place opens that place's window; a page off every place goes to the browser.
+fn route<R: Runtime>(app: &AppHandle<R>, me: &Place, url: &Url, popup: bool) -> bool {
+    // port 0 never matches a link: This Mac's window before its kwant runs
+    let mine = home(app, me).unwrap_or(Home::Local { port: 0 });
+    let others: Vec<(Place, Home)> = current(app)
+        .all()
+        .into_iter()
+        .filter(|p| p != me)
+        .filter_map(|p| home(app, &p).map(|h| (p, h)))
+        .collect();
+    let homes: Vec<Home> = others.iter().map(|(_, h)| h.clone()).collect();
+    let link = if popup { links::new_window(url, &mine, &homes) } else { links::navigation(url, &mine, &homes) };
+    match link {
+        links::Link::Stay => !popup,
+        links::Link::Place(i) => {
+            let place = others[i].0.clone();
+            let (app, url) = (app.clone(), url.clone());
+            // never build or show a window inside the webview's own callback
+            std::thread::spawn(move || open_place(&app, &place, Goto::Url(url)));
+            false
+        }
+        links::Link::Browser => {
+            links::open_in_browser(url);
+            false
+        }
+        links::Link::Drop => {
+            tracing::info!(scheme = url.scheme(), "blocked a link the app doesn't open");
+            false
+        }
+    }
+}
+
+/// A place's window. It opens on the "Starting kwant…" page and moves to the place once it
+/// answers.
+fn make_window<R: Runtime>(app: &AppHandle<R>, place: &Place, goto: Goto, visible: bool) {
+    let title = places::window_title(place, &current(app));
+    let (nav_app, nav_place) = (app.clone(), place.clone());
+    let (pop_app, pop_place) = (app.clone(), place.clone());
+    let window = match WebviewWindowBuilder::new(app, place.window_label(), WebviewUrl::App("index.html".into()))
+        .title(title)
         .visible(visible)
         .inner_size(1280.0, 820.0)
         .min_inner_size(900.0, 600.0)
         .initialization_script(APP_MARK)
-        // The window only shows kwant; every other page opens in the default browser
-        .on_navigation(move |url| {
-            let connecting = nav_app.state::<Connecting>().0.lock().unwrap().clone();
-            match links::navigation(url, &nav_home, connecting.as_ref()) {
-                links::Link::Stay => true,
-                links::Link::Browser => {
-                    links::open_in_browser(url);
-                    false
-                }
-                links::Link::Drop => {
-                    tracing::info!(scheme = url.scheme(), "blocked a link the app doesn't open");
-                    false
-                }
-            }
-        })
+        // The window only shows its place; another place opens in its own window, every other
+        // page in the default browser
+        .on_navigation(move |url| route(&nav_app, &nav_place, url, false))
         .on_new_window(move |url, _| {
-            if links::new_window(&url, &popup_home) == links::Link::Browser {
-                links::open_in_browser(&url);
-            }
+            route(&pop_app, &pop_place, &url, true);
             NewWindowResponse::Deny
         })
         .build()
@@ -372,264 +611,607 @@ fn make_window(handle: &tauri::AppHandle, path: Option<&str>, visible: bool) {
             return;
         }
     };
-    begin(window, home, path);
+    begin(window, place.clone(), goto);
 }
 
-/// Waits for kwant (here: /api/health on loopback; on a server: the native check), then moves
-/// the window from the loading page to kwant's `path`. On failure the loading page says so.
-fn begin<R: Runtime>(window: WebviewWindow<R>, home: Home, path: String) {
-    std::thread::spawn(move || match &home {
-        Home::Local { port } => {
-            let port = *port;
-            if startup::wait_for_health(port, Duration::from_secs(120)).is_none() {
-                tracing::error!(port, "kwant didn't answer within 2 minutes");
-                let _ = window.eval("document.body.dataset.state = 'failed'");
-                return;
-            }
-            if let Some(url) = home.page(&path) {
-                let _ = window.navigate(url);
-            }
-        }
-        Home::Remote { origin } => {
-            let app = window.app_handle().clone();
-            set_reach(&app, nudge::REACH_CONNECTING);
-            let client = remote::client();
-            let mut result = Err(remote::Failure::Timeout);
-            // a laptop just woken up may need a moment for its network
-            for attempt in 0..3 {
-                if attempt > 0 {
-                    std::thread::sleep(Duration::from_secs(3));
-                }
-                result = tauri::async_runtime::block_on(remote::check(&client, origin));
-                if result.is_ok() {
-                    break;
+/// Waits for the place (This Mac: /api/health on loopback; a server: the native check), then
+/// moves the window from the loading page to `goto`. On failure the loading page says so.
+fn begin<R: Runtime>(window: WebviewWindow<R>, place: Place, goto: Goto) {
+    std::thread::spawn(move || {
+        let app = window.app_handle().clone();
+        match &place {
+            Place::ThisMac => {
+                app.state::<Shared>().local.lock().unwrap().failed = false;
+                wake(&app);
+                let port = ensure_local(&app);
+                let answered = port.filter(|p| startup::wait_for_health(*p, Duration::from_secs(120)).is_some());
+                let Some(port) = answered else {
+                    tracing::error!(?port, "kwant didn't answer within 2 minutes");
+                    app.state::<Shared>().local.lock().unwrap().failed = true;
+                    wake(&app);
+                    let _ = window.eval("document.body.dataset.state = 'failed'");
+                    return;
+                };
+                let home = Home::Local { port };
+                let url = match goto {
+                    Goto::Url(url) => Some(url),
+                    Goto::Path(path) => home.page(&path),
+                    Goto::Stay => home.page("/"),
+                };
+                if let Some(url) = url {
+                    let _ = window.navigate(url);
                 }
             }
-            match result {
-                Ok(_) => {
-                    set_reach(&app, nudge::REACH_CONNECTED);
-                    let _ = window.navigate(origin.page(&path));
+            Place::Server(origin) => {
+                set_reach(&app, origin, Reach::Connecting);
+                let client = remote::client();
+                let mut result = Err(remote::Failure::Timeout);
+                // a laptop just woken up may need a moment for its network
+                for attempt in 0..3 {
+                    if attempt > 0 {
+                        std::thread::sleep(Duration::from_secs(3));
+                    }
+                    result = tauri::async_runtime::block_on(remote::check(&client, origin));
+                    if result.is_ok() {
+                        break;
+                    }
                 }
-                Err(failure) => {
-                    set_reach(&app, nudge::REACH_FAILED);
-                    let host = origin.host();
-                    tracing::warn!(host = %host, reason = failure.code(), "the kwant server didn't answer");
-                    let state = serde_json::json!({ "host": host, "code": failure.code(), "message": failure.message(&host) });
-                    let js = format!(
-                        "(function(s){{var b=document.body;b.dataset.host=s.host;b.dataset.code=s.code;b.dataset.message=s.message;b.dataset.state='unreachable';}})({state})"
-                    );
-                    let _ = window.eval(js.as_str());
+                match result {
+                    Ok(_) => {
+                        set_reach(&app, origin, Reach::Connected);
+                        let url = match goto {
+                            Goto::Url(url) => url,
+                            Goto::Path(path) => origin.page(&path),
+                            Goto::Stay => origin.page("/"),
+                        };
+                        let _ = window.navigate(url);
+                    }
+                    Err(failure) => {
+                        set_reach(&app, origin, Reach::Unreachable);
+                        let host = origin.host();
+                        tracing::warn!(host = %host, reason = failure.code(), "the kwant server didn't answer");
+                        let state = serde_json::json!({ "host": host, "code": failure.code(), "message": failure.message(&host) });
+                        let js = format!(
+                            "(function(s){{var b=document.body;b.dataset.host=s.host;b.dataset.code=s.code;b.dataset.message=s.message;b.dataset.state='unreachable';}})({state})"
+                        );
+                        let _ = window.eval(js.as_str());
+                    }
                 }
             }
         }
     });
 }
 
-/// Back to kwant's own page from a bundled page (the connect page, or the loading page's
-/// Try again): the loading page, then kwant once it answers.
-fn show_home<R: Runtime>(app: &AppHandle<R>) {
-    let Some(window) = app.get_webview_window(MAIN) else {
+/// The loading page's Try again: the window's own place, checked (or started) again.
+fn show_home<R: Runtime>(app: &AppHandle<R>, place: &Place) {
+    let Some(window) = app.get_webview_window(&place.window_label()) else {
         return;
     };
-    let home = app.state::<Target>().home.clone();
     let _ = window.navigate(connect::bundled("index.html"));
-    begin(window, home, "/".into());
+    begin(window, place.clone(), Goto::Stay);
 }
 
-/// Shows the connect page in the kwant window.
-fn show_connect(app: &AppHandle) {
-    open_window(app);
-    if let Some(window) = app.get_webview_window(MAIN) {
-        let _ = window.navigate(connect::bundled("connect.html"));
+/// The "Add a server" window (one at a time).
+fn show_connect<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(window) = app.get_webview_window(CONNECT) {
+        show(&window);
+        return;
+    }
+    // it only shows the app's own page; a link on it opens in the browser
+    let off_page = Home::Local { port: 0 };
+    let popup_page = off_page.clone();
+    let built = WebviewWindowBuilder::new(app, CONNECT, WebviewUrl::App("connect.html".into()))
+        .title("Add a server")
+        .inner_size(560.0, 640.0)
+        .min_inner_size(420.0, 480.0)
+        .initialization_script(APP_MARK)
+        .on_navigation(move |url| match links::navigation(url, &off_page, &[]) {
+            links::Link::Stay => true,
+            links::Link::Browser => {
+                links::open_in_browser(url);
+                false
+            }
+            _ => false,
+        })
+        .on_new_window(move |url, _| {
+            if links::new_window(&url, &popup_page, &[]) == links::Link::Browser {
+                links::open_in_browser(&url);
+            }
+            NewWindowResponse::Deny
+        })
+        .build();
+    match built {
+        Ok(window) => show(&window),
+        Err(e) => tracing::error!(error = %e, "couldn't open the Add a server window"),
     }
 }
 
-/// The window's sign-in cookie for the server, in memory only. Never call it on the main
-/// thread: the webview answers there.
+/// Adds a checked server (and saves it), then shows its window; a sign-in link opens there once.
+/// `Err`: the file couldn't be written (nothing changed).
+fn add_place<R: Runtime>(app: &AppHandle<R>, origin: Origin, link: Option<Url>) -> std::io::Result<bool> {
+    let place = Place::Server(origin.clone());
+    let added = {
+        let shared = app.state::<Shared>();
+        let mut places = shared.places.lock().unwrap();
+        let before = places.clone();
+        let added = places.add_server(origin.clone());
+        if let Err(e) = places.save(&shared.data_dir) {
+            *places = before;
+            return Err(e);
+        }
+        added
+    };
+    tracing::info!(host = %origin.host(), added, "a server is listed");
+    let window = app.get_webview_window(&place.window_label());
+    match (window, link) {
+        // a listed server's window: the link opens there, after its place answers
+        (Some(window), Some(link)) => {
+            let _ = window.navigate(connect::bundled("index.html"));
+            begin(window.clone(), place.clone(), Goto::Url(link));
+            show(&window);
+        }
+        (Some(window), None) => show(&window),
+        (None, link) => make_window(app, &place, link.map_or(Goto::Stay, Goto::Url), true),
+    }
+    if let Some(w) = app.get_webview_window(CONNECT) {
+        let _ = w.close();
+    }
+    refresh_titles(app);
+    wake(app);
+    Ok(added)
+}
+
+/// Takes a server out: its sign-in cookie, its window, its line in the file. With no place
+/// left, This Mac comes back on. Never on the main thread (cookies are read there).
+fn remove_place<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
+    let label = Place::Server(origin.clone()).window_label();
+    clear_token(app, origin);
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.destroy();
+    }
+    let shared = app.state::<Shared>();
+    let (removed, back_here) = {
+        let mut places = shared.places.lock().unwrap();
+        let removed = places.remove_server(origin);
+        let back_here = removed && places.all().is_empty();
+        if back_here {
+            places.set_this_mac(true);
+        }
+        if removed {
+            if let Err(e) = places.save(&shared.data_dir) {
+                tracing::warn!(error = %e, "couldn't save the server list");
+            }
+        }
+        (removed, back_here)
+    };
+    shared.reach.lock().unwrap().remove(&origin.as_str());
+    {
+        let mut last = shared.last_focused.lock().unwrap();
+        if last.as_deref() == Some(label.as_str()) {
+            *last = None;
+        }
+    }
+    if removed {
+        tracing::info!(host = %origin.host(), "removed a server");
+    }
+    if back_here {
+        open_place(app, &Place::ThisMac, Goto::Stay);
+    }
+    refresh_titles(app);
+    wake(app);
+    removed
+}
+
+/// Why "Run kwant on this Mac" didn't change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToggleRefused {
+    /// Off with no server would leave nothing to show.
+    LastPlace,
+    SaveFailed,
+}
+
+/// "Run kwant on this Mac": on starts it (or finds the one running here) and opens its window;
+/// off closes the window and stops the kwant this app started.
+fn set_local<R: Runtime>(app: &AppHandle<R>, on: bool) -> Result<(), ToggleRefused> {
+    let shared = app.state::<Shared>();
+    {
+        let mut places = shared.places.lock().unwrap();
+        if places.this_mac == on {
+            return Ok(());
+        }
+        if !on && places.servers.is_empty() {
+            return Err(ToggleRefused::LastPlace);
+        }
+        let before = places.clone();
+        places.set_this_mac(on);
+        if let Err(e) = places.save(&shared.data_dir) {
+            tracing::warn!(error = %e, "couldn't save Run kwant on this Mac");
+            *places = before;
+            return Err(ToggleRefused::SaveFailed);
+        }
+    }
+    tracing::info!(on, "Run kwant on this Mac");
+    if on {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            ensure_local(&app);
+            open_place(&app, &Place::ThisMac, Goto::Stay);
+            refresh_titles(&app);
+            wake(&app);
+        });
+        return Ok(());
+    }
+    if let Some(w) = app.get_webview_window(MAIN) {
+        let _ = w.destroy();
+    }
+    let server = std::mem::take(&mut *shared.local.lock().unwrap()).server;
+    if let Some(server) = server {
+        let stopping = std::thread::spawn(move || server.shutdown());
+        *shared.stopping.lock().unwrap() = Some(stopping);
+    }
+    {
+        let mut last = shared.last_focused.lock().unwrap();
+        if last.as_deref() == Some(MAIN) {
+            *last = None;
+        }
+    }
+    refresh_titles(app);
+    wake(app);
+    Ok(())
+}
+
+/// The sign-in cookie for a server, in memory only. WebKit keeps one cookie store for all the
+/// app's windows, so any window can read it; the server's own is asked first. Never call it on
+/// the main thread: the webview answers there.
 fn read_token<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Option<remote::Token> {
-    let cookies = app.get_webview_window(MAIN)?.cookies().ok()?;
+    let cookies = cookie_window(app, origin)?.cookies().ok()?;
     remote::pick_token(
         origin,
         cookies.iter().map(|c| (c.name(), c.value(), c.domain(), c.path())),
     )
 }
 
-/// Removes kwant's sign-in cookie for this server from the window (one left from an earlier
-/// session), so it can't pass for the sign-in about to happen.
+/// Removes kwant's sign-in cookie for this server (Remove a server). Not on the main thread.
 fn clear_token<R: Runtime>(app: &AppHandle<R>, origin: &Origin) {
-    let Some(window) = app.get_webview_window(MAIN) else { return };
+    let Some(window) = cookie_window(app, origin) else { return };
     let Ok(cookies) = window.cookies() else { return };
     for cookie in cookies {
         let ours = remote::pick_token(origin, [(cookie.name(), cookie.value(), cookie.domain(), cookie.path())]).is_some();
         if ours && window.delete_cookie(cookie).is_err() {
-            tracing::warn!("couldn't clear an old sign-in cookie");
+            tracing::warn!("couldn't clear a sign-in cookie");
         }
     }
 }
 
-/// The menu-bar icon: Open kwant, a status line, Show nudges, the server items, Quit. The status
-/// counts what waits for the person (questions and approvals); the nudges (`nudge.rs`) follow the
-/// same poll. "Update to x.y.z…" appears at the top while a newer version is on offer.
+fn cookie_window<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Option<WebviewWindow<R>> {
+    app.get_webview_window(&Place::Server(origin.clone()).window_label())
+        .or_else(|| app.webview_windows().into_values().find(|w| is_place_window(w.label())))
+        .or_else(|| app.webview_windows().into_values().next())
+}
+
+/// Asks before removing a server (the native dialog), then removes it.
+fn confirm_remove(app: &AppHandle, origin: &str) {
+    let Some(origin) = current(app).servers.into_iter().find(|o| o.as_str() == origin) else {
+        return;
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+        let confirmed = app
+            .dialog()
+            .message(REMOVE_DETAIL)
+            .title(format!("Remove {} from this app?", origin.host()))
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom("Remove".into(), "Cancel".into()))
+            .blocking_show();
+        if confirmed {
+            remove_place(&app, &origin);
+        }
+    });
+}
+
+/// One item of the tray menu, kept to change its text or tick in place.
+enum Handle {
+    Item(MenuItem<Wry>),
+    Check(CheckMenuItem<Wry>),
+    Other,
+}
+
+/// The tray menu as built, with the entries it shows.
+struct TrayMenu {
+    entries: Vec<menu::Entry>,
+    handles: Vec<Handle>,
+}
+
+fn build_menu(app: &AppHandle, entries: Vec<menu::Entry>) -> tauri::Result<(Menu<Wry>, TrayMenu)> {
+    let built = Menu::new(app)?;
+    let mut handles = Vec::new();
+    for entry in &entries {
+        match entry {
+            menu::Entry::Item { id, text, enabled } => {
+                let accel = (id == "quit").then_some("CmdOrCtrl+Q");
+                let item = MenuItem::with_id(app, id, text, *enabled, accel)?;
+                built.append(&item)?;
+                handles.push(Handle::Item(item));
+            }
+            menu::Entry::Check { id, text, checked } => {
+                let item = CheckMenuItem::with_id(app, id, text, true, *checked, None::<&str>)?;
+                built.append(&item)?;
+                handles.push(Handle::Check(item));
+            }
+            menu::Entry::Submenu { text, items } => {
+                let sub = Submenu::new(app, text, true)?;
+                for (id, text) in items {
+                    sub.append(&MenuItem::with_id(app, id, text, true, None::<&str>)?)?;
+                }
+                built.append(&sub)?;
+                handles.push(Handle::Other);
+            }
+            menu::Entry::Separator => {
+                built.append(&PredefinedMenuItem::separator(app)?)?;
+                handles.push(Handle::Other);
+            }
+        }
+    }
+    Ok((built, TrayMenu { entries, handles }))
+}
+
+/// Shows `entries`: in place when only texts and ticks changed, else as a new menu.
+fn apply_menu(app: &AppHandle, tray: &TrayIcon, shown: &mut TrayMenu, entries: Vec<menu::Entry>) {
+    let same_shape = shown.entries.len() == entries.len()
+        && shown.entries.iter().zip(&entries).all(|(a, b)| a.shape() == b.shape());
+    if !same_shape {
+        match build_menu(app, entries) {
+            Ok((built, fresh)) => {
+                if tray.set_menu(Some(built)).is_ok() {
+                    *shown = fresh;
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "couldn't rebuild the menu"),
+        }
+        return;
+    }
+    for (i, entry) in entries.into_iter().enumerate() {
+        if shown.entries[i] == entry {
+            continue;
+        }
+        match (&shown.handles[i], &entry) {
+            (Handle::Item(item), menu::Entry::Item { text, enabled, .. }) => {
+                let _ = item.set_text(text);
+                let _ = item.set_enabled(*enabled);
+            }
+            (Handle::Check(item), menu::Entry::Check { text, checked, .. }) => {
+                let _ = item.set_text(text);
+                let _ = item.set_checked(*checked);
+            }
+            _ => {}
+        }
+        shown.entries[i] = entry;
+    }
+}
+
+/// ⌘1, ⌘2… in the Window menu, one per place (spec P8).
+#[cfg(target_os = "macos")]
+fn set_window_menu(app: &AppHandle, places: &[Place]) {
+    let built = (|| -> tauri::Result<()> {
+        let bar = Menu::default(app)?;
+        if let Some(window) = bar.get(tauri::menu::WINDOW_SUBMENU_ID).and_then(|k| k.as_submenu().cloned()) {
+            window.append(&PredefinedMenuItem::separator(app)?)?;
+            for (i, place) in places.iter().enumerate() {
+                let accel = (i < 9).then(|| format!("CmdOrCtrl+{}", i + 1));
+                let text = match place {
+                    Place::ThisMac => place.label(),
+                    Place::Server(o) => menu::short_host(&o.host()),
+                };
+                window.append(&MenuItem::with_id(app, format!("win:{}", place.key()), text, true, accel.as_deref())?)?;
+            }
+        }
+        app.set_menu(bar)?;
+        Ok(())
+    })();
+    if let Err(e) = built {
+        tracing::warn!(error = %e, "couldn't set the Window menu");
+    }
+}
+
+/// Every menu click: the tray's and the Window menu's.
+fn on_menu(app: &AppHandle, id: &str) {
+    match id {
+        "open" => open_place(app, &Place::ThisMac, Goto::Stay),
+        "update" => {
+            // The window shows the download and the relaunch
+            if let Err(e) = kwnt::app_update::UpdateHub::shared().install() {
+                tracing::info!(reason = e.message(), "update from the menu not started");
+            }
+            show_last(app);
+        }
+        "nudges" => {
+            let state = app.state::<Nudges>();
+            let on = !state.show.load(Ordering::Relaxed);
+            state.show.store(on, Ordering::Relaxed);
+            if let Err(e) = (nudge::Prefs { show_nudges: on }).save(&state.data_dir) {
+                tracing::warn!(error = %e, "couldn't save Show nudges");
+            }
+            wake(app);
+        }
+        "add" => show_connect(app),
+        "this_mac" => {
+            let on = !current(app).this_mac;
+            if let Err(e) = set_local(app, on) {
+                tracing::info!(?e, "Run kwant on this Mac unchanged");
+            }
+            wake(app);
+        }
+        "quit" => {
+            save_open(app);
+            app.exit(0);
+        }
+        _ => {
+            if let Some(key) = id.strip_prefix("place:").or_else(|| id.strip_prefix("win:")) {
+                if let Some(place) = place_by_key(app, key) {
+                    open_place(app, &place, Goto::Stay);
+                }
+            } else if let Some(origin) = id.strip_prefix("remove:") {
+                confirm_remove(app, origin);
+            }
+        }
+    }
+}
+
+/// The menu-bar icon (spec P4, `menu.rs`): each place with what waits there, Add a server…,
+/// Remove a server, Run kwant on this Mac, Show nudges, Quit. With This Mac alone it reads as
+/// before. "Update to x.y.z…" appears at the top while a newer version is on offer.
 ///
-/// Connected to a server, a grey server line follows the window (Connecting to / Connected to /
-/// Can't reach), and the count comes from the server with the window's sign-in cookie (read from
-/// the webview, kept in memory only).
-fn build_tray(handle: &tauri::AppHandle) -> tauri::Result<()> {
-    let home = handle.state::<Target>().home.clone();
-    let update = MenuItem::with_id(handle, "update", "Update kwant bots…", true, None::<&str>)?;
-    let update_separator = PredefinedMenuItem::separator(handle)?;
-    let open = MenuItem::with_id(handle, "open", "Open kwant", true, None::<&str>)?;
-    let first_line = match &home {
-        Home::Local { .. } => "Starting…",
-        Home::Remote { .. } => SIGN_IN_LINE,
-    };
-    let status = MenuItem::with_id(handle, "status", first_line, false, None::<&str>)?;
+/// A server's count comes from the server with the windows' sign-in cookie (read from the
+/// webview, kept in memory only). The nudges (`nudge.rs`) follow the same poll.
+fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
     let show = handle.state::<Nudges>().show.load(Ordering::Relaxed);
-    let nudges = CheckMenuItem::with_id(handle, "nudges", "Show nudges", true, show, None::<&str>)?;
-    let quit = MenuItem::with_id(handle, "quit", "Quit kwant", true, Some("CmdOrCtrl+Q"))?;
-    let separator = PredefinedMenuItem::separator(handle)?;
-    let separator2 = PredefinedMenuItem::separator(handle)?;
-    let separator3 = PredefinedMenuItem::separator(handle)?;
-    let host = match &home {
-        Home::Remote { origin } => origin.host(),
-        Home::Local { .. } => String::new(),
-    };
-    let server = MenuItem::with_id(handle, "server", nudge::server_line(nudge::REACH_CONNECTING, &host), false, None::<&str>)?;
-    let menu = match &home {
-        Home::Local { .. } => {
-            let connect = MenuItem::with_id(handle, "connect", "Connect to a server…", true, None::<&str>)?;
-            Menu::with_items(handle, &[&open, &status, &separator, &nudges, &separator2, &connect, &separator3, &quit])?
-        }
-        Home::Remote { .. } => {
-            let change = MenuItem::with_id(handle, "connect", "Change server…", true, None::<&str>)?;
-            let local = MenuItem::with_id(handle, "local", "Use kwant on this computer", true, None::<&str>)?;
-            Menu::with_items(
-                handle,
-                &[&open, &status, &separator, &nudges, &separator2, &server, &change, &local, &separator3, &quit],
-            )?
-        }
-    };
+    let places = current(handle);
+    let first = menu::model(&menu::Input {
+        places: &places,
+        status: &|p| if *p == Place::ThisMac { menu::Status::Starting } else { menu::Status::Connecting },
+        local_line: menu::Status::Starting.text(),
+        show_nudges: show,
+        update: None,
+    });
+    let (first_menu, mut shown) = build_menu(handle, first)?;
     let icon = tauri::image::Image::from_bytes(TRAY_ICON)?;
     let tray = TrayIconBuilder::with_id("kwant")
         .icon(icon)
         .icon_as_template(cfg!(target_os = "macos"))
-        .tooltip(match &home {
-            Home::Remote { origin } => format!("kwant – {}", origin.host()),
-            Home::Local { .. } => "kwant".to_string(),
-        })
-        .menu(&menu)
+        .tooltip("kwant")
+        .menu(&first_menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => open_window(app),
-            "update" => {
-                // The window shows the download and the relaunch
-                if let Err(e) = kwnt::app_update::UpdateHub::shared().install() {
-                    tracing::info!(reason = e.message(), "update from the menu not started");
-                }
-                open_window(app);
-            }
-            "nudges" => {
-                let state = app.state::<Nudges>();
-                let on = !state.show.load(Ordering::Relaxed);
-                state.show.store(on, Ordering::Relaxed);
-                if let Err(e) = (nudge::Prefs { show_nudges: on }).save(&state.data_dir) {
-                    tracing::warn!(error = %e, "couldn't save Show nudges");
-                }
-            }
-            "connect" => show_connect(app),
-            "local" => {
-                if let Home::Remote { origin } = &app.state::<Target>().home {
-                    if connect::use_this_computer_from(app, origin.clone()).is_err() {
-                        show_connect(app);
-                    }
-                }
-            }
-            "quit" => app.exit(0),
-            _ => {}
-        })
+        // this handler gets every menu's clicks, the Window menu's too
+        .on_menu_event(|app, event| on_menu(app, event.id.as_ref()))
         .build(handle)?;
 
+    let (wake_tx, wake_rx) = mpsc::channel();
+    *handle.state::<Shared>().wake.lock().unwrap() = Some(wake_tx);
     let hub = kwnt::app_update::UpdateHub::shared();
     let app = handle.clone();
     std::thread::spawn(move || {
-        let mut shown = false;
-        let mut checked = show;
         let mut nudger = platform::Nudger::start(&app, tray.clone());
         let mut tracker = nudge::Tracker::default();
         let mut demo_step = 0;
-        let mut reach_shown = nudge::REACH_CONNECTING;
-        let mut poll = match &home {
-            Home::Remote { origin } => Some(RemotePoll::new(origin.clone())),
-            Home::Local { .. } => None,
-        };
+        let mut updates = false;
+        let mut polls: HashMap<String, RemotePoll> = HashMap::new();
+        let mut status: HashMap<String, menu::Status> = HashMap::new();
+        // what each place said last, so a missed poll doesn't make its items new again
+        let mut last: HashMap<String, nudge::Waiting> = HashMap::new();
+        #[cfg(target_os = "macos")]
+        let mut window_menu: Option<Vec<String>> = None;
         loop {
+            let shared = app.state::<Shared>();
+            let places = current(&app);
+            let all = places.all();
+            let keys: Vec<String> = all.iter().map(Place::key).collect();
+            polls.retain(|k, _| keys.contains(k));
+            status.retain(|k, _| keys.contains(k));
+            last.retain(|k, _| keys.contains(k));
             let demo = DEMO.get().map(|t| nudge::demo::step(t.elapsed()));
-            let waiting = match (demo, &home, poll.as_mut()) {
-                (Some(step), _, _) => Some(nudge::demo::waiting(step)),
-                (None, _, Some(poll)) => poll.poll(&app),
-                (None, Home::Local { port }, None) => poll_waiting(*port),
-                (None, Home::Remote { .. }, None) => None,
+            let (port, failed) = {
+                let local = shared.local.lock().unwrap();
+                (local.port, local.failed)
             };
-            let show = app.state::<Nudges>().show.load(Ordering::Relaxed);
-            if show != checked {
-                checked = nudges.set_checked(show).map(|_| show).unwrap_or(checked);
-            }
-            let (line, badge) = match (&waiting, &home) {
-                (Some(w), Home::Local { port }) => nudge::status_line(w, *port),
-                (Some(w), Home::Remote { .. }) => nudge::remote_status_line(w),
-                (None, Home::Local { .. }) => ("Starting…".to_string(), None),
-                (None, Home::Remote { .. }) => (SIGN_IN_LINE.to_string(), None),
-            };
-            if matches!(home, Home::Remote { .. }) {
-                let reach = app.state::<Reach>().0.load(Ordering::Relaxed);
-                if reach != reach_shown && server.set_text(nudge::server_line(reach, &host)).is_ok() {
-                    reach_shown = reach;
+            let reach = shared.reach.lock().unwrap().clone();
+            for place in &all {
+                let key = place.key();
+                let (said, waiting) = match place {
+                    Place::ThisMac => {
+                        let waiting = match (demo, port) {
+                            (Some(step), _) => Some(nudge::demo::waiting(step)),
+                            (None, Some(port)) if !failed => poll_waiting(port),
+                            _ => None,
+                        };
+                        let said = match &waiting {
+                            Some(w) => menu::Status::Waiting(w.count),
+                            None if failed => menu::Status::DidntStart,
+                            None => menu::Status::Starting,
+                        };
+                        (said, waiting)
+                    }
+                    Place::Server(origin) => {
+                        let poll = polls.entry(key.clone()).or_insert_with(|| RemotePoll::new(origin.clone()));
+                        match poll.poll(&app) {
+                            Polled::Ok(w) => (menu::Status::Waiting(w.count), Some(w)),
+                            Polled::SignedOut => (menu::Status::SignIn, None),
+                            Polled::Failed if reach.get(&key) == Some(&Reach::Connecting) => (menu::Status::Connecting, None),
+                            Polled::Failed => (menu::Status::Unreachable, None),
+                        }
+                    }
+                };
+                status.insert(key.clone(), said);
+                if let Some(w) = waiting {
+                    last.insert(key, w);
                 }
             }
-            let _ = status.set_text(&line);
-            let _ = tray.set_title(badge.as_deref());
-            if let Some(w) = &waiting {
+            // P7: with more than one place, each nudge names its place
+            let labelled = all.len() > 1;
+            let mut merged: Option<nudge::Waiting> = None;
+            for place in &all {
+                if let Some(w) = last.get(&place.key()) {
+                    let label = if labelled { place.label() } else { String::new() };
+                    merged.get_or_insert_with(Default::default).add(w.clone().in_place(&place.key(), &label));
+                }
+            }
+            let status_of = |p: &Place| {
+                status.get(&p.key()).copied().unwrap_or(if *p == Place::ThisMac {
+                    menu::Status::Starting
+                } else {
+                    menu::Status::Connecting
+                })
+            };
+            let show = app.state::<Nudges>().show.load(Ordering::Relaxed);
+            let local_line = match (status_of(&Place::ThisMac), last.get(places::THIS_MAC), port) {
+                (menu::Status::Waiting(_), Some(w), Some(port)) => nudge::status_line(w, port).0,
+                (said, _, _) => said.text(),
+            };
+            let _ = tray.set_title(menu::badge(&places, &status_of).as_deref());
+            if let Some(w) = &merged {
                 let change = tracker.update(w, Instant::now());
                 nudger.on_poll(&app, &change, show);
             }
             if let Some(step) = demo.filter(|s| *s != demo_step) {
                 demo_step = step;
-                println!("demo-nudge: step {step}: {line}");
+                println!("demo-nudge: step {step}: {local_line}");
             }
-            let offer = update::menu_item(&hub.status());
-            // in Remote mode "Update" alone could read as updating the server
-            let offer = match &home {
-                Home::Remote { .. } => offer.map(|(text, on)| (text.replacen("Update to ", "Update this app to ", 1), on)),
-                Home::Local { .. } => offer,
-            };
-            match offer {
-                Some((text, enabled)) => {
-                    if !shown {
-                        shown = menu.insert_items(&[&update, &update_separator], 0).is_ok();
-                    }
-                    let _ = update.set_text(text);
-                    let _ = update.set_enabled(enabled);
-                }
-                None if shown => {
-                    let _ = menu.remove(&update);
-                    let _ = menu.remove(&update_separator);
-                    shown = false;
-                }
-                None => {}
+            let entries = menu::model(&menu::Input {
+                places: &places,
+                status: &status_of,
+                local_line,
+                show_nudges: show,
+                update: update::menu_item(&hub.status()),
+            });
+            apply_menu(&app, &tray, &mut shown, entries);
+            #[cfg(target_os = "macos")]
+            if demo.is_none() && window_menu.as_ref() != Some(&keys) {
+                set_window_menu(&app, &all);
+                window_menu = Some(keys.clone());
+            }
+            // The app's own update: when it runs kwant here or shows a server (an attached
+            // kwant updates itself)
+            if !updates && demo.is_none() && (shared.started_kwant.load(Ordering::Relaxed) || !places.servers.is_empty()) {
+                updates = true;
+                update::start(&app);
             }
             // the demo moves on a timeline CI screenshots, so it looks every second
-            std::thread::sleep(Duration::from_secs(if demo.is_some() { 1 } else { 5 }));
+            let _ = wake_rx.recv_timeout(Duration::from_secs(if demo.is_some() { 1 } else { 5 }));
+            while wake_rx.try_recv().is_ok() {}
         }
     });
     Ok(())
 }
 
-/// The status line on a server before the app has the window's sign-in cookie.
-const SIGN_IN_LINE: &str = "Sign in to see what's waiting";
+/// One poll of a server.
+enum Polled {
+    Ok(nudge::Waiting),
+    /// It answers, but not to this app's cookie (none yet, or signed out).
+    SignedOut,
+    Failed,
+}
 
-/// The tray's poll of kwant on a server, signed in with the window's cookie. Without the
-/// cookie (not signed in yet, or the webview won't say) it gives `None`: the menu then reads
-/// "Connected to <host>" with no count and no nudges.
+/// The tray's poll of kwant on a server, signed in with the windows' cookie.
 struct RemotePoll {
     origin: Origin,
     client: reqwest::Client,
@@ -645,7 +1227,7 @@ impl RemotePoll {
         RemotePoll { origin, client: remote::client(), token: None, read_at: None }
     }
 
-    fn poll(&mut self, app: &AppHandle) -> Option<nudge::Waiting> {
+    fn poll(&mut self, app: &AppHandle) -> Polled {
         if self.token.is_none() && self.read_at.is_none_or(|t| t.elapsed() >= COOKIE_RECHECK) {
             self.read_at = Some(Instant::now());
             self.token = read_token(app, &self.origin);
@@ -656,16 +1238,16 @@ impl RemotePoll {
             remote::Answer::SignedOut => {
                 // signed out, or the cookie changed: look again (at most every 30 s)
                 self.token = None;
-                return None;
+                return Polled::SignedOut;
             }
-            remote::Answer::Failed => return None,
+            remote::Answer::Failed => return Polled::Failed,
         };
         let (client, origin, token) = (&self.client, &self.origin, self.token.as_ref());
         let ok = |path: &str| match tauri::async_runtime::block_on(remote::get(client, origin, token, path)) {
             remote::Answer::Ok(body) => Some(body),
             _ => None,
         };
-        Some(collect_waiting(Some(spaces), ok))
+        Polled::Ok(collect_waiting(Some(spaces), ok))
     }
 }
 
@@ -800,37 +1382,50 @@ mod tests {
     use tauri::webview::InvokeRequest;
 
     const COMMANDS: &[&str] = &[
-        "connect_state",
+        "places_state",
         "check_server",
-        "connect_server",
-        "use_this_computer",
+        "add_server",
+        "remove_server",
+        "set_this_mac",
         "close_connect",
         "retry_start",
     ];
 
-    /// The app's commands and its real capabilities, on Tauri's mock runtime.
-    fn app(name: &str) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>, PathBuf) {
+    /// The app's commands and its real capabilities, on Tauri's mock runtime, in a window
+    /// labelled `label`.
+    fn app_with(
+        name: &str,
+        label: &str,
+        places: Places,
+    ) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>, PathBuf) {
         let data_dir = std::env::temp_dir().join(format!("kwant-ipc-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&data_dir);
+        let config = kwnt::Config { data_dir: data_dir.clone(), ..Default::default() };
+        let shared = Shared::new(data_dir.clone(), config, places);
+        // a port nothing listens on: tests never start or reach a real kwant
+        shared.local.lock().unwrap().port = Some(1);
         let app = mock_builder()
-            .manage(Target { home: Home::Local { port: 1 }, last: None, started_kwant: true })
-            .manage(Connecting::default())
-            .manage(Reach::default())
+            .manage(shared)
             .manage(Nudges { data_dir: data_dir.clone(), show: AtomicBool::new(true) })
             .invoke_handler(tauri::generate_handler![
-                connect::connect_state,
+                connect::places_state,
                 connect::check_server,
-                connect::connect_server,
-                connect::use_this_computer,
+                connect::add_server,
+                connect::remove_server,
+                connect::set_this_mac,
                 connect::close_connect,
                 connect::retry_start,
             ])
             .build(tauri::generate_context!(test = true))
             .expect("the mock app");
-        let window = WebviewWindowBuilder::new(&app, MAIN, WebviewUrl::App("index.html".into()))
+        let window = WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into()))
             .build()
             .expect("the mock window");
         (app, window, data_dir)
+    }
+
+    fn app(name: &str) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>, PathBuf) {
+        app_with(name, MAIN, Places::default())
     }
 
     fn invoke(
@@ -854,10 +1449,18 @@ mod tests {
         .map(|body| body.deserialize::<serde_json::Value>().unwrap_or_default())
     }
 
+    fn nothing_saved(data_dir: &std::path::Path) {
+        assert!(!data_dir.join(target::TARGET_FILE).exists(), "no old file was written");
+        assert!(!data_dir.join(places::PLACES_FILE).exists(), "no places file was written");
+    }
+
+    fn args() -> serde_json::Value {
+        serde_json::json!({ "address": "https://kwant.example.com", "origin": "https://kwant.example.com", "on": false })
+    }
+
     #[test]
     fn a_server_s_pages_can_call_no_command() {
         let (_app, window, data_dir) = app("remote");
-        let args = serde_json::json!({ "address": "https://kwant.example.com" });
         for from in [
             "https://kwant.example.com/",
             "https://kwant.example.com/s/spc_default/inbox",
@@ -866,7 +1469,7 @@ mod tests {
             "https://tauri.localhost.evil.example/",
         ] {
             for cmd in COMMANDS {
-                let refused = invoke(&window, cmd, from, args.clone());
+                let refused = invoke(&window, cmd, from, args());
                 // the access control answers (a plain message), the command never runs
                 assert!(
                     matches!(&refused, Err(serde_json::Value::String(_))),
@@ -874,7 +1477,26 @@ mod tests {
                 );
             }
         }
-        assert!(!data_dir.join(target::TARGET_FILE).exists(), "nothing was saved");
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// The same holds in a server's own window (its label is in the capability for the bundled
+    /// loading page, never for the server's pages).
+    #[test]
+    fn a_server_window_s_pages_can_call_no_command() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let label = Place::Server(origin).window_label();
+        let (_app, window, data_dir) = app_with("server-window", &label, places);
+        for from in ["https://kwant.example.com/", "https://kwant.example.com/s/spc_default/inbox"] {
+            for cmd in COMMANDS {
+                let refused = invoke(&window, cmd, from, args());
+                assert!(matches!(&refused, Err(serde_json::Value::String(_))), "{cmd} from {from}: {refused:?}");
+            }
+        }
+        nothing_saved(&data_dir);
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
@@ -884,7 +1506,6 @@ mod tests {
     #[test]
     fn a_bundled_look_alike_with_a_port_or_a_user_name_can_call_no_command() {
         let (_app, window, data_dir) = app("lookalike");
-        let args = serde_json::json!({ "address": "https://kwant.example.com" });
         for from in [
             "http://tauri.localhost:8080/",
             "tauri://localhost:8080/",
@@ -893,31 +1514,114 @@ mod tests {
         ] {
             window.navigate(from.parse().unwrap()).unwrap();
             for cmd in COMMANDS {
-                let refused = invoke(&window, cmd, from, args.clone());
+                let refused = invoke(&window, cmd, from, args());
                 let by_acl = matches!(&refused, Err(serde_json::Value::String(_)));
                 let by_command = matches!(&refused, Err(e) if e["code"] == "not_allowed");
                 assert!(by_acl || by_command, "{cmd} from {from}: {refused:?}");
             }
         }
-        assert!(!data_dir.join(target::TARGET_FILE).exists(), "nothing was saved");
+        nothing_saved(&data_dir);
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
     #[test]
     fn the_bundled_pages_can() {
         let (_app, window, data_dir) = app("bundled");
-        let state = invoke(&window, "connect_state", &connect::bundled("connect.html").to_string(), serde_json::json!({}))
-            .expect("connect_state from the connect page");
-        assert_eq!(state["mode"], "local");
+        let page = connect::bundled("connect.html").to_string();
+        let state = invoke(&window, "places_state", &page, serde_json::json!({})).expect("places_state from a bundled page");
+        assert_eq!(state["this_mac"], true);
+        assert_eq!(state["servers"], serde_json::json!([]));
+        assert_eq!(state["last_origin"], serde_json::Value::Null);
+        assert_eq!(state["place"]["kind"], "this_mac", "{state}");
         // the command itself runs (and refuses plain http before contacting anything)
-        let refused = invoke(
-            &window,
-            "check_server",
-            &connect::bundled("connect.html").to_string(),
-            serde_json::json!({ "address": "http://kwant.example.com" }),
-        )
-        .unwrap_err();
+        let refused = invoke(&window, "check_server", &page, serde_json::json!({ "address": "http://kwant.example.com" }))
+            .unwrap_err();
         assert_eq!(refused["code"], "http_not_allowed", "{refused}");
+        let refused = invoke(&window, "add_server", &page, serde_json::json!({ "address": "http://kwant.example.com" }))
+            .unwrap_err();
+        assert_eq!(refused["code"], "http_not_allowed", "{refused}");
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// This Mac can't go off while it is the only place: there would be nothing to show.
+    #[test]
+    fn this_mac_stays_on_without_a_server() {
+        let (app, window, data_dir) = app("last-place");
+        let page = connect::bundled("index.html").to_string();
+        let refused = invoke(&window, "set_this_mac", &page, serde_json::json!({ "on": false })).unwrap_err();
+        assert_eq!(refused["code"], "last_place", "{refused}");
+        assert!(current(app.handle()).this_mac);
+        // on while on: nothing changes, nothing is written
+        let state = invoke(&window, "set_this_mac", &page, serde_json::json!({ "on": true })).unwrap();
+        assert_eq!(state["this_mac"], true);
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn removing_a_server_that_isn_t_listed_changes_nothing() {
+        let (app, window, data_dir) = app("remove-unlisted");
+        let page = connect::bundled("index.html").to_string();
+        let answer =
+            invoke(&window, "remove_server", &page, serde_json::json!({ "origin": "https://kwant.example.com" })).unwrap();
+        assert_eq!(answer["removed"], false);
+        assert_eq!(current(app.handle()), Places::default());
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn a_listed_server_shows_in_the_state_with_its_reach() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, window, data_dir) = app_with("listed", MAIN, places);
+        set_reach(app.handle(), &origin, Reach::Unreachable);
+        let page = connect::bundled("index.html").to_string();
+        let state = invoke(&window, "places_state", &page, serde_json::json!({})).unwrap();
+        assert_eq!(state["servers"][0]["origin"], "https://kwant.example.com");
+        assert_eq!(state["servers"][0]["host"], "kwant.example.com");
+        assert_eq!(state["servers"][0]["reach"], "unreachable");
+        assert_eq!(state["last_origin"], "https://kwant.example.com");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// With a server listed, This Mac can go off and the file says so. (Whether its window
+    /// closes is the real runtime's part: the mock keeps destroyed windows.)
+    #[test]
+    fn this_mac_goes_off_beside_a_server() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, window, data_dir) = app_with("this-mac-off", "connect", places);
+        let main = WebviewWindowBuilder::new(&app, MAIN, WebviewUrl::App("index.html".into())).build().unwrap();
+        drop(main);
+        let page = connect::bundled("connect.html").to_string();
+        let state = invoke(&window, "set_this_mac", &page, serde_json::json!({ "on": false })).unwrap();
+        assert_eq!(state["this_mac"], false);
+        let saved = Places::load(&data_dir);
+        assert!(!saved.this_mac);
+        assert_eq!(saved.servers, vec![origin.clone()]);
+        assert_eq!(saved.all(), vec![Place::Server(origin)]);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// Removing the only server takes it out of the file; with This Mac off, This Mac comes back.
+    #[test]
+    fn removing_the_last_server_brings_this_mac_back() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        places.set_this_mac(false);
+        let (app, _window, data_dir) = app_with("remove-last", "connect", places);
+        assert!(remove_place(app.handle(), &origin));
+        let after = current(app.handle());
+        assert!(after.servers.is_empty());
+        assert!(after.this_mac);
+        let saved = Places::load(&data_dir);
+        assert_eq!(saved.servers, Vec::<Origin>::new());
+        assert!(saved.this_mac);
         let _ = std::fs::remove_dir_all(data_dir);
     }
 }

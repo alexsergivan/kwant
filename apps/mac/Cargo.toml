@@ -26,6 +26,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # The native check and poll of a kwant server (already in the tree via kwnt)
 reqwest = "0.12"
+tauri-plugin-dialog = "2"
 
 # A second launch focuses the running app (macOS does this itself)
 [target.'cfg(not(target_os = "macos"))'.dependencies]

@@ -8,34 +8,41 @@ A Tauri v2 shell around kwant. The app links the `kwnt` crate and runs the same 
   app opens a window on it and starts nothing. If something else holds the port, it uses a free one.
 - **PATH:** apps opened from Finder get a bare PATH, so the app merges the login shell's PATH with
   `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin` to find `claude`, `codex` and `grok`.
-- **Links:** the window only shows kwant (its loopback page and the bundled loading page). Any other
-  web or mail address, including sign-in pages and `target=_blank` links, opens in the default
-  browser; the app never opens a second window. Other schemes (`file:`, app links) are ignored.
-  The page sees `window.__KWANT_APP__ = 'mac'`, so sign-ins say to finish in the browser and watch
-  the server for the result. See `src/links.rs`.
-- **Menu bar:** Open kwant, a status line (approvals waiting), Show nudges, Connect to a server…,
-  Quit. Closing the window keeps kwant
-  running; Quit stops it.
+- **Links:** each window only shows its own place: This Mac's loopback page, or exactly one
+  server's origin, plus the bundled pages. A link to another listed place opens (or focuses) that
+  place's window. Any other web or mail address, including sign-in pages and `target=_blank`
+  links, opens in the default browser. Other schemes (`file:`, app links) are ignored. The page
+  sees `window.__KWANT_APP__ = 'mac'`, so sign-ins say to finish in the browser and watch the
+  server for the result. See `src/links.rs`.
+- **Places, side by side** (0.7.5): This Mac and every added server each get their own window
+  ("kwant – This Mac", "kwant – host"; just "kwant" while This Mac is alone), all running at once.
+  Nothing relaunches. The list lives in `~/.kwnt/desktop-places.json` (origins and which windows
+  were open, never a token, mode 0600); an older `desktop-target.json` is migrated once and
+  removed. Closing a window hides it and its place keeps running; the Dock click shows the window
+  used last. See `src/places.rs`.
+- **Menu bar:** with no server, as before (Open kwant, a status line, Show nudges, Quit) plus
+  **Add a server…**. With servers: one row per place with what waits there, **Add a server…**,
+  **Remove a server ▸** (asks first, then closes its window, clears its sign-in cookie and drops
+  it), **Run kwant on this Mac** (off stops the kwant this app started and closes its window; it
+  can't go off with no server) and **Show nudges**. On macOS the Window menu lists the places
+  with ⌘1, ⌘2…. With more than one place, a nudge names its place ("host · …") and opens in that
+  place's window. See `src/menu.rs`.
 - **Updates:** 15 seconds after start and then every 6 hours the app reads
   `releases/latest/download/latest.json` (prereleases are never offered). A newer version shows in
   the web app (`GET /api/app/update`), as one notification per version and as **Update to x.y.z…**
-  at the top of the menu-bar menu. Installing downloads `kwant_universal.app.tar.gz`, checks its
-  signature against `plugins.updater.pubkey` in `tauri.conf.json`, replaces the app, stops kwant and
-  relaunches. If anything fails, the running app stays as it was. See `src/update.rs`.
-- **Connect to a server** (0.7.5): the menu's **Connect to a server…** opens a bundled page
-  (`loading/connect.html`) that checks an address (`GET /api/health` must answer as kwant, 10 s,
-  no redirects), saves its origin to `~/.kwnt/desktop-target.json` (scheme, host and port only,
-  mode 0600) and relaunches. In Remote mode the app starts no local kwant, checks the server
-  natively, then opens it; the window keeps exactly that origin (`src/links.rs`), and everything
-  else goes to the browser. http is allowed only on 127.0.0.1, localhost and [::1] (an SSH
-  tunnel). A pasted one-time sign-in link is used once in the window before the relaunch and is
-  never saved or logged. The menu then shows **Connected to <host>**, **Change server…** and
-  **Use kwant on this computer**; the count comes from the server with the window's sign-in
-  cookie, held in memory only. No file, or an unreadable one, means today's Local mode. Only the
-  bundled pages can call the app's commands (`capabilities/connect.json`, and each command checks
-  the page itself); a server's pages can call none. The log masks `kwnt_token` values and the
-  fragment of any address. The app's own updates stay on in Remote mode and show only in the
-  menu, as **Update this app to x.y.z…**. Commands: `src/connect.rs`.
+  at the top of the menu-bar menu (**Update this app to x.y.z…** once a server is listed).
+  Installing downloads `kwant_universal.app.tar.gz`, checks its signature against
+  `plugins.updater.pubkey` in `tauri.conf.json`, replaces the app, stops kwant and relaunches. If
+  anything fails, the running app stays as it was. See `src/update.rs`.
+- **Add a server:** a bundled page (`loading/connect.html`) checks an address (`GET /api/health`
+  must answer as kwant, 10 s, no redirects), adds its origin (scheme, host and port only) and
+  opens its window; a server already listed is focused. The app checks the server natively, then
+  opens it. http is allowed only on 127.0.0.1, localhost and [::1] (an SSH tunnel). A pasted
+  one-time sign-in link is opened once in that server's window and is never saved or logged. A
+  server's count comes from the server with the windows' sign-in cookie, held in memory only. Only
+  the bundled pages can call the app's commands (`capabilities/connect.json`, and each command
+  checks the page itself); a server's pages can call none. The log masks `kwnt_token` values and
+  the fragment of any address. Commands: `src/connect.rs`.
 - `kwant --check` starts kwant headless on a free port with a throwaway data dir, waits for
   `/api/health` and exits 0. CI runs it on the built app.
 

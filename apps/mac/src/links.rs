@@ -1,9 +1,10 @@
-//! Where a link goes. The window only ever shows kwant: the kwant it was opened on (its own page
-//! on loopback, or the saved server's exact origin) and the bundled pages ("Starting kwant…",
-//! "Connect to a server"). Any other web or mail address opens in the person's default browser,
-//! so a sign-in page can never take over the window with no way back.
+//! Where a link goes. Each place's window only ever shows its own kwant (its own page on
+//! loopback for This Mac, or exactly the server's origin) and the bundled pages ("Starting
+//! kwant…", "Add a server"). A link to another listed place opens (or focuses) that place's
+//! window (spec P3); any other web or mail address opens in the person's default browser, so a
+//! sign-in page can never take over a window with no way back.
 
-use crate::target::{Home, Origin};
+use crate::target::Home;
 use tauri::Url;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +15,8 @@ pub enum Link {
     Browser,
     /// Cancel it and open nothing (file:, javascript:, other apps' schemes).
     Drop,
+    /// Cancel it here and open it in another place's window: the index in `others`.
+    Place(usize),
 }
 
 /// The bundled pages (tauri://localhost on macOS, http://tauri.localhost elsewhere): exactly
@@ -42,11 +45,14 @@ fn is_kwant_server(url: &Url, home: &Home) -> bool {
     }
 }
 
-/// A top-level navigation in the kwant window. `connecting` is a server the connect page is
-/// signing in to right now (a pasted sign-in link), allowed for that one hand-over only.
-pub fn navigation(url: &Url, home: &Home, connecting: Option<&Origin>) -> Link {
-    if is_bundled(url) || is_kwant_server(url, home) || connecting.is_some_and(|o| o.is(url)) {
+/// A top-level navigation in a place's window. `others` are the homes of the other places the
+/// app lists (This Mac and the servers), in the order the caller keeps.
+pub fn navigation(url: &Url, home: &Home, others: &[Home]) -> Link {
+    if is_bundled(url) || is_kwant_server(url, home) {
         return Link::Stay;
+    }
+    if let Some(i) = others.iter().position(|h| is_kwant_server(url, h)) {
+        return Link::Place(i);
     }
     match url.scheme() {
         // blank pages and in-page content kwant makes itself (downloads, previews)
@@ -56,11 +62,12 @@ pub fn navigation(url: &Url, home: &Home, connecting: Option<&Origin>) -> Link {
     }
 }
 
-/// A window.open() or target=_blank request. The app never opens a second window: real
-/// addresses, kwant's own included, go to the browser; a blank popup is refused, so the page's
-/// window.open() gets null and falls back to a navigation that `navigation` sends to the browser.
-pub fn new_window(url: &Url, home: &Home) -> Link {
-    match navigation(url, home, None) {
+/// A window.open() or target=_blank request. A place never opens a second window of its own:
+/// real addresses, its own kwant's included, go to the browser (sandbox pages and the like); a
+/// blank popup is refused, so the page's window.open() gets null and falls back to a navigation
+/// that `navigation` sends on. A link to another place opens that place's window.
+pub fn new_window(url: &Url, home: &Home, others: &[Home]) -> Link {
+    match navigation(url, home, others) {
         Link::Stay if is_kwant_server(url, home) => Link::Browser,
         Link::Stay => Link::Drop,
         other => other,
@@ -97,11 +104,11 @@ mod tests {
     const LOCAL: Home = Home::Local { port: PORT };
 
     fn nav(s: &str) -> Link {
-        navigation(&s.parse().unwrap(), &LOCAL, None)
+        navigation(&s.parse().unwrap(), &LOCAL, &[])
     }
 
     fn popup(s: &str) -> Link {
-        new_window(&s.parse().unwrap(), &LOCAL)
+        new_window(&s.parse().unwrap(), &LOCAL, &[])
     }
 
     fn remote(s: &str) -> Home {
@@ -109,7 +116,7 @@ mod tests {
     }
 
     fn rnav(home: &str, s: &str) -> Link {
-        navigation(&s.parse().unwrap(), &remote(home), None)
+        navigation(&s.parse().unwrap(), &remote(home), &[])
     }
 
     #[test]
@@ -206,7 +213,7 @@ mod tests {
         ] {
             assert!(!is_bundled(&s.parse().unwrap()), "{s}");
             for home in [LOCAL, remote("https://kwant.example.com")] {
-                assert_ne!(navigation(&s.parse().unwrap(), &home, None), Link::Stay, "{s} in {home:?}");
+                assert_ne!(navigation(&s.parse().unwrap(), &home, &[]), Link::Stay, "{s} in {home:?}");
             }
         }
         assert_eq!(rnav("https://kwant.example.com", "tauri://localhost:8080/"), Link::Drop);
@@ -268,21 +275,59 @@ mod tests {
         assert_eq!(nav("https://127.0.0.1:8799/"), Link::Browser);
     }
 
+    /// P3: a link to another listed place opens that place's window, with the same exact-origin
+    /// rules as a window's own home; everything else still goes to the browser.
     #[test]
-    fn a_sign_in_hand_over_allows_only_that_server() {
-        let o = crate::target::parse_address("https://kwant.example.com").unwrap().origin;
-        let go = |s: &str| navigation(&s.parse().unwrap(), &LOCAL, Some(&o));
+    fn a_link_to_another_place_opens_its_window() {
+        let a = remote("https://kwant.example.com");
+        let b = remote("http://127.0.0.1:2222");
+        // This Mac's window, with two servers listed
+        let others = [a.clone(), b.clone()];
+        let go = |s: &str| navigation(&s.parse().unwrap(), &LOCAL, &others);
+        assert_eq!(go("https://kwant.example.com/s/spc_default/inbox"), Link::Place(0));
+        assert_eq!(go("https://KWANT.example.com:443/"), Link::Place(0));
+        assert_eq!(go("http://127.0.0.1:2222/s/x"), Link::Place(1));
+        assert_eq!(go("http://127.0.0.1:8799/"), Link::Stay, "its own kwant");
+        for s in [
+            "https://kwant.example.com.evil.example/",
+            "https://a@kwant.example.com/",
+            "https://kwant.example.com:8443/",
+            "http://kwant.example.com/",
+            "https://kwant.example.com./",
+            "http://localhost:2222/",
+            "http://127.0.0.1:2223/",
+        ] {
+            assert_eq!(go(s), Link::Browser, "{s}");
+        }
+        // a server's window: This Mac and the other server are places too
+        let others = [LOCAL, b];
+        let go = |s: &str| navigation(&s.parse().unwrap(), &a, &others);
+        assert_eq!(go("https://kwant.example.com/x"), Link::Stay);
+        assert_eq!(go("http://127.0.0.1:8799/s/spc_default/inbox"), Link::Place(0));
+        assert_eq!(go("http://localhost:8799/"), Link::Place(0));
+        assert_eq!(go("http://127.0.0.1:2222/"), Link::Place(1));
+        assert_eq!(go("http://127.0.0.1:8798/"), Link::Browser);
+        assert_eq!(go("file:///etc/passwd"), Link::Drop);
+        // a popup to another place opens that place, to its own server goes to the browser
+        let pop = |s: &str| new_window(&s.parse().unwrap(), &a, &others);
+        assert_eq!(pop("http://127.0.0.1:8799/s/x"), Link::Place(0));
+        assert_eq!(pop("https://kwant.example.com/sandbox/team-1"), Link::Browser);
+        assert_eq!(pop("about:blank"), Link::Drop);
+    }
+
+    #[test]
+    fn a_sign_in_link_stays_in_its_own_server_s_window() {
+        let a = remote("https://kwant.example.com");
+        let go = |s: &str| navigation(&s.parse().unwrap(), &a, &[LOCAL]);
         assert_eq!(go("https://kwant.example.com/#kwnt_token=kl1.TESTONLY"), Link::Stay);
-        assert_eq!(go("https://kwant.example.com.evil.example/"), Link::Browser);
+        assert_eq!(go("https://kwant.example.com.evil.example/#kwnt_token=kl1.TESTONLY"), Link::Browser);
         assert_eq!(go("https://a@kwant.example.com/"), Link::Browser);
-        // the local server still stays while connecting
-        assert_eq!(go("http://127.0.0.1:8799/"), Link::Stay);
     }
 
     #[test]
     fn remote_new_windows_go_to_the_browser() {
         let h = remote("https://kwant.example.com");
-        let pop = |s: &str| new_window(&s.parse().unwrap(), &h);
+        let pop = |s: &str| new_window(&s.parse().unwrap(), &h, &[]);
         assert_eq!(pop("https://kwant.example.com/sandbox/team-1"), Link::Browser);
         assert_eq!(pop("https://evil.example/"), Link::Browser);
         assert_eq!(pop("about:blank"), Link::Drop);

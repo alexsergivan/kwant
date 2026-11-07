@@ -1,10 +1,11 @@
 /// The app's own commands (connect.rs). Listing them turns on Tauri's access control for them:
 /// only capabilities/connect.json grants them, and it is local-only.
 const COMMANDS: &[&str] = &[
-    "connect_state",
+    "places_state",
     "check_server",
-    "connect_server",
-    "use_this_computer",
+    "add_server",
+    "remove_server",
+    "set_this_mac",
     "close_connect",
     "retry_start",
 ];

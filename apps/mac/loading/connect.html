@@ -34,8 +34,8 @@
 </head>
 <body>
 <main>
-  <h1>Connect to a server</h1>
-  <p class="lead">Open a kwant that runs on another machine, such as your VPS.</p>
+  <h1>Add a server</h1>
+  <p class="lead">Open a kwant that runs on another machine, such as your VPS. It gets a window of its own.</p>
   <label for="address">Server address</label>
   <input id="address" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false"
          placeholder="kwant.example.com" aria-describedby="help slot">
@@ -44,14 +44,9 @@
     <p class="help">Or paste a one-time sign-in link (in kwant: Settings → Signed-in devices → Add a phone or browser). It signs this app in once and isn't kept.</p>
   </div>
   <div class="slot" id="slot" role="status" aria-live="polite"></div>
-  <div class="notice">
-    <strong>While connected, this app shows the kwant on <span id="notice-host">that server</span>.</strong>
-    <span id="notice-local">The bots on this computer pause until you switch back. Your data on this computer stays as it is.</span>
-    <br><br>To switch back, choose <strong>Use kwant on this computer</strong> in the kwant menu <span id="where">in the menu bar</span>.
-  </div>
   <div class="actions">
     <button id="cancel">Cancel</button>
-    <button id="connect" class="primary" disabled>Connect and restart</button>
+    <button id="connect" class="primary" disabled>Connect</button>
   </div>
 </main>
 <script>
@@ -109,7 +104,6 @@
     field.removeAttribute('aria-invalid');
     connectButton.disabled = !field.value.trim();
     help.hidden = !!field.value.trim() || !!link;
-    document.getElementById('notice-host').textContent = p ? p.host : 'that server';
     if (link) show(chip(true));
     else if (p) show(text('', null, 'Connects to ' + p.origin));
     else show(null);
@@ -132,7 +126,7 @@
     field.readOnly = false;
     field.setAttribute('aria-invalid', 'true');
     cancelButton.textContent = 'Cancel';
-    connectButton.textContent = 'Connect and restart';
+    connectButton.textContent = 'Connect';
     connectButton.disabled = false;
     var box = document.createElement('div');
     if (link) box.appendChild(chip(true));
@@ -154,14 +148,15 @@
     ipc.invoke('check_server', { address: address }).then(function (s) {
       if (mine !== checking) return;
       cancelButton.hidden = true;
-      connectButton.textContent = 'Restarting…';
+      connectButton.textContent = 'Opening…';
       var box = document.createElement('div');
       if (link) box.appendChild(chip(false));
       box.appendChild(text('ok', '✓ Connected to ' + s.host, link
-        ? 'Signing you in with the link, then kwant restarts to open it…'
-        : 'kwant restarts to open it… Then sign in there. "Sign in from another device" lets you approve this app from your phone or browser.'));
+        ? 'Signing you in with the link in its own window…'
+        : 'It opens in its own window. Sign in there: "Sign in from another device" lets you approve this app from your phone or browser.'));
       show(box);
-      return ipc.invoke('connect_server', { address: address }).then(function () { link = null; });
+      // the app opens (or shows) the server's window and closes this one
+      return ipc.invoke('add_server', { address: address }).then(function () { link = null; });
     }).catch(function (e) {
       if (mine !== checking) return;
       cancelButton.hidden = false;
@@ -198,7 +193,7 @@
       checking++;
       field.readOnly = false;
       cancelButton.textContent = 'Cancel';
-      connectButton.textContent = 'Connect and restart';
+      connectButton.textContent = 'Connect';
       update();
       field.focus();
       return;
@@ -208,13 +203,7 @@
   };
 
   if (!ipc) return;
-  ipc.invoke('connect_state').then(function (s) {
-    if (s.app === 'linux') document.getElementById('where').textContent = 'in the tray';
-    if (s.local_kwant === 'outside') {
-      document.getElementById('notice-local').textContent = 'kwant on this computer was started outside this app, so it keeps running.';
-    }
-    var start = s.mode === 'remote' ? s.host : '';
-    if (start) { field.value = start; field.select(); }
+  ipc.invoke('places_state').then(function () {
     update();
     field.focus();
   }).catch(function () { update(); field.focus(); });

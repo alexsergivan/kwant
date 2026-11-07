@@ -39,15 +39,13 @@
     <p class="muted" id="why"></p>
     <div class="actions">
       <button class="primary" id="retry">Try again</button>
-      <button id="change">Change server…</button>
-      <button id="local">Use kwant on this computer</button>
     </div>
-    <p class="muted small">The bots on this computer are paused while this app is set to a server. Your data on this computer is safe.</p>
     <p class="faint small">Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
   </section>
 <script>
-// Remote mode: the app checks the server and either opens it or sets data-state="unreachable"
-// with data-host, data-code and data-message. The buttons call the app's commands (api.md).
+// A server's window: the app checks the server and either opens it or sets
+// data-state="unreachable" with data-host, data-code and data-message. Try again calls the app's
+// retry_start for this window's own place (spec.md, next-075/side-by-side).
 (function () {
   var ipc = window.__TAURI_INTERNALS__;
   var body = document.body;
@@ -79,10 +77,10 @@
     document.getElementById('retry').focus();
   }
   new MutationObserver(render).observe(body, { attributes: true, attributeFilter: ['data-state'] });
-  ipc.invoke('connect_state').then(function (s) {
+  ipc.invoke('places_state').then(function (s) {
     if (s.app === 'linux') document.querySelectorAll('.log').forEach(function (e) { e.textContent = '~/.kwnt/desktop-app.log'; });
-    if (s.mode === 'remote' && !body.dataset.state) {
-      setHost(s.host);
+    if (s.place && s.place.kind === 'server' && !body.dataset.state) {
+      setHost(s.place.host);
       body.dataset.state = 'connecting';
     }
   }).catch(function () {});
@@ -90,13 +88,6 @@
     busy(true);
     body.dataset.state = 'connecting';
     ipc.invoke('retry_start').catch(function () { busy(false); });
-  };
-  document.getElementById('change').onclick = function () {
-    location.href = 'connect.html';
-  };
-  document.getElementById('local').onclick = function () {
-    busy(true);
-    ipc.invoke('use_this_computer').catch(function () { busy(false); });
   };
 })();
 </script>
