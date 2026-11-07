@@ -137,6 +137,29 @@ pub fn status_line(waiting: &Waiting, port: u16) -> (String, Option<String>) {
     (line, Some(n.to_string()))
 }
 
+/// The tray's status line with kwant on a server (its host has a line of its own): the count
+/// (and the badge) when something waits, "Nothing waiting for you" when nothing does.
+pub fn remote_status_line(waiting: &Waiting) -> (String, Option<String>) {
+    if waiting.count == 0 {
+        return ("Nothing waiting for you".to_string(), None);
+    }
+    status_line(waiting, 0)
+}
+
+/// The tray's server line, following the window: before the server answers, after, and while
+/// the loading page says it can't be reached.
+pub fn server_line(reach: u8, host: &str) -> String {
+    match reach {
+        REACH_CONNECTED => format!("Connected to {host}"),
+        REACH_FAILED => format!("Can't reach {host}"),
+        _ => format!("Connecting to {host}…"),
+    }
+}
+
+pub const REACH_CONNECTING: u8 = 0;
+pub const REACH_CONNECTED: u8 = 1;
+pub const REACH_FAILED: u8 = 2;
+
 /// What one poll changed.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Change {
@@ -490,6 +513,16 @@ mod tests {
         assert_eq!(status_line(&one_q, 1).0, "1 question waiting for you");
         let mix = waiting(vec![item(Kind::Question, "q", "J"), item(Kind::Approval, "a", "J"), item(Kind::Approval, "b", "J")]);
         assert_eq!(status_line(&mix, 1), ("3 things waiting for you".into(), Some("3".into())));
+    }
+
+    #[test]
+    fn a_server_s_lines_follow_mira_s_wording() {
+        assert_eq!(remote_status_line(&Waiting::default()), ("Nothing waiting for you".into(), None));
+        let two_a = waiting(vec![item(Kind::Approval, "a", "J"), item(Kind::Approval, "b", "J")]);
+        assert_eq!(remote_status_line(&two_a), ("2 approvals waiting for you".into(), Some("2".into())));
+        assert_eq!(server_line(REACH_CONNECTING, "kwant.example.com"), "Connecting to kwant.example.com…");
+        assert_eq!(server_line(REACH_CONNECTED, "kwant.example.com"), "Connected to kwant.example.com");
+        assert_eq!(server_line(REACH_FAILED, "kwant.example.com:8443"), "Can't reach kwant.example.com:8443");
     }
 
     #[test]

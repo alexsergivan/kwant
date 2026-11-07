@@ -13,7 +13,8 @@ A Tauri v2 shell around kwant. The app links the `kwnt` crate and runs the same 
   browser; the app never opens a second window. Other schemes (`file:`, app links) are ignored.
   The page sees `window.__KWANT_APP__ = 'mac'`, so sign-ins say to finish in the browser and watch
   the server for the result. See `src/links.rs`.
-- **Menu bar:** Open kwant, a status line (approvals waiting), Quit. Closing the window keeps kwant
+- **Menu bar:** Open kwant, a status line (approvals waiting), Show nudges, Connect to a server…,
+  Quit. Closing the window keeps kwant
   running; Quit stops it.
 - **Updates:** 15 seconds after start and then every 6 hours the app reads
   `releases/latest/download/latest.json` (prereleases are never offered). A newer version shows in
@@ -21,6 +22,20 @@ A Tauri v2 shell around kwant. The app links the `kwnt` crate and runs the same 
   at the top of the menu-bar menu. Installing downloads `kwant_universal.app.tar.gz`, checks its
   signature against `plugins.updater.pubkey` in `tauri.conf.json`, replaces the app, stops kwant and
   relaunches. If anything fails, the running app stays as it was. See `src/update.rs`.
+- **Connect to a server** (0.7.5): the menu's **Connect to a server…** opens a bundled page
+  (`loading/connect.html`) that checks an address (`GET /api/health` must answer as kwant, 10 s,
+  no redirects), saves its origin to `~/.kwnt/desktop-target.json` (scheme, host and port only,
+  mode 0600) and relaunches. In Remote mode the app starts no local kwant, checks the server
+  natively, then opens it; the window keeps exactly that origin (`src/links.rs`), and everything
+  else goes to the browser. http is allowed only on 127.0.0.1, localhost and [::1] (an SSH
+  tunnel). A pasted one-time sign-in link is used once in the window before the relaunch and is
+  never saved or logged. The menu then shows **Connected to <host>**, **Change server…** and
+  **Use kwant on this computer**; the count comes from the server with the window's sign-in
+  cookie, held in memory only. No file, or an unreadable one, means today's Local mode. Only the
+  bundled pages can call the app's commands (`capabilities/connect.json`, and each command checks
+  the page itself); a server's pages can call none. The log masks `kwnt_token` values and the
+  fragment of any address. The app's own updates stay on in Remote mode and show only in the
+  menu, as **Update this app to x.y.z…**. Commands: `src/connect.rs`.
 - `kwant --check` starts kwant headless on a free port with a throwaway data dir, waits for
   `/api/health` and exits 0. CI runs it on the built app.
 

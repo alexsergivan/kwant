@@ -2712,6 +2712,7 @@ dependencies = [
  "dirs 5.0.1",
  "kwnt",
  "objc2-app-kit",
+ "reqwest 0.12.28",
  "serde_json",
  "tauri",
  "tauri-build",

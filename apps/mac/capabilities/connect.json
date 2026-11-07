@@ -1,0 +1,14 @@
+{
+  "identifier": "connect",
+  "description": "The bundled pages (the loading page and the connect page) may check and save the server the app opens. Local only: a server's own pages get no commands.",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "allow-connect-state",
+    "allow-check-server",
+    "allow-connect-server",
+    "allow-use-this-computer",
+    "allow-close-connect",
+    "allow-retry-start"
+  ]
+}

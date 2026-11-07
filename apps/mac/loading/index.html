@@ -7,14 +7,98 @@
   :root { color-scheme: light dark; }
   body { margin: 0; height: 100vh; display: grid; place-items: center;
          font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #11151c; color: #ece5d6; }
-  .failed { display: none; color: #ef7d62; }
-  body[data-state="failed"] .starting { display: none; }
+  .failed, .connecting, .unreachable { display: none; }
+  .failed { color: #ef7d62; }
+  body[data-state="failed"] .starting,
+  body[data-state="connecting"] .starting,
+  body[data-state="unreachable"] .starting { display: none; }
   body[data-state="failed"] .failed { display: block; }
+  body[data-state="connecting"] .connecting { display: block; }
+  body[data-state="unreachable"] .unreachable { display: block; }
   p { text-align: center; line-height: 1.5; }
+  .unreachable { width: 520px; max-width: calc(100vw - 48px); }
+  .unreachable h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; }
+  .unreachable h1::before { content: "ⓘ "; color: #ef7d62; }
+  .unreachable p { text-align: left; margin: 0 0 16px; }
+  .muted { color: #a9a294; }
+  .small { font-size: 13px; }
+  .faint { color: #7d786d; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid #3a4150;
+           background: #1b212b; color: inherit; cursor: pointer; }
+  button.primary { background: #ece5d6; color: #11151c; border-color: #ece5d6; }
+  button:disabled { opacity: .45; cursor: default; }
 </style>
 </head>
 <body>
   <p class="starting">Starting kwant…</p>
-  <p class="failed">kwant didn't start.<br>Details are in ~/.kwnt/mac-app.log</p>
+  <p class="failed">kwant didn't start.<br>Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
+  <p class="connecting">Connecting to <span class="host">the server</span>…</p>
+  <section class="unreachable" role="alert">
+    <h1 id="title">Couldn't reach <span class="host">the server</span></h1>
+    <p class="muted" id="why"></p>
+    <div class="actions">
+      <button class="primary" id="retry">Try again</button>
+      <button id="change">Change server…</button>
+      <button id="local">Use kwant on this computer</button>
+    </div>
+    <p class="muted small">The bots on this computer are paused while this app is set to a server. Your data on this computer is safe.</p>
+    <p class="faint small">Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
+  </section>
+<script>
+// Remote mode: the app checks the server and either opens it or sets data-state="unreachable"
+// with data-host, data-code and data-message. The buttons call the app's commands (api.md).
+(function () {
+  var ipc = window.__TAURI_INTERNALS__;
+  var body = document.body;
+  if (!ipc) return;
+  var why = {
+    timeout: function () { return "It didn't answer in 10 seconds. The server may be off, or this computer may be offline."; },
+    dns: function () { return "This computer couldn't find that address. Check that you're online."; },
+    tls: function () { return "Its security certificate isn't valid, so the app stopped."; },
+    refused: function () { return "The machine is there, but kwant isn't answering. It may be restarting or stopped."; },
+    not_kwant: function () { return "It answered, but not as kwant. The address may have moved."; }
+  };
+  function setHost(host) {
+    document.querySelectorAll('.host').forEach(function (e) { e.textContent = host; });
+  }
+  function busy(on) {
+    document.querySelectorAll('button').forEach(function (b) { b.disabled = on; });
+  }
+  function render() {
+    if (body.dataset.state !== 'unreachable') return;
+    var host = body.dataset.host || 'the server';
+    var code = body.dataset.code;
+    setHost(host);
+    var title = document.getElementById('title');
+    if (code === 'tls') title.textContent = "Couldn't connect safely to " + host;
+    else if (code === 'not_kwant') title.textContent = host + " isn't a kwant server now";
+    else title.textContent = "Couldn't reach " + host;
+    document.getElementById('why').textContent = (why[code] || why.timeout)();
+    busy(false);
+    document.getElementById('retry').focus();
+  }
+  new MutationObserver(render).observe(body, { attributes: true, attributeFilter: ['data-state'] });
+  ipc.invoke('connect_state').then(function (s) {
+    if (s.app === 'linux') document.querySelectorAll('.log').forEach(function (e) { e.textContent = '~/.kwnt/desktop-app.log'; });
+    if (s.mode === 'remote' && !body.dataset.state) {
+      setHost(s.host);
+      body.dataset.state = 'connecting';
+    }
+  }).catch(function () {});
+  document.getElementById('retry').onclick = function () {
+    busy(true);
+    body.dataset.state = 'connecting';
+    ipc.invoke('retry_start').catch(function () { busy(false); });
+  };
+  document.getElementById('change').onclick = function () {
+    location.href = 'connect.html';
+  };
+  document.getElementById('local').onclick = function () {
+    busy(true);
+    ipc.invoke('use_this_computer').catch(function () { busy(false); });
+  };
+})();
+</script>
 </body>
 </html>
