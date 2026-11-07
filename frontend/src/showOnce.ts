@@ -441,6 +441,52 @@ const SECTION_KEYS: Record<string, keyof SkillSections> = {
 };
 
 const joinLines = (lines: string[]) => lines.map((l) => l.trim()).filter(Boolean).join(' ').trim();
+// Keeps the line breaks (trimmed, at most one blank line in a row), for sections that can hold a list
+const keepLines = (lines: string[]) =>
+  lines
+    .map((l) => l.trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+/** A text section's paragraphs and bullet lists. */
+export type TextBlock = { t: 'p'; text: string } | { t: 'ul'; items: string[] };
+
+/**
+ * Lines starting with "- " or "* " are list items; a line right after one with no blank line between
+ * goes on with that item. Other lines are paragraphs, a blank line ending one.
+ */
+export function textBlocks(text: string): TextBlock[] {
+  const out: TextBlock[] = [];
+  let para: string[] = [];
+  let list: string[] | null = null;
+  let afterItem = false;
+  const endPara = () => {
+    if (para.length) out.push({ t: 'p', text: para.join(' ') });
+    para = [];
+  };
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const item = /^[-*]\s+(.*)$/.exec(line);
+    if (item) {
+      endPara();
+      if (!list) out.push({ t: 'ul', items: (list = []) });
+      list.push(item[1].trim());
+      afterItem = true;
+    } else if (!line) {
+      endPara();
+      list = null;
+      afterItem = false;
+    } else if (afterItem && list) {
+      list[list.length - 1] = `${list[list.length - 1]} ${line}`.trim();
+    } else {
+      list = null;
+      para.push(line);
+    }
+  }
+  endPara();
+  return out.filter((b) => (b.t === 'p' ? b.text : b.items.length));
+}
 
 function splitSections(body: string): Map<keyof SkillSections, string[]> {
   const sections = new Map<keyof SkillSections, string[]>();
@@ -500,8 +546,8 @@ export function parseSkillSections(body: string): SkillSections | null {
     inputs: inputsText ? [] : inputs,
     inputsText,
     steps: stepLines,
-    checks: joinLines(sections.get('checks') ?? []) || null,
-    wrong: joinLines(sections.get('wrong') ?? []) || null,
+    checks: keepLines(sections.get('checks') ?? []) || null,
+    wrong: keepLines(sections.get('wrong') ?? []) || null,
     sites,
   };
 }

@@ -3,7 +3,7 @@
 // text; when it doesn't split into sections the card shows the SKILL.md as it is.
 import React, { useId, useState } from 'react';
 import { Loader2, MousePointer2, Play, TriangleAlert } from 'lucide-react';
-import { InlinePart, SkillShown, dayOf, errText, inlineParts, isSkillShown, parseSkillSections, shortDay, showOnceApi, siteList, stepsWord, keepLine, trySites } from '../showOnce';
+import { InlinePart, SkillShown, dayOf, errText, inlineParts, isSkillShown, parseSkillSections, shortDay, showOnceApi, siteList, stepsWord, keepLine, textBlocks, trySites } from '../showOnce';
 import type { Skill } from '../skills';
 import { MaskChip } from './ShowOnce';
 
@@ -21,6 +21,27 @@ const Inline: React.FC<{ text: string }> = ({ text }) => (
   <>
     {inlineParts(text).map((p: InlinePart, i) =>
       p.t === 'text' ? <React.Fragment key={i}>{p.v}</React.Fragment> : p.t === 'code' ? <code key={i}>{p.v}</code> : <MaskChip key={i} text={p.text} label={p.label} />,
+    )}
+  </>
+);
+
+/** A text section: "- " or "* " lines as a bulleted list (styled like Steps), other lines as paragraphs. */
+const TextSection: React.FC<{ text: string }> = ({ text }) => (
+  <>
+    {textBlocks(text).map((b, i) =>
+      b.t === 'ul' ? (
+        <ul key={i}>
+          {b.items.map((x, j) => (
+            <li key={j}>
+              <Inline text={x} />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p key={i}>
+          <Inline text={b.text} />
+        </p>
+      ),
     )}
   </>
 );
@@ -92,17 +113,13 @@ export const DraftSections: React.FC<{ body: string; shown: SkillShown; label: s
       {d.checks && (
         <>
           <h6>Checks</h6>
-          <p>
-            <Inline text={d.checks} />
-          </p>
+          <TextSection text={d.checks} />
         </>
       )}
       {d.wrong && (
         <>
           <h6>What can go wrong</h6>
-          <p>
-            <Inline text={d.wrong} />
-          </p>
+          <TextSection text={d.wrong} />
         </>
       )}
       {d.sites.length > 0 && (
