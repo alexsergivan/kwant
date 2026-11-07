@@ -78,34 +78,6 @@ pub fn notify(state: &AppState, space_id: &str, key: &str, to: &str) {
     let _ = state.event_sender.send(RuntimeEvent::DevTicket { space_id: space_id.into(), key: key.into(), state: to.into() });
 }
 
-/// The reading checklist's steps and states (api.md 1.7).
-pub const CHECKLIST_STEPS: &[&str] = &["ticket", "comments", "links", "confluence", "code"];
-pub const CHECKLIST_STATES: &[&str] = &["running", "done", "skipped"];
-/// `detail` is cut to this many chars, on one line.
-pub const CHECKLIST_DETAIL_CHARS: usize = 120;
-
-/// Sends one reading-checklist line, `dev_ticket_progress {space_id, key, step, state, detail}`.
-/// Bus only: nothing is stored. Returns false (and sends nothing) for an unknown step or state.
-/// `detail` should be kwant's own words ("2 comments"); it is flattened to one line and cut.
-pub fn checklist(state: &AppState, space_id: &str, key: &str, step: &str, st: &str, detail: &str) -> bool {
-    match checklist_event(space_id, key, step, st, detail) {
-        Some(ev) => {
-            let _ = state.event_sender.send(ev);
-            true
-        }
-        None => false,
-    }
-}
-
-pub fn checklist_event(space_id: &str, key: &str, step: &str, st: &str, detail: &str) -> Option<RuntimeEvent> {
-    if !CHECKLIST_STEPS.contains(&step) || !CHECKLIST_STATES.contains(&st) {
-        return None;
-    }
-    let spaced: String = detail.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    let line: String = spaced.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(CHECKLIST_DETAIL_CHARS).collect();
-    Some(RuntimeEvent::DevTicketProgress { space_id: space_id.into(), key: key.into(), step: step.into(), state: st.into(), detail: line })
-}
-
 /// J9's two comments.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Progress {
@@ -195,20 +167,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_checklist_line_takes_known_steps_and_states_on_one_short_line() {
-        let ev = checklist_event("spc", "TRAIL-1", "comments", "done", "2\ncomments \u{7}").unwrap();
-        match ev {
-            RuntimeEvent::DevTicketProgress { step, state, detail, .. } => {
-                assert_eq!((step.as_str(), state.as_str(), detail.as_str()), ("comments", "done", "2 comments"));
-            }
-            _ => panic!("wrong event"),
-        }
-        assert!(checklist_event("spc", "TRAIL-1", "shell", "done", "").is_none());
-        assert!(checklist_event("spc", "TRAIL-1", "code", "failed", "").is_none());
-        let long = "x".repeat(500);
-        let Some(RuntimeEvent::DevTicketProgress { detail, .. }) = checklist_event("s", "K-1", "code", "running", &long) else { panic!() };
-        assert_eq!(detail.chars().count(), CHECKLIST_DETAIL_CHARS);
-        let v = serde_json::to_value(checklist_event("s", "K-1", "links", "skipped", "none").unwrap()).unwrap();
+    fn the_reading_checklist_event_has_the_agreed_wire_shape() {
+        // api.md 1.7: Vega's `tools::progress` is the only sender; this branch only defines the event.
+        let ev = RuntimeEvent::DevTicketProgress { space_id: "s".into(), key: "K-1".into(), step: "links".into(), state: "skipped".into(), detail: "none".into() };
+        let v = serde_json::to_value(ev).unwrap();
         assert_eq!(v["type"], "dev_ticket_progress");
         assert_eq!(v["data"], serde_json::json!({"space_id": "s", "key": "K-1", "step": "links", "state": "skipped", "detail": "none"}));
     }
