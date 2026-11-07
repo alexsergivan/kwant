@@ -377,8 +377,9 @@ fn checked_config(kind: &str, config: &Value) -> Result<(String, String), Respon
             Ok((serde_json::to_string(&cfg).unwrap_or_default(), cfg.vault_origin()))
         }
         "github" => {
-            let cfg: GithubConfig = serde_json::from_value(config.clone()).map_err(|e| bad(format!("config: {e}")))?;
-            cfg.validate().map_err(bad)?;
+            let typed: GithubConfig = serde_json::from_value(config.clone()).map_err(|e| bad(format!("config: {e}")))?;
+            // Saved as its API base, so the token is filed under the API's origin
+            let cfg = typed.to_saved().map_err(bad)?;
             Ok((serde_json::to_string(&cfg).unwrap_or_default(), cfg.vault_origin()))
         }
         _ => Err(bad("kind must be imap or github".into())),

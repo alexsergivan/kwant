@@ -316,6 +316,8 @@ finding that quotes a key doesn't carry it out either. The GitHub token is only 
 Dismissed findings and the card's model prompts aren't posted.
 
 **The token.** Posting uses the Loose ends GitHub connection, GitHub Enterprise `api_base` included.
+
+**GitHub Enterprise address.** In the GitHub form, type the server's address as it is: `https://github.yourcompany.com` (Enterprise Server, saved as `…/api/v3`) or `https://yourcompany.ghe.com` (Enterprise Cloud, saved as `https://api.yourcompany.ghe.com`); leave it empty for github.com. Rows saved before 0.7.4 are read the same way, and their token stays where it was filed (`GithubConfig::normalized`).
 It needs **Pull requests: Read and write** on a fine-grained token, or `repo` (`public_repo` for a
 public repo) on a classic one. Reading alone works with read access, so posting is the only reason
 to give it more.
