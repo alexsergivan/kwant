@@ -54,7 +54,8 @@ import { JarIcon } from './components/JarIcon';
 import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToast';
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings, Sparkles } from 'lucide-react';
-import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
+import { ChatApproval, OpenChat, addSettled, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
@@ -124,7 +125,7 @@ import {
 } from './questions';
 import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
 import { needsYouRows } from './chatsTab';
-import { Space, eventsUrl, pickInitialChat } from './spaces';
+import { Space, eventsUrl, getCurrentSpace, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
 import { claudeNeedsSignIn } from './claudeLogin';
@@ -295,6 +296,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const currentTeamRef = useRef<Team | null>(null);
   // Every tool approval still waiting, from live events and, after a reload or reconnect, the server.
   const [pendingApprovals, setPendingApprovals] = useState<ChatApproval[]>([]);
+  const pendingRef = useRef<ChatApproval[]>([]);
+  pendingRef.current = pendingApprovals;
+  // Approvals allowed in Telegram, kept in their chat as one line (live, and from the server after a reload).
+  const [settledApprovals, setSettledApprovals] = useState<ChatApproval[]>([]);
   // Seen live since the last server list: kept even if that list was fetched just before.
   const liveApprovalIdsRef = useRef<Set<string>>(new Set());
   const dropApproval = (id: string) => {
@@ -730,6 +735,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const hydrateFromServer = async () => {
     skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
     refreshAwayCount();
+    awayApi.approvals('allowed_once').then((rows) => setSettledApprovals((prev) => addSettled(prev, settledFromRecords(rows))), () => undefined);
     questionsApi.listOpen().then((list) => {
       // Closed ones seen live stay; open ones come from the server.
       setQuestions((prev) => {
@@ -1311,8 +1317,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             playSfx('alert');
             break;
           }
-          case 'ApprovalWithdrawn':
-            dropApproval(event.data.id);
+          case 'ApprovalWithdrawn': {
+            // Answered in Telegram (when the server says so): kept in the chat as a resolved row (G4).
+            // Allowed in Telegram: the card stays as one line. Old {id}-only events just close it.
+            const { settled } = withdrawApproval(pendingRef.current, [], event.data);
+            if (settled.length) setSettledApprovals((prev) => addSettled(prev, settled));
+            dropApproval(event.data?.id);
+            break;
+          }
+          case 'telegram.status':
+          case 'telegram.paired':
+          case 'telegram.expired':
+            if (forThisSpace(event.data?.space_id, getCurrentSpace()))
+              window.dispatchEvent(new CustomEvent<TelegramEventDetail>(TG_EVENT, { detail: { type: event.type, data: event.data ?? {} } }));
             break;
           case 'discussion_started':
           case 'DiscussionStarted': {
@@ -3576,6 +3593,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           streamingText={isCurrentContextStreaming ? streamingText : ''}
           streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
           pendingApprovals={approvalsHere}
+          settledApprovals={approvalsForChat(settledApprovals, openChat)}
           home={chatHome}
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}

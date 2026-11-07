@@ -12,6 +12,7 @@ import './styles/ideas.css';
 import './styles/ideaShell.css';
 import './styles/devStatus.css';
 import './styles/tickets.css';
+import './styles/telegram.css';
 
 registerServiceWorker();
 captureInstallPrompt();

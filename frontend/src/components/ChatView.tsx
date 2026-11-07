@@ -20,7 +20,9 @@ import { playSfx } from '../audio/chiptune';
 import { groupDiscussionThreads, stripDiscussionMarkers } from '../discussionThreads';
 import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
-import { QuestionMeta, parseQuestionMeta } from '../questions';
+import { QuestionMeta, parseMetaObject, parseQuestionMeta } from '../questions';
+import { fromTelegram, sentToTelegram } from '../telegram';
+import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, hasThinkingText, parseActivityMeta } from '../activity';
 import { LiveActivityList, SavedActivityList } from './ActivityList';
@@ -107,6 +109,14 @@ export interface QueuedState {
   speaker: string;
 }
 
+/** "Drafter: Write" for a resolved approval row; the card's own words, nothing computed. */
+function approvalLead(a: PendingApproval): string {
+  const d = (a.details ?? {}) as Record<string, unknown>;
+  const who = typeof d.kwant_name === 'string' && d.kwant_name ? d.kwant_name : null;
+  const what = typeof d.summary === 'string' && d.summary ? d.summary : a.tool_name;
+  return who ? `${who}: ${what}` : what;
+}
+
 export interface DiscussionState {
   inProgress: boolean;
   teamId?: string;
@@ -158,6 +168,8 @@ export interface ChatViewProps {
   streamingThinking: string;
   /** Tool approvals waiting in this chat, oldest first. */
   pendingApprovals: PendingApproval[];
+  /** Approvals answered in Telegram while this chat was open (G4): kept as a resolved row. */
+  settledApprovals?: PendingApproval[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -394,6 +406,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   streamingText,
   streamingThinking,
   pendingApprovals,
+  settledApprovals = [],
   isStreaming,
   streamingSpeakerName,
   onSendMessage,
@@ -1215,12 +1228,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {isUser ? (
             <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
               <span className="text-zinc-200 shrink-0">{displayName}</span>
+              {fromTelegram(parseMetaObject(msg.meta)) && <ViaTelegram />}
             </div>
           ) : (
             // One line, "Name · 3:42 PM"; the model, account, tokens, steps and reasoning wait behind Details
             <ReplyMeta
               name={displayName}
               at={msg.created_at}
+              sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
               avatar={<span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={20} kwantId={replyKwantId} /></span>}
               ranOn={ranOn}
               account={account}
@@ -1731,6 +1746,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </div>
           </div>
         )}
+
+        {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
+        {settledApprovals.map((approval) => (
+          <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
+        ))}
 
         {/* Pending Security Approval Ticket */}
         {pendingApprovals.map((approval) => (
