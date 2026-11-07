@@ -696,6 +696,10 @@ pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, mut held: Held) -> 
     if let Some(routing) = held.meta.as_ref().map(|m| &m["routing"]).filter(|r| !r.is_null()) {
         extra["routing"] = routing.clone();
     }
+    // ...and stays the reply to a connected agent's ask (see agents_connect)
+    if let Some(agent_turn) = held.meta.as_ref().map(|m| &m["agent_turn_id"]).filter(|t| !t.is_null()) {
+        extra["agent_turn_id"] = agent_turn.clone();
+    }
     opts.extra_meta = Some(extra);
     let reply = turn_once(scope, kwant, decide_prompt(&held.text, &gate, &views), opts).await;
     let saved = hook.lock().ok().and_then(|mut h| h.saved.take());

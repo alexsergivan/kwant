@@ -6,6 +6,8 @@ import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { DailyUsagePanel } from './DailyUsage';
 import { SpendStopFields, StopFields, forgetToday } from './SpendStop';
 import { stopBody, stopFieldsFromSettings } from '../spendStop';
+import { CodingAgents } from './CodingAgents';
+import { getCurrentSpace } from '../spaces';
 import {
   BROWSER_NOTIFY_KEY,
   MASK,
@@ -676,6 +678,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             <ComputerModeControl api={computer} />
           </div>
         )}
+
+        {/* Saves at once, so it sits outside the Settings form (its own Create form can't nest). */}
+        <CodingAgents currentSpace={getCurrentSpace()} />
 
         {/* App settings form; API keys moved to Settings › This space › Accounts */}
         <form onSubmit={handleSave} onChange={(e) => isTextField(e.target) && setTyped(true)} {...editorProps(typed)} className="space-y-4">

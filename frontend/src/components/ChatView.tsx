@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { BotHome } from './BotHome';
@@ -1170,7 +1171,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const decisions = shownDecisions?.decisions ?? [];
     const text = shownDecisions ? shownDecisions.text : msg.text;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
-    const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
+    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
     const replyQuote = isUser ? replyRefOf(msg.reply_to) : null;
     // Whose mood the reply header shows (Pixel's AvatarMood, drawn by ModernAvatar given a kwantId):
     // Laya's pick, else this bot chat's bot, else the team member with that name. Unknown: no mood.

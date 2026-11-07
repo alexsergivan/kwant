@@ -58,6 +58,7 @@ pub mod goals;
 pub mod app_update_routes;
 pub mod smart_results;
 pub mod dev;
+pub mod agents_connect;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -354,6 +355,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
         .route("/api/mcp/self", post(continuity::self_endpoint))
+        // 0.7.4: connected coding agents (the endpoint checks its own `kag_` token)
+        .route(agents_connect::ENDPOINT, post(agents_connect::endpoint))
+        .route("/api/agent-connections", get(agents_connect::list_connections).post(agents_connect::create_connection))
+        .route("/api/agent-connections/:id", delete(agents_connect::revoke_connection))
+        .route("/api/agent-connections/:id/activity", get(agents_connect::connection_activity))
         .route("/api/mcp/suggestions", get(mcp_suggest::list))
         .route("/api/mcp/suggestions/:id/install", post(mcp_suggest::install))
         .route("/api/mcp/suggestions/:id/dismiss", post(mcp_suggest::dismiss))

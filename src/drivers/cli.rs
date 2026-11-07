@@ -424,6 +424,11 @@ pub fn build_cli_prompt(input: &TurnInput) -> String {
             parts.push(super::peer_message(&msg.sender_id, &msg.text));
             continue;
         }
+        // A connected outside agent's message is framed too: it isn't the person's
+        if super::from_agent(msg).is_some() {
+            parts.push(super::user_history_text(msg));
+            continue;
+        }
         let role = match msg.sender_role.as_str() {
             "user" => "User",
             "kwant" => "Assistant",
