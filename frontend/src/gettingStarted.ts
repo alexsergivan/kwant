@@ -460,12 +460,13 @@ export function storeChoice(space: string, c: AiChoice | null) {
 
 /**
  * Whether #general shows the card (C4): not dismissed here, and either nothing can run yet or the
- * card was started here, or #general is still empty in a space with no teams (a fresh install that
+ * card was started here, or #general is still empty in a space with only the starter team (a fresh install that
  * found an account already signed in, D2). An older install with any history never sees it.
  */
 export function showCard(opts: { dismissed: boolean; canRun: boolean | null; generalMessages: number; teams: number; started: boolean }): boolean {
   if (opts.dismissed) return false;
   if (opts.canRun === false || opts.started) return true;
   if (opts.canRun === null) return false;
-  return opts.generalMessages === 0 && opts.teams === 0;
+  // A fresh install comes with one starter team (core-engineering), so one team still counts as fresh.
+  return opts.generalMessages === 0 && opts.teams <= 1;
 }

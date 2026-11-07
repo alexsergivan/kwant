@@ -75,6 +75,7 @@ test('the card shows for a fresh space, never for an older one with history, nev
   const base = { dismissed: false, canRun: true, generalMessages: 0, teams: 0, started: false };
   assert.equal(m.showCard(base), true);
   assert.equal(m.showCard({ ...base, generalMessages: 4 }), false);
+  assert.equal(m.showCard({ ...base, teams: 1 }), true, 'the starter team alone is still a fresh install');
   assert.equal(m.showCard({ ...base, teams: 2 }), false);
   assert.equal(m.showCard({ ...base, teams: 2, started: true }), true, 'C4: stays until the first message');
   assert.equal(m.showCard({ ...base, canRun: false, generalMessages: 9 }), true);
