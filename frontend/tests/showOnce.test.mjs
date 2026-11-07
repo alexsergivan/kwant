@@ -140,7 +140,7 @@ test('stop banners are Mira §1 word for word, each ending with what was kept', 
   assert.equal(m.keptSentence(14), 'All 14 steps up to there are kept.');
   assert.deepEqual(b('limit_time', 120), { tone: 'warn', lead: 'Stopped at 30 minutes,', rest: ' the most one recording can take. All 120 steps up to there are kept.' });
   assert.deepEqual(b('limit_steps', 198), { tone: 'warn', lead: 'Stopped at 200 steps,', rest: ' the most one recording can take. All 198 steps up to there are kept.' });
-  assert.deepEqual(b('closed', 1), { tone: 'warn', lead: "The recording stopped when the app's window closed, the computer slept, or another window took over.", rest: ' The 1 step up to there is kept.' });
+  assert.deepEqual(b('closed', 1), { tone: 'warn', lead: "The recording stopped when the app's window closed or the computer slept.", rest: ' The 1 step up to there is kept.' });
   assert.deepEqual(b('restart', 0), { tone: 'warn', lead: 'The recording stopped when the app restarted.', rest: ' Nothing was recorded before it stopped.' });
   assert.deepEqual(b('handed_back', 14), { tone: 'info', lead: 'Stopped when you pressed Hand back.', rest: ' All 14 steps up to there are kept.' }, 'reopened later: the browser is already back');
   assert.equal(full(b('stop', 14, { botName: 'Rook', handedBack: true, holdsStage: true })), 'Stopped when you pressed Hand back. All 14 steps up to there are kept. Rook gets the browser back when you close this.', 'gap 2: this session pressed Hand back, server said stop');

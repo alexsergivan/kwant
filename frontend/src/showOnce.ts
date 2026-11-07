@@ -346,7 +346,7 @@ export function stopBanner(r: Recording, listed: number, opts: { botName?: strin
     case 'limit_steps':
       return { tone: 'warn', lead: `Stopped at ${limits.steps} steps,`, rest: ` the most one recording can take.${kept}` };
     case 'closed':
-      return { tone: 'warn', lead: "The recording stopped when the app's window closed, the computer slept, or another window took over.", rest: kept };
+      return { tone: 'warn', lead: "The recording stopped when the app's window closed or the computer slept.", rest: kept };
     case 'restart':
       return { tone: 'warn', lead: 'The recording stopped when the app restarted.', rest: kept };
   }
