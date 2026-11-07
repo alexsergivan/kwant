@@ -9,8 +9,9 @@ use axum::{
 };
 use kwnt::{
     broker::PermissionBroker,
+    clock,
     config::Config,
-    db::{spaces::SpaceId, team_templates, Database},
+    db::{spaces::SpaceId, Database},
     router::LayaRouter,
     server::{create_router, AppState},
     tools::ToolRunner,
@@ -43,17 +44,17 @@ async fn undo_closes_after_24_hours_and_a_suggestion_after_1_hour() {
     );
     let app = create_router(state.clone());
     let space = SpaceId::default_space();
-    team_templates::set_clock_skew(0);
+    clock::set_test_offset(0);
 
     // Undo: open at 23 h 59 min, closed at 24 h 1 min
     let (s, made) = call(&app, "POST", "/api/teams/from-template", Some(json!({"template_id": "inbox"}))).await;
     assert_eq!(s, StatusCode::CREATED, "{made}");
     let team = made["team"]["id"].as_str().unwrap();
     let action = made["action_id"].as_str().unwrap();
-    team_templates::set_clock_skew(24 * 3600 - 60);
+    clock::set_test_offset(24 * 3600 - 60);
     let (_, t) = call(&app, "GET", &format!("/api/teams/{team}/template"), None).await;
     assert_eq!(t["can_undo"], true, "{t}");
-    team_templates::set_clock_skew(24 * 3600 + 60);
+    clock::set_test_offset(24 * 3600 + 60);
     let (_, t) = call(&app, "GET", &format!("/api/teams/{team}/template"), None).await;
     assert_eq!(t["can_undo"], false, "{t}");
     let bots = state.db.list_kwants(&space).await.unwrap().len();
@@ -63,7 +64,7 @@ async fn undo_closes_after_24_hours_and_a_suggestion_after_1_hour() {
     assert!(state.db.get_team(team).await.unwrap().is_some());
 
     // A suggestion: usable at 59 min, gone at 61 min
-    team_templates::set_clock_skew(0);
+    clock::set_test_offset(0);
     let root = tmp.path().join("shop");
     std::fs::create_dir_all(root.join("web")).unwrap();
     std::fs::write(root.join("web/package.json"), r#"{"dependencies":{"react":"18.0.0"}}"#).unwrap();
@@ -78,11 +79,11 @@ async fn undo_closes_after_24_hours_and_a_suggestion_after_1_hour() {
     let (s, late) = suggest().await;
     assert_eq!(s, StatusCode::OK, "{late}");
     let (_, soon) = suggest().await;
-    team_templates::set_clock_skew(61 * 60);
+    clock::set_test_offset(61 * 60);
     let (s, v) = call(&app, "POST", "/api/teams/from-template", Some(rename(&late))).await;
     assert_eq!((s, v["code"].as_str()), (StatusCode::GONE, Some("suggestion_expired")), "{v}");
-    team_templates::set_clock_skew(59 * 60);
+    clock::set_test_offset(59 * 60);
     let (s, v) = call(&app, "POST", "/api/teams/from-template", Some(rename(&soon))).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
-    team_templates::set_clock_skew(0);
+    clock::set_test_offset(0);
 }

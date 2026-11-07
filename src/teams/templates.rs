@@ -197,6 +197,20 @@ mod tests {
     }
 
     #[test]
+    fn sales_requires_what_you_sell_and_it_is_the_only_composer_need() {
+        // A5 (decisions.md): copy from design/templates-copy.md, Sales "Needs (T5)"
+        let sales = get("sales").unwrap();
+        let n = sales.needs.iter().find(|n| n.id == "what_you_sell").expect("Sales has what_you_sell");
+        assert_eq!(n.label, "Tell the team what you sell");
+        assert_eq!(n.why, "Three short answers in this chat. Leads are only as good as this.");
+        assert!(n.required);
+        assert_eq!(n.opens, "composer_prompt");
+        assert_eq!(n.done_when, "The person has posted a message in @sales");
+        let composer: Vec<_> = all().iter().flat_map(|t| t.needs.iter().filter(|n| n.opens == "composer_prompt").map(move |n| (t.id.as_str(), n.id.as_str()))).collect();
+        assert_eq!(composer, [("sales", "what_you_sell")]);
+    }
+
+    #[test]
     fn skills_fit_and_have_owners() {
         for t in all() {
             for s in &t.skills {

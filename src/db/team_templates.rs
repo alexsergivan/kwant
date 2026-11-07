@@ -242,6 +242,9 @@ pub struct TemplateInfo {
     pub chat_messages: i64,
     pub also_in: Vec<AlsoIn>,
     pub edited_skills: Vec<String>,
+    /// Needs (T5) the server can see are done. A `composer_prompt` need, such as Sales'
+    /// `what_you_sell` (A5), is done once the person has posted in the team chat.
+    pub needs_done: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -258,26 +261,8 @@ pub struct AlsoIn {
     pub team: String,
 }
 
-/// The clock for the Undo window and suggestion expiry. Tests move it with [`set_clock_skew`]
-/// or, in debug builds, `KWNT_TEST_NOW_OFFSET_SECS` (Q-X1).
-pub fn now() -> DateTime<Utc> {
-    let mut skew = CLOCK_SKEW_S.load(std::sync::atomic::Ordering::SeqCst);
-    if cfg!(debug_assertions) {
-        if let Some(s) = std::env::var("KWNT_TEST_NOW_OFFSET_SECS").ok().and_then(|v| v.trim().parse::<i64>().ok()) {
-            skew += s;
-        }
-    }
-    Utc::now() + Duration::seconds(skew)
-}
-
-static CLOCK_SKEW_S: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-
-/// Moves [`now`] by `skew_s` seconds; 0 puts it back. Tests only, and process-wide: a test that
-/// uses it lives in its own test binary.
-#[doc(hidden)]
-pub fn set_clock_skew(skew_s: i64) {
-    CLOCK_SKEW_S.store(skew_s, std::sync::atomic::Ordering::SeqCst);
-}
+/// The Undo window and the suggestion expiry read the one shared test clock (Q-X1, api.md §7).
+pub use crate::clock::now;
 
 type Tx = sqlx::Transaction<'static, sqlx::Sqlite>;
 
@@ -473,6 +458,23 @@ impl Database {
             }
             _ => 0,
         };
+        let person_posted = match &c.created.channel_id {
+            Some(ch) => {
+                sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM messages WHERE channel_id = ? AND sender_role = 'user'")
+                    .bind(ch)
+                    .fetch_one(&mut *conn)
+                    .await?
+                    .0
+                    > 0
+            }
+            None => false,
+        };
+        let needs_done = c
+            .template_id
+            .as_deref()
+            .and_then(crate::teams::templates::get)
+            .map(|t| t.needs.iter().filter(|n| n.opens == "composer_prompt" && person_posted).map(|n| n.id.clone()).collect())
+            .unwrap_or_default();
         let mut edited_skills = Vec::new();
         for s in &c.created.skills {
             let edited: Option<(String,)> = sqlx::query_as("SELECT name FROM skills WHERE id = ? AND updated_at > ?")
@@ -494,6 +496,7 @@ impl Database {
             chat_messages,
             also_in,
             edited_skills,
+            needs_done,
         })
     }
 

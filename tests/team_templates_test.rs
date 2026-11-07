@@ -187,6 +187,27 @@ async fn undo_keeps_a_chat_with_history_archived() {
     let (s, v) = create(&e, json!({"template_id": "sales"})).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let chat_id = v["channel_id"].as_str().unwrap().to_string();
+    let team_id = v["team"]["id"].as_str().unwrap().to_string();
+    let needs_done = |t: &Value| t["needs_done"].clone();
+    // A5: "Tell the team what you sell" is done when the person posts in @sales, not a bot
+    let (s, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!((s, needs_done(&t)), (StatusCode::OK, json!([])), "{t}");
+    e.state
+        .db
+        .insert_message(&NewMessage {
+            channel_id: Some(chat_id.clone()),
+            direct_kwant_id: None,
+            sender_role: "kwant".into(),
+            sender_id: v["bots"][0]["id"].as_str().unwrap().into(),
+            text: "Hi! What do you sell?".into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+        })
+        .await
+        .unwrap();
+    let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!(needs_done(&t), json!([]), "a bot's message doesn't tick it");
     e.state
         .db
         .insert_message(&NewMessage {
@@ -201,6 +222,9 @@ async fn undo_keeps_a_chat_with_history_archived() {
         })
         .await
         .unwrap();
+    let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
+    assert_eq!(needs_done(&t), json!(["what_you_sell"]), "{t}");
+    assert_eq!(t["chat_messages"], 2);
     let (s, u) = undo(&e, v["action_id"].as_str().unwrap()).await;
     assert!(s.is_success(), "{s} {u}");
     let chats = e.state.db.list_channels(&e.space).await.unwrap();
