@@ -43,6 +43,12 @@ pub async fn reporter_replied(state: &AppState, space_id: &str, key: &str, asked
     let _ = state.db.add_dev_ticket_event(space_id, key, "hook", Some(&note)).await;
 }
 
+/// The person posted Ask on Jira for this ticket (item 16): called by `routes::post_ask` after the
+/// comment is posted and `set_dev_ticket_asked` has run. `comment_url` is the posted comment's link;
+/// `to` the mentioned person's display name, `None` when the ticket had nobody to mention. Vega's
+/// body records `asked_on_jira` on every open question of the brief. The stub does nothing.
+pub async fn asked_on_jira(_state: &AppState, _space_id: &str, _key: &str, _comment_url: &str, _to: Option<&str>) {}
+
 /// The person deleted the site's connection (its `dev_tickets` and `dev_ticket_events` rows are
 /// already gone). Vega's body forgets the site's briefs (`brief::forget_site`, brief.md §10).
 pub async fn site_deleted(_state: &AppState, _space_id: &str, _site_id: &str) {}
