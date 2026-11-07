@@ -20,7 +20,7 @@ const m = await loadBundled(`
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { Sidebar } from './src/components/Sidebar';
   import { WorkingStrip } from './src/components/WorkingStrip';
-  import { BrowserSwitcherMenu, BrowserSwitcherRow, WatchGlobe } from './src/components/WatchLive';
+  import { BrowserSwitcherMenu, BrowserSwitcherRow, GlobeSlot, LiveMissPage, WatchGlobe } from './src/components/WatchLive';
   export * from './src/watchLive';
   export { parseSpacePath, spacePath } from './src/spaces';
   export { targetFromQuery } from './src/push';
@@ -40,13 +40,14 @@ const m = await loadBundled(`
     const host = document.createElement('div');
     document.body.appendChild(host);
     const root = createRoot(host);
-    const comp = { Sidebar, WorkingStrip, BrowserSwitcherMenu, BrowserSwitcherRow }[C];
+    const comp = { Sidebar, WorkingStrip, BrowserSwitcherMenu, BrowserSwitcherRow, GlobeSlot, LiveMissPage }[C];
     const render = (q) => flushSync(() => root.render(React.createElement(comp, C === 'Sidebar' ? sidebarProps(q) : q)));
     render(p);
     return { host, render, flush: (fn) => flushSync(fn), unmount: () => { root.unmount(); host.remove(); } };
   };
 `);
 
+const React_p = (t) => ({ $$typeof: Symbol.for('react.element'), type: 'p', key: null, ref: null, props: { children: t }, _owner: null });
 const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 const bot = (id, name) => ({ id, name, title: 'Shopper', persona_prompt: '', avatar_sprite: 'coder', driver_type: 'claude', preferred_model: 'claude:sonnet' });
 const rook = bot('k_rook', 'Rook');
@@ -147,21 +148,25 @@ test('W2: the notification query takes &live=1 only with a chat', () => {
 
 // ---------------------------------------------------------------- W1: the globe
 
-test('globe: 12 px violet Globe, labelled with the host, 24 px hit (44 on a phone)', () => {
+test('globe: 12 px violet Globe, labelled with the host; a 12 px box whose hit area overflows to 24 px (44 on a phone)', () => {
   const desk = m.globe({ name: 'Rook', host: 'shop.example.com', onWatch() {} });
   assert.match(desk, /aria-label="Watch Rook’s page: shop.example.com"/);
   assert.match(desk, /title="Watch Rook’s page: shop.example.com"/);
-  assert.match(desk, /h-6 w-6/);
+  assert.match(desk, /\bh-3 w-3\b/, 'the box is the icon: the row keeps its height (Mira 1)');
+  assert.match(desk, /after:-inset-1\.5/, '12 + 2×6 = 24 px hit area');
   assert.match(desk, /kw-globe-in/);
   assert.match(desk, /text-\[#9d8fff\]/);
   assert.match(desk, /width="12"/);
-  assert.match(m.globe({ name: 'Rook', host: 'x', phone: true, onWatch() {} }), /h-11 w-11/);
+  const phone = m.globe({ name: 'Rook', host: 'x', phone: true, onWatch() {} });
+  assert.match(phone, /after:-inset-4/, '12 + 2×16 = 44 px hit area');
+  assert.doesNotMatch(phone, /h-11|-my-/, 'no box that makes the row taller');
+  assert.match(phone, /data-compact=""/, 'out of the global 44 px touch min-height');
 });
 
 test('sidebar: globes on the DM bot row, the team row, a member bot row and a channel row', () => {
   const b = m.noteBrowser(m.noteBrowser(m.noteBrowser({}, 't_shop', 'https://shop.example.com', 1), 'k_rook', 'https://mail.example.com', 2), 'c_gen', 'https://git.example.com', 3);
   const html = m.sidebar({ kwants: [rook, mira], teams: [team], channels: [general], browsingOwners: b, browsingBots: { k_mira: b.t_shop }, onWatchBrowser() {} });
-  const labels = [...html.matchAll(/data-watch-globe="" aria-label="([^"]+)"/g)].map((x) => x[1]);
+  const labels = [...html.matchAll(/data-watch-globe=""[^>]*?aria-label="([^"]+)"/g)].map((x) => x[1]);
   assert.ok(labels.includes('Watch Rook’s page: mail.example.com'), labels.join(' | '));
   assert.ok(labels.includes('Watch Mira’s page: shop.example.com'));
   assert.ok(labels.includes('Watch @storefront’s page: shop.example.com'));
@@ -266,4 +271,136 @@ test('switcher phone row: 44 px avatars, a ring on the current one, "Rook, on sh
   v.host.querySelector('[data-switch-owner="k_rook"]').click();
   assert.deepEqual(picked, ['t_shop'], 'the current one does nothing');
   v.unmount();
+});
+
+// ---------------------------------------------------------------- 0.7.7 review round (Mira 1–6, QA F1–F6)
+
+test('Mira 2: the bot row globe is pushed to the end of the name line, like team and channel rows', () => {
+  const b = m.noteBrowser({}, 'k_rook', 'https://shop.example.com', 1);
+  const html = m.sidebar({ kwants: [rook], browsingOwners: b, onWatchBrowser() {} });
+  assert.match(html, /data-watch-globe=""[^>]*class="[^"]*\bml-auto\b/);
+});
+
+test('Mira 3: every row on a chat whose browser holds an open step hides its globe (bot rows too)', () => {
+  const b = m.noteBrowser({}, 't_shop', 'https://shop.example.com', 1);
+  const html = m.sidebar({ kwants: [rook, mira], teams: [team], browsingOwners: b, browsingBots: { k_mira: b.t_shop }, browserNeedsYou: new Set(['t_shop']), onWatchBrowser() {} });
+  assert.doesNotMatch(html, /data-watch-globe/, 'neither @storefront nor Mira (running in it) shows one');
+  const other = m.sidebar({ kwants: [rook, mira], teams: [team], browsingOwners: b, browsingBots: { k_mira: b.t_shop }, browserNeedsYou: new Set(['c_gen']), onWatchBrowser() {} });
+  assert.equal((other.match(/data-watch-globe/g) || []).length, 2, 'another chat’s step changes nothing here');
+});
+
+test('Mira 4: the menu hangs 4 px under the whole two-line title block, with the sub line inside it', () => {
+  const v = m.mount('BrowserSwitcherMenu', { entries, current: 'k_rook', onPick() {}, title: '@Rook', sub: React_p('Live Chromium') });
+  const block = v.host.querySelector('[data-switcher-block]');
+  assert.match(block.textContent, /Live Chromium/);
+  v.flush(() => v.host.querySelector('[data-browser-switcher]').click());
+  const menu = v.host.querySelector('[role="menu"]');
+  assert.equal(menu.parentElement, block);
+  assert.match(menu.className, /top-\[calc\(100%\+4px\)\]/);
+  assert.doesNotMatch(menu.className, /\bmt-/);
+  v.unmount();
+});
+
+test('Mira 5: a chat that needs you says so: "Needs you" in amber on desk, an amber dot on the phone', () => {
+  const needy = [{ ...entries[1], needsYou: true }, entries[0]];
+  const v = m.mount('BrowserSwitcherMenu', { entries: needy, current: 'k_rook', onPick() {}, title: '@Rook' });
+  v.flush(() => v.host.querySelector('[data-browser-switcher]').click());
+  const rows = [...v.host.querySelectorAll('[role="menuitemradio"]')];
+  const tag = rows[0].querySelector('[data-switch-needs-you]');
+  assert.equal(tag.textContent, 'Needs you');
+  assert.match(tag.className, /text-\[11px\]/);
+  assert.match(tag.className, /text-\[#fcd34d\]/);
+  assert.doesNotMatch(rows[0].textContent, /git\.example\.com/, 'it replaces the host');
+  assert.match(rows[1].textContent, /shop\.example\.com/);
+  v.unmount();
+  const html = m.row({ entries: needy, current: 'k_rook', onPick() {} });
+  assert.match(html, /aria-label="@storefront, on git.example.com, needs you"/);
+  assert.match(html, /data-switch-needs-you=""[^>]*class="[^"]*h-2 w-2[^"]*bg-\[#fcd34d\][^"]*ring-2 ring-\[#1c1838\]/);
+  assert.equal((html.match(/data-switch-needs-you/g) || []).length, 1);
+});
+
+test('Mira 6: the disabled phone row says "Hand back first to switch", tied to each avatar by aria-describedby', () => {
+  const v = m.mount('BrowserSwitcherRow', { entries, current: 'k_rook', onPick() {}, disabled: true });
+  const hint = v.host.querySelector('[data-switch-hint]');
+  assert.equal(hint.textContent, 'Hand back first to switch');
+  assert.match(hint.className, /text-\[11px\]/);
+  assert.match(hint.className, /text-\[#9a94c4\]/);
+  for (const b of v.host.querySelectorAll('[data-switch-owner]')) {
+    assert.equal(b.getAttribute('aria-disabled'), 'true');
+    assert.equal(b.getAttribute('aria-describedby'), hint.id);
+  }
+  v.render({ entries, current: 'k_rook', onPick() {} });
+  assert.equal(v.host.querySelector('[data-switch-hint]'), null);
+  assert.equal(v.host.querySelector('[data-switch-owner]').getAttribute('aria-describedby'), null);
+  v.unmount();
+});
+
+test('nice-to-have: "@Rook" in the menu as in the header; a 10 px rounded ring with offset 2 on the phone', () => {
+  const v = m.mount('BrowserSwitcherMenu', { entries, current: 'k_rook', onPick() {}, title: '@Rook' });
+  v.flush(() => v.host.querySelector('[data-browser-switcher]').click());
+  assert.match(v.host.querySelector('[role="menuitemradio"]').textContent, /^@Rook/);
+  v.unmount();
+  const html = m.row({ entries, current: 'k_rook', onPick() {} });
+  assert.match(html, /rounded-\[10px\] ring-2 ring-\[#b8adff\] ring-offset-2/);
+});
+
+test('F2: the globe fades out over 150 ms (unclickable meanwhile), then goes', async () => {
+  const b = m.noteBrowser({}, 'k_rook', 'https://shop.example.com', 1);
+  const watched = [];
+  const v = m.mount('GlobeSlot', { browsing: b.k_rook, name: 'Rook', onWatch: (o) => watched.push(o) });
+  assert.match(v.host.querySelector('[data-watch-globe]').className, /kw-globe-in/);
+  v.render({ browsing: undefined, name: 'Rook', onWatch: (o) => watched.push(o) });
+  const g = v.host.querySelector('[data-watch-globe]');
+  assert.ok(g, 'still there while it fades');
+  assert.match(g.className, /kw-globe-out/);
+  assert.equal(g.getAttribute('tabindex'), '-1');
+  g.click();
+  assert.deepEqual(watched, []);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(v.host.querySelector('[data-watch-globe]'), null);
+  v.unmount();
+});
+
+test('F1 parse: a broken live link is still a live link, to no chat', () => {
+  assert.deepEqual(m.parseSpacePath('/s/spc_1/b//live'), { spaceId: 'spc_1', live: true });
+  assert.deepEqual(m.parseSpacePath('/s/spc_1/b/k_rook/live/x'), { spaceId: 'spc_1', live: true });
+  assert.deepEqual(m.parseSpacePath('/s/spc_1/c//live'), { spaceId: 'spc_1', live: true });
+  assert.deepEqual(m.parseSpacePath('/s/spc_1/b/nope/live'), { spaceId: 'spc_1', botId: 'nope', live: true });
+});
+
+test('F1 page: "This bot isn’t browsing now" with a button to the chat, focused', () => {
+  let opened = 0;
+  const v = m.mount('LiveMissPage', { chatLabel: '@Rook', onOpenChat: () => opened++ });
+  assert.match(v.host.textContent, /This bot isn’t browsing now/);
+  const btn = [...v.host.querySelectorAll('button')].find((b) => b.textContent === 'Open @Rook');
+  assert.ok(btn);
+  assert.equal(document.activeElement, btn);
+  btn.click();
+  assert.equal(opened, 1);
+  v.unmount();
+});
+
+test('F1 seed: a page opened mid-turn counts a running turn whose newest tool is a browser tool', () => {
+  const steps = (...tools) => tools.map((tool) => ({ kind: 'tool', tool, detail: tool.endsWith('open') ? 'https://shop.example.com/cart' : undefined }));
+  const turns = [
+    { ...running('t1', 'k_rook', 'c_team'), steps: steps('Bash', 'mcp__kwnt__browser_open') },
+    { ...running('t2', 'k_mira', undefined), steps: steps('mcp__kwnt__browser_open', 'Bash') },
+  ];
+  const out = m.seedBrowsing({}, turns, [teamCh], teamOf, 5);
+  assert.deepEqual(Object.keys(out), ['t_shop']);
+  assert.equal(out.t_shop.host, 'shop.example.com');
+  assert.equal(m.isBrowserTool('browser_navigate'), true);
+  assert.equal(m.isBrowserTool('mcp__other__browser_open'), true);
+  assert.equal(m.isBrowserTool('my_browser'), false);
+  const known = m.noteBrowser({}, 't_shop', 'https://other.example.com', 9);
+  assert.equal(m.seedBrowsing(known, turns, [teamCh], teamOf, 10), known, 'a live event wins over the seed');
+});
+
+test('F6: an event right after turn_started survives the prune; an ended turn’s owner goes', () => {
+  // The old code pruned with a key from the render before the event: that key had no owner yet.
+  let map = {};
+  const turns = [running('t1', 'k_rook', 'c_team')];
+  map = m.noteBrowser(map, 't_shop', 'https://shop.example.com', 1);
+  assert.equal(m.pruneBrowsing(map, turns, [teamCh], teamOf), map, 'kept: its turn runs');
+  assert.deepEqual(m.pruneBrowsing(map, [], [teamCh], teamOf), {}, 'gone once no turn drives it');
 });

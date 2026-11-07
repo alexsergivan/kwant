@@ -22,7 +22,7 @@ import { SpaceControls } from './SpaceControls';
 import { DevOnToast } from './DevOnToast';
 import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
-import { WatchGlobe } from './WatchLive';
+import { GlobeSlot, WatchGlobe, useFadeOut } from './WatchLive';
 import type { Browsing } from '../watchLive';
 import { IdeaJarRow } from './IdeaJarRow';
 
@@ -479,8 +479,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ? 'Needs you in the browser'
         : busyKwants[k.id];
     const open = asked && onOpenNeedsYou ? () => onOpenNeedsYou(asked) : () => onSelectKwant(k);
-    // The globe steps aside while the row says it needs you in the browser (that line leads there)
-    const botBrowsing = onWatchBrowser && !warn && !asked ? browsingBots[k.id] ?? browsingOwners[k.id] : undefined;
+    // The globe steps aside while the row says it needs you in the browser (that line leads there), and
+    // while the browser it shows holds an open step: one browser per chat, so every row on it hides (Mira 3)
+    const botWatch = browsingBots[k.id] ?? browsingOwners[k.id];
+    const botBrowsing = onWatchBrowser && !warn && !asked && botWatch && !browserNeedsYou?.has(botWatch.owner) ? botWatch : undefined;
     return (
       <div
         key={`${chat ? 'chat' : team?.id ?? 'none'}:${k.id}`}
@@ -528,10 +530,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span aria-hidden="true">{needs}</span>
               </span>
             )}
-            {/* W1: this bot's current work is in a browser; the click opens the chat that browser belongs to */}
-            {botBrowsing && (
-              <WatchGlobe name={k.name} host={botBrowsing.host} phone={phone} onWatch={() => onWatchBrowser!(botBrowsing.owner)} />
-            )}
             {/* The space header already says when approvals are off for everyone: a bot only gets its own mark when it differs */}
             {approvalsDiffers(k, space.approvals) &&
               (approvalsOff(k) ? (
@@ -542,6 +540,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span className="sr-only">Asks before acting</span>
                 </span>
               ))}
+            {/* W1: this bot's current work is in a browser; the click opens the chat that browser belongs to.
+                Last on the name line and pushed right, so every row's globe lines up in one column */}
+            {onWatchBrowser && <GlobeSlot browsing={botBrowsing} name={k.name} phone={phone} className="ml-auto mt-1" onWatch={onWatchBrowser} />}
             {/* Edit and Remove sit at the right end of the one-line status below the name, which makes room
                 for them on hover: the name keeps its width and the row its height */}
             {!phone && (
@@ -650,8 +651,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="truncate">@{t.name}</span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {onWatchBrowser && browsingOwners[t.id] && !browserNeedsYou?.has(t.id) && (
-            <WatchGlobe name={`@${t.name}`} host={browsingOwners[t.id].host} phone={phone} onWatch={() => onWatchBrowser(t.id)} />
+          {onWatchBrowser && (
+            <GlobeSlot browsing={!browserNeedsYou?.has(t.id) ? browsingOwners[t.id] : undefined} name={`@${t.name}`} phone={phone} className="ml-auto mx-1.5" onWatch={onWatchBrowser} />
           )}
           {(!expanded || !withMembers) && (
             <span className="text-2xs px-1.5 py-0.5 rounded-full tabular-nums bg-white/[0.05] text-zinc-300 border border-hairline" title={`${count} ${count === 1 ? 'member' : 'members'}`}>
@@ -920,7 +921,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {displayChannels.map((c) => {
               const active = isChannelActive(c);
               const watching = onWatchBrowser && browsingOwners[c.id] && !browserNeedsYou?.has(c.id) ? browsingOwners[c.id] : null;
-              const row = (
+              return (
+                <ChannelRowGlobe key={c.id} channelId={c.id} watching={watching} phone={phone} name={`#${c.name}`} onWatch={onWatchBrowser}>
+                  {(pad) => (
                 <button
                   key={c.id}
                   onClick={() => onSelectChannel(c)}
@@ -930,22 +933,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     active
                       ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
                       : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-                  }${watching ? (phone ? ' pr-12' : ' pr-8') : ''}`}
+                  }${pad ? (phone ? ' pr-12' : ' pr-8') : ''}`}
                 >
                   <Hash size={15} className={active ? 'text-sky-400' : 'text-zinc-500'} />
                   <span className="truncate flex-1">{c.name}</span>
                 </button>
-              );
-              // W1: the globe is its own button beside the row's, never inside it
-              return watching ? (
-                <div key={c.id} className="relative" data-channel-browsing={c.id}>
-                  {row}
-                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 flex">
-                    <WatchGlobe name={`#${c.name}`} host={watching.host} phone={phone} onWatch={() => onWatchBrowser!(c.id)} />
-                  </span>
-                </div>
-              ) : (
-                row
+                  )}
+                </ChannelRowGlobe>
               );
             })}
             {displayChannels.length === 0 && (
@@ -1181,6 +1175,30 @@ const MemberSheet: React.FC<{
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+/**
+ * W1 on a channel row: the globe is its own button beside the row's, never inside it, at the right end
+ * of the name line like every other row's. It stays for its 150 ms fade-out.
+ */
+const ChannelRowGlobe: React.FC<{
+  channelId: string;
+  watching: Browsing | null;
+  name: string;
+  phone?: boolean;
+  onWatch?: (owner: string) => void;
+  children: (pad: boolean) => React.ReactElement;
+}> = ({ channelId, watching, name, phone, onWatch, children }) => {
+  const { value, leaving } = useFadeOut(watching);
+  if (!value || !onWatch) return children(false);
+  return (
+    <div className="relative" data-channel-browsing={channelId}>
+      {children(true)}
+      <span className="absolute right-2 top-1/2 -translate-y-1/2 flex">
+        <WatchGlobe name={name} host={value.host} phone={phone} leaving={leaving} onWatch={() => onWatch(value.owner)} />
+      </span>
     </div>
   );
 };

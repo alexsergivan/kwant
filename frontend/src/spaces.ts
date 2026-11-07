@@ -187,6 +187,8 @@ export function parseSpacePath(path: string): SpaceRoute {
   const live = chat?.[3] ? { live: true } : {};
   if (chat?.[1] === 'c') return { spaceId, channelId: decodeURIComponent(chat[2]), ...live };
   if (chat?.[1] === 'b') return { spaceId, botId: decodeURIComponent(chat[2]), ...live };
+  // A broken live link (`b//live`, `b/<id>/live/x`): still a live link, to no chat (W-L4)
+  if (/^(c|b)\//.test(rest) && /(^|\/)live(\/|$)/.test(rest)) return { spaceId, live: true };
   const v = rest ? parseView(rest) : null;
   if (v) return v.legacy ? { spaceId, view: v.view, legacy: true } : { spaceId, view: v.view };
   // An address this version doesn't know still opens the space, and is rewritten.

@@ -333,10 +333,12 @@
 .kw-fade-in { animation: kw-fade-in 160ms var(--kw-ease) both; }
 .kw-stagger > * { animation: kw-fade-in 180ms var(--kw-ease) both; animation-delay: calc(var(--i, 0) * 40ms); }
 
-/* W1: the Watch globe appears in 150ms, opacity only; without motion it is just there. */
+/* W1: the Watch globe appears and leaves in 150ms, opacity only; without motion it is just there or gone. */
 @keyframes kw-opacity-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kw-opacity-out { from { opacity: 1; } to { opacity: 0; } }
 .kw-globe-in { animation: kw-opacity-in 150ms ease-out both; }
-@media (prefers-reduced-motion: reduce) { .kw-globe-in { animation: none; } }
+.kw-globe-out { animation: kw-opacity-out 150ms ease-in both; }
+@media (prefers-reduced-motion: reduce) { .kw-globe-in, .kw-globe-out { animation: none; } }
 
 /* Bot home: the avatar floats and the glow breathes. Transform and opacity only. */
 @keyframes kw-float {

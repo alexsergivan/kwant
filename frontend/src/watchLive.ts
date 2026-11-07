@@ -141,3 +141,57 @@ export function switchEntries(
 
 /** The globe's label and tooltip: "Watch Rook's page: shop.example.com". */
 export const watchLabel = (name: string, host: string) => (host ? `Watch ${name}’s page: ${host}` : `Watch ${name}’s page`);
+
+/**
+ * Keeps only owners that a running turn still drives. Run it against the newest turns (a ref read inside
+ * the state updater), never against a key worked out at an earlier render: that stale key is how a
+ * browser event sent right after its `turn_started` got dropped (QA F6).
+ */
+export function pruneBrowsing(
+  map: BrowsingMap,
+  turns: Iterable<OwnerTurn>,
+  channels: readonly Named[],
+  teamOf: (c: Named) => Named | undefined,
+): BrowsingMap {
+  const list = Array.from(turns);
+  const gone = Object.keys(map).filter((o) => !ownerStillRunning(o, list, channels, teamOf));
+  if (!gone.length) return map;
+  const out = { ...map };
+  for (const o of gone) delete out[o];
+  return out;
+}
+
+interface SeedStep {
+  kind: string;
+  tool?: string;
+  detail?: string;
+}
+
+/** True for kwant's own browser tools (`mcp__kwnt__browser_open`, `browser_navigate`…). */
+export const isBrowserTool = (tool: string | undefined) => !!tool && /(^|__)browser_[a-z_]+$/.test(tool);
+
+/**
+ * A page opened (or reloaded) mid-turn: a running turn whose newest tool step is a browser tool is
+ * browsing now, before its next browser event arrives. The page comes from the step's detail when it
+ * is an address.
+ */
+export function seedBrowsing(
+  map: BrowsingMap,
+  turns: Iterable<OwnerTurn & { steps?: readonly SeedStep[] }>,
+  channels: readonly Named[],
+  teamOf: (c: Named) => Named | undefined,
+  now: number,
+): BrowsingMap {
+  let out = map;
+  for (const t of turns) {
+    if (t.state !== 'running' || !t.steps?.length) continue;
+    const tools = t.steps.filter((s) => s.kind === 'tool');
+    const last = tools[tools.length - 1];
+    if (!last || !isBrowserTool(last.tool)) continue;
+    const owner = ownerOfTurn(t, channels, teamOf);
+    if (out[owner]) continue;
+    const url = last.detail && /^https?:\/\//.test(last.detail) ? last.detail : '';
+    out = noteBrowser(out, owner, url, now);
+  }
+  return out;
+}

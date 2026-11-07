@@ -291,18 +291,31 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const switching = !!switcher && switcher.entries.length >= 2;
 
   return (
-    <div className="w-96 border-l border-zinc-800 bg-zinc-950 flex flex-col h-full shadow-2xl z-30 select-none animate-in slide-in-from-right duration-200">
+    // On a phone the panel is the whole screen (0.7.7 nice-to-have 5): a 384 px column beside the chat left the chat a sliver.
+    <div
+      data-vm-pane=""
+      className={`${narrow ? 'fixed inset-0 z-[60] w-full h-[100dvh] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]' : 'w-96 border-l border-zinc-800 h-full z-30'} bg-zinc-950 flex flex-col shadow-2xl select-none animate-in slide-in-from-right duration-200`}
+    >
       {/* Top Header */}
       <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between gap-2 bg-zinc-900/60">
         <div className="flex items-center gap-2 min-w-0">
           <div className={`shrink-0 w-2.5 h-2.5 rounded-full ${browserReady ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
           <div className="min-w-0">
             {switching && !narrow ? (
-              <BrowserSwitcherMenu entries={switcher!.entries} current={switcher!.current} onPick={switcher!.onPick} disabled={isControlMode} title={`@${teamName}`} />
+              <BrowserSwitcherMenu
+                entries={switcher!.entries}
+                current={switcher!.current}
+                onPick={switcher!.onPick}
+                disabled={isControlMode}
+                title={`@${teamName}`}
+                sub={<p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>}
+              />
             ) : (
-              <div className="text-xs font-semibold text-zinc-100 truncate" title={`@${teamName}`}>@{teamName}</div>
+              <>
+                <div className="text-xs font-semibold text-zinc-100 truncate" title={`@${teamName}`}>@{teamName}</div>
+                <p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>
+              </>
             )}
-            <p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>
           </div>
         </div>
 
