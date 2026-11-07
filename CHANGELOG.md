@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Connect in the Bitwarden form works again.** Inside the GitHub, email and approvals forms, Connect (or Enter) reloaded the page and sent nothing; it now connects. (#371)
 - **Connecting Bitwarden works with accounts whose key salt isn't their email.** kwant now uses the salt Bitwarden's server reports, and also reads the account key from Bitwarden's newer login reply. Each failed connect or unlock logs one line with what went wrong, the HTTP status and the server's host. That line never includes the email, password or codes. (#370)
 - A custom server's models that have no name now show their id in the model picker instead of "[redacted]" (#365).
+- A watched repo whose server lost git now reads "Needs git on the server", with the install tip, instead of "Can't read it right now. Trying again." (#374)
 
 ## [Mac 0.7.2] - 2026-11-06
 

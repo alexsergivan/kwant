@@ -267,7 +267,7 @@ export const storeApi = {
  * here (audit F-10), so it's blocked. */
 export const AUTOFILL_GAP_NOTE = {
   bitwarden: 'While a password is being filled into a page, a bot that can run commands can read it.',
-  local: 'Unless every space and bot is on “Ask before running commands”, any bot that can run commands could read passwords saved on this server, so they can’t be saved here: use Bitwarden.',
+  local: 'Unless every space and bot is on “Ask before running commands”, any bot that can run commands could read passwords saved on this server, so Bitwarden is the safer place for them.',
 } as const;
 
 /** The note for a store; unknown counts as this server, the stricter one. */
