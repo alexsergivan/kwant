@@ -564,7 +564,7 @@ export type ContinuityEvent =
   /** Show it once: `skill_recording_updated` (api.md §5), a recording's state changed. It never carries steps. */
   | { type: 'recording_updated'; data: Recording }
   /** Show it once: SSE `show_once_trial_ended` (api.md §10), a "Try it once" run finished. */
-  | { type: 'trial_ended'; data: { skill_id: string; recording_id: string; bot: string; outcome: string } }
+  | { type: 'trial_ended'; data: { skill_id: string; recording_id: string | null; bot: string; outcome: string } }
   /** kwant suggested a routine (re-broadcast from its notification), so an open Routines list reloads. */
   | { type: 'automation_suggested'; data: NotifyEvent };
 

@@ -103,6 +103,23 @@ test('after a reload the card is rebuilt from history, after the bot’s result,
   v.unmount();
 });
 
+test('after a reload with api.md §6’s outcome marker the card follows the marked message', async () => {
+  pending = [skill()];
+  const marked = { ...result, trial: undefined, meta: JSON.stringify({ trial: { ...tr, outcome: 'done' } }) };
+  let v = mount({ messages: [you, sysline, marked, later] });
+  await settle();
+  const c = card(v.host);
+  assert.ok(c, 'rebuilt from the outcome');
+  assert.ok(v.host.querySelector('[data-message-id="k1"]').compareDocumentPosition(c) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+  v.unmount();
+  const earlier = { ...marked, id: 'k0' };
+  const running = { ...result, id: 'k3', trial: undefined, meta: JSON.stringify({ trial: tr }) };
+  v = mount({ messages: [you, sysline, earlier, { ...sysline, id: 's2' }, running] });
+  await settle();
+  assert.equal(card(v.host), null, 'the second run has no outcome yet: still running');
+  v.unmount();
+});
+
 test('a skill already approved or rejected gets no card; a rejection elsewhere removes it', async () => {
   pending = [];
   let v = mount({ messages: [you, sysline, result] });

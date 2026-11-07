@@ -757,3 +757,22 @@ test('trial messages: the marker on the message or in meta; the card goes after 
   assert.deepEqual([...m.trialCardsAfter(msgs.slice(0, 2), new Set())], [], 'only the sysline: still running');
   assert.deepEqual([...m.trialCardsAfter(msgs.slice(0, 2), new Set(['sk_1']))], [['s1', tr]], 'the SSE says it ended');
 });
+
+test('trial outcome (api.md §6): the marked last message ends it; a server that marks never falls back to the heuristic', () => {
+  const tr = { skill_id: 'sk_1', recording_id: 'rec_1' };
+  const meta = (t) => JSON.stringify({ kind: 'x', trial: t });
+  assert.deepEqual(m.trialOf({ meta: meta({ ...tr, outcome: 'failed' }) }), { ...tr, outcome: 'failed' });
+  assert.deepEqual(m.trialOf({ meta: meta({ ...tr, outcome: 'nope' }) }), tr, 'an unknown outcome is ignored');
+  assert.deepEqual(m.trialOf({ meta: meta({ skill_id: 'sk_1', recording_id: null }) }), { skill_id: 'sk_1', recording_id: null }, 'recording gone');
+  const ran = [
+    { id: 's1', sender_role: 'system', meta: meta(tr) },
+    { id: 'k1', sender_role: 'kwant', meta: meta(tr) },
+    { id: 'f1', sender_role: 'system', meta: meta({ ...tr, outcome: 'failed' }) },
+  ];
+  assert.deepEqual([...m.trialCardsAfter(ran, new Set())].map(([id]) => id), ['f1'], 'after a failure note, not the bot reply');
+  const again = [...ran, { id: 's2', sender_role: 'system', meta: meta(tr) }, { id: 'k2', sender_role: 'kwant', meta: meta(tr) }];
+  assert.deepEqual([...m.trialCardsAfter(again, new Set())], [], 'a second run without outcome yet is still running, even when the bot spoke last');
+  assert.deepEqual([...m.trialCardsAfter(again, new Set(['sk_1']))].map(([id]) => id), ['k2'], 'the live SSE end comes before the marker');
+  const nothing = [{ id: 's1', sender_role: 'system', meta: meta({ ...tr, outcome: 'cancelled' }) }];
+  assert.deepEqual([...m.trialCardsAfter(nothing, new Set())].map(([id]) => id), ['s1'], 'the turn saved nothing: the line itself');
+});

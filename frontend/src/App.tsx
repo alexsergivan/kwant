@@ -1102,7 +1102,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (t && typeof t.skill_id === 'string' && t.skill_id)
               emitContinuity({
                 type: 'trial_ended',
-                data: { skill_id: t.skill_id, recording_id: String(t.recording_id ?? ''), bot: String(t.bot ?? ''), outcome: String(t.outcome ?? '') },
+                data: { skill_id: t.skill_id, recording_id: typeof t.recording_id === 'string' ? t.recording_id : null, bot: String(t.bot ?? ''), outcome: String(t.outcome ?? '') },
               });
             break;
           }

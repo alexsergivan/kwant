@@ -890,12 +890,18 @@ export function elapsedNow(s: ShowOnceSession, at = now()): number {
 // ---------------------------------------------------------------------------------------------
 // The trial in chat (A29, design §S "Trial in chat", api.md §10)
 
+export type TrialOutcome = 'done' | 'failed' | 'cancelled';
 export interface TrialRef {
   skill_id: string;
-  recording_id: string;
+  /** null only when the skill's recording is gone (api.md §5) */
+  recording_id: string | null;
+  /** Only on the trial's last saved message, once the turn ended (api.md §6) */
+  outcome?: TrialOutcome;
 }
 
-/** A trial message carries `trial: {skill_id, recording_id}`, on the message or in its meta JSON. */
+const OUTCOMES: ReadonlySet<string> = new Set(['done', 'failed', 'cancelled']);
+
+/** A trial message carries `trial: {skill_id, recording_id, outcome?}`, on the message or in its meta JSON. */
 export function trialOf(msg: { trial?: unknown; meta?: string | null }): TrialRef | null {
   let t: unknown = msg.trial;
   if (t == null && typeof msg.meta === 'string' && msg.meta.includes('"trial"')) {
@@ -906,26 +912,36 @@ export function trialOf(msg: { trial?: unknown; meta?: string | null }): TrialRe
     }
   }
   if (!t || typeof t !== 'object') return null;
-  const { skill_id, recording_id } = t as Record<string, unknown>;
-  return str(skill_id) && skill_id && str(recording_id) ? { skill_id, recording_id } : null;
+  const { skill_id, recording_id, outcome } = t as Record<string, unknown>;
+  if (!str(skill_id) || !skill_id || !(recording_id === null || str(recording_id))) return null;
+  const ref: TrialRef = { skill_id, recording_id };
+  if (str(outcome) && OUTCOMES.has(outcome)) ref.outcome = outcome as TrialOutcome;
+  return ref;
 }
 
 /**
  * Where a "… still waits for you" card goes: after the last message of each trial that has ended.
- * Ended is the SSE `show_once_trial_ended` seen in this tab, or, after a reload, the trial's last
- * message being the bot's own reply (its result), since the sysline and approvals come first.
- * Returns message id → the trial whose card follows it.
+ * Ended is the SSE `show_once_trial_ended` seen in this tab (the live message lacks `outcome`), or
+ * the skill's last trial message carrying `trial.outcome` (api.md §6, after a reload). When none of
+ * a skill's trial messages carry `outcome` (a server from before §6's marker), the fallback is the
+ * last message being the bot's own reply. Returns message id → the trial whose card follows it.
  */
 export function trialCardsAfter(
   messages: ReadonlyArray<{ id: string; sender_role: string; trial?: unknown; meta?: string | null }>,
   ended: ReadonlySet<string>,
 ): Map<string, TrialRef> {
   const last = new Map<string, { id: string; ref: TrialRef; botReply: boolean }>();
+  const marks = new Set<string>();
   for (const m of messages) {
     const ref = trialOf(m);
-    if (ref) last.set(ref.skill_id, { id: m.id, ref, botReply: m.sender_role === 'kwant' });
+    if (!ref) continue;
+    last.set(ref.skill_id, { id: m.id, ref, botReply: m.sender_role === 'kwant' });
+    if (ref.outcome) marks.add(ref.skill_id);
   }
   const out = new Map<string, TrialRef>();
-  for (const [skill, v] of last) if (ended.has(skill) || v.botReply) out.set(v.id, v.ref);
+  for (const [skill, v] of last) {
+    const done = ended.has(skill) || (marks.has(skill) ? !!v.ref.outcome : v.botReply);
+    if (done) out.set(v.id, v.ref);
+  }
   return out;
 }
