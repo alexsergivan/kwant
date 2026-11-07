@@ -9,6 +9,7 @@ mod common;
 
 use async_trait::async_trait;
 use common::*;
+use kwnt::db::dev_jira::{self, TicketFacts};
 use kwnt::db::models::{NewKwant, NewTeam};
 use kwnt::db::spaces::{NewSpace, SpaceId};
 use kwnt::server::dev::tickets::hooks::{self, TicketRef};
@@ -191,7 +192,11 @@ async fn world(name: &str, f: Fixture, wait_for_ok: bool) -> World {
 }
 
 impl World {
+    /// The poller's part: the ticket's card in picked_up (hooks only start a picked-up card),
+    /// then the start hook.
     async fn start(&self, key: &str) {
+        let f = TicketFacts { key: key.into(), project: "TRAIL".into(), url: format!("{HOST}/browse/{key}"), ..Default::default() };
+        self.env.state.db.insert_dev_ticket(self.space.as_str(), &self.site, &f, dev_jira::PICKED_UP, Some(&self.team), Some("label")).await.unwrap();
         hooks::start(&self.env.state, self.space.as_str(), TicketRef { site_id: self.site.clone(), key: key.into(), team_id: self.team.clone() }).await;
     }
 

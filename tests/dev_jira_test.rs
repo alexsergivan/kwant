@@ -11,6 +11,7 @@ mod mock_atlassian;
 
 use common::*;
 use kwnt::db::dev_jira::{self, TicketRow};
+use kwnt::db::models::{NewKwant, NewTeam};
 use kwnt::db::spaces::SpaceId;
 use kwnt::server::continuity::{SelfScope, TurnOrigin};
 use kwnt::server::dev::tickets::{pickup, store};
@@ -111,6 +112,72 @@ async fn no_token_anywhere(env: &Env, m: &MockAtlassian) {
     for tok in [m.token(), m.scoped_token(), m.confluence_token()] {
         assert!(!all.contains(&tok), "a token leaked into kwant's answers or rows");
     }
+}
+
+/// A lead and a team in the default space: the site hands its tickets to it, so the real hooks
+/// read them (a site with no team fails what it picks up).
+async fn team(env: &Env) -> String {
+    let sp = SpaceId::default_space();
+    let k = NewKwant { name: "Ann".into(), title: "Lead".into(), persona_prompt: "Test persona".into(), soul: String::new(), avatar_sprite: "s".into(), driver_type: "api".into(), preferred_model: "claude".into() };
+    let lead = env.state.db.create_kwant(&sp, &k).await.unwrap().id;
+    let t = NewTeam { name: "Shop".into(), description: None, icon: None, lead_kwant_id: lead.clone(), member_kwants: vec![lead], workspace_path: None, repo_url: None };
+    env.state.db.create_team(&sp, &t).await.unwrap().id
+}
+
+/// Connects the site to a new team; answers the team id.
+async fn connect_team(env: &Env, m: &MockAtlassian) -> String {
+    let team_id = team(env).await;
+    connect(env, m, json!({"team_id": team_id})).await;
+    team_id
+}
+
+/// A description that makes the lead's brief turn submit a brief for `goal` (with `questions`).
+/// The plan line carries a fresh nonce: the fake CLI runs each marker once per test binary.
+fn briefed(goal: &str, questions: Value) -> String {
+    let line = |t: &str| json!({"text": t, "sources": ["ticket"], "inferred": false});
+    let plan = format!("Make the change ({})", uuid::Uuid::new_v4().simple());
+    let brief = json!({"goal": line(goal), "done_when": [line("It works")], "where": [], "plan": [line(&plan)], "assumptions": [], "questions": questions, "flags": []});
+    format!("{goal}.\n{}", call_tool_marker("submit_brief", brief))
+}
+
+/// Gives `key` a description the lead can brief with no questions.
+fn clear(m: &MockAtlassian, key: &str) {
+    let d = briefed(&m.issue(key).unwrap().summary, json!([]));
+    m.edit(key, |i| i.description = d);
+}
+
+/// Waits (up to 30 s) for the card to reach one of `want`; answers the last state seen.
+async fn wait_state(env: &Env, key: &str, want: &[&str]) -> String {
+    let mut last = String::new();
+    for _ in 0..300 {
+        last = ticket(env, key).await.state;
+        if want.contains(&last.as_str()) {
+            return last;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    last
+}
+
+/// Waits for `working`, and checks the brief row came along.
+async fn until_working(env: &Env, key: &str) {
+    let st = wait_state(env, key, &[dev_jira::WORKING, dev_jira::FAILED, dev_jira::NEEDS_ANSWER]).await;
+    assert_eq!(st, dev_jira::WORKING, "{key}: {:?}", events(env, key).await);
+    assert_eq!(brief_state(env, key).await, dev_jira::WORKING, "the brief row mirrors the card");
+}
+
+/// The brief row's state, from the brief route.
+async fn brief_state(env: &Env, key: &str) -> String {
+    let (s, b) = call(&env.app, "GET", &uri(&format!("tickets/{key}/brief")), None).await;
+    assert_eq!(s.as_u16(), 200, "{b}");
+    b["state"].as_str().unwrap_or_default().to_string()
+}
+
+/// A Start or Retry answer: started, and the card left for the read or the kept brief.
+fn started(v: &Value) {
+    let st = v["ticket"]["state"].as_str().unwrap_or_default();
+    assert_eq!(v["started"].as_bool(), Some(true), "{v}");
+    assert!([dev_jira::PICKED_UP, dev_jira::READING, dev_jira::BRIEF_READY, dev_jira::WORKING].contains(&st), "{v}");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -309,7 +376,7 @@ async fn pickup_backfills_picks_up_stops_and_names_who_took_it_back() {
     let (s, v) = call(&env.app, "PUT", &uri("jira"), Some(body)).await;
     assert!(s.is_client_error(), "{v}");
 
-    connect(&env, &m, json!({})).await;
+    connect_team(&env, &m).await;
     let r = poll(&env).await;
     assert_eq!((r["matched"].as_u64(), r["waiting"].as_u64(), r["started"].as_u64()), (Some(1), Some(1), Some(0)), "{r}");
     let t = ticket(&env, &old).await;
@@ -317,20 +384,24 @@ async fn pickup_backfills_picks_up_stops_and_names_who_took_it_back() {
     assert_eq!(t.handed_over_by.as_deref(), Some("label"));
     assert_eq!(t.assignee_id.as_deref(), Some(dana.account_id.as_str()), "the label rule keeps the human assignee");
 
-    // A new hand-over after connecting is picked up and started (a slot is free)
+    // A new hand-over after connecting is picked up and started (a slot is free): the lead reads
+    // it, and the brief takes it to work
     let new = m.add_issue("TRAIL", "Add dark mode", &["kwant", "ui"], None);
+    clear(&m, &new);
     let r = poll(&env).await;
     assert_eq!((r["new"].as_u64(), r["started"].as_u64()), (Some(1), Some(1)), "{r}");
     let t = ticket(&env, &new).await;
-    assert_eq!((t.state.as_str(), t.waiting_since_connect, t.start_called_at.is_some()), (dev_jira::PICKED_UP, false, true));
-    assert!(events(&env, &new).await.contains(&"hook:start".to_string()));
+    assert_eq!((t.waiting_since_connect, t.start_called_at.is_some()), (false, true));
+    until_working(&env, &new).await;
 
     // Start on the Waiting card
+    clear(&m, &old);
     let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{old}/start")), None).await;
     assert_eq!(s.as_u16(), 200, "{v}");
-    assert_eq!((v["ticket"]["state"].as_str(), v["started"].as_bool()), (Some(dev_jira::PICKED_UP), Some(true)), "{v}");
+    started(&v);
     let (s, _) = call(&env.app, "POST", &uri(&format!("tickets/{old}/start")), None).await;
     assert_eq!(s.as_u16(), 409, "Start twice is refused");
+    until_working(&env, &old).await;
 
     // Dana removes the label: taken back, and the card names her
     m.act_as("dana");
@@ -341,11 +412,11 @@ async fn pickup_backfills_picks_up_stops_and_names_who_took_it_back() {
     assert_eq!(t.state, dev_jira::TAKEN_BACK);
     assert_eq!(t.taken_back_by.as_deref(), Some("Dana Park"));
     assert!(t.taken_back_at.is_some());
-    assert!(events(&env, &new).await.contains(&"hook:stopped: taken_back".to_string()));
-    // Handed over again: picked up again
+    assert_eq!(brief_state(&env, &new).await, dev_jira::TAKEN_BACK, "the brief row is taken back with it");
+    // Handed over again: picked up again, and back at work from the kept brief
     m.set_labels(&new, &["ui", "kwant"]);
     poll(&env).await;
-    assert_eq!(ticket(&env, &new).await.state, dev_jira::PICKED_UP);
+    until_working(&env, &new).await;
 
     // Done closes it, with the resolution; deleted closes too
     m.transition(&old, "Done", "done");
@@ -356,6 +427,7 @@ async fn pickup_backfills_picks_up_stops_and_names_who_took_it_back() {
     assert_eq!(t.state, dev_jira::CLOSED);
     assert!(t.closed_resolution.as_deref().unwrap_or_default().starts_with("done"), "{:?}", t.closed_resolution);
     assert_eq!(ticket(&env, &new).await.closed_resolution.as_deref(), Some("deleted"));
+    assert_eq!((brief_state(&env, &old).await, brief_state(&env, &new).await), (dev_jira::CLOSED.to_string(), dev_jira::CLOSED.to_string()));
 
     // Only reads and no writes went to Jira
     assert!(m.writes().is_empty() && m.refused().is_empty(), "pickup never writes to Jira");
@@ -369,14 +441,15 @@ async fn a_search_lag_is_reconciled_and_never_reads_as_taken_back() {
     let _g = gateway_to(&m);
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
-    connect(&env, &m, json!({})).await;
+    connect_team(&env, &m).await;
     poll(&env).await;
     let key = m.add_issue("TRAIL", "Lagging", &["kwant"], None);
+    clear(&m, &key);
     poll(&env).await;
-    assert_eq!(ticket(&env, &key).await.state, dev_jira::PICKED_UP);
+    until_working(&env, &key).await;
     m.hide(&key, true);
     poll(&env).await;
-    assert_eq!(ticket(&env, &key).await.state, dev_jira::PICKED_UP, "still handed over in Jira");
+    assert_eq!(ticket(&env, &key).await.state, dev_jira::WORKING, "still handed over in Jira");
     let id = ticket(&env, &key).await.issue_id.unwrap().parse::<u64>().unwrap();
     assert!(m.reconciled().iter().any(|r| r.contains(&id)), "{:?}", m.reconciled());
 }
@@ -388,9 +461,10 @@ async fn at_most_three_tickets_run_and_the_queue_goes_by_priority() {
     let _g = gateway_to(&m);
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
-    connect(&env, &m, json!({})).await;
+    connect_team(&env, &m).await;
     poll(&env).await;
     let keys: Vec<String> = (0..5).map(|i| m.add_issue("TRAIL", &format!("T{i}"), &["kwant"], None)).collect();
+    keys.iter().for_each(|k| clear(&m, k));
     m.set_priority(&keys[4], "Highest", "1");
     let r = poll(&env).await;
     assert_eq!((r["new"].as_u64(), r["started"].as_u64()), (Some(5), Some(pickup::SLOTS as u64)), "{r}");
@@ -398,8 +472,13 @@ async fn at_most_three_tickets_run_and_the_queue_goes_by_priority() {
     assert!(started.contains(&keys[4]), "Highest first: {started:?}");
     assert!(started.contains(&keys[0]) && started.contains(&keys[1]), "then oldest: {started:?}");
     // A later poll starts nothing more while all slots are taken
+    for k in &started {
+        until_working(&env, k).await;
+    }
     let r = poll(&env).await;
     assert_eq!(r["started"].as_u64(), Some(0), "{r}");
+    let waiting: Vec<String> = env.state.db.dev_tickets(&space()).await.unwrap().into_iter().filter(|t| t.state == dev_jira::PICKED_UP).map(|t| t.key).collect();
+    assert_eq!(waiting.len(), 5 - pickup::SLOTS, "the rest wait for a slot: {waiting:?}");
 }
 
 #[tokio::test]
@@ -467,17 +546,19 @@ async fn ask_on_jira_shows_the_exact_comment_and_posts_it_once_with_a_mention() 
         let _g = gateway_to(&m);
         dev_mode_on(&env).await;
         m.add_project("TRAIL", "Trail app");
-        connect(&env, &m, json!({})).await;
+        connect_team(&env, &m).await;
         poll(&env).await;
+        // The lead's brief has a question the ticket and a comment disagree on
         let key = m.add_issue("TRAIL", "Export orders", &["kwant"], None);
+        let cid = m.comment_as(&key, "ana", "Finance wants XLSX.");
+        let q = json!([{"text": "Which file should the export make?", "choices": ["CSV", "XLSX"], "default": "CSV", "default_reason": "the ticket says CSV",
+                        "why_blocks": "the format changes the code", "conflict_sources": ["ticket", format!("comment:{cid}")]}]);
+        let d = briefed("Export orders", q);
+        m.edit(&key, |i| i.description = d);
         poll(&env).await;
+        let st = wait_state(&env, &key, &[dev_jira::NEEDS_ANSWER, dev_jira::FAILED, dev_jira::WORKING]).await;
+        assert_eq!(st, dev_jira::NEEDS_ANSWER, "{flavor:?}: {:?}", events(&env, &key).await);
         let questions = json!({"questions": [{"text": "Which file should the export make?", "choices": ["CSV", "XLSX"]}], "team": "Shop team"});
-
-        // Only while the card is waiting on questions
-        let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/ask/preview")), Some(questions.clone())).await;
-        assert_eq!(s.as_u16(), 409, "{v}");
-        assert!(store::set_state(&env.state, &space(), &key, dev_jira::READING, None).await.unwrap());
-        assert!(store::set_state(&env.state, &space(), &key, dev_jira::NEEDS_ANSWER, None).await.unwrap());
 
         let (s, p) = call(&env.app, "POST", &uri(&format!("tickets/{key}/ask/preview")), Some(questions.clone())).await;
         assert_eq!(s.as_u16(), 200, "{p}");
@@ -512,20 +593,29 @@ async fn ask_on_jira_shows_the_exact_comment_and_posts_it_once_with_a_mention() 
             Flavor::Dc => assert!(writes[0].body.contains("Hi [~ana], before we start"), "{}", writes[0].body),
         }
         assert_eq!(ticket(&env, &key).await.asked_comment_id.as_deref(), Some(id.as_str()));
+        let (_, b) = call(&env.app, "GET", &uri(&format!("tickets/{key}/brief")), None).await;
+        assert_eq!(b["asked_comment_id"].as_str(), Some(id.as_str()), "both rows know the comment: {b}");
+        assert_eq!(b["brief"]["questions"][0]["asked_on_jira"]["to"], "Ana Reporter", "{b}");
         // Asked once: a second post is refused
         let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/ask")), Some(with(questions.clone(), json!({"digest": p["digest"]})))).await;
         assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("already_asked")), "{v}");
         assert_eq!(m.writes().len(), 1);
 
-        // kwant's own comment isn't an answer; the reporter's reply is
+        // kwant's own comment isn't an answer; the reporter's reply is, and the work starts
         m.comment_as(&key, "kwant-bot", "a note");
         let reply = m.comment_as(&key, "ana", "CSV please");
         let r = poll(&env).await;
         assert_eq!(r["replies"].as_u64(), Some(1), "{flavor:?}: {r}");
-        assert!(events(&env, &key).await.iter().any(|e| e.starts_with("hook:reporter_replied") && e.contains(&reply)));
         assert_eq!(ticket(&env, &key).await.last_reply_id.as_deref(), Some(reply.as_str()));
+        until_working(&env, &key).await;
+        let (_, b) = call(&env.app, "GET", &uri(&format!("tickets/{key}/brief")), None).await;
+        assert_eq!(b["brief"]["questions"][0]["answer"]["value"], "CSV", "the reply answered the question: {b}");
         let r = poll(&env).await;
         assert_eq!(r["replies"].as_u64(), Some(0), "once per reply");
+        // Only while the card is waiting on questions
+        let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/ask/preview")), Some(questions.clone())).await;
+        assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("wrong_state")), "{v}");
+        assert_eq!(m.writes().len(), 1, "kwant posted exactly one comment");
         no_token_anywhere(&env, &m).await;
     }
 }
@@ -623,45 +713,60 @@ async fn the_person_stops_skips_closes_and_retries_without_writing_to_jira() {
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
     let old = m.add_issue("TRAIL", "Labelled before connecting", &["kwant"], None);
-    connect(&env, &m, json!({})).await;
+    connect_team(&env, &m).await;
     poll(&env).await;
     let new = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    clear(&m, &new);
     poll(&env).await;
-    assert_eq!(ticket(&env, &new).await.state, dev_jira::PICKED_UP);
+    until_working(&env, &new).await;
     let mv = |key: String, what: &'static str| {
         let app = env.app.clone();
         async move { call(&app, "POST", &uri(&format!("tickets/{key}/{what}")), None).await }
     };
+
+    // Skip is for work not started yet
+    let (s, v) = mv(new.clone(), "skip").await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("wrong_state")), "{v}");
 
     // Stop: taken back, held; the poller doesn't pick it up again while it still matches
     let (s, v) = mv(new.clone(), "stop").await;
     assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["held_by_person"].as_bool()), (200, Some(dev_jira::TAKEN_BACK), Some(true)), "{v}");
     assert!(v["ticket"].get("work").is_some(), "the answer is the row with work: {v}");
     let e = events(&env, &new).await;
-    assert!(e.contains(&"state:stopped by you".to_string()) && e.contains(&"hook:stopped: taken_back".to_string()), "{e:?}");
+    assert!(e.contains(&"state:stopped by you".to_string()), "{e:?}");
+    assert_eq!(brief_state(&env, &new).await, dev_jira::TAKEN_BACK, "the brief row stops with it");
     poll(&env).await;
     assert_eq!(ticket(&env, &new).await.state, dev_jira::TAKEN_BACK, "a stopped ticket stays stopped");
     let (s, v) = mv(new.clone(), "stop").await;
     assert_eq!((s.as_u16(), v["code"].as_str(), v["state"].as_str()), (409, Some("wrong_state"), Some(dev_jira::TAKEN_BACK)), "{v}");
 
-    // Retry: back in the queue (and started, a slot is free), no longer held
+    // Retry: back in the queue (and started, a slot is free), no longer held; the work resumes
+    // from the kept brief
     let (s, v) = mv(new.clone(), "retry").await;
-    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["held_by_person"].as_bool(), v["started"].as_bool()), (200, Some(dev_jira::PICKED_UP), Some(false), Some(true)), "{v}");
+    assert_eq!((s.as_u16(), v["ticket"]["held_by_person"].as_bool()), (200, Some(false)), "{v}");
+    started(&v);
+    until_working(&env, &new).await;
 
-    // Skip: closed as skipped, never picked up again even though it still matches
+    // Skip, once stopped: closed as skipped, never picked up again even though it still matches
+    let (s, v) = mv(new.clone(), "stop").await;
+    assert_eq!(s.as_u16(), 200, "{v}");
     let (s, v) = mv(new.clone(), "skip").await;
     assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["closed_resolution"].as_str()), (200, Some(dev_jira::CLOSED), Some("skipped")), "{v}");
     poll(&env).await;
     assert_eq!(ticket(&env, &new).await.state, dev_jira::CLOSED);
     let (s, _) = mv(new.clone(), "skip").await;
     assert_eq!(s.as_u16(), 409);
+    assert_eq!(brief_state(&env, &new).await, dev_jira::CLOSED);
     // Retry from closed
     let (s, v) = mv(new.clone(), "retry").await;
-    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["closed_resolution"].clone()), (200, Some(dev_jira::PICKED_UP), Value::Null), "{v}");
+    assert_eq!((s.as_u16(), v["ticket"]["closed_resolution"].clone()), (200, Value::Null), "{v}");
+    started(&v);
+    until_working(&env, &new).await;
 
-    // Close: done in kwant only
+    // Close: done in kwant only, at work too
     let (s, v) = mv(new.clone(), "close").await;
     assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["closed_resolution"].as_str()), (200, Some(dev_jira::CLOSED), Some("done")), "{v}");
+    assert_eq!(brief_state(&env, &new).await, dev_jira::CLOSED);
     let (s, v) = mv(new.clone(), "close").await;
     assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("wrong_state")), "{v}");
     assert_eq!(m.issue(&new).unwrap().status, "To Do", "Close changes nothing in Jira");
@@ -686,16 +791,19 @@ async fn a_ticket_at_work_shows_its_branch_pr_and_lead() {
     let _g = gateway_to(&m);
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
-    connect(&env, &m, json!({})).await;
-    poll(&env).await;
+    // Handed over before connecting: it waits for Start
     let key = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    let team_id = connect_team(&env, &m).await;
     poll(&env).await;
+    assert_eq!(ticket(&env, &key).await.state, dev_jira::WAITING);
     let (_, v) = call(&env.app, "GET", &uri("tickets"), None).await;
     assert_eq!(v["tickets"][0]["work"], Value::Null, "no work before work starts: {v}");
 
-    for to in [dev_jira::READING, dev_jira::BRIEF_READY, dev_jira::WORKING] {
-        assert!(env.state.db.set_dev_ticket_state(&space(), &key, to).await.unwrap(), "{to}");
-    }
+    clear(&m, &key);
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/start")), None).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    started(&v);
+    until_working(&env, &key).await;
     let facts = json!({"head_branch": format!("feat/{key}-dark-mode"), "title": "Dark mode", "links": {"pr": "https://github.com/acme/trail/pull/7"}});
     env.state.db.insert_dev_card(&space(), kwnt::db::dev_mode::REVIEW, "pr/7", "abc1234", &facts.to_string()).await.unwrap();
     let (s, v) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
@@ -703,7 +811,12 @@ async fn a_ticket_at_work_shows_its_branch_pr_and_lead() {
     let w = &v["ticket"]["work"];
     assert_eq!(w["branch"].as_str(), Some(format!("feat/{key}-dark-mode").as_str()), "{v}");
     assert_eq!((w["pr_url"].as_str(), w["head_sha"].as_str()), (Some("https://github.com/acme/trail/pull/7"), Some("abc1234")), "{v}");
-    assert_eq!((w["builder_ids"].clone(), w["plan"].clone(), w["matches"].clone()), (json!([]), json!([]), Value::Null), "the stub seam has no mission: {v}");
+    // The work is the brief's mission: the team, its lead building, no verdict yet
+    let lead = env.state.db.get_team(&team_id).await.unwrap().unwrap().lead_kwant_id;
+    assert_eq!((w["team_id"].as_str(), w["lead_id"].as_str(), w["matches"].clone()), (Some(team_id.as_str()), Some(lead.as_str()), Value::Null), "{v}");
+    let (_, b) = call(&env.app, "GET", &uri(&format!("tickets/{key}/brief")), None).await;
+    let mission = b["mission_id"].as_str().unwrap_or_else(|| panic!("no mission: {b}"));
+    assert_eq!(env.state.db.get_mission(mission).await.unwrap().unwrap().status, "active");
     let (_, list) = call(&env.app, "GET", &uri("tickets"), None).await;
     assert_eq!(list["tickets"][0]["work"], *w, "the list and the ticket agree");
 }
@@ -722,11 +835,12 @@ async fn a_failed_row_says_why_in_kwants_words_and_never_repeats_jira() {
     let _g = gateway_to(&m);
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
-    connect(&env, &m, json!({})).await;
+    connect_team(&env, &m).await;
     poll(&env).await;
     let key = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    clear(&m, &key);
     poll(&env).await;
-    assert_eq!(ticket(&env, &key).await.state, dev_jira::PICKED_UP);
+    until_working(&env, &key).await;
     let (_, v) = call(&env.app, "GET", &uri("tickets"), None).await;
     assert_eq!(v["tickets"][0]["error"], Value::Null, "only a failed row carries error: {v}");
 
@@ -738,6 +852,7 @@ async fn a_failed_row_says_why_in_kwants_words_and_never_repeats_jira() {
     assert_eq!(r["failed"], 1, "{r}");
     let row = ticket(&env, &key).await;
     assert_eq!((row.state.as_str(), row.error_code.as_deref()), (dev_jira::FAILED, Some("jira_unreachable")));
+    assert_eq!(brief_state(&env, &key).await, dev_jira::FAILED, "the brief row fails with it");
     let (_, list) = call(&env.app, "GET", &uri("tickets"), None).await;
     let (_, one) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
     let (_, site) = call(&env.app, "GET", &uri("jira"), None).await;
@@ -764,13 +879,13 @@ async fn a_failed_row_says_why_in_kwants_words_and_never_repeats_jira() {
     // Moving on clears it: Retry puts it back in the queue with no error
     m.heal("/search/jql");
     let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/retry")), None).await;
-    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["error"].clone()), (200, Some(dev_jira::PICKED_UP), Value::Null), "{v}");
+    assert_eq!((s.as_u16(), v["ticket"]["error"].clone()), (200, Value::Null), "{v}");
+    started(&v);
     assert_eq!(ticket(&env, &key).await.error_code, None);
+    until_working(&env, &key).await;
 
     // A writer that names no reason still gets a sentence
-    for to in [dev_jira::READING, dev_jira::FAILED] {
-        assert!(env.state.db.set_dev_ticket_state(&space(), &key, to).await.unwrap(), "{to}");
-    }
+    assert!(env.state.db.set_dev_ticket_state(&space(), &key, dev_jira::FAILED).await.unwrap());
     let (_, one) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
     assert_eq!(one["ticket"]["error"], json!({"code": "failed", "message": store::FailCode::Failed.message()}), "{one}");
     no_token_anywhere(&env, &m).await;
@@ -828,13 +943,12 @@ async fn work_says_when_the_pr_merged_and_null_before() {
     let _g = gateway_to(&m);
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
-    connect(&env, &m, json!({})).await;
+    connect_team(&env, &m).await;
     poll(&env).await;
     let key = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    clear(&m, &key);
     poll(&env).await;
-    for to in [dev_jira::READING, dev_jira::BRIEF_READY, dev_jira::WORKING] {
-        assert!(env.state.db.set_dev_ticket_state(&space(), &key, to).await.unwrap(), "{to}");
-    }
+    until_working(&env, &key).await;
     let review = json!({"head_branch": format!("feat/{key}-dark-mode"), "title": "Dark mode", "links": {"pr": "https://github.com/acme/trail/pull/7"}});
     env.state.db.insert_dev_card(&space(), kwnt::db::dev_mode::REVIEW, "pr/7", "abc1234", &review.to_string()).await.unwrap();
     let (_, v) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
