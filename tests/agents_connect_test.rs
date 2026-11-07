@@ -333,6 +333,11 @@ async fn ask_round_trip_with_the_mock_engine() {
     assert!(calls.iter().any(|c| c["tool"] == "ask" && c["outcome"] == "ok" && c["bot"] == "Architect"), "{act}");
     assert!(calls.iter().any(|c| c["tool"] == "ask" && c["outcome"] == "refused"), "{act}");
     assert!(calls.iter().all(|c| c["connection_name"] == "Claude Code"));
+    // What the agent typed is kept short in the trail
+    let (_, err, _) = tool(&env, &token, "ask", json!({"bot": "x".repeat(5000), "message": "hi"})).await;
+    assert!(err);
+    let (_, act) = call(&env.app, "GET", &format!("/api/agent-connections/{conn_id}/activity"), None).await;
+    assert_eq!(act["calls"][0]["bot"].as_str().unwrap().chars().count(), 80);
     assert!(!act.to_string().contains(&token));
 }
 

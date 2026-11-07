@@ -42,6 +42,8 @@ const DEFAULT_WAIT_SECONDS: u64 = 120;
 const MAX_WAIT_SECONDS: u64 = 300;
 /// How much of a thread's last reply `list_threads` shows.
 const LIST_REPLY_CHARS: usize = 500;
+/// A bot name or id the agent typed, as the activity trail keeps it.
+const MAX_LABEL_CHARS: usize = 80;
 const POLL: Duration = Duration::from_millis(250);
 
 /// The line every connected agent's turn gets after its message (see [`crate::drivers::AGENT_NOTE`]).
@@ -374,7 +376,6 @@ pub async fn endpoint(State(state): State<AppState>, headers: HeaderMap, body: B
     let Some(conn) = conn else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
-    // The connection may have lost every space it was made for
     let Ok(msg) = serde_json::from_slice::<Value>(&body) else {
         return (StatusCode::BAD_REQUEST, Json(json!({"jsonrpc": "2.0", "id": null, "error": {"code": -32700, "message": "parse error"}})))
             .into_response();
@@ -442,7 +443,7 @@ async fn call_tool(
             let bot = match args["bot"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
                 Some(b) => match resolve_bot(state, conn, b).await {
                     Ok(k) => Some(k),
-                    Err(e) => return (tool_refused(id, &e), Some(b.to_string()), false),
+                    Err(e) => return (tool_refused(id, &e), Some(cut(b, MAX_LABEL_CHARS)), false),
                 },
                 None => None,
             };
@@ -543,7 +544,8 @@ async fn list_threads(state: &AppState, conn: &AgentConnection, bot: Option<&Kwa
 /// waits up to `wait_seconds` for it.
 async fn ask(state: &AppState, conn: &AgentConnection, args: &Value, id: Value) -> (Response, Option<String>, bool) {
     let wanted = args["bot"].as_str().map(str::trim).unwrap_or("");
-    let bot_label = (!wanted.is_empty()).then(|| wanted.to_string());
+    // What the agent typed goes into the activity trail: kept short
+    let bot_label = (!wanted.is_empty()).then(|| cut(wanted, MAX_LABEL_CHARS));
     if wanted.is_empty() {
         return (tool_refused(id, "bot is required."), None, false);
     }
