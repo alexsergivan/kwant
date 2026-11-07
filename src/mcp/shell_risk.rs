@@ -407,6 +407,7 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
             _ => Err(format!("`{name}` runs commands kwnt can't see")),
         },
         "bun" => packages(name, args, ctx).and_then(|()| interpreter(name, args, ctx)),
+        "deno" => new_package(name, args).and_then(|()| interpreter(name, args, ctx)),
         _ if INTERPRETERS.contains(&name) || name.starts_with("python3.") => interpreter(name, args, ctx),
         "git" => git(args, ctx),
         "npm" | "pnpm" | "yarn" => packages(name, args, ctx),
@@ -415,6 +416,7 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
             if let Some(sub) = args.iter().find(|a| matches!(a.text.as_str(), "publish" | "login" | "logout" | "owner" | "yank" | "install")) {
                 return Err(format!("`cargo {}` reaches outside the folder", sub.text));
             }
+            new_package(name, args)?;
             all_paths_inside(args, ctx)
         }
         "pipx" => Err("`pipx` installs or runs packages outside the folder".into()),
@@ -426,6 +428,7 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
                 // Installs land outside the folder (`pip install`, `go install`, `uv tool`)
                 return Err(format!("`{name} {}` reaches outside the folder", sub.text));
             }
+            new_package(name, args)?;
             all_paths_inside(args, ctx)
         }
         "make" | "gmake" => {
@@ -676,7 +679,82 @@ fn packages(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
             return Err(format!("`{name} {}` can download and run a package's code", a.text));
         }
     }
+    new_package(name, args)?;
     all_paths_inside(args, ctx)
+}
+
+/// Commands that add a package the project doesn't list yet (`npm install left-pad`, `cargo add
+/// serde`, `go get x`): the package is downloaded and its code runs, at install (npm-style install
+/// scripts) or when the project builds. Installing what the project already lists (`npm install`,
+/// `npm ci`, `pnpm install`, `yarn`, `bun install`) and a local path (`npm install ./lib`, judged
+/// by `all_paths_inside`) don't count. pip, gem, `uv pip` and `poetry install` ask for any install.
+fn new_package(name: &str, args: &[Word]) -> Verdict {
+    // (subcommands that add, options that take a value, options that fetch from elsewhere)
+    let (verbs, valued, fetches): (&[&str], &[&str], &[&str]) = match name {
+        "npm" => (
+            &["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "install-test", "it"],
+            &["-w", "--workspace", "--prefix", "--registry", "--tag", "--omit", "--include", "--cache", "--userconfig", "--install-strategy"],
+            &[],
+        ),
+        "pnpm" => (&["add", "install", "i"], &["-C", "--dir", "-F", "--filter", "--registry"], &[]),
+        "yarn" => (&["add"], &["--cwd", "--registry", "--modules-folder"], &[]),
+        "bun" => (&["add", "a", "install", "i"], &["--cwd", "--registry", "-c", "--config", "--backend", "--cache-dir"], &[]),
+        "deno" => (&["add", "install", "i"], &["-c", "--config", "--lock", "--cert"], &[]),
+        "cargo" => (
+            &["add"],
+            &[
+                "-F", "--features", "--rename", "-p", "--package", "--manifest-path", "--registry", "--branch", "--tag", "--rev",
+                "--path", "--target", "--config", "-Z", "--color", "--lockfile-path",
+            ],
+            &["--git"],
+        ),
+        "uv" => (
+            &["add"],
+            &[
+                "--group", "--optional", "--extra", "--package", "--index", "--default-index", "--index-url", "--extra-index-url",
+                "--project", "--directory", "--python", "-p", "--marker", "-m", "--tag", "--branch", "--rev", "--bounds", "--script",
+                "--config-file", "--cache-dir", "-c", "--constraints",
+            ],
+            &["-r", "--requirements"],
+        ),
+        "poetry" => (
+            &["add"],
+            &["-G", "--group", "-E", "--extras", "--source", "-C", "--directory", "-P", "--project", "--python", "--platform", "-m", "--markers"],
+            &[],
+        ),
+        "go" => (&["get"], &["-C", "-modfile", "-tags"], &[]),
+        _ => return Ok(()),
+    };
+    // The words that aren't options or option values; the first (not a `+toolchain`) is the subcommand
+    let mut operands = vec![];
+    let (mut skip, mut rest) = (false, false);
+    for a in args {
+        let t = a.text.as_str();
+        if skip {
+            skip = false;
+        } else if rest || !t.starts_with('-') || t == "-" {
+            operands.push(t);
+        } else if t == "--" {
+            rest = true;
+        } else {
+            skip = !t.contains('=') && valued.contains(&t);
+        }
+    }
+    let mut operands = operands.into_iter().skip_while(|t| t.starts_with('+'));
+    let Some(verb) = operands.next().filter(|v| verbs.contains(v)) else {
+        return Ok(());
+    };
+    let local = |t: &str| t == "." || t == ".." || t.starts_with("./") || t.starts_with("../") || t.starts_with('/') || t.starts_with("file:");
+    let what = operands.find(|t| !local(t)).or_else(|| {
+        args.iter().map(|a| a.text.as_str()).find(|t| fetches.iter().any(|f| t == f || t.strip_prefix(f).is_some_and(|r| r.starts_with('='))))
+    });
+    match what {
+        Some(what) if matches!(name, "npm" | "pnpm" | "yarn" | "bun") => {
+            Err(format!("`{name} {verb} {what}` downloads a new package and runs its install scripts"))
+        }
+        Some(what) => Err(format!("`{name} {verb} {what}` downloads a new package, whose code runs when the project builds or runs")),
+        None => Ok(()),
+    }
 }
 
 /// grep-like tools: the pattern is not a path, and `-f`/`--file` names one. Short options are
@@ -1420,6 +1498,27 @@ mod tests {
         "rm -rf src/*",
         "rm -rf ./target",
         "cat src/a.rs",
+        // Installing what the project already lists, or a package from inside the folder
+        "npm install",
+        "npm i",
+        "npm ci",
+        "npm ci --omit dev",
+        "npm install --workspace src",
+        "npm --prefix src install",
+        "npm install ./src",
+        "npm i ../ws/src",
+        "pnpm install",
+        "pnpm i --frozen-lockfile",
+        "yarn",
+        "yarn install",
+        "yarn install --frozen-lockfile",
+        "bun install",
+        "bun install --frozen-lockfile",
+        "deno install",
+        "cargo add --path ./src",
+        "uv add ./src",
+        "go get ./...",
+        "go mod download",
     ];
 
     const ASKED: &[&str] = &[
@@ -1578,6 +1677,45 @@ mod tests {
         "sort --compress-program=sh src/x",
         "zip -T -TT 'sh -c id' out.zip src",
         "rustc -C linker=sh src/a.rs",
+        // Adding a package the project doesn't list yet
+        "npm install left-pad",
+        "npm i left-pad",
+        "npm add left-pad",
+        "npm install --save-dev left-pad",
+        "npm i -D @types/node",
+        "npm install -w src left-pad",
+        "npm --prefix src install left-pad",
+        "npm install left-pad ./src",
+        "npm install github:user/repo",
+        "npm install user/repo",
+        "npm install https://example.com/x.tgz",
+        "npm it left-pad",
+        "pnpm add left-pad",
+        "pnpm install left-pad",
+        "pnpm add -D left-pad",
+        "pnpm -C src add left-pad",
+        "yarn add left-pad",
+        "yarn add -D left-pad",
+        "bun add left-pad",
+        "bun a left-pad",
+        "bun install left-pad",
+        "deno add npm:chalk",
+        "deno install npm:chalk",
+        "cargo add serde",
+        "cargo add serde --features derive",
+        "cargo add -F derive serde",
+        "cargo +nightly add serde",
+        "cargo add --git https://github.com/x/y",
+        "cargo add --git=https://github.com/x/y",
+        "uv add requests",
+        "uv add --dev pytest",
+        "uv add -r requirements.txt",
+        "poetry add requests",
+        "poetry add --group dev pytest",
+        "go get github.com/x/y",
+        "go get -u golang.org/x/net",
+        "pip install -r requirements.txt",
+        "gem install rails",
     ];
 
     #[test]
@@ -1723,5 +1861,13 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(matches!(classify("echo $(id)", &ws), SmartVerdict::Ask(why) if why.contains("variable")));
+        assert_eq!(
+            classify("npm install left-pad", &ws),
+            SmartVerdict::Ask("`npm install left-pad` downloads a new package and runs its install scripts".into())
+        );
+        assert_eq!(
+            classify("cargo add serde --features derive", &ws),
+            SmartVerdict::Ask("`cargo add serde` downloads a new package, whose code runs when the project builds or runs".into())
+        );
     }
 }

@@ -344,7 +344,9 @@ pub fn identity_block(name: &str, with_tools: bool) -> String {
         Never use the engine's own scheduler, cron, loop or wake-up tools, reminders or push notifications, its memory files, \
         its remote or cloud sessions, or its ways of messaging other agents or sessions: they work outside kwant, where the person \
         can't see, approve or undo them. {own} If kwant gives you no tool for something, say so plainly instead of using the \
-        engine's version."
+        engine's version.\n\
+        When the person gives you a key, password or token, do what they asked with it, but never repeat it in full in a reply: \
+        call it by its name or its last 4 characters."
     )
 }
 
@@ -901,6 +903,18 @@ pub(crate) mod tests {
             let with_tools = access == BrowserAccess::Tools;
             assert_eq!(prompt.contains("`routine_create`"), with_tools, "{access:?}");
             assert_eq!(prompt.contains("Routines in kwant's sidebar"), !with_tools, "{access:?}");
+        }
+    }
+
+    /// Rigel's Compass trial (item D): a bot saved a key it was given and then pasted it back in full.
+    #[test]
+    fn every_turn_is_told_not_to_repeat_a_secret_back() {
+        let rule = "When the person gives you a key, password or token, do what they asked with it, but never repeat it in full in a reply: \
+            call it by its name or its last 4 characters.";
+        for access in [BrowserAccess::Tools, BrowserAccess::Shell, BrowserAccess::Unavailable] {
+            assert_eq!(input().format_system_prompt_with(access).matches(rule).count(), 1, "{access:?}");
+            // In the part that stays the same between turns, so it doesn't break the cache
+            assert!(input().system_prompt_parts(access).head.contains(rule), "{access:?}");
         }
     }
 
