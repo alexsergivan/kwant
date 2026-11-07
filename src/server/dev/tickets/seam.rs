@@ -162,41 +162,9 @@ pub async fn set_asked(state: &AppState, space_id: &str, key: &str, comment_id: 
     card && brief
 }
 
-/// The ticket key a branch or PR title carries (`TRAIL-102-orders-export`, "TRAIL-102: Orders
-/// export"): the first `PROJECT-123` at its start, upper-case.
-pub fn key_in(branch: &str, title: &str) -> Option<String> {
-    let at_start = |s: &str| -> Option<String> {
-        let s = s.trim().trim_start_matches("refs/heads/");
-        let s = s.rsplit('/').next().unwrap_or(s);
-        let project: String = s.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
-        if project.is_empty() || !project.chars().next()?.is_ascii_alphabetic() || project.len() > 30 {
-            return None;
-        }
-        let rest = s[project.len()..].strip_prefix('-')?;
-        let n: String = rest.chars().take_while(char::is_ascii_digit).collect();
-        if n.is_empty() || n.len() > 9 || rest[n.len()..].chars().next().is_some_and(|c| c.is_ascii_alphanumeric()) {
-            return None;
-        }
-        Some(format!("{}-{n}", project.to_ascii_uppercase()))
-    };
-    at_start(branch).or_else(|| at_start(title))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn keys_at_the_start_of_a_branch_or_title() {
-        assert_eq!(key_in("TRAIL-102-orders-export", ""), Some("TRAIL-102".into()));
-        assert_eq!(key_in("feature/TRAIL-102-x", ""), Some("TRAIL-102".into()));
-        assert_eq!(key_in("main", "TRAIL-7: Orders export"), Some("TRAIL-7".into()));
-        assert_eq!(key_in("trail-7-x", ""), Some("TRAIL-7".into()));
-        assert_eq!(key_in("fix-TRAIL-7", "Orders"), None, "only at the start");
-        assert_eq!(key_in("TRAIL-7a", ""), None);
-        assert_eq!(key_in("utf-8-names", ""), Some("UTF-8".into()), "looks like a key; no brief means no section");
-        assert_eq!(key_in("", ""), None);
-    }
 
     #[test]
     fn moves_follow_the_table() {

@@ -212,8 +212,8 @@ mod tests {
         assert_eq!(pr_title("TRAIL-102", "Orders\n export\t"), "TRAIL-102: Orders export");
         assert_eq!(pr_title("TRAIL-1", &"x".repeat(300)).chars().count(), MAX_TITLE);
         // The review finds the brief from either
-        assert_eq!(seam::key_in(&branch("TRAIL-102", "Orders export"), ""), Some("TRAIL-102".into()));
-        assert_eq!(seam::key_in("main", &pr_title("TRAIL-102", "Orders export")), Some("TRAIL-102".into()));
+        assert_eq!(super::super::store::key_in(Some(&branch("TRAIL-102", "Orders export")), ""), Some("TRAIL-102".into()));
+        assert_eq!(super::super::store::key_in(Some("main"), &pr_title("TRAIL-102", "Orders export")), Some("TRAIL-102".into()));
     }
 
     #[test]

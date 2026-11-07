@@ -921,8 +921,14 @@ pub struct TicketCheck {
 
 /// The ticket a review card's PR works on, when its branch or title carries a key with a brief.
 pub async fn ticket_check(state: &crate::server::AppState, space_id: &str, facts: &crate::server::dev::facts::DevFacts) -> Option<TicketCheck> {
-    let key = super::seam::key_in(facts.head_branch.as_deref().unwrap_or(""), &facts.title)?;
-    let row = state.db.ticket_brief(space_id, &key).await.ok().flatten()?;
+    let mut row = None;
+    for key in super::store::keys_in(facts.head_branch.as_deref(), &facts.title) {
+        if let Ok(Some(r)) = state.db.ticket_brief(space_id, &key).await {
+            row = Some(r);
+            break;
+        }
+    }
+    let row = row?;
     let brief: Brief = serde_json::from_str(row.brief.as_deref()?).ok()?;
     check_from(row.key, &row.url, &brief, &super::seam::origins(state, space_id, &row.site_id).await)
 }
