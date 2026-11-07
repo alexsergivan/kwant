@@ -83,13 +83,35 @@ pub fn prompt(line: &str, skill_name: &str, body: &str, inputs: &[(String, Strin
     )
 }
 
-/// How a trial turn ended: `done`, `cancelled` (the person pressed Stop) or `failed`.
-pub fn outcome(ok: bool, cancelled: bool) -> &'static str {
-    match (ok, cancelled) {
-        (true, _) => "done",
-        (false, true) => "cancelled",
-        (false, false) => "failed",
+/// How a trial turn ended: `done` only for a turn that ended with a reply; `cancelled` when the
+/// person pressed Stop; `failed` for a failure note, or a "reply" that is only the engine's own
+/// error (see [`engine_error`]).
+pub fn outcome(reply: &Result<String, String>, cancelled: bool) -> &'static str {
+    match (reply, cancelled) {
+        (Ok(text), _) if engine_error(text) => "failed",
+        (Ok(_), _) => "done",
+        (Err(_), true) => "cancelled",
+        (Err(_), false) => "failed",
     }
+}
+
+/// Longest text taken as an engine's error line rather than a reply.
+const ERROR_LINE_MAX_CHARS: usize = 1000;
+
+/// Whether a turn's text is the engine reporting an error, not an answer. The Claude CLI ends a
+/// turn whose API call failed with its error as the result ("API Error: 500 …", "API Error
+/// (Request timed out.)"), which the driver hands on as the reply text; a usage-limit line, the
+/// driver's own "Execution error" line and an empty text aren't replies either. Only short texts
+/// that start that way count, so an answer that mentions an API error is still an answer.
+pub fn engine_error(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() || crate::profiles::classify::is_limit_line(t) {
+        return true;
+    }
+    if t.chars().count() > ERROR_LINE_MAX_CHARS || t.lines().filter(|l| !l.trim().is_empty()).count() > 3 {
+        return false;
+    }
+    t.starts_with("API Error") || (t.starts_with("⚠️ [") && t.contains("] Execution error for "))
 }
 
 /// `meta` with `trial` set when it has none, and `trial.outcome` set when `outcome` is given.
@@ -177,7 +199,7 @@ pub async fn start(state: &AppState, skill_id: &str, given: HashMap<String, Stri
         // a failure note carries it when the chat refreshes on the turn's error, not only after
         opts.failure_meta = Some(json!({"trial": trial}));
         let reply = try_kwant_turn(&scope, &b, p, opts).await;
-        let outcome = outcome(reply.is_ok(), scope.cancel_token.is_cancelled());
+        let outcome = outcome(&reply, scope.cancel_token.is_cancelled());
         mark_the_rest(&st, &b.id, &after, &trial, outcome).await;
         let _ = st.event_sender.send(RuntimeEvent::TrialEnded { skill_id, recording_id, bot: b.id.clone(), outcome: outcome.into() });
     });
@@ -204,10 +226,22 @@ mod tests {
 
     #[test]
     fn a_trial_ends_done_failed_or_cancelled() {
-        assert_eq!(outcome(true, false), "done");
-        assert_eq!(outcome(true, true), "done");
-        assert_eq!(outcome(false, true), "cancelled");
-        assert_eq!(outcome(false, false), "failed");
+        let ok = |t: &str| Ok::<String, String>(t.into());
+        let err = Err::<String, String>("stopped".into());
+        assert_eq!(outcome(&ok("Here is the report."), false), "done");
+        assert_eq!(outcome(&ok("Here is the report."), true), "done");
+        assert_eq!(outcome(&err, true), "cancelled");
+        assert_eq!(outcome(&err, false), "failed");
+        // an engine/API error the driver handed on as text is a failure, not a reply
+        assert_eq!(outcome(&ok("API Error: 500 test stub"), false), "failed");
+        assert_eq!(outcome(&ok("API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}"), false), "failed");
+        assert_eq!(outcome(&ok("API Error (Request timed out.)"), false), "failed");
+        assert_eq!(outcome(&ok("⚠️ [Lin] Execution error for claude CLI: No such file"), false), "failed");
+        assert_eq!(outcome(&ok("Claude AI usage limit reached|1794060000"), false), "failed");
+        assert_eq!(outcome(&ok("  \n"), false), "failed");
+        // a real answer that mentions an error stays done
+        assert_eq!(outcome(&ok("The page said API Error: 500, so I stopped."), false), "done");
+        assert_eq!(outcome(&ok(&format!("API Error: 500\n{}", "step\n".repeat(5))), false), "done");
     }
 
     #[test]

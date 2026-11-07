@@ -163,9 +163,10 @@ impl StageRecorder {
     }
 
     /// This socket took Take over: it's the stage's recorder from now on. A recording still live
-    /// on the stage isn't this socket's: Take over ended in that other window (or with no window
-    /// left) without Hand back, so it stops with `closed`, its steps kept for review, and that
-    /// window takes its recorder off. The first reason wins.
+    /// on the stage isn't this socket's. That's defensive only: a second window can't take over
+    /// while the first holds control (the lease), so this runs only after the first window's
+    /// connection dropped, before its socket noticed. It stops with `closed`, as the drop would,
+    /// its steps kept for review, and that window takes its recorder off. The first reason wins.
     pub async fn claim(&mut self) {
         let (tx, rx) = mpsc::unbounded_channel();
         let old = links().insert(self.stage.clone(), Link { socket: self.socket, tx });
@@ -219,7 +220,9 @@ impl StageRecorder {
                 let open = self.state.db.get_recording(&recording_id).await.ok().flatten();
                 let Some(rec) = open.filter(|r| r.state == "recording" && r.stage == self.stage) else { return vec![] };
                 self.live = Some(rec.id.clone());
-                self.last_page = None;
+                // Keep recording: the page the recording last recorded, so going on from the same
+                // page adds no second page step (a page changed while it was stopped still does)
+                self.last_page = self.last_page_step(&rec.id).await;
                 self.start_pending = start_url.is_some();
                 let mut acts = vec![Act::Install, Act::Send(state_frame(&rec))];
                 if let Some(url) = start_url {
@@ -261,6 +264,16 @@ impl StageRecorder {
             Some(url) => self.on_navigated(url).await,
             None => vec![],
         }
+    }
+
+    /// The recording's last page step that isn't deleted, as `(origin, path)`.
+    async fn last_page_step(&self, id: &str) -> Option<(String, String)> {
+        let steps = self.state.db.list_steps(id, now()).await.ok()?;
+        steps
+            .into_iter()
+            .rev()
+            .filter(|s| s.deleted_at.is_none() && s.kind == "page")
+            .find_map(|s| Some((s.origin?, s.path?)))
     }
 
     /// A top-level page loaded: a `page` step, unless it's the page already recorded.

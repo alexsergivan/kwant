@@ -534,6 +534,82 @@ async fn a_failed_trial_marks_its_failure_note_before_the_chat_refreshes() {
 }
 
 #[tokio::test]
+async fn a_trial_that_ends_with_an_api_error_is_failed_in_the_event_and_the_last_message() {
+    let env = env().await;
+    let rec = stopped_recording(&env, &format!("REPLYTEXT:{}", b64(&canned_draft()))).await;
+    let skill = written_skill(&env, &rec).await;
+    let skill_id = skill["id"].as_str().unwrap().to_string();
+    let meta = |m: &kwnt::db::models::Message| serde_json::from_str::<Value>(m.meta.as_deref().unwrap_or("{}")).unwrap();
+    let try_uri = format!("/api/show-once/skills/{skill_id}/try");
+    // As claude's own error result, and as plain text
+    for marker in ["APIERROR:trialjson", "APIERRORPLAIN:trialplain"] {
+        let mut events = env.state.event_sender.subscribe();
+        let mut tried = false;
+        for _ in 0..300 {
+            let (s, v) = call(&env.app, "POST", &try_uri, Some(json!({"inputs": {"date_range": marker}}))).await;
+            if s == StatusCode::ACCEPTED {
+                tried = true;
+                break;
+            }
+            assert_eq!(v["error"], "bot_busy", "{v}");
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(tried, "{marker}");
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                let e = match events.recv().await {
+                    Ok(kwnt::RuntimeEvent::Scoped { event, .. }) => Ok(*event),
+                    e => e,
+                };
+                match e {
+                    Ok(kwnt::RuntimeEvent::TrialEnded { outcome, skill_id: s, .. }) if s == skill_id => break outcome,
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(e) => panic!("{e}"),
+                }
+            }
+        })
+        .await
+        .expect("show_once_trial_ended");
+        assert_eq!(ended, "failed", "{marker}: the SSE event");
+        // The trial's last message is what the engine said, and it carries the same outcome
+        let last = messages(&env, &env.a).await.into_iter().rev().find(|m| m.sender_role != "user").unwrap();
+        assert!(last.text.contains("API Error: 500 test stub"), "{marker}: {}", last.text);
+        assert_eq!(meta(&last)["trial"]["skill_id"], skill_id.as_str(), "{marker}: {:?}", last.meta);
+        assert_eq!(meta(&last)["trial"]["outcome"], "failed", "{marker}: {:?}", last.meta);
+    }
+    // A trial that ends with a reply is still done
+    let mut events = env.state.event_sender.subscribe();
+    let reply = format!("REPLYTEXT:{}", b64("Here is the weekly report."));
+    loop {
+        let (s, v) = call(&env.app, "POST", &try_uri, Some(json!({"inputs": {"date_range": reply}}))).await;
+        if s == StatusCode::ACCEPTED {
+            break;
+        }
+        assert_eq!(v["error"], "bot_busy", "{v}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        loop {
+            let e = match events.recv().await {
+                Ok(kwnt::RuntimeEvent::Scoped { event, .. }) => Ok(*event),
+                e => e,
+            };
+            if let Ok(kwnt::RuntimeEvent::TrialEnded { outcome, skill_id: s, .. }) = e {
+                if s == skill_id {
+                    break outcome;
+                }
+            }
+        }
+    })
+    .await
+    .expect("show_once_trial_ended");
+    assert_eq!(ended, "done");
+    let last = messages(&env, &env.a).await.into_iter().rev().find(|m| m.sender_role != "user").unwrap();
+    assert_eq!(last.text, "Here is the weekly report.");
+    assert_eq!(meta(&last)["trial"]["outcome"], "done", "{:?}", last.meta);
+}
+
+#[tokio::test]
 async fn another_window_taking_over_stops_the_recording_as_closed() {
     use kwnt::server::show_once::stage::{Act, Cmd, StageRecorder};
     let env = env().await;
@@ -778,6 +854,46 @@ async fn every_stop_takes_the_pending_edit_first_masked_and_within_the_cap() {
     let (done, wait) = Done::new();
     assert!(stage.on_cmd(Cmd::Stop { recording_id: id, reason: "stop".into(), done }).await.is_empty());
     assert!(wait.await.is_ok());
+}
+
+#[tokio::test]
+async fn keep_recording_on_the_same_page_adds_no_second_page_step() {
+    use kwnt::server::show_once::stage::{Act, Cmd, StageRecorder};
+    let env = env().await;
+    let orders = "http://127.0.0.1:9483/shop/orders.html";
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 41);
+    let id = live_recording(&env, &mut stage).await;
+    assert!(stage.on_installed(orders).await.iter().any(is_step));
+    // Stop, then Keep recording through the route: the stage gets Begin with no start_url
+    async fn resume(env: &Env, stage: &mut StageRecorder, id: &str) {
+        stage.stop_now("stop").await;
+        let (s, v) = call(&env.app, "POST", &format!("/api/show-once/recordings/{id}/resume"), None).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        let cmd = next_cmd_for(stage, id).await;
+        assert!(matches!(&cmd, Cmd::Begin { recording_id, start_url: None } if recording_id == id), "{cmd:?}");
+        let acts = stage.on_cmd(cmd).await;
+        assert!(acts.contains(&Act::Install), "{acts:?}");
+    }
+
+    // Keep recording on the page it stopped on: no second page step, also after the §3 URL rules
+    // (a query or a fragment isn't part of a page)
+    resume(&env, &mut stage, &id).await;
+    assert!(stage.on_installed(orders).await.is_empty());
+    assert!(stage.on_navigated(&format!("{orders}?tab=2#top")).await.is_empty());
+    assert_eq!(steps_of(&env, &id).await, vec![("note".into(), None), ("page".into(), Some("/shop/orders.html".into()))]);
+
+    // The page changed while it was stopped: that page is a step, as before
+    resume(&env, &mut stage, &id).await;
+    assert!(stage.on_installed(LOGIN).await.iter().any(is_step));
+    let pages = vec![("note".into(), None), ("page".into(), Some("/shop/orders.html".into())), ("page".into(), Some("/shop/login.html".into()))];
+    assert_eq!(steps_of(&env, &id).await, pages);
+
+    // Back on the first page after that: the last page step is login, so orders is a step again
+    resume(&env, &mut stage, &id).await;
+    assert!(stage.on_installed(orders).await.iter().any(is_step));
+    assert_eq!(steps_of(&env, &id).await.last().unwrap().1.as_deref(), Some("/shop/orders.html"));
+    // three page steps (step_count leaves the note out)
+    assert_eq!(env.state.db.get_recording(&id).await.unwrap().unwrap().step_count, 3);
 }
 
 /// The stage's next command about recording `id`. Discard tells every linked stage (tests run in
