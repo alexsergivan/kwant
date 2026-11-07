@@ -283,6 +283,9 @@ fn main() {
     if std::env::args().any(|a| a == "--check") {
         std::process::exit(check());
     }
+    if std::env::args().any(|a| a == "--serve-headless") {
+        std::process::exit(serve_headless());
+    }
 
     let demo = std::env::args().any(|a| a == "--demo-nudge");
     let (config, places) = if demo { demo_start() } else { normal_start() };
@@ -1469,6 +1472,31 @@ fn check() -> i32 {
             eprintln!("kwant --check: /api/health never answered on port {port}");
             1
         }
+    }
+}
+
+/// `--serve-headless`: only kwant, no window or tray, on 127.0.0.1 with `KWNT_PORT` and
+/// `KWNT_DATA_DIR` (both required), until it is stopped. CI runs it as a second server for the
+/// side-by-side smoke test.
+fn serve_headless() -> i32 {
+    tracing_subscriber::fmt().with_env_filter("info").init();
+    let port = std::env::var("KWNT_PORT").ok().and_then(|p| p.parse::<u16>().ok());
+    let data_dir = std::env::var_os("KWNT_DATA_DIR").map(PathBuf::from);
+    let (Some(port), Some(data_dir)) = (port, data_dir) else {
+        eprintln!("kwant --serve-headless: set KWNT_PORT and KWNT_DATA_DIR");
+        return 2;
+    };
+    let config = kwnt::Config { data_dir, host: "127.0.0.1".to_string(), port, laya_managed: false, ..Default::default() };
+    let _server = start_server(config);
+    match startup::wait_for_health(port, Duration::from_secs(60)) {
+        Some(body) => println!("kwant --serve-headless: /api/health on port {port}: {body}"),
+        None => {
+            eprintln!("kwant --serve-headless: /api/health never answered on port {port}");
+            return 1;
+        }
+    }
+    loop {
+        std::thread::park();
     }
 }
 

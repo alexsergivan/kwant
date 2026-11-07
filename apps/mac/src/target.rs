@@ -246,6 +246,8 @@ impl Saved {
         }
     }
 
+    /// Only the migration tests write the old file now; the app moves it to desktop-places.json.
+    #[cfg(test)]
     pub fn save(&self, data_dir: &Path) -> std::io::Result<()> {
         let v = match self {
             Saved::Remote(origin) => serde_json::json!({ "mode": "remote", "origin": origin.as_str() }),
