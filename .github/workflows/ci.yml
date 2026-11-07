@@ -58,6 +58,41 @@ jobs:
       - name: Script tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
+  # O9, the new-computer test on every release: kwnt starts as a brand-new user (empty HOME, `env -i`, a bare PATH
+  # with no AI tools), and the job checks that the first-run welcome shows, that the one-click Claude Code install
+  # starts and finishes against a stand-in download (the real one is never fetched: the fake curl refuses every
+  # other URL), and that the sign-in starts. scripts/release_required_checks.txt lists it, so the release gate
+  # (the release script reads that list) refuses a release commit where this job isn't green.
+  # The welcome is found by CARD in scripts/fresh_machine_test.py; O2's Get started card changes that, not the job.
+  fresh-machine:
+    name: fresh-machine
+    runs-on: ubuntu-latest
+    needs: frontend
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      # The binary embeds frontend/dist, so the Rust build needs it
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: fresh-machine
+      - name: Build kwnt
+        run: cargo build --locked --bin kwnt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Only the driver: the page check uses the runner's own Chrome, no browser download
+      - name: Browser driver
+        run: npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/pw" playwright-core
+      - name: New computer (empty HOME, bare PATH, no AI tools, stand-in download)
+        env:
+          PW_CORE: ${{ runner.temp }}/pw/node_modules/playwright-core/index.mjs
+        run: python3 scripts/fresh_machine_test.py --kwnt target/debug/kwnt --browser "$(command -v google-chrome || command -v chromium)"
+
   rust:
     name: rust
     runs-on: ubuntu-latest
