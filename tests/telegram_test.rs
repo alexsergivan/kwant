@@ -712,3 +712,91 @@ async fn a_turn_that_read_outside_text_or_that_kwant_started_has_no_allow_once()
         h.abort();
     }
 }
+
+/// The next `ApprovalWithdrawn` for `id`, as `(answered_via, outcome)`.
+async fn withdrawn(rx: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>, id: &str) -> (Option<String>, Option<String>) {
+    let wait = async {
+        loop {
+            match rx.recv().await {
+                Ok(e) => {
+                    if let RuntimeEvent::ApprovalWithdrawn { id: got, answered_via, outcome } = e.unscoped() {
+                        if got == id {
+                            return (answered_via.clone(), outcome.clone());
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(e) => panic!("events closed: {e}"),
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(20), wait).await.expect("ApprovalWithdrawn")
+}
+
+/// The approval's row in `GET /api/approvals`.
+async fn listed(env: &Env, id: &str) -> Value {
+    let (s, v) = call(&env.app, "GET", "/api/approvals", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    v.as_array().unwrap().iter().find(|a| a["id"] == id).cloned().unwrap_or_else(|| panic!("{id} not listed: {v}"))
+}
+
+// Iris's #403 gap: the app draws "✓ Allowed once from Telegram · 10:12" from the live event, and
+// a reload reads the same `answered_via` from GET /api/approvals
+#[tokio::test]
+async fn a_closed_card_says_where_and_how_it_was_answered() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 44).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let mut events = env.state.event_sender.subscribe();
+
+    // Allow once from Telegram: answered_via "telegram", outcome "allowed_once", live and on reload
+    let (tg_id, rx) = approval(&env, json!({"source": "mcp", "tool": "via_tg", "server": "files"})).await;
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>via_tg</code>")).await;
+    tg.tap(&bot, &PERSON, card.message_id(), &card.callbacks()[0]);
+    assert!(matches!(tokio::time::timeout(Duration::from_secs(20), rx).await.unwrap().unwrap(), ApprovalDecision::AllowOnce));
+    assert_eq!(withdrawn(&mut events, &tg_id).await, (Some("telegram".into()), Some("allowed_once".into())));
+    let row = listed(&env, &tg_id).await;
+    assert_eq!((row["answered_via"].as_str(), row["status"].as_str()), (Some("telegram"), Some("allowed_once")), "{row}");
+    tg.wait_edit(&bot, |c| c.message_id() == card.message_id() && c.text().contains("✓ Allowed once from Telegram · ")).await;
+
+    // Answered in kwant while the turn waits: no answered_via (null), its outcome, and Telegram's
+    // copy says "Answered in kwant", never "No longer waiting"
+    let (app_id, rx) = approval(&env, json!({"source": "mcp", "tool": "in_app", "server": "files"})).await;
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>in_app</code>")).await;
+    let (s, v) = call(&env.app, "POST", &format!("/api/approvals/{app_id}/resolve"), Some(json!({"decision": "deny"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(matches!(tokio::time::timeout(Duration::from_secs(20), rx).await.unwrap().unwrap(), ApprovalDecision::Deny));
+    assert_eq!(withdrawn(&mut events, &app_id).await, (None, Some("denied".into())));
+    let row = listed(&env, &app_id).await;
+    assert!(row["answered_via"].is_null(), "{row}");
+    assert_eq!(row["status"], "denied");
+    let edited = tg.wait_edit(&bot, |c| c.message_id() == card.message_id()).await;
+    assert!(edited.text().contains("✓ Answered in kwant · "), "{}", edited.text());
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(
+        tg.calls(&bot).iter().filter(|c| c.message_id() == card.message_id()).all(|c| !c.text().contains("No longer waiting")),
+        "an answered card never says it's no longer waiting"
+    );
+
+    // A late answer in kwant (the card outlived its turn's wait; Deny, so nothing resumes):
+    // answered_via null, outcome "denied"
+    let (late_id, _rx) = approval(&env, json!({"source": "mcp", "tool": "late", "server": "files"})).await;
+    tg.wait_send(&bot, |c| c.text().contains("<code>late</code>")).await;
+    assert!(env.state.broker.cancel(&late_id).await);
+    assert!(env.state.db.park_approval(&late_id, &json!({"direct_kwant_id": env.a})).await.unwrap());
+    let (s, v) = call(&env.app, "POST", &format!("/api/approvals/{late_id}/resolve"), Some(json!({"decision": "deny"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(withdrawn(&mut events, &late_id).await, (None, Some("denied".into())));
+
+    // Its turn ended while the card waited: outcome "cancelled", nobody answered it, and Telegram
+    // says it's no longer waiting
+    let waiting = ask_through_the_approver(&env, "turn-tg-ends", "ends_lookup", false);
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>ends_lookup</code>")).await;
+    let ended_id = env.state.broker.pending_ids().await.into_iter().next().expect("the card waits");
+    waiting.abort();
+    assert_eq!(withdrawn(&mut events, &ended_id).await, (None, Some("cancelled".into())));
+    assert_eq!(listed(&env, &ended_id).await["status"], "cancelled");
+    tg.wait_edit(&bot, |c| c.message_id() == card.message_id() && c.text().contains("No longer waiting")).await;
+}

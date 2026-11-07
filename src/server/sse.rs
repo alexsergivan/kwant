@@ -59,7 +59,7 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         | E::Activity { .. } => Vec::new(),
         // Never broadcast: the turn's stall watchdog and spend meter take them
         E::Progress | E::UsageSoFar { .. } => Vec::new(),
-        E::ApprovalRequired { id, .. } | E::ApprovalWithdrawn { id } => vec![Owner::Approval(id.clone())],
+        E::ApprovalRequired { id, .. } | E::ApprovalWithdrawn { id, .. } => vec![Owner::Approval(id.clone())],
         E::TurnComplete { kwant_id, .. } => contexts([kwant_id]),
         E::TurnStarted { kwant_id, context_id, thread_id, .. }
         | E::TurnEnded { kwant_id, context_id, thread_id, .. }
@@ -223,7 +223,7 @@ mod tests {
             E::Progress,
             E::UsageSoFar { fresh: 1 },
             E::ApprovalRequired { id: s("a"), tool_name: s("x"), details: json!({}) },
-            E::ApprovalWithdrawn { id: s("a") },
+            E::ApprovalWithdrawn { id: s("a"), answered_via: None, outcome: None },
             E::TurnComplete { tokens: 1, duration_ms: 1, kwant_id: Some(s("k")), profile_id: None },
             E::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: None, thread_id: None },
             E::TurnEnded { kwant_id: s("k"), context_id: None, outcome: s("completed"), turn_id: None, thread_id: None, quiet: false },

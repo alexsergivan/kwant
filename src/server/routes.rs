@@ -3938,13 +3938,10 @@ pub(crate) async fn resolve_approval_inner(
     if !resolved {
         // A card whose turn stopped waiting (or that kwant kept over a restart): a late answer,
         // and Allow resumes the work
-        let reply = super::mcp_runtime::resume_late_approval(state, ticket_id, decision, status_str).await;
+        let reply = super::mcp_runtime::resume_late_approval(state, ticket_id, decision, status_str, via).await;
         super::missions::listener::refresh_needs_you(state).await;
         return match reply {
             Some(mut reply) => {
-                if let Some(via) = via {
-                    let _ = state.db.set_answered_via("approvals", ticket_id, via).await;
-                }
                 super::telegram::bridge::approval_answered(state, ticket_id, via).await;
                 reply["ticket_id"] = json!(ticket_id);
                 reply["resolved"] = json!(true);
@@ -3970,6 +3967,9 @@ pub(crate) async fn resolve_approval_inner(
     super::missions::listener::refresh_needs_you(state).await;
     // Telegram edits its copy of the card ("✓ Answered in kwant")
     super::telegram::bridge::approval_answered(state, ticket_id, via).await;
+    // Every open copy of the card (another window, the app after a Telegram answer) closes,
+    // with where and how it was answered
+    let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::approval_withdrawn(ticket_id, status_str, via));
 
     (
         StatusCode::OK,

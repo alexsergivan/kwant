@@ -411,7 +411,11 @@ async fn on_event(state: &AppState, event: &RuntimeEvent) {
     match event {
         RuntimeEvent::QuestionUpdated { question } => on_question(state, question).await,
         RuntimeEvent::ApprovalRequired { id, tool_name, details } => on_approval(state, id, tool_name, details).await,
-        RuntimeEvent::ApprovalWithdrawn { id } => approval_closed(state, id, &format!("<i>{}</i>", text::escape(copy::NO_LONGER_WAITING))).await,
+        // An answered card's Telegram copy is edited by `approval_answered` (or the tap itself);
+        // only a card nobody answered says it's no longer waiting
+        RuntimeEvent::ApprovalWithdrawn { id, outcome, .. } if !RuntimeEvent::is_answer(outcome.as_deref()) => {
+            approval_closed(state, id, &format!("<i>{}</i>", text::escape(copy::NO_LONGER_WAITING))).await
+        }
         RuntimeEvent::HumanStepUpdated { step } => on_human_step(state, step).await,
         RuntimeEvent::Notify { kind, kwant_name, title, body, space_id: Some(space), channel_id, kwant_id, .. } => {
             on_notify(state, space, kind, kwant_name, title, body, channel_id.as_deref(), kwant_id).await
