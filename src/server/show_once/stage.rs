@@ -150,11 +150,14 @@ pub struct StageRecorder {
     /// Start opened a `start_url` that hasn't loaded yet: the page the browser was on before
     /// isn't a step, the start page is the first one.
     start_pending: bool,
+    /// The page the browser was on when Start opened a `start_url`: the first page step after
+    /// all if the start page can't be opened (S-F1).
+    before_start: Option<String>,
 }
 
 impl StageRecorder {
     pub fn new(state: AppState, stage: String, socket: u64) -> Self {
-        StageRecorder { state, stage, socket, rx: None, live: None, last_page: None, start_pending: false }
+        StageRecorder { state, stage, socket, rx: None, live: None, last_page: None, start_pending: false, before_start: None }
     }
 
     /// Whether a recording is live on this socket.
@@ -224,6 +227,7 @@ impl StageRecorder {
                 // page adds no second page step (a page changed while it was stopped still does)
                 self.last_page = self.last_page_step(&rec.id).await;
                 self.start_pending = start_url.is_some();
+                self.before_start = None;
                 let mut acts = vec![Act::Install, Act::Send(state_frame(&rec))];
                 if let Some(url) = start_url {
                     acts.push(Act::Navigate(url));
@@ -252,16 +256,21 @@ impl StageRecorder {
     /// Start opens a `start_url` next (B1), whose own load is the first page step.
     pub async fn on_installed(&mut self, url: &str) -> Vec<Act> {
         if self.start_pending {
+            self.before_start = Some(url.to_string());
             return vec![];
         }
         self.on_navigated(url).await
     }
 
-    /// The `start_url` couldn't be opened: the page the browser is on is the first step after all.
+    /// The `start_url` couldn't be opened: the page the browser stays on is the first step after
+    /// all. Chromium usually shows its own error page there (`chrome-error://…`, never recorded),
+    /// so that's the page the browser was on when Start was pressed (S-F1).
     pub async fn on_start_failed(&mut self, url: Option<&str>) -> Vec<Act> {
         self.start_pending = false;
-        match url {
-            Some(url) => self.on_navigated(url).await,
+        let before = self.before_start.take();
+        let stays_on = url.filter(|u| scrub::scrub(u).is_some()).map(str::to_string).or(before);
+        match stays_on {
+            Some(url) => self.on_navigated(&url).await,
             None => vec![],
         }
     }
@@ -279,8 +288,18 @@ impl StageRecorder {
     /// A top-level page loaded: a `page` step, unless it's the page already recorded.
     pub async fn on_navigated(&mut self, url: &str) -> Vec<Act> {
         let Some(id) = self.live.clone() else { return vec![] };
-        let Some(page) = scrub::scrub(url) else { return vec![] };
+        // the start page landed on Chromium's error page without Page.navigate saying so: the
+        // page before Start is the first step, as in on_start_failed
+        let url = match self.before_start.take() {
+            Some(before) if self.start_pending && url.starts_with("chrome-error:") => before,
+            before => {
+                self.before_start = before;
+                url.to_string()
+            }
+        };
+        let Some(page) = scrub::scrub(&url) else { return vec![] };
         self.start_pending = false;
+        self.before_start = None;
         let key = (page.origin.clone(), page.path.clone());
         if self.last_page.as_ref() == Some(&key) {
             return vec![];
