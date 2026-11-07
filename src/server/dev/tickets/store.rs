@@ -102,8 +102,8 @@ impl FailCode {
 
     pub fn message(self) -> String {
         match self {
-            FailCode::JiraUnreachable => format!("kwant couldn't reach Jira for {} hours, so it stopped work on this ticket.", super::pickup::UNREACHABLE_FAIL_HOURS),
-            FailCode::BriefFailed => "kwant couldn't turn this ticket into a brief.".into(),
+            FailCode::JiraUnreachable => format!("Couldn't reach Jira for {} hours, so work on this ticket stopped.", super::pickup::UNREACHABLE_FAIL_HOURS),
+            FailCode::BriefFailed => "Couldn't turn this ticket into a brief.".into(),
             FailCode::WorkFailed => "The work on this ticket stopped with an error.".into(),
             FailCode::Failed => "Work on this ticket stopped.".into(),
         }
@@ -159,7 +159,7 @@ pub enum Progress {
 /// The J9 text. Plain words, no mention, no bot's text: only kwant's own sentence and a PR link.
 pub fn progress_text(p: &Progress) -> String {
     match p {
-        Progress::Work => "kwant started work on this ticket. The pull request will carry the ticket key.".into(),
+        Progress::Work => "Work on this ticket started in kwant. The pull request will carry the ticket key.".into(),
         Progress::Pr(Some(url)) => format!("A pull request for this ticket is ready for review: {url}"),
         Progress::Pr(None) => "A pull request for this ticket is ready for review.".into(),
     }
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn progress_comments_are_kwants_own_words() {
-        assert!(progress_text(&Progress::Work).starts_with("kwant started work"));
+        assert!(progress_text(&Progress::Work).starts_with("Work on this ticket started in kwant."));
         assert_eq!(progress_text(&Progress::Pr(Some("https://github.com/o/r/pull/9".into()))), "A pull request for this ticket is ready for review: https://github.com/o/r/pull/9");
     }
 }

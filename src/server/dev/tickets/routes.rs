@@ -95,7 +95,7 @@ fn guard_code(s: StatusCode) -> &'static str {
 
 fn internal(e: impl std::fmt::Display) -> Response {
     tracing::warn!("jira: {e}");
-    coded(StatusCode::INTERNAL_SERVER_ERROR, "internal", "kwant could not read or save that")
+    coded(StatusCode::INTERNAL_SERVER_ERROR, "internal", "Couldn't read or save that.")
 }
 
 /// A source error as an answer. `Display` never carries a token, header or URL.
@@ -701,7 +701,7 @@ async fn prepare(state: &AppState, space: &SpaceId, key: &str, body: &AskBody) -
         return Err((StatusCode::CONFLICT, Json(json!({"error": "this ticket has no open questions", "code": "wrong_state", "state": ticket.state}))).into_response());
     }
     if ticket.asked_comment_id.is_some() {
-        return Err(coded(StatusCode::CONFLICT, "already_asked", "kwant already asked on this ticket; answer here, or wait for the reply"));
+        return Err(coded(StatusCode::CONFLICT, "already_asked", "Already asked on this ticket. Answer here, or wait for the reply."));
     }
     let rest = ask_rest(key, &body.questions, body.team.as_deref()).map_err(|m| coded(StatusCode::BAD_REQUEST, "bad_request", m))?;
     let writer = atlassian::client_for(state, &site).await.map_err(|e| source_error(&e))?;

@@ -283,7 +283,7 @@ impl AtlassianClient {
 pub async fn send(http: &reqwest::Client, method: Method, url: &str, auth: Option<HeaderValue>, body: Option<&Value>) -> Result<Value, SourceError> {
     let parsed = url::Url::parse(url).map_err(|_| SourceError::Invalid("that address can't be used".into()))?;
     let loopback = forge::loopback_allowed(url);
-    forge::check_url(&parsed, loopback).map_err(|_| SourceError::Unavailable("kwant doesn't connect to this address".into()))?;
+    forge::check_url(&parsed, loopback).map_err(|_| SourceError::Unavailable("This address isn't one kwant connects to.".into()))?;
     let path = parsed.path().to_string();
     let mut req = http.request(method.clone(), parsed).header(reqwest::header::ACCEPT, "application/json");
     if let Some(a) = auth {
@@ -294,7 +294,7 @@ pub async fn send(http: &reqwest::Client, method: Method, url: &str, auth: Optio
     }
     let res = match req.send().await {
         Ok(r) => r,
-        Err(e) if forge::refused_by_pin(&e) => return Err(SourceError::Unavailable("kwant doesn't connect to this address".into())),
+        Err(e) if forge::refused_by_pin(&e) => return Err(SourceError::Unavailable("This address isn't one kwant connects to.".into())),
         Err(e) if e.is_timeout() => return Err(SourceError::Unavailable("Jira didn't answer in time".into())),
         Err(_) => return Err(SourceError::Unavailable("Jira couldn't be reached".into())),
     };
