@@ -3474,7 +3474,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               <TeamNeedsTop
                 team={currentTeam}
                 canRun={canRun !== false}
-                personPosted={messages.some((m) => m.sender_role === 'user')}
+                personPosts={messages.filter((m) => m.sender_role === 'user').length}
                 refreshKey={settingsClosedCount}
                 onAddAccount={offerClaude ? openClaudeSignIn : openSettings}
                 onOpenNeed={(opens) => openTeamNeed(opens, currentTeam)}

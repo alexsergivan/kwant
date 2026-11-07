@@ -28,9 +28,11 @@ import {
 } from '../teams/teamTemplates';
 
 // ---------------------------------------------------------------------------------------------------
-// Which teams a template made. The team row says so (api.md §0.8: `created_from_template` and
-// `template_action_id`); a team made here is remembered at once so its card shows before the roster reload.
-// `GET /api/teams/:id/template-undo` is read only when the person presses Undo.
+// Which teams a template made. A team made here is remembered at once (localStorage) so its card shows
+// before the roster reload. Team rows don't say (api.md has no `created_from_template`; an older §0.8 row
+// that does is still read), so for a team with no local record the Needs card reads
+// `GET /api/teams/:id/template` (404 = not a template team). The same read gives `needs_done` (A5), and
+// Undo reads it again for the confirm.
 
 export interface MadeTeam {
   templateId: string | null;
@@ -80,6 +82,14 @@ export const madeFromRow = (t: ReadyTeam, local: MadeTeam | null): MadeTeam | nu
     actionId: t.template_action_id,
     undoUntil: at + DAY,
   };
+};
+
+/** `GET /api/teams/:id/template` → the made record, for a team this browser has no record of. */
+export const madeFromInfo = (i: TeamTemplateInfo, name: string): MadeTeam => {
+  const at = Date.parse(i.created_at);
+  const createdAt = Number.isFinite(at) ? at : Date.now();
+  const until = Date.parse(i.undo_until);
+  return { templateId: i.template_id, handle: i.removes?.handle || name, createdAt, actionId: i.action_id, undoUntil: Number.isFinite(until) ? until : createdAt + DAY };
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -366,9 +376,22 @@ const imapOf = (sources: LooseSource[]): NeedsContext['imap'] => {
   return { state: 'checking', detail: host(imap[0]) };
 };
 
-export function useNeedsContext(space: string, teamId: string, canRun: boolean, personPosted: boolean, refreshKey: unknown): NeedsContext {
+/** `personPosts`: how many messages the person has in this chat; a change re-reads `needs_done` (it never ticks by itself). */
+/** `wantsInfo`: read `GET /api/teams/:id/template` (for `needs_done`, and for the made record when this
+ * browser has none). `info` is undefined until it answers, null when the team isn't a template team. */
+export function useNeedsContext(
+  space: string,
+  teamId: string,
+  canRun: boolean,
+  personPosts: number,
+  refreshKey: unknown,
+  wantsInfo = true,
+): NeedsContext & { info: TeamTemplateInfo | null | undefined } {
   const [imap, setImap] = useState<NeedsContext['imap']>({ state: 'none' });
   const [apps, setApps] = useState<string[]>([]);
+  const [read, setRead] = useState<{ teamId: string; info: TeamTemplateInfo | null } | null>(null);
+  const info = read && read.teamId === teamId ? read.info : undefined;
+  const needsDone = info?.needs_done ?? [];
   const dev = useDevMode(space);
   const [seq, setSeq] = useState(0);
   useEffect(() => {
@@ -388,6 +411,18 @@ export function useNeedsContext(space: string, teamId: string, canRun: boolean, 
       live = false;
     };
   }, [space, refreshKey, seq]);
+  useEffect(() => {
+    if (!space || !teamId || !wantsInfo) return;
+    let live = true;
+    teamsApi.templateInfo(teamId, space).then(
+      (i) => live && setRead({ teamId, info: i }),
+      // 404 not_a_template_team: nothing to show. Other errors keep what was read before.
+      (e) => live && e instanceof TeamsError && e.status === 404 && setRead({ teamId, info: null }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [space, teamId, wantsInfo, personPosts, refreshKey, seq]);
   const row = dev?.repos.find((r) => r.team_id === teamId);
   const repo: NeedsContext['repo'] = !row
     ? { state: 'none' }
@@ -396,14 +431,14 @@ export function useNeedsContext(space: string, teamId: string, canRun: boolean, 
       : row.status === 'error' || row.poll_error
         ? { state: 'failed', detail: row.poll_error }
         : { state: 'checking', detail: row.repo };
-  return { canRun, imap, apps, repo, personPosted };
+  return { canRun, imap, apps, repo, needsDone, info };
 }
 
 export interface TeamNeedsTopProps {
   team: ReadyTeam;
   canRun: boolean;
-  /** The person has posted in this chat. */
-  personPosted: boolean;
+  /** How many messages the person has posted in this chat; a change re-reads `needs_done` (A5). */
+  personPosts: number;
   refreshKey?: unknown;
   onAddAccount: () => void;
   /** `loose_ends_imap`, `connections` or `dev_mode_setup`. */
@@ -411,13 +446,17 @@ export interface TeamNeedsTopProps {
 }
 
 /** The line and the Needs card at the top of a template team's chat; nothing for other teams. */
-export const TeamNeedsTop: React.FC<TeamNeedsTopProps> = ({ team, canRun, personPosted, refreshKey, onAddAccount, onOpenNeed }) => {
+export const TeamNeedsTop: React.FC<TeamNeedsTopProps> = ({ team, canRun, personPosts, refreshKey, onAddAccount, onOpenNeed }) => {
   const rt = useReadyTeams();
-  const m = rt?.made(team.id) ?? null;
+  const local = rt?.made(team.id) ?? null;
+  const localT = local?.templateId ? rt?.templates?.find((x) => x.id === local.templateId) : undefined;
+  // Read the server when this browser didn't make the team (team rows don't say, api.md §6), or for A5.
+  const wantsInfo = !local || !!localT?.needs.some((n) => n.opens === 'composer_prompt');
+  const ctx = useNeedsContext(rt?.space ?? '', team.id, canRun, personPosts, refreshKey, wantsInfo);
+  const m = local ?? (ctx.info ? madeFromInfo(ctx.info, team.name) : null);
   const t = m?.templateId ? rt?.templates?.find((x) => x.id === m.templateId) : undefined;
-  const ctx = useNeedsContext(rt?.space ?? '', team.id, canRun, personPosted, refreshKey);
   if (!rt || !m || !t) return null;
-  const undoable = Date.now() < (m.undoUntil || m.createdAt + 86_400_000);
+  const undoable = (ctx.info ? ctx.info.can_undo : true) && Date.now() < (m.undoUntil || m.createdAt + 86_400_000);
   return (
     <div className="w-full max-w-3xl mx-auto space-y-2" data-team-needs-top>
       <TeamCreatedLine handle={m.handle} label={t.label} createdAt={m.createdAt} />

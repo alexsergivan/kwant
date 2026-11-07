@@ -8,7 +8,7 @@ import { personFetch } from '../auth';
 // Types. The internal shapes the sheet uses; `Wire*` are api.md's, turned into these by the client.
 
 export interface TemplateBot {
-  /** api.md §0.1 `key` (inboxmanager, drafter, …, techlead, frontend, backend, qa): the key in `names`.
+  /** api.md §1 `slot` (InboxManager, Drafter, …, TechLead, Frontend, Backend, QA), kept as `key`: the key in `names`.
    * Never the preset (Coding has two `backend` bots) and never an index (the server refuses those). */
   key: string;
   preset: string;
@@ -30,7 +30,7 @@ export interface TemplateNeed {
 }
 
 export interface TemplateSkill {
-  /** api.md §0.2: the owning bot's `key`. */
+  /** api.md §1: the owning bot's slot (its template name), the same as that bot's `key`. */
   owner: string;
   /** For display only; the sheet shows the person's rename when there is one. */
   owner_name?: string;
@@ -42,7 +42,7 @@ export interface TemplateSkill {
 export interface TemplateRoutine {
   name: string;
   when: string;
-  /** api.md §0.9: the bot's `key`. */
+  /** api.md §1: the bot's slot (`key`). */
   bot: string;
   enabled: false;
   cron?: string;
@@ -64,7 +64,8 @@ export interface TeamTemplate {
   used_in_space?: boolean;
 }
 
-export type WireTemplate = TeamTemplate;
+/** api.md §1 sends each bot's `slot`; older fixtures say `key`. */
+export type WireTemplate = Omit<TeamTemplate, 'bots'> & { bots: (Omit<TemplateBot, 'key'> & { key?: string; slot?: string })[] };
 
 /** One part of a D reason: plain text, or a path shown as inline code. */
 export type ReasonPart = { text: string } | { path: string };
@@ -111,7 +112,7 @@ export interface Suggestion {
   source: string;
 }
 
-type WireSuggested = Omit<SuggestedBot, 'reason' | 'owns' | 'existing_kwant_id' | 'existing_name' | 'existing_avatar' | 'existing_leads_team'> & {
+type WireSuggested = Omit<SuggestedBot, 'reason' | 'owns'> & {
   reason_parts?: ReasonPart[];
   reason?: string;
   owns?: string[];
@@ -124,7 +125,7 @@ export interface CreatedTeam {
   channel_id: string;
   action_id: string;
   template_id: string | null;
-  /** `key`: the template bot key, or the suggestion row key. */
+  /** `key`: api.md §3's `slot`, the template bot slot or the suggestion row key. */
   bots: { key: string; id: string; name: string; preset: string; lead: boolean; existing: boolean }[];
   skills: { id: string; name: string; owner_id: string }[];
   routine: { id: string; name: string; enabled: boolean } | null;
@@ -134,7 +135,7 @@ export interface CreatedTeam {
 /** api.md §0.8: what a team row says about the template that made it. */
 export type CreatedFrom = 'inbox' | 'sales' | 'coding' | 'suggested' | null;
 
-/** GET /api/teams/:id/template-undo, read by the Undo confirm (api.md §0.10, §6). */
+/** GET /api/teams/:id/template, read by the Undo confirm and the Needs card (api.md §6). */
 export interface TeamTemplateInfo {
   template_id: string | null;
   action_id: string;
@@ -147,6 +148,8 @@ export interface TeamTemplateInfo {
   /** Other teams a bot it made has joined since; it leaves them too. */
   other_teams: { bot: string; team: string }[];
   edited_skills: string[];
+  /** A5: Need ids the server sees are done (today only Sales' `what_you_sell`). */
+  needs_done: string[];
 }
 type WireTemplateInfo = Omit<TeamTemplateInfo, 'other_teams'> & { other_teams?: TeamTemplateInfo['other_teams']; also_in?: TeamTemplateInfo['other_teams'] };
 
@@ -192,7 +195,7 @@ export class TeamsError extends Error {
     public key: string | null = null,
     public suggestion: string | null = null,
     public extra: Record<string, unknown> = {},
-    /** api.md §0.4: every clash in a 409 `clash`; the top-level field and suggestion are the first. */
+    /** api.md §5: every clash in a 409 `name_taken` / `handle_taken`; the top-level field and suggestion are the first. */
     public clashes: Clash[] = [],
   ) {
     super(message);
@@ -250,7 +253,12 @@ async function call<T>(url: string, method = 'GET', body?: unknown, headers?: Re
 
 const enc = encodeURIComponent;
 
-export const normTemplate = (t: WireTemplate): TeamTemplate => t;
+export const normTemplate = ({ bots, ...t }: WireTemplate): TeamTemplate => ({
+  ...t,
+  bots: bots.map(({ slot, key, ...b }) => ({ ...b, key: key ?? slot ?? b.name })),
+});
+type WireCreated = Omit<CreatedTeam, 'bots'> & { bots?: (Omit<CreatedTeam['bots'][number], 'key'> & { key?: string; slot?: string })[] };
+const normCreated = ({ bots, ...c }: WireCreated): CreatedTeam => ({ ...c, bots: (bots ?? []).map(({ slot, key, ...b }) => ({ ...b, key: key ?? slot ?? b.name })) });
 
 /** The display name of a template bot by key, after the person's renames. */
 export const botNameByKey = (t: Pick<TeamTemplate, 'bots'>, names: Record<string, string>, key: string, fallback?: string): string =>
@@ -263,10 +271,11 @@ export function normSuggestion(s: WireSuggestion, source: string): Suggestion {
     ...b,
     owns: owns ?? [],
     reason: reason_parts ?? (reason ? [{ text: reason }] : []),
-    existing_kwant_id: existing?.kwant_id ?? null,
-    existing_name: existing?.name ?? null,
-    existing_avatar: existing?.avatar_sprite ?? null,
-    existing_leads_team: existing?.leads_team ?? null,
+    // api.md §4 sends existing_kwant_id / existing_name flat; an `existing` object (§0.6) wins when present.
+    existing_kwant_id: existing?.kwant_id ?? b.existing_kwant_id ?? null,
+    existing_name: existing?.name ?? b.existing_name ?? null,
+    existing_avatar: existing?.avatar_sprite ?? b.existing_avatar ?? null,
+    existing_leads_team: existing?.leads_team ?? b.existing_leads_team ?? null,
   });
   return {
     ...s,
@@ -279,17 +288,16 @@ export function normSuggestion(s: WireSuggestion, source: string): Suggestion {
 }
 
 /** api.md §3 bodies: exactly the documented fields, so the strict server never answers unknown_field.
- * `idempotency_key` is required (§0.3): one UUID per sheet open. */
-export function createBody(r: CreateRequest, idempotencyKey: string): Record<string, unknown> {
-  if (r.kind === 'template') return { template_id: r.template_id, handle: r.handle, names: r.names, idempotency_key: idempotencyKey };
+ * The idempotency key goes in the `Idempotency-Key` header (§3, §8), never the body. An add-to-team
+ * suggestion (A18) already knows its team, so neither `team_id` nor `handle` is sent then. */
+export function createBody(r: CreateRequest): Record<string, unknown> {
+  if (r.kind === 'template') return { template_id: r.template_id, handle: r.handle, names: r.names };
   const edits: Record<string, unknown> = { rows: r.rows };
   if (r.handle && !r.team_id) edits.handle = r.handle;
-  const out: Record<string, unknown> = { suggestion_id: r.suggestion_id, edits, idempotency_key: idempotencyKey };
-  if (r.team_id) out.team_id = r.team_id;
-  return out;
+  return { suggestion_id: r.suggestion_id, edits };
 }
 
-const normInfo = ({ other_teams, also_in, ...i }: WireTemplateInfo): TeamTemplateInfo => ({ ...i, other_teams: other_teams ?? also_in ?? [], edited_skills: i.edited_skills ?? [] });
+const normInfo = ({ other_teams, also_in, ...i }: WireTemplateInfo): TeamTemplateInfo => ({ ...i, other_teams: other_teams ?? also_in ?? [], edited_skills: i.edited_skills ?? [], needs_done: i.needs_done ?? [] });
 
 const newKey = (): string => {
   try {
@@ -304,14 +312,14 @@ export const teamsApi = {
     call<{ templates: WireTemplate[] }>(`/api/team-templates?space=${enc(space)}`).then((r) => (r.templates ?? []).map(normTemplate)),
   /** `idempotencyKey`: one per sheet open (api.md §0.3); a retry of the same sheet reuses it. */
   create: (r: CreateRequest, idempotencyKey: string) =>
-    call<CreatedTeam>(`/api/teams/from-template?space=${enc(r.space)}`, 'POST', createBody(r, idempotencyKey)),
+    call<WireCreated>(`/api/teams/from-template?space=${enc(r.space)}`, 'POST', createBody(r), { 'Idempotency-Key': idempotencyKey }).then(normCreated),
   /** Optional: the server's free names (api.md §0.10). Callers fall back to their own guess on any error. */
   preview: (space: string, templateId: string) =>
     call<TemplatePreview>(`/api/team-templates/${enc(templateId)}/preview?space=${enc(space)}`),
   suggest: ({ space, ...src }: SuggestRequest, source: string) =>
     call<WireSuggestion>(`/api/teams/suggest?space=${enc(space)}`, 'POST', src).then((s) => normSuggestion(s, source)),
   templateInfo: (teamId: string, space: string) =>
-    call<WireTemplateInfo>(`/api/teams/${enc(teamId)}/template-undo?space=${enc(space)}`).then(normInfo),
+    call<WireTemplateInfo>(`/api/teams/${enc(teamId)}/template?space=${enc(space)}`).then(normInfo),
 };
 export { newKey as newIdempotencyKey };
 
@@ -415,8 +423,9 @@ export interface NeedsContext {
   apps: string[];
   /** Dev mode for this team's repo. */
   repo: { state: 'none' | 'checking' | 'watching' | 'failed'; detail?: string | null };
-  /** The person has posted a message in this team's chat. */
-  personPosted: boolean;
+  /** `needs_done` from GET /api/teams/:id/template (A5): Need ids the server sees are done. Sales'
+   *  `what_you_sell` is ticked only from here: the person posted in the team chat (a bot's message doesn't count). */
+  needsDone: string[];
 }
 
 export interface NeedView {
@@ -447,7 +456,7 @@ export function needView(n: TemplateNeed, ctx: NeedsContext): NeedView {
       if (ctx.repo.state === 'failed') return { state: 'bad', text: ctx.repo.detail || 'Couldn’t read this repo yet.' };
       return idle;
     case 'composer_prompt':
-      return ctx.personPosted ? { state: 'done', text: 'Done · you told the team' } : idle;
+      return ctx.needsDone.includes(n.id) ? { state: 'done', text: 'Done · you told the team' } : idle;
     default:
       return idle;
   }
@@ -524,8 +533,9 @@ export function swapRole(e: RowEdit, preset: string, taken: Iterable<string>): R
 
 export const tickedCount = (edits: Record<string, RowEdit>) => Object.values(edits).filter((e) => e.ticked).length;
 
-export function sizeNote(n: number): string | null {
-  if (n < MIN_BOTS) return 'Pick at least 2 bots.';
+/** `min`: 2 for a new team, 1 when adding to a team (api.md §3b `too_few_bots`). */
+export function sizeNote(n: number, min: number = MIN_BOTS): string | null {
+  if (n < min) return min === 1 ? 'Pick at least 1 bot.' : `Pick at least ${min} bots.`;
   if (n >= MAX_BOTS) return '6 bots at most. Untick one to add another.';
   return null;
 }
@@ -553,7 +563,7 @@ export function partialBody(p: Suggestion['partial']): string | null {
 export const undoWindowOver = (e: unknown) =>
   e instanceof TeamsError ? e.code === 'undo_window_over' || e.code === 'undo_expired' : !!e && typeof e === 'object' && ['undo_window_over', 'undo_expired'].includes((e as { code?: string }).code ?? '');
 
-/** The Can't read block (api.md §0.5): 424 only. A 403 means the caller isn't the person, never "can't read". */
+/** The Can't read block (api.md §4): 422 `cant_read` (424 from the §0 draft too). A 403 means the caller isn't the person, never "can't read". */
 export const cantRead = (e: unknown) => e instanceof TeamsError && (e.status === 424 || e.code === 'cant_read') && e.status !== 403;
 
 export const readLine = (r: Suggestion['read'], partial: Suggestion['partial']) =>

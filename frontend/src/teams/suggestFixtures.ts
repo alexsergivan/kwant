@@ -122,7 +122,7 @@ export function fixtureTransport(
       const sc = opts.suggest ?? 'shop';
       if (sc === 'offline') throw new TeamsError('Couldn’t reach the server.', 0, 'offline');
       if (sc === 'error') return { status: 502, body: { error: 'The read stopped.', code: 'read_failed' } };
-      if (sc === 'cantread') return { status: 424, body: { error: 'Can’t read this repo.', code: 'cant_read', forge: 'gitlab' } };
+      if (sc === 'cantread') return { status: 422, body: { error: 'Can’t read this repo.', code: 'cant_read', forge: 'gitlab' } };
       if (sc === 'slow') await new Promise((r) => setTimeout(r, 60_000));
       const s = sc === 'partial' ? PARTIAL_WIRE : sc === 'partial-file' ? PARTIAL_FILE_WIRE : sc === 'leads' ? LEADS_WIRE : sc === 'unknown' ? UNKNOWN_WIRE : sc === 'manage' ? MANAGE_WIRE : SHOP_WIRE;
       return { status: 200, body: s };
@@ -130,21 +130,21 @@ export function fixtureTransport(
     if (path === '/api/teams/from-template') {
       if (opts.create === 'fail') return { status: 500, body: { error: 'stopped' } };
       if (opts.create === 'clash')
-        return { status: 409, body: { error: 'That name is taken.', code: 'clash', field: 'names.drafter', suggestion: 'Drafter3', clashes: [{ field: 'names.drafter', wanted: 'Drafter', suggestion: 'Drafter3' }] } };
+        return { status: 409, body: { error: 'That name is taken.', code: 'name_taken', field: 'names.Drafter', suggestion: 'Drafter3', clashes: [{ field: 'names.Drafter', wanted: 'Drafter', suggestion: 'Drafter3' }] } };
       if (opts.create === 'clash-handle')
-        return { status: 409, body: { error: 'That handle is taken.', code: 'clash', field: 'handle', suggestion: 'inbox3', clashes: [{ field: 'handle', wanted: 'inbox', suggestion: 'inbox3' }] } };
+        return { status: 409, body: { error: 'That handle is taken.', code: 'handle_taken', field: 'handle', suggestion: 'inbox3', clashes: [{ field: 'handle', wanted: 'inbox', suggestion: 'inbox3' }] } };
       if (opts.create === 'clash-many')
         return {
           status: 409,
           body: {
             error: 'That handle is taken.',
-            code: 'clash',
+            code: 'handle_taken',
             field: 'handle',
             suggestion: 'inbox3',
             clashes: [
               { field: 'handle', wanted: 'inbox', suggestion: 'inbox3' },
-              { field: 'names.drafter', wanted: 'Drafter', suggestion: 'Drafter3' },
-              { field: 'names.researcher', wanted: 'Researcher', suggestion: 'Researcher2' },
+              { field: 'names.Drafter', wanted: 'Drafter', suggestion: 'Drafter3' },
+              { field: 'names.Researcher', wanted: 'Researcher', suggestion: 'Researcher2' },
             ],
           },
         };
@@ -162,7 +162,7 @@ export function fixtureTransport(
           channel_id: 'ch_team_new',
           action_id: 'act_demo',
           template_id: b.template_id ?? null,
-          bots: (t?.bots ?? []).map((x, i) => ({ key: x.key, id: `kw_${i}`, name: b.names?.[x.key] ?? x.name, preset: x.preset, lead: x.lead, existing: false })),
+          bots: (t?.bots ?? []).map((x, i) => ({ slot: x.slot, id: `kw_${i}`, name: (x.slot && b.names?.[x.slot]) || x.name, preset: x.preset, lead: x.lead, existing: false })),
           skills: (t?.skills ?? []).map((s, i) => ({ id: `sk_${i}`, name: s.name, owner_id: 'kw_0' })),
           routine: t?.routine ? { id: 'rt_0', name: t.routine.name, enabled: false } : null,
           undo_until: '2026-11-08T10:00:00Z',

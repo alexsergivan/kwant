@@ -312,6 +312,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       setLive('Reading the project');
       if (!navigator.onLine) {
         setDPhase('offline');
+        setLive('You’re offline. Nothing was read.');
         return;
       }
       try {
@@ -337,9 +338,17 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         setLive(`Suggested ${plural(s.bots.length, 'bot')}${s.also_possible.length ? `, ${s.also_possible.length} also possible` : ''}`);
       } catch (e) {
         if (ac.signal.aborted) return;
-        if (cantRead(e)) setDPhase('cantread');
-        else if (e instanceof TeamsError && e.status === 0) setDPhase('offline');
-        else setDPhase('error');
+        // The live region still says "Reading the project" otherwise.
+        if (cantRead(e)) {
+          setDPhase('cantread');
+          setLive('Can’t read this project yet. Nothing was read and nothing was created.');
+        } else if (e instanceof TeamsError && e.status === 0) {
+          setDPhase('offline');
+          setLive('You’re offline. Nothing was read.');
+        } else {
+          setDPhase('error');
+          setLive('Couldn’t read the project. Nothing was created.');
+        }
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -382,7 +391,8 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const ticked = isD ? tickedCount(edits) : tBots.length;
   const anyNameBad = isD ? dRows.some((b) => edits[b.key]?.ticked && nameErr(b.key)) : tBots.some((b) => nameErr(b.key));
   const handleBad = !manage && !cleanHandle(handle);
-  const dSizeBad = isD && (ticked < MIN_BOTS || ticked > MAX_BOTS);
+  const minBots = manage ? 1 : MIN_BOTS;
+  const dSizeBad = isD && (ticked < minBots || ticked > MAX_BOTS);
   const creating = phase === 'creating';
   const canCreate = ready && online && !creating && !anyNameBad && !handleBad && !dSizeBad && renaming === null;
   const label = t?.label ?? 'Coding';
@@ -959,7 +969,13 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           <h4 className={H} id={`${titleId}-who`}>
             Who’s on it{sug.bots.find((b) => b.lead) && <span className={`${CNT} text-zinc-500`}>{edits[sug.bots.find((b) => b.lead)!.key]?.name} leads</span>}
           </h4>
-          <ul>{sug.bots.map((b) => sgRow(b, false))}</ul>
+          {sug.bots.length === 0 && sug.also_possible.length === 0 ? (
+            <p className="py-3 text-sm text-zinc-300" data-nothing-new>
+              {manage && mode.kind === 'suggest' && mode.team ? `@${mode.team.name} already has every role the code suggests.` : 'The code doesn’t suggest any roles.'} Nothing to add.
+            </p>
+          ) : (
+            <ul>{sug.bots.map((b) => sgRow(b, false))}</ul>
+          )}
           {also.length > 0 && (
             <details open={also.length <= 3} className="mt-2 pt-2 border-t border-dashed border-white/10">
               <summary className={`cursor-pointer list-none ${phone ? 'min-h-11' : 'min-h-8'} flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[.08em] text-zinc-400 rounded ${FOCUS}`} role="button">
@@ -1005,10 +1021,12 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
 
   // ---- footer
   const nNew = isD ? newBotCount(edits) : tBots.length;
-  const sNote = isD && dPhase === 'ready' ? sizeNote(ticked) : null;
+  // Manage with nothing new to suggest: the body says so; no "Pick at least" nag.
+  const nothingNew = manage && dPhase === 'ready' && !!sug && sug.bots.length === 0 && sug.also_possible.length === 0;
+  const sNote = isD && dPhase === 'ready' && !nothingNew ? sizeNote(ticked, minBots) : null;
   const fallbackFooter = isD && (dPhase === 'cantread' || dPhase === 'offline' || dPhase === 'error');
   const retry = (!isD && templatesError && !t) || phase === 'failed' || (isD && (dPhase === 'error' || dPhase === 'offline'));
-  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? `Add ${plural(nNew, 'bot')}` : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
+  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? `Add ${plural(ticked, 'bot')}` : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
   const onPrimary = () => {
     if (retry) {
       if (!isD && templatesError && !t) return onRetryTemplates?.();
@@ -1019,7 +1037,17 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     void create();
   };
   const primaryDisabled = creating || (retry ? (isD && dPhase === 'offline' && !online) || (phase === 'failed' && !online) : !canCreate);
-  const footNote = sNote ?? ((isD && nNew !== ticked) || manage ? `Undo removes the ${plural(nNew, 'new bot')}.` : 'Undo removes all of it.');
+  // Reused bots are left alone by Undo (api.md §6); with none new, say what it does instead of "the 0 new bots".
+  const footNote = nothingNew
+    ? null
+    : sNote ??
+    ((isD && nNew !== ticked) || manage
+      ? nNew === 0
+        ? manage
+          ? 'Undo takes them out of the team again.'
+          : 'Undo removes the team. Your bots stay.'
+        : `Undo removes the ${plural(nNew, 'new bot')}.`
+      : 'Undo removes all of it.');
 
   const btnH = phone ? 'h-11 flex-1' : 'h-9';
   const panel = (
@@ -1084,7 +1112,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       </div>
       <footer className={`flex ${phone ? 'flex-wrap' : 'items-center'} gap-2 ${phone ? 'px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]' : 'px-5 py-3.5'} border-t border-zinc-800 bg-zinc-900`}>
         <p className={`${phone ? 'w-full' : 'flex-1 min-w-0'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
-          {!fallbackFooter && !sNote && <Undo2 size={13} aria-hidden="true" />}
+          {!fallbackFooter && !sNote && footNote && <Undo2 size={13} aria-hidden="true" />}
           {fallbackFooter ? null : footNote}
         </p>
         <button type="button" onClick={close} disabled={creating} className={`${btnH} px-3.5 rounded-lg text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}>
