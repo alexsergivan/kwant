@@ -631,3 +631,56 @@ td code { white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   .kw-sticker { --mx: 30% !important; --my: 20% !important; transition: none; }
 }
+
+/* O7a: "First time on a Mac" block, under the hero's Download for Mac. Goes into site.css as is. */
+.mac-first { margin-top: 16px; max-width: 600px; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); }
+.mac-first > summary { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 14px; border-radius: 13px; list-style: none; cursor: pointer; }
+.mac-first > summary::-webkit-details-marker { display: none; }
+.mac-first > summary:hover { background: #faf9ff; }
+.mac-first > summary:focus-visible { outline: 3px solid var(--v5); outline-offset: 2px; border-radius: 13px; }
+.mf-ico { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: var(--bg-2); color: var(--v4); }
+.mf-ico svg { width: 20px; height: 20px; shape-rendering: crispEdges; }
+.mf-sum { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.mf-sum b { font: 600 15px/20px var(--sans); color: var(--ink); }
+.mf-sum span { font: 400 13.5px/19px var(--sans); color: var(--dim); }
+.mf-chev { flex: none; width: 20px; height: 20px; color: var(--v4); }
+.mac-first[open] .mf-chev { transform: rotate(180deg); }
+
+.mf-body { padding: 14px 18px 18px; border-top: 1px solid var(--line); }
+.mf-steps { margin: 0; padding: 0; list-style: none; counter-reset: mf; display: grid; gap: 10px; }
+.mf-steps li { counter-increment: mf; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; font: 400 15px/22px var(--sans); color: var(--ink); }
+.mf-steps li::before { content: counter(mf); display: grid; place-items: center; width: 24px; height: 24px; margin-top: -1px; border-radius: 4px; background: var(--v4); color: #fff; font: 700 13px/1 var(--sans); }
+.mf-steps b { font-weight: 600; }
+.mf-fig { margin: 14px 0 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #efebfd; }
+.mf-fig a { display: block; }
+.mf-fig a:focus-visible { outline-offset: -3px; border-radius: 10px; }
+.mf-fig img { display: block; width: 100%; height: auto; }
+.mf-after { margin: 12px 0 0; font-size: 14px; line-height: 21px; color: var(--muted); }
+.mf-term { margin: 14px 0 0; padding-top: 12px; border-top: 1px dashed var(--line-2); font-size: 13.5px; line-height: 20px; color: var(--dim); }
+.mf-term .soon { margin-right: 6px; padding: 1px 6px; border: 1px solid var(--line-2); border-radius: 6px; font: 600 11px var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--dim); vertical-align: 1px; }
+.mf-term .cmd { margin-top: 8px; min-height: 42px; }
+.mf-term .cmd code { font-size: 13px; padding: 11px 0; }
+
+/* Desktop: while open, the CRT stops re-centring on the taller column. */
+@media (min-width: 1001px) {
+  .hero-grid:has(.mac-first[open]) { align-items: start; }
+  .hero-grid:has(.mac-first[open]) .hero-crt { margin-top: 72px; }
+}
+.hero .mac-first + .mac-dl { margin-top: 12px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .mf-chev { transition: transform 160ms ease-out; }
+  .mac-first[open] .mf-body { animation: mf-in 160ms ease-out; }
+  @keyframes mf-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+}
+@media (max-width: 640px) {
+  .mac-first > summary { padding: 10px 12px; }
+  .mf-body { padding: 12px 14px 16px; }
+  .mf-steps li { font-size: 15px; }
+}
+/* The same steps and picture in docs/install#mac. */
+.mac-first-doc { max-width: 600px; margin: 0 0 24px; }
+.prose .mac-first-doc .mf-steps { margin: 14px 0 0; padding: 0; }
+.prose .mac-first-doc .mf-steps li { margin: 0; }
+.prose .mac-first-doc .mf-fig { margin: 14px 0 0; }
+.prose .mac-first-doc .mf-after { margin: 12px 0 0; color: var(--muted); }

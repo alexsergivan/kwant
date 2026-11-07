@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 360" width="560" height="360" role="img" aria-labelledby="t">
+  <title id="t">Mock-up of macOS System Settings, Privacy and Security. Under Security it says “kwant” was blocked to protect your Mac, with an Open Anyway button (step 3). Privacy and Security is selected in the sidebar (step 2). In front, the first alert, “kwant” Not Opened, with Done marked (step 1).</title>
+  <defs>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#1b1033" flood-opacity=".22"/></filter>
+    <filter id="sh2" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#1b1033" flood-opacity=".10"/></filter>
+    <clipPath id="win"><rect x="12" y="12" width="536" height="300" rx="12"/></clipPath>
+    <g id="badge"><rect x="-11" y="-11" width="22" height="22" rx="4" fill="#4024a8" stroke="#fff" stroke-width="2"/></g>
+  </defs>
+  <style>
+    text { font-family: -apple-system, "SF Pro Text", "Inter", system-ui, sans-serif; fill: #1b1033; }
+    .s { font-size: 12.5px; }
+    .m { font-size: 12.5px; fill: #5d5873; }
+    .b { font-weight: 700; }
+    .n { font-size: 12.5px; font-weight: 800; fill: #fff; text-anchor: middle; }
+  </style>
+
+  <rect width="560" height="360" fill="#efebfd"/>
+
+  <!-- Settings window -->
+  <g filter="url(#sh2)"><rect x="12" y="12" width="536" height="300" rx="12" fill="#fff"/></g>
+  <g clip-path="url(#win)">
+    <rect x="12" y="12" width="160" height="300" fill="#f4f3f8"/>
+    <line x1="172" y1="12" x2="172" y2="312" stroke="#e4e1ee"/>
+    <line x1="172" y1="58" x2="548" y2="58" stroke="#e4e1ee"/>
+  </g>
+  <rect x="12.5" y="12.5" width="535" height="299" rx="11.5" fill="none" stroke="#d8d4e6"/>
+  <circle cx="32" cy="32" r="5.5" fill="#ee6a5f"/><circle cx="48" cy="32" r="5.5" fill="#f4bf4f"/><circle cx="64" cy="32" r="5.5" fill="#61c454"/>
+
+  <!-- Sidebar -->
+  <g class="side">
+    <rect x="26" y="62" width="16" height="16" rx="4" fill="#b9b5c8"/><text class="s" x="50" y="75">General</text>
+    <rect x="26" y="92" width="16" height="16" rx="4" fill="#b9b5c8"/><text class="s" x="50" y="105">Appearance</text>
+    <rect x="22" y="116" width="144" height="28" rx="7" fill="#dedbea"/>
+    <rect x="26" y="122" width="16" height="16" rx="4" fill="#7c7891"/><text class="s b" x="50" y="135">Privacy &amp; Security</text>
+    <rect x="26" y="152" width="16" height="16" rx="4" fill="#b9b5c8"/><text class="s" x="50" y="165">Desktop &amp; Dock</text>
+    <rect x="26" y="182" width="16" height="16" rx="4" fill="#b9b5c8"/><text class="s" x="50" y="195">Displays</text>
+  </g>
+
+  <!-- Pane header -->
+  <text class="m" x="188" y="40" style="font-size:15px">‹  ›</text>
+  <text class="s b" x="222" y="40" style="font-size:14px">Privacy &amp; Security</text>
+
+  <!-- Security group -->
+  <text class="m b" x="190" y="86" style="font-size:12px">Security</text>
+  <rect x="186" y="96" width="346" height="104" rx="8" fill="#f7f6fa" stroke="#e6e3ef"/>
+  <text class="s" x="200" y="121">Allow applications from</text>
+  <text class="m" x="518" y="121" text-anchor="end" style="font-size:11.5px">App Store &amp; Known Developers ⌄</text>
+  <line x1="200" y1="134" x2="518" y2="134" stroke="#e6e3ef"/>
+  <!-- shield -->
+  <path d="M208 148 l8 3 v6 c0 5 -3.5 8 -8 10 c-4.5 -2 -8 -5 -8 -10 v-6 z" fill="#8f8aa6"/>
+  <text class="s" x="226" y="161">“kwant” was blocked to</text>
+  <text class="s" x="226" y="177">protect your Mac.</text>
+  <rect x="418" y="153" width="100" height="28" rx="7" fill="#fff" stroke="#cfcbdc"/>
+  <text class="s" x="468" y="171.5" text-anchor="middle" style="font-weight:600">Open Anyway</text>
+  <rect x="412.5" y="147.5" width="111" height="39" rx="10" fill="none" stroke="#5c3fd0" stroke-width="3"/>
+  <use href="#badge" x="524" y="148"/><text class="n" x="524" y="152.5">3</text>
+
+  <!-- step 2 badge on the sidebar item -->
+  <use href="#badge" x="14" y="130"/><text class="n" x="14" y="134.5">2</text>
+
+  <!-- First alert, in front -->
+  <g filter="url(#sh)"><rect x="34" y="206" width="226" height="146" rx="12" fill="#fbfaff"/></g>
+  <rect x="34.5" y="206.5" width="225" height="145" rx="11.5" fill="none" stroke="#d8d4e6"/>
+  <!-- our own pixel app icon -->
+  <rect x="132" y="216" width="30" height="30" rx="7" fill="#4024a8"/>
+  <rect x="139" y="225" width="5" height="6" fill="#fff"/><rect x="150" y="225" width="5" height="6" fill="#fff"/>
+  <rect x="141" y="236" width="12" height="3" fill="#b8a9fb"/>
+  <text class="s b" x="147" y="266" text-anchor="middle">“kwant” Not Opened</text>
+  <text class="m" x="147" y="284" text-anchor="middle" style="font-size:11.5px">Apple could not verify “kwant”…</text>
+  <rect x="46" y="306" width="96" height="28" rx="7" fill="#fff" stroke="#cfcbdc"/>
+  <text class="s" x="94" y="324.5" text-anchor="middle" style="font-size:12px">Move to Trash</text>
+  <rect x="152" y="306" width="96" height="28" rx="7" fill="#3d3a4d"/>
+  <text class="s" x="200" y="324.5" text-anchor="middle" style="fill:#fff;font-weight:600">Done</text>
+  <rect x="146.5" y="300.5" width="107" height="39" rx="10" fill="none" stroke="#5c3fd0" stroke-width="3"/>
+  <use href="#badge" x="254" y="301"/><text class="n" x="254" y="305.5">1</text>
+</svg>

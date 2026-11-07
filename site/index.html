@@ -29,7 +29,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=99f2fc30c3">
+<link rel="stylesheet" href="assets/css/site.css?v=54126dbcd8">
 </head>
 <body class="page-home">
 <a class="skip" href="#main">Skip to content</a>
@@ -56,7 +56,32 @@
         <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
         <p class="cta-alt"><a href="/docs/quickstart">A VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
-      <p class="mac-dl">Free, for Apple silicon and Intel. <a href="/docs/install#mac">First open</a> needs one extra step. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="/docs/install#linux">how to install</a>).</p>
+      <details class="mac-first" id="mac-first">
+        <summary>
+          <span class="mf-ico" aria-hidden="true"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v1H4zM3 5h1v8H3zM16 5h1v8h-1zM4 12h12v1H4zM1 14h18v2H1z"/><path d="M5 6h10v6H5z" opacity=".22"/><path d="M8 8h1v2H8zM11 8h1v2h-1z"/></svg></span>
+          <span class="mf-sum"><b>First time on a Mac?</b><span>macOS asks once, because kwant isn't notarized by Apple yet.</span></span>
+          <svg class="mf-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+        <div class="mf-body">
+          <ol class="mf-steps">
+            <li><span>Drag kwant to Applications and open it. When macOS says it couldn't verify it, click <b>Done</b>.</span></li>
+            <li><span>Open <b>System Settings › Privacy &amp; Security</b> and scroll down to <b>Security</b>.</span></li>
+            <li><span>Click <b>Open Anyway</b> next to “kwant” was blocked, then <b>Open Anyway</b> again, and enter your Mac password or use Touch ID.</span></li>
+          </ol>
+          <figure class="mf-fig">
+            <a class="zoom" href="assets/media/open-anyway-wide.svg?v=57a3a5fdca" data-caption="A mock-up of macOS 15: the “kwant” Not Opened alert (click Done), System Settings › Privacy &amp; Security, and Open Anyway under Security.">
+            <picture>
+              <source media="(max-width: 640px)" srcset="assets/media/open-anyway-phone.svg?v=e2a16f140e">
+              <img src="assets/media/open-anyway-wide.svg?v=57a3a5fdca" width="560" height="360" loading="lazy" decoding="async"
+                   alt="A mock-up of the three macOS steps: the “kwant” Not Opened alert with Done marked, System Settings › Privacy &amp; Security, and the Security row “kwant” was blocked to protect your Mac with Open Anyway marked.">
+            </picture>
+            </a>
+          </figure>
+          <p class="mf-after">You only do this once. On macOS 14 or earlier, right-click kwant in Applications and choose <b>Open</b> instead.</p>
+          <p class="mf-term" data-term="soon"><span class="soon">Soon</span>A one-line Terminal install that skips this step.</p>
+        </div>
+      </details>
+      <p class="mac-dl">Free, for Apple silicon and Intel. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="/docs/install#linux">how to install</a>).</p>
       <div class="install" data-tabs><div class="install-top"><span class="install-k" aria-hidden="true">Install</span><div class="tabs" role="tablist" aria-label="Install with"><button type="button" role="tab" id="hero-t-src" aria-controls="hero-p-src" aria-selected="true">macOS · Linux</button><button type="button" role="tab" id="hero-t-docker" aria-controls="hero-p-docker" aria-selected="false" tabindex="-1">Docker</button></div></div><div class="cmd" role="tabpanel" id="hero-p-src" aria-labelledby="hero-t-src"><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; make run</code><button type="button" class="copy-cmd" aria-label="Copy the macOS · Linux install command">copy</button></div><div class="cmd" role="tabpanel" id="hero-p-docker" aria-labelledby="hero-t-docker" hidden><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; docker compose up -d --build</code><button type="button" class="copy-cmd" aria-label="Copy the Docker install command">copy</button></div></div>
       <p class="proof">0.7.5 released Nov 7 <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant/releases" rel="noopener">30 releases since Oct 25</a> <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant" rel="noopener">AGPL-3.0, open source</a></p>
     </div>
@@ -435,7 +460,7 @@
     <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
   </div>
 </footer>
-<script src="assets/js/site.js?v=63f328cd53" defer></script>
+<script src="assets/js/site.js?v=9846e390c8" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
 <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]},{"@type":"WebSite","@id":"https://kwant.si/#website","name":"kwant","url":"https://kwant.si/","inLanguage":"en","publisher":{"@id":"https://kwant.si/#org"}},{"@type":"SoftwareApplication","@id":"https://kwant.si/#app","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","description":"Open-source, self-hosted AI agents that share chats, hand off work and run on a schedule. One Rust binary (kwnt) for your laptop or a VPS.","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","image":"https://kwant.si/assets/og/home.png?v=77495a5e49","screenshot":"https://kwant.si/assets/media/desktop-team-discussion-1440.webp","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":["https://github.com/alexsergivan/kwant/blob/main/LICENSE"],"isAccessibleForFree":true,"downloadUrl":"https://github.com/alexsergivan/kwant","sameAs":["https://github.com/alexsergivan/kwant"],"author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"}},{"@type":"SoftwareSourceCode","@id":"https://kwant.si/#code","name":"kwant","codeRepository":"https://github.com/alexsergivan/kwant","programmingLanguage":["Rust","TypeScript"],"license":["https://github.com/alexsergivan/kwant/blob/main/LICENSE"],"targetProduct":{"@id":"https://kwant.si/#app"}}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
