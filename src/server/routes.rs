@@ -2608,7 +2608,7 @@ async fn run_kwant_turn_inner(
             gave_up = Some(text);
         } else if attempts.is_empty() {
             let text = if brief_turn && (rehearse_blocked || had_attempts) {
-                format!("⚠️ [{}] A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on.", target_kwant.name)
+                super::dev::tickets::engine_refused_line(&target_kwant.name)
             } else if rehearse_blocked {
                 format!("⚠️ [{}] A skill replay runs only on Claude, with kwant's tool checks on.", target_kwant.name)
             } else {

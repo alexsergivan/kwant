@@ -84,6 +84,9 @@ pub enum FailCode {
     JiraUnreachable,
     /// Reading the ticket into a brief failed (Vega's brief turn).
     BriefFailed,
+    /// The brief turn was refused before it ran: the lead isn't on Claude or Codex, or kwant's
+    /// tool checks are off (J7, D6). Nothing of the ticket was read.
+    EngineRefused,
     /// The team's work stopped with an error.
     WorkFailed,
     /// A writer that didn't say why (`dev_jira::FAIL_DEFAULT_CODE`).
@@ -91,12 +94,13 @@ pub enum FailCode {
 }
 
 impl FailCode {
-    pub const ALL: &'static [FailCode] = &[FailCode::JiraUnreachable, FailCode::BriefFailed, FailCode::WorkFailed, FailCode::Failed];
+    pub const ALL: &'static [FailCode] = &[FailCode::JiraUnreachable, FailCode::BriefFailed, FailCode::EngineRefused, FailCode::WorkFailed, FailCode::Failed];
 
     pub fn code(self) -> &'static str {
         match self {
             FailCode::JiraUnreachable => "jira_unreachable",
             FailCode::BriefFailed => "brief_failed",
+            FailCode::EngineRefused => "engine_refused",
             FailCode::WorkFailed => "work_failed",
             FailCode::Failed => dev_jira::FAIL_DEFAULT_CODE,
         }
@@ -106,6 +110,7 @@ impl FailCode {
         match self {
             FailCode::JiraUnreachable => format!("Couldn't reach Jira for {} hours, so work on this ticket stopped.", super::pickup::UNREACHABLE_FAIL_HOURS),
             FailCode::BriefFailed => "Couldn't turn this ticket into a brief.".into(),
+            FailCode::EngineRefused => format!("{} Put the team's lead on one of them, then press Start.", super::ENGINE_REFUSED),
             FailCode::WorkFailed => "The work on this ticket stopped with an error.".into(),
             FailCode::Failed => "Work on this ticket stopped.".into(),
         }
@@ -257,6 +262,29 @@ mod tests {
         let v = serde_json::to_value(ev).unwrap();
         assert_eq!(v["type"], "dev_ticket_progress");
         assert_eq!(v["data"], serde_json::json!({"space_id": "s", "key": "K-1", "step": "links", "state": "skipped", "detail": "none"}));
+    }
+
+    #[test]
+    fn every_fail_code_reads_back_and_a_refused_engine_says_why() {
+        for c in FailCode::ALL {
+            assert_eq!(FailCode::of(c.code()), *c, "{c:?}");
+        }
+        assert_eq!(FailCode::of("nonsense"), FailCode::Failed);
+        assert_eq!(FailCode::EngineRefused.code(), "engine_refused");
+        let m = FailCode::EngineRefused.message();
+        assert_eq!(m, "A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on. Put the team's lead on one of them, then press Start.");
+        assert_ne!(m, FailCode::Failed.message());
+        assert!(m.chars().count() <= 300, "the card keeps 300 characters");
+    }
+
+    #[test]
+    fn only_kwants_own_refusal_line_counts_as_a_refused_engine() {
+        use super::super::{engine_refused_line, is_engine_refusal};
+        assert!(is_engine_refusal(&engine_refused_line("Lead")));
+        assert!(is_engine_refusal(&engine_refused_line("A [b] c")));
+        assert!(!is_engine_refusal("The brief took longer than 15 minutes"));
+        assert!(!is_engine_refusal(super::super::ENGINE_REFUSED), "without the chat's lead prefix");
+        assert!(!is_engine_refusal(&format!("{} and more", engine_refused_line("Lead"))));
     }
 
     #[test]

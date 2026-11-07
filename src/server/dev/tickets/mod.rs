@@ -36,6 +36,21 @@ pub fn brief_engine(engine: crate::profiles::Engine) -> bool {
     matches!(engine, crate::profiles::Engine::Claude | crate::profiles::Engine::Codex)
 }
 
+/// Why a brief turn was refused before it ran (J7, D6): the lead's engine isn't one
+/// [`brief_engine`] allows, or kwant's tool checks are off. kwant's own words, shown in the brief's
+/// chat and, through `engine_refused`, on the ticket card.
+pub const ENGINE_REFUSED: &str = "A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on.";
+
+/// The brief's chat line for a refused brief turn, naming the lead.
+pub fn engine_refused_line(lead: &str) -> String {
+    format!("⚠️ [{lead}] {ENGINE_REFUSED}")
+}
+
+/// Whether a brief turn's error is kwant's refusal ([`engine_refused_line`]), not a failure.
+pub fn is_engine_refusal(error: &str) -> bool {
+    error.starts_with("⚠️ [") && error.ends_with(&format!("] {ENGINE_REFUSED}"))
+}
+
 /// A Jira key as kwant accepts it: `PROJECT-123`, upper-case, at most 40 characters.
 pub fn valid_key(key: &str) -> bool {
     let Some((project, n)) = key.split_once('-') else { return false };
