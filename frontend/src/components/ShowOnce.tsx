@@ -649,7 +649,8 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
   const bot = s.botName;
   const writing = s.phase === 'writing';
   const written = s.phase === 'written';
-  const listed = s.steps.filter((x) => !x.deleted).length;
+  // Notes don't count as steps (api.md step_count), so this matches the bar and the skill's "from N steps"
+  const listed = s.steps.filter((x) => !x.deleted && x.kind !== 'note').length;
   const blocker = writeBlocker(rec, s.steps, bot);
   const engine = engineName(rec.engine);
 

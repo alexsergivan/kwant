@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useUndoableDelete } from '../undoDelete';
 import { UndoNotice } from './UndoNotice';
 import { Bot, Check, ChevronDown, ChevronRight, CircleDot, Globe2, ListChecks, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
@@ -214,6 +214,24 @@ const SkillMeta: React.FC<{ skill: Skill; replaces?: Skill }> = ({ skill, replac
   </div>
 );
 
+// Undo brings the Reject button back; focus goes back to it, not to the page
+function useRefocusOnUndo(pending: boolean, undo: () => void) {
+  const target = useRef<HTMLButtonElement>(null);
+  const again = useRef(false);
+  useEffect(() => {
+    if (pending || !again.current) return;
+    again.current = false;
+    target.current?.focus();
+  }, [pending]);
+  return {
+    target,
+    undo: () => {
+      again.current = true;
+      undo();
+    },
+  };
+}
+
 export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPending?: boolean; botName?: string }> = ({ skill, replaces, initialPending = false, botName = 'The bot' }) => {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [trying, setTrying] = useState(false);
@@ -222,6 +240,7 @@ export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPen
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const rejection = useUndoableDelete(undefined, initialPending);
+  const back = useRefocusOnUndo(rejection.pending, rejection.undo);
 
   const approve = async (edits?: SkillDraft) => {
     setBusy('approve');
@@ -245,7 +264,7 @@ export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPen
       <UndoNotice
         as="li"
         text={shown ? `Rejected “${skill.name}”. Its recorded steps are deleted when this closes.` : `Rejected “${skill.name}”. Nothing was added.`}
-        onUndo={rejection.undo}
+        onUndo={back.undo}
       />
     );
 
@@ -292,7 +311,7 @@ export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPen
               <button type="button" onClick={() => setMode('edit')} disabled={!!busy} className={quietBtn}>
                 <Pencil size={11} aria-hidden="true" /> Edit, then approve
               </button>
-              <button type="button" onClick={reject} disabled={!!busy} className={dangerBtn}>
+              <button ref={back.target} type="button" onClick={reject} disabled={!!busy} className={dangerBtn}>
                 <X size={11} aria-hidden="true" /> Reject
               </button>
               {shown && shown.inputs && (
@@ -332,6 +351,7 @@ export const TrialWaitsCard: React.FC<{ skillId: string; kwantId: string; onOpen
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const rejection = useUndoableDelete();
+  const back = useRefocusOnUndo(rejection.pending, rejection.undo);
 
   useEffect(() => {
     let live = true;
@@ -351,7 +371,7 @@ export const TrialWaitsCard: React.FC<{ skillId: string; kwantId: string; onOpen
 
   if (!skill || rejection.gone) return null;
   if (rejection.pending)
-    return <UndoNotice text={`Rejected “${skill.name}”. Its recorded steps are deleted when this closes.`} onUndo={rejection.undo} />;
+    return <UndoNotice text={`Rejected “${skill.name}”. Its recorded steps are deleted when this closes.`} onUndo={back.undo} />;
 
   const approve = async (edits?: SkillDraft) => {
     setBusy(true);
@@ -388,6 +408,7 @@ export const TrialWaitsCard: React.FC<{ skillId: string; kwantId: string; onOpen
             <Pencil size={11} aria-hidden="true" /> Edit, then approve
           </button>
           <button
+            ref={back.target}
             type="button"
             onClick={() => {
               setError(null);

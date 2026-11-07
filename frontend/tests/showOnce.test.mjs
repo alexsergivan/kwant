@@ -24,7 +24,7 @@ const m = await loadBundled(`
   export { emitContinuity } from './src/continuity';
   export { ShowOnceStart, RecordingStrip, StepReview, RecordStepsButton } from './src/components/ShowOnce';
   export { DraftSections, TryItOnce, KeepLine, ShownLine, shownOf } from './src/components/SkillDraft';
-  export { PendingSkill, ActiveSkill, SkillsPanel } from './src/components/SkillsPanel';
+  export { PendingSkill, ActiveSkill, SkillsPanel, TrialWaitsCard } from './src/components/SkillsPanel';
   export { React };
   export { createRoot } from 'react-dom/client';
 `);
@@ -419,7 +419,7 @@ test('Check the steps: every step numbered and named, masks as chips, the engine
   const dlg = host.querySelector('[role="dialog"]');
   assert.ok(dlg, 'a dialog');
   assert.equal(document.activeElement?.tagName, 'H3');
-  assert.match(host.textContent, /15 steps · 3 min 40 s · shop\.example\.com, crm\.example\.com/);
+  assert.match(host.textContent, /14 steps · 3 min 40 s · shop\.example\.com, crm\.example\.com/);  // 15 listed, one is a note: notes don't count (api.md step_count)
   const rows = [...host.querySelectorAll('li.so-step')];
   assert.equal(rows.length, 15);
   assert.equal(rows[2].getAttribute('aria-label'), 'Step 3: Typed in “Password”, kept as password not kept, uses the saved login');
@@ -472,7 +472,7 @@ test('delete a step: “Step n deleted.” with Undo focused; Undo puts it back'
   assert.ok(row);
   const undo = host.querySelector('button[aria-label="Undo deleting step 5"]');
   assert.equal(document.activeElement, undo);
-  assert.match(host.textContent, /14 steps · /, 'the subtitle counts what is still listed');
+  assert.match(host.textContent, /13 steps · /, 'the subtitle counts what is still listed');
   await click(undo);
   assert.ok(calls.some((c) => c.method === 'POST' && c.url.endsWith('/steps/5/restore')));
   assert.equal(byText(host, 'li', 'Step 5 deleted.'), undefined);
@@ -509,7 +509,7 @@ test('Escape asks before discarding; Keep them keeps; Discard deletes and closes
   const { host, unmount } = await mount(h(m.StepReview), true);
   await key('Escape');
   const conf = host.querySelector('[role="alertdialog"]');
-  assert.match(conf.textContent, /Discard all 15 steps\? Nothing is written, and the steps are deleted now\./);
+  assert.match(conf.textContent, /Discard all 14 steps\? Nothing is written, and the steps are deleted now\./);
   assert.equal(document.activeElement, byText(host, 'button', 'Keep them'));
   await click(byText(host, 'button', 'Keep them'));
   assert.equal(host.querySelector('[role="alertdialog"]'), null);
@@ -535,7 +535,7 @@ test('Keep recording goes back to the stage with the same list', async () => {
   reset();
 });
 
-test('Write: “is writing the skill from 15 steps”, then “wrote the skill”; Close hands the browser back', async () => {
+test('Write: “is writing the skill from 14 steps”, then “wrote the skill”; Close hands the browser back', async () => {
   fake({ [`POST ${R}/rec_1/write`]: [202, { recording: rec({ state: 'writing' }) }] });
   m.showOnceStore.set(reviewing());
   const ended = [];
@@ -543,7 +543,7 @@ test('Write: “is writing the skill from 15 steps”, then “wrote the skill�
   const { host, unmount } = await mount(h(m.StepReview), true);
   await click(byText(host, 'button', 'Write the skill'));
   assert.equal(m.showOnceStore.get().phase, 'writing');
-  assert.match(host.textContent, /Rook is writing the skill from 15 steps\./);
+  assert.match(host.textContent, /Rook is writing the skill from 14 steps\./);
   assert.match(host.textContent, /You can close this\./);
   assert.equal(host.querySelector('button[aria-label="Delete step 1"]')?.disabled ?? true, true, 'no edits while writing');
   m.showOnceStore.update((s) => m.applyRecording(s, rec({ state: 'written', skill_id: 'sk_1' })));
@@ -578,7 +578,7 @@ test('a failed write comes back to the review with the reason and Try again', as
 test('a stop at the limit says so in a banner; no engine blocks Write with the reason', async () => {
   m.showOnceStore.set(reviewing({ stop_reason: 'limit_steps', step_count: 200, engine: null }));
   const { host, unmount } = await mount(h(m.StepReview), true);
-  assert.match(host.textContent, /Stopped at 200 steps, the most one recording can take\. All 15 steps up to there are kept\./);
+  assert.match(host.textContent, /Stopped at 200 steps, the most one recording can take\. All 14 steps up to there are kept\./);
   assert.ok(host.querySelector('.so-banner.warn[role="status"]'));
   const w = byText(host, 'button', 'Write the skill');
   assert.equal(w.disabled, true);
@@ -604,7 +604,7 @@ test('Hand back while recording stops first, and hands back when the review clos
   const info = v.host.querySelector('.so-banner.info');
   assert.equal(info.getAttribute('role'), 'status', 'the person’s own action: status, not alert');
   assert.ok(info.querySelector('svg.lucide-hand'), 'lucide Hand icon');
-  assert.equal(info.querySelector('span').textContent, 'Stopped when you pressed Hand back. All 15 steps up to there are kept. Rook gets the browser back when you close this.');
+  assert.equal(info.querySelector('span').textContent, 'Stopped when you pressed Hand back. All 14 steps up to there are kept. Rook gets the browser back when you close this.');
   v.unmount();
   await m.showOnce.discard();
   assert.deepEqual(ended, [{ stage: 'k_rook', handBack: true }]);
@@ -645,6 +645,21 @@ test('a shown draft: the badge, its sections, Approve / Edit then approve / Reje
   for (const b of ['Approve', 'Edit, then approve', 'Reject', 'Try it once']) assert.ok(byText(host, 'button', b), b);
   assert.match(host.textContent, /The recorded steps are kept until Nov 14, or 7 days after you approve\. Rejecting deletes them\./);
   unmount();
+});
+
+test('Reject then Undo puts focus back on Reject, in Skills and on the chat trial card; nothing is sent', async () => {
+  const calls = fake({ ['GET /api/skills?status=pending']: [200, [skill()]] });
+  for (const el of [h(m.PendingSkill, { skill: skill(), botName: 'Rook' }), h(m.TrialWaitsCard, { skillId: 'sk_1', kwantId: 'k_rook' })]) {
+    const { host, unmount } = await mount(el);
+    await settle();
+    await click(byText(host, 'button', 'Reject'));
+    assert.equal(document.activeElement?.textContent.trim(), 'Undo');
+    await click(byText(host, 'button', 'Undo'));
+    assert.equal(document.activeElement?.textContent.trim(), 'Reject');
+    unmount();
+  }
+  assert.equal(calls.filter((c) => c.method !== 'GET').length, 0);
+  reset();
 });
 
 test('Try it once: inputs prefilled with the run’s examples, a plain warning, Start sends the values', async () => {
