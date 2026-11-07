@@ -272,6 +272,21 @@ jobs:
           path: ${{ runner.temp }}/nudge-linux
           if-no-files-found: ignore
           retention-days: 14
+      # This computer and a server, each in its own window, at once; then quit (SIGTERM here) and
+      # reopen, and both come back from desktop-places.json. Same script as the Mac job's step.
+      - name: Smoke test, side by side
+        timeout-minutes: 10
+        run: |
+          set -uo pipefail
+          sudo apt-get install -y --no-install-recommends imagemagick x11-utils > /dev/null || true
+          xvfb-run -a -s "-screen 0 2400x1000x24" dbus-run-session -- apps/mac/ci/side-by-side.sh "$RUNNER_TEMP/side-by-side-linux" "$PWD/apps/mac/target/release/kwant"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: side-by-side-linux
+          path: ${{ runner.temp }}/side-by-side-linux
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Collect the packages
         env:
           DEB: ${{ steps.bundle.outputs.deb }}

@@ -2,14 +2,18 @@
 // What landed and Reviews. The page fetches plan §3.2's routes, updates live on the `dev_card`
 // SSE (App re-sends it as DEV_CARD_EVENT) and mounts Iris's cards (#314) through DevDeskSlots.
 
-import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
 import { DEV_FEATURES, DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, gitOnlyRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
 import { DevStatusLine } from './DevStatusLine';
+import { TicketsPanel, useTickets } from './dev/TicketsTab';
+import { siteOrigins } from '../dev/tickets';
 import { openGitHubConnect } from './GitHubConnect';
+import { JiraHint, useJira } from './JiraSettings';
+import { deskBadge } from '../dev/jiraSetup';
 
 /** App re-sends the `dev_card` SSE as this window event: detail `{space_id, id, kind, status}`. */
 export const DEV_CARD_EVENT = 'kwant:dev-card';
@@ -122,7 +126,11 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
   // Flow F6: the badge is review cards new since the desk was last opened (the server keeps "seen",
   // so phone and desktop agree). Landed cards are news, not needs; floor approvals stay in the chat.
   // An older server without new_reviews falls back to the open reviews.
-  const count = rowBadge(dev, reviews);
+  // 0.7.6 (design §7): plus tickets waiting on you (questions, Brief ready); amber when there's one.
+  // With Jira never connected (or an older server) tickets are null and the badge is the 0.7.5 one.
+  const jira = useJira(spaceId, !!dev?.on);
+  const badge = deskBadge(rowBadge(dev, reviews), jira?.site ? jira.tickets : null);
+  const count = badge.count;
   // Flow F4: one soft highlight the first time the row appears in this space; never again, never looping.
   const [fresh] = useState(() => !firstRun.rowSeen(spaceId));
   useEffect(() => {
@@ -135,7 +143,7 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
     if (count > prev.current) setPop((n) => n + 1);
     prev.current = count;
   }, [count]);
-  const name = count > 0 ? `Dev desk, ${count} new ${count === 1 ? 'review' : 'reviews'}` : undefined;
+  const name = badge.label;
   return (
     <button
       type="button"
@@ -157,16 +165,23 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
           Dev desk<span className="sr-only">, </span>
         </span>
         <span className="block text-2xs text-zinc-400 truncate" data-dev-desk-status>
+          {badge.lead && (
+            <span className="text-amber-300" data-dev-desk-needs>
+              {badge.lead}
+              {' · '}
+            </span>
+          )}
           {desk.landed || desk.reviews ? deskStatus(landed, reviews) : desk.error ? 'Couldn’t load' : 'Loading…'}
         </span>
       </span>
       {count > 0 && (
         <span
           key={pop}
-          className={`kw-dv-row-badge shrink-0${pop ? ' kw-dv-row-badge-pop' : ''}`}
+          className={`kw-dv-row-badge shrink-0${badge.tone === 'needs' ? ' kw-dv-row-badge-needs' : ''}${pop ? ' kw-dv-row-badge-pop' : ''}`}
           aria-hidden="true"
-          title={`${count === 1 ? '1 new review' : `${count} new reviews`} to look at`}
+          title={badge.tickets ? badge.label : `${count === 1 ? '1 new review' : `${count} new reviews`} to look at`}
           data-dev-row-badge
+          data-tone={badge.tone === 'needs' ? 'needs' : undefined}
         >
           {count > 9 ? '9+' : count}
         </span>
@@ -178,7 +193,7 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
 // ---------------------------------------------------------------------------
 // The page
 
-type Tab = 'landed' | 'reviews';
+type Tab = 'landed' | 'reviews' | 'tickets';
 
 export interface DevDeskViewProps {
   spaceId: string;
@@ -193,9 +208,11 @@ export interface DevDeskViewProps {
   onOpenLooseEnds?: (anchor?: HTMLElement) => void;
   /** The space's teams, so a team with no repo gets "Link a repo" in the repo list. */
   teams?: DevTeamRef[];
+  /** 0.7.6: the space's bots, so a ticket's work reads "Built by Ann and Ben", not ids. */
+  bots?: { id: string; name: string }[];
 }
 
-export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams }) => {
+export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots }) => {
   const dev = useDevMode(spaceId);
   const connect = (anchor?: HTMLElement) => (onOpenLooseEnds ? onOpenLooseEnds(anchor) : openGitHubConnect({ space: spaceId, anchor }));
   // 0.7.2: with several repos, both lists filter by one (All · app · site) through `?repo=`.
@@ -207,6 +224,17 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   // 0.7.3 (any-git): a repo read with plain git has no forge: no CI tile, no Post button, no "Open on" link.
   const gitOnly = useCallback((key: string | null) => gitOnlyRepo(dev, key), [dev]);
   const [tab, setTab] = useState<Tab>(initialTab);
+  // 0.7.6: the Tickets tab exists only while Jira is connected; without it the desk is exactly 0.7.5's.
+  const jira = useTickets(spaceId, !!dev?.on);
+  const ticketsOn = !!jira.site;
+  const jiraOrigins = useMemo(() => siteOrigins(jira.site), [jira.site]);
+  const ticketNames = useMemo(
+    () => ({ bots: Object.fromEntries((bots ?? []).map((b) => [b.id, b.name])), teams: Object.fromEntries((teams ?? []).map((t) => [t.id, t.name])) }),
+    [bots, teams],
+  );
+  useEffect(() => {
+    if (tab === 'tickets' && !ticketsOn && !jira.loading) setTab('landed');
+  }, [tab, ticketsOn, jira.loading]);
   // Flow F6: opening the desk clears the row badge on every device. On a deep link to /s/<space>/dev
   // the store is still empty here, so the first state to arrive (fetched before the server saw the
   // desk) is cleared too, and again once the server has it.
@@ -361,9 +389,10 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   const polling = firstPolling(dev, landedCards.length);
   const statusShown = statusLine(dev) !== null;
 
-  const tabs: Array<{ key: Tab; label: string; count: number }> = [
+  const tabs: Array<{ key: Tab; label: string; count: number; tone?: 'needs' }> = [
     { key: 'landed', label: 'What landed', count: unseen },
     { key: 'reviews', label: 'Reviews', count: open },
+    ...(ticketsOn ? [{ key: 'tickets' as Tab, label: 'Tickets', count: jira.needs, tone: 'needs' as const }] : []),
   ];
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
     const n = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : null;
@@ -447,7 +476,12 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                   className={`kw-dv-tab ${focusRing}`}
                 >
                   {t.label}
-                  {t.count > 0 && <span className="kw-dv-tab-count">{t.count}</span>}
+                  {t.count > 0 && (
+                    <span className="kw-dv-tab-count" data-tone={t.tone}>
+                      {t.count}
+                      {t.tone === 'needs' && <span className="sr-only"> {t.count === 1 ? 'needs you' : 'need you'}</span>}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -483,7 +517,9 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
           )}
 
           <div ref={panelRef} role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${tab}`} className="space-y-3">
-            {tab === 'landed' && polling ? (
+            {tab === 'tickets' && ticketsOn ? (
+              <TicketsPanel space={spaceId} data={jira} names={ticketNames} />
+            ) : tab === 'landed' && polling ? (
               <SkeletonCards />
             ) : first && desk.loading ? (
               // Flow copy §6 on the first visit; style-v2 §9 "Reading main" with 2 cards on later loads.
@@ -532,7 +568,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                 )}
               </>
             ) : reviews.length ? (
-              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} />)
+              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} />)
             ) : (
               desk.reviews && (
                 <TermEmpty
@@ -540,7 +576,9 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                   out="0 open changes"
                   title="No open changes to review"
                   line="When a bot opens a pull request, a second bot reads it and the card lands here."
-                />
+                >
+                  <JiraHint space={spaceId} teams={teams} />
+                </TermEmpty>
               )
             )}
           </div>

@@ -28,9 +28,20 @@ pub enum RuntimeEvent {
         tool_name: String,
         details: Value,
     },
-    /// A pending approval can no longer be answered (its turn ended, or it expired).
+    /// A pending approval is closed: answered (in kwant or from Telegram), or it can no longer
+    /// be answered (its turn ended, or it expired). Both fields are absent on events stored
+    /// before they existed, so `{id}` alone still reads.
     ApprovalWithdrawn {
         id: String,
+        /// Where it was answered: "telegram", or absent (null) when answered in kwant or when
+        /// nobody answered it. The same value as the approval's `answered_via` in `GET /api/approvals`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answered_via: Option<String>,
+        /// The approval's stored status after closing: "allowed_once", "always_allowed",
+        /// "denied" (answered), "expired" (nobody answered in time, or an audit/generate card
+        /// closed) or "cancelled" (its turn ended or was stopped while waiting).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
     },
     TurnComplete {
         tokens: usize,
@@ -96,6 +107,14 @@ pub enum RuntimeEvent {
     /// `{id, kwant_id, deleted: true}`). See `crate::db::skills`.
     #[serde(rename = "skill_updated", alias = "SkillUpdated")]
     SkillUpdated { skill: Value },
+    /// A Show-it-once recording started, stopped, was written or lost its steps; `recording` is
+    /// the recording without any step (steps never go out on SSE). See `crate::db::show_once`.
+    #[serde(rename = "skill_recording_updated", alias = "RecordingUpdated")]
+    RecordingUpdated { recording: Value },
+    /// Show it once (A29): a Try it once turn ended. `outcome` is `done`, `failed` or `cancelled`;
+    /// `bot` is the bot whose chat ran it.
+    #[serde(rename = "show_once_trial_ended", alias = "TrialEnded")]
+    TrialEnded { skill_id: String, recording_id: Option<String>, bot: String, outcome: String },
     /// A question an agent asked the user was asked, answered or cancelled.
     #[serde(rename = "question_updated", alias = "QuestionUpdated")]
     QuestionUpdated { question: Value },
@@ -295,6 +314,25 @@ pub enum RuntimeEvent {
     /// Dev mode was turned on or off in a space.
     #[serde(rename = "dev_mode", alias = "DevMode")]
     DevMode { space_id: String, on: bool },
+    /// A Jira ticket picked up by Dev mode changed state (jira-tickets J4–J14); refetch
+    /// `GET /api/spaces/:id/dev/tickets/:key`. Carries no ticket text, only its key.
+    #[serde(rename = "dev_ticket", alias = "DevTicket")]
+    DevTicket { space_id: String, key: String, state: String },
+    /// One line of a ticket's reading checklist (jira-tickets api.md 1.7): `step` is `ticket`,
+    /// `comments`, `links`, `confluence` or `code`; `state` is `running`, `done` or `skipped`;
+    /// `detail` is kwant's own short line ("2 comments"). Sent on the bus only, never stored.
+    #[serde(rename = "dev_ticket_progress", alias = "DevTicketProgress")]
+    DevTicketProgress { space_id: String, key: String, step: String, state: String, detail: String },
+    /// A Telegram account paired with the space (next-077 §G). Never carries the bot token.
+    #[serde(rename = "telegram.paired", alias = "TelegramPaired")]
+    TelegramPaired { space_id: String, name: String, username: Option<String> },
+    /// The space's Telegram pairing code ran out before anyone used it.
+    #[serde(rename = "telegram.expired", alias = "TelegramExpired")]
+    TelegramExpired { space_id: String },
+    /// Something on the Telegram status changed (state, listening/offline, queue); refetch
+    /// `GET /api/connections/telegram`.
+    #[serde(rename = "telegram.status", alias = "TelegramStatus")]
+    TelegramStatus { space_id: String },
     /// An idea in the idea jar changed (dropped in, peeked at, picked, edited, shelved, deleted:
     /// `status` is then `deleted`); `GET /api/ideas/:id` has the rest.
     #[serde(rename = "idea_updated", alias = "IdeaUpdated")]
@@ -329,6 +367,22 @@ pub struct TurnTag {
 }
 
 impl RuntimeEvent {
+    /// An `ApprovalWithdrawn` saying how the card closed: `outcome` is the approval's stored
+    /// status, `answered_via` where it was answered ("telegram"; `None` in kwant or unanswered).
+    pub fn approval_withdrawn(id: impl Into<String>, outcome: &str, answered_via: Option<&str>) -> Self {
+        RuntimeEvent::ApprovalWithdrawn {
+            id: id.into(),
+            answered_via: answered_via.map(str::to_string),
+            outcome: Some(outcome.to_string()),
+        }
+    }
+
+    /// Whether an approval outcome is a person's answer (Allow once, Always allow, Deny), not a
+    /// card that closed on its own (expired, its turn ended).
+    pub fn is_answer(outcome: Option<&str>) -> bool {
+        matches!(outcome, Some("allowed_once" | "always_allowed" | "denied"))
+    }
+
     /// The JSON sent to SSE clients.
     pub fn to_wire(&self) -> Value {
         match self {
@@ -362,4 +416,35 @@ pub struct RoutingCandidate {
     pub id: String,
     pub name: String,
     pub title: String,
+}
+
+#[cfg(test)]
+mod approval_withdrawn_tests {
+    use super::RuntimeEvent;
+    use serde_json::json;
+
+    #[test]
+    fn an_old_id_only_withdrawn_event_still_reads() {
+        let old: RuntimeEvent = serde_json::from_value(json!({"type": "ApprovalWithdrawn", "data": {"id": "a1"}})).unwrap();
+        assert_eq!(old, RuntimeEvent::ApprovalWithdrawn { id: "a1".into(), answered_via: None, outcome: None });
+        assert!(!RuntimeEvent::is_answer(None));
+    }
+
+    #[test]
+    fn withdrawn_carries_where_and_how_it_closed() {
+        let tg = serde_json::to_value(RuntimeEvent::approval_withdrawn("a1", "allowed_once", Some("telegram"))).unwrap();
+        assert_eq!(tg, json!({"type": "ApprovalWithdrawn", "data": {"id": "a1", "answered_via": "telegram", "outcome": "allowed_once"}}));
+        // answered in kwant: no answered_via key (reads as null)
+        let app = serde_json::to_value(RuntimeEvent::approval_withdrawn("a2", "denied", None)).unwrap();
+        assert_eq!(app, json!({"type": "ApprovalWithdrawn", "data": {"id": "a2", "outcome": "denied"}}));
+        assert!(app["data"].get("answered_via").is_none());
+        let back: RuntimeEvent = serde_json::from_value(tg).unwrap();
+        assert_eq!(back, RuntimeEvent::approval_withdrawn("a1", "allowed_once", Some("telegram")));
+        for o in ["allowed_once", "always_allowed", "denied"] {
+            assert!(RuntimeEvent::is_answer(Some(o)));
+        }
+        for o in ["expired", "cancelled"] {
+            assert!(!RuntimeEvent::is_answer(Some(o)));
+        }
+    }
 }

@@ -1,0 +1,46 @@
+title: Telegram: message your kwant bots and get alerts on your phone
+description: Pair a Telegram chat with a kwant space. Write to your bots from Telegram, get their replies, questions and approvals on your phone, and allow some approvals once with a tap. It needs no public address.
+card_title: Telegram
+path: docs/telegram.html
+nav: telegram
+card: Write to your bots from Telegram and get what needs you on your phone. Some approvals can be allowed once.
+card_art: avatar:user
+---
+<p class="kicker">Docs</p>
+<h1>Telegram: your bots on your phone</h1>
+<p class="intro">Pair one Telegram chat with a space. Then you can write to your bots from Telegram and get their replies there, along with what needs you: questions, approvals, steps only you can do, and stuck bots. It uses a Telegram bot you make yourself, and your kwant needs no public address for it. It's off until you set it up.</p>
+<figure>
+  <div class="frame">{{shot:v075-telegram-card|A kwant chat where a request to open a pull request waits for approval, and the approval row reads "Allowed once from Telegram".|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>An approval tapped in Telegram shows in the chat as allowed once from Telegram.</figcaption>
+</figure>
+
+<h2 id="set-up">Set it up</h2>
+<p>Open <strong>Settings › This space › Connections</strong> and choose <strong>Telegram</strong>.</p>
+<ol>
+  <li><strong>Your Telegram bot.</strong> In Telegram, message @BotFather and make a new bot. BotFather replies with a token: paste it in kwant. Nothing is saved until Telegram accepts the token.</li>
+  <li><strong>Pair your Telegram account.</strong> Open the pairing link, or scan its QR code with your phone, and press Start in Telegram. The link works once, for 10 minutes.</li>
+  <li><strong>Choose your alerts</strong> under "Send me 'needs you' alerts for…", then send a test.</li>
+</ol>
+<p class="note warn">Telegram can read what you and your bots send in this chat. Bot chats there aren't end-to-end encrypted, so keep passwords and codes out of it.</p>
+
+<h2 id="alerts">What comes to Telegram</h2>
+<ul>
+  <li><strong>Questions with choices:</strong> answer with buttons in Telegram, or with a reply.</li>
+  <li><strong>Approvals:</strong> what's asked, with an Open button.</li>
+  <li><strong>Human steps:</strong> sign-ins, codes and CAPTCHAs, with an Open button.</li>
+  <li><strong>A bot is stuck or stopped,</strong> with what it was doing.</li>
+  <li><strong>A task you started from Telegram is done.</strong> Answers to your messages always come back.</li>
+</ul>
+
+<h2 id="approvals">Approvals from Telegram</h2>
+<p><strong>Allow approvals from Telegram</strong> is off at first. While it's off, approvals show what's asked, and you approve in the app: Telegram can't grant anything.</p>
+<p>With it on, some approvals get <strong>Allow once</strong> on the phone. kwant checks the approval again when you tap. "Always allow" stays in the app, and each approval made from Telegram is logged as "from Telegram".</p>
+<p>Never from Telegram: production connections, payment floors, human steps and Take over. Those always open the app, with the reason.</p>
+
+<h2 id="safety">The token and the spending stop</h2>
+<ul>
+  <li>The bot token stays in the vault. It never appears in replies, logs or a bot's context.</li>
+  <li>When the <a href="mission-board.html#spend-stop">daily spending stop</a> holds a message you sent from Telegram, the chat says so once. Press Continue in kwant, then send it again.</li>
+  <li>If another program reads the same Telegram bot, kwant pauses and says so. Stop the other program and your bots pick up again.</li>
+  <li><strong>Unpair</strong> has an Undo. <strong>Disconnect</strong> deletes the token.</li>
+</ul>

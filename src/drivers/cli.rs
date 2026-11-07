@@ -461,6 +461,35 @@ pub fn no_tools_refusal(tool_kind: &str, input: &TurnInput) -> Option<String> {
     }
 }
 
+/// Why this driver won't run a read-only turn ([`TurnInput::read_only`]), or `None` when it runs
+/// it read-only: claude through its permission hook (so it needs the turn's MCP context, whose
+/// approver holds every call), codex in its own read-only sandbox. No other CLI can be held to
+/// reading.
+pub fn read_only_refusal(tool_kind: &str, input: &TurnInput) -> Option<String> {
+    if !input.read_only {
+        return None;
+    }
+    match tool_kind {
+        "claude" if input.mcp.is_some() => None,
+        "codex" => None,
+        other => Some(format!("this turn may only read, and kwnt can't hold the {other} CLI to reading, so it didn't run it")),
+    }
+}
+
+/// [`CODEX_NO_TOOLS_CONFIG`] without its shell switches, and codex's read-only sandbox: the model
+/// keeps its shell to read and search the folder, and nothing else codex offers (web search,
+/// images, subagents, apps, browser). The sandbox stops every write and the shell's network; if
+/// codex can't start it, codex fails and kwnt never runs the turn without it.
+pub fn codex_read_only_args() -> Vec<String> {
+    let mut args: Vec<String> = CODEX_NO_TOOLS_CONFIG
+        .iter()
+        .filter(|c| !matches!(**c, "features.shell_tool=false" | "features.unified_exec=false"))
+        .flat_map(|c| ["-c".to_string(), c.to_string()])
+        .collect();
+    args.extend(["--sandbox".to_string(), "read-only".to_string()]);
+    args
+}
+
 /// The error for a no-tools run that was offered or used a tool anyway: the run was stopped and
 /// its reply dropped.
 fn no_tools_broken(tool_kind: &str, what: &str) -> DriverError {
@@ -1354,7 +1383,7 @@ impl Driver for CliDriver {
         event_tx: mpsc::Sender<RuntimeEvent>,
     ) -> Result<TurnOutput, DriverError> {
         let start = Instant::now();
-        if let Some(why) = no_tools_refusal(&self.tool_kind, &input) {
+        if let Some(why) = no_tools_refusal(&self.tool_kind, &input).or_else(|| read_only_refusal(&self.tool_kind, &input)) {
             tracing::warn!(cli = %self.tool_kind, "{why}");
             return Err(DriverError::Execution(why));
         }
@@ -1471,6 +1500,9 @@ impl Driver for CliDriver {
                 if input.no_tools {
                     // No shell, files, web, images, agents or plans (see CODEX_NO_TOOLS_CONFIG)
                     cmd.args(codex_no_tools_args());
+                } else if input.read_only {
+                    // A Dev mode brief (J7): reading only, whatever the ticket says
+                    cmd.args(codex_read_only_args());
                 } else if input.workspace_dir.as_deref().is_some_and(|d| d.exists()) {
                     // codex exec has no approval hook: its sandbox keeps file writes (and shell
                     // commands' writes) inside the bot's working folder instead of read-only everywhere
@@ -2097,6 +2129,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             teammates: vec![],
             mcp: None,
             no_tools: false,
+            read_only: false,
         };
 
         let result = build_cli_prompt(&input);
@@ -2148,6 +2181,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             teammates: vec![],
             mcp: None,
             no_tools: false,
+            read_only: false,
         };
 
         let result = build_cli_prompt(&input);
@@ -2195,6 +2229,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 teammates: vec![],
                 mcp: None,
                 no_tools,
+                read_only: false,
             }
         }
 
@@ -2403,6 +2438,50 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             for setting in CODEX_NO_TOOLS_CONFIG {
                 setting.parse::<toml::Table>().unwrap_or_else(|e| panic!("{setting}: {e}"));
             }
+        }
+
+        #[test]
+        fn only_claude_with_its_hook_and_codex_run_a_read_only_turn() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut ro = turn(false);
+            ro.read_only = true;
+            assert!(read_only_refusal("claude", &ro).unwrap().contains("only read"), "claude without its approver");
+            assert_eq!(read_only_refusal("codex", &ro), None);
+            for kind in ["grok", "gemini", ""] {
+                assert!(read_only_refusal(kind, &ro).unwrap().contains("only read"), "{kind}");
+            }
+            ro.mcp = Some(mcp_context(tmp.path()));
+            assert_eq!(read_only_refusal("claude", &ro), None);
+            assert!(read_only_refusal("grok", &ro).is_some(), "an approver doesn't make grok read-only");
+            // A turn that isn't read-only is never refused here
+            assert_eq!(read_only_refusal("grok", &turn(false)), None);
+        }
+
+        #[tokio::test]
+        async fn a_read_only_codex_turn_keeps_its_shell_and_gateway_in_the_read_only_sandbox() {
+            let fake = fake_codex(r#"echo '{"type":"item.completed","item":{"id":"m","type":"agent_message","text":"The card."}}'"#);
+            let folder = tempfile::tempdir().unwrap();
+            let tmp = tempfile::tempdir().unwrap();
+            let mut input = turn(false);
+            input.read_only = true;
+            input.workspace_dir = Some(folder.path().to_path_buf());
+            let mut ctx = mcp_context(tmp.path());
+            ctx.gateway = Some(crate::mcp::GatewayAccess { url: "http://127.0.0.1:1/api/mcp/gateway".into(), token: "tok".into() });
+            input.mcp = Some(ctx);
+            let out = fake.run(input).await.expect("a read-only codex turn runs");
+            assert_eq!(out.text, "The card.");
+            let argv = fake.argv();
+            // Read-only everywhere, never the folder's workspace-write
+            assert!(has_pair(&argv, "--sandbox", "read-only"), "{argv:?}");
+            assert!(!argv.iter().any(|a| a == "workspace-write"), "{argv:?}");
+            // Its shell stays, to read and search the code; everything else codex offers is off
+            assert!(!argv.iter().any(|a| a == "features.shell_tool=false" || a == "features.unified_exec=false"), "{argv:?}");
+            for setting in ["web_search=\"disabled\"", "features.multi_agent=false", "features.apps=false", "features.browser_use=false"] {
+                assert!(has_pair(&argv, "-c", setting), "{setting} not in {argv:?}");
+            }
+            // kwnt's gateway (jira_read and the rest) is there; the user's own server isn't
+            assert!(argv.iter().any(|a| a.contains("bearer_token_env_var")), "{argv:?}");
+            assert!(argv.iter().any(|a| a.contains(r#""usersrv"={enabled=false}"#)), "{argv:?}");
         }
 
         #[tokio::test]

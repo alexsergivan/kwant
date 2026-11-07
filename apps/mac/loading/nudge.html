@@ -108,12 +108,14 @@ html.kw-reduce .kw-nudge__av, html.kw-reduce .kw-nudge__badge, html.kw-reduce .k
   const go = what => { location.href = 'kwant-nudge://' + what; };
   // Plain text: escaped where it goes into HTML, as it is in the aria-label (an attribute set
   // through the DOM, never parsed), so "R&D" is read as "R&D".
+  // With more than one place running, the second line names the place: "kwant.jumpin.games · …"
+  const placed = (items, text) => (items[0] && items[0].place ? items[0].place + ' · ' : '') + text;
   const content = items => {
     if (items.length === 1) {
       const i = items[0];
-      return { av: initial(i.name), l1: (i.name || 'A bot') + ' ' + (VERB[i.kind] || 'needs you'), l2: String(i.title ?? '') };
+      return { av: initial(i.name), l1: (i.name || 'A bot') + ' ' + (VERB[i.kind] || 'needs you'), l2: placed(items, String(i.title ?? '')) };
     }
-    return { av: items.length > 9 ? '9+' : String(items.length), l1: items.length + ' things need you', l2: names(items) };
+    return { av: items.length > 9 ? '9+' : String(items.length), l1: items.length + ' things need you', l2: placed(items, names(items)) };
   };
   // The 12 s cap only limits arrival restarts; after the pointer leaves it always waits the full 2 s.
   const arm = (ms, capped) => { clearTimeout(timer); timer = setTimeout(leave, capped ? Math.max(0, Math.min(ms, CAP - (Date.now() - firstShown))) : ms); };

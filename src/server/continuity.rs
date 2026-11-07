@@ -551,6 +551,10 @@ pub async fn browser_act_payment(state: &AppState, target: &str, args: &Value) -
 /// The tools a turn's kwant server lists: `skill_draft` only while the bot has a Skill Foundry
 /// draft run open.
 async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
+    // A Dev mode brief turn gets its four reading tools and nothing else (J6, J7)
+    if super::dev::tickets::tools::brief_thread(state, scope).is_some() {
+        return Value::Array(super::dev::tickets::tools::tools());
+    }
     let board = super::missions::enabled(state).await;
     let mut tools = tool_list(scope, board);
     if super::missions::truth_ledger::on(state).await {
@@ -568,6 +572,9 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
 
 /// The names of the kwant tools `scope`'s turns are offered (without `skill_draft`).
 pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<String> {
+    if super::dev::tickets::tools::brief_thread(state, scope).is_some() {
+        return super::dev::tickets::tools::TOOLS.iter().map(|t| t.to_string()).collect();
+    }
     let board = super::missions::enabled(state).await;
     let mut tools = tool_list(scope, board);
     if super::missions::truth_ledger::on(state).await {
@@ -1045,6 +1052,15 @@ pub async fn self_endpoint(
         "tools/call" => {
             let args = &msg["params"]["arguments"];
             let name = msg["params"]["name"].as_str().unwrap_or("");
+            // A Dev mode brief turn: its four tools run, nothing else does (J7)
+            if let Some(thread) = super::dev::tickets::tools::brief_thread(&state, &scope) {
+                let (text, is_error) = if super::dev::tickets::tools::TOOLS.contains(&name) {
+                    super::dev::tickets::tools::call_checked(&state, &thread, name, args).await
+                } else {
+                    (super::dev::tickets::tools::REFUSED_TEXT.to_string(), true)
+                };
+                return tool_text(id, text, is_error);
+            }
             if name == "read_attachment" && scope.origin.is_some() {
                 let (content, is_error) = super::attachments::tool_read(&state, &scope, args).await;
                 return rpc_result(id, json!({"content": content, "isError": is_error}));
@@ -1706,11 +1722,21 @@ pub struct Notification {
 /// Sends `n` to the UI, the webhook and push subscriptions, if the user wants this kind. The body never holds chat
 /// text, tool arguments or settings, so nothing secret reaches the phone service.
 pub async fn notify(state: &AppState, n: Notification) {
+    notify_in(state, n, None).await
+}
+
+/// [`notify`] for a notification that names no bot but belongs to `space` (the spending stop:
+/// the space of the turn it held), so the space's Telegram chat and push still get it. With
+/// `None`, the space is the bot's.
+pub async fn notify_in(state: &AppState, n: Notification, space: Option<&crate::db::spaces::SpaceId>) {
     if !notify_on(state).await.iter().any(|k| k == n.kind) {
         return;
     }
     let body = clip(&n.body, NOTIFY_BODY_CHARS);
-    let space = notify_space(state, &n.kwant_id).await;
+    let space = match space {
+        Some(id) => space_named(state, id).await,
+        None => notify_space(state, &n.kwant_id).await,
+    };
     // With more than one space the phone can't tell "Laya finished" apart, so name the space
     let title = match &space {
         Some((_, name, true)) => clip(&format!("{name} · {}", n.title), 120),
@@ -1751,7 +1777,12 @@ pub async fn notify(state: &AppState, n: Notification) {
 /// The kwant's space: id, name and whether other active spaces exist.
 async fn notify_space(state: &AppState, kwant_id: &str) -> Option<(String, String, bool)> {
     let id = state.db.space_of_kwant(kwant_id).await.ok().flatten()?;
-    let space = state.db.get_space(&id).await.ok().flatten()?;
+    space_named(state, &id).await
+}
+
+/// The space `id`: id, name and whether other active spaces exist.
+async fn space_named(state: &AppState, id: &crate::db::spaces::SpaceId) -> Option<(String, String, bool)> {
+    let space = state.db.get_space(id).await.ok().flatten()?;
     let several = state
         .db
         .list_spaces()

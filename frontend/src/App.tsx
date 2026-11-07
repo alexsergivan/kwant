@@ -54,9 +54,12 @@ import { JarIcon } from './components/JarIcon';
 import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToast';
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSquare, Settings, Sparkles } from 'lucide-react';
-import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
+import { ChatApproval, OpenChat, addSettled, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
+import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
+import { ReadyTeamsWelcome } from './components/ReadyTeamsEntry';
 import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -69,6 +72,8 @@ import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
 import { recentWork, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
+import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
+import { LiveMissPage } from './components/WatchLive';
 import {
   ChatLoads,
   Delegation,
@@ -120,9 +125,10 @@ import {
 } from './questions';
 import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
 import { needsYouRows } from './chatsTab';
-import { Space, eventsUrl, pickInitialChat } from './spaces';
+import { Space, eventsUrl, getCurrentSpace, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
+import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
@@ -132,10 +138,13 @@ import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
-import { devApi, devStore } from './devMode';
+import { devApi, devStore, devTeamRefs } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
+import { JiraSetupHost } from './components/JiraSetup';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
+import { DEV_TICKET_EVENT, DEV_TICKET_PROGRESS_EVENT } from './components/dev/TicketsTab';
+import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
@@ -153,6 +162,8 @@ const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) =
 export interface SpaceTarget {
   channelId?: string;
   botId?: string;
+  /** W2: the chat's `/live` address, with the browser panel open. */
+  live?: boolean;
 }
 
 export interface SpaceAppProps {
@@ -211,7 +222,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The Idea jar is a tab of the list on phones, so a link to it opens on the list. The Inbox opens
   // over it, as a tap does (a notification's Needs you lands there).
   const [phoneView, setPhoneView] = useState<'list' | 'chat'>(() =>
-    initialView?.kind === 'inbox' || (initialView?.kind !== 'jar' && (initialTarget?.channelId || initialTarget?.botId)) ? 'chat' : 'list',
+    initialView?.kind === 'inbox' || (initialView?.kind !== 'jar' && (initialTarget?.channelId || initialTarget?.botId || initialTarget?.live)) ? 'chat' : 'list',
   );
   const [phoneTab, setPhoneTab] = useState<PhoneTab>(() => (initialView?.kind === 'jar' ? 'jar' : 'chats'));
   const [loaded, setLoaded] = useState(false);
@@ -287,6 +298,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const currentTeamRef = useRef<Team | null>(null);
   // Every tool approval still waiting, from live events and, after a reload or reconnect, the server.
   const [pendingApprovals, setPendingApprovals] = useState<ChatApproval[]>([]);
+  const pendingRef = useRef<ChatApproval[]>([]);
+  pendingRef.current = pendingApprovals;
+  // Approvals allowed in Telegram, kept in their chat as one line (live, and from the server after a reload).
+  const [settledApprovals, setSettledApprovals] = useState<ChatApproval[]>([]);
   // Seen live since the last server list: kept even if that list was fetched just before.
   const liveApprovalIdsRef = useRef<Set<string>>(new Set());
   const dropApproval = (id: string) => {
@@ -336,6 +351,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const engines = useEngines(true);
   const canRun = canRunNow(engines.engines);
   const offerClaude = canRun === false && claudeNeedsSignIn(engines.engines);
+  // Claude Code isn't here but kwant can install it: "Set up Claude" installs, then signs in, in one go.
+  const claudeMissing = canRun === false && !!engines.engines?.some((e) => e.id === 'claude' && e.status === 'not_installed' && e.enabled !== false);
+  const [claudeInstallable, setClaudeInstallable] = useState(false);
+  useEffect(() => {
+    if (!claudeMissing) return;
+    let gone = false;
+    setupApi
+      .status()
+      .then((items) => !gone && setClaudeInstallable(canInstall(items, 'claude') === true))
+      .catch(() => !gone && setClaudeInstallable(false));
+    return () => void (gone = true);
+  }, [claudeMissing]);
+  const offerSetup = claudeMissing && claudeInstallable;
+  const setupLabel = offerSetup ? 'Set up Claude' : offerClaude ? 'Sign in with Claude' : 'Add an account';
+  const setupAction = offerSetup || offerClaude ? openClaudeSignIn : openSettings;
   // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
   useSettingsCover(!!spaceSettingsTab, contentRef);
@@ -722,6 +752,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const hydrateFromServer = async () => {
     skillsApi.list({ status: 'pending' }).then(setPendingSkills, () => undefined);
     refreshAwayCount();
+    awayApi.approvals('allowed_once').then((rows) => setSettledApprovals((prev) => addSettled(prev, settledFromRecords(rows))), () => undefined);
     questionsApi.listOpen().then((list) => {
       // Closed ones seen live stay; open ones come from the server.
       setQuestions((prev) => {
@@ -766,6 +797,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     } catch {
       clearAllTurns();
     }
+    setTurnsHydrated((n) => n + 1);
   };
 
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
@@ -774,6 +806,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [isNewChannelOpen, setIsNewChannelOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
+  const [editingTeamFocusWs, setEditingTeamFocusWs] = useState(false);
+  useEffect(() => {
+    if (!editingTeam) setEditingTeamFocusWs(false);
+  }, [editingTeam]);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
   const [deletingKwant, setDeletingKwant] = useState<Kwant | null>(null);
   const [editingTab, setEditingTab] = useState<EditTab>('profile');
@@ -798,7 +834,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [routeChoices, setRouteChoices] = useState<Record<string, RouteChoiceMeta>>({});
 
   // Virtual Machine & Live Browser state
+  // A `/live` address (W2) opens the chat with its browser showing, cold opens included, once the
+  // running turns are in and the chat's browser is active. Otherwise (an unknown, malformed or idle
+  // link) it shows the plain "this bot isn't browsing now" page (W-L4).
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
+  const [liveGate, setLiveGate] = useState<null | 'pending' | 'miss'>(() => (initialTarget?.live ? 'pending' : null));
+  // W1: chats whose browser is active right now, from the browser events every stream gets
+  const [browsing, setBrowsing] = useState<BrowsingMap>({});
+  // Bumped each time the running turns come in from the server (first connect and every reconnect)
+  const [turnsHydrated, setTurnsHydrated] = useState(0);
+  const [browsingSeeded, setBrowsingSeeded] = useState(0);
   const [solveRequest, setSolveRequest] = useState(0);
   const [activeUrl, setActiveUrl] = useState('');
   const [pageTitle, setPageTitle] = useState('');
@@ -1087,6 +1132,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             setPendingSkills((prev) => applySkillEvent(prev, sk).filter((x) => x.status === 'pending'));
             break;
           }
+          case 'skill_recording_updated':
+          case 'SkillRecordingUpdated': {
+            // Show it once (api.md §5): state changes only, never steps
+            const rec = event.data?.recording;
+            if (rec?.id) emitContinuity({ type: 'recording_updated', data: rec });
+            break;
+          }
+          case 'show_once_trial_ended':
+          case 'ShowOnceTrialEnded': {
+            // Show it once (api.md §10): a trial finished, so the chat can show the "still waits" card
+            const t = event.data;
+            if (t && typeof t.skill_id === 'string' && t.skill_id)
+              emitContinuity({
+                type: 'trial_ended',
+                data: { skill_id: t.skill_id, recording_id: typeof t.recording_id === 'string' ? t.recording_id : null, bot: String(t.bot ?? ''), outcome: String(t.outcome ?? '') },
+              });
+            break;
+          }
           case 'mcp_suggestion_updated':
           case 'McpSuggestionUpdated': {
             const sg: Suggestion | undefined = event.data?.suggestion;
@@ -1162,6 +1225,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const d = event.data ?? {};
             if (typeof d.space_id === 'string' && typeof d.id === 'string') {
               window.dispatchEvent(new CustomEvent<DevCardEvent>(DEV_CARD_EVENT, { detail: { space_id: d.space_id, id: d.id, kind: String(d.kind ?? ''), status: String(d.status ?? '') } }));
+            }
+            break;
+          }
+          // 0.7.6 Work from Jira: the Tickets tab refetches on `dev_ticket`; a reading card folds in `dev_ticket_progress`.
+          case 'dev_ticket':
+          case 'dev_ticket_progress': {
+            const d = event.data ?? {};
+            if (typeof d.space_id === 'string' && typeof d.key === 'string') {
+              window.dispatchEvent(new CustomEvent(event.type === 'dev_ticket' ? DEV_TICKET_EVENT : DEV_TICKET_PROGRESS_EVENT, { detail: d }));
             }
             break;
           }
@@ -1280,8 +1352,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             playSfx('alert');
             break;
           }
-          case 'ApprovalWithdrawn':
-            dropApproval(event.data.id);
+          case 'ApprovalWithdrawn': {
+            // Answered in Telegram (when the server says so): kept in the chat as a resolved row (G4).
+            // Allowed in Telegram: the card stays as one line. Old {id}-only events just close it.
+            const { settled } = withdrawApproval(pendingRef.current, [], event.data);
+            if (settled.length) setSettledApprovals((prev) => addSettled(prev, settled));
+            dropApproval(event.data?.id);
+            break;
+          }
+          case 'telegram.status':
+          case 'telegram.paired':
+          case 'telegram.expired':
+            if (forThisSpace(event.data?.space_id, getCurrentSpace()))
+              window.dispatchEvent(new CustomEvent<TelegramEventDetail>(TG_EVENT, { detail: { type: event.type, data: event.data ?? {} } }));
             break;
           case 'discussion_started':
           case 'DiscussionStarted': {
@@ -1366,6 +1449,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'browser_navigated':
           case 'BrowserNavigated': {
             const teamId = event.data?.team_id;
+            setBrowsing((m) => noteBrowser(m, teamId, event.data?.url, Date.now()));
             const currentTid = activeSandboxIdRef.current;
             const k = currentKwantRef.current;
             const t = currentTeamRef.current;
@@ -1389,6 +1473,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'browser_screenshot':
           case 'BrowserScreenshot': {
             const teamId = event.data?.team_id;
+            setBrowsing((m) => noteBrowser(m, teamId, event.data?.url, Date.now()));
             const currentTid = activeSandboxIdRef.current;
             const k = currentKwantRef.current;
             const t = currentTeamRef.current;
@@ -2172,6 +2257,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const a = d === 'undo' ? await botActionsApi.undo(actionId) : d === 'confirm' ? await botActionsApi.confirm(actionId) : await botActionsApi.decline(actionId);
       setBotActions((prev) => applyBotAction(prev, a));
+      // U-1: an Undo from the history can remove a team and its chat; pick up the lists without a reload.
+      if (d === 'undo') {
+        refreshRoster();
+        void syncChannelsAfterUndo();
+      }
       playSfx('click');
     } catch (err) {
       // Already decided elsewhere: pick up the real state so the card stops offering the button.
@@ -2535,6 +2625,104 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
   };
 
+  // 0.7.7 T: a template team was made; open its chat (the server answers with its channel id).
+  // U-1: where the person was before a new team's chat opened, so Undo can take them back there.
+  const beforeNewTeamRef = useRef<{ id: string; isChannel: boolean } | null>(null);
+  const openNewTeamChat = async (created: { id: string; name: string }, channelId: string) => {
+    if (selectedIdRef.current) beforeNewTeamRef.current = { id: selectedIdRef.current, isChannel: isChannelRef.current };
+    // U-2: the team is known at once (the roster reload brings the full row), so its chat is a team
+    // chat from the first frame: the Needs card, never the first-run welcome.
+    setTeams((prev) => (prev.some((t) => t.id === created.id) ? prev : [...prev, { id: created.id, name: created.name, icon: '', lead_kwant_id: '', member_kwants: [], created_at: new Date().toISOString() }]));
+    setSelectedTeamId(created.id);
+    let chan: Channel | undefined;
+    try {
+      const cRes = await fetch('/api/channels');
+      if (cRes.ok) {
+        const freshChannels: Channel[] = await cRes.json();
+        setChannels(freshChannels);
+        chan = freshChannels.find((c) => c.id === channelId) ?? teamChannelOf(freshChannels, created as Team);
+      }
+    } catch {
+      /* the channel event selects nothing; the id alone is enough below */
+    }
+    const id = chan?.id ?? channelId;
+    if (!id) return;
+    setSelectedId(id);
+    selectedIdRef.current = id;
+    setIsChannel(true);
+    isChannelRef.current = true;
+    messagesCacheRef.current[id] = [];
+    setMessages([]);
+    setPage('chat');
+    setPhoneView('chat');
+  };
+  // U-1: Undo removed a team. Its chat leaves the lists at once; if it was open, go back to where the
+  // person was before (or the space's home). Then the server's channel list confirms it.
+  const leaveRemovedChat = (gone: Set<string>) => {
+    if (!isChannelRef.current || !selectedIdRef.current || !gone.has(selectedIdRef.current)) return;
+    const prev = beforeNewTeamRef.current;
+    beforeNewTeamRef.current = null;
+    const left = channelsRef.current.filter((c) => !gone.has(c.id));
+    if (prev && !prev.isChannel && kwants.some((k) => k.id === prev.id)) {
+      handleSelectKwant(kwants.find((k) => k.id === prev.id)!);
+      return;
+    }
+    const back =
+      (prev?.isChannel && !gone.has(prev.id) && left.find((c) => c.id === prev.id)) ||
+      left.find((c) => c.id === space.general_channel_id) ||
+      left[0];
+    if (back) handleSelectChannel(back);
+    else {
+      setSelectedId('');
+      selectedIdRef.current = '';
+      setSelectedTeamId(null);
+      setMessages([]);
+    }
+  };
+  const syncChannelsAfterUndo = async () => {
+    try {
+      const cRes = await fetch('/api/channels');
+      if (!cRes.ok) return;
+      const fresh: Channel[] = await cRes.json();
+      const ids = new Set(fresh.map((c) => c.id));
+      const gone = new Set(channelsRef.current.filter((c) => !ids.has(c.id)).map((c) => c.id));
+      setChannels(fresh);
+      channelsRef.current = fresh;
+      for (const id of gone) delete messagesCacheRef.current[id];
+      leaveRemovedChat(gone);
+    } catch {
+      /* the next load brings it */
+    }
+  };
+  const handleTeamUndone = (team: { id: string; name: string }) => {
+    const chan = teamChannelOf(channelsRef.current, team);
+    setTeams((prev) => prev.filter((t) => t.id !== team.id));
+    if (chan) {
+      const gone = new Set([chan.id]);
+      leaveRemovedChat(gone);
+      const left = channelsRef.current.filter((c) => c.id !== chan.id);
+      setChannels(left);
+      channelsRef.current = left;
+      delete messagesCacheRef.current[chan.id];
+    } else if (selectedTeamId === team.id) setSelectedTeamId(null);
+    void syncChannelsAfterUndo();
+  };
+  const [looseAddImap, setLooseAddImap] = useState(0);
+  const openTeamNeed = (opens: string, team: ReadyTeam) => {
+    if (opens === 'loose_ends_imap') {
+      setLooseAddImap((n) => n + 1);
+      showPage('inbox', 'loose');
+    } else if (opens === 'connections') openConnections();
+    else if (opens === 'dev_mode_setup') {
+      // The team's repo is set in Manage team (Team settings > Git Repo), where Dev mode's line shows.
+      const t = teams.find((x) => x.id === team.id);
+      if (t) {
+        setEditingTeamFocusWs(true);
+        setEditingTeam(t);
+      }
+    }
+  };
+
   const handleUpdateTeam = async (
     id: string,
     data: {
@@ -2860,10 +3048,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The address bar and "reopen where I was" follow the open chat.
   const chatChangeRef = useRef(onChatChange);
   chatChangeRef.current = onChatChange;
+  // W-L4: the chat a `/live` link names is one of this space's
+  const liveTargetKnown = !!(initialTarget?.botId ? kwants.some((k) => k.id === initialTarget.botId) : initialTarget?.channelId && channels.some((c) => c.id === initialTarget.channelId));
   useEffect(() => {
     if (!loaded || !selectedId) return;
-    chatChangeRef.current(isChannel ? { channelId: selectedId } : { botId: selectedId });
-  }, [loaded, selectedId, isChannel]);
+    // The address says `/live` while the panel is open; closing it rewrites it back to the chat in
+    // place (the Shell replaces, never pushes), so Back doesn't reopen the panel.
+    // A `/live` link that is still being checked, or showing "isn't browsing now", keeps its address.
+    const live = isVmPaneOpen || (liveGate && liveTargetKnown) ? { live: true } : {};
+    chatChangeRef.current(isChannel ? { channelId: selectedId, ...live } : { botId: selectedId, ...live });
+  }, [loaded, selectedId, isChannel, isVmPaneOpen, liveGate, liveTargetKnown]);
 
   const isCurrentContextStreaming = openCtx in live;
   const decidingHere = deciding[openCtx] ?? null;
@@ -2930,6 +3124,76 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         {pendingHere === 1 ? '1 skill to review' : `${pendingHere} skills to review`}
       </button>
     ) : null;
+  // W1–W3 Watch live. An owner stays while a running turn drives its browser, and drops after a minute
+  // with no browser event.
+  const teamOfCh = (c: { id: string; name: string }) => teamOfChannel(teams, c);
+  const runningTurns = Object.values(turns);
+  const liveBrowsing: BrowsingMap = Object.fromEntries(
+    Object.entries(browsing).filter(([owner]) => ownerStillRunning(owner, runningTurns, channels, teamOfCh)),
+  );
+  const browsingKey = Object.keys(liveBrowsing).sort().join(',');
+  useEffect(() => {
+    // Forget owners whose last turn ended, so an old page never comes back with the next turn. The
+    // check reads the newest turns inside the updater: a key from this render could be older than a
+    // browser event queued meanwhile, and dropped it (QA F6).
+    if (!loaded) return;
+    setBrowsing((m) => pruneBrowsing(m, Object.values(turnsRef.current), channelsRef.current, (c) => teamOfChannel(teamsRef.current, c)));
+  }, [turns, loaded]);
+  useEffect(() => {
+    // A page opened mid-turn: a running turn whose newest step is a browser tool is browsing already
+    if (!loaded || !turnsHydrated) return;
+    const withSteps = Object.values(turnsRef.current).map((t) => ({ ...t, steps: activityRef.current[t.turn_id]?.steps }));
+    setBrowsing((m) => seedBrowsing(m, withSteps, channelsRef.current, (c) => teamOfChannel(teamsRef.current, c), Date.now()));
+    setBrowsingSeeded(turnsHydrated);
+  }, [turnsHydrated, loaded]);
+  useEffect(() => {
+    if (!browsingKey) return;
+    const id = window.setInterval(() => setBrowsing((m) => expireBrowsing(m, Date.now())), 5_000);
+    return () => window.clearInterval(id);
+  }, [browsingKey]);
+  const globes = globeRows(liveBrowsing, runningTurns, channels, teamOfCh);
+  const browserNeedsYou = new Set(Object.values(humanSteps).filter((st) => st.status === 'open' && st.sandbox_target).map((st) => st.sandbox_target!));
+  const describeOwner = (owner: string) => {
+    const t = teams.find((x) => x.id === owner);
+    if (t) return { kind: 'team' as const, label: t.name };
+    const c = channels.find((x) => x.id === owner);
+    if (c) {
+      const ct = teamOfCh(c);
+      return ct ? { kind: 'team' as const, label: ct.name } : { kind: 'channel' as const, label: c.name };
+    }
+    const k = kwants.find((x) => x.id === owner);
+    return k ? { kind: 'bot' as const, label: k.name, sprite: k.avatar_sprite } : null;
+  };
+  /** Opens the chat a browser belongs to, with the panel open (the W2 `/live` address follows). */
+  const watchOwner = (owner: string) => {
+    const t = teams.find((x) => x.id === owner);
+    const c = !t ? channels.find((x) => x.id === owner) : undefined;
+    const k = !t && !c ? kwants.find((x) => x.id === owner) : undefined;
+    if (t) handleSelectTeam(t);
+    else if (c) handleSelectChannel(c);
+    else if (k) handleSelectKwant(k);
+    else return;
+    setIsVmPaneOpen(true);
+  };
+  // W-L4: decide a `/live` link once the chats, the running turns and the seeded browsers are in.
+  const liveHere = !!liveBrowsing[activeSandboxId];
+  useEffect(() => {
+    if (!liveGate || !loaded || !browsingSeeded) return;
+    if (liveTargetKnown && liveHere) {
+      setIsVmPaneOpen(true);
+      setLiveGate(null);
+    } else if (liveGate === 'pending') setLiveGate('miss');
+  }, [liveGate, loaded, browsingSeeded, liveTargetKnown, liveHere]);
+  // Opening any other chat (or a page) leaves the "isn't browsing now" page
+  const missChatRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (liveGate !== 'miss') return;
+    if (missChatRef.current === null) missChatRef.current = selectedId;
+    else if (missChatRef.current !== selectedId) setLiveGate(null);
+  }, [liveGate, selectedId]);
+  const switcherEntries = switchEntries(liveBrowsing, describeOwner, (o) => browserNeedsYou.has(o));
+  const vmSwitcher = switcherEntries.length >= 2 ? { entries: switcherEntries, current: activeSandboxId, onPick: watchOwner } : null;
+
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
@@ -3108,11 +3372,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         </div>
         <button
           type="button"
-          onClick={offerClaude ? openClaudeSignIn : openSettings}
+          onClick={setupAction}
+          data-setup-action={offerSetup ? 'install-claude' : offerClaude ? 'sign-in-claude' : 'add-account'}
           className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300"
         >
           <KeyRound size={13} aria-hidden="true" />
-          {offerClaude ? 'Sign in with Claude' : 'Add an account'}
+          {setupLabel}
         </button>
       </div>
     ) : null;
@@ -3216,6 +3481,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      browsingOwners={globes.owners}
+      browsingBots={globes.bots}
+      browserNeedsYou={browserNeedsYou}
+      onWatchBrowser={watchOwner}
       botStatus={botStatus}
       needsYou={needsYouByKwant}
       needsYouRows={isPhone && section === 'chats' ? needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))) : undefined}
@@ -3342,7 +3611,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
   const loose = (
     <LooseEndsPage
+      key={`loose-${looseAddImap}`}
       onOpenChat={openThread}
+      addImap={looseAddImap > 0}
     />
   );
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount} onBack={backToList} newPage={away} loosePage={loose} />;
@@ -3358,6 +3629,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           streamingText={isCurrentContextStreaming ? streamingText : ''}
           streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
           pendingApprovals={approvalsHere}
+          settledApprovals={approvalsForChat(settledApprovals, openChat)}
           home={chatHome}
           isStreaming={isCurrentContextStreaming}
           streamingSpeakerName={live[openCtx] || undefined}
@@ -3390,6 +3662,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 }
               : undefined
           }
+          onOpenSkills={(kwantId) => openSkillsRef.current(kwantId)}
           isVmPaneOpen={isVmPaneOpen}
           onToggleVmPane={() => setIsVmPaneOpen((prev) => !prev)}
           activeUrl={activeUrl}
@@ -3404,8 +3677,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           vmApprovalsOff={space.approvals === 'off' || kwants.some(approvalsOff)}
           vmCaptchaStep={captchaStepFor(humanSteps, activeSandboxId)}
           vmHumanStep={openStepFor(humanSteps, activeSandboxId)}
+          onWatchBrowser={liveBrowsing[activeSandboxId] ? () => setIsVmPaneOpen(true) : undefined}
+          vmSwitcher={vmSwitcher}
           onVmStepDone={(id) => answerHumanStep(id, 'done')}
           vmSolveRequest={solveRequest}
+          vmShowOnceBot={currentKwant && !currentTeam ? { id: currentKwant.id, name: currentKwant.name } : undefined}
           pinned={pinned}
           onEditInstructions={
             isChannel && currentChannel
@@ -3420,13 +3696,28 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           subHeader={subHeader}
           threadLine={isPhone && threadBarProps ? <ThreadPicker {...threadBarProps} /> : undefined}
           notice={setupBanner}
-          welcome={
-            setupBanner && isChannel ? (
-              <FirstRunWelcome
-                bots={kwants}
-                actionLabel={offerClaude ? 'Sign in with Claude' : 'Add an account'}
-                onAction={offerClaude ? openClaudeSignIn : openSettings}
+          topCard={
+            isChannel && currentTeam ? (
+              <TeamNeedsTop
+                team={currentTeam}
+                canRun={canRun !== false}
+                personPosts={messages.filter((m) => m.sender_role === 'user').length}
+                refreshKey={settingsClosedCount}
+                onAddAccount={setupAction}
+                onOpenNeed={(opens) => openTeamNeed(opens, currentTeam)}
               />
+            ) : undefined
+          }
+          welcome={
+            setupBanner && isChannel && !selectedTeamId && !currentTeam ? (
+              <>
+                <FirstRunWelcome
+                  bots={kwants}
+                  actionLabel={setupLabel}
+                  onAction={setupAction}
+                />
+                <ReadyTeamsWelcome onBlank={() => setIsNewTeamOpen(true)} />
+              </>
             ) : undefined
           }
           onOpenAccounts={openSettings}
@@ -3511,10 +3802,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
     />
   );
-  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={teams.map((t) => ({ id: t.id, name: t.name }))} />;
+  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name }))} />;
   const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
+    </main>
+  ) : liveGate === 'miss' ? (
+    <LiveMissPage
+      chatLabel={isChannel ? (currentTeam?.name ? `@${currentTeam.name}` : currentChannel?.name ? `#${currentChannel.name}` : '') : currentKwant?.name ? `@${currentKwant.name}` : ''}
+      kind={isChannel ? 'place' : 'bot'}
+      onOpenChat={() => setLiveGate(null)}
+      onBack={isPhone ? () => { setLiveGate(null); setPhoneView('list'); } : undefined}
+    />
+  ) : liveGate === 'pending' ? (
+    <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
+      <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening the live page…
     </main>
   ) : chat;
 
@@ -3537,10 +3839,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
+  const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (
-    // overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
-    // once slid the whole chat under its header (P1-7). Browsers without clip keep hidden.
+    <ReadyTeamsProvider
+      space={space.id}
+      bots={readyBots}
+      teams={teams}
+      onChanged={refreshRoster}
+      onOpenTeam={(t, channelId) => void openNewTeamChat(t, channelId)}
+      onUndone={handleTeamUndone}
+    >
+    {/* overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
+        once slid the whole chat under its header (P1-7). Browsers without clip keep hidden. */}
     <div className="relative flex-1 min-w-0 h-full flex flex-col bg-surface-main text-zinc-100 overflow-hidden [overflow:clip]" data-space={space.id}>
       <div ref={contentRef} className={`flex-1 min-h-0 flex ${isPhone ? 'flex-col' : 'overflow-hidden'}`}>
         {isPhone ? (
@@ -3549,8 +3860,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               <div className="flex-1 min-h-0 flex flex-col">
                 {needsSetup ? (
                   <>
-                    {sidebar('chats')}
-                    {setupChecklist}
+                    {/* U-4: the Bots tab has "+ Team", "+ Bot" and the ready-teams box with zero bots, as on desk.
+                        It gets the full height: split with the checklist, the box was cut in half. */}
+                    {phoneTab === 'bots' ? (
+                      sidebar('bots')
+                    ) : (
+                      <>
+                        {sidebar('chats')}
+                        {setupChecklist}
+                      </>
+                    )}
                   </>
                 ) : phoneTab === 'jar' ? (
                   <div className="flex-1 min-h-0 flex" data-main-pane>{jarPage}</div>
@@ -3599,6 +3918,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       {/* New bot */}
       <Suspense fallback={null}>
+        {/* Show it once: the review sheet sits over the Take over stage, outside it (design §S) */}
+        <StepReview />
+
         <NewAgentModal
           isOpen={isNewAgentOpen}
           onClose={() => {
@@ -3642,6 +3964,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 }
               : undefined
           }
+          onShowOnce={
+            editingKwant
+              ? () => {
+                  const k = editingKwant;
+                  setEditingKwant(null);
+                  openTarget({ kwant_id: k.id, channel_id: null });
+                  setIsVmPaneOpen(true);
+                }
+              : undefined
+          }
+          browserUrl={editingKwant && editingKwant.id === activeSandboxId ? activeUrl : undefined}
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
           onRequestDelete={editingKwant ? () => setDeletingKwant(editingKwant) : undefined}
           onApprovalsChanged={refreshRoster}
@@ -3682,6 +4015,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         onClose={() => setEditingTeam(null)}
         onUpdateTeam={handleUpdateTeam}
         onDeleteTeam={handleDeleteTeam}
+        focusWorkspace={editingTeamFocusWs}
       />
 
       {spaceSettingsTab && (
@@ -3776,6 +4110,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+      <JiraSetupHost onSaved={() => pushToast('Taking tickets from Jira', 'Tickets you hand over show up on the Dev desk.')} />
       <GitHubConnectHost
         onConnected={(_space, source, test) => {
           const t = connectedToast(source, test);
@@ -3809,5 +4144,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       </p>
       <NeedsYouPill items={pill.items} rev={pill.rev} spriteOf={spriteOf} onOpen={openPill} onDismiss={dismissPill} />
     </div>
+    </ReadyTeamsProvider>
   );
 };

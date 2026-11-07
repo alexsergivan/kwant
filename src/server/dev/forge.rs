@@ -147,7 +147,7 @@ impl reqwest::dns::Resolve for Pinned {
 }
 
 /// Whether a request failed because [`Pinned`] refused its host's addresses.
-fn refused_by_pin(e: &reqwest::Error) -> bool {
+pub(crate) fn refused_by_pin(e: &reqwest::Error) -> bool {
     let mut src: Option<&(dyn std::error::Error + 'static)> = Some(e);
     while let Some(s) = src {
         if s.downcast_ref::<RefusedAddress>().is_some() {
@@ -207,7 +207,7 @@ pub fn client(resolver: Arc<dyn Resolver>, loopback: bool, timeout: Duration) ->
 }
 
 /// Reads an answer's body, at most [`MAX_BODY`].
-async fn body(mut res: reqwest::Response) -> Option<Vec<u8>> {
+pub(crate) async fn body(mut res: reqwest::Response) -> Option<Vec<u8>> {
     if res.content_length().is_some_and(|n| n as usize > MAX_BODY) {
         return None;
     }
@@ -535,7 +535,7 @@ impl ForgeClient {
 
 /// How long to wait after a 403/429: `Retry-After`, else a `RateLimit-Reset` (GitLab) or
 /// `X-RateLimit-Reset` (Gitea) epoch when none are left; a bare 429 waits a minute.
-fn limited(status: u16, headers: &reqwest::header::HeaderMap, now: u64) -> Option<u64> {
+pub(crate) fn limited(status: u16, headers: &reqwest::header::HeaderMap, now: u64) -> Option<u64> {
     let h = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::trim);
     if let Some(s) = h("retry-after").and_then(|v| v.parse::<u64>().ok()) {
         return Some(s.clamp(1, 3600));

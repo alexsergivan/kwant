@@ -22,7 +22,10 @@ import { SpaceControls } from './SpaceControls';
 import { DevOnToast } from './DevOnToast';
 import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
+import { GlobeSlot, WatchGlobe, useFadeOut, useLingeringIds } from './WatchLive';
+import type { Browsing } from '../watchLive';
 import { IdeaJarRow } from './IdeaJarRow';
+import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
 
 export interface Kwant {
   id: string;
@@ -71,6 +74,10 @@ export interface Team {
   member_kwants: string[];
   /** Pinned for every turn in the team's channels; null when unset. */
   instructions?: string | null;
+  created_at?: string | null;
+  /** 0.7.7 (api.md §0.8): which ready-made team made it, and the action Undo reverses. */
+  created_from_template?: 'inbox' | 'sales' | 'coding' | 'suggested' | null;
+  template_action_id?: string | null;
 }
 
 /** What the sidebar shows: everything, or one phone tab. */
@@ -101,6 +108,14 @@ export interface SidebarProps {
   needsYou?: Record<string, number>;
   /** Phone Chats tab: bots waiting on you, one row each, first in the list. */
   needsYouRows?: NeedsYouRow[];
+  /** W1: chats whose browser is active, by owner (team, channel, or bot for its direct chat). */
+  browsingOwners?: Record<string, Browsing>;
+  /** W1: bots whose running turn is in one of those chats, with that chat's browser. */
+  browsingBots?: Record<string, Browsing>;
+  /** Opens the owner's chat with the browser panel open (the W2 address). */
+  onWatchBrowser?: (owner: string) => void;
+  /** Owners whose browser holds an open step for the person: their rows show that, not the globe. */
+  browserNeedsYou?: ReadonlySet<string>;
   /** Opens a Needs-you row's chat on its card. */
   onOpenNeedsYou?: (row: NeedsYouRow) => void;
   onSelectKwant: (kwant: Kwant) => void;
@@ -272,6 +287,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   busyKwants = {},
   botStatus = {},
   needsYou = {},
+  browsingOwners = {},
+  browsingBots = {},
+  onWatchBrowser,
+  browserNeedsYou,
   needsYouRows = [],
   onOpenNeedsYou,
   onSelectKwant,
@@ -343,7 +362,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const chatsTab = phone && section === 'chats';
   const needsRows = chatsTab ? needsYouRows.filter((r) => kwants.some((k) => k.id === r.kwant_id)) : [];
   const needsIds = new Set(needsRows.map((r) => r.kwant_id));
-  const workingBots = chatsTab ? workingIds(kwants, busyKwants, needsIds) : [];
+  const busyNow = chatsTab ? workingIds(kwants, busyKwants, needsIds) : [];
+  // A bot whose turn just ended stays in Working for its globe's fade-out, instead of jumping to Direct
+  // chats (a new row, with no globe) in the same frame (QA F2 on phone)
+  const lingering = useLingeringIds(busyNow.map((k) => k.id));
+  const workingBots = chatsTab && lingering.size ? workingIds(kwants, { ...Object.fromEntries([...lingering].map((id) => [id, 'done'])), ...busyKwants }, needsIds) : busyNow;
   const directBots = chatsTab ? directIds(kwants, new Set([...needsIds, ...workingBots.map((k) => k.id)])) : [];
 
   const toggleTeam = (id: string) =>
@@ -465,6 +488,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ? 'Needs you in the browser'
         : busyKwants[k.id];
     const open = asked && onOpenNeedsYou ? () => onOpenNeedsYou(asked) : () => onSelectKwant(k);
+    // The globe steps aside while the row says it needs you in the browser (that line leads there), and
+    // while the browser it shows holds an open step: one browser per chat, so every row on it hides (Mira 3)
+    const botWatch = browsingBots[k.id] ?? browsingOwners[k.id];
+    const botBrowsing = onWatchBrowser && !warn && !asked && botWatch && !browserNeedsYou?.has(botWatch.owner) ? botWatch : undefined;
     return (
       <div
         key={`${chat ? 'chat' : team?.id ?? 'none'}:${k.id}`}
@@ -522,6 +549,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span className="sr-only">Asks before acting</span>
                 </span>
               ))}
+            {/* W1: this bot's current work is in a browser; the click opens the chat that browser belongs to.
+                Last on the name line and pushed right, so every row's globe lines up in one column */}
+            {onWatchBrowser && <GlobeSlot browsing={botBrowsing} name={k.name} phone={phone} className="ml-auto mt-1" onWatch={onWatchBrowser} />}
             {/* Edit and Remove sit at the right end of the one-line status below the name, which makes room
                 for them on hover: the name keeps its width and the row its height */}
             {!phone && (
@@ -649,6 +679,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <Settings2 size={12} />
             </button>
+          )}
+          {/* Last in the row, like the bot rows' globe, so every globe lines up in one column (QA N1) */}
+          {onWatchBrowser && (
+            <GlobeSlot browsing={!browserNeedsYou?.has(t.id) ? browsingOwners[t.id] : undefined} name={`@${t.name}`} phone={phone} className="mr-px" onWatch={onWatchBrowser} />
           )}
         </div>
       </div>
@@ -896,7 +930,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="mt-1 space-y-0.5">
             {displayChannels.map((c) => {
               const active = isChannelActive(c);
+              const watching = onWatchBrowser && browsingOwners[c.id] && !browserNeedsYou?.has(c.id) ? browsingOwners[c.id] : null;
               return (
+                <ChannelRowGlobe key={c.id} channelId={c.id} watching={watching} phone={phone} name={`#${c.name}`} onWatch={onWatchBrowser}>
+                  {(pad) => (
                 <button
                   key={c.id}
                   onClick={() => onSelectChannel(c)}
@@ -906,11 +943,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     active
                       ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
                       : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-                  }`}
+                  }${pad ? (phone ? ' pr-12' : ' pr-8') : ''}`}
                 >
                   <Hash size={15} className={active ? 'text-sky-400' : 'text-zinc-500'} />
                   <span className="truncate flex-1">{c.name}</span>
                 </button>
+                  )}
+                </ChannelRowGlobe>
               );
             })}
             {displayChannels.length === 0 && (
@@ -979,6 +1018,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ),
             )}
           </div>
+          <ReadyTeamsSidebarBox teamCount={teams.length} />
         </div>
         )}
 
@@ -1146,6 +1186,30 @@ const MemberSheet: React.FC<{
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+/**
+ * W1 on a channel row: the globe is its own button beside the row's, never inside it, at the right end
+ * of the name line like every other row's. It stays for its 150 ms fade-out.
+ */
+const ChannelRowGlobe: React.FC<{
+  channelId: string;
+  watching: Browsing | null;
+  name: string;
+  phone?: boolean;
+  onWatch?: (owner: string) => void;
+  children: (pad: boolean) => React.ReactElement;
+}> = ({ channelId, watching, name, phone, onWatch, children }) => {
+  const { value, leaving } = useFadeOut(watching);
+  if (!value || !onWatch) return children(false);
+  return (
+    <div className="relative" data-channel-browsing={channelId}>
+      {children(true)}
+      <span className="absolute right-2 top-1/2 -translate-y-1/2 flex">
+        <WatchGlobe name={name} host={value.host} phone={phone} leaving={leaving} onWatch={() => onWatch(value.owner)} />
+      </span>
     </div>
   );
 };

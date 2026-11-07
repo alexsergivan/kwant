@@ -77,7 +77,7 @@ pub async fn tick(state: &AppState) {
 /// background). Returns `(task_id, kwant_id)` of each started, and why none were if so.
 pub async fn run_mission(state: &AppState, mission: &Mission, max: usize) -> (Vec<(String, String)>, Option<String>) {
     // Today's spending stop holds new turns: nothing is claimed, so no attempt is used
-    if let Some(why) = crate::server::spend_stop::held(state).await {
+    if let Some(why) = crate::server::spend_stop::held(state, &mission.space_id).await {
         skip_for_spend(state, mission, &why).await;
         return (Vec::new(), Some(why));
     }

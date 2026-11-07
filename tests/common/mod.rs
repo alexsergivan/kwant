@@ -10,6 +10,8 @@
 //!   it resets in 2 s, or in `QUOTARESET:<secs>`.
 //! - A no-tools turn (`--tools ""`) first prints claude's init line with no tools.
 //! - `CAPPED:<tag>` / `CAPALWAYS:<tag>`: end at the model-call cap; the continuation doesn't / does too.
+//! - `FAILTURN`: die with no output. `APIERROR:<tag>` / `APIERRORPLAIN:<tag>`: end with "API Error:
+//!   500 test stub" as claude's error result / as plain text, once per tag.
 //!
 //! Each test file that uses it is its own binary, because it changes PATH.
 #![allow(dead_code)]
@@ -40,6 +42,21 @@ prompt = args[-1] if args else ""
 out_dir = os.environ["KWNT_TEST_PROMPTS"]
 with open(os.path.join(out_dir, "%d-%d" % (os.getpid(), time.time_ns())), "w") as f:
     f.write("\n".join(args))
+# FAILTURN: the CLI dies with no output (exit 3), so the turn fails
+if "FAILTURN" in prompt:
+    sys.exit(3)
+# APIERROR:<tag>: the API call fails, and claude ends with the error as its result (exit 1);
+# APIERRORPLAIN:<tag>: the same error as plain text, not JSON. Once per tag (later turns see it
+# in history).
+ae = re.findall(r"APIERROR(PLAIN)?:([A-Za-z0-9_]+)", prompt)
+ae_flag = ae and os.path.join(os.path.dirname(out_dir), "apierror-" + ae[-1][1])
+if ae and not os.path.exists(ae_flag):
+    open(ae_flag, "w").close()
+    if ae[-1][0]:
+        print("API Error: 500 test stub"); sys.exit(1)
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1,
+        "result": "API Error: 500 test stub"}))
+    sys.exit(1)
 # A no-tools turn (--tools ""): say so first, like claude's init line, or kwnt stops the run
 if "--tools" in args:
     print(json.dumps({"type": "system", "subtype": "init", "tools": [], "mcp_servers": [],

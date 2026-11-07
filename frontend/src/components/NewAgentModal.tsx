@@ -89,6 +89,10 @@ interface NewAgentModalProps {
   approvalsOff?: boolean;
   /** Opens a task on the Mission board (from a lesson on the Memory tab). Absent when the board is off. */
   onOpenTask?: (taskId: string) => void;
+  /** Show it once was started from the Skills tab: close and open the bot's browser. Absent = no entry. */
+  onShowOnce?: () => void;
+  /** The page the bot's browser is on, for Show it once's Start at */
+  browserUrl?: string;
 }
 
 type ProfileFields = { name: string; title: string; roleStyle: string; model: string; prompt: string; soul: string; profileId: string | null; failover: boolean; covers: string; avoids: string; sites: string };
@@ -108,6 +112,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   enginesRefreshKey,
   onSubmit,
   kwants = [],
+  onShowOnce,
+  browserUrl,
   channels = [],
   initialTab = 'profile',
   pendingSkills = 0,
@@ -367,7 +373,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
         )}
         {isEdit && kwantId && tab === 'skills' && (
           <div role="tabpanel" id="agent-panel-skills" aria-labelledby="agent-tab-skills">
-            <SkillsPanel kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} />
+            <SkillsPanel kwantId={kwantId} kwantName={initial?.name ?? 'This bot'} onShowOnceStarted={onShowOnce} browserUrl={browserUrl} />
           </div>
         )}
         {isEdit && kwantId && tab === 'routines' && (

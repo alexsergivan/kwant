@@ -6,6 +6,9 @@
 // one the renderer can draw honestly (wrong kind, no PR number). The desk then shows the plain fallback
 // row (`CardFallback`). Strings are trimmed to a sane length and never rendered as HTML.
 
+import { parseMatches } from './tickets';
+import type { ReviewMatches } from './tickets';
+
 export type CardStatus = 'pending' | 'ready' | 'failed' | 'stale';
 export type RiskLevel = 'low' | 'medium' | 'high';
 
@@ -120,6 +123,8 @@ export interface ReviewCard extends CardBase {
   same_engine: boolean;
   risk: DevRisk | null;
   intent: { source: string; asked: string; rows: { state: IntentState; text: string }[]; none: boolean } | null;
+  /** 0.7.6 api-decisions 17: "Matches the ticket", its own block, when the PR maps to a Jira ticket's brief. */
+  matches: ReviewMatches | null;
   /** `unread`: files GitHub sent no diff for, so nothing in them was checked (round 3, V-T5). */
   tamper: { flags: TamperFlag[]; unread: string[] };
   security: {
@@ -259,6 +264,8 @@ export interface ReviewCardProps {
   forgeLogin?: string | null;
   /** 0.7.2: the card's repo chip text, or null with one repo in the space (`cardRepoLabel`). */
   repoLabel?: (repo: string | null, name?: string | null) => string | null;
+  /** 0.7.6: the saved Jira site's origins; "Matches the ticket" links to Jira only there (api-decisions 18). */
+  jiraOrigins?: readonly string[];
 }
 
 export interface ReleaseNotesSheetProps {
@@ -420,6 +427,7 @@ export function parseReview(raw: unknown): ReviewCard | null {
             .filter((r) => r.text),
         }
       : null,
+    matches: parseMatches(raw.matches),
     tamper: {
       flags: arr(isObj(raw.tamper) ? raw.tamper.flags : [])
         .filter(isObj)

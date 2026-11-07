@@ -86,6 +86,12 @@ pub struct TurnInput {
     /// tools. Set from `TurnOpts::no_tools` (Dev mode cards, where the prompt quotes PR text).
     #[serde(default)]
     pub no_tools: bool,
+    /// The turn may read but never write or reach the network on its own (a Dev mode brief from a
+    /// Jira ticket, J7). claude runs it only with `mcp` set, whose approver holds every call to
+    /// reading; codex runs it in its own read-only sandbox with the gateway; every other driver
+    /// refuses it. Never retried without it.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -907,6 +913,7 @@ pub(crate) mod tests {
             store: None,
             mcp: None,
             no_tools: false,
+            read_only: false,
         }
     }
 

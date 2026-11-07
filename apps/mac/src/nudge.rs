@@ -38,16 +38,23 @@ pub struct Item {
     pub thread_id: Option<String>,
     pub channel_id: Option<String>,
     pub direct_kwant_id: Option<String>,
+    /// The place it waits in (`places::Place::key`: `this_mac` or a server's origin); a click
+    /// opens that place's window.
+    pub place: String,
+    /// What the nudge calls the place ("This Mac", the host), or empty while only one place
+    /// runs (no prefix then: P7).
+    pub place_label: String,
 }
 
 impl Item {
-    /// The same item in a seen-set: ids are unique per kind.
+    /// The same item in a seen-set: ids are unique per kind on one server; two places can
+    /// reuse an id.
     pub fn key(&self) -> String {
         let kind = match self.kind {
             Kind::Question => "q",
             Kind::Approval => "a",
         };
-        format!("{kind}:{}", self.id)
+        format!("{}|{kind}:{}", self.place, self.id)
     }
 }
 
@@ -63,6 +70,25 @@ impl Waiting {
     pub fn add(&mut self, other: Waiting) {
         self.items.extend(other.items);
         self.count += other.count;
+    }
+
+    /// Marks every item with the place it waits in (`label` empty: no prefix).
+    pub fn in_place(mut self, place: &str, label: &str) -> Waiting {
+        for i in &mut self.items {
+            i.place = place.to_string();
+            i.place_label = label.to_string();
+        }
+        self
+    }
+}
+
+/// The second line of a nudge: "kwant.jumpin.games · Use Bash (…)" once more than one place
+/// runs (Mira's nudge.html), the text alone before that.
+pub fn with_place(label: &str, text: &str) -> String {
+    if label.is_empty() {
+        text.to_string()
+    } else {
+        format!("{label} · {text}")
     }
 }
 
@@ -104,6 +130,8 @@ pub fn parse_away(body: &str, space_id: Option<&str>) -> Option<Waiting> {
                 thread_id: text(link, "thread_id"),
                 channel_id: text(link, "channel_id"),
                 direct_kwant_id: text(link, "direct_kwant_id"),
+                place: String::new(),
+                place_label: String::new(),
             })
         })
         .collect();
@@ -136,6 +164,7 @@ pub fn status_line(waiting: &Waiting, port: u16) -> (String, Option<String>) {
     };
     (line, Some(n.to_string()))
 }
+
 
 /// What one poll changed.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -205,6 +234,17 @@ pub struct Pill {
     pub initial: String,
     /// The kwant page to open, a path such as `/s/spc_default/c/ch1`.
     pub target: String,
+    /// The place whose window opens (`places::Place::key`).
+    pub place: String,
+}
+
+/// The items one pill gathers: a pill only gathers items from one place (Mira's nudge.html,
+/// "Several items from one place"), the place of the first one.
+pub fn one_place(items: &[Item]) -> Vec<Item> {
+    match items.first() {
+        Some(first) => items.iter().filter(|i| i.place == first.place).cloned().collect(),
+        None => Vec::new(),
+    }
 }
 
 /// The pill for `items` (newest first), all arriving within one pill's time: one item names its
@@ -214,9 +254,10 @@ pub fn pill(items: &[Item]) -> Option<Pill> {
         [] => None,
         [one] => Some(Pill {
             headline: headline(one),
-            detail: one.title.clone(),
+            detail: with_place(&one.place_label, &one.title),
             initial: one.kwant_name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default(),
             target: target_path(one),
+            place: one.place.clone(),
         }),
         [first, ..] => {
             let mut names: Vec<&str> = Vec::new();
@@ -234,9 +275,10 @@ pub fn pill(items: &[Item]) -> Option<Pill> {
             };
             Some(Pill {
                 headline: format!("{} things need you", items.len()),
-                detail,
+                detail: with_place(&first.place_label, &detail),
                 initial: String::new(),
                 target: inbox_path(first.space_id.as_deref()),
+                place: first.place.clone(),
             })
         }
     }
@@ -388,6 +430,8 @@ pub mod demo {
             thread_id: None,
             channel_id: None,
             direct_kwant_id: None,
+            place: crate::places::THIS_MAC.to_string(),
+            place_label: String::new(),
         }
     }
 
@@ -426,6 +470,8 @@ mod tests {
             thread_id: None,
             channel_id: None,
             direct_kwant_id: None,
+            place: String::new(),
+            place_label: String::new(),
         }
     }
 
@@ -490,6 +536,44 @@ mod tests {
         assert_eq!(status_line(&one_q, 1).0, "1 question waiting for you");
         let mix = waiting(vec![item(Kind::Question, "q", "J"), item(Kind::Approval, "a", "J"), item(Kind::Approval, "b", "J")]);
         assert_eq!(status_line(&mix, 1), ("3 things waiting for you".into(), Some("3".into())));
+    }
+
+    /// P7: once more than one place runs, a nudge names its place, a pill gathers one place's
+    /// items only, and a click opens that place.
+    #[test]
+    fn nudges_name_their_place_once_two_places_run() {
+        let server = "https://kwant.jumpin.games";
+        let one = waiting(vec![item(Kind::Approval, "a", "Juno")]).in_place("this_mac", "");
+        let p = pill(&one.items).unwrap();
+        assert_eq!((p.headline.as_str(), p.detail.as_str(), p.place.as_str()), ("Juno needs your OK", "title a", "this_mac"));
+
+        let remote = waiting(vec![item(Kind::Approval, "a", "Juno")]).in_place(server, "kwant.jumpin.games");
+        let p = pill(&remote.items).unwrap();
+        assert_eq!(p.detail, "kwant.jumpin.games · title a");
+        assert_eq!(p.place, server);
+        assert_eq!(p.target, "/s/spc_default/b/k-a");
+
+        let three = waiting(vec![item(Kind::Question, "q", "Juno"), item(Kind::Approval, "b", "Mira"), item(Kind::Approval, "c", "Iris")])
+            .in_place(server, "kwant.jumpin.games");
+        assert_eq!(pill(&three.items).unwrap().detail, "kwant.jumpin.games · Juno, Mira and Iris");
+
+        // the same id on two places is two items
+        let local = waiting(vec![item(Kind::Approval, "a", "Juno")]).in_place("this_mac", "This Mac");
+        assert_ne!(local.items[0].key(), remote.items[0].key());
+        let mut both = remote.clone();
+        both.add(local.clone());
+        let mut t = Tracker::default();
+        let c = t.update(&both, Instant::now());
+        assert_eq!(c.arrived.len(), 2);
+        assert_eq!(c.count, 2);
+        // one pill, one place: the first arrival's
+        let gathered = one_place(&c.arrived);
+        assert_eq!(gathered.len(), 1);
+        assert_eq!(gathered[0].place, server);
+        assert_eq!(pill(&gathered).unwrap().detail, "kwant.jumpin.games · title a");
+        assert_eq!(one_place(&[]), Vec::<Item>::new());
+        assert_eq!(with_place("", "x"), "x");
+        assert_eq!(with_place("This Mac", "x"), "This Mac · x");
     }
 
     #[test]

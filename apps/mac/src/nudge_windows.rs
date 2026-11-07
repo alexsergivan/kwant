@@ -5,7 +5,7 @@
 //! `nudge.rs`.
 
 use crate::nudge::Change;
-use tauri::{image::Image, tray::TrayIcon, AppHandle, Manager, UserAttentionType};
+use tauri::{image::Image, tray::TrayIcon, AppHandle, UserAttentionType};
 
 // Mira's Linux colour marks (44 px): the notification area draws them as they are, too
 const NORMAL_DARK: &[u8] = include_bytes!("../icons/linux/tray-normal-dark.png");
@@ -82,10 +82,11 @@ impl Nudger {
             let _ = self.tray.set_tooltip(Some(tooltip(change.count)));
             self.count = Some(change.count);
         }
-        if !show || change.arrived.is_empty() || crate::main_focused(handle) {
+        if !show || change.arrived.is_empty() || crate::kwant_focused(handle) {
             return;
         }
-        if let Some(main) = handle.get_webview_window(crate::MAIN) {
+        let from = change.arrived.first().map(|i| i.place.as_str());
+        if let Some(main) = crate::place_window(handle, from) {
             let _ = main.request_user_attention(Some(UserAttentionType::Informational));
         }
     }

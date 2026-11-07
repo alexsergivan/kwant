@@ -3,7 +3,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { Check, Code } from 'lucide-react';
-import { DevModeState, approvalsWord, devApi, devStore, normaliseRepo } from '../devMode';
+import { DevModeState, DevTeamRef, approvalsWord, devApi, devStore, normaliseRepo } from '../devMode';
+import { JiraSettings } from './JiraSettings';
 import { useDevMode } from './DevModeSwitch';
 
 const card = 'rounded-xl border border-zinc-800 bg-zinc-950/60';
@@ -12,7 +13,7 @@ const rowBtn =
 const primaryBtn = 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors disabled:opacity-50';
 const input = 'w-full bg-zinc-950 border rounded-lg px-3 py-2 text-sm font-mono text-zinc-100 focus:outline-none border-zinc-800 focus:border-sky-500';
 
-export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; approvals?: string; save?: typeof devApi.put }> = ({ spaceId, spaceName, approvals, save = devApi.put }) => {
+export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; approvals?: string; save?: typeof devApi.put; teams?: DevTeamRef[] }> = ({ spaceId, spaceName, approvals, save = devApi.put, teams }) => {
   const state = useDevMode(spaceId);
   const [repo, setRepo] = useState('');
   const [branch, setBranch] = useState('');
@@ -56,6 +57,7 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
   };
 
   return (
+    <>
     <form
       className={`${card} p-4 space-y-3`}
       data-dev-settings
@@ -130,5 +132,8 @@ export const DevModeSettings: React.FC<{ spaceId: string; spaceName: string; app
         </button>
       </div>
     </form>
+    {/* 0.7.6: "Work from Jira · Off · Set up" (or the On box); nothing on a server without the Jira routes. */}
+    {state.on && <JiraSettings space={spaceId} teams={teams} />}
+    </>
   );
 };

@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.7.5] - 2026-11-07
+
+### Added
+- **This Mac and your servers, side by side.** The Mac and Linux app now opens This Mac and every server you add, each in its own window, all at the same time. Nothing relaunches to change place. **Add a server…** in the menu bar takes an address or a sign-in link. A server stays listed, and signed in, until you remove it, so you never type it again. The menu bar lists each place with what's waiting there, or "Sign in to see what's waiting" or "Couldn't reach it". A link to another listed place opens that place's window; other links open in your browser. **Remove a server** asks first, then signs the app out on that server, so it disappears from that server's signed-in devices. When a server can't be reached, its window says why, with Try again and Remove this server…. **Run kwant on this Mac** (on by default) can be turned off if you only use servers. The list lives in `~/.kwnt/desktop-places.json` and holds addresses only, never a token. (#388, #389)
+- **Ready-made teams.** Create an Inbox, Sales or Coding team in one step. The preview shows who's in it, lets you rename them, and names any clashes, its skills, its routine (off until you turn it on) and what the team will never do. Create makes the bots, the team chat, the starter skills and the routine together, and one Undo removes all of it. **Suggest members from the code** reads a team's repo and suggests 2 to 6 bots, each with a reason and the paths it saw, and says plainly when it can't read or can't tell. (#396, #398)
+- **Work from Jira tickets.** Dev mode can connect Jira Cloud or Data Center (off by default; until you connect it, nothing changes). Tickets that match your rule appear on the Dev desk's Tickets tab. A bot reads each one, writes a brief with its sources and any questions, and waits for your OK before it works. The card follows the ticket through review to landed, and shows **Matches the ticket** only when every done-when line is met. A token Jira rejects, an address with no Jira, a token that sees no projects, and Jira asking kwant to slow down each get their own message. (#393, #394, #395)
+- **Watch live.** A globe on a chat's row shows that its bot is using the browser right now; click it to watch the page. **Watch** on the working strip does the same. Each chat's live view has its own `/live` address, and a notification can open it directly. With two or more chats browsing, the panel's name becomes a switcher, with the chats that need you first. (#397)
+- **Telegram.** Pair one Telegram chat with a space (off by default). Write to your bots from Telegram, and get their replies and what needs you (questions, approvals, steps only you can do, and stuck bots) on your phone. Answer questions with a tap or a reply. With **Allow approvals from Telegram** on, some approvals get **Allow once** on the phone, checked again when you tap; the rest open in kwant, with the reason. The bot token stays in the vault and never appears in replies, logs or a bot's context. When the daily spending stop holds a message you sent from Telegram, the chat says so once: press Continue in kwant, then send it again. Unpair has an Undo, and Disconnect deletes the token. (#399, #403)
+- **Show it once.** Hold Take over and show a bot a task once while kwant records the steps. Passwords, one-time codes, card details, secrets and anything filled in by a saved login or a script are recorded as placeholders, never as their text. kwant drafts a skill from the steps, you review and edit them, and **Try it once** runs it in the bot's chat before you approve it. The trial never changes the skill. Picks from a dropdown are recorded like any other step, and each field is named by its own label. (#402, #400, #407)
+- **Install Claude Code in one click.** When Claude Code, Codex or Grok's command-line tool is missing and kwant can install it, the start picker and the engine cards show **Install** instead of a link and a Re-check. When it's done, sign-in follows straight away. If it fails, kwant says so, with Try again and the old link. (#406)
+
+### Changed
+- **A quieter working line on the phone.** The "… is getting started" line is now one small line with space above the message box, and the Ask buttons above the box are smaller. Both are just as easy to tap. Desktop is unchanged. (#405)
+
+### Fixed
+- **The Dev mode switch no longer gets stuck in "settling."** A timer that fired a moment early left the switch ignoring every press. (#391)
+- **After "Which is it?" in a forge connection form, keyboard focus lands on the first choice** every time, even on a slow machine. (#401)
+
 ## [Mac 0.7.4] - 2026-11-07
 
 ### Added

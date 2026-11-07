@@ -1,0 +1,15 @@
+{
+  "identifier": "connect",
+  "description": "The bundled pages (the loading page in each place's window and the Add a server window) may list, add and remove places. Local only: a server's own pages get no commands.",
+  "local": true,
+  "windows": ["main", "server-*", "connect"],
+  "permissions": [
+    "allow-places-state",
+    "allow-check-server",
+    "allow-add-server",
+    "allow-remove-server",
+    "allow-set-this-mac",
+    "allow-close-connect",
+    "allow-retry-start"
+  ]
+}

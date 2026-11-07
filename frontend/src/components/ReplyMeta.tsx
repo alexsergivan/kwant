@@ -3,6 +3,7 @@ import { ChevronRight } from 'lucide-react';
 import { localClock } from '../clock';
 import { RouteInfo, useRouteChip } from './RouteChip';
 import { EngineChip } from './Signature';
+import { SentToTelegram } from './TelegramMarks';
 
 export interface ReplyFacts {
   /** "Claude · Opus 5.5": the engine and model the reply ran on. */
@@ -26,6 +27,8 @@ export interface ReplyMetaProps extends ReplyFacts {
   /** Set after a failover: the engines the reply moved between, with the reason on hover. */
   handoff?: { from: string; to: string; why: string } | null;
   now?: number;
+  /** The reply also went out to Telegram (G4): "· sent to Telegram too" after the time. */
+  sentToTelegram?: boolean;
   /** Steps and the reasoning item; shown with the facts when Details is open. */
   children?: React.ReactNode;
 }
@@ -40,7 +43,7 @@ export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
 const hasContent = (n: React.ReactNode) => React.Children.toArray(n).length > 0;
 
 /** A bot reply's header: one line, "Name · 3:42 PM", and a Details toggle holding the rest. */
-export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, failed = false, note, route, handoff, now, children }) => {
+export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, account, tokens, failed = false, note, route, handoff, now, sentToTelegram = false, children }) => {
   const [open, setOpen] = useState(false);
   const why = useRouteChip(route);
   const panelId = useId();
@@ -65,6 +68,7 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
             {time}
           </span>
         )}
+        {sentToTelegram && <SentToTelegram />}
         {hasDetails && (
           <button
             type="button"
