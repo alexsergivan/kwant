@@ -25,6 +25,8 @@ import { usePasswordStore } from './PasswordStorePanel';
 import { BrowserControlOverlay } from './BrowserControlOverlay';
 import { BrowserTakeoverStage } from './BrowserTakeoverStage';
 import { HumanStep, HumanStepKind } from '../humanSteps';
+import type { SwitchEntry } from '../watchLive';
+import { BrowserSwitcherMenu, BrowserSwitcherRow } from './WatchLive';
 
 const PHONE_QUERY = '(max-width: 639px)';
 
@@ -88,6 +90,8 @@ export interface VirtualMachinePaneProps {
   solveRequest?: number;
   /** An open sign-in, code or other step this browser is held for: the stage offers its Done. */
   humanStep?: HumanStep | null;
+  /** W3: chats whose browser is active right now; with 2 or more the header becomes a switcher. */
+  switcher?: { entries: SwitchEntry[]; current: string; onPick: (owner: string) => void } | null;
   /** Answers that step as done; resolves to an error message on failure. */
   onStepDone?: (id: string) => Promise<string | void> | void;
 }
@@ -129,6 +133,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   solveRequest = 0,
   humanStep = null,
   onStepDone,
+  switcher,
 }) => {
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
@@ -283,16 +288,34 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   const loginsOnThisPage = useMemo(() => passwords.logins.filter((l) => loginMatchesPage(l, pageUrl)).length, [passwords.logins, pageUrl]);
 
   if (!isOpen) return null;
+  const switching = !!switcher && switcher.entries.length >= 2;
 
   return (
-    <div className="w-96 border-l border-zinc-800 bg-zinc-950 flex flex-col h-full shadow-2xl z-30 select-none animate-in slide-in-from-right duration-200">
+    // On a phone the panel is the whole screen (0.7.7 nice-to-have 5): a 384 px column beside the chat left the chat a sliver.
+    <div
+      data-vm-pane=""
+      className={`${narrow ? 'fixed inset-0 z-[60] w-full h-[100dvh] pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]' : 'w-96 border-l border-zinc-800 h-full z-30'} bg-zinc-950 flex flex-col shadow-2xl select-none animate-in slide-in-from-right duration-200`}
+    >
       {/* Top Header */}
       <div className="h-14 border-b border-zinc-800 px-4 flex items-center justify-between gap-2 bg-zinc-900/60">
         <div className="flex items-center gap-2 min-w-0">
           <div className={`shrink-0 w-2.5 h-2.5 rounded-full ${browserReady ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
           <div className="min-w-0">
-            <div className="text-xs font-semibold text-zinc-100 truncate" title={`@${teamName}`}>@{teamName}</div>
-            <p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>
+            {switching && !narrow ? (
+              <BrowserSwitcherMenu
+                entries={switcher!.entries}
+                current={switcher!.current}
+                onPick={switcher!.onPick}
+                disabled={isControlMode}
+                title={`@${teamName}`}
+                sub={<p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>}
+              />
+            ) : (
+              <>
+                <div className="text-xs font-semibold text-zinc-100 truncate" title={`@${teamName}`}>@{teamName}</div>
+                <p className="text-[10px] text-zinc-400 truncate">{isLocal ? 'Your Chrome' : 'Live Chromium'}</p>
+              </>
+            )}
           </div>
         </div>
 
@@ -367,6 +390,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           </button>
         </div>
       </div>
+      {switching && narrow && <BrowserSwitcherRow entries={switcher!.entries} current={switcher!.current} onPick={switcher!.onPick} disabled={isControlMode} />}
 
       {computer.state.error && (
         <div className="px-3 pt-2">
