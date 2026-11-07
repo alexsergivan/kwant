@@ -1,13 +1,14 @@
 <!doctype html>
-<!-- kwant 0.7.5 "Connect to a server". Design: next-075/connect-server/design.md §3 (Mira).
-     Commands: next-075/connect-server/api.md (Lin). Bundled, no network, no build step.
+<!-- kwant 0.7.5 "Add a server", in its own small window. Design: next-075/side-by-side/design.md (Mira),
+     checks and errors from next-075/connect-server/design.md §3. Commands: next-075/side-by-side/spec.md
+     (check_server, add_server, close_connect, places_state). Bundled, no network, no build step.
      A pasted one-time sign-in link lives only in the `link` variable below: never in the field,
      the DOM, storage, the URL or a log. The page never reads its own query or hash. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="color-scheme" content="dark">
-<title>Connect to a server – kwant</title>
+<title>Add a server – kwant</title>
 <style>
   /* Shared with loading/index.html (design.md §2). Dark only. */
   :root {
@@ -21,7 +22,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
                font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Cantarell, sans-serif; }
-  main { width: 460px; max-width: calc(100vw - 48px); margin: 0 auto; padding: max(48px, 14vh) 0 48px; }
+  main { width: 460px; max-width: calc(100vw - 48px); margin: 0 auto; padding: 40px 0 32px; }
   h1 { margin: 0 0 6px; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -.2px; }
   .lead { margin: 0 0 24px; color: var(--muted); }
   label { display: block; margin: 0 0 6px; font-size: 13px; line-height: 18px; font-weight: 600; }
@@ -88,14 +89,14 @@
     .spin, .status { animation: none; }
     input, button.btn { transition: none; }
   }
-  /* At the 900×600 minimum the tallest state (connected, with a link) must not scroll. */
-  @media (max-height: 640px) { main { padding: 48px 0 16px; } }
+  /* A small window: the tallest state (a link, then an error) must not scroll at 520×600. */
+  @media (max-height: 620px) { main { padding: 24px 0 16px; } }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Connect to a server</h1>
+  <h1>Add a server</h1>
   <p class="lead">Open a kwant that runs on another machine, such as your VPS.</p>
 
   <form id="form" novalidate>
@@ -116,17 +117,17 @@
 
     <div id="status" role="status" aria-live="polite"></div>
 
-    <div class="notice">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 9v6M14 9v6"/></svg>
+    <div class="notice" id="notice">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="11" rx="2"/><path d="M9 19h11a2 2 0 0 0 2-2V9"/></svg>
       <div>
-        <p><b>While connected, this app shows the kwant on <span id="notice-host">that server</span>.</b> <span id="notice-local">The bots on this computer pause until you switch back. Your data on this computer stays as it is.</span></p>
-        <p>To switch back, choose <b>Use kwant on this computer</b> in the kwant menu in the <span id="where">menu bar</span>.</p>
+        <p><b><span id="notice-host">The server</span> opens in its own window.</b> <span id="notice-local">kwant on this computer keeps running beside it.</span></p>
+        <p>It stays in the kwant menu in the <span id="where">menu bar</span> until you remove it there.</p>
       </div>
     </div>
 
     <div class="actions">
       <button type="button" class="btn secondary" id="cancel">Cancel</button>
-      <button type="submit" class="btn primary" id="go" disabled>Connect and restart</button>
+      <button type="submit" class="btn primary" id="go" disabled>Connect</button>
     </div>
   </form>
 </main>
@@ -141,11 +142,14 @@
 
   var link = null;      // the whole pasted sign-in link, in memory only
   var linkOrigin = null;
-  var phase = 'edit';   // edit | checking | connected
+  var phase = 'edit';   // edit | checking | connected (added, or already listed)
   var errored = false;  // an error is showing (cleared by the next edit)
   var removed = false;  // Remove was pressed: show the help lines until the next edit
   var run = 0;          // the current check; Stop bumps it so a late answer is ignored
-  var HOLD_MS = 1500;   // the connected state stays this long before the app restarts (design §3.3)
+  var ADDED_MS = 600;   // "Added": long enough to read, then the server's own window has it
+  var LISTED_MS = 1500; // "Already in this app": a little longer, it is news
+  var listed = [];      // origins already in the app (places_state), so a known one skips the network
+  var thisMac = true;   // places_state.this_mac: the notice's second sentence
 
   var LOOPBACK = /^(localhost|127\.0\.0\.1|\[::1\])(:\d*)?$/i;
   var TOKEN = /(^|[#&?])kwnt_token=/i;
@@ -233,13 +237,14 @@
     if (showPreview) $('preview-origin').textContent = p.origin;
     chip.hidden = !showChip;
     unlink.hidden = phase === 'connected';
-    $('notice-host').textContent = (!errored && p.code === 'ok') ? p.host : 'that server';
+    $('notice-host').textContent = (!errored && p.code === 'ok') ? p.host : 'The server';
+    $('notice-local').hidden = !thisMac;
     if (phase === 'edit') {
       go.disabled = !text;
       field.readOnly = false;
       cancel.hidden = false;
       cancel.textContent = 'Cancel';
-      setGo('Connect and restart', false);
+      setGo('Connect', false);
       if (!errored) field.setAttribute('aria-invalid', 'false');
     }
   }
@@ -278,7 +283,7 @@
     phase = 'edit';
     errored = true;
     var words = WORDS[code] ? WORDS[code](host || 'that server')
-      : (code === 'save_failed' || code === 'not_allowed') ? [message || "Couldn't save the server.", '']
+      : (code === 'save_failed' || code === 'not_allowed') ? [message || "Couldn't add the server.", 'Try again. If it keeps failing, details are in the app log.']
       : WORDS.timeout(host || 'that server'); // unknown failures read as "didn't answer" (design §3.6)
     render();
     field.setAttribute('aria-invalid', 'true');
@@ -300,6 +305,7 @@
     if (p.code !== 'ok') { showError(p.code, null); return; } // answered here, no network
     var address = link || field.value.trim();
     var mine = ++run;
+    if (!link && listed.indexOf(p.origin) >= 0) { add(p.host, address, mine); return; } // just focus it
     phase = 'checking';
     errored = false; removed = false;
     field.readOnly = true;
@@ -311,7 +317,7 @@
     setStatus('busy', 'Checking ' + p.host + '…', '');
     ipc.invoke('check_server', { address: address }).then(function (ok) {
       if (mine !== run) return;
-      connected(ok && ok.host ? ok.host : p.host, address, mine);
+      add(ok && ok.host ? ok.host : p.host, address, mine);
     }, function (e) {
       if (mine !== run) return;
       var f = failure(e, p.host);
@@ -319,28 +325,39 @@
     });
   }
 
-  function connected(host, address, mine) {
+  // The check passed (or the server is already listed): add it. The app opens or focuses its
+  // window, and with a link that window opens the link once. Then this window closes.
+  function add(host, address, mine) {
+    ipc.invoke('add_server', { address: address }).then(function (r) {
+      if (mine !== run) return;
+      dropLink(); // the app has it now
+      var h = (r && r.host) || host;
+      if (r && r.origin && listed.indexOf(r.origin) < 0) listed.push(r.origin);
+      var fresh = !(r && r.added === false);
+      done(fresh ? 'Added ' + h : h + ' is already in this app',
+        fresh ? 'Opening it in its own window…' : 'Showing its window.', mine, fresh ? ADDED_MS : LISTED_MS);
+    }, function (e) {
+      if (mine !== run) return;
+      var f = failure(e, host);
+      showError(f.code, f.host, f.message);
+    });
+  }
+
+  function done(title, detail, mine, ms) {
     phase = 'connected';
-    var signing = !!link;
     field.readOnly = true;
     cancel.hidden = true;
     go.disabled = true;
-    setGo('Restarting…', false);
-    go.setAttribute('aria-busy', 'true');
+    setGo('Connect', false);
     render();
-    setStatus('ok', 'Connected to ' + host, signing
-      ? 'Signing you in with the link, then kwant restarts to open it…'
-      : 'kwant restarts to open it… Then sign in there. "Sign in from another device" lets you approve this app from your phone or browser.');
+    setStatus('ok', title, detail);
     setTimeout(function () {
       if (mine !== run) return;
-      ipc.invoke('connect_server', { address: address }).then(function () {
-        dropLink(); // the app has it now; the window moves or restarts
-      }, function (e) {
-        if (mine !== run) return;
-        var f = failure(e, host);
-        showError(f.code, f.host, f.message);
+      ipc.invoke('close_connect').catch(function () {
+        // The window stayed open: let the person add another or close it themselves.
+        phase = 'edit'; field.value = ''; render(); field.focus();
       });
-    }, HOLD_MS);
+    }, ms);
   }
 
   function stop() {
@@ -391,17 +408,15 @@
   render();
   field.focus();
   if (!ipc) return;
-  ipc.invoke('connect_state').then(function (s) {
+  ipc.invoke('places_state').then(function (s) {
     if (!s) return;
-    if (s.app === 'linux') $('where').textContent = 'tray';
-    if (s.local_kwant === 'outside') $('notice-local').textContent = 'kwant on this computer was started outside this app, so it keeps running.';
-    // Remote mode (Change server…): start with the saved host, selected. Local mode starts empty.
-    if (s.mode === 'remote' && s.host && !field.value) {
-      field.value = s.host;
-      render();
-      field.focus();
-      field.select();
-    }
+    thisMac = s.this_mac !== false;
+    listed = (s.servers || []).map(function (v) { return v && v.origin; }).filter(Boolean);
+    render();
+  }).catch(function () {});
+  // The tray wording on Linux. Older builds answer connect_state; a missing command changes nothing.
+  ipc.invoke('connect_state').then(function (s) {
+    if (s && s.app === 'linux') $('where').textContent = 'tray';
   }).catch(function () {});
 })();
 </script>

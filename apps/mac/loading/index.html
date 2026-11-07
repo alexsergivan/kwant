@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>kwant</title>
 <style>
-  /* Local mode: today's page, unchanged (the two lines, their look and their words). */
+  /* One copy per window (spec P3). This Mac's window: today's two lines, unchanged. */
   :root { color-scheme: light dark; }
   body { margin: 0; height: 100vh; display: grid; place-items: center;
          font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #11151c; color: #ece5d6; }
@@ -13,7 +13,7 @@
   body[data-state="failed"] .failed { display: block; }
   p { text-align: center; line-height: 1.5; }
 
-  /* Remote mode (design.md §4). The app sets data-state="connecting" or "unreachable". */
+  /* A server's window (design.md §4). The app sets data-state="connecting" or "unreachable". */
   .connecting, .unreachable { display: none; }
   body[data-state="connecting"] .starting,
   body[data-state="unreachable"] .starting { display: none; }
@@ -59,7 +59,10 @@
 </head>
 <body>
   <p class="starting">Starting kwant…</p>
-  <p class="failed">kwant didn't start.<br>Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
+  <div class="failed remote" role="alert">
+    <p>kwant didn't start.<br>Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
+    <div class="actions"><button type="button" class="btn secondary" id="retry-local">Try again</button></div>
+  </div>
 
   <p class="remote connecting" role="status"><span class="wait"><svg class="spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg><span>Connecting to <span class="host">the server</span>…</span></span></p>
 
@@ -68,16 +71,16 @@
     <p class="why" id="why"></p>
     <div class="actions">
       <button type="button" class="btn primary" id="retry">Try again</button>
-      <button type="button" class="btn secondary" id="change">Change server…</button>
-      <button type="button" class="btn secondary" id="local">Use kwant on this computer</button>
     </div>
-    <p class="paused">The bots on this computer are paused while this app is set to a server. Your data on this computer is safe.</p>
+    <p class="paused">Your other kwant windows keep working. Try again checks only this server.</p>
     <p class="logline">Details are in <span class="log">~/.kwnt/mac-app.log</span></p>
   </section>
 <script>
-// Remote mode: the app checks the server natively and either opens it or sets, on <body>,
-// data-host, data-code, data-message and last data-state="unreachable" (api.md). Local mode
-// is driven by the app as before (data-state="failed"). The page never reads its own URL.
+// One page per window. A server's window: the app checks that server natively and either opens
+// it or sets, on <body>, data-host, data-code, data-message and last data-state="unreachable"
+// (api.md). This Mac's window is driven as before (data-state="failed"). connect_state answers
+// for the window that asks. Try again (retry_start) re-checks only this window's place.
+// The page never reads its own URL.
 (function () {
   'use strict';
   var ipc = window.__TAURI_INTERNALS__;
@@ -108,12 +111,16 @@
     busy(false);
     $('retry').focus();
   }
-  new MutationObserver(render).observe(body, { attributes: true, attributeFilter: ['data-state'] });
+  function renderFailed() {
+    if (body.dataset.state !== 'failed') return;
+    $('retry-local').disabled = false;
+  }
+  new MutationObserver(function () { render(); renderFailed(); }).observe(body, { attributes: true, attributeFilter: ['data-state'] });
   ipc.invoke('connect_state').then(function (s) {
     if (!s) return;
     if (s.app === 'linux') document.querySelectorAll('.log').forEach(function (e) { e.textContent = '~/.kwnt/desktop-app.log'; });
     if (s.mode === 'remote' && !body.dataset.state) {
-      setHost(s.host || 'the server');
+      setHost(body.dataset.host || s.host || 'the server');
       body.dataset.state = 'connecting';
     }
   }).catch(function () {});
@@ -123,10 +130,11 @@
     body.dataset.state = 'connecting';
     ipc.invoke('retry_start').catch(function () { body.dataset.state = 'unreachable'; });
   });
-  $('change').addEventListener('click', function () { location.href = 'connect.html'; });
-  $('local').addEventListener('click', function () {
-    busy(true);
-    ipc.invoke('use_this_computer').catch(function () { busy(false); });
+  // This Mac's window: start the local kwant again (retry_start re-checks only this window's place).
+  $('retry-local').addEventListener('click', function () {
+    $('retry-local').disabled = true;
+    body.dataset.state = '';
+    ipc.invoke('retry_start').catch(function () { body.dataset.state = 'failed'; });
   });
 })();
 </script>
