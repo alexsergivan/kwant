@@ -1,34 +1,91 @@
 <!doctype html>
+<!-- kwant 0.7.5 "Add a server", in its own small window. Design: next-075/side-by-side/design.md (Mira),
+     checks and errors from next-075/connect-server/design.md §3. Commands: next-075/side-by-side/spec.md
+     (check_server, add_server, close_connect, places_state). Bundled, no network, no build step.
+     A pasted one-time sign-in link lives only in the `link` variable below: never in the field,
+     the DOM, storage, the URL or a log. The page never reads its own query or hash. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Connect to a server – kwant</title>
+<meta name="color-scheme" content="dark">
+<title>Add a server – kwant</title>
 <style>
-  /* A plain working page; Pixel builds the designed one from design/connect.html. */
-  :root { color-scheme: light dark; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
-         font: 15px -apple-system, BlinkMacSystemFont, sans-serif; background: #11151c; color: #ece5d6; }
-  main { width: 560px; max-width: calc(100vw - 48px); }
-  h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
-  .lead, .help, .muted { color: #a9a294; }
-  .help { font-size: 13px; margin: 6px 0 0; }
-  label { display: block; margin: 20px 0 6px; font-weight: 600; }
-  input { box-sizing: border-box; width: 100%; font: inherit; padding: 9px 12px; border-radius: 8px;
-          border: 1px solid #3a4150; background: #0c1016; color: inherit; }
-  input[aria-invalid="true"] { border-color: #ef7d62; }
+  /* Shared with loading/index.html (design.md §2). Dark only. */
+  :root {
+    --bg: #11151c; --ink: #ece5d6; --muted: #a8a294; --faint: #8a8478;
+    --field: #181d26; --field-edge: #6a7286; --card: #161b23; --card-edge: #252c38;
+    --btn2: #1c222d; --btn2-edge: #2f3644; --btn2-hover: #232a37;
+    --accent: #b8adff; --fill: #6c58e0; --fill-hover: #5b47d6; --fill-active: #5845bd;
+    --bad: #ef7d62; --ok: #5eead4;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+               font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Cantarell, sans-serif; }
+  main { width: 460px; max-width: calc(100vw - 48px); margin: 0 auto; padding: 28px 0 24px; }
+  h1 { margin: 0 0 6px; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -.2px; }
+  .lead { margin: 0 0 24px; color: var(--muted); }
+  label { display: block; margin: 0 0 6px; font-size: 13px; line-height: 18px; font-weight: 600; }
+  input {
+    display: block; width: 100%; height: 44px; padding: 0 14px; margin: 0;
+    border: 1px solid var(--field-edge); border-radius: 10px; background: var(--field); color: var(--ink);
+    font: inherit; outline: none;
+    transition: border-color 120ms linear, opacity 120ms linear;
+  }
+  input::placeholder { color: var(--faint); opacity: 1; }
+  input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+  input[aria-invalid="true"] { border-color: var(--bad); }
+  input[aria-invalid="true"]:focus-visible { border-color: var(--bad); box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--bad); }
   input[readonly] { opacity: .6; }
-  .slot { min-height: 44px; margin: 10px 0; font-size: 14px; }
-  .slot .error { color: #ef7d62; }
-  .slot .ok { color: #7ed69a; }
-  .chip { display: inline-block; padding: 6px 10px; border-radius: 8px; background: rgb(184 173 255 / .08); }
-  .notice { border: 1px solid #2a3140; border-radius: 10px; padding: 12px 14px; font-size: 14px; line-height: 1.5; }
-  .notice::before { content: "⏸ "; color: #b8adff; }
-  .actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 20px; }
-  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid #3a4150;
-           background: #1b212b; color: inherit; cursor: pointer; }
-  button.primary { background: #ece5d6; color: #11151c; border-color: #ece5d6; }
-  button:disabled { opacity: .45; cursor: default; }
-  button.link { border: 0; background: none; padding: 0 4px; text-decoration: underline; }
+  .help { margin: 8px 0 0; font-size: 13px; line-height: 18px; color: var(--muted); }
+  .help + .help { margin-top: 4px; }
+  .preview { margin: 8px 0 0; font-size: 13px; line-height: 18px; color: var(--muted); overflow-wrap: anywhere; }
+  .preview b { color: var(--ink); font-weight: 500; }
+
+  /* The one-time link chip: shown while a link is held in memory. */
+  .linkchip { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0; padding: 8px 10px;
+              border-radius: 8px; background: rgb(184 173 255 / .08); font-size: 13px; line-height: 18px; }
+  .linkchip svg { flex: none; margin-top: 1px; color: var(--accent); }
+  .linkchip span { flex: 1; }
+  .linkbtn { flex: none; border: 0; padding: 0; background: none; color: var(--accent); font: inherit; font-weight: 600;
+             cursor: pointer; border-radius: 4px; }
+  .linkbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* The status slot under the field: checking, error, connected. */
+  .status { display: flex; gap: 10px; margin: 12px 0 0; font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
+  .status svg { flex: none; margin-top: 2px; }
+  .status b { display: block; font-weight: 600; }
+  .status span { color: var(--muted); }
+  .status.bad b, .status.bad svg { color: var(--bad); }
+  .status.ok b, .status.ok svg { color: var(--ok); }
+  .status.busy svg { color: var(--accent); }
+  .status.info b { font-weight: 500; }
+  .status.info svg { color: var(--accent); }
+  .status { animation: fade 160ms linear backwards; }
+
+  .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin: 24px 0 0; }
+  button.btn { height: 40px; padding: 0 16px; border-radius: 10px; font: inherit; font-weight: 600; cursor: pointer;
+               display: inline-flex; align-items: center; gap: 8px;
+               transition: background-color 120ms linear, opacity 120ms linear; }
+  button.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.secondary { border: 1px solid var(--btn2-edge); background: var(--btn2); color: var(--ink); }
+  .btn.secondary:hover { background: var(--btn2-hover); }
+  .btn.primary { border: 0; background: var(--fill); color: #fff; }
+  .btn.primary:hover { background: var(--fill-hover); }
+  .btn.primary:active { background: var(--fill-active); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .btn.secondary:disabled:hover { background: var(--btn2); }
+  .btn.primary:disabled:hover, .btn.primary:disabled:active { background: var(--fill); }
+
+  .spin { animation: spin 900ms linear infinite; transform-origin: 50% 50%; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fade { from { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) {
+    .spin, .status { animation: none; }
+    input, button.btn { transition: none; }
+  }
+  /* The window is 520×420 (design.md §3.1); a short one still never clips. */
+  @media (max-height: 400px) { main { padding: 16px 0 12px; } }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -36,177 +93,318 @@
 <main>
   <h1>Add a server</h1>
   <p class="lead">Open a kwant that runs on another machine, such as your VPS. It gets a window of its own.</p>
-  <label for="address">Server address</label>
-  <input id="address" type="text" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false"
-         placeholder="kwant.example.com" aria-describedby="help slot">
-  <div id="help">
-    <p class="help">The address you open kwant at in a browser.</p>
-    <p class="help">Or paste a one-time sign-in link (in kwant: Settings → Signed-in devices → Add a phone or browser). It signs this app in once and isn't kept.</p>
-  </div>
-  <div class="slot" id="slot" role="status" aria-live="polite"></div>
-  <div class="actions">
-    <button id="cancel">Cancel</button>
-    <button id="connect" class="primary" disabled>Connect</button>
-  </div>
+
+  <form id="form" novalidate>
+    <label for="address">Server address</label>
+    <input id="address" name="address" type="text" inputmode="url" autocomplete="off" autocapitalize="off"
+           autocorrect="off" spellcheck="false" placeholder="kwant.example.com"
+           aria-describedby="help1 help2 preview chip-text status">
+
+    <p class="help" id="help1">The address you open kwant at in a browser.</p>
+    <p class="help" id="help2">Or paste a one-time sign-in link (in kwant: Settings → Signed-in devices → Add a phone or browser). It signs this app in once and isn't kept.</p>
+    <p class="preview" id="preview" hidden>Connects to <b id="preview-origin"></b></p>
+
+    <div class="linkchip" id="chip" hidden>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3"/><path d="m16 7 3 3"/><path d="m19 4 2 2"/></svg>
+      <span id="chip-text">Sign-in link added. It signs this app in once when you connect, then it's dropped. It isn't saved.</span>
+      <button type="button" class="linkbtn" id="unlink" aria-label="Remove the sign-in link">Remove</button>
+    </div>
+
+    <div id="status" role="status" aria-live="polite"></div>
+
+    <div class="actions">
+      <button type="button" class="btn secondary" id="cancel">Cancel</button>
+      <button type="submit" class="btn primary" id="go" disabled>Connect</button>
+    </div>
+  </form>
 </main>
+
 <script>
-// The address field never holds a sign-in link: a pasted link is split into its origin (shown)
-// and the whole link (kept in `link`, in memory only, never written anywhere). Commands: api.md.
 (function () {
+  'use strict';
   var ipc = window.__TAURI_INTERNALS__;
-  var field = document.getElementById('address');
-  var slot = document.getElementById('slot');
-  var help = document.getElementById('help');
-  var connectButton = document.getElementById('connect');
-  var cancelButton = document.getElementById('cancel');
-  var link = null;          // the pasted sign-in link, or null
-  var checking = 0;         // the current check; Stop bumps it so a late answer is ignored
-  var loopback = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+  var $ = function (id) { return document.getElementById(id); };
+  var form = $('form'), field = $('address'), statusBox = $('status');
+  var go = $('go'), cancel = $('cancel'), chip = $('chip'), unlink = $('unlink');
 
-  // What the app will save, for the preview and the notice (the app decides; this only shows).
-  function preview(text) {
-    text = text.trim();
-    if (!text || /\s/.test(text)) return null;
-    var hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(text);
-    var hostPart = text.split(/[\/?#]/)[0];
-    var withScheme = hasScheme ? text : (loopback.test(hostPart) ? 'http://' : 'https://') + text;
-    try {
-      var u = new URL(withScheme);
-      if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
-      if (u.username || u.password || !u.hostname) return null;
-      return { origin: u.origin.replace(/\.(?=(:\d+)?$)/, ''), host: u.host.replace(/\.(?=(:\d+)?$)/, ''), hasToken: /(^|[#&])kwnt_token=[^&]/.test(u.hash) };
-    } catch (e) { return null; }
-  }
+  var link = null;      // the whole pasted sign-in link, in memory only
+  var linkOrigin = null;
+  var phase = 'edit';   // edit | checking | connected (the app is opening or showing its window)
+  var errored = false;  // an error is showing (cleared by the next edit)
+  var removed = false;  // Remove was pressed: show the help lines until the next edit
+  var run = 0;          // the current check; Stop bumps it so a late answer is ignored
+  var listed = [];      // origins already in the app (places_state().servers), checked on each input
 
-  function show(html) { slot.innerHTML = ''; if (html) slot.appendChild(html); }
-  function text(cls, strong, rest) {
-    var p = document.createElement('div');
-    if (cls) p.className = cls;
-    if (strong) { var b = document.createElement('strong'); b.textContent = strong; p.appendChild(b); }
-    if (rest) { p.appendChild(document.createElement('br')); p.appendChild(document.createTextNode(rest)); }
-    return p;
-  }
-  function chip(withRemove) {
-    var c = document.createElement('div');
-    c.className = 'chip';
-    c.textContent = "🔑 Sign-in link added. It signs this app in once when you connect, then it's dropped. It isn't saved.";
-    if (withRemove) {
-      var r = document.createElement('button');
-      r.className = 'link'; r.textContent = 'Remove';
-      r.onclick = function () { link = null; update(); field.focus(); };
-      c.appendChild(r);
+  var LOOPBACK = /^(localhost|127\.0\.0\.1|\[::1\])(:\d*)?$/i;
+  var TOKEN = /(^|[#&?])kwnt_token=/i;
+
+  // What the app will save (api.md table), for the preview, the "already" line and the checks the app
+  // answers without the network. The app's answer is what counts.
+  function parse(raw) {
+    var text = String(raw || '').trim();
+    if (!text) return { code: 'empty' };
+    if (/\s/.test(text)) return { code: 'not_an_address' };
+    var scheme = /^([a-z][a-z0-9+.-]*):/i.exec(text);
+    var withScheme = text;
+    if (!scheme || !/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+      // "localhost:2222" parses as a scheme "localhost:", so judge by the host part instead
+      var hostPart = text.split(/[\/?#]/)[0];
+      if (hostPart.indexOf('@') >= 0) return { code: 'userinfo' };
+      if (scheme && !/^\d/.test(text.slice(scheme[0].length)) && !LOOPBACK.test(hostPart)) return { code: 'not_an_address' };
+      withScheme = (LOOPBACK.test(hostPart.replace(/^[^@]*@/, '')) ? 'http://' : 'https://') + text;
     }
-    return c;
+    var u;
+    try { u = new URL(withScheme); } catch (e) { return { code: 'not_an_address' }; }
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return { code: 'not_an_address' };
+    if (u.username || u.password) return { code: 'userinfo' };
+    var hostname = u.hostname.replace(/\.$/, '');
+    if (!hostname || hostname.indexOf('..') >= 0 || /^\./.test(hostname)) return { code: 'not_an_address' };
+    if (u.protocol === 'http:' && !LOOPBACK.test(hostname)) return { code: 'http_not_allowed' };
+    var host = hostname + (u.port ? ':' + u.port : '');
+    return { code: 'ok', origin: u.protocol + '//' + host, host: host, token: TOKEN.test(u.hash) };
   }
 
-  function update() {
-    var p = preview(field.value);
-    field.removeAttribute('aria-invalid');
-    connectButton.disabled = !field.value.trim();
-    help.hidden = !!field.value.trim() || !!link;
-    if (link) show(chip(true));
-    else if (p) show(text('', null, 'Connects to ' + p.origin));
-    else show(null);
-  }
-
-  var errors = {
-    dns: function (h) { return ["Couldn't find " + h, "Check the spelling. A new address can take a few minutes to start working."]; },
+  // Wording: design.md §3.3. `h` is the host that was checked.
+  var WORDS = {
+    dns: function (h) { return ["Couldn't find " + h, 'Check the spelling. A new address can take a few minutes to start working.']; },
     tls: function (h) { return ["Couldn't connect safely to " + h, "Its security certificate isn't valid, so the app stopped. On a new server the certificate may not be ready yet."]; },
-    timeout: function (h) { return [h + " didn't answer", "Nothing came back in 10 seconds. Check that the server is on and that this computer is online."]; },
-    refused: function (h) { return ["Nothing answered at " + h, "The machine is there, but nothing is listening at that address. Check that kwant is running and the port is right."]; },
-    not_kwant: function (h) { return ["That isn't a kwant server", h + " answered, but not as kwant. Use the address you open kwant at in a browser."]; },
-    http_not_allowed: function () { return ["Use an https:// address", "http:// works only for this computer (localhost or 127.0.0.1), for example through an SSH tunnel."]; },
-    userinfo: function () { return ["Leave out the part before @", "Type just the server address, like kwant.example.com."]; },
-    not_an_address: function () { return ["That isn't a server address", "Type it like kwant.example.com or https://kwant.example.com."]; }
+    timeout: function (h) { return [h + " didn't answer", 'Nothing came back in 10 seconds. Check that the server is on and that this computer is online.']; },
+    refused: function (h) { return ['Nothing answered at ' + h, 'The machine is there, but nothing is listening at that address. Check that kwant is running and the port is right.']; },
+    not_kwant: function (h) { return ["That isn't a kwant server", h + ' answered, but not as kwant. Use the address you open kwant at in a browser.']; },
+    http_not_allowed: function () { return ['Use an https:// address', 'http:// works only for this computer (localhost or 127.0.0.1), for example through an SSH tunnel.']; },
+    userinfo: function () { return ['Leave out the part before @', 'Type just the server address, like kwant.example.com.']; },
+    not_an_address: function () { return ["That isn't a server address", 'Type it like kwant.example.com or https://kwant.example.com.']; },
+    save_failed: function () { return ["kwant couldn't save the server. Check that ~/.kwnt can be written.", '']; }
   };
-  function fail(e) {
-    var p = preview(field.value);
-    var host = (e && e.host) || (p && p.host) || 'that server';
-    var words = (errors[e && e.code] || function () { return [e && e.message || "Something went wrong", ""]; })(host);
-    field.readOnly = false;
-    field.setAttribute('aria-invalid', 'true');
-    cancelButton.textContent = 'Cancel';
-    connectButton.textContent = 'Connect';
-    connectButton.disabled = false;
-    var box = document.createElement('div');
-    if (link) box.appendChild(chip(true));
-    box.appendChild(text('error', 'ⓘ ' + words[0], words[1]));
-    show(box);
-    field.focus();
+  // Any other failure the page has no words of its own for (not_allowed, a code added later).
+  var OTHER = ["Couldn't add the server.", 'Try again. If it keeps failing, details are in the app log.'];
+
+  var SVG = 'http://www.w3.org/2000/svg';
+  function icon(kind) {
+    var s = document.createElementNS(SVG, 'svg');
+    s.setAttribute('width', '16'); s.setAttribute('height', '16'); s.setAttribute('viewBox', '0 0 24 24');
+    s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-linecap', 'round');
+    s.setAttribute('stroke-linejoin', 'round'); s.setAttribute('aria-hidden', 'true');
+    s.setAttribute('stroke-width', kind === 'bad' ? '2' : '2.5');
+    var paths = kind === 'busy' ? ['M21 12a9 9 0 1 1-6.2-8.56'] : kind === 'ok' ? ['m7.5 12.5 3 3 6-6']
+      : kind === 'info' ? ['M12 11v6M12 7.5v.5'] : ['M12 7v6M12 16.5v.5'];
+    if (kind !== 'busy') { var c = document.createElementNS(SVG, 'circle'); c.setAttribute('cx', '12'); c.setAttribute('cy', '12'); c.setAttribute('r', '10'); s.appendChild(c); }
+    else s.setAttribute('class', 'spin');
+    paths.forEach(function (d) { var p = document.createElementNS(SVG, 'path'); p.setAttribute('d', d); s.appendChild(p); });
+    return s;
+  }
+  // Every text goes in through textContent: nothing from the field or the app becomes markup.
+  function setStatus(kind, title, detail) {
+    statusBox.textContent = '';
+    if (!kind) return;
+    var row = document.createElement('div');
+    row.className = 'status ' + kind;
+    row.appendChild(icon(kind));
+    var words = document.createElement('div');
+    var b = document.createElement('b'); b.textContent = title; words.appendChild(b);
+    if (detail) { var sp = document.createElement('span'); sp.textContent = detail; words.appendChild(sp); }
+    row.appendChild(words);
+    statusBox.appendChild(row);
+  }
+  function setGo(label, busy) {
+    go.textContent = '';
+    if (busy) go.appendChild(icon('busy'));
+    go.appendChild(document.createTextNode(label));
+    if (busy) go.setAttribute('aria-busy', 'true'); else go.removeAttribute('aria-busy');
   }
 
-  function connect() {
-    if (connectButton.disabled) return;
-    var address = link || field.value;
-    var p = preview(field.value);
-    var mine = ++checking;
+  // Draws the edit-phase pieces from the field and the held link.
+  function render() {
+    var text = field.value.trim();
+    var p = parse(field.value);
+    var showChip = !!link;
+    var showPreview = phase === 'edit' && !errored && !removed && !link && p.code === 'ok' && !isListed(p);
+    var showHelp = phase === 'edit' && !errored && !showChip && (!text || removed || p.code !== 'ok');
+    $('help1').hidden = $('help2').hidden = !showHelp;
+    $('preview').hidden = !showPreview;
+    if (showPreview) $('preview-origin').textContent = p.origin;
+    chip.hidden = !showChip;
+    unlink.hidden = phase === 'connected';
+    if (phase === 'edit') {
+      var known = isListed(p);
+      go.disabled = !text;
+      field.readOnly = false;
+      cancel.hidden = false;
+      cancel.textContent = 'Cancel';
+      setGo(known && !link ? 'Show it' : 'Connect', false); // design.md §3.2 P5.already.btn
+      if (!errored) {
+        field.setAttribute('aria-invalid', 'false');
+        // P5.already / P5.already.link: decided here, from places_state, with no network call
+        if (known) setStatus('info', p.host + ' is already in this app.', link ? 'Connect signs its window in again with the link.' : '');
+        else if (statusBox.querySelector('.status.info')) setStatus(null);
+      }
+    }
+  }
+
+  function isListed(p) { return p.code === 'ok' && listed.indexOf(p.origin) >= 0; }
+
+  function dropLink() { link = null; linkOrigin = null; }
+
+  // A pasted or dropped sign-in link: keep it in memory, show only its origin.
+  function takeLink(text) {
+    var p = parse(text);
+    if (p.code !== 'ok' || !p.token) return false;
+    link = String(text).trim(); // a second link replaces the first
+    linkOrigin = p.origin;
+    field.value = p.origin;
+    removed = false; errored = false;
+    setStatus(null);
+    render();
+    return true;
+  }
+
+  function edited() {
+    if (phase !== 'edit') return;
+    // A link typed by hand ends up here too: take it out of the field at once.
+    if (TOKEN.test(field.value)) {
+      if (takeLink(field.value)) return;
+      field.value = field.value.replace(/[?#].*$/, ''); // not a link we can use: still never keep it in the field
+    }
+    var p = parse(field.value);
+    if (link && (p.code !== 'ok' || p.origin !== linkOrigin)) dropLink(); // the link only works for its own server
+    errored = false; removed = false;
+    field.setAttribute('aria-invalid', 'false');
+    setStatus(null);
+    render();
+  }
+
+  function showError(code, host, message) {
+    phase = 'edit';
+    errored = true;
+    var words = WORDS[code] ? WORDS[code](host || 'that server') : OTHER;
+    render();
+    field.setAttribute('aria-invalid', 'true');
+    setStatus('bad', words[0], words[1]);
+    field.focus();
+    var end = field.value.length;
+    try { field.setSelectionRange(end, end); } catch (e) { /* not every input type allows it */ }
+  }
+
+  function failure(e, fallbackHost) {
+    if (typeof e === 'string' || !e) return { code: 'not_allowed', host: fallbackHost, message: null };
+    return { code: e.code, host: e.host || fallbackHost, message: e.message };
+  }
+
+  function startCheck() {
+    if (phase !== 'edit' || go.disabled) return;
+    var p = parse(field.value);
+    if (p.code === 'empty') return;
+    if (p.code !== 'ok') { showError(p.code, null); return; } // answered here, no network
+    var address = link || field.value.trim();
+    var mine = ++run;
+    if (!link && isListed(p)) { show(p.host, address, mine); return; } // Show it: no check, just its window
+    phase = 'checking';
+    errored = false; removed = false;
     field.readOnly = true;
-    connectButton.disabled = true;
-    connectButton.textContent = 'Checking…';
-    cancelButton.textContent = 'Stop';
-    show(text('', null, 'Checking ' + (p ? p.host : 'the address') + '…'));
-    ipc.invoke('check_server', { address: address }).then(function (s) {
-      if (mine !== checking) return;
-      cancelButton.hidden = true;
-      connectButton.textContent = 'Opening…';
-      var box = document.createElement('div');
-      if (link) box.appendChild(chip(false));
-      box.appendChild(text('ok', '✓ Connected to ' + s.host, link
-        ? 'Signing you in with the link in its own window…'
-        : 'It opens in its own window. Sign in there: "Sign in from another device" lets you approve this app from your phone or browser.'));
-      show(box);
-      // the app opens (or shows) the server's window and closes this one
-      return ipc.invoke('add_server', { address: address }).then(function () { link = null; });
-    }).catch(function (e) {
-      if (mine !== checking) return;
-      cancelButton.hidden = false;
-      fail(e);
+    field.setAttribute('aria-invalid', 'false');
+    go.disabled = true;
+    setGo('Checking…', true);
+    cancel.textContent = 'Stop';
+    render();
+    setStatus('busy', 'Checking ' + p.host + '…', '');
+    ipc.invoke('check_server', { address: address }).then(function (ok) {
+      if (mine !== run) return;
+      add(ok && ok.host ? ok.host : p.host, address, mine);
+    }, function (e) {
+      if (mine !== run) return;
+      var f = failure(e, p.host);
+      showError(WORDS[f.code] ? f.code : 'other', f.host, f.message);
     });
   }
 
+  // Show it: the server is listed and no link was pasted. add_server focuses its window.
+  function show(host, address, mine) {
+    phase = 'checking';
+    field.readOnly = true;
+    go.disabled = true;
+    cancel.hidden = true;
+    add(host, address, mine);
+  }
+
+  // The check passed (or the server is already listed): add it. The app opens or focuses its
+  // window, and with a link that window opens the link once. Then this window closes at once
+  // (design.md §3.1: no hold, no "Restarting…").
+  function add(host, address, mine) {
+    ipc.invoke('add_server', { address: address }).then(function (r) {
+      if (mine !== run) return;
+      dropLink(); // the app has it now
+      if (r && r.origin && listed.indexOf(r.origin) < 0) listed.push(r.origin);
+      phase = 'connected';
+      field.readOnly = true;
+      cancel.hidden = true;
+      go.disabled = true;
+      render();
+      ipc.invoke('close_connect').catch(function () {
+        // The window stayed open: let the person add another or close it themselves.
+        phase = 'edit'; field.value = ''; setStatus(null); render(); field.focus();
+      });
+    }, function (e) {
+      if (mine !== run) return;
+      var f = failure(e, host);
+      // add_server checks a new server too, so its codes are the check's; save_failed has its
+      // own sentence; anything else reads "Couldn't add the server."
+      showError(WORDS[f.code] ? f.code : 'other', f.host, f.message);
+    });
+  }
+
+  function stop() {
+    run++;
+    phase = 'edit';
+    setStatus(null);
+    render();
+    field.focus();
+  }
+
   field.addEventListener('paste', function (ev) {
-    var pasted = (ev.clipboardData || window.clipboardData).getData('text');
-    var p = preview(pasted);
-    if (p && p.hasToken) {
+    var data = ev.clipboardData && ev.clipboardData.getData('text');
+    if (data && TOKEN.test(data)) {
       ev.preventDefault();
-      link = pasted.trim();           // replaces any earlier link
-      field.value = p.origin;
-      update();
+      if (phase === 'edit' && !takeLink(data)) showError(parse(data).code, null);
     }
   });
-  field.addEventListener('input', function () {
-    // the link only works for its own server
-    var p = preview(field.value);
-    if (link && (!p || p.origin !== preview(link).origin)) link = null;
-    if (p && p.hasToken) { link = field.value.trim(); field.value = p.origin; }
-    update();
+  field.addEventListener('drop', function (ev) {
+    var data = ev.dataTransfer && (ev.dataTransfer.getData('text/plain') || ev.dataTransfer.getData('text/uri-list'));
+    if (data && TOKEN.test(data)) {
+      ev.preventDefault();
+      if (phase === 'edit' && !takeLink(data)) showError(parse(data).code, null);
+    }
   });
-  field.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Enter') { ev.preventDefault(); connect(); }
+  field.addEventListener('input', edited);
+  form.addEventListener('submit', function (ev) { ev.preventDefault(); startCheck(); });
+  unlink.addEventListener('click', function () {
+    dropLink();
+    removed = true;
+    render();
+    field.focus();
+  });
+  cancel.addEventListener('click', function () {
+    if (phase === 'checking') { stop(); return; }
+    if (phase !== 'edit') return;
+    dropLink();
+    if (ipc) ipc.invoke('close_connect').catch(function () {});
   });
   document.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Escape') { ev.preventDefault(); cancelButton.click(); }
+    if (ev.key !== 'Escape' || ev.defaultPrevented) return;
+    ev.preventDefault();
+    if (phase === 'checking') stop();
+    else if (phase === 'edit') cancel.click();
   });
-  connectButton.onclick = connect;
-  cancelButton.onclick = function () {
-    if (cancelButton.textContent === 'Stop') {
-      checking++;
-      field.readOnly = false;
-      cancelButton.textContent = 'Cancel';
-      connectButton.textContent = 'Connect';
-      update();
-      field.focus();
-      return;
-    }
-    link = null;
-    ipc.invoke('close_connect').catch(function () {});
-  };
+  // Nothing held after the page goes away.
+  addEventListener('pagehide', dropLink);
 
+  render();
+  field.focus();
   if (!ipc) return;
-  ipc.invoke('places_state').then(function () {
-    update();
-    field.focus();
-  }).catch(function () { update(); field.focus(); });
+  ipc.invoke('places_state').then(function (s) {
+    if (!s) return;
+    listed = (s.servers || []).map(function (v) { return v && v.origin; }).filter(Boolean);
+    render();
+  }).catch(function () {});
 })();
 </script>
 </body>
