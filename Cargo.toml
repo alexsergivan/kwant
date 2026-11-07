@@ -72,6 +72,8 @@ libc = "0.2"
 
 # Windows: a Job Object per bot turn, so Stop ends the whole process tree (0.7.6 Windows port)
 [target.'cfg(windows)'.dependencies]
+# Windows has no system tz database: the IANA zones, bundled (routines::parse_tz)
+tzdb_data = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [features]

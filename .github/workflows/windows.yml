@@ -46,7 +46,11 @@ jobs:
     name: rust (windows)
     runs-on: windows-latest
     needs: frontend
+    timeout-minutes: 90
     steps:
+      # Byte-for-byte checkout: the test fixtures (PDFs, the docker files whose hash is pinned)
+      # must not get CRLF line endings
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -60,8 +64,15 @@ jobs:
         run: cargo check --all-targets --locked --keep-going --message-format short
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
-      - name: Tests
-        run: cargo test --locked --no-fail-fast
+      # The first full run on Windows (125fc52) hung in ask_user_test: most integration tests drive
+      # fake `sh` CLIs and aren't ported yet (plan.md, "Tests not ported to Windows yet"). The gate is
+      # the unit tests, less the modules listed there, plus the integration tests for Windows behaviour.
+      - name: Unit tests
+        timeout-minutes: 20
+        run: cargo test --locked --lib --no-fail-fast -- --skip server::dev:: --skip parallel::harness::
+      - name: Windows integration tests (bash, Stop ends the process tree)
+        timeout-minutes: 20
+        run: cargo test --locked --no-fail-fast --test shell_stop_tree_test --test shell_tool_test
       # kwnt.exe on its own: a scratch data dir and a free port, /api/health answers, then Stop and
       # nothing it started is left. Laya stays off (--no-laya) so the step never downloads Python.
       - name: Build kwnt.exe

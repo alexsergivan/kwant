@@ -1073,6 +1073,8 @@ mod tests {
         }
     }
 
+    // Linux and Mac plans with their paths; Windows plans are windows_cli_steps' (tested everywhere)
+    #[cfg(unix)]
     #[test]
     fn laya_on_a_bare_machine_installs_uv_into_the_data_folder_then_laya() {
         for p in [bare(Platform::Linux), mac()] {
@@ -1095,6 +1097,8 @@ mod tests {
         }
     }
 
+    // Linux and Mac plans with their paths; Windows plans are windows_cli_steps' (tested everywhere)
+    #[cfg(unix)]
     #[test]
     fn laya_prefers_uv_then_a_real_python() {
         let mut p = bare(Platform::Linux);
@@ -1180,6 +1184,8 @@ mod tests {
         assert!(plan(ItemId::Browser, &p).steps.is_empty());
     }
 
+    // Linux and Mac plans with their paths; Windows plans are windows_cli_steps' (tested everywhere)
+    #[cfg(unix)]
     #[test]
     fn clis_install_in_user_space() {
         let p = bare(Platform::Linux);
@@ -1236,6 +1242,8 @@ mod tests {
         assert_eq!(default_selection(&has, None, false), vec![ItemId::Laya, ItemId::Browser]);
     }
 
+    // Linux and Mac plans with their paths; Windows plans are windows_cli_steps' (tested everywhere)
+    #[cfg(unix)]
     #[test]
     fn checklist_rows() {
         let mut p = bare(Platform::Linux);

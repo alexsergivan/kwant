@@ -174,7 +174,10 @@ mod tests {
             "(Get-Acl -LiteralPath '{}').Access | ForEach-Object {{ $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value + ' ' + $_.IsInherited }}",
             path.display().to_string().replace('\'', "''")
         );
+        // PowerShell 7 (the CI's shell) leaves its own module path behind, which Windows
+        // PowerShell can't load Get-Acl from; without it Windows PowerShell uses its default
         let out = std::process::Command::new("powershell")
+            .env_remove("PSModulePath")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
             .unwrap();

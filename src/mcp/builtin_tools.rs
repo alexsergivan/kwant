@@ -260,6 +260,18 @@ const CREDENTIAL_FOLDERS: &[&str] = &[
     "library/application support/bitwarden", "library/application support/code/user/globalstorage", "library/cookies",
     "library/safari", "library/containers/com.apple.safari", "library/group containers",
 ];
+/// Where Windows keeps browser profiles, signed-in apps and its own stored passwords and keys
+/// (under `%LOCALAPPDATA%` and `%APPDATA%`).
+#[cfg(windows)]
+const WINDOWS_CREDENTIAL_FOLDERS: &[&str] = &[
+    "appdata/local/google/chrome", "appdata/local/chromium", "appdata/local/microsoft/edge",
+    "appdata/local/bravesoftware", "appdata/local/vivaldi", "appdata/roaming/opera software",
+    "appdata/roaming/mozilla", "appdata/local/mozilla", "appdata/roaming/1password", "appdata/local/1password",
+    "appdata/roaming/bitwarden", "appdata/roaming/bitwarden cli", "appdata/roaming/gh", "appdata/roaming/github cli",
+    "appdata/roaming/gcloud", "appdata/roaming/code/user/globalstorage", "appdata/roaming/microsoft/protect",
+    "appdata/roaming/microsoft/credentials", "appdata/local/microsoft/credentials", "appdata/roaming/microsoft/crypto",
+    "appdata/roaming/microsoft/systemcertificates", "appdata/local/packages",
+];
 /// File endings of keys, certificates and password vaults.
 const CREDENTIAL_ENDINGS: &[&str] = &[".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx", ".ppk", ".asc", ".gpg"];
 /// Live process and device data: `/proc/self/environ` holds the gateway token.
@@ -271,11 +283,29 @@ const SYSTEM_SECRETS: &[&str] = &["/etc/shadow", "/etc/gshadow", "/etc/master.pa
 /// Whether `path` (absolute) is live system data or names a credential, and why (`{}` stands
 /// for the path as the bot wrote it).
 fn denied_place(path: &Path) -> Option<&'static str> {
-    let p = path.to_string_lossy().to_lowercase();
+    let p = path_text(path);
     if SYSTEM_PLACES.iter().any(|s| p == *s || p.starts_with(&format!("{s}/"))) {
         return Some("{} is live system data and can hold secrets");
     }
     (credential_text(&p) || system_secret(&p)).then_some("{} can hold passwords or keys")
+}
+
+/// `path` as lowercase text with `/` between its parts, the form the name checks read. On
+/// Windows `\` becomes `/` and the `\\?\` and drive prefixes go, so `C:\Users\x\.ssh` reads as
+/// `/users/x/.ssh` (a UNC share `\\host\share` as `//host/share`).
+fn path_text(path: &Path) -> String {
+    let p = path.to_string_lossy().to_lowercase();
+    #[cfg(windows)]
+    let p = {
+        let slashed = p.replace('\\', "/");
+        let bare = match slashed.strip_prefix("//?/") {
+            Some(rest) => rest.strip_prefix("unc/").map_or_else(|| rest.to_string(), |share| format!("//{share}")),
+            None => slashed,
+        };
+        let drive = bare.len() >= 2 && bare.as_bytes()[0].is_ascii_alphabetic() && bare.as_bytes()[1] == b':';
+        if drive { bare[2..].to_string() } else { bare }
+    };
+    p
 }
 
 /// Whether a lowercase absolute path is one of [`SYSTEM_SECRETS`] (`/etc/shadow-` and
@@ -291,7 +321,23 @@ fn credential_text(p: &str) -> bool {
     let parts: Vec<&str> = p.split('/').filter(|c| !c.is_empty()).collect();
     parts.iter().any(|c| {
         CREDENTIAL_NAMES.contains(c) || c.starts_with(".env") || CREDENTIAL_ENDINGS.iter().any(|e| c.ends_with(e))
-    }) || CREDENTIAL_FOLDERS.iter().any(|f| {
+    }) || credential_folder(p, CREDENTIAL_FOLDERS)
+        || windows_credential_folder(p)
+}
+
+#[cfg(windows)]
+fn windows_credential_folder(p: &str) -> bool {
+    credential_folder(p, WINDOWS_CREDENTIAL_FOLDERS)
+}
+
+#[cfg(not(windows))]
+fn windows_credential_folder(_: &str) -> bool {
+    false
+}
+
+/// Whether a lowercase path is in (or is) one of `folders`.
+fn credential_folder(p: &str, folders: &[&str]) -> bool {
+    folders.iter().any(|f| {
         let tail = format!("/{f}");
         p.contains(&format!("{tail}/")) || p.ends_with(&tail) || p.starts_with(&format!("{f}/")) || p == *f
     })
@@ -306,6 +352,13 @@ fn broad_search(root: &Path) -> Option<String> {
     let real = resolve(root).unwrap_or_else(|| lexical(root));
     let shown = real.display();
     let homes = std::env::var_os("HOME").map(PathBuf::from).into_iter().chain(["/home", "/Users", "/root"].map(PathBuf::from));
+    // Windows homes: %USERPROFILE% and the folder holding every user's
+    #[cfg(windows)]
+    let homes = homes.chain(std::env::var_os("USERPROFILE").map(PathBuf::from)).chain(std::env::var_os("SystemDrive").map(|d| {
+        let mut users = PathBuf::from(d);
+        users.push("\\Users");
+        users
+    }));
     for home in homes {
         let home = home.canonicalize().unwrap_or(home);
         if home.starts_with(&real) {
@@ -325,7 +378,7 @@ fn broad_search(root: &Path) -> Option<String> {
                 return Some(format!("{shown} is too big for kwnt to check for passwords and keys"));
             }
             let path = entry.path();
-            let lower = path.to_string_lossy().to_lowercase();
+            let lower = path_text(&path);
             if credential_text(&lower) || system_secret(&lower) {
                 return Some(format!("{} can hold passwords or keys", path.display()));
             }
@@ -694,8 +747,11 @@ mod tests {
     #[test]
     fn smart_searches_from_root_home_or_above_credentials_ask() {
         let (tmp, ws) = folder();
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
-        for root in ["/", "/home", "/Users", home.as_str()] {
+        #[cfg(unix)]
+        let (home, homes) = (std::env::var("HOME").unwrap_or_else(|_| "/root".into()), ["/home", "/Users"]);
+        #[cfg(windows)]
+        let (home, homes) = (std::env::var("USERPROFILE").unwrap(), [r"C:\Users", "/Users"]);
+        for root in ["/", homes[0], homes[1], home.as_str()] {
             assert!(!smart("Grep", json!({"pattern": "x", "path": root}), &ws), "Grep {root}");
             assert!(!smart("Glob", json!({"pattern": "**/*", "path": root}), &ws), "Glob {root}");
         }
@@ -708,6 +764,31 @@ mod tests {
         std::fs::write(other.join("app/config/.env"), "SECRET=1").unwrap();
         assert!(!smart("Grep", json!({"pattern": "SECRET", "path": other_s}), &ws), "a .env deep below");
         assert!(!smart("Glob", json!({"pattern": format!("{other_s}/**/*")}), &ws));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn smart_windows_paths_with_backslashes_and_drives_ask() {
+        let (_tmp, ws) = folder();
+        for path in [
+            r"C:\Users\x\.ssh\id_rsa",
+            r"c:\users\x\.SSH\id_ed25519",
+            r"C:\Users\x\.kwnt\secrets.json",
+            r"\\?\C:\Users\x\.aws\credentials",
+            r"\\host\share\x\.env",
+            r"D:\keys\server.pem",
+            r"C:\Users\x\AppData\Roaming\gh\hosts.yml",
+            r"C:\Users\x\AppData\Local\Google\Chrome\User Data\Default\Cookies",
+            r"C:\Users\x\AppData\Roaming\Microsoft\Protect\S-1-5-21\key",
+            r"C:\Users\x\AppData\Local\Microsoft\Credentials\ABC",
+            "C:/Users/x/.ssh/config",
+        ] {
+            assert!(!smart("Read", json!({"file_path": path}), &ws), "{path}");
+        }
+        assert!(!smart("Grep", json!({"pattern": "x", "path": r"C:\"}), &ws), "a whole drive");
+        assert!(smart("Read", json!({"file_path": r"C:\Windows\win.ini"}), &ws), "ordinary reads outside still run");
+        assert_eq!(path_text(Path::new(r"\\?\UNC\host\share\A")), "//host/share/a");
+        assert_eq!(path_text(Path::new(r"C:\Users\X")), "/users/x");
     }
 
     #[test]

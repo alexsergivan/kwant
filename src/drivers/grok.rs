@@ -832,6 +832,8 @@ include_only = ["*"]
         assert!(auth.exists(), "the user's own file is untouched");
     }
 
+    // Windows can't open a folder as a file to date it, and Grok is off on Windows
+    #[cfg(unix)]
     #[test]
     fn sweeps_only_stale_kwnt_homes() {
         let base = tempfile::tempdir().unwrap();

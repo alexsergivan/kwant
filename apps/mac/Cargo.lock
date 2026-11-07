@@ -2767,6 +2767,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tz-rs",
+ "tzdb_data",
  "unicode-normalization",
  "url",
  "uuid",
@@ -6201,6 +6202,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fc6c929ffa10fb34f4a3c7e9a73620a83ef2e85e47f9ec3381b8289e6762f42"
 
 [[package]]
+name = "tzdb_data"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "febaa995f6852367564e16c3369988b99d471d43ed12b1255b8d294661797f1c"
+dependencies = [
+ "tz-rs",
+]
+
+[[package]]
 name = "uds_windows"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6658,7 +6668,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
