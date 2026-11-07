@@ -917,3 +917,13 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
 }
 /* §2.4 kbd chips are desktop only */
 @media (max-width: 639px) { .dv-kbd { display: none; } }
+
+/* 0.7.7 ready-made teams: the preview sheet rises 8 px (dialog) or 24 px (phone sheet). Opacity and transform only. */
+@keyframes t-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes t-sheet {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: none; }
+}
