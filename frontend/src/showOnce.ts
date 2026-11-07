@@ -146,7 +146,7 @@ async function api<T>(method: string, url: string, body?: unknown): Promise<T> {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    throw new ShowOnceError('kwant didn’t answer. Check the connection and try again.', 0, null, null);
+    throw new ShowOnceError('The server didn’t answer. Check the connection and try again.', 0, null, null);
   }
   if (!res.ok) {
     let data: Record<string, unknown> | null = null;
@@ -171,7 +171,7 @@ export const showOnceApi = {
   start: (body: { bot: string; stage: string; start_url?: string; first_note?: string }) => api<{ recording: Recording }>('POST', R, body),
   current: (bot: string) => api<{ recording: Recording | null }>('GET', `${R}?bot=${enc(bot)}`),
   get: (id: string) => api<{ recording: Recording; steps: RecordedStep[] }>('GET', `${R}/${enc(id)}`),
-  note: (id: string, body: { text: string; after?: string }) => api<{ step: RecordedStep }>('POST', `${R}/${enc(id)}/notes`, body),
+  note: (id: string, body: { text: string; after?: number | string }) => api<{ step: RecordedStep }>('POST', `${R}/${enc(id)}/notes`, body),
   stop: (id: string) => api<{ recording: Recording }>('POST', `${R}/${enc(id)}/stop`),
   resume: (id: string) => api<{ recording: Recording }>('POST', `${R}/${enc(id)}/resume`),
   deleteStep: (id: string, step: string) => api<{ step: RecordedStep }>('DELETE', `${R}/${enc(id)}/steps/${enc(step)}`),
@@ -325,7 +325,7 @@ export function stopBanner(r: Recording, listed: number): { lead: string; rest: 
     case 'closed':
       return { lead: 'The recording stopped when the browser closed.', rest: ' The steps up to there are kept.' };
     case 'restart':
-      return { lead: 'The recording stopped when kwant restarted.', rest: ' The steps up to there are kept.' };
+      return { lead: 'The recording stopped when the app restarted.', rest: ' The steps up to there are kept.' };
     default:
       return null;
   }
@@ -716,8 +716,10 @@ export const showOnce = {
   note: (text: string, after?: string): Promise<string | null> => {
     const id = session?.rec?.id;
     if (!id) return Promise.resolve(null);
+    // api.md §3: a step id goes back as the server sent it (a number), never as its string key
+    const afterId = after === undefined ? undefined : session?.steps.find((st) => stepKey(st) === after)?.id ?? after;
     return run(
-      () => showOnceApi.note(id, after ? { text, after } : { text }),
+      () => showOnceApi.note(id, afterId !== undefined ? { text, after: afterId } : { text }),
       (s, v) => (isStep(v.step) ? { ...s, steps: after ? s.steps : mergeStep(s.steps, v.step) } : s),
     ).then((err) => {
       if (!err) void refresh();

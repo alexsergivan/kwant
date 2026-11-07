@@ -130,7 +130,7 @@ test('the clock, durations, the near-limit line and the review subtitle', () => 
     lead: 'Stopped at 30 minutes,', rest: ' the most one recording can take. All 120 steps up to there are kept.',
   });
   assert.equal(m.stopBanner(rec({ stop_reason: 'stop' }), 3), null);
-  assert.match(m.stopBanner(rec({ stop_reason: 'restart' }), 3).lead, /kwant restarted/);
+  assert.match(m.stopBanner(rec({ stop_reason: 'restart' }), 3).lead, /the app restarted/);
 });
 
 test('Write the skill says why it can’t yet', () => {
@@ -380,7 +380,7 @@ test('Check the steps: every step numbered and named, masks as chips, the engine
   const { host, unmount } = await mount(h(m.StepReview));
   const dlg = host.querySelector('[role="dialog"]');
   assert.ok(dlg, 'a dialog');
-  assert.equal(document.activeElement?.tagName, 'H2');
+  assert.equal(document.activeElement?.tagName, 'H3');
   assert.match(host.textContent, /15 steps · 3 min 40 s · shop\.example\.com, crm\.example\.com/);
   const rows = [...host.querySelectorAll('li.so-step')];
   assert.equal(rows.length, 15);
@@ -432,7 +432,7 @@ test('a note after a step goes in with `after`', async () => {
   assert.equal(document.activeElement, ta);
   await type(ta, 'Wait for the file.');
   await click(byText(host, '.so-addnote button', 'Add'));
-  assert.deepEqual(calls.find((c) => c.url.endsWith('/notes')).body, { text: 'Wait for the file.', after: '7' });
+  assert.deepEqual(calls.find((c) => c.url.endsWith('/notes')).body, { text: 'Wait for the file.', after: 7 });
   assert.equal(host.querySelector('.so-addnote'), null);
   assert.match(host.textContent, /Wait for the file\./);
   unmount();
@@ -563,7 +563,7 @@ test('a shown draft: the badge, its sections, Approve / Edit then approve / Reje
   const { host, unmount } = await mount(h(m.PendingSkill, { skill: skill(), botName: 'Rook' }));
   assert.match(host.textContent, /Shown by you/);
   assert.match(host.textContent, /Shown by you on Nov 7, 2026 · from 14 steps/);
-  for (const b of ['Approve', 'Edit then approve', 'Reject', 'Try it once']) assert.ok(byText(host, 'button', b), b);
+  for (const b of ['Approve', 'Edit, then approve', 'Reject', 'Try it once']) assert.ok(byText(host, 'button', b), b);
   assert.match(host.textContent, /The recorded steps are kept until Nov 14\. They're deleted 7 days after you approve, and at once if you reject\./);
   unmount();
 });
