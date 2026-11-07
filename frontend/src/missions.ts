@@ -4,6 +4,7 @@
 // Nothing here can mark a task verified on a bot's word: the board only shows what kwant checked,
 // and every non-GET route is person-only on the server.
 
+import { spendStopEventText } from './spendStop';
 import { PersonCancelledError, personFetch } from './auth';
 import { relativeTime } from './away';
 import { Capabilities, CapabilityChange, CapabilityChangedEvent, ENGINE_CANT_SANDBOX, ProposalDecision, ProposalStatus, Scorecard, TaskTier, Tier, TierProposal } from './flightSchool';
@@ -1493,6 +1494,9 @@ export function eventText(e: TaskEvent, names: Record<string, string> = {}): str
   const Who = who[0].toUpperCase() + who.slice(1);
   const d = e.detail ?? {};
   const note = str(d.note) ?? str(d.reason);
+  // Today's spending stop held it: a pause, not a failure (spendStop.ts).
+  const stop = spendStopEventText(e);
+  if (stop) return stop;
   switch (e.kind) {
     case 'created':
       return `${Who} added this task`;

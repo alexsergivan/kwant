@@ -45,7 +45,7 @@ const HINT = 'Install git 2.31 or newer on the server.';
 // Mira's copy-073.md §1a–§1d.
 const NO_GIT_TIP = 'Dev mode reads this repo with git. Install git 2.31 or newer on the server. Then press Refresh.';
 const NO_GIT_TIP_OLD = 'Dev mode reads this repo with git. Install git 2.31 or newer on the server, then press Refresh.';
-const GIT_TIP = 'Watching with git: shows what lands on trunk. Reviews and CI checks work on GitHub repos for now.';
+const GIT_TIP = 'Watching with git: shows what lands on trunk. Reviews and CI checks work on GitHub, GitLab, Gitea and Forgejo repos\.';
 const LOCAL_TIP = 'Read from Notes’s folder on the server: shows what lands on main. It has no remote, so there are no reviews or CI checks.';
 const CANT_USE_TIP = 'Dev mode only reads https, ssh or git addresses on another computer. This one points at this server, or isn’t a git address. Change it in Ops’s settings or in the folder’s git remote.';
 
@@ -109,7 +109,7 @@ test('watching (plain git): "Watching {repo} · {branch} · landed changes only"
   assert.deepEqual(texts(m.onToast(s).body), ['Watching ', 'https://gitlab.example.test/demo/lab', ' on ', 'trunk', '. Landed changes only for now.']);
   assert.equal(m.onToast(s).title, 'Dev mode on');
   const out = html(m.DevStatusLine, { spaceId: 'spc_demo', state: s });
-  assert.match(out, /data-dv-line-note="true">Watching with git: shows what lands on trunk\. Reviews and CI checks work on GitHub repos for now\.</);
+  assert.match(out, /data-dv-line-note="true">Watching with git: shows what lands on trunk\. Reviews and CI checks work on GitHub, GitLab, Gitea and Forgejo repos\.</);
   assert.match(out, /aria-describedby="[^"]+-note"/, 'the line is described by its note');
   assert.doesNotMatch(out, /Connect GitHub|Link a repo/);
   // No branch name (the remote's default): no branch anywhere, never "main".

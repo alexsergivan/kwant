@@ -76,6 +76,11 @@ pub async fn tick(state: &AppState) {
 /// Starts runner turns for up to `max` ready tasks of `mission` (one at a time, in the
 /// background). Returns `(task_id, kwant_id)` of each started, and why none were if so.
 pub async fn run_mission(state: &AppState, mission: &Mission, max: usize) -> (Vec<(String, String)>, Option<String>) {
+    // Today's spending stop holds new turns: nothing is claimed, so no attempt is used
+    if let Some(why) = crate::server::spend_stop::held(state).await {
+        skip_for_spend(state, mission, &why).await;
+        return (Vec::new(), Some(why));
+    }
     let slot = match Slot::take(&state.mission_runs, &mission.id) {
         Ok(s) => s,
         Err(why) => return (Vec::new(), Some(why.into())),
@@ -128,6 +133,18 @@ pub async fn run_mission(state: &AppState, mission: &Mission, max: usize) -> (Ve
         }
     });
     (started, None)
+}
+
+/// The spending stop held `mission`: its next ready task's history says so, once a day.
+async fn skip_for_spend(state: &AppState, mission: &Mission, why: &str) {
+    let space = crate::db::spaces::SpaceId::new(&mission.space_id);
+    let ready = state.db.list_tasks(&space, Some("ready"), Some(&mission.id), None, 100).await.unwrap_or_default();
+    let Some(t) = ready.iter().find(|t| matches!(t.source_kind.as_str(), "mission" | "person") && t.held_at.is_none()) else { return };
+    if crate::server::spend_stop::first_skip_today(state, &format!("task:{}", t.id)).await {
+        let detail = serde_json::json!({"reason": crate::server::spend_stop::REASON, "why": why});
+        let _ = state.db.task_event(&t.id, Some(&mission.id), "skipped", "kwant", &detail).await;
+        super::emit_task(state, t).await;
+    }
 }
 
 /// Where a runner turn of `bot` in `m` runs: the mission's channel; its thread or direct chat only
@@ -243,6 +260,22 @@ pub async fn after_turn(state: &AppState, task_id: &str, err: Option<&str>, star
         return;
     }
     if t.state != "working" {
+        return;
+    }
+    // Today's spending stop held the turn before it started: back to ready, no attempt used and
+    // no failure, so AutoFix doesn't retry it
+    if let Some(why) = err.filter(|e| crate::server::spend_stop::is_stop_error(e)) {
+        let change = TaskChange {
+            kind: "released".into(),
+            reason: Some(format!("skipped: {}", crate::server::spend_stop::REASON)),
+            ..Default::default()
+        };
+        let _ = transition(state, &t.id, "working", "ready", Actor::Kwant, "kwant", change).await;
+        // …and its timeline says why, once a day (the same mark [`skip_for_spend`] leaves)
+        if crate::server::spend_stop::first_skip_today(state, &format!("task:{}", t.id)).await {
+            let detail = serde_json::json!({"reason": crate::server::spend_stop::REASON, "why": why});
+            let _ = state.db.task_event(&t.id, t.mission_id.as_deref(), "skipped", "kwant", &detail).await;
+        }
         return;
     }
     let park = super::autofix::parks(state, &t, true).await;

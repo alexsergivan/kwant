@@ -55,15 +55,12 @@ pub fn normalize(input: &str) -> Option<(Option<String>, String)> {
     Some((host.map(|h| h.to_lowercase()), format!("{owner}/{name}")))
 }
 
-/// The web host repos of this API base live on: `api.github.com` → `github.com`,
-/// `https://ghe.example/api/v3` → `ghe.example`.
+/// The web host repos of this API base live on ([`GithubConfig::web_origin`]):
+/// `api.github.com` → `github.com`, `https://ghe.example/api/v3` → `ghe.example`,
+/// `api.acme.ghe.com` → `acme.ghe.com`. Old rows are normalised first, so a stored
+/// `https://acme.ghe.com` gives `acme.ghe.com` too.
 pub fn web_host(cfg: &GithubConfig) -> String {
-    let host = url::Url::parse(cfg.api_base.trim()).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
-    if host == "api.github.com" {
-        "github.com".into()
-    } else {
-        host
-    }
+    url::Url::parse(&cfg.web_origin()).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default()
 }
 
 /// What a repo's root says about how it ships (plan §3.1 `deploy_hint`).
@@ -784,6 +781,20 @@ mod tests {
     fn the_web_host_follows_the_api_base() {
         assert_eq!(web_host(&GithubConfig { api_base: "https://api.github.com".into() }), "github.com");
         assert_eq!(web_host(&GithubConfig { api_base: "https://ghe.example.com/api/v3".into() }), "ghe.example.com");
+        assert_eq!(web_host(&GithubConfig { api_base: "https://github.acme.com".into() }), "github.acme.com");
+        assert_eq!(web_host(&GithubConfig { api_base: "".into() }), "github.com");
+    }
+
+    #[test]
+    fn a_ghe_com_repo_matches_its_connection() {
+        // Saved (0.7.4+) and old (as typed) rows both give the repos' host
+        for api in ["https://api.acme.ghe.com", "https://api.acme.ghe.com/", "https://acme.ghe.com", "https://ACME.ghe.com/"] {
+            assert_eq!(web_host(&GithubConfig { api_base: api.into() }), "acme.ghe.com", "{api:?}");
+        }
+        let hosts = vec!["github.com".to_string(), "acme.ghe.com".to_string()];
+        assert_eq!(source_repo("https://acme.ghe.com/org/app/tree/main", &hosts, true), Some(("acme.ghe.com".into(), "org/app".into())));
+        assert_eq!(source_repo("git@acme.ghe.com:org/app.git", &hosts, false), Some(("acme.ghe.com".into(), "org/app".into())));
+        assert_eq!(normalize("https://acme.ghe.com/org/app"), Some((Some("acme.ghe.com".into()), "org/app".into())));
     }
 
     #[test]

@@ -51,13 +51,15 @@ export interface AwayViewProps {
   onOpen: (item: AwayItem) => void;
   onAnswer: (item: AwayItem, choice: number) => void;
   onResolve: (item: AwayItem, decision: ApprovalDecision) => void;
+  /** Above the lists: what holds every bot (today's spending stop), not one bot's item. */
+  top?: React.ReactNode;
 }
 
 const actionBtn =
   'inline-flex items-center gap-1.5 min-h-[36px] sm:min-h-[30px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400';
 
 /** The Inbox's New tab (once "While you were away"): what's waiting on you, what finished and what failed. */
-export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice = null, busy = null, now = Date.now(), onRefresh, onBack, onOpen, onAnswer, onResolve }) => {
+export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice = null, busy = null, now = Date.now(), onRefresh, onBack, onOpen, onAnswer, onResolve, top }) => {
   const renderItem = (item: AwayItem) => {
     const { label, tone } = itemLabel(item);
     const when = relativeTime(item.timestamp, now);
@@ -152,6 +154,7 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6" aria-busy={loading}>
         <div className="max-w-3xl mx-auto space-y-6">
+          {top}
           {error && (
             <div role="alert" className="px-3 py-2 rounded-lg border border-rose-500/20 bg-rose-500/5 flex items-center gap-2 text-xs text-rose-300">
               <span>Couldn't load what happened: {error}</span>
@@ -227,10 +230,11 @@ export interface AwayPageProps {
   /** An approval was answered here, so the chat drops its card too. */
   onApprovalResolved?: (id: string) => void;
   onBack?: () => void;
+  top?: React.ReactNode;
 }
 
 /** Loads the page, marks it seen, and runs the one-tap actions. */
-export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpen, onCounts, onApprovalResolved, onBack }) => {
+export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpen, onCounts, onApprovalResolved, onBack, top }) => {
   const [data, setData] = useState<AwayResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -306,6 +310,7 @@ export const AwayPage: React.FC<AwayPageProps> = ({ since = null, onSince, onOpe
       notice={notice}
       onRefresh={() => load().then((next) => next && onCountsRef.current(next.unseen.total))}
       onBack={onBack}
+      top={top}
       onOpen={onOpen}
       onAnswer={(item, choice) => act(item, () => awayApi.answer(item.id, choice))}
       onResolve={(item, decision) =>

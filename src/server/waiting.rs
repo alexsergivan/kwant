@@ -242,7 +242,12 @@ pub async fn list(State(state): State<AppState>, super::spaces::Scope(space): su
         })));
     }
     items.sort_by_key(|(at, _)| *at);
-    let items: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
+    let mut items: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
+    // Today's spending stop holds routines, goals, missions and AutoFix: one item, first, while it
+    // does (its `id` names the day, so it is one item per day)
+    if let Some(stop) = super::spend_stop::needs_you_item(&state).await {
+        items.insert(0, stop);
+    }
     Json(json!({ "items": items, "follow_up_hours": follow_up_hours(&state).await })).into_response()
 }
 

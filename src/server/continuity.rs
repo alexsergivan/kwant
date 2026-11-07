@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 16] = [
+pub const NOTIFY_KINDS: [&str; 17] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -51,6 +51,7 @@ pub const NOTIFY_KINDS: [&str; 16] = [
     "fact_disputed",
     "goal_alert",
     "idea_ready",
+    "spend_stopped",
 ];
 const MASK: &str = "••••••••";
 
@@ -1556,8 +1557,8 @@ pub async fn notify_settings_view(state: &AppState) -> (String, Vec<String>) {
 pub const NOTIFY_KNOWN_SETTING: &str = "notify_known";
 /// Kinds added after `notify_on` lists were first saved but before `notify_known` existed: a list
 /// saved without `notify_known` was chosen from every kind but these.
-const KINDS_SINCE_FIRST_LIST: [&str; 7] =
-    ["app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready"];
+const KINDS_SINCE_FIRST_LIST: [&str; 8] =
+    ["app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped"];
 
 /// Kinds the user wants to hear about; all of them unless set. A kind added after the list was
 /// saved is on, so a new event isn't silently off for everyone who ever saved the settings.

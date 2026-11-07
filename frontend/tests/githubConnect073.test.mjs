@@ -343,7 +343,7 @@ test('B2 DOM: the spec’s copy for each line; Connect GitHub opens the shared f
     [dev({ repos: [repo()] }), 'connected', 'Dev mode watches this repo · GitHub connected'],
     [dev({ repos: [repo({ status: 'not_connected' })], forge: null }), 'connect', 'Dev mode watches this repo. Connect GitHub for reviews.'],
     [dev({ on: false }), 'off', 'Dev mode can watch this repo: turn it on next to the space name.'],
-    [dev({ repos: [repo({ provider: 'git' })] }), 'git', 'Dev mode reads this repo with git. Reviews need GitHub.'],
+    [dev({ repos: [repo({ provider: 'git' })] }), 'git', 'Dev mode reads this repo with git. Reviews need GitHub, GitLab, Gitea or Forgejo.'],
   ]) {
     m.devStore.set('spc_demo', state);
     const { root } = await mount(h(m.TeamRepoDevLine, { url, teamId: 'team_web', spaceId: 'spc_demo' }));

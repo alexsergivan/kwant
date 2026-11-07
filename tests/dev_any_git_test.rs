@@ -183,7 +183,8 @@ async fn with_a_forge_prs_and_checks_come_from_it_and_files_from_git() {
     use kwnt::server::dev::facts::{Check, FileDiff};
     use kwnt::server::dev::git::Repo;
     use kwnt::server::dev::source::{Change, Forge, History};
-    use kwnt::zombie::github::{EtagCache, GhError};
+    use kwnt::server::dev::forge::ForgeKind;
+    use kwnt::zombie::github::{EtagCache, GhError, GhReview, PostError, ReviewPost};
     use std::sync::Mutex;
 
     struct Fake {
@@ -211,6 +212,18 @@ async fn with_a_forge_prs_and_checks_come_from_it_and_files_from_git() {
         }
         async fn commit_login(&self, _sha: &str) -> Option<String> {
             Some("demo-person".into())
+        }
+        fn kind(&self) -> ForgeKind {
+            ForgeKind::Github
+        }
+        async fn change(&self, number: u64) -> Result<Option<Change>, GhError> {
+            Ok([&self.merged, &self.open].into_iter().find(|c| c.number == number).cloned())
+        }
+        async fn login(&self) -> Result<String, GhError> {
+            Ok("demo-bot".into())
+        }
+        async fn post_review(&self, _number: u64, _post: &ReviewPost) -> Result<GhReview, PostError> {
+            unreachable!("nothing posts in this test")
         }
     }
 

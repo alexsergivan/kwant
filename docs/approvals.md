@@ -28,8 +28,9 @@ is refused and recorded as `denied`. Calls that run without a card are recorded 
 person accepts the risk once for the server (0.7.3): see [saved-passwords.md](saved-passwords.md).
 
 **`smart` is a guard against accidents, not a sandbox.** Scripts in the bot's folder (`./run.sh`,
-`bash x.sh`, `python data.py`), `make`, `cargo run`/`cargo build` (build scripts), and
-`npm install`/`npm run` (package scripts) run without a card, and can do anything the bot's user
+`bash x.sh`, `python data.py`), `make`, `cargo run`/`cargo build` (build scripts), a bare
+`npm install`/`npm ci` (the packages the project already lists, and their install scripts) and
+`npm run` (package scripts) run without a card, and can do anything the bot's user
 can, including the network and kwnt's own API. That includes a script the bot wrote a moment
 earlier in the same turn. Choose `ask` for bots or folders you don't trust.
 
@@ -38,7 +39,9 @@ earlier in the same turn. Choose `ask` for bots or folders you don't trust.
 - **Shell commands** (claude's `Bash`, API drivers' `execute_shell` in Local mode) that
   `src/mcp/shell_risk.rs` finds safe in the bot's folder. It is an allowlist and fails closed:
   only programs it knows run (file and text tools like `ls`, `cat`, `cp`, `mv`, `mkdir`, `sort`,
-  `jq`; build tools like `cargo`, `npm`, `make`, `git` with checks; programs inside the folder),
+  `jq`; build tools like `cargo`, `npm`, `make`, `git` with checks; programs inside the folder,
+  except that a package manager there, like a venv's `v/bin/pip` or `node_modules/.bin/npm`, is
+  judged by its name like any other),
   and anything else, or anything it can't read confidently, asks. It asks for:
   - `$`, `$(…)`, backticks, unquoted `( ) { }`, heredocs, newlines, `eval`, `source`, `exec`,
     shells with `-c`, a pipe into a shell, inline code (`python -c`, `node -e`, …);
@@ -52,9 +55,28 @@ earlier in the same turn. Choose `ask` for bots or folders you don't trust.
   - `git push`, `fetch`, `pull`, `clone`, `ls-remote`, `archive`, `remote` other than
     `-v`/`get-url`/`rename`/`remove`, `submodule` other than `status`/`summary`/`init`, any git
     argument that is a URL or `user@host:path`, and git commands that touch global config or run a
-    command (`rebase -x/--exec`, `--upload-pack`, `ext::`, `grep -O`, …); publish, login and
-    install commands of npm/pnpm/yarn/bun/cargo/pip/uv/gem/poetry/twine/go; `npx`, `bunx`,
-    `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x` (they download and run package code);
+    command (`rebase -x/--exec`, `--upload-pack`, `ext::`, `grep -O`, …); publish and login
+    commands of npm/pnpm/yarn/bun/cargo/pip/uv/gem/poetry/twine/go; `npx`, `bunx`,
+    `npm exec`/`npm x`, `pnpm dlx`, `yarn dlx`, `bun x` wherever the verb sits (`npm --prefix x
+    exec …` too; so `npm run x` asks as well); starters (`npm create vite`, `npm init vite`,
+    `pnpm`/`yarn`/`bun create …`; a bare `npm init` or `npm init -y` runs), `deno run` of a URL
+    or `npm:`/`jsr:` spec, and `uv run --with <pkg>`, because they download and run package code;
+  - adding a package the project doesn't list yet, because it downloads the package and runs
+    its code (npm-style install scripts at once, the others when the project builds):
+    `npm install|i|add <pkg>`, `pnpm add|install <pkg>`, `yarn add <pkg>`,
+    `bun add|install <pkg>`, `deno add|install <pkg>`, `cargo add <crate>` (and `--git`),
+    `uv add <pkg>` (and `-r`), `poetry add <pkg>`, `go get <module>`, `dotnet add package <pkg>`.
+    The verb counts wherever it sits before a `--`, so an option kwnt doesn't know
+    (`npm --loglevel silent install x`) or a workspace (`yarn workspace app add x`) can't hide
+    it; that makes `cargo test add x` ask too. A package name, `user/repo`,
+    `github:…` or a URL counts; a local path (`npm install ./lib`, `cargo add --path ./x`) is
+    judged like any other path. Installing what the project already lists runs without a card:
+    a bare `npm install`/`npm i`/`npm ci`, `pnpm install`, `yarn`/`yarn install`,
+    `bun install`, `deno install`, with only options. pip and poetry always ask: every
+    `pip install` (`pip install -r requirements.txt` too), `uv pip install`, `uv pip sync` and `poetry install`
+    or `add`, even a bare one. So do `gem install`, `go install` and `cargo install` (they
+    install outside the folder, or kwnt can't tell what they add). Updating packages the project
+    already lists (`npm update`, `pnpm up`, `yarn up`, `cargo update`) runs without a card;
   - `find -exec/-delete`, `sed` scripts beyond print/delete/substitute (`w`, `e`, `-f`), `awk`
     programs that redirect `print`, pipe, read `ENVIRON` or call `system`/`getline`, and awk
     options other than `-F`/`-v`; `tar` options that run a program (`--checkpoint-action`,

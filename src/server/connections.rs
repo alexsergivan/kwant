@@ -317,6 +317,14 @@ async fn source_connections(state: &AppState, space: &SpaceId) -> Vec<Connection
                     ("email", Some(format!("{user} @ {host}")))
                 }
                 "github" => ("github", config["api_base"].as_str().and_then(host_of).or_else(|| Some("api.github.com".into()))),
+                "forge" => {
+                    let kind = match config["forge"].as_str() {
+                        Some("gitlab") => "gitlab",
+                        Some("forgejo") => "forgejo",
+                        _ => "gitea",
+                    };
+                    (kind, config["url"].as_str().and_then(host_of))
+                }
                 _ => return None,
             };
             let (status, status_detail) = match (s.enabled, s.last_status.as_deref()) {

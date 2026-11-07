@@ -2,7 +2,7 @@ import React from 'react';
 import { AlertTriangle, ChevronRight, FileText, FlaskConical, GitCommitHorizontal, GitMerge, ShieldCheck } from 'lucide-react';
 import { Sticker } from '../Sticker';
 import type { Forge, LandedCard as Landed, LandedListProps, ReviewCard } from '../../dev/types';
-import { byDay, clock, forgeOpen, landedNode, openFindings, riskReasons, showVerified, testsWords } from '../../dev/logic';
+import { byDay, clock, forgeOpen, prName, prRef, landedNode, openFindings, riskReasons, showVerified, testsWords } from '../../dev/logic';
 import { DiffStat, Led, OutLink, RiskChip, Sha, Who, personText } from './parts';
 
 const isTest = (path: string) => /(^|\/)(tests?|__tests__|e2e)\/|\.(test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(path);
@@ -59,12 +59,13 @@ export const LandedCard: React.FC<{ card: Landed; reviews?: ReviewCard[]; onOpen
         <Sha sha={card.sha} />
         {pr !== null ? (
           card.links.pr ? (
-            <a href={card.links.pr} target="_blank" rel="noreferrer noopener" aria-label={`PR #${pr}`} className="kw-focus kw-hit rounded font-mono text-[11.5px] text-zinc-400 hover:text-sky-300">
-              #{pr}
+            <a href={card.links.pr} target="_blank" rel="noreferrer noopener" aria-label={prName(forge, pr)} className="kw-focus kw-hit rounded font-mono text-[11.5px] text-zinc-400 hover:text-sky-300">
+              {prRef(forge, pr)}
             </a>
           ) : (
             <span className="font-mono text-[11.5px] text-zinc-400">
-              <span className="sr-only">PR </span>#{pr}
+              <span className="sr-only">{prName(forge, pr)}</span>
+              <span aria-hidden="true">{prRef(forge, pr)}</span>
             </span>
           )
         ) : (
@@ -250,7 +251,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now = Da
           <span aria-hidden="true" className="h-px flex-1 bg-[var(--kw-hairline)]" />
         </h3>
         {day.cards.map((c) => (
-          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={forge} repoLabel={repoLabel} gitOnly={gitOnly?.(c.repo ?? null) ?? false} onRail />
+          <LandedCard key={c.id || c.pr || c.sha} card={c} reviews={reviews} onOpenReview={onOpenReview} forge={c.forge ?? forge} repoLabel={repoLabel} gitOnly={!c.forge && (gitOnly?.(c.repo ?? null) ?? false)} onRail />
         ))}
       </section>
     ))}

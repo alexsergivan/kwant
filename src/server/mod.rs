@@ -16,6 +16,7 @@ pub mod continuity;
 pub mod goals_remediation;
 pub mod model_usage;
 pub mod budget;
+pub mod spend_stop;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
@@ -57,6 +58,7 @@ pub mod goals;
 pub mod app_update_routes;
 pub mod smart_results;
 pub mod dev;
+pub mod agents_connect;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -127,6 +129,8 @@ pub struct AppState {
     pub app_update: Arc<crate::app_update::UpdateHub>,
     /// Missions with a runner turn going (at most `missions::runner::MAX_RUNNING`).
     pub mission_runs: Arc<missions::runner::RunningMissions>,
+    /// The daily spending stop's clock (a test fixes it; see [`spend_stop::Clock`]).
+    pub spend: Arc<spend_stop::Clock>,
 }
 
 impl AppState {
@@ -176,6 +180,7 @@ impl AppState {
             push: Arc::new(push::Push::load(&config_data_dir)),
             app_update: crate::app_update::UpdateHub::shared(),
             mission_runs: Arc::default(),
+            spend: Arc::default(),
         }
     }
 
@@ -350,6 +355,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
         .route("/api/mcp/self", post(continuity::self_endpoint))
+        // 0.7.4: connected coding agents (the endpoint checks its own `kag_` token)
+        .route(agents_connect::ENDPOINT, post(agents_connect::endpoint))
+        .route("/api/agent-connections", get(agents_connect::list_connections).post(agents_connect::create_connection))
+        .route("/api/agent-connections/:id", delete(agents_connect::revoke_connection))
+        .route("/api/agent-connections/:id/activity", get(agents_connect::connection_activity))
         .route("/api/mcp/suggestions", get(mcp_suggest::list))
         .route("/api/mcp/suggestions/:id/install", post(mcp_suggest::install))
         .route("/api/mcp/suggestions/:id/dismiss", post(mcp_suggest::dismiss))
@@ -369,6 +379,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/kwants/:id/lessons", get(missions::lessons::get_lessons))
         .route("/api/kwants/:id/model-usage", get(model_usage::get_usage))
         .route("/api/usage/daily", get(model_usage::get_daily))
+        .route("/api/usage/today", get(spend_stop::get_today))
+        .route("/api/usage/today/continue", post(spend_stop::continue_today))
         .route("/api/chains/:id/continue", post(budget::continue_chain))
         .route(
             "/api/kwants/:id/memories/:mid",

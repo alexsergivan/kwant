@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { BotHome } from './BotHome';
@@ -51,6 +52,8 @@ import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSugg
 import { routeChipLabel, routeReasonText } from '../routeReason';
 import { BudgetPausedNotice, HandoffCappedNotice, InterruptedNotice, SystemNotice } from './SystemNotice';
 import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainBudget';
+import { parseSpendStopped } from '../spendStop';
+import { SpendStoppedNotice } from './SpendStop';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
 import { ideaBlockedLine, ideaLength } from '../ideaShell';
@@ -245,6 +248,8 @@ export interface ChatViewProps {
   onSendToOtherBot?: (question: ChatMessage, kwantId: string) => Promise<string | void>;
   /** Opens Space settings → Accounts; turns a "nothing can run" reply into a card with a button. */
   onOpenAccounts?: () => void;
+  /** Opens Settings › All spaces › Usage at the daily spending stop. */
+  onOpenUsage?: () => void;
   /** Whether anything can run a bot in this space now (null while unknown). */
   canRun?: boolean | null;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
@@ -440,6 +445,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   rerouteTargets = [],
   onSendToOtherBot,
   onOpenAccounts,
+  onOpenUsage,
   canRun = null,
   awaitingAnswer,
   awaitingBrowser,
@@ -1112,6 +1118,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
         </div>
       );
+    const spend = parseSpendStopped(msg.meta);
+    if (spend)
+      return (
+        <SpendStoppedNotice
+          key={msg.id}
+          messageId={msg.id}
+          text={msg.text}
+          meta={spend}
+          onOpenSettings={onOpenUsage}
+          flash={flashId === msg.id}
+        />
+      );
     const paused = parseBudgetPaused(msg.meta);
     if (paused)
       return (
@@ -1153,7 +1171,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const decisions = shownDecisions?.decisions ?? [];
     const text = shownDecisions ? shownDecisions.text : msg.text;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
-    const displayName = isUser ? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
+    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
     const replyQuote = isUser ? replyRefOf(msg.reply_to) : null;
     // Whose mood the reply header shows (Pixel's AvatarMood, drawn by ModernAvatar given a kwantId):
     // Laya's pick, else this bot chat's bot, else the team member with that name. Unknown: no mood.

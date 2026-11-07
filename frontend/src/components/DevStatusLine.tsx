@@ -35,7 +35,8 @@ import {
   typedRepo,
   undoBody,
 } from '../devMode';
-import { openGitHubConnect } from './GitHubConnect';
+import { openForgeConnect, openGitHubConnect } from './GitHubConnect';
+import type { ForgeFix } from '../devMode';
 
 const focusRing = 'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 
@@ -105,7 +106,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
   const single = rows.length === 0;
   const singleRow: RepoRow | null =
     single && state.repos.length === 1
-      ? { id: state.repos[0].key, team: state.repos[0].team, teamId: null, repo: state.repos[0], state: '', origin: null, teamNote: null, title: null, note: line.note, led: line.led, action: line.action }
+      ? { id: state.repos[0].key, team: state.repos[0].team, teamId: null, repo: state.repos[0], state: '', origin: null, teamNote: null, title: null, note: line.note, led: line.led, action: line.action, forgeName: line.forgeName ?? null, fix: line.fix ?? null }
       : null;
   // The single line's Link: the one team with none, if there is exactly one; else a repo added by hand.
   // 0.7.3: a lone no_repo row (a remote kwant won't fetch) links its own team's repo.
@@ -164,6 +165,27 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
     }
     if (row) doRemove(row);
   };
+
+  /** 0.7.4: "Connect GitLab" / "Connect Gitea" opens the forge form in place, prefilled with the host. */
+  const fixButton = (fix: ForgeFix | null | undefined, id: string, isLine: boolean) =>
+    fix ? (
+      <button
+        type="button"
+        onClick={(e) => openForgeConnect({ space: spaceId, anchor: e.currentTarget, forge: { forge: fix.forge, url: fix.url } })}
+        aria-haspopup="dialog"
+        {...(isLine ? { 'data-dv-status-fix': fix.forge } : { 'data-dv-row-fix': id, 'data-fix': fix.forge })}
+        className={`act kw-dv-status-act ${focusRing}`}
+      >
+        {fix.label}
+      </button>
+    ) : null;
+
+  const forgeChip = (name: string | null | undefined, isLine: boolean) =>
+    name ? (
+      <span className="kw-dv-repo-forge" data-dv-repo-forge={isLine ? 'line' : true}>
+        {name}
+      </span>
+    ) : null;
 
   const actionButton = (row: RepoRow | null, action: RowAction | null, id: string, label: string, isLine: boolean) => {
     if (!action || (action === 'connect' && !onConnect)) return null;
@@ -239,6 +261,8 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
             </button>
           )}
         </p>
+        {single && forgeChip(line.forgeName, true)}
+        {single && fixButton(line.fix, 'line', true)}
         {single && actionButton(singleRow, line.action, singleRow?.id ?? 'line', singleRow?.repo?.repo ?? '', true)}
         {checked && (
           <span className="checked" data-dev-checked>
@@ -273,6 +297,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
                         </span>
                       )}
                       <b className="kw-dv-repo-name">{r.repo.repo}</b>
+                      {forgeChip(r.forgeName, false)}
                       {r.repo.branch && r.repo.status !== 'other_host' && r.repo.status !== 'too_many' && (
                         <>
                           <span className="kw-dv-repo-sep" aria-hidden="true">
@@ -310,6 +335,7 @@ export const DevStatusLine: React.FC<DevStatusLineProps> = ({ spaceId, state, te
                     <Info size={14} aria-hidden="true" />
                   </button>
                 )}
+                {fixButton(r.fix, r.id, false)}
                 {actionButton(r, r.action, r.id, r.repo?.repo ?? r.team ?? '', false)}
               </div>
               {r.origin && (

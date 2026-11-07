@@ -1007,6 +1007,8 @@ pub(super) async fn run_routed_turn(
             Ok(reply_id)
         }
         Err(_) if job.token.is_cancelled() => Err("stopped by the user".into()),
+        // Today's spending stop held the turn: it never ran, so the caller records a skip
+        Err(why) if super::spend_stop::is_stop_error(&why) => Err(why),
         Err(why) => Err(format!("the bot's turn failed: {why}")),
     }
 }
@@ -1926,6 +1928,10 @@ pub(super) async fn turn_once(
         context_id: scope.context_id(target_kwant),
         thread_id: scope.thread_id.clone(),
     };
+    // The daily spending stop: the one check every turn passes, whatever started it (see
+    // [`super::spend_stop`]). Checked again once the slot is taken, for turns that queued.
+    let quiet_stop = opts.quiet_failure || opts.unsaved;
+    super::spend_stop::gate(scope, target_kwant, quiet_stop).await?;
     let turns = &scope.state.turns;
     turns.add_keys(&scope.job_id, std::slice::from_ref(&tag.turn_id));
     // Sends turn_ended even if this future is dropped, queued or mid-turn
@@ -1941,6 +1947,7 @@ pub(super) async fn turn_once(
     let Some(_slot) = turns.acquire(&tag, &scope.cancel_token, &scope.state.event_sender).await else {
         return Err("stopped by the user".into());
     };
+    super::spend_stop::gate(scope, target_kwant, quiet_stop).await?;
     turns.set_turn(super::turns::ActiveTurn {
         turn_id: tag.turn_id.clone(),
         kwant_id: tag.kwant_id.clone(),
@@ -2951,6 +2958,12 @@ async fn run_kwant_turn_inner(
         if let Some((_, token)) = &mcp_turn {
             super::mcp_runtime::finish_turn(state, token).await;
         }
+        // A turn that ends without output still used what its engine reported so far (the Claude
+        // CLI and the API engines stream it as they go): it counts toward today's spending stop.
+        // Engines that report usage only at the end add nothing here.
+        if cancelled || gave_up.is_some() || !matches!(driver_result, Some(Ok(Ok(_)))) {
+            super::spend_stop::book(state, state.turns.usage_seen(&tag.turn_id), None).await;
+        }
         let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
         // Ends what still runs; kept on the reply so the steps show after a reload
         let activity = event_broadcast.activity.finish();
@@ -2990,6 +3003,8 @@ async fn run_kwant_turn_inner(
             // Counts toward the chain's token budget (see `super::budget`)
             let fresh = output.usage.map_or(output.tokens_used as u64, |u| u.fresh());
             state.turns.add_job_tokens(&scope.job_id, fresh);
+            // …and toward today's spending stop: every engine's fresh tokens, dollars where reported
+            super::spend_stop::book(state, fresh, output.usage.and_then(|u| u.cost_usd)).await;
             // …and toward the task the bot holds, if any (see `super::missions`)
             let turn_started_ms = chrono::Utc::now().timestamp_millis() - turn_start.elapsed().as_millis() as i64;
             // (less what a task the bot handed in mid-turn already paid for)
@@ -3973,6 +3988,11 @@ pub struct SettingsResponse {
     pub waiting_follow_up_hours: i64,
     /// Fresh tokens one chain may use before hand-offs pause (see `super::budget`); 0 = off.
     pub chain_token_budget: u64,
+    /// Fresh tokens all turns may use in one day before new turns are held (see
+    /// `super::spend_stop`); 0 = off.
+    pub daily_spend_stop_tokens: u64,
+    /// Dollars (engine-reported cost) all turns may use in one day; 0 = off.
+    pub daily_spend_stop_usd: f64,
     /// Bots decide reversible choices themselves (see `super::decide`).
     pub decide_first: bool,
     /// Bots work ahead in quiet chats.
@@ -4058,6 +4078,8 @@ pub struct SaveSettingsPayload {
     pub captcha_timeout_minutes: Option<u64>,
     pub waiting_follow_up_hours: Option<i64>,
     pub chain_token_budget: Option<u64>,
+    pub daily_spend_stop_tokens: Option<u64>,
+    pub daily_spend_stop_usd: Option<f64>,
     pub decide_first: Option<bool>,
     pub work_ahead: Option<bool>,
     pub work_ahead_daily_cap: Option<u64>,
@@ -4124,6 +4146,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
             .unwrap_or(super::human_steps::DEFAULT_CAPTCHA_TIMEOUT_MINUTES),
         waiting_follow_up_hours: super::waiting::follow_up_hours(&state).await,
         chain_token_budget: super::budget::limit(&state).await,
+        daily_spend_stop_tokens: super::spend_stop::limits(&state).await.0,
+        daily_spend_stop_usd: super::spend_stop::limits(&state).await.1,
         decide_first: super::decide::enabled(&state).await,
         work_ahead: super::decide::work_ahead_enabled(&state).await,
         work_ahead_daily_cap: super::decide::work_ahead_cap(&state).await,
@@ -4237,6 +4261,12 @@ pub async fn save_settings(
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
         return bad(format!("chain_token_budget must be 0–{}", super::budget::MAX));
     }
+    if payload.daily_spend_stop_tokens.is_some_and(|n| n > super::spend_stop::MAX_TOKENS) {
+        return bad(format!("daily_spend_stop_tokens must be 0–{}", super::spend_stop::MAX_TOKENS));
+    }
+    if payload.daily_spend_stop_usd.is_some_and(|v| !v.is_finite() || !(0.0..=super::spend_stop::MAX_USD).contains(&v)) {
+        return bad(format!("daily_spend_stop_usd must be 0–{}", super::spend_stop::MAX_USD));
+    }
     let timezone = payload.timezone.as_deref().map(crate::routines::canonical_tz);
     if let Some(tz) = timezone.as_deref().filter(|t| !t.is_empty()) {
         if let Err(e) = check_tz(tz) {
@@ -4306,6 +4336,18 @@ pub async fn save_settings(
     }
     if let Some(n) = payload.chain_token_budget {
         let _ = state.db.set_setting(super::budget::SETTING, &n.to_string()).await;
+    }
+    if payload.daily_spend_stop_tokens.is_some() || payload.daily_spend_stop_usd.is_some() {
+        let before = super::spend_stop::limits(&state).await;
+        if let Some(n) = payload.daily_spend_stop_tokens {
+            let _ = state.db.set_setting(super::spend_stop::SETTING_TOKENS, &n.to_string()).await;
+        }
+        if let Some(v) = payload.daily_spend_stop_usd {
+            let _ = state.db.set_setting(super::spend_stop::SETTING_USD, &v.to_string()).await;
+        }
+        if super::spend_stop::limits(&state).await != before {
+            super::spend_stop::limits_changed(&state).await;
+        }
     }
     if let Some(m) = payload.delegation_follow_up_minutes {
         let _ = state.db.set_setting(super::delegation::FOLLOW_UP_SETTING, &m.to_string()).await;
