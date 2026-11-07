@@ -1,6 +1,7 @@
 //! One browser service per installation; isolated CDP contexts per bot/team.
 //! The private CDP endpoint is used only by the server, never by the web client.
 use super::browser::{BrowserController, BrowserError};
+use super::chrome_download::{self, ChromeSetup};
 use super::computer::{self, ComputerMode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -35,6 +36,8 @@ pub struct BrowserService {
     last_error: std::sync::Mutex<Option<String>>,
     /// When a bot last used the browser (see [`Self::note_use`]).
     last_use: std::sync::Mutex<Option<std::time::SystemTime>>,
+    /// Local mode without Chrome: the private browser kwnt downloads on first use (O5).
+    chrome_setup: std::sync::Arc<ChromeSetup>,
 }
 
 struct ServiceState {
@@ -50,7 +53,30 @@ impl BrowserService {
             root, endpoint, mode: std::sync::RwLock::new(mode),
             local_window: std::sync::atomic::AtomicBool::new(false), state: Mutex::new(None),
             last_error: std::sync::Mutex::new(None), last_use: std::sync::Mutex::new(None),
+            chrome_setup: std::sync::Arc::new(ChromeSetup::system()),
         }
+    }
+
+    /// The same service with its private browser downloaded through `setup` (tests).
+    pub fn with_chrome_setup(mut self, setup: ChromeSetup) -> Self {
+        self.chrome_setup = std::sync::Arc::new(setup);
+        self
+    }
+
+    /// The private browser download (O5): its state for the UI, and "Try again".
+    pub fn chrome_setup(&self) -> &std::sync::Arc<ChromeSetup> { &self.chrome_setup }
+
+    /// Local mode with no Chrome on this computer: downloads the private browser first, outside
+    /// the connection lock so status and frames don't wait for a download.
+    async fn ensure_private_browser(&self) -> Result<(), BrowserError> {
+        if self.mode() != ComputerMode::Local || !self.chrome_setup.available() {
+            return Ok(());
+        }
+        let found = tokio::task::spawn_blocking(computer::local_chrome_path).await.ok().flatten();
+        if found.is_none() {
+            self.chrome_setup.ensure().await.map_err(BrowserError::Http)?;
+        }
+        Ok(())
     }
 
     pub fn mode(&self) -> ComputerMode {
@@ -344,13 +370,17 @@ impl BrowserService {
         }
         let last = self.last_error.lock().unwrap_or_else(|e| e.into_inner()).clone();
         match last {
+            Some(reason) if reason.starts_with(chrome_download::FAILED_LINE) => reason,
             Some(reason) => format!("The bot browser could not start kwant's Chrome on this computer: {reason}"),
             None => "The bot browser could not start kwant's Chrome on this computer. Restart the browser and try again.".into(),
         }
     }
 
     pub async fn session(&self, id: &str, workspace: &Path) -> Result<BrowserController, BrowserError> {
-        let result = self.open_session(id, workspace).await;
+        let result = match self.ensure_private_browser().await {
+            Ok(()) => self.open_session(id, workspace).await,
+            Err(e) => Err(e),
+        };
         *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) = result.as_ref().err().map(|e| match e {
             // the local start's own words, without the CDP prefix
             BrowserError::Http(reason) => reason.clone(),
