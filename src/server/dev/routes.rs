@@ -631,6 +631,12 @@ pub fn card_json_in(row: &DevCardRow, teams: &HashMap<String, String>) -> Value 
     if row.kind == REVIEW {
         // post-to-github.md P1: null until posted, null when the last post went through
         let stored = |s: &Option<String>| s.as_deref().and_then(|v| serde_json::from_str::<Value>(v).ok()).unwrap_or(Value::Null);
+        // api-decisions 20: whether "Matches the ticket" holds back LGTM, from the items' Fix it
+        // state now, so the client never works it out
+        if let Some(m) = out.get_mut("matches").and_then(Value::as_object_mut) {
+            let blocks = super::review::matches_block_lgtm(&Value::Object(m.clone()));
+            m.insert("blocks_lgtm".into(), json!(blocks));
+        }
         out.insert("posted".into(), stored(&row.posted));
         out.insert("post_error".into(), stored(&row.post_error));
     }
@@ -853,8 +859,36 @@ const NOTE_CHARS: usize = 500;
 /// without a database. `fix` sets `sent` with `sent_at` (the task goes out after the Undo window);
 /// `undo_fix` puts it back to `open` (and says which task to cancel, if one went out); `dismiss`
 /// stores the reason.
+/// What Fix it, Undo and Dismiss act on for `fid`: a finding, or else the `fix` state of the
+/// "Matches the ticket" item with that id (`k{n}`, api-decisions 20–21). A met item has none.
+pub fn fix_entry<'a>(card: &'a mut Value, fid: &str) -> Option<&'a mut Value> {
+    if card["findings"].as_array().is_some_and(|fs| fs.iter().any(|f| f["id"] == fid)) {
+        return card["findings"].as_array_mut()?.iter_mut().find(|f| f["id"] == fid);
+    }
+    card.get_mut("matches")?.get_mut("items")?.as_array_mut()?.iter_mut().find(|i| i["id"] == fid)?.get_mut("fix").filter(|f| f.is_object())
+}
+
+/// The finding Fix it sends for `fid`, read-only: the finding itself, or a match item as one
+/// ([`review::match_as_finding`]).
+pub fn fix_view(card: &Value, fid: &str) -> Option<Value> {
+    if let Some(f) = card["findings"].as_array().and_then(|fs| fs.iter().find(|f| f["id"] == fid)) {
+        return Some(f.clone());
+    }
+    let m = &card["matches"];
+    let item = m["items"].as_array()?.iter().find(|i| i["id"] == fid)?;
+    Some(super::review::match_as_finding(m, item)).filter(|f| f.is_object())
+}
+
+/// Ids sent with Fix it whose task never went out (findings and match items), for after a restart.
+pub fn undelivered(card: &Value) -> Vec<String> {
+    let waiting = |f: &Value| f["state"] == "sent" && !f["task_id"].is_string();
+    let findings = card["findings"].as_array().into_iter().flatten().filter(|f| waiting(f));
+    let items = card["matches"]["items"].as_array().into_iter().flatten().filter(|i| waiting(&i["fix"]));
+    findings.chain(items).filter_map(|f| f["id"].as_str().map(str::to_string)).collect()
+}
+
 pub fn apply_finding(card: &mut Value, fid: &str, body: &FindingBody, now: DateTime<Utc>) -> Result<Option<String>, (StatusCode, String)> {
-    let Some(f) = card["findings"].as_array_mut().and_then(|fs| fs.iter_mut().find(|f| f["id"] == fid)) else {
+    let Some(f) = fix_entry(card, fid) else {
         return Err((StatusCode::NOT_FOUND, "no such finding on this card".into()));
     };
     let state = f["state"].as_str().unwrap_or("open").to_string();
@@ -953,7 +987,7 @@ pub async fn deliver_fix(state: &AppState, card_id: &str, fid: &str) {
     for _ in 0..3 {
         let Ok(Some(row)) = state.db.dev_card(card_id).await else { return };
         let Some(mut card) = row.card.as_deref().and_then(|c| serde_json::from_str::<Value>(c).ok()) else { return };
-        let Some(f) = card["findings"].as_array().and_then(|fs| fs.iter().find(|f| f["id"] == fid)).cloned() else { return };
+        let Some(f) = fix_view(&card, fid) else { return };
         if f["state"] != "sent" || f["task_id"].is_string() {
             return;
         }
@@ -964,8 +998,7 @@ pub async fn deliver_fix(state: &AppState, card_id: &str, fid: &str) {
             Some(b) => crate::server::missions::bot_in_space(state, &space, &b.id).await,
             None => None,
         };
-        let entry = card["findings"].as_array_mut().and_then(|fs| fs.iter_mut().find(|x| x["id"] == fid));
-        let Some(entry) = entry else { return };
+        let Some(entry) = fix_entry(&mut card, fid) else { return };
         match target {
             Some(k) => {
                 let task = fix_task(&space, &k.id, card_id, fid, &f, facts.as_ref());
@@ -1000,8 +1033,8 @@ pub async fn deliver_fix(state: &AppState, card_id: &str, fid: &str) {
             }
             Ok(false) => {
                 // Changed in between (an Undo): a task made just now is cancelled again
-                if let Some(t) = card["findings"].as_array().and_then(|fs| fs.iter().find(|x| x["id"] == fid)).and_then(|x| x["task_id"].as_str()) {
-                    cancel_fix_task(state, t).await;
+                if let Some(t) = fix_view(&card, fid).and_then(|x| x["task_id"].as_str().map(str::to_string)) {
+                    cancel_fix_task(state, &t).await;
                 }
                 continue;
             }
@@ -1243,6 +1276,33 @@ mod tests {
 
     fn body(action: &str, reason: Option<&str>) -> FindingBody {
         FindingBody { action: action.into(), reason: reason.map(str::to_string), note: None }
+    }
+
+    /// api-decisions 20–21: Fix it, Undo and Dismiss take a "Matches the ticket" item's `k{n}`; a met
+    /// item has nothing to fix; a sent one waits for delivery like a finding.
+    #[test]
+    fn fix_it_works_on_a_matches_item_by_its_id() {
+        let now = Utc::now();
+        let open = json!({"state": "open", "sent_at": null, "dismissed": null});
+        let mut card = json!({"findings": [{"id": "f1", "state": "open"}], "matches": {"key": "TRAIL-102", "verdict": "not_met", "items": [
+            {"id": "k1", "state": "met", "criterion": "a", "fix": null},
+            {"id": "k2", "state": "not_met", "criterion": "b", "evidence": "No test.", "paths": [], "fix": open.clone()},
+            {"id": "k3", "state": "unclear", "criterion": "c", "evidence": "", "paths": ["src/a.rs"], "fix": open}]}});
+        assert_eq!(apply_finding(&mut card, "k1", &body("fix", None), now).unwrap_err().0, StatusCode::NOT_FOUND);
+        assert_eq!(apply_finding(&mut card, "k2", &body("fix", None), now), Ok(None));
+        assert_eq!(card["matches"]["items"][1]["fix"]["state"], "sent");
+        assert_eq!(card["matches"]["items"][1]["state"], "not_met", "the item's own state stays");
+        assert_eq!(undelivered(&card), ["k2"]);
+        let f = fix_view(&card, "k2").unwrap();
+        assert_eq!((f["state"].as_str(), f["title"].as_str()), (Some("sent"), Some("Not met: done-when line 2 of TRAIL-102")));
+        fix_entry(&mut card, "k2").unwrap()["task_id"] = json!("tsk_9");
+        assert!(undelivered(&card).is_empty());
+        assert_eq!(apply_finding(&mut card, "k2", &body("undo_fix", None), now), Ok(Some("tsk_9".into())));
+        apply_finding(&mut card, "k3", &body("dismiss", Some("fine_here")), now).unwrap();
+        assert_eq!(card["matches"]["items"][2]["fix"]["dismissed"]["reason"], "fine_here");
+        assert_eq!(fix_view(&card, "k3").unwrap()["file"], "src/a.rs");
+        assert_eq!(card["findings"][0]["state"], "open", "findings untouched");
+        assert!(fix_view(&card, "k1").is_none() && fix_view(&card, "k9").is_none());
     }
 
     #[test]

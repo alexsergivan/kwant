@@ -914,6 +914,9 @@ pub struct TicketCheck {
     pub key: String,
     pub url: String,
     pub lines: Vec<String>,
+    /// Per done-when line, in order: its sources (only those on the site, api-decisions 18) and
+    /// whether it was inferred, copied onto `review.matches.items` (api-decisions 21).
+    pub cites: Vec<(Vec<SourceRef>, bool)>,
 }
 
 /// The ticket a review card's PR works on, when its branch or title carries a key with a brief.
@@ -921,9 +924,16 @@ pub async fn ticket_check(state: &crate::server::AppState, space_id: &str, facts
     let key = super::seam::key_in(facts.head_branch.as_deref().unwrap_or(""), &facts.title)?;
     let row = state.db.ticket_brief(space_id, &key).await.ok().flatten()?;
     let brief: Brief = serde_json::from_str(row.brief.as_deref()?).ok()?;
+    check_from(row.key, &row.url, &brief, &super::seam::origins(space_id, &row.site_id))
+}
+
+/// [`ticket_check`] from a saved brief: the done-when lines, with each line's sources kept only
+/// when on the site (a source with a link on any other origin is dropped from the line, api-decisions
+/// 21) and its `inferred`. `None` when the brief has no done-when line.
+pub fn check_from(key: String, url: &str, brief: &Brief, origins: &[url::Url]) -> Option<TicketCheck> {
     let lines: Vec<String> = brief.done_when.iter().map(|d| d.text.clone()).collect();
-    let url = super::links::keep(&row.url, &super::seam::origins(space_id, &row.site_id));
-    (!lines.is_empty()).then_some(TicketCheck { key: row.key, url, lines })
+    let cites = brief.done_when.iter().map(|d| (super::links::site_sources(&d.sources, origins), d.inferred)).collect();
+    (!lines.is_empty()).then(|| TicketCheck { key, url: super::links::keep(url, origins), lines, cites })
 }
 
 /// Hides anything that looks like a secret (keys, tokens, credentialed URLs) in every text of the

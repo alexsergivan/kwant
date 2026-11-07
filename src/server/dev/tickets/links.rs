@@ -37,6 +37,12 @@ pub fn keep(link: &str, origins: &[Url]) -> String {
     }
 }
 
+/// The sources whose link is on the site, in order. A source with no link (a file, or one whose
+/// link was already dropped) stays; one linking anywhere else is left out.
+pub fn site_sources(sources: &[SourceRef], origins: &[Url]) -> Vec<SourceRef> {
+    sources.iter().filter(|s| s.url.trim().is_empty() || on_site(&s.url, origins)).cloned().collect()
+}
+
 /// Drops every link in a brief that isn't on the site: line and conflict sources, flags, and the
 /// Jira comments of asked questions and answers. How many were dropped.
 pub fn keep_site_links(b: &mut Brief, origins: &[Url]) -> usize {
@@ -153,5 +159,26 @@ mod tests {
         assert_eq!(b.questions[0].asked_on_jira.as_ref().unwrap().comment_url, "");
         assert_eq!(b.questions[0].answer.as_ref().unwrap().comment_url, None);
         assert_eq!(keep_site_links(&mut b, &cloud()), 0, "nothing left to drop");
+    }
+
+    /// api-decisions 21: a "Matches the ticket" item copies its done-when line's sources, and one
+    /// linking off the site is dropped from it; files and on-site links stay, as does `inferred`.
+    #[test]
+    fn a_matches_item_keeps_only_the_sites_sources() {
+        use crate::server::dev::tickets::brief::{check_from, Brief};
+        let src = |kind: &str, url: &str| SourceRef { kind: kind.into(), label: kind.into(), url: url.into(), cite: kind.into(), ..Default::default() };
+        let on = src("ticket", "https://yourcompany.atlassian.net/browse/TRAIL-102");
+        let file = SourceRef { file: Some("src/a.rs".into()), ..src("file", "") };
+        let lines = vec![
+            Line { text: "A CSV downloads".into(), sources: vec![on.clone(), src("page", "https://yourcompany.atlassian.net.evil.example/wiki/x"), file.clone()], ..Default::default() },
+            Line { text: "It's fast".into(), sources: vec![src("comment", "javascript:alert(1)"), src("page", "http://yourcompany.atlassian.net/wiki/y")], inferred: true, ..Default::default() },
+        ];
+        let b = Brief { key: "TRAIL-102".into(), done_when: lines, ..Default::default() };
+        let t = check_from("TRAIL-102".into(), "https://evil.example.com/browse/TRAIL-102", &b, &cloud()).unwrap();
+        assert_eq!(t.lines, ["A CSV downloads", "It's fast"]);
+        assert_eq!(t.cites[0], (vec![on, file], false), "the lookalike host is dropped");
+        assert_eq!(t.cites[1], (vec![], true), "javascript: and another scheme are dropped; inferred stays");
+        assert_eq!(t.url, "", "the ticket link is kept on the site only");
+        assert!(check_from("TRAIL-1".into(), "", &Brief::default(), &cloud()).is_none());
     }
 }

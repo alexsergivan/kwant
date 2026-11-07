@@ -137,7 +137,9 @@ pub(super) async fn card<M: Model>(facts: &DevFacts, review: Option<Reviewed<'_>
     let review = review.filter(|r| pr_head.is_some_and(|h| h == r.head_sha));
     let FromReview { name: reviewed_by, id: reviewer_id, follow_ups } = from_review(review.map(|r| r.card), facts.pr);
     let author_id = facts.author.bot.as_ref().map(|b| b.id.as_str());
-    let verified = verified(facts.ci, reviewer_id.as_deref(), author_id, review.map(|r| r.head_sha), pr_head, &follow_ups);
+    // api-decisions 20: the sticker also needs every "Matches the ticket" item met
+    let verified = verified(facts.ci, reviewer_id.as_deref(), author_id, review.map(|r| r.head_sha), pr_head, &follow_ups)
+        && review.is_none_or(|r| super::review::every_item_met(r.card));
     let author = author_json(&facts.author);
 
     let (mut status, mut error, mut text, mut cut) = (READY, None, None, facts.cut.clone());
@@ -303,6 +305,14 @@ mod tests {
         // Another bot with the author's name is still someone else
         let other = json!({"reviewer": {"id": "kw_other", "name": f.author.bot.as_ref().unwrap().name}, "findings": []});
         let (_, c) = card::<Stub>(&f, Some(Reviewed { card: &other, head_sha: &head }), None).await;
+        assert_eq!(c["verified"], true);
+        // api-decisions 20: "Matches the ticket" must be met on every item for the sticker
+        let mut unclear = other.clone();
+        unclear["matches"] = json!({"verdict": "unclear", "items": [{"id": "k1", "state": "met"}, {"id": "k2", "state": "unclear"}]});
+        let (_, c) = card::<Stub>(&f, Some(Reviewed { card: &unclear, head_sha: &head }), None).await;
+        assert_eq!(c["verified"], false);
+        unclear["matches"]["items"][1]["state"] = json!("met");
+        let (_, c) = card::<Stub>(&f, Some(Reviewed { card: &unclear, head_sha: &head }), None).await;
         assert_eq!(c["verified"], true);
         // A review card from before reviewers had ids
         let old = json!({"reviewer": {"name": "Rigel"}, "findings": []});

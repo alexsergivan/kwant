@@ -431,13 +431,62 @@ pub fn verdict(rows: &[TicketRow]) -> &'static str {
     }
 }
 
-/// `review.matches` (api-decisions 17): `{key, url, verdict, items: [{criterion, state, evidence,
-/// paths}]}`, one item per done-when line of the brief, in its order. `criterion` is the line;
-/// `evidence` the reviewer's one sentence; `paths` the files of this diff that show it.
+/// `review.matches` (api-decisions 17, 21): `{key, url, verdict, items: [{id, criterion, state,
+/// evidence, paths, sources, inferred, fix}]}`, one item per done-when line of the brief, in its
+/// order. `id` is `k{n}`, n the line's 1-based number; `criterion` is the line; `evidence` the
+/// reviewer's one sentence; `paths` the files of this diff that show it; `sources` and `inferred`
+/// are the line's own, on the site only. `fix` is Fix it's state for a `not_met` or `unclear` item
+/// (`{state: open|sent|dismissed, sent_at, dismissed}`, like a finding's) and `null` for a met one.
 fn ticket_matches(t: &TicketCheck, rows: &[TicketRow]) -> Value {
     json!({"key": t.key, "url": t.url, "verdict": verdict(rows),
-           "items": rows.iter().map(|r| json!({"criterion": t.lines.get(r.done_when_index).map(|l| one_line(l)).unwrap_or_default(),
-               "state": r.state, "evidence": r.evidence_text, "paths": r.evidence_paths})).collect::<Vec<_>>()})
+           "items": rows.iter().map(|r| {
+               let (sources, inferred) = t.cites.get(r.done_when_index).cloned().unwrap_or_default();
+               json!({"id": format!("k{}", r.done_when_index + 1),
+                      "criterion": t.lines.get(r.done_when_index).map(|l| one_line(l)).unwrap_or_default(),
+                      "state": r.state, "evidence": r.evidence_text, "paths": r.evidence_paths,
+                      "sources": sources, "inferred": inferred,
+                      "fix": if r.state == "met" { Value::Null } else { json!({"state": "open", "sent_at": null, "dismissed": null}) }})
+           }).collect::<Vec<_>>()})
+}
+
+/// Whether "Matches the ticket" holds back LGTM (api-decisions 20): a `not_met` item still open,
+/// as an open finding does. An `unclear` item never does, nor one sent or dismissed.
+pub fn matches_block_lgtm(matches: &Value) -> bool {
+    matches["items"].as_array().is_some_and(|items| items.iter().any(|i| i["state"] == "not_met" && i["fix"]["state"].as_str().unwrap_or("open") == "open"))
+}
+
+/// Whether a review card leaves the Verified sticker possible (api-decisions 20): no "Matches the
+/// ticket" block, or one whose every item is `met`.
+pub fn every_item_met(card: &Value) -> bool {
+    match card.get("matches").filter(|m| !m.is_null()) {
+        None => true,
+        Some(m) => m["items"].as_array().is_some_and(|items| !items.is_empty() && items.iter().all(|i| i["state"] == "met")),
+    }
+}
+
+/// A `not_met` or `unclear` item of "Matches the ticket" as the finding Fix it sends (api-decisions
+/// 20): its `fix` state, kwant's fixed title, and the line and the reviewer's sentence quoted as data.
+pub fn match_as_finding(matches: &Value, item: &Value) -> Value {
+    let n = item["id"].as_str().and_then(|i| i.strip_prefix('k')).unwrap_or("?");
+    let key = matches["key"].as_str().filter(|k| super::tickets::valid_key(k)).unwrap_or("the ticket");
+    let not_met = item["state"] == "not_met";
+    let line = super::scan::as_data_up_to(item["criterion"].as_str().unwrap_or(""), 300);
+    let mut detail = format!("{key}'s brief says the work is done when: {line}.");
+    if let Some(e) = item["evidence"].as_str().filter(|e| !e.trim().is_empty()) {
+        detail.push_str(&format!(" The reviewer: {}.", super::scan::as_data_up_to(e, 200)));
+    }
+    let mut f = item["fix"].clone();
+    if let Some(m) = f.as_object_mut() {
+        m.insert("id".into(), item["id"].clone());
+        m.insert("source".into(), json!("ticket"));
+        m.insert("severity".into(), json!(if not_met { "medium" } else { "low" }));
+        m.insert("title".into(), json!(format!("{}: done-when line {n} of {key}", if not_met { "Not met" } else { "Unclear" })));
+        m.insert("file".into(), item["paths"][0].as_str().map_or(json!(""), |p| json!(p)));
+        m.insert("line".into(), Value::Null);
+        m.insert("detail".into(), json!(detail));
+        m.insert("fix".into(), json!(if not_met { "Do what this line of the brief asks." } else { "Show in the code or tests that this line of the brief holds." }));
+    }
+    f
 }
 
 /// The verdict a review card gives its ticket, for the ticket row's `work.matches` (api-decisions
@@ -735,7 +784,7 @@ mod tests {
     }
 
     fn trail(lines: &[&str]) -> TicketCheck {
-        TicketCheck { key: "TRAIL-102".into(), url: "https://yourcompany.atlassian.net/browse/TRAIL-102".into(), lines: lines.iter().map(|l| l.to_string()).collect() }
+        TicketCheck { key: "TRAIL-102".into(), url: "https://yourcompany.atlassian.net/browse/TRAIL-102".into(), lines: lines.iter().map(|l| l.to_string()).collect(), cites: vec![] }
     }
 
     fn with_ticket(rows: &str) -> String {
@@ -811,5 +860,58 @@ mod tests {
         assert_eq!(verdict(&[r("unclear"), r("not_met")]), "not_met");
         assert_eq!(verdict(&[]), "unclear");
         assert_eq!(matches_verdict(&json!({"matches": {"verdict": "done!"}})), None);
+    }
+
+    /// api-decisions 20–21: each item carries `k{n}`, its line's sources and `inferred`, and Fix it
+    /// state on the items that aren't met. A `not_met` item holds back LGTM while open, an
+    /// `unclear` one never does, and the sticker needs every item met.
+    #[tokio::test]
+    async fn matches_items_carry_their_id_and_sources_and_only_not_met_blocks_lgtm() {
+        use super::super::tickets::brief::SourceRef;
+        let mut f = review_facts(303);
+        f.files.retain(|x| x.path != "src/server/reactions.rs");
+        f.files.push(FileDiff { path: "src/server/reactions.rs".into(), status: "modified".into(), additions: 1, deletions: 0, patch: Some("@@ -40,0 +40,1 @@\n+// told\n".into()), previous_path: None });
+        let picked = choose(vec![bot("kw_demo_rigel", "Rigel", "codex")], &f.author).unwrap();
+        let mut t = trail(&["Export as CSV", "A test covers it", "Docs say how"]);
+        let ticket = SourceRef { kind: "ticket".into(), label: "TRAIL-102".into(), url: t.url.clone(), cite: "ticket".into(), ..Default::default() };
+        let file = SourceRef { kind: "file".into(), label: "src/a.rs:3".into(), file: Some("src/a.rs".into()), line: Some(3), cite: "file:src/a.rs:3".into(), ..Default::default() };
+        t.cites = vec![(vec![ticket.clone()], false), (vec![], false), (vec![file.clone()], true)];
+        // A met row must name a file of the PR; the others may too
+        let rows = |s1: &str, s2: &str| with_ticket(&format!(r#"[{{"done_when_index": 0, "state": "met", "evidence_text": "Writes CSV.", "evidence_paths": ["src/server/reactions.rs"]}},
+            {{"done_when_index": 1, "state": "{s1}", "evidence_text": "No test.", "evidence_paths": ["src/server/reactions.rs"]}},
+            {{"done_when_index": 2, "state": "{s2}", "evidence_text": "Can't tell.", "evidence_paths": ["src/server/reactions.rs"]}}]"#));
+        let (_, c) = card_for(&f, Some(&picked), Some(&mut Stub::new(vec![Ok(rows("not_met", "unclear"))])), Some(&t)).await;
+        let items = c["matches"]["items"].as_array().unwrap();
+        assert_eq!(items.iter().map(|i| i["id"].as_str().unwrap()).collect::<Vec<_>>(), ["k1", "k2", "k3"]);
+        assert_eq!(items[0]["sources"], json!([ticket]));
+        assert_eq!((items[1]["sources"].clone(), items[2]["sources"].clone()), (json!([]), json!([file])));
+        assert_eq!(items.iter().map(|i| i["inferred"].as_bool().unwrap()).collect::<Vec<_>>(), [false, false, true]);
+        assert_eq!(items[0]["fix"], Value::Null, "a met item has nothing to fix");
+        assert_eq!((items[1]["fix"]["state"].as_str(), items[2]["fix"]["state"].as_str()), (Some("open"), Some("open")), "Fix it lists not_met and unclear");
+
+        // not_met blocks LGTM; once dismissed or sent it doesn't; unclear never does
+        let m = &c["matches"];
+        assert!(matches_block_lgtm(m));
+        let mut dismissed = m.clone();
+        dismissed["items"][1]["fix"]["state"] = json!("dismissed");
+        assert!(!matches_block_lgtm(&dismissed));
+        let (_, only_unclear) = card_for(&f, Some(&picked), Some(&mut Stub::new(vec![Ok(rows("met", "unclear"))])), Some(&t)).await;
+        assert_eq!(only_unclear["matches"]["verdict"], "unclear");
+        assert!(!matches_block_lgtm(&only_unclear["matches"]), "unclear is shown but doesn't block");
+        assert_eq!(only_unclear["matches"]["items"][2]["fix"]["state"], "open", "and Fix it still lists it");
+
+        // The sticker: only when every item is met
+        assert!(!every_item_met(&c) && !every_item_met(&only_unclear));
+        let (_, all_met) = card_for(&f, Some(&picked), Some(&mut Stub::new(vec![Ok(rows("met", "met"))])), Some(&t)).await;
+        assert!(every_item_met(&all_met) && !matches_block_lgtm(&all_met["matches"]));
+        assert!(every_item_met(&json!({"findings": []})), "no ticket, no say");
+
+        // Fix it's finding for k2: kwant's own title; the line and the reviewer's words as data
+        let k2 = match_as_finding(m, &items[1]);
+        assert_eq!((k2["id"].as_str(), k2["source"].as_str(), k2["severity"].as_str(), k2["state"].as_str()), (Some("k2"), Some("ticket"), Some("medium"), Some("open")));
+        assert_eq!(k2["title"], "Not met: done-when line 2 of TRAIL-102");
+        assert!(k2["detail"].as_str().unwrap().contains(r"`A\u{20}test\u{20}covers\u{20}it`"), "{k2}");
+        assert_eq!(match_as_finding(m, &items[2])["severity"], "low");
+        assert_eq!(match_as_finding(m, &items[0]), Value::Null);
     }
 }
