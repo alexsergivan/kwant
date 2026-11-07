@@ -127,7 +127,9 @@ import { claudeNeedsSignIn } from './claudeLogin';
 import { personFetch } from './auth';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
-import { isNotificationOpen, showDeviceNotification } from './push';
+import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
+import { requestSpendStopFocus } from './spendStop';
+import { SpendStopNeedsYou } from './components/SpendStop';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { devApi, devConnect, devStore } from './devMode';
@@ -205,9 +207,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 }) => {
   const isPhone = useIsPhone();
   // Phones: the list (one tab of it) or the open chat.
-  // The Idea jar is a tab of the list on phones, so a link to it opens on the list.
+  // The Idea jar is a tab of the list on phones, so a link to it opens on the list. The Inbox opens
+  // over it, as a tap does (a notification's Needs you lands there).
   const [phoneView, setPhoneView] = useState<'list' | 'chat'>(() =>
-    initialView?.kind !== 'jar' && (initialTarget?.channelId || initialTarget?.botId) ? 'chat' : 'list',
+    initialView?.kind === 'inbox' || (initialView?.kind !== 'jar' && (initialTarget?.channelId || initialTarget?.botId)) ? 'chat' : 'list',
   );
   const [phoneTab, setPhoneTab] = useState<PhoneTab>(() => (initialView?.kind === 'jar' ? 'jar' : 'chats'));
   const [loaded, setLoaded] = useState(false);
@@ -316,6 +319,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     playSfx('click');
   };
   const openSettings = () => openSpaceSettings('accounts');
+  // Settings › All spaces › Usage, at the daily spending stop's fields.
+  const openUsageSettings = () => {
+    setSettingsFocusRow('spend-stop');
+    openAppSettings();
+  };
   const openConnections = () => openSpaceSettings('connections');
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
@@ -370,6 +378,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const isPhoneRef = useRef(isPhone);
   isPhoneRef.current = isPhone;
+  // Today's spending stop: Needs you (Inbox › New) with its Continue today, focused.
+  const [spendStopSeq, setSpendStopSeq] = useState(0);
+  const openSpendStop = () => {
+    requestSpendStopFocus();
+    setSpendStopSeq((n) => n + 1);
+    showPage('inbox', 'new');
+  };
+  // Home: the chat list on a phone, the open chat elsewhere, with nothing on top.
+  const openHome = () => {
+    if (spaceSettingsTab) closeSpaceSettings();
+    setPage('chat');
+    if (isPhoneRef.current) setPhoneView('list');
+  };
   // Dev mode Connect (flow F5): Loose ends opens on the GitHub form; once a GitHub source is added
   // the person lands back on the Dev desk, which reads Dev mode again.
   const [devConnecting, setDevConnecting] = useState(0);
@@ -533,10 +554,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (!shouldShowOsNotification({ enabled: browserNotifyEnabled(), permission: notificationPermission(), hidden: document.hidden, kind: n.kind })) return;
     showDeviceNotification({ ...n, space_id: n.space_id ?? space.id }, () => openNotifiedRef.current(n)).catch(() => undefined);
   };
-  // A tap on a notification: the bot's skill, question or browser step, else its chat.
+  // A tap on a notification: the bot's skill, question or browser step, else its chat. One about no
+  // bot opens its place: today's spending stop opens Needs you on it, with Continue today; any other
+  // kind (an app update, a loose-end reminder) opens home.
   const openNotified = (n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id'>) => {
     const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
-    if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
+    const place = placeOfNotification(n);
+    if (place === 'spend_stop') openSpendStop();
+    else if (place === 'home') openHome();
+    else if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
     // A suggested routine is decided in Routines, not in the bot's chat
     else if (n.kind === 'automation_suggested') openSpaceSettings('routines');
     else if (n.kind === 'tier_proposed') openBoardForTier();
@@ -549,6 +575,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openTargetRef.current(target);
   };
   const openNotifiedRef = useRef(openNotified);
+  const openSpendStopRef = useRef(openSpendStop);
+  openSpendStopRef.current = openSpendStop;
+  const openHomeRef = useRef(openHome);
+  openHomeRef.current = openHome;
   openNotifiedRef.current = openNotified;
   // Taps on notifications shown through the service worker (pushes and this page's own) arrive
   // here; another space's are the shell's.
@@ -557,8 +587,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (!sw) return;
     const onMessage = (e: MessageEvent) => {
       const m = e.data;
-      if (!isNotificationOpen(m) || !m.kwant_id) return;
+      if (!isNotificationOpen(m)) return;
+      // About no bot: the spending stop (server-wide) opens Needs you; other kinds open home.
+      const place = placeOfNotification(m);
+      if (place === 'spend_stop') return openSpendStopRef.current();
       if (m.space_id && m.space_id !== space.id) return;
+      if (place === 'home') return openHomeRef.current();
+      if (!m.kwant_id) return;
       openNotifiedRef.current({ kind: m.kind as NotifyKind, kwant_id: m.kwant_id, channel_id: m.channel_id });
     };
     sw.addEventListener('message', onMessage);
@@ -3273,6 +3308,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const away = (
     <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} onApprovalResolved={dropApproval}
+      top={<SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />}
     />
   );
   const backToList = isPhone ? () => { setPage('chat'); setPhoneView('list'); } : undefined;
@@ -3414,6 +3450,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             ) : undefined
           }
           onOpenAccounts={openSettings}
+          onOpenUsage={openUsageSettings}
           canRun={canRun}
           titleExtra={
             workingBadge || skillsBadge || approvalsBadge ? (

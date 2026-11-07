@@ -4,6 +4,8 @@ import { AuditorModelSetting } from './AuditorModelSetting';
 import { Key, X, Settings, Check, ChevronRight, LogOut, Bell, AlertTriangle, Layers, Monitor, Volume2, VolumeX, Gauge, MapPin, Vibrate, VibrateOff, Sparkles, KanbanSquare, BellRing } from 'lucide-react';
 import { TURN_LIMITS, TurnLimitKey, limitError } from '../threads';
 import { DailyUsagePanel } from './DailyUsage';
+import { SpendStopFields, StopFields, forgetToday } from './SpendStop';
+import { stopBody, stopFieldsFromSettings } from '../spendStop';
 import {
   BROWSER_NOTIFY_KEY,
   MASK,
@@ -346,6 +348,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   const [limits, setLimits] = useState<Record<TurnLimitKey, string> | null>(null);
   // Fresh tokens one request's hand-offs may use before they pause (0 = no limit), as typed; null on a server without it.
   const [chainBudget, setChainBudget] = useState<string | null>(null);
+  // Today's spending stop, as typed ("" is off); null on a server without it.
+  const [spendStop, setSpendStop] = useState<StopFields | null>(null);
+  const spendStopValue = spendStop ? stopBody(spendStop) : null;
+  const spendStopInvalid = !!spendStop && !spendStopValue;
+  const [spendSaved, setSpendSaved] = useState(0);
   const chainBudgetValue = chainBudget === null ? null : requestLimitFrom(chainBudget);
   const chainBudgetError = chainBudget !== null && chainBudgetValue === null;
   // Default token limits for new tasks and missions, as typed; null on a server without them.
@@ -390,6 +397,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               : null,
           );
           setChainBudget(typeof data.chain_token_budget === 'number' ? String(data.chain_token_budget) : null);
+          setSpendStop(stopFieldsFromSettings(data));
           const dl = parseDefaultLimits(data);
           setTokenLimits(dl ? { task: String(dl.task), mission: String(dl.mission) } : null);
           setAgentTools(typeof data.agent_tools === 'boolean' ? data.agent_tools : null);
@@ -471,7 +479,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (webhookError || limitsInvalid || chainBudgetError || tokenLimitsInvalid) return;
+    if (webhookError || limitsInvalid || chainBudgetError || tokenLimitsInvalid || spendStopInvalid) return;
     setSaveError(null);
     setSaving(true);
     playSfx('click');
@@ -482,7 +490,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           notify_webhook_url: webhookUrl.trim(),
-          notify_on: notifyOnToSave(notifyOn, appUpdates, !!proactive, !!discovery, flightSchool !== null),
+          notify_on: notifyOnToSave(notifyOn, appUpdates, !!proactive, !!discovery, flightSchool !== null, spendStop !== null),
           ...(limits
             ? {
                 max_turns_per_agent: Number(limits.max_turns_per_agent),
@@ -491,6 +499,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               }
             : {}),
           ...(chainBudgetValue !== null ? { chain_token_budget: chainBudgetValue } : {}),
+          ...(spendStopValue ?? {}),
           ...(tokenLimitsValue ? defaultLimitsBody(tokenLimitsValue) : {}),
           ...(agentTools !== null ? { agent_tools: agentTools } : {}),
           ...(proactive ?? {}),
@@ -507,6 +516,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
       if (res.ok) {
         setSaveSuccess(true);
+        if (spendStopValue) {
+          forgetToday();
+          setSpendSaved((n) => n + 1);
+        }
         setTyped(false);
         if (missionBoard !== null) window.dispatchEvent(new CustomEvent(MISSION_BOARD_SETTING_EVENT, { detail: missionBoard }));
         if (discovery) window.dispatchEvent(new CustomEvent(DISCOVERY_SETTING_EVENT, { detail: discovery }));
@@ -824,6 +837,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                 </p>
               </div>
             )}
+            {spendStop !== null && <SpendStopFields value={spendStop} onChange={setSpendStop} open={isOpen} savedKey={spendSaved} />}
             <DailyUsagePanel open={isOpen} />
           </fieldset>
 
@@ -1149,7 +1163,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
 
             <div className="space-y-1.5" role="group" aria-labelledby="notify-kinds-label">
               <p id="notify-kinds-label" className="text-xs font-medium text-zinc-400">Tell me when</p>
-              {notifyKindsFor(appUpdates, !!proactive, !!discovery, !!flightSchool?.flight_school).map((k) => (
+              {notifyKindsFor(appUpdates, !!proactive, !!discovery, !!flightSchool?.flight_school, spendStop !== null).map((k) => (
                 <label key={k.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
                   <input
                     type="checkbox"
@@ -1205,7 +1219,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </button>
             <button
               type="submit"
-              disabled={saving || !!webhookError || limitsInvalid || tokenLimitsInvalid}
+              disabled={saving || !!webhookError || limitsInvalid || tokenLimitsInvalid || spendStopInvalid}
               className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-500 transition-colors shadow-sm disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Save'}

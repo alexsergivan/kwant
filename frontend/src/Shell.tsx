@@ -24,7 +24,10 @@ import {
   spacesApi,
 } from './spaces';
 import { NotifyEvent, TOAST_KINDS, browserNotifyEnabled, notificationPermission, shouldShowOsNotification } from './continuity';
-import { isNotificationOpen, resyncPushOnLoad, showDeviceNotification, targetFromQuery } from './push';
+import { isNotificationOpen, placeOfQuery, resyncPushOnLoad, showDeviceNotification, targetFromQuery } from './push';
+import { requestSpendStopFocus } from './spendStop';
+
+const INBOX_NEW: SpaceView = { kind: 'inbox', tab: 'new' };
 
 const POLL_MS = 15000;
 
@@ -88,6 +91,17 @@ export const App: React.FC = () => {
       if (!list) return;
       // A notification's `/?space=…&channel=…` link counts as the chat's own address.
       const q = targetFromQuery(window.location.search);
+      // A notification about no bot (`?notify=<kind>`): the spending stop opens Needs you on it, any
+      // other kind opens home, in the last space used. The query goes from the address either way, so
+      // a reload doesn't open it again.
+      if (q?.notify) {
+        const s = pickSpace(list, q.spaceId, lastSpace());
+        const stop = placeOfQuery(q.notify) === 'spend_stop';
+        if (stop) requestSpendStopFocus();
+        if (s) open(s.id, null, true, stop ? INBOX_NEW : null);
+        if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
+        return;
+      }
       const route = q ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined } : parseSpacePath(window.location.pathname);
       const s = pickSpace(list, route.spaceId, lastSpace());
       if (!s) return;
