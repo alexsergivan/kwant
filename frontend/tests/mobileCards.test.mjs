@@ -308,3 +308,28 @@ test('ChatView keeps one phone flag after the rebase on #307: useMedia(PHONE_QUE
   assert.deepEqual([...chat.matchAll(/const phone\b[^;\n]*/g)].map((x) => x[0]), ['const phone = useMedia(PHONE_QUERY)']);
   assert.doesNotMatch(chat, /usePhoneLayout/);
 });
+
+test('Ask chips on a phone: 28 px to look at, 44 px to tap; desktop chips unchanged', () => {
+  const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const start = src.indexOf('aria-label="Ask a member"');
+  const block = src.slice(src.lastIndexOf('<ScrollRow', start), src.indexOf('</ScrollRow>', start));
+  // The exact desktop classes from before 0.7.5, row and both chip kinds.
+  for (const desk of [
+    "'kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none'",
+    "'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
+    "'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'",
+  ])
+    assert.ok(block.includes(desk), desk);
+  const phoneChips = [...block.matchAll(/\? '(kws-hit[^']*)'/g)].map((x) => x[1]);
+  assert.equal(phoneChips.length, 2, 'member chip and team chip');
+  for (const c of phoneChips) {
+    assert.match(c, /\bh-7\b/);
+    assert.match(c, /\btext-xs\b/);
+    assert.doesNotMatch(c, /\bpy-1\b/);
+  }
+  assert.equal((block.match(/data-compact=\{phone \? '' : undefined\}/g) || []).length, 2, 'out of the touch rule on a phone only');
+  // The row scrolls sideways and so clips; 8 px padding keeps the -8 px hit areas inside it, and the
+  // margins give the space back (-6 px top, 2 px bottom: still 10 px to the composer).
+  assert.match(block, /'kw-scroll-row max-w-4xl mx-auto -mt-1\.5 mb-0\.5 py-2 /);
+  assert.match(block, /size=\{14\}/, '14 px avatar');
+});
