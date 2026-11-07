@@ -71,8 +71,8 @@ export function ticket(state: TicketState, extra: Record<string, unknown> & { wo
   const back = state === 'taken_back' ? { taken_back_at: '2026-11-07T10:12:00Z', taken_back_by: 'Dana Park' } : {};
   // updated_at moves on after the merge; the footer reads work.merged_at (api-decisions 22), never this.
   const at = state === 'landed' ? { updated_at: '2026-11-07T11:34:00Z' } : {};
-  // A failed row says why in kwant's own words (api-decisions 22, api.md 2.6).
-  const err = state === 'failed' ? { error: { code: 'work_failed', message: 'The work on this ticket stopped with an error.' } } : { error: null };
+  // A failed row says why, word for word from the server (api-decisions 22, 24; api.md 2.6).
+  const err = state === 'failed' ? { error: { code: 'jira_unreachable', message: 'Couldn’t reach Jira for 24 hours, so work on this ticket stopped.' } } : { error: null };
   // Waiting tickets have no work yet (api-decisions 11: null until someone is on it).
   const w = state === 'waiting' && !more ? null : { ...work, ...(more ?? {}) };
   return { ...base, state, ...back, ...at, ...err, ...rest, work: w };
@@ -276,7 +276,7 @@ const reviewBase = {
 };
 
 const S2 = BRIEF.done_when;
-type Fix = { state: 'open' | 'sent' | 'dismissed'; sent_at: string | null; sent_to?: string | null; task_id?: string | null; send_error?: string | null; dismissed: null };
+type Fix = { state: 'open' | 'sent' | 'dismissed'; sent_at: string | null; sent_to?: string | null; task_id?: string | null; send_error?: string | null; dismissed: { reason: string; note: string; by: string; at: string | null } | null };
 const open: Fix = { state: 'open', sent_at: null, sent_to: null, task_id: null, send_error: null, dismissed: null };
 /** One `review.matches` item as Vega's #392 sends it (api.md 2.11): id k{n}, the line's sources, and `fix`. */
 const item = (i: number, state: string, evidence: string, paths: string[], fix: Fix | null = state === 'met' ? null : open) => ({
@@ -312,6 +312,21 @@ export const REVIEW_GAPS_SENT = {
     ...matches(false),
     blocks_lgtm: false,
     items: items(false).map((it) => (it.id === 'k3' ? { ...it, fix: { ...open, state: 'sent' as const, sent_at: '2026-11-07T11:02:00Z', sent_to: 'Ben', task_id: 'task_demo_7' } } : it)),
+  },
+  findings: [],
+};
+
+/** The gaps review once the person dismissed line 3 as "Fine in this PR" (api-decisions 25): LGTM is back. */
+export const REVIEW_GAPS_DISMISSED = {
+  ...reviewBase,
+  matches: {
+    ...matches(false),
+    blocks_lgtm: false,
+    items: items(false).map((it) =>
+      it.id === 'k3'
+        ? { ...it, fix: { ...open, state: 'dismissed' as const, dismissed: { reason: 'fine_here', note: 'The export is small enough for now.', by: 'person', at: '2026-11-07T11:04:00Z' } } }
+        : it,
+    ),
   },
   findings: [],
 };

@@ -206,7 +206,7 @@ const STATE_COPY = {
   in_review: /Cody is reviewing the pull request/,
   landed: /a41c9e2|Landed|landed/,
   taken_back: /Dana Park took it back in Jira/,
-  failed: /Work on TRAIL-142 stopped/,
+  failed: /Ann couldn’t read TRAIL-142/,
 };
 
 for (const [state, re] of Object.entries(STATE_COPY)) {
@@ -239,15 +239,19 @@ test('landed footer replaces the brief row: PR, merge time, Brief, who built and
   assert.doesNotMatch(out, /class="tk-brief"/);
 });
 
-test('failed card shows the row\'s error message as text, and the fallback copy without one', () => {
-  const jira = { code: 'jira_unreachable', message: 'kwant couldn’t reach Jira for 24 hours, so it stopped work on this ticket.' };
-  const out = html(m.TicketCard, { ...N, ticket: T('failed', { error: jira }), onRetry: () => {} });
-  assert.match(out, /Ann couldn’t read TRAIL-142/);
-  assert.match(out, /kwant couldn’t reach Jira for 24 hours, so it stopped work on this ticket\./);
+test('failed card shows the row\'s error message word for word, and the fallback copy without one', () => {
+  // api-decisions 24: the default failed fixture is Jira unreachable, in the server's new words.
+  const out = html(m.TicketCard, { ...N, ticket: T('failed'), onRetry: () => {} });
+  assert.match(out, /Ann couldn’t read TRAIL-142/, 'read failures keep the lead heading (api-decisions 26)');
+  assert.match(out, /Couldn’t reach Jira for 24 hours, so work on this ticket stopped\./);
   assert.doesNotMatch(out, /Jira didn’t answer/);
-  const work = html(m.TicketCard, { ...N, ticket: T('failed'), onRetry: () => {} });
-  assert.match(work, /Work on TRAIL-142 stopped/);
-  assert.match(work, /The work on this ticket stopped with an error\./);
+  const brief = html(m.TicketCard, { ...N, ticket: T('failed', { error: { code: 'brief_failed', message: 'Couldn’t turn this ticket into a brief.' } }), onRetry: () => {} });
+  assert.match(brief, /Couldn’t turn this ticket into a brief\./);
+  for (const code of ['work_failed', 'failed']) {
+    const work = html(m.TicketCard, { ...N, ticket: T('failed', { error: { code, message: 'The work on this ticket stopped with an error.' } }), onRetry: () => {} });
+    assert.match(work, /Work on TRAIL-142 stopped/, `${code} keeps "Work on TRAIL-142 stopped"`);
+    assert.match(work, /The work on this ticket stopped with an error\./);
+  }
   const none = html(m.TicketCard, { ...N, ticket: T('failed', { error: null }), onRetry: () => {} });
   assert.match(none, /Jira didn’t answer\. Nothing was built\./);
   const tag = html(m.TicketCard, { ...N, ticket: T('failed', { error: { code: 'jira_unreachable', message: '<b>x</b>' } }), onRetry: () => {} });
@@ -438,6 +442,64 @@ test('a Fix it that fails keeps its error on the item and offers Try again', asy
   const row = host.querySelector('[data-item="k3"]');
   assert.match(row.textContent, /Couldn’t send it: the lead is offline/);
   assert.match(row.querySelector('[data-fix="k3"]').textContent, /Try again/);
+});
+
+test('Dismiss on a matches row posts {action:"dismiss", reason, note} to the item\'s k{n}', async () => {
+  const card = m.parseReview(fx.REVIEW_GAPS);
+  const sent = [];
+  const host = await mount(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async (_c, id, a) => (sent.push([id, a]), m.parseReview(fx.REVIEW_GAPS_DISMISSED)) });
+  await click(host.querySelector('[data-dismiss="k3"]'));
+  const form = host.querySelector('#dismiss-k3');
+  assert.ok(form, 'the findings\' own Dismiss form opens on the row');
+  assert.match(form.textContent, /Why dismiss\? Rigel learns from this\./);
+  assert.equal(form.querySelectorAll('[role="radio"]').length, 4, 'the same four reasons as findings');
+  assert.equal(form.querySelector('button[type="submit"]').disabled, true, 'a reason is required');
+  await click(form.querySelector('[data-reason="fine_here"]'));
+  const note = form.querySelector('textarea');
+  const set = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+  set.call(note, '  Small enough for now.  ');
+  note.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await settle();
+  await click(form.querySelector('button[type="submit"]'));
+  assert.deepEqual(sent, [['k3', { action: 'dismiss', reason: 'fine_here', note: 'Small enough for now.' }]]);
+});
+
+test('after the server answers, the dismissed row shows its Dismissed · reason line and LGTM comes back', async () => {
+  const card = m.parseReview(fx.REVIEW_GAPS);
+  const host = await mount(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async () => m.parseReview(fx.REVIEW_GAPS_DISMISSED) });
+  assert.equal(host.querySelector('[data-lgtm]'), null, 'blocks_lgtm true: no LGTM yet');
+  await click(host.querySelector('[data-dismiss="k3"]'));
+  await click(host.querySelector('#dismiss-k3 [data-reason="fine_here"]'));
+  await click(host.querySelector('#dismiss-k3 button[type="submit"]'));
+  const row = host.querySelector('[data-item="k3"]');
+  assert.equal(row.querySelector('[data-dismissed]').textContent, 'Dismissed · Fine in this PR · you', 'read from matches.items[i].fix');
+  assert.equal(row.querySelector('[data-fix]'), null);
+  assert.equal(row.querySelector('[data-dismiss]'), null);
+  assert.equal(host.querySelector('#dismiss-k3'), null, 'the form closes');
+  assert.ok(host.querySelector('[data-lgtm]'), 'blocks_lgtm flipped to false: LGTM is back');
+  assert.ok(host.querySelector('[data-dismiss="k4"]'), 'the unclear row still offers Dismiss');
+});
+
+test('a Dismiss the server refuses keeps the form open with the error', async () => {
+  const card = m.parseReview(fx.REVIEW_GAPS);
+  const host = await mount(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async () => { throw new Error('the review moved on'); } });
+  await click(host.querySelector('[data-dismiss="k4"]'));
+  await click(host.querySelector('#dismiss-k4 [data-reason="wrong"]'));
+  await click(host.querySelector('#dismiss-k4 button[type="submit"]'));
+  assert.match(host.querySelector('#dismiss-k4 [role="alert"]').textContent, /the review moved on/);
+  assert.equal(host.querySelector('[data-item="k4"] [data-dismissed]'), null);
+});
+
+test('Dismiss shows only on open not_met and unclear rows: never on met, sent or dismissed ones', () => {
+  const gaps = html(m.TicketMatches, { matches: m.parseReview(fx.REVIEW_GAPS).matches, now: fx.TICKET_NOW, act: async () => {} });
+  assert.deepEqual([...gaps.matchAll(/data-dismiss="(k\d+)"/g)].map((x) => x[1]), ['k3', 'k4']);
+  const met = html(m.TicketMatches, { matches: m.parseReview(fx.REVIEW_ALL_MET).matches, now: fx.TICKET_NOW, act: async () => {} });
+  assert.doesNotMatch(met, /data-dismiss=/, 'a met row has no Dismiss');
+  const sent = html(m.TicketMatches, { matches: m.parseReview(fx.REVIEW_GAPS_SENT).matches, now: fx.TICKET_NOW, act: async () => {} });
+  assert.deepEqual([...sent.matchAll(/data-dismiss="(k\d+)"/g)].map((x) => x[1]), ['k4']);
+  const dis = html(m.TicketMatches, { matches: m.parseReview(fx.REVIEW_GAPS_DISMISSED).matches, now: fx.TICKET_NOW, act: async () => {} });
+  assert.deepEqual([...dis.matchAll(/data-dismiss="(k\d+)"/g)].map((x) => x[1]), ['k4']);
+  assert.match(dis, /Dismissed · Fine in this PR · you/);
 });
 
 test('LGTM follows blocks_lgtm: an unclear item never disables it, an open not_met does', () => {

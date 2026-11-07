@@ -1,4 +1,4 @@
-import React, { useEffect, useReducer, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -14,10 +14,7 @@ import {
 } from 'lucide-react';
 import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
-  DISMISS_REASONS,
   clock,
-  closedDraft,
-  dismissReducer,
   dismissedLine,
   findingsSummary,
   FORGE_NAME,
@@ -43,6 +40,7 @@ import {
 } from '../../dev/logic';
 import type { LedState, PostState } from '../../dev/logic';
 import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
+import { DismissForm, useDismiss } from './DismissForm';
 import { TicketMatches, itemFinding, matchFindingIds } from './TicketMatches';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
@@ -142,7 +140,8 @@ interface FindingRowProps {
 }
 
 const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) => {
-  const [draft, send] = useReducer(dismissReducer, closedDraft);
+  const dismiss = useDismiss(f, act);
+  const { draft, send } = dismiss;
   const formId = `dismiss-${f.id}`;
   const where = ref(f);
 
@@ -156,17 +155,6 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
   }
 
   const left = undoLeft(f, now);
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draft.reason || draft.sending) return;
-    send({ type: 'submit' });
-    try {
-      await act(f, { action: 'dismiss', reason: draft.reason, ...(draft.note.trim() ? { note: draft.note.trim() } : {}) });
-      send({ type: 'done' });
-    } catch (err) {
-      send({ type: 'failed', error: err instanceof Error ? err.message : 'That didn’t go through. Try again.' });
-    }
-  };
 
   return (
     <li data-finding={f.id} data-state={f.state} className={`rounded-xl border border-zinc-700/60 border-l-[3px] bg-zinc-900/60 p-3 text-xs shadow-[var(--kws-shadow)] ${STRIPE[f.severity]}`}>
@@ -220,53 +208,7 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
             )}
           </div>
 
-          {draft.open && (
-            <form id={formId} onSubmit={submit} aria-label={`Dismiss: ${f.title}`} className="mt-2 rounded-lg border border-hairline bg-surface-main p-2.5">
-              <fieldset disabled={draft.sending}>
-                <legend className="text-meta text-zinc-200">Why dismiss? Rigel learns from this.</legend>
-                <div role="radiogroup" aria-label="Reason" className="mt-2 flex flex-wrap gap-1.5">
-                  {DISMISS_REASONS.map((r) => {
-                    const on = draft.reason === r.id;
-                    return (
-                      <button
-                        key={r.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={on}
-                        onClick={() => send({ type: 'reason', reason: r.id })}
-                        className={`kw-focus min-h-[44px] rounded-full border px-3 text-xs sm:min-h-[28px] ${on ? 'border-sky-400 bg-sky-500/15 text-zinc-50' : 'border-hairline text-zinc-300 hover:border-hairline-strong'}`}
-                      >
-                        {r.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <label className="mt-2 block text-2xs text-zinc-400">
-                  Note (optional)
-                  <textarea
-                    value={draft.note}
-                    onChange={(e) => send({ type: 'note', note: e.target.value })}
-                    rows={2}
-                    maxLength={500}
-                    className="kw-focus mt-1 block w-full resize-y rounded-lg border border-hairline bg-surface-main px-2 py-1.5 text-xs text-zinc-100"
-                  />
-                </label>
-                {draft.error && (
-                  <p role="alert" className="mt-1 text-bad">
-                    {draft.error}
-                  </p>
-                )}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button type="submit" disabled={!draft.reason} aria-busy={draft.sending || undefined} className="kw-btn-primary min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0">
-                    {draft.sending ? 'Dismissing…' : 'Dismiss finding'}
-                  </button>
-                  <button type="button" onClick={() => send({ type: 'cancel' })} className="kw-btn-ghost min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0">
-                    Cancel
-                  </button>
-                </div>
-              </fieldset>
-            </form>
-          )}
+          <DismissForm id={formId} title={f.title} d={dismiss} />
         </div>
       </div>
     </li>

@@ -10,7 +10,8 @@ import { Check, ExternalLink, HelpCircle, Loader2, Target, X } from 'lucide-reac
 import type { DevFinding, FindingAction } from '../../dev/types';
 import type { MatchItem, ReviewMatches } from '../../dev/tickets';
 import { extraPaths, matchCount, onSite } from '../../dev/tickets';
-import { undoLeft } from '../../dev/logic';
+import { dismissedLine, undoLeft } from '../../dev/logic';
+import { DismissForm, useDismiss } from './DismissForm';
 import { CodeText, InferredChip, SiteOrigins, SourceChip } from './TicketBrief';
 
 /**
@@ -52,10 +53,13 @@ const MRow: React.FC<{
   i: number;
   now: number;
   busy: boolean;
-  act?: (f: DevFinding, a: FindingAction) => void;
+  act?: (f: DevFinding, a: FindingAction) => Promise<void> | void;
 }> = ({ r, i, now, busy, act }) => {
   const st = STATE[r.state];
   const f = itemFinding(r);
+  // api-decisions 25: the findings' own Dismiss-with-a-reason, on the item's k{n}.
+  const dismiss = useDismiss(f, act);
+  const formId = `dismiss-${r.id ?? `row-${i + 1}`}`;
   const paths = extraPaths(r.evidence, r.paths);
   const left = f ? undoLeft(f, now) : 0;
   return (
@@ -100,6 +104,11 @@ const MRow: React.FC<{
             Couldn’t send it: {f.send_error}
           </p>
         )}
+        {f?.state === 'dismissed' && (
+          <p className="dl" data-dismissed>
+            {dismissedLine(f)}
+          </p>
+        )}
       </div>
       {st.chip && (
         <span className="r">
@@ -117,21 +126,33 @@ const MRow: React.FC<{
                 </button>
               )}
             </>
-          ) : f?.state === 'dismissed' ? (
-            <span className="kw-chip" data-dismissed>
-              Dismissed
-            </span>
           ) : (
-            f &&
-            act && (
-              <button type="button" className="tk-btn-sm" disabled={busy} onClick={() => act(f, { action: 'fix' })} aria-label={`Fix it: line ${i + 1}`} data-fix={f.id}>
-                {busy ? <Loader2 size={12} className="tk-spin" aria-hidden="true" /> : null}
-                {f.send_error ? 'Try again' : 'Fix it'}
-              </button>
+            f?.state === 'open' &&
+            act &&
+            !dismiss.draft.open && (
+              <>
+                <button type="button" className="tk-btn-sm" disabled={busy} onClick={() => void act(f, { action: 'fix' })} aria-label={`Fix it: line ${i + 1}`} data-fix={f.id}>
+                  {busy ? <Loader2 size={12} className="tk-spin" aria-hidden="true" /> : null}
+                  {f.send_error ? 'Try again' : 'Fix it'}
+                </button>
+                <button
+                  type="button"
+                  className="tk-btn-sm"
+                  disabled={busy}
+                  aria-expanded={false}
+                  aria-controls={formId}
+                  aria-label={`Dismiss: line ${i + 1}`}
+                  onClick={() => dismiss.send({ type: 'open' })}
+                  data-dismiss={f.id}
+                >
+                  Dismiss
+                </button>
+              </>
             )
           )}
         </span>
       )}
+      {f?.state === 'open' && <DismissForm id={formId} title={`line ${i + 1}, ${r.criterion}`} d={dismiss} submitLabel="Dismiss line" className="tk-mdis" />}
     </li>
   );
 };
@@ -145,7 +166,7 @@ export interface TicketMatchesProps {
   /** The brief's author for "Ann's brief"; falls back to "the brief". */
   lead?: string | null;
   busy?: boolean;
-  act?: (f: DevFinding, a: FindingAction) => void;
+  act?: (f: DevFinding, a: FindingAction) => Promise<void> | void;
 }
 
 export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Date.now(), origins = [], lead = null, busy = false, act }) => {
