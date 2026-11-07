@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
-import { DevModeState, DevRepo, devApi, devStore, normaliseRepo } from '../devMode';
+import { DevModeState, DevRepo, FORGE_NAME, devApi, devStore, normaliseRepo } from '../devMode';
 import { useDevMode } from './DevModeSwitch';
-import { openGitHubConnect } from './GitHubConnect';
+import { openForgeConnect, openGitHubConnect } from './GitHubConnect';
 
 /**
  * Team settings > Git Repo, one line under the URL (0.7.3 B2): what Dev mode does with this team's repo,
@@ -12,7 +12,10 @@ export const TEAM_REPO_LINES = {
   connected: 'Dev mode watches this repo · GitHub connected',
   connect: 'Dev mode watches this repo. Connect GitHub for reviews.',
   off: 'Dev mode can watch this repo: turn it on next to the space name.',
-  git: 'Dev mode reads this repo with git. Reviews need GitHub.',
+  git: 'Dev mode reads this repo with git. Reviews need GitHub, GitLab or Gitea.',
+  /** 0.7.4: a GitLab or Gitea repo; `{forge}` is its name. */
+  forge_connected: 'Dev mode watches this repo · {forge} connected',
+  forge_connect: 'Dev mode watches this repo. Connect {forge} for reviews.',
 } as const;
 export type TeamRepoLine = keyof typeof TEAM_REPO_LINES;
 
@@ -29,6 +32,15 @@ export function repoKeyOf(url: string): string | null {
   return s.includes('/') ? s.toLowerCase() : null;
 }
 
+/** The team's row in Dev mode's repos, matched by the team, then by the URL. */
+export function teamRepoRow(state: DevModeState | null, url: string, teamId?: string | null): DevRepo | undefined {
+  const key = repoKeyOf(url);
+  if (!state || !key) return undefined;
+  const same = (r: DevRepo) => r.key === key || r.key === key.replace(/^([^/]+):\d+\//, '$1/');
+  const own = teamId ? state.repos.find((r) => r.team_id === teamId) : undefined;
+  return own && same(own) ? own : state.repos.find(same);
+}
+
 /** Which line a team's repo gets. null: say nothing. */
 export function teamRepoLine(state: DevModeState | null, url: string, teamId?: string | null): TeamRepoLine | null {
   const key = repoKeyOf(url);
@@ -37,9 +49,9 @@ export function teamRepoLine(state: DevModeState | null, url: string, teamId?: s
   // api.md B2: the team's own entry first, then the same repo (Dev mode keeps one entry per repo).
   // A URL being edited that no longer matches the team's entry is read by the URL.
   // Dev mode's key has no port (`127.0.0.1/owner/name`), a typed URL may (`127.0.0.1:9476/owner/name`).
-  const same = (r: DevRepo) => r.key === key || r.key === key.replace(/^([^/]+):\d+\//, '$1/');
-  const own = teamId ? state.repos.find((r) => r.team_id === teamId) : undefined;
-  const row: DevRepo | undefined = own && same(own) ? own : state.repos.find(same);
+  const row = teamRepoRow(state, url, teamId);
+  // 0.7.4: GitLab and Gitea read reviews once Loose ends has a connection for the host.
+  if (row && (row.forge === 'gitlab' || row.forge === 'gitea')) return row.forge_connected ? 'forge_connected' : row.host ? 'forge_connect' : 'git';
   const github = row ? row.provider === 'github' : key.startsWith('github.com/');
   if (!github) return 'git';
   const notConnected = (row ? row.status === 'not_connected' : state.status === 'not_connected') || state.forge !== 'github';
@@ -56,6 +68,8 @@ export const TeamRepoDevLine: React.FC<{ url: string; teamId?: string | null; sp
   }, [space]);
   const line = teamRepoLine(state, url, teamId);
   if (!line) return null;
+  const row = line === 'forge_connect' || line === 'forge_connected' ? teamRepoRow(state, url, teamId) : undefined;
+  const forgeName = row?.forge ? FORGE_NAME[row.forge] : '';
   return (
     <p className="text-[11px] text-zinc-400 mt-1" data-team-repo-dev={line} aria-live="polite">
       {line === 'connect' ? (
@@ -71,8 +85,22 @@ export const TeamRepoDevLine: React.FC<{ url: string; teamId?: string | null; sp
           </button>{' '}
           for reviews.
         </>
+      ) : line === 'forge_connect' && row?.host && (row.forge === 'gitlab' || row.forge === 'gitea') ? (
+        <>
+          Dev mode watches this repo.{' '}
+          <button
+            type="button"
+            onClick={(e) => openForgeConnect({ space: space ?? undefined, anchor: e.currentTarget, forge: { forge: row.forge as 'gitlab' | 'gitea', url: `https://${row.host}` } })}
+            aria-haspopup="dialog"
+            className="font-medium text-sky-300 hover:text-sky-200 underline underline-offset-2"
+            data-team-repo-connect={row.forge}
+          >
+            Connect {forgeName}
+          </button>{' '}
+          for reviews.
+        </>
       ) : (
-        TEAM_REPO_LINES[line]
+        TEAM_REPO_LINES[line].replace('{forge}', forgeName)
       )}
     </p>
   );

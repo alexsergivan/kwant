@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useEscapeLayer } from '../escape';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { devApi, devStore } from '../devMode';
-import type { LooseSource } from '../looseEnds';
+import { forgeConnectedText, forgeHost, type LooseSource } from '../looseEnds';
 import { GitHubConnectForm } from './LooseEndsView';
 
 /**
@@ -21,13 +21,26 @@ export interface GitHubConnectRequest {
   space?: string;
   /** The button it opens next to (and focus goes back to). Defaults to the focused element. */
   anchor?: HTMLElement | null;
+  /** 0.7.4 (G4): a repo row's "Connect GitLab" / "Connect Gitea": the forge form, prefilled with `https://<host>`. */
+  forge?: { forge: 'gitlab' | 'gitea'; url: string } | null;
 }
 
 export function openGitHubConnect(req: GitHubConnectRequest = {}): void {
   if (typeof window === 'undefined') return;
   const anchor = req.anchor ?? (document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null);
-  window.dispatchEvent(new window.CustomEvent<GitHubConnectRequest>(GITHUB_CONNECT_EVENT, { detail: { space: req.space, anchor } }));
+  window.dispatchEvent(new window.CustomEvent<GitHubConnectRequest>(GITHUB_CONNECT_EVENT, { detail: { space: req.space, anchor, forge: req.forge ?? null } }));
 }
+
+/** The same form in place for a GitLab or Gitea host (0.7.4): popover on the desktop, sheet on the phone. */
+export const openForgeConnect = (req: GitHubConnectRequest & { forge: { forge: 'gitlab' | 'gitea'; url: string } }): void => openGitHubConnect(req);
+
+/** The layer's name: "Connect GitHub", "Connect GitLab" or "Connect Gitea". */
+export const connectTitle = (req: Pick<GitHubConnectRequest, 'forge'>): string => (req.forge ? `Connect ${req.forge.forge === 'gitlab' ? 'GitLab' : 'Gitea'}` : 'Connect GitHub');
+/** The toast after the in-place form saved. */
+export const connectedToast = (source: LooseSource, test?: unknown): { title: string; body: string } =>
+  source.kind === 'forge'
+    ? { title: `${source.config?.forge === 'gitea' ? 'Gitea' : source.config?.forge === 'gitlab' ? 'GitLab' : 'Server'} connected`, body: `${forgeConnectedText(test, forgeHost(String(source.config?.url ?? '')))} Dev mode reads its reviews and CI now.` }
+    : { title: 'GitHub connected', body: 'Loose ends and Dev mode both use it.' };
 
 const WIDTH = 380;
 const GAP = 8;
@@ -44,7 +57,7 @@ export function popoverPlace(anchor: { top: number; bottom: number; left: number
   return { left, top: Math.round(top), width };
 }
 
-export const GitHubConnectHost: React.FC<{ onConnected?: (space: string | undefined, source: LooseSource) => void }> = ({ onConnected }) => {
+export const GitHubConnectHost: React.FC<{ onConnected?: (space: string | undefined, source: LooseSource, test?: unknown) => void }> = ({ onConnected }) => {
   const [req, setReq] = useState<(GitHubConnectRequest & { n: number }) | null>(null);
   useEffect(() => {
     const on = (e: Event) => {
@@ -60,17 +73,17 @@ export const GitHubConnectHost: React.FC<{ onConnected?: (space: string | undefi
       key={req.n}
       req={req}
       onClose={() => setReq(null)}
-      onAdded={(source) => {
+      onAdded={(source, test) => {
         setReq(null);
         if (req.space) devApi.get(req.space).then((st) => devStore.set(req.space!, st), () => undefined);
-        window.dispatchEvent(new window.CustomEvent(GITHUB_CONNECTED_EVENT, { detail: { space: req.space } }));
-        onConnected?.(req.space, source);
+        window.dispatchEvent(new window.CustomEvent(GITHUB_CONNECTED_EVENT, { detail: { space: req.space, kind: source.kind } }));
+        onConnected?.(req.space, source, test);
       }}
     />
   );
 };
 
-const GitHubConnectLayer: React.FC<{ req: GitHubConnectRequest; onClose: () => void; onAdded: (s: LooseSource) => void }> = ({ req, onClose, onAdded }) => {
+const GitHubConnectLayer: React.FC<{ req: GitHubConnectRequest; onClose: () => void; onAdded: (s: LooseSource, test?: unknown) => void }> = ({ req, onClose, onAdded }) => {
   const phone = usePhoneLayout();
   const ref = useRef<HTMLDivElement>(null);
   const [place, setPlace] = useState<{ left: number; top: number; width: number } | null>(null);
@@ -114,13 +127,18 @@ const GitHubConnectLayer: React.FC<{ req: GitHubConnectRequest; onClose: () => v
     return () => document.removeEventListener('mousedown', down);
   });
 
-  const form = <GitHubConnectForm onAdded={onAdded} onCancel={close} land scroll={false} />;
+  const title = connectTitle(req);
+  const form = req.forge ? (
+    <GitHubConnectForm onAdded={onAdded} onCancel={close} land scroll={false} heading={title} forge={{ url: req.forge.url, choice: req.forge.forge }} />
+  ) : (
+    <GitHubConnectForm onAdded={onAdded} onCancel={close} land scroll={false} />
+  );
 
   if (phone)
     return createPortal(
       <div className="fixed inset-0 z-[70] flex flex-col justify-end" data-github-connect-sheet>
         <button type="button" aria-label="Close" tabIndex={-1} onClick={close} className="absolute inset-0 bg-black/50 cursor-default" />
-        <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Connect GitHub" className="kw-sheet outline-none relative max-h-[88vh] overflow-y-auto rounded-t-2xl bg-zinc-900 border-t border-zinc-800 p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-2xl">
+        <div ref={ref} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title} className="kw-sheet outline-none relative max-h-[88vh] overflow-y-auto rounded-t-2xl bg-zinc-900 border-t border-zinc-800 p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] shadow-2xl">
           <div className="flex justify-center pt-1 pb-2" aria-hidden="true">
             <span className="w-9 h-1 rounded-sm bg-zinc-700" />
           </div>
@@ -136,7 +154,7 @@ const GitHubConnectLayer: React.FC<{ req: GitHubConnectRequest; onClose: () => v
       tabIndex={-1}
       role="dialog"
       aria-modal="false"
-      aria-label="Connect GitHub"
+      aria-label={title}
       data-github-connect-popover
       style={place ? { left: place.left, top: place.top, width: place.width } : { visibility: 'hidden', left: 0, top: 0, width: WIDTH }}
       className="fixed z-[70] outline-none max-h-[calc(100vh-24px)] overflow-y-auto rounded-xl bg-zinc-900 shadow-2xl shadow-black/60 ring-1 ring-zinc-700"

@@ -84,7 +84,7 @@ const KINDS: Record<string, { label: string; tone: Tone }> = {
   document_request: { label: 'Letter to deal with', tone: 'sky' },
 };
 
-const SOURCES: Record<string, string> = { imap: 'Email', github: 'GitHub', kwant: 'Bot chats', document: 'Letter' };
+const SOURCES: Record<string, string> = { imap: 'Email', github: 'GitHub', forge: 'GitLab or Gitea', kwant: 'Bot chats', document: 'Letter' };
 
 /** `bank_statement` → `Bank statement`: how an unknown kind or source still reads. */
 export function humanize(s: string): string {
@@ -94,6 +94,13 @@ export function humanize(s: string): string {
 
 export const kindLabel = (kind: string): { label: string; tone: Tone } => KINDS[kind] ?? { label: humanize(kind), tone: 'zinc' };
 export const sourceLabel = (source: string): string => SOURCES[source] ?? humanize(source);
+/** A saved source's kind line: a forge connection says which forge and its host ("GitLab · git.example.com"). */
+export function sourceKindText(s: Pick<LooseSource, 'kind' | 'config'>): string {
+  if (s.kind !== 'forge') return sourceLabel(s.kind);
+  const f = s.config?.forge === 'gitlab' ? 'GitLab' : s.config?.forge === 'gitea' ? 'Gitea' : 'GitLab or Gitea';
+  const host = forgeHost(typeof s.config?.url === 'string' ? s.config.url : '');
+  return host ? `${f} · ${host}` : f;
+}
 
 /** Which list a status belongs in. */
 export type CaseTab = 'open' | 'snoozed' | 'waiting' | 'done';
@@ -245,7 +252,7 @@ export async function call<T>(url: string, method = 'GET', body?: unknown): Prom
 const enc = encodeURIComponent;
 
 export interface NewSource {
-  kind: 'imap' | 'github';
+  kind: 'imap' | 'github' | 'forge';
   label: string;
   config: Record<string, unknown>;
   secret: string;
@@ -356,3 +363,72 @@ export function sourceStatusText(s: LooseSource): { text: string; error: boolean
   if (s.last_scan_at) return { text: `Last read ${shortDate(s.last_scan_at)}`, error: false };
   return { text: 'Not read yet', error: false };
 }
+
+// ---------------------------------------------------------------------------
+// 0.7.4 (G4): a GitLab, Gitea or Forgejo connection (kind `forge`), for Loose ends and Dev mode.
+
+/** "Which is it?": Forgejo (and Codeberg) is sent as `gitea`, as the server reads it. */
+export type ForgeChoice = 'gitlab' | 'gitea' | 'forgejo';
+export const FORGE_CHOICES: Array<{ value: ForgeChoice; label: string }> = [
+  { value: 'gitlab', label: 'GitLab' },
+  { value: 'gitea', label: 'Gitea' },
+  { value: 'forgejo', label: 'Forgejo' },
+];
+export const FORGE_TOKEN_HINT = 'Read access is enough: read_api on GitLab, or read access to repositories and issues on Gitea and Forgejo.';
+
+/** The host of a forge address, or '' when it isn't one. */
+export function forgeHost(url: string): string {
+  try {
+    return new URL(url.trim()).host.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+/** The forge form as the API wants it, or why it can't be sent yet. Only `https`, or `http` to a server on this computer. */
+export function forgeSource(label: string, address: string, choice: ForgeChoice | null, token: string): NewSource | { error: string } {
+  const raw = address.trim();
+  if (!raw) return { error: 'Enter the server address, like https://gitlab.example.com.' };
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+  let u: URL;
+  try {
+    u = new URL(withScheme);
+  } catch {
+    return { error: 'That isn’t a web address. Try https://gitlab.example.com.' };
+  }
+  if (u.username || u.password) return { error: 'Leave the login out of the address. The token goes in its own field.' };
+  if (u.search || u.hash) return { error: 'Use the server’s address only, without anything after ? or #.' };
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLoopbackHost(u.hostname))) return { error: 'The address must start with https://.' };
+  if (!token) return { error: 'Enter a token. Read access is enough.' };
+  const url = `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`;
+  const config: Record<string, unknown> = { url };
+  if (choice) config.forge = choice === 'forgejo' ? 'gitea' : choice;
+  return { kind: 'forge', label: label.trim() || u.host, config, secret: token };
+}
+
+/** The save's test: who the token logs in as, on which forge. */
+export function forgeTest(test: unknown): { login: string; forge: 'gitlab' | 'gitea' | null } | null {
+  if (!test || typeof test !== 'object') return null;
+  const t = test as Record<string, unknown>;
+  const login = typeof t.login === 'string' && t.login.trim() ? t.login.trim() : null;
+  if (!login) return null;
+  return { login, forge: t.forge === 'gitlab' || t.forge === 'gitea' ? t.forge : null };
+}
+
+/** After saving: "Connected to GitLab at git.example.com as ana." */
+export function forgeConnectedText(test: unknown, host: string): string {
+  const t = forgeTest(test);
+  const name = t?.forge === 'gitlab' ? 'GitLab' : t?.forge === 'gitea' ? 'Gitea' : null;
+  const where = name ? `${name} at ${host}` : host;
+  return t ? `Connected to ${where} as ${t.login}.` : `Connected to ${where}.`;
+}
+
+/** The server couldn't tell GitLab from Gitea (a 400 with no code yet): open "Which is it?". */
+export const cantTellForge = (e: unknown): boolean => e instanceof LooseEndsError && e.status === 400 && /couldn.t tell whether/i.test(e.message);
+/** The server's can't-tell sentence without its API advice (`: set "forge" to gitlab or gitea`): the choice below is that. */
+export const cantTellText = (message: string): string => {
+  const m = message.replace(/\s*[:;,]\s*set\s+"?forge"?\b.*$/is, '').trim();
+  return /[.!?]$/.test(m) ? m : `${m}.`;
+};
+/** One connection per host (409): say so plainly. */
+export const forgeTakenText = (host: string) => `${host || 'This server'} is already connected. To change its token, remove that connection and add it again.`;

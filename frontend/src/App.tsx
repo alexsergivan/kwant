@@ -131,7 +131,7 @@ import { isNotificationOpen, showDeviceNotification } from './push';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { devApi, devStore } from './devMode';
-import { GitHubConnectHost, openGitHubConnect } from './components/GitHubConnect';
+import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
@@ -3739,7 +3739,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
-      <GitHubConnectHost onConnected={() => pushToast('GitHub connected', 'Loose ends and Dev mode both use it.')} />
+      <GitHubConnectHost
+        onConnected={(_space, source, test) => {
+          const t = connectedToast(source, test);
+          pushToast(t.title, t.body);
+        }}
+      />
       {ideaToast && (
         <IdeaDropToast
           key={ideaToast.id}
