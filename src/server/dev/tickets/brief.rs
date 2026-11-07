@@ -924,7 +924,7 @@ pub async fn ticket_check(state: &crate::server::AppState, space_id: &str, facts
     let key = super::seam::key_in(facts.head_branch.as_deref().unwrap_or(""), &facts.title)?;
     let row = state.db.ticket_brief(space_id, &key).await.ok().flatten()?;
     let brief: Brief = serde_json::from_str(row.brief.as_deref()?).ok()?;
-    check_from(row.key, &row.url, &brief, &super::seam::origins(space_id, &row.site_id))
+    check_from(row.key, &row.url, &brief, &super::seam::origins(state, space_id, &row.site_id).await)
 }
 
 /// [`ticket_check`] from a saved brief: the done-when lines, with each line's sources kept only

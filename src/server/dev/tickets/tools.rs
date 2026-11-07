@@ -216,7 +216,7 @@ pub async fn call_checked(state: &AppState, thread_id: &str, name: &str, args: &
             }
         }
     }
-    let out = call(thread_id, name, args).await;
+    let out = call(state, thread_id, name, args).await;
     if !out.1 {
         if let Some(s) = peek(thread_id) {
             let n = |k: usize, one: &str, many: &str| format!("{k} {}", if k == 1 { one } else { many });
@@ -294,11 +294,11 @@ pub fn progress_done(state: &AppState, s: &Session, confluence_on: bool) {
 pub const OUT_OF_BUDGET: &str = "This brief used up its token budget; nothing more runs. End your turn now.";
 
 /// Runs one of the four tools for the brief chat `thread_id`: (text, is_error).
-pub async fn call(thread_id: &str, name: &str, args: &Value) -> (String, bool) {
+pub async fn call(state: &AppState, thread_id: &str, name: &str, args: &Value) -> (String, bool) {
     let Some(s) = peek(thread_id) else {
         return ("This brief is closed.".into(), true);
     };
-    let Some(site) = seam::site(&s.space_id, &s.site_id) else {
+    let Some(site) = seam::site(state, &s.space_id, &s.site_id).await else {
         return ("Jira is no longer connected for this space.".into(), true);
     };
     match name {

@@ -178,7 +178,7 @@ async fn world(name: &str, f: Fixture, wait_for_ok: bool) -> World {
     let team = env.state.db.create_team(&space, &t).await.unwrap().id;
     let fixture = Arc::new(f);
     let site = format!("site-{}", uuid::Uuid::new_v4());
-    seam::register(Site {
+    seam::register_for_test(Site {
         site_id: site.clone(),
         space_id: space.as_str().into(),
         source: fixture.clone(),
@@ -475,7 +475,7 @@ async fn the_call_cap_fails_the_brief() {
 #[tokio::test]
 async fn with_jira_off_nothing_changes() {
     let w = world("Off", fixture("", "", ""), false).await;
-    seam::unregister(&w.site);
+    seam::unregister_for_test(&w.site);
     w.start("TRAIL-101").await;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(w.env.state.db.ticket_brief(w.space.as_str(), "TRAIL-101").await.unwrap().is_none());

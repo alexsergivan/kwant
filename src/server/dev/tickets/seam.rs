@@ -1,20 +1,18 @@
-//! Stand-ins for Juno's side of the seam (jira-tickets api.md 1.3–1.5), so the brief builds and
-//! is tested before `juno-076-jira-client` lands. At merge each one is replaced by Juno's:
+//! Where the brief (Vega's half) meets pickup (Juno's half), jira-tickets api.md 1.3–1.5.
 //!
-//! | Here | Juno's |
-//! |---|---|
-//! | [`site`], [`register`] (an in-memory map) | the `dev_jira_sites` row and `AtlassianClient::source_for` / its writer |
-//! | [`set_state`] (on `dev_ticket_briefs.state`) | `db.set_dev_ticket_state`, which also writes `dev_ticket_events` and sends `dev_ticket` |
-//! | [`set_asked`] | `db.set_dev_ticket_asked` |
-//! | [`key_in`] | `tickets::store::key_in` |
+//! - [`site`]: the connected site, built from the space's saved `dev_jira_sites` row each time
+//!   (`atlassian::client_for`, its token from the vault). Nothing is kept in memory, so a server
+//!   restart, a changed setting or a deleted site is seen at once.
+//! - [`set_state`]: the card row `dev_tickets.state` is the ticket's one state.
+//! - [`set_asked`]: the Ask on Jira comment, on both rows.
 //!
-//! Nothing here reaches the network: a space with no registered site has no tickets, so with Jira
-//! off nothing changes.
+//! Nothing here reaches the network unless a site is connected: a space with no saved site has
+//! no tickets, so with Jira off nothing changes.
 
 use super::source::{TicketSource, TicketWriter};
+use crate::db::dev_jira::JiraSiteRow;
 use crate::server::AppState;
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 
 /// One connected Jira site, as the brief needs it.
 #[derive(Clone)]
@@ -34,28 +32,91 @@ pub struct Site {
     pub origins: Vec<url::Url>,
 }
 
-static SITES: LazyLock<Mutex<HashMap<String, Site>>> = LazyLock::new(Default::default);
-
-fn sites() -> std::sync::MutexGuard<'static, HashMap<String, Site>> {
-    SITES.lock().unwrap_or_else(|e| e.into_inner())
+/// The space's saved site row, only when it is `site_id` (a ticket of a deleted and re-made
+/// site finds nothing).
+pub async fn saved(state: &AppState, space_id: &str, site_id: &str) -> Option<JiraSiteRow> {
+    state.db.dev_jira_site(space_id).await.ok().flatten().filter(|r| r.id == site_id)
 }
 
-pub fn register(site: Site) {
-    sites().insert(site.site_id.clone(), site);
+/// The site, only when it is the one saved for `space_id`. `None` too when its token can't be
+/// read (vault locked, token gone): nothing reads Jira then.
+pub async fn site(state: &AppState, space_id: &str, site_id: &str) -> Option<Site> {
+    #[cfg(feature = "test-seams")]
+    if let Some(s) = test_sites::get(space_id, site_id) {
+        return Some(s);
+    }
+    let row = saved(state, space_id, site_id).await?;
+    let client = match crate::server::dev::atlassian::client_for(state, &row).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(%site_id, error = %e, "dev: the Jira site can't be read now");
+            return None;
+        }
+    };
+    Some(Site {
+        site_id: row.id.clone(),
+        space_id: space_id.to_string(),
+        source: client.clone(),
+        writer: Some(client),
+        wait_for_ok: row.wait_for_ok,
+        confluence: !row.space_list().is_empty(),
+        origins: super::links::origins(&row.jira_url, row.confluence_url.as_deref()),
+    })
 }
 
-pub fn unregister(site_id: &str) {
-    sites().remove(site_id);
+/// Whether the site is connected, and its Confluence search is on: from the saved row alone,
+/// without reading the token. `None` when the site is gone.
+pub async fn confluence(state: &AppState, space_id: &str, site_id: &str) -> Option<bool> {
+    #[cfg(feature = "test-seams")]
+    if let Some(s) = test_sites::get(space_id, site_id) {
+        return Some(s.confluence);
+    }
+    saved(state, space_id, site_id).await.map(|r| !r.space_list().is_empty())
 }
 
-/// The site, only when it belongs to `space_id`.
-pub fn site(space_id: &str, site_id: &str) -> Option<Site> {
-    sites().get(site_id).filter(|s| s.space_id == space_id).cloned()
+/// The site's origins ([`Site::origins`]), from the saved row alone (no token read); none when
+/// the site is gone, so no link passes.
+pub async fn origins(state: &AppState, space_id: &str, site_id: &str) -> Vec<url::Url> {
+    #[cfg(feature = "test-seams")]
+    if let Some(s) = test_sites::get(space_id, site_id) {
+        return s.origins;
+    }
+    saved(state, space_id, site_id).await.map(|r| super::links::origins(&r.jira_url, r.confluence_url.as_deref())).unwrap_or_default()
 }
 
-/// The site's origins ([`Site::origins`]); none when the site is gone, so no link passes.
-pub fn origins(space_id: &str, site_id: &str) -> Vec<url::Url> {
-    site(space_id, site_id).map(|s| s.origins).unwrap_or_default()
+/// Test-only sites (the `test-seams` feature, never in a shipped build): an in-process source
+/// stands in for a saved row, so the brief's tests run without an Atlassian mock.
+#[cfg(feature = "test-seams")]
+mod test_sites {
+    use super::Site;
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    static SITES: LazyLock<Mutex<HashMap<String, Site>>> = LazyLock::new(Default::default);
+
+    pub fn get(space_id: &str, site_id: &str) -> Option<Site> {
+        SITES.lock().unwrap_or_else(|e| e.into_inner()).get(site_id).filter(|s| s.space_id == space_id).cloned()
+    }
+
+    pub fn put(site: Site) {
+        SITES.lock().unwrap_or_else(|e| e.into_inner()).insert(site.site_id.clone(), site);
+    }
+
+    pub fn drop_site(site_id: &str) {
+        SITES.lock().unwrap_or_else(|e| e.into_inner()).remove(site_id);
+    }
+}
+
+/// Test-only: serve `site` as if it were saved (`test-seams`).
+#[cfg(feature = "test-seams")]
+pub fn register_for_test(site: Site) {
+    test_sites::put(site);
+}
+
+/// Test-only: forget a [`register_for_test`] site.
+#[cfg(feature = "test-seams")]
+pub fn unregister_for_test(site_id: &str) {
+    test_sites::drop_site(site_id);
 }
 
 /// The ticket row states (api.md 1.4).

@@ -86,7 +86,7 @@ async fn save(state: &AppState, space_id: &str, key: &str, b: &Brief) -> Brief {
     let mut b = b.clone();
     if let Some(r) = row(state, space_id, key).await {
         b = brief::with_edits(b, &edits_of(&r));
-        let dropped = super::links::keep_site_links(&mut b, &seam::origins(space_id, &r.site_id));
+        let dropped = super::links::keep_site_links(&mut b, &seam::origins(state, space_id, &r.site_id).await);
         if dropped > 0 {
             tracing::warn!(%key, dropped, "dev: links off the Jira site were dropped from a brief");
         }
@@ -116,7 +116,7 @@ pub async fn start(state: &AppState, space_id: &str, t: TicketRef) {
     if !valid_key(&t.key) {
         return;
     }
-    let Some(site) = seam::site(space_id, &t.site_id) else { return };
+    let Some(site) = seam::site(state, space_id, &t.site_id).await else { return };
     if let Some(r) = row(state, space_id, &t.key).await {
         // Already going, or done with
         if !matches!(r.state.as_str(), "picked_up" | "taken_back" | "failed" | "waiting") {
@@ -316,7 +316,7 @@ pub async fn after_turn(state: &AppState, space_id: &str, key: &str, thread_id: 
     }
     let brief = session.as_ref().and_then(|s| s.brief.clone());
     if let Some(s) = &session {
-        tools::progress_done(state, s, seam::site(space_id, &r.site_id).is_some_and(|x| x.confluence));
+        tools::progress_done(state, s, seam::confluence(state, space_id, &r.site_id).await.unwrap_or(false));
     }
     let lead_name = match r_lead(state, &r).await {
         Some(id) => state.db.get_kwant(&id).await.ok().flatten().map(|k| k.name).unwrap_or_default(),
@@ -355,7 +355,7 @@ pub async fn after_turn(state: &AppState, space_id: &str, key: &str, thread_id: 
     close_task(state, r.task_id.as_deref(), true, "The brief is in.").await;
     if b.questions.is_empty() {
         let b = save(state, space_id, key, &b).await;
-        if let Some(site) = seam::site(space_id, &r.site_id) {
+        if let Some(site) = seam::site(state, space_id, &r.site_id).await {
             ready(state, &site, space_id, key, &b).await;
         } else {
             seam::set_state(state, space_id, key, "brief_ready").await;
@@ -430,7 +430,7 @@ async fn take_answer(state: &AppState, question_id: &str, answer: &str, by: &str
     }
     tracing::info!(key = %tq.key, %by, "dev: a brief question was answered");
     if r.state == "needs_answer" && open_questions(state, &tq.space_id, &tq.key).await.is_empty() {
-        if let Some(site) = seam::site(&tq.space_id, &r.site_id) {
+        if let Some(site) = seam::site(state, &tq.space_id, &r.site_id).await {
             ready(state, &site, &tq.space_id, &tq.key, &b).await;
         } else {
             seam::set_state(state, &tq.space_id, &tq.key, "brief_ready").await;
@@ -450,7 +450,7 @@ pub async fn asked_on_jira(state: &AppState, space_id: &str, key: &str, comment_
     let open = open_questions(state, space_id, key).await;
     let asked = brief::AskedOnJira {
         at: brief::at(Utc::now()),
-        comment_url: super::links::keep(comment_url, &seam::origins(space_id, &r.site_id)),
+        comment_url: super::links::keep(comment_url, &seam::origins(state, space_id, &r.site_id).await),
         to: to.map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).take(80).collect()).unwrap_or_default(),
     };
     for q in b.questions.iter_mut().filter(|q| q.answer.is_none() && q.card_id.as_ref().is_some_and(|id| open.iter().any(|o| &o.question_id == id))) {
@@ -529,7 +529,7 @@ pub async fn edit(state: &AppState, space_id: &str, key: &str, edits: brief::Edi
         // The draft was made from the old words: make it again from these
         mission::stop(state, &r, "The person edited the brief.").await;
         let _ = state.db.set_ticket_brief_field(space_id, key, "mission_id", None).await;
-        if let (Some(site), Some(r)) = (seam::site(space_id, &r.site_id), row(state, space_id, key).await) {
+        if let (Some(site), Some(r)) = (seam::site(state, space_id, &r.site_id).await, row(state, space_id, key).await) {
             mission::start(state, &site, &r, &b).await;
         }
     }
@@ -686,7 +686,7 @@ async fn answer_from_text(state: &AppState, r: &BriefRow, text: &str) -> bool {
 /// answers (see [`read_answers`]) the brief takes them and no turn runs. Whether it did.
 pub async fn answer_in_chat(state: &AppState, thread_id: &str, text: &str) -> bool {
     let Ok(Some(r)) = state.db.ticket_brief_by_thread(thread_id).await else { return false };
-    if r.state != "needs_answer" || seam::site(&r.space_id, &r.site_id).is_none() {
+    if r.state != "needs_answer" || seam::confluence(state, &r.space_id, &r.site_id).await.is_none() {
         return false;
     }
     answer_from_text(state, &r, text).await
@@ -706,7 +706,7 @@ pub async fn reporter_replied(state: &AppState, space_id: &str, key: &str, asked
         return;
     }
     let name = reply.author.as_ref().map(|p| p.display_name.clone()).filter(|n| !n.trim().is_empty());
-    let origins = seam::origins(space_id, &r.site_id);
+    let origins = seam::origins(state, space_id, &r.site_id).await;
     let ticket_url = super::links::keep(&r.url, &origins);
     let url = brief::comment_url(&ticket_url, &reply.id);
     let known = brief::Known { key: key.into(), ticket_url, comments: [(reply.id.clone(), name.clone())].into(), origins, ..Default::default() };
@@ -835,7 +835,6 @@ pub async fn site_deleted(state: &AppState, space_id: &str, site_id: &str) {
         Ok(n) => tracing::info!(%site_id, briefs = n, "dev: a Jira site's briefs were forgotten"),
         Err(e) => tracing::warn!(%site_id, error = %e, "dev: couldn't forget a Jira site's briefs"),
     }
-    seam::unregister(site_id);
 }
 
 #[cfg(test)]

@@ -55,17 +55,17 @@ pub async fn get_brief(State(state): State<AppState>, headers: HeaderMap, Path((
             }
         }
     }
-    Json(brief_json(&r)).into_response()
+    Json(brief_json(&r, &seam::origins(&state, &r.space_id, &r.site_id).await)).into_response()
 }
 
 /// The brief card's JSON: the row, the brief and its Markdown. The questions are in
 /// `brief.questions` only (api-decisions 15), each with its `card_id` (the `question_id` to
 /// answer with); the ticket link only when it is on the site (api-decisions 18).
-fn brief_json(r: &BriefRow) -> Value {
+fn brief_json(r: &BriefRow, origins: &[url::Url]) -> Value {
     let brief: Option<Brief> = r.brief.as_deref().and_then(|j| serde_json::from_str(j).ok());
     json!({
         "key": r.key,
-        "url": links::keep(&r.url, &seam::origins(&r.space_id, &r.site_id)),
+        "url": links::keep(&r.url, origins),
         "summary": r.summary,
         "needs_you": needs_you(&r.state),
         "state": r.state,
@@ -142,7 +142,7 @@ pub async fn answer(State(state): State<AppState>, headers: HeaderMap, Path((id,
         Err(AnswerRefused::NotWaiting) => return coded(StatusCode::CONFLICT, "not_waiting", "this brief isn't waiting for answers"),
     }
     match state.db.ticket_brief(&r.space_id, &r.key).await {
-        Ok(Some(r)) => Json(brief_json(&r)).into_response(),
+        Ok(Some(r)) => Json(brief_json(&r, &seam::origins(&state, &r.space_id, &r.site_id).await)).into_response(),
         Ok(None) => coded(StatusCode::NOT_FOUND, "no_brief", "no brief for that ticket"),
         Err(e) => internal(e),
     }
@@ -190,7 +190,7 @@ pub async fn put_brief(State(state): State<AppState>, headers: HeaderMap, Path((
         return coded(StatusCode::CONFLICT, "not_editable", "the brief can be changed only while it waits for answers or for your OK");
     }
     match state.db.ticket_brief(&r.space_id, &r.key).await {
-        Ok(Some(r)) => Json(brief_json(&r)).into_response(),
+        Ok(Some(r)) => Json(brief_json(&r, &seam::origins(&state, &r.space_id, &r.site_id).await)).into_response(),
         Ok(None) => coded(StatusCode::NOT_FOUND, "no_brief", "no brief for that ticket"),
         Err(e) => internal(e),
     }
