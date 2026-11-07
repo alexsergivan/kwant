@@ -9,6 +9,7 @@ import {
   ExternalLink,
   FileText,
   GitBranch,
+  GitMerge,
   Bot,
   Loader2,
   Mail,
@@ -47,6 +48,16 @@ import {
   draftOpen,
   githubSource,
   imapSource,
+  FORGE_CHOICES,
+  FORGE_TOKEN_HINT,
+  ForgeChoice,
+  cantTellForge,
+  cantTellText,
+  forgeConnectedText,
+  forgeHost,
+  forgeSource,
+  forgeTakenText,
+  sourceKindText,
   isLoopbackHost,
   kindLabel,
   looseApi,
@@ -70,6 +81,7 @@ const TONES: Record<Tone, string> = {
 const SOURCE_ICON: Record<string, React.ReactNode> = {
   imap: <Mail size={12} aria-hidden="true" />,
   github: <GitBranch size={12} aria-hidden="true" />,
+  forge: <GitMerge size={12} aria-hidden="true" />,
   kwant: <MessageSquare size={12} aria-hidden="true" />,
   document: <FileText size={12} aria-hidden="true" />,
 };
@@ -464,12 +476,17 @@ const EMPTY_IMAP: ImapFields = { label: '', host: '', port: '', security: 'tls',
 
 /** The GitHub login's hint under the token field: the same words wherever it's connected. */
 export const GITHUB_TOKEN_HINT = 'Read-only access to issues and pull requests is enough. To post reviews from Dev mode, give it Pull requests: Read and write.';
+/** 0.7.4: what a GitLab or Gitea login is for. */
+export const FORGE_NOTE = 'Dev mode reads reviews and CI with this login. It’s tested first, and nothing is saved if the test fails.';
 /** Where else this connection is used (0.7.3 B1): one GitHub login for Loose ends and Dev mode. */
 export const GITHUB_ALSO_DEV = 'Also used by Dev mode';
 
-const KindPicker: React.FC<{ kind: 'imap' | 'github'; onKind: (k: 'imap' | 'github') => void }> = ({ kind, onKind }) => (
-  <div role="radiogroup" aria-label="Kind of source" className="grid grid-cols-2 gap-2">
-    {(['imap', 'github'] as const).map((k) => (
+export type SourceKind = 'imap' | 'github' | 'forge';
+const KIND_TEXT: Record<SourceKind, string> = { imap: 'Email (IMAP)', github: 'GitHub', forge: 'GitLab, Gitea or Forgejo' };
+
+const KindPicker: React.FC<{ kind: SourceKind; onKind: (k: SourceKind) => void }> = ({ kind, onKind }) => (
+  <div role="radiogroup" aria-label="Kind of source" className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+    {(['imap', 'github', 'forge'] as const).map((k) => (
       <button
         key={k}
         type="button"
@@ -478,7 +495,7 @@ const KindPicker: React.FC<{ kind: 'imap' | 'github'; onKind: (k: 'imap' | 'gith
         onClick={() => onKind(k)}
         className={`${actionBtn} justify-center border ${kind === k ? 'border-sky-500/50 bg-sky-500/10 text-sky-200' : 'border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-800'}`}
       >
-        {SOURCE_ICON[k]} {k === 'imap' ? 'Email (IMAP)' : 'GitHub'}
+        {SOURCE_ICON[k]} {KIND_TEXT[k]}
       </button>
     ))}
   </div>
@@ -491,7 +508,8 @@ const KindPicker: React.FC<{ kind: 'imap' | 'github'; onKind: (k: 'imap' | 'gith
  * its field at submit and never kept in state.
  */
 export const GitHubConnectForm: React.FC<{
-  onAdded: (s: LooseSource) => void;
+  /** `test`: the save's test answer (a forge's `{login, forge}`), for the line after saving. */
+  onAdded: (s: LooseSource, test?: unknown) => void;
   onCancel: () => void;
   /** Focus the first control (the token, or the card's first button) once this turns true. */
   land?: boolean;
@@ -504,8 +522,17 @@ export const GitHubConnectForm: React.FC<{
   note?: string;
   /** Test hook: start past the store check. */
   initialGate?: SaveGate;
-}> = ({ onAdded, onCancel, land = false, scroll = true, heading = 'Connect GitHub', above, note, initialGate }) => {
+  /** 0.7.4 (G4): a GitLab, Gitea or Forgejo connection instead, prefilled from a repo row's Connect GitLab. */
+  forge?: { url?: string; choice?: ForgeChoice | null };
+}> = ({ onAdded, onCancel, land = false, scroll = true, heading = 'Connect GitHub', above, note, initialGate, forge }) => {
   const id = useId();
+  const isForge = !!forge;
+  const [address, setAddress] = useState(forge?.url ?? '');
+  const [choice, setChoice] = useState<ForgeChoice | null>(forge?.choice ?? null);
+  // "Which is it?" stays folded unless the server couldn't tell (or the person opens it).
+  const [choiceOpen, setChoiceOpen] = useState(false);
+  const [cantTell, setCantTell] = useState<string | null>(null);
+  const choiceRef = useRef<HTMLDivElement>(null);
   const [ghLabel, setGhLabel] = useState('');
   const [ghBase, setGhBase] = useState('');
   const [busy, setBusy] = useState(false);
@@ -568,7 +595,7 @@ export const GitHubConnectForm: React.FC<{
     let tries = 0;
     const step = () => {
       const form = formRef.current;
-      const target = form && (gate === 'open' ? secretRef.current : form.querySelector<HTMLElement>('[data-land]:not([disabled])'));
+      const target = form && (gate === 'open' ? (isForge && !address.trim() ? form.querySelector<HTMLElement>('[data-forge-url]') : secretRef.current) : form.querySelector<HTMLElement>('[data-land]:not([disabled])'));
       if (!form || !target) {
         if (++tries < 30) h = window.setTimeout(step, 50);
         return;
@@ -583,7 +610,8 @@ export const GitHubConnectForm: React.FC<{
 
   const submit = async (e?: React.FormEvent, accept = acceptRisk.current) => {
     e?.preventDefault();
-    const req = githubSource(ghLabel, ghBase, secretRef.current?.value ?? '');
+    const token = secretRef.current?.value ?? '';
+    const req = isForge ? forgeSource(ghLabel, address, choice, token) : githubSource(ghLabel, ghBase, token);
     if ('error' in req) {
       setError(req.error);
       return;
@@ -591,13 +619,20 @@ export const GitHubConnectForm: React.FC<{
     setBusy(true);
     setError(null);
     setVault(null);
+    setCantTell(null);
     try {
       const r = await looseApi.addSource(req, accept);
       if (secretRef.current) secretRef.current.value = '';
       playSfx('coin');
-      onAdded(r.source);
+      onAdded(r.source, r.test);
     } catch (err) {
       if (err instanceof LooseEndsError && (err.needsBitwarden || err.locked)) setVault({ message: err.message, locked: err.locked, canAccept: err.canAccept });
+      else if (isForge && cantTellForge(err)) {
+        // The server's own words, then the choice opens with its first option in focus.
+        setCantTell(cantTellText((err as Error).message));
+        setChoiceOpen(true);
+        window.setTimeout(() => choiceRef.current?.querySelector<HTMLElement>('[role="radio"]')?.focus(), 0);
+      } else if (isForge && err instanceof LooseEndsError && err.status === 409) setError(forgeTakenText(forgeHost(String((req as { config: Record<string, unknown> }).config.url ?? ''))));
       else setError(err instanceof Error ? err.message : 'Couldn’t add it.');
     } finally {
       setBusy(false);
@@ -605,7 +640,7 @@ export const GitHubConnectForm: React.FC<{
   };
 
   return (
-    <form ref={formRef} onSubmit={submit} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:p-4 space-y-3 scroll-mt-4" aria-labelledby={`${id}-h`} data-add-source="github" data-github-connect>
+    <form ref={formRef} onSubmit={submit} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 sm:p-4 space-y-3 scroll-mt-4" aria-labelledby={`${id}-h`} data-add-source={isForge ? 'forge' : 'github'} data-github-connect={isForge ? undefined : true} data-forge-connect={isForge || undefined}>
       <div className="flex items-center justify-between gap-2">
         <h4 id={`${id}-h`} className="text-xs font-semibold text-zinc-200">
           {heading}
@@ -635,13 +670,31 @@ export const GitHubConnectForm: React.FC<{
               {ready}
             </p>
           )}
+          {isForge && (
+            <div className="sm:col-span-2">
+              <label htmlFor={`${id}-url`} className="block text-[11px] text-zinc-400 mb-1">
+                Server address
+              </label>
+              <input
+                id={`${id}-url`}
+                className={field}
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="https://gitlab.example.com"
+                inputMode="url"
+                autoComplete="off"
+                spellCheck={false}
+                data-forge-url
+              />
+            </div>
+          )}
           <div className="sm:col-span-2">
             <label htmlFor={`${id}-tok`} className="block text-[11px] text-zinc-400 mb-1">
               Token
             </label>
-            <input id={`${id}-tok`} ref={secretRef} type="password" className={field} autoComplete="new-password" aria-describedby={`${id}-tok-hint`} data-github-token />
+            <input id={`${id}-tok`} ref={secretRef} type="password" className={field} autoComplete="new-password" aria-describedby={`${id}-tok-hint`} data-github-token={isForge ? undefined : true} data-forge-token={isForge || undefined} />
             <p id={`${id}-tok-hint`} className="mt-1 text-[11px] text-zinc-400">
-              {GITHUB_TOKEN_HINT}
+              {isForge ? FORGE_TOKEN_HINT : GITHUB_TOKEN_HINT}
             </p>
             {ghBase.trim() && (
               <p className="mt-1 text-[11px] text-zinc-400" data-ghe-token-hint>
@@ -649,22 +702,61 @@ export const GitHubConnectForm: React.FC<{
               </p>
             )}
           </div>
-          <div>
+          {isForge && (
+            <div className="sm:col-span-2" ref={choiceRef} data-forge-choice={choiceOpen ? 'open' : 'closed'}>
+              {cantTell && (
+                <p role="alert" className="mb-2 flex items-start gap-1.5 text-xs text-amber-200 break-words" data-forge-cant-tell>
+                  <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" /> {cantTell} Pick which it is, then try again.
+                </p>
+              )}
+              {!choiceOpen ? (
+                <button type="button" onClick={() => setChoiceOpen(true)} aria-expanded={false} className="text-[11px] text-sky-300 hover:text-sky-200 underline-offset-2 hover:underline" data-forge-choice-open>
+                  {choice ? `${FORGE_CHOICES.find((c) => c.value === choice)?.label}. Change` : 'Which is it? (optional)'}
+                </button>
+              ) : (
+                <>
+                  <p id={`${id}-which`} className="block text-[11px] text-zinc-400 mb-1">
+                    Which is it?{cantTell ? '' : ' (optional)'}
+                  </p>
+                  <div role="radiogroup" aria-labelledby={`${id}-which`} className="grid grid-cols-3 gap-2">
+                    {FORGE_CHOICES.map((c) => (
+                      <button
+                        key={c.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={choice === c.value}
+                        onClick={() => {
+                          setChoice(choice === c.value && !cantTell ? null : c.value);
+                        }}
+                        className={`${actionBtn} justify-center border ${choice === c.value ? 'border-sky-500/50 bg-sky-500/10 text-sky-200' : 'border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-800'}`}
+                        data-forge-pick={c.value}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          <div className={isForge ? 'sm:col-span-2' : undefined}>
             <label htmlFor={`${id}-glabel`} className="block text-[11px] text-zinc-400 mb-1">
               Name (optional)
             </label>
-            <input id={`${id}-glabel`} className={field} value={ghLabel} onChange={(e) => setGhLabel(e.target.value)} placeholder="GitHub" />
+            <input id={`${id}-glabel`} className={field} value={ghLabel} onChange={(e) => setGhLabel(e.target.value)} placeholder={isForge ? forgeHost(/^[a-z]+:\/\//i.test(address.trim()) ? address : `https://${address.trim()}`) || 'Our GitLab' : 'GitHub'} />
           </div>
+          {!isForge && (
           <div>
             <label htmlFor={`${id}-base`} className="block text-[11px] text-zinc-400 mb-1">
               GitHub Enterprise address (leave empty for github.com)
             </label>
             <input id={`${id}-base`} className={field} value={ghBase} onChange={(e) => setGhBase(e.target.value)} placeholder="https://github.yourcompany.com" spellCheck={false} />
           </div>
+          )}
         </div>
       )}
 
-      <p className="text-[11px] text-zinc-500">{note ?? 'Loose ends and Dev mode share this login. It’s tested first, and nothing is saved if the test fails.'}</p>
+      <p className="text-[11px] text-zinc-500">{note ?? (isForge ? FORGE_NOTE : 'Loose ends and Dev mode share this login. It’s tested first, and nothing is saved if the test fails.')}</p>
 
       {vault && <NeedsBitwarden message={vault.message} locked={vault.locked} canAccept={vault.canAccept} onReady={(accept) => submit(undefined, accept || acceptRisk.current)} onCancel={() => setVault(null)} />}
       {error && (
@@ -688,22 +780,24 @@ export const GitHubConnectForm: React.FC<{
 
 /** Add an IMAP mailbox or GitHub. GitHub is the shared connect form; the IMAP password is read from its field at submit and never kept in state. */
 export const AddSourceForm: React.FC<{
-  onAdded: (s: LooseSource) => void;
+  onAdded: (s: LooseSource, test?: unknown) => void;
   onCancel: () => void;
-  initialKind?: 'imap' | 'github';
+  initialKind?: SourceKind;
   /** Dev mode's Connect (flow F5): land on the first field once `land` is true. */
   connect?: boolean;
   land?: boolean;
 }> = ({ onAdded, onCancel, initialKind = 'imap', connect = false, land = false }) => {
-  const [kind, setKind] = useState<'imap' | 'github'>(initialKind);
-  // Choosing GitHub in the picker lands on its first control (the token, or the card), like Connect does.
+  const [kind, setKind] = useState<SourceKind>(initialKind);
+  // Choosing GitHub (or GitLab) in the picker lands on its first control (the token, or the card), like Connect does.
   const [picked, setPicked] = useState(false);
-  const onKind = (k: 'imap' | 'github') => {
+  const onKind = (k: SourceKind) => {
     setKind(k);
-    setPicked(k === 'github');
+    setPicked(k !== 'imap');
   };
+  if (kind === 'forge')
+    return <GitHubConnectForm key="forge" forge={{}} heading="Add a source" above={<KindPicker kind={kind} onKind={onKind} />} onAdded={onAdded} onCancel={onCancel} land={picked} />;
   if (kind === 'github')
-    return <GitHubConnectForm heading="Add a source" above={<KindPicker kind={kind} onKind={onKind} />} onAdded={onAdded} onCancel={onCancel} land={(connect && land) || picked} />;
+    return <GitHubConnectForm key="github" heading="Add a source" above={<KindPicker kind={kind} onKind={onKind} />} onAdded={onAdded} onCancel={onCancel} land={(connect && land) || picked} />;
   return <ImapSourceForm picker={<KindPicker kind={kind} onKind={onKind} />} onAdded={onAdded} onCancel={onCancel} />;
 };
 
@@ -829,7 +923,7 @@ export const LooseSources: React.FC<{
   onChanged: () => void;
   /** Tests open the form; Dev mode's Connect opens it on GitHub (flow F5). */
   initialAdding?: boolean;
-  initialKind?: 'imap' | 'github';
+  initialKind?: SourceKind;
   /** Called after a source is added, with it. */
   onAdded?: (s: LooseSource) => void;
   /** The page above has finished loading: Connect lands on the GitHub form now (B3), not before the cases push it down. */
@@ -846,8 +940,8 @@ export const LooseSources: React.FC<{
     setNote(null);
     try {
       if (what === 'test') {
-        await looseApi.testSource(s.id);
-        setNote({ text: `${s.label}: connected.`, error: false });
+        const r = await looseApi.testSource(s.id);
+        setNote({ text: s.kind === 'forge' ? `${s.label}: ${forgeConnectedText(r?.test, forgeHost(String(s.config?.url ?? '')))}` : `${s.label}: connected.`, error: false });
       } else if (what === 'toggle') {
         await looseApi.setEnabled(s.id, !s.enabled);
       } else {
@@ -885,9 +979,9 @@ export const LooseSources: React.FC<{
           connect={connect}
           land={connect && settled}
           onCancel={() => setAdding(false)}
-          onAdded={(s) => {
+          onAdded={(s, test) => {
             setAdding(false);
-            setNote({ text: `Added ${s.label}. It’s read at the next scan.`, error: false });
+            setNote({ text: s.kind === 'forge' ? forgeConnectedText(test, forgeHost(String(s.config?.url ?? ''))) : `Added ${s.label}. It’s read at the next scan.`, error: false });
             onChanged();
             onAdded?.(s);
           }}
@@ -904,9 +998,9 @@ export const LooseSources: React.FC<{
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-medium text-zinc-100 break-words">{s.builtin ? 'Your bot chats, tasks and questions' : s.label}</p>
                     <p className={`text-[11px] break-words ${st.error ? 'text-rose-300' : 'text-zinc-500'}`}>
-                      {sourceLabel(s.kind)}
+                      {sourceKindText(s)}
                       {s.builtin ? ' · built in' : ''} · {st.text}
-                      {s.kind === 'github' && <span data-github-also-dev> · {GITHUB_ALSO_DEV}</span>}
+                      {(s.kind === 'github' || s.kind === 'forge') && <span data-github-also-dev> · {s.kind === 'forge' ? 'Used by Dev mode' : GITHUB_ALSO_DEV}</span>}
                     </p>
                   </div>
                 </div>

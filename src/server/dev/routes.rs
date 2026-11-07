@@ -105,6 +105,8 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
     // never needs one.
     let lost = rows.iter().any(|r| r.poll_error.is_some() && !r.is_git()) && repo::clients(state).await.is_err();
     let git = super::git::available().await;
+    // Forge connections (GitLab, Gitea) by host, without reading the vault (G4)
+    let forge_hosts = super::forge::connected_hosts(state).await;
     let mut repos = Vec::new();
     for e in &list {
         let status = match (e.row, e.source) {
@@ -140,8 +142,23 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             (None, Some(r)) if r.added_by != BY_TEAM => Some("hand"),
             _ => None,
         };
+        // The forge the repo's host runs (`github`, `gitlab`, `gitea`; null when unknown or for a
+        // team folder), and whether kwant has a token for it (GitHub's own connection, or a
+        // Loose ends forge connection for this host)
+        let host_lc = host.as_deref().map(str::to_ascii_lowercase);
+        let forge_conn = host_lc.as_deref().and_then(|h| forge_hosts.iter().find(|(fh, _)| fh == h));
+        let (forge, forge_connected) = match provider {
+            "github" => (Some("github"), status != "not_connected"),
+            _ => match host_lc.as_deref() {
+                Some(h) if hosts.iter().any(|g| g == h) => (Some("github"), true),
+                Some(h) => (forge_conn.and_then(|(_, k)| *k).or_else(|| super::forge::detected_kind(h)).map(|k| k.as_str()), forge_conn.is_some()),
+                None => (None, false),
+            },
+        };
         repos.push(json!({
             "key": key,
+            "forge": forge,
+            "forge_connected": forge_connected,
             "repo": repo_name,
             "host": host,
             "team": team_name(team_id.as_deref()),
@@ -584,6 +601,10 @@ pub fn card_json_in(row: &DevCardRow, teams: &HashMap<String, String>) -> Value 
             out.insert("pr".into(), json!(f.pr));
             out.insert("title".into(), json!(f.title));
             out.insert("links".into(), json!(f.links));
+            // Where the PR and CI come from (G4); `no_forge`: a pushed branch read with git alone,
+            // no CI tile and no Post (G5)
+            out.insert("forge".into(), json!(f.forge));
+            out.insert("no_forge".into(), json!(f.no_forge));
             if row.kind == LANDED {
                 out.insert("sha".into(), json!(short(&f.head_sha)));
                 out.insert("merged_at".into(), json!(f.merged_at));
@@ -1021,7 +1042,8 @@ pub fn fix_task(space: &SpaceId, kwant_id: &str, card_id: &str, fid: &str, f: &V
     }
     // The path and branch come from the PR: quoted as data, like the names in scan findings.
     let where_ = if where_.is_empty() { where_ } else { crate::server::dev::scan::as_data_up_to(&where_, 200) };
-    let pr = facts.and_then(|x| x.pr.map(|n| format!("PR #{n}"))).unwrap_or_else(|| "the PR".into());
+    let no_forge = facts.is_some_and(|x| x.no_forge);
+    let pr = if no_forge { "the pushed branch".into() } else { facts.and_then(|x| x.pr.map(|n| format!("PR #{n}"))).unwrap_or_else(|| "the PR".into()) };
     let branch = facts.and_then(|x| x.head_branch.clone()).map(|b| format!(" on branch {}", crate::server::dev::scan::as_data_up_to(&b, 120))).unwrap_or_default();
     let repo = facts.map(|x| format!(" in {}", x.repo)).unwrap_or_default();
     let mut acceptance = format!("A Dev mode review of {pr}{repo}{branch} found this ({} severity).\n{}\n", s("severity"), crate::server::dev::scan::PR_DATA_NOTE);
@@ -1038,7 +1060,7 @@ pub fn fix_task(space: &SpaceId, kwant_id: &str, card_id: &str, fid: &str, f: &V
     if !s("fix").is_empty() {
         acceptance.push_str(&format!("Suggested fix: {}\n", prose("fix", MODEL_TEXT_CHARS)));
     }
-    acceptance.push_str("Done when the fix is pushed to the PR's branch and its tests pass.");
+    acceptance.push_str(if no_forge { "Done when the fix is pushed to the branch and its tests pass." } else { "Done when the fix is pushed to the PR's branch and its tests pass." });
     let _ = space;
     crate::db::missions::NewTask {
         mission_id: None,

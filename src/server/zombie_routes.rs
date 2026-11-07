@@ -40,6 +40,7 @@ use super::loose_ends_owner::{self, OwnerSettings};
 use super::AppState;
 use crate::db::zombie::{CaseRow, SourceRow, CASE_STATUSES};
 use crate::sandbox::credentials::{normalize_origin, CredentialStore, StoreError};
+use crate::server::dev::forge::{ForgeClient, ForgeConfig};
 use crate::zombie::draft::Draft;
 use crate::zombie::github::{GithubConfig, GithubSource};
 use crate::zombie::hunt::{self, ScanError};
@@ -317,7 +318,7 @@ pub async fn regenerate_draft(State(state): State<AppState>, headers: HeaderMap,
 #[derive(Debug, Serialize)]
 pub struct SourceView {
     pub id: String,
-    /// `kwant`, `imap`, `github`.
+    /// `kwant`, `imap`, `github`, `forge` (GitLab, Gitea, Forgejo: Dev mode only).
     pub kind: String,
     pub label: String,
     /// `ImapConfig` or `GithubConfig`; `{}` for kwant.
@@ -382,8 +383,38 @@ fn checked_config(kind: &str, config: &Value) -> Result<(String, String), Respon
             let cfg = typed.to_saved().map_err(bad)?;
             Ok((serde_json::to_string(&cfg).unwrap_or_default(), cfg.vault_origin()))
         }
-        _ => Err(bad("kind must be imap or github".into())),
+        "forge" => {
+            let cfg: ForgeConfig = serde_json::from_value(config.clone()).map_err(|e| bad(format!("config: {e}")))?;
+            cfg.validate().map_err(bad)?;
+            Ok((serde_json::to_string(&cfg).unwrap_or_default(), cfg.vault_origin()))
+        }
+        _ => Err(bad("kind must be imap, github or forge".into())),
     }
+}
+
+/// A `forge` connection's config with its forge filled in (asked of the server when the person
+/// didn't say), refused when another connection already has its host (one per host). Other kinds
+/// pass through.
+async fn settled_config(state: &AppState, id: Option<&str>, kind: &str, config: String) -> Result<String, Response> {
+    if kind != "forge" {
+        return Ok(config);
+    }
+    let bad = |m: String| error(StatusCode::BAD_REQUEST, &m);
+    let cfg: ForgeConfig = serde_json::from_str(&config).map_err(|e| bad(format!("config: {e}")))?;
+    let host = cfg.host().unwrap_or_default();
+    let taken = state.db.zombie_sources().await.map_err(db_error)?.into_iter().any(|r| {
+        r.kind == "forge" && Some(r.id.as_str()) != id && serde_json::from_str::<ForgeConfig>(&r.config).ok().and_then(|c| c.host()).as_deref() == Some(host.as_str())
+    });
+    if taken {
+        return Err(error(StatusCode::CONFLICT, &format!("{host} already has a connection: change that one")));
+    }
+    let cfg = crate::server::dev::forge::settle(cfg, std::sync::Arc::new(crate::server::dev::git::SystemResolver))
+        .await
+        .map_err(|e| match e.code() {
+            Some(code) => (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string(), "code": code}))).into_response(),
+            None => bad(e.to_string()),
+        })?;
+    Ok(serde_json::to_string(&cfg).unwrap_or_default())
 }
 
 /// Connects with `config` and `secret`: what the test found, or 400 with why not.
@@ -394,6 +425,13 @@ async fn test_connection(id: &str, kind: &str, config: &str, secret: Zeroizing<S
             let cfg: ImapConfig = serde_json::from_str(config).map_err(|_| failed("unreadable settings".into()))?;
             let report = ImapSource::new(id, cfg, secret, &[]).test().await.map_err(failed)?;
             Ok(serde_json::to_value(report).unwrap_or(Value::Null))
+        }
+        "forge" => {
+            let cfg: ForgeConfig = serde_json::from_str(config).map_err(|_| failed("unreadable settings".into()))?;
+            let forge = cfg.forge.map(|k| k.as_str());
+            let client = ForgeClient::new(id, cfg, secret, std::sync::Arc::new(crate::server::dev::git::SystemResolver)).ok_or_else(|| failed("unreadable settings".into()))?;
+            let login = client.login().await.map_err(|e| failed(e.to_string()))?;
+            Ok(json!({"login": login, "forge": forge}))
         }
         _ => {
             let cfg: GithubConfig = serde_json::from_str(config).map_err(|_| failed("unreadable settings".into()))?;
@@ -444,6 +482,7 @@ pub async fn add_source(State(state): State<AppState>, headers: HeaderMap, Json(
     person(&state, &headers).await?;
     let label = checked_label(&b.label)?;
     let (config, origin) = checked_config(&b.kind, &b.config)?;
+    let config = settled_config(&state, None, &b.kind, config).await?;
     let secret = checked_secret(&b.secret)?;
     drop(b.secret);
     if state.credentials.is_locked().await {
@@ -511,7 +550,10 @@ pub async fn update_source(State(state): State<AppState>, headers: HeaderMap, Pa
             return Err(refused);
         }
         let (config, origin) = match &b.config {
-            Some(c) => checked_config(&row.kind, c)?,
+            Some(c) => {
+                let (config, origin) = checked_config(&row.kind, c)?;
+                (settled_config(&state, Some(&id), &row.kind, config).await?, origin)
+            }
             None => (row.config.clone(), hunt::origin_of(&row).map_err(|e| error(StatusCode::BAD_REQUEST, &e))?),
         };
         let secret = match b.secret.as_deref() {

@@ -379,7 +379,7 @@ export function findingsSummary(findings: DevFinding[]): string {
 export const postCount = (findings: Pick<DevFinding, 'state'>[]): number => findings.filter((f) => f.state !== 'dismissed').length;
 
 /** Display names for `forge` (amendment, 21:50): posting is GitHub-only in 0.7.1, GitLab and Gitea come in 0.7.2. */
-export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea' };
+export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea', forgejo: 'Forgejo' };
 
 /** "Post to GitHub · 3 findings"; no count when nothing is open (the review is then its body only). F6: findings, not
  * comments, because a finding outside the diff goes in the review body; the posted line counts inline comments. */
@@ -387,6 +387,25 @@ export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'Gi
  *  forge (the URL is in the card), named plainly; the review footer hides it instead (user-flow.md F7). */
 export const forgeOpen = (forge: Forge | null, what: 'pr' | 'commit' = 'pr'): string =>
   forge ? `Open on ${FORGE_NAME[forge]}` : what === 'pr' ? 'Open pull request' : 'Open commit';
+
+/** 0.7.4: how a change is numbered on its forge: GitLab's merge requests are "!7", the rest "#7". */
+export const prRef = (forge: Forge | null, pr: number): string => (forge === 'gitlab' ? `!${pr}` : `#${pr}`);
+/** "MR !7" on GitLab, "PR #7" elsewhere (api.md, Card JSON 0.7.4). */
+export const prName = (forge: Forge | null, pr: number): string => (forge === 'gitlab' ? `MR !${pr}` : `PR #${pr}`);
+/** Where a card's PR, MR and CI live: its own `forge`, else (a card from before 0.7.4) the space's. A branch card has none. */
+export const cardForge = (card: { forge: Forge | null; no_forge: boolean }, space: Forge | null): Forge | null =>
+  card.no_forge ? null : card.forge ?? space;
+/** Where Post would go: GitHub cards (and older cards) post through the space's GitHub connection; GitLab and Gitea
+ * cards name their own forge, so the footer can say posting there comes later. A branch card posts nowhere. */
+export const postForge = (card: { forge: Forge | null; no_forge: boolean }, space: Forge | null): Forge | null =>
+  card.no_forge ? null : card.forge && card.forge !== 'github' ? card.forge : space;
+/** A GitLab or Gitea card (0.7.4): Post comes in a later version (G7). */
+export const laterForge = (card: { forge?: Forge | null; no_forge?: boolean }): Forge | null =>
+  !card.no_forge && card.forge && card.forge !== 'github' ? card.forge : null;
+/** G7 isn't in yet: the server's words for Post on a GitLab or Gitea card, shown before anyone presses anything. */
+export const postLaterLine = (forge: Forge): string => `Posting to ${FORGE_NAME[forge]} comes in a later update.`;
+/** G5: the line on a review card for a pushed branch with no pull request. */
+export const NO_FORGE_LINE = 'No pull request: reviewing the pushed branch.';
 
 export function postLabel(n: number, forge: Forge): string {
   const to = `Post to ${FORGE_NAME[forge]}`;
@@ -417,7 +436,9 @@ export type PostState =
   | { kind: 'posted'; at: string | null; url: string | null; login: string | null; comments: number | null }
   | { kind: 'read_only' }
   | { kind: 'stale' }
-  | { kind: 'failed'; message: string; retry: boolean };
+  | { kind: 'failed'; message: string; retry: boolean }
+  // 0.7.4: a GitLab or Gitea card: posting there comes in a later version (G7). A line, no button.
+  | { kind: 'later'; message: string };
 
 /**
  * Which footer to draw. `posted` wins over everything (the server never posts twice, P6); then the
@@ -425,12 +446,17 @@ export type PostState =
  */
 export function postState(
   card: { status: string; posted: { at: string | null; url: string | null; login?: string | null; comments?: number | null } | null; post_error: { kind: string; message: string | null } | null },
-  opts: { canPost: boolean; posting: boolean; forge: Forge | null; noReview?: boolean },
+  opts: { canPost: boolean; posting: boolean; forge: Forge | null; noReview?: boolean; later?: Forge | null },
 ): PostState {
   if (card.posted) return { kind: 'posted', at: card.posted.at, url: card.posted.url, login: card.posted.login ?? null, comments: card.posted.comments ?? null };
   if (!opts.canPost || !opts.forge || card.status === 'pending') return { kind: 'none' };
   // F4: a card whose review didn't finish has nothing to post.
   if (card.status === 'failed') return { kind: 'no_review' };
+  // `later`: the card's own forge is GitLab or Gitea (0.7.4), so Post isn't there yet.
+  if (opts.later && opts.later !== 'github') {
+    const m = card.post_error?.message?.trim();
+    return { kind: 'later', message: m ? (/[.!?]$/.test(m) ? m : `${m}.`).replace(/^./, (c) => c.toUpperCase()) : postLaterLine(opts.later) };
+  }
   if (opts.posting) return { kind: 'posting' };
   const e = card.post_error;
   if (e?.kind === 'read_only') return { kind: 'read_only' };

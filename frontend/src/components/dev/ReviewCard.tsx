@@ -34,6 +34,12 @@ import {
   lgtm,
   lgtmLabel,
   readingLine,
+  cardForge,
+  postForge,
+  laterForge,
+  prName,
+  prRef,
+  NO_FORGE_LINE,
 } from '../../dev/logic';
 import type { LedState, PostState } from '../../dev/logic';
 import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
@@ -385,6 +391,11 @@ const PostFooter: React.FC<{
       );
     }
   }
+  // 0.7.4: GitLab and Gitea: posting there comes later (G7). The server's words, no button.
+  if (state.kind === 'later') {
+    line = withLed('off', state.message, { 'data-post-later': '' });
+    action = null;
+  }
   // F7 (user-flow.md): Post first, then "Open on {Forge}". Not after posting: View on {Forge} replaces it.
   const link = !!prLink && state.kind !== 'posted';
   // F4: no review, no Post footer; the card keeps only its link to the PR.
@@ -483,7 +494,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   // F4: the server answers 409 when the card has no review; that press is final, no Try again.
   const [noReview, setNoReview] = useState(false);
   const post = async () => {
-    if (!onPost || posting || noReview || card.posted) return;
+    if (!onPost || posting || noReview || card.posted || card.no_forge || laterForge(card)) return;
     setPosting(true);
     try {
       setCard(await onPost(card.id));
@@ -500,7 +511,10 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const author = personText(card.author);
   const authorModel = card.author ? modelLabel(card.author.engine, card.author.model) : null;
   const reviewerModel = card.reviewer ? modelLabel(card.reviewer.engine, card.reviewer.model) : null;
-  const headingId = `review-${card.id || card.pr}-h`;
+  const headingId = `review-${card.id || card.pr || card.branch}-h`;
+  // 0.7.4: the card's own forge names its MR or PR and the Open link; a branch card (G5) has neither.
+  const named = cardForge(card, forge);
+  const branchCard = card.no_forge || card.pr === null;
   const tile = card.draft ? 'bg-zinc-500/15 text-zinc-300' : 'bg-teal-400/15 text-teal-300';
   const summary = findingsSummary(card.findings);
   const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
@@ -508,19 +522,41 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const repoChip = repoLabel ? repoLabel(card.repo, card.repo_name) : null;
 
   return (
-    <article data-dev-card="review" data-repo={card.repo ?? undefined} data-pr={card.pr} aria-labelledby={headingId} className="kw-card relative min-w-0 scroll-mt-3 p-4">
+    <article data-dev-card="review" data-repo={card.repo ?? undefined} data-pr={card.pr ?? undefined} data-forge={named ?? undefined} data-no-forge={branchCard || undefined} aria-labelledby={headingId} className="kw-card relative min-w-0 scroll-mt-3 p-4">
       {stamp && <Stamp id={card.id || `pr-${card.pr}`} reviewer={stamp} />}
       {/* 1. Header */}
       <header className={`flex items-start gap-3 ${stamp ? 'sm:pr-32' : ''}`}>
         <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${tile}`} aria-hidden="true">
-          <GitPullRequest size={16} />
+          {branchCard ? <GitBranch size={16} /> : <GitPullRequest size={16} />}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <h3 id={headingId} className="min-w-0 rounded-sm text-title font-semibold text-zinc-50 [overflow-wrap:anywhere] focus:outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400">
-              #{card.pr} {card.title}
+              {branchCard ? (
+                <>
+                  <span className="sr-only">Branch </span>
+                  <span className="font-mono text-[0.92em] text-zinc-300">{card.branch}</span>
+                  <span aria-hidden="true" className="text-zinc-500">
+                    {' · '}
+                  </span>
+                  <span className="sr-only">: </span>
+                  {card.title}
+                </>
+              ) : (
+                named === 'gitlab' ? (
+                  <>
+                    <span className="sr-only">{prName(named, card.pr!)} </span>
+                    <span aria-hidden="true">{prRef(named, card.pr!)}</span> {card.title}
+                  </>
+                ) : (
+                  <>
+                    {prRef(named, card.pr!)} {card.title}
+                  </>
+                )
+              )}
             </h3>
             {card.draft && <span className="kw-chip">Draft</span>}
+            {branchCard && <span className="kw-chip">Branch</span>}
             {sample && <span className="kw-chip kw-chip-info">Sample PR</span>}
             {repoChip && (
               <span data-dev-card-repo className="kw-chip font-mono [overflow-wrap:anywhere]" title={repoChip}>
@@ -697,15 +733,31 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       {card.cut && <p className="mt-3 text-2xs text-zinc-400">{card.cut}</p>}
 
       {/* 7. Footer: Post to {Forge} (design §5.7) */}
+      {branchCard ? (
+        <footer data-review-footer data-post-state="no_forge" className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3 text-[12.5px] text-zinc-400">
+          <span data-no-forge-line className="inline-flex min-w-0 flex-1 items-start gap-[7px]">
+            <Led s="off" className="mt-[5px] shrink-0" />
+            <span className="min-w-0 [overflow-wrap:anywhere]">{NO_FORGE_LINE}</span>
+          </span>
+          {card.links.commit && (
+            <span className="text-meta">
+              <OutLink href={card.links.commit} className="min-h-[44px] sm:min-h-0">
+                Open commit
+              </OutLink>
+            </span>
+          )}
+        </footer>
+      ) : (
       <PostFooter
         id={headingId}
-        state={postState(card, { canPost: !!onPost && !sample, posting, forge, noReview })}
-        forge={card.posted?.forge ?? forge}
+        state={postState(card, { canPost: !!onPost && !sample, posting, forge: postForge(card, forge), noReview, later: laterForge(card) })}
+        forge={card.posted?.forge ?? (postForge(card, forge) ? named : null)}
         count={postCount(card.findings)}
         login={forgeLogin}
         prLink={card.links.pr}
         onPost={() => void post()}
       />
+      )}
     </article>
   );
 };
