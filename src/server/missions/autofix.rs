@@ -370,11 +370,11 @@ fn diagnostics_root(state: &AppState) -> std::path::PathBuf {
 
 /// Writes the redacted diagnostics of a failure, 0600 in a 0700 folder. Server-only.
 fn write_diagnostics(state: &AppState, task_id: &str, name: &str, text: &str) -> Option<String> {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use crate::fsx::UnixMode;
     let dir = diagnostics_root(state).join(task_id);
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir).ok()?;
+    std::fs::DirBuilder::new().recursive(true).unix_mode(0o700).create(&dir).ok()?;
     let path = dir.join(format!("{name}.log"));
-    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).ok()?;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).unix_mode(0o600).open(&path).ok()?;
     let body: String = text.chars().take(DIAGNOSTICS_MAX).collect();
     std::io::Write::write_all(&mut f, body.as_bytes()).ok()?;
     Some(path.to_string_lossy().into_owned())

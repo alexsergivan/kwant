@@ -606,13 +606,12 @@ pub fn scratch_dir(state: &AppState, run_id: &str, n: usize) -> PathBuf {
 }
 
 fn private_dir(dir: &FsPath) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     if let Some(parent) = dir.parent() {
         std::fs::create_dir_all(parent)?;
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        crate::fsx::set_mode(parent, 0o700)?;
     }
     std::fs::create_dir_all(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    crate::fsx::set_mode(dir, 0o700)
 }
 
 /// Runs a draft's checks on a replay's scratch folder: file checks run there; command and http

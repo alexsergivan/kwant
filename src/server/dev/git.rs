@@ -309,6 +309,11 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
             Ok(())
         });
     }
+    // Windows has no setsid, nice or RLIMIT_FSIZE: git runs below normal priority with no
+    // console window, and a mirror's size is checked after each fetch (`Repo::cap`) instead of
+    // stopping the write at the cap.
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
     let mut child = cmd.spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { GitError::NoGit } else { GitError::Failed })?;
     let mut group = crate::drivers::cli::ProcessGroup::of(&child);
     let (so, se) = (child.stdout.take(), child.stderr.take());
@@ -328,6 +333,11 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
     }
 }
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+
 /// Whether a size-limited git (or the index-pack it ran) stopped at `RLIMIT_FSIZE`: killed by
 /// SIGXFSZ, or told "File too large" if that signal is ignored.
 fn hit_size_limit(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
@@ -340,7 +350,11 @@ fn hit_size_limit(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
     }
     let _ = status;
     let e = String::from_utf8_lossy(stderr).to_lowercase();
-    e.contains(&format!("died of signal {}", libc::SIGXFSZ)) || e.contains("file too large")
+    #[cfg(unix)]
+    if e.contains(&format!("died of signal {}", libc::SIGXFSZ)) {
+        return true;
+    }
+    e.contains("file too large")
 }
 
 /// Reads all of `r`, or [`GitError::TooBig`] as soon as it passes `cap`.
@@ -1608,6 +1622,8 @@ mod tests {
         assert!(available().await, "the test machine has git {MIN_VERSION:?} or newer");
     }
 
+    // Unix only: the fake git is a `#!/bin/sh` script, which Windows can't run as a program
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_slow_git_is_killed_with_its_children() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1630,6 +1646,8 @@ mod tests {
         assert!(!alive, "the grandchild was killed with the group");
     }
 
+    // Unix only: the fake git is a `#!/bin/sh` script, which Windows can't run as a program
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_token_reaches_git_by_environment_only() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1876,6 +1894,7 @@ mod tests {
     // -----------------------------------------------------------------------------------------
     // G2 review (Lin, at 6dd0243): one test per probe.
 
+    #[cfg(unix)]
     fn exe(path: &Path, text: &str) {
         std::fs::write(path, text).unwrap();
         #[cfg(unix)]
@@ -1887,6 +1906,8 @@ mod tests {
 
     /// F1 (probe P1): an ssh remote runs `ssh`, never an empty command, whatever the repo's own
     /// config says. A fake `ssh` first on PATH logs what git asked it for.
+    // Unix only: the fake git is a `#!/bin/sh` script, which Windows can't run as a program
+    #[cfg(unix)]
     #[tokio::test]
     async fn ssh_remotes_run_ssh_and_never_the_repos_own_command() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1950,6 +1971,8 @@ mod tests {
     }
 
     /// F2 (probe P3, setup 2): a `.git` symlink is refused.
+    // Unix only: making a symlink on Windows needs admin rights or Developer Mode
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_git_symlink_is_refused() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1975,6 +1998,8 @@ mod tests {
 
     /// F2: the same reach by other routes: a `.git` directory with a `commondir`, or with its
     /// objects or refs a symlink to another repo's.
+    // Unix only: making a symlink on Windows needs admin rights or Developer Mode
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_git_dir_borrowing_another_repos_objects_or_refs_is_refused() {
         let tmp = tempfile::tempdir().unwrap();

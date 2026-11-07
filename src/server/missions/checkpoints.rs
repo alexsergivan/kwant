@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use crate::fsx::UnixMode;
 use std::path::{Component, Path as FsPath, PathBuf};
 
 pub const SETTING: &str = "checkpoints";
@@ -113,7 +113,7 @@ struct Run {
 
 fn private_dir(dir: &FsPath) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    crate::fsx::set_mode(dir, 0o700)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -166,7 +166,7 @@ fn current(folder: &FsPath, rel: &str) -> Result<Option<String>, String> {
 fn store_blob(blobs: &FsPath, src: &FsPath) -> std::io::Result<String> {
     let mut input = std::fs::File::open(src)?;
     let tmp = blobs.join(format!(".tmp-{}", new_id()));
-    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).unix_mode(0o600).open(&tmp)?;
     let mut h = <sha2::Sha256 as sha2::Digest>::new();
     let mut buf = vec![0u8; 64 * 1024];
     let res = (|| -> std::io::Result<()> {
@@ -261,7 +261,7 @@ fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, St
             } else if meta.len() > FILE_MAX_BYTES {
                 m.skipped.push(Skip { path: rel, why: "over 20 MB".into() });
             } else {
-                candidates.push((rel, entry.path(), meta.len(), meta.permissions().mode() & 0o777));
+                candidates.push((rel, entry.path(), meta.len(), crate::fsx::mode_of(&meta)));
             }
         }
     }
@@ -313,7 +313,7 @@ fn write_manifest(dir: &FsPath, id: &str, m: &Manifest) -> std::io::Result<(Path
     private_dir(dir)?;
     let body = serde_json::to_vec(m).map_err(std::io::Error::other)?;
     let path = dir.join(format!("{id}.json"));
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
+    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).unix_mode(0o600).open(&path)?;
     f.write_all(&body)?;
     Ok((path, hex(&<sha2::Sha256 as sha2::Digest>::digest(&body))))
 }
@@ -337,7 +337,7 @@ pub async fn materialize_first(state: &AppState, task_id: &str, dest: &FsPath) -
             }
             // A missing blob is skipped: the replay sees less, never something else
             if std::fs::copy(blobs.join(&e.sha256), &to).is_ok() {
-                let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode((e.mode & 0o700) | 0o600));
+                let _ = crate::fsx::set_mode(&to, (e.mode & 0o700) | 0o600);
                 n += 1;
             }
         }
@@ -399,7 +399,7 @@ fn read_runs(dir: &FsPath) -> Vec<Run> {
 
 fn append_run(dir: &FsPath, run: &Run) -> std::io::Result<()> {
     private_dir(dir)?;
-    let mut f = std::fs::OpenOptions::new().append(true).create(true).mode(0o600).open(dir.join("runs.jsonl"))?;
+    let mut f = std::fs::OpenOptions::new().append(true).create(true).unix_mode(0o600).open(dir.join("runs.jsonl"))?;
     writeln!(f, "{}", serde_json::to_string(run).map_err(std::io::Error::other)?)
 }
 
@@ -923,7 +923,7 @@ fn apply(blobs: &FsPath, p: &Plan, force: &BTreeSet<String>) -> (Vec<String>, Ve
                 }
                 let tmp = parent.join(format!(".kwant-restore-{}", new_id()));
                 std::fs::copy(blobs.join(&e.sha256), &tmp)?;
-                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(if e.mode == 0 { 0o644 } else { e.mode }))?;
+                crate::fsx::set_mode(&tmp, if e.mode == 0 { 0o644 } else { e.mode })?;
                 std::fs::rename(&tmp, &dest).inspect_err(|_| {
                     let _ = std::fs::remove_file(&tmp);
                 })?;
