@@ -58,6 +58,14 @@ pub struct DevFacts {
     /// None when the head wasn't scanned (landed cards, cards written before the scan existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<super::scan::Security>,
+    /// The forge the card's PR, MR and CI come from: `github`, `gitlab` or `gitea` (any-git.md
+    /// G4). None for a repo read with git alone, and for cards written before 0.7.4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forge: Option<String>,
+    /// Review only: a pushed branch read with git alone (G5), compared against the watched
+    /// branch. No PR, no CI and no Post.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_forge: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -186,6 +194,8 @@ mod tests {
             links: Links::default(),
             pr_head_sha: None,
             security: None,
+            forge: None,
+            no_forge: false,
         };
         let v = serde_json::to_value(&f).unwrap();
         assert_eq!(v["kind"], "review");

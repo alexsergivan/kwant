@@ -12,12 +12,13 @@ use crate::db::dev_mode::{DevCardRow, DevRepoRow, LANDED, PENDING, REVIEW, STALE
 use crate::db::models::Kwant;
 use crate::db::spaces::SpaceId;
 use crate::server::AppState;
+use super::forge;
 use super::git::{self, Auth, GitError, Repo};
 use super::source::{Change, Commit, Forge, GithubForge, History};
 use crate::zombie::github::{EtagCache, GhError};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
@@ -238,20 +239,41 @@ async fn poll_git(state: &AppState, mode: &DevRepoRow) -> Result<(), GhError> {
         let url = git::remote_url(from).filter(|u| u == from).ok_or(GitError::Refused)?;
         (Repo::mirror(&state.config.data_dir, &mode.space_id, &mode.key).await?, url)
     };
+    // The repo's forge connection in Loose ends, one per host (G4): its token reads the forge's
+    // API, and git fetches with it over https
+    let resolver: Arc<dyn git::Resolver> = Arc::new(git::SystemResolver);
+    let client = match mode.host.as_deref() {
+        Some(host) if !url.is_empty() => forge::client_for_host(state, host, resolver.clone()).await,
+        _ => None,
+    };
+    let auth = client.as_ref().and_then(|c| c.git_auth(&url));
     let mut mode = mode.clone();
     if mode.branch.trim().is_empty() {
-        mode.branch = g.default_branch(&url, None).await?;
+        mode.branch = g.default_branch(&url, auth.as_ref()).await?;
         state.db.set_dev_repo_branch(&mode.space_id, &mode.key, &mode.branch).await.map_err(|e| GhError::Other(e.to_string()))?;
     }
     let base = mode.host.as_deref().and_then(|h| git::commit_base(h, &mode.repo));
-    let mut h = History::new(Some(g), url, None, None, &mode.branch, base);
+    let mut h = History::new(Some(g), url, auth, None, &mode.branch, base);
     h.fetch().await?;
     if mode.deploy_hint.is_none() {
         if let Some(hint) = h.root_names().await.as_deref().and_then(repo::deploy_hint) {
             let _ = state.db.set_dev_repo_hint(&mode.space_id, &mode.key, Some(hint)).await;
         }
     }
-    read(state, &mode, &h, None).await
+    match &client {
+        Some(c) => {
+            let f = c.forge_for(&mode.repo);
+            read(state, &mode, &h, Some(f.as_ref())).await
+        }
+        None => {
+            // For the desk: which forge the host runs, so it can offer the connection (cached a day)
+            if let Some(host) = mode.host.as_deref() {
+                forge::detect(host, resolver).await;
+            }
+            read(state, &mode, &h, None).await?;
+            branches(state, &mode, &h).await
+        }
+    }
 }
 
 /// Reads what landed, the open changes and the CI that was still running, and makes their cards:
@@ -359,7 +381,8 @@ async fn landed(state: &AppState, h: &History<'_>, forge: Option<&dyn Forge>, mo
     };
     let until = pr.and_then(|p| p.merged_at).or(full.committer.date).unwrap_or_else(Utc::now) - Duration::seconds(1);
     let first = first_edits(h, &files, until).await;
-    let facts = landed_facts(mode, &full, pr, files, checks, kwants, first);
+    let mut facts = landed_facts(mode, &full, pr, files, checks, kwants, first);
+    facts.forge = forge.map(|f| f.kind().as_str().to_string());
     insert(state, mode, LANDED, &c.sha, &c.sha, &facts).await;
     Ok(true)
 }
@@ -398,10 +421,70 @@ async fn reviews(state: &AppState, h: &History<'_>, forge: &dyn Forge, mode: &De
         let security = super::scan::for_review(&state.config.data_dir, h, &p.head_sha, &mut files, capped).await;
         let mut facts = review_facts(mode, p, head.as_ref(), files, checks, kwants, first);
         facts.security = Some(security);
+        facts.forge = Some(forge.kind().as_str().to_string());
         insert(state, mode, REVIEW, &ref_, &p.head_sha, &facts).await;
         stale(state, mode, &ref_, Some(&p.head_sha)).await;
     }
     // A PR of this repo that closed or merged: its review cards go stale
+    if let Ok(cards) = state.db.dev_cards_in(&mode.space_id, Some(&mode.key), REVIEW, None, 200).await {
+        let gone: HashSet<String> = cards.into_iter().filter(|c| c.status != STALE && !open.contains(&c.ref_)).map(|c| c.ref_).collect();
+        for r in gone {
+            stale(state, mode, &r, None).await;
+        }
+    }
+    Ok(())
+}
+
+/// Review cards for pushed branches when the repo has no forge, or no token for it (any-git.md
+/// G5): each branch other than the watched one with commits the watched branch doesn't have gets a
+/// card (ref `branch:<name>`), compared against the watched branch, with no PR, no CI and no Post
+/// (`no_forge`). A branch whose head already has a card keeps it; a new push makes a new card and
+/// the old one goes stale, as a PR's does. A branch that merged or was deleted goes stale. At most
+/// [`MAX_REVIEWS`] are read per poll; the rest wait for the next.
+pub async fn branches(state: &AppState, mode: &DevRepoRow, h: &History<'_>) -> Result<(), GhError> {
+    let space = SpaceId::new(&mode.space_id);
+    let kwants = state.db.list_kwants(&space).await.unwrap_or_default();
+    let heads = h.branches().await?;
+    let mut open = HashSet::new();
+    let mut read = 0;
+    for (name, sha) in heads.iter().filter(|(n, _)| *n != mode.branch) {
+        let ref_ = format!("branch:{name}");
+        // Merged (or level with the watched branch): no card, and its old one goes stale below
+        if h.in_branch(sha, &mode.branch).await {
+            continue;
+        }
+        let have = state.db.dev_cards_of_ref_in(&mode.space_id, &mode.key, REVIEW, &ref_).await.unwrap_or_default();
+        if have.iter().any(|c| c.head_sha == *sha) {
+            open.insert(ref_.clone());
+            stale(state, mode, &ref_, Some(sha)).await;
+            continue;
+        }
+        if read >= MAX_REVIEWS {
+            // Not read yet: its card (if any) stays until the next poll reads it
+            open.insert(ref_);
+            continue;
+        }
+        read += 1;
+        let Some(mut files) = h.branch_files(name, sha, &mode.branch).await else { continue };
+        if files.is_empty() {
+            continue;
+        }
+        open.insert(ref_.clone());
+        let head = h.commit(sha).await.ok();
+        let title = head.as_ref().map(|c| split_message(&c.message).0).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| name.clone());
+        let change = Change { number: 0, title, head_branch: name.clone(), head_sha: sha.clone(), base_branch: mode.branch.clone(), ..Default::default() };
+        let first = first_edits(h, &files, Utc::now()).await;
+        let capped = files.len() >= crate::zombie::github::MAX_PR_FILES;
+        let security = super::scan::for_review(&state.config.data_dir, h, sha, &mut files, capped).await;
+        let mut facts = review_facts(mode, &change, head.as_ref(), files, Vec::new(), &kwants, first);
+        facts.pr = None;
+        facts.body = String::new();
+        facts.no_forge = true;
+        facts.security = Some(security);
+        insert(state, mode, REVIEW, &ref_, sha, &facts).await;
+        stale(state, mode, &ref_, Some(sha)).await;
+    }
+    // A branch that merged, was deleted or has nothing new any more: its cards go stale
     if let Ok(cards) = state.db.dev_cards_in(&mode.space_id, Some(&mode.key), REVIEW, None, 200).await {
         let gone: HashSet<String> = cards.into_iter().filter(|c| c.status != STALE && !open.contains(&c.ref_)).map(|c| c.ref_).collect();
         for r in gone {
@@ -584,6 +667,8 @@ pub fn landed_facts(mode: &DevRepoRow, c: &Commit, pr: Option<&Change>, files: V
         draft: false,
         head_branch: None,
         pr_head_sha: pr.map(|p| p.head_sha.clone()),
+        forge: None,
+        no_forge: false,
     }
 }
 
@@ -612,6 +697,8 @@ pub fn review_facts(mode: &DevRepoRow, p: &Change, head: Option<&Commit>, files:
         draft: p.draft,
         head_branch: Some(p.head_branch.clone()),
         pr_head_sha: None,
+        forge: None,
+        no_forge: false,
     }
 }
 

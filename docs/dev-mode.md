@@ -146,8 +146,9 @@ cards stay), or reads a `local` team folder's own `.git` in place, never touchin
 Commits, diffs, file text, tags, path history and the root's names come from git; on GitHub, pull
 requests, checks and review cards still come from the API, and the API answers when a fetch fails.
 A team's repo on GitLab, Gitea, a bare git server or a folder with no remote now gets a row too
-(`provider: "git"`, with the URL git fetches from in `git_url`) and landed cards, with no PR, CI or
-review cards until its forge is added (G4, G5).
+(`provider: "git"`, with the URL git fetches from in `git_url`) and landed cards. With a GitLab,
+Gitea or Forgejo connection for its host it gets merge request / pull request cards with CI too; with
+none, each pushed branch gets a review card (0.7.4, below).
 
 Git runs as kwant's own user, so its SSH keys and credential helpers work. A GitHub token goes to git
 only as an `http.extraHeader` in `GIT_CONFIG_*` environment variables, never in argv, a file or a
@@ -231,6 +232,56 @@ returns those. A card in an archived space is refused like that space's lists.
 
 Turning Dev mode **off** (D12) stops the polling, the reviews and the floor. Cards stay readable,
 and approvals stay as they were.
+
+### GitLab, Gitea and Forgejo (0.7.4)
+
+A repo on GitLab (gitlab.com or self-hosted) or Gitea, Forgejo or Codeberg gets what a GitHub repo
+gets, once Loose ends has a **forge** connection for its host (any-git.md G4): each landed card names
+the merge request or pull request it came from, every open one into the watched branch gets a
+review card, and the CI on its head shows as checks. Drafts (`draft`, or a `WIP:` / `[WIP]` title on
+Gitea) are skipped, as on GitHub. The code is one `Forge` trait in `src/server/dev/source.rs` with
+three adapters: GitHub (`GithubForge`, unchanged, Enterprise `api_base` included) and, in
+`src/server/dev/forge.rs`, GitLab (`/api/v4`: merge requests, commit statuses with the newest job of
+each name, else the newest pipeline; `allow_failure` jobs are neutral) and Gitea (`/api/v1`: pulls,
+commit statuses, the newest of each context; `warning` is neutral).
+
+**The connection.** `POST /api/zombie/sources` with `kind: "forge"`, `config: {"url": "https://git.example.com", "forge"?: "gitlab" | "gitea"}`
+and the token as `secret`. Without `forge`, kwant asks the server: GitLab answers
+`GET /api/v4/version` (200, or 401 when it wants a token), Gitea and Forgejo answer
+`GET /api/v1/version`; neither is a 400 that asks the person to say which. `forge: "github"` is a 400
+(GitHub has its own connection), and a second connection for the same host (and port) is a 409. The
+save is tested with `GET /user` and answers `test: {"login", "forge"}`. gitlab.com is GitLab and
+codeberg.org and gitea.com are Gitea without asking. The url may carry a path (`https://example.com/gitlab`).
+The token goes as `Authorization: Bearer` to GitLab and `token` to Gitea, and to git over https as
+Basic (`oauth2:<token>` on GitLab), only for that host and port. Loose ends doesn't scan these
+connections; they show in Connections as `gitlab` or `gitea` with their host.
+
+**Addresses.** Every forge request takes the same check as a git fetch: https only, no user info in
+the URL, the host looked up by kwant and refused if any address is loopback, link-local, a metadata
+address or the others listed above, and the connection pinned to the checked addresses. No redirect
+is followed, no proxy is used, and answers stop at 8 MB. The one exception is a connection whose url
+is `http://` on a loopback host (a forge on the same machine, or a test's mock); a repo's own remote
+still can't point at this machine.
+
+**Which forge a host runs** is told on the desk even with no connection: a host that isn't
+github.com and has no connection is asked once a day (`/api/v4/version`, then `/api/v1/version`,
+https only, through the same check), so the desk can offer the right connection.
+
+**Posting** goes to GitHub only. A review card on GitLab or Gitea says "Posting to GitLab comes in a
+later kwant version" when Post is pressed (G7).
+
+### Pushed branches with no forge (0.7.4)
+
+A repo with no forge (a bare git server, a team folder with no remote) or no token for its forge
+gets a review card for each pushed branch other than the watched one that has commits the watched
+branch doesn't (any-git.md G5). The card's ref is `branch:<name>`; it compares the branch's head with
+its merge base on the watched branch, has `pr: null`, no checks (`ci: "none"`), no PR link, and
+`no_forge: true`, so the desk hides Post, and Post answers `failed` ("this branch has no pull request
+to post to"). Its title is the head commit's first line. It is scanned like any review. A new push
+makes a new card and the old one goes stale; a branch that merges into the watched branch or is
+deleted goes stale. A branch level with or behind the watched one gets none. At most 200 branch names
+are read (sorted), and 10 branches per poll; a mirror reads them with `git ls-remote`
+and fetches a branch only to diff it, then drops the ref. A team folder is read in place.
 
 ## Reading GitHub
 
@@ -334,7 +385,8 @@ took a post but its answer was lost, the next press finds that review by its mar
 records it instead of posting again.
 
 **Who posts.** `GET /api/spaces/:id/dev_mode` has `forge` (`"github"` once the space has a repo and a
-GitHub connection is saved, else `null`; `gitlab` and `gitea` are reserved) and `forge_login`, the
+GitHub connection is saved, else `null`; each repo row also has its own `forge` and
+`forge_connected`, see 0.7.4 above) and `forge_login`, the
 login the post goes out as, from `GET /user`. That login is cached per connection for 15 minutes (a
 minute when it fails). Only GitHub can be posted to in 0.7.1; the code keeps it behind one function,
 `post_review` in `src/server/dev/post.rs`, so other forges can join later.

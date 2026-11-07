@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - NVIDIA preset for custom servers: free models from build.nvidia.com (#365).
 - **Dev mode reads any git repo.** Repos on GitLab, Gitea or any git server, and team folders with no remote, are watched with git, and what lands there shows on the Dev desk. Reviews, CI checks and Post to GitHub still work on GitHub repos only. The server needs git 2.31 or newer; without it, the desk says "Needs git on the server". (#366, #368)
+- **Dev mode on GitLab, Gitea, Forgejo and Codeberg (0.7.4).** Add the server as a connection in Loose ends (kwant asks it which forge it runs) and its merge requests or pull requests get review cards with their CI, like GitHub's. A repo with no forge, or no token for it, gets a review card for each pushed branch that's ahead of the watched one, with no CI and no Post. Posting reviews is still GitHub only. Forge requests take the same address checks as git fetches and never follow redirects.
 
 ### Changed
 - **Dev mode reads commit history with git, not GitHub's API.** Each watched repo gets a copy in kwant's data folder, up to 1 GB each; a bigger repo reads "Too big to read". Repo addresses that point at this server, link-local addresses or cloud metadata addresses are refused, and https reads are pinned to the address that was checked. A team folder whose .git points somewhere else is refused. GitHub PRs, checks and logins still come from GitHub. (#366)
