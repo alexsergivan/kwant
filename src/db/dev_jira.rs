@@ -568,9 +568,10 @@ impl Database {
     }
 
     /// Turn off (pickup stops, cards stay) or back on (J5 runs again). Ok(false): no site.
+    /// `updated_at` moves only when `on_` changes, so an Off site's row says since when it is Off (D10).
     pub async fn set_dev_jira_on(&self, space_id: &str, on: bool) -> Result<bool, DbError> {
         let done = sqlx::query(
-            "UPDATE dev_jira_sites SET on_ = ?2, updated_at = ?3, backfill_done = CASE WHEN ?2 AND on_ = 0 THEN 0 ELSE backfill_done END,
+            "UPDATE dev_jira_sites SET on_ = ?2, updated_at = CASE WHEN on_ = ?2 THEN updated_at ELSE ?3 END, backfill_done = CASE WHEN ?2 AND on_ = 0 THEN 0 ELSE backfill_done END,
                backoff_until = NULL, unreachable_since = NULL WHERE space_id = ?1",
         )
         .bind(space_id)
@@ -878,6 +879,19 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(done.rows_affected() > 0)
+    }
+
+    /// D10: `picked_up` cards whose start was claimed at or after `since` (the site was Off then,
+    /// so `hooks::start` left them as they were) join the queue again. Answers their keys.
+    pub async fn requeue_dev_tickets_started_since(&self, space_id: &str, since: DateTime<Utc>) -> Result<Vec<String>, DbError> {
+        let keys: Vec<(String,)> = sqlx::query_as(
+            "UPDATE dev_tickets SET start_called_at = NULL WHERE space_id = ?1 AND state = 'picked_up' AND start_called_at IS NOT NULL AND start_called_at >= ?2 RETURNING key",
+        )
+        .bind(space_id)
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(keys.into_iter().map(|(k,)| k).collect())
     }
 
     /// One more poll a custom-JQL ticket was missing from; returns the new count.

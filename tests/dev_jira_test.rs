@@ -587,6 +587,185 @@ async fn turning_off_mid_read_makes_no_jira_call_and_keeps_the_cards() {
     until_working(&env, &fresh).await;
 }
 
+/// A card for `key` at `state`, put straight on the board (as pickup would), walking the state table.
+async fn card_at(env: &Env, m: &MockAtlassian, site_id: &str, team_id: &str, key: &str, state: &str) {
+    let f = dev_jira::TicketFacts { key: key.into(), project: "TRAIL".into(), summary: m.issue(key).unwrap().summary, ..Default::default() };
+    assert!(env.state.db.insert_dev_ticket(&space(), site_id, &f, dev_jira::PICKED_UP, Some(team_id), Some("label")).await.unwrap());
+    let path: &[&str] = match state {
+        dev_jira::PICKED_UP => &[],
+        dev_jira::NEEDS_ANSWER => &[dev_jira::READING, dev_jira::NEEDS_ANSWER],
+        dev_jira::FAILED => &[dev_jira::READING, dev_jira::FAILED],
+        dev_jira::TAKEN_BACK => &[dev_jira::TAKEN_BACK],
+        other => panic!("no path to {other}"),
+    };
+    for to in path {
+        assert!(env.state.db.set_dev_ticket_state(&space(), key, to).await.unwrap(), "{key} → {to}");
+    }
+}
+
+/// While Work from Jira is Off (Ada's answers to the 0.7.6 open questions): Start, Retry and Ask
+/// on Jira (and its preview) answer 409 `jira_off` "Work from Jira is off." and reach nothing; the
+/// card stays as it is. The check and users routes stay open so setup works, Stop needs no Jira,
+/// and the brief turn's submit_brief is still accepted (it only keeps the brief).
+#[tokio::test]
+async fn while_off_start_retry_and_ask_answer_jira_off_and_reach_nothing() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app");
+    let team_id = connect_team(&env, &m).await;
+    poll(&env).await;
+    let site_id = env.state.db.dev_jira_site(&space()).await.unwrap().unwrap().id;
+    let lead = env.state.db.get_team(&team_id).await.unwrap().unwrap().lead_kwant_id;
+
+    let waiting = m.add_issue("TRAIL", "Waiting", &["kwant"], None);
+    let f = dev_jira::TicketFacts { key: waiting.clone(), project: "TRAIL".into(), summary: "Waiting".into(), ..Default::default() };
+    assert!(env.state.db.insert_dev_ticket(&space(), &site_id, &f, dev_jira::WAITING, Some(&team_id), Some("label")).await.unwrap());
+    let failed = m.add_issue("TRAIL", "Failed", &["kwant"], None);
+    card_at(&env, &m, &site_id, &team_id, &failed, dev_jira::FAILED).await;
+    let back = m.add_issue("TRAIL", "Taken back", &["kwant"], None);
+    card_at(&env, &m, &site_id, &team_id, &back, dev_jira::TAKEN_BACK).await;
+    let asking = m.add_issue("TRAIL", "Questions", &["kwant"], None);
+    card_at(&env, &m, &site_id, &team_id, &asking, dev_jira::NEEDS_ANSWER).await;
+    let reading = m.add_issue("TRAIL", "Reading", &["kwant"], None);
+    card_at(&env, &m, &site_id, &team_id, &reading, dev_jira::PICKED_UP).await;
+    assert!(env.state.db.set_dev_ticket_state(&space(), &reading, dev_jira::READING).await.unwrap());
+    let thread = format!("brief-off-{}", uuid::Uuid::new_v4().simple());
+    let mut session = tools::Session::new(&space(), &site_id, &reading, &lead, &thread, None);
+    let issue = kwnt::server::dev::tickets::source::Issue { key: reading.clone(), summary: "Reading".into(), description: "Add a reading list.".into(), ..Default::default() };
+    session.saw_ticket(&issue, &[]);
+    tools::open(session);
+
+    let (s, v) = call(&env.app, "POST", &uri("jira/on"), Some(json!({"on": false}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let hits = m.hits().len();
+    let off = |what: &str, s: axum::http::StatusCode, v: &Value| {
+        assert_eq!((s.as_u16(), v["code"].as_str(), v["error"].as_str()), (409, Some("jira_off"), Some("Work from Jira is off.")), "{what}: {v}");
+    };
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{waiting}/start")), None).await;
+    off("start a waiting card", s, &v);
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{back}/start")), None).await;
+    off("start a taken back card", s, &v);
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{failed}/retry")), None).await;
+    off("retry", s, &v);
+    let questions = json!({"questions": [{"text": "Which file?", "choices": ["CSV", "XLSX"]}]});
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{asking}/ask/preview")), Some(questions.clone())).await;
+    off("ask preview", s, &v);
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{asking}/ask")), Some(with(questions, json!({"digest": "0".repeat(64)})))).await;
+    off("ask", s, &v);
+    // The brief turn's submit_brief only keeps the brief
+    let brief = json!({"goal": {"text": "Add a reading list", "sources": ["ticket"], "inferred": false}, "done_when": [{"text": "It works", "sources": ["ticket"], "inferred": false}],
+                       "where": [], "plan": [{"text": "Make the change", "sources": ["ticket"], "inferred": false}], "assumptions": [], "questions": [], "flags": []});
+    let (text, is_error) = tools::call(&env.state, &thread, tools::SUBMIT_BRIEF, &brief).await;
+    assert!(!is_error && text.starts_with("Brief received."), "{text}");
+    assert!(tools::peek(&thread).unwrap().brief.is_some(), "the brief is kept");
+    tools::close(&thread);
+    assert_eq!(m.hits().len(), hits, "nothing reached Jira while Off: {:?}", &m.hits()[hits..]);
+    assert!(m.writes().is_empty());
+    for (key, st) in [(&waiting, dev_jira::WAITING), (&failed, dev_jira::FAILED), (&back, dev_jira::TAKEN_BACK), (&asking, dev_jira::NEEDS_ANSWER)] {
+        assert_eq!(ticket(&env, key).await.state, st, "{key} stays as it is");
+    }
+    // Stop needs no Jira, so it still works
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{asking}/stop")), None).await;
+    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str()), (200, Some(dev_jira::TAKEN_BACK)), "{v}");
+    assert_eq!(m.hits().len(), hits);
+    // Setup keeps working: the check and the users list reach Jira
+    let (s, v) = call(&env.app, "POST", &uri("jira/check"), Some(sign_in(&m))).await;
+    assert_eq!(s.as_u16(), 200, "check while Off: {v}");
+    let (s, v) = call(&env.app, "GET", &uri("jira/users?q=a"), None).await;
+    assert_eq!(s.as_u16(), 200, "users while Off: {v}");
+    assert!(m.hits().len() > hits, "the check and users read Jira");
+    assert!(!env.state.db.dev_jira_site(&space()).await.unwrap().unwrap().on_, "and the site stays Off");
+    no_token_anywhere(&env, &m).await;
+}
+
+/// D10 (Rigel r2): cards whose turn came while Off go on when the site is On again. A `picked_up`
+/// card whose start found the site Off goes back through pickup; a Brief ready card whose brief
+/// came in while Off (so it has no mission) gets its work, or a draft that waits for the OK when
+/// "Wait for my OK" is on. A ticket labelled while Off still waits for Start (no surprise backfill).
+#[tokio::test]
+async fn back_on_the_cards_stranded_while_off_go_on() {
+    for wait_for_ok in [false, true] {
+        let env = jira_setup().await;
+        let m = MockAtlassian::cloud().await;
+        let _g = gateway_to(&m);
+        dev_mode_on(&env).await;
+        m.add_project("TRAIL", "Trail app");
+        let team_id = team(&env).await;
+        connect(&env, &m, json!({"team_id": team_id, "wait_for_ok": wait_for_ok})).await;
+        poll(&env).await;
+        let site_id = env.state.db.dev_jira_site(&space()).await.unwrap().unwrap().id;
+        let lead = env.state.db.get_team(&team_id).await.unwrap().unwrap().lead_kwant_id;
+
+        // A card in its brief turn: the brief comes in after the site went Off
+        let briefed_key = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+        card_at(&env, &m, &site_id, &team_id, &briefed_key, dev_jira::PICKED_UP).await;
+        let thread = env.state.db.create_thread(&lead, &hooks::thread_title(&briefed_key), "chat", Some(&team_id), "kwant").await.unwrap().id;
+        env.state.db.upsert_ticket_brief(&space(), &briefed_key, &site_id, &team_id, "", "Add dark mode").await.unwrap();
+        env.state.db.set_ticket_brief_field(&space(), &briefed_key, "thread_id", Some(&thread)).await.unwrap();
+        assert!(store::set_state(&env.state, &space(), &briefed_key, dev_jira::READING, None).await.unwrap());
+        let mut session = tools::Session::new(&space(), &site_id, &briefed_key, &lead, &thread, None);
+        let issue = kwnt::server::dev::tickets::source::Issue { key: briefed_key.clone(), summary: "Add dark mode".into(), description: "A dark mode toggle.".into(), ..Default::default() };
+        session.saw_ticket(&issue, &[]);
+        tools::open(session);
+        // A card queued for its turn
+        let stranded = m.add_issue("TRAIL", "Orders export", &["kwant"], None);
+        clear(&m, &stranded);
+        card_at(&env, &m, &site_id, &team_id, &stranded, dev_jira::PICKED_UP).await;
+
+        let (s, v) = call(&env.app, "POST", &uri("jira/on"), Some(json!({"on": false}))).await;
+        assert_eq!(s.as_u16(), 200, "{v}");
+        let line = |t: &str| json!({"text": t, "sources": ["ticket"], "inferred": false});
+        let brief = json!({"goal": line("Add dark mode"), "done_when": [line("It works")], "where": [], "plan": [line("Make the change")], "assumptions": [], "questions": [], "flags": []});
+        let (text, is_error) = tools::call(&env.state, &thread, tools::SUBMIT_BRIEF, &brief).await;
+        assert!(!is_error, "{text}");
+        hooks::after_turn(&env.state, &space(), &briefed_key, &thread, None).await;
+        // The stranded card's turn came while Off (as the poller or the old Start did): it waits
+        assert!(env.state.db.claim_dev_ticket_start(&space(), &stranded).await.unwrap());
+        hooks::start(&env.state, &space(), TicketRef { site_id: site_id.clone(), key: stranded.clone(), team_id: team_id.clone() }).await;
+        let labelled = m.add_issue("TRAIL", "Receipt link", &["kwant"], None);
+        clear(&m, &labelled);
+        let b = env.state.db.ticket_brief(&space(), &briefed_key).await.unwrap().unwrap();
+        assert_eq!((ticket(&env, &briefed_key).await.state.as_str(), b.mission_id.as_deref()), (dev_jira::BRIEF_READY, None), "brief ready, no mission while Off");
+        let t = ticket(&env, &stranded).await;
+        assert_eq!((t.state.as_str(), t.start_called_at.is_some()), (dev_jira::PICKED_UP, true), "stranded: {:?}", events(&env, &stranded).await);
+        assert!(env.state.db.ticket_brief(&space(), &stranded).await.unwrap().is_none(), "no brief for it");
+        // Off again while already Off keeps the moment it went Off (else the stranded card would be missed)
+        let off_at = env.state.db.dev_jira_site(&space()).await.unwrap().unwrap().updated_at;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let (s, v) = call(&env.app, "POST", &uri("jira/on"), Some(json!({"on": false}))).await;
+        assert_eq!(s.as_u16(), 200, "{v}");
+        assert_eq!(env.state.db.dev_jira_site(&space()).await.unwrap().unwrap().updated_at, off_at, "a second Off doesn't move the Off time");
+
+        // On again
+        let (s, v) = call(&env.app, "POST", &uri("jira/on"), Some(json!({"on": true}))).await;
+        assert_eq!(s.as_u16(), 200, "{v}");
+        let b = env.state.db.ticket_brief(&space(), &briefed_key).await.unwrap().unwrap();
+        let mission = env.state.db.get_mission(b.mission_id.as_deref().expect("the brief got its mission")).await.unwrap().unwrap();
+        if wait_for_ok {
+            assert_eq!((ticket(&env, &briefed_key).await.state.as_str(), mission.status.as_str()), (dev_jira::BRIEF_READY, "draft"), "waits for the OK");
+            let st = wait_state(&env, &stranded, &[dev_jira::BRIEF_READY, dev_jira::FAILED, dev_jira::WORKING]).await;
+            assert_eq!(st, dev_jira::BRIEF_READY, "read again, then waits for the OK: {:?}", events(&env, &stranded).await);
+            let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{briefed_key}/ok")), None).await;
+            assert_eq!((s.as_u16(), v["state"].as_str()), (200, Some("working")), "the OK starts the draft: {v}");
+        } else {
+            assert_eq!(mission.status, "active");
+            assert_eq!(ticket(&env, &briefed_key).await.state, dev_jira::WORKING);
+            until_working(&env, &stranded).await;
+        }
+        assert!(env.state.db.ticket_brief(&space(), &stranded).await.unwrap().is_some(), "the stranded card was read");
+        // The ticket labelled while Off comes in waiting for the person's Start
+        poll(&env).await;
+        let t = ticket(&env, &labelled).await;
+        assert_eq!((t.state.as_str(), t.start_called_at), (dev_jira::WAITING, None), "no surprise backfill");
+        // Turning On when it already is On moves nothing
+        let (s, _) = call(&env.app, "POST", &uri("jira/on"), Some(json!({"on": true}))).await;
+        assert_eq!(s.as_u16(), 200);
+        assert_eq!(ticket(&env, &labelled).await.state, dev_jira::WAITING);
+    }
+}
+
 /// A site with no team, or whose team is gone, picks nothing up (`skipped: "no_team"`, no Jira
 /// call), and the cards it has stay as they are.
 #[tokio::test]

@@ -418,6 +418,36 @@ pub fn queue_order(a: &TicketRow, b: &TicketRow) -> std::cmp::Ordering {
     rank(a).cmp(&rank(b)).then_with(|| created(a).cmp(&created(b))).then_with(|| a.key.cmp(&b.key))
 }
 
+/// What turning the site On again moved on (D10).
+#[derive(Debug, Default, serde::Serialize, PartialEq)]
+pub struct BackOn {
+    /// `picked_up` cards whose start found the site Off, queued again.
+    pub requeued: usize,
+    /// Brief ready cards whose work started (or whose draft waits for the OK).
+    pub work: usize,
+    /// Queued cards started now (the rest wait for a free slot).
+    pub started: usize,
+}
+
+/// D10: the site was Off from `off_since` and is On now. Cards whose turn came while it was Off
+/// go on from where they stopped: a `picked_up` card whose start found the site Off goes back
+/// through pickup, and a Brief ready card with no mission gets its work (`hooks::work_after_on`).
+/// Tickets labelled while Off are untouched: `backfill_done` was reset, so the next poll brings
+/// them in as waiting for the person's Start (no surprise backfill).
+pub async fn back_on(state: &AppState, space_id: &str, off_since: DateTime<Utc>) -> BackOn {
+    let mut out = BackOn { requeued: state.db.requeue_dev_tickets_started_since(space_id, off_since).await.map(|k| k.len()).unwrap_or(0), ..BackOn::default() };
+    out.work = hooks::work_after_on(state, space_id).await;
+    if let Ok(Some(site)) = state.db.dev_jira_site(space_id).await {
+        if site.on_ {
+            out.started = fill_slots(state, &site).await;
+        }
+    }
+    if out != BackOn::default() {
+        tracing::info!(space_id, requeued = out.requeued, work = out.work, started = out.started, "jira: the site is on again; waiting cards go on");
+    }
+    out
+}
+
 /// Starts queued tickets while a slot is free (the Start button); answers how many started.
 pub async fn fill_slots(state: &AppState, site: &JiraSiteRow) -> usize {
     let mut report = PollReport::default();

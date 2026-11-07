@@ -130,6 +130,13 @@ pub async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<Sp
     }
 }
 
+/// 409 `jira_off`: the person turned Work from Jira off, so Start, Retry and Ask on Jira (and its
+/// preview, which reads the ticket's reporter) are refused before anything reaches Jira. Check,
+/// users, Stop, Skip, Close and the brief's own routes stay open (api.md §2.5).
+pub fn jira_off() -> Response {
+    coded(StatusCode::CONFLICT, "jira_off", "Work from Jira is off.")
+}
+
 #[allow(clippy::result_large_err)]
 async fn site_or_404(state: &AppState, space: &SpaceId) -> Result<JiraSiteRow, Response> {
     match state.db.dev_jira_site(space.as_str()).await {
@@ -395,6 +402,10 @@ pub async fn put_site(State(state): State<AppState>, headers: HeaderMap, Path(id
     let rule_changed = existing.as_ref().is_none_or(|e| e.projects != row.projects || e.handover != row.handover || e.assignee_id != row.assignee_id || e.label != row.label || e.jql != row.jql);
     match state.db.save_dev_jira_site(&row, rule_changed).await {
         Ok(saved) => {
+            // Saving turns the site On: cards whose turn came while it was Off go on (D10)
+            if let Some(off) = existing.as_ref().filter(|e| !e.on_) {
+                pickup::back_on(&state, space.as_str(), off.updated_at).await;
+            }
             pickup::poll_soon(space.as_str());
             // The names come from this check, never from the body (api-decisions 23)
             save_names(&state, space.as_str(), &out).await;
@@ -439,9 +450,18 @@ pub async fn set_on(State(state): State<AppState>, headers: HeaderMap, Path(id):
     let Some(on) = body["on"].as_bool() else {
         return coded(StatusCode::BAD_REQUEST, "bad_request", "say on: true or false");
     };
+    // When it was Off: since when (the row's last change was turning it Off)
+    let off_since = match state.db.dev_jira_site(space.as_str()).await {
+        Ok(Some(s)) if !s.on_ => Some(s.updated_at),
+        Ok(_) => None,
+        Err(e) => return internal(e),
+    };
     match state.db.set_dev_jira_on(space.as_str(), on).await {
         Ok(true) => {
             if on {
+                if let Some(since) = off_since {
+                    pickup::back_on(&state, space.as_str(), since).await;
+                }
                 pickup::poll_soon(space.as_str());
             }
             Json(json!({"on": on})).into_response()
@@ -543,6 +563,9 @@ pub async fn start(State(state): State<AppState>, headers: HeaderMap, Path((id, 
         Ok(s) => s,
         Err(r) => return r,
     };
+    if !site.on_ {
+        return jira_off();
+    }
     match store::set_state(&state, space.as_str(), &key, dev_jira::PICKED_UP, Some("started by the person")).await {
         Ok(true) => {
             let started = pickup::fill_slots(&state, &site).await;
@@ -570,6 +593,9 @@ async fn person_move(state: AppState, headers: HeaderMap, id: String, key: Strin
         Ok(s) => s,
         Err(r) => return r,
     };
+    if mv == PersonMove::Retry && !site.on_ {
+        return jira_off();
+    }
     match store::person_move(&state, space.as_str(), &key, mv).await {
         Ok(Some(_)) => {}
         Ok(None) => return wrong_state(&state, space.as_str(), &key, mv.as_str()).await,
@@ -697,6 +723,9 @@ struct Prepared {
 #[allow(clippy::result_large_err)]
 async fn prepare(state: &AppState, space: &SpaceId, key: &str, body: &AskBody) -> Result<Prepared, Response> {
     let site = site_or_404(state, space).await?;
+    if !site.on_ {
+        return Err(jira_off());
+    }
     let ticket = match state.db.dev_ticket(space.as_str(), key).await {
         Ok(Some(t)) => t,
         Ok(None) => return Err(coded(StatusCode::NOT_FOUND, "not_found", "no such ticket here")),

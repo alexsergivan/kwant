@@ -109,6 +109,26 @@ async fn open_questions(state: &AppState, space_id: &str, key: &str) -> Vec<Tick
     qs
 }
 
+/// D10: the site is On again. A Brief ready card whose brief came in while it was Off has no
+/// mission: its work starts now (a draft that waits for the OK when "Wait for my OK before
+/// building" is on, so the OK button has something to start). Answers how many got their work.
+pub async fn work_after_on(state: &AppState, space_id: &str) -> usize {
+    let _one = ANSWERS.lock().await;
+    let mut n = 0;
+    for t in state.db.dev_tickets(space_id).await.unwrap_or_default().iter().filter(|t| t.state == crate::db::dev_jira::BRIEF_READY) {
+        let Some(r) = row(state, space_id, &t.key).await else { continue };
+        if r.mission_id.is_some() {
+            continue;
+        }
+        let Some(b) = parse(&r) else { continue };
+        let Some(site) = seam::site(state, space_id, &r.site_id).await else { continue };
+        if mission::start(state, &site, &r, &b).await {
+            n += 1;
+        }
+    }
+    n
+}
+
 /// The ticket's turn has come (api.md 1.3). Only a ticket whose card is `picked_up` starts (the
 /// card row is the one truth, D2). A ticket with a brief resumes from it (its open questions, or a
 /// new mission, J14), whatever its brief row was left at when it was taken back, closed or failed
