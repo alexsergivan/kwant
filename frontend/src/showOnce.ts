@@ -126,6 +126,9 @@ export class ShowOnceError extends Error {
 
 const FALLBACK: Record<string, string> = {
   not_taken_over: 'Take over the browser first, then record.',
+  not_shown: 'This skill wasn’t shown, so it has no recorded steps.',
+  no_skill: 'That skill is gone.',
+  no_bot: 'That bot is gone.',
   already_open: 'This bot already has a recording open.',
   stage_busy: 'Another bot is recording in this browser.',
   no_steps: 'There are no steps left to write from.',
@@ -614,6 +617,12 @@ export function onRecordingFrame(m: Record<string, unknown>) {
 }
 
 onContinuity('recording_updated', (rec) => {
+  // api.md §10.1: Discard (here or in another tab) sends only {id, kwant_id, space_id, deleted: true}
+  const gone = rec as unknown as { id?: unknown; deleted?: unknown } | null;
+  if (session?.rec && gone?.deleted === true && gone.id === session.rec.id) {
+    end(session.handBackAfter);
+    return;
+  }
   if (!session?.rec || !isRecording(rec) || rec.id !== session.rec.id) return;
   const was = session.phase;
   showOnceStore.set(applyRecording(session, rec));

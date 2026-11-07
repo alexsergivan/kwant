@@ -185,7 +185,7 @@ export const ShowOnceStart: React.FC<{
             <li>
               <Check size={14} aria-hidden="true" />
               <span>
-                <b>Recorded:</b> pages, clicks, what you type and pick, files you upload (by name only), your notes.
+                <b>Recorded:</b> pages, clicks, what you type and pick, that you uploaded a file (never its name), your notes.
               </span>
             </li>
             <li>

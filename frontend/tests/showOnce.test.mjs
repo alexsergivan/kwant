@@ -21,6 +21,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = false;
 const m = await loadBundled(`
   import React from 'react';
   export * from './src/showOnce';
+  export { emitContinuity } from './src/continuity';
   export { ShowOnceStart, RecordingStrip, StepReview, RecordStepsButton } from './src/components/ShowOnce';
   export { DraftSections, TryItOnce, KeepLine, ShownLine, shownOf } from './src/components/SkillDraft';
   export { PendingSkill, ActiveSkill, SkillsPanel } from './src/components/SkillsPanel';
@@ -239,6 +240,7 @@ test('Start recording: Start at prefilled, the optional line focused, Esc cancel
 test('an empty Start at and note send nulls (Start uses the page the browser is on)', async () => {
   let started = null;
   const { host, unmount } = await mount(h(m.ShowOnceStart, { botName: 'Rook', open: true, onCancel: () => {}, onStart: (u, n) => (started = [u, n]) }));
+  assert.match(host.textContent, /that you uploaded a file \(never its name\)/, 'api.md §3: an upload keeps the label, never the file name');
   await click(byText(host, 'button', 'Start recording'));
   assert.deepEqual(started, [null, null]);
   unmount();
@@ -631,4 +633,14 @@ test('no HTML from data, spinners stop for reduced motion, the dot stops pulsing
   }
   const css = src('styles/showOnce.css');
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
+});
+
+test('a Discard elsewhere (SSE with deleted: true, api.md §10.1) closes the review here', async () => {
+  m.showOnceStore.set(reviewing());
+  m.emitContinuity({ type: 'recording_updated', data: { id: 'rec_other', kwant_id: 'k_rook', space_id: 'sp1', deleted: true } });
+  assert.ok(m.showOnceStore.get(), 'another recording: nothing happens');
+  m.emitContinuity({ type: 'recording_updated', data: { id: 'rec_1', kwant_id: 'k_rook', space_id: 'sp1', deleted: true } });
+  await settle();
+  assert.equal(m.showOnceStore.get(), null);
+  reset();
 });
