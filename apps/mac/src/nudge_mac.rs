@@ -97,14 +97,15 @@ impl Nudger {
     pub fn on_poll(&mut self, handle: &AppHandle, change: &Change, show: bool) {
         let badge = (change.count > 0).then_some(change.count);
         if badge != self.badge {
-            if let Some(main) = handle.get_webview_window(crate::MAIN) {
+            // the Dock badge is the app's, whichever window sets it
+            if let Some(main) = crate::place_window(handle, None) {
                 if main.set_badge_count(badge.map(|n| n as i64)).is_ok() {
                     self.badge = badge;
                 }
             }
         }
         let _ = self.icon.send(if show && change.play { Icon::Play } else { Icon::Rest(change.count > 0) });
-        let cmd = if !show || change.count == 0 || crate::main_focused(handle) {
+        let cmd = if !show || change.count == 0 || crate::kwant_focused(handle) {
             PillCmd::Quiet
         } else {
             PillCmd::Update { arrived: change.arrived.clone(), live: change.live.clone() }
@@ -168,7 +169,7 @@ fn animate(tray: TrayIcon, rx: Receiver<Icon>) {
 fn payload(items: &[Item]) -> String {
     let list: Vec<serde_json::Value> = items
         .iter()
-        .map(|i| serde_json::json!({ "kind": i.kind.as_str(), "name": i.kwant_name, "title": i.title }))
+        .map(|i| serde_json::json!({ "kind": i.kind.as_str(), "name": i.kwant_name, "title": i.title, "place": i.place_label }))
         .collect();
     serde_json::Value::Array(list).to_string()
 }
@@ -292,6 +293,11 @@ fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: S
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(PillCmd::Update { arrived, live }) => {
+                // a pill gathers one place's items (P7); a newer place's take it over
+                if shown.first().zip(arrived.first()).is_some_and(|(s, a)| s.place != a.place) {
+                    shown.clear();
+                }
+                let arrived = nudge::one_place(&arrived);
                 let before = shown.len();
                 shown.retain(|i| live.contains(&i.key()));
                 if arrived.is_empty() && shown.len() == before {
@@ -354,7 +360,7 @@ fn pill_loop(handle: AppHandle, tray: TrayIcon, rx: Receiver<PillCmd>, opener: S
             Ok(PillCmd::Open) => {
                 if let Some(p) = nudge::pill(&shown) {
                     let h = handle.clone();
-                    let _ = handle.run_on_main_thread(move || crate::open_window_at(&h, Some(&p.target)));
+                    let _ = handle.run_on_main_thread(move || crate::open_place_at(&h, &p.place, Some(&p.target)));
                 }
                 hide_window(&window);
                 shown.clear();
