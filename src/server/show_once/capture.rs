@@ -15,6 +15,41 @@ pub const WORLD: &str = "kwnt-recorder";
 /// empty list where the recorder isn't installed.
 pub const FLUSH: &str =
     "typeof globalThis.__kwntRecorderFlush === 'function' ? globalThis.__kwntRecorderFlush() : []";
+/// Called on the select the person picked in kwnt's drawn option list, resolved into the
+/// recorder's world: the recorder posts that pick as a `select` step through its binding. `false`
+/// where the recorder isn't installed.
+pub const PICKED_FN: &str = "function (indexes) { var f = globalThis.__kwntRecorderPicked; \
+    return typeof f === 'function' ? f(this, indexes) : false; }";
+
+/// Records a pick the person made through kwnt's drawn option list (`select_option` on the
+/// stream). kwnt sets that select itself, so the page sees an untrusted change the recorder
+/// ignores; this hands the pick to the recorder in its own world instead, which posts it as a
+/// `select` step through the binding like any other (same field facts, same mask). `select` is
+/// the select's remote object id in the page's world; `call` sends one CDP command. True when the
+/// recorder took it. Only kwnt's server reaches this path: a page script can neither call the
+/// recorder's world nor send `select_option`.
+pub async fn record_pick<F, Fut>(call: F, select: &str, indexes: &[i64]) -> bool
+where
+    F: Fn(&'static str, serde_json::Value) -> Fut,
+    Fut: std::future::Future<Output = Option<serde_json::Value>>,
+{
+    use serde_json::json;
+    let Some(node) = call("DOM.describeNode", json!({"objectId": select})).await else { return false };
+    let Some(backend) = node["node"]["backendNodeId"].as_i64() else { return false };
+    let Some(tree) = call("Page.getFrameTree", json!({})).await else { return false };
+    let Some(frame) = tree["frameTree"]["frame"]["id"].as_str() else { return false };
+    let world = json!({"frameId": frame, "worldName": WORLD});
+    let Some(world) = call("Page.createIsolatedWorld", world).await else { return false };
+    let Some(context) = world["executionContextId"].as_i64() else { return false };
+    let resolve = json!({"backendNodeId": backend, "executionContextId": context});
+    let Some(resolved) = call("DOM.resolveNode", resolve).await else { return false };
+    let Some(object) = resolved["object"]["objectId"].as_str().map(str::to_string) else { return false };
+    let picked = json!({"objectId": object, "functionDeclaration": PICKED_FN, "arguments": [{"value": indexes}], "returnByValue": true});
+    let took = call("Runtime.callFunctionOn", picked).await.is_some_and(|r| r["result"]["value"] == true);
+    let _ = call("Runtime.releaseObject", json!({"objectId": object})).await;
+    took
+}
+
 /// Largest payload read; anything bigger is dropped.
 pub const MAX_PAYLOAD: usize = 16 * 1024;
 pub const MAX_NAME: usize = 120;
@@ -220,6 +255,71 @@ mod tests {
         assert_eq!(c.step.name.unwrap().chars().count(), MAX_NAME);
         let c = typed(json!({"name":"note"}), &"z".repeat(900));
         assert_eq!(c.step.value.unwrap().chars().count(), MAX_VALUE);
+    }
+
+    /// Canned CDP replies per method (`None` fails that call).
+    type Replies = Vec<(&'static str, Option<serde_json::Value>)>;
+
+    /// `record_pick` against a fake CDP: what it returned and every call it made.
+    fn pick_with(replies: Replies) -> (bool, Vec<(String, serde_json::Value)>) {
+        let map: std::collections::HashMap<_, _> = replies.into_iter().collect();
+        let log = std::sync::Mutex::new(Vec::new());
+        let call = |m: &'static str, p: serde_json::Value| {
+            log.lock().unwrap().push((m.to_string(), p));
+            let r = map.get(m).cloned().flatten();
+            async move { r }
+        };
+        let took = tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(record_pick(call, "page-obj", &[1]));
+        (took, log.into_inner().unwrap())
+    }
+
+    fn all_ok(took: bool) -> Replies {
+        vec![
+            ("DOM.describeNode", Some(json!({"node": {"backendNodeId": 42}}))),
+            ("Page.getFrameTree", Some(json!({"frameTree": {"frame": {"id": "F1"}}}))),
+            ("Page.createIsolatedWorld", Some(json!({"executionContextId": 7}))),
+            ("DOM.resolveNode", Some(json!({"object": {"objectId": "rec-obj"}}))),
+            ("Runtime.callFunctionOn", Some(json!({"result": {"value": took}}))),
+            ("Runtime.releaseObject", Some(json!({}))),
+        ]
+    }
+
+    #[test]
+    fn a_pick_goes_to_the_recorders_world_on_the_same_select() {
+        let (took, log) = pick_with(all_ok(true));
+        assert!(took);
+        let methods: Vec<&str> = log.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["DOM.describeNode", "Page.getFrameTree", "Page.createIsolatedWorld", "DOM.resolveNode", "Runtime.callFunctionOn", "Runtime.releaseObject"]);
+        assert_eq!(log[0].1, json!({"objectId": "page-obj"}));
+        assert_eq!(log[2].1, json!({"frameId": "F1", "worldName": WORLD}), "the recorder's own world");
+        assert_eq!(log[3].1, json!({"backendNodeId": 42, "executionContextId": 7}));
+        assert_eq!(log[4].1["objectId"], "rec-obj", "called on the select as seen from the recorder's world");
+        assert_eq!(log[4].1["functionDeclaration"], PICKED_FN);
+        assert_eq!(log[4].1["arguments"], json!([{"value": [1]}]));
+        assert_eq!(log[5].1, json!({"objectId": "rec-obj"}));
+    }
+
+    #[test]
+    fn a_pick_is_not_recorded_without_the_recorder_or_when_the_page_cant_be_reached() {
+        // the recorder isn't installed: its function answers false
+        assert!(!pick_with(all_ok(false)).0);
+        // any step failing stops there
+        for failing in ["DOM.describeNode", "Page.getFrameTree", "Page.createIsolatedWorld", "DOM.resolveNode", "Runtime.callFunctionOn"] {
+            let replies = all_ok(true).into_iter().map(|(m, r)| (m, if m == failing { None } else { r })).collect();
+            let (took, log) = pick_with(replies);
+            assert!(!took, "{failing}");
+            assert!(!log.iter().any(|(m, _)| m == "Runtime.callFunctionOn") || failing == "Runtime.callFunctionOn", "{failing}");
+        }
+        assert!(PICKED_FN.contains("typeof f === 'function'"));
+    }
+
+    #[test]
+    fn the_recorder_names_a_wrapped_field_by_the_labels_own_words() {
+        let js = recorder_js();
+        assert!(js.contains("function labelText(lab)"));
+        assert!(js.contains("out.push(cut(labelText(el.labels[i]), 200))"));
+        assert!(!js.contains("el.labels[i].textContent"), "a label's whole text includes its select's options");
+        assert!(js.contains("Object.defineProperty(globalThis, '__kwntRecorderPicked'"));
     }
 
     #[test]

@@ -28,9 +28,24 @@
     return !!el.isContentEditable;
   }
   function textOf(id) { var n = document.getElementById(id); return n ? n.textContent : ''; }
+  // A label's own words: a control wrapped inside it (a select's options, a textarea's text, a
+  // button) isn't part of its name, so <label>Status <select>…</select></label> is "Status".
+  var NOT_LABEL_TEXT = { SELECT: 1, TEXTAREA: 1, BUTTON: 1, DATALIST: 1, OPTION: 1, OPTGROUP: 1,
+    SCRIPT: 1, STYLE: 1, TEMPLATE: 1 };
+  function labelText(lab) {
+    var out = '';
+    (function walk(n, depth) {
+      if (depth > 32) return;
+      for (var c = n.firstChild; c && out.length < 2000; c = c.nextSibling) {
+        if (c.nodeType === 3) out += c.data;
+        else if (c.nodeType === 1 && !NOT_LABEL_TEXT[c.tagName]) walk(c, depth + 1);
+      }
+    })(lab, 0);
+    return out;
+  }
   function labels(el) {
     var out = [];
-    if (el.labels) for (var i = 0; i < el.labels.length; i++) out.push(cut(el.labels[i].textContent, 200));
+    if (el.labels) for (var i = 0; i < el.labels.length; i++) out.push(cut(labelText(el.labels[i]), 200));
     if (el.getAttribute('aria-label')) out.push(cut(el.getAttribute('aria-label'), 200));
     var by = el.getAttribute('aria-labelledby');
     if (by) out.push(cut(by.split(/\s+/).map(textOf).join(' '), 200));
@@ -118,14 +133,35 @@
     setTimeout(function () { lastTrusted.set(el, String(valueOf(el) || '')); }, 0);
   }, true);
 
+  function postSelect(el, opt) {
+    var f = facts(el), m = mask(f);
+    var step = { kind: 'select', field: f, label: label(f), masked: m };
+    if (!m) step.value = cut(opt ? opt.label || opt.textContent : '', 600);
+    post(step);
+  }
+  // The person picked in kwnt's own drawn option list (the streamed browser draws none): kwnt
+  // sets the select there, so the page sees an untrusted change, which the listener below
+  // ignores. kwnt's server then calls this, in this world only, which no page script can reach,
+  // with the indexes the person chose: that pick is a `select` step like a native one, and the
+  // select isn't counted as script-changed.
+  Object.defineProperty(globalThis, '__kwntRecorderPicked', { value: function (el, indexes) {
+    if (!el || el.nodeType !== 1 || el.tagName !== 'SELECT' || !Array.isArray(indexes)) return false;
+    var opts = el.options, opt = null;
+    for (var i = 0; i < indexes.length && !opt; i++) {
+      var o = Number.isInteger(indexes[i]) ? opts[indexes[i]] : null;
+      if (o && !o.disabled) opt = o;
+    }
+    if (!opt) return false;
+    commitAll();
+    postSelect(el, opt);
+    return true;
+  } });
+
   document.addEventListener('change', function (e) {
     var el = e.target;
     if (!e.isTrusted) { if (isTextField(el)) scripted.add(el); return; }
     if (el.tagName === 'SELECT') {
-      var f = facts(el), m = mask(f), opt = el.selectedOptions && el.selectedOptions[0];
-      var step = { kind: 'select', field: f, label: label(f), masked: m };
-      if (!m) step.value = cut(opt ? opt.label || opt.textContent : '', 600);
-      post(step);
+      postSelect(el, el.selectedOptions && el.selectedOptions[0]);
     } else if (el.tagName === 'INPUT' && String(el.type).toLowerCase() === 'file') {
       var ff = facts(el);
       post({ kind: 'upload', field: ff, label: label(ff) });
@@ -159,7 +195,7 @@
   function accessibleName(el) {
     var by = el.getAttribute('aria-labelledby');
     var n = el.getAttribute('aria-label') || (by ? by.split(/\s+/).map(textOf).join(' ') : '');
-    if (!n && el.labels && el.labels.length) n = el.labels[0].textContent;
+    if (!n && el.labels && el.labels.length) n = labelText(el.labels[0]);
     if (!n && el.tagName === 'INPUT') n = el.value;
     if (!n) n = el.innerText || el.textContent || '';
     if (!n) { var img = el.querySelector && el.querySelector('img[alt]'); n = img ? img.alt : ''; }

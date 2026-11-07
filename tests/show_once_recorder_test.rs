@@ -27,7 +27,18 @@ const PAGE: &str = "<!doctype html><title>form</title><body>\
 <input id=pw name=pw type=password>\
 <textarea id=area name=area></textarea>";
 
+/// A select wrapped by its label (named after the label's own words, not its options), and a
+/// textarea wrapped the same way whose prefilled text must not become its name.
+const SELECT_PAGE: &str = "<!doctype html><title>orders</title><body>\
+<label>Status <select id=status name=status><option>All</option><option>Paid</option>\
+<option>Refunded</option><option disabled>Pending</option></select></label>\
+<label>Note <textarea id=note>Prefilled words</textarea></label>";
+
 async fn serve_page() -> String {
+    serve(PAGE).await
+}
+
+async fn serve(page: &'static str) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -36,8 +47,8 @@ async fn serve_page() -> String {
                 let mut buf = [0u8; 2048];
                 let _ = stream.read(&mut buf).await;
                 let reply = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{PAGE}",
-                    PAGE.len()
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+                    page.len()
                 );
                 let _ = stream.write_all(reply.as_bytes()).await;
             });
@@ -156,4 +167,96 @@ async fn the_recorder_masks_any_field_whose_text_is_not_all_the_persons_own_typi
     assert_eq!(steps.get("events"), Some(&saved("saved_login")), "an untrusted input event");
     assert_eq!(steps.get("pw"), Some(&saved("password")));
     assert_eq!(steps.get("area"), Some(&(Some("note".to_string()), None)), "the pending edit at the stop");
+}
+
+/// The person picks `index` of the select `id` in kwant's own drawn option list, the way the
+/// stream's `select_option` does it: the page's `<select>` as a remote object, set with the
+/// stream's own SELECT_SET_FN (untrusted events), then handed to the recorder with
+/// `capture::record_pick`. Returns what `record_pick` returned.
+async fn person_picks(ctrl: &BrowserController, id: &str, index: i64) -> bool {
+    let probe = json!({"expression": format!("document.getElementById('{id}')"), "returnByValue": false});
+    let found = ctrl.send_cdp_command("Runtime.evaluate", probe).await.unwrap();
+    let object = found["result"]["objectId"].as_str().unwrap().to_string();
+    let set = json!({"objectId": object, "functionDeclaration": kwnt::server::browser_input::SELECT_SET_FN,
+        "arguments": [{"value": [index]}], "returnByValue": true});
+    let r = ctrl.send_cdp_command("Runtime.callFunctionOn", set).await.unwrap();
+    assert_eq!(r["result"]["value"], true, "the stream set the select: {r}");
+    let call = |method: &'static str, params: Value| async move { ctrl.send_cdp_command(method, params).await.ok() };
+    capture::record_pick(call, &object, &[index]).await
+}
+
+#[tokio::test]
+async fn a_pick_in_the_drawn_list_is_a_select_step_and_a_wrapping_label_names_the_field() {
+    std::env::remove_var("DISPLAY");
+    std::env::remove_var("WAYLAND_DISPLAY");
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let _chrome = ChromeGuard(tmp.path().join("local-chrome"));
+    let service = BrowserService::new(tmp.path().to_path_buf(), None);
+    service.set_mode(ComputerMode::Local).await;
+    let ctrl = service.session("bot", tmp.path()).await.expect("local session");
+    let url = serve(SELECT_PAGE).await;
+    ctrl.navigate(&url).await.unwrap();
+
+    let tree = ctrl.send_cdp_command("Page.getFrameTree", json!({})).await.unwrap();
+    let frame = tree["frameTree"]["frame"]["id"].as_str().unwrap().to_string();
+    let world = ctrl.send_cdp_command("Page.createIsolatedWorld", json!({"frameId": frame, "worldName": capture::WORLD})).await.unwrap();
+    let ctx = world["executionContextId"].clone();
+    let in_world = |expr: String| {
+        let ctrl = &ctrl;
+        let ctx = ctx.clone();
+        async move {
+            let r = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": expr, "contextId": ctx, "returnByValue": true})).await.unwrap();
+            assert!(r.get("exceptionDetails").is_none(), "{r}");
+            r["result"]["value"].clone()
+        }
+    };
+    let sent = || in_world("JSON.stringify(__sent.splice(0))".to_string());
+    let take = |v: Value| -> Vec<String> { serde_json::from_str(v.as_str().unwrap()).unwrap() };
+    in_world(format!("globalThis.__sent = []; globalThis.{} = function (s) {{ __sent.push(s); }}; true", capture::BINDING)).await;
+
+    // no recording on: no recorder in its world, so a pick records nothing
+    assert!(!person_picks(&ctrl, "status", 2).await, "no recorder, nothing taken");
+    assert!(take(sent().await).is_empty());
+
+    in_world(capture::recorder_js()).await;
+
+    // a page script changes the same select and fires change: never a step (S-F2)
+    page_js(&ctrl, "var s = document.getElementById('status'); s.selectedIndex = 2; \
+        s.dispatchEvent(new Event('input', {bubbles: true})); s.dispatchEvent(new Event('change', {bubbles: true})); true").await;
+    assert!(take(sent().await).is_empty(), "a script's change is never recorded");
+    // nor can the page's world reach the recorder's pick
+    assert_eq!(page_js(&ctrl, "typeof globalThis.__kwntRecorderPicked").await, "undefined");
+
+    // the person picks "Paid" in kwant's drawn list: exactly one select step
+    assert!(person_picks(&ctrl, "status", 1).await, "the recorder took the pick");
+    let payloads = take(sent().await);
+    assert_eq!(payloads.len(), 1, "{payloads:?}");
+    let raw: Value = serde_json::from_str(&payloads[0]).unwrap();
+    assert_eq!(raw["field"]["script_filled"], false, "the person's pick isn't script-changed: {raw}");
+    let c = capture::parse(&payloads[0]).expect("the server reads the pick");
+    assert_eq!(c.step.kind, "select");
+    assert_eq!(c.step.label.as_deref(), Some("Status"), "the label's own words, not its options");
+    assert_eq!(c.step.value.as_deref(), Some("Paid"));
+    assert_eq!(c.step.masked, None);
+
+    // a second pick after the script's change: still the person's, still unmasked
+    assert!(person_picks(&ctrl, "status", 2).await);
+    let payloads = take(sent().await);
+    assert_eq!(payloads.len(), 1, "{payloads:?}");
+    let c = capture::parse(&payloads[0]).unwrap();
+    assert_eq!((c.step.value.as_deref(), c.step.masked.as_deref()), (Some("Refunded"), None));
+
+    // a wrapped textarea is named "Note": its prefilled text is never its name
+    focus(&ctrl, "note").await;
+    person_types(&ctrl, "x").await;
+    let flushed = in_world(format!("JSON.stringify({})", capture::FLUSH)).await;
+    let payloads = take(flushed);
+    assert_eq!(payloads.len(), 1, "{payloads:?}");
+    assert!(!payloads[0].contains("Prefilled"), "{}", payloads[0]);
+    let c = capture::parse(&payloads[0]).unwrap();
+    assert_eq!(c.step.label.as_deref(), Some("Note"));
 }

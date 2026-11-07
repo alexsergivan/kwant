@@ -374,6 +374,9 @@ struct Shared {
     cursor_at: std::sync::Mutex<Option<Instant>>,
     /// Asks to read the page's address and title again.
     location: Latest<()>,
+    /// The Show it once recorder is installed on this connection (a recording is live): a pick in
+    /// kwnt's drawn option list is handed to it ([`recorder::record_pick`]).
+    recording: AtomicBool,
 }
 
 /// Keeps only the newest value offered and makes sure exactly one runner drains it, so a value
@@ -736,6 +739,15 @@ impl Worker {
                     "arguments": [{"value": indexes}], "returnByValue": true,
                 }), PROBE_WAIT).await?;
                 if result["result"]["value"] != true { return Err(protocol("That option can't be picked")); }
+                // Show it once: the page saw an untrusted change, which the recorder ignores; the
+                // person's pick goes to the recorder in its own world as a `select` step
+                if self.shared.recording.load(Ordering::SeqCst) {
+                    let cdp = &self.cdp;
+                    let call = |method: &'static str, params: Value| async move { cdp.call(method, params, PROBE_WAIT).await.ok() };
+                    if !recorder::record_pick(call, &object, &indexes).await {
+                        tracing::debug!("show it once: a pick in the drawn list wasn't recorded");
+                    }
+                }
                 self.close_select();
                 let _ = self.client.send(ack(id, json!({})));
             }
@@ -891,6 +903,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
         cursor_moves: Latest::new(),
         cursor_at: std::sync::Mutex::new(None),
         location: Latest::new(),
+        recording: AtomicBool::new(false),
     });
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<Value>();
     let (jobs, jobs_rx) = mpsc::unbounded_channel::<Job>();
@@ -984,12 +997,12 @@ async fn stream(
                     refresh_location(cdp, ctrl, shared, client_tx);
                     // Show it once: the 30-minute limit and the 28:00 warning
                     let acts = rec.tick().await;
-                    recorder_acts(socket, ctrl, cdp, rec, acts, &mut recorder_script).await?;
+                    recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
                 }
                 cmd = rec.next_cmd() => {
                     if let Some(cmd) = cmd {
                         let acts = rec.on_cmd(cmd).await;
-                        recorder_acts(socket, ctrl, cdp, rec, acts, &mut recorder_script).await?;
+                        recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
                     }
                 }
                 Some(value) = client_rx.recv() => send(socket, value).await?,
@@ -1004,7 +1017,7 @@ async fn stream(
                         let _ = client_tx.send(json!({"type":"location","url":url,"title":""}));
                         if rec.is_live() {
                             let acts = rec.on_navigated(&url).await;
-                            recorder_acts(socket, ctrl, cdp, rec, acts, &mut recorder_script).await?;
+                            recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
                         }
                     }
                     if moves_location(method, params) { refresh_location(cdp, ctrl, shared, client_tx); }
@@ -1022,7 +1035,7 @@ async fn stream(
                         }
                         "Runtime.bindingCalled" if params["name"] == recorder::BINDING => {
                             let acts = rec.on_binding(params["payload"].as_str().unwrap_or_default()).await;
-                            recorder_acts(socket, ctrl, cdp, rec, acts, &mut recorder_script).await?;
+                            recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
                         }
                         "Page.screencastFrame" => {
                             let session = params["sessionId"].as_i64().unwrap_or_default();
@@ -1084,7 +1097,7 @@ async fn stream(
                         "release_control" => {
                             // Show it once: the edit still pending in the page is a step first
                             if rec.is_live() {
-                                recorder_acts(socket, ctrl, cdp, rec, vec![Act::Flush], &mut recorder_script).await?;
+                                recorder_acts(socket, ctrl, cdp, shared, rec, vec![Act::Flush], &mut recorder_script).await?;
                             }
                             let (done, wait) = oneshot::channel();
                             if jobs.send(Job::HandBack(Some(done))).is_ok() {
@@ -1093,7 +1106,7 @@ async fn stream(
                             lease = None;
                             // Show it once: Hand back stops a live recording (`handed_back`)
                             let acts = rec.handed_back().await;
-                            recorder_acts(socket, ctrl, cdp, rec, acts, &mut recorder_script).await?;
+                            recorder_acts(socket, ctrl, cdp, shared, rec, acts, &mut recorder_script).await?;
                             let (vw, vh) = shared.view();
                             send(socket, json!({"type":"control","active":false,"viewport":{"width":vw,"height":vh}})).await?;
                         }
@@ -1160,6 +1173,7 @@ async fn recorder_acts(
     socket: &mut WebSocket,
     ctrl: &BrowserController,
     cdp: &Cdp,
+    shared: &Shared,
     rec: &mut StageRecorder,
     acts: Vec<Act>,
     script: &mut Option<String>,
@@ -1169,6 +1183,7 @@ async fn recorder_acts(
         match act {
             Act::Send(frame) => send(socket, frame).await?,
             Act::Install => {
+                shared.recording.store(true, Ordering::SeqCst);
                 if script.is_none() {
                     let binding = json!({"name": recorder::BINDING, "executionContextName": recorder::WORLD});
                     if let Err(e) = cdp.call("Runtime.addBinding", binding, PROBE_WAIT).await { tracing::debug!("recorder binding: {}", e); }
@@ -1181,6 +1196,7 @@ async fn recorder_acts(
                 if let Some(url) = current_url(cdp).await { queue.extend(rec.on_installed(&url).await); }
             }
             Act::Uninstall => {
+                shared.recording.store(false, Ordering::SeqCst);
                 if let Some(identifier) = script.take() {
                     let _ = cdp.call("Page.removeScriptToEvaluateOnNewDocument", json!({"identifier": identifier}), PROBE_WAIT).await;
                 }
