@@ -48,8 +48,8 @@ const GAP = 8;
 const EDGE = 12;
 
 /** Where the popover goes: under the anchor (or above it when there's no room), kept inside the window. */
-export function popoverPlace(anchor: { top: number; bottom: number; left: number; right: number } | null, vw: number, vh: number, height: number) {
-  const width = Math.min(WIDTH, vw - EDGE * 2);
+export function popoverPlace(anchor: { top: number; bottom: number; left: number; right: number } | null, vw: number, vh: number, height: number, want = WIDTH) {
+  const width = Math.min(want, vw - EDGE * 2);
   if (!anchor) return { left: Math.round((vw - width) / 2), top: Math.max(EDGE, Math.round((vh - height) / 3)), width };
   const left = Math.round(Math.min(Math.max(EDGE, anchor.left), vw - width - EDGE));
   const below = anchor.bottom + GAP;
