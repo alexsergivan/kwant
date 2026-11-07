@@ -28,7 +28,9 @@ use crate::server::AppState;
 
 pub const REFUSAL: &str = "only the person can read or change the Jira connection";
 
-fn coded(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
+/// A refusal in the routes' shape, `{error, code}`. Public so the brief routes (Vega's, mounted through
+/// `hooks::mount`) answer the same way.
+pub fn coded(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
     (status, Json(json!({"error": message.into(), "code": code}))).into_response()
 }
 
@@ -114,8 +116,11 @@ fn source_error(e: &SourceError) -> Response {
     }
 }
 
+/// The check every tickets route makes first: a bot's token is refused (403 `person_only`), then the space
+/// must exist (404 `no_space`) and not be archived (409 `space_archived`). Public so the brief routes
+/// mounted through `hooks::mount` use the same guard and the same codes.
 #[allow(clippy::result_large_err)]
-async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceId, Response> {
+pub async fn guard(state: &AppState, headers: &HeaderMap, id: &str) -> Result<SpaceId, Response> {
     if let Err(r) = crate::server::mcp_suggest::refuse_agent_tokens(state, headers, REFUSAL).await {
         return Err(with_code(r, guard_code).await);
     }
