@@ -356,7 +356,7 @@ fn tools() -> Value {
         },
         {
             "name": "list_threads",
-            "description": "The threads this connection started, newest first, with each one's last reply (first 500 characters).",
+            "description": "The threads this connection started, newest first, with the bot's last reply to this connection's asks in each (first 500 characters; null before the first reply).",
             "inputSchema": {
                 "type": "object",
                 "properties": {"bot": {"type": "string", "description": "Only threads with this bot (id or exact name)."}},
@@ -527,7 +527,7 @@ async fn list_threads(state: &AppState, conn: &AgentConnection, bot: Option<&Kwa
     let mut out = Vec::new();
     for r in rows {
         let name = state.db.get_kwant(&r.kwant_id).await?.map(|k| k.name);
-        let last = state.db.last_kwant_text_in_thread(&r.thread_id).await?.map(|t| cut(&redact(&t), LIST_REPLY_CHARS));
+        let last = state.db.last_agent_reply_in_thread(&conn.id, &r.thread_id).await?.map(|t| cut(&redact(&t), LIST_REPLY_CHARS));
         out.push(json!({
             "thread_id": r.thread_id,
             "bot": {"id": r.kwant_id, "name": name},

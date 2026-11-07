@@ -595,3 +595,69 @@ async fn the_activity_trail_keeps_the_newest_1000_rows_per_connection() {
     assert!(env.state.db.list_agent_calls(&id, 5000).await.unwrap().is_empty());
     assert_eq!(env.state.db.list_agent_calls(&other_id, 5000).await.unwrap().len(), 1);
 }
+
+/// `list_threads`' `last_reply` for the connection's one thread with bot A.
+async fn last_reply(env: &Env, token: &str) -> Value {
+    let (s, err, l) = tool(env, token, "list_threads", json!({"bot": env.a})).await;
+    assert_eq!((s, err), (StatusCode::OK, false), "{l}");
+    let threads = l["threads"].as_array().unwrap();
+    assert_eq!(threads.len(), 1, "{l}");
+    threads[0]["last_reply"].clone()
+}
+
+#[tokio::test]
+async fn list_threads_last_reply_is_only_the_reply_to_this_connections_own_ask() {
+    let env = setup().await;
+    let (_, token) = connect(&env, "Claude Code", json!("all")).await;
+    let (other_id, _) = connect(&env, "Codex", json!("all")).await;
+
+    // A slow ask (its own marker: the fake CLI dedupes a marker by its text): its turn holds on a card for the person, so nothing has answered it yet
+    let hold = call_tool_marker(
+        "ask_user",
+        json!({"question": "List hold?", "choices": ["yes", "no"], "why_you": "irreversible", "checked": "x"}),
+    );
+    let (s, err, r) =
+        tool(&env, &token, "ask", json!({"bot": env.a, "message": format!("Agent work {hold} REPLYTAG:listown"), "wait_seconds": 0})).await;
+    assert_eq!((s, err), (StatusCode::OK, false), "{r}");
+    let thread_id = r["thread_id"].as_str().unwrap().to_string();
+    let turn_id = r["turn_id"].as_str().unwrap().to_string();
+    let agent_q = open_question(&env, &thread_id, "List hold?").await;
+    assert_eq!(last_reply(&env, &token).await, Value::Null);
+
+    // The person types in the "From …" thread meanwhile: the bot's answer to them is not the agent's
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"thread_id": thread_id, "prompt": "Person here REPLYTAG:listperson", "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_reply(&env, &thread_id, "answer listperson").await;
+    assert_eq!(last_reply(&env, &token).await, Value::Null, "the reply to the person leaked");
+
+    // The ask finishes: its own reply shows
+    let (s, _) = call(&env.app, "POST", &format!("/api/questions/{agent_q}/answer"), Some(json!({"choice": 1}))).await;
+    assert_eq!(s, StatusCode::OK);
+    let done = reply_until(&env, &token, &turn_id, |g| g["status"] != "working" && g["status"] != "waiting_on_person").await;
+    assert_eq!(done["status"], "done", "{done}");
+    let own = last_reply(&env, &token).await;
+    assert!(own.as_str().is_some_and(|t| t.contains("answer listown") && !t.contains("person")), "{own}");
+
+    // A newer bot reply to the person does not replace it...
+    let (s, _) = call(&env.app, "POST", "/api/chat/send", Some(json!({"thread_id": thread_id, "prompt": "Again REPLYTAG:listagain", "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK);
+    wait_reply(&env, &thread_id, "answer listagain").await;
+    assert_eq!(last_reply(&env, &token).await, own);
+
+    // ...nor does a reply tied to another connection's turn (two agents granted the same bot)
+    let theirs = env.state.db.reserve_agent_turn(&other_id, &env.a, &thread_id).await.unwrap().expect("reserved");
+    let m = kwnt::db::models::NewMessage {
+        channel_id: None,
+        direct_kwant_id: Some(env.a.clone()),
+        sender_role: "kwant".into(),
+        sender_id: env.a.clone(),
+        text: "answer for Codex".into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    let extra = kwnt::db::models::MessageExtra { thread_id: Some(thread_id.clone()), meta: Some(json!({"agent_turn_id": theirs.id})) };
+    env.state.db.insert_message_with(&m, &extra).await.unwrap();
+    env.state.db.finish_agent_turn(&theirs.id, "done", None, None).await.unwrap();
+    assert_eq!(last_reply(&env, &token).await, own);
+}
