@@ -180,6 +180,8 @@ test('phone strip buttons are 28 px to look at and 44 px to tap: data-compact pl
     assert.match(b.attrs, /kws-hit/, b.label);
     assert.match(b.attrs, /\bh-7\b/, b.label);
     assert.match(b.attrs, /text-xs/, b.label);
+    // N1: the label ends on the time's right edge (the button's own px-2 pulled back by -mr-2).
+    assert.match(b.attrs, /(^|\s)-mr-2(\s|")/, b.label);
   }
   // Stop is muted; Answer is the one amber thing.
   assert.match(buttons(html).find((b) => b.label === 'Stop').attrs, /text-zinc-400/);
@@ -204,7 +206,7 @@ test('desktop strip is unchanged: the bordered card, 24 px avatar, no hit-area c
   assert.match(html, /<div class="kws-strip px-3 sm:px-6 pt-2" data-working-strip="">/);
   assert.match(html, /rounded-xl border border-zinc-700\/60 bg-zinc-900\/80 shadow-\[var\(--kws-shadow\)\] gap-3 px-3 py-1\.5/);
   assert.match(html, /style="width:24px;height:24px"/);
-  assert.doesNotMatch(html, /kws-hit|data-compact|kws-strip-phone/);
+  assert.doesNotMatch(html, /kws-hit|data-compact|kws-strip-phone|-mr-2/);
 });
 
 test('on a phone the steps panel is one 44 px row, the engine note behind an info button', () => {

@@ -110,7 +110,7 @@ export const WatchButton: React.FC<{ name: string; phone?: boolean; onWatch: () 
     data-compact={phone ? '' : undefined}
     className={
       phone
-        ? `textbtn kws-hit shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 ${FOCUS}`
+        ? `textbtn kws-hit -mr-2 shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 ${FOCUS}`
         : `textbtn shrink-0 inline-flex items-center gap-1 rounded-lg px-2 font-medium text-[#b8adff] hover:bg-[rgb(157_143_255/.10)] min-h-8 text-xs ${FOCUS}`
     }
   >

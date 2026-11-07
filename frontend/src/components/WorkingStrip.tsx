@@ -83,7 +83,7 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
               onClick={() => onAnswer?.(answer)}
               data-strip-answer=""
               data-compact=""
-              className="kws-hit shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 active:bg-amber-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff]"
+              className="kws-hit -mr-2 shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 active:bg-amber-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff]"
             >
               Answer
               <ArrowUp size={12} aria-hidden="true" />
@@ -95,7 +95,7 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
               onClick={onStop}
               title="Stop"
               data-compact=""
-              className="kws-hit shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+              className="kws-hit -mr-2 shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
             >
               <Square size={10} className="fill-current" aria-hidden="true" />
               Stop
