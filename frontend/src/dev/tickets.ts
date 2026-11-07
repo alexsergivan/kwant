@@ -117,6 +117,8 @@ export interface TicketWork {
   /** https only. */
   pr_url: string | null;
   head_sha: string | null;
+  /** When the PR merged (api-decisions 22); null until it does. */
+  merged_at: string | null;
   plan: { step: string; state: string }[];
   /** Vega's review verdict, passed through the seam; null until reviewed. */
   matches: MatchVerdict | null;
@@ -149,6 +151,8 @@ export interface Ticket {
   team_id: string | null;
   project: string | null;
   work: TicketWork | null;
+  /** A failed row's reason (api-decisions 22): kwant's own one sentence, shown as plain text. */
+  error: { code: string; message: string | null } | null;
 }
 
 const MATCH_VERDICTS = ['met', 'not_met', 'unclear'] as const;
@@ -164,6 +168,7 @@ export function parseWork(v: unknown): TicketWork | null {
     branch: str(v.branch, 200),
     pr_url: safeHref(v.pr_url),
     head_sha: sha && /^[0-9a-f]{7,64}$/i.test(sha) ? sha : null,
+    merged_at: str(v.merged_at, 40),
     plan: arr(v.plan)
       .filter(isObj)
       .map((p) => ({ step: str(p.step, 200) ?? '', state: str(p.state, 40) ?? '' }))
@@ -188,6 +193,8 @@ export interface WorkView {
   branch: string | null;
   pr: { number: number | null; url: string } | null;
   sha: string | null;
+  /** When the PR merged, from the server (api-decisions 22). */
+  mergedAt: string | null;
   /** Rows of the plan in each state, counted, not a new figure. */
   plan: { done: number; total: number } | null;
   matches: MatchVerdict | null;
@@ -208,6 +215,7 @@ export function workView(t: Pick<Ticket, 'work' | 'team_id'>, names: TicketNames
     branch: w?.branch ?? null,
     pr: w?.pr_url ? { number: m ? Number(m[1]) : null, url: w.pr_url } : null,
     sha: w?.head_sha ?? null,
+    mergedAt: w?.merged_at ?? null,
     plan: w && w.plan.length > 0 ? { done: w.plan.filter((p) => p.state === 'done').length, total: w.plan.length } : null,
     matches: w?.matches ?? null,
   };
@@ -248,6 +256,7 @@ export function parseTicket(raw: unknown): Ticket | null {
     team_id: str(o.team_id, 120),
     project: str(o.project, 40),
     work: parseWork(o.work),
+    error: isObj(o.error) && str(o.error.code, 60) ? { code: str(o.error.code, 60)!, message: str(o.error.message, 300) } : null,
   };
 }
 
@@ -607,27 +616,61 @@ export function matchCount(rows: { state: string }[]): { met: number; total: num
 /** The holo sticker on Landed: only when the review's verdict is that every done-when line is met (design §3 rules). */
 export const earnsMatches = (t: Pick<Ticket, 'state' | 'work'>): boolean => t.state === 'landed' && t.work?.matches === 'met';
 
-/** api-decisions 17: the review's own "Matches the ticket" block. */
+/**
+ * A matches item's Fix it state (api-decisions 20, api.md 2.11): `null` on a met item, else the same shape
+ * as a finding's. The card shows it as the server sends it and never works out whether it blocks.
+ */
+export interface MatchFix {
+  state: 'open' | 'sent' | 'dismissed';
+  sent_at: string | null;
+  sent_to: string | null;
+  task_id: string | null;
+  send_error: string | null;
+  dismissed: { reason: string; note: string; by: string; at: string | null } | null;
+}
+
+/** api-decisions 17, 20, 21: the review's own "Matches the ticket" block. */
 export interface MatchItem {
+  /** "k{n}" for done-when line n, from the server; Fix it posts to it. Null when missing or malformed (no Fix it). */
+  id: string | null;
   criterion: string;
   state: MatchVerdict;
   evidence: string | null;
-  /** Files the evidence names, when the server sends them apart from the sentence. */
+  /** Files the evidence names, sent apart from the sentence. */
   paths: string[];
-  /** The done-when line's own sources, when the server copies them from the brief; else the card looks them up. */
+  /** The done-when line's own sources, copied by the server (off-site links already dropped). */
   sources: SourceRef[];
   inferred: boolean;
+  fix: MatchFix | null;
 }
 export interface ReviewMatches {
   verdict: MatchVerdict;
   items: MatchItem[];
   key: string | null;
   url: string | null;
+  /** The server's word on whether this block holds back LGTM (api-decisions 20a). */
+  blocks_lgtm: boolean;
+}
+
+const FIX_STATES = ['open', 'sent', 'dismissed'] as const;
+
+export function parseMatchFix(v: unknown): MatchFix | null {
+  if (!isObj(v)) return null;
+  const d = v.dismissed;
+  return {
+    // An unknown state reads as open: Fix it stays on offer rather than claiming something was sent.
+    state: oneOf(v.state, FIX_STATES, 'open'),
+    sent_at: str(v.sent_at, 40),
+    sent_to: str(v.sent_to, 80),
+    task_id: str(v.task_id, 120),
+    send_error: str(v.send_error, 300),
+    dismissed: isObj(d) ? { reason: str(d.reason, 40) ?? '', note: str(d.note, 500) ?? '', by: str(d.by, 80) ?? '', at: str(d.at, 40) } : null,
+  };
 }
 
 /**
- * `review.matches = {verdict, items:[{criterion, state, evidence}]}`. `evidence` may be a sentence or
- * `{text, paths}`. An unknown state reads as unclear, never as met. Null when there's no block.
+ * `review.matches = {key, url, verdict, blocks_lgtm, items:[{id, criterion, state, evidence, paths, sources,
+ * inferred, fix}]}` (api.md 2.11). An unknown state reads as unclear, never as met. Null when there's no block.
  */
 export function parseMatches(v: unknown): ReviewMatches | null {
   if (!isObj(v)) return null;
@@ -637,16 +680,18 @@ export function parseMatches(v: unknown): ReviewMatches | null {
     .map((i): MatchItem | null => {
       const criterion = str(i.criterion, 600);
       if (!criterion) return null;
-      const ev = i.evidence;
-      const evText = isObj(ev) ? str(ev.text, 400) : str(ev, 400);
-      const paths = isObj(ev) ? strList(ev.paths, 5) : strList(i.paths, 5);
+      const id = str(i.id, 8);
+      const state = oneOf(i.state, MATCH_VERDICTS, 'unclear');
       return {
+        id: id && /^k\d{1,2}$/.test(id) ? id : null,
         criterion,
-        state: oneOf(i.state, MATCH_VERDICTS, 'unclear'),
-        evidence: evText,
-        paths,
+        state,
+        evidence: str(i.evidence, 400),
+        paths: strList(i.paths, 5),
         sources: arr(i.sources).map(parseSource).filter((x): x is SourceRef => !!x).slice(0, 4),
         inferred: i.inferred === true,
+        // A met item has nothing to fix, whatever the server sent.
+        fix: state === 'met' ? null : parseMatchFix(i.fix),
       };
     })
     .filter((i): i is MatchItem => !!i);
@@ -657,17 +702,8 @@ export function parseMatches(v: unknown): ReviewMatches | null {
     items,
     key: str(v.key, 40),
     url: str(v.url, 2000),
+    blocks_lgtm: v.blocks_lgtm === true,
   };
-}
-
-/**
- * The brief's done-when line a matches item checks: same words first, else the same place in the list.
- * Its sources become the item's chips (item 15) when the server didn't copy them.
- */
-export function doneWhenFor(brief: Pick<Brief, 'done_when'> | null, item: Pick<MatchItem, 'criterion'>, i: number): BriefLine | null {
-  if (!brief) return null;
-  const norm = (x: string) => x.replace(/\s+/g, ' ').trim().toLowerCase();
-  return brief.done_when.find((l) => norm(l.text) === norm(item.criterion)) ?? brief.done_when[i] ?? null;
 }
 
 /**

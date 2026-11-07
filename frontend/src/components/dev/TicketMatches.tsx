@@ -1,22 +1,45 @@
-// 0.7.6 "Matches the ticket" on the Review card (design.md §6, api-decisions 17). When a PR maps to a ticket's
-// brief, the review's own `matches {verdict, items}` block replaces "Did it do what was asked?": one row per
-// done-when line, met / not met / unclear, with the reviewer's evidence and the line's source chips from the
-// brief. A row gets Fix it only when the review has a finding `k{n}` for it, sent through the same fix_task
-// as any finding. Counts are the rows' own states, not a new figure.
+// 0.7.6 "Matches the ticket" on the Review card (design.md §6, api-decisions 17, 20, 21; api.md 2.11). When a PR
+// maps to a ticket's brief, the review's own `matches` block replaces "Did it do what was asked?": one row per
+// done-when line, met / not met / unclear, with the reviewer's evidence and the line's source chips as the
+// server copied them. Fix it, Undo and Dismiss go to the item's own `k{n}` id on the findings route; its state
+// is the item's `fix`, read as sent. Whether the block holds back LGTM is the server's `blocks_lgtm`, never
+// worked out here. Counts are the rows' own states, not a new figure.
 
 import React from 'react';
 import { Check, ExternalLink, HelpCircle, Loader2, Target, X } from 'lucide-react';
 import type { DevFinding, FindingAction } from '../../dev/types';
-import type { Brief, MatchItem, ReviewMatches } from '../../dev/tickets';
-import { doneWhenFor, extraPaths, matchCount, onSite } from '../../dev/tickets';
+import type { MatchItem, ReviewMatches } from '../../dev/tickets';
+import { extraPaths, matchCount, onSite } from '../../dev/tickets';
+import { undoLeft } from '../../dev/logic';
 import { CodeText, InferredChip, SiteOrigins, SourceChip } from './TicketBrief';
 
-/** The finding a row's Fix it sends: the review's `k{n}` finding for done-when line n, whatever its source. */
-export const rowFinding = (findings: DevFinding[], i: number): DevFinding | null => findings.find((f) => f.id === `k${i + 1}`) ?? null;
+/**
+ * A matches item as the findings route sees it: the item's server id and its `fix` state, so Fix it, Undo and
+ * the send error go through the review card's one finding path. Null on a met item or one with no id.
+ */
+export function itemFinding(r: MatchItem): DevFinding | null {
+  if (!r.id || !r.fix || r.state === 'met') return null;
+  return {
+    id: r.id,
+    severity: r.state === 'not_met' ? 'high' : 'medium',
+    title: r.criterion,
+    file: null,
+    line: null,
+    detail: r.evidence,
+    fix: null,
+    source: 'review',
+    state: r.fix.state,
+    sent_at: r.fix.sent_at,
+    sent_to: r.fix.sent_to,
+    task_id: r.fix.task_id,
+    send_error: r.fix.send_error,
+    dismissed: r.fix.dismissed as DevFinding['dismissed'],
+  };
+}
 
-/** The `k{n}` findings that live on the Matches rows, so Findings doesn't list them twice. */
+/** The item ids that live on the Matches rows, so Findings never lists one of them twice. */
 export const matchFindingIds = (m: ReviewMatches | null): Set<string> =>
-  new Set(m ? m.items.map((it, i) => (it.state === 'met' ? null : `k${i + 1}`)).filter((x): x is string => !!x) : []);
+  new Set(m ? m.items.map((it) => it.id).filter((x): x is string => !!x) : []);
 
 const STATE: Record<MatchItem['state'], { word: string; chip: string | null; cls: string }> = {
   met: { word: 'Met', chip: null, cls: 'ok' },
@@ -27,19 +50,16 @@ const STATE: Record<MatchItem['state'], { word: string; chip: string | null; cls
 const MRow: React.FC<{
   r: MatchItem;
   i: number;
-  brief: Brief | null;
-  f: DevFinding | null;
+  now: number;
   busy: boolean;
   act?: (f: DevFinding, a: FindingAction) => void;
-}> = ({ r, i, brief, f, busy, act }) => {
+}> = ({ r, i, now, busy, act }) => {
   const st = STATE[r.state];
-  const sent = f?.state === 'sent';
-  const line = r.sources.length > 0 || r.inferred ? null : doneWhenFor(brief, r, i);
-  const sources = r.sources.length > 0 ? r.sources : line?.sources ?? [];
-  const inferred = r.inferred || !!line?.inferred;
+  const f = itemFinding(r);
   const paths = extraPaths(r.evidence, r.paths);
+  const left = f ? undoLeft(f, now) : 0;
   return (
-    <li className="tk-mrow" data-m={st.cls} data-row={i + 1}>
+    <li className="tk-mrow" data-m={st.cls} data-row={i + 1} data-item={r.id ?? undefined}>
       <span className="st" aria-hidden="true">
         {st.cls === 'ok' ? <Check size={12} /> : st.cls === 'bad' ? <X size={12} /> : <HelpCircle size={13} />}
       </span>
@@ -49,10 +69,10 @@ const MRow: React.FC<{
             Line {i + 1}, {st.word}:{' '}
           </span>
           <CodeText text={r.criterion} />
-          {(inferred || sources.length > 0) && (
+          {(r.inferred || r.sources.length > 0) && (
             <span className="srcs">
-              {inferred && <InferredChip />}
-              {sources.map((s, j) => (
+              {r.inferred && <InferredChip />}
+              {r.sources.map((s, j) => (
                 <SourceChip key={j} s={s} />
               ))}
             </span>
@@ -86,14 +106,24 @@ const MRow: React.FC<{
           <span className={`kw-chip ${st.cls === 'bad' ? 'kw-chip-bad' : 'kw-chip-warn'}`} aria-hidden="true">
             {st.chip}
           </span>
-          {sent ? (
-            <span className="kw-chip kw-chip-ok" data-sent>
-              Sent{f?.sent_to ? ` to ${f.sent_to}` : ''}
+          {f?.state === 'sent' ? (
+            <>
+              <span className="kw-chip kw-chip-ok" data-sent>
+                Sent{f.sent_to ? ` to ${f.sent_to}` : ''}
+              </span>
+              {left > 0 && act && (
+                <button type="button" className="tk-btn-sm" disabled={busy} onClick={() => act(f, { action: 'undo_fix' })} aria-label={`Undo Fix it: line ${i + 1}`} data-undo={f.id}>
+                  Undo ({Math.ceil(left / 1000)} s)
+                </button>
+              )}
+            </>
+          ) : f?.state === 'dismissed' ? (
+            <span className="kw-chip" data-dismissed>
+              Dismissed
             </span>
           ) : (
             f &&
-            act &&
-            f.state === 'open' && (
+            act && (
               <button type="button" className="tk-btn-sm" disabled={busy} onClick={() => act(f, { action: 'fix' })} aria-label={`Fix it: line ${i + 1}`} data-fix={f.id}>
                 {busy ? <Loader2 size={12} className="tk-spin" aria-hidden="true" /> : null}
                 {f.send_error ? 'Try again' : 'Fix it'}
@@ -108,9 +138,8 @@ const MRow: React.FC<{
 
 export interface TicketMatchesProps {
   matches: ReviewMatches;
-  findings: DevFinding[];
-  /** The ticket's brief, for each line's source chips when the review didn't copy them. */
-  brief?: Brief | null;
+  /** The clock the review card ticks, for the Undo countdown. */
+  now?: number;
   /** The saved Jira site's origins: the key links to Jira only on that site (api-decisions 18). */
   origins?: readonly string[];
   /** The brief's author for "Ann's brief"; falls back to "the brief". */
@@ -119,12 +148,12 @@ export interface TicketMatchesProps {
   act?: (f: DevFinding, a: FindingAction) => void;
 }
 
-export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, findings, brief = null, origins = [], lead = null, busy = false, act }) => {
+export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, now = Date.now(), origins = [], lead = null, busy = false, act }) => {
   const { met, total } = matchCount(matches.items);
   const all = matches.verdict === 'met' && total > 0 && met === total;
   const url = onSite(matches.url, origins);
   return (
-    <section className="tk-matches mt-4" aria-label="Matches the ticket" data-matches={`${met}/${total}`} data-verdict={matches.verdict}>
+    <section className="tk-matches mt-4" aria-label="Matches the ticket" data-matches={`${met}/${total}`} data-verdict={matches.verdict} data-blocks-lgtm={matches.blocks_lgtm ? 'true' : 'false'}>
       <div className="tk-sech">
         <Target size={12} aria-hidden="true" />
         <h4>Matches the ticket</h4>
@@ -153,7 +182,7 @@ export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, findings,
         <SiteOrigins.Provider value={origins}>
           <ul className="tk-mrows" role="list">
             {matches.items.map((r, i) => (
-              <MRow key={i} r={r} i={i} brief={brief} f={r.state === 'met' ? null : rowFinding(findings, i)} busy={busy} act={act} />
+              <MRow key={r.id ?? i} r={r} i={i} now={now} busy={busy} act={act} />
             ))}
           </ul>
         </SiteOrigins.Provider>

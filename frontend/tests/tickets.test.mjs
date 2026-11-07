@@ -19,10 +19,11 @@ const m = await loadBundled(`
   export * from './src/dev/tickets';
   export * as fx from './src/dev/ticketFixtures';
   export { parseReview } from './src/dev/types';
+  export { lgtm } from './src/dev/logic';
   export { TicketCard, closedLine } from './src/components/dev/TicketCard';
   export { TicketBrief } from './src/components/dev/TicketBrief';
   export { TicketQuestions } from './src/components/dev/TicketQuestions';
-  export { TicketMatches, matchFindingIds } from './src/components/dev/TicketMatches';
+  export { TicketMatches, matchFindingIds, itemFinding } from './src/components/dev/TicketMatches';
   export { TicketsPanel, useTickets } from './src/components/dev/TicketsTab';
   export { ReviewCard } from './src/components/dev/ReviewCard';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
@@ -162,6 +163,21 @@ test('shortPath cuts from the left past 36 characters; extraPaths drops paths th
   assert.deepEqual(m.extraPaths('No background job', ['api/orders/export.ts']), ['api/orders/export.ts']);
 });
 
+test('parseMatches reads id, sources, inferred, fix and blocks_lgtm as the server sends them', () => {
+  const mm = m.parseMatches(fx.REVIEW_GAPS.matches);
+  assert.equal(mm.blocks_lgtm, true);
+  assert.deepEqual(mm.items.map((i) => i.id), ['k1', 'k2', 'k3', 'k4']);
+  assert.equal(mm.items[0].fix, null, 'a met item has no fix');
+  assert.equal(mm.items[2].fix.state, 'open');
+  assert.ok(mm.items[0].sources.length > 0);
+  assert.deepEqual(mm.items[0].paths, ['src/admin/OrdersPage.tsx:212', 'tests/export.filters.test.ts']);
+  const odd = m.parseMatches({ verdict: 'not_met', items: [{ id: '../k1', criterion: 'a', state: 'not_met', fix: { state: 'weird' } }, { id: 'k2', criterion: 'b', state: 'met', fix: { state: 'open' } }] });
+  assert.equal(odd.items[0].id, null, 'a malformed id gives no Fix it');
+  assert.equal(m.itemFinding(odd.items[0]), null);
+  assert.equal(odd.items[1].fix, null, 'a met item never has a fix');
+  assert.equal(odd.blocks_lgtm, false, 'no blocks_lgtm from the server reads as false; the UI never works it out');
+});
+
 test('parseMatches never shows met when a line is not met', () => {
   const mm = m.parseMatches({ verdict: 'met', items: [{ criterion: 'a', state: 'met' }, { criterion: 'b', state: 'nope' }] });
   assert.equal(mm.verdict, 'unclear');
@@ -190,7 +206,7 @@ const STATE_COPY = {
   in_review: /Cody is reviewing the pull request/,
   landed: /a41c9e2|Landed|landed/,
   taken_back: /Dana Park took it back in Jira/,
-  failed: /Ann couldn’t read TRAIL-142/,
+  failed: /Work on TRAIL-142 stopped/,
 };
 
 for (const [state, re] of Object.entries(STATE_COPY)) {
@@ -216,10 +232,26 @@ test('landed footer replaces the brief row: PR, merge time, Brief, who built and
   const out = html(m.TicketCard, { ...N, ticket: T('landed'), brief: B(fx.BRIEF_ANSWERED) });
   assert.match(out, /data-landed-foot/);
   assert.match(out, /data-pr-link="true">#61</);
-  assert.match(out, /merged 11:20/);
+  assert.match(out, /merged 11:20/, 'from work.merged_at, not updated_at (11:34)');
+  assert.doesNotMatch(out, /11:34/);
   assert.match(out, /Built by Ann and Ben/);
   assert.match(out, /reviewed by Cody/);
   assert.doesNotMatch(out, /class="tk-brief"/);
+});
+
+test('failed card shows the row\'s error message as text, and the fallback copy without one', () => {
+  const jira = { code: 'jira_unreachable', message: 'kwant couldn’t reach Jira for 24 hours, so it stopped work on this ticket.' };
+  const out = html(m.TicketCard, { ...N, ticket: T('failed', { error: jira }), onRetry: () => {} });
+  assert.match(out, /Ann couldn’t read TRAIL-142/);
+  assert.match(out, /kwant couldn’t reach Jira for 24 hours, so it stopped work on this ticket\./);
+  assert.doesNotMatch(out, /Jira didn’t answer/);
+  const work = html(m.TicketCard, { ...N, ticket: T('failed'), onRetry: () => {} });
+  assert.match(work, /Work on TRAIL-142 stopped/);
+  assert.match(work, /The work on this ticket stopped with an error\./);
+  const none = html(m.TicketCard, { ...N, ticket: T('failed', { error: null }), onRetry: () => {} });
+  assert.match(none, /Jira didn’t answer\. Nothing was built\./);
+  const tag = html(m.TicketCard, { ...N, ticket: T('failed', { error: { code: 'jira_unreachable', message: '<b>x</b>' } }), onRetry: () => {} });
+  assert.match(tag, /&lt;b&gt;x&lt;\/b&gt;/, 'the message is text, never HTML');
 });
 
 test('taken back: no brief row; Kept: branch · Brief', () => {
@@ -366,7 +398,7 @@ test('Matches replaces "Did it do what was asked?" and hides ticket findings fro
   const card = m.parseReview(fx.REVIEW_GAPS);
   assert.ok(card, 'review fixture parses');
   assert.ok(card.matches);
-  assert.deepEqual([...m.matchFindingIds(card.matches)], ['k3', 'k4']);
+  assert.deepEqual([...m.matchFindingIds(card.matches)], ['k1', 'k2', 'k3', 'k4']);
   const out = html(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async () => {} });
   assert.match(out, /aria-label="Matches the ticket"/);
   assert.doesNotMatch(out, /Did it do what was asked/);
@@ -385,12 +417,47 @@ test('all met: n of n met, no Fix it', () => {
   assert.doesNotMatch(out, /data-fix="/);
 });
 
-test('Fix it sends the matching k-finding', async () => {
+test('Fix it posts the item\'s own server id, and its state comes from the item\'s fix', async () => {
   const card = m.parseReview(fx.REVIEW_GAPS);
   const sent = [];
-  const host = await mount(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async (_c, id, a) => (sent.push([id, a.action]), card) });
+  const after = m.parseReview(fx.REVIEW_GAPS_SENT);
+  const host = await mount(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async (_c, id, a) => (sent.push([id, a.action]), after) });
   await click(host.querySelector('[data-fix="k3"]'));
   assert.deepEqual(sent[0], ['k3', 'fix']);
+  const row = host.querySelector('[data-item="k3"]');
+  assert.ok(row.querySelector('[data-sent]'), 'the row reads Sent from matches.items[i].fix');
+  assert.match(row.textContent, /Sent to Ben/);
+  assert.equal(row.querySelector('[data-fix]'), null);
+  assert.ok(host.querySelector('[data-fix="k4"]'), 'the unclear row still offers Fix it');
+});
+
+test('a Fix it that fails keeps its error on the item and offers Try again', async () => {
+  const card = m.parseReview(fx.REVIEW_GAPS);
+  const host = await mount(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async () => { throw new Error('the lead is offline'); } });
+  await click(host.querySelector('[data-fix="k3"]'));
+  const row = host.querySelector('[data-item="k3"]');
+  assert.match(row.textContent, /Couldn’t send it: the lead is offline/);
+  assert.match(row.querySelector('[data-fix="k3"]').textContent, /Try again/);
+});
+
+test('LGTM follows blocks_lgtm: an unclear item never disables it, an open not_met does', () => {
+  const ok = { verdict: 'unclear', key: 'TRAIL-142', url: null, blocks_lgtm: false };
+  // Only an unclear item left open: the server says it doesn't block, so the stamp shows.
+  const unclear = m.parseReview({ ...fx.REVIEW_GAPS, matches: { ...ok, items: fx.REVIEW_GAPS.matches.items.map((it) => (it.id === 'k3' ? { ...it, state: 'met', fix: null } : it)) } });
+  assert.equal(unclear.matches.items.find((i) => i.id === 'k4').fix.state, 'open');
+  assert.equal(m.lgtm(unclear), true);
+  assert.match(html(m.ReviewCard, { card: unclear, now: fx.TICKET_NOW, onFinding: async () => {} }), /data-lgtm/);
+  // An open not_met item: the server says it blocks, so no stamp.
+  const notMet = m.parseReview(fx.REVIEW_GAPS);
+  assert.equal(notMet.matches.blocks_lgtm, true);
+  assert.equal(m.lgtm(notMet), false);
+  assert.doesNotMatch(html(m.ReviewCard, { card: notMet, now: fx.TICKET_NOW, onFinding: async () => {} }), /data-lgtm/);
+  // Once that fix is sent the server stops blocking; the card follows it and works nothing out itself.
+  const sent = m.parseReview(fx.REVIEW_GAPS_SENT);
+  assert.equal(m.lgtm(sent), true);
+  // The card never derives it: a not_met item with blocks_lgtm false doesn't block, and true always does.
+  assert.equal(m.lgtm({ ...notMet, matches: { ...notMet.matches, blocks_lgtm: false } }), true);
+  assert.equal(m.lgtm({ ...unclear, matches: { ...unclear.matches, blocks_lgtm: true } }), false);
 });
 
 test('a review without a ticket keeps the old intent section', () => {

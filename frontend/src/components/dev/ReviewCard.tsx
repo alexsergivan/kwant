@@ -43,7 +43,7 @@ import {
 } from '../../dev/logic';
 import type { LedState, PostState } from '../../dev/logic';
 import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
-import { TicketMatches, matchFindingIds } from './TicketMatches';
+import { TicketMatches, itemFinding, matchFindingIds } from './TicketMatches';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
 const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
@@ -469,7 +469,9 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const now = fixedNow ?? tick;
 
   // Tick once a second only while an Undo is on screen.
-  const undoing = fixedNow === undefined && card.findings.some((f) => undoLeft(f, tick) > 0);
+  const undoing =
+    fixedNow === undefined &&
+    (card.findings.some((f) => undoLeft(f, tick) > 0) || (card.matches?.items ?? []).some((it) => { const f = itemFinding(it); return !!f && undoLeft(f, tick) > 0; }));
   useEffect(() => {
     if (!undoing) return;
     const t = window.setInterval(() => setTick(Date.now()), 1000);
@@ -485,7 +487,15 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
     } catch (err) {
       if (a.action === 'dismiss') throw err;
       const msg = err instanceof Error ? err.message : 'it didn’t go through';
-      setCard((c) => ({ ...c, findings: c.findings.map((x) => (x.id === f.id ? { ...x, send_error: msg } : x)) }));
+      setCard((c) => ({
+        ...c,
+        findings: c.findings.map((x) => (x.id === f.id ? { ...x, send_error: msg } : x)),
+        // A matches item's Fix it (api.md 2.11) keeps its error on the item's own fix.
+        matches: c.matches && {
+          ...c.matches,
+          items: c.matches.items.map((it) => (it.id === f.id && it.fix ? { ...it, fix: { ...it.fix, send_error: msg } } : it)),
+        },
+      }));
     } finally {
       setBusy(null);
     }
@@ -518,8 +528,8 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const branchCard = card.no_forge || card.pr === null;
   const tile = card.draft ? 'bg-zinc-500/15 text-zinc-300' : 'bg-teal-400/15 text-teal-300';
   // 0.7.6 J12: a PR that maps to a ticket's brief shows "Matches the ticket" (its own `matches` block,
-  // api-decisions 17) instead of the intent section, and a row's `k{n}` finding lives on that row (Fix it
-  // there), not twice in Findings.
+  // api-decisions 17) instead of the intent section. Its items carry their own `k{n}` id and Fix it state
+  // (api.md 2.11); a finding with one of those ids is never listed twice in Findings.
   const ticketMatches = card.matches;
   const onRows = matchFindingIds(ticketMatches);
   const listed = onRows.size ? card.findings.filter((f) => !onRows.has(f.id)) : card.findings;
@@ -647,7 +657,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
 
       {/* 3. Intent, or Matches the ticket (0.7.6) */}
       {ticketMatches && (
-        <TicketMatches matches={ticketMatches} findings={card.findings} origins={jiraOrigins} lead={author?.name ?? null} busy={busy !== null} act={act} />
+        <TicketMatches matches={ticketMatches} now={now} origins={jiraOrigins} lead={author?.name ?? null} busy={busy !== null} act={act} />
       )}
       {card.intent && !ticketMatches && (
         <section className="mt-4" aria-label="Did it do what was asked?">

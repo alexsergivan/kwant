@@ -64,15 +64,18 @@ const plan = (done: number, total: number) =>
 /** TRAIL-142 in one state, with the `work` object that state has (null before anyone is on it). */
 export function ticket(state: TicketState, extra: Record<string, unknown> & { work?: Record<string, unknown> } = {}) {
   const { work: more, ...rest } = extra;
-  const work: Record<string, unknown> = { ...team, branch: null, pr_url: null, head_sha: null, plan: [], matches: null };
+  const work: Record<string, unknown> = { ...team, branch: null, pr_url: null, head_sha: null, merged_at: null, plan: [], matches: null };
   if (['working', 'in_review', 'landed', 'taken_back'].includes(state)) Object.assign(work, { branch: 'TRAIL-142-export-orders', plan: plan(3, 4) });
   if (state === 'in_review' || state === 'landed') Object.assign(work, { pr_url: `${repo}/pull/61`, head_sha: 'a41c9e2', matches: state === 'landed' ? 'met' : 'not_met' });
-  if (state === 'landed') Object.assign(work, { plan: plan(4, 4) });
+  if (state === 'landed') Object.assign(work, { plan: plan(4, 4), merged_at: '2026-11-07T11:20:00Z' });
   const back = state === 'taken_back' ? { taken_back_at: '2026-11-07T10:12:00Z', taken_back_by: 'Dana Park' } : {};
-  const at = state === 'landed' ? { updated_at: '2026-11-07T11:20:00Z' } : {};
+  // updated_at moves on after the merge; the footer reads work.merged_at (api-decisions 22), never this.
+  const at = state === 'landed' ? { updated_at: '2026-11-07T11:34:00Z' } : {};
+  // A failed row says why in kwant's own words (api-decisions 22, api.md 2.6).
+  const err = state === 'failed' ? { error: { code: 'work_failed', message: 'The work on this ticket stopped with an error.' } } : { error: null };
   // Waiting tickets have no work yet (api-decisions 11: null until someone is on it).
   const w = state === 'waiting' && !more ? null : { ...work, ...(more ?? {}) };
-  return { ...base, state, ...back, ...at, ...rest, work: w };
+  return { ...base, state, ...back, ...at, ...err, ...rest, work: w };
 }
 
 export const TICKET_151 = {
@@ -273,12 +276,18 @@ const reviewBase = {
 };
 
 const S2 = BRIEF.done_when;
-const item = (i: number, state: string, text: string, paths: string[]) => ({
+type Fix = { state: 'open' | 'sent' | 'dismissed'; sent_at: string | null; sent_to?: string | null; task_id?: string | null; send_error?: string | null; dismissed: null };
+const open: Fix = { state: 'open', sent_at: null, sent_to: null, task_id: null, send_error: null, dismissed: null };
+/** One `review.matches` item as Vega's #392 sends it (api.md 2.11): id k{n}, the line's sources, and `fix`. */
+const item = (i: number, state: string, evidence: string, paths: string[], fix: Fix | null = state === 'met' ? null : open) => ({
+  id: `k${i + 1}`,
   criterion: S2[i].text,
   state,
-  evidence: { text, paths },
+  evidence,
+  paths,
   sources: S2[i].sources,
   inferred: S2[i].inferred,
+  fix,
 });
 const items = (all: boolean) => [
   item(0, 'met', 'Button in `OrdersPage.tsx:212`; test `export.filters.test.ts` passes', ['src/admin/OrdersPage.tsx:212', 'tests/export.filters.test.ts']),
@@ -287,27 +296,24 @@ const items = (all: boolean) => [
   all ? item(3, 'met', 'Check in `export.ts:44`; test passes', ['api/orders/export.ts:44']) : item(3, 'unclear', 'Emails are left out for everyone. Stricter than asked; no test', []),
 ];
 
-/** The review's `k{n}` finding for done-when line n (any source; api-decisions 17 drops source 'ticket'). */
-const kFinding = (i: number, state: 'not_met' | 'unclear') => ({
-  id: `k${i + 1}`,
-  severity: state === 'not_met' ? 'medium' : 'low',
-  title: `${state === 'not_met' ? 'Not met' : 'Unclear'}: ${BRIEF.done_when[i].text}`,
-  file: 'api/orders/export.ts',
-  line: null,
-  detail: `TRAIL-142 says the work is done when: ${BRIEF.done_when[i].text}`,
-  fix: state === 'not_met' ? 'Do what this line of the brief asks.' : 'Show in the code or tests that this line of the brief holds.',
-  source: 'review',
-  state: 'open',
-  sent_at: null,
-  dismissed: null,
-});
-
-const matches = (all: boolean) => ({ verdict: all ? 'met' : 'not_met', key: 'TRAIL-142', url: `${JIRA}/browse/TRAIL-142`, items: items(all) });
+/** `blocks_lgtm` is the server's (api-decisions 20a): here an open not_met item, so true on the gaps review. */
+const matches = (all: boolean) => ({ verdict: all ? 'met' : 'not_met', key: 'TRAIL-142', url: `${JIRA}/browse/TRAIL-142`, blocks_lgtm: !all, items: items(all) });
 
 export const REVIEW_GAPS = {
   ...reviewBase,
   matches: matches(false),
-  findings: [kFinding(2, 'not_met'), kFinding(3, 'unclear')],
+  findings: [],
+};
+
+/** The gaps review once line 3's Fix it went to Ben: the server stops blocking LGTM; line 4 is still unclear. */
+export const REVIEW_GAPS_SENT = {
+  ...reviewBase,
+  matches: {
+    ...matches(false),
+    blocks_lgtm: false,
+    items: items(false).map((it) => (it.id === 'k3' ? { ...it, fix: { ...open, state: 'sent' as const, sent_at: '2026-11-07T11:02:00Z', sent_to: 'Ben', task_id: 'task_demo_7' } } : it)),
+  },
+  findings: [],
 };
 
 export const REVIEW_ALL_MET = {

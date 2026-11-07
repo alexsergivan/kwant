@@ -382,8 +382,9 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
     case 'failed':
       card = 'bad';
       tone = 'bad';
-      bold = `${lead} couldn’t read ${t.key}`;
-      line = 'Jira didn’t answer. Nothing was built.';
+      // api-decisions 22: the row says why in kwant's own words (plain text); the old copy is the fallback.
+      bold = t.error && (t.error.code === 'work_failed' || t.error.code === 'failed') ? `Work on ${t.key} stopped` : `${lead} couldn’t read ${t.key}`;
+      line = t.error?.message ?? 'Jira didn’t answer. Nothing was built.';
       acts = (
         <>
           <Btn primary onClick={props.onRetry}>
@@ -501,7 +502,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
         />
       )}
 
-      {t.state === 'landed' && <LandedFoot t={t} w={w} brief={<BriefLink />} />}
+      {t.state === 'landed' && <LandedFoot w={w} brief={<BriefLink />} />}
 
       {t.state === 'taken_back' && (w.branch || hasBrief) && (
         <p className="tk-links">
@@ -544,8 +545,8 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
 };
 
 /** Landed's footer (item 7): "#61 merged 11:20 · Brief · Built by Ann and Ben · reviewed by Cody". */
-const LandedFoot: React.FC<{ t: Ticket; w: ReturnType<typeof workView>; brief: React.ReactNode }> = ({ t, w, brief }) => {
-  const at = clock(t.updated_at);
+const LandedFoot: React.FC<{ w: ReturnType<typeof workView>; brief: React.ReactNode }> = ({ w, brief }) => {
+  const at = clock(w.mergedAt);
   const builders = w.builders.length ? w.builders : w.lead ? [w.lead] : [];
   const bits: React.ReactNode[] = [];
   if (w.pr)
