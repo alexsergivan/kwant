@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CalendarClock,
@@ -533,6 +533,16 @@ export const GitHubConnectForm: React.FC<{
   const [choiceOpen, setChoiceOpen] = useState(false);
   const [cantTell, setCantTell] = useState<string | null>(null);
   const choiceRef = useRef<HTMLDivElement>(null);
+  // Set by a can't-tell 400; the first choice takes focus once the open choice is on screen. A timer
+  // set in the catch could run before React draws it and find no radio.
+  const focusChoice = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusChoice.current || !choiceOpen) return;
+    const first = choiceRef.current?.querySelector<HTMLElement>('[role="radio"]');
+    if (!first) return;
+    focusChoice.current = false;
+    first.focus();
+  });
   const [ghLabel, setGhLabel] = useState('');
   const [ghBase, setGhBase] = useState('');
   const [busy, setBusy] = useState(false);
@@ -630,8 +640,8 @@ export const GitHubConnectForm: React.FC<{
       else if (isForge && cantTellForge(err)) {
         // The server's own words, then the choice opens with its first option in focus.
         setCantTell(cantTellText((err as Error).message));
+        focusChoice.current = true;
         setChoiceOpen(true);
-        window.setTimeout(() => choiceRef.current?.querySelector<HTMLElement>('[role="radio"]')?.focus(), 0);
       } else if (isForge && err instanceof LooseEndsError && err.status === 409) setError(forgeTakenText(forgeHost(String((req as { config: Record<string, unknown> }).config.url ?? ''))));
       else setError(err instanceof Error ? err.message : 'Couldn’t add it.');
     } finally {
