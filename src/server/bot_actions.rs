@@ -1689,6 +1689,13 @@ async fn changed(state: &AppState, a: &BotAction) {
     let _ = state.event_sender.send(RuntimeEvent::BotActionUpdated { action: action_json(a) });
 }
 
+/// Tells the person's open screens about an action logged elsewhere (a ready-made team's create).
+pub(super) async fn announce(state: &AppState, action_id: &str) {
+    if let Ok(Some(a)) = state.db.get_bot_action(action_id).await {
+        let _ = state.event_sender.send(RuntimeEvent::BotActionUpdated { action: action_json(&a) });
+    }
+}
+
 // Routes (the person's)
 
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
@@ -1951,6 +1958,43 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
                 };
                 if let Err(e) = state.db.set_channel_routing(&target, &channel.lead_kwant_id, &members, &channel.routing_mode).await {
                     return Err(error(StatusCode::CONFLICT, format!("the members can't be put back: {e}")));
+                }
+            }
+        }
+        crate::db::team_templates::ACTION => {
+            use crate::db::team_templates::UndoError;
+            let refuse = |code: &str, msg: String, extra: Value| {
+                let mut body = json!({ "error": msg, "code": code });
+                if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+                    b.extend(e.clone());
+                }
+                (StatusCode::CONFLICT, Json(body)).into_response()
+            };
+            match state.db.undo_team_creation(&a.id).await {
+                Ok(created) => {
+                    let mut gone: Vec<&str> = created.bots.iter().filter(|b| !b.existing).map(|b| b.id.as_str()).collect();
+                    if created.new_team {
+                        gone.push(&created.team_id);
+                        gone.extend(created.channel_id.as_deref());
+                    }
+                    super::passwords::forget_deleted_owners(state, &gone).await;
+                    state.scheduler_wake.notify_one();
+                    super::dev::repo::reconcile_soon(state, &space);
+                }
+                Err(e @ UndoError::Expired) => return Err(refuse("undo_expired", e.to_string(), Value::Null)),
+                Err(UndoError::LeadsElsewhere(blocked)) => {
+                    let names: Vec<String> = blocked.iter().map(|b| format!("{} leads {}", b.bot, b.leads)).collect();
+                    return Err(refuse(
+                        "bot_leads_elsewhere",
+                        format!("pick a new lead first: {}", names.join(", ")),
+                        json!({ "blocked": blocked }),
+                    ));
+                }
+                Err(e @ UndoError::NoKeeper) => return Err(refuse("no_bot_to_keep_chat", e.to_string(), Value::Null)),
+                Err(e @ UndoError::NotFound) => return Err(refuse("not_a_template_team", e.to_string(), Value::Null)),
+                Err(UndoError::Db(e)) => {
+                    tracing::warn!(error = %e, action_id = %a.id, "undoing a ready-made team");
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
                 }
             }
         }

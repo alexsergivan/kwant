@@ -1,6 +1,6 @@
 # kwant 0.7.7 API: ready-made teams (T) and team discovery (D)
 
-Lin, 2026-11-07. Branch `lin-077-teams` (from main 266032e). Spec: `next-077/spec.md` §T, §D. Design: `next-077/design/design.md`. Tests: `next-077/qa/test-plan.md` §1, §1b.
+Lin, 2026-11-07 (revised with the tests: clashes list, edit codes, limits). Branch `lin-077-teams` (from main 266032e). Spec: `next-077/spec.md` §T, §D. Design: `next-077/design/design.md`. Tests: `next-077/qa/test-plan.md` §1, §1b.
 Where this file and design.md disagree on a field name, this file is what the server does; the differences are listed in §8.
 
 Conventions (same as the rest of `/api`):
@@ -133,11 +133,14 @@ Header `Idempotency-Key: <client uuid>` (optional, recommended): the same key in
 - `rows` keys are the `key`s from the suggestion (§4), for `bots[]` and `also_possible[]` alike. A row not mentioned keeps its suggested state: `bots[]` on, `also_possible[]` off.
 - Per row, all optional: `on` (bool), `name`, `preset` (one of the D presets, §4), `use_existing` (a live bot id in this space, or `null` for **New bot**).
 - `edits` and each row are **strict**: any other field (`persona`, `soul`, `instructions`, `title`, …) is a **400 `unknown_field`** (Q-D6a). The server builds every persona from the preset plus its own facts.
-- The lead row can't be turned off (400 `lead_required`, A14). At most 6 bots on (400 `too_many_bots`).
+- The lead row can't be turned off (400 `lead_required`, A14), and keeps its preset (400 `bad_row`). At most 6 bots on (400 `too_many_bots`); at least 2 for a new team and 1 when adding to a team (400 `too_few_bots`).
+- A row key that isn't in the suggestion, or a row that isn't an object: 400 `bad_row`. One bot can fill one row: the same `use_existing` twice is 400 `bad_existing`.
+- `handle` or `names` at the top level next to `suggestion_id`: 400 `unknown_field` (they go in `edits`). `edits` next to `template_id`: 400 `unknown_field`.
+- A refused create (any 4xx, a clash, or a failed transaction) gives the suggestion back; only a 201 uses it up.
 - `use_existing` (D6, A16): that bot joins the team unchanged; its persona is not touched. The stack line goes into the team instructions instead.
 - A suggestion made for an existing team (`team_id` in §4) **adds** the ticked bots to that team (A18). `handle` is then refused (400 `unknown_field`), and Undo removes only the bots it added.
 - A suggestion is used up by the first successful create (Q-D6c). Using it again, or after 1 hour, is **410 `suggestion_expired`** (A17: the client reads the project again and re-applies its edits).
-- `template_id` and `suggestion_id` together: 400 `bad_request`. For the Coding template with a repo, the client calls §4 and posts the suggestion (T1).
+- `template_id: "coding"` with `suggestion_id` is the Coding template with a project (T1): the roster comes from the suggestion and the team also gets the Coding starter skills, each on the row that took that bot's role. Any other `template_id` with `suggestion_id` is 400 `bad_request`; neither of them is 400 `bad_request` too.
 
 ### Response 201
 
@@ -210,8 +213,10 @@ Exactly one of the three (400 `bad_request` otherwise, and on unknown fields). `
 - `reason_parts`: render `text` as text and `path` as code. Every `path` is a folder or manifest path `[A-Za-z0-9._/-]{1,40}`; nothing else from the repo appears in a reason.
 - `owns`: at most 3 top folders that carry a signal, each `[A-Za-z0-9._/-]{1,40}`; a longer name is dropped, not cut (Q-D10).
 - `existing_kwant_id` / `existing_name`: the oldest live bot in the space with that preset's title or name (D6, Q-D4b). The row then defaults to **Add {existing_name} (already in this space)**; it is still a new bot unless the create sends `use_existing`.
+- `limits`: every limit that was hit, in a fixed order; `partial` is its first entry or `null`.
 - `partial`: `null`, `"paths"` (over 20,000 paths), `"bytes"` (over 2 MB of manifests, or a file over 256 KB was skipped) or `"time"` (10 s). The suggestion is still made from what was read.
-- `fallback: true`: nothing recognised; `bots` is the Coding roster, `facts` is `[]` and `stack_line` is `null` (D7 "Couldn't tell what this project uses").
+- Every role's `owns` comes from its own evidence; the Tech Writer owns `docs/` when that is what made it.
+- `fallback: true`: nothing recognised; `bots` is the Coding roster (keys `lead`, `frontend`, `backend`, `qa`, plus `sre` when there's a Dockerfile), with the Coding template's own personas, `facts` is `[]` and `stack_line` is `null` (D7 "Couldn't tell what this project uses").
 - Lead (A13, Q-D2): TechLead with the `backend` preset ("Tech Lead · Backend"), or the `frontend` preset ("Tech Lead · Frontend") for a frontend-only project. 2 to 6 bots; a lone signal is padded with the lead.
 - No progress events in this version: the request finishes within the 10 s limit, so the sheet shows "Reading file names and manifests" without numbers.
 
@@ -235,16 +240,34 @@ Errors:
 | 400 | `unknown_field` | `field` | any field not listed above (top level, `edits`, a row) |
 | 400 | `bad_name` | `field: "names.<slot>"` or `"edits.rows.<key>.name"` | whitespace, `@`, empty or over 40 |
 | 400 | `bad_handle` | `field: "handle"` | not a lower-case slug |
-| 400 | `bad_preset` / `bad_row` / `lead_required` / `too_many_bots` | `field` | D edits |
+| 400 | `bad_preset` / `bad_row` / `lead_required` / `too_many_bots` / `too_few_bots` | `field` | D edits |
 | 400 | `bad_existing` | `field` | `use_existing` isn't a live bot in this space |
 | 404 | `unknown_template` | | |
-| 409 | `name_taken` | `field: "names.Drafter"`, `suggestion: "Drafter2"` | a bot name is taken (or two slots got the same name) |
-| 409 | `handle_taken` | `field: "handle"`, `suggestion: "inbox2"` | |
+| 404 | `unknown_space` | | `?space=` isn't a space |
+| 404 | `team_not_found` | | an add-to-team suggestion whose team was deleted since |
+| 409 | `handle_taken` | `field: "handle"` (`"edits.handle"` for D), `suggestion: "inbox2"`, `clashes[]` | the handle is taken |
+| 409 | `name_taken` | `field: "names.Drafter"` (`"edits.rows.<key>.name"` for D), `suggestion: "Drafter2"`, `clashes[]` | a bot name is taken (or two slots got the same name) |
 | 410 | `suggestion_expired` | | unknown, used, or over 1 hour old |
 | 423 | `space_archived` | | |
 | 500 | `create_failed` | | the transaction failed; **nothing was made** |
 
-Only the first clash is reported; call `…/preview` for all of them.
+A 409 names **every** clash in one answer. `code`, `field` and `suggestion` describe the first (the handle first, then the bots in roster order); `clashes[]` lists all of them in the preview's shape:
+
+```json
+{
+  "error": "that team name is taken; coding2 is free",
+  "code": "handle_taken",
+  "field": "handle",
+  "suggestion": "coding2",
+  "clashes": [
+    {"field": "handle", "wanted": "coding", "suggestion": "coding2"},
+    {"field": "names.TechLead", "wanted": "TechLead", "suggestion": "TechLead2"},
+    {"field": "names.QA", "wanted": "QA", "suggestion": "QA2"}
+  ]
+}
+```
+
+Suggestions never repeat within one answer, and never name a bot another slot of the same request asks for. Nothing is made. Sending the suggestions back as `handle` and `names` goes through unless something else took them in between.
 
 ## 6. Undo (T4)
 
@@ -272,7 +295,7 @@ Before it, the sheet's confirm reads `GET /api/teams/:id/template`:
 }
 ```
 
-404 when the team wasn't made by a template (or was made before 0.7.7).
+404 `not_a_template_team` when the team wasn't made by a template or a suggestion (or was made before 0.7.7).
 
 What Undo does, in one transaction:
 
@@ -307,4 +330,6 @@ Undo refuses (409, nothing changes) when:
 | Rename map key (A10) | `names: {preset: name}` | `names: {slot: name}`, slot = template bot name | Coding has two `backend` bots |
 | Handle taken (Q-T11) | archived teams' handles count | only live teams and live `team-<handle>` chats | an archived chat is renamed, so the handle is free again |
 | Undo route | "Undo team" | the existing bot-action Undo, plus `GET /api/teams/:id/template` for the confirm | one Undo path, already person-only |
+| Clash code (test plan T-A5, T-W9, Q-API1) | 409 `clash` with `clashes[]` | 409 `name_taken` / `handle_taken` (`name_taken` is what imports already answer) **plus** `clashes[]` with every clash | one code family across kwant; the list is what the sheet needs |
+| Idempotency (test plan §0.5, T-W9) | `idempotency_key` in the body, required | optional `Idempotency-Key` header; 400 `bad_request` when sent empty or over 200 characters | a header keeps the body strict (`unknown_field`), and an older client without a key still works; the sheet always sends one |
 | Templates source | templates-copy.md | `templates.json` embedded byte for byte from `design/templates.js` | no hand copying |

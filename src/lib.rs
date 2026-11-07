@@ -17,6 +17,7 @@ pub mod sandbox;
 pub mod serve;
 pub mod setup;
 pub mod server;
+pub mod teams;
 pub mod tools;
 pub mod zombie;
 

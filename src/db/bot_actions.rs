@@ -334,57 +334,9 @@ impl Database {
     /// the space's log of bot actions.
     pub async fn delete_kwant_and_history(&self, id: &str, new_lead: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
-        for sql in [
-            "DELETE FROM attachments WHERE direct_kwant_id = ?1 OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
-            "DELETE FROM messages WHERE direct_kwant_id = ?1 OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
-            "DELETE FROM delegations WHERE lead_kwant_id = ?1 OR specialist_kwant_id = ?1 \
-                OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
-            "DELETE FROM threads WHERE kwant_id = ?1",
-            "DELETE FROM questions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
-            "DELETE FROM approvals WHERE kwant_id = ?1",
-            "DELETE FROM approval_modes WHERE scope = 'kwant' AND id = ?1",
-            "DELETE FROM skills WHERE kwant_id = ?1",
-            "DELETE FROM mcp_suggestions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
-            "DELETE FROM hire_proposals WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
-            "DELETE FROM bot_actions WHERE direct_kwant_id = ?1",
-            "DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE kwant_id = ?1)",
-            "DELETE FROM routines WHERE kwant_id = ?1",
-            "DELETE FROM kwant_memories WHERE kwant_id = ?1",
-            "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?1",
-            "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?1",
-            "DELETE FROM api_contexts WHERE kwant_id = ?1",
-            "DELETE FROM model_usage WHERE kwant_id = ?1",
-            "DELETE FROM kwant_scope WHERE kwant_id = ?1",
-            "DELETE FROM route_examples WHERE kwant_id = ?1",
-        ] {
-            sqlx::query(sql).bind(id).execute(&mut *tx).await?;
-        }
-        for sql in super::truth_ledger::PURGE_BOT_FACTS {
-            sqlx::query(sql).bind(id).execute(&mut *tx).await?;
-        }
-        // Memberships; a channel or team it led goes to its next member, else `new_lead`
-        for table in ["channels", "teams"] {
-            let rows: Vec<(String, String, String)> = sqlx::query_as(&format!(
-                "SELECT id, lead_kwant_id, member_kwants FROM {table} WHERE lead_kwant_id = ?1 OR member_kwants LIKE '%' || ?1 || '%'"
-            ))
-            .bind(id)
-            .fetch_all(&mut *tx)
-            .await?;
-            for (row_id, lead, members) in rows {
-                let kept: Vec<String> =
-                    serde_json::from_str::<Vec<String>>(&members).unwrap_or_default().into_iter().filter(|m| m != id).collect();
-                let lead = if lead == id { kept.first().cloned().unwrap_or_else(|| new_lead.to_string()) } else { lead };
-                sqlx::query(&format!("UPDATE {table} SET member_kwants = ?, lead_kwant_id = ? WHERE id = ?"))
-                    .bind(serde_json::to_string(&kept)?)
-                    .bind(&lead)
-                    .bind(&row_id)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-        }
-        let done = sqlx::query("DELETE FROM kwants WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        let done = purge_kwant(&mut tx, id, new_lead).await?;
         tx.commit().await?;
-        Ok(done.rows_affected() == 1)
+        Ok(done)
     }
 
     /// Removes a channel nobody has written in yet; `false` when it has messages or is #general.
@@ -399,4 +351,59 @@ impl Database {
         tx.commit().await?;
         Ok(done.rows_affected() == 1)
     }
+}
+
+/// The body of [`Database::delete_kwant_and_history`] inside the caller's transaction, so a
+/// ready-made team's Undo can remove its bots in the same transaction as the team (spec T4).
+pub(super) async fn purge_kwant(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, id: &str, new_lead: &str) -> Result<bool, DbError> {
+    for sql in [
+        "DELETE FROM attachments WHERE direct_kwant_id = ?1 OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
+        "DELETE FROM messages WHERE direct_kwant_id = ?1 OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
+        "DELETE FROM delegations WHERE lead_kwant_id = ?1 OR specialist_kwant_id = ?1 \
+            OR thread_id IN (SELECT id FROM threads WHERE kwant_id = ?1)",
+        "DELETE FROM threads WHERE kwant_id = ?1",
+        "DELETE FROM questions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
+        "DELETE FROM approvals WHERE kwant_id = ?1",
+        "DELETE FROM approval_modes WHERE scope = 'kwant' AND id = ?1",
+        "DELETE FROM skills WHERE kwant_id = ?1",
+        "DELETE FROM mcp_suggestions WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
+        "DELETE FROM hire_proposals WHERE kwant_id = ?1 OR direct_kwant_id = ?1",
+        "DELETE FROM bot_actions WHERE direct_kwant_id = ?1",
+        "DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE kwant_id = ?1)",
+        "DELETE FROM routines WHERE kwant_id = ?1",
+        "DELETE FROM kwant_memories WHERE kwant_id = ?1",
+        "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?1",
+        "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?1",
+        "DELETE FROM api_contexts WHERE kwant_id = ?1",
+        "DELETE FROM model_usage WHERE kwant_id = ?1",
+        "DELETE FROM kwant_scope WHERE kwant_id = ?1",
+        "DELETE FROM route_examples WHERE kwant_id = ?1",
+    ] {
+        sqlx::query(sql).bind(id).execute(&mut **tx).await?;
+    }
+    for sql in super::truth_ledger::PURGE_BOT_FACTS {
+        sqlx::query(sql).bind(id).execute(&mut **tx).await?;
+    }
+    // Memberships; a channel or team it led goes to its next member, else `new_lead`
+    for table in ["channels", "teams"] {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(&format!(
+            "SELECT id, lead_kwant_id, member_kwants FROM {table} WHERE lead_kwant_id = ?1 OR member_kwants LIKE '%' || ?1 || '%'"
+        ))
+        .bind(id)
+        .fetch_all(&mut **tx)
+        .await?;
+        for (row_id, lead, members) in rows {
+            let kept: Vec<String> =
+                serde_json::from_str::<Vec<String>>(&members).unwrap_or_default().into_iter().filter(|m| m != id).collect();
+            let lead = if lead == id { kept.first().cloned().unwrap_or_else(|| new_lead.to_string()) } else { lead };
+            sqlx::query(&format!("UPDATE {table} SET member_kwants = ?, lead_kwant_id = ? WHERE id = ?"))
+                .bind(serde_json::to_string(&kept)?)
+                .bind(&lead)
+                .bind(&row_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+    }
+    let done = sqlx::query("DELETE FROM kwants WHERE id = ?").bind(id).execute(&mut **tx).await?;
+    Ok(done.rows_affected() == 1)
 }
