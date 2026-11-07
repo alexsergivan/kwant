@@ -1445,7 +1445,7 @@ impl Ctx<'_> {
             Ok(p) => p,
             Err(e) => return fail(format!("The space was not changed: {e}")),
         };
-        if let Err(e) = read(super::spaces::update(State(self.state.clone()), Path(self.space.to_string()), Json(patch)).await).await {
+        if let Err(e) = read(super::spaces::update(State(self.state.clone()), Default::default(), Path(self.space.to_string()), Json(patch)).await).await {
             return fail(format!("The space was not changed: {e}"));
         }
         let after = self.space_json(&self.space).await;
@@ -1920,13 +1920,13 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
         }
         "space_create" => {
             let patch = serde_json::from_value(json!({"archived": true})).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
-            ok_or_conflict(super::spaces::update(State(state.clone()), Path(target), Json(patch)).await, "the space can't be archived")
+            ok_or_conflict(super::spaces::update(State(state.clone()), Default::default(), Path(target), Json(patch)).await, "the space can't be archived")
                 .await?;
         }
         "space_update" => {
             let patch = serde_json::from_value(json!({"name": before["name"], "icon": before["icon"], "color": before["color"]}))
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
-            ok_or_conflict(super::spaces::update(State(state.clone()), Path(target), Json(patch)).await, "the space can't be put back")
+            ok_or_conflict(super::spaces::update(State(state.clone()), Default::default(), Path(target), Json(patch)).await, "the space can't be put back")
                 .await?;
         }
         "channel_create" => match state.db.delete_empty_channel(&target).await {
@@ -1965,7 +1965,7 @@ async fn confirm_action(state: &AppState, a: &BotAction) -> Result<(), Response>
         "bot_delete" => delete_unused_bot(state, &target).await,
         "space_archive" => {
             let patch = serde_json::from_value(json!({"archived": true})).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
-            ok_or_conflict(super::spaces::update(State(state.clone()), Path(target), Json(patch)).await, "the space can't be archived")
+            ok_or_conflict(super::spaces::update(State(state.clone()), Default::default(), Path(target), Json(patch)).await, "the space can't be archived")
                 .await
                 .map(|_| ())
         }

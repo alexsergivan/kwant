@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""kwant.si must show the newest release before that release counts as done.
+"""kwant.si and the GitHub README must show the newest release before that release counts as done.
 
-Reads the newest `## [Mac X.Y.Z]` heading in CHANGELOG.md and checks site-src/:
+Reads the newest `## [Mac X.Y.Z]` heading in CHANGELOG.md and checks site-src/ and README.md:
 
 1. features.html has a "New in" section for it: `id="new-<id>"`, where <id> is the version without dots or a
    trailing .0 (0.7.0 -> new-07, 0.7.1 -> new-071, 0.6.11 -> new-0611), or any section whose `data-covers` lists
@@ -10,11 +10,14 @@ Reads the newest `## [Mac X.Y.Z]` heading in CHANGELOG.md and checks site-src/:
 3. Every guide the CHANGELOG entry names (`docs/NAME.md`) has a page, site-src/docs-NAME.html, or an entry in
    GUIDE_PAGES saying where the site covers it.
 4. Every screenshot, video and media file that site-src names exists in site/assets/media.
+5. README.md has a `## New in X.Y` section for the release's minor version, and that section names the release
+   (0.7.2 as "(0.7.2)" on a bullet, say). A small fix release with no bullet of its own can be named in an HTML
+   comment in the section: `<!-- covers: 0.7.3 -->`.
 
 Usage: python3 scripts/site_release_gate.py [--warn]
-Exit 0 when kwant.si is current, else 1 with one line per gap. --warn prints the gaps and exits 0: check_site.py
-uses it, because the release PR bumps CHANGELOG.md before the site PR lands. The release script uses the strict
-form, so a release isn't done until the site is.
+Exit 0 when kwant.si and the README are current, else 1 with one line per gap. --warn prints the gaps and exits 0:
+check_site.py uses it, because the release PR bumps CHANGELOG.md before the site PR lands. The release script uses
+the strict form, so a release isn't done until the site and the README are.
 """
 import re
 import sys
@@ -31,6 +34,7 @@ GUIDE_PAGES = {
 }
 
 HEAD = re.compile(r"^## \[Mac (\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}\s*$", re.M)
+README_NEW = re.compile(r"^## New in (\d+)\.(\d+)\s*$", re.M)
 
 
 def section_id(version):
@@ -46,6 +50,23 @@ def newest(changelog):
         raise SystemExit("CHANGELOG.md has no '## [Mac X.Y.Z] - YYYY-MM-DD' release headings")
     nxt = re.search(r"^## \[", changelog[m.end():], re.M)
     return m[1], changelog[m.end(): m.end() + nxt.start()] if nxt else changelog[m.end():]
+
+
+def readme_gap(version, readme):
+    """None when README.md's "## New in X.Y" section names `version`, else the gap. The section ends at the next
+    `## ` heading or `---` rule."""
+    major, minor, _ = version.split(".")
+    for m in README_NEW.finditer(readme):
+        if (m[1], m[2]) != (major, minor):
+            continue
+        end = re.search(r"^(?:## |---\s*$)", readme[m.end():], re.M)
+        body = readme[m.end(): m.end() + end.start()] if end else readme[m.end():]
+        if re.search(rf"(?<![0-9.]){re.escape(version)}(?![0-9])", body):
+            return None
+        return (f"README.md: the 'New in {major}.{minor}' section doesn't name {version} (add a bullet tagged "
+                f"({version}), or <!-- covers: {version} --> for a fix release)")
+    return (f"README.md: no '## New in {major}.{minor}' section for {version} (replace the old New in section "
+            f"with one for {major}.{minor}, its bullets tagged by version)")
 
 
 def media_files(name):
@@ -90,6 +111,10 @@ def gaps(root=ROOT):
                 missing.setdefault(f, []).append(page.name)
     for f, pages in sorted(missing.items()):
         out.append(f"site/assets/media/{f} is missing (used in {', '.join(pages)})")
+    readme = root / "README.md"
+    gap = readme_gap(version, readme.read_text()) if readme.exists() else "README.md is missing"
+    if gap:
+        out.append(gap)
     return out
 
 
@@ -100,7 +125,7 @@ def main():
     for g in found:
         print(("WARN " if warn else "GAP ") + g)
     if not found:
-        print(f"kwant.si covers {version}")
+        print(f"kwant.si and README.md cover {version}")
     sys.exit(0 if warn or not found else 1)
 
 
