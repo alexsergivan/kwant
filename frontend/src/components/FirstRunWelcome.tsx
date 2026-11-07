@@ -11,7 +11,7 @@ export interface WelcomeBot {
 
 interface Props {
   bots: WelcomeBot[];
-  /** "Sign in with Claude" when Claude is installed but signed out; otherwise "Add an account". */
+  /** "Set up Claude" when kwant can install Claude Code, "Sign in with Claude" when it is installed but signed out; otherwise "Add an account". */
   actionLabel: string;
   onAction: () => void;
 }

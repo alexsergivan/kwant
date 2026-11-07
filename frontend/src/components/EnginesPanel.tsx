@@ -10,6 +10,11 @@ import { Profile, accountUsable, accountsForCard, activeLimit, formatUntil } fro
 import type { ProfilesState } from '../useProfiles';
 import { RouteRow, routeSummary } from '../routing';
 import { StartPicker } from './StartPicker';
+import { EngineInstall } from './EngineInstall';
+import type { SetupItemId } from '../setupInstall';
+
+/** Engines the server's Setup can install (claude, codex, grok); others keep the link. */
+const SETUP_ITEMS: SetupItemId[] = ['claude', 'codex', 'grok'];
 
 const SUMMARY_TEXT = {
   ok: 'text-emerald-300',
@@ -51,8 +56,12 @@ export const EngineCard: React.FC<{
   hostAction?: React.ReactNode;
   /** Claude's sign-in sits in "Pick one to start" above the cards. */
   signInAbove?: boolean;
+  /** kwant installed this engine: read the engines again. */
+  onInstalled?: () => void;
+  /** Claude's install sits in "Pick one to start" above the cards. */
+  installAbove?: boolean;
   now?: number;
-}> = ({ engine, onToggle, accounts, onAccountsChanged, hostAction, signInAbove = false, now = Date.now() }) => {
+}> = ({ engine, onToggle, accounts, onAccountsChanged, hostAction, signInAbove = false, onInstalled, installAbove = false, now = Date.now() }) => {
   const view = statusView(engine);
   const Icon = KIND_ICON[engine.kind] ?? Cpu;
   const off = engine.enabled === false;
@@ -91,15 +100,20 @@ export const EngineCard: React.FC<{
               {engine.models.length > 3 ? '…' : ''}
             </p>
           )}
-          {isAbsent(engine) && INSTALL_URL[engine.id] && (
-            <a
-              href={INSTALL_URL[engine.id]}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200 hover:underline underline-offset-2"
-            >
-              Install {engine.name} <ExternalLink size={10} aria-hidden="true" />
-            </a>
+          {installAbove ? null : isAbsent(engine) && SETUP_ITEMS.includes(engine.id as SetupItemId) ? (
+            <EngineInstall item={engine.id as SetupItemId} name={engine.name} url={INSTALL_URL[engine.id]} needed onInstalled={onInstalled} />
+          ) : (
+            isAbsent(engine) &&
+            INSTALL_URL[engine.id] && (
+              <a
+                href={INSTALL_URL[engine.id]}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] text-violet-300 hover:text-violet-200 hover:underline underline-offset-2"
+              >
+                Install {engine.name} <ExternalLink size={10} aria-hidden="true" />
+              </a>
+            )
           )}
           {/* Without a "This machine" row to hold it, the sign-in sits here. */}
           {signInHere && hostAction && <div className="pt-0.5">{hostAction}</div>}
@@ -226,6 +240,8 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
     window.setTimeout(reload, 1500);
   };
   const signedIn = () => void accountsChanged();
+  // The server re-checks the engine before the install job ends, so a plain read shows it.
+  const installed = () => void accountsChanged();
 
   // Nothing runs yet: "Pick one to start" leads, and holds Claude's sign-in so it isn't drawn twice.
   // An engine someone switched off isn't a first run: its card says how to turn it back on.
@@ -242,6 +258,9 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
       onAccountsChanged={accounts ? accountsChanged : undefined}
       hostAction={picking && e.id === 'claude' ? null : hostAction(e, api, signedIn, focusClaudeSignIn)}
       signInAbove={picking && e.id === 'claude' && claudeNeedsSignIn(engines)}
+      // "Pick one to start" holds Claude's install, so it isn't offered twice.
+      onInstalled={picking && e.id === 'claude' ? undefined : installed}
+      installAbove={picking && e.id === 'claude'}
     />
   );
 
@@ -280,7 +299,7 @@ export const EnginesPanel: React.FC<{ api: EnginesApi; accounts?: ProfilesState;
         </p>
       )}
 
-      {picking && <StartPicker engines={engines!} onSignedIn={signedIn} onKeyAdded={signedIn} focusClaudeSignIn={focusClaudeSignIn} initial={claudeNeedsSignIn(engines) ? 'claude' : null} />}
+      {picking && <StartPicker engines={engines!} onSignedIn={signedIn} onKeyAdded={signedIn} focusClaudeSignIn={focusClaudeSignIn} initial={claudeNeedsSignIn(engines) ? 'claude' : null} onInstalled={installed} />}
 
       {error && (
         <p role="alert" className="flex items-center gap-1.5 text-[11px] text-rose-300">
