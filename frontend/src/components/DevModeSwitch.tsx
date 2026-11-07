@@ -146,15 +146,23 @@ export const DevModeSwitch: React.FC<DevModeSwitchProps> = ({ space, phone = fal
 
   // A lifted cover drops back after 5 s; a flip settles at 450 ms.
   useEffect(() => {
-    if (state.phase === 'lifted' && state.liftedAt !== null) {
-      const t = setTimeout(() => dispatch({ type: 'recover', now: now() }), Math.max(0, state.liftedAt + RECOVER_MS - now()));
-      return () => clearTimeout(t);
-    }
-    if (state.phase === 'settling') {
-      const t = setTimeout(() => dispatch({ type: 'settled', now: now() }), Math.max(0, state.settleUntil - now()));
-      return () => clearTimeout(t);
-    }
-    return undefined;
+    const due =
+      state.phase === 'lifted' && state.liftedAt !== null
+        ? { at: state.liftedAt + RECOVER_MS, action: (n: number): SwitchAction => ({ type: 'recover', now: n }) }
+        : state.phase === 'settling'
+          ? { at: state.settleUntil, action: (n: number): SwitchAction => ({ type: 'settled', now: n }) }
+          : null;
+    if (!due) return undefined;
+    let t: ReturnType<typeof setTimeout>;
+    const fire = () => {
+      const before = ref.current;
+      // A timer can fire a millisecond before Date.now() says it is due (Node, and browsers' timers run
+      // on a different clock). The reducer then keeps the state, nothing re-renders, this effect never
+      // runs again, and the switch would stay settling (ignoring every press) or lifted. So try again.
+      if (dispatch(due.action(now())) === before) t = setTimeout(fire, Math.max(1, due.at - now()));
+    };
+    t = setTimeout(fire, Math.max(0, due.at - now()));
+    return () => clearTimeout(t);
   }, [state.phase, state.liftedAt, state.settleUntil, dispatch, now]);
 
   const save = useCallback(
