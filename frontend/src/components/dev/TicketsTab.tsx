@@ -9,6 +9,7 @@ import type { Brief, JiraSite, Ticket, TicketNames, TicketProgress } from '../..
 import { applyProgress, emptyProgress, orderTickets, siteOrigins, ticketsNeedCount, workView } from '../../dev/tickets';
 import * as api from '../../dev/ticketApi';
 import { TicketCard } from './TicketCard';
+import { DevModeError } from '../../devMode';
 
 /** App re-sends the `dev_ticket` and `dev_ticket_progress` SSE messages as these window events. */
 export const DEV_TICKET_EVENT = 'kwant:dev-ticket';
@@ -86,8 +87,8 @@ export interface TicketsPanelProps {
 
 /** One card with its own brief, checklist and actions. */
 const LiveCard: React.FC<
-  { space: string; t: Ticket; reload: () => void; origins: readonly string[]; names: TicketNames } & Pick<TicketsPanelProps, 'handoverLabel' | 'onOpenChat' | 'onOpenReview'>
-> = ({ space, t, reload, origins, names, handoverLabel, onOpenChat, onOpenReview }) => {
+  { space: string; t: Ticket; reload: () => void; origins: readonly string[]; names: TicketNames; jiraOff: boolean } & Pick<TicketsPanelProps, 'handoverLabel' | 'onOpenChat' | 'onOpenReview'>
+> = ({ space, t, reload, origins, names, jiraOff, handoverLabel, onOpenChat, onOpenReview }) => {
   const [brief, setBrief] = useState<{ brief: Brief | null; text: string | null }>({ brief: null, text: null });
   const [progress, setProgress] = useState<TicketProgress>(emptyProgress);
   const wantsBrief = BRIEF_STATES.has(t.state);
@@ -108,10 +109,17 @@ const LiveCard: React.FC<
     return () => window.removeEventListener(DEV_TICKET_PROGRESS_EVENT, on);
   }, [t.key, t.state]);
 
-  const after = <T,>(p: Promise<T>) => p.then((v) => (reload(), v));
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => setNotice(null), [t.state, jiraOff]);
+  const after = <T,>(p: Promise<T>) => p.then((v) => (setNotice(null), reload(), v));
+  /** A failed card action: Off gets its own sentence (never a raw error); the rest show the server's words. */
+  const failed = (e: unknown) => {
+    setNotice(e instanceof DevModeError && e.code === 'jira_off' ? api.JIRA_OFF : e instanceof Error ? e.message : 'Something went wrong.');
+    reload();
+  };
   const team = workView(t, names).team ?? '';
   const b = brief.brief;
-  const act = (fn: (space: string, key: string) => Promise<unknown>) => () => void after(fn(space, t.key)).catch(reload);
+  const act = (fn: (space: string, key: string) => Promise<unknown>) => () => void after(fn(space, t.key)).catch(failed);
 
   return (
     <TicketCard
@@ -122,12 +130,14 @@ const LiveCard: React.FC<
       handoverLabel={handoverLabel}
       names={names}
       origins={origins}
+      jiraOff={jiraOff}
+      notice={notice}
       onStart={t.state === 'waiting' ? act(api.startTicket) : undefined}
       onSkip={t.state === 'waiting' ? act(api.skipTicket) : undefined}
       onStop={t.state === 'picked_up' || t.state === 'reading' ? act(api.stopTicket) : undefined}
       onRetry={t.state === 'failed' ? act(api.retryTicket) : undefined}
       onCloseCard={t.state === 'taken_back' ? act(api.closeTicket) : undefined}
-      onStartBuilding={() => void after(api.okBrief(space, t.key))}
+      onStartBuilding={() => void after(api.okBrief(space, t.key)).catch(failed)}
       onChangeBrief={onOpenChat ? () => onOpenChat(t) : undefined}
       onOpenChat={onOpenChat ? () => onOpenChat(t) : undefined}
       onOpenReview={onOpenReview ? () => onOpenReview(t) : undefined}
@@ -145,7 +155,7 @@ export const TicketsPanel: React.FC<TicketsPanelProps> = ({ space, data, handove
   const origins = siteOrigins(data.site);
   const teamName = data.site?.team_id ? names.teams?.[data.site.team_id] ?? null : null;
   const projects = data.site?.projects ?? [];
-  const common = { space, reload: data.reload, handoverLabel, origins, names };
+  const common = { space, reload: data.reload, handoverLabel, origins, names, jiraOff: data.site ? !data.site.on : false };
   const host = (() => {
     try {
       return data.site?.site ? new URL(data.site.site).host : null;

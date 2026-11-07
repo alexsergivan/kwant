@@ -742,6 +742,8 @@ export interface JiraSite {
   handover: HandedOverBy | null;
   label: string | null;
   team_id: string | null;
+  /** Work from Jira is on. False (Off): no new pickups, and the cards hide Start and Retry. Missing reads as on. */
+  on: boolean;
   tickets: number;
 }
 
@@ -760,6 +762,7 @@ export const parseJiraSite = (v: unknown): JiraSite | null => {
     handover: str(r.handover) ? oneOf(r.handover, ['label', 'assignee', 'jql'] as const, 'jql') : null,
     label: str(r.label, 80),
     team_id: str(r.team_id, 120),
+    on: r.on !== false,
     tickets: num(v.tickets) ?? (Array.isArray(v.tickets) ? v.tickets.length : 0),
   };
 };

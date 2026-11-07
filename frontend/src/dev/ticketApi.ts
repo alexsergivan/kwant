@@ -9,6 +9,9 @@ import type { AskPosted, AskPreview, Brief, JiraSite, Ticket, TicketEvent } from
 import { askBody, briefFallbackText, parseAskPosted, parseAskPreview, parseBrief, parseJiraSite, parseTicket, parseTicketEvents, parseTicketList } from './tickets';
 
 const enc = encodeURIComponent;
+
+/** Juno's 409 `jira_off` (Start, Retry and Ask while Work from Jira is Off), in the card's words. */
+export const JIRA_OFF = 'Work from Jira is off. Turn it on in Settings to start this ticket.';
 const base = (space: string) => `/api/spaces/${enc(space)}/dev`;
 
 async function call(url: string, method = 'GET', body?: unknown): Promise<unknown> {
@@ -28,7 +31,9 @@ async function call(url: string, method = 'GET', body?: unknown): Promise<unknow
   const o = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
   const code = typeof o.code === 'string' ? o.code : typeof o.error === 'string' && /^[a-z_]+$/.test(o.error) ? o.error : null;
   const msg =
-    code === 'wrong_state'
+    code === 'jira_off'
+      ? JIRA_OFF
+      : code === 'wrong_state'
       ? 'The ticket moved on in the meantime. The card shows where it is now.'
       : code === 'already_asked' || code === 'asked'
       ? 'This was already asked on Jira.'

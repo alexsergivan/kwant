@@ -131,6 +131,10 @@ export interface TicketCardProps {
   origins?: readonly string[];
   /** The repo's short name for "The code in storefront". */
   repo?: string | null;
+  /** Work from Jira is Off (site `on: false`): Start and Retry are hidden; nothing new starts. */
+  jiraOff?: boolean;
+  /** One line under the status, from the last action that failed (e.g. the server's `jira_off`). Plain text. */
+  notice?: string | null;
   /** Each missing handler hides its button. */
   onStart?: () => void;
   onSkip?: () => void;
@@ -150,9 +154,10 @@ export interface TicketCardProps {
 
 type Tone = 'needs' | 'ok' | 'bad' | 'plain';
 
-const Btn: React.FC<{ primary?: boolean; onClick?: () => void; children: React.ReactNode; label?: string }> = ({ primary, onClick, children, label }) =>
+/** D8: every card button's name ends with the ticket key ("Stop TRAIL-101"), so a list of cards doesn't read "Stop, Stop, Skip". */
+const Btn: React.FC<{ primary?: boolean; onClick?: () => void; children: string; k: string }> = ({ primary, onClick, children, k }) =>
   onClick ? (
-    <button type="button" className={primary ? 'tk-btn primary' : 'tk-btn ghost'} onClick={onClick} aria-label={label}>
+    <button type="button" className={primary ? 'tk-btn primary' : 'tk-btn ghost'} onClick={onClick} aria-label={`${children} ${k}`}>
       {children}
     </button>
   ) : null;
@@ -203,7 +208,9 @@ const ClosedRow: React.FC<{ t: Ticket; onShow: () => void }> = ({ t, onShow }) =
 };
 
 export const TicketCard: React.FC<TicketCardProps> = (props) => {
-  const { ticket: t, brief = null, briefText = null, progress = null, handoverLabel = null, names = {}, origins = [], repo = null } = props;
+  const { ticket: t, brief = null, briefText = null, progress = null, handoverLabel = null, names = {}, origins = [], repo = null, jiraOff = false, notice = null } = props;
+  const onStart = jiraOff ? undefined : props.onStart;
+  const onRetry = jiraOff ? undefined : props.onRetry;
   const [expanded, setExpanded] = useState(false);
   const [briefShown, setBriefShown] = useState(false);
   if (t.state === 'closed' && !expanded) return <ClosedRow t={t} onShow={() => setExpanded(true)} />;
@@ -216,7 +223,15 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
   /** "Brief" in the Landed footer and Taken back's Kept line: shows the brief under the card (items 7, 16). */
   const BriefLink: React.FC<{ chip?: boolean }> = ({ chip }) =>
     hasBrief ? (
-      <button type="button" className={chip ? 'tk-src' : undefined} aria-expanded={briefShown} aria-controls={briefId} onClick={() => setBriefShown((v) => !v)} data-brief-link>
+      <button
+        type="button"
+        className={chip ? 'tk-src' : undefined}
+        aria-label={`${briefShown ? 'Hide' : 'Show'} brief ${t.key}`}
+        aria-expanded={briefShown}
+        aria-controls={briefId}
+        onClick={() => setBriefShown((v) => !v)}
+        data-brief-link
+      >
         {chip && <FileText aria-hidden="true" />}
         Brief
       </button>
@@ -236,11 +251,11 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
     case 'waiting':
       card = 'waiting';
       bold = 'Waiting for your Start';
-      line = t.waiting_since_connect ? 'It was open before you connected Jira. New tickets start on their own.' : 'It waits until you start it.';
+      line = t.waiting_since_connect ? 'It was open before Work from Jira was turned on. New tickets start on their own.' : 'It waits until you start it.';
       acts = (
         <>
-          <Btn onClick={props.onSkip}>Skip</Btn>
-          <Btn primary onClick={props.onStart}>
+          <Btn k={t.key} onClick={props.onSkip}>Skip</Btn>
+          <Btn k={t.key} primary onClick={onStart}>
             Start
           </Btn>
         </>
@@ -249,15 +264,15 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
     case 'picked_up':
       bold = `${lead} picked it up`;
       line = 'Reading starts in a moment. Nothing is built yet.';
-      acts = <Btn onClick={props.onStop}>Stop</Btn>;
+      acts = <Btn k={t.key} onClick={props.onStop}>Stop</Btn>;
       break;
     case 'reading':
       bold = `${lead} is reading everything about it`;
       line = 'About a minute. Nothing is built yet.';
       acts = (
         <>
-          <Btn onClick={props.onOpenChat}>{w.lead ? `Open ${w.lead}’s chat` : 'Open the chat'}</Btn>
-          <Btn onClick={props.onStop}>Stop</Btn>
+          <Btn k={t.key} onClick={props.onOpenChat}>{w.lead ? `Open ${w.lead}’s chat` : 'Open the chat'}</Btn>
+          <Btn k={t.key} onClick={props.onStop}>Stop</Btn>
         </>
       );
       break;
@@ -282,8 +297,8 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       line = `You asked to OK every brief first. ${lead} waits.`;
       acts = (
         <>
-          <Btn onClick={props.onChangeBrief}>Change something</Btn>
-          <Btn primary onClick={props.onStartBuilding}>
+          <Btn k={t.key} onClick={props.onChangeBrief}>Change something</Btn>
+          <Btn k={t.key} primary onClick={props.onStartBuilding}>
             Start building
           </Btn>
         </>
@@ -322,7 +337,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
         </>
       );
       acts = (
-        <Btn primary onClick={props.onOpenReview}>
+        <Btn k={t.key} primary onClick={props.onOpenReview}>
           Open the review
         </Btn>
       );
@@ -373,7 +388,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       line = `${how}${at ? ` at ${at}` : ''}. Work paused; nothing was thrown away. It carries on if the ticket comes back.`;
       acts = (
         <>
-          <Btn onClick={props.onCloseCard}>Close card</Btn>
+          <Btn k={t.key} onClick={props.onCloseCard}>Close card</Btn>
           <JiraLink t={t} origins={origins} />
         </>
       );
@@ -387,7 +402,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       line = t.error?.message ?? 'Jira didn’t answer. Nothing was built.';
       acts = (
         <>
-          <Btn primary onClick={props.onRetry}>
+          <Btn k={t.key} primary onClick={onRetry}>
             Try again
           </Btn>
           <JiraLink t={t} origins={origins} />
@@ -400,7 +415,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       line = closedLine(t);
       acts = (
         <>
-          <Btn onClick={() => setExpanded(false)}>Hide</Btn>
+          <Btn k={t.key} onClick={() => setExpanded(false)}>Hide</Btn>
           <JiraLink t={t} origins={origins} />
         </>
       );
@@ -449,7 +464,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
               </span>
             )}
             {waitSince ? (
-              <span className="opt">open since {waitSince}, before you connected</span>
+              <span className="opt">open since {waitSince}, before Work from Jira was on</span>
             ) : (
               handed && (
                 <>
@@ -477,6 +492,11 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
             {bold}
           </p>
           <p className="l">{line}</p>
+          {notice && (
+            <p className="l tk-notice" role="alert" data-notice>
+              {notice}
+            </p>
+          )}
         </div>
         {acts && <div className="acts">{acts}</div>}
       </div>

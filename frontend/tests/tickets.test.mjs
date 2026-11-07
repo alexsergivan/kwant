@@ -566,3 +566,76 @@ test('TicketsPanel groups active, waiting and closed', () => {
   assert.match(out, /closed in Jira as Won&#x27;t do · Nov 5 · branch kept/);
   assert.match(out, /data-tickets/);
 });
+
+// ---------------------------------------------------------------------------------------------------
+// Rigel's round 2 (D7, D8, Off)
+
+test('D8: every card button names its ticket, so a list of cards does not read "Stop, Stop, Skip"', async () => {
+  const noop = () => {};
+  const hs = { onStart: noop, onSkip: noop, onStop: noop, onRetry: noop, onCloseCard: noop, onStartBuilding: noop, onChangeBrief: noop, onOpenChat: noop, onOpenReview: noop };
+  const named = (state, extra) => {
+    const out = html(m.TicketCard, { ...N, ...hs, ticket: T(state, extra), brief: B(fx.BRIEF_ANSWERED) });
+    return [...out.matchAll(/<button type="button" class="tk-btn[^"]*"[^>]*aria-label="([^"]+)"/g)].map((x) => x[1]);
+  };
+  assert.deepEqual(named('waiting'), ['Skip TRAIL-142', 'Start TRAIL-142']);
+  assert.deepEqual(named('picked_up'), ['Stop TRAIL-142']);
+  assert.deepEqual(named('reading'), ['Open Ann’s chat TRAIL-142', 'Stop TRAIL-142']);
+  assert.deepEqual(named('failed'), ['Try again TRAIL-142']);
+  assert.deepEqual(named('taken_back'), ['Close card TRAIL-142']);
+  // The visible words stay as they were.
+  assert.match(html(m.TicketCard, { ...N, ...hs, ticket: T('picked_up') }), />Stop<\/button>/);
+  // The Brief link names the ticket too, and says which way it goes.
+  const host = await mount(m.TicketCard, { ...N, ticket: T('landed'), brief: B(fx.BRIEF_ANSWERED) });
+  const link = host.querySelector('[data-brief-link]');
+  assert.equal(link.getAttribute('aria-label'), 'Show brief TRAIL-142');
+  await click(link);
+  assert.equal(host.querySelector('[data-brief-link]').getAttribute('aria-label'), 'Hide brief TRAIL-142');
+});
+
+test('D7: a ticket that waited from before says "before Work from Jira was on", not "before you connected"', () => {
+  const out = html(m.TicketCard, { ...N, ticket: T('waiting', { waiting_since_connect: true, jira_created: '2026-11-03T09:00:00Z' }), onStart: () => {} });
+  assert.match(out, /It was open before Work from Jira was turned on\. New tickets start on their own\./);
+  assert.match(out, /open since Nov 3, before Work from Jira was on/);
+  assert.doesNotMatch(out, /connected/);
+});
+
+test('Off: the site reads on:false, and the cards hide Start and Retry but keep Skip and Stop', () => {
+  assert.equal(m.parseJiraSite(fx.JIRA_SITE).on, true, 'a site without `on` reads as on');
+  assert.equal(m.parseJiraSite({ site: { ...fx.JIRA_SITE.site, on: false } }).on, false);
+  const noop = () => {};
+  const w = html(m.TicketCard, { ...N, ticket: T('waiting'), jiraOff: true, onStart: noop, onSkip: noop });
+  assert.doesNotMatch(w, />Start</);
+  assert.match(w, />Skip</);
+  const f = html(m.TicketCard, { ...N, ticket: T('failed'), jiraOff: true, onRetry: noop });
+  assert.doesNotMatch(f, />Try again</);
+  const r = html(m.TicketCard, { ...N, ticket: T('reading'), jiraOff: true, onStop: noop });
+  assert.match(r, />Stop</);
+  // TicketsPanel passes Off down from the site.
+  const tickets = [T('waiting'), T('failed', { key: 'TRAIL-150' })].filter(Boolean);
+  const data = { site: m.parseJiraSite({ site: { ...fx.JIRA_SITE.site, on: false } }), tickets, dropped: 0, loading: false, error: null, needs: 0, reload() {} };
+  const panel = html(m.TicketsPanel, { space: 'sp_demo', data, names: fx.NAMES });
+  assert.doesNotMatch(panel, />Start</);
+  assert.doesNotMatch(panel, />Try again</);
+  const onData = { ...data, site: m.parseJiraSite(fx.JIRA_SITE) };
+  assert.match(html(m.TicketsPanel, { space: 'sp_demo', data: onData, names: fx.NAMES }), />Start</);
+});
+
+test('Off: a 409 jira_off from Start shows the plain sentence on the card, never the raw error', async () => {
+  const calls = [];
+  g.fetch = async (url, init) => {
+    calls.push(`${init?.method ?? 'GET'} ${url}`);
+    if (String(url).endsWith('/start'))
+      return new Response(JSON.stringify({ error: 'jira_off', code: 'jira_off' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ brief: null }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+  };
+  // The site still read on when the list loaded; Off came in between.
+  const data = { site: m.parseJiraSite(fx.JIRA_SITE), tickets: [T('waiting')], dropped: 0, loading: false, error: null, needs: 0, reload() {} };
+  const host = await mount(m.TicketsPanel, { space: 'sp_demo', data, names: fx.NAMES });
+  await click(host.querySelector('button[aria-label="Start TRAIL-142"]'));
+  assert.ok(calls.includes('POST /api/spaces/sp_demo/dev/tickets/TRAIL-142/start'));
+  const n = host.querySelector('[data-notice]');
+  assert.ok(n, 'the card shows a notice');
+  assert.equal(n.textContent, 'Work from Jira is off. Turn it on in Settings to start this ticket.');
+  assert.equal(n.getAttribute('role'), 'alert');
+  assert.doesNotMatch(host.textContent, /jira_off|HTTP 409/);
+});
