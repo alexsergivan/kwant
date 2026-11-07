@@ -142,7 +142,8 @@ test('setup snippets are the docs’ blocks, with this server and the new token 
   assert.ok(doc.includes('`' + m.setupSnippets('codex', m.DOC_SERVER, m.DOC_TOKEN)[1] + '`'), 'the Codex export line');
   const filled = m.setupSnippets('cursor', m.serverUrl('https://kwant.example/'), TOKEN)[0];
   assert.ok(filled.includes('"url": "https://kwant.example/api/mcp/agents"'));
-  assert.ok(filled.includes(`Bearer ${TOKEN}`));
+  assert.ok(filled.includes('Bearer ${env:KWANT_AGENT_TOKEN}') && !filled.includes(TOKEN), 'the config file holds no token');
+  assert.equal(m.setupSnippets('cursor', m.DOC_SERVER, TOKEN)[1], `export KWANT_AGENT_TOKEN=${TOKEN}`);
   assert.equal(m.serverUrl('javascript:alert(1)'), m.DOC_SERVER);
   assert.equal(m.serverUrl(null), m.DOC_SERVER);
 });

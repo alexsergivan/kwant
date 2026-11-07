@@ -156,9 +156,9 @@ export const agentConnectionsApi = (send: Fetch = (...a) => fetch(...a)) => ({
 export type SetupTool = 'claude' | 'codex' | 'cursor';
 
 export const SETUP_TOOLS: Array<{ id: SetupTool; label: string; where: string }> = [
-  { id: 'claude', label: 'Claude Code', where: 'Run this once in a terminal.' },
+  { id: 'claude', label: 'Claude Code', where: 'Run this once in a terminal. Add --scope user to have it in every project.' },
   { id: 'codex', label: 'Codex', where: 'Add this to ~/.codex/config.toml, then set the token in your shell profile.' },
-  { id: 'cursor', label: 'Cursor', where: 'Add this to ~/.cursor/mcp.json, or .cursor/mcp.json in a project you don’t commit.' },
+  { id: 'cursor', label: 'Cursor', where: 'Add this to ~/.cursor/mcp.json, or .cursor/mcp.json in a project you don’t commit, then set the token in your shell profile.' },
 ];
 
 /** The placeholders the docs use; the card fills in this server's address and the new token. */
@@ -185,7 +185,8 @@ export function setupSnippets(tool: SetupTool, server: string, token: string): s
       return [`[mcp_servers.${n}]\nurl = "${url}"\nbearer_token_env_var = "KWANT_AGENT_TOKEN"`, `export KWANT_AGENT_TOKEN=${token}`];
     case 'cursor':
       return [
-        `{\n  "mcpServers": {\n    "${n}": {\n      "url": "${url}",\n      "headers": { "Authorization": "Bearer ${token}" }\n    }\n  }\n}`,
+        `{\n  "mcpServers": {\n    "${n}": {\n      "url": "${url}",\n      "headers": { "Authorization": "Bearer \${env:KWANT_AGENT_TOKEN}" }\n    }\n  }\n}`,
+        `export KWANT_AGENT_TOKEN=${token}`,
       ];
   }
 }
