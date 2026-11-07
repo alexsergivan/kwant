@@ -60,6 +60,7 @@ Key facts:
 - [Parallel Universe: compare deployment options](https://kwant.si/docs/parallel-universe): Load-test up to three ways to deploy an app in sealed Docker containers, next to a dated price estimate. No cloud account and no spending.
 - [MCP tools for AI agents: a self-hosted client](https://kwant.si/docs/mcp): Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.
 - [Use kwant from Claude Code, Codex or Cursor over MCP](https://kwant.si/docs/agents-connect): Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can't approve anything, revoked at once.
+- [Telegram: message your kwant bots and get alerts on your phone](https://kwant.si/docs/telegram): Pair a Telegram chat with a kwant space. Write to your bots from Telegram, get their replies, questions and approvals on your phone, and allow some approvals once with a tap. It needs no public address.
 - [AI agent browser: your Chrome or Docker](https://kwant.si/docs/browser): Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.
 
 ## Alternatives
