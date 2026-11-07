@@ -3,6 +3,8 @@ import { AlertTriangle, ArrowUpCircle, CheckCircle2, ExternalLink, Info, Loader2
 import { BannerView, UpdateController, UpdateModel, aboutLine, appUpdateController, bannerView, dismissVersion, dismissedVersion } from '../appUpdate';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { desktopAppOs } from '../externalLinks';
+import { hasWhatsNew } from './WhatsNewSheet';
+import { openWhatsNew } from '../whatsNewSheet';
 
 const PHONE_QUERY = '(max-width: 767px)';
 const UPDATED_NOTE_MS = 10000;
@@ -18,13 +20,15 @@ interface ViewProps {
   view: BannerView;
   onUpdate: () => void;
   onDismiss: () => void;
+  /** "See what's new" on the "Updated to" bar, when there's a What's new sheet for that version. */
+  onWhatsNew?: () => void;
 }
 
 const btn =
   'inline-flex min-h-[32px] items-center gap-1.5 rounded-lg px-3 text-xs font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400';
 
 /** The slim bar itself, without the polling: what tests and screenshots render. */
-export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDismiss }) => {
+export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDismiss, onWhatsNew }) => {
   const [notesOpen, setNotesOpen] = useState(false);
   const notesId = useId();
   const notes = view.kind === 'available' || view.kind === 'error' ? view.notes.trim() : '';
@@ -109,6 +113,17 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
           </div>
         )}
 
+        {view.kind === 'updated' && onWhatsNew && (
+          <button
+            type="button"
+            onClick={onWhatsNew}
+            data-see-whats-new
+            className={`${btn} min-h-[28px] h-7 border border-emerald-300/35 px-2.5 text-emerald-200 hover:bg-emerald-500/15 hover:text-emerald-50`}
+          >
+            See what’s new
+          </button>
+        )}
+
         {(view.kind === 'available' || view.kind === 'updated') && (
           <button
             type="button"
@@ -158,6 +173,7 @@ export const AppUpdateBanner: React.FC = () => {
       key={`${view.kind}-${view.version}`}
       view={view}
       onUpdate={() => void ctrl.install()}
+      onWhatsNew={view.kind === 'updated' && hasWhatsNew(view.version) ? () => openWhatsNew(view.version) : undefined}
       onDismiss={() => {
         if (view.kind === 'updated') return ctrl.clearUpdated();
         dismissVersion(view.version);
