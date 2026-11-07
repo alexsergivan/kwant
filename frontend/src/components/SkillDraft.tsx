@@ -3,7 +3,7 @@
 // text; when it doesn't split into sections the card shows the SKILL.md as it is.
 import React, { useId, useState } from 'react';
 import { Loader2, MousePointer2, Play, TriangleAlert } from 'lucide-react';
-import { InlinePart, SkillShown, dayOf, errText, inlineParts, isSkillShown, parseSkillSections, shortDay, showOnceApi, stepsWord } from '../showOnce';
+import { InlinePart, SkillShown, dayOf, errText, inlineParts, isSkillShown, parseSkillSections, shortDay, showOnceApi, stepsWord, tryFacts } from '../showOnce';
 import type { Skill } from '../skills';
 import { MaskChip } from './ShowOnce';
 
@@ -136,7 +136,8 @@ export const TryItOnce: React.FC<{ skill: Skill; shown: SkillShown; botName: str
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const id = useId();
-  const sites = parseSkillSections(skill.body)?.sites ?? [];
+  // A29: what it does comes from the draft's GOAL; without one, the sites it visits
+  const { goal, sites } = tryFacts(skill.body);
 
   const start = async () => {
     setBusy(true);
@@ -178,7 +179,7 @@ export const TryItOnce: React.FC<{ skill: Skill; shown: SkillShown; botName: str
       <p className="so-warn">
         <TriangleAlert size={12} aria-hidden="true" />
         <span>
-          It runs for real{sites.length ? ` on ${sites.join(' and ')}` : ''}. Approvals still ask. You watch it in {botName}'s chat.
+          {goal ? `It runs for real: ${goal}.` : `It runs for real${sites.length ? ` on ${sites.join(' and ')}` : ''}.`} Approvals still ask. You watch it in {botName}'s chat.
         </span>
       </p>
       {error && (

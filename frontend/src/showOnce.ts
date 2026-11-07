@@ -172,10 +172,13 @@ const R = '/api/show-once/recordings';
 
 export const showOnceApi = {
   start: (body: { bot: string; stage: string; start_url?: string; first_note?: string }) => api<{ recording: Recording }>('POST', R, body),
-  current: (bot: string) => api<{ recording: Recording | null }>('GET', `${R}?bot=${enc(bot)}`),
+  /** `last_url`: the page the bot's browser was last on, null when it has none (A26 prefill, §10). */
+  current: (bot: string) => api<{ recording: Recording | null; last_url?: string | null }>('GET', `${R}?bot=${enc(bot)}`),
   get: (id: string) => api<{ recording: Recording; steps: RecordedStep[] }>('GET', `${R}/${enc(id)}`),
   note: (id: string, body: { text: string; after?: number | string }) => api<{ step: RecordedStep }>('POST', `${R}/${enc(id)}/notes`, body),
-  stop: (id: string) => api<{ recording: Recording }>('POST', `${R}/${enc(id)}/stop`),
+  /** `handed_back` when the person hands the browser back while recording (A27, §10). */
+  stop: (id: string, reason?: 'handed_back') =>
+    api<{ recording: Recording }>('POST', `${R}/${enc(id)}/stop`, reason ? { reason } : undefined),
   resume: (id: string) => api<{ recording: Recording }>('POST', `${R}/${enc(id)}/resume`),
   deleteStep: (id: string, step: string) => api<{ step: RecordedStep }>('DELETE', `${R}/${enc(id)}/steps/${enc(step)}`),
   restoreStep: (id: string, step: string) => api<{ step: RecordedStep }>('POST', `${R}/${enc(id)}/steps/${enc(step)}/restore`),
@@ -387,8 +390,7 @@ const SECTION_KEYS: Record<string, keyof SkillSections> = {
 
 const joinLines = (lines: string[]) => lines.map((l) => l.trim()).filter(Boolean).join(' ').trim();
 
-export function parseSkillSections(body: string): SkillSections | null {
-  if (typeof body !== 'string') return null;
+function splitSections(body: string): Map<keyof SkillSections, string[]> {
   const sections = new Map<keyof SkillSections, string[]>();
   let current: keyof SkillSections | null = null;
   for (const raw of body.split(/\r?\n/)) {
@@ -406,6 +408,12 @@ export function parseSkillSections(body: string): SkillSections | null {
     }
     if (current) sections.get(current)!.push(raw);
   }
+  return sections;
+}
+
+export function parseSkillSections(body: string): SkillSections | null {
+  if (typeof body !== 'string') return null;
+  const sections = splitSections(body);
   const goal = joinLines(sections.get('goal') ?? []);
   const stepLines = (sections.get('steps') ?? []).map((l) => /^\s*(?:\d+[.)]|[-*])\s+(.*)$/.exec(l)?.[1]?.trim()).filter((l): l is string => !!l);
   if (!goal || stepLines.length === 0) return null;
@@ -432,14 +440,7 @@ export function parseSkillSections(body: string): SkillSections | null {
   }
   const inputsText = !tableish || (inputLines.length > 0 && inputs.length === 0) ? joinLines(inputLines) : null;
 
-  // Sites are the recorded origins kwant wrote; the rule line and the "Shown by you" line aren't sites
-  const sites: string[] = [];
-  for (const raw of sections.get('sites') ?? []) {
-    for (const w of raw.replace(/[`*]/g, ' ').split(/[\s,]+/)) {
-      const host = hostOf(w.replace(/[.;:]+$/, ''));
-      if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?$/i.test(host) && /[a-z]/i.test(host) && !sites.includes(host)) sites.push(host);
-    }
-  }
+  const sites = sitesFrom(sections.get('sites') ?? []);
 
   return {
     goal,
@@ -451,6 +452,26 @@ export function parseSkillSections(body: string): SkillSections | null {
     wrong: joinLines(sections.get('wrong') ?? []) || null,
     sites,
   };
+}
+
+// Sites are the recorded origins kwant wrote; the rule line and the "Shown by you" line aren't sites
+function sitesFrom(lines: string[]): string[] {
+  const sites: string[] = [];
+  for (const raw of lines) {
+    for (const w of raw.replace(/[`*]/g, ' ').split(/[\s,]+/)) {
+      const host = hostOf(w.replace(/[.;:]+$/, ''));
+      if (/^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?$/i.test(host) && /[a-z]/i.test(host) && !sites.includes(host)) sites.push(host);
+    }
+  }
+  return sites;
+}
+
+/** Try it once's warning (A29): the GOAL as plain text, else the sites, even when the draft doesn't split. */
+export function tryFacts(body: string): { goal: string | null; sites: string[] } {
+  if (typeof body !== 'string') return { goal: null, sites: [] };
+  const sections = splitSections(body);
+  const goal = joinLines(sections.get('goal') ?? []).replace(/[`*]/g, '').replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '');
+  return { goal: goal || null, sites: sitesFrom(sections.get('sites') ?? []) };
 }
 
 /** Inline text of the draft: `code` becomes a chip and the placeholders become mask chips. */
@@ -742,7 +763,7 @@ export const showOnce = {
     if (!s?.rec || s.phase !== 'recording') return null;
     const id = s.rec.id;
     showOnceStore.set({ ...s, phase: 'review', handBackAfter: s.handBackAfter || handBack });
-    const err = await run(() => showOnceApi.stop(id), (x, v) => withRec(x, v.recording));
+    const err = await run(() => showOnceApi.stop(id, handBack ? 'handed_back' : undefined), (x, v) => withRec(x, v.recording));
     if (err) showOnceStore.update((x) => ({ ...x, error: err }));
     void refresh();
     return err;
@@ -824,4 +845,47 @@ export const showOnce = {
 export function elapsedNow(s: ShowOnceSession, at = now()): number {
   if (!s.rec) return 0;
   return s.rec.elapsed_secs * 1000 + (s.phase === 'recording' ? Math.max(0, at - s.syncedAt) : 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The trial in chat (A29, design §S "Trial in chat", api.md §10)
+
+export interface TrialRef {
+  skill_id: string;
+  recording_id: string;
+}
+
+/** A trial message carries `trial: {skill_id, recording_id}`, on the message or in its meta JSON. */
+export function trialOf(msg: { trial?: unknown; meta?: string | null }): TrialRef | null {
+  let t: unknown = msg.trial;
+  if (t == null && typeof msg.meta === 'string' && msg.meta.includes('"trial"')) {
+    try {
+      t = (JSON.parse(msg.meta) as { trial?: unknown })?.trial;
+    } catch {
+      t = null;
+    }
+  }
+  if (!t || typeof t !== 'object') return null;
+  const { skill_id, recording_id } = t as Record<string, unknown>;
+  return str(skill_id) && skill_id && str(recording_id) ? { skill_id, recording_id } : null;
+}
+
+/**
+ * Where a "… still waits for you" card goes: after the last message of each trial that has ended.
+ * Ended is the SSE `show_once_trial_ended` seen in this tab, or, after a reload, the trial's last
+ * message being the bot's own reply (its result), since the sysline and approvals come first.
+ * Returns message id → the trial whose card follows it.
+ */
+export function trialCardsAfter(
+  messages: ReadonlyArray<{ id: string; sender_role: string; trial?: unknown; meta?: string | null }>,
+  ended: ReadonlySet<string>,
+): Map<string, TrialRef> {
+  const last = new Map<string, { id: string; ref: TrialRef; botReply: boolean }>();
+  for (const m of messages) {
+    const ref = trialOf(m);
+    if (ref) last.set(ref.skill_id, { id: m.id, ref, botReply: m.sender_role === 'kwant' });
+  }
+  const out = new Map<string, TrialRef>();
+  for (const [skill, v] of last) if (ended.has(skill) || v.botReply) out.set(v.id, v.ref);
+  return out;
 }

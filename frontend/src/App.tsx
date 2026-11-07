@@ -1095,6 +1095,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (rec?.id) emitContinuity({ type: 'recording_updated', data: rec });
             break;
           }
+          case 'show_once_trial_ended':
+          case 'ShowOnceTrialEnded': {
+            // Show it once (api.md §10): a trial finished, so the chat can show the "still waits" card
+            const t = event.data;
+            if (t && typeof t.skill_id === 'string' && t.skill_id)
+              emitContinuity({
+                type: 'trial_ended',
+                data: { skill_id: t.skill_id, recording_id: String(t.recording_id ?? ''), bot: String(t.bot ?? ''), outcome: String(t.outcome ?? '') },
+              });
+            break;
+          }
           case 'mcp_suggestion_updated':
           case 'McpSuggestionUpdated': {
             const sg: Suggestion | undefined = event.data?.suggestion;
@@ -3398,6 +3409,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 }
               : undefined
           }
+          onOpenSkills={(kwantId) => openSkillsRef.current(kwantId)}
           isVmPaneOpen={isVmPaneOpen}
           onToggleVmPane={() => setIsVmPaneOpen((prev) => !prev)}
           activeUrl={activeUrl}

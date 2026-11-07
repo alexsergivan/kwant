@@ -519,7 +519,7 @@ test('a stop at the limit says so in a banner; no engine blocks Write with the r
 });
 
 test('Hand back while recording stops first, and hands back when the review closes (A27)', async () => {
-  fake({
+  const calls = fake({
     [`POST ${R}/rec_1/stop`]: [200, { recording: rec({ state: 'stopped', stop_reason: 'handed_back' }) }],
     [`GET ${R}/rec_1`]: [200, { recording: rec({ state: 'stopped', stop_reason: 'handed_back' }), steps: STEPS }],
     [`DELETE ${R}/rec_1`]: [204, null],
@@ -529,6 +529,7 @@ test('Hand back while recording stops first, and hands back when the review clos
   const off = m.showOnceStore.onEnd((e) => ended.push(e));
   await m.showOnce.stop(true);
   assert.equal(m.showOnceStore.get().handBackAfter, true);
+  assert.deepEqual(calls.find((c) => c.url === `${R}/rec_1/stop`).body, { reason: 'handed_back' }, '§10: stop says why');
   await m.showOnce.discard();
   assert.deepEqual(ended, [{ stage: 'k_rook', handBack: true }]);
   off();
@@ -576,7 +577,7 @@ test('Try it once: inputs prefilled with the run’s examples, a plain warning, 
   const { host, unmount } = await mount(h(m.TryItOnce, { skill: skill(), shown: shown(), botName: 'Rook', onClose: () => {}, onStarted: (k) => (startedIn = k) }));
   const inputs = [...host.querySelectorAll('input')];
   assert.deepEqual(inputs.map((i) => i.value), ['Last 7 days', 'Orders']);
-  assert.match(host.textContent, /It runs for real on shop\.example\.com and crm\.example\.com\. Approvals still ask\. You watch it in Rook's chat\./);
+  assert.match(host.textContent, /It runs for real: Export last week's paid orders from the shop and import them into the CRM\. Approvals still ask\. You watch it in Rook's chat\./, 'A29: what it does is the GOAL');
   await type(inputs[0], 'Last 14 days');
   await click(byText(host, 'button', 'Start the trial'));
   assert.deepEqual(calls[0].body, { inputs: { date_range: 'Last 14 days', import_type: 'Orders' } });
@@ -643,4 +644,62 @@ test('a Discard elsewhere (SSE with deleted: true, api.md §10.1) closes the rev
   await settle();
   assert.equal(m.showOnceStore.get(), null);
   reset();
+});
+
+test('a plain Stop sends no reason', async () => {
+  const calls = fake({
+    [`POST ${R}/rec_1/stop`]: [200, { recording: rec({ state: 'stopped', stop_reason: 'stop' }) }],
+    [`GET ${R}/rec_1`]: [200, { recording: rec({ state: 'stopped', stop_reason: 'stop' }), steps: STEPS }],
+  });
+  m.showOnceStore.set(session());
+  await m.showOnce.stop(false);
+  assert.equal(calls.find((c) => c.url === `${R}/rec_1/stop`).body, undefined);
+  reset();
+});
+
+test('Try it once without a GOAL names the sites; with neither it still reads', async () => {
+  fake({});
+  const noGoal = SKILL_BODY.replace(/## Goal\n[^\n]*\n/, '');
+  let v = await mount(h(m.TryItOnce, { skill: skill({ body: noGoal }), shown: shown(), botName: 'Rook', onClose: () => {} }));
+  assert.match(v.host.textContent, /It runs for real on shop\.example\.com and crm\.example\.com\. Approvals still ask\./);
+  v.unmount();
+  v = await mount(h(m.TryItOnce, { skill: skill({ body: 'Just do it.' }), shown: shown(), botName: 'Rook', onClose: () => {} }));
+  assert.match(v.host.textContent, /It runs for real\. Approvals still ask\. You watch it in Rook's chat\./);
+  v.unmount();
+  assert.deepEqual(m.tryFacts('## Goal\nExport **paid** `orders`.\n'), { goal: 'Export paid orders', sites: [] });
+});
+
+test('Start at is prefilled with the bot’s last page (last_url, §10); null keeps the placeholder', async () => {
+  fake({ ['GET /api/skills?kwant_id=k_rook']: [200, []], [`GET ${R}?bot=k_rook`]: [200, { recording: null, last_url: 'https://shop.example.com/admin/orders' }] });
+  let v = await mount(h(m.SkillsPanel, { kwantId: 'k_rook', kwantName: 'Rook', onShowOnceStarted: () => {} }));
+  await click(byText(v.host.querySelector('.so-entry'), 'button', 'Show it once'));
+  assert.equal(document.querySelector('[role="dialog"] input').value, 'https://shop.example.com/admin/orders');
+  await click(byText(document.body, 'button', 'Cancel'));
+  v.unmount();
+  fake({ ['GET /api/skills?kwant_id=k_rook']: [200, []], [`GET ${R}?bot=k_rook`]: [200, { recording: null, last_url: null }] });
+  v = await mount(h(m.SkillsPanel, { kwantId: 'k_rook', kwantName: 'Rook', onShowOnceStarted: () => {} }));
+  await click(byText(v.host.querySelector('.so-entry'), 'button', 'Show it once'));
+  const input = document.querySelector('[role="dialog"] input');
+  assert.equal(input.value, '');
+  assert.equal(input.placeholder, 'The page the browser is on');
+  await click(byText(document.body, 'button', 'Cancel'));
+  v.unmount();
+});
+
+test('trial messages: the marker on the message or in meta; the card goes after the last one once it ended', () => {
+  const tr = { skill_id: 'sk_1', recording_id: 'rec_1' };
+  assert.deepEqual(m.trialOf({ trial: tr }), tr);
+  assert.deepEqual(m.trialOf({ meta: JSON.stringify({ trial: tr }) }), tr);
+  assert.equal(m.trialOf({ meta: '{"trial": 1}' }), null);
+  assert.equal(m.trialOf({ meta: 'not json "trial"' }), null);
+  assert.equal(m.trialOf({ trial: { skill_id: '', recording_id: 'r' } }), null);
+  const msgs = [
+    { id: 'u1', sender_role: 'user' },
+    { id: 's1', sender_role: 'system', trial: tr },
+    { id: 'k1', sender_role: 'kwant', trial: tr },
+    { id: 'k2', sender_role: 'kwant' },
+  ];
+  assert.deepEqual([...m.trialCardsAfter(msgs, new Set())], [['k1', tr]], 'after a reload: the bot’s result ends it');
+  assert.deepEqual([...m.trialCardsAfter(msgs.slice(0, 2), new Set())], [], 'only the sysline: still running');
+  assert.deepEqual([...m.trialCardsAfter(msgs.slice(0, 2), new Set(['sk_1']))], [['s1', tr]], 'the SSE says it ended');
 });

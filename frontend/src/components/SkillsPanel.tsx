@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useUndoableDelete } from '../undoDelete';
 import { UndoNotice } from './UndoNotice';
-import { Bot, Check, ChevronDown, ChevronRight, CircleDot, Globe2, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
+import { Bot, Check, ChevronDown, ChevronRight, CircleDot, Globe2, ListChecks, Loader2, Pencil, Play, Plus, RefreshCw, Trash2, User, X } from 'lucide-react';
 import { DraftSections, KeepLine, ShownBadge, ShownLine, TryItOnce, shownOf } from './SkillDraft';
 import { ShowOnceStart } from './ShowOnce';
-import { showOnce } from '../showOnce';
+import { showOnce, showOnceApi } from '../showOnce';
 import { formatWhen, onContinuity } from '../continuity';
 import { playSfx } from '../audio/chiptune';
 import {
@@ -30,7 +30,7 @@ const inputClass =
 const errText = (e: unknown) => (e instanceof Error ? e.message : 'That failed.');
 
 /** Name, description and steps; used to write a new skill and to edit one (before approving). */
-const SkillForm: React.FC<{
+export const SkillForm: React.FC<{
   idPrefix: string;
   initial: SkillDraft;
   submitLabel: string;
@@ -321,6 +321,99 @@ export const PendingSkill: React.FC<{ skill: Skill; replaces?: Skill; initialPen
   );
 };
 
+/**
+ * Trial in chat (A29, design §S): after a "Try it once" run ends, "`name` still waits for you"
+ * with Approve, "Edit, then approve", Reject and Open in Skills. It reads the skill from the server
+ * and goes away once the skill is no longer pending (approved, rejected or deleted, in any tab).
+ */
+export const TrialWaitsCard: React.FC<{ skillId: string; kwantId: string; onOpenSkills?: (kwantId: string) => void }> = ({ skillId, kwantId, onOpenSkills }) => {
+  const [skill, setSkill] = useState<Skill | null>(null);
+  const [mode, setMode] = useState<'view' | 'edit'>('view');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const rejection = useUndoableDelete();
+
+  useEffect(() => {
+    let live = true;
+    skillsApi
+      .list({ status: 'pending' })
+      .then((list) => live && setSkill(list.find((x) => x.id === skillId && x.status === 'pending') ?? null))
+      .catch(() => live && setSkill(null));
+    const off = onContinuity('skill_updated', (ev) => {
+      if (ev.id !== skillId) return;
+      setSkill('deleted' in ev && ev.deleted ? null : (ev as Skill).status === 'pending' ? (ev as Skill) : null);
+    });
+    return () => {
+      live = false;
+      off();
+    };
+  }, [skillId]);
+
+  if (!skill || rejection.gone) return null;
+  if (rejection.pending)
+    return <UndoNotice text={`Rejected “${skill.name}”. Its recorded steps are deleted when this closes.`} onUndo={rejection.undo} />;
+
+  const approve = async (edits?: SkillDraft) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await skillsApi.approve(skill.id, edits);
+      playSfx('coin');
+    } catch (e) {
+      setBusy(false);
+      return errText(e);
+    }
+  };
+  const label = `${skill.name} still waits for you`;
+  return (
+    <section className="so-trialcard w-full max-w-3xl sm:ml-[48px] p-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] space-y-2" aria-label={label}>
+      <p className="text-xs text-zinc-200 break-words">
+        <code className="font-mono font-semibold text-zinc-100 break-all">{skill.name}</code> still waits for you.
+      </p>
+      {mode === 'edit' ? (
+        <SkillForm
+          idPrefix={`trial-${skill.id}`}
+          initial={{ name: skill.name, description: skill.description, body: skill.body }}
+          submitLabel="Save & approve"
+          onSubmit={(d) => approve(d)}
+          onCancel={() => setMode('view')}
+        />
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => approve().then((e) => e && setError(e))} disabled={busy} className={goBtn}>
+            {busy ? <Loader2 size={11} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={11} aria-hidden="true" />}
+            Approve
+          </button>
+          <button type="button" onClick={() => setMode('edit')} disabled={busy} className={quietBtn}>
+            <Pencil size={11} aria-hidden="true" /> Edit, then approve
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              rejection.start(() => skillsApi.reject(skill.id));
+            }}
+            disabled={busy}
+            className={dangerBtn}
+          >
+            <X size={11} aria-hidden="true" /> Reject
+          </button>
+          {onOpenSkills && (
+            <button type="button" onClick={() => onOpenSkills(skill.kwant_id ?? kwantId)} className={`${quietBtn} sm:ml-auto`}>
+              <ListChecks size={11} aria-hidden="true" /> Open in Skills
+            </button>
+          )}
+        </div>
+      )}
+      {(error ?? rejection.error) && (
+        <p className="text-[11px] text-rose-400" role="alert">
+          {error ?? `Couldn’t reject it: ${rejection.error}`}
+        </p>
+      )}
+    </section>
+  );
+};
+
 export const ActiveSkill: React.FC<{ skill: Skill; initialPending?: boolean }> = ({ skill, initialPending = false }) => {
   const [editing, setEditing] = useState(false);
   const [open, setOpen] = useState(false);
@@ -435,6 +528,7 @@ export const SkillsPanel: React.FC<{
   browserUrl?: string;
 }> = ({ kwantId, kwantName, onShowOnceStarted, browserUrl }) => {
   const [starting, setStarting] = useState(false);
+  const [lastUrl, setLastUrl] = useState<string | null>(null);
   const [skills, setSkills] = useState<Skill[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
@@ -454,6 +548,20 @@ export const SkillsPanel: React.FC<{
     reload();
     return onContinuity('skill_updated', (ev) => setSkills((prev) => (prev ? applySkillEvent(prev, ev, kwantId) : prev)));
   }, [kwantId, reload]);
+
+  // A26: Start at is prefilled with the page the bot's browser was last on (api.md §10 `last_url`)
+  useEffect(() => {
+    if (!onShowOnceStarted) return;
+    let live = true;
+    setLastUrl(null);
+    showOnceApi
+      .current(kwantId)
+      .then((r) => live && setLastUrl(typeof r?.last_url === 'string' && r.last_url.trim() ? r.last_url : null))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [kwantId, !!onShowOnceStarted]);
 
   const groups = skills ? groupSkills(skills) : null;
   const byId = (id: string | null) => (id ? skills?.find((s) => s.id === id) : undefined);
@@ -506,7 +614,7 @@ export const SkillsPanel: React.FC<{
         <ShowOnceStart
           botName={kwantName}
           open={starting}
-          defaultUrl={browserUrl}
+          defaultUrl={lastUrl ?? browserUrl}
           onCancel={() => setStarting(false)}
           onStart={(url, note) => {
             setStarting(false);
