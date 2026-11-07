@@ -134,6 +134,7 @@ import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, creat
 import { NeedsYouPill } from './components/NeedsYouPill';
 import { devApi, devStore } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
+import { JiraSetupHost } from './components/JiraSetup';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
@@ -3776,6 +3777,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       <StarAsk needsYou={Object.keys(needsYouByKwant).length > 0} waiting={awaitingTurns.size > 0 || pendingApprovals.length > 0} />
       <Toasts toasts={toasts} onDismiss={dismissToast} />
+      <JiraSetupHost onSaved={() => pushToast('Taking tickets from Jira', 'Tickets you hand over show up on the Dev desk.')} />
       <GitHubConnectHost
         onConnected={(_space, source, test) => {
           const t = connectedToast(source, test);

@@ -10,6 +10,8 @@ import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlot
 import { useDevMode } from './DevModeSwitch';
 import { DevStatusLine } from './DevStatusLine';
 import { openGitHubConnect } from './GitHubConnect';
+import { JiraHint, useJira } from './JiraSettings';
+import { deskBadge } from '../dev/jiraSetup';
 
 /** App re-sends the `dev_card` SSE as this window event: detail `{space_id, id, kind, status}`. */
 export const DEV_CARD_EVENT = 'kwant:dev-card';
@@ -122,7 +124,11 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
   // Flow F6: the badge is review cards new since the desk was last opened (the server keeps "seen",
   // so phone and desktop agree). Landed cards are news, not needs; floor approvals stay in the chat.
   // An older server without new_reviews falls back to the open reviews.
-  const count = rowBadge(dev, reviews);
+  // 0.7.6 (design §7): plus tickets waiting on you (questions, Brief ready); amber when there's one.
+  // With Jira never connected (or an older server) tickets are null and the badge is the 0.7.5 one.
+  const jira = useJira(spaceId, !!dev?.on);
+  const badge = deskBadge(rowBadge(dev, reviews), jira?.site ? jira.tickets : null);
+  const count = badge.count;
   // Flow F4: one soft highlight the first time the row appears in this space; never again, never looping.
   const [fresh] = useState(() => !firstRun.rowSeen(spaceId));
   useEffect(() => {
@@ -135,7 +141,7 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
     if (count > prev.current) setPop((n) => n + 1);
     prev.current = count;
   }, [count]);
-  const name = count > 0 ? `Dev desk, ${count} new ${count === 1 ? 'review' : 'reviews'}` : undefined;
+  const name = badge.label;
   return (
     <button
       type="button"
@@ -157,16 +163,23 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
           Dev desk<span className="sr-only">, </span>
         </span>
         <span className="block text-2xs text-zinc-400 truncate" data-dev-desk-status>
+          {badge.lead && (
+            <span className="text-amber-300" data-dev-desk-needs>
+              {badge.lead}
+              {' · '}
+            </span>
+          )}
           {desk.landed || desk.reviews ? deskStatus(landed, reviews) : desk.error ? 'Couldn’t load' : 'Loading…'}
         </span>
       </span>
       {count > 0 && (
         <span
           key={pop}
-          className={`kw-dv-row-badge shrink-0${pop ? ' kw-dv-row-badge-pop' : ''}`}
+          className={`kw-dv-row-badge shrink-0${badge.tone === 'needs' ? ' kw-dv-row-badge-needs' : ''}${pop ? ' kw-dv-row-badge-pop' : ''}`}
           aria-hidden="true"
-          title={`${count === 1 ? '1 new review' : `${count} new reviews`} to look at`}
+          title={badge.tickets ? badge.label : `${count === 1 ? '1 new review' : `${count} new reviews`} to look at`}
           data-dev-row-badge
+          data-tone={badge.tone === 'needs' ? 'needs' : undefined}
         >
           {count > 9 ? '9+' : count}
         </span>
@@ -540,7 +553,9 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                   out="0 open changes"
                   title="No open changes to review"
                   line="When a bot opens a pull request, a second bot reads it and the card lands here."
-                />
+                >
+                  <JiraHint space={spaceId} teams={teams} />
+                </TermEmpty>
               )
             )}
           </div>
