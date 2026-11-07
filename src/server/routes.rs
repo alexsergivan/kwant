@@ -723,6 +723,18 @@ async fn get_configured_endpoint(db: &crate::db::Database, target_model: &str) -
     }
 }
 
+/// `meta` with [`TurnOpts::failure_meta`]'s keys added (its own keys, such as `kind`, are kept).
+fn with_failure_meta(meta: Option<serde_json::Value>, extra: &Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let Some(serde_json::Value::Object(extra)) = extra else { return meta };
+    let mut meta = meta.unwrap_or_else(|| json!({}));
+    if let Some(m) = meta.as_object_mut() {
+        for (k, v) in extra {
+            m.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    Some(meta)
+}
+
 /// Longest driver error kept in a saved `turn_failed` message, in bytes.
 const MAX_SAVED_ERROR_BYTES: usize = 600;
 
@@ -1792,6 +1804,9 @@ pub(super) struct TurnOpts {
     pub(super) hook: Option<super::decide::HookSlot>,
     /// Merged into the saved reply's meta.
     pub(super) extra_meta: Option<serde_json::Value>,
+    /// Merged into the meta of a note the turn saves instead of a reply (`turn_failed`, or the note
+    /// a turn that gave up leaves), before the chat is told to refresh.
+    pub(super) failure_meta: Option<serde_json::Value>,
     /// The reply isn't saved (a teammate's view for the decide-first round).
     pub(super) unsaved: bool,
     /// A failed turn saves no `turn_failed` note (the caller posts something else).
@@ -2989,7 +3004,8 @@ async fn run_kwant_turn_inner(
                     reasoning_content: with_notices(opts.label.clone()),
                     ..scope.message("kwant", &target_kwant.name, text.clone())
                 };
-                scope.save(&msg, super::activity::with_activity(gave_up_meta, activity)).await;
+                let meta = with_failure_meta(gave_up_meta, &opts.failure_meta);
+                scope.save(&msg, super::activity::with_activity(meta, activity)).await;
             }
             return Err(text);
         } else if let Some(Ok(Ok(output))) = driver_result {
@@ -3106,7 +3122,8 @@ async fn run_kwant_turn_inner(
                 reasoning_content: with_notices(opts.label.clone()),
                 ..scope.message("kwant", &target_kwant.name, turn_failed_text(&target_kwant.name, &why, &event_broadcast.activity))
             };
-            scope.save(&msg, super::activity::with_activity(Some(json!({"kind": "turn_failed"})), activity)).await;
+            let meta = with_failure_meta(Some(json!({"kind": "turn_failed"})), &opts.failure_meta);
+            scope.save(&msg, super::activity::with_activity(meta, activity)).await;
         }
         if let Some(e) = driver_error {
             event_broadcast.send(e);
@@ -5637,7 +5654,17 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{scrub_urls, turn_failed_text};
+    use super::{scrub_urls, turn_failed_text, with_failure_meta};
+    use serde_json::json;
+
+    #[test]
+    fn a_failure_note_gets_the_callers_meta_but_keeps_its_kind() {
+        let extra = Some(json!({"trial": {"skill_id": "s", "recording_id": "r"}, "kind": "nope"}));
+        let meta = with_failure_meta(Some(json!({"kind": "turn_failed"})), &extra).unwrap();
+        assert_eq!(meta, json!({"kind": "turn_failed", "trial": {"skill_id": "s", "recording_id": "r"}}));
+        assert_eq!(with_failure_meta(None, &extra).unwrap()["trial"]["skill_id"], "s");
+        assert_eq!(with_failure_meta(Some(json!({"kind": "x"})), &None), Some(json!({"kind": "x"})));
+    }
 
     #[test]
     fn a_retry_a_discussion_round_or_a_no_tools_turn_never_parks() {
