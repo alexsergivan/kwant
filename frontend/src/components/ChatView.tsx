@@ -1,10 +1,11 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import type { SwitchEntry } from '../watchLive';
-import { trialCardsAfter } from '../showOnce';
+import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
+import { parsePick } from '../engines';
 import { onContinuity } from '../continuity';
 import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel } from '../agentConnections';
-import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
+import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { BotHome } from './BotHome';
 import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
@@ -182,7 +183,7 @@ export interface ChatViewProps {
   /** Saves the person's thumbs on a bot reply; absent hides the thumbs. */
   onReact?: (msg: ChatMessage, reaction: Reaction | null) => Promise<ReactResult> | void;
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
-  kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
+  kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   /** Prompts offered above an empty chat, made from who is in it; none hides the bar. */
   suggestions?: string[];
@@ -524,7 +525,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   // Fallback to fetch kwants and teams if not provided as props
-  const [internalKwants, setInternalKwants] = useState<Array<{ id: string; name: string; title: string; avatar_sprite: string }>>([]);
+  const [internalKwants, setInternalKwants] = useState<Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>>([]);
   const [internalTeams, setInternalTeams] = useState<Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>>([]);
 
   useEffect(() => {
@@ -1207,6 +1208,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const shownDecisions = isUser ? null : messageDecisions(msg.text, msg.meta);
     const decisions = shownDecisions?.decisions ?? [];
     const text = shownDecisions ? shownDecisions.text : msg.text;
+    // S-F7: a trial turn that came back empty says so, in muted text, instead of a blank bubble.
+    const emptyTrial =
+      !isUser && msg.sender_role === 'kwant' && !(text ?? '').trim() && !files.length && msg.results == null && trialOf(msg)
+        ? emptyTrialReplyLine(parsePick(activeKwants.find((k) => k.id === msg.sender_id || k.name === msg.sender_id)?.preferred_model).family)
+        : null;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
     const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
     const replyQuote = isUser ? replyRefOf(msg.reply_to) : null;
@@ -1332,6 +1338,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </>
             ) : workAhead ? (
               <WorkAheadBody messageId={msg.id} text={text} />
+            ) : emptyTrial ? (
+              <p className="flex items-start gap-2 text-sm leading-5 text-zinc-400" data-empty-trial-reply="">
+                <CircleSlash size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
+                <span>{emptyTrial}</span>
+              </p>
             ) : (
               <MarkdownRenderer content={text} results={msg.results} messageId={msg.id} />
             )}
