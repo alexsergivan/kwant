@@ -460,3 +460,29 @@ async fn a_git_folder_is_read_from_its_tracked_files() {
     assert_eq!(sug["handle"], "shop-git");
     assert!(sug["bots"].as_array().unwrap().iter().any(|b| b["key"] == "frontend"), "{sug}");
 }
+
+/// Pixel on the real server: a folder that exists but kwant can't list (mode 000) read as an
+/// empty project and fell back to the Coding template. It is a bad path, like a missing one.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_folder_kwant_cant_list_is_a_bad_path() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = setup().await;
+    let tmp = tempdir().unwrap();
+    let shut = folder(tmp.path(), "shut", &shop_files(None));
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // root (or CAP_DAC_READ_SEARCH) still lists it: nothing to test there
+    if std::fs::read_dir(&shut).is_ok() {
+        std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+        eprintln!("skipped: this user can list a mode 000 folder (root)");
+        return;
+    }
+    let (s, v) = suggest(&e, json!({ "workspace_path": shut.to_str().unwrap() })).await;
+    std::fs::set_permissions(&shut, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!((s, v["code"].as_str(), v["field"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_path"), Some("workspace_path")), "{v}");
+    assert!(v.get("suggestion_id").is_none() && v.get("fallback").is_none(), "{v}");
+    // Opened again, the same folder is read
+    let (s, v) = suggest(&e, json!({ "workspace_path": shut.to_str().unwrap() })).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["fallback"], json!(false), "{v}");
+}

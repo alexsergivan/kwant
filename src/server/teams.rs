@@ -758,7 +758,9 @@ fn check_folder(raw: &str) -> Option<std::path::PathBuf> {
         return None;
     }
     let m = std::fs::symlink_metadata(p).ok()?;
-    m.file_type().is_dir().then(|| p.to_path_buf())
+    // A folder kwant can't list (mode 000, or no read bit for this user) is as unusable as a
+    // missing one: say bad_path rather than read nothing and fall back to a template (§4).
+    (m.file_type().is_dir() && std::fs::read_dir(p).is_ok()).then(|| p.to_path_buf())
 }
 
 fn read_failed() -> Response {

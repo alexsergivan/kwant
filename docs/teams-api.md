@@ -90,7 +90,7 @@ The server's free names for this space, for the sheet's clash state (T9). Read-o
 
 - **Taken names:** any bot in the space with that name ignoring case, plus a pending hire proposal of that name (the `create_clash` rule, Q-T11).
 - **Taken handles:** a live team in the space with that name ignoring case, or a live channel called `team-<handle>`. An archived team chat is renamed `archived-team-…`, so it doesn't hold the handle.
-- **Next free:** `Drafter` → `Drafter2` → `Drafter3` …; `inbox` → `inbox2` …. No space before the number (design A3).
+- **Next free:** `Drafter` → `Drafter2` → `Drafter3` …; `inbox` → `inbox2` …. A name that already ends in a number counts on from it instead of gaining a digit: `TechLead4` → `TechLead5` (or the next free one), `Agent007` → `Agent008`, `inbox-2` → `inbox-3`. No space before the number (design A3).
 - 404 `{"code": "unknown_template"}` for an unknown id.
 
 ## 3. `POST /api/teams/from-template?space=`
@@ -228,7 +228,7 @@ Errors:
 | Status | `code` | When |
 |---|---|---|
 | 400 | `bad_request` / `unknown_field` | not exactly one source; extra fields |
-| 400 | `bad_path` | `workspace_path` isn't an absolute path to a readable folder |
+| 400 | `bad_path` | `workspace_path` isn't an absolute path to a readable folder (missing, a file, a symlink, `..`, or a folder kwant can't list, such as mode 000) |
 | 400 | `bad_repo_url` | not an `https://` (or `ssh`) URL Dev mode accepts; local addresses refused |
 | 404 | `team_not_found` | `team_id` isn't a team in this space |
 | 409 | `team_has_no_project` | that team has no folder or repo |

@@ -37,15 +37,21 @@ pub fn slug(text: &str) -> Option<String> {
     (!out.is_empty()).then_some(out)
 }
 
-/// `base`, else `base2`, `base3`, … : the first `taken` doesn't hold (ignoring case). Each
-/// candidate is cut so the number still fits in [`MAX_LEN`].
+/// `base`, else the next free one (ignoring case): a name that ends in a number counts on from
+/// it (`TechLead4` → `TechLead5`, `Agent007` → `Agent008`), any other gets `2`, `3`, …
+/// (`Drafter` → `Drafter2`). Each candidate is cut so the number still fits in [`MAX_LEN`].
 pub fn next_free(base: &str, taken: impl Fn(&str) -> bool) -> String {
     if !taken(base) {
         return base.to_string();
     }
-    for n in 2.. {
-        let suffix = n.to_string();
-        let keep: String = base.chars().take(MAX_LEN - suffix.len()).collect();
+    let digits = base.len() - base.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    let (stem, first, width) = match base[base.len() - digits..].parse::<u64>() {
+        Ok(n) if digits > 0 && n < u64::MAX / 2 => (&base[..base.len() - digits], n + 1, digits),
+        _ => (base, 2, 0),
+    };
+    for n in first.. {
+        let suffix = format!("{n:0width$}");
+        let keep: String = stem.chars().take(MAX_LEN.saturating_sub(suffix.len())).collect();
         let candidate = format!("{keep}{suffix}");
         if !taken(&candidate) {
             return candidate;
@@ -90,5 +96,23 @@ mod tests {
         let got = next_free(&long, |n| n == long);
         assert_eq!(got.len(), 40);
         assert!(got.ends_with('2'));
+    }
+
+    #[test]
+    fn a_name_ending_in_a_number_counts_on() {
+        let taken = ["techlead4", "techlead5", "agent007", "inbox-2"];
+        let is = |n: &str| taken.iter().any(|t| t.eq_ignore_ascii_case(n));
+        assert_eq!(next_free("TechLead4", is), "TechLead6");
+        assert_eq!(next_free("TechLead9", |n| n == "TechLead9"), "TechLead10");
+        assert_eq!(next_free("Agent007", is), "Agent008");
+        assert_eq!(next_free("inbox-2", is), "inbox-3");
+        assert_eq!(next_free("42", |n| n == "42"), "43");
+        // too big to count on: append as before
+        let huge = "Bot99999999999999999999999";
+        assert_eq!(next_free(huge, |n| n == huge), format!("{huge}2"));
+        let long = format!("{}7", "a".repeat(39));
+        let got = next_free(&long, |n| n == long);
+        assert_eq!(got.len(), 40);
+        assert!(got.ends_with('8'));
     }
 }
