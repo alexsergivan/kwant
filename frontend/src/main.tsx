@@ -11,6 +11,7 @@ import './styles/needsYou.css';
 import './styles/ideas.css';
 import './styles/ideaShell.css';
 import './styles/devStatus.css';
+import './styles/showOnce.css';
 
 registerServiceWorker();
 captureInstallPrompt();

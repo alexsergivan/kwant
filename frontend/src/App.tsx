@@ -136,6 +136,7 @@ import { devApi, devStore } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
+import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
@@ -1085,6 +1086,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (!sk?.id) break;
             emitContinuity({ type: 'skill_updated', data: sk });
             setPendingSkills((prev) => applySkillEvent(prev, sk).filter((x) => x.status === 'pending'));
+            break;
+          }
+          case 'skill_recording_updated':
+          case 'SkillRecordingUpdated': {
+            // Show it once (api.md §5): state changes only, never steps
+            const rec = event.data?.recording;
+            if (rec?.id) emitContinuity({ type: 'recording_updated', data: rec });
+            break;
+          }
+          case 'show_once_trial_ended':
+          case 'ShowOnceTrialEnded': {
+            // Show it once (api.md §10): a trial finished, so the chat can show the "still waits" card
+            const t = event.data;
+            if (t && typeof t.skill_id === 'string' && t.skill_id)
+              emitContinuity({
+                type: 'trial_ended',
+                data: { skill_id: t.skill_id, recording_id: typeof t.recording_id === 'string' ? t.recording_id : null, bot: String(t.bot ?? ''), outcome: String(t.outcome ?? '') },
+              });
             break;
           }
           case 'mcp_suggestion_updated':
@@ -3390,6 +3409,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 }
               : undefined
           }
+          onOpenSkills={(kwantId) => openSkillsRef.current(kwantId)}
           isVmPaneOpen={isVmPaneOpen}
           onToggleVmPane={() => setIsVmPaneOpen((prev) => !prev)}
           activeUrl={activeUrl}
@@ -3406,6 +3426,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           vmHumanStep={openStepFor(humanSteps, activeSandboxId)}
           onVmStepDone={(id) => answerHumanStep(id, 'done')}
           vmSolveRequest={solveRequest}
+          vmShowOnceBot={currentKwant && !currentTeam ? { id: currentKwant.id, name: currentKwant.name } : undefined}
           pinned={pinned}
           onEditInstructions={
             isChannel && currentChannel
@@ -3599,6 +3620,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       {/* New bot */}
       <Suspense fallback={null}>
+        {/* Show it once: the review sheet sits over the Take over stage, outside it (design §S) */}
+        <StepReview />
+
         <NewAgentModal
           isOpen={isNewAgentOpen}
           onClose={() => {
@@ -3642,6 +3666,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 }
               : undefined
           }
+          onShowOnce={
+            editingKwant
+              ? () => {
+                  const k = editingKwant;
+                  setEditingKwant(null);
+                  openTarget({ kwant_id: k.id, channel_id: null });
+                  setIsVmPaneOpen(true);
+                }
+              : undefined
+          }
+          browserUrl={editingKwant && editingKwant.id === activeSandboxId ? activeUrl : undefined}
           onSubmit={(data) => (editingKwant ? handleUpdateAgent(editingKwant, data) : undefined)}
           onRequestDelete={editingKwant ? () => setDeletingKwant(editingKwant) : undefined}
           onApprovalsChanged={refreshRoster}

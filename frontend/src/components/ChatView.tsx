@@ -1,4 +1,7 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { trialCardsAfter } from '../showOnce';
+import { onContinuity } from '../continuity';
+import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
@@ -182,6 +185,8 @@ export interface ChatViewProps {
   repoUrl?: string;
   onManageTeam?: () => void;
   onEditKwant?: () => void;
+  /** Open a bot's Skills tab (the trial card's Open in Skills, A29). */
+  onOpenSkills?: (kwantId: string) => void;
   // Grok-style Sandbox VM Pane props
   isVmPaneOpen?: boolean;
   onToggleVmPane?: () => void;
@@ -203,6 +208,8 @@ export interface ChatViewProps {
   /** Answers that step as done from the browser; resolves to an error message on failure. */
   onVmStepDone?: (id: string) => Promise<string | void> | void;
   vmSolveRequest?: number;
+  /** Show it once: the single bot this chat's browser belongs to (absent in teams and channels). */
+  vmShowOnceBot?: { id: string; name: string };
   /** Pinned team/channel instructions, shown collapsed above the messages. */
   pinned?: PinnedItem[];
   /** Opens the channel's instructions editor; only for channels. */
@@ -406,6 +413,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   repoUrl,
   onManageTeam,
   onEditKwant,
+  onOpenSkills,
   isVmPaneOpen,
   onToggleVmPane,
   activeUrl,
@@ -422,6 +430,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   vmHumanStep,
   onVmStepDone,
   vmSolveRequest,
+  vmShowOnceBot,
   pinned = [],
   onEditInstructions,
   highlightMessageId,
@@ -1071,6 +1080,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   }
 
+  // Show it once trials (A29): which trials ended in this tab (SSE); history covers a reload
+  const [endedTrials, setEndedTrials] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => onContinuity('trial_ended', (t) => setEndedTrials((prev) => (prev.has(t.skill_id) ? prev : new Set(prev).add(t.skill_id)))), []);
+  const trialCards = useMemo(() => trialCardsAfter(messages, endedTrials), [messages, endedTrials]);
+
   const renderMessage = (msg: ChatMessage) => {
     const interruption = parseInterruption(msg);
     if (interruption)
@@ -1597,7 +1611,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
         {groupDiscussionThreads(messages).map((item) => {
-          if (item.kind === 'message') return renderMessage(item.message);
+          if (item.kind === 'message') {
+            const trial = trialCards.get(item.message.id);
+            if (!trial) return renderMessage(item.message);
+            return (
+              <Fragment key={item.message.id}>
+                {renderMessage(item.message)}
+                <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
+              </Fragment>
+            );
+          }
           const threadKey = `thread:${item.id}`;
           const isThreadOpen = !!openThoughts[threadKey];
           return (
@@ -2139,6 +2162,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       humanStep={vmHumanStep}
       onStepDone={onVmStepDone}
       solveRequest={vmSolveRequest}
+      showOnceBot={vmShowOnceBot}
     />
   </div>
 </div>
