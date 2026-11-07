@@ -266,6 +266,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/dev/reviews", get(dev::routes::reviews))
         .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
         .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
+        .merge(dev::tickets::routes::router())
         .route("/api/dev/cards/:id", get(dev::routes::card))
         .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/dev/cards/:id/post", post(dev::post::post))

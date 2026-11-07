@@ -486,7 +486,7 @@ pub(super) fn require_person_token(state: &AppState, headers: &HeaderMap, peer: 
 fn person_token_required() -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": "this needs the API token: open the sign-in link kwant printed when it started, or run `kwnt token`", "person_only": true })),
+        Json(json!({ "error": "this needs the API token: open the sign-in link kwant printed when it started, or run `kwnt token`", "person_only": true, "code": "person_only" })),
     )
         .into_response()
 }
@@ -527,8 +527,8 @@ pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> R
     } else if api.require != Require::Never && person_only(req.method(), &path) {
         // A bot's turn token (or any bearer that isn't the API token) is a 403, from anywhere;
         // no token a 401 where the token is needed
-        if let Err(refused) = super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person can do this").await {
-            refused
+        if super::mcp_suggest::refuse_agent_tokens(&state, &headers, "only the person can do this").await.is_err() {
+            (StatusCode::FORBIDDEN, Json(json!({ "error": "only the person can do this", "code": "person_only" }))).into_response()
         } else if person_token_needed(&api, &headers, peer) && !presented_token_ok(&api, &headers) {
             person_token_required()
         } else {

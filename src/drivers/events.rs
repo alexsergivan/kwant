@@ -295,6 +295,15 @@ pub enum RuntimeEvent {
     /// Dev mode was turned on or off in a space.
     #[serde(rename = "dev_mode", alias = "DevMode")]
     DevMode { space_id: String, on: bool },
+    /// A Jira ticket picked up by Dev mode changed state (jira-tickets J4–J14); refetch
+    /// `GET /api/spaces/:id/dev/tickets/:key`. Carries no ticket text, only its key.
+    #[serde(rename = "dev_ticket", alias = "DevTicket")]
+    DevTicket { space_id: String, key: String, state: String },
+    /// One line of a ticket's reading checklist (jira-tickets api.md 1.7): `step` is `ticket`,
+    /// `comments`, `links`, `confluence` or `code`; `state` is `running`, `done` or `skipped`;
+    /// `detail` is kwant's own short line ("2 comments"). Sent on the bus only, never stored.
+    #[serde(rename = "dev_ticket_progress", alias = "DevTicketProgress")]
+    DevTicketProgress { space_id: String, key: String, step: String, state: String, detail: String },
     /// An idea in the idea jar changed (dropped in, peeked at, picked, edited, shelved, deleted:
     /// `status` is then `deleted`); `GET /api/ideas/:id` has the rest.
     #[serde(rename = "idea_updated", alias = "IdeaUpdated")]
