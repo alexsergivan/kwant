@@ -64,7 +64,11 @@ pub fn default_mode(os: &str, env: Option<&str>) -> ComputerMode {
 }
 
 /// A valid saved choice wins over the env/platform default.
+/// On Windows (0.7.6 beta) it is always local: the isolated vm computer isn't there yet.
 pub fn effective_mode(saved: Option<&str>, os: &str, env: Option<&str>) -> ComputerMode {
+    if os == "windows" {
+        return ComputerMode::Local;
+    }
     saved
         .and_then(ComputerMode::parse)
         .unwrap_or_else(|| default_mode(os, env))
@@ -185,9 +189,15 @@ pub fn window_unavailable_reason(display: bool) -> Option<String> {
     (!display).then(|| "This computer has no screen to show a browser window on (no display).".into())
 }
 
+/// The vm computer's reason on Windows (0.7.6 beta: no isolated desktop, Xvfb or rlimits there).
+pub const VM_NOT_ON_WINDOWS: &str = "The isolated computer is not available on Windows yet. Bots use this computer.";
+
 /// Why vm mode cannot run here, or `None` if it can. A configured browser service URL is enough
 /// for the browser even without Docker.
 pub fn vm_unavailable_reason(docker: bool, browser_url_configured: bool, platform: Platform) -> Option<String> {
+    if cfg!(windows) {
+        return Some(VM_NOT_ON_WINDOWS.into());
+    }
     (!docker && !browser_url_configured).then(|| match platform {
         Platform::Docker => format!("No browser service is set for this container. {}", doctor::vm_fix(platform)),
         _ => format!("Docker is not installed or not running. {}", doctor::vm_fix(platform)),
@@ -796,6 +806,10 @@ mod tests {
         assert_eq!(window_unavailable_reason(true), None);
         assert!(window_unavailable_reason(false).unwrap().contains("display"));
 
+        if cfg!(windows) {
+            assert_eq!(vm_unavailable_reason(true, true, Platform::Linux).as_deref(), Some(VM_NOT_ON_WINDOWS));
+            return;
+        }
         assert_eq!(vm_unavailable_reason(true, false, Platform::Linux), None);
         assert_eq!(vm_unavailable_reason(false, true, Platform::Docker), None);
         // each platform gets its own advice: no "Docker Desktop on a Mac" on a Linux server
@@ -804,6 +818,16 @@ mod tests {
         assert!(vm_unavailable_reason(false, false, Platform::Mac).unwrap().contains("Docker Desktop"));
         let docker = vm_unavailable_reason(false, false, Platform::Docker).unwrap();
         assert!(docker.contains("KWNT_BROWSER_CDP_URL") && docker.contains("docker compose up -d browser"), "{docker}");
+    }
+
+    #[test]
+    fn windows_always_uses_this_computer() {
+        assert_eq!(effective_mode(None, "windows", None), ComputerMode::Local);
+        assert_eq!(effective_mode(Some("vm"), "windows", Some("vm")), ComputerMode::Local);
+        // Mac and Linux keep their defaults and saved choices
+        assert_eq!(effective_mode(None, "linux", None), ComputerMode::Vm);
+        assert_eq!(effective_mode(Some("vm"), "macos", None), ComputerMode::Vm);
+        assert!(VM_NOT_ON_WINDOWS.contains("not available on Windows yet"));
     }
 
     #[test]
