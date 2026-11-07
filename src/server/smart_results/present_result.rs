@@ -8,6 +8,9 @@
 //!   `source` is refused);
 //! - `steps` must name the numbered list of the reply they stand for (`source`) and be all of it:
 //!   the same items in the same order (a task list is never declared as steps);
+//! - a `recipe` needs no `source`: the reply must hold the one recipe the recipe selector reads,
+//!   with the same ingredient lines and steps in the same order, and the block stored is the one
+//!   read from the reply (so its amounts, groups, servings and times are the reply's own);
 //! - every URL is a link in the reply (never plain text, never with a login in it), and nothing is
 //!   HTML.
 //!
@@ -26,8 +29,9 @@ use crate::mcp::SELF_SERVER_NAME;
 use crate::server::continuity::SelfScope;
 use crate::server::AppState;
 
+use super::recipe::recipe_of;
 use super::selector::{is_task, lists_of, plain, tables_of};
-use super::{Block, Column, Comparison, Provenance, ResultSet, Row, Source, Step, Steps, VERSION};
+use super::{Block, Column, Comparison, Ingredient, Provenance, Recipe, RecipeStep, ResultSet, Row, Source, Step, Steps, VERSION};
 
 const NAME: &str = "present_result";
 /// Largest call, in bytes of JSON; a bigger one is refused at the call.
@@ -40,21 +44,21 @@ pub fn handles(name: &str) -> bool {
 pub fn tools() -> Vec<Value> {
     vec![json!({
         "name": NAME,
-        "description": "Optional. Declare the one block kwant should draw for your final reply (a comparison table, a numbered-steps list), only when the answer's data reads better that way than as plain text; never for a simple answer, and never instead of writing the reply. The data must match your reply text exactly: every label, cell, item and link is checked against it, and a call that doesn't match is dropped and the plain reply is shown. For a comparison, `source` is required: the index (from 0) of the table in your reply that it describes. Call it once, just before your final reply. Types today: comparison and steps; kwant draws charts, metrics, facts, cards and findings from your reply's own structure (use '**Label:** value' lines for key numbers).",
+        "description": "Optional. Declare the one block kwant should draw for your final reply (a comparison table, a numbered-steps list), only when the answer's data reads better that way than as plain text; never for a simple answer, and never instead of writing the reply. The data must match your reply text exactly: every label, cell, item and link is checked against it, and a call that doesn't match is dropped and the plain reply is shown. For a comparison, `source` is required: the index (from 0) of the table in your reply that it describes. For a recipe, no `source`: your reply must hold the recipe as an 'Ingredients' list then numbered steps. Call it once, just before your final reply. Types today: comparison, steps and recipe; kwant draws charts, metrics, facts, cards and findings from your reply's own structure (use '**Label:** value' lines for key numbers).",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "type": {"type": "string", "enum": ["comparison", "steps"]},
+                "type": {"type": "string", "enum": ["comparison", "steps", "recipe"]},
                 "title": {"type": "string", "description": "Optional short title."},
                 "source": {
                     "type": "object",
-                    "description": "Which table or numbered list of your reply the block replaces: {kind: 'markdown_table' | 'markdown_list', index: number counted from 0 in the order they appear}. Required for both types.",
+                    "description": "Which table or numbered list of your reply the block replaces: {kind: 'markdown_table' | 'markdown_list', index: number counted from 0 in the order they appear}. Required for comparison and steps; leave it out for a recipe.",
                     "properties": {"kind": {"type": "string", "enum": ["markdown_table", "markdown_list"]}, "index": {"type": "integer", "minimum": 0}},
                     "required": ["kind", "index"],
                 },
                 "data": {
                     "type": "object",
-                    "description": "comparison: {columns: [{label, numeric?, unit?}], rows: [{cells: [string, ...]}]}, 3-50 rows and 2-8 columns, every header and cell exactly as in your table: all of its rows and columns, in its order. steps: {items: [string, ...]}, 3-15 items: all the items of that list, in its order.",
+                    "description": "comparison: {columns: [{label, numeric?, unit?}], rows: [{cells: [string, ...]}]}, 3-50 rows and 2-8 columns, every header and cell exactly as in your table: all of its rows and columns, in its order. steps: {items: [string, ...]}, 3-15 items: all the items of that list, in its order. recipe: {ingredients: [string, ...], steps: [string, ...]}, 2-40 ingredient lines and 2-30 steps, each exactly as in your reply, in its order.",
                 },
             },
             "required": ["type", "data"],
@@ -112,6 +116,13 @@ fn declared(args: &Value) -> Result<Declared, String> {
     }
     let kind = args.get("type").and_then(Value::as_str).ok_or("`type` is missing")?;
     let data = args.get("data").filter(|d| d.is_object()).ok_or("`data` is missing")?;
+    if kind == "recipe" {
+        // Where it goes is read from the reply itself, never from the call
+        let block = recipe(data)?;
+        let set = ResultSet { version: VERSION, blocks: vec![block.clone()] };
+        super::validate(&set, None).map_err(|why| format!("the block doesn't fit ({why})"))?;
+        return Ok(Declared { block, source: None });
+    }
     let source = match args.get("source") {
         None | Some(Value::Null) => None,
         Some(s) => {
@@ -185,7 +196,7 @@ fn comparison(data: &Value, source: Option<(bool, usize)>) -> Result<Block, Stri
     Ok(Block::Comparison(Comparison {
         id: "b0".into(),
         title: None,
-        source: Source { kind: "markdown_table".into(), index: source.map(|s| s.1), ordered: None },
+        source: Source { kind: "markdown_table".into(), index: source.map(|s| s.1), ..Source::default() },
         columns,
         rows,
         highlight_row: None,
@@ -203,8 +214,38 @@ fn steps(data: &Value, source: Option<(bool, usize)>) -> Result<Block, String> {
         .enumerate()
         .map(|(k, it)| it.as_str().map(|t| Step { id: format!("s{k}"), text: t.to_string(), done: None, when: None, owner: None }).ok_or("every step must be a string"))
         .collect::<Result<Vec<_>, _>>()?;
-    let source = Source { kind: "markdown_list".into(), index: source.map(|s| s.1), ordered: Some(true) };
+    let source = Source { kind: "markdown_list".into(), index: source.map(|s| s.1), ordered: Some(true), ..Source::default() };
     Ok(Block::Steps(Steps { id: "b0".into(), title: None, variant: super::Variant::Steps, source, items, provenance: Provenance::reply_text() }))
+}
+
+/// A declared recipe: its ingredient lines (held whole in `text`) and steps. The block that is
+/// stored is the reply's own (see [`ground`]); this one only carries what to match.
+fn recipe(data: &Value) -> Result<Block, String> {
+    let strings = |key: &str| -> Result<Vec<String>, String> {
+        data.get(key)
+            .and_then(Value::as_array)
+            .ok_or(format!("`data.{key}` is missing"))?
+            .iter()
+            .map(|v| v.as_str().map(str::to_string).ok_or(format!("every one of `data.{key}` must be a string")))
+            .collect()
+    };
+    let ingredients = strings("ingredients")?
+        .into_iter()
+        .enumerate()
+        .map(|(k, text)| Ingredient { id: format!("i{k}"), text, qty: None, group: None })
+        .collect();
+    let steps = strings("steps")?.into_iter().enumerate().map(|(k, text)| RecipeStep { id: format!("s{k}"), text }).collect();
+    Ok(Block::Recipe(Recipe {
+        id: "b0".into(),
+        title: None,
+        source: Source::section((0, false), (0, true), 0),
+        serves: None,
+        times: Vec::new(),
+        ingredients,
+        steps,
+        notes: Vec::new(),
+        provenance: Provenance::reply_text(),
+    }))
 }
 
 /// `declared` held to `reply`, as a block with `bot_declared` provenance, or the reason it isn't.
@@ -263,6 +304,26 @@ fn ground(declared: Declared, reply: &str, tool_call_id: String) -> Result<Block
                 }
             }
             s.provenance = Provenance::bot_declared(tool_call_id);
+        }
+        Block::Recipe(declared) => {
+            let mut read = recipe_of(reply).ok_or("the reply has no recipe kwant can read")?;
+            if declared.ingredients.len() != read.ingredients.len() || declared.steps.len() != read.steps.len() {
+                return Err("the ingredients and steps aren't all of the reply's recipe".into());
+            }
+            for (d, r) in declared.ingredients.iter().zip(&read.ingredients) {
+                check_urls(&d.text, &links)?;
+                if !same_cell(&d.text, &r.line()) {
+                    return Err("an ingredient isn't the recipe's line at that position".into());
+                }
+            }
+            for (d, r) in declared.steps.iter().zip(&read.steps) {
+                check_urls(&d.text, &links)?;
+                if !same_cell(&d.text, &r.text) {
+                    return Err("a step isn't the recipe's step at that position".into());
+                }
+            }
+            read.provenance = Provenance::bot_declared(tool_call_id);
+            return Ok(Block::Recipe(read));
         }
         _ => return Err("not declarable".into()),
     }
