@@ -236,7 +236,12 @@ export function focusAfterDiscard() {
     if (panel) {
       if (!panel.hasAttribute('tabindex')) panel.setAttribute('tabindex', '-1');
       panel.focus();
+      return;
     }
+    // none of those on screen (a review opened by Hand back, closed in the chat): the stage's
+    // own Take over button, where the next recording starts
+    const stage = Array.from(document.querySelectorAll('[data-takeover-button]')).find(visible);
+    if (stage) stage.focus();
   });
 }
 

@@ -197,7 +197,10 @@ textarea.so-input { height: auto; padding: 8px 10px; line-height: 20px; resize: 
 /* ---------- Skills tab ---------- */
 .so-entry { display: flex; gap: 8px; flex-wrap: wrap; }
 .so-entry-help { margin: -4px 0 0; font-size: 11px; line-height: 16px; color: var(--so-t4); }
-.so-entry-wait { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; border: 1px solid rgb(184 173 255 / .22); background: rgb(184 173 255 / .06); font-size: 12px; line-height: 17px; color: var(--so-t2); }
+/* Mira §4.1: a neutral "needs you" card (not amber, not violet); text 13.5/20 --t1, a 32 px outline button */
+.so-entry-wait { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--so-line); background: rgb(255 255 255 / .03); font-size: 13.5px; line-height: 20px; color: var(--so-t1); }
+.so-entry-wait > span { flex: 1 1 260px; min-width: 0; }
+.so-entry-wait > button { height: 32px; flex: none; }
 .so-badge-you { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 500; line-height: 12px; background: rgb(108 88 224 / 0.10); color: var(--so-accent); border: 1px solid rgb(108 88 224 / 0.25); }
 .so-draft { padding: 10px 12px; border-radius: 8px; background: #120e26; border: 1px solid var(--so-line); font-size: 11.5px; line-height: 17px; color: var(--so-t2); overflow-wrap: anywhere; }
 .so-draft h6 { margin: 10px 0 3px; font-size: 10px; line-height: 14px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--so-t4); }
@@ -257,6 +260,7 @@ textarea.so-input { height: auto; padding: 8px 10px; line-height: 20px; resize: 
   .so-banner.bad .so-btn { height: 44px; width: 100%; }
   .so-entry > button { flex: 1; justify-content: center; min-height: 44px; font-size: 13px; }
   .so-entry-help { font-size: 12px; line-height: 17px; }
+  .so-entry-wait > button { flex-basis: 100%; height: 44px; justify-content: center; font-size: 13px; }
   .so-draft { font-size: 12.5px; line-height: 18px; }
   .so-tin { grid-template-columns: 1fr; gap: 4px; }
   .so-tin .so-input { height: 44px; }

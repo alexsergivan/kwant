@@ -804,6 +804,27 @@ test('Mira §4.2: this tab’s own Discard closes with no message even when the 
   unmount();
 });
 
+test('after a Discard with no Record steps, Show it once or Skills panel on screen, focus goes to Take over', async () => {
+  fake({ [`DELETE ${R}/rec_1`]: [204, null] });
+  m.showOnceStore.set(reviewing());
+  const hidden = document.createElement('button');
+  hidden.className = 'so-record-steps';
+  hidden.getClientRects = () => [];
+  const take = document.createElement('button');
+  take.setAttribute('data-takeover-button', 'true');
+  take.getClientRects = () => [1];
+  document.body.append(hidden, take);
+  const { host, unmount } = await mount(h(m.StepReview), true);
+  await click(byText(host, '.so-rv-foot button', 'Discard'));
+  await click(byText(host, '[role="alertdialog"] button', 'Discard'));
+  await settle();
+  assert.equal(m.showOnceStore.get(), null);
+  assert.equal(document.activeElement, take);
+  hidden.remove();
+  take.remove();
+  unmount();
+});
+
 test('Mira §4.2: a live recording discarded elsewhere swaps the bar for the banner with a ×; focus stays', async () => {
   fake({});
   m.showOnceStore.set(session());
