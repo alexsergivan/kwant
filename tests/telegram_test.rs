@@ -220,7 +220,7 @@ async fn five_wrong_codes_lock_out_that_sender_only() {
     tg.wait_handled(&bot, last).await;
     let v = status(&env).await;
     assert_ne!(v["state"], "paired", "{v}");
-    assert_eq!(v["pair_locked"], false, "{v}");
+    assert_ne!(v["pair_locked"], true, "only sent when locked: {v}");
     let last = tg.text(&bot, &PERSON, &format!("/start {code}"));
     tg.wait_handled(&bot, last).await;
     tg.wait_send(&bot, |c| c.text().contains("Paired with kwant")).await;
