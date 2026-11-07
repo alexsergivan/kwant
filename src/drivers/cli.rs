@@ -111,6 +111,7 @@ pub fn forget_cli_binaries() {
 
 #[cfg(windows)]
 fn find_cli_binary_uncached(name: &str) -> Option<String> {
+    use std::os::windows::process::CommandExt;
     // `where` lists PATH hits with every PATHEXT extension; an .exe beats a .cmd shim
     let on_path: Vec<String> = std::process::Command::new("where")
         .arg(name)
