@@ -3616,7 +3616,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     </main>
   ) : liveGate === 'miss' ? (
     <LiveMissPage
-      chatLabel={isChannel ? (currentTeam ? `@${currentTeam.name}` : `#${currentChannel?.name ?? 'general'}`) : `@${currentKwant?.name ?? ''}`}
+      chatLabel={isChannel ? (currentTeam?.name ? `@${currentTeam.name}` : currentChannel?.name ? `#${currentChannel.name}` : '') : currentKwant?.name ? `@${currentKwant.name}` : ''}
+      kind={isChannel ? 'place' : 'bot'}
       onOpenChat={() => setLiveGate(null)}
       onBack={isPhone ? () => { setLiveGate(null); setPhoneView('list'); } : undefined}
     />

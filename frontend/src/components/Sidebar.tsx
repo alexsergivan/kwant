@@ -652,7 +652,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {onWatchBrowser && (
-            <GlobeSlot browsing={!browserNeedsYou?.has(t.id) ? browsingOwners[t.id] : undefined} name={`@${t.name}`} phone={phone} className="ml-auto mx-1.5" onWatch={onWatchBrowser} />
+            <GlobeSlot browsing={!browserNeedsYou?.has(t.id) ? browsingOwners[t.id] : undefined} name={`@${t.name}`} phone={phone} className="ml-auto mr-px" onWatch={onWatchBrowser} />
           )}
           {(!expanded || !withMembers) && (
             <span className="text-2xs px-1.5 py-0.5 rounded-full tabular-nums bg-white/[0.05] text-zinc-300 border border-hairline" title={`${count} ${count === 1 ? 'member' : 'members'}`}>

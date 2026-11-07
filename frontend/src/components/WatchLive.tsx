@@ -259,7 +259,14 @@ export const BrowserSwitcherRow: React.FC<SwitcherProps> = ({ entries, current, 
  * broken one. One plain page whatever the reason, so it never tells which ids exist; its button opens
  * the chat (the one the link named, else the space's first).
  */
-export const LiveMissPage: React.FC<{ chatLabel: string; onOpenChat: () => void; onBack?: () => void }> = ({ chatLabel, onOpenChat, onBack }) => {
+export const LiveMissPage: React.FC<{
+  chatLabel: string;
+  /** `place`: a team or channel link (`/c/<id>/live`), which no single bot owns. */
+  kind?: 'bot' | 'place';
+  onOpenChat: () => void;
+  onBack?: () => void;
+}> = ({ chatLabel, kind = 'bot', onOpenChat, onBack }) => {
+  const label = chatLabel.replace(/^[@#]$/, '').trim();
   const btn = useRef<HTMLButtonElement>(null);
   useEffect(() => btn.current?.focus(), []);
   return (
@@ -267,15 +274,17 @@ export const LiveMissPage: React.FC<{ chatLabel: string; onOpenChat: () => void;
       <span className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/[0.05] text-[#9a94c4]" aria-hidden="true">
         <Globe size={20} />
       </span>
-      <h1 className="text-[15px] font-semibold text-zinc-100">This bot isn’t browsing now</h1>
-      <p className="max-w-[320px] text-[13px] leading-5 text-[#a39dcc]">When it opens a page, this link shows it live.</p>
+      <h1 className="text-[15px] font-semibold text-zinc-100">{kind === 'place' ? 'No bot is browsing here now' : 'This bot isn’t browsing now'}</h1>
+      <p className="max-w-[320px] text-[13px] leading-5 text-[#a39dcc]">
+        {kind === 'place' ? 'When a bot opens a page here, this link shows it live.' : 'When it opens a page, this link shows it live.'}
+      </p>
       <button
         ref={btn}
         type="button"
         onClick={onOpenChat}
         className={`mt-1 inline-flex min-h-9 max-sm:min-h-11 items-center justify-center rounded-lg bg-control px-4 text-[13px] font-semibold text-control-ink hover:brightness-110 ${FOCUS}`}
       >
-        Open {chatLabel}
+        {label ? `Open ${label}` : 'Open the chat'}
       </button>
       {onBack && (
         <button type="button" onClick={onBack} className={`textbtn min-h-11 px-3 text-[13px] text-[#a39dcc] hover:text-zinc-100 rounded-lg ${FOCUS}`}>

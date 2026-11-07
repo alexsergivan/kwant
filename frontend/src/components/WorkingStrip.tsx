@@ -67,10 +67,11 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
           <span className="font-semibold text-zinc-100">{name}</span> is {label}
         </p>
         {/* Own box, so a long step name never cuts the time off at 390 px. Hidden behind Answer on a
-            phone: the line is short there, and what to do next matters more than for how long. */}
+            phone: the line is short there, and what to do next matters more than for how long. Below 400 px
+            with Watch showing, the host the bot is on matters more than the time, so the time goes. */}
         {!answer && (
           <span
-            className={`shrink-0 tabular-nums ${phone ? 'pr-2 text-sm leading-5 text-[#a39dcc]' : 'text-meta text-zinc-400'}`}
+            className={`shrink-0 tabular-nums ${phone ? `pr-2 text-sm leading-5 text-[#a39dcc]${onWatch ? ' hidden min-[400px]:inline' : ''}` : 'text-meta text-zinc-400'}`}
             aria-hidden="true"
             data-working-elapsed=""
           >

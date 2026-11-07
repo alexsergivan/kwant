@@ -404,3 +404,49 @@ test('F6: an event right after turn_started survives the prune; an ended turn’
   assert.equal(m.pruneBrowsing(map, turns, [teamCh], teamOf), map, 'kept: its turn runs');
   assert.deepEqual(m.pruneBrowsing(map, [], [teamCh], teamOf), {}, 'gone once no turn drives it');
 });
+
+// ---------------------------------------------------------------- 0.7.7 nits (Mira recheck N1–N4)
+
+test('N1: the team row globe has no side margin, so it lines up with channel and bot globes', () => {
+  const b = m.noteBrowser({}, 't_shop', 'https://shop.example.com', 1);
+  const html = m.sidebar({ kwants: [rook], teams: [team], browsingOwners: b, onWatchBrowser() {} });
+  assert.match(html, /data-watch-globe/, 'the team row shows a globe');
+  assert.doesNotMatch(html, /\bmx-1\.5\b/);
+});
+
+test('N2 /b/: a bot link keeps "This bot isn’t browsing now"', () => {
+  const v = m.mount('LiveMissPage', { chatLabel: '@Rook', kind: 'bot', onOpenChat() {} });
+  assert.match(v.host.textContent, /This bot isn’t browsing now/);
+  assert.match(v.host.textContent, /When it opens a page, this link shows it live\./);
+  v.unmount();
+});
+
+test('N2 /c/: a team or channel link says "No bot is browsing here now"', () => {
+  const v = m.mount('LiveMissPage', { chatLabel: '#general', kind: 'place', onOpenChat() {} });
+  assert.match(v.host.textContent, /No bot is browsing here now/);
+  assert.match(v.host.textContent, /When a bot opens a page here, this link shows it live\./);
+  assert.doesNotMatch(v.host.textContent, /This bot/);
+  assert.ok([...v.host.querySelectorAll('button')].some((b) => b.textContent === 'Open #general'));
+  v.unmount();
+});
+
+test('N3: with no name the button says "Open the chat", never "Open @"', () => {
+  for (const chatLabel of ['', '@', '#']) {
+    const v = m.mount('LiveMissPage', { chatLabel, onOpenChat() {} });
+    const texts = [...v.host.querySelectorAll('button')].map((b) => b.textContent);
+    assert.ok(texts.includes('Open the chat'), `label ${JSON.stringify(chatLabel)}`);
+    assert.ok(!texts.some((t) => /^Open [@#]?$/.test(t)));
+    v.unmount();
+  }
+});
+
+test('N4: on a phone with Watch showing, the time hides below 400 px so the host fits', () => {
+  const timer = (html) => html.match(/<span class="([^"]*)"[^>]*data-working-elapsed=""/)[1];
+  const withWatch = timer(m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: true }));
+  assert.match(withWatch, /\bhidden\b/);
+  assert.match(withWatch, /min-\[400px\]:inline/);
+  const noWatch = timer(m.strip({ active: true, name: 'Rook', title: 'coder', phone: true }));
+  assert.doesNotMatch(noWatch, /\bhidden\b/, 'without Watch the time stays');
+  const desk = timer(m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: false }));
+  assert.doesNotMatch(desk, /\bhidden\b/, 'desk unchanged');
+});
