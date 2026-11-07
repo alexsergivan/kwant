@@ -73,6 +73,67 @@ pub async fn set_state(state: &AppState, space_id: &str, key: &str, to: &str, de
     Ok(moved)
 }
 
+/// Why a ticket failed (api-decisions 22). The row stores only the code; the wire shows
+/// `error: {code, message}` with kwant's own sentence for it. There is deliberately no variant that
+/// carries text: Jira's answers, URLs and tokens can't reach the row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailCode {
+    /// Jira couldn't be reached for `pickup::UNREACHABLE_FAIL_HOURS` hours.
+    JiraUnreachable,
+    /// Reading the ticket into a brief failed (Vega's brief turn).
+    BriefFailed,
+    /// The team's work stopped with an error.
+    WorkFailed,
+    /// A writer that didn't say why (`dev_jira::FAIL_DEFAULT_CODE`).
+    Failed,
+}
+
+impl FailCode {
+    pub const ALL: &'static [FailCode] = &[FailCode::JiraUnreachable, FailCode::BriefFailed, FailCode::WorkFailed, FailCode::Failed];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            FailCode::JiraUnreachable => "jira_unreachable",
+            FailCode::BriefFailed => "brief_failed",
+            FailCode::WorkFailed => "work_failed",
+            FailCode::Failed => dev_jira::FAIL_DEFAULT_CODE,
+        }
+    }
+
+    pub fn message(self) -> String {
+        match self {
+            FailCode::JiraUnreachable => format!("kwant couldn't reach Jira for {} hours, so it stopped work on this ticket.", super::pickup::UNREACHABLE_FAIL_HOURS),
+            FailCode::BriefFailed => "kwant couldn't turn this ticket into a brief.".into(),
+            FailCode::WorkFailed => "The work on this ticket stopped with an error.".into(),
+            FailCode::Failed => "Work on this ticket stopped.".into(),
+        }
+    }
+
+    /// A stored code; anything unknown reads as [`FailCode::Failed`].
+    pub fn of(code: &str) -> Self {
+        Self::ALL.iter().copied().find(|c| c.code() == code).unwrap_or(FailCode::Failed)
+    }
+}
+
+/// The row's `error`: `{code, message}` on a `failed` row, else `null`.
+pub fn error_json(row: &TicketRow) -> serde_json::Value {
+    if row.state != dev_jira::FAILED {
+        return serde_json::Value::Null;
+    }
+    let c = FailCode::of(row.error_code.as_deref().unwrap_or_default());
+    serde_json::json!({"code": c.code(), "message": c.message()})
+}
+
+/// Fails a ticket with `code` and sends `dev_ticket`. Ok(false): it can't fail from where it is.
+/// `detail` is kwant's own note for the event row. Vega calls this for a failed brief.
+pub async fn fail(state: &AppState, space_id: &str, key: &str, code: FailCode, detail: Option<&str>) -> Result<bool, DbError> {
+    let moved = state.db.fail_dev_ticket(space_id, key, code.code(), detail).await?;
+    if moved {
+        notify(state, space_id, key, dev_jira::FAILED);
+    }
+    Ok(moved)
+}
+
 /// The person's Stop, Skip, Close or Retry: the DB move, then `dev_ticket`. Ok(None): not from
 /// where the ticket is (or no such ticket); nothing is sent. Never writes to Jira.
 pub async fn person_move(state: &AppState, space_id: &str, key: &str, mv: dev_jira::PersonMove) -> Result<Option<String>, DbError> {

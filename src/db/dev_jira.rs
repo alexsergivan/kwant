@@ -22,6 +22,8 @@ pub const LANDED: &str = "landed";
 pub const TAKEN_BACK: &str = "taken_back";
 pub const CLOSED: &str = "closed";
 pub const FAILED: &str = "failed";
+/// The `error_code` of a row failed by a writer that didn't name a reason.
+pub const FAIL_DEFAULT_CODE: &str = "failed";
 
 pub const STATES: &[&str] = &[WAITING, PICKED_UP, READING, NEEDS_ANSWER, BRIEF_READY, WORKING, IN_REVIEW, LANDED, TAKEN_BACK, CLOSED, FAILED];
 
@@ -157,7 +159,10 @@ const TABLES: &[&str] = &[
         backoff_until TIMESTAMP,
         unreachable_since TIMESTAMP,
         token_rejected_at TIMESTAMP,
-        scope_note TEXT
+        scope_note TEXT,
+        project_names TEXT,
+        space_names TEXT,
+        names_at TIMESTAMP
     )",
     "CREATE TABLE IF NOT EXISTS dev_tickets (
         space_id TEXT NOT NULL,
@@ -194,6 +199,7 @@ const TABLES: &[&str] = &[
         work_comment_at TIMESTAMP,
         pr_comment_at TIMESTAMP,
         held_by_person INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT,
         first_seen_at TIMESTAMP NOT NULL,
         updated_at TIMESTAMP NOT NULL,
         PRIMARY KEY (space_id, key)
@@ -267,6 +273,28 @@ pub struct JiraSiteRow {
     /// for a classic token or a PAT (api-decisions 6).
     #[sqlx(default)]
     pub scope_note: Option<String>,
+    /// `{KEY: name}` for the projects the token sees (api-decisions 23), as a JSON object in the
+    /// column and on the wire. Written by the check and the poll only; `PUT` never takes it.
+    #[sqlx(default)]
+    #[serde(serialize_with = "json_map")]
+    pub project_names: Option<String>,
+    /// `{KEY: name}` for the Confluence spaces the token sees; same rules as `project_names`.
+    #[sqlx(default)]
+    #[serde(serialize_with = "json_map")]
+    pub space_names: Option<String>,
+    /// When the poll last listed the names (it lists them at most every [`NAMES_EVERY_MINUTES`]).
+    #[sqlx(default)]
+    #[serde(skip)]
+    pub names_at: Option<DateTime<Utc>>,
+}
+
+/// The poll lists project and space names at most this often (the check always does).
+pub const NAMES_EVERY_MINUTES: i64 = 60;
+
+/// A JSON-object column as a real object on the wire (`{}` when empty or unparseable).
+fn json_map<S: serde::Serializer>(v: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    v.as_deref().and_then(|t| serde_json::from_str::<std::collections::BTreeMap<String, String>>(t).ok()).unwrap_or_default().serialize(s)
 }
 
 /// A JSON-array column as a real array on the wire (`[]` when the column doesn't parse).
@@ -326,6 +354,9 @@ impl JiraSiteRow {
             unreachable_since: None,
             token_rejected_at: None,
             scope_note: None,
+            project_names: None,
+            space_names: None,
+            names_at: None,
         }
     }
 
@@ -392,6 +423,12 @@ pub struct TicketRow {
     /// in Jira, until the person presses Retry (api-decisions 12). Cleared on `picked_up`.
     #[sqlx(default)]
     pub held_by_person: bool,
+    /// A `failed` row's reason, one of `tickets::store::FailCode`'s codes; NULL in every other
+    /// state. The wire shows `error: {code, message}` with kwant's own sentence for the code
+    /// (api-decisions 22): no text from Jira or anywhere else is ever stored here.
+    #[sqlx(default)]
+    #[serde(skip)]
+    pub error_code: Option<String>,
     pub first_seen_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -454,7 +491,14 @@ impl Database {
             sqlx::query(sql).execute(&self.pool).await?;
         }
         // Add-only columns that came after the tables (a database made by an earlier build).
-        for (table, column, ddl) in [("dev_jira_sites", "scope_note", "scope_note TEXT"), ("dev_tickets", "held_by_person", "held_by_person INTEGER NOT NULL DEFAULT 0")] {
+        for (table, column, ddl) in [
+            ("dev_jira_sites", "scope_note", "scope_note TEXT"),
+            ("dev_tickets", "held_by_person", "held_by_person INTEGER NOT NULL DEFAULT 0"),
+            ("dev_jira_sites", "project_names", "project_names TEXT"),
+            ("dev_jira_sites", "space_names", "space_names TEXT"),
+            ("dev_jira_sites", "names_at", "names_at TIMESTAMP"),
+            ("dev_tickets", "error_code", "error_code TEXT"),
+        ] {
             let has: Option<(String,)> = sqlx::query_as(&format!("SELECT name FROM pragma_table_info('{table}') WHERE name = ?")).bind(column).fetch_optional(&self.pool).await?;
             if has.is_none() {
                 sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {ddl}")).execute(&self.pool).await?;
@@ -683,18 +727,48 @@ impl Database {
     /// (`"unassigned"`, `"done: Done"`, `"deleted"`).
     pub async fn set_dev_ticket_state_with(&self, space_id: &str, key: &str, to: &str, detail: Option<&str>) -> Result<bool, DbError> {
         let resolution = detail.filter(|_| to == CLOSED).map(|d| if d.starts_with("deleted") { "deleted" } else { "done" });
-        Ok(self.write_state(space_id, key, to, detail, None, resolution, false).await?.is_some())
+        let code = (to == FAILED).then_some(FAIL_DEFAULT_CODE);
+        Ok(self.write_state(space_id, key, to, detail, None, resolution, false, code).await?.is_some())
+    }
+
+    /// Moves the ticket to `failed` with `code` (a `tickets::store::FailCode` code; the caller
+    /// passes the enum's code, never free text) and a note on the event row.
+    pub async fn fail_dev_ticket(&self, space_id: &str, key: &str, code: &'static str, detail: Option<&str>) -> Result<bool, DbError> {
+        Ok(self.write_state(space_id, key, FAILED, detail, None, None, false, Some(code)).await?.is_some())
+    }
+
+    /// Replaces the names the check or the poll listed (`None` leaves that list as it is) and
+    /// stamps `names_at`. Keys must look like keys; names are cut to 120 characters.
+    pub async fn set_dev_jira_names(&self, space_id: &str, projects: Option<&[(String, String)]>, spaces: Option<&[(String, String)]>) -> Result<(), DbError> {
+        let enc = |l: Option<&[(String, String)]>| {
+            l.map(|l| {
+                let m: std::collections::BTreeMap<&str, String> = l
+                    .iter()
+                    .filter(|(k, _)| !k.is_empty() && k.len() <= 255 && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '~' || c == '-'))
+                    .map(|(k, n)| (k.as_str(), n.chars().filter(|c| !c.is_control()).take(120).collect::<String>().trim().to_string()))
+                    .collect();
+                serde_json::to_string(&m).unwrap_or_else(|_| "{}".into())
+            })
+        };
+        sqlx::query("UPDATE dev_jira_sites SET project_names = COALESCE(?2, project_names), space_names = COALESCE(?3, space_names), names_at = ?4 WHERE space_id = ?1")
+            .bind(space_id)
+            .bind(enc(projects))
+            .bind(enc(spaces))
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     /// The person's Stop, Skip, Close or Retry (api-decisions 12): the same writer, limited to
     /// [`PersonMove::from`]. Ok(Some(from)) when it moved; Ok(None) when there's no such ticket or
     /// it can't move from where it is (the route's 409 `wrong_state`). Nothing is written to Jira.
     pub async fn person_move_dev_ticket(&self, space_id: &str, key: &str, mv: PersonMove) -> Result<Option<String>, DbError> {
-        self.write_state(space_id, key, mv.to(), Some(mv.detail()), Some(mv.from()), mv.resolution(), mv == PersonMove::Stop).await
+        self.write_state(space_id, key, mv.to(), Some(mv.detail()), Some(mv.from()), mv.resolution(), mv == PersonMove::Stop, None).await
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn write_state(&self, space_id: &str, key: &str, to: &str, detail: Option<&str>, only_from: Option<&[&str]>, resolution: Option<&str>, hold: bool) -> Result<Option<String>, DbError> {
+    async fn write_state(&self, space_id: &str, key: &str, to: &str, detail: Option<&str>, only_from: Option<&[&str]>, resolution: Option<&str>, hold: bool, error_code: Option<&str>) -> Result<Option<String>, DbError> {
         if !STATES.contains(&to) {
             return Err(DbError::Conflict(format!("{to} isn't a ticket state")));
         }
@@ -728,7 +802,8 @@ impl Database {
                taken_back_at = CASE WHEN ?3 = 'taken_back' THEN ?4 WHEN ?3 = 'picked_up' THEN NULL ELSE taken_back_at END,
                taken_back_by = CASE WHEN ?3 IN ('taken_back', 'picked_up') THEN NULL ELSE taken_back_by END,
                closed_resolution = CASE WHEN ?3 = 'closed' THEN COALESCE(?6, 'done') WHEN ?3 = 'picked_up' THEN NULL ELSE closed_resolution END,
-               held_by_person = CASE WHEN ?7 THEN 1 WHEN ?3 = 'picked_up' THEN 0 ELSE held_by_person END
+               held_by_person = CASE WHEN ?7 THEN 1 WHEN ?3 = 'picked_up' THEN 0 ELSE held_by_person END,
+               error_code = CASE WHEN ?3 = 'failed' THEN COALESCE(?8, 'failed') ELSE NULL END
              WHERE space_id = ?1 AND key = ?2 AND state = ?5",
         )
         .bind(space_id)
@@ -738,6 +813,7 @@ impl Database {
         .bind(&current)
         .bind(resolution)
         .bind(hold)
+        .bind(error_code)
         .execute(&mut *tx)
         .await?;
         if done.rows_affected() == 0 {

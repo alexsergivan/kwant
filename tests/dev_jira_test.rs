@@ -707,3 +707,144 @@ async fn a_ticket_at_work_shows_its_branch_pr_and_lead() {
     let (_, list) = call(&env.app, "GET", &uri("tickets"), None).await;
     assert_eq!(list["tickets"][0]["work"], *w, "the list and the ticket agree");
 }
+
+/// Sets a site column the way kwnt writes timestamps (sqlx's encoding).
+async fn set_site_time(env: &Env, column: &str, t: chrono::DateTime<chrono::Utc>) {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect(&format!("sqlite://{}", env.state.config.data_dir.join("kwnt.db").display())).await.unwrap();
+    sqlx::query(&format!("UPDATE dev_jira_sites SET {column} = ? WHERE space_id = ?")).bind(t).bind(space()).execute(&pool).await.unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn a_failed_row_says_why_in_kwants_words_and_never_repeats_jira() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app");
+    connect(&env, &m, json!({})).await;
+    poll(&env).await;
+    let key = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    poll(&env).await;
+    assert_eq!(ticket(&env, &key).await.state, dev_jira::PICKED_UP);
+    let (_, v) = call(&env.app, "GET", &uri("tickets"), None).await;
+    assert_eq!(v["tickets"][0]["error"], Value::Null, "only a failed row carries error: {v}");
+
+    // Jira has been unreachable for a day, and its error page carries a token-shaped string
+    let leak = "ATATT3xFfGF0LEAKED_upstream_token_0123456789abcdefABCDEF https://evil.example/x";
+    m.fault("/search/jql", Fault::ServerSays(503, leak.into()));
+    set_site_time(&env, "unreachable_since", chrono::Utc::now() - chrono::Duration::hours(pickup::UNREACHABLE_FAIL_HOURS + 1)).await;
+    let r = poll(&env).await;
+    assert_eq!(r["failed"], 1, "{r}");
+    let row = ticket(&env, &key).await;
+    assert_eq!((row.state.as_str(), row.error_code.as_deref()), (dev_jira::FAILED, Some("jira_unreachable")));
+    let (_, list) = call(&env.app, "GET", &uri("tickets"), None).await;
+    let (_, one) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
+    let (_, site) = call(&env.app, "GET", &uri("jira"), None).await;
+    let want = json!({"code": "jira_unreachable", "message": store::FailCode::JiraUnreachable.message()});
+    assert_eq!(list["tickets"][0]["error"], want, "{list}");
+    assert_eq!(one["ticket"]["error"], want, "the list and the ticket agree: {one}");
+    let msg = want["message"].as_str().unwrap();
+    assert!(!msg.contains("http") && !msg.contains('\n') && msg.ends_with('.'), "one plain sentence: {msg}");
+    let rows = format!("{list}{one}{:?}", env.state.db.dev_ticket_events(&space(), &key, 100).await.unwrap());
+    for bad in ["ATATT3x", "LEAKED", "evil.example"] {
+        assert!(!rows.contains(bad), "upstream text reached a row or its events ({bad})");
+    }
+    // The site status line may say Jira is unreachable, but never in Jira's words either
+    assert!(!site.to_string().contains("ATATT3x") && !site.to_string().contains("evil.example"), "{site}");
+
+    // Every code has kwant's own sentence; an unknown stored code reads as `failed`
+    for c in store::FailCode::ALL {
+        let t = c.message();
+        assert!(!t.is_empty() && t.ends_with('.') && !t.contains("http"), "{c:?}: {t}");
+        assert_eq!(store::FailCode::of(c.code()), *c);
+    }
+    assert_eq!(store::FailCode::of("<script>"), store::FailCode::Failed);
+
+    // Moving on clears it: Retry puts it back in the queue with no error
+    m.heal("/search/jql");
+    let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/retry")), None).await;
+    assert_eq!((s.as_u16(), v["ticket"]["state"].as_str(), v["ticket"]["error"].clone()), (200, Some(dev_jira::PICKED_UP), Value::Null), "{v}");
+    assert_eq!(ticket(&env, &key).await.error_code, None);
+
+    // A writer that names no reason still gets a sentence
+    for to in [dev_jira::READING, dev_jira::FAILED] {
+        assert!(env.state.db.set_dev_ticket_state(&space(), &key, to).await.unwrap(), "{to}");
+    }
+    let (_, one) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
+    assert_eq!(one["ticket"]["error"], json!({"code": "failed", "message": store::FailCode::Failed.message()}), "{one}");
+    no_token_anywhere(&env, &m).await;
+}
+
+#[tokio::test]
+async fn the_site_names_its_projects_and_spaces_from_the_check_and_the_poll_never_from_put() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app").add_project("OPS", "Operations");
+    m.add_space("ENG", "Engineering");
+    let v = connect(&env, &m, json!({"spaces": ["ENG"], "project_names": {"TRAIL": "Injected"}, "space_names": {"ENG": "Injected"}})).await;
+    assert_eq!(v["site"]["project_names"], json!({"OPS": "Operations", "TRAIL": "Trail app"}), "PUT takes the check's names, not the body's: {v}");
+    assert_eq!(v["site"]["space_names"], json!({"ENG": "Engineering"}), "{v}");
+    let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;
+    assert_eq!((g["site"]["project_names"].clone(), g["site"]["space_names"].clone()), (v["site"]["project_names"].clone(), v["site"]["space_names"].clone()), "{g}");
+    assert!(g["site"].get("names_at").is_none(), "{g}");
+
+    // The poll lists them again, at most hourly
+    m.rename_project("TRAIL", "Trail app v2");
+    poll(&env).await;
+    let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;
+    assert_eq!(g["site"]["project_names"]["TRAIL"], "Trail app", "listed less than an hour ago: {g}");
+    set_site_time(&env, "names_at", chrono::Utc::now() - chrono::Duration::minutes(dev_jira::NAMES_EVERY_MINUTES + 1)).await;
+    poll(&env).await;
+    let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;
+    assert_eq!(g["site"]["project_names"]["TRAIL"], "Trail app v2", "{g}");
+
+    // A check of the saved site refreshes them too
+    m.rename_project("OPS", "Ops & Support");
+    let (s, c) = call(&env.app, "POST", &uri("jira/check"), Some(sign_in(&m))).await;
+    assert_eq!((s.as_u16(), c["result"].as_str()), (200, Some("found")), "{c}");
+    let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;
+    assert_eq!(g["site"]["project_names"]["OPS"], "Ops & Support", "{g}");
+
+    // A failed list keeps the names it had
+    m.fault("/project/search", Fault::Server(503));
+    set_site_time(&env, "names_at", chrono::Utc::now() - chrono::Duration::hours(2)).await;
+    poll(&env).await;
+    let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;
+    assert_eq!(g["site"]["project_names"]["TRAIL"], "Trail app v2", "{g}");
+
+    // No site: no names (the answer is still site: null)
+    let (_, d) = call(&env.app, "DELETE", &uri("jira"), None).await;
+    let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;
+    assert_eq!(g["site"], Value::Null, "{d} {g}");
+}
+
+#[tokio::test]
+async fn work_says_when_the_pr_merged_and_null_before() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app");
+    connect(&env, &m, json!({})).await;
+    poll(&env).await;
+    let key = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    poll(&env).await;
+    for to in [dev_jira::READING, dev_jira::BRIEF_READY, dev_jira::WORKING] {
+        assert!(env.state.db.set_dev_ticket_state(&space(), &key, to).await.unwrap(), "{to}");
+    }
+    let review = json!({"head_branch": format!("feat/{key}-dark-mode"), "title": "Dark mode", "links": {"pr": "https://github.com/acme/trail/pull/7"}});
+    env.state.db.insert_dev_card(&space(), kwnt::db::dev_mode::REVIEW, "pr/7", "abc1234", &review.to_string()).await.unwrap();
+    let (_, v) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
+    assert_eq!(v["ticket"]["work"]["merged_at"], Value::Null, "not merged yet: {v}");
+
+    let landed = json!({"title": format!("{key}: Dark mode"), "merged_at": "2026-11-07T10:12:00Z", "pr": 7});
+    env.state.db.insert_dev_card(&space(), kwnt::db::dev_mode::LANDED, "commit/m1", "m1", &landed.to_string()).await.unwrap();
+    let (_, v) = call(&env.app, "GET", &uri(&format!("tickets/{key}")), None).await;
+    let at = v["ticket"]["work"]["merged_at"].as_str().unwrap_or_default();
+    assert_eq!(at.parse::<chrono::DateTime<chrono::Utc>>().ok(), "2026-11-07T10:12:00Z".parse().ok(), "{v}");
+    let (_, list) = call(&env.app, "GET", &uri("tickets"), None).await;
+    assert_eq!(list["tickets"][0]["work"], v["ticket"]["work"], "the list and the ticket agree");
+}

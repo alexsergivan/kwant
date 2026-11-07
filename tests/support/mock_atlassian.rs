@@ -56,6 +56,8 @@ pub enum Fault {
     Server(u16),
     /// 401: the token was revoked.
     Unauthorized,
+    /// A 5xx status whose body says `text` (an upstream error kwant must never repeat).
+    ServerSays(u16, String),
 }
 
 /// A Jira user. `handle` is the test's name for them (= the DC username).
@@ -247,6 +249,12 @@ impl MockAtlassian {
 
     pub fn add_project(&self, key: &str, name: &str) -> &Self {
         self.with(|i| i.projects.push((key.into(), name.into())));
+        self
+    }
+
+    /// Renames a project (what the next project list says).
+    pub fn rename_project(&self, key: &str, name: &str) -> &Self {
+        self.with(|i| i.projects.iter_mut().filter(|p| p.0 == key).for_each(|p| p.1 = name.into()));
         self
     }
 
@@ -622,6 +630,7 @@ fn fault_reply(f: Fault) -> Response {
         }
         Fault::Server(code) => reply(code, json!({"errorMessages": ["Service unavailable"]})),
         Fault::Unauthorized => reply(401, json!({"errorMessages": ["Unauthorized"]})),
+        Fault::ServerSays(code, text) => reply(code, json!({"errorMessages": [text], "message": text})),
     }
 }
 

@@ -282,8 +282,19 @@ pub async fn check_site(State(state): State<AppState>, headers: HeaderMap, Path(
     let mut out = check::check(input, atlassian::resolver()).await;
     if out.result == "found" {
         out.suggested_project = check::suggest_project(&out.projects, &branch_names(&state, space.as_str()).await);
+        // A check of the saved site refreshes the names next to its keys (api-decisions 23)
+        if existing.as_ref().is_some_and(|e| out.jira_url.as_deref() == Some(e.jira_url.as_str())) {
+            save_names(&state, space.as_str(), &out).await;
+        }
     }
     Json(out).into_response()
+}
+
+/// The check's project names, and its space names when Confluence answered.
+async fn save_names(state: &AppState, space: &str, out: &check::CheckOutcome) {
+    let projects: Vec<(String, String)> = out.projects.iter().map(|p| (p.key.clone(), p.name.clone())).collect();
+    let spaces: Option<Vec<(String, String)>> = out.confluence.as_ref().filter(|c| c.result == "ok").map(|c| c.spaces.iter().map(|s| (s.key.clone(), s.name.clone())).collect());
+    let _ = state.db.set_dev_jira_names(space, Some(&projects), spaces.as_deref()).await;
 }
 
 /// A new site's id: `jira_` and 16 hex characters (also the vault entry's name).
@@ -380,6 +391,9 @@ pub async fn put_site(State(state): State<AppState>, headers: HeaderMap, Path(id
     match state.db.save_dev_jira_site(&row, rule_changed).await {
         Ok(saved) => {
             pickup::poll_soon(space.as_str());
+            // The names come from this check, never from the body (api-decisions 23)
+            save_names(&state, space.as_str(), &out).await;
+            let saved = state.db.dev_jira_site(space.as_str()).await.ok().flatten().unwrap_or(saved);
             Json(json!({"site": site_json(&saved), "check": out})).into_response()
         }
         Err(e) => internal(e),

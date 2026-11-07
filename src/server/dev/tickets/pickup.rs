@@ -193,11 +193,26 @@ async fn fail_live(state: &AppState, space_id: &str) -> usize {
     let mut n = 0;
     for t in state.db.dev_tickets_in(space_id, &live).await.unwrap_or_default() {
         let note = format!("Jira unreachable for {UNREACHABLE_FAIL_HOURS} hours");
-        if matches!(store::set_state(state, space_id, &t.key, dev_jira::FAILED, Some(&note)).await, Ok(true)) {
+        if matches!(store::fail(state, space_id, &t.key, store::FailCode::JiraUnreachable, Some(&note)).await, Ok(true)) {
             n += 1;
         }
     }
     n
+}
+
+/// api-decisions 23: the project and Confluence space names next to the keys, listed again at
+/// most every `NAMES_EVERY_MINUTES` (the check lists them every time). A list that fails keeps
+/// the names it had.
+async fn refresh_names(state: &AppState, site: &JiraSiteRow, client: &AtlassianClient) {
+    if site.names_at.is_some_and(|t| Utc::now() - t < Duration::minutes(dev_jira::NAMES_EVERY_MINUTES)) {
+        return;
+    }
+    let projects = client.projects().await.ok().map(|l| l.into_iter().map(|p| (p.key, p.name)).collect::<Vec<_>>());
+    let spaces = match site.space_list().is_empty() {
+        true => None,
+        false => client.spaces().await.ok().map(|l| l.into_iter().map(|s| (s.key, s.name)).collect::<Vec<_>>()),
+    };
+    let _ = state.db.set_dev_jira_names(&site.space_id, projects.as_deref(), spaces.as_deref()).await;
 }
 
 /// A search hit or a single read as the row's facts.
@@ -256,6 +271,7 @@ async fn run(state: &AppState, site: &JiraSiteRow, report: &mut PollReport) -> P
         Err(e) => return mark_for(&e, Utc::now()),
     };
     report.matched = hits.len();
+    refresh_names(state, site, &client).await;
     let seen: HashSet<String> = hits.iter().map(|(_, i)| i.key.clone()).collect();
 
     for (id, issue) in &hits {
@@ -452,6 +468,7 @@ mod tests {
             closed_resolution: None,
             waiting_since_connect: false,
             held_by_person: false,
+            error_code: None,
             work_comment_at: None,
             pr_comment_at: None,
             first_seen_at: t0,
