@@ -58,7 +58,8 @@ earlier in the same turn. Choose `ask` for bots or folders you don't trust.
     command (`rebase -x/--exec`, `--upload-pack`, `ext::`, `grep -O`, …); publish and login
     commands of npm/pnpm/yarn/bun/cargo/pip/uv/gem/poetry/twine/go; `npx`, `bunx`,
     `npm exec`/`npm x`, `pnpm dlx`, `yarn dlx`, `bun x` wherever the verb sits (`npm --prefix x
-    exec …` too; so `npm run x` asks as well); starters (`npm create vite`, `npm init vite`,
+    exec …` too; a script named `x` asks as well, because `npm run x` looks like `npm x`; any
+    other `npm run` script runs); starters (`npm create vite`, `npm init vite`,
     `pnpm`/`yarn`/`bun create …`; a bare `npm init` or `npm init -y` runs), `deno run` of a URL
     or `npm:`/`jsr:` spec, and `uv run --with <pkg>`, because they download and run package code;
   - adding a package the project doesn't list yet, because it downloads the package and runs

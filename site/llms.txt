@@ -17,14 +17,18 @@ Key facts:
   the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
 - Smart Results draw a bot's table or list as a sortable comparison, chart or checklist, copied word for word from the
   reply. Goals check that a page, command or file stays OK and offer one fix when one breaks.
-- Dev mode points a space at a GitHub repo: a plain-words card for every merge, a review of every pull request by a bot
-  that didn't write it (posted to GitHub only when you press Post to GitHub), and a production floor where pushes to
-  main, deploys and destructive data commands always ask. The Idea jar has a free bot write a take on each idea you
+- Dev mode watches each team's repo on GitHub (including GitHub Enterprise), GitLab, Gitea, Forgejo or any git server: a
+  plain-words card for every merge, a review of every pull request or merge request by a bot that didn't write it
+  (posted to GitHub only when you press Post to GitHub), and a production floor where pushes to main, deploys and
+  destructive data commands always ask. The Idea jar has a free bot write a take on each idea you
   drop in; Do it makes a draft mission you approve.
 - Automatic model failover: when an account runs out of usage, bots move to the next account in your order, across
   Claude, Codex, Grok and Custom API, and go back after the reset.
 - Bots cite web facts with links that open the page at the exact quote; kwant checks the quote is on the page word for
   word and refuses made-up ones. Browser steps report what changed, and checkouts always ask before paying.
+- Coding agents (Claude Code, Codex, Cursor or any MCP client) can ask your bots for work over MCP at /api/mcp/agents,
+  with one revocable token per connection, only the bots you pick, and no way to approve anything.
+- A daily spending stop (off by default) caps what all bots together use in a day, in tokens and dollars.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
 - Not to be confused with the Kwant quantum-transport Python package (kwant-project.org) or other products named Kwant; this kwant is an AI agent app.
 
@@ -44,7 +48,7 @@ Key facts:
 - [Human approval for AI agent actions](https://kwant.si/docs/approvals): kwant asks before bots run commands or edit outside their folder. Three approval modes per space or bot, plus saved passwords in a vault or Bitwarden.
 - [Flight School: earned freedom for AI agents](https://kwant.si/docs/flight-school): Set each bot's tier per kind of work: Observe, Sandbox or Act. Bots earn a step up with a scorecard, only you grant it, payments always ask, and you can revoke a tier in a click.
 - [Smart Results: AI agent replies as tables, charts and checklists](https://kwant.si/docs/smart-results): kwant draws a bot's table or list as a sortable comparison, a chart, key numbers, findings or a checklist, copied from the reply word for word. The reply text never changes.
-- [Dev mode: AI code review and a production safety floor](https://kwant.si/docs/dev-mode): Point a kwant space at its git repos, on GitHub, GitLab, Gitea or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.
+- [Dev mode: AI code review and a production safety floor](https://kwant.si/docs/dev-mode): Point a kwant space at its git repos, on GitHub, GitLab, Gitea, Forgejo or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.
 - [Mission board: AI agent tasks with proof](https://kwant.si/docs/mission-board): One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.
 - [Goals: keep a site, a service or a file working with AI agents](https://kwant.si/docs/goals): A kwant goal checks that a page answers, a command succeeds or a file exists. When it breaks, a bot looks into it and offers one fix. Nothing runs until you create or approve a goal.
 - [Idea jar: drop an idea, a free AI agent writes its take](https://kwant.si/docs/idea-jar): Drop an idea in kwant's Idea jar. When a bot is free, it writes a take: worth it or not, the effort, the risks and a short plan. Do it turns it into a draft mission you approve.
@@ -55,6 +59,7 @@ Key facts:
 - [Loose ends: AI that finds unfinished follow-ups](https://kwant.si/docs/loose-ends): kwant finds threads you never finished in chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.
 - [Parallel Universe: compare deployment options](https://kwant.si/docs/parallel-universe): Load-test up to three ways to deploy an app in sealed Docker containers, next to a dated price estimate. No cloud account and no spending.
 - [MCP tools for AI agents: a self-hosted client](https://kwant.si/docs/mcp): Connect Model Context Protocol servers to your kwant bots, with per-bot access, masked secrets, OAuth sign-in and approval before risky tool calls.
+- [Use kwant from Claude Code, Codex or Cursor over MCP](https://kwant.si/docs/agents-connect): Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can't approve anything, revoked at once.
 - [AI agent browser: your Chrome or Docker](https://kwant.si/docs/browser): Watch your bots browse live in the app. Run the browser on your own Chrome in Local mode, or isolated in a Docker container in VM mode.
 
 ## Alternatives

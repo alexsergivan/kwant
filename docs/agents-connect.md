@@ -2,7 +2,7 @@
 
 Claude Code, Codex, Cursor and other MCP clients can ask your kwant bots for work ("ask Vega to check the
 release notes") and get the reply back where you're working. You make one connection per tool in
-**Settings → Coding agents**. Each connection has its own token, only reaches the spaces and bots you pick,
+**Settings → All spaces → Coding agents**. Each connection has its own token, only reaches the spaces and bots you pick,
 and can be revoked at once.
 
 The outside agent is never you. A bot sees its messages marked as coming from that agent, and the agent can't
@@ -10,7 +10,7 @@ approve anything.
 
 ## Connect
 
-1. In **Settings → Coding agents**, choose **Connect a coding agent**. Name it (for example "Claude Code on my
+1. In **Settings → All spaces → Coding agents**, choose **Connect a coding agent**. Name it (for example "Claude Code on my
    laptop"), then pick the spaces and either all of their bots or some of them.
 2. Copy the token. It starts with `kag_` and **is shown only once**.
 3. Add kwant to your tool. In the examples below, `https://<server>` is the address you open kwant at.
@@ -108,5 +108,5 @@ include the token. Each connection keeps its newest 1,000 entries; a revoked con
 
 ## Revoke
 
-In **Settings → Coding agents**, choose **Revoke** next to the connection. It takes effect at once: the next
+In **Settings → All spaces → Coding agents**, choose **Revoke** next to the connection. It takes effect at once: the next
 call with that token gets a 401. Its threads stay in kwant. You can have up to 10 live connections.

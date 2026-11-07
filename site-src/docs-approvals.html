@@ -18,7 +18,7 @@ card_art: avatar:qa
   <li><strong>Deny</strong> refuses it, and the bot is told.</li>
 </ul>
 <figure>
-  <div class="frame">{{shot:desktop-approval|An Approval needed card in a bot's chat: Ann wants to open a pull request on GitHub, with the title Trip waitlist with timed seat holds and the repo trailhead/storefront, and the full arguments shown below, with Deny, Always allow and Allow once buttons.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:desktop-approval|Ann's chat. Right under the request Tests are passing. Please open the pull request for the waitlist branch, an Approval needed card says Ann wants to open a pull request on GitHub, with the title Trip waitlist with timed seat holds and the repo trailhead/storefront, and Deny, Always allow and Allow once buttons.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Ann asks before opening a pull request.</figcaption>
 </figure>
 <p>Only you can answer a card. Bots' own tools can't, and neither can a bot calling kwant's API.</p>
@@ -42,6 +42,11 @@ card_art: avatar:qa
   <li><strong>Reads</strong> outside the folder, unless they touch system data or anything that looks like a credential: <code>.ssh</code>, <code>.aws</code>, <code>.env</code> files, key files, browser profiles, shell histories and more.</li>
   <li><strong>MCP tools</strong> the server marks read-only and not destructive.</li>
 </ul>
+<p id="packages">Since 0.7.4, adding a package the project doesn't list yet asks first, because it downloads code that runs on your computer: <code>npm install &lt;name&gt;</code>, <code>pnpm add</code>, <code>yarn add</code>, <code>bun add</code>, <code>cargo add</code>, <code>uv add</code>, <code>poetry add</code>, <code>go get</code> and <code>dotnet add package</code>. An option or a workspace name in front can't hide it. A plain <code>npm install</code> of what the project already lists still runs on its own. Starters like <code>npm create vite</code>, <code>npx</code>, <code>npm exec</code> and <code>npm x</code> ask too.</p>
+<figure>
+  <div class="frame">{{shot:v074-package-ask|With Ask only when risky on, Ann stops to ask before installing a new package: npm install left-pad. Buttons: Deny, Always this session, Allow once.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A new package asks first, even under "Ask only when risky".</figcaption>
+</figure>
 <p>Requests to kwant itself, on its own port or any loopback <code>/api/</code> path, always ask. Writes and edits outside the folder, and unknown tools, always ask.</p>
 <div class="note warn"><strong><code>smart</code> guards against accidents. It isn't a sandbox.</strong> Scripts in the bot's folder, <code>make</code>, <code>cargo build</code> and <code>npm run</code> run without a card and can do anything the bot's user can, including a script the bot wrote a moment earlier. Use <code>ask</code> for bots or folders you don't trust.</div>
 

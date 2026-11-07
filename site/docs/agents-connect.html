@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Use kwant from Claude Code, Codex or Cursor over MCP · kwant</title>
+<meta name="description" content="Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can&#x27;t approve anything, revoked at once.">
+<meta name="theme-color" content="#f4f1ff">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://kwant.si/docs/agents-connect">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="kwant">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Use kwant from Claude Code, Codex or Cursor over MCP · kwant">
+<meta property="og:description" content="Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can&#x27;t approve anything, revoked at once.">
+<meta property="og:url" content="https://kwant.si/docs/agents-connect">
+<meta property="og:image" content="https://kwant.si/assets/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Coding agents: Let Claude Code, Codex or Cursor ask your bots for work, with one token per connection, and it can&#x27;t approve anything.">
+<meta property="article:published_time" content="2026-11-07">
+<meta property="article:modified_time" content="2026-11-07">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Use kwant from Claude Code, Codex or Cursor over MCP · kwant">
+<meta name="twitter:description" content="Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can&#x27;t approve anything, revoked at once.">
+<meta name="twitter:image" content="https://kwant.si/assets/og.png">
+<meta name="twitter:image:alt" content="Coding agents: Let Claude Code, Codex or Cursor ask your bots for work, with one token per connection, and it can&#x27;t approve anything.">
+<link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
+<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css?v=99f2fc30c3">
+</head>
+<body class="page-docs">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart" aria-current="page">Docs</a>
+      <a href="/blog/">Blog</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <div class="docs-group"><h3>Get started</h3><ul><li><a href="/docs/quickstart">Quickstart</a></li><li><a href="/docs/install">Install &amp; run</a></li></ul></div>
+    <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="/docs/spaces">Spaces</a></li><li><a href="/docs/bots-and-teams">Bots &amp; teams</a></li><li><a href="/docs/accounts">Accounts &amp; profiles</a></li><li><a href="/docs/models">Models &amp; routing</a></li><li><a href="/docs/approvals">Approvals &amp; passwords</a></li><li><a href="/docs/flight-school">Flight School</a></li><li><a href="/docs/smart-results">Smart Results</a></li><li><a href="/docs/dev-mode">Dev mode</a></li></ul></div>
+    <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="/docs/mission-board">Mission board</a></li><li><a href="/docs/goals">Goals</a></li><li><a href="/docs/idea-jar">Idea jar</a></li><li><a href="/docs/routines">Routines &amp; bot actions</a></li><li><a href="/docs/memory-skills">Memory, skills &amp; search</a></li><li><a href="/docs/lessons">Lessons</a></li><li><a href="/docs/truth-ledger">Truth Ledger</a></li><li><a href="/docs/loose-ends">Loose ends &amp; letters</a></li><li><a href="/docs/parallel-universe">Parallel Universe</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/agents-connect" aria-current="page">Coding agents</a></li><li><a href="/docs/browser">Browser</a></li></ul></div>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Use kwant from your coding agent</h1>
+<p class="intro">Claude Code, Codex, Cursor and other MCP clients can ask your kwant bots for work ("ask Ann to check the release notes") and get the reply back where you're coding. You make one connection per tool. Each has its own token, reaches only the spaces and bots you pick, and can be revoked at once. The agent is never you: it can't approve anything.</p>
+<figure>
+  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v074-coding-agents-poster.webp?v=67df1bb24b" width="1280" height="800" aria-label="Demo: in Settings, All spaces, Coding agents, a new connection is created and named, its Claude Code setup line is copied, and Done is pressed. A moment later its first request comes in, and Recent activity on the connection shows Asked Ann."><source src="../assets/media/clip-v074-coding-agents.mp4?v=b71c246ff3" type="video/mp4"></video></div>
+  <figcaption>Connect, copy the setup line, and the first ask shows up under Recent activity.</figcaption>
+</figure>
+
+<h2 id="connect">Connect</h2>
+<ol>
+  <li>In <strong>Settings → All spaces → Coding agents</strong>, choose <strong>Connect a coding agent</strong>. Name it, for example "Claude Code on my laptop", then pick the spaces and either all of their bots or some of them.</li>
+  <li>Copy the token. It starts with <code>kag_</code> and <strong>is shown only once</strong>. kwant keeps only a hash of it.</li>
+  <li>Add kwant to your tool. The screen has a copyable setup for Claude Code, Codex and Cursor. In the examples below, <code>https://&lt;server&gt;</code> is the address you open kwant at.</li>
+</ol>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v074-coding-agents-setup-2880.webp?v=2e2b6d3a29" data-caption="Coding agents. A new connection called Claude Code on my laptop shows its token once, with a warning to keep it like a password, and the one-line setup command for Claude Code, with tabs for Codex and Cursor."><img class="app" src="../assets/media/v074-coding-agents-setup-1440.webp?v=acfbeb143e" srcset="../assets/media/v074-coding-agents-setup-1440.webp?v=acfbeb143e 1440w, ../assets/media/v074-coding-agents-setup-2880.webp?v=2e2b6d3a29 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Coding agents. A new connection called Claude Code on my laptop shows its token once, with a warning to keep it like a password, and the one-line setup command for Claude Code, with tabs for Codex and Cursor."></a></div>
+  <figcaption>The token is shown once, next to the setup for your tool.</figcaption>
+</figure>
+<div class="note warn"><strong>The token is like a password.</strong> Anyone who has it can ask your bots for work, within the connection's spaces and bots, until you revoke it. It doesn't expire. Keep it out of repos and shared dotfiles. If it leaks, revoke the connection and make a new one.</div>
+
+<h3 id="claude-code">Claude Code</h3>
+<pre><code>claude mcp add --transport http kwant https://&lt;server&gt;/api/mcp/agents --header "Authorization: Bearer kag_…"</code></pre>
+<p>This adds kwant in the current project. Add <code>--scope user</code> to have it in every project. Check it with <code>claude mcp get kwant</code>.</p>
+
+<h3 id="codex">Codex</h3>
+<p>In <code>~/.codex/config.toml</code>:</p>
+<pre><code>[mcp_servers.kwant]
+url = "https://&lt;server&gt;/api/mcp/agents"
+bearer_token_env_var = "KWANT_AGENT_TOKEN"</code></pre>
+<p>Then set the token in your shell profile, for example <code>export KWANT_AGENT_TOKEN=kag_…</code>, so it stays out of the config file.</p>
+
+<h3 id="cursor">Cursor</h3>
+<p>In <code>~/.cursor/mcp.json</code>, or <code>.cursor/mcp.json</code> in a project you don't commit:</p>
+<pre><code>{
+  "mcpServers": {
+    "kwant": {
+      "url": "https://&lt;server&gt;/api/mcp/agents",
+      "headers": { "Authorization": "Bearer ${env:KWANT_AGENT_TOKEN}" }
+    }
+  }
+}</code></pre>
+<p>Cursor fills in <code>${env:KWANT_AGENT_TOKEN}</code> from your environment. You can also paste the token itself in its place.</p>
+<p>The endpoint, <code>POST /api/mcp/agents</code>, uses MCP's streamable HTTP transport with plain JSON responses. Every call needs the token, including calls from the same machine.</p>
+
+<h2 id="tools">What the agent can do</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tool</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td><code>list_bots</code></td><td>Lists the bots this connection may ask, with each one's name, role, team, space, and whether it's busy.</td></tr>
+    <tr><td><code>ask</code></td><td>Sends a bot a message (up to 8,000 characters) and waits up to <code>wait_seconds</code> (0–300, default 120) for the reply.</td></tr>
+    <tr><td><code>get_reply</code></td><td>Checks a turn that <code>ask</code> started, by <code>turn_id</code>.</td></tr>
+    <tr><td><code>list_threads</code></td><td>Lists the threads this connection started, newest first, with the bot's last reply to its own asks.</td></tr>
+  </tbody>
+</table></div>
+<p><code>ask</code> posts into a thread with the bot called <strong>From &lt;connection name&gt;</strong>, one per connection and bot, so the bot keeps the context. You see these threads in kwant like any other, and you can read along or reply. The agent only ever gets the bot's reply to its own ask.</p>
+<p>Each answer has a <code>status</code>:</p>
+<ul>
+  <li><strong><code>done</code></strong>: the bot replied, with passwords, keys and home-folder paths hidden.</li>
+  <li><strong><code>working</code></strong>: still going. Call <code>get_reply</code> later.</li>
+  <li><strong><code>waiting_on_person</code></strong>: the bot needs you first, to approve a step or answer a question. You answer in kwant as usual, and the turn carries on.</li>
+  <li><strong><code>failed</code></strong>: the turn stopped, and the reply says why.</li>
+</ul>
+
+<h2 id="limits">What it can't do</h2>
+<ul>
+  <li><strong>Approve anything.</strong> Approvals and questions go to you in kwant, as they always do. The agent only sees that the turn is waiting.</li>
+  <li><strong>Act as you.</strong> Its messages are stored and shown as the agent's, and the bot is told they aren't from you.</li>
+  <li><strong>Reach anything else.</strong> The token works only on <code>/api/mcp/agents</code>. Every other kwant address gives it a 403, even from the same machine. It can't read passwords, change settings or send chat messages as you.</li>
+  <li><strong>Reach other bots or threads.</strong> Only the spaces and bots you picked, and only threads this connection started.</li>
+  <li><strong>Run unlimited work.</strong> Each connection can make up to 60 asks an hour and have 3 turns working at once; past that it gets HTTP 429 with <code>retry_after</code>. Its turns count toward the hand-off budget and the <a href="/docs/mission-board#spend-stop">daily spending stop</a>.</li>
+</ul>
+
+<h2 id="revoke">See what it did, and revoke it</h2>
+<p>The Coding agents list shows each connection with its spaces, bots, when it was added and when it was last used. <strong>Recent activity</strong> lists what it asked and which bot. Every call is logged with the connection, the tool, the bot and whether it was allowed, never with the token.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v074-coding-agents-2880.webp?v=ca27dfcfd9" data-caption="The Coding agents list with two connections, Codex on the build box and Claude Code on my laptop. Its recent activity shows one question asked to Ann. Each connection has a Revoke button."><img class="app" src="../assets/media/v074-coding-agents-1440.webp?v=f2fb6cb031" srcset="../assets/media/v074-coding-agents-1440.webp?v=f2fb6cb031 1440w, ../assets/media/v074-coding-agents-2880.webp?v=ca27dfcfd9 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Coding agents list with two connections, Codex on the build box and Claude Code on my laptop. Its recent activity shows one question asked to Ann. Each connection has a Revoke button."></a></div>
+  <figcaption>Two connections, each with its own bots, its last use and a Revoke button.</figcaption>
+</figure>
+<p><strong>Revoke</strong> takes effect at once: the next call with that token gets a 401. Its threads stay in kwant. You can have up to 10 live connections.</p>
+<p>The other way round, giving your bots tools from MCP servers, is on <a href="/docs/mcp">MCP tools</a>.</p>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="/docs/mcp"><small>Previous</small>MCP tools</a><a class="next" href="/docs/browser"><small>Next</small>Browser</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot-brand">
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="https://github.com/alexsergivan/kwant" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+    </div>
+    <nav aria-label="Product">
+      <h2>Product</h2>
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Quickstart</a>
+      <a href="/docs/install">Install &amp; run</a>
+      <a href="/self-hosted-ai-agents">Self-hosted AI agents</a>
+      <a href="/blog/">Blog</a>
+      <a href="/docs/mcp">MCP tools</a>
+    </nav>
+    <nav aria-label="Using kwant">
+      <h2>Using kwant</h2>
+      <a href="/docs/spaces">Spaces</a>
+      <a href="/docs/accounts">Accounts</a>
+      <a href="/docs/approvals">Approvals</a>
+      <a href="/docs/routines">Routines</a>
+    </nav>
+    <nav aria-label="Project">
+      <h2>Project</h2>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+      <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Issues</a>
+      <a href="https://github.com/alexsergivan/kwant/blob/main/SECURITY.md" rel="noopener">Security</a>
+      <a href="/contact">Contact</a>
+    </nav>
+    <nav aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms of use</a>
+      <a href="/terms#license">License</a>
+    </nav>
+    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+  </div>
+</footer>
+<script src="../assets/js/site.js?v=63f328cd53" defer></script>
+<script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/agents-connect#article","headline":"Use kwant from Claude Code, Codex or Cursor over MCP","description":"Let Claude Code, Codex, Cursor and other MCP clients ask your self-hosted kwant bots for work and get the reply back. One token per connection, only the bots you pick, can't approve anything, revoked at once.","url":"https://kwant.si/docs/agents-connect","mainEntityOfPage":"https://kwant.si/docs/agents-connect","image":"https://kwant.si/assets/og.png","inLanguage":"en","datePublished":"2026-11-07","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Coding agents","item":"https://kwant.si/docs/agents-connect"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
+</body>
+</html>
