@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dev mode: AI code review and a production safety floor · kwant</title>
-<meta name="description" content="Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
+<meta name="description" content="Point a kwant space at its git repos, on GitHub, GitLab, Gitea or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
 <meta name="theme-color" content="#f4f1ff">
 <meta name="color-scheme" content="light">
 <link rel="canonical" href="https://kwant.si/docs/dev-mode">
@@ -12,7 +12,7 @@
 <meta property="og:site_name" content="kwant">
 <meta property="og:locale" content="en_US">
 <meta property="og:title" content="Dev mode: AI code review and a production safety floor · kwant">
-<meta property="og:description" content="Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
+<meta property="og:description" content="Point a kwant space at its git repos, on GitHub, GitLab, Gitea or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
 <meta property="og:url" content="https://kwant.si/docs/dev-mode">
 <meta property="og:image" content="https://kwant.si/assets/og.png">
 <meta property="og:image:type" content="image/png">
@@ -20,10 +20,10 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Dev mode: Plain-words cards for every merge, a second bot&#x27;s review on every pull request, and a floor under production.">
 <meta property="article:published_time" content="2026-11-06">
-<meta property="article:modified_time" content="2026-11-06">
+<meta property="article:modified_time" content="2026-11-07">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Dev mode: AI code review and a production safety floor · kwant">
-<meta name="twitter:description" content="Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
+<meta name="twitter:description" content="Point a kwant space at its git repos, on GitHub, GitLab, Gitea or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.">
 <meta name="twitter:image" content="https://kwant.si/assets/og.png">
 <meta name="twitter:image:alt" content="Dev mode: Plain-words cards for every merge, a second bot&#x27;s review on every pull request, and a floor under production.">
 <link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
@@ -58,7 +58,7 @@
   <article class="prose">
 <p class="kicker">Docs</p>
 <h1>Dev mode: code review and a safety floor for your repo</h1>
-<p class="intro">Dev mode watches the GitHub repo of every team in a space. kwant reads each repo and writes a card for every merge and every open pull request, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
+<p class="intro">Dev mode watches the repo of every team in a space, on GitHub or any git server. kwant reads each repo and writes a card for every merge, and on GitHub for every open pull request, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
 <figure>
   <div class="frame"><a class="zoom" href="../assets/media/v071-dev-on-2880.webp?v=bf89108acc" data-caption="The Trailhead Outfitters space right after one press on the Dev mode switch, which now reads On. A note above the message box says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."><img class="app" src="../assets/media/v071-dev-on-1440.webp?v=730f1fb8c8" srcset="../assets/media/v071-dev-on-1440.webp?v=730f1fb8c8 1440w, ../assets/media/v071-dev-on-2880.webp?v=bf89108acc 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Trailhead Outfitters space right after one press on the Dev mode switch, which now reads On. A note above the message box says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."></a></div>
   <figcaption>One press turns it on. A note says which repo kwant found, with Undo.</figcaption>
@@ -69,7 +69,7 @@
 <ul>
   <li><strong>A short note says what it found</strong>, such as <strong>Watching 3 repos</strong>, with <strong>Open Dev desk</strong> and <strong>Undo</strong>. When a repo needs you, such as no GitHub connection that can read it, the note adds one button for that.</li>
   <li><strong>A team with no repo</strong> shows as one quiet line on the Dev desk, with <strong>Link a repo</strong>. Linking a repo never turns Dev mode on by itself.</li>
-  <li><strong>Connect GitHub</strong> shows when no GitHub connection can read the repo. It takes you to Connections once, and Dev mode picks the repo up as soon as the connection is saved, without turning it off and on.</li>
+  <li><strong>Connect GitHub</strong> shows when no GitHub connection can read the repo. It opens the GitHub form right where you pressed it, a popover on the desktop and a sheet on the phone, and Dev mode picks the repo up as soon as the connection is saved, without turning it off and on.</li>
   <li><strong>Turning on never fails.</strong> With no repo, the production floor and the command guards still work, and the desk waits for one.</li>
 </ul>
 <p>On the Dev desk, one line says how many repos are watched and how many need you. <strong>Show repos</strong> opens the list: each team's repo with its branch, where kwant found it, and its state. A repo that needs you has one button for its fix, and the others keep going.</p>
@@ -77,15 +77,17 @@
   <div class="frame"><a class="zoom" href="../assets/media/v072-dev-repos-card-2880.webp?v=8086252a09" data-caption="The repo list on the Dev desk, under the line Watching 3 of 4 repos, 1 needs you. The Shop, Storefront and Payments teams&#x27; repos each read Watching, checked 19:00. The Ops team&#x27;s demo-org/warehouse-ops says Needs your GitHub connection in amber."><img src="../assets/media/v072-dev-repos-card-1440.webp?v=4b1ed04d10" srcset="../assets/media/v072-dev-repos-card-1440.webp?v=4b1ed04d10 1440w, ../assets/media/v072-dev-repos-card-2880.webp?v=8086252a09 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The repo list on the Dev desk, under the line Watching 3 of 4 repos, 1 needs you. The Shop, Storefront and Payments teams&#x27; repos each read Watching, checked 19:00. The Ops team&#x27;s demo-org/warehouse-ops says Needs your GitHub connection in amber."></a></div>
   <figcaption>Every team's repo, each checked on its own.</figcaption>
 </figure>
-<p>Dev mode reads GitHub. A GitLab or Gitea repo is named in the note, but kwant doesn't read it yet.</p>
+<h3 id="any-git">Any git repo</h3>
+<p>Since 0.7.3, Dev mode reads every repo's history with git: GitHub, GitLab, Gitea, any git server, or a team folder with no remote. Each merge gets its plain-words card. Pull requests, CI checks, reviews and <strong>Post to GitHub</strong> work on GitHub repos only. kwant keeps a copy of each watched repo in its data folder, up to 1 GB; a bigger repo reads "Too big to read". The server needs git 2.31 or newer; without it, the desk says "Needs git on the server", with the install tip. kwant fetches over https, http, ssh or git, and never from the server itself, a link-local or a cloud metadata address. git runs as the server user kwant runs as, so that user's SSH keys and credential helpers work.</p>
+<p>Under a team's repo link, Team settings say in one line what Dev mode does with it: watched, watched but needs Connect GitHub for reviews, can be watched once Dev mode is on, or read with git.</p>
 <figure>
   <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v071-dev-on-poster.webp?v=bcbcad544d" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="../assets/media/clip-v071-dev-on.mp4?v=4d75df0d2b" type="video/mp4"></video></div>
   <figcaption>On, the repo found, and the last five merges written up.</figcaption>
 </figure>
 
 <h2 id="before">Before you turn it on</h2>
-<p>Dev mode reads GitHub through the GitHub connection in <a href="/docs/loose-ends">Loose ends</a>, so it needs a GitHub token. Reading works with a read-only token; <a href="#post">posting a review</a> needs <strong>Pull requests: Read and write</strong> on a fine-grained token.</p>
-<div class="note"><strong>Where the token is kept.</strong> kwant's built-in password store only saves a GitHub token while every space and every bot is on <strong>Ask before running commands</strong> (new installs start on <strong>Ask only when risky</strong>). Switch them to Ask, or connect Bitwarden. While the token is in the built-in store, approvals can't go back to Off or Ask only when risky. See <a href="/docs/approvals">Approvals &amp; passwords</a>.</div>
+<p>On GitHub, Dev mode reads pull requests and checks through the GitHub connection in <a href="/docs/loose-ends">Loose ends</a> (its row says "Also used by Dev mode"), so it needs a GitHub token. Reading works with a read-only token; <a href="#post">posting a review</a> needs <strong>Pull requests: Read and write</strong> on a fine-grained token.</p>
+<div class="note"><strong>Where the token is kept.</strong> When some bots run commands without asking (new installs start on <strong>Ask only when risky</strong>), one of them could read a token saved on this server. The card <strong>Before you save the token</strong> says so and offers <strong>Save it on this server</strong>, <strong>Use Bitwarden</strong> or <strong>Make every bot ask first</strong>. A read-only token limited to the repos you need keeps the risk small. See <a href="/docs/approvals#passwords">Approvals &amp; passwords</a>.</div>
 
 <h2 id="landed">What landed</h2>
 <p>The <strong>Dev desk</strong> sits at the top of the sidebar. Its first tab, <strong>What landed</strong>, has one card per commit that reaches the watched branch: what changed in plain words, how risky it is, the commit, the pull request it came from (or "Direct push"), a diffstat for each file, and whether tests passed.</p>
@@ -223,7 +225,7 @@
 </footer>
 <script src="../assets/js/site.js?v=63f328cd53" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/dev-mode#article","headline":"Dev mode: AI code review and a production safety floor","description":"Point a kwant space at a GitHub repo. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.","url":"https://kwant.si/docs/dev-mode","mainEntityOfPage":"https://kwant.si/docs/dev-mode","image":"https://kwant.si/assets/og.png","inLanguage":"en","datePublished":"2026-11-06","dateModified":"2026-11-06","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Dev mode","item":"https://kwant.si/docs/dev-mode"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/dev-mode#article","headline":"Dev mode: AI code review and a production safety floor","description":"Point a kwant space at its git repos, on GitHub, GitLab, Gitea or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.","url":"https://kwant.si/docs/dev-mode","mainEntityOfPage":"https://kwant.si/docs/dev-mode","image":"https://kwant.si/assets/og.png","inLanguage":"en","datePublished":"2026-11-06","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Dev mode","item":"https://kwant.si/docs/dev-mode"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>
