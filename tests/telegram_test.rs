@@ -7,7 +7,7 @@ mod common;
 mod mock_telegram;
 
 use axum::http::StatusCode;
-use common::{call, call_with, setup, wait_for, Env};
+use common::{call, call_with, setup, Env};
 use kwnt::broker::{ApprovalDecision, ApprovalRequest};
 use kwnt::db::models::NewApproval;
 use kwnt::db::questions::QuestionPlace;
@@ -17,6 +17,21 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 const BASE: &str = "/api/connections/telegram";
+
+/// [`common::wait_for`] with 60 s instead of 30 s: this suite failed under load (Rigel's N-T4).
+async fn wait_for<F, Fut>(what: &str, mut check: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..600 {
+        if check().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
 
 async fn status(env: &Env) -> Value {
     let (s, v) = call(&env.app, "GET", BASE, None).await;
@@ -204,6 +219,28 @@ async fn pairing_takes_the_right_code_from_a_private_chat_only() {
     assert_eq!(tg.sent(&bot).len(), sent, "strangers get no reply");
 }
 
+// Rigel's N-T1: update ids are per bot. A different bot's ids start again, and its first update
+// (the person's /start) must not look already handled.
+#[tokio::test]
+async fn a_different_bot_s_first_update_is_handled() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let a = paired(&env, tg, 13).await;
+    let mut last = 0;
+    for i in 0..3 {
+        last = tg.text(&a, &PERSON, &format!("note {i} for bot A"));
+    }
+    tg.wait_handled(&a, last).await;
+
+    // Bot B's update ids start where A's did
+    let b = connect(&env, tg, 14).await;
+    let code = new_code(&env).await;
+    let first = tg.text(&b, &PERSON, &format!("/start {code}"));
+    assert!(first <= last, "B's first update id ({first}) is one A already used (up to {last})");
+    tg.wait_send(&b, |c| c.text().contains("Paired with kwant")).await;
+    wait_for("paired with B", || async { status(&env).await["state"] == "paired" }).await;
+}
+
 #[tokio::test]
 async fn five_wrong_codes_lock_out_that_sender_only() {
     let env = setup().await;
@@ -282,7 +319,17 @@ async fn messages_go_to_general_and_replies_come_back() {
     let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"prompt": format!("@{name} from my desk REPLYTAG:desk20"), "sender_id": "user", "channel_id": general}))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     common::wait_reply(&env, &general, "answer desk20").await;
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // No fixed sleep (N-T4): a later Telegram message's answer reaching Telegram means the bridge
+    // has already dealt with the desk reply before it. (The fake bot may answer an earlier tag it
+    // sees in its prompt, so count bot answers instead of matching this one's tag.)
+    let answers = |tg: &mock_telegram::MockTelegram| tg.sent(&bot).iter().filter(|c| c.text().contains(" · #general\nanswer ")).count();
+    let before = answers(tg);
+    tg.text(&bot, &PERSON, &format!("@{name} once more REPLYTAG:tg20b"));
+    wait_for("the answer to a later Telegram message", || {
+        let now = answers(tg);
+        async move { now > before }
+    })
+    .await;
     assert!(tg.sent(&bot).iter().all(|c| !c.text().contains("answer desk20")), "A19: only replies to Telegram messages go there");
 }
 

@@ -198,6 +198,7 @@ impl Database {
     /// A new token was accepted: the bot is (re)set, any pairing and the approvals switch end.
     pub async fn telegram_save_bot(&self, space: &str, bot_id: i64, username: &str, name: &str) -> Result<(), DbError> {
         let now = crate::clock::now();
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO telegram_links (space_id, state, bot_id, bot_username, bot_name, kinds, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -216,10 +217,13 @@ impl Database {
         .bind(DEFAULT_KINDS)
         .bind(now)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         // A new bot can't edit the old one's messages, and none of them may allow anything now
-        sqlx::query("UPDATE telegram_asks SET state = 'closed', allow = 0 WHERE space_id = ?").bind(space).execute(&self.pool).await?;
+        sqlx::query("UPDATE telegram_asks SET state = 'closed', allow = 0 WHERE space_id = ?").bind(space).execute(&mut *tx).await?;
+        // Update ids are per bot: the new bot's start again, and must not look already handled (N-T1)
+        sqlx::query("DELETE FROM telegram_updates WHERE space_id = ?").bind(space).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 

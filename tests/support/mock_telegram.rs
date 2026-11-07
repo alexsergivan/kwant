@@ -341,9 +341,9 @@ impl MockTelegram {
         self.inner.strays.lock().unwrap().clone()
     }
 
-    /// Waits (up to 30 s) for a call of `method` matching `pick`.
+    /// Waits (up to 60 s, so a busy runner doesn't flake) for a call of `method` matching `pick`.
     pub async fn wait_call(&self, bot: &Bot, method: &str, pick: impl Fn(&Call) -> bool) -> Call {
-        for _ in 0..300 {
+        for _ in 0..600 {
             if let Some(c) = self.calls_of(bot, method).into_iter().find(|c| pick(c)) {
                 return c;
             }
@@ -360,9 +360,9 @@ impl MockTelegram {
         self.wait_call(bot, "editMessageText", pick).await
     }
 
-    /// Waits until kwant has fetched updates past `update_id` (it has handled it).
+    /// Waits (up to 60 s) until kwant has fetched updates past `update_id` (it has handled it).
     pub async fn wait_handled(&self, bot: &Bot, update_id: i64) {
-        for _ in 0..300 {
+        for _ in 0..1200 {
             if self.calls_of(bot, "getUpdates").iter().any(|c| c.body["offset"].as_i64().unwrap_or(0) > update_id) {
                 return;
             }

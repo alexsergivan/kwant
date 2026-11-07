@@ -127,8 +127,21 @@ pub fn link_only_reason(details: &Value) -> Option<&'static str> {
         ApprovalKind::McpTool if details["server"].as_str().is_none_or(|s| s.eq_ignore_ascii_case(crate::mcp::SELF_SERVER_NAME)) => {
             Some("This is one of kwant's own tools.")
         }
+        // A phone shows only the wrapper's name, not the actions or code it runs (Ada, N-T2)
+        ApprovalKind::McpTool if runs_other_actions(details["tool"].as_str().unwrap_or_default()) => {
+            Some("This step runs other actions inside it.")
+        }
         _ => None,
     }
+}
+
+/// Parts of an MCP tool name (any case) that mark a tool running other actions or code inside it,
+/// such as COMPOSIO_MULTI_EXECUTE_TOOL, COMPOSIO_REMOTE_WORKBENCH and COMPOSIO_REMOTE_BASH_TOOL.
+pub const RUNS_OTHER_ACTIONS: &[&str] = &["MULTI_EXECUTE", "WORKBENCH", "BASH", "SHELL"];
+
+fn runs_other_actions(tool: &str) -> bool {
+    let tool = tool.to_ascii_uppercase();
+    RUNS_OTHER_ACTIONS.iter().any(|part| tool.contains(part))
 }
 
 /// [`link_only_reason`], plus the space's production marks: a call through a connection the person
@@ -613,5 +626,23 @@ mod tests {
             assert_eq!(link_only_reason(&d), Some(why), "{d}");
             assert!(!approvable(&d), "{d}");
         }
+    }
+
+    // Ada's N-T2: a tool that runs other actions or code inside it is link-only; a phone shows
+    // only the wrapper's name
+    #[test]
+    fn tools_that_run_other_actions_inside_them_are_link_only() {
+        for tool in ["COMPOSIO_MULTI_EXECUTE_TOOL", "COMPOSIO_REMOTE_WORKBENCH", "COMPOSIO_REMOTE_BASH_TOOL", "composio_multi_execute_tool", "run_shell"] {
+            let d = json!({"source": "mcp", "server": "composio", "tool": tool});
+            assert_eq!(link_only_reason(&d), Some("This step runs other actions inside it."), "{d}");
+            assert!(!approvable(&d), "{d}");
+        }
+        // kwant's own tools keep their earlier reason
+        let own = json!({"source": "mcp", "server": "kwnt_tools", "tool": "shell_thing"});
+        assert_eq!(link_only_reason(&own), Some("This is one of kwant's own tools."));
+        // An ordinary tool still gets Allow once
+        let send = json!({"source": "mcp", "server": "composio", "tool": "GMAIL_SEND_EMAIL"});
+        assert_eq!(link_only_reason(&send), None);
+        assert!(approvable(&send));
     }
 }
