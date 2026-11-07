@@ -74,6 +74,12 @@ export interface BrowserTakeoverStageProps {
   notice?: { tone: 'warn' | 'success'; text: string } | null;
   onHandBack: () => void;
   onRetryControl: () => void;
+  /** Another action before Hand back, such as Show it once's Record steps. */
+  extraAction?: React.ReactNode;
+  /** Hand back steps aside (ghost) while something else holds the bar, such as a recording. */
+  handBackQuiet?: boolean;
+  /** A strip under the top bar, such as the Recording bar. */
+  belowBar?: React.ReactNode;
 }
 
 const BUTTON_BIT: Record<number, number> = { 0: 1, 1: 4, 2: 2 };
@@ -83,7 +89,7 @@ const BUTTON_BIT: Record<number, number> = { 0: 1, 1: 4, 2: 2 };
  * drawn 1:1 with the page resized to match. Mouse, wheel and keyboard go to the page as they are;
  * the top bar keeps the address, history and "Hand back".
  */
-export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botName, pageUrl, pageTitle, stream, image, step, avatarRole, onNavigate, notice, onHandBack, onRetryControl }) => {
+export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botName, pageUrl, pageTitle, stream, image, step, avatarRole, onNavigate, notice, onHandBack, onRetryControl, extraAction, handBackQuiet = false, belowBar }) => {
   const { send, controlling, frame, acknowledgeFrame } = stream;
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -557,7 +563,14 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
 
   const actions = (
     <div className="shrink-0 ml-auto flex items-center gap-2" data-stage-actions>
-      <button ref={actionRef} type="button" onClick={onHandBack} className={`${actionButton} ${step ? GHOST_BUTTON : PRIMARY_BUTTON}`} data-primary={!step || undefined}>
+      {extraAction}
+      <button
+        ref={actionRef}
+        type="button"
+        onClick={onHandBack}
+        className={`${actionButton} ${step || handBackQuiet ? GHOST_BUTTON : PRIMARY_BUTTON}`}
+        data-primary={(!step && !handBackQuiet) || undefined}
+      >
         <Hand size={15} aria-hidden="true" /> Hand back
       </button>
       {step && (
@@ -617,6 +630,7 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
           )}
         </div>
 
+        {belowBar}
         {notice && !error && !stepError && (
           <div
             role="status"

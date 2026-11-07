@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { browserStreamUrl } from './browserViewport';
 import { PageDialog, SelectRequest, Size, parseDialog, parseSelect, streamErrorText } from './browserInput';
+import { onRecordingFrame } from './showOnce';
 
 export interface BrowserFrame {
   id: number;
@@ -104,6 +105,9 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
             setBusy(pending.current.size > 0);
             if (typeof message.editable === 'boolean') setTapFocus({ seq: message.id, editable: message.editable });
             break;
+          default:
+            // Show it once: step, near, stopped and state frames (api.md §5)
+            if (typeof message.type === 'string' && message.type.startsWith('skill.recording.')) onRecordingFrame(message);
         }
       };
       ws.onclose = () => {

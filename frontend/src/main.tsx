@@ -13,6 +13,7 @@ import './styles/ideaShell.css';
 import './styles/devStatus.css';
 import './styles/tickets.css';
 import './styles/telegram.css';
+import './styles/showOnce.css';
 
 registerServiceWorker();
 captureInstallPrompt();

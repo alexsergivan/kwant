@@ -291,6 +291,12 @@ export interface BrowserControlOverlayProps {
   resizeIgnored?: boolean;
   /** Gives the page its own size back without handing back (the overlay closes or the app goes to the background). */
   restoreSize?: () => void;
+  /** Hand back is taken by something else for now (Show it once stops the recording): true = handled. */
+  interceptHandBack?: () => boolean;
+  /** Hand back steps aside (ghost) while a recording holds the bar. */
+  handBackQuiet?: boolean;
+  /** A strip under the top bar, such as the Recording bar. */
+  belowBar?: React.ReactNode;
 }
 
 /**
@@ -316,6 +322,9 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
   controlling = false,
   resizeIgnored = false,
   restoreSize,
+  interceptHandBack,
+  handBackQuiet = false,
+  belowBar,
 }) => {
   const keys = useRef<HTMLInputElement>(null);
   const sendRef = useRef(send);
@@ -371,7 +380,10 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
       letGo();
     };
   }, [letGo]);
+  const interceptRef = useRef(interceptHandBack);
+  interceptRef.current = interceptHandBack;
   const handBack = useCallback(() => {
+    if (interceptRef.current?.()) return;
     // release_control puts the size back on the server
     sized.current = false;
     lastResize.current = '';
@@ -478,9 +490,9 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
               haptic('tap');
               handBack();
             }}
-            data-primary={step ? undefined : true}
+            data-primary={step || handBackQuiet ? undefined : true}
             className={`shrink-0 inline-flex items-center gap-1.5 h-11 px-3 rounded-[10px] text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 ${
-              step ? 'bg-[rgb(44_37_82/0.8)] border border-[#3f3868] text-[#ecebfa] hover:bg-[#2c2552]' : 'bg-[#6c58e0] hover:bg-[#5845bd] text-white'
+              step || handBackQuiet ? 'bg-[rgb(44_37_82/0.8)] border border-[#3f3868] text-[#ecebfa] hover:bg-[#2c2552]' : 'bg-[#6c58e0] hover:bg-[#5845bd] text-white'
             }`}
           >
             <Hand size={15} aria-hidden="true" /> Hand back
@@ -519,6 +531,7 @@ export const BrowserControlOverlay: React.FC<BrowserControlOverlayProps> = ({
             </button>
           </div>
         ) : null}
+        {belowBar}
       </div>
 
       <ZoomStage

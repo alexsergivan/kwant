@@ -27,6 +27,8 @@ import { BrowserTakeoverStage } from './BrowserTakeoverStage';
 import { HumanStep, HumanStepKind } from '../humanSteps';
 import type { SwitchEntry } from '../watchLive';
 import { BrowserSwitcherMenu, BrowserSwitcherRow } from './WatchLive';
+import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
+import { RecordStepsButton, RecordingStrip } from './ShowOnce';
 
 const PHONE_QUERY = '(max-width: 639px)';
 
@@ -94,6 +96,8 @@ export interface VirtualMachinePaneProps {
   switcher?: { entries: SwitchEntry[]; current: string; onPick: (owner: string) => void } | null;
   /** Answers that step as done; resolves to an error message on failure. */
   onStepDone?: (id: string) => Promise<string | void> | void;
+  /** Show it once: the single bot this browser belongs to (not set for teams and channels). */
+  showOnceBot?: { id: string; name: string };
 }
 
 type PaneTab = 'browser' | 'terminal' | 'vault';
@@ -134,6 +138,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   humanStep = null,
   onStepDone,
   switcher,
+  showOnceBot,
 }) => {
   const [activeTab, setActiveTab] = useState<PaneTab>(() => chosenPaneTab(teamId));
   useEffect(() => rememberPaneTab(teamId, activeTab), [teamId, activeTab]);
@@ -233,6 +238,49 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
     setWantsControl(false);
     if (isControlMode) send({ action: 'release_control' });
   };
+
+  // Show it once (design §S). The recording that runs on this browser, if any
+  const so = useShowOnce();
+  const soHere = so && teamId && so.stage === teamId ? so : null;
+  const recording = soHere?.phase === 'recording';
+  // Started from the Skills tab: take over first (Start needs it), then Start once control holds
+  const soTaking = soHere?.phase === 'taking';
+  useEffect(() => {
+    if (!soTaking) return;
+    if (controlling) {
+      void showOnce.startNow();
+      return;
+    }
+    setActiveTab('browser');
+    setFullScreen(true);
+    setWantsControl(true);
+  }, [soTaking, controlling]);
+  // S-B5: a recording left open (reload, closed tab, restart) comes back when Take over opens
+  useEffect(() => {
+    if (controlling && showOnceBot && teamId && !showOnceStore.get()) void showOnce.resumeOpen(showOnceBot.id, showOnceBot.name, teamId);
+  }, [controlling, showOnceBot, teamId]);
+  // A27: the review closed after Hand back (or Writing's Close): now the browser goes back
+  const handBackRef = useRef<() => void>(() => {});
+  handBackRef.current = handBack;
+  useEffect(() => showOnceStore.onEnd(({ stage, handBack: hb }) => hb && stage === teamId && handBackRef.current()), [teamId]);
+  // Hand back while recording stops first and opens the review; it hands back when that closes
+  const handBackOrStop = () => {
+    if (recording) {
+      void showOnce.stop(true);
+      return;
+    }
+    handBack();
+  };
+  const recordSteps =
+    showOnceBot && teamId && controlling && !soHere ? (
+      <RecordStepsButton
+        className="shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-[10px] text-[13px] font-semibold border border-[#3f3868] bg-[rgb(44_37_82/0.8)] text-[#ecebfa] hover:bg-[#2c2552] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#b8adff]"
+        onClick={() => {
+          playSfx('click');
+          void showOnce.record(showOnceBot.id, showOnceBot.name, teamId);
+        }}
+      />
+    ) : null;
 
   // Take the browser now (a click on the watch view, Take over, or Try again)
   const takeOver = useCallback(() => {
@@ -732,6 +780,13 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           captcha={captchaOpen ? { target: captchaStep?.target ?? null } : null}
           solved={solvedNote}
           onHandBack={handBack}
+          interceptHandBack={() => {
+            if (!recording) return false;
+            void showOnce.stop(true);
+            return true;
+          }}
+          handBackQuiet={recording}
+          belowBar={teamId ? <RecordingStrip stage={teamId} phone /> : null}
           stream={stream}
           step={stepForStage}
           controlling={stream.controlling}
@@ -756,8 +811,11 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 : null
           }
           onNavigate={onNavigate}
-          onHandBack={handBack}
+          onHandBack={handBackOrStop}
           onRetryControl={takeOver}
+          extraAction={recordSteps}
+          handBackQuiet={recording}
+          belowBar={teamId ? <RecordingStrip stage={teamId} /> : null}
         />
       )}
 
