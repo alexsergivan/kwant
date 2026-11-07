@@ -21,6 +21,7 @@ import { Cards, validCards } from './Cards';
 import { Findings, validFindings } from './Findings';
 import { Verification, validVerification } from './Verification';
 import { Files, validFiles } from './Files';
+import { Recipe, validRecipe } from './Recipe';
 
 /** One cell or list item of the reply as react-markdown drew it, plus its plain text for matching. */
 export interface ReplyPart {
@@ -31,7 +32,9 @@ export interface ReplyPart {
 /** The reply's own table or list that a block replaces in place. */
 export type ReplySource =
   | { kind: 'table'; head: ReplyPart[]; body: ReplyPart[][] }
-  | { kind: 'list'; items: ReplyPart[]; start: number; ordered: boolean; task: boolean };
+  | { kind: 'list'; items: ReplyPart[]; start: number; ordered: boolean; task: boolean }
+  /** A stretch of the reply (a recipe, from its dish heading through its last list), as written. */
+  | { kind: 'section'; markdown: string };
 
 export interface RendererProps<B extends SmartBlock = SmartBlock> {
   block: B;
@@ -79,6 +82,7 @@ export const REGISTRY: { [T in BlockType]?: Renderer<BlockOf<T>> } = {
   findings: { validate: validFindings, Component: Findings },
   verification: { validate: validVerification, Component: Verification },
   files: { validate: validFiles, Component: Files },
+  recipe: { validate: validRecipe, Component: Recipe },
 };
 
 const count = (block: SmartBlock): number | null => {
@@ -88,7 +92,7 @@ const count = (block: SmartBlock): number | null => {
 
 /** Same number of rows (table) or items (list) as the block. */
 export const defaultMatches = (block: SmartBlock, reply: ReplySource) =>
-  reply.kind === 'table' ? reply.body.length === count(block) : reply.items.length === count(block);
+  reply.kind === 'section' ? true : reply.kind === 'table' ? reply.body.length === count(block) : reply.items.length === count(block);
 
 /** The checked block and its renderer, or null: then the reply shows its markdown. */
 export function resolveBlock(raw: unknown, reply: ReplySource | null): { block: SmartBlock; renderer: Renderer<SmartBlock> } | null {
@@ -99,6 +103,9 @@ export function resolveBlock(raw: unknown, reply: ReplySource | null): { block: 
   if (!renderer || !block) return null;
   const src = block.source.kind;
   if (!reply) return src === 'slot' ? { block, renderer } : null;
+  // The section was found in the reply and cut out for this block; it stands for that stretch.
+  if ((src === 'markdown_section') !== (reply.kind === 'section')) return null;
+  if (reply.kind === 'section') return { block, renderer };
   if ((src === 'markdown_table') !== (reply.kind === 'table') || src === 'slot') return null;
   return (renderer.matches ?? defaultMatches)(block, reply) ? { block, renderer } : null;
 }

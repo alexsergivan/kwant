@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Copy, Check, Terminal } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
-import { HastNode, blockAt, hastText, rehypeSmartIndex, resultBlocks } from '../smartResults';
+import { HastNode, blockAt, hastText, rehypeSmartIndex, rehypeSmartSection, resultBlocks, sectionBlock } from '../smartResults';
 import type { ReplyPart, ReplySource } from './results/registry';
 import { SmartResult } from './results/SmartResult';
 import { ReplyText } from './results/ReplyText';
@@ -164,6 +164,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   // Never while streaming: the block appears when the final message arrives.
   const smart = !isStreaming && !!messageId && resultBlocks(results).length > 0;
   const slot = smart ? blockAt(results, { kind: 'slot' }) : null;
+  // A recipe stands for a stretch of the reply: rehypeSmartSection cuts it out and leaves a placeholder.
+  const section = smart ? sectionBlock(results) : null;
 
   const listView = (node: HastNode | undefined, children: React.ReactNode, plain: React.ReactElement) => {
     if (!smart || !node || node.data?.smartTop !== true || typeof node.data.smartIndex !== 'number') return plain;
@@ -177,7 +179,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     <div className={`markdown-content text-sm leading-relaxed text-zinc-200 ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={smart ? [rehypeSmartIndex as never] : undefined}
+        rehypePlugins={smart ? [rehypeSmartIndex as never, ...(section ? [rehypeSmartSection(content, results) as never] : [])] : undefined}
         components={{
           // Pre element pass-through to let CodeBlock handle layout
           pre: ({ children }) => <>{children}</>,
@@ -206,6 +208,16 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               >
                 {children}
               </code>
+            );
+          },
+
+          // A stretch of the reply that one block stands for (a recipe). Its markdown is the fallback.
+          div: ({ node, children, ...props }) => {
+            const data = (node as HastNode | undefined)?.data;
+            if (!section || data?.smartSection !== true || typeof data.markdown !== 'string') return <div {...props}>{children}</div>;
+            const md = data.markdown;
+            return (
+              <SmartResult raw={section} reply={{ kind: 'section', markdown: md }} messageId={messageId as string} fallback={<MarkdownRenderer content={md} />} />
             );
           },
 
