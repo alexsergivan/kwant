@@ -1794,6 +1794,37 @@ mod tests {
     use super::*;
     use crate::db::models::{Kwant, Message};
 
+    // Plan decision 5: native .exe first, Claude's own install, then npm .cmd shims.
+    #[test]
+    fn windows_cli_candidates_prefer_native_exe_then_npm_shims() {
+        let home = std::path::PathBuf::from("C:/Users/someone");
+        let roaming = home.join("AppData").join("Roaming");
+        let on_path = vec!["C:/npm/claude.cmd".to_string(), "C:/bin/claude.EXE".to_string(), "C:/x/claude.ps1".to_string()];
+        let got = windows_cli_candidates("claude", &on_path, Some(home.clone()), Some(roaming.clone()));
+        assert_eq!(
+            got,
+            vec![
+                "C:/bin/claude.EXE".to_string(),
+                home.join(".local").join("bin").join("claude.exe").display().to_string(),
+                "C:/npm/claude.cmd".to_string(),
+                roaming.join("npm").join("claude.cmd").display().to_string(),
+            ]
+        );
+        assert!(windows_cli_candidates("codex", &[], None, None).is_empty());
+    }
+
+    #[test]
+    fn npm_shim_script_skips_the_node_exe_it_also_names() {
+        let shim = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\n\
+IF EXIST \"%dp0%\\node.exe\" (\r\n  SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\n\r\n\
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js\" %*\r\n";
+        assert_eq!(shim_script(shim).as_deref(), Some("node_modules\\@anthropic-ai\\claude-code\\cli.js"));
+        let codex = "\"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.MJS\" %*";
+        assert_eq!(shim_script(codex).as_deref(), Some("node_modules\\@openai\\codex\\bin\\codex.MJS"));
+        assert_eq!(shim_script("@echo off\r\nC:\\tools\\thing.exe %*"), None);
+        assert_eq!(shim_script("\"%dp0%\\node.exe\" \"%dp0%\\unterminated.js"), None);
+    }
+
     #[test]
     fn claude_stream_reports_usage_so_far() {
         let mut stream = ClaudeStream::default();

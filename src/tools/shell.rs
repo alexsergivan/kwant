@@ -145,3 +145,47 @@ fn is_wsl_bash(path: &Path) -> bool {
     let p = path.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
     ["\\windows\\system32\\", "\\windows\\syswow64\\", "\\windows\\sysnative\\"].iter().any(|d| p.contains(d))
 }
+
+#[cfg(test)]
+mod windows_path_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    // Forward slashes so the same paths split the same way on Linux, Mac and Windows.
+    #[test]
+    fn git_bash_comes_from_git_s_own_folder_first_and_never_from_wsl() {
+        let got = git_bash_candidates(
+            Some("C:/Program Files/Git/mingw64/libexec/git-core"),
+            Some(PathBuf::from("C:/Program Files")),
+            Some(PathBuf::from("C:/Users/someone/AppData/Local")),
+        );
+        let git = |root: &str| Path::new(root).join("bin").join("bash.exe");
+        assert_eq!(
+            got,
+            vec![
+                git("C:/Program Files/Git"),
+                Path::new("C:/Program Files").join("Git").join("bin").join("bash.exe"),
+                Path::new("C:/Users/someone/AppData/Local").join("Programs").join("Git").join("bin").join("bash.exe"),
+            ]
+        );
+        assert!(git_bash_candidates(None, None, None).is_empty());
+        assert!(git_bash_candidates(Some(""), None, None).is_empty());
+        // A git whose folder is in System32 would point at WSL's bash: dropped
+        assert!(git_bash_candidates(Some("C:/Windows/System32/a/b/c"), None, None).is_empty());
+    }
+
+    #[test]
+    fn wsl_s_launcher_is_not_git_bash() {
+        for wsl in ["C:\\Windows\\System32\\bash.exe", "c:/windows/sysnative/bash.exe", "C:\\WINDOWS\\SysWOW64\\bash.exe"] {
+            assert!(is_wsl_bash(Path::new(wsl)), "{wsl}");
+        }
+        for git in ["C:\\Program Files\\Git\\bin\\bash.exe", "D:/tools/Git/bin/bash.exe"] {
+            assert!(!is_wsl_bash(Path::new(git)), "{git}");
+        }
+    }
+
+    #[test]
+    fn missing_git_says_how_to_install_it() {
+        assert!(GIT_MISSING.contains("winget install --id Git.Git -e"));
+    }
+}
