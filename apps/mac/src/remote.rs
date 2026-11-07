@@ -197,6 +197,40 @@ pub fn pick_token<'a>(
     })
 }
 
+/// How long Remove waits for the server to sign this app out.
+pub const SIGN_OUT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `DELETE {origin}/api/auth/session` with the server's own sign-in cookie: the server revokes
+/// that session (and drops its push subscription), so the app leaves Signed-in devices.
+pub fn sign_out_request(
+    client: &reqwest::Client,
+    origin: &Origin,
+    token: &Token,
+    limit: Duration,
+) -> reqwest::RequestBuilder {
+    client
+        .delete(origin.page("/api/auth/session"))
+        .header(reqwest::header::COOKIE, format!("{COOKIE}={}", token.0))
+        .timeout(limit)
+}
+
+/// Signs this app out of a server. `true` only for a 2xx answer; no token, an error, another
+/// status or the time limit is `false`. Never logs the token or the server's reply.
+pub async fn sign_out(client: &reqwest::Client, origin: &Origin, token: Option<&Token>) -> bool {
+    sign_out_within(client, origin, token, SIGN_OUT_TIMEOUT).await
+}
+
+async fn sign_out_within(client: &reqwest::Client, origin: &Origin, token: Option<&Token>, limit: Duration) -> bool {
+    let Some(token) = token else { return false };
+    match sign_out_request(client, origin, token, limit).send().await {
+        Ok(response) => response.status().is_success(),
+        Err(e) => {
+            tracing::info!(host = %origin.host(), kind = failure(&e, origin).code(), "couldn't sign out of a server");
+            false
+        }
+    }
+}
+
 /// What one authenticated GET gave.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Answer {
@@ -347,4 +381,81 @@ mod tests {
         let v6 = origin("http://[::1]:2222");
         assert!(pick_token(&v6, vec![("kwnt_token", "kd1.TESTONLY", Some("::1"), Some("/"))]).is_some());
     }
+
+    #[test]
+    fn the_sign_out_request_carries_only_the_server_s_cookie() {
+        let o = origin("https://kwant.example.com");
+        let t = Token("kd1.TESTONLY".into());
+        let req = sign_out_request(&client(), &o, &t, SIGN_OUT_TIMEOUT).build().unwrap();
+        assert_eq!(req.method(), reqwest::Method::DELETE);
+        assert_eq!(req.url().as_str(), "https://kwant.example.com/api/auth/session");
+        let cookies: Vec<_> = req.headers().get_all(reqwest::header::COOKIE).iter().collect();
+        assert_eq!(cookies, vec!["kwnt_token=kd1.TESTONLY"]);
+        assert_eq!(req.timeout(), Some(&Duration::from_secs(5)));
+        assert!(req.body().is_none());
+    }
+
+    /// A one-shot server on 127.0.0.1 that answers `status` (or never answers) and hands back
+    /// the request it read.
+    async fn one_answer(status: Option<&'static str>) -> (Origin, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let mut got = Vec::new();
+            while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = socket.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                got.extend_from_slice(&buf[..n]);
+            }
+            match status {
+                Some(status) => {
+                    let reply = format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                    socket.write_all(reply.as_bytes()).await.unwrap();
+                }
+                None => tokio::time::sleep(Duration::from_secs(3)).await,
+            }
+            String::from_utf8_lossy(&got).into_owned()
+        });
+        (origin(&format!("http://127.0.0.1:{port}")), seen)
+    }
+
+    #[tokio::test]
+    async fn a_2xx_answer_signs_out() {
+        for status in ["204 No Content", "200 OK"] {
+            let (o, seen) = one_answer(Some(status)).await;
+            let t = Token("kd1.TESTONLY".into());
+            assert!(sign_out(&client(), &o, Some(&t)).await, "{status}");
+            let request = seen.await.unwrap().to_ascii_lowercase();
+            assert!(request.starts_with("delete /api/auth/session http/1.1\r\n"), "{request}");
+            assert!(request.contains("\r\ncookie: kwnt_token=kd1.testonly\r\n"), "{request}");
+        }
+    }
+
+    #[tokio::test]
+    async fn another_answer_a_timeout_or_no_token_is_not_signed_out() {
+        let t = Token("kd1.TESTONLY".into());
+        for status in ["401 Unauthorized", "302 Found", "404 Not Found", "500 Internal Server Error"] {
+            let (o, seen) = one_answer(Some(status)).await;
+            assert!(!sign_out(&client(), &o, Some(&t)).await, "{status}");
+            seen.await.unwrap();
+        }
+        let (o, seen) = one_answer(None).await;
+        let started = std::time::Instant::now();
+        assert!(!sign_out_within(&client(), &o, Some(&t), Duration::from_millis(300)).await);
+        assert!(started.elapsed() < Duration::from_secs(2), "the time limit holds");
+        seen.abort();
+        // no cookie: nothing is sent
+        let (o, seen) = one_answer(Some("204 No Content")).await;
+        assert!(!sign_out(&client(), &o, None).await);
+        seen.abort();
+        // nothing listening
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert!(!sign_out(&client(), &origin(&format!("http://127.0.0.1:{port}")), Some(&t)).await);
+    }
+
 }

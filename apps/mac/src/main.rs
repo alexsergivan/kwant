@@ -68,9 +68,97 @@ const LOG_FILE: &str = "mac-app.log";
 #[cfg(not(target_os = "macos"))]
 const LOG_FILE: &str = "desktop-app.log";
 
-/// The second half of the remove confirm (Ada's words); the first is its title.
-const REMOVE_DETAIL: &str =
-    "To add it back you'll need a new sign-in link. It stays in that server's Signed-in devices until you remove it there.";
+/// The words of the one Remove confirm (Mira's design.md §4.1), for the tray and the pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoveWords {
+    title: String,
+    message: String,
+    /// The confirm already says the server can't be reached (so no second message after).
+    says_unreachable: bool,
+}
+
+fn remove_words(host: &str, unreachable: bool, last_place: bool, mac: bool) -> RemoveWords {
+    let mut message = format!(
+        "Its window closes and this app signs out of it. The bots on {host} keep running.\n\n\
+         To use it here again, choose Add a server… and sign in."
+    );
+    if unreachable {
+        message.push_str(
+            "\n\nIt can't be reached right now, so it will still list this app under Settings → \
+             Signed-in devices. You can remove it there later.",
+        );
+    }
+    if last_place {
+        let here = if mac { "this Mac" } else { "this computer" };
+        message.push_str(&format!(
+            "\n\n“Run kwant on {here}” turns back on, so the app still has a place to open."
+        ));
+    }
+    RemoveWords { title: format!("Remove {host}?"), message, says_unreachable: unreachable }
+}
+
+/// After a Remove the server didn't confirm, when the confirm didn't already say so.
+fn removed_words(host: &str) -> (String, &'static str) {
+    (
+        format!("Removed {host}"),
+        "It couldn't be reached, so it still lists this app under Settings → Signed-in devices. \
+         You can remove it there later.",
+    )
+}
+
+/// Shows the native dialogs. Tests answer with a fixed choice and keep what was said.
+enum Asker {
+    Native,
+    #[cfg(test)]
+    Fixed { answer: bool, said: Mutex<Vec<(String, String)>> },
+}
+
+impl Asker {
+    /// Remove / Cancel. Blocks: never on the main thread.
+    fn confirm<R: Runtime>(&self, app: &AppHandle<R>, title: &str, message: &str) -> bool {
+        match self {
+            Asker::Native => {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                app.dialog()
+                    .message(message)
+                    .title(title)
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom("Remove".into(), "Cancel".into()))
+                    .blocking_show()
+            }
+            #[cfg(test)]
+            Asker::Fixed { answer, said } => {
+                said.lock().unwrap().push((title.into(), message.into()));
+                *answer
+            }
+        }
+    }
+
+    /// One OK. Blocks: never on the main thread.
+    fn tell<R: Runtime>(&self, app: &AppHandle<R>, title: &str, message: &str) {
+        match self {
+            Asker::Native => {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                app.dialog()
+                    .message(message)
+                    .title(title)
+                    .kind(MessageDialogKind::Info)
+                    .buttons(MessageDialogButtons::OkCustom("OK".into()))
+                    .blocking_show();
+            }
+            #[cfg(test)]
+            Asker::Fixed { said, .. } => said.lock().unwrap().push((title.into(), message.into())),
+        }
+    }
+}
+
+/// What one Remove did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Removed {
+    cancelled: bool,
+    removed: bool,
+    revoked: bool,
+}
 
 /// The running server, when this app started one (not when it attached to another kwant).
 struct Server {
@@ -138,6 +226,8 @@ struct Shared {
     /// This app started kwant here at some point (it then offers its own updates).
     started_kwant: AtomicBool,
     reach: Mutex<HashMap<String, Reach>>,
+    /// Servers the menu's last poll couldn't reach (the row says Can't reach it).
+    unreachable: Mutex<std::collections::HashSet<String>>,
     /// The place window that had the keyboard last (the Dock click shows it).
     last_focused: Mutex<Option<String>>,
     /// Wakes the menu's poll after a change.
@@ -155,6 +245,7 @@ impl Shared {
             stopping: Mutex::new(None),
             started_kwant: AtomicBool::new(false),
             reach: Mutex::new(HashMap::new()),
+            unreachable: Mutex::new(Default::default()),
             last_focused: Mutex::new(None),
             wake: Mutex::new(None),
         }
@@ -208,6 +299,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(Shared::new(data_dir.clone(), config, places))
         .manage(Nudges { data_dir, show: AtomicBool::new(show) })
+        .manage(Asker::Native)
         .invoke_handler(tauri::generate_handler![
             connect::places_state,
             connect::check_server,
@@ -889,25 +981,56 @@ fn cookie_window<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Option<Webv
         .or_else(|| app.webview_windows().into_values().next())
 }
 
-/// Asks before removing a server (the native dialog), then removes it.
+/// The tray's Remove: the one confirm, off the main thread.
 fn confirm_remove(app: &AppHandle, origin: &str) {
     let Some(origin) = current(app).servers.into_iter().find(|o| o.as_str() == origin) else {
         return;
     };
     let app = app.clone();
     std::thread::spawn(move || {
-        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-        let confirmed = app
-            .dialog()
-            .message(REMOVE_DETAIL)
-            .title(format!("Remove {} from this app?", origin.host()))
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom("Remove".into(), "Cancel".into()))
-            .blocking_show();
-        if confirmed {
-            remove_place(&app, &origin);
-        }
+        confirm_and_remove(&app, &origin);
     });
+}
+
+/// The server's row says it can't be reached (its window's check or the menu's last poll).
+fn unreachable_now<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
+    let shared = app.state::<Shared>();
+    let by_window = shared.reach.lock().unwrap().get(&origin.as_str()) == Some(&Reach::Unreachable);
+    by_window || shared.unreachable.lock().unwrap().contains(&Place::Server(origin.clone()).key())
+}
+
+/// Every Remove (tray or page): the native confirm, then the server sign-out, then the remove;
+/// a sign-out the server didn't confirm is said once. Blocks: never on the main thread or on
+/// an async task (it waits for the sign-out).
+fn confirm_and_remove<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> Removed {
+    let places = current(app);
+    if !places.servers.contains(origin) {
+        return Removed::default();
+    }
+    let last_place = places.servers.len() == 1 && !places.this_mac;
+    let host = origin.host();
+    let words = remove_words(&host, unreachable_now(app, origin), last_place, cfg!(target_os = "macos"));
+    let asker = app.state::<Asker>();
+    if !asker.confirm(app, &words.title, &words.message) {
+        return Removed { cancelled: true, ..Removed::default() };
+    }
+    let revoked = tauri::async_runtime::block_on(sign_out_of(app, origin));
+    let removed = remove_place(app, origin);
+    if removed && !revoked && !words.says_unreachable {
+        let (title, message) = removed_words(&host);
+        asker.tell(app, &title, message);
+    }
+    Removed { cancelled: false, removed, revoked }
+}
+
+/// Signs this app out of a server with the cookie it keeps for it (`DELETE /api/auth/session`).
+/// `false` for no cookie, no answer or an answer that isn't 2xx; never blocks a remove.
+/// Not on the main thread (cookies are read there).
+async fn sign_out_of<R: Runtime>(app: &AppHandle<R>, origin: &Origin) -> bool {
+    let token = read_token(app, origin);
+    let revoked = remote::sign_out(&remote::client(), origin, token.as_ref()).await;
+    tracing::info!(host = %origin.host(), revoked, "signed this app out of a server");
+    revoked
 }
 
 /// One item of the tray menu, kept to change its text or tick in place.
@@ -1162,6 +1285,11 @@ fn build_tray(handle: &AppHandle) -> tauri::Result<()> {
                     menu::Status::Connecting
                 })
             };
+            *shared.unreachable.lock().unwrap() = all
+                .iter()
+                .filter(|p| status_of(p) == menu::Status::Unreachable)
+                .map(Place::key)
+                .collect();
             let show = app.state::<Nudges>().show.load(Ordering::Relaxed);
             let local_line = match (status_of(&Place::ThisMac), last.get(places::THIS_MAC), port) {
                 (menu::Status::Waiting(_), Some(w), Some(port)) => nudge::status_line(w, port).0,
@@ -1398,6 +1526,16 @@ mod tests {
         label: &str,
         places: Places,
     ) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>, PathBuf) {
+        app_answering(name, label, places, true)
+    }
+
+    /// The same, with the Remove confirm answered `answer`.
+    fn app_answering(
+        name: &str,
+        label: &str,
+        places: Places,
+        answer: bool,
+    ) -> (tauri::App<MockRuntime>, WebviewWindow<MockRuntime>, PathBuf) {
         let data_dir = std::env::temp_dir().join(format!("kwant-ipc-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&data_dir);
         let config = kwnt::Config { data_dir: data_dir.clone(), ..Default::default() };
@@ -1407,6 +1545,7 @@ mod tests {
         let app = mock_builder()
             .manage(shared)
             .manage(Nudges { data_dir: data_dir.clone(), show: AtomicBool::new(true) })
+            .manage(Asker::Fixed { answer, said: Mutex::new(Vec::new()) })
             .invoke_handler(tauri::generate_handler![
                 connect::places_state,
                 connect::check_server,
@@ -1566,6 +1705,8 @@ mod tests {
         let answer =
             invoke(&window, "remove_server", &page, serde_json::json!({ "origin": "https://kwant.example.com" })).unwrap();
         assert_eq!(answer["removed"], false);
+        assert_eq!(answer["revoked"], false);
+        assert!(said(&app).is_empty(), "no confirm for a server that isn't listed");
         assert_eq!(current(app.handle()), Places::default());
         nothing_saved(&data_dir);
         let _ = std::fs::remove_dir_all(data_dir);
@@ -1624,4 +1765,128 @@ mod tests {
         assert!(saved.this_mac);
         let _ = std::fs::remove_dir_all(data_dir);
     }
+
+    fn said(app: &tauri::App<MockRuntime>) -> Vec<(String, String)> {
+        match &*app.state::<Asker>() {
+            Asker::Fixed { said, .. } => said.lock().unwrap().clone(),
+            Asker::Native => unreachable!(),
+        }
+    }
+
+    const PLAIN: &str = "Its window closes and this app signs out of it. The bots on kwant.example.com keep \
+        running.\n\nTo use it here again, choose Add a server… and sign in.";
+    const UNREACHABLE: &str = "\n\nIt can't be reached right now, so it will still list this app under \
+        Settings → Signed-in devices. You can remove it there later.";
+
+    #[test]
+    fn the_remove_confirm_says_mira_s_words() {
+        let host = "kwant.example.com";
+        let plain = remove_words(host, false, false, true);
+        assert_eq!(plain.title, "Remove kwant.example.com?");
+        assert_eq!(plain.message, PLAIN);
+        assert!(!plain.says_unreachable);
+
+        let away = remove_words(host, true, false, true);
+        assert_eq!(away.title, "Remove kwant.example.com?");
+        assert_eq!(away.message, format!("{PLAIN}{UNREACHABLE}"));
+        assert!(away.says_unreachable);
+
+        let last = remove_words(host, false, true, true);
+        assert_eq!(
+            last.message,
+            format!("{PLAIN}\n\n“Run kwant on this Mac” turns back on, so the app still has a place to open.")
+        );
+
+        let linux = remove_words(host, false, true, false);
+        assert_eq!(
+            linux.message,
+            format!("{PLAIN}\n\n“Run kwant on this computer” turns back on, so the app still has a place to open.")
+        );
+        assert_eq!(remove_words(host, false, false, false), plain, "Linux words differ only for the last place");
+
+        let both = remove_words(host, true, true, true);
+        assert!(both.message.starts_with(&format!("{PLAIN}{UNREACHABLE}\n\n“Run kwant on this Mac”")));
+
+        assert_eq!(
+            removed_words(host),
+            (
+                "Removed kwant.example.com".to_string(),
+                "It couldn't be reached, so it still lists this app under Settings → Signed-in devices. \
+                 You can remove it there later."
+            )
+        );
+    }
+
+    /// The page's Remove this server… gets the native confirm too. No cookie here, so the
+    /// sign-out isn't confirmed and the one follow-up message says so.
+    #[test]
+    fn the_page_s_remove_asks_natively_then_says_it_wasn_t_signed_out() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, window, data_dir) = app_with("remove-page", MAIN, places);
+        let page = connect::bundled("index.html").to_string();
+        let answer = invoke(&window, "remove_server", &page, serde_json::json!({ "origin": origin.as_str() })).unwrap();
+        assert_eq!(answer, serde_json::json!({ "removed": true, "revoked": false, "cancelled": false }));
+        let said = said(&app);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert_eq!(said[0], ("Remove kwant.example.com?".to_string(), PLAIN.to_string()));
+        assert_eq!(said[1].0, "Removed kwant.example.com");
+        assert!(current(app.handle()).servers.is_empty());
+        assert!(Places::load(&data_dir).servers.is_empty());
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// Unreachable as the confirm opens: the confirm says so, and nothing more is said after.
+    #[test]
+    fn an_unreachable_server_is_said_once_in_the_confirm() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        places.set_this_mac(false);
+        let (app, window, data_dir) = app_with("remove-away", "connect", places);
+        set_reach(app.handle(), &origin, Reach::Unreachable);
+        let page = connect::bundled("index.html").to_string();
+        let answer = invoke(&window, "remove_server", &page, serde_json::json!({ "origin": origin.as_str() })).unwrap();
+        assert_eq!(answer["removed"], true);
+        assert_eq!(answer["revoked"], false);
+        let said = said(&app);
+        assert_eq!(said.len(), 1, "{said:?}");
+        let here = if cfg!(target_os = "macos") { "this Mac" } else { "this computer" };
+        assert_eq!(
+            said[0].1,
+            format!("{PLAIN}{UNREACHABLE}\n\n“Run kwant on {here}” turns back on, so the app still has a place to open.")
+        );
+        assert!(current(app.handle()).this_mac, "the last place brought This Mac back");
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// The menu's last poll couldn't reach it: that counts as unreachable too.
+    #[test]
+    fn a_failed_poll_counts_as_unreachable() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, _window, data_dir) = app_with("remove-polled", MAIN, places);
+        assert!(!unreachable_now(app.handle(), &origin));
+        app.state::<Shared>().unreachable.lock().unwrap().insert(Place::Server(origin.clone()).key());
+        assert!(unreachable_now(app.handle(), &origin));
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn cancel_keeps_the_server() {
+        let origin = target::parse_address("kwant.example.com").unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, window, data_dir) = app_answering("remove-cancel", MAIN, places.clone(), false);
+        let page = connect::bundled("index.html").to_string();
+        let answer = invoke(&window, "remove_server", &page, serde_json::json!({ "origin": origin.as_str() })).unwrap();
+        assert_eq!(answer, serde_json::json!({ "removed": false, "revoked": false, "cancelled": true }));
+        assert_eq!(said(&app).len(), 1, "only the confirm");
+        assert_eq!(current(app.handle()), places);
+        nothing_saved(&data_dir);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
 }
