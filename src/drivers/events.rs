@@ -295,6 +295,16 @@ pub enum RuntimeEvent {
     /// Dev mode was turned on or off in a space.
     #[serde(rename = "dev_mode", alias = "DevMode")]
     DevMode { space_id: String, on: bool },
+    /// A Telegram account paired with the space (next-077 §G). Never carries the bot token.
+    #[serde(rename = "telegram.paired", alias = "TelegramPaired")]
+    TelegramPaired { space_id: String, name: String, username: Option<String> },
+    /// The space's Telegram pairing code ran out before anyone used it.
+    #[serde(rename = "telegram.expired", alias = "TelegramExpired")]
+    TelegramExpired { space_id: String },
+    /// Something on the Telegram status changed (state, listening/offline, queue); refetch
+    /// `GET /api/connections/telegram`.
+    #[serde(rename = "telegram.status", alias = "TelegramStatus")]
+    TelegramStatus { space_id: String },
     /// An idea in the idea jar changed (dropped in, peeked at, picked, edited, shelved, deleted:
     /// `status` is then `deleted`); `GET /api/ideas/:id` has the rest.
     #[serde(rename = "idea_updated", alias = "IdeaUpdated")]

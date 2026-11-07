@@ -227,6 +227,7 @@ mod tests {
             answered_at: None,
             why_you: None,
             checked: None,
+            answered_via: None,
         }
     }
 

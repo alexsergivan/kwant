@@ -114,7 +114,11 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         E::RoutineRun { routine_id, .. } => vec![Owner::Routine(routine_id.clone())],
         E::TaskUpdated { task: v } | E::MissionUpdated { mission: v } => fields(v, &["space_id"], Owner::Space),
         E::GoalUpdated { space_id, .. } | E::IdeaUpdated { space_id, .. } => vec![Owner::Space(space_id.clone())],
-        E::DevCard { space_id, .. } | E::DevMode { space_id, .. } => vec![Owner::Space(space_id.clone())],
+        E::DevCard { space_id, .. }
+        | E::DevMode { space_id, .. }
+        | E::TelegramPaired { space_id, .. }
+        | E::TelegramExpired { space_id }
+        | E::TelegramStatus { space_id } => vec![Owner::Space(space_id.clone())],
         E::Notify { space_id, kwant_id, channel_id, .. } => {
             let mut out: Vec<Owner> = space_id.iter().cloned().map(Owner::Space).collect();
             out.extend(contexts([channel_id, &Some(kwant_id.clone())]));
@@ -301,6 +305,9 @@ mod tests {
             E::GoalUpdated { id: s("g"), status: s("met"), space_id: s("spc_x") },
             E::DevCard { space_id: s("spc_x"), id: s("dvc_1"), kind: s("landed"), status: s("ready") },
             E::DevMode { space_id: s("spc_x"), on: true },
+            E::TelegramPaired { space_id: s("spc_x"), name: s("x"), username: None },
+            E::TelegramExpired { space_id: s("spc_x") },
+            E::TelegramStatus { space_id: s("spc_x") },
             E::IdeaUpdated { id: s("i"), status: s("ready"), space_id: s("spc_x") },
             E::Notify {
                 kind: s("x"),
@@ -360,6 +367,9 @@ mod tests {
                 | E::GoalUpdated { .. }
                 | E::DevCard { .. }
                 | E::DevMode { .. }
+                | E::TelegramPaired { .. }
+                | E::TelegramExpired { .. }
+                | E::TelegramStatus { .. }
                 | E::IdeaUpdated { .. }
                 | E::Notify { .. } => {}
             }

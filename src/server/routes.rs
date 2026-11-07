@@ -701,6 +701,10 @@ pub struct SendChatPayload {
     /// `docs/reactions-and-replies.md`); checked by [`send_chat`].
     #[serde(default)]
     pub reply_to_message_id: Option<String>,
+    /// Where the person wrote it, when not in kwant ("telegram"); saved as the message's
+    /// `meta.source`. Set only by the server, never read from a request.
+    #[serde(skip)]
+    pub source: Option<String>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -3202,7 +3206,7 @@ async fn idea_from_chat(
     }
 }
 
-async fn send_chat_inner(
+pub(crate) async fn send_chat_inner(
     state: AppState,
     mut payload: SendChatPayload,
     from_person: bool,
@@ -3419,10 +3423,11 @@ async fn send_chat_inner(
         tool_calls: None,
         tokens_used: payload.prompt.len() as i64 / 4,
     };
-    let user_extra = MessageExtra {
-        thread_id: None,
-        meta: (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)})),
-    };
+    let mut user_meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
+    if let Some(source) = &payload.source {
+        user_meta.get_or_insert_with(|| json!({}))["source"] = json!(source);
+    }
+    let user_extra = MessageExtra { thread_id: None, meta: user_meta };
     let saved_user_msg = state
         .db
         .insert_message_with(&user_msg, &user_extra)
@@ -3888,7 +3893,19 @@ pub async fn resolve_approval(
         "always_allow" => ApprovalDecision::AlwaysAllowSession,
         _ => ApprovalDecision::Deny,
     };
+    let (status, body) = resolve_approval_inner(&state, &ticket_id, decision, None).await;
+    Ok((status, Json(body)).into_response())
+}
 
+/// Answers an approval card: the app's route, and Telegram's Allow once (`via: "telegram"`, which
+/// is recorded as the card's `answered_via`). Same checks either way: the production floor, and
+/// only a card still waiting (or one kwant kept over a restart) can be answered.
+pub(crate) async fn resolve_approval_inner(
+    state: &AppState,
+    ticket_id: &str,
+    decision: ApprovalDecision,
+    via: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
     let status_str = match decision {
         ApprovalDecision::AllowOnce => "allowed_once",
         ApprovalDecision::AlwaysAllowSession => "always_allowed",
@@ -3900,7 +3917,7 @@ pub async fn resolve_approval(
     if decision != ApprovalDecision::Deny {
         let details = state
             .db
-            .get_approval(&ticket_id)
+            .get_approval(ticket_id)
             .await
             .ok()
             .flatten()
@@ -3910,48 +3927,58 @@ pub async fn resolve_approval(
                 refusal["ticket_id"] = json!(ticket_id);
                 refusal["resolved"] = json!(false);
                 refusal["status"] = json!("needs_backup");
-                return Ok((StatusCode::CONFLICT, Json(refusal)).into_response());
+                return (StatusCode::CONFLICT, refusal);
             }
         }
     }
 
     // Only a ticket still waiting can be answered; a withdrawn one (turn ended, expired)
     // keeps its status and its tool never runs
-    let resolved = state.broker.resolve(&ticket_id, decision.clone()).await;
+    let resolved = state.broker.resolve(ticket_id, decision.clone()).await;
     if !resolved {
         // A card whose turn stopped waiting (or that kwant kept over a restart): a late answer,
         // and Allow resumes the work
-        let reply = super::mcp_runtime::resume_late_approval(&state, &ticket_id, decision, status_str).await;
-        super::missions::listener::refresh_needs_you(&state).await;
+        let reply = super::mcp_runtime::resume_late_approval(state, ticket_id, decision, status_str).await;
+        super::missions::listener::refresh_needs_you(state).await;
         return match reply {
             Some(mut reply) => {
+                if let Some(via) = via {
+                    let _ = state.db.set_answered_via("approvals", ticket_id, via).await;
+                }
+                super::telegram::bridge::approval_answered(state, ticket_id, via).await;
                 reply["ticket_id"] = json!(ticket_id);
                 reply["resolved"] = json!(true);
                 reply["status"] = json!(status_str);
-                Ok(Json(reply).into_response())
+                (StatusCode::OK, reply)
             }
-            None => Ok((
+            None => (
                 StatusCode::CONFLICT,
-                Json(json!({
+                json!({
                     "ticket_id": ticket_id,
                     "resolved": false,
                     "status": "expired",
                     "error": "This card expired: the bot is no longer waiting for it. Ask the bot again.",
-                })),
-            )
-                .into_response()),
+                }),
+            ),
         };
     }
-    let _ = state.db.update_approval_status(&ticket_id, status_str).await;
+    let _ = state.db.update_approval_status(ticket_id, status_str).await;
+    if let Some(via) = via {
+        let _ = state.db.set_answered_via("approvals", ticket_id, via).await;
+    }
     // The card is answered: a task that waited on it is working again (Mission Control)
-    super::missions::listener::refresh_needs_you(&state).await;
+    super::missions::listener::refresh_needs_you(state).await;
+    // Telegram edits its copy of the card ("✓ Answered in kwant")
+    super::telegram::bridge::approval_answered(state, ticket_id, via).await;
 
-    Ok(Json(json!({
-        "ticket_id": ticket_id,
-        "resolved": resolved,
-        "status": status_str
-    }))
-    .into_response())
+    (
+        StatusCode::OK,
+        json!({
+            "ticket_id": ticket_id,
+            "resolved": resolved,
+            "status": status_str
+        }),
+    )
 }
 
 #[derive(Serialize)]

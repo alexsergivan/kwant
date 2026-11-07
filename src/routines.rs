@@ -240,6 +240,12 @@ pub fn local_instant(tz: &str, date: NaiveDate, time: NaiveTime) -> Result<Optio
     Ok(resolve_local(&parse_tz(tz)?, date, time))
 }
 
+/// The wall-clock time in `tz` at `at` (Telegram's "✓ … · 10:06" lines). `Err` for an unknown zone.
+pub fn local_datetime(tz: &str, at: DateTime<Utc>) -> Result<Option<chrono::NaiveDateTime>, String> {
+    let zone = parse_tz(tz)?;
+    Ok(zone.offset_at(at.timestamp()).map(|o| at.naive_utc() + Duration::seconds(o)))
+}
+
 /// The calendar date in `tz` at `at`. `Err` for an unknown zone.
 pub fn local_date(tz: &str, at: DateTime<Utc>) -> Result<Option<NaiveDate>, String> {
     Ok(parse_tz(tz)?.date_at(at))
