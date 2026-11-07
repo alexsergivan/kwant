@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import type { SwitchEntry } from '../watchLive';
 import { agentSenderLabel } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
@@ -200,6 +201,10 @@ export interface ChatViewProps {
   vmCaptchaStep?: HumanStep | null;
   /** The newest open step (any kind) holding this browser. */
   vmHumanStep?: HumanStep | null;
+  /** W1: set while this chat's browser is active; the working strip offers Watch when the panel is closed. */
+  onWatchBrowser?: () => void;
+  /** W3: the panel's switcher between browsing chats. */
+  vmSwitcher?: { entries: SwitchEntry[]; current: string; onPick: (owner: string) => void } | null;
   /** Answers that step as done from the browser; resolves to an error message on failure. */
   onVmStepDone?: (id: string) => Promise<string | void> | void;
   vmSolveRequest?: number;
@@ -422,6 +427,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   vmApprovalsOff,
   vmCaptchaStep,
   vmHumanStep,
+  onWatchBrowser,
+  vmSwitcher,
   onVmStepDone,
   vmSolveRequest,
   pinned = [],
@@ -1764,6 +1771,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         awaitingBrowser={!!awaitingBrowser}
         writing={!!streamingText}
         onAnswer={showWaitingCard}
+        onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
       />
 
       {/* Modern Composer Input Bar */}
@@ -2141,6 +2149,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       approvalsOff={vmApprovalsOff}
       captchaStep={vmCaptchaStep}
       humanStep={vmHumanStep}
+      switcher={vmSwitcher}
       onStepDone={onVmStepDone}
       solveRequest={vmSolveRequest}
     />

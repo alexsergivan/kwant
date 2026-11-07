@@ -4,6 +4,7 @@ import type { LiveActivity } from '../activity';
 import { formatElapsed, turnStart, waitingOn, workingLabel } from '../workingStrip';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { ModernAvatar } from './ModernAvatar';
+import { WatchButton } from './WatchLive';
 
 interface WorkingStripProps {
   active: boolean;
@@ -21,6 +22,8 @@ interface WorkingStripProps {
    * a waiting strip shows "Answer ↑", which stands in for the separate "Approval waiting" pill.
    */
   onAnswer?: (on: 'question' | 'approval') => void;
+  /** W1: this chat's browser is active and the panel is closed: "Watch" opens it. */
+  onWatch?: () => void;
   /** Forces the phone or desktop look (tests); by default it follows the window. */
   phone?: boolean;
 }
@@ -30,7 +33,7 @@ interface WorkingStripProps {
  * above the composer; the card in the stream holds the step details. On a phone it is the one live
  * line (0.6.13 spec A3): 44 px tall, 14 px text, and "Answer ↑" while the bot waits on the person.
  */
-export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, writing, onStop, onAnswer, phone: forcePhone }) => {
+export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, writing, onStop, onAnswer, onWatch, phone: forcePhone }) => {
   const mountedAt = useRef(Date.now());
   const [now, setNow] = useState(() => Date.now());
   const phoneLayout = usePhoneLayout();
@@ -64,16 +67,18 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
           <span className="font-semibold text-zinc-100">{name}</span> is {label}
         </p>
         {/* Own box, so a long step name never cuts the time off at 390 px. Hidden behind Answer on a
-            phone: the line is short there, and what to do next matters more than for how long. */}
+            phone: the line is short there, and what to do next matters more than for how long. Below 400 px
+            with Watch showing, the host the bot is on matters more than the time, so the time goes. */}
         {!answer && (
           <span
-            className={`shrink-0 tabular-nums ${phone ? 'pr-2 text-sm leading-5 text-[#a39dcc]' : 'text-meta text-zinc-400'}`}
+            className={`shrink-0 tabular-nums ${phone ? `pr-2 text-sm leading-5 text-[#a39dcc]${onWatch ? ' hidden min-[400px]:inline' : ''}` : 'text-meta text-zinc-400'}`}
             aria-hidden="true"
             data-working-elapsed=""
           >
             {elapsed}
           </span>
         )}
+        {onWatch && !answer && <WatchButton name={name} phone={phone} onWatch={onWatch} />}
         {answer && (
           <button
             type="button"

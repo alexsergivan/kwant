@@ -102,11 +102,14 @@ export const App: React.FC = () => {
         if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
         return;
       }
-      const route = q ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined } : parseSpacePath(window.location.pathname);
+      // The chat's own address with `?live=1` opens its live panel too, as `/live` does (W-L11)
+      const routed = parseSpacePath(window.location.pathname);
+      const liveFlag = (routed.channelId || routed.botId) && new URLSearchParams(window.location.search).get('live') === '1';
+      const route = q ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined, live: q.live } : liveFlag ? { ...routed, live: true } : routed;
       const s = pickSpace(list, route.spaceId, lastSpace());
       if (!s) return;
       const here = route.spaceId === s.id;
-      const fromUrl = here && (route.channelId || route.botId) ? { channelId: route.channelId, botId: route.botId } : null;
+      const fromUrl = here && (route.channelId || route.botId || route.live) ? { channelId: route.channelId, botId: route.botId, ...(route.live ? { live: true } : {}) } : null;
       // An old address (/away, /loose-ends, /connections…) opens its new place, rewritten in place.
       open(s.id, fromUrl, true, here && 'view' in route ? route.view ?? null : null);
     });
@@ -120,7 +123,7 @@ export const App: React.FC = () => {
       const view = route.view ?? null;
       if (route.spaceId !== currentRef.current) {
         setCurrentSpace(route.spaceId);
-        setTarget({ channelId: route.channelId, botId: route.botId });
+        setTarget({ channelId: route.channelId, botId: route.botId, live: route.live });
         setStartView(view);
         setViewRequest(null);
         viewRef.current = view;

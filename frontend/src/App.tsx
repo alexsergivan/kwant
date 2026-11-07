@@ -71,6 +71,8 @@ import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
 import { recentWork, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
+import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
+import { LiveMissPage } from './components/WatchLive';
 import {
   ChatLoads,
   Delegation,
@@ -156,6 +158,8 @@ const SettingsModal = lazy(() => import('./components/SettingsModal').then((m) =
 export interface SpaceTarget {
   channelId?: string;
   botId?: string;
+  /** W2: the chat's `/live` address, with the browser panel open. */
+  live?: boolean;
 }
 
 export interface SpaceAppProps {
@@ -214,7 +218,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The Idea jar is a tab of the list on phones, so a link to it opens on the list. The Inbox opens
   // over it, as a tap does (a notification's Needs you lands there).
   const [phoneView, setPhoneView] = useState<'list' | 'chat'>(() =>
-    initialView?.kind === 'inbox' || (initialView?.kind !== 'jar' && (initialTarget?.channelId || initialTarget?.botId)) ? 'chat' : 'list',
+    initialView?.kind === 'inbox' || (initialView?.kind !== 'jar' && (initialTarget?.channelId || initialTarget?.botId || initialTarget?.live)) ? 'chat' : 'list',
   );
   const [phoneTab, setPhoneTab] = useState<PhoneTab>(() => (initialView?.kind === 'jar' ? 'jar' : 'chats'));
   const [loaded, setLoaded] = useState(false);
@@ -769,6 +773,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     } catch {
       clearAllTurns();
     }
+    setTurnsHydrated((n) => n + 1);
   };
 
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
@@ -805,7 +810,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [routeChoices, setRouteChoices] = useState<Record<string, RouteChoiceMeta>>({});
 
   // Virtual Machine & Live Browser state
+  // A `/live` address (W2) opens the chat with its browser showing, cold opens included, once the
+  // running turns are in and the chat's browser is active. Otherwise (an unknown, malformed or idle
+  // link) it shows the plain "this bot isn't browsing now" page (W-L4).
   const [isVmPaneOpen, setIsVmPaneOpen] = useState(false);
+  const [liveGate, setLiveGate] = useState<null | 'pending' | 'miss'>(() => (initialTarget?.live ? 'pending' : null));
+  // W1: chats whose browser is active right now, from the browser events every stream gets
+  const [browsing, setBrowsing] = useState<BrowsingMap>({});
+  // Bumped each time the running turns come in from the server (first connect and every reconnect)
+  const [turnsHydrated, setTurnsHydrated] = useState(0);
+  const [browsingSeeded, setBrowsingSeeded] = useState(0);
   const [solveRequest, setSolveRequest] = useState(0);
   const [activeUrl, setActiveUrl] = useState('');
   const [pageTitle, setPageTitle] = useState('');
@@ -1382,6 +1396,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'browser_navigated':
           case 'BrowserNavigated': {
             const teamId = event.data?.team_id;
+            setBrowsing((m) => noteBrowser(m, teamId, event.data?.url, Date.now()));
             const currentTid = activeSandboxIdRef.current;
             const k = currentKwantRef.current;
             const t = currentTeamRef.current;
@@ -1405,6 +1420,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'browser_screenshot':
           case 'BrowserScreenshot': {
             const teamId = event.data?.team_id;
+            setBrowsing((m) => noteBrowser(m, teamId, event.data?.url, Date.now()));
             const currentTid = activeSandboxIdRef.current;
             const k = currentKwantRef.current;
             const t = currentTeamRef.current;
@@ -2979,10 +2995,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The address bar and "reopen where I was" follow the open chat.
   const chatChangeRef = useRef(onChatChange);
   chatChangeRef.current = onChatChange;
+  // W-L4: the chat a `/live` link names is one of this space's
+  const liveTargetKnown = !!(initialTarget?.botId ? kwants.some((k) => k.id === initialTarget.botId) : initialTarget?.channelId && channels.some((c) => c.id === initialTarget.channelId));
   useEffect(() => {
     if (!loaded || !selectedId) return;
-    chatChangeRef.current(isChannel ? { channelId: selectedId } : { botId: selectedId });
-  }, [loaded, selectedId, isChannel]);
+    // The address says `/live` while the panel is open; closing it rewrites it back to the chat in
+    // place (the Shell replaces, never pushes), so Back doesn't reopen the panel.
+    // A `/live` link that is still being checked, or showing "isn't browsing now", keeps its address.
+    const live = isVmPaneOpen || (liveGate && liveTargetKnown) ? { live: true } : {};
+    chatChangeRef.current(isChannel ? { channelId: selectedId, ...live } : { botId: selectedId, ...live });
+  }, [loaded, selectedId, isChannel, isVmPaneOpen, liveGate, liveTargetKnown]);
 
   const isCurrentContextStreaming = openCtx in live;
   const decidingHere = deciding[openCtx] ?? null;
@@ -3049,6 +3071,76 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         {pendingHere === 1 ? '1 skill to review' : `${pendingHere} skills to review`}
       </button>
     ) : null;
+  // W1–W3 Watch live. An owner stays while a running turn drives its browser, and drops after a minute
+  // with no browser event.
+  const teamOfCh = (c: { id: string; name: string }) => teamOfChannel(teams, c);
+  const runningTurns = Object.values(turns);
+  const liveBrowsing: BrowsingMap = Object.fromEntries(
+    Object.entries(browsing).filter(([owner]) => ownerStillRunning(owner, runningTurns, channels, teamOfCh)),
+  );
+  const browsingKey = Object.keys(liveBrowsing).sort().join(',');
+  useEffect(() => {
+    // Forget owners whose last turn ended, so an old page never comes back with the next turn. The
+    // check reads the newest turns inside the updater: a key from this render could be older than a
+    // browser event queued meanwhile, and dropped it (QA F6).
+    if (!loaded) return;
+    setBrowsing((m) => pruneBrowsing(m, Object.values(turnsRef.current), channelsRef.current, (c) => teamOfChannel(teamsRef.current, c)));
+  }, [turns, loaded]);
+  useEffect(() => {
+    // A page opened mid-turn: a running turn whose newest step is a browser tool is browsing already
+    if (!loaded || !turnsHydrated) return;
+    const withSteps = Object.values(turnsRef.current).map((t) => ({ ...t, steps: activityRef.current[t.turn_id]?.steps }));
+    setBrowsing((m) => seedBrowsing(m, withSteps, channelsRef.current, (c) => teamOfChannel(teamsRef.current, c), Date.now()));
+    setBrowsingSeeded(turnsHydrated);
+  }, [turnsHydrated, loaded]);
+  useEffect(() => {
+    if (!browsingKey) return;
+    const id = window.setInterval(() => setBrowsing((m) => expireBrowsing(m, Date.now())), 5_000);
+    return () => window.clearInterval(id);
+  }, [browsingKey]);
+  const globes = globeRows(liveBrowsing, runningTurns, channels, teamOfCh);
+  const browserNeedsYou = new Set(Object.values(humanSteps).filter((st) => st.status === 'open' && st.sandbox_target).map((st) => st.sandbox_target!));
+  const describeOwner = (owner: string) => {
+    const t = teams.find((x) => x.id === owner);
+    if (t) return { kind: 'team' as const, label: t.name };
+    const c = channels.find((x) => x.id === owner);
+    if (c) {
+      const ct = teamOfCh(c);
+      return ct ? { kind: 'team' as const, label: ct.name } : { kind: 'channel' as const, label: c.name };
+    }
+    const k = kwants.find((x) => x.id === owner);
+    return k ? { kind: 'bot' as const, label: k.name, sprite: k.avatar_sprite } : null;
+  };
+  /** Opens the chat a browser belongs to, with the panel open (the W2 `/live` address follows). */
+  const watchOwner = (owner: string) => {
+    const t = teams.find((x) => x.id === owner);
+    const c = !t ? channels.find((x) => x.id === owner) : undefined;
+    const k = !t && !c ? kwants.find((x) => x.id === owner) : undefined;
+    if (t) handleSelectTeam(t);
+    else if (c) handleSelectChannel(c);
+    else if (k) handleSelectKwant(k);
+    else return;
+    setIsVmPaneOpen(true);
+  };
+  // W-L4: decide a `/live` link once the chats, the running turns and the seeded browsers are in.
+  const liveHere = !!liveBrowsing[activeSandboxId];
+  useEffect(() => {
+    if (!liveGate || !loaded || !browsingSeeded) return;
+    if (liveTargetKnown && liveHere) {
+      setIsVmPaneOpen(true);
+      setLiveGate(null);
+    } else if (liveGate === 'pending') setLiveGate('miss');
+  }, [liveGate, loaded, browsingSeeded, liveTargetKnown, liveHere]);
+  // Opening any other chat (or a page) leaves the "isn't browsing now" page
+  const missChatRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (liveGate !== 'miss') return;
+    if (missChatRef.current === null) missChatRef.current = selectedId;
+    else if (missChatRef.current !== selectedId) setLiveGate(null);
+  }, [liveGate, selectedId]);
+  const switcherEntries = switchEntries(liveBrowsing, describeOwner, (o) => browserNeedsYou.has(o));
+  const vmSwitcher = switcherEntries.length >= 2 ? { entries: switcherEntries, current: activeSandboxId, onPick: watchOwner } : null;
+
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext });
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
@@ -3335,6 +3427,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       isChannel={isChannel}
       selectedTeamId={selectedTeamId}
       busyKwants={busyKwants}
+      browsingOwners={globes.owners}
+      browsingBots={globes.bots}
+      browserNeedsYou={browserNeedsYou}
+      onWatchBrowser={watchOwner}
       botStatus={botStatus}
       needsYou={needsYouByKwant}
       needsYouRows={isPhone && section === 'chats' ? needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))) : undefined}
@@ -3525,6 +3621,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           vmApprovalsOff={space.approvals === 'off' || kwants.some(approvalsOff)}
           vmCaptchaStep={captchaStepFor(humanSteps, activeSandboxId)}
           vmHumanStep={openStepFor(humanSteps, activeSandboxId)}
+          onWatchBrowser={liveBrowsing[activeSandboxId] ? () => setIsVmPaneOpen(true) : undefined}
+          vmSwitcher={vmSwitcher}
           onVmStepDone={(id) => answerHumanStep(id, 'done')}
           vmSolveRequest={solveRequest}
           pinned={pinned}
@@ -3651,6 +3749,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…
+    </main>
+  ) : liveGate === 'miss' ? (
+    <LiveMissPage
+      chatLabel={isChannel ? (currentTeam?.name ? `@${currentTeam.name}` : currentChannel?.name ? `#${currentChannel.name}` : '') : currentKwant?.name ? `@${currentKwant.name}` : ''}
+      kind={isChannel ? 'place' : 'bot'}
+      onOpenChat={() => setLiveGate(null)}
+      onBack={isPhone ? () => { setLiveGate(null); setPhoneView('list'); } : undefined}
+    />
+  ) : liveGate === 'pending' ? (
+    <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
+      <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening the live page…
     </main>
   ) : chat;
 
