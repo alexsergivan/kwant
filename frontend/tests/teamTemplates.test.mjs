@@ -435,6 +435,8 @@ test('D: Manage team adds a single bot, and says so when the team already has ev
   v = await mount(el);
   root = document.querySelector('[data-team-sheet="suggest"]');
   assert.match(root.querySelector('[data-nothing-core]').textContent, /@shop already has the roles the code suggests\. Tick one below if it helps\./);
+  assert.equal(primary(root).textContent.trim(), 'Add bots');
+  assert.doesNotMatch(root.textContent, /Add 0 bots/);
   v.unmount();
   m.setTeamsTransport(async (url, method, body, headers) => {
     const r = await base(url, method, body, headers);

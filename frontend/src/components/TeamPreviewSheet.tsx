@@ -1034,7 +1034,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const sNote = isD && dPhase === 'ready' && !nothingNew ? sizeNote(ticked, minBots) : null;
   const fallbackFooter = isD && (dPhase === 'cantread' || dPhase === 'offline' || dPhase === 'error');
   const retry = (!isD && templatesError && !t) || phase === 'failed' || (isD && (dPhase === 'error' || dPhase === 'offline'));
-  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? (nothingNew ? 'Add bots' : `Add ${plural(ticked, 'bot')}`) : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
+  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? (nothingNew || ticked === 0 ? 'Add bots' : `Add ${plural(ticked, 'bot')}`) : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
   const onPrimary = () => {
     if (retry) {
       if (!isD && templatesError && !t) return onRetryTemplates?.();
