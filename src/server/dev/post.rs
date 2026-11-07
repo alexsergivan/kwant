@@ -126,6 +126,23 @@ pub fn postable(card: &Value) -> Vec<&Value> {
     card["findings"].as_array().map_or(Vec::new(), |fs| fs.iter().filter(|f| f["state"].as_str() != Some("dismissed")).collect())
 }
 
+/// "Matches the ticket" (J12, api-decisions 17) in the posted review: the key, the verdict and a
+/// state per done-when line. A Jira ticket may be private and the repo public, so none of the
+/// ticket's or the brief's words are posted, only "done-when line N".
+fn matches_section(b: &mut String, m: &Value) {
+    let Some(items) = m["items"].as_array() else { return };
+    let word = |s: &str| match s {
+        "met" => "Met",
+        "not_met" => "Not met",
+        _ => "Unclear",
+    };
+    let key = m["key"].as_str().filter(|k| super::tickets::valid_key(k)).unwrap_or("the ticket");
+    b.push_str(&format!("\n**Matches the ticket** ({key}): {}\n", word(m["verdict"].as_str().unwrap_or(""))));
+    for (i, it) in items.iter().enumerate() {
+        b.push_str(&format!("- {}: done-when line {}\n", word(it["state"].as_str().unwrap_or("")), i + 1));
+    }
+}
+
 fn is_secret(f: &Value) -> bool {
     f["source"].as_str() == Some("gitleaks")
 }
@@ -254,6 +271,7 @@ pub fn build(card: &Value, facts: &DevFacts, inline: bool) -> Built {
         };
         b.push_str(&format!("- {label}: {}\n", r["text"].as_str().unwrap_or("").trim()));
     }
+    matches_section(&mut b, &card["matches"]);
 
     b.push_str("\n**Test tampering**\n");
     let flags: Vec<&Value> = card["tamper"]["flags"].as_array().map_or(Vec::new(), |f| f.iter().collect());
@@ -609,6 +627,22 @@ mod tests {
         }
         assert!(!b.body.contains("Title f4") && !b.body.contains("Title f1"), "{}", b.body);
         assert!(b.body.contains("Other findings"));
+    }
+
+    #[test]
+    fn a_ticket_check_posts_states_but_never_the_tickets_words() {
+        let mut c = card(vec![]);
+        c["matches"] = json!({"key": "TRAIL-102", "url": "https://yourcompany.atlassian.net/browse/TRAIL-102", "verdict": "not_met",
+            "items": [{"criterion": "SECRET-WORDS one", "state": "met", "evidence": "SECRET-WORDS", "paths": ["src/a.rs"]},
+                      {"criterion": "SECRET-WORDS two", "state": "not_met", "evidence": "", "paths": []},
+                      {"criterion": "SECRET-WORDS three", "state": "unclear", "evidence": "", "paths": []}]});
+        let b = build(&c, &facts(), true);
+        assert!(b.body.contains("**Matches the ticket** (TRAIL-102): Not met"), "{}", b.body);
+        for l in ["- Met: done-when line 1", "- Not met: done-when line 2", "- Unclear: done-when line 3"] {
+            assert!(b.body.contains(l), "{l} missing from:\n{}", b.body);
+        }
+        assert!(!b.body.contains("SECRET-WORDS") && !b.body.contains("atlassian.net"), "{}", b.body);
+        assert!(!build(&card(vec![]), &facts(), true).body.contains("Matches the ticket"));
     }
 
     #[test]

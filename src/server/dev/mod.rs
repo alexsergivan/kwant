@@ -5,7 +5,8 @@
 //!
 //! Lin owns `facts`, `routes`, `poller`, `post`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
 //! `review`, `risk`, `tamper`, `notes` and `source`; Juno owns `scan`, `forge` and
-//! `atlassian`; `tickets` is split per its api.md §1.1 (Juno: `source`, `pickup`, `store`; Vega: `brief*`, `tools`).
+//! `atlassian`; `tickets` is split per its api.md §1.1 (Juno: `source`, `pickup`, `store`, `routes`;
+//! Vega: `brief*`, `tools`, `links`, `mission`, `prompt`; `hooks` and `seam` are the join).
 
 pub mod atlassian;
 pub mod backup;
