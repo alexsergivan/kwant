@@ -1,5 +1,5 @@
 // Fixtures for the 0.7.6 ticket card, the brief, the questions and "Matches the ticket", shaped like the
-// server's JSON (Juno's TicketRow, Vega's Brief) and filled with Mira's TRAIL-142 story (design/parts.js).
+// server's JSON (Juno's TicketRow with api-decisions 11's `work`, Vega's Brief and review.matches) and filled with Mira's TRAIL-142 story (design/parts.js).
 // Example hosts and demo names only; nothing here is a real person, key, token or email. Tests and the
 // screenshot page use these; the app never imports them.
 
@@ -26,8 +26,7 @@ const base = {
   priority_rank: 2,
   assignee_id: null,
   assignee_name: null,
-  // Juno's column is a JSON string, not an array.
-  labels: '["kwant"]',
+  labels: ['kwant'],
   reporter_id: 'acc-demo-dana',
   reporter_name: 'Dana Park',
   url: `${JIRA}/browse/TRAIL-142`,
@@ -50,26 +49,30 @@ const base = {
   updated_at: '2026-11-07T10:03:00Z',
 };
 
-const team = { lead: 'Ann', builders: ['Ann', 'Ben'], reviewer: 'Cody', team: 'Shop team' };
+/** The space's roster as the card looks names up (api-decisions 11 sends ids only). */
+export const NAMES = {
+  bots: { kw_demo_ann: 'Ann', kw_demo_ben: 'Ben', kw_demo_cody: 'Cody' },
+  teams: { tm_shop: 'Shop team' },
+};
 
-/** TRAIL-142 in one state, with the work fields that state has. */
+export const REPO = 'storefront';
+
+const team = { team_id: 'tm_shop', lead_id: 'kw_demo_ann', builder_ids: ['kw_demo_ann', 'kw_demo_ben'], reviewer_id: 'kw_demo_cody' };
+const plan = (done: number, total: number) =>
+  ['Orders API export', 'Export button', 'Background job', 'Tests'].slice(0, total).map((step, i) => ({ step, state: i < done ? 'done' : i === done ? 'running' : 'waiting' }));
+
+/** TRAIL-142 in one state, with the `work` object that state has (null before anyone is on it). */
 export function ticket(state: TicketState, extra: Record<string, unknown> & { work?: Record<string, unknown> } = {}) {
   const { work: more, ...rest } = extra;
-  const work: Record<string, unknown> = { ...team };
-  if (['working', 'in_review', 'landed', 'taken_back'].includes(state)) {
-    Object.assign(work, { branch: 'TRAIL-142-export-orders', plan: { done: 3, total: 4 }, started_at: '2026-11-07T10:06:00Z', task_url: 'https://kwant.example.com/s/sp_demo/t/tk_demo' });
-  }
-  if (state === 'in_review' || state === 'landed') {
-    Object.assign(work, {
-      pr: { number: 61, title: 'TRAIL-142: Export orders as a spreadsheet', url: `${repo}/pull/61` },
-      review_card_id: 'dvc_61',
-      matches: state === 'landed' ? { met: 4, total: 4 } : { met: 2, total: 4 },
-    });
-  }
-  if (state === 'landed') Object.assign(work, { sha: 'a41c9e2', merged_at: '2026-11-07T11:20:00Z' });
-  if (state === 'failed') Object.assign(work, { error: 'Jira said 403 for the attachments. Everything else was read.' });
+  const work: Record<string, unknown> = { ...team, branch: null, pr_url: null, head_sha: null, plan: [], matches: null };
+  if (['working', 'in_review', 'landed', 'taken_back'].includes(state)) Object.assign(work, { branch: 'TRAIL-142-export-orders', plan: plan(3, 4) });
+  if (state === 'in_review' || state === 'landed') Object.assign(work, { pr_url: `${repo}/pull/61`, head_sha: 'a41c9e2', matches: state === 'landed' ? 'met' : 'not_met' });
+  if (state === 'landed') Object.assign(work, { plan: plan(4, 4) });
   const back = state === 'taken_back' ? { taken_back_at: '2026-11-07T10:12:00Z', taken_back_by: 'Dana Park' } : {};
-  return { ...base, state, ...back, ...rest, work: { ...work, ...(more ?? {}) } };
+  const at = state === 'landed' ? { updated_at: '2026-11-07T11:20:00Z' } : {};
+  // Waiting tickets have no work yet (api-decisions 11: null until someone is on it).
+  const w = state === 'waiting' && !more ? null : { ...work, ...(more ?? {}) };
+  return { ...base, state, ...back, ...at, ...rest, work: w };
 }
 
 export const TICKET_151 = {
@@ -88,7 +91,7 @@ export const TICKET_151 = {
   jira_created: '2026-11-03T09:00:00Z',
   jira_updated: '2026-11-03T09:00:00Z',
   updated_at: '2026-11-07T09:50:00Z',
-  work: {},
+  work: null,
 };
 
 export const TICKET_148 = {
@@ -117,10 +120,10 @@ export const TICKET_137 = {
   state: 'closed',
   status: "Won't do",
   status_category: 'done',
-  closed_resolution: "done: Won't do",
+  closed_resolution: 'done',
   jira_updated: '2026-11-05T14:00:00Z',
   updated_at: '2026-11-05T14:00:00Z',
-  work: { branch: 'TRAIL-137-price-sort' },
+  work: { ...team, branch: 'TRAIL-137-price-sort', pr_url: null, head_sha: null, plan: [], matches: null },
 };
 
 export const TICKET_139 = {
@@ -136,7 +139,7 @@ export const TICKET_139 = {
   state: 'working',
   handed_over_at: '2026-11-07T09:41:00Z',
   updated_at: '2026-11-07T10:01:00Z',
-  work: { ...team, builders: ['Ben'], lead: 'Ben', branch: 'TRAIL-139-free-ship-banner', plan: { done: 1, total: 3 }, started_at: '2026-11-07T09:50:00Z' },
+  work: { ...team, lead_id: 'kw_demo_ben', builder_ids: ['kw_demo_ben'], branch: 'TRAIL-139-free-ship-banner', pr_url: null, head_sha: null, plan: plan(1, 3), matches: null },
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -146,7 +149,7 @@ const S = {
   ticket: { kind: 'ticket', label: 'ticket', url: `${JIRA}/browse/TRAIL-142`, cite: 'TRAIL-142 description' },
   comment: { kind: 'comment', label: 'comment · Dana', comment_author: 'Dana Park', url: `${JIRA}/browse/TRAIL-142?focusedCommentId=20311`, cite: 'Dana Park, Nov 5' },
   page: { kind: 'page', label: 'Orders export', page_version: 7, url: `${WIKI}/spaces/SHOP/pages/4401/Orders+export?pageVersion=7`, cite: 'Orders export, version 7' },
-  file: (f: string, line?: number) => ({ kind: 'file', label: line ? `${f.split('/').pop()}:${line}` : f.split('/').pop(), url: '', file: f, ...(line ? { line } : {}), cite: f }),
+  file: (f: string, line?: number) => ({ kind: 'file', label: line ? `${f}:${line}` : f, url: '', file: f, ...(line ? { line } : {}), cite: f }),
 };
 
 export const BRIEF = {
@@ -232,7 +235,7 @@ export const ASK_PREVIEW = {
    Suggested: Everyone with Orders access · Only admins
 
 We’ll wait for your reply before building. Reply to this comment to answer.
-— kwant bots, for the Shop team`,
+— Ann, a kwant bot on the Shop team`,
 };
 
 export const ASK_POSTED = { comment_id: '20340', url: `${JIRA}/browse/TRAIL-142?focusedCommentId=20340`, to: 'Dana Park', at: '2026-11-07T10:04:00Z', text: ASK_PREVIEW.text };
@@ -242,7 +245,7 @@ export const PROGRESS_MID = [
   { step: 'ticket', state: 'done', detail: 'The ticket and its 2 attachments' },
   { step: 'comments', state: 'done', detail: '4 comments' },
   { step: 'links', state: 'done', detail: 'Linked: TRAIL-120 Orders filters' },
-  { step: 'confluence', state: 'running', detail: '2 of 3 searches · found “Orders export” v7' },
+  { step: 'confluence', state: 'running', detail: '2 of 3 searches · found “Orders export” v7', note: 'SHOP space' },
 ].map((d) => ({ type: 'dev_ticket_progress', data: { space_id: 'sp_demo', key: 'TRAIL-142', ...d } }));
 
 // ---------------------------------------------------------------------------------------------------
@@ -269,17 +272,22 @@ const reviewBase = {
   links: { pr: `${repo}/pull/61`, commit: null, ci: null },
 };
 
-const rows = (all: boolean) => [
-  { done_when_index: 0, state: 'met', text: BRIEF.done_when[0].text, evidence_text: 'Button in `OrdersPage.tsx:212`; test `export.filters.test.ts` passes', evidence_paths: ['src/admin/OrdersPage.tsx:212', 'tests/export.filters.test.ts'] },
-  { done_when_index: 1, state: 'met', text: BRIEF.done_when[1].text, evidence_text: 'Columns in `api/orders/export.ts:30`', evidence_paths: ['api/orders/export.ts:30'] },
-  all
-    ? { done_when_index: 2, state: 'met', text: BRIEF.done_when[2].text, evidence_text: 'Job in `jobs/ordersExport.ts`; test passes', evidence_paths: ['jobs/ordersExport.ts'] }
-    : { done_when_index: 2, state: 'not_met', text: BRIEF.done_when[2].text, evidence_text: 'No background job; the export always runs in the request', evidence_paths: ['api/orders/export.ts'] },
-  all
-    ? { done_when_index: 3, state: 'met', text: BRIEF.done_when[3].text, evidence_text: 'Check in `export.ts:44`; test passes', evidence_paths: ['api/orders/export.ts:44'] }
-    : { done_when_index: 3, state: 'unclear', text: BRIEF.done_when[3].text, evidence_text: 'Emails are left out for everyone. Stricter than asked; no test', evidence_paths: [] },
+const S2 = BRIEF.done_when;
+const item = (i: number, state: string, text: string, paths: string[]) => ({
+  criterion: S2[i].text,
+  state,
+  evidence: { text, paths },
+  sources: S2[i].sources,
+  inferred: S2[i].inferred,
+});
+const items = (all: boolean) => [
+  item(0, 'met', 'Button in `OrdersPage.tsx:212`; test `export.filters.test.ts` passes', ['src/admin/OrdersPage.tsx:212', 'tests/export.filters.test.ts']),
+  item(1, 'met', 'Columns in `api/orders/export.ts:30`', ['api/orders/export.ts:30']),
+  all ? item(2, 'met', 'Job in `jobs/ordersExport.ts`; test passes', ['jobs/ordersExport.ts']) : item(2, 'not_met', 'No background job; the export always runs in the request', ['api/orders/export.ts']),
+  all ? item(3, 'met', 'Check in `export.ts:44`; test passes', ['api/orders/export.ts:44']) : item(3, 'unclear', 'Emails are left out for everyone. Stricter than asked; no test', []),
 ];
 
+/** The review's `k{n}` finding for done-when line n (any source; api-decisions 17 drops source 'ticket'). */
 const kFinding = (i: number, state: 'not_met' | 'unclear') => ({
   id: `k${i + 1}`,
   severity: state === 'not_met' ? 'medium' : 'low',
@@ -288,21 +296,28 @@ const kFinding = (i: number, state: 'not_met' | 'unclear') => ({
   line: null,
   detail: `TRAIL-142 says the work is done when: ${BRIEF.done_when[i].text}`,
   fix: state === 'not_met' ? 'Do what this line of the brief asks.' : 'Show in the code or tests that this line of the brief holds.',
-  source: 'ticket',
-  done_when_index: i,
+  source: 'review',
   state: 'open',
   sent_at: null,
   dismissed: null,
 });
 
+const matches = (all: boolean) => ({ verdict: all ? 'met' : 'not_met', key: 'TRAIL-142', url: `${JIRA}/browse/TRAIL-142`, items: items(all) });
+
 export const REVIEW_GAPS = {
   ...reviewBase,
-  intent: { source: 'ticket', key: 'TRAIL-142', url: `${JIRA}/browse/TRAIL-142`, asked: 'Export orders as a spreadsheet', none: false, rows: rows(false) },
+  matches: matches(false),
   findings: [kFinding(2, 'not_met'), kFinding(3, 'unclear')],
 };
 
 export const REVIEW_ALL_MET = {
   ...reviewBase,
-  intent: { source: 'ticket', key: 'TRAIL-142', url: `${JIRA}/browse/TRAIL-142`, asked: 'Export orders as a spreadsheet', none: false, rows: rows(true) },
+  matches: matches(true),
   findings: [],
+};
+
+/** GET …/dev/jira for the demo site (Juno's JiraSiteRow). */
+export const JIRA_SITE = {
+  site: { jira_url: JIRA, confluence_url: WIKI, projects: ['TRAIL'], spaces: ['SHOP'], handover: 'label', label: 'kwant', team_id: 'tm_shop' },
+  tickets: 5,
 };

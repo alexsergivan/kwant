@@ -502,7 +502,8 @@ export const shortSha = (sha: string): string => sha.trim().slice(0, 7);
 
 /**
  * Style v2 §6 LGTM stamp: only when the review really found nothing to fix. All of: ready; no open finding;
- * no tamper flag; no intent row missing (or ticket line not met or unclear); secrets and packages not hit; a reviewer on a different engine.
+ * no tamper flag; no intent row missing; the ticket matched (when there is one); secrets and packages not hit;
+ * a reviewer on a different engine.
  */
 export function lgtm(card: {
   status: string;
@@ -511,6 +512,7 @@ export function lgtm(card: {
   findings: { state: string }[];
   tamper: { flags: unknown[] };
   intent: { rows: { state: string }[] } | null;
+  matches?: { verdict: string } | null;
   security: { secrets: { state: string }; packages: { state: string } };
 }): boolean {
   return (
@@ -519,7 +521,8 @@ export function lgtm(card: {
     !card.same_engine &&
     !card.findings.some((f) => f.state === 'open') &&
     card.tamper.flags.length === 0 &&
-    !(card.intent?.rows ?? []).some((r) => r.state === 'missing' || r.state === 'not_met' || r.state === 'unclear') &&
+    !(card.intent?.rows ?? []).some((r) => r.state === 'missing') &&
+    (!card.matches || card.matches.verdict === 'met') &&
     card.security.secrets.state !== 'hit' &&
     card.security.packages.state !== 'hit'
   );

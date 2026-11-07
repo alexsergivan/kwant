@@ -1,13 +1,14 @@
 // 0.7.6 "Work from Jira": one ticket card that grows through its states (design.md §3).
-// Ticket text is untrusted: every field is a React text node; links are https only (parseTicket checks).
+// Ticket text is untrusted: every field is a React text node. A Jira link is a link only on the saved site
+// (api-decisions 18); the PR link is https only. `work` carries ids (api-decisions 11): names come from `names`.
 // The holo "MATCHES the ticket" sticker shows only on Landed when every done-when line is met.
 
 import React, { useState } from 'react';
 import { ArrowUp, ArrowDown, Minus, Check, ExternalLink, GitBranch, Loader2, Ticket as TicketIcon, FileText, Users, AlertTriangle } from 'lucide-react';
-import type { AskPosted, AskPreview, Brief, ReadStep, Ticket, TicketProgress } from '../../dev/tickets';
-import { READ_LABEL, READ_STEPS, earnsMatches, openQuestions } from '../../dev/tickets';
+import type { AskPosted, AskPreview, Brief, ReadStep, Ticket, TicketNames, TicketProgress } from '../../dev/tickets';
+import { READ_LABEL, READ_STEPS, closedWhy, earnsMatches, onSite, openQuestions, workView } from '../../dev/tickets';
 import { clock } from '../../dev/logic';
-import { TicketBrief } from './TicketBrief';
+import { SiteOrigins, TicketBrief } from './TicketBrief';
 import { TicketQuestions } from './TicketQuestions';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -27,7 +28,7 @@ const initials = (name: string) =>
     .join('');
 
 /** "Ann and Ben", "Ann, Ben and Cy". */
-const names = (ns: string[]) => (ns.length <= 1 ? ns[0] ?? '' : `${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`);
+const andList = (ns: string[]) => (ns.length <= 1 ? ns[0] ?? '' : `${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`);
 
 const RAIL = ['Picked up', 'Reading', 'Brief', 'Working', 'In review', 'Landed'] as const;
 type RailS = 'done' | 'now' | 'needs' | 'paused' | 'bad' | 'todo';
@@ -55,7 +56,7 @@ export function railFor(t: Ticket): { at: number; s: RailS } | null {
     case 'landed':
       return { at: 6, s: 'done' };
     case 'taken_back':
-      return { at: t.work.branch ? 3 : 2, s: 'paused' };
+      return { at: t.work?.branch ? 3 : 2, s: 'paused' };
   }
 }
 
@@ -64,7 +65,8 @@ const Rail: React.FC<{ t: Ticket }> = ({ t }) => {
   const steps = RAIL.map((label, i): { label: string; s: RailS } => {
     if (!r) return { label, s: 'todo' };
     if (i < r.at) return { label, s: 'done' };
-    if (i === r.at) return { label: r.s === 'paused' ? 'Paused' : label, s: r.s };
+    // design §3: while the questions or the brief wait on the person, step 3 reads "Needs you".
+    if (i === r.at) return { label: r.s === 'paused' ? 'Paused' : r.s === 'needs' ? 'Needs you' : label, s: r.s };
     return { label, s: 'todo' };
   });
   const cur = steps.find((x) => x.s !== 'done' && x.s !== 'todo');
@@ -94,19 +96,21 @@ const Priority: React.FC<{ p: string }> = ({ p }) => {
   );
 };
 
-const Chk: React.FC<{ step: ReadStep; p: TicketProgress }> = ({ step, p }) => {
+/** One checklist row: the server's detail when it sent one, else the fixed words; the status on the right. */
+const Chk: React.FC<{ step: ReadStep; p: TicketProgress; repo: string | null }> = ({ step, p, repo }) => {
   const s = p[step];
   const cls = s.state === 'done' ? 'ok' : s.state === 'running' ? 'run' : 'wait';
-  const word = s.state === 'done' ? 'done' : s.state === 'running' ? 'reading now' : s.state === 'skipped' ? 'skipped' : 'waiting';
+  const word = s.state === 'done' ? 'done' : s.state === 'running' ? 'reading' : s.state === 'skipped' ? 'skipped' : 'waiting';
+  const words = s.detail ?? (step === 'code' && repo ? `The code in ${repo}` : READ_LABEL[step]);
   return (
     <li className={cls} data-step={step} data-state={s.state}>
       <span className="m" aria-hidden="true">
         {s.state === 'done' ? <Check size={12} /> : s.state === 'running' ? <Loader2 size={12} className="tk-spin" /> : s.state === 'skipped' ? <Minus size={12} /> : <span className="dot" />}
       </span>
-      <span>
-        {READ_LABEL[step]}
-        {s.detail && <em>, {s.detail}</em>}
-        <span className="sr-only">: {word}</span>
+      <span className="tx">{words}</span>
+      <span className="st">
+        <span className="sr-only">: </span>
+        {s.note ?? word}
       </span>
     </li>
   );
@@ -121,6 +125,12 @@ export interface TicketCardProps {
   progress?: TicketProgress | null;
   /** The label that hands tickets over ("kwant"); from the site settings. Falls back to "the label". */
   handoverLabel?: string | null;
+  /** Bot and team names for the ids in `work`. */
+  names?: TicketNames;
+  /** The saved Jira and Confluence origins (api-decisions 18). Without them no Jira link is a link. */
+  origins?: readonly string[];
+  /** The repo's short name for "The code in storefront". */
+  repo?: string | null;
   /** Each missing handler hides its button. */
   onStart?: () => void;
   onSkip?: () => void;
@@ -147,20 +157,39 @@ const Btn: React.FC<{ primary?: boolean; onClick?: () => void; children: React.R
     </button>
   ) : null;
 
-const JiraLink: React.FC<{ t: Ticket; className?: string; children?: React.ReactNode }> = ({ t, className = 'tk-btn ghost', children }) =>
-  t.url ? (
-    <a className={className} href={t.url} target="_blank" rel="noreferrer noopener">
+const JiraLink: React.FC<{ t: Ticket; origins: readonly string[]; className?: string; children?: React.ReactNode }> = ({ t, origins, className = 'tk-btn ghost', children }) => {
+  const url = onSite(t.url, origins);
+  return url ? (
+    <a className={className} href={url} target="_blank" rel="noreferrer noopener">
       {children ?? 'Open in Jira'}
       <ExternalLink size={12} aria-hidden="true" />
       <span className="sr-only"> (opens {t.key} in Jira in a new tab)</span>
     </a>
   ) : null;
+};
+
+/** "closed in Jira as Won't do · Nov 5 · branch kept": the same words on the row and the open card (item 17). */
+export const closedLine = (t: Ticket): string =>
+  [closedWhy(t), shortDay(t.jira_updated ?? t.updated_at), t.work?.branch ? 'branch kept' : null].filter(Boolean).join(' · ');
+
+/** The 8 px dot before the status title (item 13). */
+const DOT: Record<Ticket['state'], 'run' | 'needs' | 'ok' | 'off' | 'bad'> = {
+  waiting: 'off',
+  picked_up: 'run',
+  reading: 'run',
+  needs_answer: 'needs',
+  brief_ready: 'needs',
+  working: 'run',
+  in_review: 'run',
+  landed: 'ok',
+  taken_back: 'off',
+  failed: 'bad',
+  closed: 'off',
+};
 
 /** The one-line Closed row (design §3, 13): key · title · "closed in Jira as Won't do · Nov 5 · branch kept". */
 const ClosedRow: React.FC<{ t: Ticket; onShow: () => void }> = ({ t, onShow }) => {
-  const res = t.closed_resolution;
-  const how = !res ? 'closed in Jira' : res === 'deleted' ? 'deleted in Jira' : `closed in Jira as ${res.replace(/^done:\s*/i, '') || 'Done'}`;
-  const bits = [how, shortDay(t.jira_updated ?? t.updated_at), t.work.branch ? 'branch kept' : null].filter(Boolean).join(' · ');
+  const bits = closedLine(t);
   return (
     <div className="tk-mini" data-ticket={t.key} data-state="closed">
       <span className="tk-key">{t.key}</span>
@@ -174,13 +203,24 @@ const ClosedRow: React.FC<{ t: Ticket; onShow: () => void }> = ({ t, onShow }) =
 };
 
 export const TicketCard: React.FC<TicketCardProps> = (props) => {
-  const { ticket: t, brief = null, briefText = null, progress = null, handoverLabel = null } = props;
+  const { ticket: t, brief = null, briefText = null, progress = null, handoverLabel = null, names = {}, origins = [], repo = null } = props;
   const [expanded, setExpanded] = useState(false);
+  const [briefShown, setBriefShown] = useState(false);
   if (t.state === 'closed' && !expanded) return <ClosedRow t={t} onShow={() => setExpanded(true)} />;
 
-  const w = t.work;
+  const w = workView(t, names);
   const lead = w.lead ?? 'The lead';
   const leadIn = w.lead ?? 'the lead';
+  const briefId = `tk-${t.key}-brief`;
+  const hasBrief = !!(brief || briefText);
+  /** "Brief" in the Landed footer and Taken back's Kept line: shows the brief under the card (items 7, 16). */
+  const BriefLink: React.FC<{ chip?: boolean }> = ({ chip }) =>
+    hasBrief ? (
+      <button type="button" className={chip ? 'tk-src' : undefined} aria-expanded={briefShown} aria-controls={briefId} onClick={() => setBriefShown((v) => !v)} data-brief-link>
+        {chip && <FileText aria-hidden="true" />}
+        Brief
+      </button>
+    ) : null;
   const reporter = t.reporter_name ?? t.assignee_name;
   const label = handoverLabel ?? (t.labels.length === 1 ? t.labels[0]! : null);
   const nQ = brief ? openQuestions(brief).length : 0;
@@ -250,7 +290,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       );
       break;
     case 'working': {
-      const who = w.builders.length ? names(w.builders) : lead;
+      const who = w.builders.length ? andList(w.builders) : lead;
       bold = `${who} ${w.builders.length > 1 ? 'are' : 'is'} building`;
       const bits: React.ReactNode[] = [];
       if (w.branch)
@@ -260,31 +300,25 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
           </>,
         );
       if (w.plan) bits.push(`${w.plan.done} of ${w.plan.total} plan steps`);
-      if (clock(w.started_at)) bits.push(`started ${clock(w.started_at)}`);
       line = bits.length ? join(bits) : 'Building from the brief.';
       break;
     }
     case 'in_review': {
       bold = `${w.reviewer ?? 'The reviewer'} is reviewing the pull request`;
       const m = w.matches;
-      const all = !!m && m.met === m.total;
+      const pr = w.pr ? (w.pr.number !== null ? `#${w.pr.number}` : 'The pull request') : null;
       line = (
         <>
-          {w.pr && (
-            <>
-              #{w.pr.number}
-              {w.pr.title ? ` ${w.pr.title}` : ''}
-            </>
-          )}
+          {pr}
           {m && (
             <>
-              {w.pr ? ' · ' : ''}Matches the ticket:{' '}
-              <b className={all ? 'tk-ok' : 'tk-warn'} data-matches={`${m.met}/${m.total}`}>
-                {m.met} of {m.total} met
+              {pr ? ' · ' : ''}Matches the ticket:{' '}
+              <b className={m === 'met' ? 'tk-ok' : 'tk-warn'} data-matches={m}>
+                {m === 'met' ? 'every line met' : m === 'not_met' ? 'not every line met yet' : 'unclear so far'}
               </b>
             </>
           )}
-          {!w.pr && !m && 'The review will check it against the brief.'}
+          {!pr && !m && 'The review will check it against the brief.'}
         </>
       );
       acts = (
@@ -305,12 +339,25 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
         'Landed on main'
       );
       const m = w.matches;
-      line = !m
-        ? 'Jira wasn’t changed: move the ticket when you’re happy.'
-        : m.met === m.total
-          ? `All ${m.total} done-when lines met. Jira wasn’t changed: move the ticket when you’re happy.`
-          : `${m.met} of ${m.total} done-when lines met. See the review.`;
-      acts = <JiraLink t={t} />;
+      const n = brief?.done_when.length ?? 0;
+      line =
+        m === 'met' ? (
+          `${n > 0 ? `All ${n} done-when lines met` : 'Every done-when line met'}. Jira wasn’t changed: move the ticket when you’re happy.`
+        ) : m ? (
+          <>
+            Not every done-when line is met.{' '}
+            {props.onOpenReview ? (
+              <button type="button" className="tk-inl" onClick={props.onOpenReview} data-see-review>
+                See the review
+              </button>
+            ) : (
+              'See the review.'
+            )}
+          </>
+        ) : (
+          'Jira wasn’t changed: move the ticket when you’re happy.'
+        );
+      acts = <JiraLink t={t} origins={origins} />;
       break;
     }
     case 'taken_back': {
@@ -327,7 +374,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       acts = (
         <>
           <Btn onClick={props.onCloseCard}>Close card</Btn>
-          <JiraLink t={t} />
+          <JiraLink t={t} origins={origins} />
         </>
       );
       break;
@@ -336,24 +383,24 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       card = 'bad';
       tone = 'bad';
       bold = `${lead} couldn’t read ${t.key}`;
-      line = w.error ?? 'Jira didn’t answer. Nothing was built.';
+      line = 'Jira didn’t answer. Nothing was built.';
       acts = (
         <>
           <Btn primary onClick={props.onRetry}>
             Try again
           </Btn>
-          <JiraLink t={t} />
+          <JiraLink t={t} origins={origins} />
         </>
       );
       break;
     case 'closed': {
-      bold = 'Closed in Jira';
-      const res = t.closed_resolution;
-      line = res === 'deleted' ? 'The ticket was deleted. The card and any branch stay here.' : `Resolution: ${res?.replace(/^done:\s*/i, '') || 'Done'}. Any branch stays.`;
+      card = 'waiting';
+      bold = t.closed_resolution === 'skipped' ? 'Skipped' : t.closed_resolution === 'deleted' ? 'Deleted in Jira' : 'Closed';
+      line = closedLine(t);
       acts = (
         <>
           <Btn onClick={() => setExpanded(false)}>Hide</Btn>
-          <JiraLink t={t} />
+          <JiraLink t={t} origins={origins} />
         </>
       );
       break;
@@ -364,10 +411,13 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
   const handed = clock(t.handed_over_at);
   const waitSince = t.waiting_since_connect ? shortDay(t.jira_created) : null;
   const showJiraTop = t.state !== 'landed' && t.state !== 'taken_back' && t.state !== 'failed' && t.state !== 'closed';
-  const showBrief = !!(brief || briefText) && ['needs_answer', 'brief_ready', 'working', 'in_review', 'landed', 'taken_back'].includes(t.state);
+  // Landed and Taken back show the brief only from their "Brief" link (items 7, 16).
+  const linkBrief = t.state === 'landed' || t.state === 'taken_back';
+  const showBrief = hasBrief && (['needs_answer', 'brief_ready', 'working', 'in_review'].includes(t.state) || (linkBrief && briefShown));
   const briefOpen = t.state === 'brief_ready';
 
   return (
+ <SiteOrigins.Provider value={origins}>
     <article className="tk kw-card" data-s={card} data-ticket={t.key} data-state={t.state} aria-labelledby={`tk-${t.key}-t`}>
       {t.state === 'landed' && earnsMatches(t) && (
         <span className="tk-holo" role="img" aria-label="Earned: matches the ticket" data-holo>
@@ -408,13 +458,13 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
                       with the label <code>{label ?? 'the label'}</code>
                     </span>
                   )}
-                  {t.handed_over_by === 'assignee' && <span className="opt">assigned to kwant bots</span>}
+                  {t.handed_over_by === 'assignee' && <span className="opt">assigned to your bots</span>}
                 </>
               )
             )}
           </p>
         </div>
-        {showJiraTop && <JiraLink t={t} className="tk-open" />}
+        {showJiraTop && <JiraLink t={t} origins={origins} className="tk-open" />}
       </header>
 
       <Rail t={t} />
@@ -422,7 +472,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       <div className="tk-status" data-tone={tone} aria-live="polite">
         <div className="tx">
           <p className="b">
-            {tone === 'bad' && <AlertTriangle size={14} aria-hidden="true" />}
+            {tone === 'bad' ? <AlertTriangle size={14} aria-hidden="true" /> : <span className="tk-sdot" data-d={DOT[t.state]} aria-hidden="true" />}
             {bold}
           </p>
           <p className="l">{line}</p>
@@ -433,7 +483,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
       {t.state === 'reading' && progress && (
         <ul className="tk-read" aria-label="What is being read" aria-live="polite">
           {READ_STEPS.map((s) => (
-            <Chk key={s} step={s} p={progress} />
+            <Chk key={s} step={s} p={progress} repo={repo} />
           ))}
         </ul>
       )}
@@ -451,9 +501,9 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
         />
       )}
 
-      {showBrief && <TicketBrief key={`${t.key}-${t.state}`} brief={brief} fallbackText={briefText} lead={w.lead} defaultOpen={briefOpen} />}
+      {t.state === 'landed' && <LandedFoot t={t} w={w} brief={<BriefLink />} />}
 
-      {t.state === 'taken_back' && (w.branch || brief) && (
+      {t.state === 'taken_back' && (w.branch || hasBrief) && (
         <p className="tk-links">
           <span className="m">Kept:</span>
           {w.branch && (
@@ -462,24 +512,24 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
               {w.branch}
             </span>
           )}
-          {brief && (
-            <span className="tk-src">
-              <FileText aria-hidden="true" />
-              Brief
+          {w.branch && hasBrief && (
+            <span className="m" aria-hidden="true">
+              ·
             </span>
           )}
+          <BriefLink chip />
         </p>
       )}
 
-      {(t.state === 'working' || t.state === 'in_review') && (w.task_url || w.team) && (
+      {showBrief && (
+        <div id={briefId}>
+          <TicketBrief key={`${t.key}-${t.state}`} brief={brief} fallbackText={briefText} lead={w.lead} defaultOpen={briefOpen || linkBrief} />
+        </div>
+      )}
+      {linkBrief && !showBrief && <div id={briefId} hidden />}
+
+      {(t.state === 'working' || t.state === 'in_review') && w.team && (
         <p className="tk-links">
-          {w.task_url && (
-            <a className="tk-link" href={w.task_url} target="_blank" rel="noreferrer noopener">
-              Open the task
-              <ExternalLink size={12} aria-hidden="true" />
-              <span className="sr-only"> (opens in a new tab)</span>
-            </a>
-          )}
           {w.team && (
             <span className="m">
               <Users size={12} aria-hidden="true" />
@@ -489,6 +539,42 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
         </p>
       )}
     </article>
+    </SiteOrigins.Provider>
+  );
+};
+
+/** Landed's footer (item 7): "#61 merged 11:20 · Brief · Built by Ann and Ben · reviewed by Cody". */
+const LandedFoot: React.FC<{ t: Ticket; w: ReturnType<typeof workView>; brief: React.ReactNode }> = ({ t, w, brief }) => {
+  const at = clock(t.updated_at);
+  const builders = w.builders.length ? w.builders : w.lead ? [w.lead] : [];
+  const bits: React.ReactNode[] = [];
+  if (w.pr)
+    bits.push(
+      <span>
+        <a href={w.pr.url} target="_blank" rel="noreferrer noopener" data-pr-link>
+          {w.pr.number !== null ? `#${w.pr.number}` : 'Pull request'}
+          <span className="sr-only"> (opens in a new tab)</span>
+        </a>
+        {at ? ` merged ${at}` : ' merged'}
+      </span>,
+    );
+  if (brief) bits.push(brief);
+  if (builders.length) bits.push(<span>Built by {andList(builders)}</span>);
+  if (w.reviewer) bits.push(<span>reviewed by {w.reviewer}</span>);
+  if (!bits.length) return null;
+  return (
+    <p className="tk-foot" data-landed-foot>
+      {bits.map((b, i) => (
+        <React.Fragment key={i}>
+          {i > 0 && (
+            <span className="sep" aria-hidden="true">
+              ·
+            </span>
+          )}
+          {b}
+        </React.Fragment>
+      ))}
+    </p>
   );
 };
 

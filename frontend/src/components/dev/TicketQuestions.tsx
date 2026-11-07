@@ -7,7 +7,7 @@ import { Check, ExternalLink, HelpCircle, Loader2, MessageSquare } from 'lucide-
 import type { AskPosted, AskPreview, Brief, BriefQuestion } from '../../dev/tickets';
 import { mentionParts, openQuestions } from '../../dev/tickets';
 import { clock } from '../../dev/logic';
-import { SourceChip } from './TicketBrief';
+import { SourceChip, useSiteLink } from './TicketBrief';
 
 export interface TicketQuestionsProps {
   ticketKey: string;
@@ -44,6 +44,7 @@ const Question: React.FC<{
   const labelId = `tkq-${q.id}`;
   const a = q.answer;
   const picked = a && !changing ? a.value : null;
+  const commentUrl = useSiteLink(a?.comment_url ?? null);
   return (
     <li className="tk-q" data-q={q.id} data-answered={a ? 'yes' : 'no'}>
       <h5 id={labelId}>
@@ -108,8 +109,8 @@ const Question: React.FC<{
               {clock(a.at) ? ` · ${clock(a.at)}` : ''}
             </span>
           )}
-          {a.comment_url && (
-            <a className="tk-src" href={a.comment_url} target="_blank" rel="noreferrer noopener">
+          {commentUrl && (
+            <a className="tk-src" href={commentUrl} target="_blank" rel="noreferrer noopener">
               <MessageSquare aria-hidden="true" />
               <span>comment</span>
               <span className="sr-only"> (opens in a new tab)</span>
@@ -164,7 +165,7 @@ const Preview: React.FC<{ p: AskPreview; ticketKey: string; posting: boolean; er
       </p>
     )}
     <div className="acts">
-      <span className="note">Posted once. kwant bots never edit or delete it.</span>
+      <span className="note">Posted once. It’s never edited or deleted.</span>
       <button type="button" className="tk-btn ghost" onClick={onCancel} disabled={posting}>
         Cancel
       </button>
@@ -185,6 +186,8 @@ export const TicketQuestions: React.FC<TicketQuestionsProps> = ({ ticketKey, bri
   const open = openQuestions(brief);
   const asked = qs.map((q) => q.asked_on_jira).find(Boolean) ?? null;
   const askedTo = asked?.to ?? askTo;
+  const askedUrl = useSiteLink(asked?.comment_url ?? null);
+  const askedAt = clock(asked?.at ?? null);
 
   const run = async (fn: () => Promise<void> | void) => {
     setBusy(true);
@@ -227,7 +230,9 @@ export const TicketQuestions: React.FC<TicketQuestionsProps> = ({ ticketKey, bri
           <HelpCircle size={13} aria-hidden="true" />
           {lead}’s questions
         </h4>
-        <span className="note">At most 3. Each one blocks the build.</span>
+        <span className="note" data-asked={asked ? 'yes' : undefined}>
+          {asked ? `Asked ${askedTo ?? 'them'} on Jira${askedAt ? ` at ${askedAt}` : ''}. You can still answer here.` : 'At most 3. Each one blocks the build.'}
+        </span>
       </header>
       <ol>
         {qs.map((q, i) => (
@@ -252,13 +257,10 @@ export const TicketQuestions: React.FC<TicketQuestionsProps> = ({ ticketKey, bri
       {!preview && open.length > 0 && (
         <footer>
           {asked ? (
-            <span className="note">
-              Asked {askedTo ?? 'them'} on Jira{clock(asked.at) ? ` at ${clock(asked.at)}` : ''}. You can still answer here. {lead} checks the Jira comment every 5
-              minutes. The first answer wins, here or there.
-            </span>
+            <span className="note">{lead} checks the Jira comment every 5 minutes. The first answer wins, here or there.</span>
           ) : (
             <span className="note">
-              {onAskPreview ? `Or let ${askTo ?? 'the reporter'} answer: kwant bots post one comment on the ticket.` : 'Answer here or in ' + lead + '’s chat.'}
+              {onAskPreview && onAskPost ? `Or let ${askTo ?? 'the reporter'} answer: one comment goes on the ticket, as you.` : `Answer here or in ${lead}’s chat.`}
             </span>
           )}
           {ask.s === 'error' && !ask.p && (
@@ -268,13 +270,14 @@ export const TicketQuestions: React.FC<TicketQuestionsProps> = ({ ticketKey, bri
           )}
           <span className="acts">
             {onDefaults && (
-              <button type="button" className="tk-btn ghost" disabled={busy} onClick={() => run(onDefaults)}>
+              <button type="button" className="tk-btn ghost" disabled={busy} onClick={() => run(onDefaults)} data-defaults>
+                <Check size={14} aria-hidden="true" />
                 Go with the defaults
               </button>
             )}
             {asked
-              ? asked.comment_url && (
-                  <a className="tk-btn ghost" href={asked.comment_url} target="_blank" rel="noreferrer noopener">
+              ? askedUrl && (
+                  <a className="tk-btn ghost" href={askedUrl} target="_blank" rel="noreferrer noopener">
                     See the comment
                     <ExternalLink size={12} aria-hidden="true" />
                     <span className="sr-only"> (opens in a new tab)</span>
@@ -282,8 +285,8 @@ export const TicketQuestions: React.FC<TicketQuestionsProps> = ({ ticketKey, bri
                 )
               : onAskPreview &&
                 onAskPost && (
-                  <button type="button" className="tk-btn primary" disabled={busy || ask.s === 'loading'} aria-busy={ask.s === 'loading' || undefined} onClick={openPreview} data-ask>
-                    {ask.s === 'loading' && <Loader2 size={14} className="tk-spin" aria-hidden="true" />}
+                  <button type="button" className="tk-btn ghost" disabled={busy || ask.s === 'loading'} aria-busy={ask.s === 'loading' || undefined} onClick={openPreview} data-ask>
+                    {ask.s === 'loading' ? <Loader2 size={14} className="tk-spin" aria-hidden="true" /> : <MessageSquare size={14} aria-hidden="true" />}
                     Ask on Jira
                   </button>
                 )}

@@ -1,11 +1,17 @@
 // 0.7.6 "Work from Jira": the brief on a ticket card (design.md §4) and the source chips it shares with the
 // questions and "Matches the ticket". Every word here came from Jira, Confluence or a model reading them:
-// React text only, never HTML or markdown; a chip is a link only when its url is https.
+// React text only, never HTML or markdown; a chip is a link only when its url is on the saved Jira or
+// Confluence site (api-decisions 18), which the card passes down as `SiteOrigins`.
 
-import React, { useId, useState } from 'react';
+import React, { createContext, useContext, useId, useState } from 'react';
 import { AlertTriangle, BookOpen, ChevronDown, Code2, FileText, Link2, MessageSquare, Minus, Ticket as TicketIcon } from 'lucide-react';
 import type { Brief, BriefLine, BriefQuestion, SourceRef } from '../../dev/tickets';
-import { briefMeta, codeParts } from '../../dev/tickets';
+import { briefMeta, codeParts, onSite, shortPath } from '../../dev/tickets';
+
+/** The saved site's origins. Outside a provider nothing from Jira is a link. */
+export const SiteOrigins = createContext<readonly string[]>([]);
+/** The url when it is on the saved site, else null (the chip or link stays text). */
+export const useSiteLink = (url: string | null): string | null => onSite(url, useContext(SiteOrigins));
 import { clock } from '../../dev/logic';
 
 const ICON: Record<SourceRef['kind'], React.ReactNode> = {
@@ -23,17 +29,22 @@ export const sourceLabel = (s: SourceRef): string => {
   if (s.kind === 'ticket') return 'Source: the ticket';
   if (s.kind === 'comment') return `Source: a comment${s.comment_author ? ` by ${s.comment_author}` : ''}`;
   if (s.kind === 'page') return `Source: ${s.label}${s.page_version !== null ? `, version ${s.page_version}` : ''}`;
-  if (s.kind === 'file') return `Source: ${s.file ?? s.label}${s.line !== null && s.file ? `, line ${s.line}` : ''}`;
+  if (s.kind === 'file') return `Source: ${s.file ? (s.line !== null ? `${s.file}:${s.line}` : s.file) : s.label}`;
   return `Source: ${KIND_WORD[s.kind]}, ${s.label}`;
 };
 
 /** One source chip (design §4): ticket, comment · name, page title v7, or file:line in mono. */
 export const SourceChip: React.FC<{ s: SourceRef }> = ({ s }) => {
   const cls = s.kind === 'file' ? 'tk-src f' : 'tk-src';
+  const url = useSiteLink(s.url);
+  // A file chip shows its folder too (item 3): the full path up to 36 characters, cut from the left past that.
+  const full = s.kind === 'file' && s.file ? (s.line !== null ? `${s.file}:${s.line}` : s.file) : null;
+  const shown = full ? shortPath(full) : s.label;
+  const title = full ?? s.cite ?? undefined;
   const body = (
     <>
       {ICON[s.kind]}
-      <span aria-hidden="true">{s.label}</span>
+      <span aria-hidden="true">{shown}</span>
       {s.kind === 'page' && s.page_version !== null && (
         <span aria-hidden="true" className="v">
           v{s.page_version}
@@ -41,9 +52,9 @@ export const SourceChip: React.FC<{ s: SourceRef }> = ({ s }) => {
       )}
     </>
   );
-  if (s.url) {
+  if (url) {
     return (
-      <a href={s.url} target="_blank" rel="noreferrer noopener" className={`${cls} kw-focus`} title={s.cite ?? undefined} data-src={s.kind}>
+      <a href={url} target="_blank" rel="noreferrer noopener" className={`${cls} kw-focus`} title={title} data-src={s.kind}>
         {body}
         <span className="sr-only">
           {sourceLabel(s)} (opens in a new tab)
@@ -52,7 +63,7 @@ export const SourceChip: React.FC<{ s: SourceRef }> = ({ s }) => {
     );
   }
   return (
-    <span className={cls} title={s.cite ?? undefined} data-src={s.kind}>
+    <span className={cls} title={title} aria-label={full ? sourceLabel(s) : undefined} data-src={s.kind}>
       {body}
       <span className="sr-only">{sourceLabel(s)}</span>
     </span>
@@ -122,6 +133,7 @@ export interface TicketBriefProps {
 export const TicketBrief: React.FC<TicketBriefProps> = ({ brief, fallbackText = null, lead = null, defaultOpen = false }) => {
   const [open, setOpen] = useState(defaultOpen);
   const bodyId = useId();
+  const origins = useContext(SiteOrigins);
   if (!brief && !fallbackText) return null;
   const who = brief?.author_bot ?? lead ?? null;
   const when = clock(brief?.created_at ?? null);
@@ -205,10 +217,10 @@ export const TicketBrief: React.FC<TicketBriefProps> = ({ brief, fallbackText = 
                 <span>
                   <b>Ignored part of {f.from?.kind === 'comment' ? 'a comment' : f.from?.kind === 'page' ? 'a page' : 'the ticket'}.</b> <q>{f.quote}</q>{' '}
                   {f.why ?? 'reads like an order to a bot, not a requirement.'} {who ?? 'The lead'} won’t act on it.
-                  {f.from?.url && (
+                  {f.from && onSite(f.from.url, origins) && (
                     <>
                       {' '}
-                      <a href={f.from.url} target="_blank" rel="noreferrer noopener" className="tk-link kw-focus">
+                      <a href={onSite(f.from.url, origins)!} target="_blank" rel="noreferrer noopener" className="tk-link kw-focus">
                         Show where<span className="sr-only"> (opens in a new tab)</span>
                       </a>
                     </>

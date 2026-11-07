@@ -2,7 +2,7 @@
 // What landed and Reviews. The page fetches plan §3.2's routes, updates live on the `dev_card`
 // SSE (App re-sends it as DEV_CARD_EVENT) and mounts Iris's cards (#314) through DevDeskSlots.
 
-import React, { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
 import { DEV_FEATURES, DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, gitOnlyRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
@@ -10,6 +10,7 @@ import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlot
 import { useDevMode } from './DevModeSwitch';
 import { DevStatusLine } from './DevStatusLine';
 import { TicketsPanel, useTickets } from './dev/TicketsTab';
+import { siteOrigins } from '../dev/tickets';
 import { openGitHubConnect } from './GitHubConnect';
 
 /** App re-sends the `dev_card` SSE as this window event: detail `{space_id, id, kind, status}`. */
@@ -194,9 +195,11 @@ export interface DevDeskViewProps {
   onOpenLooseEnds?: (anchor?: HTMLElement) => void;
   /** The space's teams, so a team with no repo gets "Link a repo" in the repo list. */
   teams?: DevTeamRef[];
+  /** 0.7.6: the space's bots, so a ticket's work reads "Built by Ann and Ben", not ids. */
+  bots?: { id: string; name: string }[];
 }
 
-export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams }) => {
+export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots }) => {
   const dev = useDevMode(spaceId);
   const connect = (anchor?: HTMLElement) => (onOpenLooseEnds ? onOpenLooseEnds(anchor) : openGitHubConnect({ space: spaceId, anchor }));
   // 0.7.2: with several repos, both lists filter by one (All · app · site) through `?repo=`.
@@ -211,6 +214,11 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   // 0.7.6: the Tickets tab exists only while Jira is connected; without it the desk is exactly 0.7.5's.
   const jira = useTickets(spaceId, !!dev?.on);
   const ticketsOn = !!jira.site;
+  const jiraOrigins = useMemo(() => siteOrigins(jira.site), [jira.site]);
+  const ticketNames = useMemo(
+    () => ({ bots: Object.fromEntries((bots ?? []).map((b) => [b.id, b.name])), teams: Object.fromEntries((teams ?? []).map((t) => [t.id, t.name])) }),
+    [bots, teams],
+  );
   useEffect(() => {
     if (tab === 'tickets' && !ticketsOn && !jira.loading) setTab('landed');
   }, [tab, ticketsOn, jira.loading]);
@@ -497,7 +505,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
 
           <div ref={panelRef} role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${tab}`} className="space-y-3">
             {tab === 'tickets' && ticketsOn ? (
-              <TicketsPanel space={spaceId} data={jira} />
+              <TicketsPanel space={spaceId} data={jira} names={ticketNames} />
             ) : tab === 'landed' && polling ? (
               <SkeletonCards />
             ) : first && desk.loading ? (
@@ -547,7 +555,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                 )}
               </>
             ) : reviews.length ? (
-              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} />)
+              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} />)
             ) : (
               desk.reviews && (
                 <TermEmpty

@@ -5,8 +5,8 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Settings } from 'lucide-react';
-import type { Brief, JiraSite, Ticket, TicketProgress } from '../../dev/tickets';
-import { applyProgress, emptyProgress, orderTickets, ticketsNeedCount } from '../../dev/tickets';
+import type { Brief, JiraSite, Ticket, TicketNames, TicketProgress } from '../../dev/tickets';
+import { applyProgress, emptyProgress, orderTickets, siteOrigins, ticketsNeedCount, workView } from '../../dev/tickets';
 import * as api from '../../dev/ticketApi';
 import { TicketCard } from './TicketCard';
 
@@ -74,8 +74,10 @@ export function useTickets(space: string, on: boolean): TicketsData {
 export interface TicketsPanelProps {
   space: string;
   data: TicketsData;
-  /** The label that hands tickets over, for "with the label kwant" (from the site settings). */
+  /** The label that hands tickets over, for "with the label kwant"; defaults to the site's own label. */
   handoverLabel?: string | null;
+  /** Bot and team names for the ids on each ticket's work and the site's team. */
+  names?: TicketNames;
   onOpenSettings?: () => void;
   /** Opens the lead's chat (Open Ann's chat, Change something). */
   onOpenChat?: (t: Ticket) => void;
@@ -83,14 +85,9 @@ export interface TicketsPanelProps {
 }
 
 /** One card with its own brief, checklist and actions. */
-const LiveCard: React.FC<{ space: string; t: Ticket; reload: () => void } & Pick<TicketsPanelProps, 'handoverLabel' | 'onOpenChat' | 'onOpenReview'>> = ({
-  space,
-  t,
-  reload,
-  handoverLabel,
-  onOpenChat,
-  onOpenReview,
-}) => {
+const LiveCard: React.FC<
+  { space: string; t: Ticket; reload: () => void; origins: readonly string[]; names: TicketNames } & Pick<TicketsPanelProps, 'handoverLabel' | 'onOpenChat' | 'onOpenReview'>
+> = ({ space, t, reload, origins, names, handoverLabel, onOpenChat, onOpenReview }) => {
   const [brief, setBrief] = useState<{ brief: Brief | null; text: string | null }>({ brief: null, text: null });
   const [progress, setProgress] = useState<TicketProgress>(emptyProgress);
   const wantsBrief = BRIEF_STATES.has(t.state);
@@ -112,8 +109,9 @@ const LiveCard: React.FC<{ space: string; t: Ticket; reload: () => void } & Pick
   }, [t.key, t.state]);
 
   const after = <T,>(p: Promise<T>) => p.then((v) => (reload(), v));
-  const team = t.work.team ?? '';
+  const team = workView(t, names).team ?? '';
   const b = brief.brief;
+  const act = (fn: (space: string, key: string) => Promise<unknown>) => () => void after(fn(space, t.key)).catch(reload);
 
   return (
     <TicketCard
@@ -122,7 +120,13 @@ const LiveCard: React.FC<{ space: string; t: Ticket; reload: () => void } & Pick
       briefText={brief.text}
       progress={progress}
       handoverLabel={handoverLabel}
-      onStart={t.state === 'waiting' ? () => void after(api.startTicket(space, t.key)) : undefined}
+      names={names}
+      origins={origins}
+      onStart={t.state === 'waiting' ? act(api.startTicket) : undefined}
+      onSkip={t.state === 'waiting' ? act(api.skipTicket) : undefined}
+      onStop={t.state === 'picked_up' || t.state === 'reading' ? act(api.stopTicket) : undefined}
+      onRetry={t.state === 'failed' ? act(api.retryTicket) : undefined}
+      onCloseCard={t.state === 'taken_back' ? act(api.closeTicket) : undefined}
       onStartBuilding={() => void after(api.okBrief(space, t.key))}
       onChangeBrief={onOpenChat ? () => onOpenChat(t) : undefined}
       onOpenChat={onOpenChat ? () => onOpenChat(t) : undefined}
@@ -135,8 +139,13 @@ const LiveCard: React.FC<{ space: string; t: Ticket; reload: () => void } & Pick
   );
 };
 
-export const TicketsPanel: React.FC<TicketsPanelProps> = ({ space, data, handoverLabel = null, onOpenSettings, onOpenChat, onOpenReview }) => {
+export const TicketsPanel: React.FC<TicketsPanelProps> = ({ space, data, handoverLabel: given = null, names = {}, onOpenSettings, onOpenChat, onOpenReview }) => {
   const { active, waiting, closed } = orderTickets(data.tickets);
+  const handoverLabel = given ?? data.site?.label ?? null;
+  const origins = siteOrigins(data.site);
+  const teamName = data.site?.team_id ? names.teams?.[data.site.team_id] ?? null : null;
+  const projects = data.site?.projects ?? [];
+  const common = { space, reload: data.reload, handoverLabel, origins, names };
   const host = (() => {
     try {
       return data.site?.site ? new URL(data.site.site).host : null;
@@ -147,14 +156,16 @@ export const TicketsPanel: React.FC<TicketsPanelProps> = ({ space, data, handove
   return (
     <div className="tk-list" data-tickets>
       <p className="tk-source">
-        <span>
+        <span data-source-line>
           From {host ?? 'Jira'}
+          {projects.length > 0 && ` · ${projects.join(', ')}`}
           {handoverLabel && (
             <>
               {' · label '}
               <code>{handoverLabel}</code>
             </>
           )}
+          {teamName && ` · @${teamName}`}
         </span>
         {onOpenSettings && (
           <button type="button" className="tk-textbtn" onClick={onOpenSettings}>
@@ -172,7 +183,7 @@ export const TicketsPanel: React.FC<TicketsPanelProps> = ({ space, data, handove
         <p className="tk-empty">No tickets yet. Hand one over in Jira and it shows up here within 5 minutes.</p>
       )}
       {active.map((t) => (
-        <LiveCard key={t.key} space={space} t={t} reload={data.reload} handoverLabel={handoverLabel} onOpenChat={onOpenChat} onOpenReview={onOpenReview} />
+        <LiveCard key={t.key} t={t} {...common} onOpenChat={onOpenChat} onOpenReview={onOpenReview} />
       ))}
       {waiting.length > 0 && (
         <section aria-label={`Waiting for your Start, ${waiting.length}`} className="tk-group">
@@ -180,12 +191,12 @@ export const TicketsPanel: React.FC<TicketsPanelProps> = ({ space, data, handove
             Waiting for your Start · {waiting.length}
           </h3>
           {waiting.map((t) => (
-            <LiveCard key={t.key} space={space} t={t} reload={data.reload} handoverLabel={handoverLabel} />
+            <LiveCard key={t.key} t={t} {...common} />
           ))}
         </section>
       )}
       {closed.map((t) => (
-        <LiveCard key={t.key} space={space} t={t} reload={data.reload} handoverLabel={handoverLabel} />
+        <LiveCard key={t.key} t={t} {...common} />
       ))}
       {data.dropped > 0 && (
         <p className="tk-empty">

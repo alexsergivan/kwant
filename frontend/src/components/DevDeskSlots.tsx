@@ -53,6 +53,8 @@ export interface ReviewCardProps {
   repoLabel?: (repo: string | null, name?: string | null) => string | null;
   /** 0.7.3 (any-git): the card's repo is read with plain git: no forge, so no Post button. */
   gitOnly?: boolean;
+  /** 0.7.6: the saved Jira site's origins, for "Matches the ticket" links (api-decisions 18). */
+  jiraOrigins?: readonly string[];
 }
 
 export interface ReleaseNotesSheetProps {
@@ -86,7 +88,7 @@ export const LandedList: React.FC<LandedListProps> = ({ cards, reviews, now, onO
   );
 };
 
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, forge, forgeLogin, sample, now, repoLabel, gitOnly = false }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost, forge, forgeLogin, sample, now, repoLabel, gitOnly = false, jiraOrigins }) => {
   const parsed = useMemo(() => parseReview(card), [card]);
   if (!parsed) return <CardFallback raw={card} />;
   const send = async (cardId: string, findingId: string, action: FindingAction): Promise<Review> => {
@@ -101,7 +103,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card, onFinding, onPost,
         return next;
       }
     : undefined;
-  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} forge={gitOnly ? null : forge} forgeLogin={forgeLogin} sample={sample} now={now} repoLabel={repoLabel} />;
+  return <IrisReviewCard card={parsed} onFinding={send} onPost={post} forge={gitOnly ? null : forge} forgeLogin={forgeLogin} sample={sample} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} />;
 };
 
 export const ReleaseNotesSheet: React.FC<ReleaseNotesSheetProps> = ({ card, onSaveToNotion, onDiscard, onClose }) => {

@@ -1,33 +1,43 @@
-// 0.7.6 "Matches the ticket" on the Review card (design.md §6). When a PR maps to a ticket's brief it
-// replaces "Did it do what was asked?": one row per done-when line, met / not met / unclear, with the
-// evidence the reviewer gave. Not met and unclear rows get Fix it, which sends the matching `k{n}` finding
-// through the same fix_task as any finding. Counts are the rows' own states, not a new figure.
+// 0.7.6 "Matches the ticket" on the Review card (design.md §6, api-decisions 17). When a PR maps to a ticket's
+// brief, the review's own `matches {verdict, items}` block replaces "Did it do what was asked?": one row per
+// done-when line, met / not met / unclear, with the reviewer's evidence and the line's source chips from the
+// brief. A row gets Fix it only when the review has a finding `k{n}` for it, sent through the same fix_task
+// as any finding. Counts are the rows' own states, not a new figure.
 
 import React from 'react';
 import { Check, ExternalLink, HelpCircle, Loader2, Target, X } from 'lucide-react';
-import type { DevFinding, FindingAction, ReviewCard } from '../../dev/types';
-import { matchCount, safeHref } from '../../dev/tickets';
-import { CodeText } from './TicketBrief';
+import type { DevFinding, FindingAction } from '../../dev/types';
+import type { Brief, MatchItem, ReviewMatches } from '../../dev/tickets';
+import { doneWhenFor, extraPaths, matchCount, onSite } from '../../dev/tickets';
+import { CodeText, InferredChip, SiteOrigins, SourceChip } from './TicketBrief';
 
-type Intent = NonNullable<ReviewCard['intent']>;
-type Row = Intent['rows'][number];
+/** The finding a row's Fix it sends: the review's `k{n}` finding for done-when line n, whatever its source. */
+export const rowFinding = (findings: DevFinding[], i: number): DevFinding | null => findings.find((f) => f.id === `k${i + 1}`) ?? null;
 
-/** The finding a row's Fix it sends: Vega's ticket findings are `k{done_when_index + 1}` with source ticket. */
-export const rowFinding = (findings: DevFinding[], i: number): DevFinding | null =>
-  findings.find((f) => f.source === 'ticket' && f.id === `k${i + 1}`) ?? null;
+/** The `k{n}` findings that live on the Matches rows, so Findings doesn't list them twice. */
+export const matchFindingIds = (m: ReviewMatches | null): Set<string> =>
+  new Set(m ? m.items.map((it, i) => (it.state === 'met' ? null : `k${i + 1}`)).filter((x): x is string => !!x) : []);
 
-/** True when the card should show Matches the ticket instead of the generic intent section. */
-export const isTicketIntent = (intent: ReviewCard['intent']): intent is Intent => !!intent && intent.source === 'ticket' && !intent.none;
-
-const STATE: Record<string, { word: string; chip: string | null; cls: string }> = {
+const STATE: Record<MatchItem['state'], { word: string; chip: string | null; cls: string }> = {
   met: { word: 'Met', chip: null, cls: 'ok' },
   not_met: { word: 'Not met', chip: 'Not met', cls: 'bad' },
   unclear: { word: 'Unclear', chip: 'Unclear', cls: 'warn' },
 };
 
-const MRow: React.FC<{ r: Row; i: number; f: DevFinding | null; busy: boolean; act?: (f: DevFinding, a: FindingAction) => void }> = ({ r, i, f, busy, act }) => {
-  const st = STATE[r.state] ?? STATE.unclear!;
+const MRow: React.FC<{
+  r: MatchItem;
+  i: number;
+  brief: Brief | null;
+  f: DevFinding | null;
+  busy: boolean;
+  act?: (f: DevFinding, a: FindingAction) => void;
+}> = ({ r, i, brief, f, busy, act }) => {
+  const st = STATE[r.state];
   const sent = f?.state === 'sent';
+  const line = r.sources.length > 0 || r.inferred ? null : doneWhenFor(brief, r, i);
+  const sources = r.sources.length > 0 ? r.sources : line?.sources ?? [];
+  const inferred = r.inferred || !!line?.inferred;
+  const paths = extraPaths(r.evidence, r.paths);
   return (
     <li className="tk-mrow" data-m={st.cls} data-row={i + 1}>
       <span className="st" aria-hidden="true">
@@ -38,16 +48,24 @@ const MRow: React.FC<{ r: Row; i: number; f: DevFinding | null; busy: boolean; a
           <span className="sr-only">
             Line {i + 1}, {st.word}:{' '}
           </span>
-          <CodeText text={r.text} />
+          <CodeText text={r.criterion} />
+          {(inferred || sources.length > 0) && (
+            <span className="srcs">
+              {inferred && <InferredChip />}
+              {sources.map((s, j) => (
+                <SourceChip key={j} s={s} />
+              ))}
+            </span>
+          )}
         </p>
-        {(r.evidence_text || (r.evidence_paths && r.evidence_paths.length > 0)) && (
+        {(r.evidence || paths.length > 0) && (
           <p className="ev">
-            {r.evidence_text && <CodeText text={r.evidence_text} />}
-            {r.evidence_paths && r.evidence_paths.length > 0 && (
+            {r.evidence && <CodeText text={r.evidence} />}
+            {paths.length > 0 && (
               <>
-                {r.evidence_text ? <span aria-hidden="true"> · </span> : null}
+                {r.evidence ? <span aria-hidden="true"> · </span> : null}
                 <span className="sr-only">Files: </span>
-                {r.evidence_paths.map((p, j) => (
+                {paths.map((p, j) => (
                   <React.Fragment key={p}>
                     {j > 0 ? ', ' : ''}
                     <code>{p}</code>
@@ -89,32 +107,36 @@ const MRow: React.FC<{ r: Row; i: number; f: DevFinding | null; busy: boolean; a
 };
 
 export interface TicketMatchesProps {
-  intent: Intent;
+  matches: ReviewMatches;
   findings: DevFinding[];
+  /** The ticket's brief, for each line's source chips when the review didn't copy them. */
+  brief?: Brief | null;
+  /** The saved Jira site's origins: the key links to Jira only on that site (api-decisions 18). */
+  origins?: readonly string[];
   /** The brief's author for "Ann's brief"; falls back to "the brief". */
   lead?: string | null;
   busy?: boolean;
   act?: (f: DevFinding, a: FindingAction) => void;
 }
 
-export const TicketMatches: React.FC<TicketMatchesProps> = ({ intent, findings, lead = null, busy = false, act }) => {
-  const { met, total } = matchCount(intent.rows);
-  const all = total > 0 && met === total;
-  const url = intent.url ? safeHref(intent.url) : null;
+export const TicketMatches: React.FC<TicketMatchesProps> = ({ matches, findings, brief = null, origins = [], lead = null, busy = false, act }) => {
+  const { met, total } = matchCount(matches.items);
+  const all = matches.verdict === 'met' && total > 0 && met === total;
+  const url = onSite(matches.url, origins);
   return (
-    <section className="tk-matches mt-4" aria-label="Matches the ticket" data-matches={`${met}/${total}`}>
+    <section className="tk-matches mt-4" aria-label="Matches the ticket" data-matches={`${met}/${total}`} data-verdict={matches.verdict}>
       <div className="tk-sech">
         <Target size={12} aria-hidden="true" />
         <h4>Matches the ticket</h4>
-        {intent.key &&
+        {matches.key &&
           (url ? (
             <a className="tk-key" href={url} target="_blank" rel="noreferrer noopener">
-              {intent.key}
+              {matches.key}
               <ExternalLink size={10} aria-hidden="true" />
               <span className="sr-only"> (opens in Jira in a new tab)</span>
             </a>
           ) : (
-            <span className="tk-key">{intent.key}</span>
+            <span className="tk-key">{matches.key}</span>
           ))}
         {total > 0 && (
           <span className={all ? 'sum tk-ok' : 'sum tk-warn'}>
@@ -128,11 +150,13 @@ export const TicketMatches: React.FC<TicketMatchesProps> = ({ intent, findings, 
       {total === 0 ? (
         <p className="tk-asked">The brief had no done-when lines to check.</p>
       ) : (
-        <ul className="tk-mrows" role="list">
-          {intent.rows.map((r, i) => (
-            <MRow key={i} r={r} i={i} f={r.state === 'met' ? null : rowFinding(findings, i)} busy={busy} act={act} />
-          ))}
-        </ul>
+        <SiteOrigins.Provider value={origins}>
+          <ul className="tk-mrows" role="list">
+            {matches.items.map((r, i) => (
+              <MRow key={i} r={r} i={i} brief={brief} f={r.state === 'met' ? null : rowFinding(findings, i)} busy={busy} act={act} />
+            ))}
+          </ul>
+        </SiteOrigins.Provider>
       )}
     </section>
   );

@@ -1,14 +1,16 @@
 // 0.7.6 "Work from Jira": the shared ticket and brief types, their parsers and the small display rules.
 // Owned by Iris; Pixel's setup sheet, settings row and badge import from here.
 //
-// Shapes follow the server as written on 2026-11-07:
-//   - TicketRow / TicketEventRow / JiraSite: Juno, src/db/dev_jira.rs and next-076/jira-tickets/api.md §1.4, §2.2.
-//   - Brief / Line / SourceRef / Question / Flag: Vega, src/server/dev/tickets/brief.rs and brief.md.
+// Shapes follow the server and next-076/jira-tickets/api-decisions.md (2026-11-07 09:30):
+//   - TicketRow / JiraSite: Juno, src/db/dev_jira.rs; `work` is api-decisions 11 (src/server/dev/tickets/work.rs).
+//   - Brief / Line / SourceRef / Question / Flag: Vega, brief.rs and brief.md; questions only in `brief.questions` (15).
+//   - Review `matches {verdict, items}`: api-decisions 17, its own block, not a DevFinding.
 //   - TicketProgress: the dev_ticket_progress SSE event (api.md §3).
 // Every field the design needs but the server doesn't send yet is optional and has a fallback (design.md §12).
 //
 // Everything that came from Jira, Confluence, or a model reading them is untrusted text. Components render
-// it as React text only: never HTML, never markdown, never a link unless the url is https.
+// it as React text only: never HTML, never markdown. A Jira or Confluence link is a link only when it has
+// the saved site's origin (api-decisions 18); any other link stays text.
 
 // ---------------------------------------------------------------------------------------------------
 // Small readers (the same rules as dev/types.ts)
@@ -30,7 +32,41 @@ export const safeHref = (v: unknown): string | null => {
   }
 };
 
-/** Juno serializes list columns (labels, projects, spaces) as a JSON string; accept that or a real array. */
+/**
+ * api-decisions 18: a link from a ticket, brief or citation opens only when its origin (scheme, host, port)
+ * is one of the saved sites'. With no site known (a fixture, an older server) every https link stays text.
+ */
+export function onSite(url: string | null, origins: readonly string[]): string | null {
+  if (!url || origins.length === 0) return null;
+  try {
+    const o = new URL(url).origin;
+    return origins.some((s) => {
+      try {
+        return new URL(s).origin === o;
+      } catch {
+        return false;
+      }
+    })
+      ? url
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The origins a Jira link may have: the Jira site and its Confluence site, http only when saved as http. */
+export const siteOrigins = (site: Pick<JiraSite, 'site' | 'confluence'> | null): string[] =>
+  site
+    ? [...new Set([site.site, site.confluence].filter((x): x is string => !!x && /^https?:\/\//i.test(x)).flatMap((x) => {
+        try {
+          return [new URL(x).origin];
+        } catch {
+          return [];
+        }
+      }))]
+    : [];
+
+/** Lists are arrays on the wire (api-decisions 1); a JSON string from an older server is still read. */
 export function strList(v: unknown, max = 50): string[] {
   let a: unknown = v;
   if (typeof v === 'string') {
@@ -66,28 +102,24 @@ export type TicketState = (typeof TICKET_STATES)[number];
 export type StatusCategory = 'todo' | 'in_progress' | 'done';
 export type HandedOverBy = 'label' | 'assignee' | 'jql';
 
+export type MatchVerdict = 'met' | 'not_met' | 'unclear';
+
 /**
- * What the card shows about the work kwant did on the ticket. TicketRow doesn't carry these (it has
- * thread_id/task_id/mission_id on the brief route only), so each is optional and the copy falls back to
- * "The lead" and no chips. Assumed names; see the mismatch list in the PR.
+ * api-decisions 11: who works on the ticket and where the work is. `null` on the row until work starts.
+ * Ids, not names: the card looks names up in the space's roster (`TicketNames`).
  */
 export interface TicketWork {
-  lead: string | null;
-  builders: string[];
-  reviewer: string | null;
-  team: string | null;
+  team_id: string | null;
+  lead_id: string | null;
+  builder_ids: string[];
+  reviewer_id: string | null;
   branch: string | null;
-  pr: { number: number; title: string | null; url: string | null } | null;
-  sha: string | null;
-  merged_at: string | null;
-  plan: { done: number; total: number } | null;
-  started_at: string | null;
-  /** From the review card's intent rows ("Matches the ticket"); null until reviewed. */
-  matches: { met: number; total: number } | null;
-  review_card_id: string | null;
-  task_url: string | null;
-  /** The failure line for `failed` ("Jira said 403 for the attachments. Everything else was read."). */
-  error: string | null;
+  /** https only. */
+  pr_url: string | null;
+  head_sha: string | null;
+  plan: { step: string; state: string }[];
+  /** Vega's review verdict, passed through the seam; null until reviewed. */
+  matches: MatchVerdict | null;
 }
 
 export interface Ticket {
@@ -114,37 +146,72 @@ export interface Ticket {
   jira_created: string | null;
   jira_updated: string | null;
   updated_at: string | null;
-  work: TicketWork;
+  team_id: string | null;
+  project: string | null;
+  work: TicketWork | null;
 }
 
-const work = (v: unknown): TicketWork => {
-  const o = isObj(v) ? v : {};
-  const pr = isObj(o.pr) && num(o.pr.number) !== null ? { number: num(o.pr.number)!, title: str(o.pr.title, 300), url: safeHref(o.pr.url) } : null;
-  const pair = (p: unknown, a: string, b: string) => {
-    if (!isObj(p)) return null;
-    const x = num(p[a]);
-    const y = num(p[b]);
-    return x !== null && y !== null && x >= 0 && y > 0 && x <= y ? { x, y } : null;
-  };
-  const plan = pair(o.plan, 'done', 'total');
-  const m = pair(o.matches, 'met', 'total');
+const MATCH_VERDICTS = ['met', 'not_met', 'unclear'] as const;
+
+export function parseWork(v: unknown): TicketWork | null {
+  if (!isObj(v)) return null;
+  const sha = str(v.head_sha, 64);
   return {
-    lead: str(o.lead, 80),
-    builders: strList(o.builders, 6).map((n) => n.slice(0, 80)),
-    reviewer: str(o.reviewer, 80),
-    team: str(o.team, 80),
-    branch: str(o.branch, 200),
-    pr,
-    sha: str(o.sha, 64),
-    merged_at: str(o.merged_at, 40),
-    plan: plan ? { done: plan.x, total: plan.y } : null,
-    started_at: str(o.started_at, 40),
-    matches: m ? { met: m.x, total: m.y } : null,
-    review_card_id: str(o.review_card_id, 120),
-    task_url: safeHref(o.task_url),
-    error: str(o.error, 300),
+    team_id: str(v.team_id, 120),
+    lead_id: str(v.lead_id, 120),
+    builder_ids: strList(v.builder_ids, 8),
+    reviewer_id: str(v.reviewer_id, 120),
+    branch: str(v.branch, 200),
+    pr_url: safeHref(v.pr_url),
+    head_sha: sha && /^[0-9a-f]{7,64}$/i.test(sha) ? sha : null,
+    plan: arr(v.plan)
+      .filter(isObj)
+      .map((p) => ({ step: str(p.step, 200) ?? '', state: str(p.state, 40) ?? '' }))
+      .filter((p) => p.step)
+      .slice(0, 30),
+    matches: str(v.matches) ? oneOf(v.matches, MATCH_VERDICTS, 'unclear') : null,
   };
-};
+}
+
+/** Bot and team names by id, from the space's roster. A missing id reads as "the lead" in copy. */
+export interface TicketNames {
+  bots?: Record<string, string>;
+  teams?: Record<string, string>;
+}
+
+/** The work as the card says it: names instead of ids, the PR number read from its address. */
+export interface WorkView {
+  lead: string | null;
+  builders: string[];
+  reviewer: string | null;
+  team: string | null;
+  branch: string | null;
+  pr: { number: number | null; url: string } | null;
+  sha: string | null;
+  /** Rows of the plan in each state, counted, not a new figure. */
+  plan: { done: number; total: number } | null;
+  matches: MatchVerdict | null;
+}
+
+const PR_NUMBER = /\/(?:pull|pulls|merge_requests|pull-requests)\/(\d{1,9})(?:[/?#]|$)/;
+
+export function workView(t: Pick<Ticket, 'work' | 'team_id'>, names: TicketNames = {}): WorkView {
+  const w = t.work;
+  const bot = (id: string | null) => (id ? names.bots?.[id] ?? null : null);
+  const teamId = w?.team_id ?? t.team_id;
+  const m = w?.pr_url ? PR_NUMBER.exec(w.pr_url) : null;
+  return {
+    lead: bot(w?.lead_id ?? null),
+    builders: (w?.builder_ids ?? []).map(bot).filter((n): n is string => !!n),
+    reviewer: bot(w?.reviewer_id ?? null),
+    team: teamId ? names.teams?.[teamId] ?? null : null,
+    branch: w?.branch ?? null,
+    pr: w?.pr_url ? { number: m ? Number(m[1]) : null, url: w.pr_url } : null,
+    sha: w?.head_sha ?? null,
+    plan: w && w.plan.length > 0 ? { done: w.plan.filter((p) => p.state === 'done').length, total: w.plan.length } : null,
+    matches: w?.matches ?? null,
+  };
+}
 
 /** One ticket row, or null when it has no key or summary (the card then isn't drawn; the list says so). */
 export function parseTicket(raw: unknown): Ticket | null {
@@ -178,7 +245,9 @@ export function parseTicket(raw: unknown): Ticket | null {
     jira_created: str(o.jira_created, 40),
     jira_updated: str(o.jira_updated, 40),
     updated_at: str(o.updated_at, 40),
-    work: work(o.work),
+    team_id: str(o.team_id, 120),
+    project: str(o.project, 40),
+    work: parseWork(o.work),
   };
 }
 
@@ -187,6 +256,21 @@ export function parseTicketList(raw: unknown): { tickets: Ticket[]; dropped: num
   const rows = arr(isObj(raw) ? raw.tickets : raw);
   const tickets = rows.map(parseTicket).filter((t): t is Ticket => !!t);
   return { tickets, dropped: rows.length - tickets.length, slots: isObj(raw) ? num(raw.slots) : null };
+}
+
+/**
+ * Why a closed card is closed, the same words on the one-line row and the open card (design §3, 13).
+ * `closed_resolution` is `done` (Done in Jira, the status name in `status`; or the person's Close), `deleted`,
+ * `skipped` (the person's Skip), or an older server's "done: Won't do".
+ */
+export function closedWhy(t: Pick<Ticket, 'closed_resolution' | 'status' | 'status_category'>): string {
+  const r = t.closed_resolution;
+  if (r === 'skipped') return 'skipped by you';
+  if (r === 'deleted') return 'deleted in Jira';
+  const named = r && /^done:\s*/i.test(r) ? r.replace(/^done:\s*/i, '') : null;
+  if (named) return `closed in Jira as ${named}`;
+  if (r === 'done' && t.status_category !== 'done') return 'closed by you';
+  return `closed in Jira as ${t.status ?? 'Done'}`;
 }
 
 /** The ticket waits on the person: a blocking question or a brief waiting for OK (design §7: the badge counts needs, not news). */
@@ -240,7 +324,8 @@ export const parseTicketEvents = (v: unknown): TicketEvent[] =>
 export const READ_STEPS = ['ticket', 'comments', 'links', 'confluence', 'code'] as const;
 export type ReadStep = (typeof READ_STEPS)[number];
 export type ReadState = 'waiting' | 'running' | 'done' | 'skipped';
-export type TicketProgress = Record<ReadStep, { state: ReadState; detail: string | null }>;
+/** `detail`: the row's words ("4 comments"); `note`: the right-hand column ("SHOP space"). */
+export type TicketProgress = Record<ReadStep, { state: ReadState; detail: string | null; note?: string | null }>;
 
 export const emptyProgress = (): TicketProgress =>
   Object.fromEntries(READ_STEPS.map((s) => [s, { state: 'waiting' as ReadState, detail: null }])) as TicketProgress;
@@ -255,10 +340,10 @@ export function applyProgress(p: TicketProgress, key: string, msg: unknown): Tic
   const step = oneOf(d.step, READ_STEPS, 'ticket');
   if (!READ_STEPS.includes(d.step as ReadStep)) return p;
   const state = oneOf(d.state, ['running', 'done', 'skipped'] as const, 'running');
-  return { ...p, [step]: { state, detail: str(d.detail, 120) } };
+  return { ...p, [step]: { state, detail: str(d.detail, 120), note: str(d.note, 40) } };
 }
 
-/** The checklist's fixed words when the server sent no detail. */
+/** The checklist's fixed words when the server sent no detail; the detail replaces them (never both). */
 export const READ_LABEL: Record<ReadStep, string> = {
   ticket: 'The ticket and its attachments',
   comments: 'Comments',
@@ -514,25 +599,131 @@ export function codeParts(text: string): { text: string; code: boolean }[] {
 // ---------------------------------------------------------------------------------------------------
 // Matches the ticket
 
-/** "2 of 4 met" from the review card's intent rows. Counting rows, not a new figure. */
+/** "2 of 4 met" from the review's matches items. Counting rows, not a new figure. */
 export function matchCount(rows: { state: string }[]): { met: number; total: number } {
   return { met: rows.filter((r) => r.state === 'met').length, total: rows.length };
 }
 
-/** The holo sticker on Landed: only when the review says every done-when line is met (design §3 rules). */
-export const earnsMatches = (t: Pick<Ticket, 'state' | 'work'>): boolean =>
-  t.state === 'landed' && !!t.work.matches && t.work.matches.total > 0 && t.work.matches.met === t.work.matches.total;
+/** The holo sticker on Landed: only when the review's verdict is that every done-when line is met (design §3 rules). */
+export const earnsMatches = (t: Pick<Ticket, 'state' | 'work'>): boolean => t.state === 'landed' && t.work?.matches === 'met';
+
+/** api-decisions 17: the review's own "Matches the ticket" block. */
+export interface MatchItem {
+  criterion: string;
+  state: MatchVerdict;
+  evidence: string | null;
+  /** Files the evidence names, when the server sends them apart from the sentence. */
+  paths: string[];
+  /** The done-when line's own sources, when the server copies them from the brief; else the card looks them up. */
+  sources: SourceRef[];
+  inferred: boolean;
+}
+export interface ReviewMatches {
+  verdict: MatchVerdict;
+  items: MatchItem[];
+  key: string | null;
+  url: string | null;
+}
+
+/**
+ * `review.matches = {verdict, items:[{criterion, state, evidence}]}`. `evidence` may be a sentence or
+ * `{text, paths}`. An unknown state reads as unclear, never as met. Null when there's no block.
+ */
+export function parseMatches(v: unknown): ReviewMatches | null {
+  if (!isObj(v)) return null;
+  const items = arr(v.items)
+    .filter(isObj)
+    .slice(0, 12)
+    .map((i): MatchItem | null => {
+      const criterion = str(i.criterion, 600);
+      if (!criterion) return null;
+      const ev = i.evidence;
+      const evText = isObj(ev) ? str(ev.text, 400) : str(ev, 400);
+      const paths = isObj(ev) ? strList(ev.paths, 5) : strList(i.paths, 5);
+      return {
+        criterion,
+        state: oneOf(i.state, MATCH_VERDICTS, 'unclear'),
+        evidence: evText,
+        paths,
+        sources: arr(i.sources).map(parseSource).filter((x): x is SourceRef => !!x).slice(0, 4),
+        inferred: i.inferred === true,
+      };
+    })
+    .filter((i): i is MatchItem => !!i);
+  const verdict = oneOf(v.verdict, MATCH_VERDICTS, 'unclear');
+  return {
+    // A verdict of met with a line that isn't met is the server's mistake: never shown as met.
+    verdict: verdict === 'met' && items.some((i) => i.state !== 'met') ? 'unclear' : verdict,
+    items,
+    key: str(v.key, 40),
+    url: str(v.url, 2000),
+  };
+}
+
+/**
+ * The brief's done-when line a matches item checks: same words first, else the same place in the list.
+ * Its sources become the item's chips (item 15) when the server didn't copy them.
+ */
+export function doneWhenFor(brief: Pick<Brief, 'done_when'> | null, item: Pick<MatchItem, 'criterion'>, i: number): BriefLine | null {
+  if (!brief) return null;
+  const norm = (x: string) => x.replace(/\s+/g, ' ').trim().toLowerCase();
+  return brief.done_when.find((l) => norm(l.text) === norm(item.criterion)) ?? brief.done_when[i] ?? null;
+}
+
+/**
+ * The evidence paths that the sentence doesn't already say (item 15): "…test export.filters.test.ts passes"
+ * plus tests/export.filters.test.ts adds nothing, so it isn't listed again.
+ */
+export function extraPaths(evidence: string | null, paths: string[]): string[] {
+  const said = evidence ?? '';
+  return paths.filter((p) => {
+    const bare = p.replace(/:\d+$/, '');
+    const file = bare.split('/').pop() ?? bare;
+    return !said.includes(p) && !said.includes(bare) && !said.includes(file);
+  });
+}
+
+/**
+ * A code path as a chip shows it (item 3): whole up to 36 characters, past that cut from the left at a
+ * folder with "…/", so the file and its nearest folders stay. The full path goes in title and aria-label.
+ */
+export function shortPath(p: string, max = 36): string {
+  if (p.length <= max) return p;
+  const parts = p.split('/');
+  let out = parts.pop()!;
+  while (parts.length && parts[parts.length - 1]!.length + 1 + out.length + 2 <= max) out = `${parts.pop()}/${out}`;
+  return `…/${out}`;
+}
 
 // ---------------------------------------------------------------------------------------------------
 // Jira site (GET …/dev/jira; Pixel's setup and settings read the full row)
 
 export interface JiraSite {
-  site: string | null;
+  site: string;
+  confluence: string | null;
+  projects: string[];
+  spaces: string[];
+  handover: HandedOverBy | null;
+  label: string | null;
+  team_id: string | null;
   tickets: number;
 }
+
+/** `GET …/dev/jira`: `{site: null}` (200) when not connected (api-decisions 9), which reads as null here. */
 export const parseJiraSite = (v: unknown): JiraSite | null => {
   if (!isObj(v)) return null;
-  const site = isObj(v.site) ? str(v.site.jira_url, 300) : str(v.site, 300);
+  const row = isObj(v.site) ? v.site : null;
+  const site = row ? str(row.jira_url, 300) : str(v.site, 300);
   if (!site) return null;
-  return { site, tickets: num(v.tickets) ?? 0 };
+  const r = row ?? {};
+  return {
+    site,
+    confluence: str(r.confluence_url, 300),
+    projects: strList(r.projects, 20),
+    spaces: strList(r.spaces, 20),
+    handover: str(r.handover) ? oneOf(r.handover, ['label', 'assignee', 'jql'] as const, 'jql') : null,
+    label: str(r.label, 80),
+    team_id: str(r.team_id, 120),
+    tickets: num(v.tickets) ?? (Array.isArray(v.tickets) ? v.tickets.length : 0),
+  };
 };

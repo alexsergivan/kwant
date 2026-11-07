@@ -43,7 +43,7 @@ import {
 } from '../../dev/logic';
 import type { LedState, PostState } from '../../dev/logic';
 import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
-import { TicketMatches, isTicketIntent } from './TicketMatches';
+import { TicketMatches, matchFindingIds } from './TicketMatches';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
 const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
@@ -461,7 +461,7 @@ const Stamp: React.FC<{ id: string; reviewer: string }> = ({ id, reviewer }) => 
 };
 
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel, jiraOrigins = [] }) => {
   const [card, setCard] = useState<Review>(given);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(() => Date.now());
@@ -517,10 +517,12 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const named = cardForge(card, forge);
   const branchCard = card.no_forge || card.pr === null;
   const tile = card.draft ? 'bg-zinc-500/15 text-zinc-300' : 'bg-teal-400/15 text-teal-300';
-  // 0.7.6 J12: a PR that maps to a ticket's brief shows "Matches the ticket" instead of the intent section,
-  // and its `k{n}` findings live on those rows (Fix it there), not twice in Findings.
-  const ticketIntent = isTicketIntent(card.intent) ? card.intent : null;
-  const listed = ticketIntent ? card.findings.filter((f) => f.source !== 'ticket') : card.findings;
+  // 0.7.6 J12: a PR that maps to a ticket's brief shows "Matches the ticket" (its own `matches` block,
+  // api-decisions 17) instead of the intent section, and a row's `k{n}` finding lives on that row (Fix it
+  // there), not twice in Findings.
+  const ticketMatches = card.matches;
+  const onRows = matchFindingIds(ticketMatches);
+  const listed = onRows.size ? card.findings.filter((f) => !onRows.has(f.id)) : card.findings;
   const summary = findingsSummary(listed);
   const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
   const stamp = lgtm(card) && card.reviewer ? card.reviewer.name : null;
@@ -644,8 +646,10 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       )}
 
       {/* 3. Intent, or Matches the ticket (0.7.6) */}
-      {ticketIntent && <TicketMatches intent={ticketIntent} findings={card.findings} lead={author?.name ?? null} busy={busy !== null} act={act} />}
-      {card.intent && !ticketIntent && (
+      {ticketMatches && (
+        <TicketMatches matches={ticketMatches} findings={card.findings} origins={jiraOrigins} lead={author?.name ?? null} busy={busy !== null} act={act} />
+      )}
+      {card.intent && !ticketMatches && (
         <section className="mt-4" aria-label="Did it do what was asked?">
           <SectionHead icon={<Target size={12} aria-hidden="true" />}>Did it do what was asked?</SectionHead>
           {card.intent.none ? (

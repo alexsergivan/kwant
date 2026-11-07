@@ -8,7 +8,8 @@
 .tk-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 8px; font: 500 12.5px/1 Inter, sans-serif;
   border: 1px solid var(--kw-hairline-strong); background: transparent; color: var(--t2); cursor: pointer; white-space: nowrap; text-decoration: none; }
 .tk-btn.primary { background: var(--accent-gradient); color: #fff; border-color: transparent; }
-.tk-btn.ghost { color: var(--t2); }
+.tk-btn.ghost { color: var(--t2); border-color: #3f3868; }
+.tk-btn svg { flex: none; }
 .tk-btn:hover:not([disabled]) { border-color: rgb(157 143 255 / .5); }
 .tk-btn[disabled] { opacity: .55; cursor: not-allowed; }
 .tk-btn-sm { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border-radius: 8px; font: 500 12px/1 Inter, sans-serif; border: 1px solid var(--kw-hairline-strong);
@@ -66,7 +67,7 @@
 .tk-rail li[data-s="done"]::before { background: rgb(94 234 212 / .45); }
 .tk-rail li[data-s="done"] { color: var(--t3); }
 .tk-rail li[data-s="now"] { color: var(--t1); font-weight: 600; }
-.tk-rail li[data-s="needs"] { color: var(--kw-warn); font-weight: 600; }
+.tk-rail li[data-s="needs"] { color: #fcd34d; font-weight: 600; }
 .tk-rail li[data-s="paused"] { color: var(--t3); font-weight: 600; }
 .tk-rail li[data-s="bad"] { color: var(--kw-bad); font-weight: 600; }
 .tk-rail .lb { overflow-wrap: anywhere; }
@@ -75,6 +76,12 @@
 .tk-status { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--kw-hairline); background: var(--kw-surface-main);
   animation: tk-fade 160ms ease-out both; }
 .tk-status .tx { flex: 1; min-width: 220px; }
+.tk-sdot { flex: none; width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; }
+.tk-sdot[data-d="run"] { border: 1.5px solid #9d8fff; }
+.tk-sdot[data-d="needs"] { background: #fcd34d; }
+.tk-sdot[data-d="ok"] { background: var(--kw-ok); }
+.tk-sdot[data-d="bad"] { background: var(--kw-bad); }
+.tk-sdot[data-d="off"] { border: 1.5px solid var(--t4); }
 .tk-status .b { margin: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13.5px; line-height: 20px; font-weight: 600; color: var(--t1); overflow-wrap: anywhere; }
 .tk-status .l { margin: 2px 0 0; font-size: 12.5px; line-height: 18px; color: var(--t4); overflow-wrap: anywhere; }
 .tk-status .l code, .tk-status .b code { font: 500 12px/1 'JetBrains Mono', monospace; color: var(--t1); background: var(--dv-code-bg); padding: 2px 5px; border-radius: 4px; overflow-wrap: anywhere; }
@@ -90,19 +97,27 @@
 .tk-read { font-variant-ligatures: none; margin: 10px 0 0; padding: 10px 12px; list-style: none; border-radius: 10px; background: var(--dv-code-bg); border: 1px solid var(--kw-hairline);
   font: 500 12.5px/20px 'JetBrains Mono', monospace; color: var(--t3); display: grid; gap: 2px; animation: tk-in 180ms ease-out both; }
 .tk-read li { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.tk-read li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .tk-read .m { flex: none; width: 14px; display: grid; place-items: center; }
 .tk-read .m .dot { width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid currentColor; }
 .tk-read .ok .m { color: var(--kw-ok); }
 .tk-read .run { color: var(--t1); }
 .tk-read .run .m { color: #9d8fff; }
 .tk-read .wait { color: var(--t5); }
-.tk-read li em { font-style: normal; color: var(--t4); font-size: 11.5px; }
+.tk-read li > .tx { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tk-read li > .st { flex: none; margin-left: auto; padding-left: 8px; font: 400 11px/16px 'JetBrains Mono', monospace; color: var(--t4); white-space: nowrap; }
 
 .tk-links { margin: 12px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12.5px; }
 .tk-links .m { display: inline-flex; align-items: center; gap: 4px; color: var(--t4); }
 .tk-link { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); text-decoration: none; }
 .tk-links .tk-src { color: var(--t3); }
+button.tk-src { cursor: pointer; font: inherit; font-size: 12px; }
+button.tk-src:hover { border-color: rgb(157 143 255 / .5); color: var(--t1); }
+.tk-foot { margin: 12px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12.5px; line-height: 18px; color: var(--t3); }
+.tk-foot .sep { color: var(--t5); }
+.tk-foot :is(a, button) { color: var(--t3); font: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-color: rgb(255 255 255 / .25); text-underline-offset: 2px; }
+.tk-foot :is(a, button):hover { color: var(--t1); }
+.tk-inl { color: inherit; font: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.tk-mrow .tx .srcs { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 6px; vertical-align: 1px; }
 
 .tk-mini { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 10px 14px; border-radius: 12px; border: 1px solid var(--kw-hairline); background: var(--kw-surface-raised, rgb(255 255 255 / .02)); min-width: 0; }
 .tk-mini .t { min-width: 0; flex: 1 1 160px; font-size: 13px; color: var(--t2); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -132,7 +147,8 @@
 a.tk-src:hover { border-color: rgb(157 143 255 / .5); color: var(--t1); }
 .tk-src .v { color: var(--t5); }
 .tk-src.f { font: 500 11px/1 'JetBrains Mono', monospace; }
-.tk-src.inf { border-style: dashed; color: var(--t4); font-style: italic; }
+.tk-src.inf { border-style: dashed; color: var(--t4); font-style: italic; padding-right: 7px; overflow: visible; }
+.tk-src.inf > span { overflow: visible; padding-right: 1px; }
 .tk-bl .srcs, .tk-q .srcs { display: inline-flex; flex-wrap: wrap; gap: 4px; max-width: 100%; }
 .tk-flag { margin-top: 10px; display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--dv-warn-bd); background: var(--dv-warn-bg);
   font-size: 12.5px; line-height: 18px; color: var(--t2); overflow-wrap: anywhere; }

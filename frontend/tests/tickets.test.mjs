@@ -19,10 +19,10 @@ const m = await loadBundled(`
   export * from './src/dev/tickets';
   export * as fx from './src/dev/ticketFixtures';
   export { parseReview } from './src/dev/types';
-  export { TicketCard } from './src/components/dev/TicketCard';
+  export { TicketCard, closedLine } from './src/components/dev/TicketCard';
   export { TicketBrief } from './src/components/dev/TicketBrief';
   export { TicketQuestions } from './src/components/dev/TicketQuestions';
-  export { TicketMatches, isTicketIntent } from './src/components/dev/TicketMatches';
+  export { TicketMatches, matchFindingIds } from './src/components/dev/TicketMatches';
   export { TicketsPanel, useTickets } from './src/components/dev/TicketsTab';
   export { ReviewCard } from './src/components/dev/ReviewCard';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
@@ -32,6 +32,7 @@ const m = await loadBundled(`
 const { fx } = m;
 const h = m.createElement;
 const html = (C, props) => m.renderToStaticMarkup(h(C, props));
+const N = { names: fx.NAMES, origins: ['https://yourcompany.atlassian.net'], repo: fx.REPO };
 const T = (state, extra) => m.parseTicket(fx.ticket(state, extra));
 const B = (raw = fx.BRIEF) => m.parseBrief(raw);
 
@@ -70,7 +71,8 @@ test('parseTicket keeps a valid row and drops a bad one; the list counts what it
   const t = T('working');
   assert.equal(t.key, 'TRAIL-142');
   assert.equal(t.state, 'working');
-  assert.equal(t.work.lead, 'Ann');
+  assert.equal(m.workView(t, fx.NAMES).lead, 'Ann');
+  assert.deepEqual(t.labels, ['kwant']);
   assert.equal(m.parseTicket({ key: 'x', state: 'nope' }), null);
   const l = m.parseTicketList({ tickets: [fx.ticket('waiting'), { bad: true }, fx.TICKET_151], slots: 2 });
   assert.equal(l.tickets.length, 2);
@@ -82,7 +84,8 @@ test('a row without work still parses, with null fallbacks', () => {
   delete raw.work;
   const t = m.parseTicket(raw);
   assert.ok(t);
-  assert.equal(t.work.lead, null);
+  assert.equal(t.work, null);
+  assert.equal(m.workView(t, fx.NAMES).lead, null);
   const out = html(m.TicketCard, { ticket: t });
   assert.match(out, /The lead picked it up/);
 });
@@ -110,11 +113,60 @@ test('needs count is open questions or a brief waiting for OK, never news', () =
   assert.equal(m.ticketsNeedCount(ts), 2);
 });
 
-test('earnsMatches: only landed with every done-when line met', () => {
+test('earnsMatches: only landed with the review verdict met', () => {
   assert.equal(m.earnsMatches(T('landed')), true);
-  assert.equal(m.earnsMatches(T('landed', { work: { matches: { met: 3, total: 4 } } })), false);
-  assert.equal(m.earnsMatches(T('landed', { work: { matches: { met: 0, total: 0 } } })), false);
+  assert.equal(m.earnsMatches(T('landed', { work: { matches: 'not_met' } })), false);
+  assert.equal(m.earnsMatches(T('landed', { work: { matches: null } })), false);
   assert.equal(m.earnsMatches(T('in_review')), false);
+});
+
+test('workView names ids from the roster and reads the PR number from its address', () => {
+  const v = m.workView(T('landed'), fx.NAMES);
+  assert.equal(v.lead, 'Ann');
+  assert.deepEqual(v.builders, ['Ann', 'Ben']);
+  assert.equal(v.reviewer, 'Cody');
+  assert.equal(v.team, 'Shop team');
+  assert.equal(v.pr.number, 61);
+  assert.equal(v.sha, 'a41c9e2');
+  assert.deepEqual(v.plan, { done: 4, total: 4 });
+  const bad = m.parseWork({ pr_url: 'javascript:alert(1)', head_sha: '<b>', plan: 'x', matches: 'great' });
+  assert.equal(bad.pr_url, null);
+  assert.equal(bad.head_sha, null);
+  assert.deepEqual(bad.plan, []);
+  assert.equal(bad.matches, 'unclear');
+});
+
+test('onSite keeps links on the saved Jira site only', () => {
+  const o = m.siteOrigins(m.parseJiraSite(fx.JIRA_SITE));
+  assert.deepEqual(o, ['https://yourcompany.atlassian.net']);
+  assert.equal(m.onSite('https://yourcompany.atlassian.net/browse/TRAIL-1', o), 'https://yourcompany.atlassian.net/browse/TRAIL-1');
+  assert.equal(m.onSite('https://evil.example.com/browse/TRAIL-1', o), null);
+  assert.equal(m.onSite('https://yourcompany.atlassian.net.evil.example.com/x', o), null);
+  assert.equal(m.onSite('https://yourcompany.atlassian.net/x', []), null);
+  assert.equal(m.parseJiraSite({ site: null }), null);
+});
+
+test('closedWhy uses the same words as the Tickets tab', () => {
+  assert.equal(m.closedWhy(m.parseTicket(fx.TICKET_137)), "closed in Jira as Won't do");
+  assert.equal(m.closedWhy({ closed_resolution: 'skipped', status: null, status_category: null }), 'skipped by you');
+  assert.equal(m.closedWhy({ closed_resolution: 'deleted', status: null, status_category: null }), 'deleted in Jira');
+  assert.match(m.closedLine(m.parseTicket(fx.TICKET_137)), /closed in Jira as Won't do · Nov 5 · branch kept/);
+});
+
+test('shortPath cuts from the left past 36 characters; extraPaths drops paths the sentence says', () => {
+  assert.equal(m.shortPath('src/admin/permissions.ts:41'), 'src/admin/permissions.ts:41');
+  const long = 'packages/storefront/src/admin/orders/OrdersPage.tsx:88';
+  const s = m.shortPath(long);
+  assert.ok(s.startsWith('…/') && s.length <= 36 && long.endsWith(s.slice(2)), s);
+  assert.deepEqual(m.extraPaths('Button in `OrdersPage.tsx:212`; test `export.filters.test.ts` passes', ['src/admin/OrdersPage.tsx:212', 'tests/export.filters.test.ts']), []);
+  assert.deepEqual(m.extraPaths('No background job', ['api/orders/export.ts']), ['api/orders/export.ts']);
+});
+
+test('parseMatches never shows met when a line is not met', () => {
+  const mm = m.parseMatches({ verdict: 'met', items: [{ criterion: 'a', state: 'met' }, { criterion: 'b', state: 'nope' }] });
+  assert.equal(mm.verdict, 'unclear');
+  assert.equal(mm.items[1].state, 'unclear');
+  assert.equal(m.parseMatches(null), null);
 });
 
 test('applyProgress folds SSE steps for this ticket only', () => {
@@ -144,7 +196,7 @@ const STATE_COPY = {
 for (const [state, re] of Object.entries(STATE_COPY)) {
   test(`card renders ${state} with its sentence and a labelled rail`, () => {
     const brief = ['needs_answer', 'brief_ready', 'working', 'in_review', 'landed', 'taken_back'].includes(state) ? B(state === 'needs_answer' ? fx.BRIEF : fx.BRIEF_ANSWERED) : null;
-    const out = html(m.TicketCard, { ticket: T(state), brief, progress: state === 'reading' ? m.emptyProgress() : null, onStart: () => {}, onStartBuilding: () => {} });
+    const out = html(m.TicketCard, { ...N, ticket: T(state), brief, progress: state === 'reading' ? m.emptyProgress() : null, onStart: () => {}, onStartBuilding: () => {} });
     assert.match(out, re);
     assert.match(out, new RegExp(`data-state="${state}"`));
     assert.match(out, /<ol class="tk-rail" aria-label="Progress\. (Step \d of 6: [^"]+|Not started|All steps done)"/);
@@ -153,16 +205,38 @@ for (const [state, re] of Object.entries(STATE_COPY)) {
 }
 
 test('landed card: holo only when every done-when line is met', () => {
-  const all = html(m.TicketCard, { ticket: T('landed'), brief: B(fx.BRIEF_ANSWERED) });
-  // the fixture landed has matches 4/4
+  const all = html(m.TicketCard, { ...N, ticket: T('landed'), brief: B(fx.BRIEF_ANSWERED) });
   assert.match(all, /data-holo/);
   assert.match(all, /aria-label="Earned: matches the ticket"/);
-  const gap = html(m.TicketCard, { ticket: T('landed', { work: { matches: { met: 3, total: 4 } } }), brief: B(fx.BRIEF_ANSWERED) });
+  const gap = html(m.TicketCard, { ...N, ticket: T('landed', { work: { matches: 'not_met' } }), brief: B(fx.BRIEF_ANSWERED), onOpenReview: () => {} });
   assert.doesNotMatch(gap, /data-holo/);
 });
 
+test('landed footer replaces the brief row: PR, merge time, Brief, who built and reviewed', () => {
+  const out = html(m.TicketCard, { ...N, ticket: T('landed'), brief: B(fx.BRIEF_ANSWERED) });
+  assert.match(out, /data-landed-foot/);
+  assert.match(out, /data-pr-link="true">#61</);
+  assert.match(out, /merged 11:20/);
+  assert.match(out, /Built by Ann and Ben/);
+  assert.match(out, /reviewed by Cody/);
+  assert.doesNotMatch(out, /class="tk-brief"/);
+});
+
+test('taken back: no brief row; Kept: branch · Brief', () => {
+  const out = html(m.TicketCard, { ...N, ticket: T('taken_back'), brief: B(fx.BRIEF_ANSWERED) });
+  assert.match(out, /Kept:/);
+  assert.match(out, /TRAIL-142-export-orders/);
+  assert.doesNotMatch(out, /class="tk-brief"/);
+});
+
+test('needs: the rail says Needs you; a state dot leads the title', () => {
+  const out = html(m.TicketCard, { ...N, ticket: T('needs_answer'), brief: B() });
+  assert.match(out, />Needs you</);
+  assert.match(out, /class="tk-sdot" data-d="needs"/);
+});
+
 test('closed is a one-line row that expands on Show', async () => {
-  const host = await mount(m.TicketCard, { ticket: T('closed') });
+  const host = await mount(m.TicketCard, { ...N, ticket: m.parseTicket(fx.TICKET_137) });
   assert.ok(host.querySelector('.tk-mini'));
   assert.equal(host.querySelector('article'), null);
   await click([...host.querySelectorAll('button')].find((b) => /Show/.test(b.textContent)));
@@ -179,8 +253,10 @@ test('a missing handler hides its button', () => {
 test('reading shows the live checklist', () => {
   let p = m.emptyProgress();
   for (const msg of fx.PROGRESS_MID) p = m.applyProgress(p, 'TRAIL-142', msg);
-  const out = html(m.TicketCard, { ticket: T('reading'), progress: p });
+  const out = html(m.TicketCard, { ...N, ticket: T('reading'), progress: p });
   assert.match(out, /class="tk-read"/);
+  assert.match(out, /<span class="st"><span class="sr-only">: <\/span>SHOP space<\/span>/);
+  assert.doesNotMatch(out, /Reading the ticket/);
   assert.match(out, /class="ok"/);
   assert.match(out, /class="run"/);
 });
@@ -193,7 +269,7 @@ const EVIL = '<img src=x onerror="alert(1)"> [click](javascript:alert(1))';
 test('ticket summary and brief text never become HTML or links', async () => {
   const t = T('brief_ready', { summary: EVIL });
   const raw = { ...fx.BRIEF_ANSWERED, goal: { text: EVIL, sources: [{ kind: 'page', label: 'evil', url: 'javascript:alert(1)' }] } };
-  const host = await mount(m.TicketCard, { ticket: t, brief: B(raw), onStartBuilding: () => {} });
+  const host = await mount(m.TicketCard, { ...N, ticket: t, brief: B(raw), onStartBuilding: () => {} });
   assert.equal(host.querySelector('img'), null);
   assert.equal(host.querySelector('a[href^="javascript"]'), null);
   assert.ok(host.textContent.includes('<img src=x onerror="alert(1)">'));
@@ -234,6 +310,8 @@ test('questions show why they block, the choices, and the default with its reaso
   assert.match(out, /Default: /);
   assert.match(out, /Go with the defaults/);
   assert.match(out, /Ask on Jira/);
+  assert.match(out, /Or let Dana Park answer: one comment goes on the ticket, as you\./);
+  assert.equal((out.match(/class="tk-btn ghost[^"]*"/g) ?? []).length, 2, 'defaults and Ask on Jira are ghost');
 });
 
 test('Ask on Jira shows the exact comment first and posts only on Post comment', async () => {
@@ -256,6 +334,8 @@ test('Ask on Jira shows the exact comment first and posts only on Post comment',
   assert.ok(prev);
   assert.ok(prev.textContent.includes('before we start TRAIL-142'));
   assert.match(prev.textContent, /sam@example\.com/);
+  assert.match(prev.textContent, /Posted once\. It’s never edited or deleted\./);
+  assert.match(prev.textContent, /— Ann, a kwant bot on the Shop team/);
   await click([...prev.querySelectorAll('button')].find((b) => /Cancel/.test(b.textContent)));
   assert.equal(host.querySelector('.tk-jprev'), null);
   assert.equal(posts, 0);
@@ -273,10 +353,10 @@ test('picking a choice answers that question', async () => {
 });
 
 test('once asked, the card says it waits for the answer on Jira and offers See the comment', () => {
-  const out = html(m.TicketCard, { ticket: T('needs_answer'), brief: B(fx.BRIEF_ASKED), onAskPreview: async () => fx.ASK_PREVIEW });
-  assert.match(out, /Waiting for Dana Park’s answer on Jira/);
-  assert.match(out, /See the comment/);
-  assert.doesNotMatch(out, /data-ask/);
+  const out = html(m.TicketCard, { ...N, ticket: T('needs_answer'), brief: B(fx.BRIEF_ASKED), onAskPreview: async () => fx.ASK_PREVIEW });
+  assert.match(out, /Asked Dana Park on Jira at 10:04\. You can still answer here\./);
+  assert.match(out, /Ann checks the Jira comment every 5 minutes\. The first answer wins, here or there\./);
+  assert.doesNotMatch(out, /data-ask=/);
 });
 
 // ---------------------------------------------------------------------------------------------------
@@ -285,14 +365,17 @@ test('once asked, the card says it waits for the answer on Jira and offers See t
 test('Matches replaces "Did it do what was asked?" and hides ticket findings from the list', () => {
   const card = m.parseReview(fx.REVIEW_GAPS);
   assert.ok(card, 'review fixture parses');
-  assert.equal(m.isTicketIntent(card.intent), true);
+  assert.ok(card.matches);
+  assert.deepEqual([...m.matchFindingIds(card.matches)], ['k3', 'k4']);
   const out = html(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async () => {} });
   assert.match(out, /aria-label="Matches the ticket"/);
   assert.doesNotMatch(out, /Did it do what was asked/);
   assert.match(out, /2 of 4 met/);
   assert.equal((out.match(/data-fix="/g) ?? []).length, 2, 'Fix it on the not met and unclear rows only');
   assert.equal((out.match(/data-m="ok"/g) ?? []).length, 2);
-  assert.doesNotMatch(out, /TRAIL-142 says the work is done when/, 'ticket findings are not repeated in Findings');
+  assert.doesNotMatch(out, /TRAIL-142 says the work is done when/, 'row findings are not repeated in Findings');
+  assert.match(out, /class="srcs"/, 'rows bring back their source chips');
+  assert.doesNotMatch(out, /<code>tests\/export\.filters\.test\.ts<\/code>/, 'paths the sentence says are not listed again');
 });
 
 test('all met: n of n met, no Fix it', () => {
@@ -311,7 +394,7 @@ test('Fix it sends the matching k-finding', async () => {
 });
 
 test('a review without a ticket keeps the old intent section', () => {
-  const raw = { ...fx.REVIEW_GAPS, intent: { ...fx.REVIEW_GAPS.intent, source: 'pr', key: null, url: null } };
+  const raw = { ...fx.REVIEW_GAPS, matches: null, findings: [], intent: { source: 'pr', asked: 'Export orders', none: false, rows: [{ state: 'met', text: 'Export button' }] } };
   const card = m.parseReview(raw);
   const out = html(m.ReviewCard, { card, now: fx.TICKET_NOW, onFinding: async () => {} });
   assert.doesNotMatch(out, /aria-label="Matches the ticket"/);
@@ -348,8 +431,9 @@ test('Dev mode off: nothing is read at all', async () => {
 
 test('TicketsPanel groups active, waiting and closed', () => {
   const tickets = [T('working'), m.parseTicket(fx.TICKET_151), m.parseTicket(fx.TICKET_148), m.parseTicket(fx.TICKET_137), m.parseTicket(fx.TICKET_139)].filter(Boolean);
-  const data = { site: { site: fx.JIRA }, tickets, dropped: 0, loading: false, error: null, needs: m.ticketsNeedCount(tickets), reload() {} };
-  const out = html(m.TicketsPanel, { space: 'sp_demo', data, handoverLabel: 'kwant' });
-  assert.match(out, /From yourcompany\.atlassian\.net/);
+  const data = { site: m.parseJiraSite(fx.JIRA_SITE), tickets, dropped: 0, loading: false, error: null, needs: m.ticketsNeedCount(tickets), reload() {} };
+  const out = html(m.TicketsPanel, { space: 'sp_demo', data, names: fx.NAMES });
+  assert.match(out, /From yourcompany\.atlassian\.net · TRAIL · label <code>kwant<\/code> · @Shop team/);
+  assert.match(out, /closed in Jira as Won&#x27;t do · Nov 5 · branch kept/);
   assert.match(out, /data-tickets/);
 });
