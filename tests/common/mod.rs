@@ -40,6 +40,9 @@ prompt = args[-1] if args else ""
 out_dir = os.environ["KWNT_TEST_PROMPTS"]
 with open(os.path.join(out_dir, "%d-%d" % (os.getpid(), time.time_ns())), "w") as f:
     f.write("\n".join(args))
+# FAILTURN: the CLI dies with no output (exit 3), so the turn fails
+if "FAILTURN" in prompt:
+    sys.exit(3)
 # A no-tools turn (--tools ""): say so first, like claude's init line, or kwnt stops the run
 if "--tools" in args:
     print(json.dumps({"type": "system", "subtype": "init", "tools": [], "mcp_servers": [],

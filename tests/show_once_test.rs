@@ -15,13 +15,18 @@ use kwnt::{
 };
 use serde_json::{json, Value};
 
+/// A port in 9491–9499. More tests than ports run at once, so wait for one to finish (its runtime
+/// drops its listener) rather than fail.
 async fn bind_free() -> tokio::net::TcpListener {
-    for port in 9491..=9499 {
-        if let Ok(l) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
-            return l;
+    for _ in 0..1200 {
+        for port in 9491..=9499 {
+            if let Ok(l) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                return l;
+            }
         }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    panic!("no free port in 9491-9499");
+    panic!("no free port in 9491-9499 for 2 minutes");
 }
 
 /// `common::setup`, on a port in 9491–9499.
@@ -388,7 +393,7 @@ async fn stop_takes_handed_back_and_a_dropped_socket_is_closed() {
 /// Claims Take over on `stage`'s socket, starts a recording of bot `b` there and installs it.
 async fn live_recording(env: &Env, stage: &mut kwnt::server::show_once::stage::StageRecorder) -> String {
     use kwnt::server::show_once::stage::Cmd;
-    stage.claim();
+    stage.claim().await;
     let (s, v) = call(&env.app, "POST", "/api/show-once/recordings", Some(json!({"bot": env.b, "first_note": "watch me"}))).await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
     let id = v["recording"]["id"].as_str().unwrap().to_string();
@@ -438,4 +443,140 @@ async fn hand_back_gives_handed_back_and_the_first_reason_wins() {
     stage.closed().await;
     let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
     assert_eq!((r.state.as_str(), r.stop_reason.as_deref()), ("stopped", Some("handed_back")));
+}
+
+#[tokio::test]
+async fn the_test_seams_are_routes_only_with_the_test_seams_feature() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+    let env = env().await;
+    // `cargo test` builds kwnt with the feature (the dev-dependency in Cargo.toml)
+    const { assert!(kwnt::clock::TEST_SEAMS) };
+    let post = |uri: &str| Request::post(uri).header("content-type", "application/json").body(Body::from("{}")).unwrap();
+    // Without the feature (a release, `make run` or Docker build) the routes don't exist
+    let without = kwnt::server::show_once::routes::router_with(false).with_state(env.state.clone());
+    for uri in ["/api/show-once/test/clock", "/api/show-once/test/sweep"] {
+        let r = without.clone().oneshot(post(uri)).await.unwrap();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+    let with = kwnt::server::show_once::routes::router_with(true).with_state(env.state.clone());
+    let r = with.oneshot(post("/api/show-once/test/sweep")).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    // No show_once seam is gated on debug_assertions any more (#399 review H1)
+    for f in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/src/server/show_once")).unwrap() {
+        let path = f.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("debug_assertions"), "{}", path.display());
+    }
+}
+
+#[tokio::test]
+async fn a_failed_trial_marks_its_failure_note_before_the_chat_refreshes() {
+    let env = env().await;
+    let rec = stopped_recording(&env, &format!("REPLYTEXT:{}", b64(&canned_draft()))).await;
+    let skill = written_skill(&env, &rec).await;
+    let skill_id = skill["id"].as_str().unwrap().to_string();
+    let mut events = env.state.event_sender.subscribe();
+    let try_uri = format!("/api/show-once/skills/{skill_id}/try");
+    let mut tried = false;
+    for _ in 0..300 {
+        let (s, v) = call(&env.app, "POST", &try_uri, Some(json!({"inputs": {"date_range": "FAILTURN"}}))).await;
+        if s == StatusCode::ACCEPTED {
+            tried = true;
+            break;
+        }
+        assert_eq!(v["error"], "bot_busy", "{v}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(tried);
+    let trial = json!({"skill_id": skill_id, "recording_id": rec});
+    let meta = |m: &kwnt::db::models::Message| serde_json::from_str::<Value>(m.meta.as_deref().unwrap_or("{}")).unwrap();
+    // The chat refreshes on the turn's error event: the failure note it reads then has the marker
+    let mut at_error = None;
+    let mut seen = Vec::new();
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        loop {
+            // The turn's own events come wrapped in its tag
+            let e = match events.recv().await {
+                Ok(kwnt::RuntimeEvent::Scoped { event, .. }) => Ok(*event),
+                e => e,
+            };
+            if let Ok(e) = &e {
+                seen.push(format!("{e:?}").chars().take(160).collect::<String>());
+            }
+            match e {
+                Ok(kwnt::RuntimeEvent::Error { kwant_id: Some(k), .. }) if k == env.a && at_error.is_none() => {
+                    let note = messages(&env, &env.a).await.into_iter().rev().find(|m| meta(m)["kind"] == "turn_failed");
+                    at_error = Some(note.expect("the failure note is saved before the error event"));
+                }
+                Ok(kwnt::RuntimeEvent::TrialEnded { outcome, .. }) => break outcome,
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(e) => panic!("{e}"),
+            }
+        }
+    })
+    .await
+    .expect("show_once_trial_ended");
+    assert_eq!(ended, "failed");
+    let note = at_error.unwrap_or_else(|| panic!("no error event for the bot: {seen:#?}"));
+    assert_eq!(meta(&note)["trial"]["skill_id"], skill_id.as_str(), "{:?}", note.meta);
+    assert_eq!(meta(&note)["trial"]["recording_id"], rec.as_str(), "{:?}", note.meta);
+    // After the end, the note is the trial's last message: it carries the outcome; the line doesn't
+    let note = env.state.db.get_message(&note.id).await.unwrap().unwrap();
+    assert_eq!(meta(&note)["trial"]["outcome"], "failed", "{:?}", note.meta);
+    assert_eq!(meta(&note)["kind"], "turn_failed");
+    let line = messages(&env, &env.a).await.into_iter().find(|m| m.text.contains("You started a trial")).unwrap();
+    assert_eq!(meta(&line)["trial"], trial, "{:?}", line.meta);
+    // The skill is still waiting for review
+    let (_, v) = call(&env.app, "GET", &format!("/api/skills/{skill_id}"), None).await;
+    assert_eq!(v["status"], "pending", "{v}");
+}
+
+#[tokio::test]
+async fn another_window_taking_over_stops_the_recording_as_closed() {
+    use kwnt::server::show_once::stage::{Act, Cmd, StageRecorder};
+    let env = env().await;
+    let mut first = StageRecorder::new(env.state.clone(), env.b.clone(), 21);
+    let id = live_recording(&env, &mut first).await;
+
+    // A second window takes Take over on the same stage
+    let mut second = StageRecorder::new(env.state.clone(), env.b.clone(), 22);
+    second.claim().await;
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!((r.state.as_str(), r.stop_reason.as_deref()), ("stopped", Some("closed")));
+    assert!(!second.is_live());
+
+    // The first window is told, takes its recorder off and shows `closed`
+    let cmd = tokio::time::timeout(std::time::Duration::from_secs(5), first.next_cmd()).await.unwrap().unwrap();
+    assert_eq!(cmd, Cmd::End { recording_id: id.clone(), reason: "closed".into() });
+    let acts = first.on_cmd(cmd).await;
+    assert!(acts.contains(&Act::Uninstall), "{acts:?}");
+    assert!(acts.iter().any(|a| matches!(a, Act::Send(f) if f["type"] == "skill.recording.stopped" && f["reason"] == "closed")), "{acts:?}");
+    assert!(!first.is_live());
+    // Its link is gone: one None, then nothing (no busy loop)
+    let none = tokio::time::timeout(std::time::Duration::from_secs(5), first.next_cmd()).await.unwrap();
+    assert!(none.is_none());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(200), first.next_cmd()).await.is_err());
+    // The first window closing later changes nothing: the first reason wins and the second keeps the stage
+    first.closed().await;
+    assert!(kwnt::server::show_once::stage::taken_over(&env.b));
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!(r.stop_reason.as_deref(), Some("closed"));
+    let (_, v) = call(&env.app, "GET", &format!("/api/show-once/recordings?bot={}", env.b), None).await;
+    assert_eq!(v["recording"]["id"], id.as_str(), "the review is offered again");
+    assert_eq!(v["recording"]["stop_reason"], "closed");
+    assert_eq!(v["recording"]["step_count"], r.step_count);
+
+    // A stop that was already there wins over a takeover: Hand back, then another window
+    let (s, _) = call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    second.handed_back().await;
+    let mut third = StageRecorder::new(env.state.clone(), env.b.clone(), 23);
+    let id = live_recording(&env, &mut third).await;
+    third.handed_back().await;
+    let mut fourth = StageRecorder::new(env.state.clone(), env.b.clone(), 24);
+    fourth.claim().await;
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!(r.stop_reason.as_deref(), Some("handed_back"));
 }

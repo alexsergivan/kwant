@@ -1064,7 +1064,7 @@ async fn stream(
                                     Ok(guard) => {
                                         lease = Some(guard);
                                         // Show it once can start on this stage now
-                                        rec.claim();
+                                        rec.claim().await;
                                         // a button left down by an earlier view would turn the
                                         // person's first click into a drag
                                         let held = ctrl.pointer_held_slot().lock().unwrap_or_else(|e| e.into_inner()).take();

@@ -174,6 +174,8 @@ pub async fn start(state: &AppState, skill_id: &str, given: HashMap<String, Stri
         let _job = job;
         let mut opts = TurnOpts::default();
         opts.extra_meta = Some(json!({"trial": trial}));
+        // a failure note carries it when the chat refreshes on the turn's error, not only after
+        opts.failure_meta = Some(json!({"trial": trial}));
         let reply = try_kwant_turn(&scope, &b, p, opts).await;
         let outcome = outcome(reply.is_ok(), scope.cancel_token.is_cancelled());
         mark_the_rest(&st, &b.id, &after, &trial, outcome).await;

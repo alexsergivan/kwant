@@ -6,7 +6,7 @@
 //!
 //! A stage runs one bot's recording at a time. Hand back (the person releasing Take over) stops it
 //! with `handed_back`; Take over ending without that (the tab closed, the socket gone, the computer
-//! slept) stops it with `closed`; a restart stops it (`restart`, see
+//! slept, another window taking over) stops it with `closed`; a restart stops it (`restart`, see
 //! [`crate::db::Database::stop_leftover_recordings`]). Every one keeps the steps, and the first
 //! reason wins.
 
@@ -95,11 +95,25 @@ impl StageRecorder {
         self.live.is_some()
     }
 
-    /// This socket took Take over: it's the stage's recorder from now on.
-    pub fn claim(&mut self) {
+    /// This socket took Take over: it's the stage's recorder from now on. A recording still live
+    /// on the stage isn't this socket's: Take over ended in that other window (or with no window
+    /// left) without Hand back, so it stops with `closed`, its steps kept for review, and that
+    /// window takes its recorder off. The first reason wins.
+    pub async fn claim(&mut self) {
         let (tx, rx) = mpsc::unbounded_channel();
-        links().insert(self.stage.clone(), Link { socket: self.socket, tx });
+        let old = links().insert(self.stage.clone(), Link { socket: self.socket, tx });
         self.rx = Some(rx);
+        let Ok(Some(rec)) = self.state.db.live_recording_on(&self.stage).await else { return };
+        if self.live.as_deref() == Some(rec.id.as_str()) {
+            return;
+        }
+        let _ = self.state.db.stop_recording(&rec.id, "closed", now()).await;
+        let stopped = self.state.db.get_recording(&rec.id).await.ok().flatten().unwrap_or(rec);
+        emit(&self.state, &stopped).await;
+        if let Some(old) = old.filter(|l| l.socket != self.socket) {
+            let reason = stopped.stop_reason.clone().unwrap_or_else(|| "closed".into());
+            let _ = old.tx.send(Cmd::End { recording_id: stopped.id.clone(), reason });
+        }
     }
 
     fn unlink(&mut self) {
@@ -110,10 +124,17 @@ impl StageRecorder {
         self.rx = None;
     }
 
-    /// The next command from the routes; never resolves while the socket isn't linked.
+    /// The next command from the routes; never resolves while the socket isn't linked. `None`
+    /// once, when another window took the stage over (the link is gone); pending after that.
     pub async fn next_cmd(&mut self) -> Option<Cmd> {
         match self.rx.as_mut() {
-            Some(rx) => rx.recv().await,
+            Some(rx) => {
+                let cmd = rx.recv().await;
+                if cmd.is_none() {
+                    self.rx = None;
+                }
+                cmd
+            }
             None => std::future::pending().await,
         }
     }

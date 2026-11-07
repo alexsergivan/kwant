@@ -402,25 +402,35 @@ pub struct ClockIn {
     offset_secs: i64,
 }
 
+/// `POST /api/show-once/test/clock`: only registered in a build with the `test-seams` feature
+/// (see [`router_with`]), and refused anyway without it.
 pub async fn test_clock(Json(p): Json<ClockIn>) -> Response {
-    if !cfg!(debug_assertions) {
+    if !crate::clock::TEST_SEAMS {
         return StatusCode::NOT_FOUND.into_response();
     }
     crate::clock::set_test_offset(p.offset_secs);
     Json(json!({"offset_secs": crate::clock::offset_secs(), "now": crate::clock::now().to_rfc3339()})).into_response()
 }
 
+/// `POST /api/show-once/test/sweep`: like [`test_clock`], `test-seams` builds only.
 pub async fn test_sweep(State(state): State<AppState>) -> Response {
-    if !cfg!(debug_assertions) {
+    if !crate::clock::TEST_SEAMS {
         return StatusCode::NOT_FOUND.into_response();
     }
     Json(super::sweep(&state).await).into_response()
 }
 
 /// Every Show it once route (api.md §1). Merged into `create_router` before the auth layers, so
-/// the guard (and `auth::person_only`) covers all of them.
+/// the guard (and `auth::person_only`) covers all of them. The §1.7 test seams are there only in a
+/// build with the `test-seams` feature (`cargo test`, or a QA build made with `--features
+/// test-seams`); a release, `make run` or Docker build doesn't have the routes at all.
 pub fn router() -> Router<AppState> {
-    Router::new()
+    router_with(crate::clock::TEST_SEAMS)
+}
+
+/// [`router`], with or without the §1.7 test seams.
+pub fn router_with(seams: bool) -> Router<AppState> {
+    let routes = Router::new()
         .route("/api/show-once/recordings", post(start).get(open_for))
         .route("/api/show-once/recordings/:id", get_route(get).delete(discard))
         .route("/api/show-once/recordings/:id/notes", post(add_note))
@@ -430,7 +440,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/show-once/recordings/:id/steps/:step_id/restore", post(restore_step))
         .route("/api/show-once/recordings/:id/write", post(write))
         .route("/api/show-once/skills/:skill_id/steps", delete(delete_skill_steps))
-        .route("/api/show-once/skills/:skill_id/try", post(try_once))
+        .route("/api/show-once/skills/:skill_id/try", post(try_once));
+    if !seams {
+        return routes;
+    }
+    routes
         .route("/api/show-once/test/clock", post(test_clock))
         .route("/api/show-once/test/sweep", post(test_sweep))
 }
