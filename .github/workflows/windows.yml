@@ -62,3 +62,94 @@ jobs:
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests
         run: cargo test --locked --no-fail-fast
+
+  # The desktop app and its installer (Pixel): an unsigned per-user NSIS .exe with the WebView2
+  # download bootstrapper (apps/mac/tauri.windows.conf.json), then a silent install and a smoke test.
+  app:
+    name: app (windows installer)
+    runs-on: windows-latest
+    needs: frontend
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: apps/mac -> target
+      - name: App tests
+        working-directory: apps/mac
+        run: cargo test --locked
+      - name: Build the NSIS installer
+        working-directory: apps/mac
+        shell: bash
+        run: npx --yes @tauri-apps/cli@2.12.4 build --ci --bundles nsis -- --locked
+      - name: Installer file
+        id: nsis
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem apps/mac/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "no NSIS installer was built"; exit 1 }
+          "{0}  {1:N1} MB" -f $exe.Name, ($exe.Length / 1MB)
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kwant-windows-installer
+          path: ${{ steps.nsis.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Silent install, start, /api/auth/status, quit
+        shell: pwsh
+        env:
+          SETUP: ${{ steps.nsis.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = Start-Process -FilePath $env:SETUP -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { Write-Error "the installer exited with $($install.ExitCode)"; exit 1 }
+          $dir = Join-Path $env:LOCALAPPDATA 'kwant'
+          $app = Join-Path $dir 'kwant.exe'
+          if (-not (Test-Path $app)) {
+            Get-ChildItem $dir -ErrorAction SilentlyContinue | Format-Table Name, Length
+            Write-Error "kwant.exe isn't in $dir after a per-user install"; exit 1
+          }
+          Get-ChildItem $dir | Format-Table Name, Length
+          $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\kwant'
+          "Start menu: $(Test-Path $shortcut)"
+
+          $proc = Start-Process -FilePath $app -PassThru
+          $status = $null
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and -not $status) {
+            if ($proc.HasExited) { break }
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 'http://127.0.0.1:8799/api/auth/status'
+              if ($r.StatusCode -eq 200) { $status = $r.Content }
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          $log = Join-Path $env:USERPROFILE '.kwnt\desktop-app.log'
+          if (-not $status) {
+            "app exited: $($proc.HasExited)"
+            if (Test-Path $log) { Get-Content $log -Tail 80 }
+            Write-Error "kwant inside the app never answered /api/auth/status"; exit 1
+          }
+          "/api/auth/status: $status"
+          $json = $status | ConvertFrom-Json
+          if ($null -eq $json.auth_required) { Write-Error "that isn't kwant's auth status"; exit 1 }
+          "data dir: $(Test-Path (Join-Path $env:USERPROFILE '.kwnt'))"
+          if (Test-Path $log) { Get-Content $log -Tail 20 }
+
+          Stop-Process -Id $proc.Id
+          $proc.WaitForExit(15000) | Out-Null
+          Get-Process kwant -ErrorAction SilentlyContinue | Stop-Process -Force
+          $uninstaller = Join-Path $dir 'uninstall.exe'
+          if (Test-Path $uninstaller) {
+            $u = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+            "uninstall exit code: $($u.ExitCode)"
+          }
