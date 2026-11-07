@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Approvals &amp; saved passwords: Three approval modes, and saved website passwords, including Bitwarden.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-29">
+<meta property="article:modified_time" content="2026-11-07">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Human approval for AI agent actions · kwant">
 <meta name="twitter:description" content="kwant asks before bots run commands or edit outside their folder. Three approval modes per space or bot, plus saved passwords in a vault or Bitwarden.">
@@ -68,8 +68,8 @@
   <li><strong>Deny</strong> refuses it, and the bot is told.</li>
 </ul>
 <figure>
-  <div class="frame"><a class="zoom" href="../assets/media/desktop-approval-2880.webp?v=46d62cd61a" data-caption="An Action Approval Required card for a GitHub create pull request call, showing the full arguments with Deny, Allow Once and Always Allow buttons."><img class="app" src="../assets/media/desktop-approval-1440.webp?v=d64714605d" srcset="../assets/media/desktop-approval-1440.webp?v=d64714605d 1440w, ../assets/media/desktop-approval-2880.webp?v=46d62cd61a 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="An Action Approval Required card for a GitHub create pull request call, showing the full arguments with Deny, Allow Once and Always Allow buttons."></a></div>
-  <figcaption>TechLead asks before opening a pull request.</figcaption>
+  <div class="frame"><a class="zoom" href="../assets/media/desktop-approval-2880.webp?v=64fdb09a35" data-caption="An Approval needed card in a bot&#x27;s chat: Ann wants to open a pull request on GitHub, with the title Trip waitlist with timed seat holds and the repo trailhead/storefront, and the full arguments shown below, with Deny, Always allow and Allow once buttons."><img class="app" src="../assets/media/desktop-approval-1440.webp?v=f12cb5aab5" srcset="../assets/media/desktop-approval-1440.webp?v=f12cb5aab5 1440w, ../assets/media/desktop-approval-2880.webp?v=64fdb09a35 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="An Approval needed card in a bot&#x27;s chat: Ann wants to open a pull request on GitHub, with the title Trip waitlist with timed seat holds and the repo trailhead/storefront, and the full arguments shown below, with Deny, Always allow and Allow once buttons."></a></div>
+  <figcaption>Ann asks before opening a pull request.</figcaption>
 </figure>
 <p>Only you can answer a card. Bots' own tools can't, and neither can a bot calling kwant's API.</p>
 
@@ -107,8 +107,8 @@
     <tr><td><strong>Bitwarden</strong></td><td>Your own Bitwarden or Vaultwarden account, folder <code>kwnt</code>, after you unlock it once.</td></tr>
   </tbody>
 </table></div>
-<p>The built-in store protects against copies of the data folder. It doesn't protect against a bot running as the same user with approvals off, because that bot could read the key. So kwant enforces one rule:</p>
-<div class="note"><strong>Approvals off, or "Ask only when risky", needs Bitwarden</strong> while the built-in store holds any password. Move them to Bitwarden first (<code>POST /api/passwords/migrate</code>): each one is deleted locally only after Bitwarden has it.</div>
+<p>The built-in store protects against copies of the data folder. It doesn't protect against a bot running as the same user with approvals off, because that bot could read the key. So kwant warns you before the two meet:</p>
+<div class="note"><strong>Approvals off, or "Ask only when risky", with passwords in the built-in store is your choice, once per server.</strong> Saving a password or token while some bots don't ask first shows <strong>Before you save the token</strong>, with <strong>Save it on this server</strong>, <strong>Use Bitwarden</strong> or <strong>Make every bot ask first</strong>. Turning approvals off with passwords on this server asks the same once. Only you can choose to keep them here; a bot never can, and the warning that they are exposed stays. To move them, connect Bitwarden (<code>POST /api/passwords/migrate</code>): each one is deleted locally only after Bitwarden has it. Archived spaces, and the bots in them, don't count.</div>
 
 <h3 id="bitwarden">How the Bitwarden store works</h3>
 <ul>
@@ -166,7 +166,7 @@
 </footer>
 <script src="../assets/js/site.js?v=63f328cd53" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/approvals#article","headline":"Human approval for AI agent actions","description":"kwant asks before bots run commands or edit outside their folder. Three approval modes per space or bot, plus saved passwords in a vault or Bitwarden.","url":"https://kwant.si/docs/approvals","mainEntityOfPage":"https://kwant.si/docs/approvals","image":"https://kwant.si/assets/og/docs-approvals.png?v=188ab5dbec","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-29","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Approvals & passwords","item":"https://kwant.si/docs/approvals"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/approvals#article","headline":"Human approval for AI agent actions","description":"kwant asks before bots run commands or edit outside their folder. Three approval modes per space or bot, plus saved passwords in a vault or Bitwarden.","url":"https://kwant.si/docs/approvals","mainEntityOfPage":"https://kwant.si/docs/approvals","image":"https://kwant.si/assets/og/docs-approvals.png?v=188ab5dbec","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Approvals & passwords","item":"https://kwant.si/docs/approvals"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

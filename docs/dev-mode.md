@@ -22,16 +22,22 @@ are left out of exports, like approval modes.
 
 ## Before you turn it on
 
-Dev mode reads GitHub through the Loose ends GitHub connection, so it needs a GitHub token saved
-first. With kwnt's built-in password store, a token can only be saved while **every** space and
-every bot is on "Ask before running commands". New installs start on "Ask only when risky", so the
-save is refused (409) until you either:
+Since 0.7.3, Dev mode reads every repo with git, so a repo on GitLab, Gitea or any git server, or a
+team folder with no remote, is watched without a token (see [Any git repo](#any-git-repo-073)).
+Reviews, CI checks and Post to GitHub need the Loose ends GitHub connection. **Connect GitHub** on
+the Dev desk opens that form in place.
 
-- switch every space and every bot to "Ask before running commands", or
-- connect Bitwarden.
+When some bots run commands without asking (new installs start on "Ask only when risky"), one of
+them could read a token saved in kwnt's built-in password store. The card **Before you save the
+token** says so and offers three ways on:
 
-While the token is in the built-in store, approvals can't go back to Off or "Ask only when risky".
-See [Saved passwords](saved-passwords.md#approvals-off-needs-bitwarden) for why.
+- **Save it on this server**: the person accepts the risk once for this server. A bot can't accept
+  it, and the warning stays.
+- **Use Bitwarden**.
+- **Make every bot ask first**: every space switches to "Ask before running commands".
+
+A read-only token limited to the repos you need keeps the risk small. See
+[Saved passwords](saved-passwords.md#approvals-off-and-the-built-in-store) for why.
 
 ## Settings
 
