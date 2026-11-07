@@ -45,6 +45,7 @@ const m = await loadBundled(`
   export * as fx from './src/dev/jiraFixtures';
   export { JiraSetupForm, JiraSetupHost, openJiraSetup, suggestTeam } from './src/components/JiraSetup';
   export { JiraHint, JiraSettings } from './src/components/JiraSettings';
+  export { devTeamRefs } from './src/devMode';
   export { popoverPlace } from './src/components/GitHubConnect';
 `);
 const { React, createRoot, fx } = m;
@@ -76,8 +77,9 @@ const mount = async (el) => {
   return { host, root, unmount: () => (root.unmount(), host.remove()) };
 };
 const FAKE = 'demo-not-a-token-1234';
+const ANN = { id: 'k_ann', name: 'Ann', avatar: 'frontend' };
 const TEAMS = [
-  { id: 'team_shop', name: 'Storefront team' },
+  { id: 'team_shop', name: 'Storefront team', lead: ANN, members: [ANN, { id: 'k_ben', name: 'Ben', avatar: 'backend' }] },
   { id: 'team_ops', name: 'Ops' },
 ];
 const form = (sc, calls = []) => {
@@ -203,7 +205,8 @@ test('the hint hides per space and stays hidden; the settings row stays the way 
   await settle();
   const hide = r.host.querySelector('[data-jira-hint-hide]');
   assert.equal(hide.textContent, 'Hide');
-  assert.equal(hide.getAttribute('aria-label'), 'Hide the Jira hint for this space');
+  assert.equal(hide.getAttribute('aria-label'), 'Hide the Jira hint in this space');
+  assert.match(hide.className, /px-1\.5 py-0\.5 -mr-1\.5 rounded-md/);
   await click(hide);
   assert.equal(r.host.querySelector('[data-jira-hint]'), null);
   assert.equal(localStorage.getItem('kwnt:jira-hint-hidden:spc_a'), '1');
@@ -443,4 +446,91 @@ test('connected: the settings box shows the status line from GET tickets and Tur
   assert.ok(calls.some((c) => c.method === 'DELETE'));
   assert.ok(r.host.querySelector('[data-jira-settings="off"]'));
   r.unmount();
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Mira's shots review (A2, 8, 18, 19)
+
+test('A2: hiding the hint says so politely, and nothing visual is left', async () => {
+  m.jiraStore._reset();
+  localStorage.clear();
+  form({ site: null });
+  const r = await mount(h(m.JiraHint, { space: 'spc_live', teams: TEAMS }));
+  await settle(20);
+  await click(r.host.querySelector('[data-jira-hint-hide]'));
+  assert.equal(r.host.querySelector('[data-jira-hint]'), null);
+  const live = r.host.querySelector('[data-jira-hint-live]');
+  assert.equal(live.getAttribute('aria-live'), 'polite');
+  assert.match(live.className, /sr-only/);
+  assert.equal(live.textContent, 'Hidden. Set it up any time in Settings › Dev mode.');
+  r.unmount();
+});
+
+test('8: the settings box names where the token lives, its scope, projects, spaces and the lead; Check now runs a pass', async () => {
+  m.jiraStore._reset();
+  localStorage.clear();
+  m.jiraNames.put('spc_demo', m.parseCheck(fx.fxFound('cloud')));
+  const calls = form({ site: fx.fxSiteRow() });
+  const r = await mount(h(m.JiraSettings, { space: 'spc_demo', teams: [{ id: 'team_shop', name: 'Shop team', lead: ANN, members: [ANN] }] }));
+  await settle(20);
+  const box = r.host.querySelector('[data-jira-settings="on"]');
+  assert.equal(box.querySelector('[data-jira-token-line]').textContent, 'Saved in Bitwarden · scoped: reads Jira and Confluence');
+  assert.match(box.querySelector('[data-jira-projects]').textContent, /TRAIL\s*Storefront/);
+  assert.match(box.textContent, /SHOP Shop handbook, ENG Engineering/);
+  const who = box.querySelector('[data-jira-who]');
+  assert.ok(who.querySelector('[data-team-faces]'));
+  assert.match(who.textContent, /@Shop team· Ann leads/);
+  const btns = [...box.querySelectorAll('button')].map((b) => b.textContent.trim());
+  assert.deepEqual(btns.slice(0, 3), ['Edit', 'Check now', 'Turn off']);
+  await click(box.querySelector('[data-jira-check-now]'));
+  await settle(20);
+  assert.ok(calls.some((c) => c.path.endsWith('/dev/jira/poll') && c.method === 'POST'));
+  r.unmount();
+});
+
+test('8: no scope note, no scope; a local store reads "Saved on this server"', () => {
+  assert.equal(m.tokenLine('local', null), 'Saved on this server');
+  assert.equal(m.tokenLine(null, 'scoped: reads Jira and Confluence'), 'Saved on this server · scoped: reads Jira and Confluence');
+  assert.equal(m.tokenLine('bitwarden', null), 'Saved in Bitwarden');
+  assert.equal(m.parseSite(fx.fxSiteRow({ scope_note: null })).scope_note, null);
+});
+
+test('devTeamRefs: the lead first, then the members, from the roster', () => {
+  const [t] = m.devTeamRefs(
+    [{ id: 't', name: 'Shop team', lead_kwant_id: 'a', member_kwants: ['b', 'a', 'gone'] }],
+    [
+      { id: 'a', name: 'Ann', avatar_sprite: 'frontend' },
+      { id: 'b', name: 'Ben', avatar_sprite: 'backend' },
+    ],
+  );
+  assert.equal(t.lead.name, 'Ann');
+  assert.deepEqual(
+    t.members.map((k) => k.name),
+    ['Ann', 'Ben'],
+  );
+});
+
+test('8 + 19: step 2 shows the team faces and "Ann leads and reads every ticket"; Off names the lead', async () => {
+  const s = await openSheet({});
+  await step1(s);
+  await click(s.$('[data-jira-check]'));
+  await settle(20);
+  const face = s.$('[data-jira-team-face]');
+  assert.equal(face.querySelectorAll('[data-team-faces] > *').length, 2);
+  assert.match(face.textContent, /@Storefront team· Ann leads and reads every ticket/);
+  assert.match(s.host.textContent, /Off: Ann writes the brief, asks if something is unclear, then builds\./);
+  assert.equal(m.waitForOkText(null), 'Off: the lead writes the brief, asks if something is unclear, then builds. On: you OK every brief first.');
+  s.unmount();
+});
+
+test('18: the phone footer has Cancel and the primary at 44 px and no "Change any of this later" note', async () => {
+  const s = await openSheet({}, { phone: true });
+  await step1(s);
+  await click(s.$('[data-jira-check]'));
+  await settle(20);
+  const foot = s.$('[data-jira-foot]');
+  assert.ok(!foot.textContent.includes('Change any of this later'));
+  assert.match(foot.querySelector('[data-jira-cancel]').className, /\bh-11\b/);
+  assert.match(foot.querySelector('[data-jira-save]').className, /\bh-11\b/);
+  s.unmount();
 });

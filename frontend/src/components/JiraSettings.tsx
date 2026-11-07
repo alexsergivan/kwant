@@ -2,9 +2,11 @@
 // it's on (§7). With Jira never connected, and on a server without the Jira routes, nothing else changes.
 
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Pencil, Power, Ticket as TicketIcon } from 'lucide-react';
+import { Loader2, Pencil, Power, RefreshCw, Ticket as TicketIcon } from 'lucide-react';
 import type { DevTeamRef } from '../devMode';
-import { JIRA_CHANGED_EVENT, JIRA_COPY, JiraState, hhmm, jiraApi, jiraHint, jiraHost, jiraStore, ticketSummary } from '../dev/jiraSetup';
+import { JIRA_CHANGED_EVENT, JIRA_COPY, JiraState, hhmm, jiraApi, jiraHint, jiraHost, jiraNames, jiraStore, ticketSummary, tokenLine } from '../dev/jiraSetup';
+import { storeApi } from '../passwordStore';
+import { TeamFaces } from './TeamFaces';
 import { openJiraSetup } from './JiraSetup';
 
 /** This space's Jira state: null until GET jira answered (and on any error, which reads as off). */
@@ -37,8 +39,16 @@ export const JiraHint: React.FC<{
 }> = ({ space, teams, phone }) => {
   const jira = useJira(space);
   const [hidden, setHidden] = useState(() => jiraHint.hidden(space));
-  useEffect(() => setHidden(jiraHint.hidden(space)), [space]);
-  if (!jira || jira.site || hidden) return null;
+  const [said, setSaid] = useState('');
+  useEffect(() => (setHidden(jiraHint.hidden(space)), setSaid('')), [space]);
+  if (!jira || jira.site) return null;
+  // The polite line outlives the hint, so "Hidden…" is read after the button goes (shots-review A2).
+  const live = (
+    <span role="status" aria-live="polite" className="sr-only" data-jira-hint-live>
+      {said}
+    </span>
+  );
+  if (hidden) return live;
   return (
     <p className="mt-4 pt-3 border-t border-white/[0.06] flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] leading-[18px] text-zinc-400" data-jira-hint>
       <span>{JIRA_COPY.hint}</span>
@@ -56,13 +66,15 @@ export const JiraHint: React.FC<{
         onClick={() => {
           jiraHint.hide(space);
           setHidden(true);
+          setSaid(JIRA_COPY.hintHidden);
         }}
-        className={`ml-auto text-zinc-500 hover:text-zinc-200 rounded ${phone ? 'py-3 -my-3 px-2 -mx-2' : ''} ${focusRing}`}
+        className={`ml-auto px-1.5 py-0.5 -mr-1.5 rounded-md text-zinc-500 hover:text-zinc-200 ${phone ? 'py-3 -my-3' : ''} ${focusRing}`}
         aria-label={JIRA_COPY.hintHideLabel}
         data-jira-hint-hide
       >
         {JIRA_COPY.hintHide}
       </button>
+      {live}
     </p>
   );
 };
@@ -82,8 +94,23 @@ export const JiraSettings: React.FC<{
   const [forget, setForget] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
+  const [pollNote, setPollNote] = useState<string | null>(null);
+  const [store, setStore] = useState<'local' | 'bitwarden' | null>(null);
   const setupBtn = useRef<HTMLButtonElement>(null);
   useEffect(() => setConfirm(false), [jira?.site?.jira_url]);
+  const hasSite = !!jira?.site;
+  useEffect(() => {
+    if (!hasSite) return undefined;
+    let live = true;
+    storeApi.peek().then(
+      (st) => live && setStore(st.store),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [hasSite]);
   if (!jira) return null; // unknown (still loading, or a server without the routes): nothing shows
   const site = jira.site;
 
@@ -114,8 +141,22 @@ export const JiraSettings: React.FC<{
       setBusy(false);
     }
   };
+  const checkNow = async () => {
+    setPolling(true);
+    setPollNote(null);
+    try {
+      setPollNote(await jiraApi.poll(space));
+      await jiraStore.load(space, true);
+    } catch (e) {
+      setPollNote(e instanceof Error ? e.message : 'Couldn’t check Jira.');
+    } finally {
+      setPolling(false);
+    }
+  };
   const team = teams?.find((t) => t.id === site.team_id);
   const rejected = site.token_rejected_at;
+  const names = jiraNames.get(space);
+  const chip = 'inline-block px-1.5 py-px rounded-md border border-[#3f3868] bg-[#9d8fff]/10 font-mono text-[11px] leading-4 font-semibold text-[#b4a9ff]';
   const kv: [string, React.ReactNode][] = [
     [
       'Jira',
@@ -127,7 +168,21 @@ export const JiraSettings: React.FC<{
         </span>
       </>,
     ],
-    ['Projects', site.projects.join(', ') || '—'],
+    [
+      'Projects',
+      site.projects.length ? (
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1" data-jira-projects>
+          {site.projects.map((k) => (
+            <span key={k} className="inline-flex items-center gap-1.5">
+              <code className={chip}>{k}</code>
+              {names.projects[k] && <span>{names.projects[k]}</span>}
+            </span>
+          ))}
+        </span>
+      ) : (
+        '—'
+      ),
+    ],
     [
       'Hand over by',
       site.handover === 'jql' ? (
@@ -136,14 +191,31 @@ export const JiraSettings: React.FC<{
         `Assigning it to ${site.assignee_name ?? 'a Jira user'}`
       ) : (
         <>
-          Adding the label <code className="font-mono text-[#b4a9ff]">{site.label}</code>
+          Adding the label <code className={chip}>{site.label}</code>
         </>
       ),
     ],
-    ['Who takes them', team ? `@${team.name}` : 'The space’s lead bot'],
-    ['Confluence', site.spaces.length ? site.spaces.join(', ') : 'Off'],
+    [
+      'Who takes them',
+      team ? (
+        <span className="inline-flex items-center gap-1.5" data-jira-who>
+          {team.lead && <TeamFaces bots={[team.lead]} />}
+          <span>@{team.name}</span>
+          {team.lead && <span className="text-zinc-500">· {team.lead.name} leads</span>}
+        </span>
+      ) : (
+        'The space’s lead bot'
+      ),
+    ],
+    ['Confluence', site.spaces.length ? site.spaces.map((k) => (names.spaces[k] ? `${k} ${names.spaces[k]}` : k)).join(', ') : 'Off'],
     ['On its own', `${site.wait_for_ok ? 'Waits for your OK before building' : 'Builds without waiting for your OK'} · ${site.comment_progress ? 'Comments on tickets' : 'No comments on tickets'}`],
-    ['Token', 'Saved'],
+    [
+      'Token',
+      <span data-jira-token-line>
+        {tokenLine(store, null)}
+        {site.scope_note && <span className="text-zinc-500"> · {site.scope_note}</span>}
+      </span>,
+    ],
   ];
   return (
     <div className={`${box} space-y-3`} data-jira-settings="on">
@@ -167,11 +239,17 @@ export const JiraSettings: React.FC<{
         <button ref={setupBtn} type="button" className={rowBtn} onClick={() => openJiraSetup({ space, anchor: setupBtn.current, teams, site })} data-jira-edit>
           <Pencil size={12} aria-hidden="true" /> {rejected ? 'Fix it' : 'Edit'}
         </button>
+        <button type="button" className={rowBtn} disabled={polling} onClick={() => void checkNow()} data-jira-check-now>
+          {polling ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <RefreshCw size={12} aria-hidden="true" />} Check now
+        </button>
         <span className="flex-1" />
         <button type="button" className={dangerBtn} aria-expanded={confirm} onClick={() => setConfirm((c) => !c)} data-jira-turn-off>
           <Power size={12} aria-hidden="true" /> Turn off
         </button>
       </div>
+      <p role="status" aria-live="polite" className={pollNote ? 'text-[11px] text-zinc-400' : 'sr-only'} data-jira-poll-note>
+        {pollNote}
+      </p>
       {confirm && (
         <div role="group" aria-label="Turn off Work from Jira" className="rounded-lg border border-rose-400/25 bg-rose-500/[0.06] p-3 space-y-2" data-jira-off-confirm>
           <p className="text-xs font-semibold text-zinc-100">Stop taking tickets from Jira?</p>

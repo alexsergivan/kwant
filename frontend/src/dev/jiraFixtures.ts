@@ -164,6 +164,7 @@ export const fxSiteRow = (o: Record<string, unknown> = {}) => ({
   backoff_until: null,
   unreachable_since: null,
   token_rejected_at: null,
+  scope_note: 'scoped: reads Jira and Confluence',
   ...o,
 });
 
@@ -263,6 +264,13 @@ export function fxTransport(sc: FxScenario = {}, calls: FxCall[] = []) {
       return json({ deleted: true });
     }
     if (path.endsWith('/dev/jira/on')) return json({ on: !!raw?.on });
+    if (path.endsWith('/dev/jira/poll'))
+      return json(
+        site && site !== 'missing'
+          ? { matched: 4, new: 0, waiting: 2, resumed: 0, taken_back: 0, closed: 0, failed: 0, started: 0, replies: 0, skipped: null, error: null }
+          : { error: 'Jira isn’t set up in this space.', code: 'no_site' },
+        site && site !== 'missing' ? 200 : 404,
+      );
     return json({ error: 'not in the fixture' }, 404);
   };
 }

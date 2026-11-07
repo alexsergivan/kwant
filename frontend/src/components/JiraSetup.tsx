@@ -13,6 +13,7 @@ import { SaveGate, saveGate, storeApi } from '../passwordStore';
 import type { DevTeamRef } from '../devMode';
 import { popoverPlace } from './GitHubConnect';
 import { SaveFirst } from './LooseEndsView';
+import { TeamFaces } from './TeamFaces';
 import {
   CheckOutcome,
   DEFAULT_LABEL,
@@ -27,8 +28,10 @@ import {
   builtJql,
   jiraApi,
   jiraHost,
+  jiraNames,
   jiraStore,
   kindFromHost,
+  waitForOkText,
   matchLine,
   noProjectsText,
   normaliseJiraUrl,
@@ -302,6 +305,9 @@ const POLLS = [
 ];
 
 /** Which team to suggest: the one whose name shares a word with the picked project's name, else the only team. */
+/** The step 2 picker's line under the team (design desk-07). */
+export const leadLine = (lead: string): string => `${lead} leads and reads every ticket`;
+
 export function suggestTeam(teams: DevTeamRef[], projectName: string | null): { team: DevTeamRef; why: string | null } | null {
   if (!teams.length) return null;
   const words = (s: string) =>
@@ -590,6 +596,7 @@ export const JiraSetupForm: React.FC<{
   const firstName = allProjects.find((p) => p.key === projects[0])?.name ?? null;
   const sug = suggestTeam(teams, firstName);
   const team = teams.find((t) => t.id === teamId) ?? (!teamTouched ? sug?.team : undefined) ?? null;
+  const lead = team?.lead ?? null;
   const confSpaces = check?.confluence?.spaces ?? (site?.spaces ?? []).map((k) => ({ id: null, key: k, name: k }));
   const confNeedsToken = effKind === 'dc' && check?.confluence?.result !== 'ok';
 
@@ -605,7 +612,8 @@ export const JiraSetupForm: React.FC<{
     }
     setSaving(true);
     try {
-      await jiraApi.save(
+      jiraNames.put(space, check);
+      const saved = await jiraApi.save(
         space,
         form({
           projects,
@@ -624,6 +632,7 @@ export const JiraSetupForm: React.FC<{
           accept_risk: acceptRisk || undefined,
         },
       );
+      jiraNames.put(space, saved.check);
       token.current = '';
       confToken.current = '';
       onSaved();
@@ -971,18 +980,37 @@ export const JiraSetupForm: React.FC<{
               id={`${id}-team`}
               value={team?.id ?? ''}
               onChange={(e) => (setTeamId(e.target.value || null), setTeamTouched(true))}
-              className="appearance-none w-full min-h-9 pl-2.5 pr-8 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] text-zinc-100 focus:outline-none focus:border-[#9d8fff]"
+              className="appearance-none w-full min-h-9 pl-2.5 pr-8 rounded-lg border border-zinc-800 bg-zinc-950 text-[13px] text-transparent focus:outline-none focus:border-[#9d8fff]"
+              aria-describedby={team?.lead ? `${id}-team-lead` : undefined}
               data-jira-team
             >
-              <option value="">The space’s lead bot</option>
+              <option value="" className="text-zinc-100 bg-zinc-900">
+                The space’s lead bot
+              </option>
               {teams.map((t) => (
-                <option key={t.id} value={t.id}>
+                <option key={t.id} value={t.id} className="text-zinc-100 bg-zinc-900">
                   @{t.name}
                 </option>
               ))}
             </select>
+            {/* What the closed picker shows (design desk-07): the team's faces, its name and who leads. */}
+            <span className="pointer-events-none absolute inset-y-0 left-2.5 right-8 flex items-center gap-2 min-w-0 text-[13px] text-zinc-100" aria-hidden="true" data-jira-team-face>
+              {team?.members?.length ? <TeamFaces bots={team.members} size={18} /> : null}
+              <span className="shrink-0">{team ? `@${team.name}` : 'The space’s lead bot'}</span>
+              {team?.lead && !phone && <span className="truncate text-[12px] text-zinc-500">· {leadLine(team.lead.name)}</span>}
+            </span>
+            {team?.lead && (
+              <span id={`${id}-team-lead`} className="sr-only">
+                {leadLine(team.lead.name)}
+              </span>
+            )}
             <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400" aria-hidden="true" />
           </div>
+          {team?.lead && phone && (
+            <p className={help} aria-hidden="true" data-jira-team-lead>
+              {leadLine(team.lead.name)}
+            </p>
+          )}
           {sug?.why && team?.id === sug.team.id && (
             <p className={help} data-jira-team-why>
               <span className="inline-flex items-center gap-1 text-[11.5px] text-teal-300">
@@ -1063,7 +1091,7 @@ export const JiraSetupForm: React.FC<{
 
   const step4 = (
     <Step n={4} title="How much your bots do on their own">
-      <CheckRow name="wait" on={waitOk} onChange={setWaitOk} title="Wait for my OK before building" text={JIRA_COPY.waitForOk} />
+      <CheckRow name="wait" on={waitOk} onChange={setWaitOk} title="Wait for my OK before building" text={waitForOkText(lead?.name)} />
       <CheckRow name="comment" on={comment} onChange={setComment} title="Comment on the ticket when work starts and when the PR is ready" text={JIRA_COPY.comment} />
       <details className="group mt-3 border-t border-white/[0.06] pt-2.5" data-jira-advanced open={jql !== null || undefined}>
         <summary className="list-none [&::-webkit-details-marker]:hidden inline-flex items-center gap-1 min-h-7 text-[12.5px] text-zinc-300 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#9d8fff]/70 rounded">
@@ -1127,21 +1155,25 @@ export const JiraSetupForm: React.FC<{
         )}
       </div>
       <div
-        className={`flex items-center gap-2 px-4 py-3 border-t border-white/[0.06] bg-zinc-900 ${phone ? 'pb-[calc(0.75rem+env(safe-area-inset-bottom))] rounded-none' : 'rounded-b-xl'}`}
+        className={`flex ${phone ? 'flex-wrap' : ''} items-center gap-2 px-4 py-3 border-t border-white/[0.06] bg-zinc-900 ${phone ? 'pb-[calc(0.75rem+env(safe-area-inset-bottom))] rounded-none' : 'rounded-b-xl'}`}
         data-jira-foot
       >
-        <span className="flex-1 text-[11.5px] leading-4 text-zinc-400" role={saveErr ? 'alert' : undefined}>
-          {saveErr ? <span className="text-rose-300">{saveErr}</span> : stage === 1 ? checking ? JIRA_COPY.checking : JIRA_COPY.nothingSaved : JIRA_COPY.laterNote}
-        </span>
-        {!phone && (
-          <button type="button" className={ghostBtn} onClick={onCancel}>
-            Cancel
-          </button>
-        )}
+        {/* Phone (shots-review 18): no "Change any of this later" note, which Settings already says; Cancel and the primary share the row at 44 px. */}
+        {(() => {
+          const note = saveErr ? <span className="text-rose-300">{saveErr}</span> : stage === 1 ? checking ? JIRA_COPY.checking : JIRA_COPY.nothingSaved : phone ? null : JIRA_COPY.laterNote;
+          return note || !phone ? (
+            <span className={`${phone ? 'basis-full' : 'flex-1'} text-[11.5px] leading-4 text-zinc-400`} role={saveErr ? 'alert' : undefined}>
+              {note}
+            </span>
+          ) : null;
+        })()}
+        <button type="button" className={phone ? `${ghostBtn.replace('h-9', 'h-11')} flex-1 justify-center` : ghostBtn} onClick={onCancel} data-jira-cancel>
+          Cancel
+        </button>
         {stage === 1 ? (
           <button
             type="button"
-            className={primaryBtn}
+            className={phone ? `${primaryBtn.replace('h-9', 'h-11')} flex-1 justify-center` : primaryBtn}
             disabled={checking || !kind || !!addrErr || (!showToken && !site)}
             onClick={() => void runCheck()}
             data-jira-check
@@ -1151,7 +1183,7 @@ export const JiraSetupForm: React.FC<{
             {checking ? 'Checking' : 'Check and continue'}
           </button>
         ) : (
-          <button type="button" className={primaryBtn} disabled={saving} onClick={() => void save()} data-jira-save>
+          <button type="button" className={phone ? `${primaryBtn.replace('h-9', 'h-11')} flex-1 justify-center` : primaryBtn} disabled={saving} onClick={() => void save()} data-jira-save>
             {saving && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
             {site ? 'Save' : 'Start taking tickets'}
           </button>

@@ -50,7 +50,8 @@ export const JIRA_COPY = {
   hint: 'Use Jira? Your bots can take tickets you hand them.',
   hintButton: 'Take work from Jira',
   hintHide: 'Hide',
-  hintHideLabel: 'Hide the Jira hint for this space',
+  hintHideLabel: 'Hide the Jira hint in this space',
+  hintHidden: 'Hidden. Set it up any time in Settings › Dev mode.',
   /** The 0.7.4 "Before you save the token" card, with the one Jira sentence (design §2, spec change 8). */
   saveFirstWhy: 'Some bots here run commands without asking, so one of them could read a token saved on this server. A scoped token that can only read Jira and Confluence keeps that risk small.',
   cloudHelp: 'Make one in your Atlassian account, under Security › API tokens. Your bots see what you can see in Jira.',
@@ -63,12 +64,47 @@ export const JIRA_COPY = {
   confluence: 'Pages the ticket links to or mentions. Every line in the brief names the page and its version.',
   confluenceCloud: 'Uses the same sign-in as Jira.',
   confluenceDc: 'Data Center keeps Confluence separate, so it needs its own token.',
-  waitForOk: 'Off: the lead writes the brief, asks if something is unclear, then builds. On: you OK every brief first.',
   comment: 'Off: Jira only changes when you post a question there yourself. Your bots never move or close tickets.',
   advancedHelp: 'Built from your choices above. Edit it and the choices above show “Set by your search”.',
   laterNote: 'Change any of this later in Dev mode settings.',
   settingsBlurb: 'Hand Jira tickets to your bots. They read the ticket and Confluence, ask what’s unclear, then build.',
 } as const;
+
+/** Step 4's "Wait for my OK" help, naming the lead when the team has one (shots-review 19). */
+export const waitForOkText = (lead?: string | null): string => `Off: ${lead || 'the lead'} writes the brief, asks if something is unclear, then builds. On: you OK every brief first.`;
+
+/** Settings' Token row: where it lives, plus Juno's verified scope note when there is one (api-decisions 6). */
+export const tokenLine = (store: 'local' | 'bitwarden' | null, scopeNote: string | null): string =>
+  `${store === 'bitwarden' ? 'Saved in Bitwarden' : 'Saved on this server'}${scopeNote ? ` · ${scopeNote}` : ''}`;
+
+/**
+ * Project and Confluence space names for the Settings row. The saved site keeps keys only, so the names
+ * from the last check or save in this browser are kept here (non-secret; keys show alone without them).
+ */
+export const jiraNamesKey = (space: string) => `kwnt:jira-names:${space}`;
+export type JiraNames = { projects: Record<string, string>; spaces: Record<string, string> };
+export const jiraNames = {
+  get(space: string): JiraNames {
+    try {
+      const o: unknown = JSON.parse(localStorage.getItem(jiraNamesKey(space)) || 'null');
+      if (isObj(o) && isObj(o.projects) && isObj(o.spaces)) return o as JiraNames;
+    } catch {
+      // unreadable: keys only
+    }
+    return { projects: {}, spaces: {} };
+  },
+  put(space: string, check: Pick<CheckOutcome, 'projects' | 'confluence'> | null | undefined): void {
+    if (!check) return;
+    const cur = jiraNames.get(space);
+    for (const p of check.projects) if (p.key && p.name) cur.projects[p.key] = p.name.slice(0, 120);
+    for (const sp of check.confluence?.spaces ?? []) if (sp.key && sp.name) cur.spaces[sp.key] = sp.name.slice(0, 120);
+    try {
+      localStorage.setItem(jiraNamesKey(space), JSON.stringify(cur));
+    } catch {
+      // storage off: keys only
+    }
+  },
+};
 
 export const tokenRejected = (kind: JiraKind, email: string | null): string =>
   `Jira didn’t accept this token. Check it was copied whole${kind === 'cloud' && email ? ` and belongs to ${email}` : ''}. Nothing was saved.`;
@@ -303,6 +339,8 @@ export interface JiraSite {
   poll_error: string | null;
   backoff_until: string | null;
   token_rejected_at: string | null;
+  /** "scoped: reads Jira and Confluence" when Juno's check verified a scoped token; null otherwise. */
+  scope_note: string | null;
 }
 
 export function parseSite(v: unknown): JiraSite | null {
@@ -333,6 +371,7 @@ export function parseSite(v: unknown): JiraSite | null {
     poll_error: str(v.poll_error, 400),
     backoff_until: str(v.backoff_until, 40),
     token_rejected_at: str(v.token_rejected_at, 40),
+    scope_note: str(v.scope_note, 120),
   };
 }
 
@@ -445,6 +484,12 @@ export const jiraApi = {
   async remove(space: string, forgetToken = true): Promise<boolean> {
     const r = await call(`${base(space)}/jira?forget_token=${forgetToken}`, 'DELETE');
     return isObj(r.data) && r.data.deleted === true;
+  },
+  /** Check now (J4): one pickup pass. Answers the PollReport's `error` or `skipped`, or null when it ran. */
+  async poll(space: string): Promise<string | null> {
+    const r = await call(`${base(space)}/jira/poll`, 'POST');
+    const o = isObj(r.data) ? r.data : {};
+    return str(o.error, 400) ?? (str(o.skipped, 40) ? `Skipped: ${String(o.skipped).replace(/_/g, ' ')}.` : null);
   },
   async setOn(space: string, on: boolean): Promise<boolean> {
     const r = await call(`${base(space)}/jira/on`, 'POST', { on });
