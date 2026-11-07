@@ -143,16 +143,12 @@ async fn recover(state: &AppState) {
         let Ok(cards) = state.db.dev_cards(&m.space_id, REVIEW, None, 200).await else { continue };
         for c in cards {
             let Some(card) = c.card.as_deref().and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok()) else { continue };
-            for f in card["findings"].as_array().into_iter().flatten() {
-                if f["state"] == "sent" && !f["task_id"].is_string() {
-                    if let Some(fid) = f["id"].as_str() {
-                        let (state, card_id, fid) = (state.clone(), c.id.clone(), fid.to_string());
-                        tokio::spawn(async move {
-                            tokio::time::sleep(std::time::Duration::from_secs(super::routes::FIX_UNDO_SECS)).await;
-                            super::routes::deliver_fix(&state, &card_id, &fid).await;
-                        });
-                    }
-                }
+            for fid in super::routes::undelivered(&card) {
+                let (state, card_id) = (state.clone(), c.id.clone());
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(super::routes::FIX_UNDO_SECS)).await;
+                    super::routes::deliver_fix(&state, &card_id, &fid).await;
+                });
             }
         }
     }

@@ -4,8 +4,11 @@
 //! `generate` turns them into cards. The production floor lives in `crate::mcp::prod_floor`.
 //!
 //! Lin owns `facts`, `routes`, `poller`, `post`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
-//! `review`, `risk`, `tamper`, `notes` and `source`; Juno owns `scan` and `forge`.
+//! `review`, `risk`, `tamper`, `notes` and `source`; Juno owns `scan`, `forge` and
+//! `atlassian`; `tickets` is split per its api.md §1.1 (Juno: `source`, `pickup`, `store`, `routes`;
+//! Vega: `brief*`, `tools`, `links`, `mission`, `prompt`; `hooks` and `seam` are the join).
 
+pub mod atlassian;
 pub mod backup;
 pub mod facts;
 pub mod floor;
@@ -23,6 +26,7 @@ pub mod routes;
 pub mod scan;
 pub mod source;
 pub mod tamper;
+pub mod tickets;
 
 pub use generate::generate;
 
@@ -32,6 +36,9 @@ use crate::server::AppState;
 
 /// Sends `dev_card {space_id, id, kind, status}` on the event stream.
 pub fn notify_card(state: &AppState, row: &DevCardRow) {
+    if let Some((keys, pr_url)) = tickets::store::card_keys(row) {
+        tokio::spawn(tickets::store::on_card(state.clone(), row.clone(), keys, pr_url));
+    }
     let _ = state.event_sender.send(RuntimeEvent::DevCard {
         space_id: row.space_id.clone(),
         id: row.id.clone(),

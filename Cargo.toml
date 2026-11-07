@@ -70,5 +70,13 @@ mail-parser = "0.11"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[features]
+# Test-only seams: the moved clock (src/clock.rs, KWNT_TEST_NOW_OFFSET_SECS) and the Telegram API
+# address (KWNT_TELEGRAM_API_BASE). Never on by default and never in a shipped or `make run` build;
+# `cargo test` turns it on through the dev-dependency on this crate below.
+test-seams = []
+
 [dev-dependencies]
 tempfile = "3"
+# Tests (unit and integration) build kwnt with its test seams on
+kwnt = { path = ".", features = ["test-seams"] }

@@ -130,6 +130,7 @@ fn input(mcp: Option<McpTurnContext>) -> TurnInput {
         teammates: vec![],
         mcp,
         no_tools: false,
+        read_only: false,
     }
 }
 
