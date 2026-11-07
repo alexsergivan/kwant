@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Undo2,
   WifiOff,
+  CircleAlert,
   X,
 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
@@ -97,17 +98,18 @@ export const LeadsBadge = () => (
   </span>
 );
 
-const Banner: React.FC<{ tone: 'bad' | 'warn' | 'info'; head: string; children?: React.ReactNode }> = ({ tone, head, children }) => {
+const Banner: React.FC<{ tone: 'bad' | 'warn' | 'info'; head: string; children?: React.ReactNode; icon?: 'offline' | 'alert' }> = ({ tone, head, children, icon = 'offline' }) => {
   const c =
     tone === 'bad'
       ? 'border-rose-400/30 bg-rose-500/10 text-rose-100'
       : tone === 'warn'
         ? 'border-amber-300/30 bg-amber-300/10 text-amber-50'
         : 'border-sky-300/25 bg-sky-400/10 text-zinc-100';
-  const Icon = tone === 'bad' ? AlertTriangle : tone === 'warn' ? WifiOff : Info;
+  const Icon = tone === 'bad' ? AlertTriangle : tone === 'warn' ? (icon === 'alert' ? CircleAlert : WifiOff) : Info;
+  const size = tone === 'warn' && icon === 'alert' ? 14 : 15;
   return (
     <div role={tone === 'bad' ? 'alert' : 'status'} className={`mt-3 flex gap-2.5 p-3 rounded-[10px] border text-[12.5px] leading-[18px] ${c}`}>
-      <Icon size={15} className="mt-px shrink-0" aria-hidden="true" />
+      <Icon size={size} className={`${size === 14 ? 'mt-0.5' : 'mt-px'} shrink-0`} aria-hidden="true" />
       <p>
         <strong className="font-semibold">{head}</strong> {children}
       </p>
@@ -608,8 +610,8 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       <h4 className={H} id={`${titleId}-handle`}>
         Team handle
       </h4>
-      <div className={`flex ${phone ? 'flex-col items-stretch' : 'items-center'} gap-2`}>
-        <label className={`flex items-center ${phone ? 'h-11' : 'h-9'} rounded-lg border ${handleBad ? 'border-rose-400' : 'border-zinc-700'} bg-zinc-950/60 px-2 focus-within:border-sky-400`}>
+      <div className={`flex ${phone || handleNote ? 'flex-col items-stretch' : 'items-center'} ${handleNote && !phone ? 'gap-0' : 'gap-2'}`}>
+        <label className={`flex items-center ${phone ? 'h-11' : 'h-9 w-[200px]'} rounded-lg border ${handleBad ? 'border-rose-400' : 'border-zinc-700'} bg-zinc-950/60 px-2 focus-within:border-sky-400`}>
           <span className="text-zinc-400 text-sm" aria-hidden="true">
             @
           </span>
@@ -622,11 +624,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
               setHandle(slugHandle(e.target.value));
               setHandleNote(null);
             }}
-            className={`${phone ? 'w-full' : 'w-[200px]'} bg-transparent outline-none text-sm text-zinc-50 pl-0.5`}
+            className="flex-1 min-w-0 w-full bg-transparent outline-none text-sm text-zinc-50 pl-0.5"
           />
         </label>
         {handleNote ? (
-          <span id={`${titleId}-hh`}>
+          <span id={`${titleId}-hh`} className={phone ? '' : 'mt-0.5'}>
             <Note>{handleNote}</Note>
           </span>
         ) : (
@@ -749,8 +751,29 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     const existingName = existing?.name ?? b.existing_name ?? b.name;
     const owns = b.owns.filter(safeFolder);
     const disabledTick = !b.lead && off && atMax;
+    const choiceBlock = (
+      <>
+            {b.existing_kwant_id && e.ticked && !also && (
+              <Choice
+                phone={phone}
+                existingName={existingName}
+                existingRole={existing?.role ?? b.existing_avatar ?? b.avatar_sprite}
+                value={e.useExisting ? 'existing' : 'new'}
+                onChange={(v) =>
+                  setEdits((x) => {
+                    const cur = x[b.key];
+                    if (v === 'existing') return { ...x, [b.key]: { ...cur, useExisting: b.existing_kwant_id ?? null, name: existingName } };
+                    const taken = [...takenNames, ...Object.entries(x).filter(([k, r]) => k !== b.key && r.ticked && !r.useExisting).map(([, r]) => r.name)];
+                    return { ...x, [b.key]: { ...cur, useExisting: null, name: nameError(cur.name, taken) ? swapRole({ ...cur, renamed: false }, cur.preset, taken).name : cur.name } };
+                  })
+                }
+              />
+            )}
+            {b.existing_leads_team && e.ticked && e.useExisting && <Note>{existingName} leads @{b.existing_leads_team}. Here it joins as a member.</Note>}
+      </>
+    );
     return (
-      <li key={b.key} data-row={b.key} className={`flex items-start gap-3 py-3 border-t border-white/5 first:border-t-0 ${renaming === b.key ? 'bg-white/[.03] -mx-2 px-2 rounded-[10px]' : ''}`}>
+      <li key={b.key} data-row={b.key} className={`flex items-start ${phone ? 'flex-wrap gap-x-3 gap-y-0' : 'gap-3'} py-3 border-t border-white/5 first:border-t-0 ${renaming === b.key ? 'bg-white/[.03] -mx-2 px-2 rounded-[10px]' : ''}`}>
         {b.lead ? (
           <span role="checkbox" aria-checked="true" aria-disabled="true" aria-label={`${e.name} leads and stays in the team`} className={`${phone ? 'w-6 h-6' : 'w-5 h-5'} mt-2 shrink-0 grid place-items-center rounded-md bg-[#3f3868] text-white/80`}>
             <Check size={12} strokeWidth={3} aria-hidden="true" />
@@ -796,23 +819,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
                 ))}
               </p>
             )}
-            {b.existing_kwant_id && e.ticked && !also && (
-              <Choice
-                phone={phone}
-                existingName={existingName}
-                existingRole={existing?.role ?? b.existing_avatar ?? b.avatar_sprite}
-                value={e.useExisting ? 'existing' : 'new'}
-                onChange={(v) =>
-                  setEdits((x) => {
-                    const cur = x[b.key];
-                    if (v === 'existing') return { ...x, [b.key]: { ...cur, useExisting: b.existing_kwant_id ?? null, name: existingName } };
-                    const taken = [...takenNames, ...Object.entries(x).filter(([k, r]) => k !== b.key && r.ticked && !r.useExisting).map(([, r]) => r.name)];
-                    return { ...x, [b.key]: { ...cur, useExisting: null, name: nameError(cur.name, taken) ? swapRole({ ...cur, renamed: false }, cur.preset, taken).name : cur.name } };
-                  })
-                }
-              />
-            )}
-            {b.existing_leads_team && e.ticked && e.useExisting && <Note>{existingName} leads @{b.existing_leads_team}. Here it joins as a member.</Note>}
+            {!phone && choiceBlock}
           </div>
         </div>
         {!also && renaming !== b.key && (
@@ -837,6 +844,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
               </button>
             )}
           </span>
+        )}
+        {phone && b.existing_kwant_id && e.ticked && !also && (
+          <div data-choice-row className={`basis-full pl-9 ${off ? 'opacity-60' : ''}`}>
+            {choiceBlock}
+          </div>
         )}
       </li>
     );
@@ -876,7 +888,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           <Lock size={22} className="text-zinc-300" aria-hidden="true" />
           <p className="mt-3 text-sm font-semibold text-zinc-50">Can’t read this repo yet</p>
           <p className="mt-1.5 max-w-[420px] text-[12.5px] leading-[18px] text-zinc-300">
-            {url.replace(/^https?:\/\//, '')} is private. Connect {forge} so the app can read file names and manifests. It’s the same connection Dev mode uses for this repo.
+            {url.replace(/^https?:\/\//, '')} is private. Connect {forge} so kwant can read file names and manifests. It’s the same connection Dev mode uses for this repo.
           </p>
           <div className={`mt-4 flex ${phone ? 'flex-col w-full' : ''} gap-2`}>
             <button type="button" onClick={() => onConnectForge?.(url, forge)} className={`${phone ? 'h-11' : 'h-9'} px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium ${FOCUS}`}>
@@ -915,13 +927,13 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           </p>
         )}
         {ph && (
-          <Banner tone="warn" head={ph}>
+          <Banner tone="warn" icon="alert" head={ph}>
             {partialBody(sug.partial)}
           </Banner>
         )}
         {reasonUnknown && (
           <Banner tone="info" head="Couldn’t tell what this project uses.">
-            It has {plural(sug.read.files, 'file')} and no manifests the app recognises, so this is the Coding template’s team. Change anything before you create it.
+            It has {plural(sug.read.files, 'file')} and no manifests kwant knows, so this is the Coding template’s team. Change anything before you create it.
           </Banner>
         )}
         {!reasonUnknown && sug.facts.length > 0 && (
@@ -963,7 +975,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             <p className="p-2.5 rounded-lg bg-black/30 border border-white/5 font-mono text-xs leading-[18px] text-zinc-300">
               This team’s code: <strong className="text-zinc-100 font-semibold">{sug.stack_line}</strong>
             </p>
-            <p className="mt-1.5 text-xs text-zinc-400">Plus the folders each bot owns. Only names the app recognises and folder names go in, never text from the repo.</p>
+            <p className="mt-1.5 text-xs text-zinc-400">Plus the folders each bot owns. Only names kwant knows and folder names go in, never text from the repo.</p>
           </section>
         )}
         {handleSec}
@@ -996,7 +1008,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const sNote = isD && dPhase === 'ready' ? sizeNote(ticked) : null;
   const fallbackFooter = isD && (dPhase === 'cantread' || dPhase === 'offline' || dPhase === 'error');
   const retry = (!isD && templatesError && !t) || phase === 'failed' || (isD && (dPhase === 'error' || dPhase === 'offline'));
-  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? `Add ${plural(nNew, 'bot')}` : `Create team · ${plural(ticked, 'bot')}`;
+  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? `Add ${plural(nNew, 'bot')}` : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
   const onPrimary = () => {
     if (retry) {
       if (!isD && templatesError && !t) return onRetryTemplates?.();
@@ -1072,8 +1084,8 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       </div>
       <footer className={`flex ${phone ? 'flex-wrap' : 'items-center'} gap-2 ${phone ? 'px-4 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]' : 'px-5 py-3.5'} border-t border-zinc-800 bg-zinc-900`}>
         <p className={`${phone ? 'w-full' : 'flex-1 min-w-0'} flex items-center gap-1.5 text-xs ${sNote ? 'text-amber-200' : 'text-zinc-400'}`} aria-live="polite">
-          {!sNote && <Undo2 size={13} aria-hidden="true" />}
-          {fallbackFooter ? 'Nothing was created.' : footNote}
+          {!fallbackFooter && !sNote && <Undo2 size={13} aria-hidden="true" />}
+          {fallbackFooter ? null : footNote}
         </p>
         <button type="button" onClick={close} disabled={creating} className={`${btnH} px-3.5 rounded-lg text-sm text-zinc-200 hover:bg-white/5 disabled:opacity-50 ${FOCUS}`}>
           Cancel
@@ -1211,9 +1223,9 @@ const Choice: React.FC<{ phone: boolean; existingName: string; existingRole: str
     onChange(next);
     refs[opts.indexOf(next)].current?.focus();
   };
-  const cls = (on: boolean) => `${phone ? 'h-11 w-full' : 'h-7'} inline-flex items-center gap-1.5 px-2 rounded-md text-xs ${on ? 'bg-[#2c2552] text-zinc-50' : 'text-zinc-300 hover:bg-white/5'} ${FOCUS}`;
+  const cls = (on: boolean) => `${phone ? 'min-h-11 w-full justify-start text-left gap-2 px-3 text-[13px] whitespace-nowrap' : 'h-7 gap-1.5 px-2 text-xs'} inline-flex items-center rounded-md ${on ? 'bg-[#2c2552] text-zinc-50' : 'text-zinc-300 hover:bg-white/5'} ${FOCUS}`;
   return (
-    <div role="radiogroup" aria-label={`${existingName} for this team`} onKeyDown={onKey} className={`mt-2 inline-flex ${phone ? 'flex-col w-full' : ''} gap-1 p-0.5 rounded-lg border border-white/10`}>
+    <div role="radiogroup" aria-label={`${existingName} for this team`} onKeyDown={onKey} className={`mt-2 ${phone ? 'flex flex-col w-full' : 'inline-flex'} gap-1 p-0.5 rounded-lg border border-white/10`}>
       <button ref={refs[0]} type="button" role="radio" aria-checked={value === 'existing'} tabIndex={value === 'existing' ? 0 : -1} onClick={() => onChange('existing')} className={cls(value === 'existing')}>
         <ModernAvatar role={existingRole} name={existingName} size={22} />
         Add {existingName} (already in this space)

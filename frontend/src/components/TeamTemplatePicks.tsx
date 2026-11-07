@@ -15,7 +15,7 @@ export const TemplateWelcome: React.FC<{ templates: TeamTemplate[]; onPick: (id:
   const phone = useMedia(PHONE_QUERY);
   if (!templates.length) return null;
   return (
-    <section aria-labelledby="t-welcome-h" className="w-full max-w-[720px] mx-auto mt-8 px-4" data-template-welcome>
+    <section aria-labelledby="t-welcome-h" className="w-full max-w-[752px] mx-auto mt-8 px-4" data-template-welcome>
       <div className="flex items-center gap-3">
         <span className="flex-1 h-px bg-white/10" aria-hidden="true" />
         <h3 id="t-welcome-h" className="text-[11px] leading-4 font-semibold uppercase tracking-[.08em] text-zinc-400">
@@ -117,8 +117,10 @@ export const TemplateSidebarBox: React.FC<{ templates: TeamTemplate[]; onPick: (
   if (!templates.length) return null;
   return (
     <div className="relative mx-1 mt-2 p-2.5 rounded-[10px] border border-dashed border-white/10" data-template-sidebar>
-      <p className="pr-7 text-[12.5px] leading-[18px] font-semibold text-zinc-200">Start a ready-made team</p>
-      <p className="text-[11px] leading-4 text-zinc-400">Bots, instructions and skills in one step.</p>
+      <div className={phone ? 'pr-11' : 'pr-7'}>
+        <p className="text-[12.5px] leading-[18px] font-semibold text-zinc-200">Start a ready-made team</p>
+        <p className="text-[11px] leading-4 text-zinc-400">Bots, instructions and skills in one step.</p>
+      </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {templates.map((t) => {
           const Icon = TEMPLATE_ICONS[t.icon];

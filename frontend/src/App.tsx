@@ -776,6 +776,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [isNewChannelOpen, setIsNewChannelOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
+  const [editingTeamFocusWs, setEditingTeamFocusWs] = useState(false);
+  useEffect(() => {
+    if (!editingTeam) setEditingTeamFocusWs(false);
+  }, [editingTeam]);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
   const [deletingKwant, setDeletingKwant] = useState<Kwant | null>(null);
   const [editingTab, setEditingTab] = useState<EditTab>('profile');
@@ -2571,7 +2575,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     else if (opens === 'dev_mode_setup') {
       // The team's repo is set in Manage team (Team settings > Git Repo), where Dev mode's line shows.
       const t = teams.find((x) => x.id === team.id);
-      if (t) setEditingTeam(t);
+      if (t) {
+        setEditingTeamFocusWs(true);
+        setEditingTeam(t);
+      }
     }
   };
 
@@ -3747,6 +3754,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         onClose={() => setEditingTeam(null)}
         onUpdateTeam={handleUpdateTeam}
         onDeleteTeam={handleDeleteTeam}
+        focusWorkspace={editingTeamFocusWs}
       />
 
       {spaceSettingsTab && (

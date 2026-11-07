@@ -48,6 +48,7 @@ const m = await loadBundled(`
   export { TemplateWelcome, TemplateTiles, TemplateSidebarBox } from './src/components/TeamTemplatePicks';
   export { ReadyTeamsProvider, madeFromRow } from './src/components/ReadyTeams';
   export { ReadyTeamsTiles, SuggestMembersButton, ReadyTeamsSidebarBox } from './src/components/ReadyTeamsEntry';
+  export { ManageTeamModal } from './src/components/ManageTeamModal';
 `);
 const { React, createRoot, fx } = m;
 const h = React.createElement;
@@ -413,7 +414,10 @@ test('D7: can’t read, read failed and couldn’t tell each offer the Coding ro
     const v = await mount(el);
     const root = document.querySelector('[data-team-sheet="suggest"]');
     assert.match(root.textContent, re);
-    assert.match(root.textContent, /Nothing was created\./);
+    // Mira #396 must-fix 5: nothing will be created, so the footer's left side is empty (no Undo icon).
+    const note = root.querySelector('footer p');
+    assert.equal(note.textContent, '');
+    assert.equal(note.querySelector('svg'), null);
     await click(byText(root, 'button', /^Use the Coding roster$/));
     assert.equal(out.coding, 1);
     v.unmount();
@@ -423,6 +427,45 @@ test('D7: can’t read, read failed and couldn’t tell each offer the Coding ro
   const v = await mount(el);
   assert.match(document.querySelector('[data-team-sheet="suggest"]').textContent, /Couldn’t tell what this project uses\./);
   v.unmount();
+});
+
+test('D7 can’t read: "Pick a local folder instead" shows when the picker is passed; partial uses CircleAlert, not WifiOff', async () => {
+  use({ suggest: 'cantread' });
+  let picked = 0;
+  const { el } = sheet({ kind: 'suggest', repo_url: 'git.example.com/acme/shop' }, { onPickFolder: () => picked++ });
+  let v = await mount(el);
+  let root = document.querySelector('[data-team-sheet="suggest"]');
+  assert.match(root.textContent, /so kwant can read file names and manifests/);
+  await click(byText(root, 'button', /^Pick a local folder instead$/));
+  assert.equal(picked, 1);
+  v.unmount();
+  use({ suggest: 'partial-file' });
+  v = await mount(sheet({ kind: 'suggest', workspace_path: '~/projects/shop' }).el);
+  root = document.querySelector('[data-team-sheet="suggest"]');
+  const banner = byText(root, '[role="status"]', /One manifest was too big to read/);
+  assert.ok(banner);
+  assert.match(banner.querySelector('svg').getAttribute('class'), /lucide-circle-alert|lucide-alert-circle/);
+  v.unmount();
+});
+
+test('A8 "Pick a repo": Manage team opens on Team Workspace; Git Repo + repo URL focused with no workspace, its own tab otherwise', async () => {
+  const scrolled = [];
+  const orig = window.HTMLElement.prototype.scrollIntoView;
+  window.HTMLElement.prototype.scrollIntoView = function (o) {
+    scrolled.push([this.getAttribute('data-team-workspace') !== null, o?.block]);
+  };
+  const kwants = [{ id: 'kw_a', name: 'Ada', avatar_sprite: 'architect' }];
+  const base = { isOpen: true, kwants, onClose() {}, onUpdateTeam: async () => {}, onDeleteTeam: async () => {}, focusWorkspace: true };
+  let v = await mount(h(m.ManageTeamModal, { ...base, team: { id: 'team_x', name: 'x', lead_kwant_id: 'kw_a', member_kwants: ['kw_a'] } }));
+  await settle(30);
+  assert.deepEqual(scrolled.at(-1), [true, 'center']);
+  assert.equal(document.activeElement?.getAttribute('aria-label'), 'Repo URL');
+  v.unmount();
+  v = await mount(h(m.ManageTeamModal, { ...base, team: { id: 'team_y', name: 'y', workspace_path: '~/projects/y', lead_kwant_id: 'kw_a', member_kwants: ['kw_a'] } }));
+  await settle(30);
+  assert.equal(document.activeElement?.value, '~/projects/y');
+  v.unmount();
+  window.HTMLElement.prototype.scrollIntoView = orig;
 });
 
 test('the sheet closes on Esc and from Close, and not while creating', async () => {
@@ -495,9 +538,9 @@ test('T5: the Needs card lists what is open, opens each, and offers Undo for a d
 
 test('the created toast shows counts and Undo', async () => {
   let undo = 0;
-  const v = await mount(h(m.TeamCreatedToast, { text: 'Created @inbox: 3 bots, 3 skills, 1 routine (off).', onUndo: () => undo++, onDismiss() {} }));
+  const v = await mount(h(m.TeamCreatedToast, { text: 'Created @inbox: 3 bots, 2 skills, 1 routine (off).', onUndo: () => undo++, onDismiss() {} }));
   const t = document.querySelector('[data-team-toast]');
-  assert.match(t.textContent, /Created @inbox: 3 bots, 3 skills, 1 routine \(off\)\./);
+  assert.match(t.textContent, /Created @inbox: 3 bots, 2 skills, 1 routine \(off\)\./);
   await click(byText(t, 'button', /Undo/));
   assert.equal(undo, 1);
   v.unmount();

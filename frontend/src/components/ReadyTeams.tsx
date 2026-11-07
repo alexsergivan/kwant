@@ -6,6 +6,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { TeamPreviewSheet, type SheetMode } from './TeamPreviewSheet';
 import { TeamCreatedLine, TeamCreatedToast, TeamNeedsCard, UndoTeamConfirm } from './TeamNeedsCard';
 import { openForgeConnect, openGitHubConnect } from './GitHubConnect';
+import { FolderBrowserModal } from './FolderBrowserModal';
 import { useDevMode } from './DevModeSwitch';
 import { askAbout } from './results/SmartResult';
 import { botActionsApi } from '../botActions';
@@ -191,6 +192,25 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
   const [confirm, setConfirm] = useState<{ team: ReadyTeam; info: TeamTemplateInfo; label: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [undoError, setUndoError] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+
+  // D7 cantread: "Pick a local folder instead" uses the same picker as Manage team's Browse… and
+  // re-reads the sheet on that folder (a new key remounts the sheet, which starts a fresh read).
+  const readFolder = (path: string) =>
+    setSheet((s) => (s && s.mode.kind === 'suggest' ? { ...s, mode: { ...s.mode, workspace_path: path, repo_url: null }, n: s.n + 1 } : s));
+  const pickFolder = async () => {
+    try {
+      const res = await fetch('/api/system/select-folder', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.path) return readFolder(data.path);
+        if (data.canceled) return;
+      }
+    } catch {
+      /* falls through to the in-app browser */
+    }
+    setBrowsing(true);
+  };
   const labelOf = (id: string | null) => templates?.find((t) => t.id === id)?.label ?? 'new';
 
   const runUndo = useCallback(
@@ -287,6 +307,7 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
             cb?.();
           }}
           onCreated={onCreated}
+          onPickFolder={() => void pickFolder()}
           onUseCoding={() => setSheet((s) => s && { mode: { kind: 'template', templateId: 'coding' }, opts: s.opts, n: s.n + 1 })}
           onConnectForge={(url, forge) => {
             if (forge === 'GitHub') openGitHubConnect({ space });
@@ -294,6 +315,10 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
           }}
         />
       )}
+      {/* Above the sheet (z-70): FolderBrowserModal is z-50 on its own. */}
+      <div className="relative z-[80]">
+        <FolderBrowserModal isOpen={browsing} initialPath="" onClose={() => setBrowsing(false)} onSelectPath={(p) => { setBrowsing(false); readFolder(p); }} />
+      </div>
       {toast && (
         <TeamCreatedToast
           key={toast.n}

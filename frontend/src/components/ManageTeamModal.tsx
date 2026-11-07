@@ -29,6 +29,8 @@ interface ManageTeamModalProps {
     }
   ) => Promise<void>;
   onDeleteTeam: (id: string) => Promise<void>;
+  /** A8 ("Pick a repo"): open with the Team Workspace group in view and its input focused. */
+  focusWorkspace?: boolean;
 }
 
 /**
@@ -56,6 +58,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
   onClose,
   onUpdateTeam,
   onDeleteTeam,
+  focusWorkspace = false,
 }) => {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -141,7 +144,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
         setWorkspacePath('');
         setRepoUrl(team.repo_url);
       } else {
-        setWorkspaceType('default');
+        // A8: no workspace yet, so "Pick a repo" lands on Git Repo.
+        setWorkspaceType(focusWorkspace ? 'repo' : 'default');
         setWorkspacePath('');
         setRepoUrl('');
       }
@@ -156,7 +160,18 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
       setError(null);
       setDeleteError(null);
     }
-  }, [team, kwants, isOpen]);
+  }, [team, kwants, isOpen, focusWorkspace]);
+
+  // A8: after the fields are seeded, bring Team Workspace into view and focus the selected tab's input.
+  const wsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isOpen || !team || !focusWorkspace) return;
+    const id = requestAnimationFrame(() => {
+      wsRef.current?.scrollIntoView?.({ block: 'center' });
+      wsRef.current?.querySelector<HTMLInputElement>('input[data-ws-input]')?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [isOpen, team, focusWorkspace]);
 
   if (!isOpen || !team) return null;
 
@@ -313,7 +328,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
           />
 
           {/* Team Workspace */}
-          <div>
+          <div ref={wsRef} data-team-workspace>
             <label className="block text-xs font-medium text-zinc-400 mb-1.5">
               Team Workspace
             </label>
@@ -366,13 +381,14 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
 
             {workspaceType === 'local' && (
               <div className="space-y-2">
-                <div className="flex gap-2 items-center">
+                <div className="flex flex-wrap sm:flex-nowrap gap-2 items-center">
                   <input
                     type="text"
+                    data-ws-input
                     value={workspacePath}
                     onChange={(e) => setWorkspacePath(e.target.value)}
                     placeholder="e.g. ~/projects/my-app or /path/to/folder"
-                    className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
+                    className="flex-1 min-w-0 basis-full sm:basis-auto bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors font-mono"
                   />
                   <button
                     type="button"
@@ -442,6 +458,8 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
               <div>
                 <input
                   type="text"
+                  data-ws-input
+                  aria-label="Repo URL"
                   value={repoUrl}
                   onChange={(e) => setRepoUrl(e.target.value)}
                   placeholder="https://github.com/owner/repository.git"
