@@ -272,6 +272,27 @@ jobs:
           cat "$KWNT_DATA_DIR/mac-app.log" || true
           test -n "$ok"
           echo "$body" | grep -q '"app":"kwnt"'
+      # This Mac and a server, each in its own window, at once, from the real app in the .dmg; then
+      # quit and reopen, and both come back from desktop-places.json. The server is a second kwant
+      # (the same binary, --serve-headless) behind a proxy that logs the window's page loads.
+      # Also the move from the old desktop-target.json. See apps/mac/ci/side-by-side.sh.
+      - name: Smoke test, side by side
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          hdiutil attach -nobrowse -readonly -mountpoint /tmp/kwant-dmg "${{ steps.bundle.outputs.dmg }}"
+          status=0
+          apps/mac/ci/side-by-side.sh "$RUNNER_TEMP/side-by-side" /tmp/kwant-dmg/kwant.app/Contents/MacOS/kwant || status=$?
+          hdiutil detach /tmp/kwant-dmg || true
+          exit $status
+      - name: Upload side-by-side screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: side-by-side
+          path: ${{ runner.temp }}/side-by-side
+          if-no-files-found: ignore
+          retention-days: 14
       # Opens the .dmg in Finder the way a person would, with hidden files shown, and screenshots
       # the window in light and dark mode. The layout check fails the job; the screenshots don't.
       - name: Install window layout and screenshots
