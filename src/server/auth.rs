@@ -359,6 +359,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "settings", ..] => *method != Method::GET && *method != Method::HEAD,
         // Carrying on a chain that went over its token budget is the person's call
         ["", "api", "chains", _, "continue"] => *method == Method::POST,
+        // Lifting today's spending stop spends the person's money: only they press Continue
+        ["", "api", "usage", "today", "continue"] => *method != Method::GET && *method != Method::HEAD,
         // Changing a choice a bot made is the person's call
         ["", "api", "messages", _, "decisions", ..] => *method != Method::GET && *method != Method::HEAD,
         // The person's own 👍/👎: a bot can't react for them (or start a turn with one)
@@ -901,6 +903,9 @@ mod tests {
             assert!(person_only(m, p), "{m} {p}");
         }
         assert!(!person_only(&get, "/api/spaces/s1/developers"));
+        assert!(person_only(&post, "/api/usage/today/continue"));
+        assert!(person_only(&put, "/api/usage/today/continue/"));
+        assert!(!person_only(&get, "/api/usage/today"));
         assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
         assert!(person_only(&put, "/api/messages/m1/reaction"));
         assert!(person_only(&post, "/api/messages/m1/reaction"));

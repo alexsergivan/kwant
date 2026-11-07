@@ -43,6 +43,7 @@ pub mod reactions;
 pub mod routing;
 pub mod smart_results;
 pub mod dev_mode;
+pub mod spend;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -203,6 +204,8 @@ impl Database {
         db.migrate_routing().await?;
         db.migrate_smart_results().await?;
         db.migrate_reactions().await?;
+        // 0.7.4: the daily spending stop's books (add-only)
+        db.migrate_spend().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;
