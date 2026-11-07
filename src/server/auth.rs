@@ -343,6 +343,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "work-ahead", ..] => true,
         // The idea jar is the person's: what they drop in, Look now, Do it and the shelf
         ["", "api", "ideas", ..] => true,
+        // Show it once (0.7.9): the person's recorded steps, Write and Try it once, every method
+        ["", "api", "show-once", ..] => true,
         // Mission Control: approving plans, verifying, rejecting, retrying and approving checks are
         // the person's calls; bots act on tasks only through their task tools
         ["", "api", "missions" | "tasks" | "checks", ..] => *method != Method::GET && *method != Method::HEAD,
@@ -943,6 +945,13 @@ mod tests {
         assert!(person_only(&get, "/api/ideas"));
         assert!(person_only(&post, "/api/ideas"));
         assert!(person_only(&get, "/api/ideas/i1"));
+        // Show it once: GET included (the steps are what the person did)
+        assert!(person_only(&get, "/api/show-once/recordings"));
+        assert!(person_only(&get, "/api/show-once/recordings/rec_1"));
+        assert!(person_only(&post, "/api/show-once/recordings/rec_1/write"));
+        assert!(person_only(&del, "/api/show-once/recordings/rec_1/steps/4"));
+        assert!(person_only(&post, "/api/show-once/skills/s1/try"));
+        assert!(person_only(&post, "/api/show-once/test/clock"));
         assert!(person_only(&post, "/api/ideas/i1/pick"));
         assert!(person_only(&post, "/api/ideas/i1/look"));
         assert!(person_only(&del, "/api/ideas/i1"));

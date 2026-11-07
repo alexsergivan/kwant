@@ -107,6 +107,14 @@ pub enum RuntimeEvent {
     /// `{id, kwant_id, deleted: true}`). See `crate::db::skills`.
     #[serde(rename = "skill_updated", alias = "SkillUpdated")]
     SkillUpdated { skill: Value },
+    /// A Show-it-once recording started, stopped, was written or lost its steps; `recording` is
+    /// the recording without any step (steps never go out on SSE). See `crate::db::show_once`.
+    #[serde(rename = "skill_recording_updated", alias = "RecordingUpdated")]
+    RecordingUpdated { recording: Value },
+    /// Show it once (A29): a Try it once turn ended. `outcome` is `done`, `failed` or `cancelled`;
+    /// `bot` is the bot whose chat ran it.
+    #[serde(rename = "show_once_trial_ended", alias = "TrialEnded")]
+    TrialEnded { skill_id: String, recording_id: Option<String>, bot: String, outcome: String },
     /// A question an agent asked the user was asked, answered or cancelled.
     #[serde(rename = "question_updated", alias = "QuestionUpdated")]
     QuestionUpdated { question: Value },

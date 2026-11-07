@@ -58,6 +58,7 @@ pub mod goals;
 pub mod app_update_routes;
 pub mod smart_results;
 pub mod dev;
+pub mod show_once;
 pub mod agents_connect;
 pub mod teams;
 pub mod telegram;
@@ -519,6 +520,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/away", get(away::get))
         .route("/api/away/seen", post(away::seen))
         .route("/api/events", get(sse::sse_handler))
+        .merge(show_once::routes::router())
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), spaces::row_guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))

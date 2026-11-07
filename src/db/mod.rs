@@ -49,6 +49,7 @@ pub mod spend;
 pub mod agent_connections;
 pub mod dev_jira;
 pub mod telegram;
+pub mod show_once;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -254,6 +255,9 @@ impl Database {
         db.migrate_dev_jira().await?;
         // 0.7.8: Telegram bridge (add-only)
         db.migrate_telegram().await?;
+        // 0.7.9: Show it once recordings (add-only). After every step that can rebuild `kwants`
+        // or `skills`, which would drop its delete triggers
+        db.migrate_show_once().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal

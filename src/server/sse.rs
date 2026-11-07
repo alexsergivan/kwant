@@ -81,6 +81,12 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
             out.extend(fields(skill, &["id"], Owner::Skill));
             out
         }
+        E::RecordingUpdated { recording } => {
+            let mut out = fields(recording, &["space_id"], Owner::Space);
+            out.extend(fields(recording, &["kwant_id"], Owner::Context));
+            out
+        }
+        E::TrialEnded { bot, .. } => vec![Owner::Context(bot.clone())],
         E::QuestionUpdated { question: v } | E::HumanStepUpdated { step: v } => fields(
             v,
             &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"],
@@ -312,6 +318,8 @@ mod tests {
             E::TelegramPaired { space_id: s("spc_x"), name: s("x"), username: None },
             E::TelegramExpired { space_id: s("spc_x") },
             E::TelegramStatus { space_id: s("spc_x") },
+            E::RecordingUpdated { recording: json!({"id": "rec_1", "space_id": "spc_x", "kwant_id": "k"}) },
+            E::TrialEnded { skill_id: s("s"), recording_id: Some(s("rec_1")), bot: s("k"), outcome: s("done") },
             E::IdeaUpdated { id: s("i"), status: s("ready"), space_id: s("spc_x") },
             E::Notify {
                 kind: s("x"),
@@ -342,6 +350,8 @@ mod tests {
                 | E::DelegationUpdated { .. }
                 | E::MessageAdded { .. }
                 | E::SkillUpdated { .. }
+                | E::RecordingUpdated { .. }
+                | E::TrialEnded { .. }
                 | E::QuestionUpdated { .. }
                 | E::Activity { .. }
                 | E::HumanStepUpdated { .. }
