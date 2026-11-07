@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Mission board, checkpoints &amp; AutoFix: A task is Verified only when a check passes, never on a bot&#x27;s word.">
 <meta property="article:published_time" content="2026-10-28">
-<meta property="article:modified_time" content="2026-11-05">
+<meta property="article:modified_time" content="2026-11-07">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Mission board: AI agent tasks with proof · kwant">
 <meta name="twitter:description" content="One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.">
@@ -53,7 +53,7 @@
     <div class="docs-group"><h3>Get started</h3><ul><li><a href="/docs/quickstart">Quickstart</a></li><li><a href="/docs/install">Install &amp; run</a></li></ul></div>
     <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="/docs/spaces">Spaces</a></li><li><a href="/docs/bots-and-teams">Bots &amp; teams</a></li><li><a href="/docs/accounts">Accounts &amp; profiles</a></li><li><a href="/docs/models">Models &amp; routing</a></li><li><a href="/docs/approvals">Approvals &amp; passwords</a></li><li><a href="/docs/flight-school">Flight School</a></li><li><a href="/docs/smart-results">Smart Results</a></li><li><a href="/docs/dev-mode">Dev mode</a></li></ul></div>
     <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="/docs/mission-board" aria-current="page">Mission board</a></li><li><a href="/docs/goals">Goals</a></li><li><a href="/docs/idea-jar">Idea jar</a></li><li><a href="/docs/routines">Routines &amp; bot actions</a></li><li><a href="/docs/memory-skills">Memory, skills &amp; search</a></li><li><a href="/docs/lessons">Lessons</a></li><li><a href="/docs/truth-ledger">Truth Ledger</a></li><li><a href="/docs/loose-ends">Loose ends &amp; letters</a></li><li><a href="/docs/parallel-universe">Parallel Universe</a></li></ul></div>
-    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/browser">Browser</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/agents-connect">Coding agents</a></li><li><a href="/docs/browser">Browser</a></li></ul></div>
   </nav>
   <article class="prose">
 <p class="kicker">Docs</p>
@@ -117,6 +117,29 @@
   <li><strong>Settings → All spaces → Usage</strong> sets defaults: <strong>Token limits</strong> for new tasks and missions, and <strong>Hand-offs per request</strong> for the tokens one request may spend on bots handing work to each other. Both start at <strong>No limit</strong>. With a limit set, a request pauses there and offers <strong>Continue</strong>.</li>
   <li>Updating to 0.4.0 switches off a hand-off limit still at the old 200k default, once. A number you set yourself stays.</li>
 </ul>
+<h3 id="spend-stop">Daily spending stop</h3>
+<p>Since 0.7.4, <strong>Settings → All spaces → Usage</strong> can also cap what all bots together use in a day, in every space. <strong>Tokens per day</strong> counts fresh tokens: new input, cache writes and output, not cache reads. <strong>Dollars per day</strong> counts only engines that report a cost. Both are empty, so off, until you set them, and today's use sits right under them, per day and per bot.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v074-spend-stop-2880.webp?v=754ecfec79" data-caption="Settings, Usage. The daily spending stop is set to 2,000,000 tokens and 5 dollars a day. Today&#x27;s use is 1.43 million tokens and 3.62 dollars, broken down by bot for each day."><img class="app" src="../assets/media/v074-spend-stop-1440.webp?v=06d34523c6" srcset="../assets/media/v074-spend-stop-1440.webp?v=06d34523c6 1440w, ../assets/media/v074-spend-stop-2880.webp?v=754ecfec79 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, Usage. The daily spending stop is set to 2,000,000 tokens and 5 dollars a day. Today&#x27;s use is 1.43 million tokens and 3.62 dollars, broken down by bot for each day."></a></div>
+  <figcaption>The two limits, next to what today has used so far.</figcaption>
+</figure>
+<p>Past either limit no new turn starts, whether from a message, a hand-off, a routine, a goal, a mission task, AutoFix or a <a href="/docs/agents-connect">coding agent</a>. Turns already running finish. Then:</p>
+<ul>
+  <li>A chat shows one notice a day with <strong>Continue today</strong> and <strong>Change the limit</strong>. Continue today lifts the stop until midnight.</li>
+  <li>Routines, missions and AutoFix skip the run and say so, without counting it as a failure.</li>
+  <li>Needs you shows one item with the same Continue today, and the first stop each day sends one notification.</li>
+  <li>Goal checks keep running, since they use no tokens.</li>
+</ul>
+<p>The day follows your time zone and survives a restart. A turn that fails part-way counts the tokens its engine reported so far.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v074-spend-notice-2880.webp?v=f4e978ee2d" data-caption="A chat where the bot has paused: today&#x27;s spending stop of 2 million tokens is used up. Buttons offer Change the limit or Continue today."><img class="app" src="../assets/media/v074-spend-notice-1440.webp?v=7906e603ff" srcset="../assets/media/v074-spend-notice-1440.webp?v=7906e603ff 1440w, ../assets/media/v074-spend-notice-2880.webp?v=f4e978ee2d 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A chat where the bot has paused: today&#x27;s spending stop of 2 million tokens is used up. Buttons offer Change the limit or Continue today."></a></div>
+  <figcaption>One notice a day in the chat, with Continue today.</figcaption>
+</figure>
+<figure>
+  <div class="phone"><a class="zoom" href="../assets/media/phone-v074-spend-stop-780.webp?v=5c96d1b0de" data-caption="On a phone: Settings, All spaces, with the daily spending stop at 2,000,000 tokens and 5 dollars, and today&#x27;s use under it."><img src="../assets/media/phone-v074-spend-stop-390.webp?v=bb2075e651" srcset="../assets/media/phone-v074-spend-stop-390.webp?v=bb2075e651 390w, ../assets/media/phone-v074-spend-stop-780.webp?v=5c96d1b0de 780w" sizes="300px" width="390" height="844" loading="lazy" decoding="async" alt="On a phone: Settings, All spaces, with the daily spending stop at 2,000,000 tokens and 5 dollars, and today&#x27;s use under it."></a></div>
+  <figcaption>The same limits on a phone.</figcaption>
+</figure>
+
 <p>What stops runaway loops are the hand-off caps: one bot can be asked up to 4 times per message, and one message can start up to 16 hand-offs. Past that, the chat shows "Paused after 16 hand-offs so it doesn't loop. Continue?" with a <strong>Continue</strong> button, or you can type "continue".</p>
 
 <h2 id="flags">"May be invalid"</h2>
@@ -236,7 +259,7 @@
 </footer>
 <script src="../assets/js/site.js?v=63f328cd53" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/mission-board#article","headline":"Mission board: AI agent tasks with proof","description":"One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.","url":"https://kwant.si/docs/mission-board","mainEntityOfPage":"https://kwant.si/docs/mission-board","image":"https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c","inLanguage":"en","datePublished":"2026-10-28","dateModified":"2026-11-05","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Mission board","item":"https://kwant.si/docs/mission-board"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/mission-board#article","headline":"Mission board: AI agent tasks with proof","description":"One board for all bot work. A task is Verified only when a check passes. Leads review hand-offs, AutoFix retries safely, Insights shows verified results and their cost.","url":"https://kwant.si/docs/mission-board","mainEntityOfPage":"https://kwant.si/docs/mission-board","image":"https://kwant.si/assets/og/docs-mission-board.png?v=cb9229cc7c","inLanguage":"en","datePublished":"2026-10-28","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Mission board","item":"https://kwant.si/docs/mission-board"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

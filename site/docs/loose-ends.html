@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Loose ends &amp; letters: Finds what you started and never finished, and drafts the next step.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-10-22">
+<meta property="article:modified_time" content="2026-11-07">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Loose ends: AI that finds unfinished follow-ups · kwant">
 <meta name="twitter:description" content="kwant finds threads you never finished in chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.">
@@ -53,7 +53,7 @@
     <div class="docs-group"><h3>Get started</h3><ul><li><a href="/docs/quickstart">Quickstart</a></li><li><a href="/docs/install">Install &amp; run</a></li></ul></div>
     <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="/docs/spaces">Spaces</a></li><li><a href="/docs/bots-and-teams">Bots &amp; teams</a></li><li><a href="/docs/accounts">Accounts &amp; profiles</a></li><li><a href="/docs/models">Models &amp; routing</a></li><li><a href="/docs/approvals">Approvals &amp; passwords</a></li><li><a href="/docs/flight-school">Flight School</a></li><li><a href="/docs/smart-results">Smart Results</a></li><li><a href="/docs/dev-mode">Dev mode</a></li></ul></div>
     <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="/docs/mission-board">Mission board</a></li><li><a href="/docs/goals">Goals</a></li><li><a href="/docs/idea-jar">Idea jar</a></li><li><a href="/docs/routines">Routines &amp; bot actions</a></li><li><a href="/docs/memory-skills">Memory, skills &amp; search</a></li><li><a href="/docs/lessons">Lessons</a></li><li><a href="/docs/truth-ledger">Truth Ledger</a></li><li><a href="/docs/loose-ends" aria-current="page">Loose ends &amp; letters</a></li><li><a href="/docs/parallel-universe">Parallel Universe</a></li></ul></div>
-    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/browser">Browser</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/agents-connect">Coding agents</a></li><li><a href="/docs/browser">Browser</a></li></ul></div>
   </nav>
   <article class="prose">
 <p class="kicker">Docs</p>
@@ -67,11 +67,20 @@
 <ul>
   <li><strong>Your bot chats, tasks and questions</strong> are always read: kwant's own threads, open questions and failed handoffs.</li>
   <li><strong>Email (IMAP)</strong>, optional: a mail server with TLS or STARTTLS.</li>
-  <li><strong>GitHub</strong>, optional: your issues and pull requests. A GitHub Enterprise address works too.</li>
+  <li><strong>GitHub</strong>, optional: your issues and pull requests. For GitHub Enterprise, paste your server's address as it is (github.yourcompany.com or yourcompany.ghe.com) and kwant finds the API itself.</li>
+  <li><strong>GitLab, Gitea or Forgejo</strong>, optional since 0.7.4: a server's address and a read token, which <a href="/docs/dev-mode#forges">Dev mode</a> uses for merge requests and CI. kwant asks the server which forge it runs, and asks you only when it can't tell. It says plainly when that server is already connected.</li>
 </ul>
 <p>Add a source with <strong>Add a source</strong>. kwant tests the connection first, and the login goes into the password vault. Sources are read-only: email is opened without marking, moving or deleting anything, and GitHub is only read.</p>
 <figure>
   <div class="frame"><a class="zoom" href="../assets/media/v2-loose-ends-2880.webp?v=9771e7036a" data-caption="Loose ends with Open, Waiting and Snoozed tabs. The top case is a letter from a water company, with the quote it&#x27;s based on and a draft reply."><img class="app" src="../assets/media/v2-loose-ends-1440.webp?v=f0ffd4836e" srcset="../assets/media/v2-loose-ends-1440.webp?v=f0ffd4836e 1440w, ../assets/media/v2-loose-ends-2880.webp?v=9771e7036a 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Loose ends with Open, Waiting and Snoozed tabs. The top case is a letter from a water company, with the quote it&#x27;s based on and a draft reply."></a></div>
+</figure>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v074-forge-connect-2880.webp?v=1c5e327c19" data-caption="Adding a self-hosted Git server in Loose ends. Kwant couldn&#x27;t tell what kind of server gitlab.example.com is and asks: which is it, GitLab, Gitea or Forgejo?"><img class="app" src="../assets/media/v074-forge-connect-1440.webp?v=c708624c2c" srcset="../assets/media/v074-forge-connect-1440.webp?v=c708624c2c 1440w, ../assets/media/v074-forge-connect-2880.webp?v=1c5e327c19 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Adding a self-hosted Git server in Loose ends. Kwant couldn&#x27;t tell what kind of server gitlab.example.com is and asks: which is it, GitLab, Gitea or Forgejo?"></a></div>
+  <figcaption>Adding a GitLab, Gitea or Forgejo server. "Which is it?" opens only when the server can't tell.</figcaption>
+</figure>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v074-ghe-address-2880.webp?v=08525f2e2e" data-caption="Adding GitHub with a GitHub Enterprise address, yourcompany.ghe.com. Leave it empty for github.com."><img class="app" src="../assets/media/v074-ghe-address-1440.webp?v=c4e01eefa9" srcset="../assets/media/v074-ghe-address-1440.webp?v=c4e01eefa9 1440w, ../assets/media/v074-ghe-address-2880.webp?v=08525f2e2e 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="Adding GitHub with a GitHub Enterprise address, yourcompany.ghe.com. Leave it empty for github.com."></a></div>
+  <figcaption>GitHub Enterprise: paste the address as it is, or leave it empty for github.com.</figcaption>
 </figure>
 
 <h2 id="cases">Cases</h2>
@@ -144,7 +153,7 @@
 </footer>
 <script src="../assets/js/site.js?v=63f328cd53" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/loose-ends#article","headline":"Loose ends: AI that finds unfinished follow-ups","description":"kwant finds threads you never finished in chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.","url":"https://kwant.si/docs/loose-ends","mainEntityOfPage":"https://kwant.si/docs/loose-ends","image":"https://kwant.si/assets/og/docs-loose-ends.png?v=4b2c634102","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-10-22","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Loose ends & letters","item":"https://kwant.si/docs/loose-ends"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/loose-ends#article","headline":"Loose ends: AI that finds unfinished follow-ups","description":"kwant finds threads you never finished in chats, email and GitHub, and reads letters you photograph. It drafts the next step and never sends anything.","url":"https://kwant.si/docs/loose-ends","mainEntityOfPage":"https://kwant.si/docs/loose-ends","image":"https://kwant.si/assets/og/docs-loose-ends.png?v=4b2c634102","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Loose ends & letters","item":"https://kwant.si/docs/loose-ends"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

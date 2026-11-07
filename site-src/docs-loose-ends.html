@@ -17,11 +17,20 @@ card_art: avatar:designer
 <ul>
   <li><strong>Your bot chats, tasks and questions</strong> are always read: kwant's own threads, open questions and failed handoffs.</li>
   <li><strong>Email (IMAP)</strong>, optional: a mail server with TLS or STARTTLS.</li>
-  <li><strong>GitHub</strong>, optional: your issues and pull requests. A GitHub Enterprise address works too.</li>
+  <li><strong>GitHub</strong>, optional: your issues and pull requests. For GitHub Enterprise, paste your server's address as it is (github.yourcompany.com or yourcompany.ghe.com) and kwant finds the API itself.</li>
+  <li><strong>GitLab, Gitea or Forgejo</strong>, optional since 0.7.4: a server's address and a read token, which <a href="dev-mode.html#forges">Dev mode</a> uses for merge requests and CI. kwant asks the server which forge it runs, and asks you only when it can't tell. It says plainly when that server is already connected.</li>
 </ul>
 <p>Add a source with <strong>Add a source</strong>. kwant tests the connection first, and the login goes into the password vault. Sources are read-only: email is opened without marking, moving or deleting anything, and GitHub is only read.</p>
 <figure>
   <div class="frame">{{shot:v2-loose-ends|Loose ends with Open, Waiting and Snoozed tabs. The top case is a letter from a water company, with the quote it's based on and a draft reply.|(max-width: 860px) 100vw, 760px}}</div>
+</figure>
+<figure>
+  <div class="frame">{{shot:v074-forge-connect|Adding a self-hosted Git server in Loose ends. Kwant couldn't tell what kind of server gitlab.example.com is and asks: which is it, GitLab, Gitea or Forgejo?|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Adding a GitLab, Gitea or Forgejo server. "Which is it?" opens only when the server can't tell.</figcaption>
+</figure>
+<figure>
+  <div class="frame">{{shot:v074-ghe-address|Adding GitHub with a GitHub Enterprise address, yourcompany.ghe.com. Leave it empty for github.com.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>GitHub Enterprise: paste the address as it is, or leave it empty for github.com.</figcaption>
 </figure>
 
 <h2 id="cases">Cases</h2>

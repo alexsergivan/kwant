@@ -67,6 +67,29 @@ card_art: avatar:tech_lead
   <li><strong>Settings → All spaces → Usage</strong> sets defaults: <strong>Token limits</strong> for new tasks and missions, and <strong>Hand-offs per request</strong> for the tokens one request may spend on bots handing work to each other. Both start at <strong>No limit</strong>. With a limit set, a request pauses there and offers <strong>Continue</strong>.</li>
   <li>Updating to 0.4.0 switches off a hand-off limit still at the old 200k default, once. A number you set yourself stays.</li>
 </ul>
+<h3 id="spend-stop">Daily spending stop</h3>
+<p>Since 0.7.4, <strong>Settings → All spaces → Usage</strong> can also cap what all bots together use in a day, in every space. <strong>Tokens per day</strong> counts fresh tokens: new input, cache writes and output, not cache reads. <strong>Dollars per day</strong> counts only engines that report a cost. Both are empty, so off, until you set them, and today's use sits right under them, per day and per bot.</p>
+<figure>
+  <div class="frame">{{shot:v074-spend-stop|Settings, Usage. The daily spending stop is set to 2,000,000 tokens and 5 dollars a day. Today's use is 1.43 million tokens and 3.62 dollars, broken down by bot for each day.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The two limits, next to what today has used so far.</figcaption>
+</figure>
+<p>Past either limit no new turn starts, whether from a message, a hand-off, a routine, a goal, a mission task, AutoFix or a <a href="agents-connect.html">coding agent</a>. Turns already running finish. Then:</p>
+<ul>
+  <li>A chat shows one notice a day with <strong>Continue today</strong> and <strong>Change the limit</strong>. Continue today lifts the stop until midnight.</li>
+  <li>Routines, missions and AutoFix skip the run and say so, without counting it as a failure.</li>
+  <li>Needs you shows one item with the same Continue today, and the first stop each day sends one notification.</li>
+  <li>Goal checks keep running, since they use no tokens.</li>
+</ul>
+<p>The day follows your time zone and survives a restart. A turn that fails part-way counts the tokens its engine reported so far.</p>
+<figure>
+  <div class="frame">{{shot:v074-spend-notice|A chat where the bot has paused: today's spending stop of 2 million tokens is used up. Buttons offer Change the limit or Continue today.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>One notice a day in the chat, with Continue today.</figcaption>
+</figure>
+<figure>
+  <div class="phone">{{shot:phone-v074-spend-stop|On a phone: Settings, All spaces, with the daily spending stop at 2,000,000 tokens and 5 dollars, and today's use under it.|300px}}</div>
+  <figcaption>The same limits on a phone.</figcaption>
+</figure>
+
 <p>What stops runaway loops are the hand-off caps: one bot can be asked up to 4 times per message, and one message can start up to 16 hand-offs. Past that, the chat shows "Paused after 16 hand-offs so it doesn't loop. Continue?" with a <strong>Continue</strong> button, or you can type "continue".</p>
 
 <h2 id="flags">"May be invalid"</h2>

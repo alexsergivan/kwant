@@ -92,7 +92,7 @@ DOC_GROUPS = [
         ("loose-ends", "Loose ends & letters"),
         ("parallel-universe", "Parallel Universe"),
     ]),
-    ("Connect", [("mcp", "MCP tools"), ("browser", "Browser")]),
+    ("Connect", [("mcp", "MCP tools"), ("agents-connect", "Coding agents"), ("browser", "Browser")]),
 ]
 DOCS = [d for _, items in DOC_GROUPS for d in items]
 
@@ -1001,14 +1001,18 @@ Key facts:
   the result. No token limits by default; hand-off caps (4 per bot, 16 per request, with Continue) stop loops.
 - Smart Results draw a bot's table or list as a sortable comparison, chart or checklist, copied word for word from the
   reply. Goals check that a page, command or file stays OK and offer one fix when one breaks.
-- Dev mode points a space at a GitHub repo: a plain-words card for every merge, a review of every pull request by a bot
-  that didn't write it (posted to GitHub only when you press Post to GitHub), and a production floor where pushes to
-  main, deploys and destructive data commands always ask. The Idea jar has a free bot write a take on each idea you
+- Dev mode watches each team's repo on GitHub (including GitHub Enterprise), GitLab, Gitea, Forgejo or any git server: a
+  plain-words card for every merge, a review of every pull request or merge request by a bot that didn't write it
+  (posted to GitHub only when you press Post to GitHub), and a production floor where pushes to main, deploys and
+  destructive data commands always ask. The Idea jar has a free bot write a take on each idea you
   drop in; Do it makes a draft mission you approve.
 - Automatic model failover: when an account runs out of usage, bots move to the next account in your order, across
   Claude, Codex, Grok and Custom API, and go back after the reset.
 - Bots cite web facts with links that open the page at the exact quote; kwant checks the quote is on the page word for
   word and refuses made-up ones. Browser steps report what changed, and checkouts always ask before paying.
+- Coding agents (Claude Code, Codex, Cursor or any MCP client) can ask your bots for work over MCP at /api/mcp/agents,
+  with one revocable token per connection, only the bots you pick, and no way to approve anything.
+- A daily spending stop (off by default) caps what all bots together use in a day, in tokens and dollars.
 - Imports bots from Claude Code subagents, SKILL.md files, character cards, JSON exports and Grok Bot exports.
 - Not to be confused with the Kwant quantum-transport Python package (kwant-project.org) or other products named Kwant; this kwant is an AI agent app.
 """

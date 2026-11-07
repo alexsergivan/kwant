@@ -1,5 +1,5 @@
 title: Dev mode: AI code review and a production safety floor
-description: Point a kwant space at its git repos, on GitHub, GitLab, Gitea or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.
+description: Point a kwant space at its git repos, on GitHub, GitLab, Gitea, Forgejo or any git server. Bots explain every merge in plain words, review each pull request with a second bot, and every push to main or deploy asks you first.
 card_title: Dev mode
 path: docs/dev-mode.html
 nav: dev-mode
@@ -8,7 +8,7 @@ card_art: avatar:devops
 ---
 <p class="kicker">Docs</p>
 <h1>Dev mode: code review and a safety floor for your repo</h1>
-<p class="intro">Dev mode watches the repo of every team in a space, on GitHub or any git server. kwant reads each repo and writes a card for every merge, and on GitHub for every open pull request, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
+<p class="intro">Dev mode watches the repo of every team in a space, on GitHub or any git server. kwant reads each repo and writes a card for every merge, and for every open pull request or merge request on GitHub, GitLab, Gitea and Forgejo, in plain words. A bot that didn't write the code reviews it. In the same space, anything that can reach production asks you first. kwant writes to GitHub only when you press <strong>Post to GitHub</strong> on a review.</p>
 <figure>
   <div class="frame">{{shot:v071-dev-on|The Trailhead Outfitters space right after one press on the Dev mode switch, which now reads On. A note above the message box says Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>One press turns it on. A note says which repo kwant found, with Undo.</figcaption>
@@ -28,11 +28,28 @@ card_art: avatar:devops
   <figcaption>Every team's repo, each checked on its own.</figcaption>
 </figure>
 <h3 id="any-git">Any git repo</h3>
-<p>Since 0.7.3, Dev mode reads every repo's history with git: GitHub, GitLab, Gitea, any git server, or a team folder with no remote. Each merge gets its plain-words card. Pull requests, CI checks, reviews and <strong>Post to GitHub</strong> work on GitHub repos only. kwant keeps a copy of each watched repo in its data folder, up to 1 GB; a bigger repo reads "Too big to read". The server needs git 2.31 or newer; without it, the desk says "Needs git on the server", with the install tip. kwant fetches over https, http, ssh or git, and never from the server itself, a link-local or a cloud metadata address. git runs as the server user kwant runs as, so that user's SSH keys and credential helpers work.</p>
+<p>Since 0.7.3, Dev mode reads every repo's history with git: GitHub, GitLab, Gitea, any git server, or a team folder with no remote. Each merge gets its plain-words card. Pull requests, CI checks and reviews need the repo's forge: GitHub, or since 0.7.4 <a href="#forges">GitLab, Gitea and Forgejo</a>. <strong>Post to GitHub</strong> works on GitHub repos only. kwant keeps a copy of each watched repo in its data folder, up to 1 GB; a bigger repo reads "Too big to read". The server needs git 2.31 or newer; without it, the desk says "Needs git on the server", with the install tip. kwant fetches over https, http, ssh or git, and never from the server itself, a link-local or a cloud metadata address. git runs as the server user kwant runs as, so that user's SSH keys and credential helpers work.</p>
 <p>Under a team's repo link, Team settings say in one line what Dev mode does with it: watched, watched but needs Connect GitHub for reviews, can be watched once Dev mode is on, or read with git.</p>
 <figure>
   <div class="frame">{{video:clip-v071-dev-on|Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words.}}</div>
   <figcaption>On, the repo found, and the last five merges written up.</figcaption>
+</figure>
+
+<h3 id="forges">GitLab, Gitea and Forgejo</h3>
+<p>Since 0.7.4, repos on GitLab, Gitea, Forgejo and Codeberg get review cards for their merge requests or pull requests, with their CI, like GitHub's. Add the server once in <a href="loose-ends.html#sources">Loose ends</a> with its address and a read token (<code>read_api</code> on GitLab). kwant asks the server which forge it runs, and asks you only when it can't tell. A repo row on the Dev desk with no connection yet has a <strong>Connect GitLab</strong> (or Gitea, or Forgejo) button that opens the same form in place. The repo list shows where each repo lives.</p>
+<figure>
+  <div class="frame">{{shot:v074-forge-repos|Dev desk watching four repos, each tagged with where it lives: GitHub, plain git, Gitea and GitLab.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Each repo with its forge, on one desk.</figcaption>
+</figure>
+<figure>
+  <div class="frame">{{shot:v074-forge-review|A GitLab merge request, !7 Show the waitlist badge on full trips, reviewed in Dev desk: low risk, does what was asked, tests changed with the code, security checks clear. Posting the review to GitLab comes later.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A GitLab merge request, reviewed like a GitHub pull request.</figcaption>
+</figure>
+<p>Posting a review back is still GitHub only: the card says "Posting to GitLab comes in a later update" and links to the merge request. Forge requests take the same address checks as git fetches and never follow redirects.</p>
+<p>A repo with no forge, or with no token for it, still gets reviews: each pushed branch that's ahead of the watched one gets a review card, with no CI and no Post.</p>
+<figure>
+  <div class="frame">{{shot:v074-branch-card|A review card for a branch, feature/seat-holds, in a repo with no pull requests: low risk, with tests and security checks.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A pushed branch in a plain git repo gets its own review card.</figcaption>
 </figure>
 
 <h2 id="before">Before you turn it on</h2>

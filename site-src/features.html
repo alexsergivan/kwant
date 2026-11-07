@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-074">New in 0.7.4</a></li>
         <li><a href="#new-073">New in 0.7.3</a></li>
         <li><a href="#new-072">New in 0.7.2</a></li>
         <li><a href="#new-071">New in 0.7.1</a></li>
@@ -48,6 +49,63 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-074" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7.4</p>
+      <h2>Ask your bots from your coding agent, and a daily spending stop</h2>
+      <p>Claude Code, Codex or Cursor can hand work to your bots and get the reply back. A daily stop caps what all bots spend. Dev mode reviews merge requests on GitLab, Gitea and Forgejo, and "Ask only when risky" now asks before a bot adds a new package.</p>
+    </div>
+    <div class="grid two">
+      <article class="card" id="coding-agents">
+        <span class="shot">{{shot:v074-coding-agents-card|The Coding agents list with two connections, Codex on the build box and Claude Code on my laptop. Its recent activity shows one question asked to Ann. Each connection has a Revoke button.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Use kwant from your coding agent</h3><p>Claude Code, Codex, Cursor and other MCP clients can ask your bots for work and get the reply back where you're coding. Each connection has its own token, shown once, reaches only the spaces and bots you pick, and is revoked at once. The agent is never you: it can't approve anything, and its token opens nothing else in kwant. <a href="docs/agents-connect.html">Connect one</a></p></div>
+      </article>
+      <article class="card" id="spend-stop">
+        <span class="shot">{{shot:v074-spend-stop-card|Settings, Usage. The daily spending stop is set to 2,000,000 tokens and 5 dollars a day. Today's use is 1.43 million tokens and 3.62 dollars, broken down by bot for each day.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A daily spending stop</h3><p><strong>Settings → All spaces → Usage</strong> can cap what all bots together use in a day, in tokens and in dollars, right next to today's use. Both are off until you set them. Past the cap no new work starts, from a chat, a hand-off, a routine, a mission or a coding agent; work already running finishes. <a href="docs/mission-board.html#spend-stop">How the stop works</a></p></div>
+      </article>
+      <article class="card" id="forge-reviews">
+        <span class="shot">{{shot:v074-forge-review-card|A GitLab merge request, !7 Show the waitlist badge on full trips, reviewed in Dev desk: low risk, does what was asked, tests changed with the code, security checks clear. Posting the review to GitLab comes later.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Reviews on GitLab, Gitea and Forgejo</h3><p>Connect a GitLab, Gitea, Forgejo or Codeberg server and its merge requests and pull requests get review cards with their CI, like GitHub's. Posting a review back is still GitHub only, and the card says so. <a href="docs/dev-mode.html#forges">Dev mode on other forges</a></p></div>
+      </article>
+      <article class="card" id="package-ask">
+        <span class="shot">{{shot:v074-package-ask-card|With Ask only when risky on, Ann stops to ask before installing a new package: npm install left-pad. Buttons: Deny, Always this session, Allow once.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A new package asks first</h3><p>Under <strong>Ask only when risky</strong>, a bot adding a package the project doesn't list yet now shows a card first, because the package's code runs on your computer: <code>npm install left-pad</code>, <code>cargo add</code>, <code>uv add</code>, <code>go get</code> and the like. A plain <code>npm install</code> of what the project already lists still runs. <a href="docs/approvals.html#smart">What still runs on its own</a></p></div>
+      </article>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3>Connected in a minute</h3>
+        <p>Name the connection, pick its spaces and bots, and copy the one-line setup for Claude Code, Codex or Cursor. Its first ask shows up under <strong>Recent activity</strong>, and the bot's thread is in kwant for you to read along. Each connection can make 60 asks an hour, and its work counts toward the spending stop.</p>
+      </div>
+      <div class="frame">{{video:clip-v074-coding-agents|Demo: in Settings, All spaces, Coding agents, a new connection is created and named, its Claude Code setup line is copied, and Done is pressed. A moment later its first request comes in, and Recent activity on the connection shows Asked Ann.}}</div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="spend-notice">
+        <span class="shot">{{shot:v074-spend-notice-card|A chat where the bot has paused: today's spending stop of 2 million tokens is used up. Buttons offer Change the limit or Continue today.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>When the stop is reached</h3><p>A chat gets one notice a day with <strong>Continue today</strong> or <strong>Change the limit</strong>. Routines, missions and AutoFix skip without counting as failures, Needs you shows one item, and the first stop each day sends one notification. The day follows your time zone.</p></div>
+      </article>
+      <article class="card" id="forge-connect">
+        <span class="shot">{{shot:v074-forge-connect-card|Adding a self-hosted Git server in Loose ends. Kwant couldn't tell what kind of server gitlab.example.com is and asks: which is it, GitLab, Gitea or Forgejo?|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Add GitLab, Gitea or Forgejo</h3><p>In Loose ends, <strong>Add a source</strong> takes the server's address and a token. kwant asks the server which forge it runs, and asks you only when it can't tell. A repo row on the Dev desk with no connection yet has a <strong>Connect GitLab</strong> (or Gitea, or Forgejo) button that opens the same form in place.</p></div>
+      </article>
+      <article class="card" id="branch-cards">
+        <span class="shot">{{shot:v074-branch-card-card|A review card for a branch, feature/seat-holds, in a repo with no pull requests: low risk, with tests and security checks.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A card for every pushed branch</h3><p>A repo with no forge, or no token for it, still gets reviews: each pushed branch that's ahead of the watched one gets a review card, with no CI and no Post. The repo list shows where each repo lives.</p></div>
+      </article>
+      <article class="card" id="ghe-address">
+        <span class="shot">{{shot:v074-ghe-address-card|Adding GitHub with a GitHub Enterprise address, yourcompany.ghe.com. Leave it empty for github.com.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>GitHub Enterprise, as you paste it</h3><p>Paste your server's address as it is, github.yourcompany.com or yourcompany.ghe.com, and kwant finds the API itself. Repos on yourcompany.ghe.com now match their connection in Dev mode. Leave it empty for github.com.</p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="keys-not-repeated"><h3>Bots don't paste your keys back</h3><p>Give a bot a key, password or token and it still does what you asked with it, but its reply names it, or shows its last 4 characters, instead of writing it out.</p></li>
+      <li id="forge-safety"><h3>Same checks for every forge</h3><p>Requests to GitLab, Gitea and Forgejo take the same address checks as git fetches, and never follow redirects.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-073" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
@@ -62,10 +120,10 @@ card_art: team
       </article>
       <article class="card" id="any-git">
         <span class="shot">{{shot:v073-any-git-card|The Dev desk watching storefront on main, landed changes only. A note says it is read from the Shop team's folder on the server, which has no remote, so there are no reviews or CI checks. What landed shows 2 changes landed on main, nothing needs you, and the card Free shipping now starts at $50, a direct push at low risk.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
-        <div class="card-body"><h3>Any git repo</h3><p>A team's repo on GitLab, Gitea or any git server, or a team folder with no remote, is watched with git, and every merge gets its plain-words card. Reviews, CI checks and Post to GitHub still work on GitHub repos only. The server needs git 2.31 or newer; without it, the desk says "Needs git on the server". <a href="docs/dev-mode.html#any-git">How it reads repos</a></p></div>
+        <div class="card-body"><h3>Any git repo</h3><p>A team's repo on GitLab, Gitea or any git server, or a team folder with no remote, is watched with git, and every merge gets its plain-words card. Post to GitHub still works on GitHub repos only; <a href="#forge-reviews">since 0.7.4</a>, reviews and CI checks work on GitLab, Gitea and Forgejo too. The server needs git 2.31 or newer; without it, the desk says "Needs git on the server". <a href="docs/dev-mode.html#any-git">How it reads repos</a></p></div>
       </article>
       <article class="card" id="connect-github">
-        <span class="shot">{{shot:v073-connect-github-card|The Connect GitHub button on the Dev desk with its popover open right below it: an empty Token field, the hint that read-only access to issues and pull requests is enough, Name (optional) and API address (GitHub Enterprise only), the line Loose ends and Dev mode share this login, then Cancel and Test and add.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v073-connect-github-card|The Connect GitHub popover open right below its button on the Dev desk: an empty Token field, the hint that read-only access to issues and pull requests is enough, Name (optional) and GitHub Enterprise address, left empty for github.com, then Cancel and Test and add.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Connect GitHub where you press it</h3><p>Every <strong>Connect GitHub</strong> opens the same form right there: a popover on the desktop, a sheet on the phone. It no longer jumps to Loose ends, and the GitHub row in Loose ends says "Also used by Dev mode". Under a team's repo link, one line says what Dev mode does with it.</p></div>
       </article>
       <article class="card" id="save-choice">
@@ -689,7 +747,7 @@ card_art: team
         <div class="card-body"><h3>Hiring you approve</h3><p>Bots can propose a new teammate. Accept once, always, or deny. Each space sets its rule.</p></div>
       </article>
       <article class="card">
-        <span class="shot">{{shot:v2-passwords-bitwarden|The confirm shown when turning off approvals for every bot in a space. It says 3 saved passwords are kept on this server and that a bot that can run commands could read them, then offers to move them to Bitwarden first, or keep them here and turn off approvals.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v2-passwords-bitwarden-card|The confirm for turning off approvals for every bot in Trailhead Outfitters. It lists what bots could then do without asking, says 3 saved passwords are kept on this server where a bot that can run commands could read them, and offers Move them to Bitwarden first, Cancel, or Keep them here and turn off approvals.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Saved passwords</h3><p>Website logins in kwant's encrypted vault or your own Bitwarden. With approvals off, kwant asks you once whether to keep them on this server or move them to Bitwarden.</p></div>
       </article>
     </div>
