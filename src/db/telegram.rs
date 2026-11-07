@@ -592,12 +592,15 @@ impl Database {
 
     /// Messages in a channel after the cursor `(at, id)`, oldest first, outside threads (the
     /// reply window's sweep, A19). `messages.created_at` is SQLite's second-precision text, so
-    /// both sides are compared through `datetime()`.
+    /// both sides are compared through `datetime()`. Within one second, messages go in the order
+    /// they were written (rowid), not by their random ids: the person's kwant message must close
+    /// the window before a reply written in the same second is looked at.
     pub async fn telegram_channel_since(&self, channel_id: &str, at: DateTime<Utc>, id: &str, limit: i64) -> Result<Vec<crate::db::models::Message>, DbError> {
         Ok(sqlx::query_as::<_, crate::db::models::Message>(
             "SELECT * FROM messages WHERE channel_id = ? AND thread_id IS NULL
-               AND (datetime(created_at) > datetime(?) OR (datetime(created_at) = datetime(?) AND id > ?))
-             ORDER BY datetime(created_at), id LIMIT ?",
+               AND (datetime(created_at) > datetime(?) OR (datetime(created_at) = datetime(?)
+                    AND rowid > COALESCE((SELECT rowid FROM messages WHERE id = ?), 0)))
+             ORDER BY datetime(created_at), rowid LIMIT ?",
         )
         .bind(channel_id)
         .bind(at)
@@ -612,5 +615,33 @@ impl Database {
     pub async fn telegram_close_window(&self, space: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE telegram_links SET reply_window_from = NULL WHERE space_id = ?").bind(space).execute(&self.pool).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A kwant message and a reply in the same second: the sweep sees them in the order they were
+    // written, whatever their ids (the reply window closes before the reply is looked at)
+    #[tokio::test]
+    async fn the_sweep_reads_one_second_in_written_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let second = "2026-11-07 12:00:00";
+        for (id, role) in [("zzz-person", "user"), ("aaa-reply", "kwant"), ("mmm-later", "kwant")] {
+            sqlx::query("INSERT INTO messages (id, channel_id, sender_role, sender_id, text, created_at) VALUES (?, 'ch', ?, 'x', 't', ?)")
+                .bind(id)
+                .bind(role)
+                .bind(second)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        let at: DateTime<Utc> = "2026-11-07T12:00:00Z".parse().unwrap();
+        let ids = |v: Vec<crate::db::models::Message>| v.into_iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(ids(db.telegram_channel_since("ch", at, "", 20).await.unwrap()), ["zzz-person", "aaa-reply", "mmm-later"]);
+        assert_eq!(ids(db.telegram_channel_since("ch", at, "zzz-person", 20).await.unwrap()), ["aaa-reply", "mmm-later"]);
+        assert_eq!(ids(db.telegram_channel_since("ch", at, "aaa-reply", 20).await.unwrap()), ["mmm-later"]);
     }
 }
