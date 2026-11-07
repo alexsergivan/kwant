@@ -134,11 +134,13 @@ export interface ReadyTeamsProviderProps {
   onChanged: () => void;
   /** Open the new team's chat (team, channel id). */
   onOpenTeam: (team: CreatedTeam['team'], channelId: string) => void;
+  /** Undo answered 200: the team and its chat are gone on the server; drop them from the lists now. */
+  onUndone?: (team: ReadyTeam) => void;
   /** Message count of a team's chat, for the Undo confirm; the server's count wins when it answers. */
   children: React.ReactNode;
 }
 
-export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, bots, teams, onChanged, onOpenTeam, children }) => {
+export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, bots, teams, onChanged, onOpenTeam, onUndone, children }) => {
   const [templates, setTemplates] = useState<TeamTemplate[] | null>(() => cache.get(space) ?? null);
   const [templatesError, setTemplatesError] = useState(false);
   const [available, setAvailable] = useState(true);
@@ -233,6 +235,7 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
         setMade((x) => ({ ...x, [team.id]: null }));
         setConfirm(null);
         setToast((t) => ({ text: `Removed @${handle}.`, n: (t?.n ?? 0) + 1 }));
+        onUndone?.(team);
         onChanged();
       } catch (e) {
         if (undoWindowOver(e)) {
@@ -247,7 +250,7 @@ export const ReadyTeamsProvider: React.FC<ReadyTeamsProviderProps> = ({ space, b
         setBusy(false);
       }
     },
-    [onChanged, confirm],
+    [onChanged, onUndone, confirm],
   );
 
   const undo = useCallback(

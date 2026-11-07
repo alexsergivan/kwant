@@ -486,7 +486,9 @@ test('D7 can’t read: "Pick a local folder instead" shows when the picker is pa
   const { el } = sheet({ kind: 'suggest', repo_url: 'git.example.com/acme/shop' }, { onPickFolder: () => picked++ });
   let v = await mount(el);
   let root = document.querySelector('[data-team-sheet="suggest"]');
-  assert.match(root.textContent, /so kwant can read file names and manifests/);
+  // U-3: an unknown host gets the can't-read line and the folder picker, no Connect GitLab.
+  assert.match(root.textContent, /git\.example\.com\/acme\/shop may be private, or on a host you haven’t connected\./);
+  assert.equal(byText(root, 'button', /^Connect /), undefined);
   await click(byText(root, 'button', /^Pick a local folder instead$/));
   assert.equal(picked, 1);
   v.unmount();
@@ -704,5 +706,79 @@ test('no templates route (404): every entry point renders nothing', async () => 
     ),
   );
   assert.equal(document.querySelector('#all').children.length, 0);
+  v.unmount();
+});
+
+test('U-3: Connect GitHub for github.com, Connect GitLab for gitlab.com or a GitLab host already connected, none otherwise', async () => {
+  assert.equal(m.repoHost('https://user:tok@GitLab.example.com/a/b.git'), 'gitlab.example.com');
+  assert.equal(m.repoHost('git@github.com:acme/shop.git'), 'github.com');
+  assert.equal(m.repoHost('ssh://git@git.example.com:2222/a/b'), 'git.example.com');
+  assert.equal(m.connectForgeFor('https://github.com/a/b', 'gitlab', []), 'GitHub');
+  assert.equal(m.connectForgeFor('https://git.example.com/a/b', 'github', []), 'GitHub');
+  assert.equal(m.connectForgeFor('https://gitlab.com/a/b', 'gitlab', []), 'GitLab');
+  assert.equal(m.connectForgeFor('https://git.example.com/a/b', 'gitlab', []), null);
+  assert.equal(m.connectForgeFor('https://git.example.com/a/b', 'gitlab', ['git.example.com']), 'GitLab');
+  assert.equal(m.connectForgeFor('http://192.168.1.20:9476/x.git', 'gitlab', []), null);
+
+  const realFetch = g.fetch;
+  g.fetch = g.window.fetch = async (url) =>
+    String(url).includes('/api/zombie/sources')
+      ? new Response(JSON.stringify({ sources: [{ id: 's1', kind: 'forge', label: 'Work', enabled: true, config: { forge: 'gitlab', url: 'https://git.example.com' } }], vault_locked: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      : new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  try {
+    use({ suggest: 'cantread' });
+    const asked = [];
+    const v = await mount(sheet({ kind: 'suggest', repo_url: 'https://git.example.com/acme/shop' }, { onConnectForge: (u, f) => asked.push(f) }).el);
+    const root = document.querySelector('[data-team-sheet="suggest"]');
+    assert.match(root.textContent, /is private\. Connect GitLab/);
+    await click(byText(root, 'button', /^Connect GitLab$/));
+    assert.deepEqual(asked, ['GitLab']);
+    v.unmount();
+  } finally {
+    g.fetch = g.window.fetch = realFetch;
+  }
+  use({ suggest: 'cantread' });
+  const v = await mount(sheet({ kind: 'suggest', repo_url: 'https://github.com/acme/shop' }).el);
+  assert.ok(byText(document.querySelector('[data-team-sheet="suggest"]'), 'button', /^Connect GitHub$/));
+  v.unmount();
+});
+
+const failing = (status, body, base = {}) => {
+  const calls = [];
+  const fixture = fx.fixtureTransport(base, calls);
+  m.setTeamsTransport(async (url, method, b, hd) => {
+    calls.push({ url, method, body: b, headers: hd ?? {} });
+    if ((url.startsWith('/api/teams/from-template') && method === 'POST') || (url.startsWith('/api/teams/suggest') && base.failSuggest)) return { status, body };
+    return fixture(url, method, b, hd);
+  });
+  return calls;
+};
+
+test('U-5: a create refused with an error shows the server’s words; no error keeps "The server stopped"', async () => {
+  const said = 'that folder is already the workspace of team @f1 in the space "Work"; spaces never share a folder';
+  failing(400, { error: said, code: 'folder_in_use', field: 'workspace_path' });
+  let v = await mount(sheet({ kind: 'template', templateId: 'inbox' }).el);
+  let root = document.querySelector('[data-team-sheet="inbox"]');
+  await click(primary(root));
+  assert.ok(root.textContent.includes(said));
+  assert.doesNotMatch(root.textContent, /The server stopped before it finished/);
+  assert.match(root.textContent, /Couldn’t create the team\. Nothing was created\./);
+  v.unmount();
+  failing(502, null);
+  v = await mount(sheet({ kind: 'template', templateId: 'inbox' }).el);
+  root = document.querySelector('[data-team-sheet="inbox"]');
+  await click(primary(root));
+  assert.match(root.textContent, /The server stopped before it finished\. Your names are kept\./);
+  v.unmount();
+});
+
+test('U-5: Suggest refused with folder_in_use (or bad_path) shows the server’s words', async () => {
+  const said = 'that folder is already the workspace of team @f1; pick another folder';
+  failing(400, { error: said, code: 'folder_in_use', field: 'workspace_path' }, { failSuggest: true });
+  const v = await mount(sheet({ kind: 'suggest', workspace_path: '/home/me/shop' }).el);
+  const root = document.querySelector('[data-team-sheet="suggest"]');
+  assert.match(root.textContent, /Couldn’t read the project\./);
+  assert.ok(root.textContent.includes(said));
+  assert.doesNotMatch(root.textContent, /The server stopped/);
   v.unmount();
 });

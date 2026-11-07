@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { useEscapeLayer } from '../escape';
+import { forgeHost, looseApi } from '../looseEnds';
 import { useMedia } from '../useMedia';
 import { PHONE_QUERY } from '../layout';
 import {
@@ -39,7 +40,8 @@ import {
   carryEdits,
   cleanHandle,
   fieldKey,
-  forgeOf,
+  connectForgeFor,
+  serverErrorText,
   initialEdits,
   nameError,
   newBotCount,
@@ -235,6 +237,8 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const [draft, setDraft] = useState('');
   const [reading, setReading] = useState<Set<number>>(new Set());
   const [phase, setPhase] = useState<'idle' | 'creating' | 'failed'>('idle');
+  /** U-5: the server's `error` for the last failed create; null keeps "The server stopped…". */
+  const [createError, setCreateError] = useState<string | null>(null);
   const [live, setLive] = useState('');
   const seeded = useRef(false);
   /** Rows (and '@handle') the person changed, which a late preview answer must not overwrite. */
@@ -245,6 +249,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
 
   // ---- D state
   const [dPhase, setDPhase] = useState<DPhase>('reading');
+  /** U-5: the server's `error` when Suggest was refused (bad_path, folder_in_use, …). */
+  const [readError, setReadError] = useState<string | null>(null);
+  /** U-3: the 422's `forge`, and the GitLab hosts already connected, for which Connect to offer. */
+  const [cantForge, setCantForge] = useState<unknown>(null);
+  const [gitlabHosts, setGitlabHosts] = useState<string[]>([]);
   const [sug, setSug] = useState<Suggestion | null>(null);
   const [edits, setEdits] = useState<Record<string, RowEdit>>({});
   const [elapsed, setElapsed] = useState(0);
@@ -344,14 +353,28 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         if (ac.signal.aborted) return;
         // The live region still says "Reading the project" otherwise.
         if (cantRead(e)) {
+          setCantForge(e instanceof TeamsError ? e.extra?.forge ?? null : null);
+          looseApi.sources().then(
+            (r) =>
+              !ac.signal.aborted &&
+              setGitlabHosts(
+                (r.sources ?? [])
+                  .filter((x) => x.kind === 'forge' && x.config?.forge === 'gitlab' && typeof x.config?.url === 'string')
+                  .map((x) => forgeHost(x.config!.url as string))
+                  .filter(Boolean),
+              ),
+            () => undefined,
+          );
           setDPhase('cantread');
           setLive('Can’t read this project yet. Nothing was read and nothing was created.');
         } else if (e instanceof TeamsError && e.status === 0) {
           setDPhase('offline');
           setLive('You’re offline. Nothing was read.');
         } else {
+          const said = serverErrorText(e);
+          setReadError(said);
           setDPhase('error');
-          setLive('Couldn’t read the project. Nothing was created.');
+          setLive(`Couldn’t read the project. ${said ? `${said} ` : ''}Nothing was created.`);
         }
       }
     },
@@ -491,8 +514,10 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         setLive(e.clashes.length > 1 ? `${e.clashes.length} names were taken. Check the new names and create again.` : 'A name was taken. Check the new name and create again.');
         return;
       }
+      const said = serverErrorText(e);
+      setCreateError(said);
       setPhase('failed');
-      setLive('Couldn’t create the team. Nothing was created.');
+      setLive(`Couldn’t create the team. ${said ? `${said} ` : ''}Nothing was created.`);
     }
   };
 
@@ -896,18 +921,22 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     }
     if (dPhase === 'cantread') {
       const url = mode.kind === 'suggest' ? mode.repo_url ?? '' : '';
-      const forge = forgeOf(url);
+      const forge = connectForgeFor(url, cantForge, gitlabHosts);
       return (
         <div className="flex flex-col items-center text-center py-10 px-4">
           <Lock size={22} className="text-zinc-300" aria-hidden="true" />
           <p className="mt-3 text-sm font-semibold text-zinc-50">Can’t read this repo yet</p>
           <p className="mt-1.5 max-w-[420px] text-[12.5px] leading-[18px] text-zinc-300">
-            {url.replace(/^https?:\/\//, '')} is private. Connect {forge} so kwant can read file names and manifests. It’s the same connection Dev mode uses for this repo.
+            {forge
+              ? `${url.replace(/^https?:\/\//, '')} is private. Connect ${forge} so kwant can read file names and manifests. It’s the same connection Dev mode uses for this repo.`
+              : `${url.replace(/^https?:\/\//, '')} may be private, or on a host you haven’t connected.`}
           </p>
           <div className={`mt-4 flex ${phone ? 'flex-col w-full' : ''} gap-2`}>
-            <button type="button" onClick={() => onConnectForge?.(url, forge)} className={`${phone ? 'h-11' : 'h-9'} px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium ${FOCUS}`}>
-              Connect {forge}
-            </button>
+            {forge && (
+              <button type="button" onClick={() => onConnectForge?.(url, forge)} className={`${phone ? 'h-11' : 'h-9'} px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium ${FOCUS}`}>
+                Connect {forge}
+              </button>
+            )}
             {onPickFolder && (
               <button type="button" onClick={onPickFolder} className={`${phone ? 'h-11' : 'h-9'} px-4 rounded-lg border border-zinc-700 text-zinc-200 text-sm hover:bg-white/5 ${FOCUS}`}>
                 Pick a local folder instead
@@ -927,7 +956,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     if (dPhase === 'error')
       return (
         <Banner tone="bad" head="Couldn’t read the project.">
-          The server stopped before it finished. Nothing was created.
+          {readError ?? 'The server stopped before it finished.'} Nothing was created.
         </Banner>
       );
     if (!sug) return null;
@@ -1113,7 +1142,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         )}
         {phase === 'failed' && (
           <Banner tone="bad" head="Couldn’t create the team. Nothing was created.">
-            The server stopped before it finished. Your names are kept.
+            {createError ? `${createError} ` : 'The server stopped before it finished. '}Your names are kept.
           </Banner>
         )}
         {isD ? dBody() : tBody()}

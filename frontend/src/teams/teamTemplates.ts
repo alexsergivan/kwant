@@ -578,6 +578,34 @@ export function sourceName(path: string | null | undefined): string {
 /** Which forge a repo URL is on, for the Can't read block's button. */
 export const forgeOf = (url: string | null | undefined): 'GitHub' | 'GitLab' => (/github\.com/i.test(url ?? '') ? 'GitHub' : 'GitLab');
 
+/** The host of a repo address: `https://host/…`, `ssh://git@host:22/…` or `git@host:owner/repo`. */
+export const repoHost = (url: string | null | undefined): string => {
+  const m = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@/\s]*@)?([^/:\s]+)/i.exec((url ?? '').trim());
+  return m ? m[1].toLowerCase() : '';
+};
+
+/**
+ * U-3: which Connect the can't-read screen offers. GitHub when the server says so or the host is
+ * github.com; GitLab only for gitlab.com or a GitLab host the person already connected; null (no
+ * Connect, only "Pick a local folder instead") for any other host.
+ */
+export const connectForgeFor = (url: string | null | undefined, serverForge: unknown, gitlabHosts: readonly string[]): 'GitHub' | 'GitLab' | null => {
+  const host = repoHost(url);
+  if (serverForge === 'github' || host === 'github.com' || host === 'www.github.com') return 'GitHub';
+  if (host === 'gitlab.com' || host === 'www.gitlab.com' || (host && gitlabHosts.includes(host))) return 'GitLab';
+  return null;
+};
+
+/**
+ * U-5: the server's own words for a failure (`error` in the body), or null when it sent none (a
+ * dropped connection, a proxy page, a 5xx without a body), so the caller keeps its generic line.
+ */
+export const serverErrorText = (e: unknown): string | null => {
+  if (!(e instanceof TeamsError) || e.status === 0) return null;
+  const said = e.extra?.error;
+  return typeof said === 'string' && said.trim() ? said.trim() : null;
+};
+
 /** Rows that come back after a 410 keep the person's edits (A17). */
 export function carryEdits(prev: Record<string, RowEdit>, next: Record<string, RowEdit>, oldS: Suggestion, newS: Suggestion): Record<string, RowEdit> {
   const out = { ...next };
