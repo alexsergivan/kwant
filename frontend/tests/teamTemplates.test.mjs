@@ -77,7 +77,7 @@ const mount = async (el) => {
   return { host, root, rerender: async (e) => (root.render(e), await settle()), unmount: () => (root.unmount(), host.remove()) };
 };
 const byText = (root, sel, re) => [...root.querySelectorAll(sel)].find((el) => re.test(el.textContent ?? ''));
-const primary = (root) => byText(root, 'button', /^(Create team|Add \d|Try again|Creating)/);
+const primary = (root) => byText(root, 'button', /^(Create team|Add \d|Add bots|Try again|Creating)/);
 const use = (opts) => {
   const calls = [];
   m.setTeamsTransport(fx.fixtureTransport(opts, calls));
@@ -424,13 +424,31 @@ test('D: Manage team adds a single bot, and says so when the team already has ev
   assert.equal(primary(root).disabled, false);
   assert.doesNotMatch(root.textContent, /Pick at least/);
   v.unmount();
+  // Only an also-possible role: say so instead of an empty "Who's on it".
+  keep = 0;
+  m.setTeamsTransport(async (url, method, body, headers) => {
+    const r = await base(url, method, body, headers);
+    if (url.startsWith('/api/teams/suggest') && r.status === 200) r.body = { ...r.body, bots: [] };
+    return r;
+  });
+  ({ el } = sheet({ kind: 'suggest', team: { id: 'team_shop', name: 'shop' }, workspace_path: '~/projects/shop' }));
+  v = await mount(el);
+  root = document.querySelector('[data-team-sheet="suggest"]');
+  assert.match(root.querySelector('[data-nothing-core]').textContent, /@shop already has the roles the code suggests\. Tick one below if it helps\./);
+  v.unmount();
+  m.setTeamsTransport(async (url, method, body, headers) => {
+    const r = await base(url, method, body, headers);
+    if (url.startsWith('/api/teams/suggest') && r.status === 200) r.body = { ...r.body, bots: r.body.bots.slice(0, keep), also_possible: keep ? r.body.also_possible : [] };
+    return r;
+  });
   // Nothing new: an empty state, no nag, Add disabled.
   keep = 0;
   ({ el } = sheet({ kind: 'suggest', team: { id: 'team_shop', name: 'shop' }, workspace_path: '~/projects/shop' }));
   v = await mount(el);
   root = document.querySelector('[data-team-sheet="suggest"]');
   assert.match(root.querySelector('[data-nothing-new]').textContent, /@shop already has every role the code suggests\. Nothing to add\./);
-  assert.doesNotMatch(root.textContent, /Pick at least|Undo/);
+  assert.doesNotMatch(root.textContent, /Pick at least|Undo|Add 0 bots/);
+  assert.equal(primary(root).textContent.trim(), 'Add bots');
   assert.equal(primary(root).disabled, true);
   v.unmount();
 });

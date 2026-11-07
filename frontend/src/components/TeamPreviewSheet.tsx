@@ -335,7 +335,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
           setHandleNote(c.handleNote);
         }
         setDPhase('ready');
-        setLive(`Suggested ${plural(s.bots.length, 'bot')}${s.also_possible.length ? `, ${s.also_possible.length} also possible` : ''}`);
+        setLive(
+          s.bots.length + s.also_possible.length === 0
+            ? 'Nothing new to add.'
+            : `Suggested ${plural(s.bots.length, 'bot')}${s.also_possible.length ? `, ${s.also_possible.length} also possible` : ''}`,
+        );
       } catch (e) {
         if (ac.signal.aborted) return;
         // The live region still says "Reading the project" otherwise.
@@ -973,6 +977,10 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             <p className="py-3 text-sm text-zinc-300" data-nothing-new>
               {manage && mode.kind === 'suggest' && mode.team ? `@${mode.team.name} already has every role the code suggests.` : 'The code doesn’t suggest any roles.'} Nothing to add.
             </p>
+          ) : sug.bots.length === 0 ? (
+            <p className="py-3 text-sm text-zinc-300" data-nothing-core>
+              {manage && mode.kind === 'suggest' && mode.team ? `@${mode.team.name} already has the roles the code suggests.` : 'The code doesn’t suggest a core role.'} Tick one below if it helps.
+            </p>
           ) : (
             <ul>{sug.bots.map((b) => sgRow(b, false))}</ul>
           )}
@@ -1026,7 +1034,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const sNote = isD && dPhase === 'ready' && !nothingNew ? sizeNote(ticked, minBots) : null;
   const fallbackFooter = isD && (dPhase === 'cantread' || dPhase === 'offline' || dPhase === 'error');
   const retry = (!isD && templatesError && !t) || phase === 'failed' || (isD && (dPhase === 'error' || dPhase === 'offline'));
-  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? `Add ${plural(ticked, 'bot')}` : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
+  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? (nothingNew ? 'Add bots' : `Add ${plural(ticked, 'bot')}`) : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
   const onPrimary = () => {
     if (retry) {
       if (!isD && templatesError && !t) return onRetryTemplates?.();
