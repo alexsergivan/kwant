@@ -22,7 +22,7 @@ import { SpaceControls } from './SpaceControls';
 import { DevOnToast } from './DevOnToast';
 import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
-import { GlobeSlot, WatchGlobe, useFadeOut } from './WatchLive';
+import { GlobeSlot, WatchGlobe, useFadeOut, useLingeringIds } from './WatchLive';
 import type { Browsing } from '../watchLive';
 import { IdeaJarRow } from './IdeaJarRow';
 
@@ -357,7 +357,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const chatsTab = phone && section === 'chats';
   const needsRows = chatsTab ? needsYouRows.filter((r) => kwants.some((k) => k.id === r.kwant_id)) : [];
   const needsIds = new Set(needsRows.map((r) => r.kwant_id));
-  const workingBots = chatsTab ? workingIds(kwants, busyKwants, needsIds) : [];
+  const busyNow = chatsTab ? workingIds(kwants, busyKwants, needsIds) : [];
+  // A bot whose turn just ended stays in Working for its globe's fade-out, instead of jumping to Direct
+  // chats (a new row, with no globe) in the same frame (QA F2 on phone)
+  const lingering = useLingeringIds(busyNow.map((k) => k.id));
+  const workingBots = chatsTab && lingering.size ? workingIds(kwants, { ...Object.fromEntries([...lingering].map((id) => [id, 'done'])), ...busyKwants }, needsIds) : busyNow;
   const directBots = chatsTab ? directIds(kwants, new Set([...needsIds, ...workingBots.map((k) => k.id)])) : [];
 
   const toggleTeam = (id: string) =>
@@ -651,9 +655,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="truncate">@{t.name}</span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {onWatchBrowser && (
-            <GlobeSlot browsing={!browserNeedsYou?.has(t.id) ? browsingOwners[t.id] : undefined} name={`@${t.name}`} phone={phone} className="ml-auto mr-px" onWatch={onWatchBrowser} />
-          )}
           {(!expanded || !withMembers) && (
             <span className="text-2xs px-1.5 py-0.5 rounded-full tabular-nums bg-white/[0.05] text-zinc-300 border border-hairline" title={`${count} ${count === 1 ? 'member' : 'members'}`}>
               {count}
@@ -673,6 +674,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <Settings2 size={12} />
             </button>
+          )}
+          {/* Last in the row, like the bot rows' globe, so every globe lines up in one column (QA N1) */}
+          {onWatchBrowser && (
+            <GlobeSlot browsing={!browserNeedsYou?.has(t.id) ? browsingOwners[t.id] : undefined} name={`@${t.name}`} phone={phone} className="mr-px" onWatch={onWatchBrowser} />
           )}
         </div>
       </div>

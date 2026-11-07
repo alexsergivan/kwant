@@ -414,6 +414,53 @@ test('N1: the team row globe has no side margin, so it lines up with channel and
   assert.doesNotMatch(html, /\bmx-1\.5\b/);
 });
 
+test('N1 recheck: the team row globe comes last, after the member count and team settings, like the bot rows', () => {
+  const b = m.noteBrowser({}, 't_shop', 'https://shop.example.com', 1);
+  for (const p of [{}, { phone: true, section: 'chats' }]) {
+    const v = m.mount('Sidebar', { kwants: [rook, mira], teams: [team], browsingOwners: b, onWatchBrowser() {}, onManageTeam() {}, ...p });
+    const row = v.host.querySelector('[data-team-row="t_shop"]');
+    const g = row.querySelector('[data-watch-globe]');
+    assert.ok(g, JSON.stringify(p));
+    assert.equal(g.parentElement.lastElementChild, g, 'nothing after the globe on its row');
+    assert.ok(g.previousElementSibling?.matches('button[aria-label^="Team settings"]'), 'team settings sits before it');
+    assert.doesNotMatch(g.className, /\bml-auto\b/);
+    v.unmount();
+  }
+});
+
+test('F2 phone: a bot whose turn ends stays in Working while its globe fades, then moves to Direct chats', async () => {
+  const b = m.noteBrowser({}, 'k_rook', 'https://shop.example.com', 1);
+  const base = { kwants: [rook, mira], phone: true, section: 'chats', onWatchBrowser() {} };
+  const v = m.mount('Sidebar', { ...base, browsingOwners: b, busyKwants: { k_rook: 'Working on the direct chat' } });
+  const sec = () => v.host.querySelector('[data-bot-row="k_rook"]')?.closest('[data-chats-section]')?.getAttribute('data-chats-section');
+  assert.equal(sec(), 'working');
+  const before = v.host.querySelector('[data-bot-row="k_rook"]');
+  v.render({ ...base, browsingOwners: {}, busyKwants: {} });
+  assert.equal(sec(), 'working', 'kept in Working for the fade');
+  assert.equal(v.host.querySelector('[data-bot-row="k_rook"]'), before, 'the same row: not unmounted and remounted');
+  const g = v.host.querySelector('[data-watch-globe]');
+  assert.ok(g && g.getAttribute('data-leaving') === 'true' && /kw-globe-out/.test(g.className), 'the globe is fading out');
+  await new Promise((r) => setTimeout(r, 220));
+  assert.equal(sec(), 'direct', 'then under Direct chats');
+  assert.equal(v.host.querySelector('[data-watch-globe]'), null);
+  v.unmount();
+});
+
+test('F2 phone: under reduced motion the row moves at once, with no fade', () => {
+  const was = window.matchMedia;
+  window.matchMedia = (q) => ({ matches: /reduce/.test(q), media: q, addEventListener() {}, removeEventListener() {} });
+  try {
+    const base = { kwants: [rook, mira], phone: true, section: 'chats', onWatchBrowser() {} };
+    const v = m.mount('Sidebar', { ...base, browsingOwners: m.noteBrowser({}, 'k_rook', 'https://shop.example.com', 1), busyKwants: { k_rook: 'Working' } });
+    v.render({ ...base, browsingOwners: {}, busyKwants: {} });
+    assert.equal(v.host.querySelector('[data-bot-row="k_rook"]').closest('[data-chats-section]').getAttribute('data-chats-section'), 'direct');
+    assert.equal(v.host.querySelector('[data-watch-globe]'), null);
+    v.unmount();
+  } finally {
+    window.matchMedia = was;
+  }
+});
+
 test('N2 /b/: a bot link keeps "This bot isn’t browsing now"', () => {
   const v = m.mount('LiveMissPage', { chatLabel: '@Rook', kind: 'bot', onOpenChat() {} });
   assert.match(v.host.textContent, /This bot isn’t browsing now/);

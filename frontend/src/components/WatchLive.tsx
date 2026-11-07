@@ -68,6 +68,31 @@ export const WatchGlobe: React.FC<{ name: string; host: string; phone?: boolean;
   );
 };
 
+/**
+ * Ids that just left `ids`, kept for the globe's 150 ms fade-out (none under reduced motion). The
+ * phone's Working group lists only busy bots, so without this a row unmounts the moment its turn
+ * ends and its globe can't fade (QA F2 on phone).
+ */
+export function useLingeringIds(ids: readonly string[], ms = GLOBE_FADE_MS): ReadonlySet<string> {
+  const key = ids.join('\n');
+  const [st, setSt] = useState<{ key: string; ids: readonly string[]; linger: string[] }>({ key, ids, linger: [] });
+  let linger = st.linger;
+  if (st.key !== key) {
+    // Derived from the previous render, so the row stays in this same commit (no unmount, then remount)
+    const now = new Set(ids);
+    const gone = reducedMotion() ? [] : st.ids.filter((id) => !now.has(id));
+    linger = [...new Set([...st.linger.filter((id) => !now.has(id)), ...gone])];
+    setSt({ key, ids, linger });
+  }
+  const lingerKey = st.linger.join('\n');
+  useEffect(() => {
+    if (!lingerKey) return;
+    const id = window.setTimeout(() => setSt((s) => ({ ...s, linger: [] })), ms);
+    return () => window.clearTimeout(id);
+  }, [lingerKey, ms]);
+  return new Set(linger);
+}
+
 /** A row's globe slot: the globe while `browsing` is set, and for its fade-out after. */
 export const GlobeSlot: React.FC<{ browsing?: Browsing | null; name: string; phone?: boolean; className?: string; onWatch: (owner: string) => void }> = ({ browsing, name, phone, className, onWatch }) => {
   const { value, leaving } = useFadeOut(browsing);
