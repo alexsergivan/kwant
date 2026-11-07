@@ -170,6 +170,8 @@ export interface SpaceRoute {
   spaceId: string | null;
   channelId?: string;
   botId?: string;
+  /** `/live` on a chat address (W2): open it with the browser panel showing. */
+  live?: boolean;
   /** Inbox, Mission board, Parallel Universe or Settings (see nav.ts). */
   view?: SpaceView;
   /** The address used an old name for the view; rewrite it to `spacePath(...)`. */
@@ -181,9 +183,10 @@ export function parseSpacePath(path: string): SpaceRoute {
   if (!m) return { spaceId: null };
   const spaceId = decodeURIComponent(m[1]);
   const rest = m[2] ?? '';
-  const chat = rest.match(/^(c|b)\/([^/]+)$/);
-  if (chat?.[1] === 'c') return { spaceId, channelId: decodeURIComponent(chat[2]) };
-  if (chat?.[1] === 'b') return { spaceId, botId: decodeURIComponent(chat[2]) };
+  const chat = rest.match(/^(c|b)\/([^/]+)(\/live)?$/);
+  const live = chat?.[3] ? { live: true } : {};
+  if (chat?.[1] === 'c') return { spaceId, channelId: decodeURIComponent(chat[2]), ...live };
+  if (chat?.[1] === 'b') return { spaceId, botId: decodeURIComponent(chat[2]), ...live };
   const v = rest ? parseView(rest) : null;
   if (v) return v.legacy ? { spaceId, view: v.view, legacy: true } : { spaceId, view: v.view };
   // An address this version doesn't know still opens the space, and is rewritten.
@@ -192,13 +195,14 @@ export function parseSpacePath(path: string): SpaceRoute {
 
 export function spacePath(
   spaceId: string,
-  target?: { channelId?: string | null; botId?: string | null } | null,
+  target?: { channelId?: string | null; botId?: string | null; live?: boolean | null } | null,
   view?: SpaceView | null,
 ): string {
   const base = `/s/${encodeURIComponent(spaceId)}`;
   if (view) return `${base}/${viewSegment(view)}`;
-  if (target?.channelId) return `${base}/c/${encodeURIComponent(target.channelId)}`;
-  if (target?.botId) return `${base}/b/${encodeURIComponent(target.botId)}`;
+  const live = target?.live ? '/live' : '';
+  if (target?.channelId) return `${base}/c/${encodeURIComponent(target.channelId)}${live}`;
+  if (target?.botId) return `${base}/b/${encodeURIComponent(target.botId)}${live}`;
   return base;
 }
 

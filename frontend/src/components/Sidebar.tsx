@@ -22,6 +22,8 @@ import { SpaceControls } from './SpaceControls';
 import { DevOnToast } from './DevOnToast';
 import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
+import { WatchGlobe } from './WatchLive';
+import type { Browsing } from '../watchLive';
 import { IdeaJarRow } from './IdeaJarRow';
 
 export interface Kwant {
@@ -101,6 +103,14 @@ export interface SidebarProps {
   needsYou?: Record<string, number>;
   /** Phone Chats tab: bots waiting on you, one row each, first in the list. */
   needsYouRows?: NeedsYouRow[];
+  /** W1: chats whose browser is active, by owner (team, channel, or bot for its direct chat). */
+  browsingOwners?: Record<string, Browsing>;
+  /** W1: bots whose running turn is in one of those chats, with that chat's browser. */
+  browsingBots?: Record<string, Browsing>;
+  /** Opens the owner's chat with the browser panel open (the W2 address). */
+  onWatchBrowser?: (owner: string) => void;
+  /** Owners whose browser holds an open step for the person: their rows show that, not the globe. */
+  browserNeedsYou?: ReadonlySet<string>;
   /** Opens a Needs-you row's chat on its card. */
   onOpenNeedsYou?: (row: NeedsYouRow) => void;
   onSelectKwant: (kwant: Kwant) => void;
@@ -272,6 +282,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   busyKwants = {},
   botStatus = {},
   needsYou = {},
+  browsingOwners = {},
+  browsingBots = {},
+  onWatchBrowser,
+  browserNeedsYou,
   needsYouRows = [],
   onOpenNeedsYou,
   onSelectKwant,
@@ -465,6 +479,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ? 'Needs you in the browser'
         : busyKwants[k.id];
     const open = asked && onOpenNeedsYou ? () => onOpenNeedsYou(asked) : () => onSelectKwant(k);
+    // The globe steps aside while the row says it needs you in the browser (that line leads there)
+    const botBrowsing = onWatchBrowser && !warn && !asked ? browsingBots[k.id] ?? browsingOwners[k.id] : undefined;
     return (
       <div
         key={`${chat ? 'chat' : team?.id ?? 'none'}:${k.id}`}
@@ -511,6 +527,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <Hand size={14} aria-hidden="true" />
                 <span aria-hidden="true">{needs}</span>
               </span>
+            )}
+            {/* W1: this bot's current work is in a browser; the click opens the chat that browser belongs to */}
+            {botBrowsing && (
+              <WatchGlobe name={k.name} host={botBrowsing.host} phone={phone} onWatch={() => onWatchBrowser!(botBrowsing.owner)} />
             )}
             {/* The space header already says when approvals are off for everyone: a bot only gets its own mark when it differs */}
             {approvalsDiffers(k, space.approvals) &&
@@ -630,6 +650,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="truncate">@{t.name}</span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          {onWatchBrowser && browsingOwners[t.id] && !browserNeedsYou?.has(t.id) && (
+            <WatchGlobe name={`@${t.name}`} host={browsingOwners[t.id].host} phone={phone} onWatch={() => onWatchBrowser(t.id)} />
+          )}
           {(!expanded || !withMembers) && (
             <span className="text-2xs px-1.5 py-0.5 rounded-full tabular-nums bg-white/[0.05] text-zinc-300 border border-hairline" title={`${count} ${count === 1 ? 'member' : 'members'}`}>
               {count}
@@ -896,7 +919,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="mt-1 space-y-0.5">
             {displayChannels.map((c) => {
               const active = isChannelActive(c);
-              return (
+              const watching = onWatchBrowser && browsingOwners[c.id] && !browserNeedsYou?.has(c.id) ? browsingOwners[c.id] : null;
+              const row = (
                 <button
                   key={c.id}
                   onClick={() => onSelectChannel(c)}
@@ -906,11 +930,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     active
                       ? 'bg-zinc-800 text-zinc-100 shadow-sm border border-zinc-700/50'
                       : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
-                  }`}
+                  }${watching ? (phone ? ' pr-12' : ' pr-8') : ''}`}
                 >
                   <Hash size={15} className={active ? 'text-sky-400' : 'text-zinc-500'} />
                   <span className="truncate flex-1">{c.name}</span>
                 </button>
+              );
+              // W1: the globe is its own button beside the row's, never inside it
+              return watching ? (
+                <div key={c.id} className="relative" data-channel-browsing={c.id}>
+                  {row}
+                  <span className="absolute right-1.5 top-1/2 -translate-y-1/2 flex">
+                    <WatchGlobe name={`#${c.name}`} host={watching.host} phone={phone} onWatch={() => onWatchBrowser!(c.id)} />
+                  </span>
+                </div>
+              ) : (
+                row
               );
             })}
             {displayChannels.length === 0 && (

@@ -102,11 +102,11 @@ export const App: React.FC = () => {
         if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
         return;
       }
-      const route = q ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined } : parseSpacePath(window.location.pathname);
+      const route = q ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined, live: q.live } : parseSpacePath(window.location.pathname);
       const s = pickSpace(list, route.spaceId, lastSpace());
       if (!s) return;
       const here = route.spaceId === s.id;
-      const fromUrl = here && (route.channelId || route.botId) ? { channelId: route.channelId, botId: route.botId } : null;
+      const fromUrl = here && (route.channelId || route.botId) ? { channelId: route.channelId, botId: route.botId, ...(route.live ? { live: true } : {}) } : null;
       // An old address (/away, /loose-ends, /connections…) opens its new place, rewritten in place.
       open(s.id, fromUrl, true, here && 'view' in route ? route.view ?? null : null);
     });
@@ -120,7 +120,7 @@ export const App: React.FC = () => {
       const view = route.view ?? null;
       if (route.spaceId !== currentRef.current) {
         setCurrentSpace(route.spaceId);
-        setTarget({ channelId: route.channelId, botId: route.botId });
+        setTarget({ channelId: route.channelId, botId: route.botId, live: route.live });
         setStartView(view);
         setViewRequest(null);
         viewRef.current = view;
