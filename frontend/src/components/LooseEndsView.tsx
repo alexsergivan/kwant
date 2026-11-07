@@ -380,7 +380,12 @@ export const NeedsBitwarden: React.FC<{
  * server), Use Bitwarden, or Make every bot ask first. A locked Bitwarden offers Unlock only.
  * `onReady(note, acceptRisk)` shows the token field.
  */
-export const SaveFirst: React.FC<{ gate: Exclude<SaveGate, 'open'>; onReady: (note: string | null, acceptRisk?: boolean) => void }> = ({ gate, onReady }) => {
+export const SaveFirst: React.FC<{
+  gate: Exclude<SaveGate, 'open'>;
+  onReady: (note: string | null, acceptRisk?: boolean) => void;
+  /** 0.7.6: the card's reason line for another token (Jira names its own scoped token). Defaults to the GitHub line. */
+  why?: string;
+}> = ({ gate, onReady, why }) => {
   const id = useId();
   const store = usePasswordStore(true, true);
   const [step, setStep] = useState(false);
@@ -417,7 +422,7 @@ export const SaveFirst: React.FC<{ gate: Exclude<SaveGate, 'open'>; onReady: (no
         {!step && <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" />}
         {locked ? SAVE_FIRST.lockedTitle : SAVE_FIRST.title}
       </p>
-      {!locked && <p className="text-[11px] text-amber-100/80 leading-snug" data-save-first-why>{SAVE_FIRST.why}</p>}
+      {!locked && <p className="text-[11px] text-amber-100/80 leading-snug" data-save-first-why>{why ?? SAVE_FIRST.why}</p>}
       {!step ? (
         <div className="flex flex-wrap gap-2">
           {!locked && (
