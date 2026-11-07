@@ -3684,9 +3684,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               <div className="flex-1 min-h-0 flex flex-col">
                 {needsSetup ? (
                   <>
-                    {/* U-4: the Bots tab still has "+ Team" and the ready-teams box with zero bots, as on desk. */}
-                    {sidebar(phoneTab === 'bots' ? 'bots' : 'chats')}
-                    {setupChecklist}
+                    {/* U-4: the Bots tab has "+ Team", "+ Bot" and the ready-teams box with zero bots, as on desk.
+                        It gets the full height: split with the checklist, the box was cut in half. */}
+                    {phoneTab === 'bots' ? (
+                      sidebar('bots')
+                    ) : (
+                      <>
+                        {sidebar('chats')}
+                        {setupChecklist}
+                      </>
+                    )}
                   </>
                 ) : phoneTab === 'jar' ? (
                   <div className="flex-1 min-h-0 flex" data-main-pane>{jarPage}</div>

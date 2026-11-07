@@ -603,7 +603,10 @@ export const connectForgeFor = (url: string | null | undefined, serverForge: unk
 export const serverErrorText = (e: unknown): string | null => {
   if (!(e instanceof TeamsError) || e.status === 0) return null;
   const said = e.extra?.error;
-  return typeof said === 'string' && said.trim() ? said.trim() : null;
+  if (typeof said !== 'string' || !said.trim()) return null;
+  // Server errors are often lower-case fragments ("that folder overlaps …"); show them as a sentence.
+  const t = said.trim();
+  return t[0].toUpperCase() + t.slice(1) + (/[.!?…]$/.test(t) ? '' : '.');
 };
 
 /** Rows that come back after a 410 keep the person's edits (A17). */

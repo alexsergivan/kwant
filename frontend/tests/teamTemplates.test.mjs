@@ -760,7 +760,8 @@ test('U-5: a create refused with an error shows the server’s words; no error k
   let v = await mount(sheet({ kind: 'template', templateId: 'inbox' }).el);
   let root = document.querySelector('[data-team-sheet="inbox"]');
   await click(primary(root));
-  assert.ok(root.textContent.includes(said));
+  // Shown as a sentence: capital first letter, a full stop, then "Your names are kept."
+  assert.ok(root.textContent.includes('That folder is already the workspace of team @f1 in the space "Work"; spaces never share a folder. Your names are kept.'));
   assert.doesNotMatch(root.textContent, /The server stopped before it finished/);
   assert.match(root.textContent, /Couldn’t create the team\. Nothing was created\./);
   v.unmount();
@@ -778,7 +779,7 @@ test('U-5: Suggest refused with folder_in_use (or bad_path) shows the server’s
   const v = await mount(sheet({ kind: 'suggest', workspace_path: '/home/me/shop' }).el);
   const root = document.querySelector('[data-team-sheet="suggest"]');
   assert.match(root.textContent, /Couldn’t read the project\./);
-  assert.ok(root.textContent.includes(said));
+  assert.ok(root.textContent.includes('That folder is already the workspace of team @f1; pick another folder. Nothing was created.'));
   assert.doesNotMatch(root.textContent, /The server stopped/);
   v.unmount();
 });
