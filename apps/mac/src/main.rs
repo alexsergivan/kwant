@@ -1889,4 +1889,89 @@ mod tests {
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
+
+    /// A one-shot listener that records every request line it gets and answers none of them
+    /// (the connection closes), so a health check fails and nothing after it is reached.
+    fn recording_listener() -> (u16, std::sync::Arc<Mutex<Vec<String>>>) {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for socket in listener.incoming() {
+                let Ok(mut socket) = socket else { break };
+                let mut buf = [0u8; 2048];
+                let n = socket.read(&mut buf).unwrap_or(0);
+                let text = String::from_utf8_lossy(&buf[..n]);
+                log.lock().unwrap().push(text.lines().next().unwrap_or("(connected)").to_string());
+            }
+        });
+        (port, seen)
+    }
+
+    /// "Show it" (design.md §3.1): a listed server without a link is only focused; nothing is
+    /// sent to it, even when it is down.
+    #[test]
+    fn show_it_on_a_listed_server_never_touches_the_network() {
+        let (port, seen) = recording_listener();
+        let address = format!("http://127.0.0.1:{port}");
+        let origin = target::parse_address(&address).unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, window, data_dir) = app_with("show-it", "connect", places.clone());
+        let label = Place::Server(origin.clone()).window_label();
+        let server_window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+            .visible(false)
+            .build()
+            .unwrap();
+        let page = connect::bundled("connect.html").to_string();
+        let started = Instant::now();
+        let answer = invoke(&window, "add_server", &page, serde_json::json!({ "address": address })).unwrap();
+        assert_eq!(answer["added"], false);
+        assert_eq!(answer["origin"], origin.as_str());
+        assert!(started.elapsed() < Duration::from_secs(2), "no check was waited for");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(seen.lock().unwrap().is_empty(), "nothing was sent: {:?}", seen.lock().unwrap());
+        assert_eq!(current(app.handle()), places);
+        drop(server_window);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    /// The same listed server with a sign-in link is checked first; when the check fails, the
+    /// error comes back and the old session isn't signed out.
+    #[test]
+    fn a_link_for_an_unreachable_listed_server_keeps_its_session() {
+        let (port, seen) = recording_listener();
+        let address = format!("http://127.0.0.1:{port}");
+        let origin = target::parse_address(&address).unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(origin.clone());
+        let (app, window, data_dir) = app_with("show-it-link", "connect", places.clone());
+        let page = connect::bundled("connect.html").to_string();
+        let link = format!("{address}/#kwnt_token=kl1.TESTONLY");
+        let refused = invoke(&window, "add_server", &page, serde_json::json!({ "address": link })).unwrap_err();
+        assert!(refused["code"].is_string(), "{refused}");
+        assert_eq!(refused["host"], origin.host());
+        std::thread::sleep(Duration::from_millis(200));
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen.iter().all(|l| l.starts_with("GET /api/health ")), "only the check: {seen:?}");
+        assert!(!seen.is_empty(), "the check was made");
+        assert!(!seen.iter().any(|l| l.starts_with("DELETE")), "no sign-out: {seen:?}");
+        assert_eq!(current(app.handle()), places);
+
+        // nothing listening at all: the same refusal, still no change
+        let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let gone_origin = target::parse_address(&format!("http://127.0.0.1:{gone}")).unwrap().origin;
+        let mut places = Places::default();
+        places.add_server(gone_origin.clone());
+        let (app2, window2, data_dir2) = app_with("show-it-gone", "connect", places.clone());
+        let link = format!("http://127.0.0.1:{gone}/#kwnt_token=kl1.TESTONLY");
+        let refused = invoke(&window2, "add_server", &page, serde_json::json!({ "address": link })).unwrap_err();
+        assert_eq!(refused["code"], "refused", "{refused}");
+        assert_eq!(current(app2.handle()), places);
+        let _ = std::fs::remove_dir_all(data_dir);
+        let _ = std::fs::remove_dir_all(data_dir2);
+    }
+
 }

@@ -111,14 +111,20 @@ pub async fn check_server<R: Runtime>(webview: Webview<R>, address: String) -> R
 /// Checks the server, lists it and opens its window (a listed one is focused). A pasted
 /// sign-in link opens once in that window, so the server sets its cookie there. The Add a
 /// server window closes. Nothing relaunches.
+///
+/// A listed server without a link ("Show it", design.md §3.1) isn't checked: its window is
+/// focused and shows its own failure page if the server is down. With a link it is checked
+/// first, so an unreachable server never loses its old session.
 #[tauri::command]
 pub async fn add_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, address: String) -> Result<Value, Value> {
     bundled_only(&webview)?;
-    let (address, _) = checked(&address).await?;
+    let parsed = parse_address(&address).map_err(|r| error(r.code(), r.message(), None))?;
+    let listed = crate::current(&app).servers.contains(&parsed.origin);
+    let address = if listed && parsed.sign_in.is_none() { parsed } else { checked(&address).await?.0 };
     let origin = address.origin;
     let host = origin.host();
     let link = address.sign_in.map(|l| l.url().clone());
-    if link.is_some() && crate::current(&app).servers.contains(&origin) {
+    if link.is_some() && listed {
         // a sign-in link signs a listed server's window in again: end the old session first,
         // so Signed-in devices doesn't list this app twice
         crate::sign_out_of(&app, &origin).await;
