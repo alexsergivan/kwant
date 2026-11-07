@@ -38,7 +38,7 @@ import {
   parseAttachments,
   preflightFile,
   readyAttachments,
-  uploadAttachment,
+  uploadWithRetry,
   uploadRetryable,
   uploadSlotsLeft,
 } from '../attachments';
@@ -806,12 +806,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const startUpload = (key: string, file: File) => {
     const abort = new AbortController();
     uploadFiles.current.set(key, { file, abort });
-    uploadAttachment(file, (progress) => patchUpload(key, { progress }), abort.signal).then(
-      (attachment) => patchUpload(key, { state: 'done', progress: 1, attachment, error: undefined }),
+    uploadWithRetry(file, (progress) => patchUpload(key, { progress, retrying: false }), abort.signal, {
+      onRetrying: () => patchUpload(key, { retrying: true, progress: 0 }),
+    }).then(
+      (attachment) => patchUpload(key, { state: 'done', progress: 1, attachment, error: undefined, retrying: false }),
       (err: Error) => {
         if (err.name === 'AbortError') return;
-        const retryable = !(err instanceof UploadError) || uploadRetryable(err.status);
-        patchUpload(key, { state: 'error', error: err.message, retryable });
+        const retryable = !(err instanceof UploadError) || uploadRetryable(err.status, err.code);
+        patchUpload(key, { state: 'error', error: err.message, retryable, retrying: false });
       },
     );
   };
@@ -830,7 +832,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         continue;
       }
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      added.push({ key, name: file.name || 'pasted file', size: file.size, progress: 0, state: 'uploading' });
+      added.push({ key, name: file.name || 'pasted file', size: file.size, mime: file.type || undefined, progress: 0, state: 'uploading' });
       startUpload(key, file);
     }
     setUploadNote(notes.length ? notes.join(' ') : null);
@@ -1966,7 +1968,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploadSlotsLeft(uploads) === 0}
-            title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : 'Attach files (or drop / paste them here). Max 20 MB each.'}
+            title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : 'Attach files (or drop / paste them here). Max 20 MB each, videos 100 MB.'}
             aria-label="Attach files"
             className={`${phone ? toolPhone : 'w-11 h-11 sm:w-9 sm:h-9 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] focus-visible:outline-sky-400'} rounded-xl flex items-center justify-center flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2`}
           >

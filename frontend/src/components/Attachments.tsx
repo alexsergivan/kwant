@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { AlertCircle, Download, FileText, Loader2, RotateCw, X } from 'lucide-react';
-import { AttachmentRef, PendingUpload, attachmentUrl, fileKind, formatBytes, isInlineImage } from '../attachments';
+import { AlertCircle, Download, FileText, Film, Loader2, RotateCw, X } from 'lucide-react';
+import { AttachmentRef, PendingUpload, attachKind, attachmentUrl, fileKind, formatBytes, isInlineImage, isVideo, uploadProgressText } from '../attachments';
 
 /**
  * A file on a message: images as a thumbnail (opens full size), everything else as a tile.
@@ -9,6 +9,7 @@ import { AttachmentRef, PendingUpload, attachmentUrl, fileKind, formatBytes, isI
 export const FileTile: React.FC<{ file: AttachmentRef }> = ({ file }) => {
   const [broken, setBroken] = useState(false);
   const image = isInlineImage(file.mime) && !broken;
+  const video = isVideo(file.mime) && !broken;
   const download = (
     <a
       href={attachmentUrl(file.id, true)}
@@ -51,10 +52,31 @@ export const FileTile: React.FC<{ file: AttachmentRef }> = ({ file }) => {
       </figure>
     );
   }
+  if (video) {
+    // P2: a player for sent videos. No autoplay; only the metadata loads until Play. A browser that
+    // can't decode it (some .mov in Chrome) errors and falls back to the file card below.
+    return (
+      <figure className="w-full sm:w-80 max-w-full rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/80">
+        <video
+          src={attachmentUrl(file.id)}
+          controls
+          preload="metadata"
+          playsInline
+          aria-label={file.name}
+          onError={() => setBroken(true)}
+          className="block w-full max-h-72 bg-black"
+        />
+        <figcaption className="flex items-center gap-2 px-2.5 py-1.5">
+          {label}
+          {download}
+        </figcaption>
+      </figure>
+    );
+  }
   return (
     <div className="flex items-center gap-2.5 w-full sm:w-72 max-w-full px-2.5 py-2 rounded-xl border border-zinc-800 bg-zinc-900/80">
       <span className="w-8 h-8 shrink-0 rounded-lg bg-zinc-800 border border-zinc-700/60 flex items-center justify-center text-zinc-400" aria-hidden="true">
-        <FileText size={15} />
+        {isVideo(file.mime) ? <Film size={15} /> : <FileText size={15} />}
       </span>
       {label}
       {download}
@@ -76,6 +98,7 @@ export const FileTiles: React.FC<{ files: AttachmentRef[]; align?: 'start' | 'en
 export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; onRetry?: () => void }> = ({ item, onRemove, onRetry }) => {
   const pct = Math.round(item.progress * 100);
   const failed = item.state === 'error';
+  const video = isVideo(item.mime || item.attachment?.mime) || attachKind({ name: item.name, type: item.mime }) === 'video';
   return (
     <li
       className={`relative flex items-center gap-2 max-w-full sm:max-w-[16rem] pl-2 pr-1 py-1 rounded-lg border text-[11px] overflow-hidden ${
@@ -86,6 +109,8 @@ export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; o
         <Loader2 size={12} className="shrink-0 text-sky-300 animate-spin motion-reduce:animate-none" aria-hidden="true" />
       ) : failed ? (
         <AlertCircle size={12} className="shrink-0 text-rose-300" aria-hidden="true" />
+      ) : video ? (
+        <Film size={12} className="shrink-0 text-zinc-400" aria-hidden="true" />
       ) : (
         <FileText size={12} className="shrink-0 text-zinc-400" aria-hidden="true" />
       )}
@@ -94,7 +119,7 @@ export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; o
           {item.name}
         </span>
         <span className={`block ${failed ? 'text-rose-300 break-words' : 'truncate text-zinc-500'}`} role={failed ? 'alert' : undefined}>
-          {failed ? item.error : item.state === 'uploading' ? `Uploading… ${pct}%` : formatBytes(item.size)}
+          {failed ? item.error : item.state === 'uploading' ? (item.retrying ? 'Retrying…' : uploadProgressText(item.progress, item.size)) : formatBytes(item.size)}
         </span>
       </span>
       {failed && onRetry && item.retryable !== false && (
@@ -121,6 +146,7 @@ export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; o
           style={{ width: `${pct}%` }}
           role="progressbar"
           aria-label={`Uploading ${item.name}`}
+          aria-valuetext={item.retrying ? 'Retrying' : uploadProgressText(item.progress, item.size)}
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={pct}
