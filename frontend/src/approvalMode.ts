@@ -81,7 +81,7 @@ export const offConsequences = (store: StoreStatus | null | undefined): string[]
 
 /** The server refused "off" because passwords are still saved on it (audit F-10). */
 export class NeedsBitwardenError extends Error {
-  constructor(message: string, public localCount: number | null) {
+  constructor(message: string, public localCount: number | null, public canAccept = false) {
     super(message);
   }
 }
@@ -137,7 +137,7 @@ async function errorText(res: Response, fallback: string): Promise<string | Need
   try {
     const body = await res.json();
     const needs = needsBitwardenFrom(res.status, body);
-    if (needs) return new NeedsBitwardenError(needs.message, needs.local_count);
+    if (needs) return new NeedsBitwardenError(needs.message, needs.local_count, needs.can_accept);
     if (typeof body?.error === 'string' && body.error) {
       if (res.status === 403) return 'Only you can change approvals, from the app.';
       if (res.status === 409) return 'This space is archived. Restore it to change its approvals.';
@@ -150,10 +150,12 @@ async function errorText(res: Response, fallback: string): Promise<string | Need
   return `${fallback} (HTTP ${res.status}).`;
 }
 
-async function put(url: string, approvals: string, fallback: string): Promise<unknown> {
+/** `acceptRisk` (0.7.3 A2): the person confirmed keeping passwords on this server; sent once, person-only on the server. */
+async function put(url: string, approvals: string, fallback: string, acceptRisk = false): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approvals }) });
+    const body = acceptRisk ? { approvals, accept_risk: true } : { approvals };
+    res = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   } catch {
     throw new Error('Couldn’t reach the server. Check your connection and try again.');
   }
@@ -168,8 +170,8 @@ const enc = encodeURIComponent;
 
 export const approvalModeApi = {
   /** Resolves to the space's new value. */
-  setSpace: async (spaceId: string, approvals: SpaceApprovals): Promise<SpaceApprovals> => {
-    const body = (await put(`/api/spaces/${enc(spaceId)}/approvals`, approvals, 'Couldn’t change approvals')) as { approvals?: unknown };
+  setSpace: async (spaceId: string, approvals: SpaceApprovals, acceptRisk = false): Promise<SpaceApprovals> => {
+    const body = (await put(`/api/spaces/${enc(spaceId)}/approvals`, approvals, 'Couldn’t change approvals', acceptRisk)) as { approvals?: unknown };
     return spaceMode(body?.approvals);
   },
   /** null when the server has no such endpoint or the call fails. */
@@ -181,15 +183,16 @@ export const approvalModeApi = {
       return null;
     }
   },
-  setBot: async (kwantId: string, approvals: BotApprovals, spaceId?: string): Promise<BotApprovalsState> => {
+  setBot: async (kwantId: string, approvals: BotApprovals, spaceId?: string, acceptRisk = false): Promise<BotApprovalsState> => {
     const url = `/api/kwants/${enc(kwantId)}/approvals${spaceId ? `?space=${enc(spaceId)}` : ''}`;
-    const state = parseBotApprovals(await put(url, approvals, 'Couldn’t change this bot’s approvals'));
+    const state = parseBotApprovals(await put(url, approvals, 'Couldn’t change this bot’s approvals', acceptRisk));
     if (!state) throw new Error('The server sent an answer the app can’t read. Reload and check the setting.');
     return state;
   },
   /**
    * "Turn approvals back on" everywhere: every active space that's off or "Ask only when risky",
-   * and every bot set to either, goes back to ask (both keep passwords off this server). Archived spaces can't be changed until they're restored; they count as failed.
+   * and every bot set to either, goes back to ask (both keep passwords off this server). Archived spaces are
+   * skipped: they can't run anything and don't count (0.7.3 A1).
    */
   turnAllOn: async (): Promise<{ changed: number; failed: number }> => {
     let changed = 0;
@@ -200,11 +203,10 @@ export const approvalModeApi = {
       const body = await res.json();
       return Array.isArray(body) ? body : [];
     };
-    // `/api/spaces` lists the active spaces only; `?archived=1` lists only the archived ones.
+    // `/api/spaces` lists the active spaces only.
     let spaces: Array<Record<string, unknown>>;
     try {
-      const [active, archived] = await Promise.all([list('/api/spaces'), list('/api/spaces?archived=1').catch(() => [])]);
-      spaces = [...active, ...archived];
+      spaces = (await list('/api/spaces')).filter((sp) => !sp.archived_at);
     } catch {
       throw new Error('Couldn’t reach the server. Check your connection and try again.');
     }
@@ -219,11 +221,7 @@ export const approvalModeApi = {
     for (const sp of spaces) {
       const id = typeof sp.id === 'string' ? sp.id : null;
       if (!id) continue;
-      if (sp.approvals === 'off' || sp.approvals === 'smart') {
-        if (sp.archived_at) failed++;
-        else await attempt(() => approvalModeApi.setSpace(id, 'ask'));
-      }
-      if (sp.archived_at) continue;
+      if (sp.approvals === 'off' || sp.approvals === 'smart') await attempt(() => approvalModeApi.setSpace(id, 'ask'));
       const bots = await list(`/api/kwants?space=${enc(id)}`).catch(() => null);
       if (!bots) {
         failed++;

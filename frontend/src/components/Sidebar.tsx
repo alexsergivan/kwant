@@ -20,7 +20,7 @@ import { type NeedsYouRow, workingIds, directIds } from '../chatsTab';
 import { DevFlipNote, useDevMode } from './DevModeSwitch';
 import { SpaceControls } from './SpaceControls';
 import { DevOnToast } from './DevOnToast';
-import { type DevModeState, deskIntent, devConnect, turnDevMode } from '../devMode';
+import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
 import { IdeaJarRow } from './IdeaJarRow';
 
@@ -396,12 +396,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setDevOnToast(s);
   };
   const focusDevSwitch = () => setTimeout(() => document.querySelector<HTMLElement>('[data-dev-switch]')?.focus(), 0);
-  const connectDev = onConnectDevGitHub
-    ? () => {
-        devConnect.start(space.id);
-        onConnectDevGitHub();
-      }
-    : undefined;
+  const connectDev = onConnectDevGitHub ? () => onConnectDevGitHub() : undefined;
   const typeDevRepo = () => {
     deskIntent.set(space.id, 'type');
     onOpenDevDesk?.();

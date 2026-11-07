@@ -378,18 +378,39 @@ pub struct PatchBody {
     pub sort: Option<i64>,
     /// `true` archives, `false` restores.
     pub archived: Option<bool>,
+    /// With a restore: the person accepts the built-in password store's risk
+    /// (`passwords::accept_risk`).
+    #[serde(default)]
+    pub accept_risk: bool,
 }
 
 /// `PATCH /api/spaces/:id`: rename, restyle, reorder, archive or restore. Archiving pauses the
 /// space's routines and stops its running turns; restoring brings back only the routines the
 /// archive paused. The Default space can be renamed but not archived (409). No hard delete.
-pub async fn update(State(state): State<AppState>, Path(id): Path<String>, Json(body): Json<PatchBody>) -> Response {
+/// Restoring a space that is on approvals off or "Ask only when risky" (or holds a bot that is)
+/// answers the same 409 as switching approvals off while passwords are saved on this server,
+/// unless the person accepts the risk (`accept_risk: true`, see `passwords`): archived spaces
+/// don't count there (0.7.3 A1), so a restore would otherwise bring the risk back unseen.
+pub async fn update(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<PatchBody>,
+) -> Response {
     let id = SpaceId::new(id);
     let current = match state.db.get_space(&id).await {
         Ok(Some(s)) => s,
         Ok(None) => return error(StatusCode::NOT_FOUND, "no such space"),
         Err(_) => return internal(),
     };
+    if body.archived == Some(false) && current.archived_at.is_some() && state.db.space_approvals_off(&id).await.unwrap_or(true) {
+        if let Err(r) = super::passwords::accept_risk(&state, &headers, body.accept_risk).await {
+            return r;
+        }
+        if let Some(r) = super::passwords::refuse_approvals_off(&state).await {
+            return r;
+        }
+    }
     let name = match body.name.as_deref().map(check_name).transpose() {
         Ok(n) => n,
         Err(r) => return r,
