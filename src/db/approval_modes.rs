@@ -149,13 +149,32 @@ impl Database {
     /// Whether approvals are off, or only ask when risky, for any existing space or bot. Both let
     /// a bot run code without a card, so both keep passwords out of the built-in store. A space
     /// counts even when every bot in it overrides to `ask`: a new bot there would inherit it.
+    /// An archived space and the bots in it don't count (0.7.3 A1): nothing runs there, and its
+    /// approvals can't be changed until it is restored, which would leave the gate shut for good.
     pub async fn any_approvals_off(&self) -> Result<bool, DbError> {
         let row: Option<(i64,)> = sqlx::query_as(
             "SELECT 1 FROM approval_modes WHERE mode IN ('off', 'smart') AND (
-                (scope = 'space' AND id IN (SELECT id FROM spaces))
-                OR (scope = 'kwant' AND id IN (SELECT id FROM kwants))
+                (scope = 'space' AND id IN (SELECT id FROM spaces WHERE archived_at IS NULL))
+                OR (scope = 'kwant' AND id IN (
+                    SELECT k.id FROM kwants k JOIN spaces s ON s.id = k.space_id WHERE s.archived_at IS NULL
+                ))
             ) LIMIT 1",
         )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
+    /// Whether `space` itself, or a bot in it, is on approvals off or "Ask only when risky",
+    /// archived or not: what restoring it would bring back into [`Self::any_approvals_off`].
+    pub async fn space_approvals_off(&self, space: &SpaceId) -> Result<bool, DbError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM approval_modes WHERE mode IN ('off', 'smart') AND (
+                (scope = 'space' AND id = ?1)
+                OR (scope = 'kwant' AND id IN (SELECT id FROM kwants WHERE space_id = ?1))
+            ) LIMIT 1",
+        )
+        .bind(space.as_str())
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.is_some())
