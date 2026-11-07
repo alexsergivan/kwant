@@ -21,7 +21,7 @@ export interface DevModeState {
   poll_error: string | null;
   calls_today: number | null;
   calls_cap: number | null;
-  /** 0.7.1: which forge reads the repo ("github" in 0.7.1; gitlab and gitea from 0.7.2), or null: no Post button. */
+  /** 0.7.1: which forge reads the repo ("github" in 0.7.1; gitlab and gitea from 0.7.2, forgejo from 0.7.4), or null: no Post button. */
   forge: Forge | null;
   /** 0.7.1: that forge connection's login, for "Posts as {login}." on review cards. */
   forge_login: string | null;
@@ -95,8 +95,8 @@ export interface RepoCheck {
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
-export type Forge = 'github' | 'gitlab' | 'gitea';
-export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'gitlab' || v === 'gitea' ? v : null);
+export type Forge = 'github' | 'gitlab' | 'gitea' | 'forgejo';
+export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'gitlab' || v === 'gitea' || v === 'forgejo' ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const STATUSES: readonly DevStatus[] = ['watching', 'no_repo', 'not_connected', 'no_git', 'other_host'];
 

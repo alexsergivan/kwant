@@ -97,6 +97,7 @@ test('the dev_mode parse reads forge and forge_login; unknown forge and a stray 
     assert.equal(d.forge_login, 'octocat');
     assert.equal(parseDevMode({ on: true, forge: 'gitlab' }).forge, 'gitlab');
     assert.equal(parseDevMode({ on: true, forge: 'gitea' }).forge, 'gitea');
+    assert.equal(parseDevMode({ on: true, forge: 'forgejo' }).forge, 'forgejo', '0.7.4: Forgejo is its own forge');
     assert.equal(parseDevMode({ on: true, forge: 'bitbucket' }).forge, null);
     assert.equal(parseDevMode({ on: true }).forge, null);
     assert.equal(parseDevMode({ on: true }).forge_login, null);
@@ -416,6 +417,7 @@ test('F7: the footer reads Post to {Forge} first, then the link Open on {Forge}'
     }
   }
   assert.equal(m.forgeOpen('gitea'), 'Open on Gitea');
+  assert.equal(m.forgeOpen('forgejo'), 'Open on Forgejo');
   assert.equal(m.forgeOpen(null, 'commit'), 'Open commit');
 });
 

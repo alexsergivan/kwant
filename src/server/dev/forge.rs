@@ -48,17 +48,19 @@ pub const MAX_OPEN: usize = 50;
 pub enum ForgeKind {
     Github,
     Gitlab,
-    /// Gitea, and Forgejo (Codeberg) which speaks the same API.
     Gitea,
+    /// Forgejo (Codeberg): Gitea's API, told apart by its version ([`probe`]).
+    Forgejo,
 }
 
 impl ForgeKind {
-    /// `github`, `gitlab`, `gitea`: the desk's `forge`.
+    /// `github`, `gitlab`, `gitea`, `forgejo`: the desk's `forge`.
     pub fn as_str(self) -> &'static str {
         match self {
             ForgeKind::Github => "github",
             ForgeKind::Gitlab => "gitlab",
             ForgeKind::Gitea => "gitea",
+            ForgeKind::Forgejo => "forgejo",
         }
     }
 
@@ -68,6 +70,7 @@ impl ForgeKind {
             ForgeKind::Github => "GitHub",
             ForgeKind::Gitlab => "GitLab",
             ForgeKind::Gitea => "Gitea",
+            ForgeKind::Forgejo => "Forgejo",
         }
     }
 
@@ -75,7 +78,8 @@ impl ForgeKind {
         match s.trim().to_ascii_lowercase().as_str() {
             "github" => Some(ForgeKind::Github),
             "gitlab" => Some(ForgeKind::Gitlab),
-            "gitea" | "forgejo" | "codeberg" => Some(ForgeKind::Gitea),
+            "gitea" => Some(ForgeKind::Gitea),
+            "forgejo" | "codeberg" => Some(ForgeKind::Forgejo),
             _ => None,
         }
     }
@@ -85,7 +89,7 @@ impl ForgeKind {
         match self {
             ForgeKind::Github => "",
             ForgeKind::Gitlab => "/api/v4",
-            ForgeKind::Gitea => "/api/v1",
+            ForgeKind::Gitea | ForgeKind::Forgejo => "/api/v1",
         }
     }
 }
@@ -96,7 +100,8 @@ pub fn known(host: &str) -> Option<ForgeKind> {
     match h.as_str() {
         "github.com" | "www.github.com" => Some(ForgeKind::Github),
         "gitlab.com" | "www.gitlab.com" => Some(ForgeKind::Gitlab),
-        "codeberg.org" | "gitea.com" => Some(ForgeKind::Gitea),
+        "gitea.com" => Some(ForgeKind::Gitea),
+        "codeberg.org" => Some(ForgeKind::Forgejo),
         _ => None,
     }
 }
@@ -255,7 +260,9 @@ pub async fn detect(host: &str, resolver: Arc<dyn Resolver>) -> Option<ForgeKind
 
 /// Asks `web` (a forge's web address) what it runs: `GET /api/v4/version` answering 200 with a
 /// `version`, or 401 with GitLab's `{"message": "401 Unauthorized"}`, is GitLab; else
-/// `GET /api/v1/version` answering 200 with a `version` is Gitea (or Forgejo). No token is sent.
+/// `GET /api/v1/version` answering 200 with a `version` is Gitea, or Forgejo when that version says
+/// so (`7.0.0+gitea-1.21.0`, `…forgejo…`) or `GET /api/forgejo/v1/version` answers too (Forgejo
+/// before 7 reported a bare number there). No token is sent.
 pub async fn probe(web: &str, resolver: Arc<dyn Resolver>, loopback: bool) -> Option<ForgeKind> {
     let http = client(resolver, loopback, PROBE_TIMEOUT);
     let ask = |path: &'static str| {
@@ -277,7 +284,16 @@ pub async fn probe(web: &str, resolver: Arc<dyn Resolver>, loopback: bool) -> Op
         }
     }
     match ask("/api/v1/version").await {
-        Some((200, v)) if v["version"].is_string() => Some(ForgeKind::Gitea),
+        Some((200, v)) if v["version"].is_string() => {
+            let version = v["version"].as_str().unwrap_or_default().to_ascii_lowercase();
+            if version.contains("+gitea-") || version.contains("forgejo") {
+                return Some(ForgeKind::Forgejo);
+            }
+            match ask("/api/forgejo/v1/version").await {
+                Some((200, f)) if f["version"].is_string() => Some(ForgeKind::Forgejo),
+                _ => Some(ForgeKind::Gitea),
+            }
+        }
         _ => None,
     }
 }
@@ -347,9 +363,39 @@ impl ForgeConfig {
     }
 }
 
+/// Why a connection's forge couldn't be settled: [`Unsettled::code`] for the app, the text for
+/// the person.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unsettled {
+    /// The server answered as neither GitLab, Gitea nor Forgejo: `forge_unknown`.
+    Unknown(String),
+    /// `forge: "github"`: GitHub has its own connection.
+    Github,
+}
+
+impl Unsettled {
+    /// A stable code, so the app needn't read the sentence: `forge_unknown`. GitHub's refusal has
+    /// none, like the same refusal from [`ForgeConfig::validate`].
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Unsettled::Unknown(_) => Some("forge_unknown"),
+            Unsettled::Github => None,
+        }
+    }
+}
+
+impl std::fmt::Display for Unsettled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unsettled::Unknown(host) => write!(f, "kwant couldn't tell whether {host} runs GitLab, Gitea or Forgejo: set \"forge\" to gitlab or gitea"),
+            Unsettled::Github => f.write_str("GitHub is its own connection: add it as GitHub"),
+        }
+    }
+}
+
 /// Fills in a new connection's `forge` by asking the server (the person typed the address, so a
-/// `http://` one on this machine may be asked). Errors are for the person.
-pub async fn settle(mut cfg: ForgeConfig, resolver: Arc<dyn Resolver>) -> Result<ForgeConfig, String> {
+/// `http://` one on this machine may be asked).
+pub async fn settle(mut cfg: ForgeConfig, resolver: Arc<dyn Resolver>) -> Result<ForgeConfig, Unsettled> {
     if cfg.forge.is_none() {
         let host = cfg.host().unwrap_or_default();
         cfg.forge = match known(&host) {
@@ -358,8 +404,8 @@ pub async fn settle(mut cfg: ForgeConfig, resolver: Arc<dyn Resolver>) -> Result
         };
     }
     match cfg.forge {
-        None => Err(format!("kwant couldn't tell whether {} runs GitLab, Gitea or Forgejo: set \"forge\" to gitlab or gitea", cfg.host().unwrap_or_default())),
-        Some(ForgeKind::Github) => Err("GitHub is its own connection: add it as GitHub".into()),
+        None => Err(Unsettled::Unknown(cfg.host().unwrap_or_default())),
+        Some(ForgeKind::Github) => Err(Unsettled::Github),
         Some(_) => Ok(cfg),
     }
 }
@@ -407,7 +453,7 @@ impl ForgeClient {
 
     fn auth_value(&self) -> String {
         match self.kind {
-            ForgeKind::Gitea => format!("token {}", self.token.as_str()),
+            ForgeKind::Gitea | ForgeKind::Forgejo => format!("token {}", self.token.as_str()),
             _ => format!("Bearer {}", self.token.as_str()),
         }
     }
@@ -427,7 +473,7 @@ impl ForgeClient {
             return None;
         }
         let pair = match self.kind {
-            ForgeKind::Gitea => format!("{}:x-oauth-basic", self.token.as_str()),
+            ForgeKind::Gitea | ForgeKind::Forgejo => format!("{}:x-oauth-basic", self.token.as_str()),
             _ => format!("oauth2:{}", self.token.as_str()),
         };
         let value = Zeroizing::new(format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(pair.as_bytes())));
@@ -738,8 +784,9 @@ impl GiteaForge<'_> {
 
 #[async_trait::async_trait]
 impl Forge for GiteaForge<'_> {
+    /// Gitea or Forgejo, as the connection says.
     fn kind(&self) -> ForgeKind {
-        ForgeKind::Gitea
+        self.client.kind
     }
     async fn changes_for_commit(&self, sha: &str) -> Result<Vec<Change>, GhError> {
         // The pull request a commit came from; 404 when none did (or on a Gitea before 1.21)
@@ -878,11 +925,15 @@ mod tests {
     fn well_known_hosts_need_no_probe() {
         assert_eq!(known("github.com"), Some(ForgeKind::Github));
         assert_eq!(known("GitLab.com"), Some(ForgeKind::Gitlab));
-        assert_eq!(known("codeberg.org"), Some(ForgeKind::Gitea));
+        assert_eq!(known("codeberg.org"), Some(ForgeKind::Forgejo));
         assert_eq!(known("gitea.com"), Some(ForgeKind::Gitea));
         assert_eq!(known("git.example.com"), None);
         assert_eq!(known("gitlab.example.com"), None, "a name is a hint, not a forge: it is probed");
-        assert_eq!(ForgeKind::parse("Forgejo"), Some(ForgeKind::Gitea));
+        assert_eq!(ForgeKind::parse("Forgejo"), Some(ForgeKind::Forgejo));
+        assert_eq!(ForgeKind::parse("codeberg"), Some(ForgeKind::Forgejo));
+        assert_eq!(ForgeKind::parse("gitea"), Some(ForgeKind::Gitea));
+        assert_eq!((ForgeKind::Forgejo.as_str(), ForgeKind::Forgejo.name()), ("forgejo", "Forgejo"));
+        assert_eq!(serde_json::from_value::<ForgeKind>(json!("forgejo")).unwrap(), ForgeKind::Forgejo);
         assert_eq!(serde_json::to_value(ForgeKind::Gitlab).unwrap(), json!("gitlab"));
     }
 

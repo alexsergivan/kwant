@@ -407,7 +407,12 @@ async fn settled_config(state: &AppState, id: Option<&str>, kind: &str, config: 
     if taken {
         return Err(error(StatusCode::CONFLICT, &format!("{host} already has a connection: change that one")));
     }
-    let cfg = crate::server::dev::forge::settle(cfg, std::sync::Arc::new(crate::server::dev::git::SystemResolver)).await.map_err(bad)?;
+    let cfg = crate::server::dev::forge::settle(cfg, std::sync::Arc::new(crate::server::dev::git::SystemResolver))
+        .await
+        .map_err(|e| match e.code() {
+            Some(code) => (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string(), "code": code}))).into_response(),
+            None => bad(e.to_string()),
+        })?;
     Ok(serde_json::to_string(&cfg).unwrap_or_default())
 }
 

@@ -320,6 +320,7 @@ async fn source_connections(state: &AppState, space: &SpaceId) -> Vec<Connection
                 "forge" => {
                     let kind = match config["forge"].as_str() {
                         Some("gitlab") => "gitlab",
+                        Some("forgejo") => "forgejo",
                         _ => "gitea",
                     };
                     (kind, config["url"].as_str().and_then(host_of))
