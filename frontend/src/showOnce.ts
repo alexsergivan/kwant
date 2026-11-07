@@ -320,22 +320,51 @@ export function reviewSub(r: Recording, listed: number): string {
   return [stepsWord(listed), duration(r.elapsed_secs * 1000), hosts.join(', ')].filter(Boolean).join(' · ');
 }
 
-/** Why the recording stopped, when it wasn't the person's Stop (warn banner). */
-export function stopBanner(r: Recording, listed: number): { lead: string; rest: string } | null {
+/** Mira §1: every non-Stop banner ends with what survived. */
+export const keptSentence = (listed: number): string =>
+  listed <= 0 ? 'Nothing was recorded before it stopped.' : listed === 1 ? 'The 1 step up to there is kept.' : `All ${stepsWord(listed)} up to there are kept.`;
+
+export type StopBanner = { tone: 'warn' | 'info'; lead: string; rest: string };
+
+/**
+ * Why the recording stopped, when it wasn't the person's plain Stop (Mira §1). `handedBack` is this
+ * session's Hand back press (gap 2: works whether or not the server records `handed_back`);
+ * `holdsStage` adds the "gets the browser back" sentence while this stage still holds Take over.
+ */
+export function stopBanner(r: Recording, listed: number, opts: { botName?: string; handedBack?: boolean; holdsStage?: boolean } = {}): StopBanner | null {
   const limits = limitsOf(r);
+  const kept = ` ${keptSentence(listed)}`;
   switch (r.stop_reason) {
     case 'limit_time':
-      return { lead: `Stopped at ${Math.round(limits.secs / 60)} minutes,`, rest: ` the most one recording can take. All ${stepsWord(listed)} up to there are kept.` };
+      return { tone: 'warn', lead: `Stopped at ${Math.round(limits.secs / 60)} minutes,`, rest: ` the most one recording can take.${kept}` };
     case 'limit_steps':
-      return { lead: `Stopped at ${limits.steps} steps,`, rest: ' the most one recording can take. All of them are kept.' };
+      return { tone: 'warn', lead: `Stopped at ${limits.steps} steps,`, rest: ` the most one recording can take.${kept}` };
     case 'closed':
-      return { lead: 'The recording stopped when the browser closed.', rest: ' The steps up to there are kept.' };
+      return { tone: 'warn', lead: "The recording stopped when the app's window closed or the computer slept.", rest: kept };
     case 'restart':
-      return { lead: 'The recording stopped when the app restarted.', rest: ' The steps up to there are kept.' };
-    default:
-      return null;
+      return { tone: 'warn', lead: 'The recording stopped when the app restarted.', rest: kept };
   }
+  if (r.stop_reason === 'handed_back' || opts.handedBack) {
+    const back = opts.handedBack && opts.holdsStage && opts.botName ? ` ${opts.botName} gets the browser back when you close this.` : '';
+    return { tone: 'info', lead: 'Stopped when you pressed Hand back.', rest: kept + back };
+  }
+  return null;
 }
+
+/** Mira §2: the review footer's lock note; `until` is `steps_expire_at` as "Nov 14". */
+export const lockNote = (bot: string, engine: string | null, until: string | null): string =>
+  `Only ${bot}'s own engine${engine ? ` (${engine})` : ''} reads these steps. They're kept ${until ? `until ${until}` : '7 days'}, or 7 days after you approve the skill. Rejecting it deletes them.`;
+
+/** Mira §2: the draft card's keep line, under Approve / Reject. */
+export const keepLine = (until: string | null, deleted = false): string =>
+  deleted
+    ? 'The recorded steps are deleted.'
+    : until
+      ? `The recorded steps are kept until ${until}, or 7 days after you approve. Rejecting deletes them.`
+      : 'The recorded steps are kept 7 days after the recording, or 7 days after you approve. Rejecting deletes them.';
+
+/** Mira §2: the end of the Write failed banner, after the server's `write_error`. */
+export const writeFailedTail = (until: string | null): string => (until ? `Your steps are kept until ${until}, so try again.` : 'Your steps are kept, so try again.');
 
 const DATE_LONG: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
 const DATE_SHORT: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
@@ -466,12 +495,23 @@ function sitesFrom(lines: string[]): string[] {
   return sites;
 }
 
-/** Try it once's warning (A29): the GOAL as plain text, else the sites, even when the draft doesn't split. */
-export function tryFacts(body: string): { goal: string | null; sites: string[] } {
-  if (typeof body !== 'string') return { goal: null, sites: [] };
-  const sections = splitSections(body);
-  const goal = joinLines(sections.get('goal') ?? []).replace(/[`*]/g, '').replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '');
-  return { goal: goal || null, sites: sitesFrom(sections.get('sites') ?? []) };
+/** Try it once's warning (A29, Mira §3): the sites kwant recorded, even when the draft doesn't split. */
+export function trySites(body: string): string[] {
+  if (typeof body !== 'string') return [];
+  return sitesFrom(splitSections(body).get('sites') ?? []);
+}
+
+/** Mira §3 list rule: "a", "a and b", "a, b and c", "a, b and 2 more sites". Hosts come back as their own parts. */
+export type SitePart = { t: 'text'; v: string } | { t: 'host'; v: string };
+export function siteList(sites: string[]): SitePart[] {
+  const h = (v: string): SitePart => ({ t: 'host', v });
+  const x = (v: string): SitePart => ({ t: 'text', v });
+  if (sites.length === 0) return [];
+  if (sites.length === 1) return [h(sites[0])];
+  if (sites.length === 2) return [h(sites[0]), x(' and '), h(sites[1])];
+  if (sites.length === 3) return [h(sites[0]), x(', '), h(sites[1]), x(' and '), h(sites[2])];
+  const more = sites.length - 2;
+  return [h(sites[0]), x(', '), h(sites[1]), x(` and ${more} more ${more === 1 ? 'site' : 'sites'}`)];
 }
 
 /** Inline text of the draft: `code` becomes a chip and the placeholders become mask chips. */

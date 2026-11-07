@@ -127,11 +127,46 @@ test('the clock, durations, the near-limit line and the review subtitle', () => 
   assert.equal(m.nearLimit(14, 168_000, L, true), '28 min or 186 steps left', 'the server’s near flag wins');
   assert.equal(m.reviewSub(rec({ elapsed_secs: 220 }), 15), '15 steps · 3 min 40 s · shop.example.com, crm.example.com');
   assert.equal(m.reviewSub(rec({ elapsed_secs: 1800, stop_reason: 'limit_time' }), 120), '120 steps · 30:00 · stopped at the limit');
-  assert.deepEqual(m.stopBanner(rec({ stop_reason: 'limit_time' }), 120), {
-    lead: 'Stopped at 30 minutes,', rest: ' the most one recording can take. All 120 steps up to there are kept.',
-  });
   assert.equal(m.stopBanner(rec({ stop_reason: 'stop' }), 3), null);
-  assert.match(m.stopBanner(rec({ stop_reason: 'restart' }), 3).lead, /the app restarted/);
+  assert.equal(m.stopBanner(rec({ stop_reason: null }), 3), null);
+});
+
+test('stop banners are Mira §1 word for word, each ending with what was kept', () => {
+  const b = (reason, listed, opts) => m.stopBanner(rec({ stop_reason: reason }), listed, opts);
+  const full = (x) => x.lead + x.rest;
+  assert.equal(m.keptSentence(0), 'Nothing was recorded before it stopped.');
+  assert.equal(m.keptSentence(1), 'The 1 step up to there is kept.');
+  assert.equal(m.keptSentence(14), 'All 14 steps up to there are kept.');
+  assert.deepEqual(b('limit_time', 120), { tone: 'warn', lead: 'Stopped at 30 minutes,', rest: ' the most one recording can take. All 120 steps up to there are kept.' });
+  assert.deepEqual(b('limit_steps', 198), { tone: 'warn', lead: 'Stopped at 200 steps,', rest: ' the most one recording can take. All 198 steps up to there are kept.' });
+  assert.deepEqual(b('closed', 1), { tone: 'warn', lead: "The recording stopped when the app's window closed or the computer slept.", rest: ' The 1 step up to there is kept.' });
+  assert.deepEqual(b('restart', 0), { tone: 'warn', lead: 'The recording stopped when the app restarted.', rest: ' Nothing was recorded before it stopped.' });
+  assert.deepEqual(b('handed_back', 14), { tone: 'info', lead: 'Stopped when you pressed Hand back.', rest: ' All 14 steps up to there are kept.' }, 'reopened later: the browser is already back');
+  assert.equal(full(b('stop', 14, { botName: 'Rook', handedBack: true, holdsStage: true })), 'Stopped when you pressed Hand back. All 14 steps up to there are kept. Rook gets the browser back when you close this.', 'gap 2: this session pressed Hand back, server said stop');
+  assert.equal(full(b('handed_back', 14, { botName: 'Rook', handedBack: false, holdsStage: false })), 'Stopped when you pressed Hand back. All 14 steps up to there are kept.');
+  assert.equal(b('limit_time', 3, { handedBack: true }).tone, 'warn', 'a limit stop is still the limit');
+});
+
+test('retention lines are Mira §2 word for word, with the no-date and no-engine fallbacks', () => {
+  assert.equal(m.lockNote('Rook', 'Claude', 'Nov 14'), "Only Rook's own engine (Claude) reads these steps. They're kept until Nov 14, or 7 days after you approve the skill. Rejecting it deletes them.");
+  assert.equal(m.lockNote('Rook', 'Claude', null), "Only Rook's own engine (Claude) reads these steps. They're kept 7 days, or 7 days after you approve the skill. Rejecting it deletes them.");
+  assert.equal(m.lockNote('Rook', null, 'Nov 14'), "Only Rook's own engine reads these steps. They're kept until Nov 14, or 7 days after you approve the skill. Rejecting it deletes them.");
+  assert.equal(m.keepLine('Nov 14'), 'The recorded steps are kept until Nov 14, or 7 days after you approve. Rejecting deletes them.');
+  assert.equal(m.keepLine(null), 'The recorded steps are kept 7 days after the recording, or 7 days after you approve. Rejecting deletes them.');
+  assert.equal(m.keepLine('Nov 14', true), 'The recorded steps are deleted.');
+  assert.equal(m.writeFailedTail('Nov 14'), 'Your steps are kept until Nov 14, so try again.');
+  assert.equal(m.writeFailedTail(null), 'Your steps are kept, so try again.');
+});
+
+test('Try it once names the sites by Mira §3’s list rule', () => {
+  const txt = (sites) => m.siteList(sites).map((p) => p.v).join('');
+  assert.equal(txt([]), '');
+  assert.equal(txt(['a.example.com']), 'a.example.com');
+  assert.equal(txt(['a.example.com', 'b.example.com']), 'a.example.com and b.example.com');
+  assert.equal(txt(['a.example.com', 'b.example.com', 'c.example.com']), 'a.example.com, b.example.com and c.example.com');
+  assert.equal(txt(['a.example.com', 'b.example.com', 'c.example.com', 'd.example.com']), 'a.example.com, b.example.com and 2 more sites');
+  assert.equal(txt(['a', 'b', 'c', 'd', 'e'].map((x) => `${x}.example.com`)), 'a.example.com, b.example.com and 3 more sites');
+  assert.deepEqual(m.siteList(['a.example.com', 'b.example.com', 'c.example.com', 'd.example.com']).filter((p) => p.t === 'host').map((p) => p.v), ['a.example.com', 'b.example.com'], 'only hosts are host parts');
 });
 
 test('Write the skill says why it can’t yet', () => {
@@ -392,7 +427,7 @@ test('Check the steps: every step numbered and named, masks as chips, the engine
   assert.ok(host.querySelector('button[aria-label="Add a note after step 3"]'));
   assert.ok(host.querySelector('button[aria-label="Step 3: add a note after or delete"]'));
   assert.match(host.textContent, /Only Rook's own engine \(Claude\) reads these steps\./);
-  assert.match(host.textContent, /deleted 7 days after you approve the skill, and at once if you reject it\./);
+  assert.match(host.textContent, /Only Rook's own engine \(Claude\) reads these steps\. They're kept 7 days, or 7 days after you approve the skill\. Rejecting it deletes them\./, 'no steps_expire_at: the no-date fallback');
   assert.ok(byText(host, 'button', 'Write the skill'));
   assert.ok(byText(host, 'button', 'Keep recording'));
   unmount();
@@ -500,16 +535,26 @@ test('a failed write comes back to the review with the reason and Try again', as
   fake({ [`POST ${R}/rec_1/write`]: [202, { recording: rec({ state: 'writing' }) }] });
   const { host, unmount } = await mount(h(m.StepReview));
   const alert = host.querySelector('.so-banner.bad, [role="alert"]');
-  assert.match(alert.textContent, /The engine stopped before it finished\./);
-  assert.ok(byText(host, 'button', 'Try again'));
+  assert.equal(alert.querySelector('span').textContent, "Rook couldn't write the skill. The engine stopped before it finished. Your steps are kept, so try again.");
   unmount();
+  m.showOnceStore.set(reviewing({ write_error: 'The engine stopped before it finished.', steps_expire_at: '2026-11-14T10:04:00Z' }));
+  const v = await mount(h(m.StepReview));
+  assert.equal(v.host.querySelector('.so-banner.bad span').textContent, "Rook couldn't write the skill. The engine stopped before it finished. Your steps are kept until Nov 14, so try again.");
+  assert.match(v.host.textContent, /They're kept until Nov 14, or 7 days after you approve the skill\./);
+  v.unmount();
+  m.showOnceStore.set(reviewing({ write_error: 'The engine stopped before it finished.' }));
+  const { host: host2, unmount: unmount2 } = await mount(h(m.StepReview));
+  const alert2 = host2.querySelector('.so-banner.bad');
+  assert.ok(byText(host2, 'button', 'Try again'));
+  unmount2();
   reset();
 });
 
 test('a stop at the limit says so in a banner; no engine blocks Write with the reason', async () => {
   m.showOnceStore.set(reviewing({ stop_reason: 'limit_steps', step_count: 200, engine: null }));
   const { host, unmount } = await mount(h(m.StepReview));
-  assert.match(host.textContent, /Stopped at 200 steps, the most one recording can take\./);
+  assert.match(host.textContent, /Stopped at 200 steps, the most one recording can take\. All 15 steps up to there are kept\./);
+  assert.ok(host.querySelector('.so-banner.warn[role="status"]'));
   const w = byText(host, 'button', 'Write the skill');
   assert.equal(w.disabled, true);
   assert.equal(document.getElementById(w.getAttribute('aria-describedby')).textContent, 'Rook has no engine to write the skill with.');
@@ -530,6 +575,12 @@ test('Hand back while recording stops first, and hands back when the review clos
   await m.showOnce.stop(true);
   assert.equal(m.showOnceStore.get().handBackAfter, true);
   assert.deepEqual(calls.find((c) => c.url === `${R}/rec_1/stop`).body, { reason: 'handed_back' }, '§10: stop says why');
+  const v = await mount(h(m.StepReview));
+  const info = v.host.querySelector('.so-banner.info');
+  assert.equal(info.getAttribute('role'), 'status', 'the person’s own action: status, not alert');
+  assert.ok(info.querySelector('svg.lucide-hand'), 'lucide Hand icon');
+  assert.equal(info.querySelector('span').textContent, 'Stopped when you pressed Hand back. All 15 steps up to there are kept. Rook gets the browser back when you close this.');
+  v.unmount();
   await m.showOnce.discard();
   assert.deepEqual(ended, [{ stage: 'k_rook', handBack: true }]);
   off();
@@ -567,7 +618,7 @@ test('a shown draft: the badge, its sections, Approve / Edit then approve / Reje
   assert.match(host.textContent, /Shown by you/);
   assert.match(host.textContent, /Shown by you on Nov 7, 2026 · from 14 steps/);
   for (const b of ['Approve', 'Edit, then approve', 'Reject', 'Try it once']) assert.ok(byText(host, 'button', b), b);
-  assert.match(host.textContent, /The recorded steps are kept until Nov 14\. They're deleted 7 days after you approve, and at once if you reject\./);
+  assert.match(host.textContent, /The recorded steps are kept until Nov 14, or 7 days after you approve\. Rejecting deletes them\./);
   unmount();
 });
 
@@ -577,7 +628,9 @@ test('Try it once: inputs prefilled with the run’s examples, a plain warning, 
   const { host, unmount } = await mount(h(m.TryItOnce, { skill: skill(), shown: shown(), botName: 'Rook', onClose: () => {}, onStarted: (k) => (startedIn = k) }));
   const inputs = [...host.querySelectorAll('input')];
   assert.deepEqual(inputs.map((i) => i.value), ['Last 7 days', 'Orders']);
-  assert.match(host.textContent, /It runs for real: Export last week's paid orders from the shop and import them into the CRM\. Approvals still ask\. You watch it in Rook's chat\./, 'A29: what it does is the GOAL');
+  assert.equal(host.querySelector('.so-warn span').textContent, "It runs for real on shop.example.com and crm.example.com. Approvals still ask. You watch it in Rook's chat.", 'A29: the sites, not the GOAL (Mira §3)');
+  assert.deepEqual([...host.querySelectorAll('.so-warn .so-host')].map((e) => e.textContent), ['shop.example.com', 'crm.example.com'], 'hosts are plain text, not code chips');
+  assert.equal(host.querySelector('.so-warn code'), null);
   await type(inputs[0], 'Last 14 days');
   await click(byText(host, 'button', 'Start the trial'));
   assert.deepEqual(calls[0].body, { inputs: { date_range: 'Last 14 days', import_type: 'Orders' } });
@@ -657,16 +710,17 @@ test('a plain Stop sends no reason', async () => {
   reset();
 });
 
-test('Try it once without a GOAL names the sites; with neither it still reads', async () => {
+test('Try it once: the same line without a GOAL; with no sites it still reads', async () => {
   fake({});
   const noGoal = SKILL_BODY.replace(/## Goal\n[^\n]*\n/, '');
   let v = await mount(h(m.TryItOnce, { skill: skill({ body: noGoal }), shown: shown(), botName: 'Rook', onClose: () => {} }));
-  assert.match(v.host.textContent, /It runs for real on shop\.example\.com and crm\.example\.com\. Approvals still ask\./);
+  assert.equal(v.host.querySelector('.so-warn span').textContent, "It runs for real on shop.example.com and crm.example.com. Approvals still ask. You watch it in Rook's chat.");
   v.unmount();
   v = await mount(h(m.TryItOnce, { skill: skill({ body: 'Just do it.' }), shown: shown(), botName: 'Rook', onClose: () => {} }));
-  assert.match(v.host.textContent, /It runs for real\. Approvals still ask\. You watch it in Rook's chat\./);
+  assert.equal(v.host.querySelector('.so-warn span').textContent, "It runs for real. Approvals still ask. You watch it in Rook's chat.");
   v.unmount();
-  assert.deepEqual(m.tryFacts('## Goal\nExport **paid** `orders`.\n'), { goal: 'Export paid orders', sites: [] });
+  assert.equal(m.tryFacts, undefined, 'the GOAL path is gone');
+  assert.deepEqual(m.trySites('## Goal\nExport orders.\n'), []);
 });
 
 test('Start at is prefilled with the bot’s last page (last_url, §10); null keeps the placeholder', async () => {

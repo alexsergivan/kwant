@@ -24,6 +24,7 @@ import {
   Undo2,
   Upload,
   X,
+  Hand,
 } from 'lucide-react';
 import { useEscapeLayer } from '../escape';
 import {
@@ -42,6 +43,9 @@ import {
   stepSentence,
   stepsWord,
   stopBanner,
+  lockNote,
+  writeFailedTail,
+  dayOf,
   useShowOnce,
   writeBlocker,
 } from '../showOnce';
@@ -675,7 +679,9 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
     if (err) setFootErr(err);
   };
 
-  const banner = stopBanner(rec, listed);
+  const until = dayOf(rec.steps_expire_at, false);
+  // Mira §1: Hand back pressed here keeps Take over until this review closes (A27)
+  const banner = stopBanner(rec, listed, { botName: bot, handedBack: s.handBackAfter, holdsStage: s.handBackAfter });
   const writeError = !writing && !written ? rec.write_error ?? (s.error && !footErr ? s.error : null) : null;
 
   let foot: React.ReactNode;
@@ -738,7 +744,7 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
         <p className="so-foot-note">
           <Lock size={12} aria-hidden="true" />
           <span>
-            Only {bot}'s own engine{engine ? ` (${engine})` : ''} reads these steps. They're deleted 7 days after you approve the skill, and at once if you reject it.
+            {lockNote(bot, engine, until)}
           </span>
         </p>
         <button type="button" className="so-btn so-btn-discard" onClick={() => setConfirm(true)}>
@@ -786,8 +792,8 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
         </div>
         <div className="so-rv-body" aria-busy={writing || undefined}>
           {banner && (
-            <p className="so-banner warn" role="status">
-              <Clock size={15} aria-hidden="true" />
+            <p className={`so-banner ${banner.tone}`} role="status">
+              {banner.tone === 'info' ? <Hand size={14} aria-hidden="true" /> : <Clock size={15} aria-hidden="true" />}
               <span>
                 <b>{banner.lead}</b>
                 {banner.rest}
@@ -800,7 +806,7 @@ function ReviewSheet({ s }: { s: ShowOnceSession }) {
               <span>
                 {rec.write_error ? (
                   <>
-                    <b>{bot} couldn't write the skill.</b> {rec.write_error} Your steps are kept, so try again.
+                    <b>{bot} couldn't write the skill.</b> {rec.write_error} {writeFailedTail(until)}
                   </>
                 ) : (
                   writeError

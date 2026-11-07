@@ -3,7 +3,7 @@
 // text; when it doesn't split into sections the card shows the SKILL.md as it is.
 import React, { useId, useState } from 'react';
 import { Loader2, MousePointer2, Play, TriangleAlert } from 'lucide-react';
-import { InlinePart, SkillShown, dayOf, errText, inlineParts, isSkillShown, parseSkillSections, shortDay, showOnceApi, stepsWord, tryFacts } from '../showOnce';
+import { InlinePart, SkillShown, dayOf, errText, inlineParts, isSkillShown, parseSkillSections, shortDay, showOnceApi, siteList, stepsWord, keepLine, trySites } from '../showOnce';
 import type { Skill } from '../skills';
 import { MaskChip } from './ShowOnce';
 
@@ -136,8 +136,8 @@ export const TryItOnce: React.FC<{ skill: Skill; shown: SkillShown; botName: str
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
   const id = useId();
-  // A29: what it does comes from the draft's GOAL; without one, the sites it visits
-  const { goal, sites } = tryFacts(skill.body);
+  // A29 (Mira §3): where it acts for real, from the sites kwant recorded
+  const sites = siteList(trySites(skill.body));
 
   const start = async () => {
     setBusy(true);
@@ -179,7 +179,18 @@ export const TryItOnce: React.FC<{ skill: Skill; shown: SkillShown; botName: str
       <p className="so-warn">
         <TriangleAlert size={12} aria-hidden="true" />
         <span>
-          {goal ? `It runs for real: ${goal}.` : `It runs for real${sites.length ? ` on ${sites.join(' and ')}` : ''}.`} Approvals still ask. You watch it in {botName}'s chat.
+          It runs for real
+          {sites.length > 0 && ' on '}
+          {sites.map((p, i) =>
+            p.t === 'host' ? (
+              <span key={i} className="so-host">
+                {p.v}
+              </span>
+            ) : (
+              p.v
+            ),
+          )}
+          . Approvals still ask. You watch it in {botName}'s chat.
         </span>
       </p>
       {error && (
@@ -202,13 +213,7 @@ export const TryItOnce: React.FC<{ skill: Skill; shown: SkillShown; botName: str
 
 /** Under a draft waiting for review: when its steps go. */
 export const KeepLine: React.FC<{ shown: SkillShown }> = ({ shown }) => {
-  if (shown.steps_deleted) return <p className="so-keep">The recorded steps are deleted.</p>;
-  const until = dayOf(shown.steps_expire_at, false);
-  return (
-    <p className="so-keep">
-      {until ? `The recorded steps are kept until ${until}. ` : ''}They're deleted 7 days after you approve, and at once if you reject.
-    </p>
-  );
+  return <p className="so-keep">{keepLine(dayOf(shown.steps_expire_at, false), shown.steps_deleted)}</p>;
 };
 
 /** In use: "Shown by you on Nov 7 · recorded steps kept until Nov 14 · Delete steps now". */

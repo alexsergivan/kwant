@@ -267,3 +267,10 @@ textarea.so-input { height: auto; padding: 8px 10px; line-height: 20px; resize: 
   .so-start, .so-pop, .so-rv, .so-menu, .so-trybox { animation: none !important; }
   .so-btn, .so-undo { transition: none !important; }
 }
+
+/* Mira §1: handed_back is the person's own action, so an info banner, never amber or rose */
+.so-banner.info { background: rgb(184 173 255 / 0.06); border: 1px solid rgb(184 173 255 / 0.22); color: #d3ccff; }
+.so-banner.info b { color: #ede9ff; }
+.so-banner.info > svg { color: #b8adff; margin-top: 2px; }
+/* Mira §3: hosts in the Try warning are plain --t1 text, not chips */
+.so-trybox .so-warn .so-host { color: var(--t1); overflow-wrap: anywhere; }
