@@ -8,8 +8,13 @@ use sha2::{Digest, Sha256};
 
 /// How long a code works.
 pub const CODE_MINUTES: i64 = 10;
-/// Wrong codes in [`FAIL_WINDOW_MINUTES`] that lock pairing until a new code is made (Q-G1).
+/// Wrong codes from one Telegram account in [`FAIL_WINDOW_MINUTES`] after which that account's
+/// codes are ignored until a new code is made (Q-G1). Counted per sender, so a stranger can't lock
+/// the person out (Lin's L1).
 pub const MAX_FAILURES: i64 = 5;
+/// Wrong codes from everyone together in [`FAIL_WINDOW_MINUTES`] that lock pairing for the space
+/// (`pair_locked`) until a new code is made.
+pub const MAX_SPACE_FAILURES: i64 = 25;
 pub const FAIL_WINDOW_MINUTES: i64 = 10;
 
 /// A fresh code: (code, its sha256 in hex, when it stops working).

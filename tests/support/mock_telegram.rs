@@ -1,6 +1,6 @@
 //! A mock Telegram Bot API for the Telegram bridge tests (next-077 §G). Tests never reach
-//! api.telegram.org: kwant's client is pointed here with `KWNT_TELEGRAM_API_BASE` (honoured in
-//! debug and test builds only, decision Q-G2), and every token is fake ([`fake_token`]).
+//! api.telegram.org: kwant's client is pointed here with `KWNT_TELEGRAM_API_BASE` (honoured only
+//! in builds with the `test-seams` feature, which the tests turn on; decision Q-G2), and every token is fake ([`fake_token`]).
 //!
 //! ```ignore
 //! #[path = "support/mock_telegram.rs"]
@@ -34,7 +34,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-/// The variable kwant reads (debug and test builds only).
+/// The variable kwant reads (only with the `test-seams` feature).
 pub const API_BASE_ENV: &str = "KWNT_TELEGRAM_API_BASE";
 
 /// A Telegram account writing to the bot.

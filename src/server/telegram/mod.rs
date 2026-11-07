@@ -73,9 +73,86 @@ impl ApprovalKind {
     }
 }
 
-/// Whether this card's kind may be allowed from Telegram at all (the switch is checked apart).
+/// Claude's own tools that may be allowed once from Telegram: the file tools, and only inside the
+/// bot's own folder. Bash is a shell on the computer, as `local_shell` is, and every other or later
+/// tool is link-only (Lin's M2).
+pub const BUILTIN_APPROVABLE: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "Glob", "Grep"];
+
+/// Whether this card may be allowed from Telegram at all, as far as its details tell (the switch,
+/// and the space's production marks, are checked apart).
 pub fn approvable(details: &Value) -> bool {
-    TELEGRAM_APPROVABLE.contains(&ApprovalKind::of(details)) && FORCING_KEYS.iter().all(|k| details.get(*k).is_none_or(Value::is_null))
+    link_only_reason(details).is_none()
+}
+
+/// Why a card is link-only in Telegram, from its details alone; `None` when Allow once may show.
+/// Product copy is Mira's.
+pub fn link_only_reason(details: &Value) -> Option<&'static str> {
+    let set = |k: &str| details.get(k).is_some_and(|v| !v.is_null());
+    if set("prod_floor") {
+        return Some("This is a production connection.");
+    }
+    if set("payment_reason") {
+        return Some("This one involves a payment.");
+    }
+    if set("tier_reason") {
+        return Some("This bot's tier needs you to approve it.");
+    }
+    // A turn that read outside text asks for everything: an injected request is likeliest there
+    if details["always_ask"] == true {
+        return Some("This bot read text from outside in this turn.");
+    }
+    let kind = ApprovalKind::of(details);
+    if !TELEGRAM_APPROVABLE.contains(&kind) {
+        return Some(if kind == ApprovalKind::LocalShell { "This is a command on your computer." } else { "This kind of step can't be approved from Telegram." });
+    }
+    match kind {
+        ApprovalKind::BuiltinTool => {
+            let tool = details["tool"].as_str().unwrap_or_default();
+            if tool == "Bash" {
+                return Some("This is a command on your computer.");
+            }
+            if !BUILTIN_APPROVABLE.contains(&tool) {
+                return Some("This kind of step can't be approved from Telegram.");
+            }
+            // Only an explicit "inside the folder" counts
+            if details["outside_folder"] != false {
+                return Some("This changes files outside the bot's folder.");
+            }
+            None
+        }
+        ApprovalKind::McpTool if details["server"].as_str().is_none_or(|s| s.eq_ignore_ascii_case(crate::mcp::SELF_SERVER_NAME)) => {
+            Some("This is one of kwant's own tools.")
+        }
+        _ => None,
+    }
+}
+
+/// [`link_only_reason`], plus the space's production marks: a call through a connection the person
+/// marked production is link-only in every space, Dev mode or not (Q-G6, Lin's M2).
+pub async fn link_only_in(state: &AppState, space: &str, details: &Value) -> Option<&'static str> {
+    if let Some(why) = link_only_reason(details) {
+        return Some(why);
+    }
+    if ApprovalKind::of(details) != ApprovalKind::McpTool {
+        return None;
+    }
+    let marked = match state.db.prod_connections(space).await {
+        Ok(m) => m,
+        // Can't tell: link-only
+        Err(_) => return Some("This kind of step can't be approved from Telegram."),
+    };
+    if marked.is_empty() {
+        return None;
+    }
+    let servers = match state.db.list_mcp_servers(&crate::db::spaces::SpaceId::new(space)).await {
+        Ok(s) => s,
+        Err(_) => return Some("This kind of step can't be approved from Telegram."),
+    };
+    // `mcp:<id>` marks become server names, `composio:<slug>` marks the toolkit slug
+    let names = crate::server::dev::floor::prod_names(&marked, servers.iter().map(|s| (s.id.as_str(), s.name.as_str())));
+    let server = details["server"].as_str().unwrap_or_default();
+    let tool = details["tool"].as_str().unwrap_or_default();
+    crate::mcp::prod_floor::production_connection(server, tool, &details["arguments"], &names).map(|_| "This is a production connection.")
 }
 
 /// The text Telegram shows (design G, "Telegram copy"). Product copy is Mira's.
@@ -148,6 +225,9 @@ pub struct Runner {
     tx: mpsc::UnboundedSender<(i64, Out)>,
     /// When each chat last got "That code didn't work" (once a minute per chat, Q-G1).
     bad_code_replies: Mutex<HashMap<i64, Instant>>,
+    /// Wrong codes per Telegram account: how many, since when (in-memory; a restart forgets them,
+    /// the space-wide count stays in the database).
+    bad_codes: Mutex<HashMap<i64, (i64, Instant)>>,
 }
 
 impl Runner {
@@ -174,6 +254,27 @@ impl Runner {
         }
     }
 
+    /// Whether this sender's codes are ignored: [`pairing::MAX_FAILURES`] wrong ones within
+    /// [`pairing::FAIL_WINDOW_MINUTES`], counted since the last new code.
+    fn sender_locked(&self, from_id: i64) -> bool {
+        let mut m = self.bad_codes.lock().unwrap_or_else(|e| e.into_inner());
+        prune_bad_codes(&mut m);
+        m.get(&from_id).is_some_and(|(n, _)| *n >= pairing::MAX_FAILURES)
+    }
+
+    /// One more wrong code from this sender.
+    fn sender_failed(&self, from_id: i64) {
+        let mut m = self.bad_codes.lock().unwrap_or_else(|e| e.into_inner());
+        prune_bad_codes(&mut m);
+        let e = m.entry(from_id).or_insert((0, Instant::now()));
+        e.0 += 1;
+    }
+
+    /// A new code: every sender starts again, as the space's lock does.
+    pub fn forget_bad_codes(&self) {
+        self.bad_codes.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
     /// Whether this chat may get the wrong-code reply now (and notes that it did).
     fn may_reply_bad_code(&self, chat_id: i64) -> bool {
         let mut m = self.bad_code_replies.lock().unwrap_or_else(|e| e.into_inner());
@@ -185,6 +286,13 @@ impl Runner {
         m.insert(chat_id, now);
         true
     }
+}
+
+/// Drops the per-sender counts older than the window. The window is real time: the in-memory
+/// count can't be moved by the test clock, and doesn't need to be.
+fn prune_bad_codes(m: &mut HashMap<i64, (i64, Instant)>) {
+    let window = Duration::from_secs(pairing::FAIL_WINDOW_MINUTES as u64 * 60);
+    m.retain(|_, (_, since)| since.elapsed() < window);
 }
 
 type Key = (PathBuf, String);
@@ -276,15 +384,23 @@ pub async fn ensure_running(state: &AppState) {
 /// (Re)starts the space's runner with `token`.
 pub fn start(state: &AppState, space: &str, token: Zeroizing<String>) {
     stop(state, space);
+    let client = match api::Client::new(token) {
+        Ok(c) => c,
+        Err(_) => {
+            tracing::warn!(space, "telegram: couldn't build a client that never follows redirects; not listening");
+            return;
+        }
+    };
     let (tx, rx) = mpsc::unbounded_channel();
     let runner = Arc::new(Runner {
         space: space.to_string(),
-        client: api::Client::new(token),
+        client,
         cancel: CancellationToken::new(),
         status: Mutex::new(Status::Offline),
         queued: AtomicUsize::new(0),
         tx,
         bad_code_replies: Mutex::new(HashMap::new()),
+        bad_codes: Mutex::new(HashMap::new()),
     });
     RUNNERS.lock().unwrap_or_else(|e| e.into_inner()).insert(key(state, space), runner.clone());
     tokio::spawn(bridge::poll_loop(state.clone(), runner.clone()));
@@ -452,9 +568,10 @@ mod tests {
 
     #[test]
     fn only_listed_kinds_without_a_forcing_reason_are_approvable() {
-        assert!(approvable(&json!({"source": "mcp", "tool": "create_issue"})));
-        assert!(approvable(&json!({"source": "claude_builtin", "tool": "Write"})));
-        assert!(approvable(&json!({"source": "mcp", "payment_reason": null})));
+        assert!(approvable(&json!({"source": "mcp", "server": "files", "tool": "create_issue"})));
+        assert!(approvable(&json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false})));
+        assert!(approvable(&json!({"source": "claude_builtin", "tool": "Edit", "outside_folder": false})));
+        assert!(approvable(&json!({"source": "mcp", "server": "files", "payment_reason": null})));
         for d in [
             json!({"source": "local_shell"}),
             json!({"source": "review"}),
@@ -462,10 +579,30 @@ mod tests {
             json!({"source": "tamper"}),
             json!({"source": "something_new"}),
             json!({}),
-            json!({"source": "mcp", "payment_reason": "pays"}),
-            json!({"source": "mcp", "tier_reason": "tier"}),
-            json!({"source": "claude_builtin", "prod_floor": {"needs_backup": false}}),
+            json!({"source": "mcp", "server": "files", "payment_reason": "pays"}),
+            json!({"source": "mcp", "server": "files", "tier_reason": "tier"}),
+            json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "prod_floor": {"needs_backup": false}}),
         ] {
+            assert!(!approvable(&d), "{d}");
+        }
+    }
+
+    // Lin's M2: what is as risky as a shell, or likeliest to be an injected request, stays link-only
+    #[test]
+    fn bash_outside_writes_kwants_own_tools_and_tainted_turns_are_link_only() {
+        let cases = [
+            (json!({"source": "claude_builtin", "tool": "Bash", "outside_folder": false}), "This is a command on your computer."),
+            (json!({"source": "claude_builtin", "tool": "Write", "outside_folder": true}), "This changes files outside the bot's folder."),
+            (json!({"source": "claude_builtin", "tool": "Edit"}), "This changes files outside the bot's folder."),
+            (json!({"source": "claude_builtin", "tool": "WebFetch", "outside_folder": false}), "This kind of step can't be approved from Telegram."),
+            (json!({"source": "claude_builtin", "tool": "SomeNewTool", "outside_folder": false}), "This kind of step can't be approved from Telegram."),
+            (json!({"source": "mcp", "server": "kwnt_tools", "tool": "browser_click"}), "This is one of kwant's own tools."),
+            (json!({"source": "mcp", "tool": "no_server"}), "This is one of kwant's own tools."),
+            (json!({"source": "mcp", "server": "files", "tool": "x", "always_ask": true}), "This bot read text from outside in this turn."),
+            (json!({"source": "claude_builtin", "tool": "Write", "outside_folder": false, "always_ask": true}), "This bot read text from outside in this turn."),
+        ];
+        for (d, why) in cases {
+            assert_eq!(link_only_reason(&d), Some(why), "{d}");
             assert!(!approvable(&d), "{d}");
         }
     }

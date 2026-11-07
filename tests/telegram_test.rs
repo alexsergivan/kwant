@@ -205,7 +205,7 @@ async fn pairing_takes_the_right_code_from_a_private_chat_only() {
 }
 
 #[tokio::test]
-async fn five_wrong_codes_lock_pairing() {
+async fn five_wrong_codes_lock_out_that_sender_only() {
     let env = setup().await;
     let tg = mock_telegram::shared();
     let bot = connect(&env, tg, 11).await;
@@ -215,8 +215,33 @@ async fn five_wrong_codes_lock_pairing() {
         last = tg.text(&bot, &STRANGER, &format!("/start 99999{i}"));
     }
     tg.wait_handled(&bot, last).await;
+    // Lin's L1: the stranger is locked out, even with the right code; the pairing isn't
+    let last = tg.text(&bot, &STRANGER, &format!("/start {code}"));
+    tg.wait_handled(&bot, last).await;
+    let v = status(&env).await;
+    assert_ne!(v["state"], "paired", "{v}");
+    assert_eq!(v["pair_locked"], false, "{v}");
+    let last = tg.text(&bot, &PERSON, &format!("/start {code}"));
+    tg.wait_handled(&bot, last).await;
+    tg.wait_send(&bot, |c| c.text().contains("Paired with kwant")).await;
+    wait_for("paired", || async { status(&env).await["state"] == "paired" }).await;
+    assert_eq!(status(&env).await["paired"]["name"], "Oleks");
+}
+
+#[tokio::test]
+async fn many_senders_guessing_lock_pairing_for_everyone() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = connect(&env, tg, 12).await;
+    let code = new_code(&env).await;
+    // 25 wrong codes from 25 different accounts, one each
+    let mut last = 0;
+    for i in 0..25 {
+        let who = mock_telegram::Person { id: 7_000 + i, first_name: "Eve", username: "eve_test" };
+        last = tg.text(&bot, &who, &format!("/start 88888{i}"));
+    }
+    tg.wait_handled(&bot, last).await;
     wait_for("locked", || async { status(&env).await["pair_locked"] == true }).await;
-    // Even the right code doesn't pair now
     let last = tg.text(&bot, &PERSON, &format!("/start {code}"));
     tg.wait_handled(&bot, last).await;
     assert_ne!(status(&env).await["state"], "paired");
@@ -458,6 +483,79 @@ async fn a_changed_card_or_the_switch_going_off_makes_it_link_only() {
     let edit = tg.wait_edit(&bot, |c| c.message_id() == card2.message_id()).await;
     assert!(edit.callbacks().is_empty(), "{:?}", edit.buttons());
     assert!(edit.text().contains("Approve it in kwant."));
+}
+
+#[tokio::test]
+async fn bash_production_marks_and_crossed_taps_stay_link_only() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 42).await;
+    let (s, _) = call(&env.app, "PATCH", BASE, Some(json!({"allow_approvals": true}))).await;
+    assert_eq!(s, StatusCode::OK);
+
+    // Lin's M2: Claude's own Bash is a command on the computer too
+    let (_, _b) = approval(&env, json!({"source": "claude_builtin", "tool": "Bash", "outside_folder": false})).await;
+    let bash = tg.wait_send(&bot, |c| c.text().contains("<code>Bash</code>")).await;
+    assert!(bash.callbacks().is_empty(), "{:?}", bash.buttons());
+    assert!(bash.text().contains("This is a command on your computer. Approve it in kwant."), "{}", bash.text());
+
+    // A write outside the bot's folder
+    let (_, _w) = approval(&env, json!({"source": "claude_builtin", "tool": "Write", "outside_folder": true})).await;
+    let w = tg.wait_send(&bot, |c| c.text().contains("<code>Write</code>")).await;
+    assert!(w.callbacks().is_empty() && w.text().contains("This changes files outside the bot's folder."), "{}", w.text());
+
+    // A connection marked production, outside Dev mode (no prod_floor on the card)
+    let space = kwnt::db::spaces::SpaceId::default_space();
+    env.state.db.set_prod_connection(space.as_str(), "composio:github", true).await.unwrap();
+    let (_, _p) = approval(&env, json!({"source": "mcp", "server": "composio", "tool": "GITHUB_CREATE_ISSUE"})).await;
+    let p = tg.wait_send(&bot, |c| c.text().contains("<code>GITHUB_CREATE_ISSUE</code>")).await;
+    assert!(p.callbacks().is_empty() && p.text().contains("This is a production connection."), "{}", p.text());
+
+    // Lin's L5: a question-shaped tap on an approval card allows nothing; the real tap still works
+    let (id, rx) = approval(&env, json!({"source": "mcp", "tool": "lookup", "server": "files"})).await;
+    let card = tg.wait_send(&bot, |c| c.text().contains("<code>lookup</code>")).await;
+    let cb = card.callbacks()[0].clone();
+    let ask_id = cb.split(':').nth(1).unwrap().to_string();
+    let forged = tg.tap(&bot, &PERSON, card.message_id(), &format!("q:{ask_id}:0"));
+    tg.wait_call(&bot, "answerCallbackQuery", |c| c.body["callback_query_id"] == forged).await;
+    assert_eq!(env.state.db.get_approval(&id).await.unwrap().unwrap().status, "pending");
+    tg.tap(&bot, &PERSON, card.message_id(), &cb);
+    let decision = tokio::time::timeout(Duration::from_secs(20), rx).await.expect("decided").expect("a decision");
+    assert!(matches!(decision, ApprovalDecision::AllowOnce));
+}
+
+#[tokio::test]
+async fn allow_once_is_taken_back_in_the_db_even_with_nothing_listening() {
+    // Lin's M1: no token, so no runner; the switch, a rejected token and a new bot still disarm
+    let env = setup().await;
+    let db = &env.state.db;
+    let space = kwnt::db::spaces::SpaceId::default_space();
+    let space = space.as_str();
+    let armed = |id: &str| kwnt::db::telegram::TelegramAsk {
+        id: id.into(),
+        space_id: space.into(),
+        kind: "approval".into(),
+        ref_id: format!("appr-{id}"),
+        chat_id: 1,
+        message_id: Some(1),
+        text: String::new(),
+        choices: "[]".into(),
+        allow: true,
+        state: "open".into(),
+        created_at: chrono::Utc::now(),
+    };
+    db.telegram_add_ask(&armed("m1-off")).await.unwrap();
+    db.telegram_set_allow(space, false).await.unwrap();
+    assert!(!db.telegram_ask(space, "m1-off").await.unwrap().unwrap().allow, "switch off");
+
+    db.telegram_add_ask(&armed("m1-rejected")).await.unwrap();
+    db.telegram_set_state(space, kwnt::db::telegram::REJECTED, Some("revoked")).await.unwrap();
+    assert!(!db.telegram_ask(space, "m1-rejected").await.unwrap().unwrap().allow, "token rejected");
+
+    db.telegram_add_ask(&armed("m1-newbot")).await.unwrap();
+    db.telegram_save_bot(space, 99, "other_bot", "Other").await.unwrap();
+    let a = db.telegram_ask(space, "m1-newbot").await.unwrap().unwrap();
+    assert!(!a.allow && a.state == "closed", "a new bot");
 }
 
 async fn sqlx_update_parameters(env: &Env, id: &str, params: Value) {

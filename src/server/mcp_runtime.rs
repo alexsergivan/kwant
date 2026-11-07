@@ -247,6 +247,10 @@ impl BrokerApprover {
         if let Some((_, card)) = &floor {
             details["prod_floor"] = card.clone();
         }
+        // A turn that read outside text: Telegram keeps its cards link-only (Q-G6)
+        if self.always_ask {
+            details["always_ask"] = json!(true);
+        }
         let record = NewApproval {
             turn_id: req.turn_id.clone(),
             kwant_id: req.kwant_id.clone(),

@@ -100,6 +100,14 @@ pub struct TokenBody {
     pub app_url: Option<String>,
 }
 
+/// The pasted token is wiped from memory when the body goes, on every path: refused, a bad shape,
+/// or saved (Lin's L4). What is kept is the vault's copy only.
+impl Drop for TokenBody {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.token);
+    }
+}
+
 /// `https://host[:port]` (no path, query, user or password), or `None`.
 pub fn clean_app_url(raw: &str) -> Option<String> {
     let u = url::Url::parse(raw.trim()).ok()?;
@@ -131,7 +139,11 @@ pub async fn put_token(State(state): State<AppState>, headers: HeaderMap, Scope(
     let Some(token) = api::clean_token(&body.token) else {
         return fail(StatusCode::BAD_REQUEST, "token_shape", "That doesn't look like a bot token from BotFather.");
     };
-    let bot = match api::Client::new(token.clone()).get_me().await {
+    let me = match api::Client::new(token.clone()) {
+        Ok(c) => c.get_me().await,
+        Err(e) => Err(e),
+    };
+    let bot = match me {
         Ok(b) => b,
         Err(api::TgError::Unauthorized) => return fail(StatusCode::BAD_REQUEST, "token_rejected", "Telegram didn't accept that token. Copy it again from BotFather."),
         Err(api::TgError::TooMany { .. }) => return fail(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "Telegram asked kwant to slow down. Try again in a minute."),
@@ -189,6 +201,10 @@ pub async fn pair(State(state): State<AppState>, headers: HeaderMap, Scope(space
         Ok(true) => {}
         Ok(false) => return fail(StatusCode::CONFLICT, "not_ready", "Telegram isn't ready to pair. Check the bot token."),
         Err(e) => return db_error(e),
+    }
+    // A new code lifts every lock, the space's (in the database) and each sender's
+    if let Some(r) = runner(&state, &space) {
+        r.forget_bad_codes();
     }
     emit_status(&state, &space);
     let link = pairing::link(&username, &code);
@@ -291,8 +307,7 @@ pub async fn patch(State(state): State<AppState>, headers: HeaderMap, Scope(spac
             }
         }
         Some(false) => {
-            let _ = state.db.telegram_set_allow(&space, false).await;
-            bridge::drop_allow_buttons(&state, &space).await;
+            bridge::allow_off(&state, &space).await;
         }
         None => {}
     }

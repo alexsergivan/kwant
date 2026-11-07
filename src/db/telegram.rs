@@ -218,6 +218,8 @@ impl Database {
         .bind(now)
         .execute(&self.pool)
         .await?;
+        // A new bot can't edit the old one's messages, and none of them may allow anything now
+        sqlx::query("UPDATE telegram_asks SET state = 'closed', allow = 0 WHERE space_id = ?").bind(space).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -386,13 +388,22 @@ impl Database {
                 .execute(&self.pool)
                 .await?
         } else {
-            sqlx::query("UPDATE telegram_links SET allow_approvals = 0, allow_since = NULL, updated_at = ? WHERE space_id = ?")
+            let r = sqlx::query("UPDATE telegram_links SET allow_approvals = 0, allow_since = NULL, updated_at = ? WHERE space_id = ?")
                 .bind(now)
                 .bind(space)
                 .execute(&self.pool)
-                .await?
+                .await?;
+            self.telegram_disarm_asks(space).await?;
+            r
         };
         Ok(r.rows_affected() == 1)
+    }
+
+    /// Every Allow once button still out stops counting, in the database, whether or not kwant can
+    /// reach Telegram to edit the messages (Lin's M1).
+    pub async fn telegram_disarm_asks(&self, space: &str) -> Result<(), DbError> {
+        sqlx::query("UPDATE telegram_asks SET allow = 0 WHERE space_id = ?").bind(space).execute(&self.pool).await?;
+        Ok(())
     }
 
     pub async fn telegram_set_state(&self, space: &str, state: &str, error: Option<&str>) -> Result<(), DbError> {
@@ -405,6 +416,9 @@ impl Database {
             .bind(space)
             .execute(&self.pool)
             .await?;
+        if state == REJECTED {
+            sqlx::query("UPDATE telegram_asks SET allow = 0 WHERE space_id = ?").bind(space).execute(&self.pool).await?;
+        }
         Ok(())
     }
 
@@ -438,15 +452,19 @@ impl Database {
 
     /// The person wrote from Telegram: bot replies in #general from now on go back (A19). A new
     /// window starts its cursor here, so nothing said while it was closed is sent.
+    ///
+    /// `at` (the test clock) opens the six-hour window. The cursor is compared with messages'
+    /// `created_at`, which is real time, so it starts at the real time (Lin's L6).
     pub async fn telegram_person_wrote(&self, space: &str, at: DateTime<Utc>) -> Result<(), DbError> {
         sqlx::query(
             "UPDATE telegram_links SET reply_window_from = ?1, last_message_at = ?1,
-               reply_cursor_at = CASE WHEN reply_window_from IS NULL OR reply_cursor_at IS NULL THEN ?1 ELSE reply_cursor_at END,
+               reply_cursor_at = CASE WHEN reply_window_from IS NULL OR reply_cursor_at IS NULL THEN ?3 ELSE reply_cursor_at END,
                reply_cursor_id = CASE WHEN reply_window_from IS NULL OR reply_cursor_at IS NULL THEN NULL ELSE reply_cursor_id END
              WHERE space_id = ?2",
         )
             .bind(at)
             .bind(space)
+            .bind(Utc::now())
             .execute(&self.pool)
             .await?;
         Ok(())

@@ -46,14 +46,16 @@ impl std::fmt::Display for TgError {
     }
 }
 
-/// The API base: the override only in debug and test builds, and only an http(s) URL.
+/// The API base: the override only in a build with the test seams (`cargo test`), and only an
+/// http(s) URL. A release build, a `make run` debug build and Docker always talk to api.telegram.org,
+/// so no setting can send the bot token anywhere else (Q-G2).
 pub fn api_base() -> String {
-    base_for(cfg!(debug_assertions), std::env::var(API_BASE_ENV).ok())
+    base_for(crate::clock::TEST_SEAMS, std::env::var(API_BASE_ENV).ok())
 }
 
-/// The override counts only in a debug or test build (`debug`), and only as an http(s) address.
-fn base_for(debug: bool, override_base: Option<String>) -> String {
-    if debug {
+/// The override counts only with the test seams built in (`seams`), and only as an http(s) address.
+fn base_for(seams: bool, override_base: Option<String>) -> String {
+    if seams {
         if let Some(b) = override_base {
             let b = b.trim().trim_end_matches('/');
             if b.starts_with("http://") || b.starts_with("https://") {
@@ -108,25 +110,24 @@ impl std::fmt::Debug for Client {
 }
 
 impl Client {
-    pub fn new(token: Zeroizing<String>) -> Self {
+    /// A client that never follows a redirect. If that client can't be built there is none: never
+    /// a default one, which would follow redirects (Lin's L2).
+    pub fn new(token: Zeroizing<String>) -> Result<Self, TgError> {
         let http = reqwest::Client::builder()
             // A redirect could carry the token's URL to another host
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(POLL_SECS + 10))
             .build()
-            .unwrap_or_default();
-        Client { http, base: api_base(), token: std::sync::Arc::new(token) }
+            .map_err(|_| TgError::Network)?;
+        Ok(Client { http, base: api_base(), token: std::sync::Arc::new(token) })
     }
 
-    /// Strips the token from a text Telegram sent back (it never should, but it costs nothing).
+    /// Strips the token from a text Telegram sent back (it never should, but it costs nothing),
+    /// then cuts it to 200 characters. In that order, so a token across the cut can't leave half.
     fn scrub(&self, text: &str) -> String {
-        let t: String = text.chars().take(200).collect();
-        if self.token.is_empty() {
-            t
-        } else {
-            t.replace(self.token.as_str(), "[redacted]")
-        }
+        let t = if self.token.is_empty() { text.to_string() } else { text.replace(self.token.as_str(), "[redacted]") };
+        t.chars().take(200).collect()
     }
 
     /// One call. `wait` bounds this call alone (getUpdates waits longer than a send).
@@ -249,9 +250,15 @@ mod tests {
 
     #[test]
     fn errors_never_show_the_token_or_a_url() {
-        let c = Client::new(Zeroizing::new(fake()));
+        let c = Client::new(Zeroizing::new(fake())).unwrap();
         assert!(!format!("{c:?}").contains(&fake()));
         assert_eq!(c.scrub(&format!("bad {}", fake())), "bad [redacted]");
+        // A token across the 200-character cut: none of it is left
+        let long = format!("{}{}", "x".repeat(190), fake());
+        let out = c.scrub(&long);
+        assert!(out.ends_with("[redacted]") && out.chars().count() == 200, "{out}");
+        let (id, _) = fake().split_once(':').map(|(a, b)| (a.to_string(), b.to_string())).unwrap();
+        assert!(!out.contains(&format!("{id}:")), "{out}");
         for e in [TgError::Unauthorized, TgError::Conflict, TgError::TooMany { retry_after: 3 }, TgError::Forbidden, TgError::BadRequest("x".into()), TgError::Network, TgError::Server(502)] {
             let s = format!("{e} {e:?}");
             assert!(!s.contains("http") && !s.contains("/bot"), "{s}");
@@ -259,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn release_builds_ignore_the_override() {
+    fn builds_without_the_test_seams_ignore_the_override() {
         let mock = Some("http://127.0.0.1:9/".to_string());
         assert_eq!(base_for(false, mock.clone()), "https://api.telegram.org");
         assert_eq!(base_for(true, mock), "http://127.0.0.1:9");

@@ -165,7 +165,9 @@ async fn pairing_message(state: &AppState, runner: &Runner, link: &TelegramLink,
         let _ = state.db.telegram_count_stranger(&runner.space).await;
         return;
     };
-    if link.pair_locked {
+    // One sender's wrong codes lock out that sender only, so a stranger who knows the bot's name
+    // can't keep the person from pairing (Lin's L1). Many senders together lock the space.
+    if link.pair_locked || runner.sender_locked(from_id) {
         let _ = state.db.telegram_count_stranger(&runner.space).await;
         return;
     }
@@ -185,8 +187,9 @@ async fn pairing_message(state: &AppState, runner: &Runner, link: &TelegramLink,
         }
         return;
     }
+    runner.sender_failed(from_id);
     let window_start = crate::clock::now() - chrono::Duration::minutes(pairing::FAIL_WINDOW_MINUTES);
-    let _ = state.db.telegram_code_failed(&runner.space, window_start, pairing::MAX_FAILURES).await;
+    let _ = state.db.telegram_code_failed(&runner.space, window_start, pairing::MAX_SPACE_FAILURES).await;
     emit_status(state, &runner.space);
     if runner.may_reply_bad_code(chat_id) {
         runner.enqueue(chat_id, plain(copy::BAD_CODE));
@@ -317,8 +320,10 @@ async fn handle_callback(state: &AppState, runner: &Runner, cb: &Value) {
         let _ = runner.client.answer_callback(cb_id, Some(copy::ALREADY_ANSWERED)).await;
         return;
     };
-    match kind {
-        Some("q") => {
+    // A tap counts only on its own kind of message: an answer on a question, Allow once on an
+    // approval. A forged `callback_data` that crosses them is ignored (Lin's L5).
+    match (kind, ask.kind.as_str()) {
+        (Some("q"), "question") => {
             let choices: Vec<String> = serde_json::from_str(&ask.choices).unwrap_or_default();
             let Some(choice) = n.and_then(|n| n.parse::<usize>().ok()).and_then(|i| choices.get(i)).cloned() else {
                 let _ = runner.client.answer_callback(cb_id, None).await;
@@ -335,7 +340,7 @@ async fn handle_callback(state: &AppState, runner: &Runner, cb: &Value) {
             };
             edit_answered(state, runner, &ask, &line).await;
         }
-        Some("a") => allow_once(state, runner, &link, &ask, cb_id).await,
+        (Some("a"), "approval") => allow_once(state, runner, &link, &ask, cb_id).await,
         _ => {
             let _ = runner.client.answer_callback(cb_id, None).await;
         }
@@ -357,7 +362,8 @@ async fn allow_once(state: &AppState, runner: &Runner, link: &TelegramLink, ask:
         let _ = runner.client.answer_callback(cb_id, Some(copy::ALREADY_ANSWERED)).await;
         return;
     }
-    if !(ask.allow && link.allow_approvals && super::approvable(&details) && same) {
+    let why = super::link_only_in(state, &runner.space, &details).await;
+    if !(ask.allow && link.allow_approvals && why.is_none() && same) {
         let _ = state.db.telegram_ask_link_only(&ask.id).await;
         let _ = runner.client.answer_callback(cb_id, Some(copy::APPROVE_IN_KWANT)).await;
         link_only(state, runner, ask, &details).await;
@@ -495,13 +501,14 @@ async fn on_approval(state: &AppState, id: &str, tool_name: &str, details: &Valu
         body.push_str(&format!(" on <code>{}</code>", text::escape(&clip(server, 60))));
     }
     body.push('.');
-    let allow = link.allow_approvals && super::approvable(details);
+    let why = super::link_only_in(state, &space, details).await;
+    let allow = link.allow_approvals && why.is_none();
     let ask_id = new_ask_id();
     let mut rows = Vec::new();
     if allow {
         rows.push(json!([{"text": copy::ALLOW_ONCE, "callback_data": format!("a:{ask_id}")}]));
     } else {
-        body.push_str(&format!("\n\n<i>{}</i>", text::escape(&excluded_reason(details, link.allow_approvals))));
+        body.push_str(&format!("\n\n<i>{}</i>", text::escape(&excluded_reason(why, link.allow_approvals))));
     }
     if let Some(open) = open_row(&link, &space, None, Some(&approval.kwant_id)) {
         rows.push(open);
@@ -524,22 +531,13 @@ async fn on_approval(state: &AppState, id: &str, tool_name: &str, details: &Valu
 }
 
 /// Why an approval is link-only (A25): "… Approve it in kwant."
-fn excluded_reason(details: &Value, switch_on: bool) -> String {
-    if !switch_on {
-        return copy::APPROVE_IN_KWANT.into();
+/// The line a link-only approval card carries: why, then "Approve it in kwant."
+fn excluded_reason(why: Option<&str>, switch_on: bool) -> String {
+    match (switch_on, why) {
+        (true, Some(why)) => format!("{why} {}", copy::APPROVE_IN_KWANT),
+        // Switch off, or a card that was armed and isn't any more (the switch or the card changed)
+        _ => copy::APPROVE_IN_KWANT.into(),
     }
-    let why = if details.get("prod_floor").is_some_and(|v| !v.is_null()) {
-        "This is a production connection."
-    } else if details.get("payment_reason").is_some_and(|v| !v.is_null()) {
-        "This one involves a payment."
-    } else if details.get("tier_reason").is_some_and(|v| !v.is_null()) {
-        "This bot's tier needs you to approve it."
-    } else if details["source"] == "local_shell" {
-        "This is a command on your computer."
-    } else {
-        "This kind of step can't be approved from Telegram."
-    };
-    format!("{why} {}", copy::APPROVE_IN_KWANT)
 }
 
 async fn on_human_step(state: &AppState, step: &Value) {
@@ -643,11 +641,15 @@ async fn approval_closed(state: &AppState, id: &str, line: &str) {
     }
 }
 
-/// Allow approvals went off (or the pairing changed): every Allow once button still out goes.
-pub async fn drop_allow_buttons(state: &AppState, space: &str) {
+/// The person turned Allow approvals off: the switch goes off and every Allow once button still out
+/// stops counting at once, in the database (`telegram_set_allow(false)` disarms them all). Their
+/// messages are edited to link-only when kwant can reach Telegram; offline the edit is skipped, and
+/// a tap is refused either way (Lin's M1).
+pub async fn allow_off(state: &AppState, space: &str) {
+    let armed = state.db.telegram_open_asks(space, "approval", true).await.unwrap_or_default();
+    let _ = state.db.telegram_set_allow(space, false).await;
     let Some(r) = runner(state, space) else { return };
-    for ask in state.db.telegram_open_asks(space, "approval", true).await.unwrap_or_default() {
-        let _ = state.db.telegram_ask_link_only(&ask.id).await;
+    for ask in armed {
         let details = match state.db.get_approval(&ask.ref_id).await.ok().flatten() {
             Some(a) => serde_json::from_str(&a.parameters).unwrap_or(Value::Null),
             None => Value::Null,
@@ -658,7 +660,8 @@ pub async fn drop_allow_buttons(state: &AppState, space: &str) {
 
 async fn link_only(state: &AppState, r: &Runner, ask: &TelegramAsk, details: &Value) {
     let Ok(Some(link)) = state.db.telegram_link(&ask.space_id).await else { return };
-    let html = format!("{}\n\n<i>{}</i>", ask.text, text::escape(&excluded_reason(details, link.allow_approvals)));
+    let why = super::link_only_in(state, &ask.space_id, details).await;
+    let html = format!("{}\n\n<i>{}</i>", ask.text, text::escape(&excluded_reason(why, link.allow_approvals)));
     let kwant = details["kwant_id"].as_str();
     edit(state, r, ask, html, open_markup(state, &link, &ask.space_id, kwant).await);
 }
@@ -833,9 +836,11 @@ mod tests {
 
     #[test]
     fn excluded_approvals_say_why_and_where() {
-        assert_eq!(excluded_reason(&json!({"source": "mcp"}), false), "Approve it in kwant.");
-        assert_eq!(excluded_reason(&json!({"source": "mcp", "prod_floor": {}}), true), "This is a production connection. Approve it in kwant.");
-        assert!(excluded_reason(&json!({"source": "local_shell"}), true).ends_with("Approve it in kwant."));
+        let why = |d: Value| super::super::link_only_reason(&d);
+        assert_eq!(excluded_reason(why(json!({"source": "local_shell"})), false), "Approve it in kwant.");
+        assert_eq!(excluded_reason(why(json!({"source": "mcp", "prod_floor": {}})), true), "This is a production connection. Approve it in kwant.");
+        assert_eq!(excluded_reason(why(json!({"source": "local_shell"})), true), "This is a command on your computer. Approve it in kwant.");
+        assert_eq!(excluded_reason(None, true), "Approve it in kwant.");
     }
 
     #[test]
