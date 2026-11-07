@@ -492,8 +492,8 @@ async fn first_trip_each_day_sends_one_notification() {
     env.held("third").await;
     let n = sent();
     assert_eq!(n.len(), 1, "two stopped turns, one notification: {n:?}");
-    assert_eq!(n[0].0, "Today's spending stop is on");
-    assert!(n[0].1.starts_with("Used 8k of 8k tokens."), "{}", n[0].1);
+    assert_eq!(n[0].0, "Today's spending limit is reached");
+    assert_eq!(n[0].1, "Used 8k of 8k tokens, so bots won't start new work until tomorrow. Open to continue today.");
 
     // A routine held the same day adds none
     let r = ok(&env.app, "POST", "/api/routines", Some(json!({"kwant_id": env.ann, "name": "Digest", "instructions": "Sum up.",

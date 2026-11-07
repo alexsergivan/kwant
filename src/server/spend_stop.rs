@@ -193,6 +193,7 @@ const NOTIFY_KEY: &str = "notify";
 
 /// The stop held something: the first time each day, one `spend_stopped` notification (UI,
 /// push, webhook; off when the person unticks it), so routines going quiet overnight are heard.
+/// It names no bot (the stop holds them all); a tap opens Needs you, where Continue is.
 async fn tripped(state: &AppState, s: &Status) {
     if !state.db.first_spend_notice(&s.day, NOTIFY_KEY).await.unwrap_or(false) {
         return;
@@ -202,8 +203,8 @@ async fn tripped(state: &AppState, s: &Status) {
         kwant_id: String::new(),
         kwant_name: "kwant".into(),
         channel_id: None,
-        title: "Today's spending stop is on".into(),
-        body: format!("Used {}. New turns, routines and missions wait until the day ends, or continue today from Needs you.", used_of(s)),
+        title: "Today's spending limit is reached".into(),
+        body: format!("Used {}, so bots won't start new work until tomorrow. Open to continue today.", used_of(s)),
     };
     super::continuity::notify(state, n).await;
 }
