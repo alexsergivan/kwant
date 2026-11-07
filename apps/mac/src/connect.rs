@@ -118,6 +118,11 @@ pub async fn add_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, addr
     let origin = address.origin;
     let host = origin.host();
     let link = address.sign_in.map(|l| l.url().clone());
+    if link.is_some() && crate::current(&app).servers.contains(&origin) {
+        // a sign-in link signs a listed server's window in again: end the old session first,
+        // so Signed-in devices doesn't list this app twice
+        crate::sign_out_of(&app, &origin).await;
+    }
     let added = crate::add_place(&app, origin.clone(), link).map_err(|e| {
         tracing::warn!(error = %e, "couldn't save the server list");
         error("save_failed", "kwant couldn't save the server. Check that ~/.kwnt can be written.", Some(host.clone()))
@@ -125,17 +130,20 @@ pub async fn add_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, addr
     Ok(json!({ "added": added, "origin": origin.as_str(), "host": host }))
 }
 
-/// Takes a listed server out of the app (its window, its sign-in cookie, its line in the file).
-/// The page asks first; this doesn't.
+/// Remove this server…: the same native confirm as the tray (no page builds its own), then the
+/// server sign-out and the remove (its window, its sign-in cookie, its line in the file).
 #[tauri::command]
 pub async fn remove_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, origin: String) -> Result<Value, Value> {
     bundled_only(&webview)?;
     let listed = crate::current(&app).servers.into_iter().find(|o| o.as_str() == origin);
     let Some(origin) = listed else {
-        return Ok(json!({ "removed": false }));
+        return Ok(json!({ "removed": false, "revoked": false, "cancelled": false }));
     };
-    // async commands run off the main thread, where the cookie store may be read
-    Ok(json!({ "removed": crate::remove_place(&app, &origin) }))
+    // the dialog and the sign-out block: a blocking thread, never the main thread
+    let done = tauri::async_runtime::spawn_blocking(move || crate::confirm_and_remove(&app, &origin))
+        .await
+        .unwrap_or_default();
+    Ok(json!({ "removed": done.removed, "revoked": done.revoked, "cancelled": done.cancelled }))
 }
 
 /// "Run kwant on this Mac".
