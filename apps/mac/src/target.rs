@@ -151,8 +151,11 @@ pub fn parse_address(input: &str) -> Result<Address, Refusal> {
         text.parse().map_err(|_| Refusal::NotAnAddress)?
     } else {
         let secure: Url = format!("https://{text}").parse().map_err(|_| Refusal::NotAnAddress)?;
+        // `localhost.:2222` is the loopback name too (the trailing dot goes below)
         match secure.host_str() {
-            Some(h) if is_loopback_name(h) => format!("http://{text}").parse().map_err(|_| Refusal::NotAnAddress)?,
+            Some(h) if is_loopback_name(h.strip_suffix('.').unwrap_or(h)) => {
+                format!("http://{text}").parse().map_err(|_| Refusal::NotAnAddress)?
+            }
             _ => secure,
         }
     };
@@ -165,7 +168,8 @@ pub fn parse_address(input: &str) -> Result<Address, Refusal> {
     let Some(host) = url.host_str().map(str::to_string) else {
         return Err(Refusal::NotAnAddress);
     };
-    if host.is_empty() {
+    // an empty label (`a..b.example.com`, `.example.com`) is no host name
+    if host.is_empty() || host.starts_with('.') || host.contains("..") {
         return Err(Refusal::NotAnAddress);
     }
     // `kwant.example.com.` and `kwant.example.com` are one server to a person; save the plain form
@@ -343,6 +347,34 @@ mod tests {
         assert_eq!(parse_address("https://kwänt.example").unwrap().origin.host(), "xn--kwnt-moa.example");
         assert_eq!(origin("https://kwant.example.com."), "https://kwant.example.com");
         assert_eq!(parse_address("https://kwant.example.com..").unwrap_err(), Refusal::NotAnAddress);
+    }
+
+    /// Rigel's F8: a trailing dot on a loopback name is the same loopback name, with or
+    /// without a scheme.
+    #[test]
+    fn a_loopback_name_with_a_trailing_dot_is_still_loopback() {
+        assert_eq!(origin("localhost.:2222"), "http://localhost:2222");
+        assert_eq!(origin("http://localhost.:2222"), "http://localhost:2222");
+        assert_eq!(origin("localhost."), "http://localhost");
+        assert_eq!(origin("https://localhost.:8443"), "https://localhost:8443");
+        assert_eq!(origin("localhost.example.com.:2222"), "https://localhost.example.com:2222");
+        assert_eq!(parse_address("http://localhost.example.com.").unwrap_err(), Refusal::HttpNotAllowed);
+    }
+
+    /// Rigel's F9: ".." in a host is refused before anything is contacted, as the spec says.
+    #[test]
+    fn an_empty_label_in_a_host_is_refused() {
+        for bad in [
+            "https://a..b.example.com",
+            "a..b.example.com",
+            "https://kwant..example.com:8443/x",
+            "https://kwant.example.com../",
+            "https://..kwant.example.com",
+            "https://.kwant.example.com",
+            "http://localhost..:2222",
+        ] {
+            assert_eq!(parse_address(bad).unwrap_err(), Refusal::NotAnAddress, "{bad}");
+        }
     }
 
     #[test]

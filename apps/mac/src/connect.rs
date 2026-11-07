@@ -110,6 +110,10 @@ pub async fn connect_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, 
     match (address.sign_in, app.get_webview_window(MAIN)) {
         (Some(link), Some(window)) => {
             *app.state::<Connecting>().0.lock().unwrap() = Some(origin.clone());
+            // a cookie from an earlier session would end the wait at the first look, before
+            // the link has even loaded: clear it, and ignore one that couldn't be cleared
+            crate::clear_token(&app, &origin);
+            let stale = crate::read_token(&app, &origin);
             if window.navigate(link.url().clone()).is_err() {
                 tracing::warn!(host = %host, "couldn't open the sign-in link");
             }
@@ -117,7 +121,7 @@ pub async fn connect_server<R: Runtime>(app: AppHandle<R>, webview: Webview<R>, 
                 let started = Instant::now();
                 while started.elapsed() < SIGN_IN_WAIT {
                     std::thread::sleep(Duration::from_millis(500));
-                    if crate::read_token(&app, &origin).is_some() {
+                    if crate::read_token(&app, &origin).is_some_and(|t| Some(&t) != stale.as_ref()) {
                         tracing::info!(host = %host, "signed in");
                         break;
                     }

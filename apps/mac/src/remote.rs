@@ -56,32 +56,83 @@ pub fn parse_health(body: &str) -> Option<String> {
     Some(v["version"].as_str().unwrap_or("").chars().take(40).collect())
 }
 
-/// Sorts a connection error by the words in its causes (reqwest, hyper, the OS and the TLS
-/// library each word them their own way). Anything else reads as a timeout: "didn't answer" is
-/// the honest catch-all, and the raw error is never shown.
-pub fn classify(chain: &str, timed_out: bool) -> Failure {
-    let text = chain.to_ascii_lowercase();
+/// Sorts a connection error. The kinds come first: reqwest's own timeout flag, then the OS
+/// error kind of an `io::Error` among the causes. Only then the words of the causes (hyper, the
+/// OS resolver and the TLS library each word them their own way), with every copy of the host
+/// taken out first: the URL and the host are in some of those texts, and a host may well be
+/// called `trust.example.com` or `refused.example.com`. Anything else reads as a timeout:
+/// "didn't answer" is the honest catch-all, and the raw error is never shown.
+pub fn classify(chain: &str, timed_out: bool, host: &str) -> Failure {
+    if timed_out {
+        return Failure::Timeout;
+    }
+    let text = without_addresses(&chain.to_ascii_lowercase(), &host.to_ascii_lowercase());
     let has = |words: &[&str]| words.iter().any(|w| text.contains(w));
     if has(&["dns error", "failed to lookup address", "name or service not known", "nodename nor servname", "no such host", "temporary failure in name resolution"]) {
         Failure::Dns
     } else if has(&["certificate", "tls", "ssl", "handshake", "trust"]) {
         Failure::Tls
-    } else if has(&["connection refused", "refused", "connection reset"]) && !timed_out {
+    } else if has(&["connection refused", "refused", "connection reset"]) {
         Failure::Refused
     } else {
         Failure::Timeout
     }
 }
 
-fn failure(e: &reqwest::Error) -> Failure {
+/// `text` with every web address and every copy of the host (bare, or as `host:port`) blanked.
+fn without_addresses(text: &str, host: &str) -> String {
+    let edge = |c: char| c.is_whitespace() || matches!(c, '(' | ')' | '"' | '\'' | '“' | '”' | '<' | '>' | ',');
+    let mut out = String::with_capacity(text.len());
+    for word in text.split_inclusive(edge) {
+        if word.contains("://") {
+            out.push(' ');
+            out.extend(word.chars().last().filter(|&c| edge(c)));
+        } else {
+            out.push_str(word);
+        }
+    }
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if host.is_empty() {
+        out
+    } else {
+        out.replace(host, " ")
+    }
+}
+
+/// The kind of the first `io::Error` among the causes, if it settles the case.
+fn io_kind(e: &reqwest::Error) -> Option<Failure> {
+    let mut source = std::error::Error::source(e);
+    while let Some(err) = source {
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            use std::io::ErrorKind::*;
+            match io.kind() {
+                TimedOut => return Some(Failure::Timeout),
+                ConnectionRefused | ConnectionReset | ConnectionAborted => return Some(Failure::Refused),
+                _ => {}
+            }
+        }
+        source = err.source();
+    }
+    None
+}
+
+fn failure(e: &reqwest::Error, origin: &Origin) -> Failure {
+    if e.is_timeout() {
+        return Failure::Timeout;
+    }
+    if let Some(kind) = io_kind(e) {
+        return kind;
+    }
+    // the causes only: reqwest's own line is "error sending request for url (…)"
     let mut chain = String::new();
-    let mut source: Option<&dyn std::error::Error> = Some(e);
+    let mut source = std::error::Error::source(e);
     while let Some(err) = source {
         chain.push_str(&err.to_string());
         chain.push_str(" | ");
         source = err.source();
     }
-    classify(&chain, e.is_timeout())
+    let host = origin.url().host_str().unwrap_or_default();
+    classify(&chain, false, host)
 }
 
 /// One client for the app's own calls: no redirects (a server must answer as itself), short
@@ -97,9 +148,9 @@ pub fn client() -> reqwest::Client {
 }
 
 /// Reads at most `limit` bytes of the answer.
-async fn body(mut response: reqwest::Response, limit: usize) -> Result<String, Failure> {
+async fn body(mut response: reqwest::Response, limit: usize, origin: &Origin) -> Result<String, Failure> {
     let mut out = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| failure(&e))? {
+    while let Some(chunk) = response.chunk().await.map_err(|e| failure(&e, origin))? {
         out.extend_from_slice(&chunk);
         if out.len() > limit {
             return Err(Failure::NotKwant);
@@ -111,11 +162,11 @@ async fn body(mut response: reqwest::Response, limit: usize) -> Result<String, F
 /// GET `{origin}/api/health`: kwant answers 200 with `"app":"kwnt"`. Gives its version.
 pub async fn check(client: &reqwest::Client, origin: &Origin) -> Result<String, Failure> {
     let url = origin.page("/api/health");
-    let response = client.get(url).send().await.map_err(|e| failure(&e))?;
+    let response = client.get(url).send().await.map_err(|e| failure(&e, origin))?;
     if response.status() != reqwest::StatusCode::OK {
         return Err(Failure::NotKwant);
     }
-    parse_health(&body(response, HEALTH_LIMIT).await?).ok_or(Failure::NotKwant)
+    parse_health(&body(response, HEALTH_LIMIT, origin).await?).ok_or(Failure::NotKwant)
 }
 
 /// The window's sign-in cookie value for the saved server, in memory only.
@@ -171,7 +222,7 @@ pub async fn get(client: &reqwest::Client, origin: &Origin, token: Option<&Token
         return Answer::Failed;
     };
     match response.status().as_u16() {
-        200 => body(response, POLL_LIMIT).await.map(Answer::Ok).unwrap_or(Answer::Failed),
+        200 => body(response, POLL_LIMIT, origin).await.map(Answer::Ok).unwrap_or(Answer::Failed),
         401 | 403 => Answer::SignedOut,
         _ => Answer::Failed,
     }
@@ -197,17 +248,81 @@ mod tests {
 
     #[test]
     fn connection_errors_are_sorted_by_their_causes() {
-        let dns = "error sending request | client error (Connect) | dns error: failed to lookup address information: Name or service not known";
-        assert_eq!(classify(dns, false), Failure::Dns);
-        assert_eq!(classify("client error (Connect) | The certificate was not trusted.", false), Failure::Tls);
-        assert_eq!(classify("error trying to connect: invalid peer certificate: UnknownIssuer", false), Failure::Tls);
-        assert_eq!(classify("tcp connect error: Connection refused (os error 111)", false), Failure::Refused);
-        assert_eq!(classify("operation timed out", false), Failure::Timeout);
-        assert_eq!(classify("error sending request", true), Failure::Timeout);
-        assert_eq!(classify("connection reset by peer", false), Failure::Refused);
-        assert_eq!(classify("something else", false), Failure::Timeout);
+        let h = "kwant.example.com";
+        let dns = "client error (Connect) | dns error: failed to lookup address information: Name or service not known";
+        assert_eq!(classify(dns, false, h), Failure::Dns);
+        assert_eq!(classify("client error (Connect) | The certificate was not trusted.", false, h), Failure::Tls);
+        assert_eq!(classify("error trying to connect: invalid peer certificate: UnknownIssuer", false, h), Failure::Tls);
+        assert_eq!(classify("tcp connect error: Connection refused (os error 111)", false, h), Failure::Refused);
+        assert_eq!(classify("operation timed out", false, h), Failure::Timeout);
+        assert_eq!(classify("error sending request", true, h), Failure::Timeout);
+        assert_eq!(classify("connection reset by peer", false, h), Failure::Refused);
+        assert_eq!(classify("something else", false, h), Failure::Timeout);
         assert_eq!(Failure::NotKwant.message("kwant.example.com"), "kwant.example.com answered, but not as kwant.");
         assert_eq!(Failure::Timeout.code(), "timeout");
+    }
+
+    /// Rigel's QA traps (F1): reqwest puts the URL in its text, the macOS TLS library names the
+    /// host, and a host can contain the classifier's words.
+    #[test]
+    fn a_host_s_name_never_decides_the_failure() {
+        for (chain, timed_out, host, want) in [
+            ("error sending request for url (https://trust.example.com/api/health) | operation timed out", true, "trust.example.com", Failure::Timeout),
+            ("error sending request for url (https://ssl-kwant.example.com/api/health) | operation timed out", true, "ssl-kwant.example.com", Failure::Timeout),
+            ("error sending request for url (https://tls.example.com/api/health) | dns error: failed to lookup address information", false, "tls.example.com", Failure::Dns),
+            ("error sending request for url (https://refused.example.com/api/health) | operation timed out", true, "refused.example.com", Failure::Timeout),
+            ("error sending request for url (https://trust.example.com/api/health) | Connection refused (os error 111)", false, "trust.example.com", Failure::Refused),
+            // the same chains without reqwest's timeout flag: the URL and the host are ignored
+            ("error sending request for url (https://trust.localhost:9474/api/health) | operation timed out", false, "trust.localhost", Failure::Timeout),
+            ("error sending request for url (https://ssl-kwant.example.com/api/health) | something else", false, "ssl-kwant.example.com", Failure::Timeout),
+            ("error sending request for url (https://refused.example.com/api/health) | operation timed out", false, "refused.example.com", Failure::Timeout),
+            ("client error (Connect) | connection to tls-handshake.example.com:443 timed out", false, "tls-handshake.example.com", Failure::Timeout),
+            // macOS words the host into its certificate errors; the real cause still counts
+            ("client error (Connect) | The certificate for this server is invalid. You might be connecting to a server that is pretending to be “refused.example.com”", false, "refused.example.com", Failure::Tls),
+            ("connecting to [::1]:9474: something", false, "[::1]", Failure::Timeout),
+        ] {
+            assert_eq!(classify(chain, timed_out, host), want, "{chain}");
+        }
+    }
+
+    /// The real path: a server that takes the connection and never answers, at a host named
+    /// like a TLS word, is a timeout (the hung https server of Rigel's matrix).
+    #[tokio::test]
+    async fn a_hung_server_at_a_trust_host_is_a_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hold = tokio::spawn(async move {
+            let mut held = Vec::new();
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                held.push(socket);
+            }
+        });
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_millis(400))
+            .resolve("trust.localhost", ([127, 0, 0, 1], port).into())
+            .build()
+            .unwrap();
+        let o = origin(&format!("https://trust.localhost:{port}"));
+        assert_eq!(check(&client, &o).await, Err(Failure::Timeout));
+        hold.abort();
+    }
+
+    /// Nothing listening: the OS kind says refused, whatever the host is called.
+    #[tokio::test]
+    async fn nothing_listening_at_a_tls_host_is_refused() {
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .resolve("tls-trust.localhost", ([127, 0, 0, 1], port).into())
+            .build()
+            .unwrap();
+        let o = origin(&format!("https://tls-trust.localhost:{port}"));
+        assert_eq!(check(&client, &o).await, Err(Failure::Refused));
     }
 
     #[test]
