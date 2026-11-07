@@ -193,7 +193,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
       hidden={hidden}
       aria-hidden={hidden || undefined}
     >
-      <div className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 text-zinc-100 shadow-2xl space-y-5">
+      <div className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
