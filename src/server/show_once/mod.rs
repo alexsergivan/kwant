@@ -119,6 +119,70 @@ pub async fn engine_for(state: &AppState, kwant_id: &str) -> Option<String> {
     (!families.is_empty()).then(|| families.join(" or "))
 }
 
+/// A skill as its replies and `skill_updated` show it: a shown draft also has `source: "shown"`
+/// and its `shown` facts (api.md §4, "Skill JSON"). Any other skill is unchanged.
+pub async fn skill_json(state: &AppState, skill: &crate::db::skills::Skill) -> Value {
+    let mut v = serde_json::to_value(skill).unwrap_or(Value::Null);
+    if let Ok(Some(rec)) = state.db.recording_for_skill(&skill.id).await {
+        if let Some(shown) = shown_json(state, &rec).await {
+            v["source"] = json!("shown");
+            v["shown"] = shown;
+        }
+    }
+    v
+}
+
+/// [`skill_json`] for every skill of a list.
+pub async fn skills_json(state: &AppState, skills: &[crate::db::skills::Skill]) -> Vec<Value> {
+    let mut out = Vec::with_capacity(skills.len());
+    for s in skills {
+        out.push(skill_json(state, s).await);
+    }
+    out
+}
+
+/// The `shown` object of a written recording; `None` before it's written.
+async fn shown_json(state: &AppState, r: &Recording) -> Option<Value> {
+    let at = r.shown_at?;
+    let tz = state.db.get_setting(super::bot_actions::TIMEZONE_SETTING).await.ok().flatten().unwrap_or_default();
+    let inputs: Value = r.inputs.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_else(|| json!([]));
+    Some(json!({
+        "recording_id": r.id,
+        "shown_at": rfc3339(at),
+        "shown_on": draft::shown_on(&tz, at),
+        "step_count": r.shown_step_count.unwrap_or(0),
+        "inputs": inputs,
+        "steps_expire_at": if r.steps_deleted_at.is_some() { None } else { r.steps_expire_at.map(rfc3339) },
+        "steps_deleted": r.steps_deleted_at.is_some(),
+    }))
+}
+
+/// Sends `skill_updated` for the skill with this id, with its `shown` facts.
+pub async fn skill_changed(state: &AppState, skill_id: &str) {
+    if let Ok(Some(skill)) = state.db.get_skill(skill_id).await {
+        let skill = skill_json(state, &skill).await;
+        let _ = state.event_sender.send(RuntimeEvent::SkillUpdated { skill });
+    }
+}
+
+/// Approve of a draft (any approve, edited or not): its steps are kept 7 days from now (§7).
+pub async fn on_approved(state: &AppState, skill_id: &str) {
+    match state.db.shown_skill_approved(skill_id, now()).await {
+        Ok(Some(rec)) => emit(state, &rec).await,
+        Ok(None) => {}
+        Err(e) => tracing::warn!("show it once: approve didn't move the steps' deadline: {e}"),
+    }
+}
+
+/// Reject of a draft: its steps are deleted at once (§7; the UI's 10 s Undo came first).
+pub async fn on_rejected(state: &AppState, skill_id: &str) {
+    match state.db.delete_shown_steps(skill_id, now()).await {
+        Ok(Some(rec)) => emit(state, &rec).await,
+        Ok(None) => {}
+        Err(e) => tracing::warn!("show it once: reject didn't delete the steps: {e}"),
+    }
+}
+
 /// Runs the sweep once (api.md §7): ends recordings past their 30 minutes (telling a live stage),
 /// purges steps past their undo or their 7 days, and tells each bot's context what changed.
 pub async fn sweep(state: &AppState) -> crate::db::show_once::SweepCounts {

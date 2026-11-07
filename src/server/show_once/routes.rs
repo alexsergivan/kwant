@@ -9,10 +9,12 @@ use crate::db::show_once::{Recording, ShowOnceError, StepRow};
 use crate::drivers::events::RuntimeEvent;
 use crate::server::AppState;
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
+    routing::{delete, get as get_route, post},
+    Json, Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -162,7 +164,7 @@ pub async fn start(State(state): State<AppState>, Json(p): Json<StartIn>) -> Res
         }
     }
     if !stage::send(&stage_id, Cmd::Begin { recording_id: rec.id.clone(), start_url: url }) {
-        // Take over ended between the check and now
+        // Take over ended between the check and now: the socket went away, not a Hand back
         let _ = state.db.stop_recording(&rec.id, "closed", now()).await;
         emit_id(&state, &rec.id).await;
         return fail(StatusCode::CONFLICT, "not_taken_over", "Take over ended before the recording could start.");
@@ -183,11 +185,32 @@ pub async fn open_for(State(state): State<AppState>, Query(q): Query<OpenQuery>)
     let Some(bot) = q.bot.as_deref().filter(|b| !b.is_empty()) else {
         return fail(StatusCode::BAD_REQUEST, "bad_request", "Say which bot.");
     };
-    match state.db.open_recording_for(bot).await {
-        Ok(Some(rec)) => Json(json!({"recording": recording_reply(&state, &rec).await})).into_response(),
-        Ok(None) => Json(json!({"recording": null})).into_response(),
-        Err(_) => internal(),
-    }
+    let rec = match state.db.open_recording_for(bot).await {
+        Ok(r) => r,
+        Err(_) => return internal(),
+    };
+    // A26: where the bot's stage is (or was last), scrubbed like a step's address, to prefill Start
+    let stage_id = rec.as_ref().map(|r| r.stage.clone()).unwrap_or_else(|| bot.to_string());
+    let last_url = last_url(&state, &stage_id).await;
+    let recording = match &rec {
+        Some(r) => recording_reply(&state, r).await,
+        None => Value::Null,
+    };
+    Json(json!({"recording": recording, "last_url": last_url})).into_response()
+}
+
+/// The page the stage's browser is on, or was last on: origin and path only (api.md §3), `None`
+/// when it has no http(s) page. Never opens a browser.
+async fn last_url(state: &AppState, stage_id: &str) -> Option<String> {
+    let current = state.browser_controllers.lock().await.get(stage_id).map(|c| c.current_url.clone())?;
+    let raw = current.lock().await.clone()?;
+    prefill(&raw)
+}
+
+/// A browser address as Start's prefill: scrubbed like a step's (no query, fragment, login or
+/// long ids), `None` for a page that isn't http(s).
+fn prefill(raw: &str) -> Option<String> {
+    super::scrub::scrub(raw).map(|p| format!("{}{}", p.origin, p.path))
 }
 
 pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Response {
@@ -223,14 +246,32 @@ pub async fn add_note(State(state): State<AppState>, Path(id): Path<String>, Jso
     }
 }
 
-pub async fn stop(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+/// The reason a Stop body gives (A27): none, `{}` or `"stop"` is Stop; `"handed_back"` is Hand back.
+/// Anything else is refused.
+fn stop_reason(body: &[u8]) -> Option<&'static str> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Some("stop");
+    }
+    let v: Value = serde_json::from_slice(body).ok()?;
+    match v.as_object()?.get("reason") {
+        None | Some(Value::Null) => Some("stop"),
+        Some(Value::String(r)) if r == "stop" => Some("stop"),
+        Some(Value::String(r)) if r == "handed_back" => Some("handed_back"),
+        Some(_) => None,
+    }
+}
+
+pub async fn stop(State(state): State<AppState>, Path(id): Path<String>, body: Bytes) -> Response {
+    let Some(reason) = stop_reason(&body) else {
+        return fail(StatusCode::BAD_REQUEST, "bad_request", "A recording stops with no reason, or with \"handed_back\".");
+    };
     let rec = match recording_or_404(&state, &id).await {
         Ok(r) => r,
         Err(r) => return r,
     };
-    match state.db.stop_recording(&id, "stop", now()).await {
+    match state.db.stop_recording(&id, reason, now()).await {
         Ok(true) => {
-            stage::send(&rec.stage, Cmd::End { recording_id: id.clone(), reason: "stop".into() });
+            stage::send(&rec.stage, Cmd::End { recording_id: id.clone(), reason: reason.into() });
             emit_id(&state, &id).await;
         }
         // Stop twice: a no-op
@@ -376,6 +417,24 @@ pub async fn test_sweep(State(state): State<AppState>) -> Response {
     Json(super::sweep(&state).await).into_response()
 }
 
+/// Every Show it once route (api.md §1). Merged into `create_router` before the auth layers, so
+/// the guard (and `auth::person_only`) covers all of them.
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/show-once/recordings", post(start).get(open_for))
+        .route("/api/show-once/recordings/:id", get_route(get).delete(discard))
+        .route("/api/show-once/recordings/:id/notes", post(add_note))
+        .route("/api/show-once/recordings/:id/stop", post(stop))
+        .route("/api/show-once/recordings/:id/resume", post(resume))
+        .route("/api/show-once/recordings/:id/steps/:step_id", delete(delete_step))
+        .route("/api/show-once/recordings/:id/steps/:step_id/restore", post(restore_step))
+        .route("/api/show-once/recordings/:id/write", post(write))
+        .route("/api/show-once/skills/:skill_id/steps", delete(delete_skill_steps))
+        .route("/api/show-once/skills/:skill_id/try", post(try_once))
+        .route("/api/show-once/test/clock", post(test_clock))
+        .route("/api/show-once/test/sweep", post(test_sweep))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +447,37 @@ mod tests {
             assert!(start_url(bad).is_none(), "{bad}");
         }
         assert!(start_url(&format!("https://a.example/{}", "x".repeat(MAX_URL))).is_none());
+    }
+
+    #[test]
+    fn the_start_prefill_is_scrubbed_like_a_step() {
+        assert_eq!(
+            prefill("https://sam:pw@shop.example.com/admin/orders/AbCdEfGhIjKlMnOpQrSt?token=s3cret#x").as_deref(),
+            Some("https://shop.example.com/admin/orders/…")
+        );
+        assert_eq!(prefill("http://127.0.0.1:9491/a").as_deref(), Some("http://127.0.0.1:9491/a"));
+        for none in ["about:blank", "data:text/html,x", "chrome://newtab", "file:///etc/passwd"] {
+            assert!(prefill(none).is_none(), "{none}");
+        }
+    }
+
+    #[test]
+    fn a_stop_says_stop_or_handed_back_and_nothing_else() {
+        for (body, want) in [
+            ("", Some("stop")),
+            ("  ", Some("stop")),
+            ("{}", Some("stop")),
+            (r#"{"reason":null}"#, Some("stop")),
+            (r#"{"reason":"stop"}"#, Some("stop")),
+            (r#"{"reason":"handed_back"}"#, Some("handed_back")),
+            (r#"{"reason":"limit_time"}"#, None),
+            (r#"{"reason":"closed"}"#, None),
+            (r#"{"reason":1}"#, None),
+            ("[]", None),
+            ("not json", None),
+        ] {
+            assert_eq!(stop_reason(body.as_bytes()), want, "{body}");
+        }
     }
 
     #[test]

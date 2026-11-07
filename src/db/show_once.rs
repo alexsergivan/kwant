@@ -160,7 +160,7 @@ impl From<DbError> for ShowOnceError {
 #[derive(Debug, PartialEq)]
 pub enum Added {
     /// Stored; `near` is true the one time the recording first gets near a limit.
-    Step { step: StepRow, near: bool },
+    Step { step: Box<StepRow>, near: bool },
     /// A limit was used up: the recording is now stopped with this reason and the action wasn't stored.
     Stopped { recording: Box<Recording>, reason: String },
 }
@@ -193,7 +193,7 @@ pub fn free_name(base: &str, taken: &[String]) -> String {
         let keep = MAX_SKILL_NAME_CHARS.saturating_sub(suffix.len());
         let head: String = base.chars().take(keep).collect();
         let name = format!("{}{suffix}", head.trim_end_matches('-'));
-        if !taken.iter().any(|t| *t == name) {
+        if !taken.contains(&name) {
             return name;
         }
     }
@@ -424,7 +424,7 @@ impl Database {
             .await?;
         let row = get_step_in(&mut tx, step_id).await?;
         tx.commit().await?;
-        Ok(Added::Step { step: row, near })
+        Ok(Added::Step { step: Box::new(row), near })
     }
 
     /// Marks the time-near warning sent (the 28:00 one, noticed by a timer rather than a step).
@@ -697,7 +697,7 @@ impl Database {
         let taken: Vec<String> = taken.into_iter().map(|(n,)| n).collect();
         let name = free_name(&text.name, &taken);
         let id = Uuid::new_v4().to_string();
-        let now = Utc::now();
+        let now = crate::clock::now();
         sqlx::query(
             "INSERT INTO skills (id, kwant_id, name, description, body, status, source, proposed_by, replaces_id, created_at, updated_at, space_id)
              VALUES (?, ?, ?, ?, ?, 'pending', 'agent', ?, NULL, ?, ?, ?)",

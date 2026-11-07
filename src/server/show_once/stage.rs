@@ -4,9 +4,11 @@
 //! recorder in kwnt's isolated world ([`super::capture::WORLD`]) when a recording starts and takes
 //! it off when it stops; this side turns what arrives into steps and frames for the person.
 //!
-//! A stage runs one bot's recording at a time. Hand back stops it (`handed_back`), the socket
-//! going away stops it (`closed`), and a restart stops it (`restart`, see
-//! [`crate::db::Database::stop_leftover_recordings`]); every one keeps the steps.
+//! A stage runs one bot's recording at a time. Hand back (the person releasing Take over) stops it
+//! with `handed_back`; Take over ending without that (the tab closed, the socket gone, the computer
+//! slept) stops it with `closed`; a restart stops it (`restart`, see
+//! [`crate::db::Database::stop_leftover_recordings`]). Every one keeps the steps, and the first
+//! reason wins.
 
 use super::{capture, emit, now, scrub, step_json};
 use crate::db::show_once::{Added, NewStep, Recording, ShowOnceError, StepRow};
@@ -229,7 +231,11 @@ impl StageRecorder {
     async fn stop(&mut self, id: &str, reason: &str) -> Vec<Act> {
         let _ = self.state.db.stop_recording(id, reason, now()).await;
         match self.state.db.get_recording(id).await {
-            Ok(Some(rec)) => self.stopped(&rec, reason).await,
+            // the first reason wins: a Stop or Hand back that got there first is what the person sees
+            Ok(Some(rec)) => {
+                let first = rec.stop_reason.clone().unwrap_or_else(|| reason.to_string());
+                self.stopped(&rec, &first).await
+            }
             _ => {
                 self.live = None;
                 vec![Act::Uninstall]
@@ -246,7 +252,9 @@ impl StageRecorder {
         }
     }
 
-    /// The socket went away: a live recording stops (`closed`), the steps kept for review.
+    /// The socket went away without Hand back (tab closed, connection lost, the computer slept): a
+    /// live recording stops with `closed`, the steps kept for review. After Hand back nothing is
+    /// live here any more, so its `handed_back` stands.
     pub async fn closed(&mut self) {
         self.unlink();
         if let Some(id) = self.live.clone() {

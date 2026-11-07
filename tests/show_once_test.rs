@@ -1,0 +1,441 @@
+//! Show it once (0.7.9, next-079/show-once/api.md): the routes, end to end on the fake claude.
+//! The server listens on the first free port in 9491–9499 (the fake CLI reaches its tools there).
+
+mod common;
+
+use axum::http::StatusCode;
+use common::*;
+use kwnt::{
+    broker::PermissionBroker,
+    config::Config,
+    db::{show_once::NewStep, Database},
+    router::LayaRouter,
+    server::{create_router, AppState},
+    tools::ToolRunner,
+};
+use serde_json::{json, Value};
+
+async fn bind_free() -> tokio::net::TcpListener {
+    for port in 9491..=9499 {
+        if let Ok(l) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            return l;
+        }
+    }
+    panic!("no free port in 9491-9499");
+}
+
+/// `common::setup`, on a port in 9491–9499.
+async fn env() -> Env {
+    prompts_dir();
+    no_network_scans();
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let db = Database::init(&data).await.unwrap();
+    let listener = bind_free().await;
+    let port = listener.local_addr().unwrap().port();
+    let config = Config {
+        data_dir: data.clone(),
+        host: "127.0.0.1".into(),
+        port,
+        laya_url: "http://127.0.0.1:9".into(),
+        browser_cdp_url: Some("http://127.0.0.1:9".into()),
+        ..Config::default()
+    };
+    let state = AppState::new(
+        config.clone(),
+        db,
+        ToolRunner::new(data.join("workspace")),
+        PermissionBroker::new(),
+        LayaRouter::new(config.laya_url.clone()),
+    );
+    let app = create_router(state.clone());
+    let served = app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, served).await;
+    });
+    let (_, kwants) = call(&app, "GET", "/api/kwants", None).await;
+    let mut ids = Vec::new();
+    for k in kwants.as_array().unwrap().iter().take(2) {
+        let id = k["id"].as_str().unwrap().to_string();
+        let mut body = k.clone();
+        body.as_object_mut()
+            .unwrap()
+            .retain(|key, _| ["name", "title", "persona_prompt", "soul", "avatar_sprite"].contains(&key.as_str()));
+        body["preferred_model"] = json!("claude");
+        let (s, v) = call(&app, "PUT", &format!("/api/kwants/{id}"), Some(body)).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        ids.push(id);
+    }
+    Env { app, state, a: ids[0].clone(), b: ids[1].clone(), tmp }
+}
+
+fn now() -> i64 {
+    kwnt::clock::now().timestamp()
+}
+
+fn b64(s: &str) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(s)
+}
+
+/// The draft the fake engine answers Write with: a note carries it as `REPLYTEXT:`.
+fn canned_draft() -> String {
+    json!({
+        "name": "export-paid-orders",
+        "description": "Export the paid orders for a date range",
+        "goal": "Download the paid orders as a CSV.",
+        "when_to_use": "When the person asks for the paid orders export.",
+        "inputs": [{"name": "date_range", "description": "Which dates to export", "from_step": 2}],
+        "steps": ["Open Orders", "Type the date range", "Click Export"],
+        "checks": ["A CSV file downloads"],
+        "what_can_go_wrong": ["The Export button moved"]
+    })
+    .to_string()
+}
+
+/// A stopped recording of bot `a` with a click, a typed value and a note, made the way the
+/// recorder makes it (the stage needs a live Take over, which a test can't hold).
+async fn stopped_recording(env: &Env, note: &str) -> String {
+    let bot = env.state.db.get_kwant(&env.a).await.unwrap().unwrap();
+    let rec = env.state.db.start_recording(&bot.id, &bot.space_id, &bot.id, now()).await.unwrap();
+    let page = |kind: &str| NewStep {
+        kind: kind.into(),
+        origin: Some("https://shop.example.com".into()),
+        path: Some("/admin/orders".into()),
+        ..Default::default()
+    };
+    let click = NewStep { role: Some("button".into()), name: Some("Orders".into()), ..page("click") };
+    let typed = NewStep { label: Some("Dates".into()), value: Some("Last 7 days".into()), ..page("type") };
+    env.state.db.add_step(&rec.id, &click, now()).await.unwrap();
+    env.state.db.add_step(&rec.id, &typed, now()).await.unwrap();
+    env.state.db.add_note(&rec.id, note, None, now()).await.unwrap();
+    let (s, v) = call(&env.app, "POST", &format!("/api/show-once/recordings/{}/stop", rec.id), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["recording"]["state"], "stopped");
+    assert_eq!(v["recording"]["stop_reason"], "stop");
+    rec.id
+}
+
+async fn written_skill(env: &Env, rec_id: &str) -> Value {
+    let (s, v) = call(&env.app, "POST", &format!("/api/show-once/recordings/{rec_id}/write"), None).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{v}");
+    assert_eq!(v["recording"]["state"], "writing");
+    assert_eq!(v["recording"]["engine"], "claude");
+    let uri = format!("/api/show-once/recordings/{rec_id}");
+    wait_for("the draft", || async {
+        let (_, v) = call(&env.app, "GET", &uri, None).await;
+        v["recording"]["state"] == "written" || v["recording"]["write_error"].is_string()
+    })
+    .await;
+    let (_, v) = call(&env.app, "GET", &uri, None).await;
+    assert_eq!(v["recording"]["state"], "written", "{v}");
+    let skill_id = v["recording"]["skill_id"].as_str().unwrap().to_string();
+    let (s, skill) = call(&env.app, "GET", &format!("/api/skills/{skill_id}"), None).await;
+    assert_eq!(s, StatusCode::OK, "{skill}");
+    skill
+}
+
+#[tokio::test]
+async fn a_bot_token_is_refused_and_unknown_things_are_404() {
+    let env = env().await;
+    let bearer = [("authorization", "Bearer not-the-api-token")];
+    for (m, uri) in [
+        ("POST", "/api/show-once/recordings"),
+        ("GET", "/api/show-once/recordings?bot=x"),
+        ("POST", "/api/show-once/recordings/r1/write"),
+        ("DELETE", "/api/show-once/skills/s1/steps"),
+        ("POST", "/api/show-once/skills/s1/try"),
+    ] {
+        let (s, _) = call_with(&env.app, m, uri, Some(json!({})), &bearer).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{m} {uri}");
+        assert_ne!(call_remote(&env.app, m, uri).await, StatusCode::OK, "remote {m} {uri}");
+    }
+    let (s, v) = call(&env.app, "GET", "/api/show-once/recordings/nope", None).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::NOT_FOUND, Some("no_recording")));
+    let (s, v) = call(&env.app, "POST", "/api/show-once/skills/nope/try", Some(json!({"inputs": {}}))).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::NOT_FOUND, Some("no_skill")));
+    let (s, v) = call(&env.app, "DELETE", "/api/show-once/skills/nope/steps", None).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::NOT_FOUND, Some("not_shown")));
+    let (s, v) = call(&env.app, "GET", &format!("/api/show-once/recordings?bot={}", env.a), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(v["recording"].is_null());
+}
+
+#[tokio::test]
+async fn start_needs_take_over_and_an_http_start_address() {
+    let env = env().await;
+    let (s, v) = call(&env.app, "POST", "/api/show-once/recordings", Some(json!({"bot": env.a}))).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::CONFLICT, Some("not_taken_over")), "{v}");
+    let (s, v) = call(
+        &env.app,
+        "POST",
+        "/api/show-once/recordings",
+        Some(json!({"bot": env.a, "start_url": "javascript:alert(1)"})),
+    )
+    .await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")), "{v}");
+    let (s, v) = call(&env.app, "POST", "/api/show-once/recordings", Some(json!({"bot": "nobody"}))).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::NOT_FOUND, Some("no_bot")), "{v}");
+    assert!(env.state.db.open_recording_for(&env.a).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn review_then_write_then_try_once_then_reject() {
+    let env = env().await;
+    let rec = stopped_recording(&env, &format!("REPLYTEXT:{}", b64(&canned_draft()))).await;
+
+    // Review: the steps are listed; delete then undo
+    let (s, v) = call(&env.app, "GET", &format!("/api/show-once/recordings/{rec}"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let steps = v["steps"].as_array().unwrap().clone();
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[1]["value"], "Last 7 days");
+    let first = steps[0]["id"].as_i64().unwrap();
+    let (s, v) = call(&env.app, "DELETE", &format!("/api/show-once/recordings/{rec}/steps/{first}"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["step"]["deleted"], true);
+    assert!(v["step"]["undo_until"].is_string());
+    let (s, v) = call(&env.app, "POST", &format!("/api/show-once/recordings/{rec}/steps/{first}/restore"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["step"]["deleted"], false);
+
+    // Write: one hidden no-tools turn drafts it
+    let skill = written_skill(&env, &rec).await;
+    assert_eq!(skill["status"], "pending");
+    assert_eq!(skill["source"], "shown");
+    assert_eq!(skill["name"], "export-paid-orders");
+    assert_eq!(skill["shown"]["recording_id"], rec.as_str());
+    assert_eq!(skill["shown"]["step_count"], 2);
+    assert_eq!(skill["shown"]["inputs"][0]["name"], "date_range");
+    assert_eq!(skill["shown"]["steps_deleted"], false);
+    let body = skill["body"].as_str().unwrap();
+    assert!(body.contains("Example from your run: Last 7 days"), "{body}");
+    assert!(body.contains("https://shop.example.com"), "{body}");
+    let skill_id = skill["id"].as_str().unwrap().to_string();
+    let drafts = invocations_with("REPLYTEXT:");
+    assert!(drafts.iter().any(|p| p.contains("export") || p.contains("Orders")), "the draft turn ran on the fake");
+
+    // Writing twice is refused: the recording is written
+    let (s, v) = call(&env.app, "POST", &format!("/api/show-once/recordings/{rec}/write"), None).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::CONFLICT, Some("wrong_state")), "{v}");
+
+    // Try it once: only the draft's inputs, then an ordinary turn in the bot's own chat
+    let try_uri = format!("/api/show-once/skills/{skill_id}/try");
+    let (s, v) = call(&env.app, "POST", &try_uri, Some(json!({"inputs": {"approve_everything": "yes"}}))).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")), "{v}");
+    let (s, v) = call(&env.app, "POST", &try_uri, Some(json!({"inputs": {"date_range": "x".repeat(501)}}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let mut events = env.state.event_sender.subscribe();
+    let mut tried = Value::Null;
+    for _ in 0..300 {
+        let (s, v) = call(&env.app, "POST", &try_uri, Some(json!({"inputs": {"date_range": "Last 7 days REPLYTAG:trial1"}}))).await;
+        if s == StatusCode::ACCEPTED {
+            tried = v;
+            break;
+        }
+        assert_eq!(v["error"], "bot_busy", "{v}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(tried["kwant_id"], env.a.as_str());
+    assert_eq!(tried["skill_id"], skill_id.as_str());
+    let line = messages(&env, &env.a).await.into_iter().find(|m| m.text.contains("You started a trial")).unwrap();
+    assert_eq!(
+        line.text,
+        "You started a trial of `export-paid-orders` with date_range “Last 7 days REPLYTAG:trial1”. It isn't approved yet."
+    );
+    let reply = wait_reply(&env, &env.a, "answer trial1").await;
+    // A29: the line and the reply carry the trial, and its end is announced on the bot's chat
+    let trial = json!({"skill_id": skill_id, "recording_id": rec});
+    let meta = |m: &kwnt::db::models::Message| serde_json::from_str::<Value>(m.meta.as_deref().unwrap_or("{}")).unwrap();
+    assert_eq!(meta(&line)["trial"], trial, "{:?}", line.meta);
+    assert_eq!(meta(&line)["kind"], "skill_trial");
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            match events.recv().await {
+                Ok(kwnt::RuntimeEvent::TrialEnded { skill_id, recording_id, bot, outcome }) => {
+                    break (skill_id, recording_id, bot, outcome)
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(e) => panic!("{e}"),
+            }
+        }
+    })
+    .await
+    .expect("show_once_trial_ended");
+    assert_eq!(ended, (skill_id.clone(), Some(rec.clone()), env.a.clone(), "done".to_string()));
+    // The reply is the trial's last message: it carries the outcome; the line doesn't
+    let reply = env.state.db.get_message(&reply.id).await.unwrap().unwrap();
+    let done = json!({"skill_id": skill_id, "recording_id": rec, "outcome": "done"});
+    assert_eq!(meta(&reply)["trial"], done, "{:?}", reply.meta);
+    let line = env.state.db.get_message(&line.id).await.unwrap().unwrap();
+    assert_eq!(meta(&line)["trial"], trial, "{:?}", line.meta);
+    let turn = invocations_with("REPLYTAG:trial1");
+    assert!(turn.iter().any(|p| p.contains("a draft the person hasn't approved")), "the prompt marks the draft");
+    // The trial changed nothing about the skill
+    let (_, after) = call(&env.app, "GET", &format!("/api/skills/{skill_id}"), None).await;
+    assert_eq!(after["status"], "pending");
+
+    // Reject: the steps go now, the shown facts stay
+    let (s, v) = call(&env.app, "POST", &format!("/api/skills/{skill_id}/reject"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["shown"]["steps_deleted"], true, "{v}");
+    assert_eq!(env.state.db.stored_step_rows(&rec).await.unwrap(), 0);
+    let (s, v) = call(&env.app, "POST", &try_uri, Some(json!({"inputs": {}}))).await;
+    assert_eq!((s, v["error"].as_str()), (StatusCode::CONFLICT, Some("not_proposed")), "{v}");
+}
+
+#[tokio::test]
+async fn a_reply_that_isnt_a_draft_fails_the_write_and_keeps_the_steps() {
+    let env = env().await;
+    let rec = stopped_recording(&env, &format!("REPLYTEXT:{}", b64("Sorry, I can't do that."))).await;
+    let (s, _) = call(&env.app, "POST", &format!("/api/show-once/recordings/{rec}/write"), None).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let uri = format!("/api/show-once/recordings/{rec}");
+    wait_for("the write to fail", || async {
+        let (_, v) = call(&env.app, "GET", &uri, None).await;
+        v["recording"]["write_error"].is_string()
+    })
+    .await;
+    let (_, v) = call(&env.app, "GET", &uri, None).await;
+    assert_eq!(v["recording"]["state"], "stopped", "{v}");
+    assert!(v["recording"]["skill_id"].is_null());
+    assert_eq!(v["steps"].as_array().unwrap().len(), 3);
+    let (_, pending) = call(&env.app, "GET", &format!("/api/skills?kwant_id={}&status=pending", env.a), None).await;
+    assert!(pending.as_array().unwrap().is_empty(), "{pending}");
+}
+
+#[tokio::test]
+async fn approve_keeps_the_steps_seven_days_then_the_sweep_purges_them() {
+    let env = env().await;
+    let rec = stopped_recording(&env, &format!("REPLYTEXT:{}", b64(&canned_draft()))).await;
+    let skill = written_skill(&env, &rec).await;
+    let skill_id = skill["id"].as_str().unwrap();
+    let t = now();
+    let (s, v) = call(&env.app, "POST", &format!("/api/skills/{skill_id}/approve"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "enabled");
+    let r = env.state.db.get_recording(&rec).await.unwrap().unwrap();
+    let expires = r.steps_expire_at.unwrap();
+    assert!((expires - (t + 7 * 24 * 3600)).abs() <= 5, "kept 7 days from approval");
+    assert!(env.state.db.stored_step_rows(&rec).await.unwrap() > 0);
+
+    // A day early nothing goes; past the 7 days the steps do, and the skill keeps its facts
+    env.state.db.sweep_recordings(expires - 24 * 3600).await.unwrap();
+    assert!(env.state.db.stored_step_rows(&rec).await.unwrap() > 0);
+    env.state.db.sweep_recordings(expires + 1).await.unwrap();
+    assert_eq!(env.state.db.stored_step_rows(&rec).await.unwrap(), 0);
+    let (_, after) = call(&env.app, "GET", &format!("/api/skills/{skill_id}"), None).await;
+    assert_eq!(after["source"], "shown");
+    assert_eq!(after["shown"]["steps_deleted"], true, "{after}");
+
+    // The seams answer in a debug build
+    let (s, v) = call(&env.app, "POST", "/api/show-once/test/sweep", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["purged_steps"].is_number(), "{v}");
+    let (s, v) = call(&env.app, "POST", "/api/show-once/test/clock", Some(json!({"offset_secs": 0}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["now"].is_string());
+}
+
+#[tokio::test]
+async fn discard_deletes_the_recording_and_its_steps() {
+    let env = env().await;
+    let rec = stopped_recording(&env, "use the export button").await;
+    let (s, _) = call(&env.app, "DELETE", &format!("/api/show-once/recordings/{rec}"), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    assert!(env.state.db.get_recording(&rec).await.unwrap().is_none());
+    assert_eq!(env.state.db.stored_step_rows(&rec).await.unwrap(), 0);
+    let (s, _) = call(&env.app, "POST", &format!("/api/show-once/recordings/{rec}/write"), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn stop_takes_handed_back_and_a_dropped_socket_is_closed() {
+    use kwnt::server::show_once::stage::StageRecorder;
+    let env = env().await;
+    let bot = env.state.db.get_kwant(&env.a).await.unwrap().unwrap();
+    let rec = env.state.db.start_recording(&bot.id, &bot.space_id, &bot.id, now()).await.unwrap();
+    let stop = format!("/api/show-once/recordings/{}/stop", rec.id);
+    for bad in [json!({"reason": "closed"}), json!({"reason": "limit_time"}), json!({"reason": 1})] {
+        let (s, v) = call(&env.app, "POST", &stop, Some(bad.clone())).await;
+        assert_eq!((s, v["error"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")), "{bad}");
+    }
+    let (s, v) = call(&env.app, "POST", &stop, Some(json!({"reason": "handed_back"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["recording"]["state"].as_str(), v["recording"]["stop_reason"].as_str()), (Some("stopped"), Some("handed_back")));
+    // Stopping twice is a no-op that keeps the first reason
+    let (s, v) = call(&env.app, "POST", &stop, Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["recording"]["stop_reason"], "handed_back");
+
+    // A26: no browser page yet, so nothing to prefill
+    let (s, v) = call(&env.app, "GET", &format!("/api/show-once/recordings?bot={}", env.b), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v.as_object().unwrap().contains_key("last_url") && v["last_url"].is_null(), "{v}");
+
+    // With Take over held, Start records; the socket going away (tab closed, computer slept) stops
+    // it as `closed`, not Hand back
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 7);
+    let id = live_recording(&env, &mut stage).await;
+    stage.closed().await;
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!((r.state.as_str(), r.stop_reason.as_deref()), ("stopped", Some("closed")));
+    let (_, v) = call(&env.app, "GET", &format!("/api/show-once/recordings?bot={}", env.b), None).await;
+    assert_eq!(v["recording"]["id"], id.as_str(), "the review is offered again");
+    assert_eq!(v["recording"]["stop_reason"], "closed");
+}
+
+/// Claims Take over on `stage`'s socket, starts a recording of bot `b` there and installs it.
+async fn live_recording(env: &Env, stage: &mut kwnt::server::show_once::stage::StageRecorder) -> String {
+    use kwnt::server::show_once::stage::Cmd;
+    stage.claim();
+    let (s, v) = call(&env.app, "POST", "/api/show-once/recordings", Some(json!({"bot": env.b, "first_note": "watch me"}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["recording"]["id"].as_str().unwrap().to_string();
+    let cmd = stage.next_cmd().await.unwrap();
+    assert!(matches!(&cmd, Cmd::Begin { recording_id, .. } if *recording_id == id), "{cmd:?}");
+    stage.on_cmd(cmd).await;
+    assert!(stage.is_live());
+    id
+}
+
+#[tokio::test]
+async fn hand_back_gives_handed_back_and_the_first_reason_wins() {
+    use kwnt::server::show_once::stage::{Act, StageRecorder};
+    let env = env().await;
+    let stopped = |acts: &[Act]| {
+        acts.iter()
+            .find_map(|a| match a {
+                Act::Send(f) if f["type"] == "skill.recording.stopped" => f["reason"].as_str().map(str::to_string),
+                _ => None,
+            })
+    };
+
+    // The explicit release (the Hand back button) gives `handed_back`; the stop the frontend sends
+    // after it, and the socket closing later, keep it
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 8);
+    let id = live_recording(&env, &mut stage).await;
+    let acts = stage.handed_back().await;
+    assert_eq!(stopped(&acts).as_deref(), Some("handed_back"), "{acts:?}");
+    let stop = format!("/api/show-once/recordings/{id}/stop");
+    let (s, v) = call(&env.app, "POST", &stop, Some(json!({"reason": "handed_back"}))).await;
+    assert_eq!((s, v["recording"]["stop_reason"].as_str()), (StatusCode::OK, Some("handed_back")), "{v}");
+    stage.closed().await;
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!(r.stop_reason.as_deref(), Some("handed_back"));
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+
+    // The race the other way: Hand back's stop lands first, then the release; still `handed_back`,
+    // and the frame the stage shows says so
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 9);
+    let id = live_recording(&env, &mut stage).await;
+    let (s, v) = call(&env.app, "POST", &format!("/api/show-once/recordings/{id}/stop"), Some(json!({"reason": "handed_back"}))).await;
+    assert_eq!((s, v["recording"]["stop_reason"].as_str()), (StatusCode::OK, Some("handed_back")), "{v}");
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!(r.stop_reason.as_deref(), Some("handed_back"));
+    let acts = stage.handed_back().await;
+    assert!(stopped(&acts).is_none_or(|r| r == "handed_back"), "{acts:?}");
+    stage.closed().await;
+    let r = env.state.db.get_recording(&id).await.unwrap().unwrap();
+    assert_eq!((r.state.as_str(), r.stop_reason.as_deref()), ("stopped", Some("handed_back")));
+}
