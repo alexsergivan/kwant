@@ -119,7 +119,7 @@ export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phon
                 {updatedFrom ? ` from ${updatedFrom}` : ''} · {date}
               </>
             ) : (
-              date
+              `Released ${date}`
             )}
           </p>
           <h2 ref={titleRef} id={titleId} tabIndex={-1} className={`m-0 font-semibold tracking-[-.005em] text-zinc-50 outline-none ${phone ? 'text-[17px] leading-6' : 'text-lg leading-[26px]'}`}>

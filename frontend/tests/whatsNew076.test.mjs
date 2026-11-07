@@ -234,7 +234,7 @@ test('host: the banner and Settings open a version by hand; Show me opens the pl
   await act(async () => ui.openWhatsNew('0.7.5'));
   await settle();
   assert.equal(sheet()?.querySelector('h2')?.textContent, 'What’s new in kwant bots 0.7.5');
-  assert.equal(document.querySelector('[data-whats-new-eyebrow]').textContent, 'Nov 7', 'opened by hand: just the date');
+  assert.equal(document.querySelector('[data-whats-new-eyebrow]').textContent, 'Released Nov 7', 'opened by hand: Released + date');
   const show = [...sheet().querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Show me: Ready-made teams');
   await click(show);
   assert.deepEqual(opened, [{ kind: 'settings', scope: 'space', tab: 'teams' }]);
