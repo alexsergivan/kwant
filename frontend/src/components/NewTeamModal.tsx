@@ -5,6 +5,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { Kwant, Team } from './Sidebar';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { playSfx } from '../audio/chiptune';
+import { ReadyTeamsTiles, SuggestMembersButton } from './ReadyTeamsEntry';
 
 export interface NewTeamModalProps {
   isOpen: boolean;
@@ -40,6 +41,8 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
   const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // While the preview sheet is open the dialog hides but stays mounted, so Esc there returns the fields.
+  const [hidden, setHidden] = useState(false);
 
   const handleBrowseFolder = async () => {
     playSfx('click');
@@ -73,6 +76,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
       setWorkspacePath('');
       setRepoUrl('');
       setError(null);
+      setHidden(false);
       if (kwants.length > 0) {
         const defaultLead = kwants[0].id;
         setLeadKwantId(defaultLead);
@@ -184,8 +188,12 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
   };
 
   return (
-    <div className="kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 select-none">
-      <div className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 text-zinc-100 shadow-2xl space-y-5">
+    <div
+      className={`kw-dialog fixed inset-0 z-50 bg-black/70 backdrop-blur-sm ${hidden ? 'hidden' : 'flex'} items-center justify-center p-4 select-none`}
+      hidden={hidden}
+      aria-hidden={hidden || undefined}
+    >
+      <div className="kw-dialog-panel bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full max-h-[94vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
@@ -211,6 +219,20 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
             <span>{error}</span>
           </div>
         )}
+
+        <ReadyTeamsTiles
+          source={{
+            workspace_path: workspaceType === 'local' ? workspacePath.trim() || undefined : undefined,
+            repo_url: workspaceType === 'repo' ? repoUrl.trim() || undefined : undefined,
+            name: cleanSlug || undefined,
+          }}
+          onHide={() => setHidden(true)}
+          onShow={() => setHidden(false)}
+          onDone={() => {
+            setHidden(false);
+            onClose();
+          }}
+        />
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Team Name */}
@@ -389,6 +411,18 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
                 </p>
               </div>
             )}
+
+            <SuggestMembersButton
+              workspace_path={workspaceType === 'local' ? workspacePath : undefined}
+              repo_url={workspaceType === 'repo' ? repoUrl : undefined}
+              name={cleanSlug || undefined}
+              onHide={() => setHidden(true)}
+              onShow={() => setHidden(false)}
+              onDone={() => {
+                setHidden(false);
+                onClose();
+              }}
+            />
 
             {workspaceType === 'default' && (
               <p className="text-[11px] text-zinc-500">

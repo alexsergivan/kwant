@@ -22,6 +22,9 @@ const BAD = /\b(kwants?|kwnt|agents?)\b/i;
 // Claude Code, Codex and Cursor are called in Settings → Coding agents (0.7.4).
 const ALLOWED = /\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
 const MAESTRO = /\bAgent Maestro\b/g;
+// T/D preview sheet (0.7.7): Mira's review-396-397 must-fix 7 and Ada's deviation-4 ruling keep "kwant"
+// as the subject in these three sentences only.
+const RULED = /\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b/g;
 
 /** Whether a literal reads like text a person sees (a sentence, or a capitalised word). */
 const looksVisible = (text, node) => {
@@ -50,7 +53,7 @@ export function findBareWording() {
       else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) s = node.text;
       else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) s = node.text;
       if (s !== null) {
-        const stripped = s.replace(MAESTRO, '').replace(ALLOWED, '');
+        const stripped = s.replace(MAESTRO, '').replace(RULED, '').replace(ALLOWED, '');
         // URLs, paths, event names and storage keys (kwnt:..., kwant.x) are not prose.
         // Example paths a person reads (~/dev/x) stay in.
         const prose = stripped.replace(/(?<!\S)(?!~)\S*(?:[:./_#=]\w)\S*/g, (w) => (/^[A-Za-z]+[.,;:!?)]?$/.test(w) ? w : ''));

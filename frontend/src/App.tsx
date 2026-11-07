@@ -57,6 +57,8 @@ import { Bot, Check, HelpCircle, Inbox, KeyRound, ListChecks, Loader2, MessageSq
 import { ChatApproval, OpenChat, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
+import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
+import { ReadyTeamsWelcome } from './components/ReadyTeamsEntry';
 import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
 import { ManageTeamModal } from './components/ManageTeamModal';
@@ -774,6 +776,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [isNewChannelOpen, setIsNewChannelOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
+  const [editingTeamFocusWs, setEditingTeamFocusWs] = useState(false);
+  useEffect(() => {
+    if (!editingTeam) setEditingTeamFocusWs(false);
+  }, [editingTeam]);
   const [editingKwant, setEditingKwant] = useState<Kwant | null>(null);
   const [deletingKwant, setDeletingKwant] = useState<Kwant | null>(null);
   const [editingTab, setEditingTab] = useState<EditTab>('profile');
@@ -2172,6 +2178,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const a = d === 'undo' ? await botActionsApi.undo(actionId) : d === 'confirm' ? await botActionsApi.confirm(actionId) : await botActionsApi.decline(actionId);
       setBotActions((prev) => applyBotAction(prev, a));
+      // U-1: an Undo from the history can remove a team and its chat; pick up the lists without a reload.
+      if (d === 'undo') {
+        refreshRoster();
+        void syncChannelsAfterUndo();
+      }
       playSfx('click');
     } catch (err) {
       // Already decided elsewhere: pick up the real state so the card stops offering the button.
@@ -2532,6 +2543,104 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     } catch (err) {
       console.error('Failed creating team:', err);
       throw err instanceof Error ? err : new Error('Could not reach the server.');
+    }
+  };
+
+  // 0.7.7 T: a template team was made; open its chat (the server answers with its channel id).
+  // U-1: where the person was before a new team's chat opened, so Undo can take them back there.
+  const beforeNewTeamRef = useRef<{ id: string; isChannel: boolean } | null>(null);
+  const openNewTeamChat = async (created: { id: string; name: string }, channelId: string) => {
+    if (selectedIdRef.current) beforeNewTeamRef.current = { id: selectedIdRef.current, isChannel: isChannelRef.current };
+    // U-2: the team is known at once (the roster reload brings the full row), so its chat is a team
+    // chat from the first frame: the Needs card, never the first-run welcome.
+    setTeams((prev) => (prev.some((t) => t.id === created.id) ? prev : [...prev, { id: created.id, name: created.name, icon: '', lead_kwant_id: '', member_kwants: [], created_at: new Date().toISOString() }]));
+    setSelectedTeamId(created.id);
+    let chan: Channel | undefined;
+    try {
+      const cRes = await fetch('/api/channels');
+      if (cRes.ok) {
+        const freshChannels: Channel[] = await cRes.json();
+        setChannels(freshChannels);
+        chan = freshChannels.find((c) => c.id === channelId) ?? teamChannelOf(freshChannels, created as Team);
+      }
+    } catch {
+      /* the channel event selects nothing; the id alone is enough below */
+    }
+    const id = chan?.id ?? channelId;
+    if (!id) return;
+    setSelectedId(id);
+    selectedIdRef.current = id;
+    setIsChannel(true);
+    isChannelRef.current = true;
+    messagesCacheRef.current[id] = [];
+    setMessages([]);
+    setPage('chat');
+    setPhoneView('chat');
+  };
+  // U-1: Undo removed a team. Its chat leaves the lists at once; if it was open, go back to where the
+  // person was before (or the space's home). Then the server's channel list confirms it.
+  const leaveRemovedChat = (gone: Set<string>) => {
+    if (!isChannelRef.current || !selectedIdRef.current || !gone.has(selectedIdRef.current)) return;
+    const prev = beforeNewTeamRef.current;
+    beforeNewTeamRef.current = null;
+    const left = channelsRef.current.filter((c) => !gone.has(c.id));
+    if (prev && !prev.isChannel && kwants.some((k) => k.id === prev.id)) {
+      handleSelectKwant(kwants.find((k) => k.id === prev.id)!);
+      return;
+    }
+    const back =
+      (prev?.isChannel && !gone.has(prev.id) && left.find((c) => c.id === prev.id)) ||
+      left.find((c) => c.id === space.general_channel_id) ||
+      left[0];
+    if (back) handleSelectChannel(back);
+    else {
+      setSelectedId('');
+      selectedIdRef.current = '';
+      setSelectedTeamId(null);
+      setMessages([]);
+    }
+  };
+  const syncChannelsAfterUndo = async () => {
+    try {
+      const cRes = await fetch('/api/channels');
+      if (!cRes.ok) return;
+      const fresh: Channel[] = await cRes.json();
+      const ids = new Set(fresh.map((c) => c.id));
+      const gone = new Set(channelsRef.current.filter((c) => !ids.has(c.id)).map((c) => c.id));
+      setChannels(fresh);
+      channelsRef.current = fresh;
+      for (const id of gone) delete messagesCacheRef.current[id];
+      leaveRemovedChat(gone);
+    } catch {
+      /* the next load brings it */
+    }
+  };
+  const handleTeamUndone = (team: { id: string; name: string }) => {
+    const chan = teamChannelOf(channelsRef.current, team);
+    setTeams((prev) => prev.filter((t) => t.id !== team.id));
+    if (chan) {
+      const gone = new Set([chan.id]);
+      leaveRemovedChat(gone);
+      const left = channelsRef.current.filter((c) => c.id !== chan.id);
+      setChannels(left);
+      channelsRef.current = left;
+      delete messagesCacheRef.current[chan.id];
+    } else if (selectedTeamId === team.id) setSelectedTeamId(null);
+    void syncChannelsAfterUndo();
+  };
+  const [looseAddImap, setLooseAddImap] = useState(0);
+  const openTeamNeed = (opens: string, team: ReadyTeam) => {
+    if (opens === 'loose_ends_imap') {
+      setLooseAddImap((n) => n + 1);
+      showPage('inbox', 'loose');
+    } else if (opens === 'connections') openConnections();
+    else if (opens === 'dev_mode_setup') {
+      // The team's repo is set in Manage team (Team settings > Git Repo), where Dev mode's line shows.
+      const t = teams.find((x) => x.id === team.id);
+      if (t) {
+        setEditingTeamFocusWs(true);
+        setEditingTeam(t);
+      }
     }
   };
 
@@ -3342,7 +3451,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
   const loose = (
     <LooseEndsPage
+      key={`loose-${looseAddImap}`}
       onOpenChat={openThread}
+      addImap={looseAddImap > 0}
     />
   );
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount} onBack={backToList} newPage={away} loosePage={loose} />;
@@ -3420,13 +3531,28 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           subHeader={subHeader}
           threadLine={isPhone && threadBarProps ? <ThreadPicker {...threadBarProps} /> : undefined}
           notice={setupBanner}
-          welcome={
-            setupBanner && isChannel ? (
-              <FirstRunWelcome
-                bots={kwants}
-                actionLabel={offerClaude ? 'Sign in with Claude' : 'Add an account'}
-                onAction={offerClaude ? openClaudeSignIn : openSettings}
+          topCard={
+            isChannel && currentTeam ? (
+              <TeamNeedsTop
+                team={currentTeam}
+                canRun={canRun !== false}
+                personPosts={messages.filter((m) => m.sender_role === 'user').length}
+                refreshKey={settingsClosedCount}
+                onAddAccount={offerClaude ? openClaudeSignIn : openSettings}
+                onOpenNeed={(opens) => openTeamNeed(opens, currentTeam)}
               />
+            ) : undefined
+          }
+          welcome={
+            setupBanner && isChannel && !selectedTeamId && !currentTeam ? (
+              <>
+                <FirstRunWelcome
+                  bots={kwants}
+                  actionLabel={offerClaude ? 'Sign in with Claude' : 'Add an account'}
+                  onAction={offerClaude ? openClaudeSignIn : openSettings}
+                />
+                <ReadyTeamsWelcome onBlank={() => setIsNewTeamOpen(true)} />
+              </>
             ) : undefined
           }
           onOpenAccounts={openSettings}
@@ -3537,10 +3663,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
+  const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (
-    // overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
-    // once slid the whole chat under its header (P1-7). Browsers without clip keep hidden.
+    <ReadyTeamsProvider
+      space={space.id}
+      bots={readyBots}
+      teams={teams}
+      onChanged={refreshRoster}
+      onOpenTeam={(t, channelId) => void openNewTeamChat(t, channelId)}
+      onUndone={handleTeamUndone}
+    >
+    {/* overflow: clip, not just hidden: a hidden box can still be scrolled from script (scrollIntoView), which
+        once slid the whole chat under its header (P1-7). Browsers without clip keep hidden. */}
     <div className="relative flex-1 min-w-0 h-full flex flex-col bg-surface-main text-zinc-100 overflow-hidden [overflow:clip]" data-space={space.id}>
       <div ref={contentRef} className={`flex-1 min-h-0 flex ${isPhone ? 'flex-col' : 'overflow-hidden'}`}>
         {isPhone ? (
@@ -3549,8 +3684,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               <div className="flex-1 min-h-0 flex flex-col">
                 {needsSetup ? (
                   <>
-                    {sidebar('chats')}
-                    {setupChecklist}
+                    {/* U-4: the Bots tab has "+ Team", "+ Bot" and the ready-teams box with zero bots, as on desk.
+                        It gets the full height: split with the checklist, the box was cut in half. */}
+                    {phoneTab === 'bots' ? (
+                      sidebar('bots')
+                    ) : (
+                      <>
+                        {sidebar('chats')}
+                        {setupChecklist}
+                      </>
+                    )}
                   </>
                 ) : phoneTab === 'jar' ? (
                   <div className="flex-1 min-h-0 flex" data-main-pane>{jarPage}</div>
@@ -3682,6 +3825,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         onClose={() => setEditingTeam(null)}
         onUpdateTeam={handleUpdateTeam}
         onDeleteTeam={handleDeleteTeam}
+        focusWorkspace={editingTeamFocusWs}
       />
 
       {spaceSettingsTab && (
@@ -3809,5 +3953,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       </p>
       <NeedsYouPill items={pill.items} rev={pill.rev} spriteOf={spriteOf} onOpen={openPill} onDismiss={dismissPill} />
     </div>
+    </ReadyTeamsProvider>
   );
 };

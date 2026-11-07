@@ -509,7 +509,7 @@ export function parseHirePolicy(raw: unknown): HirePolicy | null {
 
 /** An API error that keeps its HTTP status, so a 409 can read as "already decided". */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code: string | null = null) {
     super(message);
   }
 }
@@ -524,7 +524,7 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const fallback = res.status === 404 ? 'It no longer exists.' : `Request failed (HTTP ${res.status}).`;
-    throw new ApiError(typeof data?.error === 'string' && data.error ? data.error : fallback, res.status);
+    throw new ApiError(typeof data?.error === 'string' && data.error ? data.error : fallback, res.status, typeof data?.code === 'string' ? data.code : null);
   }
   return data as T;
 }

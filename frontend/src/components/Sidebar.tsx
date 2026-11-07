@@ -23,6 +23,7 @@ import { DevOnToast } from './DevOnToast';
 import { type DevModeState, deskIntent, turnDevMode } from '../devMode';
 import { DevDeskRow } from './DevDesk';
 import { IdeaJarRow } from './IdeaJarRow';
+import { ReadyTeamsSidebarBox } from './ReadyTeamsEntry';
 
 export interface Kwant {
   id: string;
@@ -71,6 +72,10 @@ export interface Team {
   member_kwants: string[];
   /** Pinned for every turn in the team's channels; null when unset. */
   instructions?: string | null;
+  created_at?: string | null;
+  /** 0.7.7 (api.md §0.8): which ready-made team made it, and the action Undo reverses. */
+  created_from_template?: 'inbox' | 'sales' | 'coding' | 'suggested' | null;
+  template_action_id?: string | null;
 }
 
 /** What the sidebar shows: everything, or one phone tab. */
@@ -979,6 +984,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ),
             )}
           </div>
+          <ReadyTeamsSidebarBox teamCount={teams.length} />
         </div>
         )}
 

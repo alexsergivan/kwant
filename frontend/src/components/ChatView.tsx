@@ -222,6 +222,8 @@ export interface ChatViewProps {
   notice?: React.ReactNode;
   /** Drawn in place of an empty chat (the first-run welcome). */
   welcome?: React.ReactNode;
+  /** 0.7.7 T5: first in the message stream (a template team's Needs card); not a message. */
+  topCard?: React.ReactNode;
   /** Next to the title, e.g. "Working on …" while the bot has background turns. */
   titleExtra?: React.ReactNode;
   /** Set while the open chat's turn waits in the queue. */
@@ -432,6 +434,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   threadLine,
   notice,
   welcome,
+  topCard,
   titleExtra,
   queued,
   renderDelegation,
@@ -1590,6 +1593,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-label={`Messages in ${title}`}
             aria-busy={isStreaming}
           >
+        {topCard}
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (
           <div className="flex min-h-full items-center justify-center">
