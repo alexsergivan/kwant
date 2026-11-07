@@ -305,6 +305,8 @@ fn exempt(path: &str) -> bool {
         || path.starts_with("/api/mcp/permission/")
         || path.starts_with("/api/mcp/gateway")
         || path == "/api/mcp/self"
+        // Connected coding agents: the handler checks its own `kag_` bearer on every call
+        || path == super::agents_connect::ENDPOINT
 }
 
 /// Routes only the person may call: saved passwords and the password vault (Bitwarden), changing app-wide settings, what bots wait on the person for, answering an approval card, Loose ends, Connections and Parallel Universe, the
@@ -319,6 +321,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // skip the payment floor, which reads the element under a label (bots use /act)
         ["", "api", "sandbox", _, "interact"] => true,
         ["", "api", "passwords", ..] => true,
+        // Connected coding agents (0.7.4): only the person creates, lists and revokes their tokens
+        ["", "api", "agent-connections", ..] => true,
         // Loose ends read the person's mail: bots never see or change them
         ["", "api", "zombie", ..] => true,
         // Connections list saved logins and add Composio, which holds the person's app sign-ins
@@ -359,6 +363,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "settings", ..] => *method != Method::GET && *method != Method::HEAD,
         // Carrying on a chain that went over its token budget is the person's call
         ["", "api", "chains", _, "continue"] => *method == Method::POST,
+        // Lifting today's spending stop spends the person's money: only they press Continue
+        ["", "api", "usage", "today", "continue"] => *method != Method::GET && *method != Method::HEAD,
         // Changing a choice a bot made is the person's call
         ["", "api", "messages", _, "decisions", ..] => *method != Method::GET && *method != Method::HEAD,
         // The person's own 👍/👎: a bot can't react for them (or start a turn with one)
@@ -509,6 +515,10 @@ pub async fn guard(State(state): State<AppState>, req: Request, next: Next) -> R
         && headers.contains_key(header::ACCESS_CONTROL_REQUEST_METHOD);
     let mut resp = if preflight {
         StatusCode::NO_CONTENT.into_response()
+    } else if path != super::agents_connect::ENDPOINT && super::agents_connect::is_agent_token(&headers) {
+        // A connected agent's token only ever works on its own endpoint, from loopback too, and
+        // never counts as the person (whatever `KWNT_REQUIRE_TOKEN` says)
+        deny(StatusCode::FORBIDDEN, "this token only works for /api/mcp/agents")
     } else if !exempt(&path)
         && needs_token(&api, &headers, peer)
         && !presented_token_ok(&api, &headers)
@@ -901,6 +911,17 @@ mod tests {
             assert!(person_only(m, p), "{m} {p}");
         }
         assert!(!person_only(&get, "/api/spaces/s1/developers"));
+        assert!(person_only(&post, "/api/usage/today/continue"));
+        assert!(person_only(&put, "/api/usage/today/continue/"));
+        assert!(!person_only(&get, "/api/usage/today"));
+        // 0.7.4: connected coding agents are made and revoked by the person only; the agent
+        // endpoint itself checks its own token instead
+        assert!(person_only(&get, "/api/agent-connections"));
+        assert!(person_only(&post, "/api/agent-connections"));
+        assert!(person_only(&del, "/api/agent-connections/agc_1"));
+        assert!(person_only(&get, "/api/agent-connections/agc_1/activity"));
+        assert!(!person_only(&post, "/api/mcp/agents"));
+        assert!(exempt("/api/mcp/agents"));
         assert!(person_only(&post, "/api/messages/m1/decisions/0/change"));
         assert!(person_only(&put, "/api/messages/m1/reaction"));
         assert!(person_only(&post, "/api/messages/m1/reaction"));

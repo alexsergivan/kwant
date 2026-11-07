@@ -6,7 +6,8 @@
 
 use super::facts::{Check, FileDiff};
 use super::git::{Auth, GitError, Repo};
-use crate::zombie::github::{EtagCache, GhCheck, GhCommit, GhError, GhFile, GhGitPerson, GhPull, GithubSource};
+use super::forge::ForgeKind;
+use crate::zombie::github::{EtagCache, GhCheck, GhCommit, GhError, GhFile, GhGitPerson, GhPull, GhReview, GithubSource, PostError, ReviewPost};
 use chrono::{DateTime, Utc};
 
 /// A git author or committer.
@@ -242,6 +243,54 @@ impl<'a> History<'a> {
         got
     }
 
+    /// The repo's branches and their heads (see [`Repo::heads`]); empty with no git.
+    pub async fn branches(&self) -> Result<Vec<(String, String)>, GhError> {
+        match &self.git {
+            Some(g) => Ok(g.heads(&self.url, self.auth.as_ref()).await?),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// What branch `name` (head `sha`) changes against `base_branch` (any-git.md G5): the diff from
+    /// their merge base to `sha`. A mirror fetches the branch into `refs/kwant/branch/<name>` for
+    /// the read and drops it after. `None` when it has nothing new (its head is already in the base
+    /// branch), or git couldn't read it.
+    pub async fn branch_files(&self, name: &str, sha: &str, base_branch: &str) -> Option<Vec<FileDiff>> {
+        let g = self.git.as_ref()?;
+        let local = format!("refs/kwant/branch/{name}");
+        let fetched = if g.is_local() || g.resolve(sha).await.is_ok() {
+            false
+        } else {
+            g.fetch_ref(&self.url, &format!("refs/heads/{name}"), &local, self.auth.as_ref()).await.ok()?;
+            true
+        };
+        let got = async {
+            if g.resolve(sha).await.ok()? != sha {
+                return None;
+            }
+            let base_ref = format!("refs/heads/{base_branch}");
+            if g.is_ancestor(sha, &base_ref).await.ok()? {
+                return None;
+            }
+            let base = g.merge_base(&base_ref, sha).await.ok()?;
+            g.diff(Some(&base), sha).await.ok()
+        }
+        .await;
+        if fetched {
+            g.drop_ref(&local).await;
+        }
+        got
+    }
+
+    /// Whether `sha` is already in `base_branch` (a pushed branch that merged, or never moved
+    /// ahead). `false` when git can't tell (the mirror doesn't have `sha` yet).
+    pub async fn in_branch(&self, sha: &str, base_branch: &str) -> bool {
+        match &self.git {
+            Some(g) => g.is_ancestor(sha, &format!("refs/heads/{base_branch}")).await.unwrap_or(false),
+            None => false,
+        }
+    }
+
     /// A text file at `sha` (see [`Repo::file_at`]).
     pub async fn file_at(&self, path: &str, sha: &str) -> Result<Option<String>, GhError> {
         if let Some(g) = &self.git {
@@ -276,10 +325,12 @@ impl<'a> History<'a> {
 
 /// What only a forge knows about a repo: its pull or merge requests and CI checks (any-git.md
 /// G4 seam). GitHub's API implements it ([`GithubForge`]); a plain git repo has none, so its
-/// commits get landed cards without a PR, checks or review cards. GitLab and Gitea forges plug in
-/// here (Juno, G4-G5) without touching the poller.
+/// commits get landed cards without a PR or checks, and its pushed branches review cards without
+/// CI or Post (G5). GitLab and Gitea implement it in `forge` (G4).
 #[async_trait::async_trait]
 pub trait Forge: Send + Sync {
+    /// Which forge this is.
+    fn kind(&self) -> ForgeKind;
     /// The changes `sha` belongs to (merged ones carry the merge sha).
     async fn changes_for_commit(&self, sha: &str) -> Result<Vec<Change>, GhError>;
     /// The open changes into `base`.
@@ -293,6 +344,12 @@ pub trait Forge: Send + Sync {
     /// The forge account that wrote `sha`, when the forge matches it (a direct push has no change
     /// to name its author).
     async fn commit_login(&self, sha: &str) -> Option<String>;
+    /// One change, with its head and base. `Ok(None)` when there is no such change.
+    async fn change(&self, number: u64) -> Result<Option<Change>, GhError>;
+    /// The account the token belongs to.
+    async fn login(&self) -> Result<String, GhError>;
+    /// Posts a review on change `number`. GitHub only until G7 (Lin): the others say so.
+    async fn post_review(&self, number: u64, post: &ReviewPost) -> Result<GhReview, PostError>;
 }
 
 /// [`Forge`] over GitHub's REST API.
@@ -303,6 +360,9 @@ pub struct GithubForge<'a> {
 
 #[async_trait::async_trait]
 impl Forge for GithubForge<'_> {
+    fn kind(&self) -> ForgeKind {
+        ForgeKind::Github
+    }
     async fn changes_for_commit(&self, sha: &str) -> Result<Vec<Change>, GhError> {
         Ok(all(self.client.dev_pulls_for_commit(self.repo, sha).await?))
     }
@@ -320,6 +380,19 @@ impl Forge for GithubForge<'_> {
     }
     async fn commit_login(&self, sha: &str) -> Option<String> {
         self.client.dev_commit(self.repo, sha).await.ok().and_then(|c| c.author.map(|u| u.login))
+    }
+    async fn change(&self, number: u64) -> Result<Option<Change>, GhError> {
+        match self.client.dev_pull(self.repo, number).await {
+            Ok(p) => Ok(Some(p.into())),
+            Err(GhError::NotFound) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+    async fn login(&self) -> Result<String, GhError> {
+        self.client.dev_login().await
+    }
+    async fn post_review(&self, number: u64, post: &ReviewPost) -> Result<GhReview, PostError> {
+        self.client.dev_post_review(self.repo, number, post).await
     }
 }
 

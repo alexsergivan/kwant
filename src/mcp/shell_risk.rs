@@ -363,7 +363,7 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
         return Err("kwnt can't tell which program it runs".into());
     }
     let (name, in_folder) = program_name(&cmd.text, ctx)?;
-    if in_folder {
+    if in_folder && !judged_by_name(name) {
         // The bot's own script: not a sandbox, see the module docs
         return all_paths_inside(args, ctx);
     }
@@ -407,14 +407,25 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
             _ => Err(format!("`{name}` runs commands kwnt can't see")),
         },
         "bun" => packages(name, args, ctx).and_then(|()| interpreter(name, args, ctx)),
+        "deno" => {
+            // `deno run https://…/x.ts`, `deno run npm:cowsay`: fetches code and runs it
+            if let Some(a) = args.iter().find(|a| {
+                let value = a.text.split_once('=').filter(|_| a.text.starts_with('-')).map_or(a.text.as_str(), |(_, v)| v);
+                ["http://", "https://", "npm:", "jsr:"].iter().any(|p| value.starts_with(p))
+            }) {
+                return Err(format!("`deno` downloads and runs code from `{}`", a.text));
+            }
+            new_package(name, args).and_then(|()| interpreter(name, args, ctx))
+        }
         _ if INTERPRETERS.contains(&name) || name.starts_with("python3.") => interpreter(name, args, ctx),
         "git" => git(args, ctx),
         "npm" | "pnpm" | "yarn" => packages(name, args, ctx),
-        "npx" | "bunx" => Err(format!("`{name}` can download and run a package's code")),
+        "npx" | "bunx" | "pnpx" | "uvx" => Err(format!("`{name}` can download and run a package's code")),
         "cargo" => {
             if let Some(sub) = args.iter().find(|a| matches!(a.text.as_str(), "publish" | "login" | "logout" | "owner" | "yank" | "install")) {
                 return Err(format!("`cargo {}` reaches outside the folder", sub.text));
             }
+            new_package(name, args)?;
             all_paths_inside(args, ctx)
         }
         "pipx" => Err("`pipx` installs or runs packages outside the folder".into()),
@@ -426,6 +437,20 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
                 // Installs land outside the folder (`pip install`, `go install`, `uv tool`)
                 return Err(format!("`{name} {}` reaches outside the folder", sub.text));
             }
+            let has = |w: &str| args.iter().any(|a| a.text == w);
+            if name == "uv" {
+                if let Some(a) = args.iter().find(|a| matches!(a.text.split('=').next(), Some("--with" | "--with-requirements" | "--with-editable"))) {
+                    return Err(format!("`uv run {}` downloads packages and runs them", a.text.split('=').next().unwrap_or("--with")));
+                }
+                if has("pip") && has("sync") {
+                    return Err("`uv pip sync` installs the packages a list names, and their code runs".into());
+                }
+            }
+            if name == "dotnet" && has("add") && has("package") {
+                // `dotnet add package x`, and .NET 10's `dotnet package add x`
+                return Err("`dotnet add package` downloads a new package, whose code runs when the project builds or runs".into());
+            }
+            new_package(name, args)?;
             all_paths_inside(args, ctx)
         }
         "make" | "gmake" => {
@@ -460,6 +485,18 @@ fn program(words: &[Word], ctx: &Ctx) -> Verdict {
         _ if KNOWN_SAFE.contains(&name) => all_paths_inside(args, ctx),
         _ => Err(format!("kwnt doesn't know that `{name}` is safe")),
     }
+}
+
+/// Programs judged by their name even when they live in the bot's folder: a bot can make its own
+/// `pip` (`python -m venv v`) or `npm` (`node_modules/.bin/npm`), and the package rules must still
+/// hold. "Inside" only spares them the check that the program itself is in the folder.
+fn judged_by_name(name: &str) -> bool {
+    matches!(
+        name,
+        "npm" | "npx" | "pnpm" | "pnpx" | "yarn" | "bun" | "bunx" | "deno" | "cargo" | "pip" | "pip3" | "pipx" | "uv" | "uvx"
+            | "poetry" | "gem" | "go" | "dotnet" | "hatch" | "flit" | "python" | "python3"
+    ) || name.starts_with("pip3.")
+        || name.starts_with("python3.")
 }
 
 /// The name a program word is judged by, and whether it is a program inside the bot's folder.
@@ -664,19 +701,112 @@ fn packages(name: &str, args: &[Word], ctx: &Ctx) -> Verdict {
     if args.iter().any(|a| matches!(a.text.as_str(), "-g" | "--global" | "global")) {
         return Err(format!("`{name}` installs for the whole account"));
     }
-    // `npm exec`/`npm x`, `pnpm dlx`, `yarn dlx`, `bun x` fetch a package and run it
-    if let Some(a) = args.iter().find(|a| !a.text.starts_with('-')) {
-        let runs = match name {
-            "npm" => matches!(a.text.as_str(), "exec" | "x"),
-            "pnpm" | "yarn" => a.text == "dlx",
-            "bun" => a.text == "x",
-            _ => false,
-        };
-        if runs {
-            return Err(format!("`{name} {}` can download and run a package's code", a.text));
+    // `npm exec`/`npm x`, `pnpm dlx`, `yarn dlx`, `bun x` fetch a package and run it. Any word
+    // counts, not only the first that isn't an option: a valued option ahead of the verb
+    // (`npm --prefix x exec cowsay`, `pnpm -C dir dlx cowsay`) must not hide it. Fails closed, so
+    // `npm run x` asks too.
+    let runner = |a: &&Word| match name {
+        "npm" => matches!(a.text.as_str(), "exec" | "x"),
+        "pnpm" | "yarn" => a.text == "dlx",
+        "bun" => a.text == "x",
+        _ => false,
+    };
+    if let Some(a) = args.iter().find(runner) {
+        return Err(format!("`{name} {}` can download and run a package's code", a.text));
+    }
+    new_package(name, args)?;
+    all_paths_inside(args, ctx)
+}
+
+/// Commands that add a package the project doesn't list yet (`npm install left-pad`, `cargo add
+/// serde`, `go get x`): the package is downloaded and its code runs, at install (npm-style install
+/// scripts) or when the project builds. Installing what the project already lists (`npm install`,
+/// `npm ci`, `pnpm install`, `yarn`, `bun install`) and a local path (`npm install ./lib`, judged
+/// by `all_paths_inside`) don't count. pip, gem, `uv pip` and `poetry install` ask for any install.
+fn new_package(name: &str, args: &[Word]) -> Verdict {
+    // (subcommands that add, options that take a value, options that fetch from elsewhere)
+    let (verbs, valued, fetches): (&[&str], &[&str], &[&str]) = match name {
+        "npm" => (
+            &["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "install-test", "it"],
+            &["-w", "--workspace", "--prefix", "--registry", "--tag", "--omit", "--include", "--cache", "--userconfig", "--install-strategy"],
+            &[],
+        ),
+        "pnpm" => (&["add", "install", "i"], &["-C", "--dir", "-F", "--filter", "--registry"], &[]),
+        "yarn" => (&["add"], &["--cwd", "--registry", "--modules-folder"], &[]),
+        "bun" => (&["add", "a", "install", "i"], &["--cwd", "--registry", "-c", "--config", "--backend", "--cache-dir"], &[]),
+        "deno" => (&["add", "install", "i"], &["-c", "--config", "--lock", "--cert"], &[]),
+        "cargo" => (
+            &["add"],
+            &[
+                "-F", "--features", "--rename", "-p", "--package", "--manifest-path", "--registry", "--branch", "--tag", "--rev",
+                "--path", "--target", "--config", "-Z", "--color", "--lockfile-path",
+            ],
+            &["--git"],
+        ),
+        "uv" => (
+            &["add"],
+            &[
+                "--group", "--optional", "--extra", "--package", "--index", "--default-index", "--index-url", "--extra-index-url",
+                "--project", "--directory", "--python", "-p", "--marker", "-m", "--tag", "--branch", "--rev", "--bounds", "--script",
+                "--config-file", "--cache-dir", "-c", "--constraints",
+            ],
+            &["-r", "--requirements"],
+        ),
+        "poetry" => (
+            &["add"],
+            &["-G", "--group", "-E", "--extras", "--source", "-C", "--directory", "-P", "--project", "--python", "--platform", "-m", "--markers"],
+            &[],
+        ),
+        "go" => (&["get"], &["-C", "-modfile", "-tags"], &[]),
+        _ => return Ok(()),
+    };
+    // The words that aren't options or option values (a `+toolchain` neither), and how many come
+    // before a `--`
+    let mut operands = vec![];
+    let (mut skip, mut before) = (false, None);
+    for a in args {
+        let t = a.text.as_str();
+        if skip {
+            skip = false;
+        } else if before.is_some() || (!t.starts_with('-') && !t.starts_with('+')) || t == "-" {
+            operands.push(t);
+        } else if t == "--" {
+            before = Some(operands.len());
+        } else {
+            skip = !t.contains('=') && valued.contains(&t);
         }
     }
-    all_paths_inside(args, ctx)
+    let before = &operands[..before.unwrap_or(operands.len())];
+    // `npm create vite`, `npm init vite`, `yarn create x`: fetch `create-<name>` and run it. A bare
+    // `npm init` (or `npm init -y`) only writes package.json.
+    if matches!(name, "npm" | "pnpm" | "yarn" | "bun") {
+        if let Some(i) = before.iter().position(|t| matches!(*t, "create" | "init" | "innit")) {
+            if before[i] == "create" || operands.len() > i + 1 {
+                let what = operands.get(i + 1).map(|w| format!(" {w}")).unwrap_or_default();
+                return Err(format!("`{name} {}{what}` downloads a starter package and runs it", before[i]));
+            }
+        }
+    }
+    // The verb: the first operand, or failing that any operand before `--`, so an option kwnt
+    // doesn't know (`npm --loglevel silent install x`) or a workspace name (`yarn workspace app add
+    // x`) can't hide it. Fails closed: `cargo test add x` asks too. After `--` the words belong to
+    // the program (`cargo run -- add x`).
+    let Some(at) = before.iter().position(|t| verbs.contains(t)) else {
+        return Ok(());
+    };
+    let verb = before[at];
+    let mut operands = operands[at + 1..].iter().copied();
+    let local = |t: &str| t == "." || t == ".." || t.starts_with("./") || t.starts_with("../") || t.starts_with('/') || t.starts_with("file:");
+    let what = operands.find(|t| !local(t)).or_else(|| {
+        args.iter().map(|a| a.text.as_str()).find(|t| fetches.iter().any(|f| t == f || t.strip_prefix(f).is_some_and(|r| r.starts_with('='))))
+    });
+    match what {
+        Some(what) if matches!(name, "npm" | "pnpm" | "yarn" | "bun") => {
+            Err(format!("`{name} {verb} {what}` downloads a new package and runs its install scripts"))
+        }
+        Some(what) => Err(format!("`{name} {verb} {what}` downloads a new package, whose code runs when the project builds or runs")),
+        None => Ok(()),
+    }
 }
 
 /// grep-like tools: the pattern is not a path, and `-f`/`--file` names one. Short options are
@@ -1356,6 +1486,11 @@ mod tests {
         "RUST_BACKTRACE=1 cargo test db::",
         "npm test",
         "npm run build",
+        "npm --prefix src run build",
+        "npm -w app test",
+        "pnpm -C src run build",
+        "yarn --cwd src build",
+        "bun --cwd src run build",
         "git status",
         "git diff HEAD~1 -- src/main.rs",
         "git log --oneline -5",
@@ -1420,6 +1555,46 @@ mod tests {
         "rm -rf src/*",
         "rm -rf ./target",
         "cat src/a.rs",
+        // Installing what the project already lists, or a package from inside the folder
+        "npm install",
+        "npm i",
+        "npm ci",
+        "npm ci --omit dev",
+        "npm install --workspace src",
+        "npm --prefix src install",
+        "npm install ./src",
+        "npm i ../ws/src",
+        "pnpm install",
+        "pnpm i --frozen-lockfile",
+        "yarn",
+        "yarn install",
+        "yarn install --frozen-lockfile",
+        "bun install",
+        "bun install --frozen-lockfile",
+        "deno install",
+        "cargo add --path ./src",
+        "uv add ./src",
+        "go get ./...",
+        "go mod download",
+        // Lockfile installs and builds behind options kwnt doesn't list (round B, F-B1–F-B4)
+        "npm --loglevel silent install",
+        "npm --color always ci",
+        "yarn --network-timeout 100000",
+        "yarn workspace app build",
+        "npm init",
+        "npm init -y",
+        "pnpm init",
+        "cargo run -- add x",
+        "uv sync",
+        "uv run pytest",
+        "dotnet build",
+        "./node_modules/.bin/npm ci",
+        "./node_modules/.bin/npm run build",
+        // Updating what the project already lists
+        "npm update left-pad",
+        "pnpm up left-pad",
+        "yarn up left-pad",
+        "cargo update",
     ];
 
     const ASKED: &[&str] = &[
@@ -1553,6 +1728,14 @@ mod tests {
         "bunx cowsay",
         "bun x cowsay",
         "npm exec cowsay",
+        // A valued option ahead of the runner verb doesn't hide it
+        "npm --prefix x exec cowsay",
+        "npm -w app exec cowsay",
+        "pnpm -C dir dlx cowsay",
+        "yarn --cwd d dlx cowsay",
+        "bun --cwd d x cowsay",
+        "npm --prefix=x x cowsay",
+        "npm run x",
         "tar --checkpoint=1 --checkpoint-action=exec=id -cf out.tar src",
         "tar -cf out.tar --to-command=id src",
         "tar -I gzip -cf x src",
@@ -1578,6 +1761,70 @@ mod tests {
         "sort --compress-program=sh src/x",
         "zip -T -TT 'sh -c id' out.zip src",
         "rustc -C linker=sh src/a.rs",
+        // Adding a package the project doesn't list yet
+        "npm install left-pad",
+        "npm i left-pad",
+        "npm add left-pad",
+        "npm install --save-dev left-pad",
+        "npm i -D @types/node",
+        "npm install -w src left-pad",
+        "npm --prefix src install left-pad",
+        "npm install left-pad ./src",
+        "npm install github:user/repo",
+        "npm install user/repo",
+        "npm install https://example.com/x.tgz",
+        "npm it left-pad",
+        "pnpm add left-pad",
+        "pnpm install left-pad",
+        "pnpm add -D left-pad",
+        "pnpm -C src add left-pad",
+        "yarn add left-pad",
+        "yarn add -D left-pad",
+        "bun add left-pad",
+        "bun a left-pad",
+        "bun install left-pad",
+        "deno add npm:chalk",
+        "deno install npm:chalk",
+        "cargo add serde",
+        "cargo add serde --features derive",
+        "cargo add -F derive serde",
+        "cargo +nightly add serde",
+        "cargo add --git https://github.com/x/y",
+        "cargo add --git=https://github.com/x/y",
+        "uv add requests",
+        "uv add --dev pytest",
+        "uv add -r requirements.txt",
+        "poetry add requests",
+        "poetry add --group dev pytest",
+        "go get github.com/x/y",
+        "go get -u golang.org/x/net",
+        "pip install -r requirements.txt",
+        // Round B: an option kwnt doesn't list, a workspace name, starters, the bot's own pip/npm
+        "npm --loglevel silent install left-pad",
+        "npm --color always i left-pad",
+        "npm --fund false add left-pad",
+        "npm --audit false install left-pad",
+        "pnpm --reporter silent add left-pad",
+        "yarn --network-timeout 100000 add left-pad",
+        "yarn workspace app add left-pad",
+        "yarn workspaces foreach add left-pad",
+        "npm init vite",
+        "npm create vite",
+        "npm create vite@latest",
+        "pnpm create vite",
+        "yarn create vite",
+        "bun create vite",
+        "deno run https://example.com/x.ts",
+        "deno run npm:cowsay",
+        "uv run --with requests python x.py",
+        "uv run --with=requests python x.py",
+        "python -m venv v && v/bin/pip install left-pad",
+        "v/bin/python -m pip install left-pad",
+        "./node_modules/.bin/npm install left-pad",
+        "dotnet add package Newtonsoft.Json",
+        "dotnet package add Newtonsoft.Json",
+        "uv pip sync requirements.txt",
+        "gem install rails",
     ];
 
     #[test]
@@ -1723,5 +1970,22 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(matches!(classify("echo $(id)", &ws), SmartVerdict::Ask(why) if why.contains("variable")));
+        assert_eq!(
+            classify("npm install left-pad", &ws),
+            SmartVerdict::Ask("`npm install left-pad` downloads a new package and runs its install scripts".into())
+        );
+        assert_eq!(
+            classify("cargo add serde --features derive", &ws),
+            SmartVerdict::Ask("`cargo add serde` downloads a new package, whose code runs when the project builds or runs".into())
+        );
+        assert_eq!(classify("pnpm -C dir dlx cowsay", &ws), SmartVerdict::Ask("`pnpm dlx` can download and run a package's code".into()));
+        let npm_install = SmartVerdict::Ask("`npm install left-pad` downloads a new package and runs its install scripts".into());
+        assert_eq!(classify("npm --loglevel silent install left-pad", &ws), npm_install);
+        assert_eq!(classify("./node_modules/.bin/npm install left-pad", &ws), npm_install);
+        assert_eq!(
+            classify("python -m venv v && v/bin/pip install left-pad", &ws),
+            SmartVerdict::Ask("`pip install` reaches outside the folder".into())
+        );
+        assert_eq!(classify("npm create vite@latest", &ws), SmartVerdict::Ask("`npm create vite@latest` downloads a starter package and runs it".into()));
     }
 }

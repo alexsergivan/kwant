@@ -52,6 +52,9 @@ pub async fn tick(state: &AppState) -> Vec<String> {
     if free == 0 {
         return started;
     }
+    // Today's spending stop doesn't hold checks: every goal check kind (http, command, file_*)
+    // runs without a bot, so it costs no tokens. What a goal starts after a run (a draft, a fix
+    // task, a mission) is a turn, and `routes::turn_once` holds that.
     for id in state.db.due_goal_ids(now, free as i64).await.unwrap_or_default() {
         let Ok(permit) = RUNS.clone().try_acquire_owned() else { break };
         let Ok(Some(g)) = state.db.lease_goal(&id, now_ms(), true).await else { continue };

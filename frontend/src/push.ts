@@ -30,15 +30,44 @@ export function isNotificationOpen(m: unknown): m is NotificationOpen {
   return !!m && typeof m === 'object' && (m as { type?: unknown }).type === 'kwnt-notification-open';
 }
 
-/** `?space=…&channel=…` / `&kwant=…`: the push payload's url, for a link opened outside the worker. */
-export function targetFromQuery(search: string): { spaceId: string | null; channelId: string | null; botId: string | null } | null {
+export interface QueryTarget {
+  spaceId: string | null;
+  channelId: string | null;
+  botId: string | null;
+  /** `?notify=<kind>`: a notification about no bot or chat (spend_stopped, app_update, loose ends…). */
+  notify?: string;
+}
+
+/**
+ * `?space=…&channel=…` / `&kwant=…` / `?notify=<kind>`: the push payload's url, for a link opened
+ * outside the worker. A notification with no bot and no chat carries `notify=<kind>` instead.
+ */
+export function targetFromQuery(search: string): QueryTarget | null {
   const q = new URLSearchParams(search);
   const spaceId = q.get('space');
+  const notify = q.get('notify');
+  if (notify) return { spaceId, channelId: null, botId: null, notify };
   const channelId = q.get('channel');
   const botId = channelId ? null : q.get('kwant');
   if (!spaceId && !channelId && !botId) return null;
   return { spaceId, channelId, botId };
 }
+
+/** A tap on a notification that opens today's spending stop (it names no bot or chat). */
+export const opensSpendStop = (n: { kind?: unknown } | null | undefined): boolean => !!n && n.kind === 'spend_stopped';
+
+/**
+ * Where a tap on a notification goes when it names no bot and no chat: today's spending stop opens
+ * Needs you on it, any other kind opens home. null when it names a bot or chat (the usual way).
+ */
+export function placeOfNotification(n: { kind?: unknown; kwant_id?: unknown; channel_id?: unknown } | null | undefined): 'spend_stop' | 'home' | null {
+  if (!n) return null;
+  if (opensSpendStop(n)) return 'spend_stop';
+  return n.kwant_id || n.channel_id ? null : 'home';
+}
+
+/** The `?notify=` kind's own place: Needs you for the spending stop, home for anything else. */
+export const placeOfQuery = (notify: string): 'spend_stop' | 'home' => (notify === 'spend_stopped' ? 'spend_stop' : 'home');
 
 // ---------------------------------------------------------------------------
 // Can this device get notifications, and how?

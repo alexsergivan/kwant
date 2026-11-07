@@ -446,6 +446,10 @@ fn key(task_id: &str, failure_id: &str, strategy: &str) -> String {
 /// Records a failure of `task` (already moved to where Phase A or [`parks`] put it), then plans
 /// AutoFix's answer. `text` is the raw output; only its redacted form is stored.
 pub async fn record(state: &AppState, task_id: &str, source: &str, status: &str, text: &str, summary: &str) -> Option<Failure> {
+    // A turn today's spending stop held never ran: not a failure, nothing to retry
+    if crate::server::spend_stop::is_stop_error(text) {
+        return None;
+    }
     let task = state.db.get_task(task_id).await.ok().flatten()?;
     let class = classify(source, status, text);
     let clean = redact(text);
@@ -604,6 +608,7 @@ pub async fn run_due(state: &AppState) {
     if mode(state).await == "off" {
         return;
     }
+    // During today's spending stop [`execute`] leaves each attempt scheduled and notes why
     for a in state.db.due_attempts(Utc::now()).await.unwrap_or_default() {
         if !busy(state, &a.task_id).await {
             execute(state, &a).await;
@@ -623,6 +628,15 @@ async fn execute(state: &AppState, a: &Attempt) {
     if let Some(code) = limit(state, &task).await {
         let _ = state.db.move_attempt(a, "scheduled", "skipped", Some(limit_reason(code))).await;
         emit_task(state, &task).await;
+        return;
+    }
+    // Today's spending stop: the attempt stays scheduled ([`run_due`] starts it once it lifts),
+    // and the task's history says why once a day
+    if let Some(why) = crate::server::spend_stop::held(state).await {
+        if crate::server::spend_stop::first_skip_today(state, &format!("autofix:{}", a.id)).await {
+            let detail = json!({"reason": crate::server::spend_stop::REASON, "why": why, "autofix_id": a.id});
+            let _ = state.db.task_event(&task.id, task.mission_id.as_deref(), "autofix_held", "kwant", &detail).await;
+        }
         return;
     }
     match state.db.move_attempt(a, "scheduled", "running", None).await {

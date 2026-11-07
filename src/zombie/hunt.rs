@@ -127,6 +127,10 @@ pub fn origin_of(row: &SourceRow) -> Result<String, String> {
             let cfg: super::github::GithubConfig = serde_json::from_str(&row.config).map_err(|_| "the source's settings are unreadable".to_string())?;
             Ok(cfg.vault_origin())
         }
+        "forge" => {
+            let cfg: crate::server::dev::forge::ForgeConfig = serde_json::from_str(&row.config).map_err(|_| "the source's settings are unreadable".to_string())?;
+            Ok(cfg.vault_origin())
+        }
         _ => Err("unknown source kind".into()),
     }
 }
@@ -148,10 +152,11 @@ pub async fn open_source(store: &dyn CredentialStore, row: &SourceRow, settings:
             let cfg: super::imap::ImapConfig = serde_json::from_str(&row.config).map_err(|_| "the source's settings are unreadable".to_string())?;
             Box::new(super::imap::ImapSource::new(&row.id, cfg, secret, &settings.my_addresses))
         }
-        _ => {
+        "github" => {
             let cfg: super::github::GithubConfig = serde_json::from_str(&row.config).map_err(|_| "the source's settings are unreadable".to_string())?;
             Box::new(super::github::GithubSource::new(&row.id, cfg, secret))
         }
+        _ => return Err("this connection isn't a Loose ends source".into()),
     })
 }
 
@@ -182,7 +187,8 @@ pub async fn scan(state: &AppState) -> Result<ScanReport, ScanError> {
     if settings.kwant_source {
         sources.push(Box::new(kwant_source::KwantSource::new(state.db.clone())));
     }
-    for row in state.db.zombie_sources().await.map_err(db_err)?.into_iter().filter(|r| r.enabled) {
+    // A `forge` connection is for Dev mode only: Loose ends doesn't scan it
+    for row in state.db.zombie_sources().await.map_err(db_err)?.into_iter().filter(|r| r.enabled && r.kind != "forge") {
         match open_source(state.credentials.as_ref(), &row, &settings).await {
             Ok(s) => sources.push(s),
             Err(e) => {

@@ -39,6 +39,11 @@ interface CardBase {
   repo: string | null;
   /** `owner/name` for the repo chip, from the card's own facts. */
   repo_name: string | null;
+  /** 0.7.4 (G4): where the card's PR/MR and CI come from. null: a repo read with git alone, or a card from
+   * before 0.7.4 (then a card with a `pr` is GitHub's). */
+  forge: Forge | null;
+  /** 0.7.4 (G5): a review card for a pushed branch with no PR: no PR number, no CI, no Post. */
+  no_forge: boolean;
 }
 
 export interface LandedCard extends CardBase {
@@ -101,7 +106,8 @@ export interface TamperFlag {
 
 export interface ReviewCard extends CardBase {
   kind: 'review';
-  pr: number;
+  /** null only on a `no_forge` branch card (0.7.4 G5): the card is named by its branch instead. */
+  pr: number | null;
   title: string;
   branch: string | null;
   base: string | null;
@@ -129,7 +135,7 @@ export interface ReviewCard extends CardBase {
   post_error: PostError | null;
 }
 
-export type Forge = 'github' | 'gitlab' | 'gitea';
+export type Forge = 'github' | 'gitlab' | 'gitea' | 'forgejo';
 
 export interface ReviewPosted {
   /** Where it was posted; "github" in 0.7.1. */
@@ -282,6 +288,8 @@ function base(raw: Record<string, unknown>): CardBase {
     error: str(raw.error, 400),
     repo: str(raw.repo, 300),
     repo_name: str(raw.repo_name, 300),
+    forge: raw.forge === 'github' || raw.forge === 'gitlab' || raw.forge === 'gitea' || raw.forge === 'forgejo' ? raw.forge : null,
+    no_forge: raw.no_forge === true,
   };
 }
 
@@ -382,7 +390,9 @@ const scan = (v: unknown) => {
 export function parseReview(raw: unknown): ReviewCard | null {
   if (!isObj(raw) || raw.kind !== 'review') return null;
   const pr = num(raw.pr);
-  if (pr === null) return null;
+  // 0.7.4 (G5): a pushed branch with no PR is a review card too, named by its branch.
+  const noForge = raw.no_forge === true;
+  if (pr === null && !(noForge && str(raw.branch, 200))) return null;
   const intent = isObj(raw.intent) ? raw.intent : null;
   const rv = isObj(raw.reviewer) ? raw.reviewer : null;
   const sec = isObj(raw.security) ? raw.security : {};
@@ -390,7 +400,7 @@ export function parseReview(raw: unknown): ReviewCard | null {
     ...base(raw),
     kind: 'review',
     pr,
-    title: str(raw.title, 300) ?? `PR #${pr}`,
+    title: str(raw.title, 300) ?? (pr !== null ? `PR #${pr}` : `Branch ${str(raw.branch, 200)}`),
     branch: str(raw.branch, 200),
     base: str(raw.base, 200),
     draft: raw.draft === true,
@@ -438,7 +448,7 @@ function posted(v: unknown): ReviewPosted | null {
   const url = str(v.url, 1000);
   const n = num(v.comments);
   const fg = v.forge;
-  return { forge: fg === 'github' || fg === 'gitlab' || fg === 'gitea' ? fg : null, at: str(v.at, 64), login: str(v.login, 80), url: url && /^https:\/\//.test(url) ? url : null, comments: n !== null && n >= 0 ? Math.floor(n) : null };
+  return { forge: fg === 'github' || fg === 'gitlab' || fg === 'gitea' || fg === 'forgejo' ? fg : null, at: str(v.at, 64), login: str(v.login, 80), url: url && /^https:\/\//.test(url) ? url : null, comments: n !== null && n >= 0 ? Math.floor(n) : null };
 }
 
 function postError(v: unknown): PostError | null {

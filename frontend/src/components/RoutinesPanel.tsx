@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { routineRunNote } from '../spendStop';
 import { useUndoableDelete } from '../undoDelete';
 import { UndoNotice } from './UndoNotice';
 import { AlertTriangle, CalendarClock, ChevronDown, ChevronRight, History, Loader2, Pencil, Play, Plus, RefreshCw, Sparkles, Trash2 } from 'lucide-react';
@@ -394,7 +395,11 @@ const RunHistory: React.FC<{ routineId: string; tick: number }> = ({ routineId, 
           <StatusBadge status={r.status} />
           <span>{formatWhen(r.started_at)}</span>
           <span className="text-zinc-600">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
-          {r.error && <span className="basis-full min-w-0 text-rose-300/90 [overflow-wrap:anywhere]">{r.error}</span>}
+          {(() => {
+            const note = routineRunNote(r);
+            if (!note) return null;
+            return <span className={`basis-full min-w-0 [overflow-wrap:anywhere] ${note.quiet ? 'text-zinc-400' : 'text-rose-300/90'}`}>{note.text}</span>;
+          })()}
         </li>
       ))}
     </ol>

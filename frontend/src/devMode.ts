@@ -21,7 +21,7 @@ export interface DevModeState {
   poll_error: string | null;
   calls_today: number | null;
   calls_cap: number | null;
-  /** 0.7.1: which forge reads the repo ("github" in 0.7.1; gitlab and gitea from 0.7.2), or null: no Post button. */
+  /** 0.7.1: which forge reads the repo ("github" in 0.7.1; gitlab and gitea from 0.7.2, forgejo from 0.7.4), or null: no Post button. */
   forge: Forge | null;
   /** 0.7.1: that forge connection's login, for "Posts as {login}." on review cards. */
   forge_login: string | null;
@@ -68,6 +68,10 @@ export interface DevRepo {
   added_by: 'team' | 'hand' | null;
   /** 0.7.3: `provider` when the server sends it, else `git` for a folder with no remote or a host other than github.com. */
   provider: RepoProvider;
+  /** 0.7.4 (G4): the forge the repo's host runs (Codeberg is `forgejo`), or null: plain git or a folder. */
+  forge: Forge | null;
+  /** 0.7.4: a connection reads that forge (GitHub's own, or a Loose ends `forge` connection for the host). */
+  forge_connected: boolean;
 }
 
 /** Where a space's repo was found: a team's repo link, a git folder with a remote, or a folder with no remote. */
@@ -95,8 +99,11 @@ export interface RepoCheck {
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
-export type Forge = 'github' | 'gitlab' | 'gitea';
-export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'gitlab' || v === 'gitea' ? v : null);
+export type Forge = 'github' | 'gitlab' | 'gitea' | 'forgejo';
+export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'gitlab' || v === 'gitea' || v === 'forgejo' ? v : null);
+/** 0.7.4: a forge other than GitHub, read through a Loose ends `forge` connection. */
+export type OtherForge = Exclude<Forge, 'github'>;
+export const otherForge = (v: unknown): OtherForge | null => (v === 'gitlab' || v === 'gitea' || v === 'forgejo' ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const STATUSES: readonly DevStatus[] = ['watching', 'no_repo', 'not_connected', 'no_git', 'other_host'];
 
@@ -137,6 +144,13 @@ export const repoKey = (repo: string, host: string | null = 'github.com'): strin
   return (/^[^/]+\.[^/]+\//.test(r) ? r : `${host ?? 'local'}/${r}`).toLowerCase();
 };
 
+/** 0.7.4 `forge`/`forge_connected`; an older server sends neither: a GitHub row is GitHub, the rest plain git. */
+const repoForge = (o: Record<string, unknown>, provider: RepoProvider, status: RepoStatus): Pick<DevRepo, 'forge' | 'forge_connected'> => {
+  const legacy = provider === 'github' ? 'github' : null;
+  const forge = 'forge' in o ? forgeOf(o.forge) : legacy;
+  return { forge, forge_connected: typeof o.forge_connected === 'boolean' ? o.forge_connected : forge === 'github' && status !== 'not_connected' };
+};
+
 export function parseRepos(v: unknown): DevRepo[] {
   if (!Array.isArray(v)) return [];
   const out: DevRepo[] = [];
@@ -170,6 +184,7 @@ export function parseRepos(v: unknown): DevRepo[] {
       // A 0.7.1 row migrated without a team reads as hand (api.md T2).
       added_by: o.added_by === 'hand' || o.added_by === 'migrated' || (from === 'hand' && o.added_by !== 'team') ? 'hand' : o.added_by === 'team' ? 'team' : null,
       provider: providerOf(o.provider, from, host, key),
+      ...repoForge(o, providerOf(o.provider, from, host, key), status),
     });
   }
   return out;
@@ -200,6 +215,7 @@ function legacyRepos(o: Record<string, unknown>, sources: DevSource[], status: D
       // An older server has no DELETE route: its typed repo has no Remove.
       added_by: src ? 'team' : null,
       provider: providerOf(null, src?.from, src?.host ?? null),
+      ...repoForge({}, providerOf(null, src?.from, src?.host ?? null), st),
     },
   ];
 }
@@ -296,6 +312,10 @@ export interface RepoRow {
   led: Led;
   /** The row's one action, or null. */
   action: RowAction | null;
+  /** 0.7.4: GitHub, GitLab, Gitea or Plain git; null for a team with no repo or a local folder. */
+  forgeName: string | null;
+  /** 0.7.4: "Connect GitLab" / "Connect Gitea" for a forge kwant has no token for, next to the row's action. */
+  fix: ForgeFix | null;
 }
 
 /** "14:32", 24-hour local time: the desk header's "Checked" format, shared by the repo rows. */
@@ -330,14 +350,33 @@ const hintSentence = (t: string) => {
 /** §1a tooltip: "Dev mode reads this repo with git. {install_hint} Then press Refresh." */
 export const noGitTip = (hint: string | null = null) =>
   hint?.trim() ? `Dev mode reads this repo with git. ${hintSentence(hint)} Then press Refresh.` : 'Dev mode reads this repo with git. Install git 2.31 or newer on the server, then press Refresh.';
+/** The forge's name on a repo row: GitHub, GitLab, Gitea, Forgejo (Codeberg too), or plain git. */
+export const FORGE_NAME: Record<Forge, string> = { github: 'GitHub', gitlab: 'GitLab', gitea: 'Gitea', forgejo: 'Forgejo' };
+export const forgeLabel = (r: Pick<DevRepo, 'forge' | 'from'>): string | null => (r.forge ? FORGE_NAME[r.forge] : r.from === 'local' ? null : 'Plain git');
+/** 0.7.4: a GitLab, Gitea or Forgejo repo kwant has no token for: its row offers "Connect GitLab" (Loose ends, url `https://<host>`). */
+export interface ForgeFix {
+  forge: OtherForge;
+  url: string;
+  label: string;
+}
+export const forgeFix = (r: DevRepo): ForgeFix | null => {
+  const forge = otherForge(r.forge);
+  return forge && !r.forge_connected && r.host && (r.status === 'watching' || r.status === 'error')
+    ? { forge, url: `https://${r.host}`, label: `Connect ${FORGE_NAME[forge]}` }
+    : null;
+};
+/** Read with plain git only: no forge connection reads its reviews and CI (landed cards only). */
+export const landedOnly = (r: Pick<DevRepo, 'provider' | 'forge' | 'forge_connected'>): boolean => r.provider === 'git' && !(r.forge && r.forge_connected);
 /** §1b: a repo read with plain git (GitLab, Gitea, a plain git server or a folder): landed cards only. */
 export const LANDED_ONLY = 'Landed changes only';
 /** §1b tooltips. With no branch name (the remote's default branch) it says "its default branch" (not in Mira's file). */
-export const gitTip = (r: Pick<DevRepo, 'from' | 'team' | 'branch'>) => {
+export const gitTip = (r: Pick<DevRepo, 'from' | 'team' | 'branch'> & Partial<Pick<DevRepo, 'forge'>>) => {
   const branch = r.branch || 'its default branch';
-  return r.from === 'local'
-    ? `Read from ${r.team ?? 'this team'}’s folder on the server: shows what lands on ${branch}. It has no remote, so there are no reviews or CI checks.`
-    : `Watching with git: shows what lands on ${branch}. Reviews and CI checks work on GitHub repos for now.`;
+  if (r.from === 'local') return `Read from ${r.team ?? 'this team'}’s folder on the server: shows what lands on ${branch}. It has no remote, so there are no reviews or CI checks.`;
+  // 0.7.4: a GitLab, Gitea or Forgejo host with no connection yet: the row's button connects it.
+  const other = otherForge(r.forge);
+  if (other) return `Watching with git: shows what lands on ${branch}. Connect ${FORGE_NAME[other]} for reviews and CI checks.`;
+  return `Watching with git: shows what lands on ${branch}. Reviews and CI checks work on GitHub, GitLab, Gitea and Forgejo repos.`;
 };
 /** §1c: the server's too-big error (`poll_code: 'too_big'`, or its exact sentence). */
 const TOO_BIG_ERROR = /too big for Dev mode to read/i;
@@ -361,13 +400,13 @@ export const repoNote = (r: DevRepo, hint: string | null = null): string | null 
   if (r.status === 'no_git' || isNeedsGit(r)) return noGitTip(hint);
   if (r.status === 'no_repo') return cantUseTip(r.team);
   if (isTooBig(r)) return tooBigNote(r);
-  return r.provider === 'git' && r.status === 'watching' ? gitTip(r) : null;
+  return landedOnly(r) && r.status === 'watching' ? gitTip(r) : null;
 };
 /** Is this card's repo read with plain git (no forge: no CI tile, no Post button, no "Open on" link)? */
 export const gitOnlyRepo = (s: DevModeState | null, key: unknown): boolean => {
   if (!s || typeof key !== 'string' || !key.trim()) return false;
   const k = key.toLowerCase();
-  return s.repos.some((r) => r.key === k && r.provider === 'git');
+  return s.repos.some((r) => r.key === k && landedOnly(r));
 };
 export const teamNoteText = (team: string, from: DevRepo['from']) =>
   from === 'folder' ? `Comes from ${team}’s folder. Change it in the team’s settings.` : `Comes from ${team}’s repo link. Change it in the team’s settings.`;
@@ -390,7 +429,7 @@ const rowState = (r: DevRepo, on = true): { state: string; led: Led } => {
     case 'watching': {
       if (!on) return { state: READY, led: 'off' };
       const t = checkedTime(r.polled_at);
-      const what = r.provider === 'git' ? LANDED_ONLY : 'Watching';
+      const what = landedOnly(r) ? LANDED_ONLY : 'Watching';
       return { state: t ? `${what} · checked ${t}` : what, led: 'ok' };
     }
     case 'not_connected':
@@ -434,9 +473,11 @@ const repoRow = (r: DevRepo, teams: DevTeamRef[], on = true, hint: string | null
   title: r.status === 'error' && !isNeedsGit(r) ? (isTooBig(r) ? tooBigNote(r) : safeError(r.poll_error)) : null,
   note: repoNote(r, hint),
   action: rowAction(r),
+  forgeName: forgeLabel(r),
+  fix: forgeFix(r),
 });
 
-const noRepoRow = (t: DevTeamRef): RepoRow => ({ id: `team:${t.id}`, team: t.name, teamId: t.id, repo: null, state: 'No repo', origin: null, teamNote: null, title: null, note: null, led: 'off', action: 'link' });
+const noRepoRow = (t: DevTeamRef): RepoRow => ({ id: `team:${t.id}`, team: t.name, teamId: t.id, repo: null, state: 'No repo', origin: null, teamNote: null, title: null, note: null, led: 'off', action: 'link', forgeName: null, fix: null });
 
 /**
  * The Dev desk's repo list (0.7.2, spec §6 and §9b): one row per repo in team order. Teams with no repo
@@ -467,6 +508,9 @@ export interface StatusLine {
   noRepoTeams: DevTeamRef[];
   /** 0.7.3, one repo: the quiet line under it (see repoNote). */
   note: string | null;
+  /** 0.7.4, one repo: its forge's name and "Connect GitLab" fix (see RepoRow). */
+  forgeName?: string | null;
+  fix?: ForgeFix | null;
 }
 
 const NO_REPO = 'No git repo in this space’s folders yet. The floor and guards are on.';
@@ -504,7 +548,7 @@ function singleLine(r: DevRepo, on = true): Omit<StatusLine, 'rows' | 'collapsed
   const branch: StatusLine['parts'] = git && !r.branch ? [] : [{ text: ' · ' }, { text: r.branch || 'main', mono: true, branch: true }];
   if (r.status === 'watching' && !on) return { status: 'watching', led, action, parts: [{ text: r.repo, mono: true }, ...branch, { text: ` · ${READY}` }] };
   if (r.status === 'watching')
-    return { status: 'watching', led, action, parts: [{ text: 'Watching ' }, { text: r.repo, mono: true }, ...branch, ...(git ? [{ text: ' · landed changes only' }] : [])] };
+    return { status: 'watching', led, action, parts: [{ text: 'Watching ' }, { text: r.repo, mono: true }, ...branch, ...(landedOnly(r) ? [{ text: ' · landed changes only' }] : [])] };
   return { status: r.status, led, action, parts: [{ text: r.repo, mono: true }, { text: ` · ${state}` }] };
 }
 
@@ -523,7 +567,7 @@ export function statusLine(s: DevModeState | null, teams: DevTeamRef[] = []): St
   if (rows.length === 1) {
     const r = rows[0];
     if (!r.repo) return { status: 'no_repo', parts: [{ text: NO_REPO }], action: 'link', led: 'off', rows: [], collapsed: false, noRepoTeams, note: null };
-    return { ...singleLine(r.repo, s.on), rows: [], collapsed: false, noRepoTeams, note: repoNote(r.repo, s.install_hint) };
+    return { ...singleLine(r.repo, s.on), rows: [], collapsed: false, noRepoTeams, note: repoNote(r.repo, s.install_hint), forgeName: r.forgeName, fix: r.fix };
   }
   const led: Led = rows.some((r) => r.led === 'bad') ? 'bad' : rows.some((r) => r.led === 'warn') ? 'warn' : rows.some((r) => r.led === 'ok') ? 'ok' : 'off';
   return { status: s.status, parts: [{ text: reposSummary(s) }], action: null, led, rows, collapsed: rows.length > LIST_OPEN_MAX, noRepoTeams, note: null };
@@ -554,7 +598,7 @@ export function onToast(s: DevModeState | null): OnToast {
       // A 0.7.2 server watches nothing in a folder with no remote; 0.7.3 reads it with git (a watching row).
       if (first?.from === 'local' && first.status !== 'watching')
         return { title: GUARDS, body: [{ text: `${first.team ?? 'This team'}’s folder has a local repo with no remote. The floor works now.` }], action: 'open', checking: false };
-      if (first?.provider === 'git') {
+      if (first && landedOnly(first)) {
         const on: OnToast['body'] = first.branch ? [{ text: ' on ' }, { text: first.branch, mono: true }] : [];
         return { title: ON, body: [{ text: 'Watching ' }, { text: first.repo, mono: true }, ...on, { text: '. Landed changes only for now.' }], action: 'open', checking: false };
       }

@@ -88,6 +88,8 @@ impl Payload {
         }
         match &channel_id {
             Some(c) => query.push(format!("channel={}", enc(c))),
+            // Not about one bot (today's spending stop): the app opens what the kind names
+            None if kwant_id.is_empty() => query.push(format!("notify={}", enc(kind))),
             None => query.push(format!("kwant={}", enc(&kwant_id))),
         }
         let tag = format!(
@@ -107,9 +109,10 @@ impl Payload {
         }
     }
 
-    /// The person is waiting on these: kept a day and sent at high urgency.
+    /// The person is waiting on these: kept a day and sent at high urgency (a spending stop that
+    /// trips overnight still reaches a phone that was off).
     pub fn needs_person(&self) -> bool {
-        matches!(self.kind.as_str(), "approval_needed" | "question_asked" | "human_step")
+        matches!(self.kind.as_str(), "approval_needed" | "question_asked" | "human_step" | "spend_stopped")
     }
 
     pub fn ttl(&self) -> u32 {
@@ -870,6 +873,9 @@ mod tests {
         assert_eq!(p.url, "/?kwant=k1");
         assert_eq!(p.tag, "kwnt-none-turn_finished-k1");
         assert_eq!((p.ttl(), p.urgency()), (3_600, "normal"));
+        let p = Payload::new("spend_stopped", "Today's spending limit is reached", "Used 8k of 8k tokens.", None, None, String::new());
+        assert_eq!((p.url.as_str(), p.tag.as_str()), ("/?notify=spend_stopped", "kwnt-none-spend_stopped-"));
+        assert_eq!((p.ttl(), p.urgency()), (86_400, "high"));
         let huge = Payload { title: "t".repeat(5000), ..p };
         assert!(huge.to_bytes().len() <= MAX_PAYLOAD_BYTES);
         assert_eq!(topic("kwnt-x").len(), 32);

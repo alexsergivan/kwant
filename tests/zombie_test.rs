@@ -616,6 +616,8 @@ async fn a_github_source_is_tested_saved_and_scanned() {
     assert!(!v.to_string().contains(MOCK_TOKEN), "the token never comes back");
     let rows = e.state.db.zombie_sources().await.unwrap();
     assert!(!rows[0].config.contains(MOCK_TOKEN), "the token is not in the config");
+    let saved: serde_json::Value = serde_json::from_str(&rows[0].config).unwrap();
+    assert_eq!(saved["api_base"], base.as_str(), "a loopback mock address is saved as typed (no /api/v3)");
 
     let report = kwnt::zombie::hunt::scan(&e.state).await.unwrap();
     let gh = report.sources.iter().find(|s| s.id == id).unwrap();

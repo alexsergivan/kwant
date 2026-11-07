@@ -540,6 +540,10 @@ pub async fn on_routine_run(state: &AppState, routine_id: &str, run_id: &str, st
         (Some(t), "ok") => {
             finish(state, &t, "review", "the routine run finished").await;
         }
+        // Today's spending stop held the run once it had started: not a failure, so no AutoFix
+        (Some(t), "skipped") => {
+            finish(state, &t, "cancelled", "skipped: today's spending stop holds new turns").await;
+        }
         (Some(t), "error") => {
             let failed = finish(state, &t, "failed", "the routine run failed").await;
             if failed {

@@ -499,6 +499,12 @@ pub async fn run_now(State(state): State<AppState>, Path(id): Path<String>) -> R
 /// Records a run and starts it in the background, or records it as skipped when the routine is
 /// still running. `None` if the run couldn't be recorded.
 pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> Option<RoutineRun> {
+    // Today's spending stop holds new turns: the run is skipped, not failed (no AutoFix retry)
+    if let Some(why) = super::spend_stop::held(state).await {
+        let run = state.db.start_routine_run(&routine.id, trigger, "skipped", Some(&why)).await.ok()?;
+        send_run_event(state, &run);
+        return Some(run);
+    }
     let claimed = state
         .running_routines
         .lock()
@@ -537,6 +543,8 @@ pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> 
         let result = execute(&state, &routine).await;
         let (status, err, message_id) = match &result {
             Ok(message_id) => ("ok", None, message_id.clone()),
+            // The stop came down while the run was starting: a skip, like one caught above
+            Err(e) if super::spend_stop::is_stop_error(e) => ("skipped", Some(e.as_str()), None),
             Err(e) => ("error", Some(e.as_str()), None),
         };
         if let Err(e) = state
@@ -552,7 +560,7 @@ pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> 
             run_id,
             status: status.into(),
         });
-        if result.is_err() {
+        if status == "error" {
             let kwant_name = state
                 .db
                 .get_kwant(&routine.kwant_id)

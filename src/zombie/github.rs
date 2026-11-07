@@ -15,7 +15,10 @@ const MAX_ISSUES: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GithubConfig {
-    /// `https://api.github.com`, or a GitHub Enterprise `https://host/api/v3`.
+    /// What the person typed, or (since 0.7.4) its [`GithubConfig::normalized`] API base:
+    /// `https://api.github.com`, a GitHub Enterprise Server `https://host/api/v3`, or a GitHub
+    /// Enterprise Cloud `https://api.<name>.ghe.com`. Rows saved before 0.7.4 keep their text;
+    /// [`GithubConfig::base`] normalises them when read.
     #[serde(default = "default_api")]
     pub api_base: String,
 }
@@ -24,29 +27,101 @@ fn default_api() -> String {
     DEFAULT_API.into()
 }
 
+const BAD_ADDRESS: &str = "the GitHub address must be an https URL like https://github.yourcompany.com";
+
 impl GithubConfig {
     pub fn validate(&self) -> Result<(), String> {
-        let url = url::Url::parse(self.api_base.trim()).map_err(|_| "api_base must be a URL like https://api.github.com".to_string())?;
-        let host = url.host_str().unwrap_or_default();
+        self.normalized().map(|_| ())
+    }
+
+    /// The API base for what the person typed (docs/dev-mode.md, "GitHub Enterprise"):
+    /// - empty, `https://github.com…` or `https://api.github.com` → `https://api.github.com`
+    /// - `https://<name>.ghe.com…` → `https://api.<name>.ghe.com` (Enterprise Cloud with data
+    ///   residency); `https://api.<name>.ghe.com` stays
+    /// - `https://host` → `https://host/api/v3` (Enterprise Server); a path ending in `/api/v3`
+    ///   stays, and so does any other path, so a stored value never changes meaning
+    /// - a loopback mock (`http://127.0.0.1:port`) stays as typed
+    ///
+    /// Refused: anything but https (loopback http allowed), user info, a query or a fragment.
+    pub fn normalized(&self) -> Result<String, String> {
+        let raw = self.api_base.trim();
+        if raw.is_empty() {
+            return Ok(DEFAULT_API.into());
+        }
+        let url = url::Url::parse(raw).map_err(|_| BAD_ADDRESS.to_string())?;
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        let loopback = super::imap::is_loopback(&host);
         let ok = match url.scheme() {
             "https" => !host.is_empty(),
             // A local mock server in tests, never a remote host in the clear
-            "http" => super::imap::is_loopback(host),
+            "http" => loopback,
             _ => false,
         };
-        if !ok || !url.username().is_empty() || url.password().is_some() || url.query().is_some() {
-            return Err("api_base must be an https URL like https://api.github.com".into());
+        if !ok || !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
+            return Err(BAD_ADDRESS.into());
         }
-        Ok(())
+        let as_typed = raw.trim_end_matches('/').to_string();
+        if loopback {
+            return Ok(as_typed);
+        }
+        let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+        let path = url.path().trim_end_matches('/');
+        if host == "github.com" || host == "www.github.com" || (host == "api.github.com" && path.is_empty()) {
+            return Ok(DEFAULT_API.into());
+        }
+        if host == "api.github.com" {
+            return Ok(as_typed);
+        }
+        if let Some(name) = host.strip_suffix(".ghe.com").filter(|n| !n.is_empty() && *n != "api") {
+            return Ok(match (name.starts_with("api."), path.is_empty()) {
+                (true, true) => format!("https://{host}{port}"),
+                // Already the API with a path of its own: kept, like any other path
+                (true, false) => as_typed,
+                (false, _) => format!("https://api.{host}{port}"),
+            });
+        }
+        if path.is_empty() {
+            return Ok(format!("https://{host}{port}/api/v3"));
+        }
+        Ok(as_typed)
     }
 
+    /// The normalised API base, no trailing `/`. A value [`GithubConfig::validate`] refuses is
+    /// never used (every caller validates first); it comes back trimmed as before.
     pub fn base(&self) -> String {
-        self.api_base.trim().trim_end_matches('/').to_string()
+        self.normalized().unwrap_or_else(|_| self.api_base.trim().trim_end_matches('/').to_string())
     }
 
-    /// The vault origin the token is saved under.
+    /// This config as it is saved: the address replaced by its API base.
+    pub fn to_saved(&self) -> Result<GithubConfig, String> {
+        Ok(GithubConfig { api_base: self.normalized()? })
+    }
+
+    /// The vault origin the token is saved under: the origin of the stored address. Saves store
+    /// the normalised base ([`GithubConfig::to_saved`]), so for them this is the API's origin; a
+    /// row saved before 0.7.4 keeps the origin its token was filed under.
     pub fn vault_origin(&self) -> String {
-        url::Url::parse(self.api_base.trim()).map(|u| u.origin().ascii_serialization()).unwrap_or_default()
+        let raw = self.api_base.trim();
+        let from = if raw.is_empty() { DEFAULT_API } else { raw };
+        url::Url::parse(from).map(|u| u.origin().ascii_serialization()).unwrap_or_default()
+    }
+
+    /// The web origin repos of this connection live on: `https://github.com` for api.github.com,
+    /// `https://<name>.ghe.com` for `api.<name>.ghe.com`, the Enterprise Server's own origin
+    /// otherwise.
+    pub fn web_origin(&self) -> String {
+        let Ok(u) = url::Url::parse(&self.base()) else { return String::new() };
+        let host = u.host_str().unwrap_or_default().to_ascii_lowercase();
+        if host == "api.github.com" {
+            return "https://github.com".into();
+        }
+        if let Some(name) = host.strip_prefix("api.").filter(|_| host.ends_with(".ghe.com")) {
+            if name.len() > ".ghe.com".len() {
+                let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
+                return format!("{}://{name}{port}", u.scheme());
+            }
+        }
+        u.origin().ascii_serialization()
     }
 }
 
@@ -414,15 +489,9 @@ impl GithubSource {
         serde_json::from_value(self.get_dev(path, cache).await?).map_err(|_| GhError::Other("GitHub sent an answer kwant could not read".into()))
     }
 
-    /// The web origin of this connection's GitHub: `https://github.com` for api.github.com, the
-    /// Enterprise host's own origin otherwise.
+    /// The web origin of this connection's GitHub ([`GithubConfig::web_origin`]).
     pub fn dev_web(&self) -> String {
-        let Ok(u) = url::Url::parse(self.cfg.api_base.trim()) else { return String::new() };
-        if u.host_str().is_some_and(|h| h.eq_ignore_ascii_case("api.github.com")) {
-            "https://github.com".into()
-        } else {
-            u.origin().ascii_serialization()
-        }
+        self.cfg.web_origin()
     }
 
     /// What git fetches `repo` from (`<web>/owner/name.git`) and the `Authorization` value that
@@ -790,6 +859,120 @@ mod tests {
         assert!(GithubConfig { api_base: "https://u:p@api.github.com".into() }.validate().is_err());
         assert!(GithubConfig { api_base: "file:///etc".into() }.validate().is_err());
         assert_eq!(GithubConfig { api_base: "https://ghe.example/api/v3/".into() }.vault_origin(), "https://ghe.example");
+    }
+
+    fn norm(typed: &str) -> Result<String, String> {
+        GithubConfig { api_base: typed.into() }.normalized()
+    }
+
+    #[test]
+    fn github_com_addresses_mean_the_public_api() {
+        for typed in ["", "  ", "https://api.github.com", "https://api.github.com/", "https://github.com", "https://github.com/", "https://GitHub.com/acme/app", "https://www.github.com"] {
+            assert_eq!(norm(typed).as_deref(), Ok(DEFAULT_API), "{typed:?}");
+        }
+        // A missing field is the public API too (serde default), as before
+        let cfg: GithubConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.base(), DEFAULT_API);
+    }
+
+    #[test]
+    fn an_enterprise_server_address_finds_its_api() {
+        for typed in ["https://github.acme.com", "https://github.acme.com/", " https://GitHub.Acme.com/ "] {
+            assert_eq!(norm(typed).as_deref(), Ok("https://github.acme.com/api/v3"), "{typed:?}");
+        }
+        assert_eq!(norm("https://ghe.example.com:8443").as_deref(), Ok("https://ghe.example.com:8443/api/v3"));
+        // Already the API: stays as it is (no trailing slash)
+        assert_eq!(norm("https://ghe.example.com/api/v3").as_deref(), Ok("https://ghe.example.com/api/v3"));
+        assert_eq!(norm("https://ghe.example.com/api/v3/").as_deref(), Ok("https://ghe.example.com/api/v3"));
+        // Any other path is kept: a stored value never changes meaning
+        assert_eq!(norm("https://proxy.example.com/github/api").as_deref(), Ok("https://proxy.example.com/github/api"));
+    }
+
+    #[test]
+    fn a_ghe_com_address_finds_its_api_subdomain() {
+        for typed in ["https://acme.ghe.com", "https://acme.ghe.com/", "https://ACME.ghe.com/org/app", "https://api.acme.ghe.com", "https://api.acme.ghe.com/"] {
+            assert_eq!(norm(typed).as_deref(), Ok("https://api.acme.ghe.com"), "{typed:?}");
+        }
+        assert_eq!(norm("https://api.acme.ghe.com/proxy").as_deref(), Ok("https://api.acme.ghe.com/proxy"));
+        // ghe.com itself and api.ghe.com aren't a tenant: read as an Enterprise Server host
+        assert_eq!(norm("https://ghe.com").as_deref(), Ok("https://ghe.com/api/v3"));
+        assert_eq!(norm("https://api.ghe.com").as_deref(), Ok("https://api.ghe.com/api/v3"));
+    }
+
+    #[test]
+    fn a_loopback_mock_is_kept_as_typed() {
+        assert_eq!(norm("http://127.0.0.1:18931").as_deref(), Ok("http://127.0.0.1:18931"));
+        assert_eq!(norm("http://127.0.0.1:18931/").as_deref(), Ok("http://127.0.0.1:18931"));
+        assert_eq!(norm("http://localhost:9/mock").as_deref(), Ok("http://localhost:9/mock"));
+    }
+
+    #[test]
+    fn bad_addresses_are_still_refused() {
+        for typed in [
+            "http://api.github.com",
+            "http://github.acme.com",
+            "http://acme.ghe.com",
+            "https://u:p@api.github.com",
+            "https://token@github.acme.com",
+            "https://u:p@acme.ghe.com",
+            "https://github.acme.com/?x=1",
+            "https://acme.ghe.com/?redirect=evil.example",
+            "https://github.acme.com/#frag",
+            "file:///etc",
+            "ftp://github.acme.com",
+            "github.acme.com",
+            "not a url",
+        ] {
+            assert!(norm(typed).is_err(), "{typed:?}");
+            assert!(GithubConfig { api_base: typed.into() }.validate().is_err(), "{typed:?}");
+            assert!(GithubConfig { api_base: typed.into() }.to_saved().is_err(), "{typed:?}");
+        }
+    }
+
+    #[test]
+    fn a_save_stores_the_api_base_and_files_the_token_under_its_origin() {
+        let saved = |typed: &str| GithubConfig { api_base: typed.into() }.to_saved().unwrap();
+        assert_eq!(saved("https://github.acme.com/"), GithubConfig { api_base: "https://github.acme.com/api/v3".into() });
+        assert_eq!(saved("https://github.acme.com/").vault_origin(), "https://github.acme.com");
+        assert_eq!(saved("https://acme.ghe.com").api_base, "https://api.acme.ghe.com");
+        assert_eq!(saved("https://acme.ghe.com").vault_origin(), "https://api.acme.ghe.com");
+        assert_eq!(saved("").vault_origin(), "https://api.github.com");
+        assert_eq!(saved("http://127.0.0.1:18931").api_base, "http://127.0.0.1:18931");
+    }
+
+    #[test]
+    fn an_old_row_keeps_its_vault_origin_and_reads_the_right_api() {
+        // Rows saved before 0.7.4 hold what was typed; their token stays where it was filed
+        let old = GithubConfig { api_base: "https://acme.ghe.com".into() };
+        assert_eq!(old.vault_origin(), "https://acme.ghe.com");
+        assert_eq!(old.base(), "https://api.acme.ghe.com");
+        let old = GithubConfig { api_base: "https://ghe.example.com/api/v3/".into() };
+        assert_eq!((old.vault_origin().as_str(), old.base().as_str()), ("https://ghe.example.com", "https://ghe.example.com/api/v3"));
+        let old = GithubConfig { api_base: "https://api.github.com".into() };
+        assert_eq!((old.vault_origin().as_str(), old.base().as_str()), ("https://api.github.com", DEFAULT_API));
+    }
+
+    #[test]
+    fn the_web_origin_is_where_the_repos_live() {
+        let web = |api: &str| GithubConfig { api_base: api.into() }.web_origin();
+        assert_eq!(web("https://api.github.com"), "https://github.com");
+        assert_eq!(web(""), "https://github.com");
+        assert_eq!(web("https://ghe.example.com/api/v3"), "https://ghe.example.com");
+        assert_eq!(web("https://github.acme.com"), "https://github.acme.com");
+        assert_eq!(web("https://api.acme.ghe.com"), "https://acme.ghe.com");
+        assert_eq!(web("https://acme.ghe.com"), "https://acme.ghe.com");
+        assert_eq!(web("http://127.0.0.1:18931"), "http://127.0.0.1:18931");
+    }
+
+    #[test]
+    fn a_ghe_com_connection_fetches_from_its_web_host_and_reads_its_api() {
+        let src = GithubSource::for_dev("src_ghe", GithubConfig { api_base: "https://acme.ghe.com".into() }, Zeroizing::new("demo-token".into()));
+        assert_eq!(src.api_base(), "https://api.acme.ghe.com");
+        assert_eq!(src.dev_web(), "https://acme.ghe.com");
+        assert_eq!(src.dev_git_remote("org/app").unwrap().0, "https://acme.ghe.com/org/app.git");
+        let src = GithubSource::for_dev("src_ghes", GithubConfig { api_base: "https://github.acme.com/".into() }, Zeroizing::new("demo-token".into()));
+        assert_eq!(src.api_base(), "https://github.acme.com/api/v3");
+        assert_eq!(src.dev_git_remote("org/app").unwrap().0, "https://github.acme.com/org/app.git");
     }
 
     #[test]

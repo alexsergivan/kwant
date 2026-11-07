@@ -706,6 +706,55 @@ Token budgets are opt-in. `budget_tokens` 0 means no limit, for tasks and missio
   `chain_token_budget` of exactly `200000`, the old default that Settings wrote back on every save,
   becomes `0`; any other stored number stays, and so does `200000` saved after the migration ran.
 
+### Daily spending stop (0.7.4)
+
+One cap on what **all turns together** may use in a day, set by the person in Settings › All spaces ›
+Usage. Opt-in: both settings are 0 (off) by default, and a database from before 0.7.4 starts at 0.
+
+- Settings (person only, `POST /api/settings`): `daily_spend_stop_tokens` (fresh tokens, 0 or
+  1–10 000 000 000) and `daily_spend_stop_usd` (dollars, 0 or up to 100 000). Anything else is 400.
+- What counts: every finished turn's fresh tokens (`fresh_input + cache_write + output`, cache reads
+  left out) for every engine, and its `cost_usd` only when the engine reports one (the Claude CLI
+  does; engines that don't add no dollars, so the dollar limit sees only them). A turn that fails,
+  stalls or is cancelled counts the fresh tokens its engine reported before it ended (the Claude CLI
+  and the API engines stream them; no dollars, which only come with a finished turn); a failed turn
+  on an engine that reports usage only at the end (Codex and the others) isn't counted. The totals
+  are kept even while the stop is off.
+- The day follows the `timezone` setting (UTC when none or an unknown zone is set) and ends at the next
+  local midnight (`day_ends_at`). Totals live in the `daily_spend` table, one row per local day, so a
+  restart keeps them.
+- **One check, where every turn starts:** `routes::turn_once` calls `spend_stop::gate` before the
+  turn takes its slot and again once a queued turn gets it. Every source goes through it: person
+  messages, hand-offs, routines, goal drafts and remediation, mission tasks, AutoFix, work-ahead and
+  connected agents. **Turns already running finish**; the stop only holds new ones, so a day can end a
+  little over the limit.
+- Over a limit, a **person message** is saved but no turn starts. The chat gets one notice per chat per
+  day (meta `kind: "spend_stopped"`): "Today's spending stop: used {X} of {Y}. Continue today, or change
+  it in Settings › All spaces › Usage." Messages saved while stopped aren't replayed after Continue;
+  the person sends again. A hand-off held by the stop ends with a `spend_stopped` error.
+- **Routines, missions and AutoFix** skip with reason `spend_stopped` in their own history,
+  without starting a turn, and Needs you (`GET /api/waiting` `items`) carries one `spend_stopped` item
+  for the day. A routine run is recorded `skipped`, also when the stop comes down while its turn waits
+  for a slot (no "routine failed" notice); a mission's next ready task gets one `skipped` event a day,
+  and a mission task the stop catches at its turn goes back to `ready` with the same `skipped` event,
+  without counting an attempt; a due AutoFix attempt stays scheduled and its task gets one
+  `autofix_held` event a day, and it runs once the stop lifts. None of these is a failure: no AutoFix
+  retry.
+- **Goal checks keep running.** Every check kind (http, command, file) runs without a bot, so it costs
+  no tokens. Only what a goal starts after a check (a draft, a fix task, a mission) is a turn, and the
+  gate holds that.
+- The first thing the stop holds each day also sends one notification, kind `spend_stopped` ("Today's
+  spending limit is reached"; "Used {X} of {Y}, so bots won't start new work until tomorrow. Open to
+  continue today."). It names no bot, since the stop holds them all; a tap opens Needs you, where
+  Continue is (push url `/?notify=spend_stopped`). Its push is kept a day at high urgency, so a phone
+  that was off overnight still gets it. It's on by default, also for notification lists saved before
+  0.7.4, and the person can turn it off like the other kinds; there's no new setting.
+- **Continue today** (`POST /api/usage/today/continue`, person only) lifts the stop until the day ends.
+  Changing either limit takes Continue back, so the new limit applies at once; raising a limit past
+  today's use lifts the stop on its own.
+- `GET /api/usage/today` returns `{day, timezone, today_tokens, today_usd, stop_tokens, stop_usd,
+  continued, stopped, over, day_ends_at}`; `over` is `"tokens"`, `"usd"` or null.
+
 ## 16. Hand-off cards that go on
 
 A hand-off task (`source_kind` `delegation`, `source_id` the delegation) is held by kwant with a

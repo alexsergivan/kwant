@@ -182,6 +182,11 @@ impl TurnRegistry {
         self.lock().jobs.values().any(|j| j.keys.iter().any(|k| k == key))
     }
 
+    /// Every key of the job holding `key`, its turns' ids among them; empty when no job holds it.
+    pub fn job_keys_holding(&self, key: &str) -> Vec<String> {
+        self.lock().jobs.values().find(|j| j.keys.iter().any(|k| k == key)).map(|j| j.keys.clone()).unwrap_or_default()
+    }
+
     pub fn set_turn(&self, turn: ActiveTurn) {
         self.lock().turns.insert(turn.turn_id.clone(), turn);
     }
@@ -277,6 +282,11 @@ impl TurnRegistry {
             .filter_map(|t| inner.meters.get(&t.turn_id))
             .map(|m| m.seen)
             .sum()
+    }
+
+    /// Fresh tokens the engine reported so far in the turn (0 when it reported none).
+    pub fn usage_seen(&self, turn_id: &str) -> u64 {
+        self.lock().meters.get(turn_id).map_or(0, |m| m.seen)
     }
 
     /// Fresh tokens of the turn not booked yet, now marked booked: what a task the bot hands in
@@ -522,6 +532,7 @@ mod tests {
         assert_eq!(reg.book_usage("t"), 0, "nothing reported, nothing booked");
         reg.saw_usage("t", 100);
         reg.saw_usage("t", 80); // an older report never shrinks the count
+        assert_eq!(reg.usage_seen("t"), 100);
         assert_eq!(reg.book_usage("t"), 100);
         assert_eq!(reg.book_usage("t"), 0, "booking twice books nothing new");
         reg.saw_usage("t", 150);
