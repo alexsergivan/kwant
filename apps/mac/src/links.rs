@@ -55,12 +55,24 @@ pub fn new_window(url: &Url, port: u16) -> Link {
 }
 
 /// The program that hands an address to the default browser: `open` on macOS, `xdg-open`
-/// (looked up on PATH) on Linux desktops.
+/// (looked up on PATH) on Linux desktops, `rundll32` on Windows (with [`opener_args`]).
 pub const fn browser_opener() -> &'static str {
     if cfg!(target_os = "macos") {
         "/usr/bin/open"
+    } else if cfg!(windows) {
+        "rundll32"
     } else {
         "xdg-open"
+    }
+}
+
+/// What comes before the address: Windows' URL handler takes it as `url.dll,FileProtocolHandler <url>`
+/// (no `cmd /C start`, which would read `&` in the address as a second command).
+pub const fn opener_args() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["url.dll,FileProtocolHandler"]
+    } else {
+        &[]
     }
 }
 
@@ -68,7 +80,7 @@ pub const fn browser_opener() -> &'static str {
 pub fn open_in_browser(url: &Url) {
     let url = url.as_str().to_string();
     std::thread::spawn(
-        move || match std::process::Command::new(browser_opener()).arg(&url).status() {
+        move || match std::process::Command::new(browser_opener()).args(opener_args()).arg(&url).status() {
             Ok(s) if s.success() => {}
             Ok(s) => tracing::warn!(status = %s, "the browser didn't open the link"),
             Err(e) => tracing::warn!(error = %e, "couldn't open the link in the browser"),
@@ -135,6 +147,10 @@ mod tests {
         assert_eq!(browser_opener(), "/usr/bin/open");
         #[cfg(target_os = "linux")]
         assert_eq!(browser_opener(), "xdg-open");
+        #[cfg(not(windows))]
+        assert!(opener_args().is_empty());
+        #[cfg(windows)]
+        assert_eq!((browser_opener(), opener_args()), ("rundll32", &["url.dll,FileProtocolHandler"][..]));
     }
 
     #[test]

@@ -1,5 +1,9 @@
 //! kwant for Mac (and Linux): the kwant server in this process, its UI in a window, and a
 //! menu-bar (tray) icon. Closing the window keeps kwant running; Quit in the menu stops it.
+//! On Windows (0.7.6 beta) the icon sits in the notification area.
+
+// No console window behind the app on Windows
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod links;
 mod nudge;
@@ -7,6 +11,8 @@ mod nudge;
 mod nudge_linux;
 #[cfg(target_os = "macos")]
 mod nudge_mac;
+#[cfg(windows)]
+mod nudge_windows;
 mod startup;
 mod update;
 
@@ -14,6 +20,8 @@ mod update;
 use nudge_linux as platform;
 #[cfg(target_os = "macos")]
 use nudge_mac as platform;
+#[cfg(windows)]
+use nudge_windows as platform;
 use startup::PortChoice;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +53,7 @@ const TRAY_ICON: &[u8] = include_bytes!("../icons/32x32.png");
 /// The shell asked for the login PATH when `$SHELL` is unset.
 #[cfg(target_os = "macos")]
 const FALLBACK_SHELL: &str = "/bin/zsh";
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 const FALLBACK_SHELL: &str = "/bin/bash";
 
 /// The app's own log in the data dir.
@@ -118,7 +126,8 @@ fn main() {
         .setup(move |app| {
             if let Some(server) = server {
                 app.manage(server);
-                if !demo {
+                // In-app updates are off on Windows in the beta (no signed Windows release yet)
+                if !demo && !cfg!(windows) {
                     update::start(app.handle());
                 }
             }
@@ -208,12 +217,24 @@ fn demo_start() -> (u16, Option<Server>, PathBuf) {
 
 /// Finder (and a Linux app menu) starts apps with a bare PATH, so the claude, codex and grok CLIs
 /// would be missing. Runs before any thread exists, so setting the variable is safe.
+#[cfg(not(windows))]
 fn fix_path() {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| FALLBACK_SHELL.to_string());
     let login = startup::login_shell_path(&shell, Duration::from_secs(3));
     let current = std::env::var("PATH").unwrap_or_default();
     let home = dirs::home_dir().unwrap_or_default();
     std::env::set_var("PATH", startup::merged_path(login.as_deref(), &current, &home));
+}
+
+/// Windows starts apps with the person's full PATH from the registry, so no login shell is
+/// asked (Git Bash would answer in /c/... form). Only npm's and the native Claude install's
+/// folders are added, in case a fresh install hasn't reached this session's PATH yet.
+#[cfg(windows)]
+fn fix_path() {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let appdata = std::env::var("APPDATA").unwrap_or_default();
+    let home = dirs::home_dir().unwrap_or_default();
+    std::env::set_var("PATH", startup::windows_path(&current, &appdata, &home.display().to_string()));
 }
 
 /// Starts kwant on its own runtime thread; the returned handle stops it.
@@ -467,8 +488,8 @@ fn poll_waiting(port: u16) -> Option<nudge::Waiting> {
     Some(all)
 }
 
-/// Platforms without a nudge of their own (the app ships for macOS and Linux) keep the count.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Platforms without a nudge of their own (the app ships for macOS, Linux and Windows) keep the count.
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 mod platform {
     pub struct Nudger;
     impl Nudger {
