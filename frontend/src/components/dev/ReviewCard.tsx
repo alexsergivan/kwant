@@ -1,4 +1,4 @@
-import React, { useEffect, useReducer, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -14,10 +14,7 @@ import {
 } from 'lucide-react';
 import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
-  DISMISS_REASONS,
   clock,
-  closedDraft,
-  dismissReducer,
   dismissedLine,
   findingsSummary,
   FORGE_NAME,
@@ -43,6 +40,8 @@ import {
 } from '../../dev/logic';
 import type { LedState, PostState } from '../../dev/logic';
 import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts';
+import { DismissForm, useDismiss } from './DismissForm';
+import { TicketMatches, itemFinding, matchFindingIds } from './TicketMatches';
 
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
 const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
@@ -141,7 +140,8 @@ interface FindingRowProps {
 }
 
 const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) => {
-  const [draft, send] = useReducer(dismissReducer, closedDraft);
+  const dismiss = useDismiss(f, act);
+  const { draft, send } = dismiss;
   const formId = `dismiss-${f.id}`;
   const where = ref(f);
 
@@ -155,17 +155,6 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
   }
 
   const left = undoLeft(f, now);
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draft.reason || draft.sending) return;
-    send({ type: 'submit' });
-    try {
-      await act(f, { action: 'dismiss', reason: draft.reason, ...(draft.note.trim() ? { note: draft.note.trim() } : {}) });
-      send({ type: 'done' });
-    } catch (err) {
-      send({ type: 'failed', error: err instanceof Error ? err.message : 'That didn’t go through. Try again.' });
-    }
-  };
 
   return (
     <li data-finding={f.id} data-state={f.state} className={`rounded-xl border border-zinc-700/60 border-l-[3px] bg-zinc-900/60 p-3 text-xs shadow-[var(--kws-shadow)] ${STRIPE[f.severity]}`}>
@@ -219,53 +208,7 @@ const FindingRow: React.FC<FindingRowProps> = ({ f, author, now, busy, act }) =>
             )}
           </div>
 
-          {draft.open && (
-            <form id={formId} onSubmit={submit} aria-label={`Dismiss: ${f.title}`} className="mt-2 rounded-lg border border-hairline bg-surface-main p-2.5">
-              <fieldset disabled={draft.sending}>
-                <legend className="text-meta text-zinc-200">Why dismiss? Rigel learns from this.</legend>
-                <div role="radiogroup" aria-label="Reason" className="mt-2 flex flex-wrap gap-1.5">
-                  {DISMISS_REASONS.map((r) => {
-                    const on = draft.reason === r.id;
-                    return (
-                      <button
-                        key={r.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={on}
-                        onClick={() => send({ type: 'reason', reason: r.id })}
-                        className={`kw-focus min-h-[44px] rounded-full border px-3 text-xs sm:min-h-[28px] ${on ? 'border-sky-400 bg-sky-500/15 text-zinc-50' : 'border-hairline text-zinc-300 hover:border-hairline-strong'}`}
-                      >
-                        {r.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <label className="mt-2 block text-2xs text-zinc-400">
-                  Note (optional)
-                  <textarea
-                    value={draft.note}
-                    onChange={(e) => send({ type: 'note', note: e.target.value })}
-                    rows={2}
-                    maxLength={500}
-                    className="kw-focus mt-1 block w-full resize-y rounded-lg border border-hairline bg-surface-main px-2 py-1.5 text-xs text-zinc-100"
-                  />
-                </label>
-                {draft.error && (
-                  <p role="alert" className="mt-1 text-bad">
-                    {draft.error}
-                  </p>
-                )}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button type="submit" disabled={!draft.reason} aria-busy={draft.sending || undefined} className="kw-btn-primary min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0">
-                    {draft.sending ? 'Dismissing…' : 'Dismiss finding'}
-                  </button>
-                  <button type="button" onClick={() => send({ type: 'cancel' })} className="kw-btn-ghost min-h-[44px] px-2.5 py-1 text-xs sm:min-h-0">
-                    Cancel
-                  </button>
-                </div>
-              </fieldset>
-            </form>
-          )}
+          <DismissForm id={formId} title={f.title} d={dismiss} />
         </div>
       </div>
     </li>
@@ -460,7 +403,7 @@ const Stamp: React.FC<{ id: string; reviewer: string }> = ({ id, reviewer }) => 
 };
 
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel, jiraOrigins = [] }) => {
   const [card, setCard] = useState<Review>(given);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(() => Date.now());
@@ -468,7 +411,9 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const now = fixedNow ?? tick;
 
   // Tick once a second only while an Undo is on screen.
-  const undoing = fixedNow === undefined && card.findings.some((f) => undoLeft(f, tick) > 0);
+  const undoing =
+    fixedNow === undefined &&
+    (card.findings.some((f) => undoLeft(f, tick) > 0) || (card.matches?.items ?? []).some((it) => { const f = itemFinding(it); return !!f && undoLeft(f, tick) > 0; }));
   useEffect(() => {
     if (!undoing) return;
     const t = window.setInterval(() => setTick(Date.now()), 1000);
@@ -484,7 +429,15 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
     } catch (err) {
       if (a.action === 'dismiss') throw err;
       const msg = err instanceof Error ? err.message : 'it didn’t go through';
-      setCard((c) => ({ ...c, findings: c.findings.map((x) => (x.id === f.id ? { ...x, send_error: msg } : x)) }));
+      setCard((c) => ({
+        ...c,
+        findings: c.findings.map((x) => (x.id === f.id ? { ...x, send_error: msg } : x)),
+        // A matches item's Fix it (api.md 2.11) keeps its error on the item's own fix.
+        matches: c.matches && {
+          ...c.matches,
+          items: c.matches.items.map((it) => (it.id === f.id && it.fix ? { ...it, fix: { ...it.fix, send_error: msg } } : it)),
+        },
+      }));
     } finally {
       setBusy(null);
     }
@@ -516,7 +469,13 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const named = cardForge(card, forge);
   const branchCard = card.no_forge || card.pr === null;
   const tile = card.draft ? 'bg-zinc-500/15 text-zinc-300' : 'bg-teal-400/15 text-teal-300';
-  const summary = findingsSummary(card.findings);
+  // 0.7.6 J12: a PR that maps to a ticket's brief shows "Matches the ticket" (its own `matches` block,
+  // api-decisions 17) instead of the intent section. Its items carry their own `k{n}` id and Fix it state
+  // (api.md 2.11); a finding with one of those ids is never listed twice in Findings.
+  const ticketMatches = card.matches;
+  const onRows = matchFindingIds(ticketMatches);
+  const listed = onRows.size ? card.findings.filter((f) => !onRows.has(f.id)) : card.findings;
+  const summary = findingsSummary(listed);
   const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
   const stamp = lgtm(card) && card.reviewer ? card.reviewer.name : null;
   const repoChip = repoLabel ? repoLabel(card.repo, card.repo_name) : null;
@@ -638,8 +597,11 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
         </div>
       )}
 
-      {/* 3. Intent */}
-      {card.intent && (
+      {/* 3. Intent, or Matches the ticket (0.7.6) */}
+      {ticketMatches && (
+        <TicketMatches matches={ticketMatches} now={now} origins={jiraOrigins} lead={author?.name ?? null} busy={busy !== null} act={act} />
+      )}
+      {card.intent && !ticketMatches && (
         <section className="mt-4" aria-label="Did it do what was asked?">
           <SectionHead icon={<Target size={12} aria-hidden="true" />}>Did it do what was asked?</SectionHead>
           {card.intent.none ? (
@@ -719,11 +681,11 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
       {/* 6. Findings */}
       <section className="mt-4" aria-label="Findings">
         <SectionHead extra={summary ? <span className="normal-case tracking-normal text-zinc-500">· {summary}</span> : null}>Findings</SectionHead>
-        {card.findings.length === 0 ? (
+        {listed.length === 0 ? (
           <p className="text-meta text-zinc-400">{card.status === 'ready' ? 'No findings.' : 'No findings yet.'}</p>
         ) : (
           <ul role="list" className="space-y-1.5">
-            {card.findings.map((f) => (
+            {listed.map((f) => (
               <FindingRow key={f.id} f={f} author={author?.name ?? null} now={now} busy={busy !== null} act={act} />
             ))}
           </ul>
