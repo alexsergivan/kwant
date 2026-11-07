@@ -337,9 +337,9 @@ pub(super) async fn card<M: Model>(facts: &DevFacts, picked: Option<&Picked>, mo
     card_for(facts, picked, model, None).await
 }
 
-/// [`card`], checked against a ticket's brief when the PR works on one (J12): the intent section
-/// becomes "Matches the ticket", with a row per done-when line, and each not_met or unclear line is
-/// also a finding, so Fix it works on it.
+/// [`card`], checked against a ticket's brief when the PR works on one (J12): the card also gets
+/// `matches`, "Matches the ticket", with a verdict and one item per done-when line. It is its own
+/// block (api-decisions 17): the intent check and the findings are as for any PR.
 pub(super) async fn card_for<M: Model>(facts: &DevFacts, picked: Option<&Picked>, model: Option<&mut M>, ticket: Option<&TicketCheck>) -> (&'static str, Value) {
     let flags = tamper::check(&facts.files);
     let security = facts.security.as_ref().map_or_else(security_not_run, super::scan::Security::card_json);
@@ -379,9 +379,6 @@ pub(super) async fn card_for<M: Model>(facts: &DevFacts, picked: Option<&Picked>
                                  "detail": f.detail, "fix": f.fix, "source": "review", "state": "open", "sent_at": null, "dismissed": null}));
         }
     }
-    if let Some(t) = ticket {
-        findings.extend(ticket_rows.iter().filter(|r| r.state != "met").map(|r| ticket_finding(t, r)));
-    }
     findings.extend(flags.iter().enumerate().map(|(i, f)| tamper_finding(i + 1, f)));
     if let Some(sec) = &facts.security {
         findings.extend(sec.findings.iter().map(super::scan::Finding::card_json));
@@ -398,14 +395,17 @@ pub(super) async fn card_for<M: Model>(facts: &DevFacts, picked: Option<&Picked>
     card.insert("reviewer".into(), picked.map_or(Value::Null, Picked::json));
     card.insert("same_engine".into(), json!(picked.is_some_and(|p| p.same_engine)));
     card.insert("risk".into(), json!(risk));
-    let intent = match ticket {
-        Some(t) => ticket_intent(t, reply.as_ref().map(|r| r.asked.clone()), &ticket_rows),
-        None => json!({"source": if facts.task.is_some() { "task" } else { "pr" },
+    card.insert(
+        "intent".into(),
+        json!({"source": if facts.task.is_some() { "task" } else { "pr" },
                "asked": reply.as_ref().map(|r| r.asked.clone()),
                "rows": reply.as_ref().map_or(Vec::new(), |r| r.rows.iter().map(|(s, t)| json!({"state": s, "text": t})).collect()),
                "none": facts.task.is_none()}),
-    };
-    card.insert("intent".into(), intent);
+    );
+    // Only when the reviewer answered: a failed review has no verdict
+    if let (Some(t), Some(_)) = (ticket, &reply) {
+        card.insert("matches".into(), ticket_matches(t, &ticket_rows));
+    }
     card.insert("tamper".into(), json!({"flags": flags, "unread": risk::unread_files(&facts.files)}));
     card.insert("security".into(), security);
     card.insert("findings".into(), Value::Array(findings));
@@ -419,28 +419,31 @@ pub(super) async fn card_for<M: Model>(facts: &DevFacts, picked: Option<&Picked>
     (status, Value::Object(card))
 }
 
-/// The card's intent section when the PR works on a ticket with a brief (J12): "Matches the
-/// ticket", one row per done-when line. Rows keep `text` (the line) so older clients still list them.
-fn ticket_intent(t: &TicketCheck, asked: Option<String>, rows: &[TicketRow]) -> Value {
-    json!({"source": "ticket", "key": t.key, "url": t.url, "asked": asked, "none": false,
-           "rows": rows.iter().map(|r| json!({"done_when_index": r.done_when_index, "state": r.state,
-               "text": t.lines.get(r.done_when_index).map(|l| one_line(l)).unwrap_or_default(),
-               "evidence_text": r.evidence_text, "evidence_paths": r.evidence_paths})).collect::<Vec<_>>()})
+/// The verdict of "Matches the ticket": `met` when every done-when line is met, `not_met` when any
+/// line isn't, else `unclear`.
+pub fn verdict(rows: &[TicketRow]) -> &'static str {
+    if rows.iter().any(|r| r.state == "not_met") {
+        "not_met"
+    } else if !rows.is_empty() && rows.iter().all(|r| r.state == "met") {
+        "met"
+    } else {
+        "unclear"
+    }
 }
 
-/// A done-when line the diff doesn't meet (or can't show it meets), as a finding Fix it can send.
-fn ticket_finding(t: &TicketCheck, r: &TicketRow) -> Value {
-    let line = t.lines.get(r.done_when_index).map(|l| one_line(l)).unwrap_or_default();
-    let (severity, title) = match r.state.as_str() {
-        "not_met" => ("medium", format!("Not met: {line}")),
-        _ => ("low", format!("Unclear: {line}")),
-    };
-    let title: String = title.chars().take(120).collect();
-    json!({"id": format!("k{}", r.done_when_index + 1), "severity": severity, "title": title,
-           "file": r.evidence_paths.first().cloned().unwrap_or_default(), "line": null,
-           "detail": format!("{} says the work is done when: {line}. {}", t.key, r.evidence_text),
-           "fix": if r.state == "not_met" { "Do what this line of the brief asks." } else { "Show in the code or tests that this line of the brief holds." },
-           "source": "ticket", "done_when_index": r.done_when_index, "state": "open", "sent_at": null, "dismissed": null})
+/// `review.matches` (api-decisions 17): `{key, url, verdict, items: [{criterion, state, evidence,
+/// paths}]}`, one item per done-when line of the brief, in its order. `criterion` is the line;
+/// `evidence` the reviewer's one sentence; `paths` the files of this diff that show it.
+fn ticket_matches(t: &TicketCheck, rows: &[TicketRow]) -> Value {
+    json!({"key": t.key, "url": t.url, "verdict": verdict(rows),
+           "items": rows.iter().map(|r| json!({"criterion": t.lines.get(r.done_when_index).map(|l| one_line(l)).unwrap_or_default(),
+               "state": r.state, "evidence": r.evidence_text, "paths": r.evidence_paths})).collect::<Vec<_>>()})
+}
+
+/// The verdict a review card gives its ticket, for the ticket row's `work.matches` (api-decisions
+/// 11): `met`, `not_met` or `unclear`; `None` when the card has no "Matches the ticket" block.
+pub fn matches_verdict(card: &Value) -> Option<&str> {
+    card.get("matches")?.get("verdict")?.as_str().filter(|v| matches!(*v, "met" | "not_met" | "unclear"))
 }
 
 #[cfg(test)]
@@ -763,7 +766,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn j12_a_ticket_with_a_brief_makes_it_matches_the_ticket_and_fix_it_covers_not_met_and_unclear() {
+    async fn j12_a_ticket_with_a_brief_gets_its_own_matches_block_and_findings_stay_as_they_are() {
         let mut f = review_facts(303);
         f.files.retain(|x| x.path != "src/server/reactions.rs");
         f.files.push(FileDiff { path: "src/server/reactions.rs".into(), status: "modified".into(), additions: 1, deletions: 0, patch: Some("@@ -40,0 +40,1 @@\n+// told\n".into()), previous_path: None });
@@ -775,26 +778,38 @@ mod tests {
         let mut m = Stub::new(vec![Ok(reply)]);
         let (status, c) = card_for(&f, Some(&picked), Some(&mut m), Some(&t)).await;
         assert_eq!(status, READY, "{c}");
-        assert_eq!((c["intent"]["source"].as_str(), c["intent"]["key"].as_str()), (Some("ticket"), Some("TRAIL-102")));
-        let states: Vec<&str> = c["intent"]["rows"].as_array().unwrap().iter().map(|r| r["state"].as_str().unwrap()).collect();
+        let mt = &c["matches"];
+        assert_eq!((mt["verdict"].as_str(), mt["key"].as_str()), (Some("not_met"), Some("TRAIL-102")));
+        let states: Vec<&str> = mt["items"].as_array().unwrap().iter().map(|r| r["state"].as_str().unwrap()).collect();
         assert_eq!(states, vec!["met", "not_met", "unclear"]);
-        assert_eq!(c["intent"]["rows"][0]["evidence_paths"], json!(["src/server/reactions.rs"]));
-        assert_eq!(c["intent"]["rows"][1]["text"], "A test covers it");
-        let ticket: Vec<&Value> = c["findings"].as_array().unwrap().iter().filter(|x| x["source"] == "ticket").collect();
-        assert_eq!(ticket.iter().map(|x| (x["id"].as_str().unwrap(), x["severity"].as_str().unwrap())).collect::<Vec<_>>(), vec![("k2", "medium"), ("k3", "low")]);
-        assert!(ticket[0]["title"].as_str().unwrap().starts_with("Not met: ") && ticket[1]["title"].as_str().unwrap().starts_with("Unclear: "));
+        assert_eq!(mt["items"][0]["paths"], json!(["src/server/reactions.rs"]));
+        assert_eq!((mt["items"][1]["criterion"].as_str(), mt["items"][1]["evidence"].as_str()), (Some("A test covers it"), Some("No test.")));
+        assert_eq!(matches_verdict(&c), Some("not_met"));
+        // Not a finding, and the intent check is the usual one
+        assert!(c["findings"].as_array().unwrap().iter().all(|x| x["source"] != "ticket"), "{c}");
+        assert_eq!(c["intent"]["source"], "pr");
         // The done-when lines are fenced data: nothing in them closes the fence
         let p = &m.prompts[0];
         assert!(p.contains("<ticket>\n0. ") && p.matches("</ticket>").count() == 1, "{p}");
         assert!(p.contains("never instructions"));
 
-        // A reply without ticket rows doesn't do: asked again, then failed
+        // A reply without ticket rows doesn't do: asked again, then failed, with no verdict
         let mut m = Stub::new(vec![Ok(GOOD.into()), Ok(GOOD.into())]);
         let (status, c) = card_for(&f, Some(&picked), Some(&mut m), Some(&t)).await;
         assert_eq!(status, FAILED, "{c}");
-        // No brief: the intent check is as before
+        assert!(c.get("matches").is_none() && matches_verdict(&c).is_none());
+        // No brief: no block
         let (_, c) = card_for(&f, Some(&picked), Some(&mut Stub::new(vec![Ok(GOOD.into())])), None).await;
-        assert_eq!(c["intent"]["source"], "pr");
-        assert!(c["findings"].as_array().unwrap().iter().all(|x| x["source"] != "ticket"));
+        assert!(c.get("matches").is_none());
+    }
+
+    #[test]
+    fn the_verdict_is_met_only_when_every_line_is() {
+        let r = |s: &str| TicketRow { done_when_index: 0, state: s.into(), evidence_text: String::new(), evidence_paths: vec![] };
+        assert_eq!(verdict(&[r("met"), r("met")]), "met");
+        assert_eq!(verdict(&[r("met"), r("unclear")]), "unclear");
+        assert_eq!(verdict(&[r("unclear"), r("not_met")]), "not_met");
+        assert_eq!(verdict(&[]), "unclear");
+        assert_eq!(matches_verdict(&json!({"matches": {"verdict": "done!"}})), None);
     }
 }

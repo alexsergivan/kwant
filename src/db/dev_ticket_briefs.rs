@@ -63,6 +63,13 @@ pub struct BriefRow {
     pub note: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// The person's edits as JSON (`tickets::brief::Edits`): they win over a re-read brief.
+    #[sqlx(default)]
+    pub person_edits: Option<String>,
+    /// The latest "Matches the ticket" verdict of a review of the ticket's PR (`met`, `not_met`,
+    /// `unclear`), for the ticket row's `work.matches` (api-decisions 11).
+    #[sqlx(default)]
+    pub matches: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -86,6 +93,14 @@ impl Database {
     pub(super) async fn migrate_ticket_briefs(&self) -> Result<(), DbError> {
         for sql in TABLES {
             sqlx::query(sql).execute(&self.pool).await?;
+        }
+        // Add-only columns: the person's edits to a brief (api-decisions 14), apart from the brief
+        // so a fresh read keeps them; and the review's verdict (api-decisions 11).
+        for col in ["person_edits", "matches"] {
+            let has: Option<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('dev_ticket_briefs') WHERE name = ?").bind(col).fetch_optional(&self.pool).await?;
+            if has.is_none() {
+                sqlx::query(&format!("ALTER TABLE dev_ticket_briefs ADD COLUMN {col} TEXT")).execute(&self.pool).await?;
+            }
         }
         Ok(())
     }
@@ -142,9 +157,9 @@ impl Database {
     }
 
     /// Sets the named optional column (`thread_id`, `task_id`, `mission_id`, `brief`,
-    /// `asked_comment_id`, `note`).
+    /// `asked_comment_id`, `note`, `person_edits`, `matches`).
     pub async fn set_ticket_brief_field(&self, space_id: &str, key: &str, field: &str, value: Option<&str>) -> Result<(), DbError> {
-        if !["thread_id", "task_id", "mission_id", "brief", "asked_comment_id", "note"].contains(&field) {
+        if !["thread_id", "task_id", "mission_id", "brief", "asked_comment_id", "note", "person_edits", "matches"].contains(&field) {
             return Err(DbError::Conflict(format!("no brief field {field}")));
         }
         sqlx::query(&format!("UPDATE dev_ticket_briefs SET {field} = ?, updated_at = ? WHERE space_id = ? AND key = ?"))
@@ -155,18 +170,6 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
-    }
-
-    /// Claims the brief's one Ask on Jira comment before it's posted: false when it was asked
-    /// already (or is being asked), so a double tap posts once.
-    pub async fn claim_ticket_ask(&self, space_id: &str, key: &str) -> Result<bool, DbError> {
-        let r = sqlx::query("UPDATE dev_ticket_briefs SET asked_comment_id = 'pending', updated_at = ? WHERE space_id = ? AND key = ? AND asked_comment_id IS NULL")
-            .bind(now_ms())
-            .bind(space_id)
-            .bind(key)
-            .execute(&self.pool)
-            .await?;
-        Ok(r.rows_affected() == 1)
     }
 
     /// Forgets every brief and question of a Jira site (its deletion).

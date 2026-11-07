@@ -12,7 +12,7 @@ import {
   X,
   GitBranch,
 } from 'lucide-react';
-import type { DevFinding, FindingAction, Forge, IntentState, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
+import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
   DISMISS_REASONS,
   clock,
@@ -47,8 +47,6 @@ import { Led, OutLink, SectionHead, Who, modelLabel, personText } from './parts'
 // Severity styling copied from results/Findings.tsx (design §5.6: "reuse as is").
 const DOT: Record<Severity, string> = { critical: 'bg-rose-500', high: 'bg-orange-500', medium: 'bg-amber-500', low: 'bg-sky-500' };
 const STRIPE: Record<Severity, string> = { critical: 'border-l-rose-500', high: 'border-l-orange-500', medium: 'border-l-amber-500', low: 'border-l-sky-500' };
-/** Screen-reader word before an intent row. */
-const INTENT_SR: Record<IntentState, string> = { ok: 'Done: ', missing: 'Missing: ', extra: 'Extra: ', met: 'Met: ', not_met: 'Not met: ', unclear: 'Unclear: ' };
 const SEV_WORD: Record<Severity, string> = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 // S4 (WCAG 1.4.1): the severity is a word too, not only the dot's colour.
 const SEV_TONE: Record<Severity, string> = { critical: 'text-rose-300', high: 'text-rose-300', medium: 'text-amber-300', low: 'text-teal-300' };
@@ -642,8 +640,8 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
 
       {/* 3. Intent */}
       {card.intent && (
-        <section className="mt-4" aria-label={card.intent.source === 'ticket' ? 'Matches the ticket' : 'Did it do what was asked?'}>
-          <SectionHead icon={<Target size={12} aria-hidden="true" />}>{card.intent.source === 'ticket' ? `Matches the ticket${card.intent.key ? ` ${card.intent.key}` : ''}` : 'Did it do what was asked?'}</SectionHead>
+        <section className="mt-4" aria-label="Did it do what was asked?">
+          <SectionHead icon={<Target size={12} aria-hidden="true" />}>Did it do what was asked?</SectionHead>
           {card.intent.none ? (
             <p className="text-meta text-zinc-400">No task to compare with. Checked against the PR description.</p>
           ) : (
@@ -657,18 +655,15 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
                 <li key={i} data-intent={r.state} className="flex items-start gap-2 text-meta text-zinc-200">
                   <span
                     aria-hidden="true"
-                    className={`mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full ${r.state === 'ok' || r.state === 'met' ? 'bg-teal-400/20 text-teal-300' : r.state === 'missing' || r.state === 'not_met' ? 'bg-rose-400/20 text-rose-300' : 'bg-amber-400/20 text-amber-300'}`}
+                    className={`mt-0.5 flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full ${r.state === 'ok' ? 'bg-teal-400/20 text-teal-300' : r.state === 'missing' ? 'bg-rose-400/20 text-rose-300' : 'bg-amber-400/20 text-amber-300'}`}
                   >
-                    {r.state === 'ok' || r.state === 'met' ? <Check size={11} /> : r.state === 'missing' || r.state === 'not_met' ? <X size={11} /> : <AlertTriangle size={10} />}
+                    {r.state === 'ok' ? <Check size={11} /> : r.state === 'missing' ? <X size={11} /> : <AlertTriangle size={10} />}
                   </span>
                   <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-                    <span className="sr-only">{INTENT_SR[r.state]}</span>
+                    <span className="sr-only">{r.state === 'ok' ? 'Done: ' : r.state === 'missing' ? 'Missing: ' : 'Extra: '}</span>
                     {r.text}
-                    {r.evidence_text ? <span className="block text-zinc-400">{r.evidence_text}</span> : null}
                   </span>
                   {r.state === 'missing' && <span className="kw-chip kw-chip-bad shrink-0">Did less than asked</span>}
-                  {r.state === 'not_met' && <span className="kw-chip kw-chip-bad shrink-0">Not met</span>}
-                  {r.state === 'unclear' && <span className="kw-chip kw-chip-warn shrink-0">Unclear</span>}
                   {r.state === 'extra' && <span className="kw-chip kw-chip-warn shrink-0">Did more than asked</span>}
                 </li>
               ))}

@@ -72,7 +72,11 @@ async fn build(state: &AppState, row: &DevCardRow, cap: i64) -> (&'static str, V
                     let mut model = picked.as_ref().map(|p| model_on(p.bot.clone()));
                     // J12: a PR on a ticket with a brief is checked against its done-when lines
                     let ticket = super::tickets::brief::ticket_check(state, &row.space_id, &facts).await;
-                    review::card_for(&facts, picked.as_ref(), model.as_mut(), ticket.as_ref()).await
+                    let (status, card) = review::card_for(&facts, picked.as_ref(), model.as_mut(), ticket.as_ref()).await;
+                    if let (Some(t), Some(v)) = (&ticket, review::matches_verdict(&card)) {
+                        super::tickets::hooks::reviewed(state, &row.space_id, &t.key, v).await;
+                    }
+                    (status, card)
                 }
                 Kind::Landed => {
                     // The text is written by the reviewer pick, else by the author's own bot

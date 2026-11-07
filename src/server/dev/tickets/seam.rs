@@ -29,6 +29,9 @@ pub struct Site {
     pub wait_for_ok: bool,
     /// Confluence search is on for this site.
     pub confluence: bool,
+    /// The saved Jira address and, on Data Center, Confluence's own ([`super::links::origins`]):
+    /// every link kwant keeps or shows is on one of them (api-decisions 18).
+    pub origins: Vec<url::Url>,
 }
 
 static SITES: LazyLock<Mutex<HashMap<String, Site>>> = LazyLock::new(Default::default);
@@ -48,6 +51,11 @@ pub fn unregister(site_id: &str) {
 /// The site, only when it belongs to `space_id`.
 pub fn site(space_id: &str, site_id: &str) -> Option<Site> {
     sites().get(site_id).filter(|s| s.space_id == space_id).cloned()
+}
+
+/// The site's origins ([`Site::origins`]); none when the site is gone, so no link passes.
+pub fn origins(space_id: &str, site_id: &str) -> Vec<url::Url> {
+    site(space_id, site_id).map(|s| s.origins).unwrap_or_default()
 }
 
 /// The ticket row states (api.md 1.4).

@@ -45,8 +45,8 @@ pub enum Why {
 pub const DEFAULT_BRIEF_TOKENS: i64 = 150_000;
 /// The longest a brief turn runs.
 const TURN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-/// The longest answer kept, in characters.
-pub const MAX_ANSWER_CHARS: usize = 500;
+/// The longest answer kept, in characters (api-decisions 13).
+pub const MAX_ANSWER_CHARS: usize = 2000;
 /// The longest Jira reply read as an answer, in characters.
 const MAX_REPLY_CHARS: usize = 2000;
 
@@ -75,11 +75,27 @@ async fn row(state: &AppState, space_id: &str, key: &str) -> Option<BriefRow> {
     state.db.ticket_brief(space_id, key).await.ok().flatten()
 }
 
-async fn save(state: &AppState, space_id: &str, key: &str, b: &Brief) {
-    let json = serde_json::to_string(b).unwrap_or_default();
+/// The person's saved edits to the ticket's brief (api-decisions 14).
+fn edits_of(r: &BriefRow) -> brief::Edits {
+    r.person_edits.as_deref().and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default()
+}
+
+/// Saves the brief as kwant keeps it, and returns it: the person's edits on top (they win over
+/// re-generated text), and every link off the site dropped (api-decisions 18).
+async fn save(state: &AppState, space_id: &str, key: &str, b: &Brief) -> Brief {
+    let mut b = b.clone();
+    if let Some(r) = row(state, space_id, key).await {
+        b = brief::with_edits(b, &edits_of(&r));
+        let dropped = super::links::keep_site_links(&mut b, &seam::origins(space_id, &r.site_id));
+        if dropped > 0 {
+            tracing::warn!(%key, dropped, "dev: links off the Jira site were dropped from a brief");
+        }
+    }
+    let json = serde_json::to_string(&b).unwrap_or_default();
     if let Err(e) = state.db.set_ticket_brief_field(space_id, key, "brief", Some(&json)).await {
         tracing::warn!(%key, error = %e, "dev: could not save a brief");
     }
+    b
 }
 
 async fn fail(state: &AppState, space_id: &str, key: &str, note: &str) {
@@ -158,7 +174,7 @@ async fn read(state: &AppState, site: &Site, space_id: &str, t: &TicketRef) {
         tracing::warn!(%key, got = %issue.key, "dev: the source returned another ticket");
         return;
     }
-    if let Err(e) = state.db.upsert_ticket_brief(space_id, key, &t.site_id, &t.team_id, &issue.url, &issue.summary).await {
+    if let Err(e) = state.db.upsert_ticket_brief(space_id, key, &t.site_id, &t.team_id, &super::links::keep(&issue.url, &site.origins), &issue.summary).await {
         tracing::warn!(%key, error = %e, "dev: could not save a ticket's brief row");
         return;
     }
@@ -194,6 +210,7 @@ async fn read(state: &AppState, site: &Site, space_id: &str, t: &TicketRef) {
     let workspace = team.workspace_path.clone().filter(|w| !w.trim().is_empty());
     let mut session = tools::Session::new(space_id, &t.site_id, key, &lead.id, &thread.id, workspace.as_ref().map(PathBuf::from));
     session.task_id = task_id;
+    session.known.origins = site.origins.clone();
     session.saw_ticket(&issue, &comments);
     tools::open(session);
     // Fixed words only: the event reaches every client of the space, and ticket text is untrusted (api.md 1.7)
@@ -337,7 +354,7 @@ pub async fn after_turn(state: &AppState, space_id: &str, key: &str, thread_id: 
     brief::stamp(&mut b, &lead_name, Utc::now());
     close_task(state, r.task_id.as_deref(), true, "The brief is in.").await;
     if b.questions.is_empty() {
-        save(state, space_id, key, &b).await;
+        let b = save(state, space_id, key, &b).await;
         if let Some(site) = seam::site(space_id, &r.site_id) {
             ready(state, &site, space_id, key, &b).await;
         } else {
@@ -422,14 +439,101 @@ async fn take_answer(state: &AppState, question_id: &str, answer: &str, by: &str
     true
 }
 
-/// The open questions went to Jira (Ask on Jira): each one records when, where and to whom.
-pub async fn asked_on_jira(state: &AppState, space_id: &str, key: &str, open: &[TicketQuestion], asked: brief::AskedOnJira) {
+/// Juno's `POST tickets/:key/ask` posted the open questions to Jira (api-decisions 16), after
+/// `set_dev_ticket_asked`: each open question records when, where (`comment_url`, kept only when
+/// it is on the site, api-decisions 18) and to whom. The reporter's reply to that comment then
+/// comes back through [`reporter_replied`].
+pub async fn asked_on_jira(state: &AppState, space_id: &str, key: &str, comment_url: &str, to: Option<&str>) {
     let _one = ANSWERS.lock().await;
-    let Some(mut b) = row(state, space_id, key).await.as_ref().and_then(parse) else { return };
+    let Some(r) = row(state, space_id, key).await else { return };
+    let Some(mut b) = parse(&r) else { return };
+    let open = open_questions(state, space_id, key).await;
+    let asked = brief::AskedOnJira {
+        at: brief::at(Utc::now()),
+        comment_url: super::links::keep(comment_url, &seam::origins(space_id, &r.site_id)),
+        to: to.map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ").chars().filter(|c| !c.is_control()).take(80).collect()).unwrap_or_default(),
+    };
     for q in b.questions.iter_mut().filter(|q| q.answer.is_none() && q.card_id.as_ref().is_some_and(|id| open.iter().any(|o| &o.question_id == id))) {
         q.asked_on_jira = Some(asked.clone());
     }
     save(state, space_id, key, &b).await;
+}
+
+/// Why the person's answer wasn't taken (`POST tickets/:key/answer`).
+#[derive(Debug, PartialEq)]
+pub enum AnswerRefused {
+    /// Not one of this ticket's questions.
+    NoQuestion,
+    /// Answered already, here or on Jira: the first answer wins.
+    Answered,
+    /// The brief isn't waiting for answers.
+    NotWaiting,
+}
+
+/// The person answered one of the brief's questions from the card (api-decisions 13): `value` is
+/// already checked (a choice, or text of at most [`MAX_ANSWER_CHARS`]). The question card closes
+/// with it; the last open one moves the ticket to Brief ready.
+pub async fn answer(state: &AppState, space_id: &str, key: &str, question_id: &str, value: &str) -> Result<(), AnswerRefused> {
+    let tq = match state.db.ticket_question(question_id).await {
+        Ok(Some(q)) if q.space_id == space_id && q.key == key => q,
+        _ => return Err(AnswerRefused::NoQuestion),
+    };
+    if tq.answer.is_some() {
+        return Err(AnswerRefused::Answered);
+    }
+    if row(state, space_id, key).await.is_none_or(|r| r.state != "needs_answer") {
+        return Err(AnswerRefused::NotWaiting);
+    }
+    let _ = crate::server::questions::close_answered(state, question_id, value).await;
+    if !take_answer(state, question_id, value, "card", "card", None).await {
+        return Err(AnswerRefused::Answered);
+    }
+    Ok(())
+}
+
+/// Why the person's edit wasn't taken (`PUT tickets/:key/brief`).
+#[derive(Debug, PartialEq)]
+pub enum EditRefused {
+    /// No brief yet, or the work has started: edit while it waits for answers or for the OK.
+    NotEditable,
+}
+
+/// The person edited the brief (api-decisions 14): kept apart from it, so they win over a brief
+/// read again, and put on it now with `edited_by_person_at`. A draft mission waiting for the OK
+/// is made again from the edited brief. The brief as it now reads.
+pub async fn edit(state: &AppState, space_id: &str, key: &str, edits: brief::Edits) -> Result<Brief, EditRefused> {
+    let _one = ANSWERS.lock().await;
+    let Some(r) = row(state, space_id, key).await else { return Err(EditRefused::NotEditable) };
+    let Some(b) = parse(&r) else { return Err(EditRefused::NotEditable) };
+    if !matches!(r.state.as_str(), "needs_answer" | "brief_ready") {
+        return Err(EditRefused::NotEditable);
+    }
+    let draft = match &r.mission_id {
+        Some(id) => match state.db.get_mission(id).await.ok().flatten() {
+            Some(m) if m.status == "draft" => true,
+            Some(m) if m.status == "cancelled" => false,
+            Some(_) => return Err(EditRefused::NotEditable),
+            None => false,
+        },
+        None => false,
+    };
+    let edits = brief::Edits { at: Some(brief::at(Utc::now())), ..edits }.over(edits_of(&r));
+    let json = serde_json::to_string(&edits).unwrap_or_default();
+    if let Err(e) = state.db.set_ticket_brief_field(space_id, key, "person_edits", Some(&json)).await {
+        tracing::warn!(%key, error = %e, "dev: could not save the person's edits");
+        return Err(EditRefused::NotEditable);
+    }
+    let b = save(state, space_id, key, &b).await;
+    tracing::info!(%key, "dev: the person edited a brief");
+    if draft {
+        // The draft was made from the old words: make it again from these
+        mission::stop(state, &r, "The person edited the brief.").await;
+        let _ = state.db.set_ticket_brief_field(space_id, key, "mission_id", None).await;
+        if let (Some(site), Some(r)) = (seam::site(space_id, &r.site_id), row(state, space_id, key).await) {
+            mission::start(state, &site, &r, &b).await;
+        }
+    }
+    Ok(b)
 }
 
 /// A question card was answered (`answer`) or dismissed (`None`: its default counts). Whether it
@@ -602,8 +706,10 @@ pub async fn reporter_replied(state: &AppState, space_id: &str, key: &str, asked
         return;
     }
     let name = reply.author.as_ref().map(|p| p.display_name.clone()).filter(|n| !n.trim().is_empty());
-    let url = brief::comment_url(&r.url, &reply.id);
-    let known = brief::Known { key: key.into(), ticket_url: r.url.clone(), comments: [(reply.id.clone(), name.clone())].into(), ..Default::default() };
+    let origins = seam::origins(space_id, &r.site_id);
+    let ticket_url = super::links::keep(&r.url, &origins);
+    let url = brief::comment_url(&ticket_url, &reply.id);
+    let known = brief::Known { key: key.into(), ticket_url, comments: [(reply.id.clone(), name.clone())].into(), origins, ..Default::default() };
     let source = known.comment(&reply.id).unwrap_or_else(|| known.ticket());
     let found = brief::flags_for(&[(source, body.clone())]);
     let flagged = !found.is_empty();
@@ -686,6 +792,43 @@ pub async fn stopped(state: &AppState, space_id: &str, key: &str, why: Why) {
 
 /// A Jira site was deleted from the space (api.md 1.7, brief.md §10). Juno's `DELETE …/dev/jira`
 /// calls this after the ticket rows are gone: the site's briefs and their questions go too.
+/// What the ticket row's `work` object needs from the brief side (api-decisions 11, api.md 1.3):
+/// the ticket's mission, and the Matches the ticket verdict.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WorkSeam {
+    pub mission_id: Option<String>,
+    pub matches: Option<String>,
+}
+
+/// One indexed read of the brief row. `matches` is only ever `met`, `not_met` or `unclear`.
+pub async fn work_seam(state: &AppState, space_id: &str, key: &str) -> WorkSeam {
+    let Ok(Some(r)) = state.db.ticket_brief(space_id, key).await else { return WorkSeam::default() };
+    WorkSeam { mission_id: r.mission_id, matches: r.matches.filter(|v| matches!(v.as_str(), "met" | "not_met" | "unclear")) }
+}
+
+/// A review of the ticket's PR gave its "Matches the ticket" verdict (J12): the newest one is the
+/// row's `work.matches`.
+pub async fn reviewed(state: &AppState, space_id: &str, key: &str, verdict: &str) {
+    if !matches!(verdict, "met" | "not_met" | "unclear") || !valid_key(key) {
+        return;
+    }
+    if let Err(e) = state.db.set_ticket_brief_field(space_id, key, "matches", Some(verdict)).await {
+        tracing::warn!(key, "tickets: could not keep the review's verdict: {e}");
+    }
+}
+
+/// The brief's routes join Juno's Jira route table here (api.md 1.3), on the same person-only
+/// footing: every handler checks `brief_routes::guard` (person only) itself. Paths are the full
+/// `/api/spaces/:id/dev/tickets/:key/…`.
+pub fn mount(r: axum::Router<AppState>) -> axum::Router<AppState> {
+    use super::brief_routes as b;
+    use axum::routing::{get, post};
+    r.route("/api/spaces/:id/dev/tickets/:key/brief", get(b::get_brief).put(b::put_brief))
+        .route("/api/spaces/:id/dev/tickets/:key/answer", post(b::answer))
+        .route("/api/spaces/:id/dev/tickets/:key/defaults", post(b::defaults))
+        .route("/api/spaces/:id/dev/tickets/:key/ok", post(b::ok))
+}
+
 /// Missions and chats the briefs started stay.
 pub async fn site_deleted(state: &AppState, space_id: &str, site_id: &str) {
     match brief::forget_site(&state.db, space_id, site_id).await {

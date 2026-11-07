@@ -87,7 +87,7 @@ impl Session {
     /// Records the brief's own ticket and its comments as read: they can be cited, and are
     /// scanned for text that tries to steer the bot.
     pub fn saw_ticket(&mut self, issue: &Issue, comments: &[Comment]) {
-        self.known.ticket_url = issue.url.clone();
+        self.known.ticket_url = super::links::keep(&issue.url, &self.known.origins);
         let mut text = format!("{}\n{}", issue.summary, issue.description);
         for r in &issue.remote_links {
             text.push_str(&format!("\nRemote link \"{}\": {}", r.title, r.url));
@@ -353,7 +353,7 @@ async fn jira_read(thread_id: &str, s: &Session, source: &dyn TicketSource, args
         } else {
             // A parent or linked ticket: citable as issue:KEY (a where, plan or assumption line,
             // never the goal or done-when), and scanned all the same
-            s.known.issues.insert(key.clone(), IssueSeen { summary: issue.summary.clone(), url: issue.url.clone() });
+            s.known.issues.insert(key.clone(), IssueSeen { summary: issue.summary.clone(), url: super::links::keep(&issue.url, &s.known.origins) });
             if let Some(source) = s.known.issue(&key) {
                 let text = format!("{}\n{}", issue.summary, issue.description);
                 s.saw(source.clone(), &text);
@@ -407,7 +407,7 @@ async fn confluence_read(thread_id: &str, source: &dyn TicketSource, args: &Valu
     };
     let (body, cut) = cut_chars(&page.body, MAX_PAGE_CHARS);
     with(thread_id, |s| {
-        s.known.pages.insert(page.id.clone(), PageSeen { version: page.version, title: page.title.clone(), url: page.url.clone() });
+        s.known.pages.insert(page.id.clone(), PageSeen { version: page.version, title: page.title.clone(), url: super::links::keep(&page.url, &s.known.origins) });
         if let Some(source) = s.known.page(&page.id) {
             s.saw(source, &format!("{}\n{body}", page.title));
         }

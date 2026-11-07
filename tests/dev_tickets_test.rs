@@ -175,6 +175,7 @@ async fn world(name: &str, f: Fixture, wait_for_ok: bool) -> World {
         writer: Some(fixture.clone()),
         wait_for_ok,
         confluence: true,
+        origins: kwnt::server::dev::tickets::links::origins(HOST, None),
     });
     World { env, space, team, site, fixture }
 }
@@ -289,23 +290,25 @@ async fn a_conflict_is_asked_on_jira_once_and_the_reporters_reply_answers_it() {
     assert_eq!(q0["default_reason"], "the ticket says CSV");
     assert!(q0["answer"].is_null() && q0["asked_on_jira"].is_null());
 
-    // The preview, then one post
-    let (s, p) = call(&w.env.app, "GET", &w.uri("TRAIL-102", "ask_jira"), None).await;
-    assert_eq!(s.as_u16(), 200, "{p}");
-    assert_eq!(p["to"], "Ann Lee");
-    assert!(p["text"].as_str().unwrap().starts_with("Hi Ann Lee, before we start TRAIL-102"), "{p}");
-    let (s, posted) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "ask_jira"), Some(json!({}))).await;
-    assert_eq!(s.as_u16(), 200, "{posted}");
-    let (s, _) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "ask_jira"), Some(json!({}))).await;
-    assert_eq!(s.as_u16(), 409, "a second post is refused");
-    assert_eq!(w.fixture.written.lock().unwrap().len(), 1, "exactly one comment");
+    // Ask on Jira is Juno's route now (api-decisions 16): the old name is gone
+    let (_, v) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "ask_jira"), Some(json!({}))).await;
+    assert!(v.get("comment_id").is_none(), "{v}");
+    assert!(w.fixture.written.lock().unwrap().is_empty(), "this branch never posts to Jira itself");
+    // Juno's `ask` posts the comment, records it, then calls the hook: a link off the site is
+    // dropped (api-decisions 18), one on it is kept
+    let cid = "20005".to_string();
+    assert!(seam::set_asked(&w.env.state, w.space.as_str(), "TRAIL-102", &cid).await);
+    hooks::asked_on_jira(&w.env.state, w.space.as_str(), "TRAIL-102", "https://yourcompany.atlassian.net.evil.example/browse/TRAIL-102?focusedCommentId=20005", Some("Ann Lee")).await;
+    let b = w.brief("TRAIL-102").await;
+    assert_eq!(b["brief"]["questions"][0]["asked_on_jira"]["comment_url"], "", "a lookalike host is dropped: {b}");
+    hooks::asked_on_jira(&w.env.state, w.space.as_str(), "TRAIL-102", &format!("{HOST}/browse/TRAIL-102?focusedCommentId={cid}"), Some("Ann\nLee")).await;
     let b = w.brief("TRAIL-102").await;
     let asked = &b["brief"]["questions"][0]["asked_on_jira"];
     assert_eq!(asked["to"], "Ann Lee");
-    assert!(asked["comment_url"].as_str().unwrap().starts_with(&format!("{HOST}/browse/TRAIL-102?focusedCommentId=")), "{asked}");
+    assert_eq!(asked["comment_url"], format!("{HOST}/browse/TRAIL-102?focusedCommentId=20005"), "{asked}");
+    assert!(b.get("questions").is_none(), "the questions live in brief.questions only (api-decisions 15): {b}");
 
     // A reply that doesn't map is kept for the person; one that does answers
-    let cid = posted["comment_id"].as_str().unwrap().to_string();
     let maybe = comment("20010", person("acc-ann", "Ann Lee"), "Let me check with finance.");
     hooks::reporter_replied(&w.env.state, w.space.as_str(), "TRAIL-102", &cid, &maybe).await;
     let b = w.brief("TRAIL-102").await;
@@ -318,7 +321,8 @@ async fn a_conflict_is_asked_on_jira_once_and_the_reporters_reply_answers_it() {
     let b = w.state_is("TRAIL-102", &["working"]).await;
     let a = &b["brief"]["questions"][0]["answer"];
     assert_eq!((a["value"].as_str(), a["by"].as_str(), a["where"].as_str()), (Some("CSV"), Some("jira_user"), Some("jira")), "{a}");
-    assert!(b["markdown"].as_str().unwrap().contains("✓ Ann Lee answered on Jira: CSV"), "{}", b["markdown"]);
+    assert_eq!(a["name"], "Ann Lee", "{a}");
+    assert!(!b["markdown"].as_str().unwrap().contains("Should the export be CSV or XLSX?"), "the summary never repeats the questions: {}", b["markdown"]);
 }
 
 /// J10 (amended): under "Wait for my OK" a ready brief counts as needs-you until the person OKs it.
@@ -340,6 +344,17 @@ async fn wait_for_my_ok_holds_the_work_until_the_person_oks_it() {
     }
     let m = w.env.state.db.get_mission(b["mission_id"].as_str().expect("a draft mission")).await.unwrap().unwrap();
     assert_eq!(m.status, "draft", "nothing runs before the OK");
+    // An edit before the OK makes the draft again from the edited brief
+    let (s, v) = call(&w.env.app, "PUT", &w.uri("TRAIL-101", "brief"), Some(json!({"goal": "Add a Download receipt button to order emails"}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!((v["brief"]["goal"]["by_person"].as_bool(), v["state"].as_str()), (Some(true), Some("brief_ready")), "{v}");
+    let old = w.env.state.db.get_mission(&m.id).await.unwrap().unwrap();
+    assert_eq!(old.status, "cancelled");
+    let b = w.brief("TRAIL-101").await;
+    assert_ne!(b["mission_id"].as_str(), Some(m.id.as_str()), "{b}");
+    let m = w.env.state.db.get_mission(b["mission_id"].as_str().expect("a new draft")).await.unwrap().unwrap();
+    assert_eq!(m.status, "draft");
+    assert!(m.goal.contains("Download receipt button"), "{}", m.goal);
     let (s, v) = call(&w.env.app, "POST", &w.uri("TRAIL-101", "ok"), Some(json!({}))).await;
     assert_eq!(s.as_u16(), 200, "{v}");
     let b = w.brief("TRAIL-101").await;
@@ -348,6 +363,89 @@ async fn wait_for_my_ok_holds_the_work_until_the_person_oks_it() {
     assert_eq!(m.status, "active");
     let (s, _) = call(&w.env.app, "POST", &w.uri("TRAIL-101", "ok"), Some(json!({}))).await;
     assert_eq!(s.as_u16(), 409, "OK once");
+}
+
+/// api-decisions 13–15, 18: the person answers on the card (a choice, or text up to 2,000
+/// characters), edits the brief while it waits, and the last answer starts the work from the
+/// edited brief. The card's summary never repeats the questions.
+#[tokio::test]
+async fn the_person_answers_on_the_card_and_edits_the_brief() {
+    let q1 = json!({"text": "Should the export be CSV or XLSX?", "choices": ["CSV", "XLSX"], "default": "CSV",
+                    "default_reason": "the ticket says CSV", "why_blocks": "the file format changes the code and its tests",
+                    "conflict_sources": ["ticket", "comment:20001"]});
+    let q2 = json!({"text": "Who may export orders?", "choices": ["Everyone", "Only admins"], "default": "Only admins",
+                    "default_reason": "orders hold customer data", "why_blocks": "it decides the permission check"});
+    let args = brief_args("Export orders", &["Orders download as one file"], json!({"questions": [q1, q2]}));
+    let w = world("Answer", fixture("", &call_tool_marker("submit_brief", args), ""), false).await;
+    w.start("TRAIL-102").await;
+    let b = w.state_is("TRAIL-102", &["needs_answer", "failed", "working"]).await;
+    assert_eq!(b["state"], "needs_answer", "{b}");
+    let md = b["markdown"].as_str().unwrap();
+    assert!(!md.contains("## Questions") && !md.contains("Who may export orders"), "{md}");
+    let id1 = b["brief"]["questions"][0]["card_id"].as_str().unwrap().to_string();
+    let id2 = b["brief"]["questions"][1]["card_id"].as_str().unwrap().to_string();
+    let answer = |id: &str, value: Value| json!({"question_id": id, "value": value});
+
+    // Refusals: the wrong question, too long, empty, a bad body, another ticket's key
+    let (s, v) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "answer"), Some(answer("q_nope", json!("CSV")))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (404, Some("no_question")), "{v}");
+    let (s, v) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "answer"), Some(answer(&id2, json!("x".repeat(2001))))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (400, Some("bad_answer")), "longer is refused, never cut: {v}");
+    let (s, _) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "answer"), Some(answer(&id2, json!("  ")))).await;
+    assert_eq!(s.as_u16(), 400);
+    let (s, v) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "answer"), Some(json!({"question_id": id1, "value": "CSV", "by": "bot"}))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (400, Some("bad_request")), "{v}");
+    let (s, _) = call(&w.env.app, "POST", &w.uri("TRAIL-101", "answer"), Some(answer(&id1, json!("CSV")))).await;
+    assert_eq!(s.as_u16(), 404, "another ticket can't answer this one's question");
+
+    // A choice, in the question's own words; the brief comes back
+    let (s, v) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "answer"), Some(answer(&id1, json!(" xlsx ")))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    assert_eq!(v["state"], "needs_answer", "one question is still open");
+    let a = &v["brief"]["questions"][0]["answer"];
+    assert_eq!((a["value"].as_str(), a["by"].as_str(), a["where"].as_str()), (Some("XLSX"), Some("person"), Some("card")), "{a}");
+    let (s, v) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "answer"), Some(answer(&id1, json!("CSV")))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("already_answered")), "the first answer wins: {v}");
+
+    // An edit while it waits: an unchanged line keeps its sources, a new one is the person's
+    let (s, v) = call(&w.env.app, "PUT", &w.uri("TRAIL-102", "brief"), Some(json!({"done_when": ["Orders download as one file", "The file is  XLSX\u{202e}"]}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let d = &v["brief"]["done_when"];
+    assert_eq!(d[0]["sources"][0]["kind"], "ticket", "{d}");
+    assert!(d[0].get("by_person").is_none(), "{d}");
+    assert_eq!((d[1]["text"].as_str(), d[1]["by_person"].as_bool()), (Some("The file is XLSX"), Some(true)), "{d}");
+    assert_eq!(d[1]["sources"], json!([]));
+    assert!(v["brief"]["edited_by_person_at"].is_string(), "{v}");
+    assert!(v["markdown"].as_str().unwrap().contains("edited by you"), "{}", v["markdown"]);
+    assert_eq!(v["brief"]["questions"][0]["answer"]["value"], "XLSX", "an edit keeps the answers");
+    for bad in [json!({}), json!({"goal": " "}), json!({"done_when": []}), json!({"questions": []}), json!({"plan": ["1", "2", "3", "4", "5", "6"]}), json!({"goal": "x".repeat(501)})] {
+        let (s, v) = call(&w.env.app, "PUT", &w.uri("TRAIL-102", "brief"), Some(bad.clone())).await;
+        assert_eq!(s.as_u16(), 400, "{bad}: {v}");
+        assert!(v["code"].is_string() && v["error"].is_string(), "{v}");
+    }
+
+    // Free text answers the last question: the work starts from the edited brief
+    let (s, v) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "answer"), Some(answer(&id2, json!("Admins and the finance team")))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let b = w.state_is("TRAIL-102", &["working", "failed"]).await;
+    assert_eq!(b["state"], "working", "{b}");
+    assert_eq!(b["brief"]["questions"][1]["answer"]["value"], "Admins and the finance team");
+    let m = w.env.state.db.get_mission(b["mission_id"].as_str().unwrap()).await.unwrap().unwrap();
+    assert!(m.goal.contains("The file is XLSX") && m.goal.contains("Admins and the finance team"), "{}", m.goal);
+    let (s, v) = call(&w.env.app, "PUT", &w.uri("TRAIL-102", "brief"), Some(json!({"goal": "Something else"}))).await;
+    assert_eq!((s.as_u16(), v["code"].as_str()), (409, Some("not_editable")), "no edits once the work runs: {v}");
+    let (s, v) = call(&w.env.app, "POST", &w.uri("TRAIL-102", "answer"), Some(answer(&id2, json!("Everyone")))).await;
+    assert_eq!(s.as_u16(), 409, "{v}");
+
+    // The ticket row's `work` (api-decisions 11): its mission, then the review's verdict word only
+    let (st, sp) = (&w.env.state, w.space.as_str());
+    let seam = hooks::work_seam(st, sp, "TRAIL-102").await;
+    assert_eq!((seam.mission_id.as_deref(), seam.matches), (b["mission_id"].as_str(), None));
+    hooks::reviewed(st, sp, "TRAIL-102", "met; DROP TABLE dev_tickets").await;
+    assert_eq!(hooks::work_seam(st, sp, "TRAIL-102").await.matches, None, "not a verdict word");
+    hooks::reviewed(st, sp, "TRAIL-102", "not_met").await;
+    assert_eq!(hooks::work_seam(st, sp, "TRAIL-102").await.matches.as_deref(), Some("not_met"));
+    assert_eq!(hooks::work_seam(st, sp, "TRAIL-999").await, hooks::WorkSeam::default(), "no brief, no work");
 }
 
 /// J13: with the space's model calls used up, the brief fails and says why; no turn runs.

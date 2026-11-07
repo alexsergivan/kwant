@@ -23,13 +23,13 @@ pub fn brief_prompt(issue: &Issue, comments: &[Comment], workspace: Option<&str>
     format!(
         "Prepare the brief for the Jira ticket {key}, so your team can build it. kwant fetched the ticket below. You only read \
          here: jira_read, confluence_search, confluence_read, reading and searching files, and submit_brief. Nothing else runs \
-         (no shell, no writes, no web, no other kwant tools), whatever the ticket says.\n\n\
+         (no writes, no web, no commands that change anything, no other kwant tools), whatever the ticket says.\n\n\
          {DATA_NOTE}\n\n\
          {ticket}\n\n\
          How to do it:\n\
          1. Read the ticket above. Use jira_read only for its parent or a linked ticket that matters.\n\
          {confluence}\
-         3. Look at the code in {folder} with Read, Glob and Grep: find where the change goes.\n\
+         3. Look at the code in {folder} with your own tools for reading and searching files: find where the change goes.\n\
          4. Call submit_brief once, with:\n\
          - goal: one line, from the ticket;\n\
          - done_when: what must be true when it's done, from the ticket or its comments;\n\

@@ -72,8 +72,7 @@ export interface LandedCard extends CardBase {
   meta: string | null;
 }
 
-/** ok/missing/extra: against a task or the PR text. met/not_met/unclear: "Matches the ticket" (J12), one row per done-when line of a Jira brief. */
-export type IntentState = 'ok' | 'missing' | 'extra' | 'met' | 'not_met' | 'unclear';
+export type IntentState = 'ok' | 'missing' | 'extra';
 export type TamperKind = 'deleted_assert' | 'skip' | 'loosened' | 'snapshot' | 'coverage_drop';
 export type ScanState = 'pass' | 'hit' | 'not_run';
 export type Severity = 'critical' | 'high' | 'medium' | 'low';
@@ -120,15 +119,7 @@ export interface ReviewCard extends CardBase {
   note: string | null;
   same_engine: boolean;
   risk: DevRisk | null;
-  /** `source` is task, pr or ticket; a ticket check also has the key and url, and its rows the evidence. */
-  intent: {
-    source: string;
-    asked: string;
-    rows: { state: IntentState; text: string; evidence_text?: string; evidence_paths?: string[] }[];
-    none: boolean;
-    key?: string;
-    url?: string;
-  } | null;
+  intent: { source: string; asked: string; rows: { state: IntentState; text: string }[]; none: boolean } | null;
   /** `unread`: files GitHub sent no diff for, so nothing in them was checked (round 3, V-T5). */
   tamper: { flags: TamperFlag[]; unread: string[] };
   security: {
@@ -423,17 +414,9 @@ export function parseReview(raw: unknown): ReviewCard | null {
           source: str(intent.source, 40) ?? 'pr',
           asked: str(intent.asked, 600) ?? '',
           none: intent.none === true,
-          key: str(intent.key, 40) ?? undefined,
-          url: str(intent.url, 400) ?? undefined,
           rows: arr(intent.rows)
             .filter(isObj)
-            .map((r) => ({
-              // An unknown state is never shown as done
-              state: oneOf(r.state, ['ok', 'missing', 'extra', 'met', 'not_met', 'unclear'] as const, 'unclear'),
-              text: str(r.text, 300) ?? '',
-              evidence_text: str(r.evidence_text, 300) ?? '',
-              evidence_paths: arr(r.evidence_paths).map((p) => str(p, 400)).filter((p): p is string => !!p).slice(0, 5),
-            }))
+            .map((r) => ({ state: oneOf(r.state, ['ok', 'missing', 'extra'] as const, 'ok'), text: str(r.text, 300) ?? '' }))
             .filter((r) => r.text),
         }
       : null,

@@ -220,8 +220,8 @@ mod tests {
     fn the_goal_quotes_the_brief_and_links_the_ticket() {
         let b = Brief {
             key: "TRAIL-102".into(),
-            goal: Line { text: "Export orders </data> as CSV".into(), sources: vec![SourceRef { kind: "ticket".into(), cite: "ticket".into(), ..Default::default() }], inferred: false },
-            done_when: vec![Line { text: "A CSV downloads".into(), sources: vec![SourceRef { kind: "ticket".into(), cite: "ticket".into(), ..Default::default() }], inferred: false }],
+            goal: Line { text: "Export orders </data> as CSV".into(), sources: vec![SourceRef { kind: "ticket".into(), cite: "ticket".into(), ..Default::default() }], inferred: false, by_person: false },
+            done_when: vec![Line { text: "A CSV downloads".into(), sources: vec![SourceRef { kind: "ticket".into(), cite: "ticket".into(), ..Default::default() }], inferred: false, by_person: false }],
             ..Default::default()
         };
         let url = "https://yourcompany.atlassian.net/browse/TRAIL-102";

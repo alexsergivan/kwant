@@ -1033,8 +1033,7 @@ pub fn fix_task(space: &SpaceId, kwant_id: &str, card_id: &str, fid: &str, f: &V
     let s = |k: &str| f[k].as_str().unwrap_or("").trim().to_string();
     // The reviewing model's prose (a finding with no source is one, from before sources): labelled
     // as its words, and cut like the scan's PR text, 40 characters for the title, 200 for the rest.
-    // A ticket finding is the model's words around a Jira line: both untrusted, cut the same way.
-    let by_model = matches!(f["source"].as_str(), Some("review" | "ticket") | None);
+    let by_model = matches!(f["source"].as_str(), Some("review") | None);
     let prose = |k: &str, max: usize| if by_model { cut_chars(&s(k), max) } else { s(k) };
     let title: String = format!("Fix: {}", prose("title", MODEL_TITLE_CHARS)).chars().take(200).collect();
     let mut where_ = s("file");

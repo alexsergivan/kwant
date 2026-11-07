@@ -10,6 +10,7 @@
 pub mod brief;
 pub mod brief_routes;
 pub mod hooks;
+pub mod links;
 pub mod mission;
 pub mod prompt;
 pub mod seam;
@@ -19,6 +20,14 @@ pub mod tools;
 /// The brief turn's purpose (`TurnOpts::purpose`): it runs only on Claude with kwant's permission
 /// hook, gets only the four brief tools and only reads ([`tools::BriefApprover`]).
 pub const BRIEF_PURPOSE: &str = "dev_brief";
+
+/// Whether a brief turn may run on this engine (J7): Claude, whose permission hook holds every
+/// call to reading, and Codex, in its read-only sandbox with the gateway's calls held the same
+/// way. Grok and Custom API accounts can be neither gated nor sandboxed, so they never read a
+/// ticket.
+pub fn brief_engine(engine: crate::profiles::Engine) -> bool {
+    matches!(engine, crate::profiles::Engine::Claude | crate::profiles::Engine::Codex)
+}
 
 /// A Jira key as kwant accepts it: `PROJECT-123`, upper-case, at most 40 characters.
 pub fn valid_key(key: &str) -> bool {
@@ -42,5 +51,19 @@ mod tests {
         assert!(!super::valid_key("TRAIL-1-2"));
         assert!(!super::valid_key("../x-1"));
         assert!(!super::valid_key("TRAIL102"));
+    }
+}
+
+#[cfg(test)]
+mod engine_tests {
+    use super::brief_engine;
+    use crate::profiles::Engine;
+
+    #[test]
+    fn a_brief_reads_a_ticket_only_on_an_engine_that_can_be_held_to_reading() {
+        assert!(brief_engine(Engine::Claude));
+        assert!(brief_engine(Engine::Codex), "in its read-only sandbox");
+        assert!(!brief_engine(Engine::Grok));
+        assert!(!brief_engine(Engine::Custom));
     }
 }
