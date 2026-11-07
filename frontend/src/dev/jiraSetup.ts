@@ -383,6 +383,17 @@ export const setJiraTransport = (s: Send | null): void => {
   send = s ?? ((url, init) => personFetch(url, init));
 };
 
+/** Why Check now didn't run, as a sentence, for the PollReport's `skipped` code (pickup.rs). */
+const POLL_SKIPPED: Record<string, string> = {
+  no_site: 'Jira isn’t set up for this space yet.',
+  off: 'Work from Jira is off. Turn it on to check for tickets.',
+  dev_mode_off: 'Dev mode is off for this space, so bots don’t check Jira.',
+  no_team: 'Choose the team that works on these tickets, then check again.',
+  backing_off: 'Jira asked for a slower pace. The next check runs on its own in a few minutes.',
+  busy: 'A check is already running. Try again in a moment.',
+};
+export const pollSkippedText = (code: string): string => (Object.prototype.hasOwnProperty.call(POLL_SKIPPED, code) ? POLL_SKIPPED[code] : 'Jira wasn’t checked this time.');
+
 async function call(path: string, method = 'GET', body?: unknown): Promise<{ status: number; data: unknown }> {
   let res: Response;
   try {
@@ -474,11 +485,12 @@ export const jiraApi = {
     const r = await call(`${base(space)}/jira?forget_token=${forgetToken}`, 'DELETE');
     return isObj(r.data) && r.data.deleted === true;
   },
-  /** Check now (J4): one pickup pass. Answers the PollReport's `error` or `skipped`, or null when it ran. */
+  /** Check now (J4): one pickup pass. Answers the PollReport's `error`, a sentence for `skipped`, or null when it ran. */
   async poll(space: string): Promise<string | null> {
     const r = await call(`${base(space)}/jira/poll`, 'POST');
     const o = isObj(r.data) ? r.data : {};
-    return str(o.error, 400) ?? (str(o.skipped, 40) ? `Skipped: ${String(o.skipped).replace(/_/g, ' ')}.` : null);
+    const skipped = str(o.skipped, 40);
+    return str(o.error, 400) ?? (skipped ? pollSkippedText(skipped) : null);
   },
   async setOn(space: string, on: boolean): Promise<boolean> {
     const r = await call(`${base(space)}/jira/on`, 'POST', { on });

@@ -599,6 +599,44 @@ test('8: the settings box names where the token lives, its scope, projects, spac
   r.unmount();
 });
 
+test('Check now: each skipped code reads as a sentence, never the raw code', async () => {
+  const want = {
+    no_site: 'Jira isn’t set up for this space yet.',
+    off: 'Work from Jira is off. Turn it on to check for tickets.',
+    dev_mode_off: 'Dev mode is off for this space, so bots don’t check Jira.',
+    no_team: 'Choose the team that works on these tickets, then check again.',
+    backing_off: 'Jira asked for a slower pace. The next check runs on its own in a few minutes.',
+    busy: 'A check is already running. Try again in a moment.',
+    something_new: 'Jira wasn’t checked this time.',
+    constructor: 'Jira wasn’t checked this time.',
+  };
+  for (const [code, text] of Object.entries(want)) {
+    m.setJiraTransport(async () => new Response(JSON.stringify({ matched: 0, skipped: code, error: null }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const got = await m.jiraApi.poll('spc_demo');
+    assert.equal(got, text, code);
+    assert.doesNotMatch(got, /Skipped:|_/, code);
+  }
+  m.setJiraTransport(async () => new Response(JSON.stringify({ matched: 4, skipped: null, error: null }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  assert.equal(await m.jiraApi.poll('spc_demo'), null, 'a pass that ran has no note');
+  m.setJiraTransport(async () => new Response(JSON.stringify({ skipped: 'no_team', error: 'Jira answered 500.' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  assert.equal(await m.jiraApi.poll('spc_demo'), 'Jira answered 500.', 'the server’s error wins');
+});
+
+test('Check now: the settings box shows the no_team sentence', async () => {
+  m.jiraStore._reset();
+  localStorage.clear();
+  const inner = fx.fxTransport({ site: fx.fxSiteRow() });
+  m.setJiraTransport(async (url, init) =>
+    url.split('?')[0].endsWith('/dev/jira/poll') ? new Response(JSON.stringify({ matched: 0, skipped: 'no_team', error: null }), { status: 200, headers: { 'Content-Type': 'application/json' } }) : inner(url, init),
+  );
+  const r = await mount(h(m.JiraSettings, { space: 'spc_demo', teams: [{ id: 'team_shop', name: 'Shop team', lead: ANN, members: [ANN] }] }));
+  await settle(20);
+  await click(r.host.querySelector('[data-jira-check-now]'));
+  await settle(20);
+  assert.equal(r.host.querySelector('[data-jira-poll-note]').textContent, 'Choose the team that works on these tickets, then check again.');
+  r.unmount();
+});
+
 test('8: no scope note, no scope; a local store reads "Saved on this server"', () => {
   assert.equal(m.tokenLine('local', null), 'Saved on this server');
   assert.equal(m.tokenLine(null, 'scoped: reads Jira and Confluence'), 'Saved on this server · scoped: reads Jira and Confluence');
