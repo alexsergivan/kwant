@@ -294,7 +294,7 @@ pub async fn approve_local_shell_in(
                 let _ = state.db.update_approval_status(&ticket, "expired").await;
                 let _ = state
                     .event_sender
-                    .send(RuntimeEvent::ApprovalWithdrawn { id: ticket });
+                    .send(RuntimeEvent::approval_withdrawn(ticket, "expired", None));
             }
             false
         }
