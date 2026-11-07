@@ -11,8 +11,9 @@ use crate::server::dev::atlassian;
 use crate::server::AppState;
 
 /// The first Jira key in a PR's head branch (`TRAIL-101-receipt-link`), else in its title
-/// (`TRAIL-101: Add a receipt link`). A key is `[A-Z][A-Z0-9_]+-[0-9]+` standing alone: not
-/// inside a longer word, so `XTRAIL-1` and `TRAIL-1x` aren't `TRAIL-1`.
+/// (`TRAIL-101: Add a receipt link`). A key is `[A-Z][A-Z0-9_]+-[0-9]+` in any case, turned to
+/// upper case (`trail-12-fix` is `TRAIL-12`), standing alone: not inside a longer word, so
+/// `1TRAIL-1` and `TRAIL-1x` aren't `TRAIL-1`.
 pub fn key_in(branch: Option<&str>, title: &str) -> Option<String> {
     keys_in(branch, title).into_iter().next()
 }
@@ -35,9 +36,9 @@ fn all_keys(s: &str) -> Vec<String> {
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
     let mut i = 0;
     while i < b.len() {
-        if b[i].is_ascii_uppercase() && (i == 0 || !word(b[i - 1])) {
+        if b[i].is_ascii_alphabetic() && (i == 0 || !word(b[i - 1])) {
             let mut j = i + 1;
-            while j < b.len() && (b[j].is_ascii_uppercase() || b[j].is_ascii_digit() || b[j] == b'_') {
+            while j < b.len() && (b[j].is_ascii_alphabetic() || b[j].is_ascii_digit() || b[j] == b'_') {
                 j += 1;
             }
             if j - i >= 2 && j < b.len() && b[j] == b'-' {
@@ -46,9 +47,9 @@ fn all_keys(s: &str) -> Vec<String> {
                     k += 1;
                 }
                 if k > j + 1 && k - j - 1 <= 12 && (k == b.len() || !word(b[k])) {
-                    let key = &s[i..k];
-                    if super::source::valid_key(key) && out.len() < 10 {
-                        out.push(key.to_string());
+                    let key = s[i..k].to_ascii_uppercase();
+                    if super::source::valid_key(&key) && out.len() < 10 {
+                        out.push(key);
                     }
                 }
             }
@@ -269,12 +270,24 @@ mod tests {
 
     #[test]
     fn a_key_stands_alone() {
-        assert_eq!(key_in(Some("XtRAIL-1"), "trail-1 and T-1 and TRAIL-01"), None);
+        assert_eq!(key_in(Some("1TRAIL-1"), "_trail-1 and T-1 and TRAIL-01"), None);
         assert_eq!(key_in(None, "TRAIL-1x"), None);
-        assert_eq!(key_in(None, "aTRAIL-1"), None);
+        assert_eq!(key_in(None, "trail-1x"), None);
+        assert_eq!(key_in(None, "9TRAIL-1"), None);
         assert_eq!(key_in(None, "TRAIL-"), None);
         assert_eq!(key_in(None, "TRAIL-1234567890123"), None);
         assert_eq!(keys_in(Some("TRAIL-12-utf"), "Fix UTF-8 in TRAIL-12"), vec!["TRAIL-12".to_string(), "UTF-8".to_string()]);
+    }
+
+    #[test]
+    fn a_lower_case_key_is_matched_in_upper_case() {
+        assert_eq!(key_in(Some("trail-12-fix"), ""), Some("TRAIL-12".into()));
+        assert_eq!(key_in(Some("feature/Trail-7-receipt"), ""), Some("TRAIL-7".into()));
+        assert_eq!(key_in(Some("main"), "trail-9: orders export"), Some("TRAIL-9".into()));
+        assert_eq!(key_in(None, "xtrail-1"), Some("XTRAIL-1".into()), "another project, not TRAIL-1");
+        // One key, however it is written
+        assert_eq!(keys_in(Some("trail-12-utf-8"), "Fix utf-8 in TRAIL-12"), vec!["TRAIL-12".to_string(), "UTF-8".to_string()]);
+        assert_eq!(key_in(Some("trail-01"), "t-1"), None);
     }
 
     #[test]

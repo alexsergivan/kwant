@@ -14,7 +14,8 @@ use kwnt::db::dev_jira::{self, TicketRow};
 use kwnt::db::models::{NewKwant, NewTeam};
 use kwnt::db::spaces::SpaceId;
 use kwnt::server::continuity::{SelfScope, TurnOrigin};
-use kwnt::server::dev::tickets::{pickup, store};
+use kwnt::server::dev::tickets::hooks::{self, TicketRef};
+use kwnt::server::dev::tickets::{pickup, store, tools};
 use kwnt::server::mcp_runtime;
 use mock_atlassian::{Fault, Flavor, MockAtlassian};
 use serde_json::{json, Value};
@@ -488,7 +489,7 @@ async fn a_429_backs_off_until_retry_after_and_a_revoked_token_is_named() {
     let _g = gateway_to(&m);
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
-    connect(&env, &m, json!({})).await;
+    let team_id = connect_team(&env, &m).await;
     m.fault("/search/jql", Fault::TooMany { retry_after: Some(600) });
     let r = poll(&env).await;
     assert!(r["error"].as_str().unwrap_or_default().contains("slow down"), "{r}");
@@ -503,7 +504,7 @@ async fn a_429_backs_off_until_retry_after_and_a_revoked_token_is_named() {
 
     // Saving the site again clears the back-off; a revoked token is named, not retried
     m.heal("/search/jql");
-    connect(&env, &m, json!({})).await;
+    connect(&env, &m, json!({"team_id": team_id})).await;
     m.revoke();
     poll(&env).await;
     let site = env.state.db.dev_jira_site(&space()).await.unwrap().unwrap();
@@ -517,7 +518,7 @@ async fn turning_pickup_off_keeps_the_cards_and_delete_forgets_the_token() {
     let _g = gateway_to(&m);
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
-    connect(&env, &m, json!({})).await;
+    connect_team(&env, &m).await;
     poll(&env).await;
     let key = m.add_issue("TRAIL", "A", &["kwant"], None);
     poll(&env).await;
@@ -534,6 +535,87 @@ async fn turning_pickup_off_keeps_the_cards_and_delete_forgets_the_token() {
     assert!(env.state.db.dev_jira_site(&space()).await.unwrap().is_none());
     let store = env.state.credentials.local();
     assert!(kwnt::zombie::hunt::source_secret(store, &site_id, &m.base).await.unwrap().is_none(), "the token is forgotten");
+}
+
+/// Off stops all Jira contact (brief.md §1 step 1, spec E: "pickup stops and the cards stay"): a
+/// reading turn's Jira tool is refused without a request, a ticket whose turn comes waits as it is
+/// (not failed), and the poll is skipped. On again, pickup works as before.
+#[tokio::test]
+async fn turning_off_mid_read_makes_no_jira_call_and_keeps_the_cards() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app");
+    let team_id = connect_team(&env, &m).await;
+    poll(&env).await;
+    let site_id = env.state.db.dev_jira_site(&space()).await.unwrap().unwrap().id;
+    let lead = env.state.db.get_team(&team_id).await.unwrap().unwrap().lead_kwant_id;
+
+    // One card in its reading turn (the turn's tools open), one whose turn has come
+    let reading = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    let next = m.add_issue("TRAIL", "Orders export", &["kwant"], None);
+    for key in [&reading, &next] {
+        let f = dev_jira::TicketFacts { key: key.clone(), project: "TRAIL".into(), summary: m.issue(key).unwrap().summary, ..Default::default() };
+        assert!(env.state.db.insert_dev_ticket(&space(), &site_id, &f, dev_jira::PICKED_UP, Some(&team_id), Some("label")).await.unwrap());
+    }
+    assert!(env.state.db.set_dev_ticket_state(&space(), &reading, dev_jira::READING).await.unwrap());
+    let thread = format!("brief-off-{}", uuid::Uuid::new_v4().simple());
+    tools::open(tools::Session::new(&space(), &site_id, &reading, &lead, &thread, None));
+
+    let (s, v) = call(&env.app, "POST", &uri("jira/on"), Some(json!({"on": false}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let hits = m.hits().len();
+    let (text, is_error) = tools::call(&env.state, &thread, tools::JIRA_READ, &json!({"key": reading})).await;
+    assert_eq!((text.as_str(), is_error), ("Jira is no longer connected for this space.", true));
+    hooks::start(&env.state, &space(), TicketRef { site_id: site_id.clone(), key: next.clone(), team_id: team_id.clone() }).await;
+    assert_eq!(poll(&env).await["skipped"], "off");
+    assert_eq!(m.hits().len(), hits, "no Jira call while Off: {:?}", &m.hits()[hits..]);
+    assert_eq!(ticket(&env, &reading).await.state, dev_jira::READING, "{:?}", events(&env, &reading).await);
+    assert_eq!(ticket(&env, &next).await.state, dev_jira::PICKED_UP, "waits, not failed: {:?}", events(&env, &next).await);
+    assert!(env.state.db.ticket_brief(&space(), &next).await.unwrap().is_none(), "nothing was read for it");
+    tools::close(&thread);
+
+    // On again: pickup works as before
+    let (s, v) = call(&env.app, "POST", &uri("jira/on"), Some(json!({"on": true}))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    poll(&env).await;
+    let fresh = m.add_issue("TRAIL", "Receipt link", &["kwant"], None);
+    clear(&m, &fresh);
+    let r = poll(&env).await;
+    assert_eq!((r["new"].as_u64(), r["skipped"].clone()), (Some(1), Value::Null), "{r}");
+    until_working(&env, &fresh).await;
+}
+
+/// A site with no team, or whose team is gone, picks nothing up (`skipped: "no_team"`, no Jira
+/// call), and the cards it has stay as they are.
+#[tokio::test]
+async fn a_site_with_no_team_picks_nothing_up_and_keeps_its_cards() {
+    let env = jira_setup().await;
+    let m = MockAtlassian::cloud().await;
+    let _g = gateway_to(&m);
+    dev_mode_on(&env).await;
+    m.add_project("TRAIL", "Trail app");
+    connect(&env, &m, json!({})).await;
+    let first = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
+    let connected = m.searches();
+    let r = poll(&env).await;
+    assert_eq!(r["skipped"], "no_team", "{r}");
+    assert_eq!(m.searches(), connected, "no search for a site with no team");
+    assert!(env.state.db.dev_tickets(&space()).await.unwrap().is_empty());
+
+    // With a team the first poll brings it in as waiting; then the team is deleted
+    let team_id = connect_team(&env, &m).await;
+    poll(&env).await;
+    assert_eq!(ticket(&env, &first).await.state, dev_jira::WAITING);
+    assert!(env.state.db.delete_team(&team_id).await.unwrap());
+    let searches = m.searches();
+    let later = m.add_issue("TRAIL", "Orders export", &["kwant"], None);
+    let r = poll(&env).await;
+    assert_eq!(r["skipped"], "no_team", "{r}");
+    assert_eq!(m.searches(), searches, "no Jira call");
+    assert_eq!(ticket(&env, &first).await.state, dev_jira::WAITING, "the card stays");
+    assert!(env.state.db.dev_ticket(&space(), &later).await.unwrap().is_none(), "no new card");
 }
 
 /// Design §5 and amendment J9: the exact comment is shown first, mentions the reporter (an ADF
@@ -662,7 +744,8 @@ async fn the_site_answer_has_arrays_on_and_puts_hand_over_words_and_every_4xx_is
     m.add_project("TRAIL", "Trail app");
     m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
 
-    let v = connect(&env, &m, json!({"handover": "label"})).await;
+    let team_id = team(&env).await;
+    let v = connect(&env, &m, json!({"handover": "label", "team_id": team_id})).await;
     for site in [v["site"].clone(), call(&env.app, "GET", &uri("jira"), None).await.1["site"].clone()] {
         assert_eq!(site["projects"], json!(["TRAIL"]), "api-decisions 1: {site}");
         assert_eq!(site["spaces"], json!([]), "{site}");
@@ -899,7 +982,8 @@ async fn the_site_names_its_projects_and_spaces_from_the_check_and_the_poll_neve
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app").add_project("OPS", "Operations");
     m.add_space("ENG", "Engineering");
-    let v = connect(&env, &m, json!({"spaces": ["ENG"], "project_names": {"TRAIL": "Injected"}, "space_names": {"ENG": "Injected"}})).await;
+    let team_id = team(&env).await;
+    let v = connect(&env, &m, json!({"team_id": team_id, "spaces": ["ENG"], "project_names": {"TRAIL": "Injected"}, "space_names": {"ENG": "Injected"}})).await;
     assert_eq!(v["site"]["project_names"], json!({"OPS": "Operations", "TRAIL": "Trail app"}), "PUT takes the check's names, not the body's: {v}");
     assert_eq!(v["site"]["space_names"], json!({"ENG": "Engineering"}), "{v}");
     let (_, g) = call(&env.app, "GET", &uri("jira"), None).await;

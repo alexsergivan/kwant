@@ -100,7 +100,7 @@ async fn no_token_anywhere(env: &Env, m: &MockAtlassian) {
 }
 
 /// R-INT-1: a ticket handed over after connecting is read: Juno's poller calls hooks::start, so the
-/// row leaves picked_up (here it fails: the site has no team to read it) and it has a brief row.
+/// row leaves picked_up and it has a brief row. (A site with no team picks nothing up: `no_team`.)
 #[tokio::test]
 async fn rigel_int_1_a_handed_over_ticket_is_read_by_the_brief_turn() {
     let env = jira_setup().await;
@@ -108,7 +108,8 @@ async fn rigel_int_1_a_handed_over_ticket_is_read_by_the_brief_turn() {
     let _g = gateway_to(&m);
     dev_mode_on(&env).await;
     m.add_project("TRAIL", "Trail app");
-    connect(&env, &m, json!({})).await;
+    let team_id = team(&env).await;
+    connect(&env, &m, json!({"team_id": team_id})).await;
     poll(&env).await;
     let new = m.add_issue("TRAIL", "Add dark mode", &["kwant"], None);
     let r = poll(&env).await;

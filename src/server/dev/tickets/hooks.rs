@@ -122,6 +122,11 @@ pub async fn start(state: &AppState, space_id: &str, t: TicketRef) {
         return;
     }
     let Some(site) = seam::site(state, space_id, &t.site_id).await else {
+        if seam::is_off(state, space_id, &t.site_id).await {
+            // Off: no Jira contact, and the card stays as it is until the person turns it On
+            tracing::info!(key = %t.key, "dev: the Jira site is off; the ticket waits");
+            return;
+        }
         // Its site can't be built (gone, or its token unreadable): fail it, so it doesn't hold a
         // slot in picked_up forever. Retry starts it again.
         tracing::warn!(key = %t.key, "dev: no site to read a ticket from");

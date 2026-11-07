@@ -299,6 +299,11 @@ pub async fn call(state: &AppState, thread_id: &str, name: &str, args: &Value) -
         return ("This brief is closed.".into(), true);
     };
     let Some(site) = seam::site(state, &s.space_id, &s.site_id).await else {
+        // Off stops every Jira read; a brief from what was already read is still kept (no Jira
+        // contact), so the card moves on as it would have
+        if name == SUBMIT_BRIEF && seam::is_off(state, &s.space_id, &s.site_id).await {
+            return submit(thread_id, args);
+        }
         return ("Jira is no longer connected for this space.".into(), true);
     };
     match name {

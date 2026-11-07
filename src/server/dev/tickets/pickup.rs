@@ -89,7 +89,7 @@ pub struct PollReport {
     pub started: usize,
     /// `hooks::reporter_replied` calls.
     pub replies: usize,
-    /// Why nothing ran: `no_site`, `off`, `dev_mode_off`, `backing_off`, `busy`.
+    /// Why nothing ran: `no_site`, `off`, `dev_mode_off`, `no_team`, `backing_off`, `busy`.
     pub skipped: Option<&'static str>,
     /// The error kept on the site row (shown on the status line).
     pub error: Option<String>,
@@ -147,6 +147,11 @@ pub async fn poll_site(state: &AppState, space_id: &str) -> PollReport {
         report.skipped = Some("dev_mode_off");
         return report;
     }
+    if !has_team(state, &site).await {
+        // No team to hand tickets to: no new cards, and the cards there stay as they are
+        report.skipped = Some("no_team");
+        return report;
+    }
     if site.backoff_until.is_some_and(|t| t > Utc::now()) {
         report.skipped = Some("backing_off");
         report.error = site.poll_error.clone();
@@ -171,6 +176,12 @@ pub async fn poll_site(state: &AppState, space_id: &str) -> PollReport {
         tracing::warn!("jira: could not save the poll for a space: {e}");
     }
     report
+}
+
+/// Whether the site's team is set and still a team of its space.
+async fn has_team(state: &AppState, site: &JiraSiteRow) -> bool {
+    let Some(id) = site.team_id.as_deref().filter(|t| !t.is_empty()) else { return false };
+    matches!(state.db.get_team(id).await, Ok(Some(t)) if t.space_id == site.space_id)
 }
 
 /// The `PollMark` for an error that stopped a poll. Never a URL or header (see `SourceError`).

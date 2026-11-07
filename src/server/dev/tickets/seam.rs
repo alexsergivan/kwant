@@ -6,8 +6,9 @@
 //! - [`set_state`]: the card row `dev_tickets.state` is the ticket's one state.
 //! - [`set_asked`]: the Ask on Jira comment, on both rows.
 //!
-//! Nothing here reaches the network unless a site is connected: a space with no saved site has
-//! no tickets, so with Jira off nothing changes.
+//! Nothing here reaches the network unless a site is connected and On: a space with no saved site
+//! has no tickets, and a site turned Off (`on_` false) has no [`site`], so no Jira read or write is
+//! made for it (brief.md §1 step 1, spec E: "pickup stops and the cards stay").
 
 use super::source::{TicketSource, TicketWriter};
 use super::store::{self, FailCode};
@@ -39,14 +40,18 @@ pub async fn saved(state: &AppState, space_id: &str, site_id: &str) -> Option<Ji
     state.db.dev_jira_site(space_id).await.ok().flatten().filter(|r| r.id == site_id)
 }
 
-/// The site, only when it is the one saved for `space_id`. `None` too when its token can't be
-/// read (vault locked, token gone): nothing reads Jira then.
+/// The site, only when it is the one saved for `space_id` and it is On. `None` too when it is Off
+/// ([`is_off`] tells the two apart) or its token can't be read (vault locked, token gone): nothing
+/// reads or writes Jira then.
 pub async fn site(state: &AppState, space_id: &str, site_id: &str) -> Option<Site> {
     #[cfg(feature = "test-seams")]
     if let Some(s) = test_sites::get(space_id, site_id) {
         return Some(s);
     }
     let row = saved(state, space_id, site_id).await?;
+    if !row.on_ {
+        return None;
+    }
     let client = match crate::server::dev::atlassian::client_for(state, &row).await {
         Ok(c) => c,
         Err(e) => {
@@ -63,6 +68,12 @@ pub async fn site(state: &AppState, space_id: &str, site_id: &str) -> Option<Sit
         confluence: !row.space_list().is_empty(),
         origins: super::links::origins(&row.jira_url, row.confluence_url.as_deref()),
     })
+}
+
+/// Whether `site_id` is the space's saved site and the person turned it Off. Its tickets then wait
+/// as they are: [`site`] is `None` for it, but that isn't a failure.
+pub async fn is_off(state: &AppState, space_id: &str, site_id: &str) -> bool {
+    saved(state, space_id, site_id).await.is_some_and(|r| !r.on_)
 }
 
 /// Whether the site is connected, and its Confluence search is on: from the saved row alone,
