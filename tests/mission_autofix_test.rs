@@ -29,6 +29,7 @@ use kwnt::{
     tools::ToolRunner,
 };
 use serde_json::{json, Value};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -781,9 +782,11 @@ async fn diagnostics_are_redacted_and_their_path_never_reaches_the_api() {
     }
     // The full diagnostics are on disk only, redacted, 0600 in a 0700 folder
     let dir = e.state.config.data_dir.join("autofix").join(&tid);
+    #[cfg(unix)]
     assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
     let files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|f| f.unwrap().path()).collect();
     assert_eq!(files.len(), 1, "{files:?}");
+    #[cfg(unix)]
     assert_eq!(std::fs::metadata(&files[0]).unwrap().permissions().mode() & 0o777, 0o600);
     let body = std::fs::read_to_string(&files[0]).unwrap();
     assert!(body.contains("exit code 1") && !body.contains("api03abcdefghij0123456789") && !body.contains("hunter2secretpw"), "{body}");

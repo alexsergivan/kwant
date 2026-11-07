@@ -57,7 +57,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build (every error, short)
-        run: cargo check --all-targets --locked --message-format short
+        run: cargo check --all-targets --locked --keep-going --message-format short
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Tests

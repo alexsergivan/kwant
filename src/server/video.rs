@@ -40,8 +40,10 @@ const MAX_FRAME_BYTES: u64 = 5 * 1024 * 1024;
 /// Frames bigger than this many pixels aren't decoded (8K is 33 MP).
 const MAX_PIXELS: &str = "40000000";
 /// No file ffmpeg writes may pass this.
+#[cfg(unix)]
 const OUT_FSIZE: u64 = 16 * 1024 * 1024;
 /// Address space for one ffmpeg/ffprobe.
+#[cfg(unix)]
 const MAX_AS: u64 = 2 * 1024 * 1024 * 1024;
 /// Most ffprobe JSON read.
 const MAX_PROBE_OUT: usize = 256 * 1024;
