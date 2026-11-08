@@ -80,6 +80,11 @@ export interface BrowserTakeoverStageProps {
   handBackQuiet?: boolean;
   /** A strip under the top bar, such as the Recording bar. */
   belowBar?: React.ReactNode;
+  /**
+   * F4: other chats are browsing too. The panel's switcher is under this stage while you're in
+   * control, so its "Hand back first" can't be reached; Hand back says it instead.
+   */
+  othersBrowsing?: boolean;
 }
 
 const BUTTON_BIT: Record<number, number> = { 0: 1, 1: 4, 2: 2 };
@@ -89,7 +94,7 @@ const BUTTON_BIT: Record<number, number> = { 0: 1, 1: 4, 2: 2 };
  * drawn 1:1 with the page resized to match. Mouse, wheel and keyboard go to the page as they are;
  * the top bar keeps the address, history and "Hand back".
  */
-export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botName, pageUrl, pageTitle, stream, image, step, avatarRole, onNavigate, notice, onHandBack, onRetryControl, extraAction, handBackQuiet = false, belowBar }) => {
+export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botName, pageUrl, pageTitle, stream, image, step, avatarRole, onNavigate, notice, onHandBack, onRetryControl, extraAction, handBackQuiet = false, belowBar, othersBrowsing = false }) => {
   const { send, controlling, frame, acknowledgeFrame } = stream;
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -454,6 +459,7 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
   const focusOut = controlling && !pageFocused && !popupOpen;
   const outline = controlling ? (focusOut ? 'rgb(124 196 255 / 0.45)' : '#7cc4ff') : 'rgb(255 255 255 / 0.14)';
   const hintId = useId();
+  const switchHintId = useId();
 
   const coarse = '[@media(pointer:coarse)]:h-11';
   const navButton = `shrink-0 inline-flex items-center justify-center w-8 h-8 [@media(pointer:coarse)]:w-11 ${coarse} rounded-lg text-zinc-200 hover:bg-white/[0.06] aria-disabled:text-[#5a5383] aria-disabled:hover:bg-transparent aria-disabled:cursor-default focus:outline-none focus-visible:ring-2 focus-visible:ring-[#b8adff]`;
@@ -568,11 +574,18 @@ export const BrowserTakeoverStage: React.FC<BrowserTakeoverStageProps> = ({ botN
         ref={actionRef}
         type="button"
         onClick={onHandBack}
+        title={othersBrowsing ? 'Hand back first to switch browser' : undefined}
+        aria-describedby={othersBrowsing ? switchHintId : undefined}
         className={`${actionButton} ${step || handBackQuiet ? GHOST_BUTTON : PRIMARY_BUTTON}`}
         data-primary={(!step && !handBackQuiet) || undefined}
       >
         <Hand size={15} aria-hidden="true" /> Hand back
       </button>
+      {othersBrowsing && (
+        <span id={switchHintId} className="sr-only">
+          Hand back first to switch browser
+        </span>
+      )}
       {step && (
         <button type="button" onClick={answerStep} disabled={stepBusy} className={`${actionButton} ${PRIMARY_BUTTON}`} data-primary>
           {stepBusy ? <Loader2 size={15} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}

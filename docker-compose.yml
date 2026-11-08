@@ -1,8 +1,10 @@
-# kwant on a server, everything in one command:  docker compose up -d --build
+# kwant on a server, everything in one command:  docker compose up -d
 #   kwnt     the app, UI on 127.0.0.1:8799 (KWNT_HOST_PORT to change; put HTTPS in front: see README "VPS in 5 minutes")
-#   laya     picks which bot answers (model baked into the image)
-#   browser  the bots' private Chromium, so VM mode works without the Docker socket
-# AI CLIs in the image:  KWNT_CLIS=claude,codex,grok docker compose up -d --build
+#            The released image (ghcr.io/alexsergivan/kwnt; KWNT_VERSION=0.7.6 to pin one), built here only if it can't be pulled
+#   laya     picks which bot answers (model baked into the image; built here on the first start)
+#   browser  the bots' private Chromium, so VM mode works without the Docker socket (built here too)
+# Upgrade:  docker compose pull kwnt && docker compose up -d
+# AI CLIs in the image, or kwnt from this checkout:  KWNT_CLIS=claude,codex,grok docker compose up -d --build
 # Check what's missing:  docker compose exec kwnt kwnt doctor
 services:
   laya:
@@ -36,7 +38,7 @@ services:
       dockerfile: docker/kwnt.Dockerfile
       args:
         KWNT_CLIS: ${KWNT_CLIS:-}
-    image: kwnt:latest
+    image: ghcr.io/alexsergivan/kwnt:${KWNT_VERSION:-latest}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${KWNT_HOST_PORT:-8799}:8799"

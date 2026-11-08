@@ -99,8 +99,12 @@ async fn save(state: &AppState, space_id: &str, key: &str, b: &Brief) -> Brief {
 }
 
 async fn fail(state: &AppState, space_id: &str, key: &str, note: &str) {
+    fail_with(state, space_id, key, note, super::store::FailCode::BriefFailed).await;
+}
+
+async fn fail_with(state: &AppState, space_id: &str, key: &str, note: &str, code: super::store::FailCode) {
     let _ = state.db.set_ticket_brief_field(space_id, key, "note", Some(note)).await;
-    seam::fail(state, space_id, key, super::store::FailCode::BriefFailed).await;
+    seam::fail(state, space_id, key, code).await;
 }
 
 async fn open_questions(state: &AppState, space_id: &str, key: &str) -> Vec<TicketQuestion> {
@@ -368,7 +372,11 @@ pub async fn after_turn(state: &AppState, space_id: &str, key: &str, thread_id: 
             Some(id) => state.db.get_task(id).await.ok().flatten().is_some_and(|t| !matches!(t.state.as_str(), "working" | "needs_you")),
             None => false,
         };
-        let note = if over {
+        // D6: a refused engine is its own reason on the card, in kwant's words, not a failure
+        let refused = error.as_deref().is_some_and(super::is_engine_refusal);
+        let note = if refused {
+            super::store::FailCode::EngineRefused.message()
+        } else if over {
             "The brief went over its token budget; press Start to try again.".to_string()
         } else {
             match error {
@@ -377,7 +385,8 @@ pub async fn after_turn(state: &AppState, space_id: &str, key: &str, thread_id: 
             }
         };
         close_task(state, r.task_id.as_deref(), false, &note).await;
-        fail(state, space_id, key, &note).await;
+        let code = if refused { super::store::FailCode::EngineRefused } else { super::store::FailCode::BriefFailed };
+        fail_with(state, space_id, key, &note, code).await;
         return;
     };
     let texts = session.map(|s| s.texts).unwrap_or_default();

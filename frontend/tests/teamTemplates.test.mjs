@@ -44,7 +44,7 @@ const m = await loadBundled(`
   export * as fx from './src/teams/suggestFixtures';
   export { TEMPLATES_FIXTURE, TEMPLATES_WIRE } from './src/teams/templateFixtures';
   export { TeamPreviewSheet } from './src/components/TeamPreviewSheet';
-  export { TeamNeedsCard, TeamCreatedToast, UndoTeamConfirm } from './src/components/TeamNeedsCard';
+  export { TeamNeedsCard, TeamCreatedToast, UndoTeamConfirm, archivedChatLine } from './src/components/TeamNeedsCard';
   export { TemplateWelcome, TemplateTiles, TemplateSidebarBox } from './src/components/TeamTemplatePicks';
   export { ReadyTeamsProvider, TeamNeedsTop, madeFromRow, useNeedsContext } from './src/components/ReadyTeams';
   export { ReadyTeamsTiles, SuggestMembersButton, ReadyTeamsSidebarBox } from './src/components/ReadyTeamsEntry';
@@ -77,7 +77,7 @@ const mount = async (el) => {
   return { host, root, rerender: async (e) => (root.render(e), await settle()), unmount: () => (root.unmount(), host.remove()) };
 };
 const byText = (root, sel, re) => [...root.querySelectorAll(sel)].find((el) => re.test(el.textContent ?? ''));
-const primary = (root) => byText(root, 'button', /^(Create team|Add \d|Add bots|Try again|Creating)/);
+const primary = (root) => byText(root, 'button', /^(Create team|Add \d|Add bots|Try again|Pick another folder|Creating)/);
 const use = (opts) => {
   const calls = [];
   m.setTeamsTransport(fx.fixtureTransport(opts, calls));
@@ -633,6 +633,55 @@ test('the Undo confirm says where a chat with messages goes: under Channels as #
   v.unmount();
 });
 
+test('N-6: the Undo confirm names the chat the server gives back, -2 included, and drops the line on null', async () => {
+  const props = { label: 'Inbox', handle: 'inbox', teamName: 'inbox', botNames: ['Drafter'], skills: 1, routine: false, messages: 4, onKeep() {}, onUndo() {} };
+  // #archived-team-inbox is taken, so the server's preview says -2: the line must say -2 too.
+  const v = await mount(h(m.UndoTeamConfirm, { ...props, archivedChat: 'archived-team-inbox-2' }));
+  let d = document.querySelector('[data-undo-confirm]');
+  assert.match(d.textContent, /The chat has 4 messages, so it’s kept, not deleted: it moves under Channels as #archived-team-inbox-2\./);
+  assert.equal(d.querySelector('[data-archived-chat]').dataset.archivedChat, 'archived-team-inbox-2');
+  // A server name is used as is, never rebuilt from the team name.
+  await v.rerender(h(m.UndoTeamConfirm, { ...props, teamName: 'Inbox', archivedChat: 'ARCHIVED-team-inbox-3' }));
+  assert.match(document.querySelector('[data-undo-confirm]').textContent, /as #ARCHIVED-team-inbox-3\./);
+  // null: Undo deletes the chat or leaves it alone, so there's no archive line at all.
+  await v.rerender(h(m.UndoTeamConfirm, { ...props, archivedChat: null }));
+  d = document.querySelector('[data-undo-confirm]');
+  assert.equal(d.querySelector('[data-archived-chat]'), null);
+  assert.doesNotMatch(d.textContent, /archived|kept, not deleted/);
+  // An older server without the field: the old guess, only when the chat has messages.
+  await v.rerender(h(m.UndoTeamConfirm, { ...props }));
+  assert.match(document.querySelector('[data-undo-confirm]').textContent, /as #archived-team-inbox\./);
+  v.unmount();
+
+  assert.equal(m.archivedChatLine('archived-team-inbox-2', 4, 'inbox'), 'archived-team-inbox-2');
+  assert.equal(m.archivedChatLine('#archived-team-inbox-2', 4, 'inbox'), 'archived-team-inbox-2', 'no double #');
+  assert.equal(m.archivedChatLine(null, 4, 'inbox'), null);
+  assert.equal(m.archivedChatLine('  ', 4, 'inbox'), null);
+  assert.equal(m.archivedChatLine(undefined, 0, 'inbox'), null);
+  assert.equal(m.archivedChatLine(undefined, 2, 'inbox'), 'archived-team-inbox');
+});
+
+test('N-6: Undo through the provider reads archived_chat from the preview and shows it in the confirm', async () => {
+  const info = { template_id: 'inbox', action_id: 'act_i', created_at: new Date(Date.now() - 60_000).toISOString(), undo_until: new Date(Date.now() + 3_600_000).toISOString(), can_undo: true, blocked: [], removes: { bots: ['Drafter'], skills: 1, routines: 0, handle: 'inbox' }, chat_messages: 3, archived_chat: 'archived-team-inbox-2', also_in: [], edited_skills: [], needs_done: [] };
+  m.setTeamsTransport(async (url) => {
+    if (url.startsWith('/api/team-templates?')) return { status: 200, body: { templates: m.TEMPLATES_WIRE } };
+    if (url.startsWith('/api/teams/team_i/template')) return { status: 200, body: info };
+    return { status: 404, body: { code: 'not_a_template_team', error: 'no' } };
+  });
+  const team = { id: 'team_i', name: 'inbox' };
+  const v = await mount(h(m.ReadyTeamsProvider, { space: 'spc_demo', bots: [], teams: [team], onChanged() {}, onOpenTeam() {} }, h(m.TeamNeedsTop, { team, canRun: true, personPosts: 0, onAddAccount() {}, onOpenNeed() {} })));
+  await settle(30);
+  const undo = document.querySelector('[aria-label="Undo team @inbox"]');
+  assert.ok(undo, 'the Needs card offers Undo');
+  await click(undo);
+  await settle(30);
+  const d = document.querySelector('[data-undo-confirm]');
+  assert.ok(d, 'a chat with messages asks first');
+  assert.match(d.textContent, /moves under Channels as #archived-team-inbox-2\./);
+  assert.doesNotMatch(d.textContent, /#archived-team-inbox\./);
+  v.unmount();
+});
+
 test('T5: the Needs card lists what is open, opens each, and offers Undo for a day', async () => {
   const inbox = m.TEMPLATES_FIXTURE.find((t) => t.id === 'inbox');
   const opened = [];
@@ -791,5 +840,41 @@ test('U-5: Suggest refused with folder_in_use (or bad_path) shows the server’s
   assert.match(root.textContent, /Couldn’t read the project\./);
   assert.ok(root.textContent.includes('That folder is already the workspace of team @f1; pick another folder. Nothing was created.'));
   assert.doesNotMatch(root.textContent, /The server stopped/);
+  v.unmount();
+});
+
+test('N-5: after folder_in_use the main button picks another folder instead of "Try again"', async () => {
+  const said = 'that folder overlaps team f8 in the space "Lab"; spaces never share a folder';
+  // Suggest refused: Pick another folder, and it calls onPickFolder (no second read of the same folder).
+  let calls = failing(400, { error: said, code: 'folder_in_use', field: 'workspace_path' }, { failSuggest: true });
+  let picked = 0;
+  let v = await mount(sheet({ kind: 'suggest', workspace_path: '/tmp/example-projects/f8' }, { onPickFolder: () => picked++ }).el);
+  let root = document.querySelector('[data-team-sheet="suggest"]');
+  let btn = primary(root);
+  assert.equal(btn.textContent, 'Pick another folder');
+  assert.equal(btn.disabled, false);
+  const reads = calls.filter((c) => c.url.startsWith('/api/teams/suggest')).length;
+  await click(btn);
+  assert.equal(picked, 1);
+  assert.equal(calls.filter((c) => c.url.startsWith('/api/teams/suggest')).length, reads, 'the same folder is not read again');
+  v.unmount();
+  // Create refused after a good read: the same.
+  calls = failing(400, { error: said, code: 'folder_in_use', field: 'workspace_path' });
+  picked = 0;
+  v = await mount(sheet({ kind: 'suggest', workspace_path: '/tmp/example-projects/f8' }, { onPickFolder: () => picked++ }).el);
+  root = document.querySelector('[data-team-sheet="suggest"]');
+  await click(primary(root));
+  assert.match(root.textContent, /Couldn’t create the team\. Nothing was created\./);
+  btn = primary(root);
+  assert.equal(btn.textContent, 'Pick another folder');
+  await click(btn);
+  assert.equal(picked, 1);
+  assert.equal(creates(calls).length, 1, 'no second create with the same folder');
+  v.unmount();
+  // Any other refusal still offers Try again.
+  failing(400, { error: 'that isn’t an absolute path to a folder kwant can read', code: 'bad_path', field: 'workspace_path' }, { failSuggest: true });
+  v = await mount(sheet({ kind: 'suggest', workspace_path: '/tmp/example-projects/f8' }, { onPickFolder: () => picked++ }).el);
+  root = document.querySelector('[data-team-sheet="suggest"]');
+  assert.match(primary(root).textContent, /Try again/);
   v.unmount();
 });

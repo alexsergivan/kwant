@@ -60,7 +60,26 @@ async fn view(state: &AppState) -> Value {
             "available": window.is_none(),
             "reason": window,
         },
+        // The private browser kwnt downloads when there's no Chrome (O5). The UI shows its
+        // `error` line, with "Try again", only while `state` is "failed".
+        "browser_setup": state.browser_service.chrome_setup().view(),
     })
+}
+
+/// `POST /api/settings/computer/browser`: "Try again" for the bots' private browser. Starts the
+/// download again in the background and answers at once with the view (`browser_setup.state` is
+/// then `downloading`, or `ready` if a browser is already there).
+pub async fn retry_browser(State(state): State<AppState>) -> Json<Value> {
+    state.browser_service.chrome_setup().retry();
+    // let the background start mark itself downloading before answering
+    for _ in 0..20 {
+        let s = state.browser_service.chrome_setup().view().state;
+        if s != crate::sandbox::chrome_download::SetupState::Failed {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    Json(view(&state).await)
 }
 
 /// `GET /api/settings/computer`

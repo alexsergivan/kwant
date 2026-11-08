@@ -11,6 +11,7 @@ import {
   Code2,
   Crown,
   FileText,
+  FolderOpen,
   Handshake,
   Inbox,
   Info,
@@ -47,6 +48,7 @@ import {
   newBotCount,
   botNameByKey,
   cantRead,
+  folderInUse,
   partialBody,
   partialHead,
   plural,
@@ -251,6 +253,8 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const [dPhase, setDPhase] = useState<DPhase>('reading');
   /** U-5: the server's `error` when Suggest was refused (bad_path, folder_in_use, …). */
   const [readError, setReadError] = useState<string | null>(null);
+  /** N-5: the last read or create was refused with `folder_in_use`, which a retry can't change. */
+  const [inUse, setInUse] = useState(false);
   /** U-3: the 422's `forge`, and the GitLab hosts already connected, for which Connect to offer. */
   const [cantForge, setCantForge] = useState<unknown>(null);
   const [gitlabHosts, setGitlabHosts] = useState<string[]>([]);
@@ -317,6 +321,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       const ac = new AbortController();
       readAbort.current = ac;
       setDPhase('reading');
+      setInUse(false);
       setElapsed(0);
       setLive('Reading the project');
       if (!navigator.onLine) {
@@ -373,6 +378,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
         } else {
           const said = serverErrorText(e);
           setReadError(said);
+          setInUse(folderInUse(e));
           setDPhase('error');
           setLive(`Couldn’t read the project. ${said ? `${said} ` : ''}Nothing was created.`);
         }
@@ -516,6 +522,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
       }
       const said = serverErrorText(e);
       setCreateError(said);
+      setInUse(folderInUse(e));
       setPhase('failed');
       setLive(`Couldn’t create the team. ${said ? `${said} ` : ''}Nothing was created.`);
     }
@@ -1062,9 +1069,12 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   const nothingNew = manage && dPhase === 'ready' && !!sug && sug.bots.length === 0 && sug.also_possible.length === 0;
   const sNote = isD && dPhase === 'ready' && !nothingNew ? sizeNote(ticked, minBots) : null;
   const fallbackFooter = isD && (dPhase === 'cantread' || dPhase === 'offline' || dPhase === 'error');
-  const retry = (!isD && templatesError && !t) || phase === 'failed' || (isD && (dPhase === 'error' || dPhase === 'offline'));
-  const primaryLabel = creating ? 'Creating…' : retry ? 'Try again' : manage ? (nothingNew || ticked === 0 ? 'Add bots' : `Add ${plural(ticked, 'bot')}`) : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
+  // N-5: the same folder gets the same refusal, so offer another folder instead of "Try again".
+  const pickOther = inUse && !!onPickFolder && mode.kind === 'suggest' && !mode.team && (phase === 'failed' || dPhase === 'error');
+  const retry = !pickOther && ((!isD && templatesError && !t) || phase === 'failed' || (isD && (dPhase === 'error' || dPhase === 'offline')));
+  const primaryLabel = creating ? 'Creating…' : pickOther ? 'Pick another folder' : retry ? 'Try again' : manage ? (nothingNew || ticked === 0 ? 'Add bots' : `Add ${plural(ticked, 'bot')}`) : isD && dPhase === 'reading' ? 'Create team' : `Create team · ${plural(ticked, 'bot')}`;
   const onPrimary = () => {
+    if (pickOther) return onPickFolder?.();
     if (retry) {
       if (!isD && templatesError && !t) return onRetryTemplates?.();
       if (isD && dPhase !== 'ready') return void read();
@@ -1073,7 +1083,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
     }
     void create();
   };
-  const primaryDisabled = creating || (retry ? (isD && dPhase === 'offline' && !online) || (phase === 'failed' && !online) : !canCreate);
+  const primaryDisabled = creating || (pickOther ? false : retry ? (isD && dPhase === 'offline' && !online) || (phase === 'failed' && !online) : !canCreate);
   // Reused bots are left alone by Undo (api.md §6); with none new, say what it does instead of "the 0 new bots".
   const footNote = nothingNew
     ? null
@@ -1169,6 +1179,7 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             className={`${btnH} inline-flex items-center justify-center gap-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-sm font-medium disabled:opacity-50 disabled:hover:bg-sky-600 ${FOCUS}`}
           >
             {creating && <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+            {pickOther && !creating && <FolderOpen size={14} aria-hidden="true" />}
             {retry && !creating && <RefreshCw size={14} aria-hidden="true" />}
             {primaryLabel}
           </button>

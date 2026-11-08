@@ -106,6 +106,15 @@
     return out;
   } });
 
+  // The person is leaving by kwnt's own address bar or back/forward (S-F5): no blur reaches the
+  // page then, so kwnt's server calls this first, in this world only. Each pending edit is posted
+  // through the binding as a `type` step like a blur would (same facts, same mask); the count.
+  Object.defineProperty(globalThis, '__kwntRecorderCommit', { value: function () {
+    var n = dirty.size;
+    commitAll();
+    return n;
+  } });
+
   // a show-password toggle keeps the field masked for good
   new MutationObserver(function (list) {
     list.forEach(function (r) { if (String(r.oldValue).toLowerCase() === 'password') everPassword.add(r.target); });

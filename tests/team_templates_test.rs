@@ -225,6 +225,7 @@ async fn undo_keeps_a_chat_with_history_archived() {
     let (_, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
     assert_eq!(needs_done(&t), json!(["what_you_sell"]), "{t}");
     assert_eq!(t["chat_messages"], 2);
+    assert_eq!(t["archived_chat"], "archived-team-sales", "{t}");
     let (s, u) = undo(&e, v["action_id"].as_str().unwrap()).await;
     assert!(s.is_success(), "{s} {u}");
     let chats = e.state.db.list_channels(&e.space).await.unwrap();
@@ -233,6 +234,46 @@ async fn undo_keeps_a_chat_with_history_archived() {
     let made: Vec<&str> = v["bots"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
     assert!(!made.contains(&kept.lead_kwant_id.as_str()), "the kept chat is led by a bot that stays");
     assert!(e.state.db.list_teams(&e.space).await.unwrap().iter().all(|t| t.name != "sales"));
+}
+
+/// archived-name (N-6): the preview names the chat the Undo will leave, `-2` included when
+/// `#archived-team-<handle>` is already taken, and the Undo then uses that very name.
+#[tokio::test]
+async fn the_undo_preview_names_the_archived_chat_the_undo_leaves() {
+    let e = setup().await;
+    let mut names = Vec::new();
+    for round in 0..2 {
+        let (s, v) = create(&e, json!({"template_id": "sales"})).await;
+        assert_eq!(s, StatusCode::CREATED, "round {round}: {v}");
+        let chat_id = v["channel_id"].as_str().unwrap().to_string();
+        let team_id = v["team"]["id"].as_str().unwrap().to_string();
+        let uri = format!("/api/teams/{team_id}/template");
+        // An empty chat is deleted by Undo, so there is no archived name to show
+        let (_, t) = call(&e.app, "GET", &uri, &[], None).await;
+        assert_eq!((t["chat_messages"].as_i64(), &t["archived_chat"]), (Some(0), &Value::Null), "{t}");
+        e.state
+            .db
+            .insert_message(&NewMessage {
+                channel_id: Some(chat_id.clone()),
+                direct_kwant_id: None,
+                sender_role: "user".into(),
+                sender_id: "user".into(),
+                text: "Our first leads, please.".into(),
+                reasoning_content: None,
+                tool_calls: None,
+                tokens_used: 0,
+            })
+            .await
+            .unwrap();
+        let (_, t) = call(&e.app, "GET", &uri, &[], None).await;
+        let shown = t["archived_chat"].as_str().expect("a chat with messages is kept").to_string();
+        let (s, u) = undo(&e, v["action_id"].as_str().unwrap()).await;
+        assert!(s.is_success(), "{s} {u}");
+        let kept = e.state.db.list_channels(&e.space).await.unwrap().into_iter().find(|c| c.id == chat_id).expect("kept");
+        assert_eq!(kept.name, shown, "round {round}: the preview showed the name the Undo used");
+        names.push(shown);
+    }
+    assert_eq!(names, ["archived-team-sales", "archived-team-sales-2"]);
 }
 
 #[tokio::test]

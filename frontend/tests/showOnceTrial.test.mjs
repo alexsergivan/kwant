@@ -135,3 +135,38 @@ test('a skill already approved or rejected gets no card; a rejection elsewhere r
   assert.equal(card(v.host), null);
   v.unmount();
 });
+
+test('S-F7: a trial reply that came back empty names the engine in muted text, not an alert', async () => {
+  pending = [skill()];
+  const empty = { ...result, text: '', trial: undefined, meta: JSON.stringify({ trial: { ...tr, outcome: 'failed' } }) };
+  const rook = { id: 'k_rook', name: 'Rook', title: '', avatar_sprite: '', preferred_model: 'claude/claude-opus-5-5' };
+  let v = mount({ messages: [you, sysline, empty], kwants: [rook] });
+  await settle();
+  const bubble = v.host.querySelector('[data-message-id="k1"]');
+  const line = bubble.querySelector('[data-empty-trial-reply]');
+  assert.ok(line, 'the empty-reply line');
+  assert.equal(line.textContent, "Claude sent back an empty reply, so this try didn't finish. Try it again before you approve.");
+  assert.match(line.className, /text-zinc-400/);
+  assert.doesNotMatch(line.className, /red/);
+  assert.equal(line.closest('[role="alert"]'), null, 'not an alert');
+  assert.equal(line.querySelector('svg').getAttribute('aria-hidden'), 'true');
+  assert.ok(card(v.host), 'the trial card still follows with Approve');
+  v.unmount();
+
+  v = mount({ messages: [you, sysline, empty], kwants: [{ ...rook, preferred_model: 'auto' }] });
+  await settle();
+  assert.equal(v.host.querySelector('[data-empty-trial-reply]').textContent, "The engine sent back an empty reply, so this try didn't finish. Try it again before you approve.");
+  v.unmount();
+
+  v = mount({ messages: [you, sysline, { ...result, text: '   ' }, { ...later, text: '' }], kwants: [{ ...rook, preferred_model: 'codex' }] });
+  await settle();
+  assert.match(v.host.querySelector('[data-message-id="k1"]').textContent, /Codex sent back an empty reply/);
+  assert.equal(v.host.querySelector('[data-message-id="k2"] [data-empty-trial-reply]'), null, 'only trial replies');
+  v.unmount();
+
+  v = mount({ messages: [you, sysline, result] });
+  await settle();
+  assert.equal(v.host.querySelector('[data-empty-trial-reply]'), null, 'a reply with text shows the text');
+  assert.match(v.host.querySelector('[data-message-id="k1"]').textContent, /Imported 42 orders\./);
+  v.unmount();
+});

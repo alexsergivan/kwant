@@ -237,7 +237,68 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
 
 /// [`run`]; with `head`, stdout past `o.max_out` isn't an error: reading stops there (git then
 /// stops at a closed pipe) and the first `o.max_out` bytes come back with `true`.
+///
+/// A remote that answers with a redirect is asked once more at the same address with `.git`
+/// when it had none (N-4: GitLab sends `/group/repo` to `/group/repo.git`, and git is never let
+/// follow a redirect itself). Any other redirect is [`GitError::Failed`], as before.
 async fn run_with(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>, head: bool) -> Result<(Vec<u8>, bool), GitError> {
+    match run_once(bin, git_dir, args, o, head).await {
+        Err(Ran::Moved) => {
+            let Some((i, url)) = args.iter().position(|a| *a == "--").and_then(|i| Some((i + 1, with_dot_git(args.get(i + 1)?)?))) else {
+                return Err(GitError::Failed);
+            };
+            let mut again = args.to_vec();
+            again[i] = &url;
+            run_once(bin, git_dir, &again, o, head).await.map_err(Ran::error)
+        }
+        r => r.map_err(Ran::error),
+    }
+}
+
+/// How one run of git failed: a [`GitError`], or a redirect from the remote.
+enum Ran {
+    Git(GitError),
+    Moved,
+}
+
+impl Ran {
+    fn error(self) -> GitError {
+        match self {
+            Ran::Git(e) => e,
+            Ran::Moved => GitError::Failed,
+        }
+    }
+}
+
+impl From<GitError> for Ran {
+    fn from(e: GitError) -> Self {
+        Ran::Git(e)
+    }
+}
+
+/// Whether git stopped at an HTTP redirect it wasn't allowed to follow.
+fn redirected(stderr: &[u8]) -> bool {
+    let e = String::from_utf8_lossy(stderr).to_lowercase();
+    ["301", "302", "303", "307", "308"].iter().any(|c| e.contains(&format!("the requested url returned error: {c}")))
+}
+
+/// `url` with `.git` added, for an http(s) [`fetch_url`] whose path doesn't end in it: the same
+/// scheme, host and port, so the address check, its pin and a token's origin all still hold.
+/// `None` for anything else (ssh, scp-like, a path that already ends in `.git`, no path).
+fn with_dot_git(url: &str) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) || fetch_url(url).as_deref() != Some(url) {
+        return None;
+    }
+    let base = url.trim_end_matches('/');
+    if base.to_ascii_lowercase().ends_with(".git") {
+        return None;
+    }
+    let next = format!("{base}.git");
+    (fetch_url(&next).as_deref() == Some(next.as_str()) && remote_host(&next) == remote_host(url)).then_some(next)
+}
+
+async fn run_once(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>, head: bool) -> Result<(Vec<u8>, bool), Ran> {
     let mut cmd = tokio::process::Command::new(bin);
     if let Some(d) = git_dir {
         cmd.arg("--git-dir").arg(d);
@@ -330,9 +391,11 @@ async fn run_with(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>,
     } else if status.success() {
         Ok((out, false))
     } else if o.fsize.is_some() && hit_size_limit(&status, &err) {
-        Err(GitError::RepoTooBig)
+        Err(GitError::RepoTooBig.into())
+    } else if redirected(&err) {
+        Err(Ran::Moved)
     } else {
-        Err(classify(&err))
+        Err(classify(&err).into())
     }
 }
 
@@ -1433,6 +1496,25 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    /// Writes an executable script at `path` that is safe to run while other tests start
+    /// processes (D-2). Writing it here would hold a write fd on it in this process, and a
+    /// thread that forks at that moment hands the fd to its child until that child execs; running
+    /// the script then fails with "text file busy" (ETXTBSY), which `run` reports as `Failed`.
+    /// So the bytes go to a draft, and a separate `cp` makes the real file: the only fd ever open
+    /// for writing on it lives and dies in that `cp`, which has exited before anything runs it.
+    fn exe(path: &Path, text: &str) {
+        let draft = path.with_extension("draft");
+        std::fs::write(&draft, text).unwrap();
+        let copied = Command::new("cp").arg(&draft).arg(path).status().unwrap();
+        assert!(copied.success(), "cp {copied}");
+        std::fs::remove_file(&draft).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     /// Plain git for setting a throwaway repo up (never the code under test).
     fn sh(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
@@ -1700,12 +1782,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let fake = tmp.path().join("git");
         let pid_file = tmp.path().join("child.pid");
-        std::fs::write(&fake, format!("#!/bin/sh\nsleep 30 &\necho $! > {}\nwait\n", pid_file.display())).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        exe(&fake, &format!("#!/bin/sh\nsleep 30 &\necho $! > {}\nwait\n", pid_file.display()));
         let t = Instant::now();
         let r = run(fake.to_str().unwrap(), None, &["x"], Opts { timeout: Duration::from_millis(500), ..Opts::read() }).await;
         assert_eq!(r, Err(GitError::Timeout));
@@ -1723,19 +1800,13 @@ mod tests {
         let fake = tmp.path().join("git");
         let seen = tmp.path().join("seen");
         // Records its argv and the config git would read from the environment
-        std::fs::write(
+        exe(
             &fake,
-            format!(
+            &format!(
                 "#!/bin/sh\nprintf '%s\\n' \"$@\" > {0}.argv\nenv | grep -E '^(GIT_|SSH_ASKPASS|GCM_)' | sort > {0}.env\n",
                 seen.display()
             ),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        );
         let token = format!("{}{}", ["gh", "s_"].concat(), "c4n4ry".repeat(6));
         let header = Zeroizing::new(format!("Basic {token}"));
         let auth = Auth::header("https://github.com/o/n.git", header).unwrap();
@@ -1877,6 +1948,92 @@ mod tests {
         assert!(request.to_ascii_lowercase().contains(&format!("host: pinned.invalid:{port}")), "{request}");
     }
 
+    #[test]
+    fn only_an_http_address_without_dot_git_gets_one() {
+        let g = |u: &str| with_dot_git(u);
+        assert_eq!(g("https://gitlab.com/gitlab-org/gitter/webapp").as_deref(), Some("https://gitlab.com/gitlab-org/gitter/webapp.git"));
+        assert_eq!(g("https://gitlab.com/group/sub/app/").as_deref(), Some("https://gitlab.com/group/sub/app.git"));
+        assert_eq!(g("https://git.example.org:8443/g/r").as_deref(), Some("https://git.example.org:8443/g/r.git"));
+        assert_eq!(g("http://gitea.lan/o/n").as_deref(), Some("http://gitea.lan/o/n.git"));
+        for u in ["https://gitlab.com/g/r.git", "https://gitlab.com/g/r.GIT", "https://gitlab.com", "https://gitlab.com/", "ssh://git@gitlab.com/g/r", "git@gitlab.com:g/r", "git://gitlab.com/g/r", "https://u:p@gitlab.com/g/r", "https://gitlab.com/g/r?x=1"] {
+            assert_eq!(g(u), None, "{u}");
+        }
+        assert!(redirected(b"fatal: unable to access 'https://gitlab.com/g/r/': The requested URL returned error: 301\n"));
+        assert!(!redirected(b"fatal: unable to access 'https://gitlab.com/g/r/': The requested URL returned error: 404\n"));
+    }
+
+    /// A listener on this machine that answers each request by its path (`answer` gets the
+    /// request line) and keeps the request lines it saw, for `n` requests.
+    fn http_host(n: usize, answer: fn(&str) -> String) -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(false).unwrap();
+        let seen = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut lines = Vec::new();
+            for _ in 0..n {
+                let Ok((mut c, _)) = listener.accept() else { break };
+                c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut buf = [0u8; 8192];
+                let k = c.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..k]).to_string();
+                let line = req.lines().next().unwrap_or_default().to_string();
+                let _ = c.write_all(answer(&line).as_bytes());
+                lines.push(line);
+            }
+            lines
+        });
+        (port, seen)
+    }
+
+    /// N-4: GitLab answers `/group/repo` with a redirect to `/group/repo.git`. git isn't let follow
+    /// it; kwant asks the same host once more with `.git`, and a private repo there is `Auth`
+    /// (so Suggest offers "Connect GitLab"), not a generic failure.
+    #[tokio::test]
+    async fn an_address_without_dot_git_is_asked_again_with_it() {
+        const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+        fn gitlab(line: &str) -> String {
+            let path = line.split(' ').nth(1).unwrap_or_default();
+            if let Some(rest) = path.strip_prefix("/group/app/") {
+                format!("HTTP/1.0 301 Moved Permanently\r\nLocation: /group/app.git/{rest}\r\nContent-Length: 0\r\n\r\n")
+            } else if path.starts_with("/group/app.git/info/refs") {
+                let body = format!("{SHA}\trefs/heads/main\n");
+                format!("HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len())
+            } else if let Some(rest) = path.strip_prefix("/private/app/") {
+                format!("HTTP/1.0 301 Moved Permanently\r\nLocation: /private/app.git/{rest}\r\nContent-Length: 0\r\n\r\n")
+            } else if path.starts_with("/private/app.git/") {
+                "HTTP/1.0 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"x\"\r\nContent-Length: 0\r\n\r\n".into()
+            } else {
+                // Moves every time: kwant asks twice at most and never follows it
+                "HTTP/1.0 302 Found\r\nLocation: http://elsewhere.invalid/\r\nContent-Length: 0\r\n\r\n".into()
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let o = Opts { timeout: REMOTE_TIMEOUT, ..Opts::read() };
+
+        let (port, seen) = http_host(2, gitlab);
+        let url = format!("http://127.0.0.1:{port}/group/app");
+        let out = run("git", Some(tmp.path()), &["ls-remote", "--heads", "--", &url], o).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&out), format!("{SHA}\trefs/heads/main\n"));
+        let seen = seen.join().unwrap();
+        assert!(seen[0].starts_with("GET /group/app/info/refs"), "{seen:?}");
+        assert!(seen[1].starts_with("GET /group/app.git/info/refs"), "{seen:?}");
+
+        let (port, seen) = http_host(2, gitlab);
+        let url = format!("http://127.0.0.1:{port}/private/app");
+        assert_eq!(run("git", Some(tmp.path()), &["ls-remote", "--", &url], o).await, Err(GitError::Auth));
+        assert!(seen.join().unwrap()[1].starts_with("GET /private/app.git/info/refs"));
+
+        let (port, seen) = http_host(3, gitlab);
+        let url = format!("http://127.0.0.1:{port}/moved/app");
+        assert_eq!(run("git", Some(tmp.path()), &["ls-remote", "--", &url], o).await, Err(GitError::Failed));
+        // Close the listener's third wait: there must be no third request
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        let seen = seen.join().unwrap();
+        assert!(seen[0].starts_with("GET /moved/app/info/refs") && seen[1].starts_with("GET /moved/app.git/info/refs"), "{seen:?}");
+        assert_eq!(seen[2], "", "asked twice, never followed: {seen:?}");
+    }
+
     #[tokio::test]
     async fn a_fetch_checks_its_remote_first() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1963,14 +2120,6 @@ mod tests {
     // -----------------------------------------------------------------------------------------
     // G2 review (Lin, at 6dd0243): one test per probe.
 
-    fn exe(path: &Path, text: &str) {
-        std::fs::write(path, text).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-    }
 
     /// F1 (probe P1): an ssh remote runs `ssh`, never an empty command, whatever the repo's own
     /// config says. A fake `ssh` first on PATH logs what git asked it for.

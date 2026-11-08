@@ -112,6 +112,10 @@ pub struct AppState {
     pub human_steps: Arc<human_steps::HumanStepHub>,
     /// "Sign in with Claude" for the Claude engine.
     pub claude_login: Arc<engine_login::ClaudeLogin>,
+    /// "Sign in with ChatGPT" (Codex device code) for the Codex engine.
+    pub codex_login: Arc<engine_login::EngineLogin>,
+    /// "Sign in with Grok" (device code) for the Grok engine.
+    pub grok_login: Arc<engine_login::EngineLogin>,
     /// The MCP Registry agents search and suggest servers from (`KWNT_MCP_REGISTRY_URL`).
     pub mcp_registry: Arc<crate::mcp::registry::McpRegistry>,
     /// Composio's app catalogue (`KWNT_COMPOSIO_API_URL`), called only once Composio is added.
@@ -173,6 +177,8 @@ impl AppState {
             questions: Default::default(),
             human_steps: Default::default(),
             claude_login: Default::default(),
+            codex_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Codex)),
+            grok_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Grok)),
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
             composio_api: Arc::new(crate::mcp::composio::ComposioApi::from_env()),
             credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
@@ -228,13 +234,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/profiles/:id/logout", post(profile_routes::logout))
         .route("/api/engines", get(engine_routes::list))
         .route("/api/engines/recheck", post(engine_routes::recheck))
-        .route("/api/engines/claude/login", post(engine_login::start))
+        // :engine is claude, codex or grok (anything else is a 404)
+        .route("/api/engines/:engine/login", post(engine_login::start))
         .route(
-            "/api/engines/claude/login/:sid",
+            "/api/engines/:engine/login/:sid",
             get(engine_login::get).delete(engine_login::cancel),
         )
-        .route("/api/engines/claude/login/:sid/code", post(engine_login::submit_code))
-        .route("/api/engines/claude/logout", post(engine_login::logout))
+        .route("/api/engines/:engine/login/:sid/code", post(engine_login::submit_code))
+        .route("/api/engines/:engine/logout", post(engine_login::logout))
         .route("/api/engines/:id", post(engine_routes::set_enabled).put(engine_routes::set_enabled))
         .route("/api/laya/status", get(routes::laya_status))
         .route("/api/kwants", get(routes::list_kwants).post(routes::create_kwant))
@@ -282,6 +289,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
         .route("/api/settings/computer/window", put(computer::put_window))
+        .route("/api/settings/computer/browser", post(computer::retry_browser))
         .route("/api/system/directories", get(routes::list_system_directories))
         .route("/api/system/select-folder", post(routes::select_folder))
         .route("/api/sandbox/:team_id/status", get(routes::get_sandbox_status))

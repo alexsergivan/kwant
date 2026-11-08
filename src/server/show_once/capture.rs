@@ -50,6 +50,31 @@ where
     took
 }
 
+/// Run in the recorder's world before the person's own navigation: the pending edits are posted
+/// through the binding as steps. `false` where the recorder isn't installed.
+pub const COMMIT: &str =
+    "typeof globalThis.__kwntRecorderCommit === 'function' ? (globalThis.__kwntRecorderCommit(), true) : false";
+
+/// The person is leaving the page through kwnt's address bar or back/forward (S-F5). Neither
+/// moves focus in the page, so a field typed into and never left would otherwise leave no step.
+/// The recorder posts those edits through its binding first, as `type` steps with the field's
+/// mask, so a password or code is recorded masked and its value never leaves the page. `call`
+/// sends one CDP command. True when the recorder took the commit.
+pub async fn commit_pending<F, Fut>(call: F) -> bool
+where
+    F: Fn(&'static str, serde_json::Value) -> Fut,
+    Fut: std::future::Future<Output = Option<serde_json::Value>>,
+{
+    use serde_json::json;
+    let Some(tree) = call("Page.getFrameTree", json!({})).await else { return false };
+    let Some(frame) = tree["frameTree"]["frame"]["id"].as_str() else { return false };
+    let world = json!({"frameId": frame, "worldName": WORLD});
+    let Some(world) = call("Page.createIsolatedWorld", world).await else { return false };
+    let Some(context) = world["executionContextId"].as_i64() else { return false };
+    let eval = json!({"expression": COMMIT, "contextId": context, "returnByValue": true});
+    call("Runtime.evaluate", eval).await.is_some_and(|r| r["result"]["value"] == true)
+}
+
 /// Largest payload read; anything bigger is dropped.
 pub const MAX_PAYLOAD: usize = 16 * 1024;
 pub const MAX_NAME: usize = 120;
@@ -311,6 +336,48 @@ mod tests {
             assert!(!log.iter().any(|(m, _)| m == "Runtime.callFunctionOn") || failing == "Runtime.callFunctionOn", "{failing}");
         }
         assert!(PICKED_FN.contains("typeof f === 'function'"));
+    }
+
+    /// `commit_pending` against a fake CDP: what it returned and every call it made.
+    fn commit_with(replies: Replies) -> (bool, Vec<(String, serde_json::Value)>) {
+        let map: std::collections::HashMap<_, _> = replies.into_iter().collect();
+        let log = std::sync::Mutex::new(Vec::new());
+        let call = |m: &'static str, p: serde_json::Value| {
+            log.lock().unwrap().push((m.to_string(), p));
+            let r = map.get(m).cloned().flatten();
+            async move { r }
+        };
+        let took = tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(commit_pending(call));
+        (took, log.into_inner().unwrap())
+    }
+
+    fn commit_ok(took: bool) -> Replies {
+        vec![
+            ("Page.getFrameTree", Some(json!({"frameTree": {"frame": {"id": "F1"}}}))),
+            ("Page.createIsolatedWorld", Some(json!({"executionContextId": 7}))),
+            ("Runtime.evaluate", Some(json!({"result": {"value": took}}))),
+        ]
+    }
+
+    #[test]
+    fn leaving_by_the_address_bar_commits_in_the_recorders_world_only() {
+        let (took, log) = commit_with(commit_ok(true));
+        assert!(took);
+        let methods: Vec<&str> = log.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["Page.getFrameTree", "Page.createIsolatedWorld", "Runtime.evaluate"]);
+        assert_eq!(log[1].1, json!({"frameId": "F1", "worldName": WORLD}), "the recorder's own world");
+        assert_eq!(log[2].1, json!({"expression": COMMIT, "contextId": 7, "returnByValue": true}));
+        // no recorder there, or any step failing: nothing taken, and nothing past the failure
+        assert!(!commit_with(commit_ok(false)).0);
+        for failing in ["Page.getFrameTree", "Page.createIsolatedWorld", "Runtime.evaluate"] {
+            let replies = commit_ok(true).into_iter().map(|(m, r)| (m, if m == failing { None } else { r })).collect();
+            let (took, log) = commit_with(replies);
+            assert!(!took, "{failing}");
+            assert_eq!(log.last().unwrap().0, failing);
+        }
+        assert!(COMMIT.contains("typeof globalThis.__kwntRecorderCommit === 'function'"));
+        let js = recorder_js();
+        assert!(js.contains("Object.defineProperty(globalThis, '__kwntRecorderCommit'"), "not enumerable, not writable");
     }
 
     #[test]

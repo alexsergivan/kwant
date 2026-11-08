@@ -62,12 +62,12 @@ fn with(mut args: Value, f: impl FnOnce(&mut Value)) -> Value {
 }
 
 #[test]
-fn the_tool_is_offered_with_its_two_types_only() {
+fn the_tool_is_offered_with_its_three_types_only() {
     let tools = tools();
     assert_eq!(tools.len(), 1);
     assert!(handles("present_result") && !handles("share_file"));
     let types = &tools[0]["inputSchema"]["properties"]["type"]["enum"];
-    assert_eq!(types, &json!(["comparison", "steps"]));
+    assert_eq!(types, &json!(["comparison", "steps", "recipe"]));
 }
 
 #[test]
@@ -413,4 +413,45 @@ fn a_declaration_with_the_replys_exact_numbers_is_still_accepted() {
         "data": {"columns": [{"label": "Plan"}, {"label": "Price", "numeric": true}],
             "rows": [{"cells": ["Basic", "5"]}, {"cells": ["Team", "9"]}, {"cells": ["Business", "7"]}]}});
     assert!(pick(reply, args).is_some());
+}
+
+const RECIPE_REPLY: &str = "Try this.\n\n## Pancakes\n\n### Ingredients\n- 1 cup flour\n- 2 eggs\n- 1 cup milk\n\n### Method\n1. Whisk everything together.\n2. Cook ladlefuls in a hot pan.\n\nWant a vegan version?\n";
+
+fn recipe_args(ingredients: &[&str], steps: &[&str]) -> Value {
+    json!({"type": "recipe", "data": {"ingredients": ingredients, "steps": steps}})
+}
+
+#[test]
+fn a_recipe_grounds_as_the_reply_s_own_recipe() {
+    let args = recipe_args(&["1 cup flour", "2 eggs", "1 cup milk"], &["Whisk everything together.", "Cook ladlefuls in a hot pan."]);
+    let Some(Block::Recipe(r)) = pick(RECIPE_REPLY, args) else { panic!("no recipe") };
+    assert_eq!(r.provenance, Provenance::bot_declared("t1".into()));
+    let Some(Block::Recipe(read)) = crate::server::smart_results::compute(RECIPE_REPLY).map(|s| s.blocks[0].clone()) else { panic!() };
+    assert_eq!(Recipe { provenance: r.provenance.clone(), ..read }, r);
+    assert_eq!(r.title.as_deref(), Some("Pancakes"));
+}
+
+#[test]
+fn a_recipe_that_differs_from_the_reply_does_not_ground() {
+    let steps = ["Whisk everything together.", "Cook ladlefuls in a hot pan."];
+    for ingredients in [
+        &["1 cup flour", "3 eggs", "1 cup milk"][..],
+        &["1 cup flour", "1 cup milk", "2 eggs"][..],
+        &["1 cup flour", "2 eggs"][..],
+        &["1 cup flour", "2 eggs", "1 cup milk", "Salt"][..],
+    ] {
+        assert!(pick(RECIPE_REPLY, recipe_args(ingredients, &steps)).is_none(), "{ingredients:?}");
+    }
+    let ingredients = ["1 cup flour", "2 eggs", "1 cup milk"];
+    assert!(pick(RECIPE_REPLY, recipe_args(&ingredients, &["Whisk.", "Cook ladlefuls in a hot pan."])).is_none());
+    assert!(pick(RECIPE_REPLY, recipe_args(&ingredients, &steps[..1])).is_none());
+}
+
+#[test]
+fn a_recipe_needs_one_in_the_reply() {
+    let args = recipe_args(&["1 cup flour", "2 eggs"], &["Whisk everything together.", "Cook ladlefuls in a hot pan."]);
+    assert!(pick("You need 1 cup flour and 2 eggs. Whisk everything together, then cook.\n", args.clone()).is_none());
+    assert!(pick(STEPS_REPLY, args).is_none());
+    assert!(declared(&json!({"type": "recipe", "data": {"ingredients": ["<b>x</b>", "y"], "steps": ["a", "b"]}})).is_err());
+    assert!(declared(&json!({"type": "recipe", "data": {"ingredients": "x", "steps": []}})).is_err());
 }
