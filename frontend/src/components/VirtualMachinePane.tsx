@@ -16,7 +16,7 @@ import {
   Hand,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
-import { BOT_BUSY_TEXT, useBrowserStream } from '../useBrowserStream';
+import { BOT_BUSY_TEXT, HELD_BY_PERSON_TEXT, useBrowserStream } from '../useBrowserStream';
 import { ComputerModeChip, ComputerModeError, LocalBrowserNote, OpenWindowButton, useComputerMode } from './ComputerModeSwitch';
 import { browserFooterLabel, isBlankPage, showsLocalWindow } from '../computerMode';
 import { loginMatchesPage } from '../savedPasswords';
@@ -329,6 +329,15 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   }, [waitBot, botBusy, send]);
   const waitingForBot = !!waitBot && !waitBot.gaveUp;
 
+  // The person holds this browser in another window: say so once, never retry. Taking over here
+  // waits for them to press Hand back there and then Take over here, so a browser never moves without a press.
+  const heldElsewhere = stream.error === HELD_BY_PERSON_TEXT && !controlling;
+  useEffect(() => {
+    if (!heldElsewhere) return;
+    setFullScreen(false);
+    setWaitBot(null);
+  }, [heldElsewhere]);
+
   // The frame the side pane shows is acknowledged once drawn; one image, its source swapped
   const paneFrameId = useRef<number | null>(null);
   paneFrameId.current = stream.frame?.id ?? null;
@@ -629,7 +638,23 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
               </div>
             )}
 
-            {controlError && !botBusy && (
+            {/* The person already has this browser in another window: a static note, no spinner, no retry */}
+            {heldElsewhere && !isControlMode && (
+              <div role="status" aria-live="polite" data-takeover-wait data-takeover-held className="flex items-start gap-2.5 px-3 py-2.5 rounded-xl border border-[rgb(157_143_255/0.35)] bg-[#1a1538]">
+                <Hand size={16} className="shrink-0 mt-0.5 text-[#9d8fff]" aria-hidden="true" />
+                <p className="flex-1 min-w-0 text-[13px] leading-[18px] text-zinc-100">{HELD_BY_PERSON_TEXT}</p>
+                <button
+                  type="button"
+                  onClick={() => stream.clearError()}
+                  aria-label="Close"
+                  className="shrink-0 -mr-1 -mt-0.5 w-6 h-6 inline-flex items-center justify-center rounded-md text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06]"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              </div>
+            )}
+
+            {controlError && !botBusy && !heldElsewhere && (
               <div role="alert" className="px-2.5 py-2 rounded-lg border border-red-500/30 bg-red-950/40 text-xs text-red-300">
                 {controlError}
               </div>
