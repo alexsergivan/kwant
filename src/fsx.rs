@@ -126,7 +126,8 @@ fn restrict_windows(dir: &Path) -> Result<(), String> {
     if out.status.success() {
         Ok(())
     } else {
-        Err(format!("icacls exited with {}", out.status))
+        let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        Err(format!("icacls exited with {}: {}", out.status, said.trim().chars().take(300).collect::<String>()))
     }
 }
 
@@ -207,12 +208,12 @@ mod tests {
         let user = current_user_sid().expect("whoami gives a SID");
         let before = acl_sids(&dir).0;
         assert!(before.len() > 2, "a temp folder starts with more than two entries: {before:?}");
-        restrict_to_user(&dir);
+        restrict_windows(&dir).expect("icacls limits the folder");
         let mut want = vec![user, SYSTEM_SID.to_string()];
         want.sort();
         let (sids, inherited) = acl_sids(&dir);
+        assert!(!inherited, "no entry inherited from the profile: {sids:?}");
         assert_eq!(sids, want, "the folder");
-        assert!(!inherited, "no entry inherited from the profile");
         // The file inherits the folder's two entries, nothing else
         let (file_sids, _) = acl_sids(&dir.join("api-token"));
         assert_eq!(file_sids, want, "a file already in it");
