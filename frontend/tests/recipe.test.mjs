@@ -32,7 +32,7 @@ const m = await loadBundled(`
   export { createRoot } from 'react-dom/client';
   export * from './src/recipe';
   export { MarkdownRenderer } from './src/components/MarkdownRenderer';
-  export { Recipe, validRecipe, FOLD_OVER, FOLD_SHOW } from './src/components/results/Recipe';
+  export { Recipe, validRecipe, FOLD_OVER, FOLD_SHOW, TWO_COLUMNS_MIN } from './src/components/results/Recipe';
   export { RecipeActions } from './src/components/results/RecipeActions';
   export { recipe, recipeFixture, RECIPE_EDGES, RECIPE_CONTRACT } from './src/components/results/recipeFixtures';
   export { blockMarkdown } from './src/components/results/exporters';
@@ -74,7 +74,13 @@ const click = async (el) => {
 };
 const stew = () => m.validRecipe(m.recipe.results.blocks[0]);
 const card = (block = stew(), messageId = 'm1') => h(m.Recipe, { block, messageId, reply: null, ask: () => {} });
-const amounts = (host) => [...host.querySelectorAll('[data-ingredient]')].map((el) => el.textContent);
+// What a sighted cook reads: the screen-reader-only "(was …)" cue left out.
+const seen = (el) => {
+  const c = el.cloneNode(true);
+  c.querySelectorAll('.sr-only').forEach((x) => x.remove());
+  return c.textContent;
+};
+const amounts = (host) => [...host.querySelectorAll('[data-ingredient]')].map(seen);
 const btn = (host, label) => host.querySelector(`button[aria-label="${label}"]`);
 const byText = (host, text) => [...host.querySelectorAll('button')].find((b) => b.textContent.trim() === text);
 
@@ -104,8 +110,35 @@ test('scaling: whole numbers, decimals, fractions, mixed numbers and glyphs', ()
   assert.equal(s('1 onion', 1.5), '1½ onions');
   assert.equal(s('2 Cups', 0.5), '1 Cup', "keeps the reply's capital");
   assert.equal(s('3 potatoes', 1 / 3), '1 potato');
-  assert.equal(s('1,000 g', 1.5), '1500 g', 'a comma before three digits is a thousands separator (contract §1)');
+  assert.equal(s('1,000 g', 1.5), '1,500 g', 'a comma before three digits is a thousands separator (contract §1), and it stays (F-3)');
+  assert.equal(s('1,000 g', 0.5), '500 g', 'under 1,000 there is nothing to separate');
+  assert.equal(s('1000 g', 1.5), '1500 g', 'no separator when the reply wrote none');
   assert.equal(s('1,5 l', 2), '3 l', 'and before one or two it is a decimal');
+});
+
+test('F-3: a non-zero amount never shows as 0; ⅛ down to 1/16, else the reply’s own amount', () => {
+  const s = (q, k) => m.scaleQty(q, k);
+  assert.deepEqual(s('0.25 tsp', 1 / 4), { qty: '⅛ tsp', scaled: true }, '0.0625 is ⅛, not 0');
+  assert.deepEqual(s('¼ tsp', 1 / 4), { qty: '⅛ tsp', scaled: true });
+  assert.deepEqual(s('0.25 tsp', 1 / 24), { qty: '0.25 tsp', scaled: false }, 'too small to write: kept as written, not marked scaled');
+  assert.deepEqual(s('1–2 pinches', 1 / 24), { qty: '1–2 pinches', scaled: false }, 'a range with an unwritable end stays whole');
+  assert.equal(m.formatAmount(0.0625), '⅛');
+  assert.equal(m.formatAmount(0.03), null);
+  assert.equal(m.formatAmount(0), '0');
+});
+
+test('F-3: a counted thing followed by another noun keeps its form; units and line ends still flip', () => {
+  const s = (q, k, after) => m.scaleQty(q, k, after).qty;
+  assert.equal(s('1 egg', 1.5, 'yolk'), '1½ egg', '"1 egg yolk" → "1½ egg yolk", never "eggs yolk"');
+  assert.equal(s('2 eggs', 0.5, 'whites'), '1 eggs', 'the reply’s own form stays either way');
+  assert.equal(s('1 egg yolk', 3), '3 egg yolk', 'the noun inside the amount counts too');
+  assert.equal(s('1 egg', 2, ''), '2 eggs', '"1 egg" → "2 eggs" still flips');
+  assert.equal(s('1 egg', 2, ', beaten'), '2 eggs', 'a comma after it is not a noun');
+  assert.equal(s('1 onion', 2, ', diced'), '2 onions');
+  assert.equal(s('1 cup', 2, 'flour'), '2 cups', 'a unit flips whatever follows');
+  assert.equal(s('1 can', 2, '(400 g) chopped tomatoes'), '2 cans');
+  const block = { ...stew(), serves: 1, ingredients: [{ id: 'i1', qty: '1 egg', text: 'yolk', group: null }, { id: 'i2', qty: '1 cup', text: 'flour', group: null }] };
+  assert.match(m.shoppingListText(block, new Set(), 3), /- 3 egg yolk\n- 3 cups flour/, 'the shopping list follows the same rule');
 });
 
 test('scaling: both ends of a range scale; nothing else changes', () => {
@@ -155,6 +188,97 @@ test('the card: the stepper scales amounts in sky, Back to restores, and the lim
   for (let i = 0; i < 30; i++) await click(btn(v.host, 'More servings'));
   assert.equal(out.textContent, '24', 'the range is 1–24');
   assert.equal(btn(v.host, 'More servings').getAttribute('aria-disabled'), 'true');
+});
+
+test('F-5: a scaled amount carries a screen-reader cue with the reply’s amount; none at the reply’s own number', async () => {
+  const v = await mount(card());
+  assert.equal(v.host.querySelector('[data-ingredient] .sr-only'), null);
+  await click(btn(v.host, 'More servings'));
+  await click(btn(v.host, 'More servings'));
+  const oil = v.host.querySelector('[data-ingredient="i1"]');
+  assert.equal(oil.querySelector('.sr-only').textContent, ' (was 1 tbsp)');
+  assert.equal(oil.textContent, '1½ tbsp (was 1 tbsp) olive oil', 'read out as: new amount, was, the rest of the line');
+  const salt = [...v.host.querySelectorAll('[data-ingredient]')].find((el) => el.textContent.includes('Salt to taste'));
+  assert.equal(salt.querySelector('.sr-only'), null, 'a line without an amount has no cue');
+});
+
+test('F-1: links, bold and code in ingredients, steps and notes are drawn as the reply wrote them', async () => {
+  const base = stew();
+  const block = {
+    ...base,
+    ingredients: [
+      { id: 'i1', qty: null, text: '**2 cups** flour', group: null },
+      { id: 'i2', qty: '1 cup', text: '[sugar](https://example.com/sugar), sifted', group: null },
+      { id: 'i3', qty: '1 onion', text: ', diced', group: null },
+    ],
+    steps: [
+      { id: 's1', text: 'Mix it **well**.' },
+      { id: 's2', text: 'Bake it; see [the guide](https://example.com/bake) and `200 C`.' },
+      { id: 's3', text: '1. Not a list: <b>raw</b> stays text.' },
+    ],
+    notes: ['Use *cold* butter, see [notes](https://example.com/notes).'],
+  };
+  const v = await mount(card(block));
+  const step = (id) => v.host.querySelector(`[data-step="${id}"]`);
+  const ing = (id) => v.host.querySelector(`[data-ingredient="${id}"]`);
+
+  assert.equal(ing('i1').querySelector('strong')?.textContent, '2 cups', 'bold stays bold in an ingredient');
+  assert.equal(seen(ing('i1')).trim(), '2 cups flour');
+  assert.equal(step('s1').querySelector('strong')?.textContent, 'well', 'bold stays bold in a step');
+
+  const a = step('s2').querySelector('a');
+  assert.equal(a?.getAttribute('href'), 'https://example.com/bake', 'a link keeps its target');
+  assert.equal(a.textContent, 'the guide');
+  assert.equal(a.getAttribute('target'), '_blank', 'opened the way the chat opens a link');
+  assert.equal(a.getAttribute('rel'), 'noopener noreferrer');
+  assert.equal(step('s2').querySelector('code')?.textContent, '200 C', 'code stays code');
+  assert.match(step('s2').textContent, /Bake it; see the guide and 200 C\./);
+
+  assert.equal(step('s3').querySelector('ol, ul, b'), null, 'a leading "1." is text, and raw HTML is never drawn');
+  assert.match(step('s3').textContent, /1\. Not a list:/);
+
+  const note = v.host.querySelector('section > div:last-child li');
+  assert.equal(note.querySelector('em')?.textContent, 'cold');
+  assert.equal(note.querySelector('a')?.getAttribute('href'), 'https://example.com/notes');
+
+  // Scaling changes only the amount; the link in the same line stays a link.
+  await click(btn(v.host, 'More servings'));
+  await click(btn(v.host, 'More servings'));
+  const sugar = ing('i2');
+  assert.equal(sugar.querySelector('[data-scaled]').textContent, '1½ cups');
+  assert.equal(sugar.querySelector('a')?.getAttribute('href'), 'https://example.com/sugar');
+  assert.equal(seen(sugar), '1½ cups sugar, sifted');
+  assert.equal(seen(ing('i3')), '1½ onions, diced', 'a line that starts with a comma gets no space');
+
+  // Clicking the link opens it and does not tick the row.
+  sugar.querySelector('a').addEventListener('click', (e) => e.preventDefault());
+  await click(sugar.querySelector('a'));
+  assert.equal(sugar.closest('label').querySelector('input').checked, false);
+});
+
+test('F-1: the two copy actions stay plain text', () => {
+  const block = {
+    ...stew(),
+    serves: 2,
+    ingredients: [
+      { id: 'i1', qty: null, text: '**2 cups** flour', group: null },
+      { id: 'i2', qty: '1 cup', text: '[sugar](https://example.com/sugar)', group: null },
+    ],
+    steps: [
+      { id: 's1', text: 'Mix it **well**.' },
+      { id: 's2', text: 'Bake it; see [the guide](https://example.com/bake) and `200 C`.' },
+    ],
+    notes: [],
+  };
+  const md = m.recipeMarkdown(block, 4);
+  assert.match(md, /- 2 cups flour\n- 2 cups sugar\n/);
+  assert.match(md, /1\. Mix it well\.\n2\. Bake it; see the guide and 200 C\./);
+  assert.doesNotMatch(md, /\*\*|\]\(|`/);
+  assert.equal(m.shoppingListText(block, new Set(), 4), 'Shopping list: ' + (block.title ?? 'Recipe') + ' (serves 4)\n- 2 cups flour\n- 2 cups sugar\n');
+});
+
+test('F-6: two columns from a 700 px card', () => {
+  assert.equal(m.TWO_COLUMNS_MIN, 700);
 });
 
 test('no serves: no stepper and nothing scales; serves with nothing to scale: a plain chip', async () => {

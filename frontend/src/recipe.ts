@@ -30,8 +30,10 @@ export function amountValue(s: string): number {
 /**
  * A scaled amount written for a cook: 10 or more is a whole number; under 10 it snaps to ¼ ⅓ ½ ⅔ ¾ (and ⅛
  * below 1) when within 0.07, written as a whole number plus a glyph; otherwise one decimal with a dot.
+ * A non-zero amount never shows as 0 (F-3): down to 1/16 it reads ⅛; below that there is nothing a cook
+ * can measure, so the result is null and the caller keeps the reply's own amount.
  */
-export function formatAmount(v: number): string {
+export function formatAmount(v: number): string | null {
   if (v >= 10) return String(Math.round(v));
   const w = Math.floor(v);
   const f = v - w;
@@ -40,35 +42,55 @@ export function formatAmount(v: number): string {
   for (const c of C) if (Math.abs(f - c[0]) < Math.abs(f - best[0])) best = c;
   if (Math.abs(f - best[0]) > 0.07) return (Math.round(v * 10) / 10).toString();
   const whole = best[0] === 1 ? w + 1 : w;
-  return (whole ? String(whole) : '') + best[1] || '0';
+  const out = (whole ? String(whole) : '') + best[1];
+  if (out) return out;
+  if (v <= 0) return '0';
+  return v >= 1 / 16 ? '⅛' : null;
 }
 
-const PLURAL: Record<string, string> = {
-  cup: 'cups', clove: 'cloves', can: 'cans', onion: 'onions', lemon: 'lemons', egg: 'eggs', tablespoon: 'tablespoons',
-  teaspoon: 'teaspoons', slice: 'slices', carrot: 'carrots', potato: 'potatoes', tomato: 'tomatoes', stick: 'sticks', sprig: 'sprigs',
+/** 1500 as "1,500" when the reply wrote its amount with a thousands comma ("1,000 g"); otherwise as is. */
+const withThousands = (written: string, out: string) =>
+  /^\d{1,3}(?:,\d{3})+$/.test(written.trim()) && /^\d{4,}$/.test(out) ? out.replace(/\B(?=(\d{3})+$)/g, ',') : out;
+
+// Units flip whatever follows ("1 cup flour" → "2 cups flour"). Things counted flip only when they end
+// the amount's line or a comma or bracket follows ("1 onion, diced"); another word after them is the noun
+// ("1 egg yolk" → "1½ egg yolk", never "eggs yolk"; F-3).
+const UNIT_PLURAL: Record<string, string> = {
+  cup: 'cups', clove: 'cloves', can: 'cans', tablespoon: 'tablespoons', teaspoon: 'teaspoons', slice: 'slices', stick: 'sticks', sprig: 'sprigs',
 };
+const THING_PLURAL: Record<string, string> = { onion: 'onions', lemon: 'lemons', egg: 'eggs', carrot: 'carrots', potato: 'potatoes', tomato: 'tomatoes' };
+const PLURAL: Record<string, string> = { ...UNIT_PLURAL, ...THING_PLURAL };
 const SINGULAR: Record<string, string> = Object.fromEntries(Object.entries(PLURAL).map(([a, b]) => [b, a]));
+const THINGS = new Set([...Object.keys(THING_PLURAL), ...Object.values(THING_PLURAL)]);
 
 /**
  * An ingredient's leading amount at factor k. Only a leading number, fraction or range changes (both
  * ends of a range); the word right after it flips singular/plural from a fixed list; everything else
- * stays exactly as written. `scaled` is false when nothing changed hands (k = 1, or nothing to scale).
+ * stays exactly as written. `after` is the rest of the line (the ingredient's text), which decides
+ * whether a counted thing is followed by another noun. `scaled` is false when nothing changed hands
+ * (k = 1, nothing to scale, or an amount too small to write).
  */
-export function scaleQty(qty: string, k: number): { qty: string; scaled: boolean } {
+export function scaleQty(qty: string, k: number, after = ''): { qty: string; scaled: boolean } {
   const m = qty.match(LEAD);
   if (!m || k === 1) return { qty, scaled: false };
   const a = amountValue(m[1]) * k;
   const b = m[2] ? amountValue(m[2]) * k : null;
   if (!Number.isFinite(a) || (b !== null && !Number.isFinite(b))) return { qty, scaled: false };
+  const fa = formatAmount(a);
+  const fb = b !== null ? formatAmount(b) : null;
+  if (fa === null || (b !== null && fb === null)) return { qty, scaled: false };
   const top = b ?? a;
-  const rest = qty.slice(m[0].length).replace(/^(\s+)([A-Za-z]+)/, (all, sp: string, w: string) => {
-    // Keep the reply's case: "Cups" stays capitalised.
+  const nounFollows = /^\s*\p{L}/u.test(after);
+  const rest = qty.slice(m[0].length).replace(/^(\s+)([A-Za-z]+)(?=\s*$|[^A-Za-z])/, (all, sp: string, w: string, off: number, whole: string) => {
     const lw = w.toLowerCase();
+    // Another word after a counted thing, in the amount or in the text, makes it a modifier.
+    if (THINGS.has(lw) && (nounFollows || /\p{L}/u.test(whole.slice(sp.length + w.length)))) return all;
     const to = top > 1 ? PLURAL[lw] : SINGULAR[lw];
     if (!to) return all;
+    // Keep the reply's case: "Cups" stays capitalised.
     return sp + (w[0] === w[0].toUpperCase() ? to[0].toUpperCase() + to.slice(1) : to);
   });
-  return { qty: formatAmount(a) + (b !== null ? '–' + formatAmount(b) : '') + rest, scaled: true };
+  return { qty: withThousands(m[1], fa) + (b !== null ? '–' + withThousands(m[2], fb as string) : '') + rest, scaled: true };
 }
 
 /** Can this amount scale at all? (It starts with a number, fraction or glyph.) */
@@ -89,7 +111,7 @@ export const shownServes = (block: RecipeBlock, chosen: number | null) => (isSca
 export function ingredientLine(ing: RecipeIngredient, k: number): string {
   const text = plainText(ing.text);
   if (!ing.qty) return text;
-  return joinLine(scaleQty(ing.qty, k).qty, text);
+  return joinLine(scaleQty(ing.qty, k, text).qty, text);
 }
 
 /** Ungrouped first (no label), then each group in the order the reply first used it. */

@@ -7,6 +7,7 @@ import { HastNode, blockAt, hastText, rehypeSmartIndex, rehypeSmartSection, resu
 import type { ReplyPart, ReplySource } from './results/registry';
 import { SmartResult } from './results/SmartResult';
 import { ReplyText } from './results/ReplyText';
+import { inlineCodeClass, linkClass } from './markdownInline';
 
 interface CodeBlockProps {
   language?: string;
@@ -203,7 +204,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
             return (
               <code
-                className="px-1.5 py-0.5 rounded-md font-mono text-[12px] bg-zinc-800/80 text-sky-300 border border-zinc-700/50 [overflow-wrap:anywhere] [box-decoration-break:clone] [-webkit-box-decoration-break:clone]"
+                className={inlineCodeClass}
                 {...props}
               >
                 {children}
@@ -352,7 +353,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-sky-400 hover:text-sky-300 underline underline-offset-2 transition-colors"
+              className={linkClass}
             >
               {children}
             </a>

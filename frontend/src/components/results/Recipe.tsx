@@ -2,7 +2,8 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExte
 import { Check, ChevronDown, ChevronUp, Clock, Minus, Plus, Users } from 'lucide-react';
 import type { RecipeBlock, RecipeIngredient, RecipeStep, RecipeTime } from '../../smartResults';
 import { inRange, isObj, isText, optText, parseCommon, plainText, uniqueIds } from '../../smartResults';
-import { factor, groupIngredients, isScalable, joinLine, scaleQty, servesRange, shownServes, useRecipeState } from '../../recipe';
+import { InlineText } from './InlineText';
+import { factor, groupIngredients, isScalable, scaleQty, servesRange, shownServes, useRecipeState } from '../../recipe';
 import type { RendererProps } from './registry';
 
 /**
@@ -57,8 +58,11 @@ const subscribePhone = (cb: () => void) => {
 export const usePhone = () =>
   useSyncExternalStore(subscribePhone, () => (typeof window.matchMedia === 'function' ? window.matchMedia(PHONE).matches : false), () => false);
 
-/** Two columns need room: the card itself must be at least this wide (design §8, Ada's §11 check). */
-export const TWO_COLUMNS_MIN = 720;
+/**
+ * Two columns need room: the card itself must be at least this wide (design §8, Ada's §11 check). 700
+ * puts a 1180 px window with the sidebar at two columns and keeps 1024 at one (F-6).
+ */
+export const TWO_COLUMNS_MIN = 700;
 /** Ingredients fold on a phone when there are more than this many, showing FOLD_SHOW. */
 export const FOLD_OVER = 10;
 export const FOLD_SHOW = 8;
@@ -229,9 +233,8 @@ export const Recipe: React.FC<RendererProps<RecipeBlock>> = ({ block, messageId 
                   <ul role="list" aria-labelledby={group ? labelId : ingId}>
                     {visible.map((ing) => {
                       const on = state.have.has(ing.id);
-                      const s = ing.qty ? scaleQty(ing.qty, k) : null;
+                      const s = ing.qty ? scaleQty(ing.qty, k, plainText(ing.text)) : null;
                       const amountClass = on ? 'font-medium text-zinc-500' : s?.scaled ? 'font-semibold text-sky-200' : 'font-medium text-zinc-100';
-                      const text = plainText(ing.text);
                       return (
                         <li key={ing.id}>
                           <label className="-mx-1.5 flex min-h-8 cursor-pointer items-start gap-2.5 rounded-lg px-1.5 py-[5px] hover:bg-white/[0.05] max-sm:min-h-11 max-sm:py-[11px]">
@@ -245,10 +248,13 @@ export const Recipe: React.FC<RendererProps<RecipeBlock>> = ({ block, messageId 
                                   <span className={`tabular-nums ${amountClass}`} title={s.scaled ? `In the reply: ${ing.qty}` : undefined} data-scaled={s.scaled || undefined}>
                                     {s.qty}
                                   </span>
-                                  {joinLine('', text)}
+                                  {/* Colour and the hover title don't reach a screen reader (F-5). */}
+                                  {s.scaled && <span className="sr-only"> (was {ing.qty})</span>}
+                                  {ing.text.startsWith(',') ? '' : ' '}
+                                  <InlineText md={ing.text} />
                                 </>
                               ) : (
-                                text
+                                <InlineText md={ing.text} />
                               )}
                             </span>
                           </label>
@@ -321,7 +327,7 @@ export const Recipe: React.FC<RendererProps<RecipeBlock>> = ({ block, messageId 
                     </span>
                     <span className={`min-w-0 text-body [overflow-wrap:anywhere] ${on ? 'text-zinc-500' : isNext ? 'text-zinc-100' : 'text-zinc-300'}`}>
                       <span className="sr-only">Step {i + 1}: </span>
-                      {plainText(step.text)}
+                      <InlineText md={step.text} />
                       {isNext && <span className="sr-only"> (next)</span>}
                     </span>
                   </label>
@@ -341,7 +347,7 @@ export const Recipe: React.FC<RendererProps<RecipeBlock>> = ({ block, messageId 
           <ul className="list-disc space-y-1 pl-[18px] text-meta leading-[19px] text-zinc-400 marker:text-zinc-600">
             {block.notes.map((n, i) => (
               <li key={i} className="[overflow-wrap:anywhere]">
-                {plainText(n)}
+                <InlineText md={n} />
               </li>
             ))}
           </ul>
