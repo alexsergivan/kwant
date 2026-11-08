@@ -1,10 +1,14 @@
 name: Windows
 
-# The Windows port (0.7.6, branch win-076). Runs only on win-* branches and by hand,
-# so it never touches the Mac and Linux releases.
+# Windows (beta, since 0.7.7): build, clippy and the Windows tests on every pull request to main and
+# every push to main, so main can't break Windows without anyone noticing, plus the installer job.
+# win-* branches still run it too. It never publishes anything: the installer on a release comes
+# from windows-release.yml, which only adds files to mac.yml's release.
 on:
   push:
-    branches: ['win-*']
+    branches: [main, 'win-*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -12,7 +16,8 @@ permissions:
 
 concurrency:
   group: windows-${{ github.ref }}
-  cancel-in-progress: true
+  # every push to main gets its own full run
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -75,7 +80,23 @@ jobs:
       # of the gate above (next-076/windows/plan.md, "Tests not ported").
       - name: Dev mode git readers (head_branch, fresh reviews, diff paths)
         timeout-minutes: 15
-        run: 'cargo test --locked --lib --no-fail-fast -- server::dev::floor:: server::dev::poller::tests::fresh_means server::dev::poller::tests::candidates_go_newest server::dev::poller::tests::the_skipped_count server::dev::git::tests::diff_output_parses server::dev::git::tests::patches_are_matched'
+        shell: bash
+        env:
+          # Exactly this many tests must run (Rigel's F-2): a renamed or moved test that no longer
+          # matches the filters fails here instead of quietly dropping out. Change it with the filters.
+          EXPECTED_TESTS: 13
+        run: |
+          set -euo pipefail
+          cargo test --locked --lib --no-fail-fast -- server::dev::floor:: server::dev::poller::tests::fresh_means server::dev::poller::tests::candidates_go_newest server::dev::poller::tests::the_skipped_count server::dev::git::tests::diff_output_parses server::dev::git::tests::patches_are_matched 2>&1 | tee dev-readers.log
+          read -r results passed failed ignored < <(awk '/test result:/ { n++
+            for (i = 1; i < NF; i++) { w = $(i + 1); gsub(/[;,]/, "", w)
+              if (w == "passed") p += $i; if (w == "failed") f += $i; if (w == "ignored") g += $i } }
+            END { print n + 0, p + 0, f + 0, g + 0 }' dev-readers.log)
+          echo "test binaries: $results; passed $passed, failed $failed, ignored $ignored; expected $EXPECTED_TESTS passed"
+          if [ "$results" != 1 ] || [ "$passed" != "$EXPECTED_TESTS" ] || [ "$failed" != 0 ] || [ "$ignored" != 0 ]; then
+            echo "::error::Dev mode git readers ran $passed tests (failed $failed, ignored $ignored), expected exactly $EXPECTED_TESTS"
+            exit 1
+          fi
       - name: Windows integration tests (bash, Stop ends the process tree)
         timeout-minutes: 20
         run: cargo test --locked --no-fail-fast --test shell_stop_tree_test --test shell_tool_test
