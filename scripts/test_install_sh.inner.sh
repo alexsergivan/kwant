@@ -10,7 +10,7 @@ apt-get install -y -qq --no-install-recommends curl ca-certificates python3 proc
 # The mock release server, on the container's own loopback
 (cd /t/release && exec python3 -m http.server 18080 --bind 127.0.0.1) >/tmp/http.log 2>&1 &
 i=0
-until curl -fsS -o /dev/null http://127.0.0.1:18080/good/; do
+until curl -fsS -o /dev/null http://127.0.0.1:18080/good/ 2>/dev/null; do
   i=$((i + 1))
   [ "$i" -lt 50 ] || { echo "mock release server didn't start"; cat /tmp/http.log; exit 1; }
   sleep 0.2
@@ -74,7 +74,7 @@ check "first line names kwant and the arch" grep -Eq '^✓ kwant [0-9][^ ]* for 
 check "says it runs in the background" grep -q '^✓ Runs in the background' /tmp/out
 check "Mira's background line" grep -qx '✓ Laya and a browser for the bots are getting ready in the background' /tmp/out
 check "Mira's link line" grep -qx 'Open this on your phone or laptop to finish. It works once, for 15 minutes:' /tmp/out
-check "the one-time link" grep -Eq '^  http://127\.0\.0\.1:18799/#kwnt_token=[A-Za-z0-9_-]{16,}$' /tmp/out
+check "the one-time link" grep -Eq '^  http://127\.0\.0\.1:18799/#kwnt_token=[A-Za-z0-9._-]{16,}$' /tmp/out
 check "a QR code under it" grep -q '█' /tmp/out
 check "Mira's closing lines" grep -qx 'There you choose your AI and sign in. Nothing else to type here.' /tmp/out
 check "how to get another link" grep -Eq '^Lost the link\? Run: .*kwnt signin-link$' /tmp/out

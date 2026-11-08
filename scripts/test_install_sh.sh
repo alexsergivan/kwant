@@ -47,6 +47,8 @@ pack bad "$bin"
 printf '%064d  %s\n' 0 "$tarball" >"$work/release/bad/$tarball.sha256"
 cp "$root/site/install.sh" "$work/install.sh"
 cp "$root/scripts/test_install_sh.inner.sh" "$work/inner.sh"
+# mktemp -d is private (700); the installs run as an ordinary user in the container
+chmod -R a+rX "$work"
 
 fails=0
 for image in "$@"; do
