@@ -221,6 +221,44 @@ pub fn build_server(input: McpServerInput, existing: Option<&McpServer>) -> Resu
 }
 
 /// Replaces every non-empty secret in `text` with [`SECRET_MASK`].
+/// Whether stdio `server` would run a file from `folder`, its working folder (D4, C8): a program
+/// or argument that is a relative path (`./x.js`, `bin/serve`, or a bare name that exists in the
+/// folder, like `server.js`), or an absolute path inside the folder, including after `--opt=`.
+/// In a folder an isolated bot used, such a file may be one it rewrote, so the server isn't
+/// started there. A program looked up on `PATH` (`npx`, `uvx`) and paths outside are fine.
+pub fn runs_folder_file(server: &McpServer, folder: &std::path::Path) -> bool {
+    use std::path::Path;
+    if server.transport != "stdio" {
+        return false;
+    }
+    let folder = crate::db::isolated_folders::canonical(folder);
+    let names_file = |word: &str, program: bool| {
+        let word = word.trim();
+        if word.is_empty() {
+            return false;
+        }
+        let p = Path::new(word);
+        if p.is_absolute() {
+            return crate::db::isolated_folders::canonical(p).starts_with(&folder) || p.starts_with(&folder);
+        }
+        // A program with a slash resolves from the folder; a bare one is a PATH lookup. An argument
+        // names a folder file when it starts with `.` or its first part exists there (an npm
+        // scope such as `@modelcontextprotocol/x` doesn't, so it stays a package name)
+        if program {
+            return word.contains('/') || word.starts_with('.');
+        }
+        let first = p.components().next().map(|c| folder.join(c)).unwrap_or_else(|| folder.clone());
+        word.starts_with('.') || std::fs::symlink_metadata(first).is_ok()
+    };
+    let program = server.command.as_deref().unwrap_or("");
+    names_file(program, true)
+        || server.args.iter().any(|a| {
+            // `--config=./x`: the value names a file just the same
+            let value = a.split_once('=').map(|(_, v)| v);
+            names_file(a, false) || value.is_some_and(|v| names_file(v, false))
+        })
+}
+
 pub fn redact(text: &str, secrets: &[String]) -> String {
     let mut out = text.to_string();
     let mut sorted: Vec<&String> = secrets.iter().filter(|s| !s.is_empty()).collect();
@@ -454,6 +492,56 @@ impl std::fmt::Debug for McpTurnContext {
             .field("gateway", &self.gateway)
             .field("max_tool_iterations", &self.max_tool_iterations)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod folder_file_tests {
+    use super::*;
+
+    fn stdio(command: &str, args: &[&str]) -> McpServer {
+        McpServer {
+            id: "m1".into(),
+            name: "x".into(),
+            transport: "stdio".into(),
+            command: Some(command.into()),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            url: None,
+            env: Default::default(),
+            headers: Default::default(),
+            enabled: true,
+            timeout_secs: 30,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn a_server_that_runs_a_file_from_the_folder_is_spotted() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path();
+        std::fs::write(dir.join("server.js"), "").unwrap();
+        std::fs::create_dir(dir.join("tools")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let abs_out = outside.path().join("srv.js");
+        let abs_in = dir.join("tools/srv.js");
+        for (cmd, args) in [
+            ("node", vec!["server.js"]),
+            ("node", vec!["./missing.js"]),
+            ("./bin/serve", vec![]),
+            ("bin/serve", vec![]),
+            ("python3", vec!["-m", "x", "--config=./cfg.json"]),
+            ("node", vec![abs_in.to_str().unwrap()]),
+            (abs_in.to_str().unwrap(), vec![]),
+            ("node", vec!["tools/srv.js"]),
+        ] {
+            assert!(runs_folder_file(&stdio(cmd, &args), dir), "{cmd} {args:?}");
+        }
+        for (cmd, args) in [("npx", vec!["-y", "@modelcontextprotocol/server-memory"]), ("uvx", vec!["mcp-server-time"]), ("node", vec![abs_out.to_str().unwrap()]), ("server.js", vec![])] {
+            assert!(!runs_folder_file(&stdio(cmd, &args), dir), "{cmd} {args:?}");
+        }
+        let mut http = stdio("node", &["server.js"]);
+        http.transport = "http".into();
+        assert!(!runs_folder_file(&http, dir));
     }
 }
 

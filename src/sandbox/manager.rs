@@ -21,6 +21,53 @@ pub enum SandboxError {
     NotFound(String),
 }
 
+pub const EXECUTOR_IMAGE: &str = "kwnt-executor:v1";
+
+/// True when the image `tag` is already built.
+pub async fn image_exists(tag: &str) -> bool {
+    Command::new("docker")
+        .args(["image", "inspect", tag])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .is_ok_and(|out| out.status.success())
+}
+
+/// Builds `tag` from `files` (a `Dockerfile` and what it copies) unless it exists. The build
+/// folder is private to this build, so two images never share one.
+pub async fn ensure_image(tag: &str, files: &[(&str, &str)], build_args: &[(&str, &str)]) -> Result<(), SandboxError> {
+    if image_exists(tag).await {
+        return Ok(());
+    }
+    let build = std::env::temp_dir().join(format!("kwnt-image-build-{}", uuid::Uuid::new_v4().simple()));
+    let result = async {
+        tokio::fs::create_dir_all(&build).await?;
+        for (name, content) in files {
+            tokio::fs::write(build.join(name), content).await?;
+        }
+        let mut cmd = Command::new("docker");
+        cmd.args(["build", "-t", tag]);
+        for (k, v) in build_args {
+            cmd.arg("--build-arg").arg(format!("{k}={v}"));
+        }
+        cmd.arg(&build).kill_on_drop(true).output().await
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&build).await;
+    let out = result.map_err(|e| SandboxError::StartFailed(e.to_string()))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let tail: String = err.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+        return Err(SandboxError::StartFailed(tail));
+    }
+    Ok(())
+}
+
+/// kwnt's base image for commands run in the computer (and the agent image's base).
+pub async fn ensure_executor_image() -> Result<(), SandboxError> {
+    ensure_image(EXECUTOR_IMAGE, &[("Dockerfile", include_str!("../../docker/executor.Dockerfile"))], &[]).await
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShellOutput {
     pub command: String,
@@ -105,16 +152,7 @@ impl SandboxManager {
         let _ = Command::new("docker").args(["rm", "-f", &container_name]).output().await;
 
         let ws_str = workspace_dir.to_string_lossy().to_string();
-        if Command::new("docker").args(["image", "inspect", "kwnt-executor:v1"]).output().await
-            .map(|out| !out.status.success()).unwrap_or(true) {
-            let build = std::env::temp_dir().join("kwnt-executor-build");
-            tokio::fs::create_dir_all(&build).await.map_err(|e| SandboxError::StartFailed(e.to_string()))?;
-            tokio::fs::write(build.join("Dockerfile"), include_str!("../../docker/executor.Dockerfile")).await
-                .map_err(|e| SandboxError::StartFailed(e.to_string()))?;
-            let out = Command::new("docker").args(["build", "-t", "kwnt-executor:v1", &build.to_string_lossy()]).output().await
-                .map_err(|e| SandboxError::StartFailed(e.to_string()))?;
-            if !out.status.success() { return Err(SandboxError::StartFailed(String::from_utf8_lossy(&out.stderr).to_string())); }
-        }
+        ensure_executor_image().await?;
         let run_res = Command::new("docker")
             .args([
                 "run",
@@ -127,7 +165,7 @@ impl SandboxManager {
                 &format!("{}:/workspace:rw", ws_str),
                 "-w",
                 "/workspace",
-                "kwnt-executor:v1",
+                EXECUTOR_IMAGE,
             ])
             .output()
             .await

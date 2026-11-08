@@ -503,7 +503,7 @@ Your earlier turn ended before they answered. Make this same call again now, wit
 }
 
 /// Address agent CLIs on this host use to reach kwnt.
-fn local_base_url(state: &AppState) -> String {
+pub(crate) fn local_base_url(state: &AppState) -> String {
     let host = match state.config.host.as_str() {
         "0.0.0.0" | "::" | "[::]" | "" | "localhost" => "127.0.0.1".to_string(),
         h if h.contains(':') && !h.starts_with('[') => format!("[{h}]"),
@@ -610,6 +610,19 @@ pub async fn prepare_turn_with_opts(
             Vec::new()
         }
     };
+    // D4 (C8): in a folder an isolated bot used, a stdio server that runs a file from that
+    // folder would run whatever the bot left there, on this computer: it isn't started
+    if let Some(dir) = cwd.as_deref().filter(|d| d.exists()) {
+        if servers.iter().any(|s| mcp::runs_folder_file(s, dir)) && state.db.host_command_refusal(dir).await.is_some() {
+            servers.retain(|s| {
+                let runs = mcp::runs_folder_file(s, dir);
+                if runs {
+                    tracing::warn!(kwant = %kwant.id, server = %s.name, "not starting an MCP server that runs a file from a folder an isolated bot used");
+                }
+                !runs
+            });
+        }
+    }
     if servers.is_empty() && self_scope.is_none() {
         return None;
     }

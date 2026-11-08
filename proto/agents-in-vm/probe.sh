@@ -30,4 +30,13 @@ for url in https://example.com http://1.1.1.1 http://172.17.0.1:22 http://host.d
   code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null); rc=$?
   if [ "$rc" = 0 ] && [ "${code:0:1}" = 2 ]; then leak "reached $url ($code)"; else ok "$url -> curl rc=$rc http=$code"; fi
 done
+echo "== 4. IPv6, UDP and DNS"
+for url in "http://[2606:4700:4700::1111]" "http://[::ffff:1.1.1.1]"; do
+  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null); rc=$?
+  if [ "$rc" = 0 ] && [ "${code:0:1}" = 2 ]; then leak "reached $url ($code)"; else ok "$url -> curl rc=$rc http=$code"; fi
+done
+for dst in 1.1.1.1/53 2606:4700:4700::1111/53 172.17.0.1/53; do
+  if timeout 5 bash -c "printf x > /dev/udp/$dst" 2>/dev/null; then leak "sent UDP to $dst"; else ok "UDP to $dst refused"; fi
+done
+if timeout 5 getent hosts example.com >/dev/null 2>&1; then leak "resolved example.com"; else ok "no DNS"; fi
 echo "PROBE_LEAKS=$leaks"

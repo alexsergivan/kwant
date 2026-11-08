@@ -2898,6 +2898,23 @@ async fn run_kwant_turn_inner(
                 break;
             }
             let result = driver_task.await;
+            // Isolated Claude didn't start, or hit its request cap: the notice is the turn's end,
+            // saved like a stall (a kwant message with meta), never another account or this computer
+            if let Ok(Ok(out)) = &result {
+                if let Some((text, meta)) = &out.notice {
+                    tracing::warn!(kwant = %target_kwant.id, kind = %meta["kind"], reason = %meta["reason"], "turn ended with a notice");
+                    event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
+                    event_broadcast.send(RuntimeEvent::TurnComplete {
+                        tokens: 0,
+                        duration_ms: turn_start.elapsed().as_millis() as u64,
+                        kwant_id: Some(target_kwant.id.clone()),
+                        profile_id: profile.as_ref().map(|p| p.id.clone()),
+                    });
+                    gave_up = Some(text.clone());
+                    gave_up_meta = Some(meta.clone());
+                    break;
+                }
+            }
             let refused = match &result {
                 // A reply that is nothing but a usage-limit line is the provider's refusal, never an answer
                 Ok(Ok(out)) => out.failure.clone().or_else(|| limit_line_failure(&out.text)),

@@ -66,6 +66,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     // browser containers left by this or another kwant: remove orphans, stop idle ones
     let browser = state.browser_service.clone();
     browser.clone().spawn_reaper(cancel.clone());
+    // Claude's VM containers: remove ones a previous run left, then idle ones (Linux only)
+    if crate::sandbox::agent_vm::supported_os().is_ok() {
+        state.agent_vm.start_reaper();
+    }
     let api_token = state.api_token.clone();
     let app = create_router(state);
 

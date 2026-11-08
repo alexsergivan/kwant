@@ -50,6 +50,7 @@ pub mod agent_connections;
 pub mod dev_jira;
 pub mod telegram;
 pub mod show_once;
+pub mod isolated_folders;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -258,6 +259,8 @@ impl Database {
         // 0.7.9: Show it once recordings (add-only). After every step that can rebuild `kwants`
         // or `skills`, which would drop its delete triggers
         db.migrate_show_once().await?;
+        // Agents in the VM: folders an isolated turn used (add-only)
+        db.migrate_isolated_folders().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal

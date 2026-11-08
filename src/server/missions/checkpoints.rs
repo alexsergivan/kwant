@@ -144,28 +144,27 @@ fn through_symlink(folder: &FsPath, rel: &str) -> bool {
 }
 
 /// What the folder holds at `rel` now: `Ok(Some(sha))`, `Ok(None)` when absent, `Err(why)`.
+/// Opened from the folder's descriptor, never through a symlink (S-8).
 fn current(folder: &FsPath, rel: &str) -> Result<Option<String>, String> {
     if through_symlink(folder, rel) {
         return Err("symlink, not followed".into());
     }
-    let p = folder.join(rel);
-    let meta = match std::fs::symlink_metadata(&p) {
-        Ok(m) => m,
+    let opened = crate::sandbox::safe_fs::Dir::open(folder).and_then(|d| d.open_file(FsPath::new(rel)));
+    let mut f = match opened {
+        Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        // A symlink that appeared since the check above
+        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)) => return Err("symlink, not followed".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => return Err("not a regular file".into()),
         Err(_) => return Err("can't be read".into()),
     };
-    if !meta.is_file() {
-        return Err("not a regular file".into());
-    }
-    let mut f = std::fs::File::open(&p).map_err(|_| "can't be read".to_string())?;
     let mut h = <sha2::Sha256 as sha2::Digest>::new();
     std::io::copy(&mut f, &mut h).map_err(|_| "can't be read".to_string())?;
     Ok(Some(hex(&sha2::Digest::finalize(h))))
 }
 
-/// Streams `src` into the blob store, returning its sha256.
-fn store_blob(blobs: &FsPath, src: &FsPath) -> std::io::Result<String> {
-    let mut input = std::fs::File::open(src)?;
+/// Streams `input` (already opened, never by path: S-8) into the blob store, returning its sha256.
+fn store_blob(blobs: &FsPath, mut input: std::fs::File) -> std::io::Result<String> {
     let tmp = blobs.join(format!(".tmp-{}", new_id()));
     let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
     let mut h = <sha2::Sha256 as sha2::Digest>::new();
@@ -250,12 +249,23 @@ fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, St
         Ok(meta) if !meta.is_dir() => return Err("the task's folder isn't a folder".into()),
         Ok(_) => {}
     }
+    // Every folder is reached from its parent's descriptor and every file opened from the
+    // folder's with `openat(…, O_NOFOLLOW)` (S-8): a part swapped for a symlink mid-walk is
+    // skipped, never followed. Candidates keep their exact relative path to open later.
+    use crate::sandbox::safe_fs::{Dir, Kind};
+    let top = std::rc::Rc::new(Dir::open(folder).map_err(|e| format!("the folder can't be read: {e}"))?);
     let mut candidates: Vec<(String, PathBuf, u64, u32)> = Vec::new();
-    let mut stack: Vec<(PathBuf, String)> = vec![(folder.to_path_buf(), String::new())];
+    let mut stack: Vec<(std::rc::Rc<Dir>, Option<std::ffi::OsString>, String, PathBuf)> =
+        vec![(top.clone(), None, String::new(), PathBuf::new())];
     let mut first = true;
-    while let Some((dir, prefix)) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
+    while let Some((parent, name, prefix, at)) = stack.pop() {
+        let listed = match name {
+            None => Ok(parent),
+            Some(n) => parent.open_dir(FsPath::new(&n)).map(std::rc::Rc::new),
+        }
+        .and_then(|d| d.list().map(|l| (d, l)));
+        let (dir, entries) = match listed {
+            Ok(x) => x,
             Err(e) if first => return Err(format!("the folder can't be read: {e}")),
             Err(_) => {
                 m.skipped.push(Skip { path: prefix.to_string(), why: "folder can't be read".into() });
@@ -263,28 +273,18 @@ fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, St
             }
         };
         first = false;
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
+        for entry in entries {
+            let name = entry.name.to_string_lossy().into_owned();
             let rel = format!("{prefix}{name}");
-            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
-                m.skipped.push(Skip { path: rel, why: "can't be read".into() });
-                continue;
-            };
-            let ft = meta.file_type();
-            if ft.is_symlink() {
-                m.skipped.push(Skip { path: rel, why: "symlink, not followed".into() });
-            } else if ft.is_dir() {
-                if SKIP_DIRS.contains(&name.as_str()) {
-                    m.skipped.push(Skip { path: format!("{rel}/"), why: "not snapshotted".into() });
-                } else {
-                    stack.push((entry.path(), format!("{rel}/")));
+            match entry.kind {
+                Kind::Symlink => m.skipped.push(Skip { path: rel, why: "symlink, not followed".into() }),
+                Kind::Dir if SKIP_DIRS.contains(&name.as_str()) => {
+                    m.skipped.push(Skip { path: format!("{rel}/"), why: "not snapshotted".into() })
                 }
-            } else if !ft.is_file() {
-                m.skipped.push(Skip { path: rel, why: "not a regular file".into() });
-            } else if meta.len() > FILE_MAX_BYTES {
-                m.skipped.push(Skip { path: rel, why: "over 20 MB".into() });
-            } else {
-                candidates.push((rel, entry.path(), meta.len(), meta.permissions().mode() & 0o777));
+                Kind::Dir => stack.push((dir.clone(), Some(entry.name.clone()), format!("{rel}/"), at.join(&entry.name))),
+                Kind::Other => m.skipped.push(Skip { path: rel, why: "not a regular file".into() }),
+                Kind::File if entry.len > FILE_MAX_BYTES => m.skipped.push(Skip { path: rel, why: "over 20 MB".into() }),
+                Kind::File => candidates.push((rel, at.join(&entry.name), entry.len, entry.mode & 0o777)),
             }
         }
     }
@@ -319,8 +319,8 @@ fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, St
         candidates = kept;
     }
     let mut bytes = 0;
-    for (rel, abs, len, mode) in candidates {
-        match store_blob(blobs, &abs) {
+    for (rel, at, len, mode) in candidates {
+        match top.open_file(&at).and_then(|f| store_blob(blobs, f)) {
             Ok(sha) => {
                 bytes += len;
                 m.files.push(Entry { path: rel, sha256: sha, bytes: len, mode });
@@ -932,27 +932,22 @@ fn apply(blobs: &FsPath, p: &Plan, force: &BTreeSet<String>) -> (Vec<String>, Ve
             failed.push(json!({"path": rel, "why": "symlink, not followed"}));
             continue;
         }
-        let dest = p.folder.join(&rel);
-        let r = if action == "delete" {
-            std::fs::remove_file(&dest).map(|_| false)
-        } else {
-            let e = &p.entries[&rel];
-            (|| -> std::io::Result<bool> {
-                let parent = dest.parent().unwrap_or(&p.folder);
-                std::fs::create_dir_all(parent)?;
-                // The folders just created can't be symlinks, but one may have appeared meanwhile
-                if through_symlink(&p.folder, &rel) {
-                    return Err(std::io::Error::other("symlink"));
-                }
-                let tmp = parent.join(format!(".kwant-restore-{}", new_id()));
-                std::fs::copy(blobs.join(&e.sha256), &tmp)?;
-                std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(if e.mode == 0 { 0o644 } else { e.mode }))?;
-                std::fs::rename(&tmp, &dest).inspect_err(|_| {
-                    let _ = std::fs::remove_file(&tmp);
-                })?;
+        // Every folder on the way is opened (or made) from the task folder's descriptor with
+        // `O_NOFOLLOW`, and the file goes in with `openat`/`renameat` (S-8): a folder swapped for
+        // a symlink after the check above is refused, never written through
+        let relp = FsPath::new(&rel);
+        let (parent, name) = (relp.parent().unwrap_or(FsPath::new("")), relp.file_name().unwrap_or_default());
+        let r = crate::sandbox::safe_fs::Dir::open(&p.folder).and_then(|root| {
+            if action == "delete" {
+                root.open_dir(parent)?.remove_file(name).map(|_| false)
+            } else {
+                let e = &p.entries[&rel];
+                let dir = root.make_dirs(parent)?;
+                let mut src = std::fs::File::open(blobs.join(&e.sha256))?;
+                dir.replace_file(name, &format!(".kwant-restore-{}", new_id()), &mut src, if e.mode == 0 { 0o644 } else { e.mode })?;
                 Ok(true)
-            })()
-        };
+            }
+        });
         match r {
             Ok(true) => restored.push(rel),
             Ok(false) => deleted.push(rel),

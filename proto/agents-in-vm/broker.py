@@ -14,10 +14,14 @@ Tokens are never logged; the log carries sha256 prefixes only.
 
 The real design builds this in Rust inside kwnt; see design.md.
 """
-import hashlib, http.client, json, os, re, socketserver, sys, threading, time
+import hashlib, http.client, json, os, re, socketserver, ssl, sys, threading, time
 from http.server import BaseHTTPRequestHandler
 
-SOCK, CREDS, LOG, UPSTREAM_PORT = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+SOCK, CREDS, LOG, UPSTREAM = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+# A port number is the local mock; "https://api.anthropic.com" is Gate 0 (the real API, the
+# /anthropic route only, API-key mode only: no refresh is ever attempted against it).
+REAL = UPSTREAM.startswith("https://")
+UPSTREAM_PORT = 443 if REAL else int(UPSTREAM)
 lock, refresh_lock = threading.Lock(), threading.Lock()
 HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te",
        "trailer", "host", "content-length", "authorization", "x-api-key", "chatgpt-account-id"}
@@ -35,12 +39,24 @@ ROUTES = {
     "/mcp": ("127.0.0.1", UPSTREAM_PORT, "/mcp", [("POST", r"(\?.*)?"), ("GET", r"(\?.*)?"),
                                                   ("DELETE", r"(\?.*)?")]),
 }
+if REAL:
+    ROUTES = {"/anthropic": (UPSTREAM.removeprefix("https://").rstrip("/"), 443, "", ROUTES["/anthropic"][3])}
 
 def h8(s):
     return hashlib.sha256(s.encode()).hexdigest()[:8] if s else "-"
 
+def scrub(path):
+    """Path for the log: long or id-like segments become sha8 so nothing secret is written."""
+    p, _, q = path.partition("?")
+    segs = [("h:" + h8(x)) if len(x) > 24 or re.search(r"[0-9a-f]{8}-|[A-Za-z0-9_-]{20,}", x) else x
+            for x in p.split("/")]
+    return "/".join(segs) + (("?" + "&".join(k.split("=")[0] + ("=" + v if len(v) <= 12 else "=h:" + h8(v))
+                                              for k, _, v in (kv.partition("=") for kv in q.split("&"))))
+                             if q else "")
+
 def log(rec):
     rec["t"] = round(time.time(), 3)
+    rec["path"] = scrub(rec.get("path", ""))
     with lock, open(LOG, "a") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -80,6 +96,8 @@ def inject(route, headers, rec):
     c = creds()
     if route == "/anthropic":
         a = c["anthropic"]
+        if REAL and a["mode"] != "api_key":
+            return "gate 0 runs in api-key mode only"
         sent_bearer = headers.get("authorization", "").startswith("Bearer ")
         sent_key = bool(headers.get("x-api-key"))
         if a["mode"] == "api_key":
@@ -128,13 +146,13 @@ class H(BaseHTTPRequestHandler):
         sent_auth = self.headers.get("authorization", "") or self.headers.get("x-api-key", "")
         rec = {"method": self.command, "path": self.path, "route": route, "sent_cred_sha": h8(sent_auth)}
         if route is None:
-            rec["decision"] = "deny_route"
+            rec["decision"], rec["status"] = "deny_route", 403
             log(rec)
             return self.reply(403, {"error": "kwnt broker: host not allowed"})
         host, port, up_prefix, allowed = ROUTES[route]
         rest = self.path[len(route):] or ""
         if not any(m == self.command and re.fullmatch(rx, rest) for m, rx in allowed):
-            rec["decision"] = "deny_path"
+            rec["decision"], rec["status"] = "deny_path", 403
             log(rec)
             return self.reply(403, {"error": "kwnt broker: path not allowed"})
         for attempt in (1, 2):
@@ -152,10 +170,11 @@ class H(BaseHTTPRequestHandler):
                 rec["real_cred_sha"] = h8(real.get("authorization") or real.get("x-api-key") or "")
             if body is not None:
                 hdrs["content-length"] = str(len(body))
-            conn = http.client.HTTPConnection(host, port, timeout=600)
+            conn = (http.client.HTTPSConnection(host, port, timeout=600, context=ssl.create_default_context())
+                    if REAL else http.client.HTTPConnection(host, port, timeout=600))
             conn.request(self.command, up_prefix + rest, body=body, headers=hdrs)
             r = conn.getresponse()
-            if (r.status == 401 and route == "/anthropic" and attempt == 1
+            if (r.status == 401 and route == "/anthropic" and attempt == 1 and not REAL
                     and creds()["anthropic"]["mode"] == "oauth"):
                 r.read()
                 rec["on_401"] = refresh(hdrs["authorization"].removeprefix("Bearer "))
@@ -186,7 +205,13 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    do_GET = do_POST = do_DELETE = do_PUT = do_PATCH = handle_any
+    do_GET = do_POST = do_DELETE = do_PUT = do_PATCH = do_HEAD = do_OPTIONS = handle_any
+
+    def do_CONNECT(self):
+        # Gate 0 points HTTPS_PROXY here, so a CLI call to any other host shows up (and is denied).
+        log({"method": "CONNECT", "path": self.path, "route": None, "decision": "deny_route",
+             "status": 403, "sent_cred_sha": "-"})
+        self.reply(403, {"error": "kwnt broker: host not allowed"})
 
 class S(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True

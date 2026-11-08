@@ -252,7 +252,16 @@ pub async fn run_check(state: &AppState, task: &Task, check: &OutcomeCheck) -> O
     // person (check approval and mission approval are person-only routes). An http check the person
     // didn't add or approve is held to public addresses again now, pinned against DNS rebinding.
     let person_ok = check.requested_by == "person" || approved_by_person(state, check).await;
-    let (status, output) = run_spec(&check.kind, &spec, folder.as_deref(), person_ok).await;
+    // D4 (C9b): a command check runs bash on this computer as kwnt; never in a folder an
+    // isolated bot used, where the command (`npm test`) runs whatever that bot left there
+    let refused = match (check.kind.as_str(), folder.as_deref()) {
+        ("command", Some(dir)) => state.db.host_command_refusal(dir).await,
+        _ => None,
+    };
+    let (status, output) = match refused {
+        Some(why) => ("error".to_string(), why),
+        None => run_spec(&check.kind, &spec, folder.as_deref(), person_ok).await,
+    };
     // The excerpt reaches bots and the API: credentials in the output never get stored
     let output = super::autofix::redact(&output);
     let ev = state

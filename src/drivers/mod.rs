@@ -765,9 +765,20 @@ pub struct TurnOutput {
     /// driver then emitted no text and no `TurnComplete`, so the turn can move to another profile.
     #[serde(skip)]
     pub failure: Option<crate::profiles::ProviderFailure>,
+    /// Set when the turn stopped for a reason the chat shows as a notice (the text, and the
+    /// message meta its card is drawn from): isolated Claude couldn't start or hit its request
+    /// cap. The driver emitted no text and no `TurnComplete`, and the turn is over: it never moves
+    /// to another account or onto this computer (D1).
+    #[serde(skip)]
+    pub notice: Option<(String, serde_json::Value)>,
 }
 
 impl TurnOutput {
+    /// A turn that ends with a chat notice instead of a reply (see [`TurnOutput::notice`]).
+    pub fn notice(text: String, meta: serde_json::Value) -> Self {
+        Self { notice: Some((text, meta)), ..Default::default() }
+    }
+
     /// A turn the provider refused before anything visible happened.
     pub fn refused(failure: crate::profiles::ProviderFailure) -> Self {
         Self { failure: Some(failure), ..Default::default() }
@@ -801,13 +812,26 @@ pub fn resolve_driver_for_model(
     endpoint: Option<String>,
     engines: &engines::EngineRegistry,
 ) -> Result<(Box<dyn Driver>, engines::EngineId), String> {
+    resolve_driver_isolated(target_model, configured_key, endpoint, engines, None)
+}
+
+/// [`resolve_driver_for_model`], with Claude on this computer's own sign-in run in the bot's
+/// agent container when `isolation` is set (ignored for every other route).
+pub fn resolve_driver_isolated(
+    target_model: &str,
+    configured_key: Option<String>,
+    endpoint: Option<String>,
+    engines: &engines::EngineRegistry,
+    isolation: Option<cli::Isolation>,
+) -> Result<(Box<dyn Driver>, engines::EngineId), String> {
     use engines::{EngineId, SystemRoute};
     Ok(match engines::system_route(engines, target_model, configured_key, find_cli_binary)? {
         SystemRoute::Ollama => (Box::new(ApiDriver::new(None, endpoint)), EngineId::Ollama),
         SystemRoute::Api { engine, key } => (Box::new(ApiDriver::new(Some(key), endpoint)), engine),
         SystemRoute::Cli { engine, bin } => {
             let name = crate::profiles::Engine::from_model(target_model).map(|e| e.as_str().to_string());
-            (Box::new(CliDriver::new(Some(bin), name)), engine)
+            let claude = name.as_deref() == Some("claude");
+            (Box::new(CliDriver::new(Some(bin), name).with_isolation(isolation.filter(|_| claude))), engine)
         }
     })
 }

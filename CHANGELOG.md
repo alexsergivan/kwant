@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Run Claude inside the VM (Linux, off by default).** In VM mode, a new switch under the VM card runs each bot's Claude replies in a container of its own with no network. The real key or sign-in stays outside: kwant's broker passes only the Anthropic calls Claude needs and refuses the rest. Each reply may make 200 model requests. Claude's own web search and fetch are off while isolated, so bots use kwant's browser tools. Codex, Grok and Claude API-key accounts still run on this computer, and the chips under the switch show where each one runs. If isolation can't start, the reply stops with a notice and nothing runs unprotected. See docs/agents-in-vm.md for what it does and doesn't protect against.
+
 ### Changed
 - **Dev mode reviews only fresh work.** A branch or PR gets a review card only if it moved in the last 7 days, so old branches no longer fill the desk or spend model calls. Cards on branches that went quiet go stale, and a new push brings a branch back. The newest branches are reviewed first, and Dev mode's status says how many old ones it skipped. A card that couldn't read a big file now says "Couldn't read N files (too large to diff)" instead of "(no diff from GitHub)".
 

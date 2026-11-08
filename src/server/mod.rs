@@ -139,6 +139,8 @@ pub struct AppState {
     pub mission_runs: Arc<missions::runner::RunningMissions>,
     /// The daily spending stop's clock (a test fixes it; see [`spend_stop::Clock`]).
     pub spend: Arc<spend_stop::Clock>,
+    /// Claude replies run inside the VM ("Run Claude inside the VM", Linux only, off by default)
+    pub agent_vm: Arc<crate::sandbox::agent_vm::AgentVm>,
 }
 
 impl AppState {
@@ -156,6 +158,7 @@ impl AppState {
         let profiles = Arc::new(crate::profiles::ProfileManager::new(config.data_dir.clone()));
         let api_token = Arc::new(auth::ApiToken::load(&config));
         let browser_service = Arc::new(crate::sandbox::service::BrowserService::new(config.data_dir.clone(), config.browser_cdp_url.clone()));
+        let agent_vm = crate::sandbox::agent_vm::AgentVm::new(&config.data_dir, config.agents_in_vm.clone(), Some(db.clone()));
         Self {
             config,
             db,
@@ -191,6 +194,7 @@ impl AppState {
             app_update: crate::app_update::UpdateHub::shared(),
             mission_runs: Arc::default(),
             spend: Arc::default(),
+            agent_vm,
         }
     }
 

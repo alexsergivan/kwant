@@ -77,10 +77,15 @@ impl ToolRunner {
 /// The working folder of a bot outside any team: `<space data>/bot-workspaces/<kwant id>`,
 /// created on first use. Its file tools write there without asking.
 pub fn bot_workspace(space_data_dir: &std::path::Path, kwant_id: &str) -> PathBuf {
-    let safe: String = kwant_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-    let dir = space_data_dir.join("bot-workspaces").join(safe);
+    let dir = bot_workspace_path(space_data_dir, kwant_id);
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+/// [`bot_workspace`]'s path, without creating it.
+pub fn bot_workspace_path(space_data_dir: &std::path::Path, kwant_id: &str) -> PathBuf {
+    let safe: String = kwant_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    space_data_dir.join("bot-workspaces").join(safe)
 }
 
 /// The folder a team works in, as [`resolve_or_prepare_workspace`] picks it, without creating or
@@ -116,8 +121,9 @@ pub async fn resolve_or_prepare_workspace(
         let git_dir = target_dir.join(".git");
         if !git_dir.exists() {
             let _ = std::fs::create_dir_all(&target_dir);
-            let clone_res = tokio::process::Command::new("git")
-                .arg("clone")
+            // The shared host git rules (D4c); `--` so an address can't be read as an option
+            let clone_res = crate::server::dev::git::host_git_command("git")
+                .args(["-c", "protocol.ext.allow=never", "clone", "--"])
                 .arg(repo.trim())
                 .arg(&target_dir)
                 .output()

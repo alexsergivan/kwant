@@ -68,10 +68,21 @@ because those protect writes, not the token.
 - **QA, about 1 day (Rigel):** run `adversarial.sh` and a real-key smoke test on Linux and Docker Desktop.
 
 ## Risks
-- The bot can still spend the person's tokens: the broker hides the key, it doesn't ration it. Add a per-turn request cap later.
+- The bot can still spend the person's tokens: the broker hides the key, it doesn't ration it. Slice 1 caps each
+  reply at 200 model requests (configurable), then answers 429 with `x-should-retry: false`; a day of replies is not capped.
+- **Refresh ownership.** A Claude OAuth refresh token is single-use: when two processes refresh the same sign-in, the
+  loser's next refresh fails and the person has to sign in again. While isolation is on, the broker must be the only
+  refresher of a bot's sign-in home. It refreshes single-flight under a per-file lock inside kwnt, re-reads the file under that lock
+  (so a token another process already rotated is used, not refreshed again) and writes it atomically at 0600. It never
+  refreshes this computer's own `~/.claude` sign-in, which host Claude (and the person's own terminal) also refresh:
+  when that one has expired, the reply stops with `sign_in_expired` and the person signs in on this computer.
+  Residual risk: a host-mode turn of the same bot profile running at the same time could still refresh in parallel;
+  the lock is inside kwnt (one per file), and the host CLI doesn't take it. Refresh was tested only against the mock, never with
+  the team's real sign-ins (by rule).
 - The OAuth refresh endpoint and the Codex and Grok side endpoints are private CLI internals and can change with any CLI release. Pin versions and keep a CI smoke test against the real CLIs with the mock.
 - On a Mac, Claude keeps its credentials in the Keychain, so the broker needs a Keychain read (one permission prompt) or kwant's own sign-in.
-- Docker Desktop socket forwarding is unproven, and so is the image size on slow links (421 MB pull).
+- Docker Desktop socket forwarding is unproven, and so is the image size on slow links (about 860 MB on disk for the
+  slice-1 image, built locally from the executor image plus one pinned Claude Code).
 - Files written by the container uid need ownership fixed on the host.
 
 ## Still unproven
@@ -82,3 +93,40 @@ and Grok sign-in inference. Refresh for ChatGPT and Grok. The allow-list CONNECT
 1. Ship the first slice for Linux only and add Mac after a Docker Desktop test on your Mac? *Default: yes.*
 2. Is a 421 MB one-time image pull acceptable, or should the CLIs download on first use? *Default: ship in the image.*
 3. Should vm mode's isolated Claude become the default once proven, or stay opt-in? *Default: opt-in for 0.7.8.*
+
+## Slice 1 as built (branch `lin-078-agents-in-vm`)
+
+Rust, in `src/sandbox/agent_vm/` (broker, folder rule, notices, VM), wired in `drivers/cli.rs`, `server/computer.rs`
+and `sandbox/manager.rs`. Off by default, Claude sign-ins only, Linux only. User-facing summary and error codes:
+`docs/agents-in-vm.md`. Binding decisions D1-D5 from Ada's review are implemented as written there; the PR lists the
+field names, statuses, error codes and the host git calls.
+
+## Gate 0: the real API
+
+`proto/agents-in-vm/gate0.sh` runs the spike broker against `https://api.anthropic.com` with Haiku: a normal turn, a
+`--resume` turn and one Bash tool call (about six calls), with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and
+`DISABLE_AUTOUPDATER=1`. It writes `evidence/real-upstream.txt`: every (method, path, status) the CLI sent, denied ones
+included, with hashes only, plus the tool types and `anthropic-beta` values seen and the container's peak memory.
+
+**Status: not run yet.** The API key hasn't been provided, so the allow-list (`ANTHROPIC_ALLOWED`), `ALLOWED_TOOL_TYPES`
+and `KNOWN_BETAS` in `broker.rs` are still taken from the mock run and the CLI 2.1.316 sources. After the run:
+derive those three from the evidence, raise `memory_mb` if the peak is above 716.8 MB (70% of 1024), and shred every
+copy of the key.
+
+## Mac (design only, not in slice 1)
+
+Settings shows the switch disabled with "Coming to Mac later". What a Mac version needs:
+
+- **Docker Desktop.** Bind-mounting the broker's Unix socket into a container goes through Docker Desktop's file
+  sharing (virtiofs). Unproven. If it fails: publish a loopback-only TCP port for the broker and give each container
+  a per-turn shared secret in the URL path (the `/t/<key>/` prefix already does this), never a credential.
+- **Sign-in source.** Claude keeps its Mac sign-in in the Keychain ("Claude Code-credentials"), not in
+  `~/.claude/.credentials.json`. The broker reads it with one Keychain prompt the person approves, or uses a kwnt-owned
+  sign-in home per bot profile (preferred: no Keychain access, and the broker owns refresh as on Linux).
+- **Ownership.** Docker Desktop maps file ownership itself, so `--user uid:gid` is not needed for files to land as the
+  person; it still keeps the CLI non-root.
+- **Image.** arm64 and x86_64 builds of the same pinned CLI; the agent image is built locally from the executor image,
+  as on Linux.
+- **Hardening for Mac "local" mode** (separate follow-up, no broker): Claude's Seatbelt sandbox plus `denyRead` on
+  `~/.claude`, `~/.codex`, `~/.grok` and the Keychain. It doesn't keep the token from the CLI process itself.
+- **Test before shipping:** the adversarial test and Gate 0 on Oleks's Mac with Docker Desktop.

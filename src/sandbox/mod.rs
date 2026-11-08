@@ -1,3 +1,4 @@
+pub mod agent_vm;
 pub mod app_links;
 pub mod bitwarden;
 pub mod browser;
@@ -9,6 +10,7 @@ pub mod manager;
 pub mod cite;
 pub mod progress;
 pub mod reads;
+pub mod safe_fs;
 pub mod service;
 pub mod site_guard;
 pub mod vault;
