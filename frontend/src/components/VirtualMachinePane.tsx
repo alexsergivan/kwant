@@ -798,6 +798,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
       {showStage && (
         <BrowserTakeoverStage
           botName={teamName}
+          othersBrowsing={switching}
           pageUrl={pageUrl}
           pageTitle={shownTitle}
           stream={stream}
