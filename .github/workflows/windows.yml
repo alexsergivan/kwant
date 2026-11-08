@@ -69,7 +69,7 @@ jobs:
       # the unit tests, less the modules listed there, plus the integration tests for Windows behaviour.
       - name: Unit tests
         timeout-minutes: 20
-        run: cargo test --locked --lib --no-fail-fast -- --skip server::dev:: --skip parallel::harness::
+        run: 'cargo test --locked --lib --no-fail-fast -- --skip server::dev:: --skip parallel::harness::'
       - name: Windows integration tests (bash, Stop ends the process tree)
         timeout-minutes: 20
         run: cargo test --locked --no-fail-fast --test shell_stop_tree_test --test shell_tool_test
