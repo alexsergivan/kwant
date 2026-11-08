@@ -1,0 +1,72 @@
+up: container kwnt-proto-lin-agent, broker /home/maus/work/lin-078-agents-in-vm/proto/agents-in-vm/run/sock/broker.sock, mock 127.0.0.1:19471
+### A. plain shell in the container (docker exec)
+== 1. read the host sign-in files
+ok   read /home/maus/.claude/.credentials.json -> No such file or directory
+ok   read /home/maus/.codex/auth.json -> No such file or directory
+ok   read /home/maus/.grok/auth.json -> No such file or directory
+ok   read /home/maus/work/lin-078-agents-in-vm/proto/agents-in-vm/run/host/signin-home/.claude/.credentials.json -> No such file or directory
+ok   read /home/maus/work/lin-078-agents-in-vm/proto/agents-in-vm/run/host/creds.json -> No such file or directory
+ok   read /home/maus/work/lin-078-agents-in-vm/proto/agents-in-vm/run/host/upstream_state.json -> No such file or directory
+ok   read /root/.claude/.credentials.json -> Permission denied
+ok   read /root/.codex/auth.json -> Permission denied
+ok   no sign-in file anywhere in the container
+== 2. read the real token
+ok   env holds no real token (0 credential vars, all dummies)
+ok   no real token in any process env/cmdline (6 processes, incl. the running claude)
+ok   no real token in any file (rootfs, /workspace, /home/agent, /run/kwnt, /tmp)
+ok   broker /anthropic/v1/oauth/token -> 403
+ok   broker /anthropic/v1/files -> 403
+ok   broker /chatgpt/backend-api/accounts -> 403
+ok   broker /admin -> 403
+== 3. reach an outside host
+ok   https://example.com -> curl rc=6 http=000
+ok   http://1.1.1.1 -> curl rc=7 http=000
+ok   http://172.17.0.1:22 -> curl rc=7 http=000
+ok   http://host.docker.internal -> curl rc=6 http=000
+ok   http://127.0.0.1:8080/https://example.com -> curl rc=0 http=403
+PROBE_LEAKS=0
+### B. the agent's own Bash tool, mid-turn (claude in the container, real token at the broker)
+== 1. read the host sign-in files
+ok   read /home/maus/.claude/.credentials.json -> No such file or directory
+ok   read /home/maus/.codex/auth.json -> No such file or directory
+ok   read /home/maus/.grok/auth.json -> No such file or directory
+ok   read /home/maus/work/lin-078-agents-in-vm/proto/agents-in-vm/run/host/signin-home/.claude/.credentials.json -> No such file or directory
+ok   read /home/maus/work/lin-078-agents-in-vm/proto/agents-in-vm/run/host/creds.json -> No such file or directory
+ok   read /home/maus/work/lin-078-agents-in-vm/proto/agents-in-vm/run/host/upstream_state.json -> No such file or directory
+ok   read /root/.claude/.credentials.json -> Permission denied
+ok   read /root/.codex/auth.json -> Permission denied
+ok   no sign-in file anywhere in the container
+== 2. read the real token
+ok   env holds no real token (1 credential vars, all dummies)
+ok   no real token in any process env/cmdline (11 processes, incl. the running claude)
+ok   no real token in any file (rootfs, /workspace, /home/agent, /run/kwnt, /tmp)
+ok   broker /anthropic/v1/oauth/token -> 403
+ok   broker /anthropic/v1/files -> 403
+ok   broker /chatgpt/backend-api/accounts -> 403
+ok   broker /admin -> 403
+== 3. reach an outside host
+ok   https://example.com -> curl rc=6 http=000
+ok   http://1.1.1.1 -> curl rc=7 http=000
+ok   http://172.17.0.1:22 -> curl rc=7 http=000
+ok   http://host.docker.internal -> curl rc=6 http=000
+ok   http://127.0.0.1:8080/https://example.com -> curl rc=0 http=403
+PROBE_LEAKS=0
+### C. positive control: the real key reached the upstream, the dummy never did
+      2 api_key_ok
+broker denials:
+  deny_path POST /anthropic/v1/oauth/token
+  deny_path POST /anthropic/v1/files
+  deny_path POST /chatgpt/backend-api/accounts
+  deny_route POST /admin
+  deny_route GET /https://example.com
+  deny_path POST /anthropic/v1/oauth/token
+  deny_path POST /anthropic/v1/files
+  deny_path POST /chatgpt/backend-api/accounts
+  deny_route POST /admin
+  deny_route GET /https://example.com
+### D. self-test: the probe does catch a planted token (expects leaks)
+  LEAK token in env
+  LEAK /proc: /proc/181/environ /proc/187/environ
+  LEAK files: /tmp/planted
+down: 0 containers, 0 networks left
+RESULT: PASS (all three attacks failed in both paths)
