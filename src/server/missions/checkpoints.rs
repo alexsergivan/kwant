@@ -155,7 +155,7 @@ fn current(folder: &FsPath, rel: &str) -> Result<Option<String>, String> {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         // A symlink that appeared since the check above
-        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)) => return Err("symlink, not followed".into()),
+        Err(e) if symlink_refused(&e) => return Err("symlink, not followed".into()),
         Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => return Err("not a regular file".into()),
         Err(_) => return Err("can't be read".into()),
     };
@@ -164,6 +164,21 @@ fn current(folder: &FsPath, rel: &str) -> Result<Option<String>, String> {
     let mut h = <sha2::Sha256 as sha2::Digest>::new();
     std::io::copy(&mut (&mut f).take(FILE_MAX_BYTES + 1), &mut h).map_err(|_| "can't be read".to_string())?;
     Ok(Some(hex(&sha2::Digest::finalize(h))))
+}
+
+/// Whether opening failed because a symlink was met on the way. Mac and Linux: `O_NOFOLLOW` gives
+/// `ELOOP` on the last part and `O_DIRECTORY` gives `ENOTDIR` on a folder swapped for a symlink.
+#[cfg(unix)]
+fn symlink_refused(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR))
+}
+
+/// Off unix [`crate::sandbox::safe_fs::Dir`] checks by path and refuses a symlink or reparse
+/// point as "not a regular file" (`InvalidInput`, the arm after this one) or "a symlink on the
+/// way" for the folder itself, so there is no separate symlink error to tell apart here.
+#[cfg(not(unix))]
+fn symlink_refused(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::InvalidInput && e.to_string() == "a symlink on the way"
 }
 
 /// Streams `input` (already opened, never by path: S-8) into the blob store, returning its sha256

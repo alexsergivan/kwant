@@ -10,6 +10,7 @@
 
 use crate::sandbox::safe_fs::Dir;
 use std::io::Read;
+#[cfg(unix)]
 use std::path::Path;
 
 /// HEAD, a loose ref or a `.git` file is tiny; a bigger one isn't git's.

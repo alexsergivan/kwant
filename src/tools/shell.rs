@@ -100,9 +100,9 @@ pub fn git_bash() -> Option<std::path::PathBuf> {
         return Some(hit.clone());
     }
     let found = {
-            let exec_path = std::process::Command::new("git")
+            // Through the one git helper (D4c): no system config, hooks or stray GIT_* here either
+            let exec_path = crate::server::dev::git::host_git_command_blocking("git")
                 .arg("--exec-path")
-                .stdin(Stdio::null())
                 .stderr(Stdio::null())
                 .output()
                 .ok()

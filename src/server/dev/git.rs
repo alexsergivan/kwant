@@ -305,7 +305,14 @@ fn with_dot_git(url: &str) -> Option<String> {
 /// an alias can't replace, so no alias ever runs. A CI test checks that nothing else in `src/`
 /// starts git.
 pub fn host_git_command(bin: &str) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(bin);
+    tokio::process::Command::from(host_git_command_blocking(bin))
+}
+
+/// [`host_git_command`] for code that can't await (Windows' `git_bash` lookup): the same flags,
+/// environment and no stdin, as a blocking [`std::process::Command`]. `host_git_command` is built
+/// from it, so the two can't drift apart.
+pub fn host_git_command_blocking(bin: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(bin);
     cmd.args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat"]);
     for (k, _) in std::env::vars_os() {
         if let Some(k) = k.to_str() {
@@ -1633,6 +1640,21 @@ fn match_patches(files: &mut [FileDiff], sections: Vec<Section>) {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    /// D4c on Windows too: `git_bash` runs git through the blocking twin, which must give git
+    /// exactly what the async helper does (same `-c` flags, same environment, no stdin).
+    #[test]
+    fn the_blocking_twin_matches_host_git_command() {
+        let a = host_git_command("git");
+        let a = a.as_std();
+        let b = host_git_command_blocking("git");
+        assert_eq!(a.get_program(), b.get_program());
+        assert_eq!(a.get_args().collect::<Vec<_>>(), b.get_args().collect::<Vec<_>>());
+        assert_eq!(a.get_envs().collect::<Vec<_>>(), b.get_envs().collect::<Vec<_>>());
+        let args: Vec<_> = b.get_args().filter_map(|x| x.to_str()).collect();
+        assert_eq!(args, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat"]);
+        assert!(b.get_envs().any(|(k, v)| k == "GIT_CONFIG_NOSYSTEM" && v.is_some_and(|v| v == "1")));
+    }
 
     /// Writes an executable script at `path` that is safe to run while other tests start
     /// processes (D-2). Writing it here would hold a write fd on it in this process, and a
