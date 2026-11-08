@@ -503,7 +503,7 @@ pub async fn branches(state: &AppState, mode: &DevRepoRow, h: &History<'_>) -> R
     let shas: Vec<&str> = ahead.iter().map(|(_, s)| s.as_str()).collect();
     let dates = h.commit_dates(&shas).await;
     let mirror = h.fetches_branches();
-    let mut ahead: Vec<((&String, &String), Option<DateTime<Utc>>)> = ahead.into_iter().map(|b| (b, dates.get(b.1.as_str()).copied())).collect();
+    let mut ahead: Vec<_> = ahead.into_iter().map(|b| (b, dates.get(b.1.as_str()).copied())).collect();
     newest_first(&mut ahead);
     let (now, days) = (Utc::now(), super::review_days());
     let mut open = HashSet::new();
