@@ -2,7 +2,7 @@
 
 A bot's final reply can carry one typed block, `results`, that the chat draws in place of a table
 or a list in the reply: a chart, a comparison, key numbers, findings, cards, steps (plain, checklist
-or timeline) or facts. The reply's
+or timeline), facts or a recipe. The reply's
 text is never changed. When there is no block, or the chat can't draw it, the reply shows its
 markdown as it always has.
 
@@ -26,13 +26,13 @@ Code: `src/server/smart_results/` (contract types, selectors, checks) and
 - **How the block is chosen:** each table gets at most one class (line chart, else bar chart unless
   the prose names a pick, else metrics, else comparison) and each list at most one (metrics,
   findings, cards, timeline, checklist, steps, facts). The candidates are then offered in the order
-  of `selector::PRIORITY`: chart > comparison > metrics > findings > cards > timeline > checklist >
+  of `selector::PRIORITY`: recipe > chart > comparison > metrics > findings > cards > timeline > checklist >
   steps > facts. A tie goes to the earliest in the text. The first candidate whose type is in
   `ENABLED_TYPES` and that passes the checks is stored, and only that one: a message has at most
   one block.
 - **The bot prompt line:** every turn's system prompt carries `smart_results::PROMPT_LINE` once
   (in the cached tail, `drivers::TurnInput::system_prompt_parts`), asking for tables, numbered
-  steps and `**Label:** value` lines.
+  steps, an "Ingredients" list then numbered steps for a recipe, and `**Label:** value` lines.
 - **What it never costs:** the reply. If a selector panics, a block fails its checks, or the write
   fails, kwant logs it and saves the message exactly as before.
 - **Edits:** when a reply's text is replaced (`set_message_text`), its block is deleted, because the
@@ -149,6 +149,32 @@ a literal "Owner: X" or "(owner: X)".
 
 **Facts:** 3–12 items `**Label:** value`, more than half of them not starting with a number.
 
+**Recipe** (0.7.6; the `Recipe` type in `mod.rs` is the reference). One block for the
+recipe part of a reply: the dish heading, a Serves/time line, the Ingredients lists (with group
+labels), the method and optional notes. The intro and the closing question stay text.
+- Exactly one ingredients cue: a heading or one-line paragraph "Ingredients" (also
+  "Ingredients (serves 4)", "Ingredient list"), or a one-line intro ending in ":" with "ingredients"
+  in it, right before the list. A second cue (a meal plan) gives no recipe.
+- Then 1+ bullet lists of 2–40 ingredients in total (each list may sit under a short group label),
+  then the method: an ordered list, or any list under Method / Instructions / Steps / Directions /
+  Preparation (2–30 steps). Optional notes after it: a Notes / Tips label and a list of 1–6 items.
+- Every top-level block in the section must be accounted for. A prose paragraph, code block, table,
+  quote or HTML in between, a list straight after the method, a second list→numbered-list pair in
+  the reply, steps that read as a weekly plan, or any list past the line where the count becomes
+  unsure: no recipe.
+- `serves` (1–24) and up to 3 `times` come from a meta line or list (`**Serves 4** · Prep 15 min`,
+  `- **Prep time:** 10 minutes`); one the server can't read ("Serves 4–6") stays text above the card.
+- `qty` is the leading amount as written, split off only when `qty + text` (with a space, or none
+  when the text starts with ",") rebuilds the line exactly. A temperature ("350 °F oven", "180C",
+  "350 degrees") is not an amount, so it gets no `qty` and never scales; a lone capital `C` is a
+  temperature only after 90 or more, so "1 C sugar" (a cup) still scales. A GFM task box in front
+  of an ingredient or a note is dropped.
+- Ranks above every other reply selector; recipe replies hold lists the steps and metrics selectors
+  would otherwise take.
+- Source `markdown_section` `{index, ordered, last_index, last_ordered, lead}`: the first and last
+  list of the section, and how many top-level nodes before the first list belong to it. Only a
+  recipe may use it, and a recipe may use nothing else.
+
 **Comparison:**
 - the table is a clean top-level GFM pipe table;
 - it has 2–8 columns and 3–50 rows, every row with as many cells as the header;
@@ -228,7 +254,7 @@ routes.
 
 **`present_result`** is a self tool (offered in `tool_list`, dispatched in `call_tool`). A bot
 calls it once before its final reply to say which table or list it wants drawn: `type`
-(`comparison` or `steps`), `source` (`markdown_table` or `markdown_list` and the `index`), `data`.
+(`comparison`, `steps` or `recipe`), `source` (`markdown_table` or `markdown_list` and the `index`), `data`.
 Nothing is trusted at call time. When the message is saved, the last call that was valid (status
 `ok` or `allowed`) is held to the final reply: the comparison's column labels are in the table's
 header, every declared row matches one row of that table cell by cell (a value moved under another
@@ -238,6 +264,9 @@ the named list. Any failure drops the call (logged) and the normal selectors run
 call without `source` is refused for a comparison (and for steps). A bot cannot declare
 `verification` or `files`, and cannot set provenance: kwant writes `bot_declared` with the call's id.
 Calls over 64 KB are refused.
+A `recipe` call has no `source` and `data: {ingredients: [full lines], steps: [texts]}`; it grounds
+only when the reply's own recipe has the same ingredients and steps in the same order, and the
+stored block is the one read from the reply, with `bot_declared` provenance.
 
 Not yet declarable: `chart`, `metrics`, `facts`, `cards`, `findings`. They arrive with
 `smart-results-more`; for metrics the plan's rule applies then (each label and its value must be on

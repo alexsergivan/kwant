@@ -4,6 +4,10 @@ use std::collections::HashSet;
 
 use super::items::severity_of;
 use super::selector::plain;
+use super::recipe::{
+    GLYPHS, GROUP_MAX, INGREDIENTS, INGREDIENT_MAX, MAX_LEAD, MAX_NOTES, MAX_TIMES, NOTE_MAX, QTY_MAX, SERVES, STEPS, STEP_MAX,
+    TIME_LABEL_MAX, TIME_TEXT_MAX,
+};
 use super::{AxisKind, Block, ChartKind, ResultSet, Role, Variant, ENABLED_TYPES, MAX_PAYLOAD, PICK_REASON, VERSION};
 
 /// `Ok` when `set` is a block set this build may store and serve. With `reply`, every label, unit,
@@ -28,11 +32,11 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
             texts.push(title);
         }
         check_source(block)?;
-        // `present_result` may declare a comparison or steps block itself (`bot_declared`, grounded
-        // against the reply by its call); the typed task and file blocks come from kwant's data.
+        // `present_result` may declare a comparison, steps or recipe block itself (`bot_declared`,
+        // grounded against the reply by its call); the typed task and file blocks come from kwant's data.
         let prov = block.provenance().kind.as_str();
         let prov_ok = match block {
-            Block::Comparison(_) | Block::Steps(_) => matches!(prov, "reply_text" | "bot_declared"),
+            Block::Comparison(_) | Block::Steps(_) | Block::Recipe(_) => matches!(prov, "reply_text" | "bot_declared"),
             Block::Verification(_) | Block::Files(_) => prov == "kwant_data",
             _ => prov == "reply_text",
         };
@@ -42,6 +46,63 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
         // Only text copied from the reply is checked against it.
         let strict = prov == "reply_text";
         match block {
+            Block::Recipe(r) => {
+                if let Some(n) = r.serves {
+                    if !(SERVES.0..=SERVES.1).contains(&n) || reply.is_some_and(|reply| !reply.contains(&n.to_string())) {
+                        return Err(format!("serves {n}"));
+                    }
+                }
+                if r.times.len() > MAX_TIMES {
+                    return Err(format!("{} times", r.times.len()));
+                }
+                for t in &r.times {
+                    check_text(&t.label, TIME_LABEL_MAX, "time label")?;
+                    check_text(&t.text, TIME_TEXT_MAX, "time")?;
+                    texts.push(&t.label);
+                    texts.push(&t.text);
+                }
+                if !(INGREDIENTS.0..=INGREDIENTS.1).contains(&r.ingredients.len()) {
+                    return Err(format!("{} ingredients", r.ingredients.len()));
+                }
+                for (k, i) in r.ingredients.iter().enumerate() {
+                    if i.id != format!("i{k}") {
+                        return Err(format!("ingredient id {:?}", i.id));
+                    }
+                    check_text(&i.text, INGREDIENT_MAX, "ingredient")?;
+                    if let Some(q) = &i.qty {
+                        check_text(q, QTY_MAX, "qty")?;
+                        if !q.starts_with(|c: char| c.is_ascii_digit() || GLYPHS.contains(&c)) {
+                            return Err(format!("qty {q:?}"));
+                        }
+                    }
+                    if let Some(g) = &i.group {
+                        check_text(g, GROUP_MAX, "group")?;
+                        texts.push(g);
+                    }
+                    // qty + text is the line as the reply wrote it
+                    let line = i.line();
+                    if reply.is_some_and(|reply| !reply.contains(&line)) {
+                        return Err(format!("{line:?} is not text of the reply"));
+                    }
+                }
+                if !(STEPS.0..=STEPS.1).contains(&r.steps.len()) {
+                    return Err(format!("{} steps", r.steps.len()));
+                }
+                for (k, step) in r.steps.iter().enumerate() {
+                    if step.id != format!("s{k}") {
+                        return Err(format!("step id {:?}", step.id));
+                    }
+                    check_text(&step.text, STEP_MAX, "step")?;
+                    texts.push(&step.text);
+                }
+                if r.notes.len() > MAX_NOTES {
+                    return Err(format!("{} notes", r.notes.len()));
+                }
+                for n in &r.notes {
+                    check_text(n, NOTE_MAX, "note")?;
+                    texts.push(n);
+                }
+            }
             Block::Comparison(c) => {
                 if !(2..=8).contains(&c.columns.len()) {
                     return Err(format!("{} columns", c.columns.len()));
@@ -406,10 +467,22 @@ fn check_source(block: &Block) -> Result<(), String> {
     let kind = block.kind();
     let table_ok = matches!(kind, "comparison" | "chart" | "metrics");
     let list_ok = matches!(kind, "steps" | "metrics" | "facts" | "cards" | "findings");
+    let section_only = s.last_index.is_none() && s.last_ordered.is_none() && s.lead.is_none();
     let ok = match s.kind.as_str() {
-        "markdown_table" => table_ok && s.ordered.is_none() && s.index.is_some_and(|i| i <= 10_000),
-        "markdown_list" => list_ok && s.index.is_some_and(|i| i <= 10_000),
-        "slot" => matches!(kind, "verification" | "files") && s.index.is_none() && s.ordered.is_none(),
+        "markdown_table" => table_ok && section_only && s.ordered.is_none() && s.index.is_some_and(|i| i <= 10_000),
+        "markdown_list" => list_ok && section_only && s.index.is_some_and(|i| i <= 10_000),
+        "markdown_section" => {
+            kind == "recipe"
+                && s.ordered.is_some()
+                && s.last_ordered.is_some()
+                && s.lead.is_some_and(|l| l <= MAX_LEAD)
+                && match (s.index, s.last_index) {
+                    // The section can't end before it starts
+                    (Some(a), Some(b)) => a <= 10_000 && b <= 10_000 && (s.ordered != s.last_ordered || a <= b),
+                    _ => false,
+                }
+        }
+        "slot" => matches!(kind, "verification" | "files") && section_only && s.index.is_none() && s.ordered.is_none(),
         _ => false,
     };
     if ok {
@@ -501,7 +574,7 @@ fn check_text(s: &str, max: usize, what: &str) -> Result<(), String> {
 
 /// A text's length as the client counts it (UTF-16 units: an emoji is two), so a text the server
 /// stores is one the client's own limit lets through.
-fn utf16_len(s: &str) -> usize {
+pub(super) fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
 

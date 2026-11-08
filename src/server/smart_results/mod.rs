@@ -1,6 +1,6 @@
 //! Smart Results (0.6.5): a table or a list in a bot's final reply, kept as one typed block the
 //! chat can draw as a chart, a comparison, metric tiles, findings, cards, a checklist, a timeline,
-//! steps or facts. Contract: docs/smart-results.md.
+//! steps, facts or a recipe. Contract: docs/smart-results.md.
 //!
 //! - The reply's text is never changed. The block set lives beside it in `message_results`,
 //!   written when the reply is saved ([`crate::db::Database::insert_message_with`]), and every
@@ -18,6 +18,7 @@ mod items;
 mod compose;
 mod files;
 mod present_result;
+mod recipe;
 mod selector;
 mod validate;
 mod verification;
@@ -32,7 +33,7 @@ use serde::{Deserialize, Serialize};
 /// The block types this build stores and serves. Taking a type out (a one-line release fallback)
 /// stops new blocks of it and hides stored ones (`results: null`); the chat then shows the
 /// reply's markdown.
-pub const ENABLED_TYPES: &[&str] = &["chart", "comparison", "metrics", "findings", "cards", "steps", "facts", "verification", "files"];
+pub const ENABLED_TYPES: &[&str] = &["chart", "comparison", "metrics", "findings", "cards", "steps", "facts", "verification", "files", "recipe"];
 /// The payload version this build writes and reads.
 pub const VERSION: u32 = 1;
 /// Largest stored payload, in bytes of JSON.
@@ -48,8 +49,8 @@ pub const PICK_REASON: &str = "named as the pick in this reply";
 /// the transposed shape (options as columns, a row per point) is what [`selector`] reads as a
 /// comparison. Every header cell must be filled, or the table stays text.
 pub const PROMPT_LINE: &str = "When you compare options use a table with every header cell filled (one row per option; for \
-    just two, a column each and a row per point), for steps use a numbered list, and for key numbers use '**Label:** value' \
-    lines; kwant shows them as cards and charts.";
+    just two, a column each and a row per point), for steps use a numbered list, for a recipe an 'Ingredients' list then \
+    numbered steps, and for key numbers use '**Label:** value' lines; kwant shows them as cards and charts.";
 
 /// The checked block set for a reply: the first candidate, in priority order ([`rank`]), whose
 /// type is enabled and that passes [`validate`]; `None` when there isn't one. A selector bug must never
@@ -94,6 +95,7 @@ pub enum Block {
     Facts(Facts),
     Verification(Verification),
     Files(Files),
+    Recipe(Recipe),
 }
 
 impl Block {
@@ -109,6 +111,7 @@ impl Block {
             Block::Facts(_) => "facts",
             Block::Verification(_) => "verification",
             Block::Files(_) => "files",
+            Block::Recipe(_) => "recipe",
         }
     }
 
@@ -142,6 +145,7 @@ macro_rules! common {
             Block::Facts($b) => $e,
             Block::Verification($b) => $e,
             Block::Files($b) => $e,
+            Block::Recipe($b) => $e,
         }
     };
 }
@@ -151,26 +155,49 @@ use common;
 /// chat draws it after the reply; `verification`, `files` and a `present_result` call use it and
 /// leave `index` out). `index` counts in the order the chat renders them, from 0: tables in one
 /// count, numbered lists in another, bullet lists (`ordered: false`) in a third.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `markdown_section` (`recipe` only) is a run of the reply's top-level blocks: from `lead` blocks
+/// before the list `index`/`ordered` to the list `last_index`/`last_ordered`, both ends included.
+/// The chat draws the block where the run starts and none of the run's own markdown.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Source {
-    /// `markdown_table`, `markdown_list` or `slot`.
+    /// `markdown_table`, `markdown_list`, `markdown_section` or `slot`.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
     /// Lists only; absent means `true` (v1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ordered: Option<bool>,
+    /// `markdown_section` only: its last list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_index: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ordered: Option<bool>,
+    /// `markdown_section` only: top-level blocks just before its first list that belong to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lead: Option<usize>,
 }
 
 impl Source {
     pub fn table(index: usize) -> Self {
-        Source { kind: "markdown_table".into(), index: Some(index), ordered: None }
+        Source { kind: "markdown_table".into(), index: Some(index), ..Source::default() }
     }
     pub fn list(index: usize, ordered: bool) -> Self {
-        Source { kind: "markdown_list".into(), index: Some(index), ordered: Some(ordered) }
+        Source { kind: "markdown_list".into(), index: Some(index), ordered: Some(ordered), ..Source::default() }
+    }
+    /// The run from `lead` blocks before list `first` to list `last` (index, ordered).
+    pub fn section(first: (usize, bool), last: (usize, bool), lead: usize) -> Self {
+        Source {
+            kind: "markdown_section".into(),
+            index: Some(first.0),
+            ordered: Some(first.1),
+            last_index: Some(last.0),
+            last_ordered: Some(last.1),
+            lead: Some(lead),
+        }
     }
     pub fn slot() -> Self {
-        Source { kind: "slot".into(), index: None, ordered: None }
+        Source { kind: "slot".into(), ..Source::default() }
     }
 }
 
@@ -517,4 +544,61 @@ pub struct Files {
     pub source: Source,
     pub provenance: Provenance,
     pub items: Vec<FileItem>,
+}
+
+/// A time of a recipe in the reply's own words: "Prep" and "15 min".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecipeTime {
+    pub label: String,
+    pub text: String,
+}
+
+/// One ingredient line. `qty` is its leading amount exactly as written ("2 cups", "½", "1–2") and
+/// `text` the rest, so the line is `text` alone without a `qty`, `qty + text` when `text` starts
+/// with ",", and `qty + " " + text` otherwise. `group` is the sub-heading above it ("For the sauce").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ingredient {
+    pub id: String,
+    pub text: String,
+    #[serde(default)]
+    pub qty: Option<String>,
+    #[serde(default)]
+    pub group: Option<String>,
+}
+
+impl Ingredient {
+    /// The line as the reply wrote it.
+    pub fn line(&self) -> String {
+        match &self.qty {
+            None => self.text.clone(),
+            Some(q) if self.text.starts_with(',') => format!("{q}{}", self.text),
+            Some(q) => format!("{q} {}", self.text),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RecipeStep {
+    pub id: String,
+    pub text: String,
+}
+
+/// One recipe: 2–40 ingredients and 2–30 steps, with servings, up to 3 times and up to 6 notes
+/// when the reply gives them. `title` is the dish name. Its source is the `markdown_section` the
+/// recipe fills, from the dish heading to its last list.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Recipe {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub source: Source,
+    #[serde(default)]
+    pub serves: Option<u32>,
+    #[serde(default)]
+    pub times: Vec<RecipeTime>,
+    pub ingredients: Vec<Ingredient>,
+    pub steps: Vec<RecipeStep>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    pub provenance: Provenance,
 }
