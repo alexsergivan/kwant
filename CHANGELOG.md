@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Changed
-- **Dev mode reviews only fresh work.** A branch or PR gets a review card only if it moved in the last 7 days, so old branches no longer fill the desk or spend model calls. Cards on branches that went quiet go stale, and a new push brings a branch back. The newest branches are reviewed first, and Dev mode's status says how many old ones it skipped. A card that couldn't read a big file now says "Couldn't read N files (too large to diff)" instead of "(no diff from GitHub)".
+- **Dev mode reviews only fresh work.** A branch or PR gets a review card only if it moved in the last 7 days, so old branches no longer fill the desk or spend model calls. Cards on branches that went quiet go stale, and a new push brings a branch back. The newest branches are reviewed first, and Dev mode's status says how many old ones it skipped. A card that couldn't read a file now says "Couldn't read N files (no diff available)" instead of "(no diff from GitHub)". A type change (a symlink turned into a file) no longer leaves every file in the change unread.
 
 ### Fixed
 - **A checkpoint's git commit only comes from the task's own git files.** When a mission takes a checkpoint, kwant notes the commit the task's folder is on. It now never follows a symlink inside `.git`, ignores a `ref:` that points outside it, skips FIFOs and oversized files, and keeps the value only when it's a real 40- or 64-character commit id. Before, a bot that could write its task folder could make a checkpoint show the first 64 characters of another file kwant can read. (#443)
