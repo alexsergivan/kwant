@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- **A checkpoint's git commit only comes from the task's own git files.** When a mission takes a checkpoint, kwant notes the commit the task's folder is on. It now never follows a symlink inside `.git`, ignores a `ref:` that points outside it, skips FIFOs and oversized files, and keeps the value only when it's a real 40- or 64-character commit id. Before, a bot that could write its task folder could make a checkpoint show the first 64 characters of another file kwant can read. (#PR)
+
 ## [Mac 0.7.6] - 2026-11-08
 
 ### Added
