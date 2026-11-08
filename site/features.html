@@ -58,6 +58,7 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-076">New in 0.7.6</a></li>
         <li><a href="#new-075">New in 0.7.5</a></li>
         <li><a href="#new-074">New in 0.7.4</a></li>
         <li><a href="#new-073">New in 0.7.3</a></li>
@@ -90,7 +91,49 @@
   </div>
 </nav>
 
-<section id="new-075" class="fgroup">
+<section id="new-076" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7.6</p>
+      <h2>Recipes you can cook from, and a first start that sets itself up</h2>
+      <p>A recipe in a reply becomes a card that rescales to your servings. A new person starts with one Get started card: choose your AI, sign in, pick a team. ChatGPT and Grok sign in from that card, a Linux server installs with one line, and after each update kwant shows what's new.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="recipes">Recipes you can cook from</h3>
+        <p>When a reply holds one recipe, with an ingredients list and a method, it shows as a recipe card: the ingredients in their groups, numbered steps, and any times and notes. Change the servings (1 to 24) and every amount kwant can read rescales, in kitchen fractions such as ¼, ⅓ and ½. Changed amounts are highlighted, and <strong>Back to 4</strong> puts them back. Oven temperatures, and anything kwant can't read, stay as written. <strong>Show as text</strong> always gives you the reply word for word. <a href="/docs/smart-results#recipes">How recipe cards work</a></p>
+      </div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v076-recipe-poster.webp?v=0bf7b171ef" width="1280" height="800" aria-label="Demo: a camp chili recipe card in a kwant chat. Plus is pressed twice, the servings go from 4 to 6 and the changed ingredient amounts are highlighted, then Back to 4 puts them back."><source src="assets/media/clip-v076-recipe.mp4?v=4dbc33d499" type="video/mp4"></video></div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="get-started">
+        <span class="shot"><a class="zoom" href="assets/media/v076-get-started-card-2880.webp?v=7bc0b59edb" data-caption="kwant&#x27;s Get started card under Welcome to kwant bots. Step 1, Choose your AI, says it gets ready by itself, with tiles for Claude and ChatGPT, both marked Installed, sign in next, then Grok and an API key."><img src="assets/media/v076-get-started-card-1440.webp?v=409a2b9be9" srcset="assets/media/v076-get-started-card-1440.webp?v=409a2b9be9 1440w, assets/media/v076-get-started-card-2880.webp?v=7bc0b59edb 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="kwant&#x27;s Get started card under Welcome to kwant bots. Step 1, Choose your AI, says it gets ready by itself, with tiles for Claude and ChatGPT, both marked Installed, sign in next, then Grok and an API key."></a></span>
+        <div class="card-body"><h3>Get started in three steps</h3><p>A new person's #general opens with one card instead of the old welcome. <strong>Choose your AI</strong>: Claude, ChatGPT, Grok or an API key. <strong>Sign in</strong>. <strong>Pick a team</strong>, or keep the starter bots. Choosing an AI installs it when it's missing, so there's nothing to type in a Terminal. <a href="/docs/quickstart#get-started">Your first start</a></p></div>
+      </article>
+      <article class="card" id="device-sign-in">
+        <span class="shot"><a class="zoom" href="assets/media/v076-device-sign-in-card-2880.webp?v=c6b46b1e21" data-caption="The Get started card with Choose your AI done (ChatGPT, installed) and step 2, Sign in: open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button."><img src="assets/media/v076-device-sign-in-card-1440.webp?v=1c8b1eea04" srcset="assets/media/v076-device-sign-in-card-1440.webp?v=1c8b1eea04 1440w, assets/media/v076-device-sign-in-card-2880.webp?v=c6b46b1e21 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Get started card with Choose your AI done (ChatGPT, installed) and step 2, Sign in: open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button."></a></span>
+        <div class="card-body"><h3>Sign in to ChatGPT and Grok from the app</h3><p>In the Get started card, ChatGPT (through Codex) and Grok sign in with a short code. kwant shows the link and the code, you approve in your browser, and the sign-in finishes by itself. Claude signs in as before. The code shown here is made up. <a href="/docs/quickstart#get-started">Sign in</a></p></div>
+      </article>
+      <article class="card" id="linux-one-line">
+        <span class="shot"><a class="zoom" href="assets/media/v076-linux-install-2880.webp?v=321420d366" data-caption="A terminal on a Linux server running curl -fsSL https://kwant.si/install.sh piped to sh. It installs kwant 0.7.6 for Linux arm64, starts it in the background, and ends with a one-time sign-in link and the ssh tunnel command for a laptop."><img class="app" src="assets/media/v076-linux-install-1440.webp?v=3f3037cf75" srcset="assets/media/v076-linux-install-1440.webp?v=3f3037cf75 1440w, assets/media/v076-linux-install-2880.webp?v=321420d366 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A terminal on a Linux server running curl -fsSL https://kwant.si/install.sh piped to sh. It installs kwant 0.7.6 for Linux arm64, starts it in the background, and ends with a one-time sign-in link and the ssh tunnel command for a laptop."></a></span>
+        <div class="card-body"><h3>A Linux server in one line</h3><p><code>curl -fsSL https://kwant.si/install.sh | sh</code> installs kwant on Ubuntu 22.04 or newer, or Debian 12 or newer, on x86_64 or arm64. It never uses sudo, checks the download's SHA-256 before installing anything, starts kwant as a user service (or in the background) and ends with your sign-in link. Run it again to update; your data stays. <a href="/docs/install#one-line">Install on a server</a></p></div>
+      </article>
+      <article class="card" id="whats-new">
+        <span class="shot"><a class="zoom" href="assets/media/v076-whats-new-2880.webp?v=3e058eec33" data-caption="kwant&#x27;s What&#x27;s new sheet for version 0.7.6 over a chat, listing sign-in to ChatGPT and Grok in the app, recipe cards, one-line Linux setup and Get started, with smaller changes and fixes below and a Got it button."><img class="app" src="assets/media/v076-whats-new-1440.webp?v=eb9d6a6f2a" srcset="assets/media/v076-whats-new-1440.webp?v=eb9d6a6f2a 1440w, assets/media/v076-whats-new-2880.webp?v=3e058eec33 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="kwant&#x27;s What&#x27;s new sheet for version 0.7.6 over a chat, listing sign-in to ChatGPT and Grok in the app, recipe cards, one-line Linux setup and Get started, with smaller changes and fixes below and a Got it button."></a></span>
+        <div class="card-body"><h3>What's new, in the app</h3><p>After an update, a sheet shows what's new and what's fixed, once on each device. The web app shows it when its server updates. <strong>See what's new</strong> on the Updated banner opens it again, and <strong>Settings › About</strong> keeps every version's notes. <a href="/docs/install#whats-new">After an update</a></p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="no-node" class="span2"><h3>Codex and the bots' browser without Node</h3><p>On a Mac or Linux computer without Node, kwant installs Codex from OpenAI's standalone release and checks its SHA-256 before unpacking anything. With no Chrome on the computer, kwant downloads Chrome for Testing into its own folder the first time a bot needs the browser. If a download fails, Settings says why.</p></li>
+      <li id="kwnt-version"><h3>kwnt reports its real version</h3><p><code>kwnt --version</code>, the health check and the update status show the release's version, not 0.1.0.</p></li>
+      <li id="mac-first-open"><h3>First time on a Mac?</h3><p>Download for Mac now shows the three Open Anyway steps for the first launch, with a picture. <a href="/docs/install#mac">See the steps</a></p></li>
+      <li id="take-over-fix" class="span2"><h3>Take over says where you already are</h3><p>When you already control the browser in another window, Take over tells you to press Hand back there instead of retrying every second. With other chats browsing, Hand back's tooltip says to hand back first to switch.</p></li>
+      <li id="fixes-076" class="span2"><h3>Smaller fixes</h3><p>Undo for a ready-made team names the exact archived chat it keeps. A Jira ticket whose lead can't prepare a brief says why. Show it once explains a failed draft or an empty trial in plain words. A GitLab address without <code>.git</code> works. After "folder in use", the team button says Pick another folder. Telegram says "your message wasn't run" only for your own message.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-075" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.5</p>
@@ -141,7 +184,7 @@
   </div>
 </section>
 
-<section id="new-074" class="fgroup alt">
+<section id="new-074" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.4</p>
@@ -171,7 +214,7 @@
         <h3>Connected in a minute</h3>
         <p>Name the connection, pick its spaces and bots, and copy the one-line setup for Claude Code, Codex or Cursor. Its first ask shows up under <strong>Recent activity</strong>, and the bot's thread is in kwant for you to read along. Each connection can make 60 asks an hour, and its work counts toward the spending stop.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v074-coding-agents-poster.webp?v=67df1bb24b" width="1280" height="800" aria-label="Demo: in Settings, All spaces, Coding agents, a new connection is created and named, its Claude Code setup line is copied, and Done is pressed. A moment later its first request comes in, and Recent activity on the connection shows Asked Ann."><source src="assets/media/clip-v074-coding-agents.mp4?v=b71c246ff3" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v074-coding-agents-poster.webp?v=7f3bfa9463" width="1280" height="800" aria-label="Demo: in Settings, All spaces, Coding agents, a new connection is created and named, its Claude Code setup line is copied, and Done is pressed. A moment later its first request comes in, and Recent activity on the connection shows Asked Ann."><source src="assets/media/clip-v074-coding-agents.mp4?v=d1d58fae47" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="spend-notice">
@@ -198,7 +241,7 @@
   </div>
 </section>
 
-<section id="new-073" class="fgroup">
+<section id="new-073" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.3</p>
@@ -238,7 +281,7 @@
   </div>
 </section>
 
-<section id="new-072" class="fgroup alt">
+<section id="new-072" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.2</p>
@@ -247,7 +290,7 @@
     </div>
     <div class="grid two">
       <article class="card" id="team-repos">
-        <span class="shot"><a class="zoom" href="assets/media/v072-dev-repos-card-2880.webp?v=8086252a09" data-caption="The repo list on the Dev desk, under the line Watching 3 of 4 repos, 1 needs you. The Shop, Storefront and Payments teams&#x27; repos each read Watching, checked 19:00. The Ops team&#x27;s demo-org/warehouse-ops says Needs your GitHub connection in amber."><img src="assets/media/v072-dev-repos-card-1440.webp?v=4b1ed04d10" srcset="assets/media/v072-dev-repos-card-1440.webp?v=4b1ed04d10 1440w, assets/media/v072-dev-repos-card-2880.webp?v=8086252a09 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The repo list on the Dev desk, under the line Watching 3 of 4 repos, 1 needs you. The Shop, Storefront and Payments teams&#x27; repos each read Watching, checked 19:00. The Ops team&#x27;s demo-org/warehouse-ops says Needs your GitHub connection in amber."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v072-dev-repos-card-2880.webp?v=ddb8732b57" data-caption="The repo list on the Dev desk, under the line Watching 3 of 4 repos, 1 needs you. The Shop, Storefront and Payments teams&#x27; repos each read Watching, checked 19:00. The Ops team&#x27;s demo-org/warehouse-ops says Needs your GitHub connection in amber."><img src="assets/media/v072-dev-repos-card-1440.webp?v=cda1186f5f" srcset="assets/media/v072-dev-repos-card-1440.webp?v=cda1186f5f 1440w, assets/media/v072-dev-repos-card-2880.webp?v=ddb8732b57 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The repo list on the Dev desk, under the line Watching 3 of 4 repos, 1 needs you. The Shop, Storefront and Payments teams&#x27; repos each read Watching, checked 19:00. The Ops team&#x27;s demo-org/warehouse-ops says Needs your GitHub connection in amber."></a></span>
         <div class="card-body"><h3>Every team's repo</h3><p>Dev mode finds each team's repo: its repo link, or its folder when that folder is a git checkout. Each repo is checked on its own. One that loses its GitHub connection or can't be found shows on its own row with one fix, <strong>Connect GitHub</strong>, <strong>Link a repo</strong> or <strong>Remove</strong>, and the others keep going. <a href="/docs/dev-mode#turn-on">How it finds repos</a></p></div>
       </article>
       <article class="card" id="dev-explainer">
@@ -259,7 +302,7 @@
         <div class="card-body"><h3>A repo on every card, and a filter</h3><p>With more than one repo, every card says which repo it's from, and What landed and Reviews filter by repo. The production floor, the command guards, approvals and the daily review limit stay the same for the whole space.</p></div>
       </article>
       <article class="card" id="switch-v3">
-        <span class="shot"><a class="zoom" href="assets/media/v072-switch-on-card-2880.webp?v=15f36e63e5" data-caption="The Dev mode row with Dev mode on: a violet track with a lock and a white knob beside the word On, a line below reads Watching demo-org/de… on main, and the Approvals row below shows Ask."><img src="assets/media/v072-switch-on-card-1440.webp?v=dd7f49473f" srcset="assets/media/v072-switch-on-card-1440.webp?v=dd7f49473f 1440w, assets/media/v072-switch-on-card-2880.webp?v=15f36e63e5 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Dev mode row with Dev mode on: a violet track with a lock and a white knob beside the word On, a line below reads Watching demo-org/de… on main, and the Approvals row below shows Ask."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v072-switch-on-card-2880.webp?v=801b68ebcf" data-caption="The Dev mode row with Dev mode on: a violet track with a lock and a white knob beside the word On, a line below reads Watching demo-org/de… on main, and the Approvals row below shows Ask."><img src="assets/media/v072-switch-on-card-1440.webp?v=bc8d4df466" srcset="assets/media/v072-switch-on-card-1440.webp?v=bc8d4df466 1440w, assets/media/v072-switch-on-card-2880.webp?v=801b68ebcf 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Dev mode row with Dev mode on: a violet track with a lock and a white knob beside the word On, a line below reads Watching demo-org/de… on main, and the Approvals row below shows Ask."></a></span>
         <div class="card-body"><h3>A new switch</h3><p>A track with a knob and the word Off, On or <strong>Off?</strong>. The first press to turn Dev mode off shows <strong>Off?</strong>, and a second press within 5 seconds turns it off. Escape or waiting keeps it on. The Approvals row shows the approval mode, and the amber Dev mode pill is gone.</p></div>
       </article>
     </div>
@@ -268,7 +311,7 @@
         <h3>Link a repo, and it's watched</h3>
         <p>A team with no repo shows as one quiet line on the Dev desk. Press <strong>Link a repo</strong>, type the repo, and its row reads Watching. Linking a repo never turns Dev mode on by itself.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v072-link-repo-poster.webp?v=2f5b6d8991" width="1280" height="800" aria-label="Demo: on the Dev desk of the Trailhead Outfitters space, Show repos opens the repo list. Link a repo, typing demo-org/docs and pressing Enter adds the Docs team&#x27;s repo, and its row reads Watching. The line on top now says Watching 4 of 5 repos."><source src="assets/media/clip-v072-link-repo.mp4?v=39f375d106" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v072-link-repo-poster.webp?v=9f0fa6ce36" width="1280" height="800" aria-label="Demo: on the Dev desk of the Trailhead Outfitters space, Show repos opens the repo list. Link a repo, typing demo-org/docs and pressing Enter adds the Docs team&#x27;s repo, and its row reads Watching. The line on top now says Watching 4 of 5 repos."><source src="assets/media/clip-v072-link-repo.mp4?v=2198279938" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li id="seen-times"><h3>The badge and the roll-up keep their own seen time</h3><p>Opening the Dev desk clears the new-reviews badge, from a link too, and <strong>Mark seen</strong> starts the "since you last looked" roll-up over. Before, opening the desk emptied the roll-up as well.</p></li>
@@ -278,7 +321,7 @@
   </div>
 </section>
 
-<section id="new-071" class="fgroup">
+<section id="new-071" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.1</p>
@@ -291,11 +334,11 @@
         <div class="card-body"><h3>Post to GitHub</h3><p>A review card goes onto its pull request as one review comment, posted as you and pinned to the commit that was reviewed. Findings go on their lines. kwant never approves, requests changes or merges, a bot can't post, and secrets are never posted. <a href="/docs/dev-mode#post">How posting works</a></p></div>
       </article>
       <article class="card" id="dev-on">
-        <span class="shot"><a class="zoom" href="assets/media/v071-dev-on-card-2880.webp?v=7ff70f085e" data-caption="The note that appears after one press on the Dev mode switch: Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."><img src="assets/media/v071-dev-on-card-1440.webp?v=660ea3f72f" srcset="assets/media/v071-dev-on-card-1440.webp?v=660ea3f72f 1440w, assets/media/v071-dev-on-card-2880.webp?v=7ff70f085e 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The note that appears after one press on the Dev mode switch: Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v071-dev-on-card-2880.webp?v=2ce14a544f" data-caption="The note that appears after one press on the Dev mode switch: Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."><img src="assets/media/v071-dev-on-card-1440.webp?v=5f2590467c" srcset="assets/media/v071-dev-on-card-1440.webp?v=5f2590467c 1440w, assets/media/v071-dev-on-card-2880.webp?v=2ce14a544f 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The note that appears after one press on the Dev mode switch: Dev mode on, watching demo-org/demo-app on main, with Open Dev desk and Undo."></a></span>
         <div class="card-body"><h3>One press on, and it finds the repo</h3><p>No setup dialog. kwant looks at the space's teams, their repo links and their folders, on your machine with no network. A note says what it found, with Undo. When it found several repos, none, or no GitHub connection that can read it, the note adds one button for that: <strong>Switch</strong>, <strong>Type a repo</strong> or <strong>Connect GitHub</strong>.</p></div>
       </article>
       <article class="card" id="dev-off">
-        <span class="shot"><a class="zoom" href="assets/media/v071-dev-off-armed-card-2880.webp?v=2f9f94a645" data-caption="The Dev mode row after one press on its switch: the switch is ringed in amber with an open lock and reads Off?, an amber hint says Press again to turn off, with an Esc key cap beside it, and the Approvals row below shows Ask."><img src="assets/media/v071-dev-off-armed-card-1440.webp?v=6cc93041ae" srcset="assets/media/v071-dev-off-armed-card-1440.webp?v=6cc93041ae 1440w, assets/media/v071-dev-off-armed-card-2880.webp?v=2f9f94a645 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Dev mode row after one press on its switch: the switch is ringed in amber with an open lock and reads Off?, an amber hint says Press again to turn off, with an Esc key cap beside it, and the Approvals row below shows Ask."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v071-dev-off-armed-card-2880.webp?v=7dbfed13aa" data-caption="The Dev mode row after one press on its switch: the switch is ringed in amber with an open lock and reads Off?, an amber hint says Press again to turn off, with an Esc key cap beside it, and the Approvals row below shows Ask."><img src="assets/media/v071-dev-off-armed-card-1440.webp?v=377e4016c7" srcset="assets/media/v071-dev-off-armed-card-1440.webp?v=377e4016c7 1440w, assets/media/v071-dev-off-armed-card-2880.webp?v=7dbfed13aa 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Dev mode row after one press on its switch: the switch is ringed in amber with an open lock and reads Off?, an amber hint says Press again to turn off, with an Esc key cap beside it, and the Approvals row below shows Ask."></a></span>
         <div class="card-body"><h3>Two presses to turn it off</h3><p>The first press only asks: the switch reads <strong>Off?</strong>. A second press within 5 seconds turns Dev mode off. Escape, clicking elsewhere or waiting keeps it on, and the off note has <strong>Turn back on</strong>.</p></div>
       </article>
       <article class="card" id="lgtm">
@@ -308,7 +351,7 @@
         <h3>On, and the last five merges written up</h3>
         <p>One press on the switch. kwant names the repo it found, reads the last five merges and writes a plain-words card for each.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v071-dev-on-poster.webp?v=bcbcad544d" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="assets/media/clip-v071-dev-on.mp4?v=4d75df0d2b" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v071-dev-on-poster.webp?v=7c37f29be2" width="1280" height="800" aria-label="Demo: in the Trailhead Outfitters space, one press on the Dev mode switch turns it on. A note says it is watching demo-org/demo-app on main. Open Dev desk shows a short intro to what Dev mode does, then the landed cards, one per merge in plain words."><source src="assets/media/clip-v071-dev-on.mp4?v=8ef32af3fe" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li id="wallet-payments"><h3>Crypto wallet sends always ask</h3><p>A tool whose arguments carry an amount and a wallet address or crypto asset now counts as a payment, so it asks in every approval mode, even with approvals off. <a href="/docs/flight-school#payments">Payments always ask</a></p></li>
@@ -318,7 +361,7 @@
   </div>
 </section>
 
-<section id="new-07" class="fgroup alt" data-covers="0.6.12 0.6.13">
+<section id="new-07" class="fgroup" data-covers="0.6.12 0.6.13">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7</p>
@@ -327,7 +370,7 @@
     </div>
     <div class="grid two">
       <article class="card" id="dev-landed">
-        <span class="shot"><a class="zoom" href="assets/media/v07-dev-landed-2880.webp?v=2350350310" data-caption="The What landed tab of the Dev desk, watching demo-org/demo-app on main: a Since you last looked note saying 3 changes landed on main and 2 need you, grouped as Account, Checkout and Cart, above yesterday&#x27;s landed cards. Each card has a short commit sha, a pull request number, a risk badge and a line count, and both shown wear the Verified sticker."><img class="app" src="assets/media/v07-dev-landed-1440.webp?v=3739319a42" srcset="assets/media/v07-dev-landed-1440.webp?v=3739319a42 1440w, assets/media/v07-dev-landed-2880.webp?v=2350350310 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The What landed tab of the Dev desk, watching demo-org/demo-app on main: a Since you last looked note saying 3 changes landed on main and 2 need you, grouped as Account, Checkout and Cart, above yesterday&#x27;s landed cards. Each card has a short commit sha, a pull request number, a risk badge and a line count, and both shown wear the Verified sticker."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v07-dev-landed-2880.webp?v=b50355d694" data-caption="The What landed tab of the Dev desk, watching demo-org/demo-app on main: a Since you last looked note saying 3 changes landed on main and 2 need you, grouped as Account, Checkout and Cart, above yesterday&#x27;s landed cards. Each card has a short commit sha, a pull request number, a risk badge and a line count, and both shown wear the Verified sticker."><img class="app" src="assets/media/v07-dev-landed-1440.webp?v=764c4e0dc2" srcset="assets/media/v07-dev-landed-1440.webp?v=764c4e0dc2 1440w, assets/media/v07-dev-landed-2880.webp?v=b50355d694 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The What landed tab of the Dev desk, watching demo-org/demo-app on main: a Since you last looked note saying 3 changes landed on main and 2 need you, grouped as Account, Checkout and Cart, above yesterday&#x27;s landed cards. Each card has a short commit sha, a pull request number, a risk badge and a line count, and both shown wear the Verified sticker."></a></span>
         <div class="card-body"><h3>What landed, in plain words</h3><p>One card per merge to the watched branch: what changed, how risky it is, and whether tests passed. <strong>Verified</strong> only when CI is green, another bot reviewed it and every finding was handled. <strong>Draft release notes</strong> writes them from the cards. <a href="/docs/dev-mode">Dev mode</a></p></div>
       </article>
       <article class="card" id="dev-review">
@@ -335,11 +378,11 @@
         <div class="card-body"><h3>A second bot reviews every pull request</h3><p>Written by a bot that didn't write the code: risk with reasons, whether it does what was asked, weakened tests, found secrets and made-up packages. <strong>Fix it</strong> sends a finding back to the bot that wrote it.</p></div>
       </article>
       <article class="card" id="prod-floor">
-        <span class="shot"><a class="zoom" href="assets/media/v07-floor-2880.webp?v=cb03b1b8ed" data-caption="A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny."><img class="app" src="assets/media/v07-floor-1440.webp?v=1f129311a2" srcset="assets/media/v07-floor-1440.webp?v=1f129311a2 1440w, assets/media/v07-floor-2880.webp?v=cb03b1b8ed 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v07-floor-2880.webp?v=57d8776518" data-caption="A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny."><img class="app" src="assets/media/v07-floor-1440.webp?v=2dcacd7a64" srcset="assets/media/v07-floor-1440.webp?v=2dcacd7a64 1440w, assets/media/v07-floor-2880.webp?v=57d8776518 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="A production floor card: Ben wants to run deploy.sh, a deploy script. It says the deploy changes the database, so it needs a backup from the last 10 minutes first, shows the blast radius and No backup yet, and offers only Back up first and Deny."></a></span>
         <div class="card-body"><h3>A floor under production</h3><p>Pushes to main, force pushes, deploys, production migrations and destructive data commands always ask, with no "always allow". A step that can change production data needs a fresh backup first. <a href="/docs/dev-mode#floor">The production floor</a></p></div>
       </article>
       <article class="card" id="idea-jar">
-        <span class="shot"><a class="zoom" href="assets/media/v07-idea-jar-2880.webp?v=2a07b4d19c" data-caption="The Idea jar with a few ideas waiting and one opened with a bot&#x27;s take: a Worth it verdict, why it matters, the effort, the risks and a short plan, with Do it and Later."><img class="app" src="assets/media/v07-idea-jar-1440.webp?v=e2ef5443a8" srcset="assets/media/v07-idea-jar-1440.webp?v=e2ef5443a8 1440w, assets/media/v07-idea-jar-2880.webp?v=2a07b4d19c 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Idea jar with a few ideas waiting and one opened with a bot&#x27;s take: a Worth it verdict, why it matters, the effort, the risks and a short plan, with Do it and Later."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v07-idea-jar-2880.webp?v=c3316e00aa" data-caption="The Idea jar with a few ideas waiting and one opened with a bot&#x27;s take: a Worth it verdict, why it matters, the effort, the risks and a short plan, with Do it and Later."><img class="app" src="assets/media/v07-idea-jar-1440.webp?v=c8705ad0ab" srcset="assets/media/v07-idea-jar-1440.webp?v=c8705ad0ab 1440w, assets/media/v07-idea-jar-2880.webp?v=c3316e00aa 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="The Idea jar with a few ideas waiting and one opened with a bot&#x27;s take: a Worth it verdict, why it matters, the effort, the risks and a short plan, with Do it and Later."></a></span>
         <div class="card-body"><h3>The Idea jar</h3><p>Drop an idea with <strong>+</strong>, the phone's <strong>Jar</strong> tab or <code>/idea</code>. A free bot writes its take: worth it or not, the effort, the risks and a plan. <strong>Do it</strong> makes a draft mission you approve. <a href="/docs/idea-jar">Idea jar</a></p></div>
       </article>
     </div>
@@ -348,7 +391,7 @@
         <h3>From an idea to a draft mission</h3>
         <p>Drop an idea with /idea. When a bot is free, its take comes in, and Do it turns the plan into a mission that waits for your OK.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v07-idea-jar-poster.webp?v=1de29c5c73" width="1280" height="800" aria-label="Demo: an idea is dropped in with /idea in the message box. A bot&#x27;s take appears with its verdict, effort and plan, and Do it turns it into a draft mission that waits for your OK."><source src="assets/media/clip-v07-idea-jar.mp4?v=c60e3a6c6b" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v07-idea-jar-poster.webp?v=0ab3178a49" width="1280" height="800" aria-label="Demo: an idea is dropped in with /idea in the message box. A bot&#x27;s take appears with its verdict, effort and plan, and Do it turns it into a draft mission that waits for your OK."><source src="assets/media/clip-v07-idea-jar.mp4?v=def90d9ef4" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li id="no-tools"><h3>Bots can't act on a pull request's text</h3><p>Dev mode cards and idea takes run with no tools at all, on every engine. A turn that can't run that way fails instead.</p></li>
@@ -358,7 +401,7 @@
   </div>
 </section>
 
-<section id="new-0611" class="fgroup">
+<section id="new-0611" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.11</p>
@@ -393,7 +436,7 @@
   </div>
 </section>
 
-<section id="new-069" class="fgroup alt">
+<section id="new-069" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.9</p>
@@ -440,7 +483,7 @@
   </div>
 </section>
 
-<section id="new-065" class="fgroup">
+<section id="new-065" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.5</p>
@@ -476,7 +519,7 @@
   </div>
 </section>
 
-<section id="new-064" class="fgroup alt">
+<section id="new-064" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.4 · Who answers</p>
@@ -510,7 +553,7 @@
   </div>
 </section>
 
-<section id="new-06" class="fgroup">
+<section id="new-06" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6 · Mission Control</p>
@@ -539,7 +582,7 @@
   </div>
 </section>
 
-<section id="new-05" class="fgroup alt">
+<section id="new-05" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.5 · Browser &amp; status</p>
@@ -558,7 +601,7 @@
   </div>
 </section>
 
-<section id="discovery" class="fgroup">
+<section id="discovery" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.5 · Automation Discovery</p>
@@ -576,7 +619,7 @@
   </div>
 </section>
 
-<section id="new-teams" class="fgroup alt">
+<section id="new-teams" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Hand-offs &amp; review</p>
@@ -595,7 +638,7 @@
   </div>
 </section>
 
-<section id="performance" class="fgroup">
+<section id="performance" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Performance &amp; audits</p>
@@ -622,7 +665,7 @@
   </div>
 </section>
 
-<section id="mission-board" class="fgroup alt">
+<section id="mission-board" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Mission board</p>
@@ -667,7 +710,7 @@
   </div>
 </section>
 
-<section id="flight-school" class="fgroup">
+<section id="flight-school" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Flight School</p>
@@ -692,7 +735,7 @@
         <div class="card-body"><h3>On from the start, at Act</h3><p>Since 0.6.5 Flight School is on and every bot starts at Act, so nothing new asks: it keeps scorecards and proposes tiers. Want new bots to start lower? Pick Sandbox or Observe in Settings.</p></div>
       </article>
       <article class="card" id="payments">
-        <span class="shot"><a class="zoom" href="assets/media/v071-wallet-payment-2880.webp?v=ef348d2337" data-caption="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."><img class="app" src="assets/media/v071-wallet-payment-1440.webp?v=4c10e6ccd8" srcset="assets/media/v071-wallet-payment-1440.webp?v=4c10e6ccd8 1440w, assets/media/v071-wallet-payment-2880.webp?v=ef348d2337 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v071-wallet-payment-2880.webp?v=3d6611aa40" data-caption="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."><img class="app" src="assets/media/v071-wallet-payment-1440.webp?v=a05c36a8fa" srcset="assets/media/v071-wallet-payment-1440.webp?v=a05c36a8fa 1440w, assets/media/v071-wallet-payment-2880.webp?v=3d6611aa40 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="An Approval needed card: Ann wants to use send transfer from a wallet tool. It says this looks like a payment, because send_transfer moves an amount to another account or asset, and that payments always ask, even with approvals off. The only buttons are Deny and Allow once."></a></span>
         <div class="card-body"><h3>Payments always ask</h3><p>Anything that looks like paying shows a card, at every tier and even with approvals off. It says why, and has no Always button.</p></div>
       </article>
       <article class="card" id="approvals-off">
@@ -710,7 +753,7 @@
   </div>
 </section>
 
-<section id="connect" class="fgroup alt">
+<section id="connect" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Connect apps</p>
@@ -738,7 +781,7 @@
   </div>
 </section>
 
-<section id="teams" class="fgroup">
+<section id="teams" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Teams & chat</p>
@@ -767,7 +810,7 @@
   </div>
 </section>
 
-<section id="spaces" class="fgroup alt">
+<section id="spaces" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Spaces & accounts</p>
@@ -798,7 +841,7 @@
   </div>
 </section>
 
-<section id="own" class="fgroup">
+<section id="own" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Works on its own</p>
@@ -826,7 +869,7 @@
   </div>
 </section>
 
-<section id="safety" class="fgroup alt">
+<section id="safety" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Safety & control</p>
@@ -857,7 +900,7 @@
   </div>
 </section>
 
-<section id="knowledge" class="fgroup">
+<section id="knowledge" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Your bots and knowledge</p>
@@ -884,7 +927,7 @@
   </div>
 </section>
 
-<section id="more" class="fgroup alt" aria-labelledby="more-title">
+<section id="more" class="fgroup" aria-labelledby="more-title">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">And more</p>
@@ -916,7 +959,7 @@
   </div>
 </section>
 
-<section id="phone" class="fgroup phone-sec" aria-labelledby="phone-title">
+<section id="phone" class="fgroup alt phone-sec" aria-labelledby="phone-title">
   <div class="wrap phone-grid">
     <div class="row-copy">
       <p class="kicker">Anywhere</p>
@@ -930,7 +973,7 @@
   </div>
 </section>
 
-<section id="running" class="fgroup alt">
+<section id="running" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Running it</p>
@@ -968,7 +1011,7 @@
   </div>
 </section>
 
-<section id="parallel" class="fgroup" aria-labelledby="parallel-title">
+<section id="parallel" class="fgroup alt" aria-labelledby="parallel-title">
   <div class="wrap">
     <div class="row">
       <div class="row-copy">
@@ -1046,7 +1089,7 @@
 </footer>
 <script src="assets/js/site.js?v=9846e390c8" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-07","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-08","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

@@ -113,6 +113,13 @@
 </ul>
 <p>The list is kept in <code>~/.kwnt/desktop-places.json</code>. It holds addresses only, never a token.</p>
 
+<h2 id="whats-new">After an update: What's new</h2>
+<p>New in 0.7.6. After kwant updates, a <strong>What's new</strong> sheet shows the version's highlights, smaller changes and fixes. Each device shows it once, and <strong>Got it</strong> closes it. The web app shows it when its server updates. <strong>See what's new</strong> on the <strong>Updated</strong> banner opens it again, and <strong>Settings › About</strong> keeps every version's notes.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v076-whats-new-2880.webp?v=3e058eec33" data-caption="kwant&#x27;s What&#x27;s new sheet for version 0.7.6 over a chat, with four highlights: signing in to ChatGPT and Grok in the app, recipe cards, setting up a Linux server in one line, and Get started in three steps. Smaller changes and fixes are listed below, with a Got it button."><img class="app" src="../assets/media/v076-whats-new-1440.webp?v=eb9d6a6f2a" srcset="../assets/media/v076-whats-new-1440.webp?v=eb9d6a6f2a 1440w, ../assets/media/v076-whats-new-2880.webp?v=3e058eec33 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="kwant&#x27;s What&#x27;s new sheet for version 0.7.6 over a chat, with four highlights: signing in to ChatGPT and Grok in the app, recipe cards, setting up a Linux server in one line, and Get started in three steps. Smaller changes and fixes are listed below, with a Got it button."></a></div>
+  <figcaption>What's new in 0.7.6, as the app shows it after the update.</figcaption>
+</figure>
+
 <h2 id="app">Install the web app</h2>
 <p>kwant bots also installs from the browser, so it opens in its own window. In Chrome or Edge, click <b>Install app</b> in <b>Settings → All spaces</b> (or the install icon in the address bar; the sidebar also offers it once, as a tip). In Safari on a Mac, choose <b>File › Add to Dock</b>. On a phone, kwant shows how. Browsers only install pages served over https or from <code>127.0.0.1</code>, so a server needs an <a href="#proxy">HTTPS reverse proxy</a> first.</p>
 
@@ -121,6 +128,22 @@
 <p>"This machine" means a loopback connection with a loopback <code>Host</code> and no proxy headers. A VPS you reach through an SSH tunnel counts too:</p>
 <pre><code>ssh -N -L 8799:127.0.0.1:8799 user@your-vps   <span class="c"># on your computer, then open http://127.0.0.1:8799</span></code></pre>
 <p>Not with Docker: its published port always counts as remote. And <code>127.0.0.1</code> only: opening kwant at your computer's network address (say <code>192.168.1.20:8799</code>) counts as another machine.</p>
+
+<h2 id="one-line">A Linux server in one line</h2>
+<p>New in 0.7.6. On Ubuntu 22.04 or newer, or Debian 12 or newer, on x86_64 or arm64, one command installs kwant and starts it. Run it as the user that should run kwant:</p>
+<pre><code>curl -fsSL https://kwant.si/install.sh | sh</code></pre>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v076-linux-install-2880.webp?v=321420d366" data-caption="A terminal on a Linux server running curl -fsSL https://kwant.si/install.sh piped to sh. It installs kwant 0.7.6 for Linux arm64, says it runs in the background and that Laya and a browser are getting ready, then shows a one-time sign-in link and the ssh tunnel command to run on a laptop."><img class="app" src="../assets/media/v076-linux-install-1440.webp?v=3f3037cf75" srcset="../assets/media/v076-linux-install-1440.webp?v=3f3037cf75 1440w, ../assets/media/v076-linux-install-2880.webp?v=321420d366 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A terminal on a Linux server running curl -fsSL https://kwant.si/install.sh piped to sh. It installs kwant 0.7.6 for Linux arm64, says it runs in the background and that Laya and a browser are getting ready, then shows a one-time sign-in link and the ssh tunnel command to run on a laptop."></a></div>
+  <figcaption>The install ends with your sign-in link. The rest happens in the browser.</figcaption>
+</figure>
+<ul>
+  <li><strong>Checked before it installs.</strong> It downloads the prebuilt <code>kwnt</code> from the latest release and checks it against its SHA-256. If they don't match, nothing is installed. kwnt goes in <code>~/.local/bin</code> and your data in <code>~/.kwnt</code>.</li>
+  <li><strong>Never sudo.</strong> When a step needs admin rights, it prints the command for you instead.</li>
+  <li><strong>Keeps running.</strong> kwant runs as a service for your user when the system allows it, so it starts again after a reboot. If starting at boot needs admin rights, it prints the one command for that. With no user services, it runs in the background and says how to start it again.</li>
+  <li><strong>Gets the rest ready.</strong> Laya and a browser for the bots install in the background, and Claude Code too when no AI CLI is there yet.</li>
+  <li><strong>Sign in.</strong> It ends with a one-time link that works for 15 minutes. On a server, it also prints the <code>ssh -N -L</code> command to run on your laptop first, so the link opens there. In the browser you choose your AI and sign in. Lost the link? Run <code>kwnt signin-link</code>.</li>
+  <li><strong>Update:</strong> run the same line again. It upgrades kwant in place and keeps your data.</li>
+</ul>
 
 <h2 id="vps">On a VPS</h2>
 <pre><code><span class="c"># 1. Copy the binary to your server</span>
@@ -170,11 +193,13 @@ KWNT_CLIS=claude,codex docker compose up -d --build   <span class="c"># any of c
 docker compose exec kwnt kwnt doctor                  <span class="c"># what works, and the fix for what doesn't</span>
 docker compose exec kwnt claude auth login            <span class="c"># or codex login --device-auth, grok login --device-auth</span>
 docker compose exec kwnt kwnt token --raw             <span class="c"># the token to paste on the sign-in screen</span></code></pre>
+<p><strong>The released image.</strong> Since 0.7.6, <code>docker compose up -d</code> without <code>--build</code> pulls the released kwnt image, <code>ghcr.io/alexsergivan/kwnt</code>, instead of building it here. It has no AI CLIs inside, so add an API key in the app, or build with <code>KWNT_CLIS</code> as above. To pin a version, set <code>KWNT_VERSION=0.7.6</code> in <code>.env</code>. To update: <code>docker compose pull kwnt &amp;&amp; docker compose up -d</code>.</p>
 <p>Instead of CLIs you can add an API key in the app under <strong>Settings → This space → Accounts</strong>. CLI sign-ins persist in the <code>kwnt-home</code> volume and data in <code>kwnt-data</code>. The UI is published on <code>127.0.0.1:8799</code> only: put HTTPS in front (below) and set <code>KWNT_ALLOWED_ORIGINS=https://your.domain</code> in <code>.env</code>. With Caddy that's a two-line <code>Caddyfile</code>: <code>your.domain { reverse_proxy 127.0.0.1:8799 }</code>.</p>
 <p>Requests through Docker's published port count as remote, so sign in with a one-time link: <code>docker compose exec kwnt kwnt signin-link</code> prints a new one (and a QR code), or paste the token from <code>docker compose exec kwnt kwnt token --raw</code>. kwant's own <code>execute_shell</code> tool isn't available in this stack, because it would need the host's Docker socket; the CLIs' shell tools work. Upgrading from an older image, where kwnt ran as root? If it says <code>/data isn't writable</code>, run once: <code>docker compose run --rm -u root kwnt chown -R 10001:10001 /data</code>.</p>
 
 <h2 id="deps">Without Docker: <code>kwnt setup</code>, then <code>kwnt doctor</code></h2>
 <p><code>kwnt setup</code> installs what kwant needs on this machine: Chromium or Chrome for the bots' browser, Laya (in kwant's data folder, with its own <code>uv</code> if there's no Python) and a CLI (<code>claude</code> unless you name others with <code>--clis</code>). It asks before each step (<code>--yes</code> skips the questions), never runs <code>sudo</code> itself (it prints the command for you), installs into your home folder where it can, skips Docker unless you pass <code>--docker</code>, and is safe to run again.</p>
+<p><strong>No Node needed.</strong> Since 0.7.6, on a Mac or Linux computer without Node, kwant installs Codex from OpenAI's standalone release and checks its SHA-256 before unpacking anything. With no Chrome or Chromium on the computer, kwant downloads Chrome for Testing into its own folder the first time a bot needs the browser. If a download fails, Settings says why.</p>
 <pre><code><span class="c"># Mac or Linux app: nothing to run, it installs the Laya router itself on first start</span>
 <span class="c"># Mac or Linux, from source (needs Rust and Node)</span>
 git clone https://github.com/alexsergivan/kwant.git &amp;&amp; cd kwant &amp;&amp; make build

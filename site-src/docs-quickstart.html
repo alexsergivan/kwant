@@ -14,9 +14,8 @@ card_art: avatar:brand
   <li><strong>A Mac</strong> (Apple silicon or Intel) <strong>or a Linux x86_64 desktop</strong> for the app. On other machines, or on a server, <a href="#run">build from source</a> or use Docker (see <a href="install.html">Install &amp; run</a>).</li>
   <li><strong>At least one AI account</strong> for your bots. Any one of these is enough:
     <ul>
-      <li>the <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener"><code>claude</code> CLI</a>, installed. You don't need to sign it in first, because kwant has a <strong>Sign in with Claude</strong> button;</li>
-      <li>the <code>codex</code> or <code>grok</code> CLI, signed in on the same machine (<code>codex login</code>, <code>grok login</code>);</li>
-      <li>an Anthropic, OpenAI or xAI API key, which you add in the app under <strong>Settings → This space → Accounts</strong>.</li>
+      <li>a Claude, ChatGPT or Grok account. When kwant's Get started card is there, you don't need to install or sign in to anything first: the card installs the AI when it's missing, and you sign in from the app;</li>
+      <li>an Anthropic, OpenAI or xAI API key, which you add in the card or under <strong>Settings → This space → Accounts</strong>.</li>
     </ul>
   </li>
   <li>Optional: <strong>Docker</strong> for VM mode and the bots' shared browser, and <a href="https://docs.astral.sh/uv/" rel="noopener"><code>uv</code></a> or <code>python3</code> for the Laya router.</li>
@@ -28,7 +27,7 @@ card_art: avatar:brand
   <li><strong>Ubuntu 22.04 or newer, Debian 12 or newer:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">download the <code>.deb</code></a>, then install it with <code>sudo apt install ./kwant_amd64.deb</code>.</li>
   <li><strong>Other Linux distributions:</strong> <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">download the AppImage</a>, then <code>chmod +x kwant_x86_64.AppImage</code> and run it. It needs a normal GTK desktop and FUSE.</li>
 </ul>
-<p>Open kwant. The app runs kwant on your computer and keeps an icon in the menu bar (Mac) or the tray (Linux). Until an account works, a banner above the chat says <strong>One step left: add an account</strong>, with a button to add one.</p>
+<p>Open kwant. The app runs kwant on your computer and keeps an icon in the menu bar (Mac) or the tray (Linux). For a new person, #general opens with the <a href="#get-started">Get started</a> card.</p>
 <p class="note warn">The Mac app is signed ad hoc, not notarized by Apple, so macOS stops it the first time. Click Done, open <b>System Settings › Privacy &amp; Security</b>, scroll down and click <b>Open Anyway</b> next to kwant. On macOS 14 or earlier, right-click the app and choose <b>Open</b> instead.</p>
 <div class="note"><strong>The first start takes a few minutes.</strong> kwant installs its Laya router and downloads its model (about 420 MB) in the background. Bots answer in the meantime, picked by keyword.</div>
 
@@ -40,14 +39,32 @@ make run   <span class="c"># builds the web app, then runs `cargo run -- serve`<
 <p>Open <strong><a href="http://127.0.0.1:8799">http://127.0.0.1:8799</a></strong>. On your own computer there's nothing to sign in to. To skip the Laya router, run <code>cargo run -- serve --no-laya</code>.</p>
 <p><code>cargo run -- serve</code> on its own works only once <code>frontend/dist</code> exists, because the binary embeds the web app. After the first <code>make run</code> (or <code>make frontend</code>) you can use either.</p>
 
-<h2 id="account">2. Add an account</h2>
-<p>Pick whichever you have:</p>
-<ul>
-  <li><strong>Claude:</strong> click <strong>Sign in with Claude</strong>, open the link and paste the code shown back into kwant.</li>
-  <li><strong>Codex or Grok:</strong> sign the CLI in on this machine, and kwant uses it as is.</li>
-  <li><strong>API key:</strong> open <strong>Settings → This space → Accounts</strong> and add an Anthropic, OpenAI or xAI key. Keys are write-only: the app never shows them again.</li>
-</ul>
-<p>You can add several accounts per engine, such as a work and a personal one. See <a href="accounts.html">Accounts &amp; profiles</a>.</p>
+<h2 id="get-started">2. Get started: choose your AI, sign in, pick a team</h2>
+<p>New in 0.7.6. A new person's #general starts with one <strong>Get started</strong> card, in three steps. It replaces the old welcome.</p>
+<figure>
+  <div class="frame">{{shot:v076-get-started|kwant's #general channel for a new person, with the Get started card: step 1, Choose your AI, with tiles for Claude, ChatGPT, Grok and an API key, then step 2, Sign in, and step 3, Pick a team.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The Get started card in #general. Screens on this site come from a sample space.</figcaption>
+</figure>
+<ol>
+  <li><strong>Choose your AI:</strong> Claude, ChatGPT, Grok or an API key. When the AI isn't on this computer yet, kwant installs it by itself, with no Terminal and no password for this computer.</li>
+  <li><strong>Sign in:</strong>
+    <ul>
+      <li><strong>ChatGPT or Grok:</strong> kwant shows a link and a short code. Open the link, enter the code and approve. The card notices by itself when you're done.</li>
+      <li><strong>Claude:</strong> press <strong>Open claude.ai</strong>, allow kwant bots, then paste the code claude.ai shows you.</li>
+      <li><strong>API key:</strong> paste an Anthropic, OpenAI or xAI key. Keys are write-only: the app never shows them again.</li>
+    </ul>
+  </li>
+  <li><strong>Pick a team:</strong> each ready-made team has a lead, helpers and skills for one job. Or choose <strong>Keep the starter bots</strong>: Architect, TechLead and DevOps, in #general. You can add more teams later.</li>
+</ol>
+<figure>
+  <div class="phone">{{shot:phone-v076-get-started|The Get started card on a phone, under Welcome to kwant bots, with its three steps one under the other: Choose your AI with tiles for Claude, ChatGPT, Grok and an API key, then Sign in and Pick a team.|300px}}</div>
+  <figcaption>The same card on a phone.</figcaption>
+</figure>
+<figure>
+  <div class="frame">{{shot:v076-device-sign-in|The Sign in step of the Get started card after choosing ChatGPT. It says to open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button and a note that kwant is waiting for you to finish there.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Signing in to ChatGPT with a short code. The code here is made up.</figcaption>
+</figure>
+<p>The short-code sign-in for ChatGPT and Grok is in the Get started card. <strong>Settings → This space → Accounts</strong> still asks you to sign the <code>codex</code> or <code>grok</code> CLI in on this machine (<code>codex login</code>, <code>grok login</code>), and that's also where you add API keys. You can add several accounts per engine, such as a work and a personal one. See <a href="accounts.html">Accounts &amp; profiles</a>.</p>
 
 <h2 id="first-question">3. Ask your first question</h2>
 <p>A fresh install's Default space starts with three bots in <strong>#general</strong>, on the <code>@core-engineering</code> team:</p>

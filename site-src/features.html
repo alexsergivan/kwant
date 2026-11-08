@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-076">New in 0.7.6</a></li>
         <li><a href="#new-075">New in 0.7.5</a></li>
         <li><a href="#new-074">New in 0.7.4</a></li>
         <li><a href="#new-073">New in 0.7.3</a></li>
@@ -50,7 +51,49 @@ card_art: team
   </div>
 </nav>
 
-<section id="new-075" class="fgroup">
+<section id="new-076" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7.6</p>
+      <h2>Recipes you can cook from, and a first start that sets itself up</h2>
+      <p>A recipe in a reply becomes a card that rescales to your servings. A new person starts with one Get started card: choose your AI, sign in, pick a team. ChatGPT and Grok sign in from that card, a Linux server installs with one line, and after each update kwant shows what's new.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="recipes">Recipes you can cook from</h3>
+        <p>When a reply holds one recipe, with an ingredients list and a method, it shows as a recipe card: the ingredients in their groups, numbered steps, and any times and notes. Change the servings (1 to 24) and every amount kwant can read rescales, in kitchen fractions such as ¼, ⅓ and ½. Changed amounts are highlighted, and <strong>Back to 4</strong> puts them back. Oven temperatures, and anything kwant can't read, stay as written. <strong>Show as text</strong> always gives you the reply word for word. <a href="docs/smart-results.html#recipes">How recipe cards work</a></p>
+      </div>
+      <div class="frame">{{video:clip-v076-recipe|Demo: a camp chili recipe card in a kwant chat. Plus is pressed twice, the servings go from 4 to 6 and the changed ingredient amounts are highlighted, then Back to 4 puts them back.}}</div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="get-started">
+        <span class="shot">{{shot:v076-get-started-card|kwant's Get started card under Welcome to kwant bots. Step 1, Choose your AI, says it gets ready by itself, with tiles for Claude and ChatGPT, both marked Installed, sign in next, then Grok and an API key.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Get started in three steps</h3><p>A new person's #general opens with one card instead of the old welcome. <strong>Choose your AI</strong>: Claude, ChatGPT, Grok or an API key. <strong>Sign in</strong>. <strong>Pick a team</strong>, or keep the starter bots. Choosing an AI installs it when it's missing, so there's nothing to type in a Terminal. <a href="docs/quickstart.html#get-started">Your first start</a></p></div>
+      </article>
+      <article class="card" id="device-sign-in">
+        <span class="shot">{{shot:v076-device-sign-in-card|The Get started card with Choose your AI done (ChatGPT, installed) and step 2, Sign in: open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Sign in to ChatGPT and Grok from the app</h3><p>In the Get started card, ChatGPT (through Codex) and Grok sign in with a short code. kwant shows the link and the code, you approve in your browser, and the sign-in finishes by itself. Claude signs in as before. The code shown here is made up. <a href="docs/quickstart.html#get-started">Sign in</a></p></div>
+      </article>
+      <article class="card" id="linux-one-line">
+        <span class="shot">{{shot:v076-linux-install|A terminal on a Linux server running curl -fsSL https://kwant.si/install.sh piped to sh. It installs kwant 0.7.6 for Linux arm64, starts it in the background, and ends with a one-time sign-in link and the ssh tunnel command for a laptop.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A Linux server in one line</h3><p><code>curl -fsSL https://kwant.si/install.sh | sh</code> installs kwant on Ubuntu 22.04 or newer, or Debian 12 or newer, on x86_64 or arm64. It never uses sudo, checks the download's SHA-256 before installing anything, starts kwant as a user service (or in the background) and ends with your sign-in link. Run it again to update; your data stays. <a href="docs/install.html#one-line">Install on a server</a></p></div>
+      </article>
+      <article class="card" id="whats-new">
+        <span class="shot">{{shot:v076-whats-new|kwant's What's new sheet for version 0.7.6 over a chat, listing sign-in to ChatGPT and Grok in the app, recipe cards, one-line Linux setup and Get started, with smaller changes and fixes below and a Got it button.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>What's new, in the app</h3><p>After an update, a sheet shows what's new and what's fixed, once on each device. The web app shows it when its server updates. <strong>See what's new</strong> on the Updated banner opens it again, and <strong>Settings › About</strong> keeps every version's notes. <a href="docs/install.html#whats-new">After an update</a></p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="no-node" class="span2"><h3>Codex and the bots' browser without Node</h3><p>On a Mac or Linux computer without Node, kwant installs Codex from OpenAI's standalone release and checks its SHA-256 before unpacking anything. With no Chrome on the computer, kwant downloads Chrome for Testing into its own folder the first time a bot needs the browser. If a download fails, Settings says why.</p></li>
+      <li id="kwnt-version"><h3>kwnt reports its real version</h3><p><code>kwnt --version</code>, the health check and the update status show the release's version, not 0.1.0.</p></li>
+      <li id="mac-first-open"><h3>First time on a Mac?</h3><p>Download for Mac now shows the three Open Anyway steps for the first launch, with a picture. <a href="docs/install.html#mac">See the steps</a></p></li>
+      <li id="take-over-fix" class="span2"><h3>Take over says where you already are</h3><p>When you already control the browser in another window, Take over tells you to press Hand back there instead of retrying every second. With other chats browsing, Hand back's tooltip says to hand back first to switch.</p></li>
+      <li id="fixes-076" class="span2"><h3>Smaller fixes</h3><p>Undo for a ready-made team names the exact archived chat it keeps. A Jira ticket whose lead can't prepare a brief says why. Show it once explains a failed draft or an empty trial in plain words. A GitLab address without <code>.git</code> works. After "folder in use", the team button says Pick another folder. Telegram says "your message wasn't run" only for your own message.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-075" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.5</p>
@@ -101,7 +144,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-074" class="fgroup alt">
+<section id="new-074" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.4</p>
@@ -158,7 +201,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-073" class="fgroup">
+<section id="new-073" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.3</p>
@@ -198,7 +241,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-072" class="fgroup alt">
+<section id="new-072" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.2</p>
@@ -238,7 +281,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-071" class="fgroup">
+<section id="new-071" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.1</p>
@@ -278,7 +321,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-07" class="fgroup alt" data-covers="0.6.12 0.6.13">
+<section id="new-07" class="fgroup" data-covers="0.6.12 0.6.13">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7</p>
@@ -318,7 +361,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-0611" class="fgroup">
+<section id="new-0611" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.11</p>
@@ -353,7 +396,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-069" class="fgroup alt">
+<section id="new-069" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.9</p>
@@ -400,7 +443,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-065" class="fgroup">
+<section id="new-065" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.5</p>
@@ -436,7 +479,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-064" class="fgroup alt">
+<section id="new-064" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.4 · Who answers</p>
@@ -470,7 +513,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-06" class="fgroup">
+<section id="new-06" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6 · Mission Control</p>
@@ -499,7 +542,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-05" class="fgroup alt">
+<section id="new-05" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.5 · Browser &amp; status</p>
@@ -518,7 +561,7 @@ card_art: team
   </div>
 </section>
 
-<section id="discovery" class="fgroup">
+<section id="discovery" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.5 · Automation Discovery</p>
@@ -536,7 +579,7 @@ card_art: team
   </div>
 </section>
 
-<section id="new-teams" class="fgroup alt">
+<section id="new-teams" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Hand-offs &amp; review</p>
@@ -555,7 +598,7 @@ card_art: team
   </div>
 </section>
 
-<section id="performance" class="fgroup">
+<section id="performance" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Performance &amp; audits</p>
@@ -582,7 +625,7 @@ card_art: team
   </div>
 </section>
 
-<section id="mission-board" class="fgroup alt">
+<section id="mission-board" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Mission board</p>
@@ -627,7 +670,7 @@ card_art: team
   </div>
 </section>
 
-<section id="flight-school" class="fgroup">
+<section id="flight-school" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Flight School</p>
@@ -670,7 +713,7 @@ card_art: team
   </div>
 </section>
 
-<section id="connect" class="fgroup alt">
+<section id="connect" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Connect apps</p>
@@ -698,7 +741,7 @@ card_art: team
   </div>
 </section>
 
-<section id="teams" class="fgroup">
+<section id="teams" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Teams & chat</p>
@@ -727,7 +770,7 @@ card_art: team
   </div>
 </section>
 
-<section id="spaces" class="fgroup alt">
+<section id="spaces" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Spaces & accounts</p>
@@ -758,7 +801,7 @@ card_art: team
   </div>
 </section>
 
-<section id="own" class="fgroup">
+<section id="own" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Works on its own</p>
@@ -786,7 +829,7 @@ card_art: team
   </div>
 </section>
 
-<section id="safety" class="fgroup alt">
+<section id="safety" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Safety & control</p>
@@ -817,7 +860,7 @@ card_art: team
   </div>
 </section>
 
-<section id="knowledge" class="fgroup">
+<section id="knowledge" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Your bots and knowledge</p>
@@ -844,7 +887,7 @@ card_art: team
   </div>
 </section>
 
-<section id="more" class="fgroup alt" aria-labelledby="more-title">
+<section id="more" class="fgroup" aria-labelledby="more-title">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">And more</p>
@@ -876,7 +919,7 @@ card_art: team
   </div>
 </section>
 
-<section id="phone" class="fgroup phone-sec" aria-labelledby="phone-title">
+<section id="phone" class="fgroup alt phone-sec" aria-labelledby="phone-title">
   <div class="wrap phone-grid">
     <div class="row-copy">
       <p class="kicker">Anywhere</p>
@@ -890,7 +933,7 @@ card_art: team
   </div>
 </section>
 
-<section id="running" class="fgroup alt">
+<section id="running" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Running it</p>
@@ -928,7 +971,7 @@ card_art: team
   </div>
 </section>
 
-<section id="parallel" class="fgroup" aria-labelledby="parallel-title">
+<section id="parallel" class="fgroup alt" aria-labelledby="parallel-title">
   <div class="wrap">
     <div class="row">
       <div class="row-copy">

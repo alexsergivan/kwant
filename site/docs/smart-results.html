@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Smart Results: Tables, charts and checklists from a bot&#x27;s own reply, with where each value came from.">
 <meta property="article:published_time" content="2026-11-03">
-<meta property="article:modified_time" content="2026-11-04">
+<meta property="article:modified_time" content="2026-11-08">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Smart Results: AI agent replies as tables, charts and checklists · kwant">
 <meta name="twitter:description" content="kwant draws a bot&#x27;s table or list as a sortable comparison, a chart, key numbers, findings or a checklist, copied from the reply word for word. The reply text never changes.">
@@ -75,6 +75,7 @@
     <tr><td>Facts</td><td>Lines like <strong>Owner:</strong> Sam</td></tr>
     <tr><td>Links</td><td>A list of links or titled items, shown as cards</td></tr>
     <tr><td>Findings</td><td>A list where each item starts with a severity, such as a review's results</td></tr>
+    <tr><td>Recipe</td><td>One recipe, with an ingredients list and the method (new in 0.7.6, <a href="#recipes">below</a>)</td></tr>
     <tr><td>Steps, checklist, timeline</td><td>Numbered steps, a list with ticks, or dated events</td></tr>
     <tr><td>Checks</td><td>A task's checks, on its report card</td></tr>
     <tr><td>Files</td><td>A preview of files a bot shared</td></tr>
@@ -82,9 +83,30 @@
 </table></div>
 <p>Bots are asked to write tables, numbered steps and <strong>Label:</strong> value lines, so most replies need nothing extra: comparing even two options gets a table, a column each and a row per point. A link in a table counts as its text, so a table with long source links still gets a card. A bot can also point at the table or list it wants drawn, and kwant holds it to the reply: every row must match the reply's table, cell by cell, with the same numbers. Checks and Files cards come from kwant's own records, never from a bot.</p>
 
+<h2 id="recipes">Recipe cards</h2>
+<p>New in 0.7.6. When a reply holds one recipe, with an ingredients list and the method, it shows as a recipe card: the ingredients in their groups, numbered steps, and any times and notes. The text before and after the recipe stays as it is. On a wide window the ingredients and steps sit side by side.</p>
+<figure>
+  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v076-recipe-poster.webp?v=0bf7b171ef" width="1280" height="800" aria-label="Demo: a camp chili recipe card in a kwant chat. Plus is pressed twice, the servings go from 4 to 6 and the changed ingredient amounts are highlighted, then Back to 4 puts them back."><source src="../assets/media/clip-v076-recipe.mp4?v=4dbc33d499" type="video/mp4"></video></div>
+  <figcaption>Change the servings and the amounts follow. Back to 4 puts them back.</figcaption>
+</figure>
+<ul>
+  <li><strong>Servings:</strong> the stepper goes from 1 to 24 and rescales every amount kwant can read, in kitchen fractions such as ¼, ⅓ and ½. A screen reader hears the old amount after each change.</li>
+  <li><strong>What changed:</strong> each changed amount is highlighted, and <strong>Back to 4</strong> (or whatever the recipe said) puts the amounts back.</li>
+  <li><strong>What stays:</strong> oven temperatures, and any amount kwant can't read, stay as written. Nothing is worked out with a model.</li>
+  <li><strong>When in doubt, text:</strong> a reply that doesn't match a recipe's shape exactly stays plain text, and <strong>Show as text</strong> always gives the reply back word for word.</li>
+</ul>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v076-recipe-2880.webp?v=6c2d3f4c07" data-caption="A recipe card in a kwant chat for one-pot camp chili, set to 6 servings instead of 4. The changed ingredient amounts are highlighted, the numbered steps sit next to the ingredients, and a Back to 4 button is above them."><img class="app" src="../assets/media/v076-recipe-1440.webp?v=a3d7b6dbef" srcset="../assets/media/v076-recipe-1440.webp?v=a3d7b6dbef 1440w, ../assets/media/v076-recipe-2880.webp?v=6c2d3f4c07 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A recipe card in a kwant chat for one-pot camp chili, set to 6 servings instead of 4. The changed ingredient amounts are highlighted, the numbered steps sit next to the ingredients, and a Back to 4 button is above them."></a></div>
+  <figcaption>On a wide window, ingredients and steps side by side.</figcaption>
+</figure>
+<figure>
+  <div class="phone"><a class="zoom" href="../assets/media/phone-v076-recipe-780.webp?v=57de1bece2" data-caption="The camp chili recipe card on a phone, set to 6 servings, with the scaled ingredient amounts in a single column."><img src="../assets/media/phone-v076-recipe-390.webp?v=0ed77f5c79" srcset="../assets/media/phone-v076-recipe-390.webp?v=0ed77f5c79 390w, ../assets/media/phone-v076-recipe-780.webp?v=57de1bece2 780w" sizes="300px" width="390" height="844" loading="lazy" decoding="async" alt="The camp chili recipe card on a phone, set to 6 servings, with the scaled ingredient amounts in a single column."></a></div>
+  <figcaption>The same card on a phone.</figcaption>
+</figure>
+
 <h2 id="trust">Copied, never worked out</h2>
 <ul>
-  <li><strong>Word for word.</strong> Every value is copied from the reply. Nothing is added up, averaged or rounded, and a chart never puts different units on one axis.</li>
+  <li><strong>Word for word.</strong> Every value is copied from the reply. Nothing is added up, averaged or rounded, and a chart never puts different units on one axis. The one exception is a <a href="#recipes">recipe card</a>'s servings stepper, which rescales amounts only when you change the servings.</li>
   <li><strong>Where it came from.</strong> Under each card a line says <strong>From this reply</strong>, <strong>From task checks</strong> or which attachment it came from.</li>
   <li><strong>The text is still there.</strong> <strong>Show as text</strong> swaps the card for the reply's own words, and <strong>Copy markdown</strong> copies the reply as it was written.</li>
   <li><strong>When in doubt, text.</strong> A card that fails a check, or can't be drawn, shows the reply's text instead. Editing a reply removes its card, since the card was copied from the old text.</li>
@@ -147,7 +169,7 @@
 </footer>
 <script src="../assets/js/site.js?v=9846e390c8" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/smart-results#article","headline":"Smart Results: AI agent replies as tables, charts and checklists","description":"kwant draws a bot's table or list as a sortable comparison, a chart, key numbers, findings or a checklist, copied from the reply word for word. The reply text never changes.","url":"https://kwant.si/docs/smart-results","mainEntityOfPage":"https://kwant.si/docs/smart-results","image":"https://kwant.si/assets/og/docs-smart-results.png?v=9fa23c8a28","inLanguage":"en","datePublished":"2026-11-03","dateModified":"2026-11-04","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Smart Results","item":"https://kwant.si/docs/smart-results"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/smart-results#article","headline":"Smart Results: AI agent replies as tables, charts and checklists","description":"kwant draws a bot's table or list as a sortable comparison, a chart, key numbers, findings or a checklist, copied from the reply word for word. The reply text never changes.","url":"https://kwant.si/docs/smart-results","mainEntityOfPage":"https://kwant.si/docs/smart-results","image":"https://kwant.si/assets/og/docs-smart-results.png?v=9fa23c8a28","inLanguage":"en","datePublished":"2026-11-03","dateModified":"2026-11-08","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Smart Results","item":"https://kwant.si/docs/smart-results"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

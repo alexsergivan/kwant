@@ -188,7 +188,7 @@ def parse(path):
 CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-human-check-card",
             "v071-post-github-card", "v071-dev-on-card", "v071-dev-off-armed-card", "v071-lgtm-card",
             "v072-dev-repos-card", "v072-dev-explainer-card", "v072-dev-repo-chips-card", "v072-switch-on-card",
-            "v07-dev-review-card"}
+            "v07-dev-review-card", "v076-get-started-card", "v076-device-sign-in-card"}
 
 
 def shot(root, name, alt, sizes):
