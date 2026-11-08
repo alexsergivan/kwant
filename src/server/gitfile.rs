@@ -184,9 +184,11 @@ pub(crate) mod windows_tests {
     use super::*;
     use std::path::Path;
 
-    /// A junction needs no privilege, unlike a symlink.
+    /// A junction needs no privilege, unlike a symlink. cmd reads a `/` in
+    /// a path as a switch, so both paths go over with backslashes only.
     pub(crate) fn junction(link: &Path, target: &Path) {
-        let out = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+        let back = |p: &Path| p.to_string_lossy().replace('/', "\\");
+        let out = std::process::Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(back(link)).arg(back(target)).output().unwrap();
         assert!(out.status.success(), "mklink /J: {}", String::from_utf8_lossy(&out.stderr));
     }
 
