@@ -13,9 +13,10 @@ The "new computer" is made like this:
 
 Checks (each prints PASS or FAIL):
   1. the machine is really new: no AI tool is installed, and the Setup list offers to install Claude;
-  2. the first-run welcome shows (a headless Chromium opens the page, scripts/fresh_machine_page.mjs) with "Set up Claude";
+  2. the Get started card shows (a headless Chromium opens the page, scripts/fresh_machine_page.mjs) at "Choose your AI",
+     with a Claude tile that says neither "Installed" nor "Signed in";
   3. the one-click install starts, finishes, ran only the stand-in download, and kwnt then sees Claude (signed out);
-     the welcome now says "Sign in with Claude";
+     on a fresh page load the Claude tile says "Installed · sign in next";
   4. the sign-in starts: kwnt asks for a link and returns an allowed claude.ai/claude.com link in the
      waiting-for-code state (the sign-in is then cancelled).
 
@@ -26,7 +27,7 @@ Exit 0 when every check passes. Needs frontend/dist embedded in the kwnt binary 
 What it cannot tell you: that claude.ai's real install.sh still works (the stand-in replaces it), that Laya installs
 (`serve --no-laya`: 420 MB), or what a person sees in the Tauri window (it loads the same page this test opens).
 
-O2 (Iris's "Get started" card, 0.7.6): point the checks at the new card by editing CARD below, nothing else.
+The page checks look for Iris's "Get started" card (O2, 0.7.6; GetStarted.tsx), set in CARD below.
 """
 import argparse
 import json
@@ -42,14 +43,18 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-# ---- What the checks look for in the first screen. O2 changes these lines when the Get started card lands. ----
+# ---- What the checks look for in the first screen: the Get started card (GetStarted.tsx). ----
 CARD = {
-    # CSS selector of the first-run card (FirstRunWelcome.tsx has data-first-run-welcome); the labels below are
-    # looked for inside it
-    "selector": "[data-first-run-welcome]",
-    # the button text while Claude Code isn't installed and kwnt can install it, and once it's installed but signed out
-    "install_label": "Set up Claude",
-    "signin_label": "Sign in with Claude",
+    # CSS selector of the first-run card (GetStarted.tsx's <section data-get-started>)
+    "selector": "[data-get-started]",
+    # its first step's title, shown while no AI is chosen yet
+    "step_label": "Choose your AI",
+    # the Claude tile inside step 1 (one <button data-ai-tile=...> per AI)
+    "tile": '[data-ai-tile="claude"]',
+    # what a tile must not say on a new machine (Claude isn't installed, nobody is signed in)
+    "not_yet": ("Installed", "Signed in"),
+    # what the Claude tile says once Claude Code is installed but signed out
+    "installed_label": "Installed · sign in next",
 }
 # ------------------------------------------------------------------------------------------------------------
 
@@ -158,12 +163,14 @@ exit 22
 
 
 def first_card(browser, url, expect=None):
-    """{"found": bool, "text": str}: the first-run card on the page, after its scripts ran."""
+    """{"found": bool, "text": str, "tile": bool, "tileText": str}: the Get started card and its Claude tile,
+    read after the page's engine list arrived."""
     helper = Path(__file__).with_name("fresh_machine_page.mjs")
     env = {"HOME": tempfile.gettempdir(), "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "CHROMIUM": browser}
     if os.environ.get("PW_CORE"):
         env["PW_CORE"] = os.environ["PW_CORE"]
-    out = subprocess.run(["node", str(helper), url, CARD["selector"], *([expect] if expect else [])], capture_output=True, text=True, timeout=120, env=env)
+    out = subprocess.run(["node", str(helper), url, CARD["selector"], CARD["tile"], *([expect] if expect else [])],
+                         capture_output=True, text=True, timeout=120, env=env)
     try:
         return json.loads(out.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
@@ -218,10 +225,13 @@ def main():
         check("new machine: Setup offers to install Claude Code by itself", items.get("claude", {}).get("can_install") is True,
               json.dumps(items.get("claude"))[:300])
 
-        # 2. First-run welcome
-        card = first_card(browser, base + "/", CARD["install_label"])
-        check(f"first run: the welcome card shows ({CARD['selector']})", card["found"], card.get("error", ""))
-        check(f"first run: the welcome offers \"{CARD['install_label']}\"", CARD["install_label"] in card["text"], card["text"][:200])
+        # 2. First screen: the Get started card
+        card = first_card(browser, base + "/")
+        check(f"first run: the Get started card shows ({CARD['selector']})", card["found"], card.get("error", ""))
+        check(f"first run: the card is at \"{CARD['step_label']}\"", CARD["step_label"] in card["text"], card["text"][:200])
+        check(f"first run: the Claude tile is there ({CARD['tile']})", card.get("tile") is True, card["text"][:200])
+        check("first run: the Claude tile says neither \"Installed\" nor \"Signed in\"",
+              card.get("tile") is True and not any(w in card["tileText"] for w in CARD["not_yet"]), card.get("tileText", ""))
 
         # 3. One-click install against the stand-in download
         code, started = http(base, "POST", "/api/setup/install", {"item": "claude"})
@@ -252,8 +262,9 @@ def main():
                 {e.get("id"): e for e in (engines.get("engines", []) if isinstance(engines, dict) else [])}
             claude_state = (eng.get("claude") or {}).get("status")
             check("install: kwnt sees Claude Code at once, signed out", claude_state == "signed_out", f"engine claude = {json.dumps(eng.get('claude'))[:200]}")
-            card = first_card(browser, base + "/", CARD["signin_label"])
-            check(f"install: the welcome now offers \"{CARD['signin_label']}\"", CARD["signin_label"] in card["text"], card["text"][:200])
+            card = first_card(browser, base + "/", CARD["installed_label"])
+            check(f"install: on a fresh page load the Claude tile says \"{CARD['installed_label']}\"",
+                  CARD["installed_label"] in card.get("tileText", ""), card.get("tileText") or card["text"][:200])
 
         # 4. The sign-in starts
         code, sess = http(base, "POST", "/api/engines/claude/login")

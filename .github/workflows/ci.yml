@@ -59,11 +59,12 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
   # O9, the new-computer test on every release: kwnt starts as a brand-new user (empty HOME, `env -i`, a bare PATH
-  # with no AI tools), and the job checks that the first-run welcome shows, that the one-click Claude Code install
+  # with no AI tools), and the job checks that the Get started card shows, that the one-click Claude Code install
   # starts and finishes against a stand-in download (the real one is never fetched: the fake curl refuses every
   # other URL), and that the sign-in starts. scripts/release_required_checks.txt lists it, so the release gate
   # (the release script reads that list) refuses a release commit where this job isn't green.
-  # The welcome is found by CARD in scripts/fresh_machine_test.py; O2's Get started card changes that, not the job.
+  # The first screen it checks is the Get started card ("Choose your AI", the Claude tile), found by CARD in
+  # scripts/fresh_machine_test.py.
   fresh-machine:
     name: fresh-machine
     runs-on: ubuntu-latest
