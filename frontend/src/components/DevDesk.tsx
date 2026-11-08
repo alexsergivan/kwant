@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronLeft, Code, RefreshCw } from 'lucide-react';
-import { DEV_FEATURES, DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, gitOnlyRepo, devApi, devStore, deskStatus, firstRun, repoFilters, reposSummary, statusLine } from '../devMode';
+import { DEV_FEATURES, DEV_OFF, DevModeState, checkedLabel, DevTeamRef, cardRepoLabel, cardsOfRepo, gitOnlyRepo, devApi, devStore, deskStatus, firstRun, freshReviewsLine, repoFilters, reposSummary, statusLine } from '../devMode';
 import { FindingAction, LandedPage, ShellCard, asCard, parseCards, parseLandedPage } from '../dev/shellTypes';
 import { LandedList, ReleaseNotesSheet, ReviewCard, Rollup } from './DevDeskSlots';
 import { useDevMode } from './DevModeSwitch';
@@ -388,6 +388,8 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   const first = !landed && !desk.reviews;
   const polling = firstPolling(dev, landedCards.length);
   const statusShown = statusLine(dev) !== null;
+  // 0.7.7: older branches and pull requests get no review; one quiet line says how many were left out.
+  const freshLine = freshReviewsLine(dev, repo);
 
   const tabs: Array<{ key: Tab; label: string; count: number; tone?: 'needs' }> = [
     { key: 'landed', label: 'What landed', count: unseen },
@@ -568,17 +570,23 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
                 )}
               </>
             ) : reviews.length ? (
-              reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} />)
+              <>
+                {freshLine && <FreshLine text={freshLine} />}
+                {reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} />)}
+              </>
             ) : (
               desk.reviews && (
-                <TermEmpty
-                  cmd="kwant reviews --open"
-                  out="0 open changes"
-                  title="No open changes to review"
-                  line="When a bot opens a pull request, a second bot reads it and the card lands here."
-                >
-                  <JiraHint space={spaceId} teams={teams} />
-                </TermEmpty>
+                <>
+                  {freshLine && <FreshLine text={freshLine} />}
+                  <TermEmpty
+                    cmd="kwant reviews --open"
+                    out="0 open changes"
+                    title="No open changes to review"
+                    line="When a bot opens a pull request, a second bot reads it and the card lands here."
+                  >
+                    <JiraHint space={spaceId} teams={teams} />
+                  </TermEmpty>
+                </>
               )
             )}
           </div>
@@ -631,6 +639,13 @@ const SkeletonCards: React.FC<{ line?: string; n?: number }> = ({ line = 'Readin
 );
 
 /** Flow copy §6: a first-visit empty state as a tiny terminal, `$ git log main -5` and its output. */
+/** 0.7.7: the Reviews tab's quiet caption: no link, no setting. Plain text, read in order by a screen reader. */
+const FreshLine: React.FC<{ text: string }> = ({ text }) => (
+  <p className="px-1 text-meta text-zinc-400" data-dev-fresh-line>
+    {text}
+  </p>
+);
+
 const TermEmpty: React.FC<{ cmd?: string; out: string; title: string; line: string; children?: React.ReactNode }> = ({ cmd = 'git log main -5', out, title, line, children }) => (
   <div className="rounded-2xl border border-dashed border-hairline-strong px-5 py-6" data-dev-empty data-dev-empty-term>
     <p className="font-mono text-[12px] text-zinc-500 break-words" aria-hidden="true">
