@@ -596,7 +596,7 @@ pub fn qr_lines(text: &str) -> Vec<String> {
 
 /// `kwnt signin-link`: asks the running server (with the API token, from this machine) for a new
 /// one-time link and prints it with a QR code.
-pub async fn cli_link(config: &crate::config::Config, url: Option<&str>, qr: bool) -> Result<(), String> {
+pub async fn cli_link(config: &crate::config::Config, url: Option<&str>, qr: bool, bare: bool) -> Result<(), String> {
     use super::auth;
     let token = auth::env_token()
         .map(Ok)
@@ -632,7 +632,8 @@ pub async fn cli_link(config: &crate::config::Config, url: Option<&str>, qr: boo
             .and_then(|u| u.split_once("/#").map(|(b, _)| b.to_string()))
     });
     let link = auth::one_time_link(&config.host, config.port, base.as_deref(), code);
-    for line in auth::one_time_notice(&link, qr) {
+    let lines = if bare { auth::bare_notice(&link, qr) } else { auth::one_time_notice(&link, qr) };
+    for line in lines {
         println!("{line}");
     }
     Ok(())

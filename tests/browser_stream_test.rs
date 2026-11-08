@@ -542,6 +542,10 @@ async fn a_watcher_is_told_to_take_control_and_a_lost_frame_ack_does_not_drop_th
     let other = ctrl.take_control().await.unwrap();
     ws.send(WsMessage::Text(json!({"action":"history","direction":"reload","id":"o"}).to_string())).await.unwrap();
     assert!(receive(&mut ws,"error").await["error"].as_str().unwrap().contains("controlled by a person"));
+    // Take over from here while that other view has it: the person's own hold, not a busy bot
+    ws.send(WsMessage::Text(json!({"action":"take_control"}).to_string())).await.unwrap();
+    assert_eq!(receive(&mut ws,"error").await, json!({"type":"error","code":"held_by_person",
+        "error":"You're controlling this browser in another window. Press Hand back there to take over here."}));
     drop(other);
 
     // the server stops waiting for the lost ack and keeps the stream (and control) alive

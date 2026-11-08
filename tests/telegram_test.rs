@@ -937,3 +937,36 @@ async fn the_spending_stop_tells_the_paired_chat_once() {
     assert!(tg.sent(&bot).iter().all(|c| !c.text().contains("answer tg40")), "no turn, no answer");
     assert!(common::messages(&env, &general).await.iter().all(|m| m.sender_role != "kwant"));
 }
+
+/// D-1: a routine, mission or Jira task that trips the spending stop while the person writes from
+/// Telegram (the reply window is open) is not told to them as their own held message: the stuck
+/// message keeps the plain line, and nothing says "your message wasn't run".
+#[tokio::test]
+async fn a_routine_tripping_the_stop_inside_the_reply_window_keeps_the_plain_line() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 54).await;
+    let space = kwnt::db::spaces::SpaceId::default_space();
+    env.state.db.telegram_person_wrote(space.as_str(), chrono::Utc::now()).await.unwrap();
+    let link = env.state.db.telegram_link(space.as_str()).await.unwrap().unwrap();
+    assert!(link.reply_window_from.is_some(), "the person writes from Telegram");
+    let mut rx = env.state.event_sender.subscribe();
+    let (s, v) = call(&env.app, "POST", "/api/settings", Some(json!({"daily_spend_stop_tokens": 10_000}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    kwnt::server::spend_stop::book(&env.state, 18_000, None).await;
+
+    // What routines, missions (Jira tasks among them) and AutoFix ask before they start work
+    let why = kwnt::server::spend_stop::held(&env.state, space.as_str()).await;
+    assert!(why.as_deref().is_some_and(|w| w.starts_with(kwnt::server::spend_stop::REASON)), "{why:?}");
+    let sent = tg.wait_send(&bot, |c| c.text().contains("Today's spending limit is reached")).await;
+    assert_eq!(sent.chat(), PERSON.id);
+    assert_eq!(
+        sent.text(),
+        "<b>Today's spending limit is reached</b>\nUsed 18k of 10k tokens, so bots won't start new work until tomorrow. Open to continue today.",
+        "a routine's stop is not the person's held message"
+    );
+    let n = spend_notifies(&mut rx);
+    assert_eq!(n.len(), 1, "{n:?}");
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!tg.sent(&bot).iter().any(|c| c.text().contains("your message wasn't run")), "never the held-message line");
+}

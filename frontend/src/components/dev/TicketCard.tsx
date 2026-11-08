@@ -362,7 +362,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
           <>
             Not every done-when line is met.{' '}
             {props.onOpenReview ? (
-              <button type="button" className="tk-inl" onClick={props.onOpenReview} data-see-review>
+              <button type="button" className="tk-inl" onClick={props.onOpenReview} aria-label={`See the review ${t.key}`} data-see-review>
                 See the review
               </button>
             ) : (
@@ -544,7 +544,7 @@ export const TicketCard: React.FC<TicketCardProps> = (props) => {
 
       {showBrief && (
         <div id={briefId}>
-          <TicketBrief key={`${t.key}-${t.state}`} brief={brief} fallbackText={briefText} lead={w.lead} defaultOpen={briefOpen || linkBrief} />
+          <TicketBrief key={`${t.key}-${t.state}`} brief={brief} fallbackText={briefText} lead={w.lead} defaultOpen={briefOpen || linkBrief} ticketKey={t.key} />
         </div>
       )}
       {linkBrief && !showBrief && <div id={briefId} hidden />}

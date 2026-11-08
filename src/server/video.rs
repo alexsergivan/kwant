@@ -27,6 +27,9 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub const READ_SECS: u64 = 20;
 /// The line a bot gets when the server has no ffmpeg.
 pub const NO_FFMPEG: &str = "Install ffmpeg on the server to let bots look inside videos.";
+/// Windows (0.7.6 beta): ffmpeg can't be held short there (no setsid, nice or rlimits), so bots
+/// get the size and this line instead.
+pub const NOT_ON_WINDOWS: &str = "Looking inside videos is not available on Windows yet.";
 /// Why a read stopped when ffmpeg or ffprobe couldn't be started.
 const NO_START: &str = "ffmpeg couldn't start on this server.";
 const MAX_FRAMES: usize = 6;
@@ -37,8 +40,10 @@ const MAX_FRAME_BYTES: u64 = 5 * 1024 * 1024;
 /// Frames bigger than this many pixels aren't decoded (8K is 33 MP).
 const MAX_PIXELS: &str = "40000000";
 /// No file ffmpeg writes may pass this.
+#[cfg(unix)]
 const OUT_FSIZE: u64 = 16 * 1024 * 1024;
 /// Address space for one ffmpeg/ffprobe.
+#[cfg(unix)]
 const MAX_AS: u64 = 2 * 1024 * 1024 * 1024;
 /// Most ffprobe JSON read.
 const MAX_PROBE_OUT: usize = 256 * 1024;
@@ -298,6 +303,9 @@ fn os(args: &[&str]) -> Vec<OsString> {
 
 /// `read_attachment` for a video: MCP content blocks, and whether it is an error.
 pub async fn describe(name: &str, mime: &str, size: i64, blob: &Path, tmp_parent: &Path) -> (Value, bool) {
+    if cfg!(windows) {
+        return (json!([{"type": "text", "text": format!("{name} is a video ({mime}, {}). {NOT_ON_WINDOWS}", human_size(size))}]), false);
+    }
     describe_with(tools(), name, mime, size, blob, tmp_parent, Duration::from_secs(READ_SECS)).await
 }
 

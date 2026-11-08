@@ -8,7 +8,8 @@ use tempfile::tempdir;
 async fn a_timed_out_command_does_not_finish_later() {
     let tmp = tempdir().unwrap();
     let marker = tmp.path().join("marker");
-    let args = json!({ "command": format!("sleep 3; touch {}", marker.display()), "timeout_secs": 1 });
+    // Relative names (the command runs in the workspace): Git bash on Windows reads backslashes as escapes
+    let args = json!({ "command": "sleep 3; touch marker", "timeout_secs": 1 });
     let err = execute_shell(tmp.path(), &args).await.unwrap_err();
     assert!(err.to_string().contains("timed out"), "{err}");
     tokio::time::sleep(Duration::from_secs(4)).await;
@@ -21,7 +22,7 @@ async fn a_timeout_also_stops_background_jobs() {
     let marker = tmp.path().join("grandchild");
     // A backgrounded subshell is a grandchild of the tool; it must die with bash
     let args = json!({
-        "command": format!("(sleep 3; touch {}) & sleep 10", marker.display()),
+        "command": "(sleep 3; touch grandchild) & sleep 10",
         "timeout_secs": 1
     });
     assert!(execute_shell(tmp.path(), &args).await.is_err());
@@ -34,7 +35,7 @@ async fn a_cancelled_turn_stops_the_command() {
     let tmp = tempdir().unwrap();
     let marker = tmp.path().join("cancelled");
     let args = json!({
-        "command": format!("(sleep 3; touch {m}) & sleep 3; touch {m}", m = marker.display()),
+        "command": "(sleep 3; touch cancelled) & sleep 3; touch cancelled",
         "timeout_secs": 30
     });
     let dir = tmp.path().to_path_buf();

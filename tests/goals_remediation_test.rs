@@ -970,9 +970,15 @@ async fn lapse(e: &Env, g: &Goal) -> Goal {
     let file = std::path::Path::new(&g.folder).join("ok.txt");
     // Goals made in one space share the folder, so it may already be gone
     let _ = std::fs::remove_file(&file);
+    // A lapse counts only strictly after the task finished, in whole milliseconds (the finish time
+    // rounds to the nearest one). On a fast machine the task's finish and these runs can share a
+    // millisecond, and then no lapse is found: start the runs a few milliseconds later
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let first = run_now(e, &g.id).await;
     assert_eq!((first.status.as_str(), first.fail_streak), ("met", 1), "one failure is not news");
-    run_now(e, &g.id).await
+    let second = run_now(e, &g.id).await;
+    assert_eq!(second.status, "not_met", "the second failure confirms it");
+    second
 }
 
 fn restore(g: &Goal) {
@@ -984,7 +990,8 @@ async fn lapse_1_a_verified_task_whose_goal_goes_met_to_not_met_is_one_lapse() {
     let e = setup().await;
     let (task_id, g) = kept_task(&e, &e.bot, "Publish the site").await;
     assert!(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap().is_empty(), "nothing before it fails");
-    // One failed run is not a lapse
+    // One failed run is not a lapse (a few milliseconds on, as in `lapse`)
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     std::fs::remove_file(std::path::Path::new(&g.folder).join("ok.txt")).unwrap();
     assert_eq!(run_now(&e, &g.id).await.status, "met");
     assert!(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap().is_empty(), "an unconfirmed failure is not a lapse");
@@ -1017,7 +1024,9 @@ async fn lapse_3_a_lapse_older_than_since_is_left_out() {
     let e = setup().await;
     let (_, g) = kept_task(&e, &e.bot, "Publish the site").await;
     lapse(&e, &g).await;
-    let at = e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap()[0].lapsed_at;
+    let lapses = e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap();
+    assert_eq!(lapses.len(), 1, "the lapse is found");
+    let at = lapses[0].lapsed_at;
     assert_eq!(e.state.db.goal_lapses_of_bot(&e.bot, at, 10).await.unwrap().len(), 1, "since is inclusive");
     assert!(e.state.db.goal_lapses_of_bot(&e.bot, at + 1, 10).await.unwrap().is_empty());
     assert!(e.state.db.goal_lapses_of_bot(&e.bot, now() + 60_000, 10).await.unwrap().is_empty());

@@ -20,6 +20,7 @@ import {
   trapFocusTarget,
 } from '../imports';
 import { useEscapeLayer } from '../escape';
+import { pickProblem, uploadFor } from '../importZip';
 
 const btn =
   'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 hover:text-zinc-100 transition-colors disabled:opacity-50';
@@ -95,7 +96,7 @@ export const SourceList: React.FC<{
       <FileUp size={18} className="text-zinc-400 shrink-0" aria-hidden="true" />
       <span className="flex-1 min-w-0">
         <span className="block text-sm font-medium text-zinc-100">Upload a file</span>
-        <span className="block text-[11px] text-zinc-500">A Claude Code subagent or SKILL.md, a character card, or a Grok Bot, OpenMausBot or .kwant.json export</span>
+        <span className="block text-[11px] text-zinc-500">One or several files: Claude Code subagents or SKILL.md, character cards, or Grok Bot, OpenMausBot or .kwant.json exports</span>
       </span>
       <ChevronRight size={16} className="text-zinc-500 shrink-0" aria-hidden="true" />
     </button>
@@ -148,8 +149,21 @@ export const PromptStep: React.FC<{
   </div>
 );
 
-export const UploadStep: React.FC<{ file: File | null; onFile: (f: File | null) => void; inputRef: React.RefObject<HTMLInputElement> }> = ({ file, onFile, inputRef }) => {
+/** A short label for what's picked: the file's name, or "3 files: a.json, b.json and c.md". */
+export function pickedLabel(files: ReadonlyArray<{ name: string }>): string {
+  if (files.length === 0) return '';
+  if (files.length === 1) return files[0].name;
+  const names = files.map((f) => f.name);
+  const shown = names.slice(0, 3);
+  const rest = names.length - shown.length;
+  const list = rest > 0 ? `${shown.join(', ')} and ${rest} more` : `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+  return `${files.length} files: ${list}`;
+}
+
+export const UploadStep: React.FC<{ files: File[]; onFiles: (f: File[]) => void; inputRef: React.RefObject<HTMLInputElement> }> = ({ files, onFiles, inputRef }) => {
   const [over, setOver] = useState(false);
+  const one = files.length === 1 ? files[0] : null;
+  const problem = pickProblem(files);
   return (
     <div className="space-y-3">
       <div
@@ -161,23 +175,29 @@ export const UploadStep: React.FC<{ file: File | null; onFile: (f: File | null) 
         onDrop={(e) => {
           e.preventDefault();
           setOver(false);
-          onFile(e.dataTransfer.files?.[0] ?? null);
+          onFiles([...(e.dataTransfer.files ?? [])]);
         }}
         className={`rounded-xl border-2 border-dashed p-6 text-center space-y-2 ${over ? 'border-sky-500 bg-sky-500/5' : 'border-zinc-700'}`}
       >
         <Upload size={22} className="mx-auto text-zinc-500" aria-hidden="true" />
-        <p className="text-xs text-zinc-300">{file ? file.name : 'Drop a file here, or'}</p>
+        <p className="text-xs text-zinc-300 break-words" data-picked>{files.length ? pickedLabel(files) : 'Drop one or more files here, or'}</p>
         <label className={`${btn} inline-flex cursor-pointer`}>
-          {file ? 'Choose another file' : 'Choose a file'}
-          <input ref={inputRef} type="file" accept={IMPORT_ACCEPT} className="sr-only" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
+          {files.length ? 'Choose other files' : 'Choose files'}
+          <input ref={inputRef} type="file" multiple accept={IMPORT_ACCEPT} className="sr-only" onChange={(e) => onFiles([...(e.target.files ?? [])])} />
         </label>
-        {file && fileTooBig(file.size) && <p className="text-[11px] text-rose-300">That file is over 20 MB, so it can’t be imported.</p>}
+        {one && fileTooBig(one.size) && <p className="text-[11px] text-rose-300">That file is over 20 MB, so it can’t be imported.</p>}
+        {problem && (
+          <p className="text-[11px] text-rose-300" role="alert">
+            {problem}
+          </p>
+        )}
       </div>
       <ul className="text-[11px] text-zinc-500 space-y-0.5 list-disc pl-5">
         <li>Claude Code subagent (.md) or a SKILL.md</li>
         <li>Character card (.json or .png)</li>
         <li>Grok Bot or OpenMausBot export (.json)</li>
         <li>A .kwant.json file exported from here</li>
+        <li>Several of these at once: pick or drop them together, no need to zip them</li>
         <li>A .zip of any of these. Chat history inside is skipped.</li>
       </ul>
     </div>
@@ -239,13 +259,20 @@ const Notes: React.FC<{ items: string[]; tone: 'warn' | 'drop' | 'problem'; labe
   );
 
 /** What the import will create. Each bot can be left out. */
-export const PreviewView: React.FC<{ preview: Preview; skip: ReadonlySet<string>; onToggle: (ref: string) => void }> = ({ preview, skip, onToggle }) => {
+export const PreviewView: React.FC<{
+  preview: Preview;
+  skip: ReadonlySet<string>;
+  onToggle: (ref: string) => void;
+  /** Several picked files went up as one zip: say "from N files", not "from a zip". */
+  pickedFiles?: number;
+}> = ({ preview, skip, onToggle, pickedFiles = 0 }) => {
   const { bots, general } = previewRows(preview);
   const teams = preview.bundle.teams ?? [];
   const shared = preview.bundle.skills ?? [];
-  const omitted = preview.bundle.omitted ?? [];
+  const packed = pickedFiles > 1;
+  const omitted = (preview.bundle.omitted ?? []).map((t) => (packed ? t.replace(/^Files in the zip that weren't read:/, "Files that weren't read:") : t));
   const kept = bots.filter((b) => !skip.has(b.ref)).length;
-  const from = sourceName(preview.bundle.source.kind);
+  const from = packed ? `${pickedFiles} files` : sourceName(preview.bundle.source.kind);
   return (
     <div className="space-y-3">
       <p className="text-xs text-zinc-300">
@@ -378,7 +405,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
   const [promptsError, setPromptsError] = useState<unknown>(null);
   const [reply, setReply] = useState('');
   const [copied, setCopied] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [skip, setSkip] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -442,7 +469,13 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
     // From the preview ("Check again" after a name was taken), read the same input again.
     const prompt = step.kind === 'prompt' ? step.prompt : step.kind === 'preview' ? step.prompt : undefined;
     try {
-      const p = prompt ? await importApi.previewText(reply) : file ? await importApi.previewFile(file, file.name) : null;
+      let p = null;
+      if (prompt) p = await importApi.previewText(reply);
+      else if (files.length > 0 && !pickProblem(files)) {
+        // Several files go up as one zip, which the server reads into one preview.
+        const up = await uploadFor(files);
+        p = await importApi.previewFile(up.body, up.filename);
+      }
       if (!p) return;
       setPreview(p);
       setSkip(new Set());
@@ -496,7 +529,12 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
 
   let footer: React.ReactNode = null;
   if (step.kind === 'prompt' || step.kind === 'upload') {
-    const ready = step.kind === 'prompt' ? reply.trim() !== '' && !textTooLong(reply) : !!file && !fileTooBig(file.size);
+    const ready =
+      step.kind === 'prompt'
+        ? reply.trim() !== '' && !textTooLong(reply)
+        : files.length > 1
+          ? !pickProblem(files)
+          : files.length === 1 && !fileTooBig(files[0].size);
     footer = (
       <button type="button" onClick={check} disabled={!ready || busy} className={primary}>
         {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} {busy ? 'Reading…' : 'Preview'}
@@ -555,10 +593,11 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
           {step.kind === 'prompt' && (
             <PromptStep prompt={step.prompt} reply={reply} onReply={setReply} copied={copied} onCopy={copy} />
           )}
-          {step.kind === 'upload' && <UploadStep file={file} onFile={setFile} inputRef={fileRef} />}
+          {step.kind === 'upload' && <UploadStep files={files} onFiles={setFiles} inputRef={fileRef} />}
           {step.kind === 'preview' && preview && (
             <PreviewView
               preview={preview}
+              pickedFiles={step.from === 'upload' ? files.length : 0}
               skip={skip}
               onToggle={(ref) =>
                 setSkip((s) => {

@@ -109,6 +109,11 @@ desktop file, the update information and the `.zsync`, the same checks the AppIm
 
 ## Releases and the updater key
 
+A release commit sets one version in `apps/mac/Cargo.toml`, `apps/mac/tauri.conf.json` and the
+root `Cargo.toml` (kwnt's own version, shown by `kwnt --version` and `/api/health`), with both
+`Cargo.lock` files. `tests/version_test.rs` fails when they disagree, and mac.yml refuses a
+`mac-v*` tag that doesn't match all three.
+
 `mac.yml` signs the updater bundle on `mac-v*` tags with the repository secrets
 `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, checks the signature
 (`scripts/minisign_verify.py`) and, for a full release, publishes `latest.json` built by

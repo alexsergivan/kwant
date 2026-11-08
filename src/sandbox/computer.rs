@@ -64,7 +64,11 @@ pub fn default_mode(os: &str, env: Option<&str>) -> ComputerMode {
 }
 
 /// A valid saved choice wins over the env/platform default.
+/// On Windows (0.7.6 beta) it is always local: the isolated vm computer isn't there yet.
 pub fn effective_mode(saved: Option<&str>, os: &str, env: Option<&str>) -> ComputerMode {
+    if os == "windows" {
+        return ComputerMode::Local;
+    }
     saved
         .and_then(ComputerMode::parse)
         .unwrap_or_else(|| default_mode(os, env))
@@ -93,7 +97,8 @@ const CHROME_COMMANDS: [&str; 5] = [
 ];
 
 /// Finds the browser local mode launches: the override if it names a file, else the macOS app
-/// bundles (in `/Applications` and `~/Applications`), else a Chrome/Chromium command on `path`.
+/// bundles (in `/Applications` and `~/Applications`), else a Chrome/Chromium command on `path`,
+/// else a Playwright Chromium, else the Chrome for Testing kwnt downloaded itself (O5).
 pub fn find_chrome(
     override_path: Option<&str>,
     os: &str,
@@ -125,7 +130,9 @@ pub fn find_chrome(
                 .find(|candidate| candidate.is_file())
         })
     });
-    on_path.or_else(|| playwright_chromium(os, home?))
+    on_path
+        .or_else(|| playwright_chromium(os, home?))
+        .or_else(|| super::chrome_download::downloaded_chrome(os, home?))
 }
 
 /// The newest Chromium Playwright downloaded into the person's cache (`kwnt setup` puts one there
@@ -185,17 +192,23 @@ pub fn window_unavailable_reason(display: bool) -> Option<String> {
     (!display).then(|| "This computer has no screen to show a browser window on (no display).".into())
 }
 
+/// The vm computer's reason on Windows (0.7.6 beta: no isolated desktop, Xvfb or rlimits there).
+pub const VM_NOT_ON_WINDOWS: &str = "The isolated computer is not available on Windows yet. Bots use this computer.";
+
 /// Why vm mode cannot run here, or `None` if it can. A configured browser service URL is enough
 /// for the browser even without Docker.
 pub fn vm_unavailable_reason(docker: bool, browser_url_configured: bool, platform: Platform) -> Option<String> {
+    if cfg!(windows) {
+        return Some(VM_NOT_ON_WINDOWS.into());
+    }
     (!docker && !browser_url_configured).then(|| match platform {
         Platform::Docker => format!("No browser service is set for this container. {}", doctor::vm_fix(platform)),
         _ => format!("Docker is not installed or not running. {}", doctor::vm_fix(platform)),
     })
 }
 
-/// The local Chrome this process would launch, from the real environment. A Playwright Chromium
-/// counts only where its sandbox can start (see [`chrome_sandbox_blocked`]).
+/// The local Chrome this process would launch, from the real environment. A Playwright Chromium,
+/// or one kwnt downloaded, counts only where its sandbox can start (see [`chrome_sandbox_blocked`]).
 pub fn local_chrome_path() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let found = find_chrome(
@@ -204,8 +217,11 @@ pub fn local_chrome_path() -> Option<PathBuf> {
         home.as_deref(),
         std::env::var("PATH").ok().as_deref(),
     )?;
-    let playwright = home.is_some_and(|h| found.starts_with(h.join(".cache").join("ms-playwright")));
-    (!(playwright && chrome_sandbox_blocked())).then_some(found)
+    let in_home_cache = home.is_some_and(|h| {
+        found.starts_with(h.join(".cache").join("ms-playwright"))
+            || found.starts_with(super::chrome_download::cache_root(std::env::consts::OS, &h))
+    });
+    (!(in_home_cache && chrome_sandbox_blocked())).then_some(found)
 }
 
 /// Linux blocks the unprivileged user namespaces Chrome's sandbox needs (Ubuntu 23.10+ AppArmor,
@@ -218,9 +234,14 @@ pub fn chrome_sandbox_blocked() -> bool {
             || read("/proc/sys/kernel/unprivileged_userns_clone").as_deref() == Some("0"))
 }
 
-/// [`local_unavailable_reason`] for this process's environment.
+/// [`local_unavailable_reason`] for this process's environment. Where kwnt can download its own
+/// browser (O5), a missing Chrome is no reason: the first bot that needs one gets it.
 pub fn local_reason() -> Option<String> {
-    local_unavailable_reason(local_chrome_path().as_deref(), Platform::detect())
+    let chrome = local_chrome_path();
+    if chrome.is_none() && super::chrome_download::ChromeSetup::system().available() {
+        return None;
+    }
+    local_unavailable_reason(chrome.as_deref(), Platform::detect())
 }
 
 /// [`window_unavailable_reason`] for this process's environment.
@@ -628,7 +649,8 @@ where
 /// Starts the kwant Chrome on `profile`, detached, so it outlives a switch or a kwant restart.
 /// Only [`ensure_local_chrome`] calls this, once no Chrome holds the profile.
 fn launch_local_chrome(profile: &Path, headless: bool) -> Result<(), String> {
-    let chrome = local_chrome_path().ok_or_else(|| local_reason().unwrap_or_default())?;
+    let chrome = local_chrome_path()
+        .ok_or_else(|| local_reason().unwrap_or_else(|| "No Chrome or Chromium was found.".into()))?;
     if !headless {
         if let Some(reason) = window_reason() {
             return Err(reason);
@@ -796,6 +818,10 @@ mod tests {
         assert_eq!(window_unavailable_reason(true), None);
         assert!(window_unavailable_reason(false).unwrap().contains("display"));
 
+        if cfg!(windows) {
+            assert_eq!(vm_unavailable_reason(true, true, Platform::Linux).as_deref(), Some(VM_NOT_ON_WINDOWS));
+            return;
+        }
         assert_eq!(vm_unavailable_reason(true, false, Platform::Linux), None);
         assert_eq!(vm_unavailable_reason(false, true, Platform::Docker), None);
         // each platform gets its own advice: no "Docker Desktop on a Mac" on a Linux server
@@ -804,6 +830,16 @@ mod tests {
         assert!(vm_unavailable_reason(false, false, Platform::Mac).unwrap().contains("Docker Desktop"));
         let docker = vm_unavailable_reason(false, false, Platform::Docker).unwrap();
         assert!(docker.contains("KWNT_BROWSER_CDP_URL") && docker.contains("docker compose up -d browser"), "{docker}");
+    }
+
+    #[test]
+    fn windows_always_uses_this_computer() {
+        assert_eq!(effective_mode(None, "windows", None), ComputerMode::Local);
+        assert_eq!(effective_mode(Some("vm"), "windows", Some("vm")), ComputerMode::Local);
+        // Mac and Linux keep their defaults and saved choices
+        assert_eq!(effective_mode(None, "linux", None), ComputerMode::Vm);
+        assert_eq!(effective_mode(Some("vm"), "macos", None), ComputerMode::Vm);
+        assert!(VM_NOT_ON_WINDOWS.contains("not available on Windows yet"));
     }
 
     #[test]
@@ -951,6 +987,7 @@ mod tests {
     }
 
     /// A pid that is not running: a child that already exited and was reaped.
+    #[cfg(unix)]
     fn dead_pid() -> u32 {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let pid = child.id();

@@ -3,6 +3,7 @@
 // the server copies it (or, for verification and files, from typed kwant data).
 
 import type { ResultSet, SmartBlock } from '../../smartResults';
+import { recipe } from './recipeFixtures';
 
 export interface Fixture {
   /** The reply's markdown, as streamed and stored. */
@@ -297,4 +298,5 @@ export const FIXTURES = {
   findings,
   verification,
   files,
+  recipe,
 } satisfies Record<string, Fixture>;

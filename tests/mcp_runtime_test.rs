@@ -1,4 +1,6 @@
 //! Turn-time MCP: broker approvals, the claude permission endpoint and the claude config file.
+// The fake CLI and agent runs are shell scripts, so their tests and helpers are Unix only
+#![cfg_attr(not(unix), allow(dead_code))]
 
 #[path = "common/exe.rs"]
 mod exe;

@@ -29,7 +29,7 @@ const act = async (fn) => {
   await settle();
 };
 
-async function renderStage() {
+async function renderStage(extra = {}) {
   const sent = [];
   const stream = {
     connected: true, controlling: true, busy: false, error: null, frame: { id: 1, width: 800, height: 600 }, location: null, tapFocus: null,
@@ -41,7 +41,7 @@ async function renderStage() {
   const root = m.createRoot(host);
   await act(async () => {
     root.render(m.React.createElement(m.BrowserTakeoverStage, {
-      botName: 'Ada', pageUrl: 'https://www.tiktok.com/login', stream, image: 'data:image/png;base64,AAAA', onHandBack() {}, onRetryControl() {},
+      botName: 'Ada', pageUrl: 'https://www.tiktok.com/login', stream, image: 'data:image/png;base64,AAAA', onHandBack() {}, onRetryControl() {}, ...extra,
     }));
   });
   const stage = document.querySelector('[data-browser-stage]');
@@ -81,5 +81,22 @@ test('every held button is released, and a blur with none held sends nothing', a
   await s.mouse(window, 'mouseup', 10, 20, 0);
   await s.blur();
   assert.equal(s.presses().length, 4);
+  await s.unmount();
+});
+
+// Rigel's F4 (0.7.7 Watch live): during Take over the panel's switcher, and its "Hand back first"
+// tooltip, are under this stage. With other chats browsing, Hand back says it where a mouse and a
+// screen reader reach it; with none it says nothing extra.
+test('F4: with other chats browsing, Hand back says to hand back first to switch browser', async () => {
+  let s = await renderStage({ othersBrowsing: true });
+  let btn = [...document.querySelectorAll('[data-browser-takeover] button')].find((b) => /Hand back/.test(b.textContent));
+  assert.equal(btn.title, 'Hand back first to switch browser');
+  const hint = document.getElementById(btn.getAttribute('aria-describedby'));
+  assert.equal(hint?.textContent, 'Hand back first to switch browser');
+  await s.unmount();
+  s = await renderStage();
+  btn = [...document.querySelectorAll('[data-browser-takeover] button')].find((b) => /Hand back/.test(b.textContent));
+  assert.equal(btn.title, '');
+  assert.equal(btn.getAttribute('aria-describedby'), null);
   await s.unmount();
 });

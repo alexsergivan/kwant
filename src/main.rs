@@ -89,6 +89,9 @@ pub enum Commands {
         /// Leave out the QR code
         #[arg(long)]
         no_qr: bool,
+        /// Only the link and its QR code, indented (install.sh prints its own sentences around them)
+        #[arg(long, hide = true)]
+        bare: bool,
     },
 
     /// Run a tiny MCP test server on stdin/stdout (for tests and smoke checks)
@@ -213,7 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     config.data_dir.join("api-token").display().to_string()
                 };
-                if let Err(e) = kwnt::server::signin::cli_link(&config, None, true).await {
+                if let Err(e) = kwnt::server::signin::cli_link(&config, None, true, false).await {
                     eprintln!("kwnt token: {e}");
                     eprintln!("The API token still works on the sign-in screen: it's {where_token} (`kwnt token --raw` prints it).");
                     std::process::exit(1);
@@ -221,8 +224,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("   Prefer typing the token? It's {where_token} (`kwnt token --raw` prints it).");
             }
         }
-        Some(Commands::SigninLink { url, no_qr }) => {
-            if let Err(e) = kwnt::server::signin::cli_link(&config, url.as_deref(), !no_qr).await {
+        Some(Commands::SigninLink { url, no_qr, bare }) => {
+            if let Err(e) = kwnt::server::signin::cli_link(&config, url.as_deref(), !no_qr, bare).await {
                 eprintln!("kwnt signin-link: {e}");
                 std::process::exit(1);
             }

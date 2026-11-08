@@ -1003,6 +1003,17 @@ export function trialOf(msg: { trial?: unknown; meta?: string | null }): TrialRe
 }
 
 /**
+ * S-F7 (next-076/copy.md): a trial turn whose reply came back empty says so in the bubble, instead of
+ * leaving it blank above the "still waits for you" card. `family` is the bot's engine family from its
+ * preferred_model; anything that isn't a named engine (auto, Custom API, unknown) reads "The engine".
+ */
+const EMPTY_REPLY_ENGINE: Record<string, string> = { claude: 'Claude', codex: 'Codex', grok: 'Grok', ollama: 'Ollama' };
+export function emptyTrialReplyLine(family: string | null | undefined): string {
+  const who = (family && EMPTY_REPLY_ENGINE[family]) || 'The engine';
+  return `${who} sent back an empty reply, so this try didn't finish. Try it again before you approve.`;
+}
+
+/**
  * Where a "… still waits for you" card goes: after the last message of each trial that has ended.
  * Ended is the SSE `show_once_trial_ended` seen in this tab (the live message lacks `outcome`), or
  * the skill's last trial message carrying `trial.outcome` (api.md §6, after a reload). When none of

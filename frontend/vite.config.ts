@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { changelogSection } from './src/whatsNewSheet';
 
 const files = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)]));
@@ -44,8 +45,34 @@ function pwaServiceWorker(): Plugin {
   };
 }
 
+const WHATS_NEW = 'virtual:kwant-whatsnew';
+
+/** "What's new" content: every src/whatsnew/<version>.json and only those versions' CHANGELOG sections,
+ * so the bundle carries what the sheet shows and nothing more. See src/whatsNewSheet.ts. */
+function whatsNewContent(): Plugin {
+  const dir = new URL('./src/whatsnew/', import.meta.url);
+  const changelog = new URL('../CHANGELOG.md', import.meta.url);
+  return {
+    name: 'kwnt-whats-new',
+    resolveId: (id) => (id === WHATS_NEW ? `\0${WHATS_NEW}` : null),
+    load(id) {
+      if (id !== `\0${WHATS_NEW}`) return null;
+      const names = readdirSync(dir).filter((n) => /^\d+\.\d+\.\d+\.json$/.test(n));
+      const entries = names.map((n) => {
+        const file = new URL(n, dir);
+        this.addWatchFile(file.pathname);
+        return JSON.parse(readFileSync(file, 'utf8'));
+      });
+      this.addWatchFile(changelog.pathname);
+      const log = readFileSync(changelog, 'utf8');
+      const sections = Object.fromEntries(names.map((n) => n.slice(0, -5)).map((v) => [v, changelogSection(log, v)]));
+      return `export const entries = ${JSON.stringify(entries)};\nexport const changelog = ${JSON.stringify(sections)};\n`;
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), pwaServiceWorker()],
+  plugins: [react(), whatsNewContent(), pwaServiceWorker()],
   server: {
     port: 5199,
     proxy: {

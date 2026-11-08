@@ -20,6 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Your own team of AI bots: They share chats, hand work to each other and get it done on their own.">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@kwantbot">
 <meta name="twitter:title" content="kwant (kwnt): self-hosted AI agent team in one binary">
 <meta name="twitter:description" content="Open-source, self-hosted AI agents that share chats, hand off work and run on a schedule. One Rust binary (kwnt) for your laptop or a VPS.">
 <meta name="twitter:image" content="https://kwant.si/assets/og/home.png?v=77495a5e49">
@@ -29,7 +30,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=99f2fc30c3">
+<link rel="stylesheet" href="assets/css/site.css?v=06a87a1c17">
 </head>
 <body class="page-home">
 <a class="skip" href="#main">Skip to content</a>
@@ -56,9 +57,34 @@
         <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
         <p class="cta-alt"><a href="/docs/quickstart">A VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
-      <p class="mac-dl">Free, for Apple silicon and Intel. <a href="/docs/install#mac">First open</a> needs one extra step. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="/docs/install#linux">how to install</a>).</p>
+      <details class="mac-first" id="mac-first">
+        <summary>
+          <span class="mf-ico" aria-hidden="true"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v1H4zM3 5h1v8H3zM16 5h1v8h-1zM4 12h12v1H4zM1 14h18v2H1z"/><path d="M5 6h10v6H5z" opacity=".22"/><path d="M8 8h1v2H8zM11 8h1v2h-1z"/></svg></span>
+          <span class="mf-sum"><b>First time on a Mac?</b><span>macOS asks once, because kwant isn't notarized by Apple yet.</span></span>
+          <svg class="mf-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+        <div class="mf-body">
+          <ol class="mf-steps">
+            <li><span>Drag kwant to Applications and open it. When macOS says it couldn't verify it, click <b>Done</b>.</span></li>
+            <li><span>Open <b>System Settings › Privacy &amp; Security</b> and scroll down to <b>Security</b>.</span></li>
+            <li><span>Click <b>Open Anyway</b> next to “kwant” was blocked, then <b>Open Anyway</b> again, and enter your Mac password or use Touch ID.</span></li>
+          </ol>
+          <figure class="mf-fig">
+            <a class="zoom" href="assets/media/open-anyway-wide.svg?v=1ba6501944" data-caption="A mock-up of macOS 15: the “kwant” Not Opened alert (click Done), System Settings › Privacy &amp; Security, and Open Anyway under Security.">
+            <picture>
+              <source media="(max-width: 640px)" srcset="assets/media/open-anyway-phone.svg?v=f4ad17b0e1">
+              <img src="assets/media/open-anyway-wide.svg?v=1ba6501944" width="560" height="360" loading="lazy" decoding="async"
+                   alt="A mock-up of the three macOS steps: the “kwant” Not Opened alert with Done marked, System Settings › Privacy &amp; Security, and the Security row “kwant” was blocked to protect your Mac with Open Anyway marked.">
+            </picture>
+            </a>
+          </figure>
+          <p class="mf-after">You only do this once. On macOS 14 or earlier, right-click kwant in Applications and choose <b>Open</b> instead.</p>
+          <p class="mf-term" data-term="soon"><span class="soon">Soon</span>A one-line Terminal install that skips this step.</p>
+        </div>
+      </details>
+      <p class="mac-dl">Free, for Apple silicon and Intel. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="/docs/install#linux">how to install</a>).</p>
       <div class="install" data-tabs><div class="install-top"><span class="install-k" aria-hidden="true">Install</span><div class="tabs" role="tablist" aria-label="Install with"><button type="button" role="tab" id="hero-t-src" aria-controls="hero-p-src" aria-selected="true">macOS · Linux</button><button type="button" role="tab" id="hero-t-docker" aria-controls="hero-p-docker" aria-selected="false" tabindex="-1">Docker</button></div></div><div class="cmd" role="tabpanel" id="hero-p-src" aria-labelledby="hero-t-src"><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; make run</code><button type="button" class="copy-cmd" aria-label="Copy the macOS · Linux install command">copy</button></div><div class="cmd" role="tabpanel" id="hero-p-docker" aria-labelledby="hero-t-docker" hidden><span class="p" aria-hidden="true">$</span><code>git clone https://github.com/alexsergivan/kwant &amp;&amp; cd kwant &amp;&amp; docker compose up -d --build</code><button type="button" class="copy-cmd" aria-label="Copy the Docker install command">copy</button></div></div>
-      <p class="proof">0.7.5 released Nov 7 <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant/releases" rel="noopener">30 releases since Oct 25</a> <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant" rel="noopener">AGPL-3.0, open source</a></p>
+      <p class="proof">0.7.6 released Nov 8 <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant/releases" rel="noopener">31 releases since Oct 25</a> <span aria-hidden="true">·</span> <a href="https://github.com/alexsergivan/kwant" rel="noopener">AGPL-3.0, open source</a></p>
     </div>
     <figure class="crt hero-crt">
       <div class="crt-screen">
@@ -78,14 +104,14 @@
 
 <section class="new-strip new-shots" aria-labelledby="new-title">
   <div class="wrap">
-    <h2 id="new-title" class="new-title">Added in 0.7.5</h2>
+    <h2 id="new-title" class="new-title">Added in 0.7.6</h2>
     <ul class="new-list">
-      <li><a href="/docs/install#side-by-side"><img src="assets/media/thumb-v075-side-by-side-640.webp?v=bb0c92ad21" srcset="assets/media/thumb-v075-side-by-side-640.webp?v=bb0c92ad21 640w, assets/media/thumb-v075-side-by-side-1280.webp?v=7569840a9e 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>This Mac and your servers, side by side</b><span>The app opens This Mac and every server you add, each in its own window. Servers stay signed in.</span></a></li>
-      <li><a href="/docs/bots-and-teams#ready-made"><img src="assets/media/thumb-v075-teams-640.webp?v=e509e13950" srcset="assets/media/thumb-v075-teams-640.webp?v=e509e13950 640w, assets/media/thumb-v075-teams-1280.webp?v=769177130e 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Ready-made teams</b><span>An Inbox, Sales or Coding team in one step, or members suggested from your code. One Undo removes it.</span></a></li>
-      <li><a href="/docs/dev-mode#jira"><img src="assets/media/thumb-v075-jira-640.webp?v=b5fffc6755" srcset="assets/media/thumb-v075-jira-640.webp?v=b5fffc6755 640w, assets/media/thumb-v075-jira-1280.webp?v=8383fb4ac9 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Work from Jira tickets</b><span>Hand a ticket over and a bot writes the brief, asks what's unclear and builds. Jira changes only when you say so.</span></a></li>
-      <li><a href="/docs/telegram"><img src="assets/media/thumb-v075-telegram-640.webp?v=9fe360debf" srcset="assets/media/thumb-v075-telegram-640.webp?v=9fe360debf 640w, assets/media/thumb-v075-telegram-1280.webp?v=7275009204 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Your bots in Telegram</b><span>Write to your bots from Telegram and get what needs you on your phone. Some approvals can be allowed once.</span></a></li>
+      <li><a href="/docs/smart-results#recipes"><img src="assets/media/thumb-v076-recipe-640.webp?v=27326e0d60" srcset="assets/media/thumb-v076-recipe-640.webp?v=27326e0d60 640w, assets/media/thumb-v076-recipe-1280.webp?v=2000f233e8 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Recipes you can cook from</b><span>A recipe in a reply becomes a card. Change the servings and the amounts rescale. Oven temperatures stay as written.</span></a></li>
+      <li><a href="/docs/quickstart#get-started"><img src="assets/media/thumb-v076-get-started-640.webp?v=162ac38e7e" srcset="assets/media/thumb-v076-get-started-640.webp?v=162ac38e7e 640w, assets/media/thumb-v076-get-started-1280.webp?v=f8784a242d 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Get started in three steps</b><span>Choose your AI, sign in, pick a team. ChatGPT and Grok sign in with a short code, with no Terminal.</span></a></li>
+      <li><a href="/docs/install#one-line"><img src="assets/media/thumb-v076-linux-install-640.webp?v=3ac58ff296" srcset="assets/media/thumb-v076-linux-install-640.webp?v=3ac58ff296 640w, assets/media/thumb-v076-linux-install-1280.webp?v=039bf02522 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>A Linux server in one line</b><span>One command installs kwant on Ubuntu or Debian, with no sudo, and ends with your sign-in link.</span></a></li>
+      <li><a href="/docs/install#whats-new"><img src="assets/media/thumb-v076-whats-new-640.webp?v=fb1716bb62" srcset="assets/media/thumb-v076-whats-new-640.webp?v=fb1716bb62 640w, assets/media/thumb-v076-whats-new-1280.webp?v=891fadab8b 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>What's new, in the app</b><span>After an update, a sheet shows what changed, once on each device. Settings › About keeps every version's notes.</span></a></li>
     </ul>
-    <p class="new-note">Also new: <a href="/docs/browser#show-once">show a bot a task once</a> and it writes the skill, and <a href="/docs/browser#watch-live">watch its browser live</a>. <a href="/features#new-075">What's new in 0.7.5</a> · <a href="/features#new-074">in 0.7.4</a> · <a href="/features#new-073">in 0.7.3</a> · <a href="/features#new-072">in 0.7.2</a> · <a href="/features#new-071">in 0.7.1</a> · <a href="/features#new-07">in 0.7</a> · <a href="/features#new-0611">in 0.6.11</a> · <a href="/features#new-069">in 0.6.9</a></p>
+    <p class="new-note">Also new: <a href="/features#no-node">Codex and the bots' browser without Node</a>. <a href="/features#new-076">What's new in 0.7.6</a> · <a href="/features#new-075">in 0.7.5</a> · <a href="/features#new-074">in 0.7.4</a> · <a href="/features#new-073">in 0.7.3</a> · <a href="/features#new-072">in 0.7.2</a> · <a href="/features#new-071">in 0.7.1</a> · <a href="/features#new-07">in 0.7</a> · <a href="/features#new-0611">in 0.6.11</a></p>
   </div>
 </section>
 
@@ -424,6 +450,7 @@
       <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Issues</a>
       <a href="https://github.com/alexsergivan/kwant/blob/main/SECURITY.md" rel="noopener">Security</a>
       <a href="/contact">Contact</a>
+      <a href="https://x.com/kwantbot" rel="noopener">X (@kwantbot)</a>
     </nav>
     <nav aria-label="Legal">
       <h2>Legal</h2>
@@ -432,10 +459,11 @@
       <a href="/terms#license">License</a>
     </nav>
     <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
     <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
   </div>
 </footer>
-<script src="assets/js/site.js?v=63f328cd53" defer></script>
+<script src="assets/js/site.js?v=9846e390c8" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
 <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]},{"@type":"WebSite","@id":"https://kwant.si/#website","name":"kwant","url":"https://kwant.si/","inLanguage":"en","publisher":{"@id":"https://kwant.si/#org"}},{"@type":"SoftwareApplication","@id":"https://kwant.si/#app","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","description":"Open-source, self-hosted AI agents that share chats, hand off work and run on a schedule. One Rust binary (kwnt) for your laptop or a VPS.","applicationCategory":"DeveloperApplication","operatingSystem":"macOS, Linux","image":"https://kwant.si/assets/og/home.png?v=77495a5e49","screenshot":"https://kwant.si/assets/media/desktop-team-discussion-1440.webp","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":["https://github.com/alexsergivan/kwant/blob/main/LICENSE"],"isAccessibleForFree":true,"downloadUrl":"https://github.com/alexsergivan/kwant","sameAs":["https://github.com/alexsergivan/kwant"],"author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"}},{"@type":"SoftwareSourceCode","@id":"https://kwant.si/#code","name":"kwant","codeRepository":"https://github.com/alexsergivan/kwant","programmingLanguage":["Rust","TypeScript"],"license":["https://github.com/alexsergivan/kwant/blob/main/LICENSE"],"targetProduct":{"@id":"https://kwant.si/#app"}}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->

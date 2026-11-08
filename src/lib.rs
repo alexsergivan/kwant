@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod documents;
 pub mod drivers;
 pub mod embedded;
+pub mod fsx;
 pub mod import;
 pub mod mcp;
 pub mod parallel;

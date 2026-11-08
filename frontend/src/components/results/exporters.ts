@@ -3,6 +3,7 @@
 // override this with `markdown` / `csv` in its registry entry.
 
 import type { SmartBlock } from '../../smartResults';
+import { joinLine, recipeMarkdown } from '../../recipe';
 import { comparisonCsv, csvCell, plainText, previewNote, stepsMarkdown } from '../../smartResults';
 
 type Row = Record<string, unknown>;
@@ -36,6 +37,8 @@ export function blockRows(block: SmartBlock): Row[] {
       });
     case 'steps':
       return block.items.map(({ text, done, when, owner }) => ({ ...(when != null ? { when } : {}), step: text, ...(owner != null ? { owner } : {}), ...(done != null ? { done } : {}) }));
+    case 'recipe':
+      return block.ingredients.map((i) => ({ ...(i.group ? { group: i.group } : {}), ingredient: i.qty ? joinLine(i.qty, i.text) : i.text }));
     default:
       return block.items.map(({ id: _id, ...rest }) => rest as Row);
   }
@@ -54,6 +57,8 @@ const mdCell = (v: unknown) => cell(v).replace(/\|/g, '\\|').replace(/\n/g, ' ')
 
 export function blockMarkdown(block: SmartBlock, done?: Set<string>): string {
   if (block.type === 'steps') return stepsMarkdown(block, done);
+  // As the reply wrote it, at its own servings.
+  if (block.type === 'recipe') return recipeMarkdown(block, block.serves ?? 1);
   const rows = blockRows(block);
   const keys = [...new Set(rows.flatMap((r) => Object.keys(r)))];
   const table = [

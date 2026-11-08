@@ -1,0 +1,54 @@
+{
+  "version": "0.7.5",
+  "date": "2026-11-07",
+  "highlights": [
+    {
+      "id": "side-by-side",
+      "title": "This Mac and your servers, side by side",
+      "text": "Every place you use opens in its own window, all at once. Add a server once from the menu bar and it stays listed and signed in.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "teams",
+      "title": "Ready-made teams",
+      "text": "Create an Inbox, Sales or Coding team in one step: the bots, the team chat, starter skills and a routine. One Undo removes it all.",
+      "image": null,
+      "open": "settings/teams"
+    },
+    {
+      "id": "jira",
+      "title": "Work from Jira tickets",
+      "text": "Connect Jira in Dev mode. A bot reads each ticket, writes a brief with its questions, and waits for your OK before it starts.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "watch-live",
+      "title": "Watch live",
+      "text": "A globe on a chat shows its bot is using the browser right now. Click it to watch the page.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "telegram",
+      "title": "Your bots on Telegram",
+      "text": "Pair a Telegram chat to write to your bots and get their replies, questions and approvals on your phone.",
+      "image": null,
+      "open": "settings/connections"
+    },
+    {
+      "id": "show-once",
+      "title": "Show it once",
+      "text": "Show a bot a task once while kwant records the steps. Passwords and codes are never recorded. kwant turns it into a skill you review.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Install Claude Code, Codex or Grok in one click when it's missing.",
+    "A quieter working line above the message box on the phone.",
+    "The Dev mode switch no longer gets stuck in \"settling\".",
+    "After \"Which is it?\" in a forge form, focus lands on the first choice."
+  ]
+}

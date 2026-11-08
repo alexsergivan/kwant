@@ -8,6 +8,7 @@ Key facts:
 
 - License: AGPL-3.0, with commercial licenses available (contact@kwant.si).
 - Source: https://github.com/alexsergivan/kwant
+- kwant has no token (no coin, no crypto). The official X account is @kwantbot (https://x.com/kwantbot).
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
 - The program you install and run is called `kwnt` (`kwnt serve`).

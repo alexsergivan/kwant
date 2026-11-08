@@ -145,6 +145,11 @@ export interface TeamTemplateInfo {
   blocked: unknown[];
   removes: { bots: string[]; skills: number; routines: number; handle: string };
   chat_messages: number;
+  /**
+   * 0.7.6 (teams-api.md §6): the name Undo gives the kept team chat, e.g. `archived-team-inbox-2`; null when
+   * Undo deletes the chat or leaves it alone. Missing from older servers.
+   */
+  archived_chat?: string | null;
   /** Other teams a bot it made has joined since; it leaves them too. */
   other_teams: { bot: string; team: string }[];
   edited_skills: string[];
@@ -564,6 +569,8 @@ export const undoWindowOver = (e: unknown) =>
   e instanceof TeamsError ? e.code === 'undo_window_over' || e.code === 'undo_expired' : !!e && typeof e === 'object' && ['undo_window_over', 'undo_expired'].includes((e as { code?: string }).code ?? '');
 
 /** The Can't read block (api.md §4): 422 `cant_read` (424 from the §0 draft too). A 403 means the caller isn't the person, never "can't read". */
+/** N-5: another space already works in that folder; the same folder gets the same answer. */
+export const folderInUse = (e: unknown) => e instanceof TeamsError && e.code === 'folder_in_use';
 export const cantRead = (e: unknown) => e instanceof TeamsError && (e.status === 424 || e.code === 'cant_read') && e.status !== 403;
 
 export const readLine = (r: Suggestion['read'], partial: Suggestion['partial']) =>

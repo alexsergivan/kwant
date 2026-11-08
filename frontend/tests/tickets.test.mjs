@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
+import { ENGINE_REFUSED_MESSAGE } from './fixtures/tickets.mjs';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
 const g = globalThis;
@@ -638,4 +639,37 @@ test('Off: a 409 jira_off from Start shows the plain sentence on the card, never
   assert.equal(n.textContent, 'Work from Jira is off. Turn it on in Settings to start this ticket.');
   assert.equal(n.getAttribute('role'), 'alert');
   assert.doesNotMatch(host.textContent, /jira_off|HTTP 409/);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// 0.7.6 follow-ups: D8's last two names, D6's engine_refused
+
+test('D8: the brief’s own toggle and "See the review" name their ticket too', async () => {
+  const host = await mount(m.TicketCard, { ...N, ticket: T('brief_ready'), brief: B(fx.BRIEF_ANSWERED) });
+  const toggle = host.querySelector('.tk-brief header button');
+  assert.ok(toggle, 'the brief toggle');
+  const was = toggle.getAttribute('aria-label');
+  assert.match(was, /^(Show|Hide) brief TRAIL-142$/);
+  await click(toggle);
+  const now = host.querySelector('.tk-brief header button').getAttribute('aria-label');
+  assert.notEqual(now, was, 'it says which way it goes');
+  assert.match(now, /^(Show|Hide) brief TRAIL-142$/);
+  const review = html(m.TicketCard, { ...N, ticket: T('landed', { work: { matches: 'not_met' } }), onOpenReview: () => {} });
+  assert.match(review, /aria-label="See the review TRAIL-142"[^>]*>\s*See the review/);
+  // Without a key (older callers) the toggle keeps its visible words as its name.
+  assert.doesNotMatch(html(m.TicketBrief, { brief: B(fx.BRIEF_ANSWERED) }), /aria-label="(Show|Hide) brief/);
+});
+
+test('D6: an engine_refused card shows the server’s sentence word for word, with Try again', () => {
+  const t = m.parseTicket(fx.TICKET_ENGINE_REFUSED(ENGINE_REFUSED_MESSAGE));
+  assert.equal(t.error.code, 'engine_refused');
+  const out = html(m.TicketCard, { ...N, ticket: t, onRetry: () => {} });
+  const plain = out.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'");
+  assert.ok(plain.includes(ENGINE_REFUSED_MESSAGE), 'the message, unchanged');
+  assert.equal(t.error.message, ENGINE_REFUSED_MESSAGE, 'under the 300-character cap, so not cut');
+  assert.match(out, /aria-label="Try again TRAIL-142"/);
+  assert.doesNotMatch(plain, /Jira didn’t answer|Work on TRAIL-142 stopped/);
+  // Any code the card doesn't know still shows its message as is.
+  const other = m.parseTicket(fx.ticket('failed', { error: { code: 'something_new', message: 'A sentence kwant wrote.' } }));
+  assert.match(html(m.TicketCard, { ...N, ticket: other }), /A sentence kwant wrote\./);
 });

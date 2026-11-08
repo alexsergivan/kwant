@@ -33,6 +33,26 @@ pub fn merged_path(login_path: Option<&str>, current: &str, home: &Path) -> Stri
     out.join(":")
 }
 
+/// Windows: the current PATH, then npm's global folder (`%APPDATA%\npm`, where `claude.cmd` and
+/// `codex.cmd` land) and the native Claude install (`%USERPROFILE%\.local\bin`), each folder
+/// once (Windows paths compare without case).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn windows_path(current: &str, appdata: &str, home: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let extras = [
+        (!appdata.is_empty()).then(|| format!("{appdata}\\npm")),
+        (!home.is_empty()).then(|| format!("{home}\\.local\\bin")),
+    ];
+    for dir in current.split(';').map(str::to_string).chain(extras.into_iter().flatten()) {
+        let dir = dir.trim().to_string();
+        let seen = out.iter().any(|d| d.trim_end_matches('\\').eq_ignore_ascii_case(dir.trim_end_matches('\\')));
+        if !dir.is_empty() && !seen {
+            out.push(dir);
+        }
+    }
+    out.join(";")
+}
+
 /// The PATH `$SHELL -lc` sees (so .zprofile/.zshrc additions count), or `None` after `timeout`.
 /// The shell's own output is noise: only the line between the markers is read.
 pub fn login_shell_path(shell: &str, timeout: Duration) -> Option<String> {
@@ -146,6 +166,8 @@ mod tests {
         PORTS.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    // The Mac/Linux PATH (`:`-joined, Homebrew); Windows has its own, tested below
+    #[cfg(unix)]
     #[test]
     fn login_path_comes_first_then_current_then_extras_without_repeats() {
         let home = PathBuf::from("/Users/o");
@@ -156,6 +178,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn finder_launch_without_a_shell_answer_still_gets_homebrew_and_local_bin() {
         let merged = merged_path(None, "/usr/bin:/bin:/usr/sbin:/sbin", Path::new("/Users/o"));
@@ -166,12 +189,28 @@ mod tests {
     }
 
     #[test]
+    fn windows_path_adds_npm_and_local_bin_once() {
+        let merged = windows_path(
+            r"C:\Windows\system32;C:\Users\o\AppData\Roaming\npm\;C:\Program Files\Git\cmd",
+            r"C:\Users\o\AppData\Roaming",
+            r"C:\Users\o",
+        );
+        assert_eq!(
+            merged,
+            r"C:\Windows\system32;C:\Users\o\AppData\Roaming\npm\;C:\Program Files\Git\cmd;C:\Users\o\.local\bin"
+        );
+        assert_eq!(windows_path("", "", ""), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn login_shell_path_reads_only_the_marked_line() {
         let path = login_shell_path("/bin/sh", Duration::from_secs(5)).expect("sh answers");
         assert!(path.contains('/'), "{path}");
         assert!(!path.contains("__KWANT"), "{path}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_shell_that_hangs_is_given_up_on() {
         let dir = std::env::temp_dir().join(format!("kwant-hang-{}", std::process::id()));

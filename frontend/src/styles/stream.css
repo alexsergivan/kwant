@@ -194,3 +194,6 @@
 @media (prefers-reduced-motion: reduce) {
   .kws-tip::after { transition: none; transform: none; }
 }
+
+/* Recipe card (0.7.6): a step's badge pops once when it becomes done. Applied with motion-safe only. */
+@keyframes kw-step-done { from { transform: scale(.7); opacity: .4; } to { transform: scale(1); opacity: 1; } }

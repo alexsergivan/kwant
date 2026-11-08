@@ -298,6 +298,22 @@ deleted goes stale. A branch level with or behind the watched one gets none. At 
 are read (sorted), and 10 branches per poll; a mirror reads them with `git ls-remote`
 and fetches a branch only to diff it, then drops the ref. A team folder is read in place.
 
+### Only fresh branches and PRs are reviewed (0.7.7)
+
+A review card is made only for a branch or PR that moved in the last 7 days
+(`poller::REVIEW_FRESH_DAYS`). For a branch, that's the head commit's committer date; for a forge PR,
+it's the PR's `updated_at`, or the head commit's date when the forge gives none. A ref whose date
+can't be read counts as fresh. An old branch or PR gets no card and no model call, and a card already
+on it goes stale the same way a merged branch's does. A new push makes the branch fresh again, so it
+gets a new card. Candidates are taken newest first, before the cap of 10 per poll, so a fresh branch
+is never pushed out by old ones. A mirror still reads branch heads with `git ls-remote`; when a head's
+date isn't already in the mirror, kwant fetches that one branch once to read it, then drops the ref.
+That's the same fetch the review would make, so a poll never fetches more than before.
+
+`GET /api/spaces/:id/dev_mode` shows the rule: each `repos[]` entry and the top level have `fresh_days` (the
+window in days) and `old_reviews_skipped` (how many branches or PRs the last poll left out for being
+old). The count is kept in memory and resets when kwnt restarts.
+
 ## Reading GitHub
 
 Reads go through the GitHub connection only. kwnt never pushes, merges, approves or edits anything
@@ -532,7 +548,8 @@ prompts, other files under the data folder).
 
 Test seams, for the test server only: `KWANT_DEV_POLL_SECS` (5–86400, default 300) and
 `KWANT_DEV_CALL_CAP` (0–1000, default 30) and `KWANT_DEV_MIRROR_CAP_BYTES` (1 B to 1 TB, default
-1 GB, so QA can make a small repo too big), read once at the first use. The daily cap counts per UTC
+1 GB, so QA can make a small repo too big) and `KWANT_DEV_REVIEW_DAYS` (1–90, default 7; anything
+else is 7), read once at the first use. The daily cap counts per UTC
 day. Tests move Dev mode's clock in-process with `server::dev::set_clock_skew`
 (`tests/dev_seams_test.rs`). There are table tests for each
 floor kind in `src/mcp/prod_floor.rs`. The backup checks and the Allow refusal are tested in

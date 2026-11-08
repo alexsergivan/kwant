@@ -954,3 +954,15 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
   from { opacity: 0; transform: translateY(24px); }
   to { opacity: 1; transform: none; }
 }
+
+/* What's new › All changes: the CHANGELOG section (Mira's design.md, All changes) */
+[data-whats-new-all] .markdown-content { font-size: 13.5px; line-height: 21px; color: #bcb7de; }
+[data-whats-new-all] h3 { margin: 18px 0 8px; font-size: 12px; line-height: 18px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em; color: #9a94c4; }
+[data-whats-new-all] .markdown-content > h3:first-child { margin-top: 4px; }
+[data-whats-new-all] ul { margin: 0; }
+[data-whats-new-all] li { line-height: 21px; }
+/* beats Tailwind's .space-y-1 > :not([hidden]) ~ :not([hidden]) (0,3,0) on the renderer's ul */
+[data-whats-new-all] ul > li:not([hidden]) + li:not([hidden]) { margin-top: 8px; }
+[data-whats-new-all] li::marker { color: #5a5383; }
+[data-whats-new-all] strong { color: #ecebfa; }

@@ -352,6 +352,10 @@ pub enum RuntimeEvent {
         space_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         space_name: Option<String>,
+        /// `spend_stopped` only: what the stop held was the person's own message, not a routine,
+        /// a mission or a Jira task, so Telegram may tell them to send it again.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        held_message: bool,
     },
 }
 

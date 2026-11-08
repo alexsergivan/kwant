@@ -2,7 +2,7 @@ use futures::{SinkExt, StreamExt};
 use super::credentials::CredentialStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -353,6 +353,10 @@ pub enum BrowserError {
     Timeout,
     #[error("Browser is controlled by a person. Retry after control is returned.")]
     HumanControl,
+    /// Take over from a live view while another of the person's live views has control (not a
+    /// bot finishing a step): retrying can't win until that view hands back.
+    #[error("You're controlling this browser in another window. Press Hand back there to take over here.")]
+    HeldByPerson,
     /// The person's live view sent input without taking control, and nobody else has it.
     #[error("Take control of the browser first.")]
     NotInControl,
@@ -368,6 +372,25 @@ pub enum BrowserError {
     /// The driving bot's site rules refused the page (see [`super::site_guard`]).
     #[error("{}", .0.message)]
     SiteRule(super::site_guard::Refusal),
+}
+
+/// A live view's control of the browser ([`BrowserController::take_control`]): the write lock,
+/// counted as a view's while it lives. The count goes down before the lock is let go.
+pub struct PersonLease {
+    views: Arc<AtomicUsize>,
+    _guard: OwnedRwLockWriteGuard<()>,
+}
+
+impl Drop for PersonLease {
+    fn drop(&mut self) {
+        self.views.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl std::fmt::Debug for PersonLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PersonLease")
+    }
 }
 
 /// What a click aims at: a label to match, or a numbered ref from the last control list.
@@ -1014,6 +1037,9 @@ pub struct BrowserController {
     /// Held while a human step (sign in, CAPTCHA) waits on the person: bot actions get
     /// `HumanControl` and the person's live-view input goes through without taking control.
     held_for_person: Arc<std::sync::Mutex<Option<OwnedRwLockWriteGuard<()>>>>,
+    /// How many [`PersonLease`]s live views hold (0 or 1): tells a takeover refused because the
+    /// person has the browser in another window from one refused because a bot is mid-step.
+    view_leases: Arc<AtomicUsize>,
     /// Which mouse buttons live-view input holds down, and where, if any.
     pointer_held: Arc<std::sync::Mutex<Option<HeldPointer>>>,
     /// The page sizes open live views asked for. Async: a resize holds it while it applies, so
@@ -1087,6 +1113,7 @@ impl BrowserController {
             browser_level: false,
             control: Arc::new(RwLock::new(())),
             held_for_person: Arc::default(),
+            view_leases: Arc::default(),
             pointer_held: Arc::default(),
             view_claims: Arc::default(),
             cookie_jar: Arc::default(),
@@ -1122,8 +1149,17 @@ impl BrowserController {
         ctrl
     }
 
-    pub async fn take_control(&self) -> Result<OwnedRwLockWriteGuard<()>, BrowserError> {
-        self.control.clone().try_write_owned().map_err(|_| BrowserError::HumanControl)
+    /// The person's control for one live view. Refused with [`BrowserError::HeldByPerson`] while
+    /// another live view has it, and with [`BrowserError::HumanControl`] while a bot is mid-step.
+    pub async fn take_control(&self) -> Result<PersonLease, BrowserError> {
+        match self.control.clone().try_write_owned() {
+            Ok(guard) => {
+                self.view_leases.fetch_add(1, Ordering::SeqCst);
+                Ok(PersonLease { views: self.view_leases.clone(), _guard: guard })
+            }
+            Err(_) if self.view_leases.load(Ordering::SeqCst) > 0 => Err(BrowserError::HeldByPerson),
+            Err(_) => Err(BrowserError::HumanControl),
+        }
     }
 
     /// Locks the browser to the person until [`Self::release_person_hold`]. Waits briefly for a
