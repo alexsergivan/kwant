@@ -9,14 +9,14 @@ use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit
 use super::{routes::get_or_create_browser_controller, AppState};
 use super::show_once::{capture as recorder, stage::{Act, StageRecorder}};
 use crate::sandbox::app_links::{self, AppLinkWatch, Verdict};
-use crate::sandbox::browser::{web_address, BrowserController, BrowserError, HeldPointer, ViewClaim, ViewRelease, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
+use crate::sandbox::browser::{web_address, BrowserController, BrowserError, HeldPointer, PersonLease, ViewClaim, ViewRelease, FOCUSED_EDITABLE_JS, MOUSE_BUTTON_BITS};
 use crate::sandbox::browser_history::HistoryDirection;
 use axum::{extract::{Path, State, WebSocketUpgrade, ws::{Message, WebSocket}}, http::{HeaderMap, StatusCode}, response::Response};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}}, time::Duration};
-use tokio::{sync::{mpsc, oneshot, OwnedRwLockWriteGuard}, task::JoinHandle, time::{timeout, Instant}};
+use tokio::{sync::{mpsc, oneshot}, task::JoinHandle, time::{timeout, Instant}};
 use tokio_tungstenite::tungstenite::Message as CdpMessage;
 
 /// The viewport the screencast starts at when the controller has none saved.
@@ -437,6 +437,18 @@ fn navigated_to(method: &str, params: &Value) -> Option<String> {
     if method != "Page.frameNavigated" || !params["frame"]["parentId"].is_null() { return None; }
     let url = params["frame"]["url"].as_str()?;
     Some(format!("{url}{}", params["frame"]["urlFragment"].as_str().unwrap_or_default()))
+}
+
+/// What a live view hears when Take over is refused: `code` is `held_by_person` while another of
+/// the person's views has control (retrying can't win until it hands back) and `bot_busy` while
+/// a bot is mid-step (a retry soon can). `error` is the text, as before.
+fn takeover_refused(error: &BrowserError) -> Value {
+    let code = match error {
+        BrowserError::HeldByPerson => "held_by_person",
+        BrowserError::HumanControl => "bot_busy",
+        _ => "failed",
+    };
+    json!({"type":"error","error":error.to_string(),"code":code})
 }
 
 /// The error for input from a live view that has not taken control.
@@ -940,8 +952,8 @@ async fn stream(
     client_rx: &mut mpsc::UnboundedReceiver<Value>,
     jobs: &mpsc::UnboundedSender<Job>,
     rec: &mut StageRecorder,
-) -> (Result<(), BrowserError>, Option<OwnedRwLockWriteGuard<()>>) {
-    let mut lease: Option<OwnedRwLockWriteGuard<()>> = None;
+) -> (Result<(), BrowserError>, Option<PersonLease>) {
+    let mut lease: Option<PersonLease> = None;
     // the Show it once recorder's script on new documents, while a recording is live
     let mut recorder_script: Option<String> = None;
     let result = async {
@@ -1088,7 +1100,7 @@ async fn stream(
                                         let held = ctrl.pointer_held_slot().lock().unwrap_or_else(|e| e.into_inner()).take();
                                         release_on(cdp, held).await;
                                     }
-                                    Err(error) => { send(socket, json!({"type":"error","error":error.to_string()})).await?; continue; }
+                                    Err(error) => { send(socket, takeover_refused(&error)).await?; continue; }
                                 }
                             }
                             let (vw, vh) = shared.view();
@@ -1466,6 +1478,34 @@ mod tests {
         assert_eq!(navigated_to("Page.frameNavigated", &json!({"frame":{"id":"B","parentId":"A","url":"https://ads.test/"}})), None, "an iframe keeps the page's title");
         assert_eq!(navigated_to("Page.navigatedWithinDocument", &json!({"frameId":"A","url":"https://b.test/#x"})), None, "same document, same title");
         assert_eq!(navigated_to("Page.domContentEventFired", &json!({"timestamp":1.0})), None);
+    }
+
+    /// Take over from a second window while the first has control is `held_by_person`, never
+    /// the busy bot's error; a bot mid-step is `bot_busy`; once the first window hands back (its
+    /// lease dropped) the second can take over.
+    #[tokio::test]
+    async fn takeover_refused_says_whether_the_person_or_a_bot_has_the_browser() {
+        let ctrl = BrowserController::new(0);
+        let first = ctrl.take_control().await.expect("a free browser");
+        let refused = ctrl.take_control().await.expect_err("one window at a time");
+        assert!(matches!(refused, BrowserError::HeldByPerson));
+        let wire = takeover_refused(&refused);
+        assert_eq!(wire["type"], "error");
+        assert_eq!(wire["code"], "held_by_person");
+        assert_eq!(wire["error"], "You're controlling this browser in another window. Press Hand back there to take over here.");
+        drop(first);
+
+        // A bot action in flight holds the read side
+        let bot = ctrl.control.clone().try_read_owned().unwrap();
+        let refused = ctrl.take_control().await.expect_err("the bot is mid-step");
+        assert!(matches!(refused, BrowserError::HumanControl));
+        assert_eq!(takeover_refused(&refused)["code"], "bot_busy");
+        drop(bot);
+
+        let second = ctrl.take_control().await.expect("free again");
+        assert!(matches!(ctrl.take_control().await, Err(BrowserError::HeldByPerson)));
+        drop(second);
+        assert!(ctrl.take_control().await.is_ok(), "the count went down with the lease");
     }
 
     #[test]
