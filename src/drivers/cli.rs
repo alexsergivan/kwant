@@ -1297,7 +1297,7 @@ impl Driver for CliDriver {
         // Isolated Claude: the container, broker turn and folder checks come first; any refusal
         // is the turn's notice and nothing runs on this computer (D1)
         let mut isolated = match (&self.isolation, self.tool_kind.as_str()) {
-            (Some(iso), "claude") => match start_isolated(iso, &input).await {
+            (Some(iso), "claude") => match start_isolated(iso, &input, &event_tx).await {
                 Ok(t) => Some(t),
                 Err((text, meta)) => return Ok(TurnOutput::notice(text, meta)),
             },
@@ -1792,10 +1792,13 @@ impl Driver for CliDriver {
 }
 
 /// Prepares an isolated Claude turn: the credential, the folder checks, the container and the
-/// broker's turn. `Err` is the turn's notice (text and `turn_isolation_failed` meta).
+/// broker's turn. `Err` is the turn's notice (text and `turn_isolation_failed` meta). While it
+/// waits for a free spot in the VM, `events` gets [`RuntimeEvent::WaitingForRoom`], then
+/// [`RuntimeEvent::RoomTaken`], so the wait is shown as queued and isn't taken for a stall.
 async fn start_isolated(
     iso: &Isolation,
     input: &TurnInput,
+    events: &mpsc::Sender<RuntimeEvent>,
 ) -> Result<crate::sandbox::agent_vm::IsolatedTurn, (String, serde_json::Value)> {
     use crate::sandbox::agent_vm as vm;
     let refuse = |r: vm::Refusal| {
@@ -1805,14 +1808,27 @@ async fn start_isolated(
     let (credential, credential_home) = vm::resolve_credential(iso.profile_home.as_deref()).map_err(refuse)?;
     // A folder that isn't there yet: the bot's private folder in its container, never kwnt's own
     let folder = input.workspace_dir.clone().filter(|d| d.exists());
+    let report = |w: vm::TurnWait| {
+        let events = events.clone();
+        async move {
+            let e = match w {
+                vm::TurnWait::Queued { position, slots } => RuntimeEvent::WaitingForRoom { reason: "vm_busy".into(), position, slots },
+                vm::TurnWait::Started => RuntimeEvent::RoomTaken,
+            };
+            let _ = events.send(e).await;
+        }
+    };
     iso.vm
-        .prepare_turn(vm::TurnRequest {
-            bot_id: input.kwant.id.clone(),
-            folder,
-            credential,
-            credential_home,
-            kwnt_origin: Some(iso.kwnt_origin.clone()),
-        })
+        .prepare_turn_reporting(
+            vm::TurnRequest {
+                bot_id: input.kwant.id.clone(),
+                folder,
+                credential,
+                credential_home,
+                kwnt_origin: Some(iso.kwnt_origin.clone()),
+            },
+            report,
+        )
         .await
         .map_err(refuse)
 }
@@ -1824,18 +1840,20 @@ fn isolation_notice(
     r: &crate::sandbox::agent_vm::Refusal,
     phase: &'static str,
 ) -> (String, serde_json::Value) {
-    use crate::sandbox::agent_vm::notice::IsolationFailed;
+    use crate::sandbox::agent_vm::notice::{self, IsolationFailed};
     let name = &input.kwant.name;
-    let mut n = match (r.unsafe_kind, &input.workspace_dir) {
-        (Some(kind), Some(dir)) => IsolationFailed::unsafe_folder(name, folder_info(input, dir), kind),
-        _ => IsolationFailed::new(name, "claude", r.code),
+    let (mut n, text) = match (r.unsafe_kind, &input.workspace_dir) {
+        (Some(kind), Some(dir)) => {
+            let folder = folder_info(input, dir);
+            // `folder` is canonical, so the home it is shortened by is too
+            let home = dirs::home_dir().map(|h| h.canonicalize().unwrap_or(h));
+            let text = notice::unsafe_folder_text(name, kind, &folder, home.as_deref());
+            (IsolationFailed::unsafe_folder(name, folder, kind), text)
+        }
+        _ => (IsolationFailed::new(name, "claude", r.code), notice::start_text(name, r.code)),
     };
     n.phase = phase;
-    let text = if phase == "mid_turn" {
-        format!("{name}'s reply stopped partway: Claude lost its connection inside the VM. What it changed before that is in the task folder, and Undo still works. Retry to start the reply again.")
-    } else {
-        crate::sandbox::agent_vm::notice::start_text(name, &n.reason, &r.message)
-    };
+    let text = if phase == "mid_turn" { notice::mid_turn_text(name) } else { text };
     (text, n.to_meta())
 }
 

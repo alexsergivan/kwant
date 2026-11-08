@@ -68,7 +68,7 @@ pub fn prod_names<'a>(marked: &[String], servers: impl Iterator<Item = (&'a str,
 /// push then counts as one to a protected branch, so `None` asks).
 ///
 /// `folder` is the bot's folder for the turn, the host's own path; `cwd` and everything under
-/// `folder` are untrusted. The rules (0.7.8, S-8):
+/// `folder` are untrusted. The rules (0.7.7, S-8):
 /// - **Q3:** a `cwd` that isn't `folder` or below it (by its text: no `..`) is refused before
 ///   any `.git` is read, and no `.git` above `folder` is read.
 /// - Every folder and file is reached by one openat walk from `folder` ([`Dir`]): no symlink is

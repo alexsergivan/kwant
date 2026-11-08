@@ -58,7 +58,7 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         | E::ToolCallCompleted { .. }
         | E::Activity { .. } => Vec::new(),
         // Never broadcast: the turn's stall watchdog and spend meter take them
-        E::Progress | E::UsageSoFar { .. } => Vec::new(),
+        E::Progress | E::UsageSoFar { .. } | E::WaitingForRoom { .. } | E::RoomTaken => Vec::new(),
         E::ApprovalRequired { id, .. } | E::ApprovalWithdrawn { id, .. } => vec![Owner::Approval(id.clone())],
         E::TurnComplete { kwant_id, .. } => contexts([kwant_id]),
         E::TurnStarted { kwant_id, context_id, thread_id, .. }
@@ -229,13 +229,15 @@ mod tests {
             E::ToolCallPending { id: s("x"), name: s("x"), args: json!({}) },
             E::ToolCallCompleted { id: s("x"), result: json!({}) },
             E::Progress,
+            E::WaitingForRoom { reason: s("vm_busy"), position: 1, slots: 2 },
+            E::RoomTaken,
             E::UsageSoFar { fresh: 1 },
             E::ApprovalRequired { id: s("a"), tool_name: s("x"), details: json!({}) },
             E::ApprovalWithdrawn { id: s("a"), answered_via: None, outcome: None },
             E::TurnComplete { tokens: 1, duration_ms: 1, kwant_id: Some(s("k")), profile_id: None },
             E::TurnStarted { kwant_id: s("k"), context_id: Some(s("c")), turn_id: None, thread_id: None },
             E::TurnEnded { kwant_id: s("k"), context_id: None, outcome: s("completed"), turn_id: None, thread_id: None, quiet: false },
-            E::TurnQueued { turn_id: s("x"), kwant_id: s("k"), context_id: None, thread_id: None, position: 1, reason: s("x") },
+            E::TurnQueued { turn_id: s("x"), kwant_id: s("k"), context_id: None, thread_id: None, position: 1, reason: s("x"), slots: None },
             E::ThreadUpdated { thread: json!({"id": "th", "kwant_id": "k"}) },
             E::DelegationUpdated { delegation: json!({"id": "d", "lead_kwant_id": "k", "thread_id": "th"}) },
             E::MessageAdded { message: json!({"id": "m", "channel_id": "c"}) },
@@ -340,6 +342,8 @@ mod tests {
                 | E::ToolCallPending { .. }
                 | E::ToolCallCompleted { .. }
                 | E::Progress
+                | E::WaitingForRoom { .. }
+                | E::RoomTaken
                 | E::UsageSoFar { .. }
                 | E::ApprovalRequired { .. }
                 | E::ApprovalWithdrawn { .. }
@@ -401,7 +405,7 @@ mod tests {
     #[test]
     fn every_event_is_placed_in_a_space_or_is_global() {
         // Only ever sent inside a turn; bare, they are dropped from scoped streams on purpose
-        let turn_only = ["TextDelta", "ThinkingDelta", "ToolCallPending", "ToolCallCompleted", "Progress", "UsageSoFar", "activity"];
+        let turn_only = ["TextDelta", "ThinkingDelta", "ToolCallPending", "ToolCallCompleted", "Progress", "WaitingForRoom", "RoomTaken", "UsageSoFar", "activity"];
         for e in samples() {
             let t = wire_type(&e);
             if turn_only.contains(&t.as_str()) && !matches!(e, RuntimeEvent::Scoped { .. }) {

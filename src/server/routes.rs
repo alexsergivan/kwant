@@ -2799,8 +2799,7 @@ async fn run_kwant_turn_inner(
             let driver_task =
                 tokio::spawn(async move { driver.stream_turn(input, driver_tx).await });
             // Stall watchdog: silence while no tool runs, for longer than the limit, stops the turn
-            let mut last_output = tokio::time::Instant::now();
-            let mut tools_running = 0usize;
+            let mut stall_clock = super::turns::StallClock::new(stall_limit, tokio::time::Instant::now());
             let mut stalled = false;
 
             // The driver's TurnComplete is held back: it's re-sent with the kwant and profile,
@@ -2808,7 +2807,7 @@ async fn run_kwant_turn_inner(
             let mut held_complete = None;
             let mut side_effects = false;
             loop {
-                let stall_at = stall_limit.filter(|_| tools_running == 0).map(|d| last_output + d);
+                let stall_at = stall_clock.deadline();
                 tokio::select! {
                     _ = cancel_token.cancelled() => {
                         cancelled = true;
@@ -2826,11 +2825,8 @@ async fn run_kwant_turn_inner(
                         break;
                     }
                     event_opt = driver_rx.recv() => {
-                        last_output = tokio::time::Instant::now();
-                        match &event_opt {
-                            Some(RuntimeEvent::ToolCallPending { .. }) => tools_running += 1,
-                            Some(RuntimeEvent::ToolCallCompleted { .. }) => tools_running = tools_running.saturating_sub(1),
-                            _ => {}
+                        if let Some(e) = &event_opt {
+                            stall_clock.saw(e, tokio::time::Instant::now());
                         }
                         match event_opt {
                             Some(RuntimeEvent::TurnComplete { tokens, duration_ms, .. }) => {
@@ -2838,6 +2834,29 @@ async fn run_kwant_turn_inner(
                             }
                             // Only resets the stall clock (above)
                             Some(RuntimeEvent::Progress) => {}
+                            // An isolated reply waits for a spot in the VM: shown as queued, and the
+                            // stall clock (above) is off until it gets one
+                            Some(RuntimeEvent::WaitingForRoom { reason, position, slots }) => {
+                                state.turns.set_turn_state(&tag.turn_id, "queued");
+                                let _ = state.event_sender.send(RuntimeEvent::TurnQueued {
+                                    turn_id: tag.turn_id.clone(),
+                                    kwant_id: tag.kwant_id.clone(),
+                                    context_id: Some(tag.context_id.clone()),
+                                    thread_id: tag.thread_id.clone(),
+                                    position,
+                                    reason,
+                                    slots: Some(slots),
+                                });
+                            }
+                            Some(RuntimeEvent::RoomTaken) => {
+                                state.turns.set_turn_state(&tag.turn_id, "running");
+                                let _ = state.event_sender.send(RuntimeEvent::TurnStarted {
+                                    kwant_id: tag.kwant_id.clone(),
+                                    context_id: Some(tag.context_id.clone()),
+                                    turn_id: Some(tag.turn_id.clone()),
+                                    thread_id: tag.thread_id.clone(),
+                                });
+                            }
                             // Lets a task handed in during the turn pay for it then (see `super::missions::spend_at_hand_in`)
                             Some(RuntimeEvent::UsageSoFar { fresh }) => state.turns.saw_usage(&tag.turn_id, fresh),
                             Some(event) => {

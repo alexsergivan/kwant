@@ -102,6 +102,12 @@ impl Case {
     fn refused(&self, out: &TurnOutput, reason: &str, case: &str) {
         let (text, meta) = out.notice.as_ref().unwrap_or_else(|| panic!("{case}: a notice, not a reply"));
         assert!(!text.is_empty(), "{case}");
+        // Every refusal reads as words, never "Something went wrong (code)" (ui-check-446 fix 4)
+        assert!(!text.contains("Something went wrong"), "{case}: {text}");
+        assert!(text.ends_with("Nothing ran.") || text.ends_with("then Retry.") || text.ends_with("nothing ran on this computer."), "{case}: {text}");
+        if reason == "unsafe_folder" {
+            assert_eq!(text.matches("Pick a project folder").count(), 1, "{case}: {text}");
+        }
         assert_eq!(meta["reason"], reason, "{case}: {meta}");
         assert!(!self.marker().exists(), "{case}: host claude started");
         assert_eq!(self.upstream_hits.load(Ordering::SeqCst), 0, "{case}: the upstream was reached");
