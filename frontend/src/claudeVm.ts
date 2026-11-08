@@ -243,3 +243,14 @@ export function putErrorText(status: number, data: unknown): string {
 /** Lin's #446 contract: a reply waiting for a free spot inside the VM. */
 export const queuedVmText = (slots?: number): string =>
   `Waiting for a free spot in the VM.${slots ? ` ${slots === 1 ? '1 reply runs' : `${slots} replies run`} at once there.` : ''} This one starts as soon as one finishes.`;
+
+/**
+ * The open chat's "in line" sentence. Calm on purpose: a reply can wait about five minutes behind
+ * two replies held on approval cards (qa-446 P-5b), so no timeout, no warning tone, no spinner.
+ */
+export const queuedText = (reason: 'agent_busy' | 'server_busy' | 'vm_busy', slots?: number): string =>
+  reason === 'vm_busy'
+    ? queuedVmText(slots)
+    : reason === 'server_busy'
+      ? 'The server is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
+      : 'Waiting for this bot’s other replies to finish.';

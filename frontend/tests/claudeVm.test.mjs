@@ -226,3 +226,10 @@ test('queued for a VM spot: Lin’s wording, with or without slots', () => {
   assert.equal(m.queuedVmText(1), 'Waiting for a free spot in the VM. 1 reply runs at once there. This one starts as soon as one finishes.');
   assert.equal(m.queuedVmText(), 'Waiting for a free spot in the VM. This one starts as soon as one finishes.');
 });
+
+test('the in-line sentence reads as calm waiting (qa-446: up to ~5 min behind approval cards)', () => {
+  assert.equal(m.queuedText('agent_busy'), 'Waiting for this bot’s other replies to finish.');
+  assert.equal(m.queuedText('vm_busy', 2), m.queuedVmText(2));
+  assert.match(m.queuedText('server_busy'), /starts as soon as a slot frees up/);
+  for (const r of ['agent_busy', 'server_busy', 'vm_busy']) assert.doesNotMatch(m.queuedText(r, 2), /timeout|timed out|error|stuck|minutes/i);
+});

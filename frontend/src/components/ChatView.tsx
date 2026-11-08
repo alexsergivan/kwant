@@ -1,5 +1,5 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
-import { queuedVmText } from '../claudeVm';
+import { queuedText } from '../claudeVm';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
@@ -1797,12 +1797,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
-                    {queued.position ? <strong className="text-amber-200">#{queued.position} in line.</strong> : <strong className="text-amber-200">In line.</strong>}{' '}
-                    {queued.reason === 'vm_busy'
-                      ? queuedVmText(queued.slots)
-                      : queued.reason === 'server_busy'
-                      ? 'The server is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
-                      : `${queued.speaker} is busy with other work; this starts as soon as one of those finishes.`}
+                    {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
+                    {queuedText(queued.reason, queued.slots)}
                   </p>
                 ) : streamingText ? (
                   <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} isStreaming={true} />
