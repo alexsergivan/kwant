@@ -166,7 +166,8 @@ labels), the method and optional notes. The intro and the closing question stay 
   `- **Prep time:** 10 minutes`); one the server can't read ("Serves 4–6") stays text above the card.
 - `qty` is the leading amount as written, split off only when `qty + text` (with a space, or none
   when the text starts with ",") rebuilds the line exactly. A temperature ("350 °F oven", "180C",
-  "350 degrees") is not an amount, so it gets no `qty` and never scales. A GFM task box in front
+  "350 degrees") is not an amount, so it gets no `qty` and never scales; a lone capital `C` is a
+  temperature only after 90 or more, so "1 C sugar" (a cup) still scales. A GFM task box in front
   of an ingredient or a note is dropped.
 - Ranks above every other reply selector; recipe replies hold lists the steps and metrics selectors
   would otherwise take.

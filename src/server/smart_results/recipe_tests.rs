@@ -372,6 +372,8 @@ fn split_qty_takes_the_leading_amount_as_written() {
         ("350F oven", None, "350F oven"),
         ("350 F oven", None, "350 F oven"),
         ("180 C fan", None, "180 C fan"),
+        ("100 C", None, "100 C"),
+        ("90 C oven", None, "90 C oven"),
         ("350 degrees oven", None, "350 degrees oven"),
         ("180 Degrees C", None, "180 Degrees C"),
         ("350–375 °F oven", None, "350–375 °F oven"),
@@ -385,6 +387,12 @@ fn split_qty_takes_the_leading_amount_as_written() {
         ("3 Fuji apples", Some("3"), "Fuji apples"),
         ("1 cl rum", Some("1 cl"), "rum"),
         ("4 fl oz cream", Some("4"), "fl oz cream"),
+        // A lone capital C under 90 is a US cup, so it still scales
+        ("1 C sugar", Some("1"), "C sugar"),
+        ("2½ C flour", Some("2½"), "C flour"),
+        ("1 1/2 C milk", Some("1 1/2"), "C milk"),
+        ("½ C butter", Some("½"), "C butter"),
+        ("89 C water", Some("89"), "C water"),
     ];
     for (line, qty, text) in cases {
         let got = split_qty(line);

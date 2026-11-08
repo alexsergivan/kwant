@@ -538,7 +538,7 @@ pub(super) fn split_qty(line: &str) -> (Option<&str>, &str) {
     let Some(amount) = amount_end(line) else { return (None, line) };
     let rest = &line[amount..];
     // "350 °F oven" is a temperature, not an amount to scale
-    if is_temperature(rest) {
+    if is_temperature(line, rest) {
         return (None, line);
     }
     let glued = alpha_run(rest);
@@ -582,15 +582,26 @@ pub(super) fn split_qty(line: &str) -> (Option<&str>, &str) {
 }
 
 /// What follows an amount marks it as a temperature: a degree sign (`°`, `º`, `℃`, `℉`), a
-/// capital `F` or `C` on its own ("350F", "180 C"), or a degree word ("350 degrees").
-fn is_temperature(rest: &str) -> bool {
+/// capital `F` on its own ("350F"), a capital `C` on its own after 90 or more ("180 C"; below
+/// that, as in "1 C sugar", it is a cup), or a degree word ("350 degrees").
+fn is_temperature(line: &str, rest: &str) -> bool {
     let r = rest.trim_start();
     if r.starts_with(['°', 'º', '℃', '℉']) {
         return true;
     }
-    let w = alpha_run(r);
-    matches!(w, "F" | "C")
-        || matches!(w.to_lowercase().as_str(), "degree" | "degrees" | "deg" | "fahrenheit" | "celsius" | "centigrade")
+    match alpha_run(r) {
+        "F" => true,
+        "C" => whole_part(line) >= 90,
+        w => matches!(w.to_lowercase().as_str(), "degree" | "degrees" | "deg" | "fahrenheit" | "celsius" | "centigrade"),
+    }
+}
+
+/// The whole number an amount starts with: 2 for "2½", 0 for "½", 350 for "350–375".
+fn whole_part(line: &str) -> u64 {
+    match digits(line, 0) {
+        0 => 0,
+        d => line[..d].parse().unwrap_or(u64::MAX),
+    }
 }
 
 /// The leading letters of `s`.
