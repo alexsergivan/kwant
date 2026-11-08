@@ -319,6 +319,7 @@ html:has(.jump-bar) { scroll-padding-top: 76px; }
 .flist h3 { font-size: 17px; }
 .flist p { margin-top: 6px; color: var(--muted); font-size: 15.5px; }
 .flist .span2 { grid-column: span 2; }
+.flist .span3 { grid-column: 1 / -1; }
 #tab-count .frame, #linux-tray .frame { margin: 12px 0 2px; }
 #tab-count .frame { width: fit-content; max-width: 100%; }
 #tab-count .frame img { width: 320px; max-width: 100%; }
