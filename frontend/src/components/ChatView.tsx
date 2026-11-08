@@ -1,4 +1,5 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { queuedVmText } from '../claudeVm';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
@@ -111,7 +112,9 @@ export interface SendOptions {
 /** The open chat's turn is waiting for a free slot. */
 export interface QueuedState {
   position: number | null;
-  reason: 'agent_busy' | 'server_busy';
+  reason: 'agent_busy' | 'server_busy' | 'vm_busy';
+  /** vm_busy only: how many replies run inside the VM at once. */
+  slots?: number;
   speaker: string;
 }
 
@@ -1795,7 +1798,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 {queued ? (
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="text-amber-200">#{queued.position} in line.</strong> : <strong className="text-amber-200">In line.</strong>}{' '}
-                    {queued.reason === 'server_busy'
+                    {queued.reason === 'vm_busy'
+                      ? queuedVmText(queued.slots)
+                      : queued.reason === 'server_busy'
                       ? 'The server is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
                       : `${queued.speaker} is busy with other work; this starts as soon as one of those finishes.`}
                   </p>

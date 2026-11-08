@@ -265,3 +265,20 @@ test('long answers collapse behind a toggle', () => {
   const html = card.render(props({ meta: t.parseDelegationMeta(metaJson()), text: 'x '.repeat(1000) }));
   assert.match(html, /aria-expanded="false"[^>]*>Show the whole answer/);
 });
+
+test('vm_busy (#446): its own line across bots, slots kept, cleared by the second turn_started', () => {
+  let m = t.hydrateTurns([]);
+  m = t.applyTurnEvent(m, ev('turn_queued', { turn_id: 'q1', kwant_id: 'a', context_id: 'a', position: 1, reason: 'vm_busy', slots: 2 }));
+  m = t.applyTurnEvent(m, ev('turn_queued', { turn_id: 'q2', kwant_id: 'b', context_id: 'b', position: 2, reason: 'vm_busy', slots: 2 }));
+  m = t.applyTurnEvent(m, ev('turn_queued', { turn_id: 'q3', kwant_id: 'b', context_id: 'b', position: 1, reason: 'agent_busy', slots: 9 }));
+  assert.equal(m.q1.reason, 'vm_busy');
+  assert.equal(m.q1.slots, 2);
+  assert.equal(m.q3.slots, undefined, 'slots only with vm_busy');
+  assert.equal(t.queuePosition(m, 'q2'), 2, 'the VM line spans bots');
+  m = t.applyTurnEvent(m, ev('turn_started', { turn_id: 'q1', kwant_id: 'a', context_id: 'a' }));
+  assert.equal(m.q1.state, 'running');
+  assert.equal(m.q1.reason, undefined);
+  assert.equal(t.queuePosition(m, 'q2'), 1);
+  m = t.applyTurnEvent(m, ev('turn_queued', { turn_id: 'q4', kwant_id: 'c', context_id: 'c', reason: 'something_new' }));
+  assert.equal(m.q4.reason, 'agent_busy', 'unknown reasons read as the bot being busy');
+});

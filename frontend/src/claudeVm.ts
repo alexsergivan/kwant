@@ -239,3 +239,7 @@ export function putErrorText(status: number, data: unknown): string {
   if (error && !/^[a-z_]+$/.test(error)) return error;
   return `Couldn’t change this (HTTP ${status}).`;
 }
+
+/** Lin's #446 contract: a reply waiting for a free spot inside the VM. */
+export const queuedVmText = (slots?: number): string =>
+  `Waiting for a free spot in the VM.${slots ? ` ${slots === 1 ? '1 reply runs' : `${slots} replies run`} at once there.` : ''} This one starts as soon as one finishes.`;

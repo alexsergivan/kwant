@@ -3098,7 +3098,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const needsYouByKwant = openStepsByKwant(humanSteps);
   const waiting = openTurns.some((t) => t.state === 'running') ? undefined : openTurns.find((t) => t.state === 'queued');
   const queuedHere: QueuedState | null = waiting
-    ? { position: queuePosition(turns, waiting.turn_id), reason: waiting.reason ?? 'agent_busy', speaker: kwantName(waiting.kwant_id) ?? live[openCtx] ?? 'The bot' }
+    ? { position: queuePosition(turns, waiting.turn_id), reason: waiting.reason ?? 'agent_busy', slots: waiting.slots, speaker: kwantName(waiting.kwant_id) ?? live[openCtx] ?? 'The bot' }
     : null;
 
   // The bot's conversations, the open thread's controls, and "working on…" elsewhere.

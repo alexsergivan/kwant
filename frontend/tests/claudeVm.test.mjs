@@ -220,3 +220,9 @@ test('VM card copy: setting on names Claude and warns about Codex and Grok', () 
   assert.match(on.note, /They won’t run in a folder Claude used inside the VM\./);
   assert.equal(m.vmCopy(['browser', 'kwnt_shell'], false).label, 'VM (browser and built-in shell isolated)');
 });
+
+test('queued for a VM spot: Lin’s wording, with or without slots', () => {
+  assert.equal(m.queuedVmText(2), 'Waiting for a free spot in the VM. 2 replies run at once there. This one starts as soon as one finishes.');
+  assert.equal(m.queuedVmText(1), 'Waiting for a free spot in the VM. 1 reply runs at once there. This one starts as soon as one finishes.');
+  assert.equal(m.queuedVmText(), 'Waiting for a free spot in the VM. This one starts as soon as one finishes.');
+});
