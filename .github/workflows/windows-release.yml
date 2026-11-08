@@ -1,0 +1,332 @@
+name: windows release
+
+# Puts the Windows (beta) installer on a release that mac.yml publishes. A mac-v* tag starts both
+# workflows; they share nothing, and this one never decides anything about the Mac/Linux release:
+#
+# - It builds the NSIS installer from the tag's commit, checks its version against the tag, installs
+#   it silently, starts it and checks /api/health, then checksums it as
+#   kwant_<version>_windows_x64_beta_setup.exe (+ .sha256).
+# - It never creates, retitles, deletes or re-marks a release, and never touches latest.json. The
+#   publish job only waits (at most WAIT_MINUTES) for mac.yml's release of that tag to be published
+#   (not a draft), uploads the two files with --clobber, and adds one "### Windows (beta)" section to
+#   the notes if it isn't there yet. So a Windows failure (build, smoke test, the wait running out)
+#   leaves the Mac/Linux release, its assets and latest.json exactly as mac.yml made them, and a rerun
+#   is safe.
+# - To attach the installer by hand later (say the Mac release came after the wait): Run workflow
+#   with tag = mac-vX.Y.Z and dry_run off.
+#
+# Dry run: pull requests that change this file, and Run workflow with dry_run on (the default), do
+# everything up to the upload and keep the installer as a workflow artifact.
+on:
+  push:
+    tags:
+      - "mac-v*"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/windows-release.yml"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (mac-vX.Y.Z). Empty: the selected branch, dry run only."
+        required: false
+        default: ""
+      dry_run:
+        description: "Build, test and checksum only; don't touch the release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ inputs.tag || github.ref }}
+  # never cancel an upload half-way
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.which.outputs.tag }}
+      ref: ${{ steps.which.outputs.ref }}
+      upload: ${{ steps.which.outputs.upload }}
+      version: ${{ steps.check.outputs.version }}
+      base: ${{ steps.check.outputs.base }}
+    steps:
+      - name: Which tag, and whether to upload
+        id: which
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          IN_TAG: ${{ inputs.tag }}
+          IN_DRY: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          tag=""; upload=false
+          case "$EVENT" in
+            push) tag="$REF_NAME"; upload=true ;;
+            workflow_dispatch)
+              tag="$IN_TAG"
+              if [ "$IN_DRY" = "false" ]; then
+                if [ -z "$tag" ]; then echo "::error::an upload needs a tag (mac-vX.Y.Z)"; exit 1; fi
+                upload=true
+              fi ;;
+          esac
+          ref=""
+          if [ -n "$tag" ]; then
+            if ! printf '%s' "$tag" | grep -Eq '^mac-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+              echo "::error::$tag isn't a mac-vX.Y.Z tag"; exit 1
+            fi
+            ref="refs/tags/$tag"
+          fi
+          echo "event $EVENT, tag '${tag:-none}', upload $upload"
+          { echo "tag=$tag"; echo "ref=$ref"; echo "upload=$upload"; } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.which.outputs.ref }}
+      # The installer's version comes from apps/mac/tauri.conf.json (file name, the .exe's version
+      # info), the app's from apps/mac/Cargo.toml, and the kwnt inside it (/api/health) from the root
+      # Cargo.toml. The release commit bumps all three with both Cargo.locks; they must agree with the tag.
+      - name: Tag matches the app and kwnt versions
+        id: check
+        env:
+          TAG: ${{ steps.which.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' apps/mac/Cargo.toml | head -1)
+          tauri=$(python3 -c 'import json;print(json.load(open("apps/mac/tauri.conf.json"))["version"])')
+          kwnt=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          win=$(python3 -c 'import json;print(json.load(open("apps/mac/tauri.windows.conf.json")).get("version",""))')
+          if [ -n "$win" ]; then
+            echo "::error::apps/mac/tauri.windows.conf.json sets its own version ($win); the release bump doesn't cover it"; exit 1
+          fi
+          if [ -n "$TAG" ]; then version="${TAG#mac-v}"; else version="$tauri"; fi
+          base="${version%%-*}"
+          echo "version $version (base $base); apps/mac/Cargo.toml $cargo; tauri.conf.json $tauri; kwnt $kwnt"
+          if [ "$base" != "$cargo" ] || [ "$base" != "$tauri" ] || [ "$base" != "$kwnt" ]; then
+            echo "::error::version $base doesn't match apps/mac $cargo (tauri.conf.json $tauri, kwnt Cargo.toml $kwnt)"; exit 1
+          fi
+          { echo "version=$version"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
+
+  frontend:
+    name: frontend
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 1
+
+  installer:
+    name: installer (windows)
+    needs: [version, frontend]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    outputs:
+      name: ${{ steps.file.outputs.name }}
+      sha256: ${{ steps.file.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: apps/mac -> target
+      - name: Build the NSIS installer
+        working-directory: apps/mac
+        shell: bash
+        run: npx --yes @tauri-apps/cli@2.12.4 build --ci --bundles nsis -- --locked
+      - name: Name, version and checksum
+        id: file
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          BASE: ${{ needs.version.outputs.base }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $built = @(Get-ChildItem apps/mac/target/release/bundle/nsis/*-setup.exe)
+          if ($built.Count -ne 1) { Write-Error "expected one NSIS installer, found $($built.Count)"; exit 1 }
+          $exe = $built[0]
+          "built: {0}  {1:N1} MB" -f $exe.Name, ($exe.Length / 1MB)
+          if ($exe.Name -ne "kwant_$($env:BASE)_x64-setup.exe") { Write-Error "the installer is $($exe.Name), not version $($env:BASE)"; exit 1 }
+          $pv = $exe.VersionInfo.ProductVersion
+          "installer ProductVersion: $pv"
+          if (-not "$pv".StartsWith($env:BASE)) { Write-Error "the installer's ProductVersion is '$pv', not $($env:BASE)"; exit 1 }
+          New-Item -ItemType Directory -Force out | Out-Null
+          $name = "kwant_$($env:VERSION)_windows_x64_beta_setup.exe"
+          $dest = Join-Path (Resolve-Path out) $name
+          Copy-Item $exe.FullName $dest
+          $hash = (Get-FileHash -Algorithm SHA256 $dest).Hash.ToLowerInvariant()
+          # sha256sum's format, so `sha256sum -c` works on it
+          [System.IO.File]::WriteAllText("$dest.sha256", "$hash  $name`n")
+          Get-Content "$dest.sha256"
+          "path=$dest" >> $env:GITHUB_OUTPUT
+          "name=$name" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+      - name: Silent install, start, /api/health reports the version, quit, uninstall
+        shell: pwsh
+        env:
+          SETUP: ${{ steps.file.outputs.path }}
+          BASE: ${{ needs.version.outputs.base }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = Start-Process -FilePath $env:SETUP -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { Write-Error "the installer exited with $($install.ExitCode)"; exit 1 }
+          $dir = Join-Path $env:LOCALAPPDATA 'kwant'
+          $app = Join-Path $dir 'kwant.exe'
+          if (-not (Test-Path $app)) { Write-Error "kwant.exe isn't in $dir after a per-user install"; exit 1 }
+          $fv = (Get-Item $app).VersionInfo
+          "kwant.exe ProductVersion $($fv.ProductVersion), FileVersion $($fv.FileVersion)"
+          if (-not "$($fv.ProductVersion)".StartsWith($env:BASE)) { Write-Error "the installed kwant.exe says $($fv.ProductVersion), not $($env:BASE)"; exit 1 }
+
+          $proc = Start-Process -FilePath $app -PassThru
+          $health = $null
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and -not $health) {
+            if ($proc.HasExited) { break }
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 'http://127.0.0.1:8799/api/health'
+              if ($r.StatusCode -eq 200) { $health = $r.Content }
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          $log = Join-Path $env:USERPROFILE '.kwnt\desktop-app.log'
+          if (-not $health) {
+            "app exited: $($proc.HasExited)"
+            if (Test-Path $log) { Get-Content $log -Tail 80 }
+            Write-Error "kwant inside the app never answered /api/health"; exit 1
+          }
+          "/api/health: $health"
+          $json = $health | ConvertFrom-Json
+          if ($json.app -ne 'kwnt' -or $json.version -ne $env:BASE) { Write-Error "kwnt in the app reports $($json.version), not $($env:BASE)"; exit 1 }
+
+          Stop-Process -Id $proc.Id
+          $proc.WaitForExit(15000) | Out-Null
+          Get-Process kwant -ErrorAction SilentlyContinue | Stop-Process -Force
+          $uninstaller = Join-Path $dir 'uninstall.exe'
+          if (Test-Path $uninstaller) {
+            $u = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+            "uninstall exit code: $($u.ExitCode)"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kwant-windows-installer-release
+          path: |
+            out/${{ steps.file.outputs.name }}
+            out/${{ steps.file.outputs.name }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # The only job that can write, and only to an existing release: it never creates one.
+  publish:
+    name: attach to the release
+    needs: [version, installer]
+    if: needs.version.outputs.upload == 'true'
+    runs-on: ubuntu-latest
+    # the wait below plus the upload
+    timeout-minutes: 140
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.version.outputs.tag }}
+      VERSION: ${{ needs.version.outputs.version }}
+      NAME: ${{ needs.installer.outputs.name }}
+      SHA256: ${{ needs.installer.outputs.sha256 }}
+      # mac.yml publishes ~40-60 min after the tag (the .dmg build alone is 21-30 min)
+      WAIT_MINUTES: 120
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kwant-windows-installer-release
+          path: out
+      - name: Check the files
+        working-directory: out
+        run: |
+          set -euo pipefail
+          ls -l
+          sha256sum -c "$NAME.sha256"
+          test "$(cut -d' ' -f1 "$NAME.sha256")" = "$SHA256"
+      # mac.yml's `gh release create … assets` makes a draft first, uploads ~200 MB, then publishes it
+      # as latest. `gh release view TAG` finds that draft too, so only a published release counts:
+      # touching it while it's a draft could race mac.yml's publish (and the latest guard below).
+      - name: Wait for mac.yml's release of the tag to be published
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 "$WAIT_MINUTES"); do
+            state=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null || true)
+            case "$state" in
+              false) echo "the $TAG release is published (after ~$((i - 1)) min)"; exit 0 ;;
+              true) echo "the $TAG release is still a draft (mac.yml is uploading); waiting" ;;
+              *) echo "no $TAG release yet; waiting" ;;
+            esac
+            sleep 60
+          done
+          echo "::error::no published $TAG release after $WAIT_MINUTES minutes. The Mac/Linux release is untouched. Once it's published, Run workflow with tag=$TAG and dry_run off."
+          exit 1
+      - name: Upload the installer and add the Windows line to the notes
+        run: |
+          set -euo pipefail
+          R="$GITHUB_REPOSITORY"
+          # published, again: never upload to or edit a draft mac.yml is still filling
+          state=$(gh release view "$TAG" -R "$R" --json isDraft -q .isDraft)
+          if [ "$state" != "false" ]; then
+            echo "::error::the $TAG release isn't published (isDraft: $state); nothing was uploaded"; exit 1
+          fi
+          latest_before=$(gh api "repos/$R/releases/latest" -q .tag_name 2>/dev/null || true)
+          gh release upload "$TAG" -R "$R" --clobber "out/$NAME" "out/$NAME.sha256"
+          gh release view "$TAG" -R "$R" --json body -q .body > notes.md
+          if grep -q '^### Windows (beta)' notes.md; then
+            echo "the notes already have the Windows (beta) section"
+          else
+            {
+              printf '\n\n### Windows (beta)\n\n'
+              printf '%s\n' "\`$NAME\` for 64-bit Windows installs for your user only, with no admin rights. It isn't code-signed yet, so the first time you run it Windows SmartScreen warns about an unrecognized app: click **More info**, then **Run anyway**. SHA-256: \`$SHA256\`"
+            } >> notes.md
+            gh release edit "$TAG" -R "$R" --notes-file notes.md
+          fi
+          # Editing notes must never move "latest" (installed apps read releases/latest/download/latest.json)
+          latest_after=$(gh api "repos/$R/releases/latest" -q .tag_name 2>/dev/null || true)
+          if [ "$latest_before" != "$latest_after" ]; then
+            echo "::error::the latest release moved from $latest_before to $latest_after; putting it back"
+            if [ -n "$latest_before" ]; then gh release edit "$latest_before" -R "$R" --latest; fi
+            exit 1
+          fi
+      - name: Check the release's copy
+        run: |
+          set -euo pipefail
+          mkdir check && cd check
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --pattern "$NAME" --pattern "$NAME.sha256"
+          sha256sum -c "$NAME.sha256"
+          test "$(cut -d' ' -f1 "$NAME.sha256")" = "$SHA256"
+          echo "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$NAME"

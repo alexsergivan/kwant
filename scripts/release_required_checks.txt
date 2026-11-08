@@ -1,0 +1,8 @@
+# CI checks that must be green on a release commit before main moves and the tag is pushed.
+# One check-run name per line (the `name:` of the job in .github/workflows/ci.yml). The release script reads this
+# from the release commit: `git show <release commit>:scripts/release_required_checks.txt`.
+# scripts/test_fresh_machine.py fails if a name here has no job in ci.yml.
+rust
+frontend
+site
+fresh-machine
