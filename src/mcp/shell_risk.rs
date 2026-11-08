@@ -1846,9 +1846,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_symlink_out_of_the_folder_is_outside() {
         let (tmp, ws) = folder();
-        #[cfg(unix)]
         {
             std::os::unix::fs::symlink(tmp.path(), ws.join("up")).unwrap();
             assert!(!classify("rm -rf up/other", &ws).is_allowed());

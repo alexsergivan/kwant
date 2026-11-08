@@ -76,8 +76,8 @@ pub fn head_branch(cwd: &Path) -> Option<String> {
                 dir = d.parent();
                 continue;
             }
-            Ok(m) if m.is_dir() => gitfile::read(&d.join(".git"), "HEAD", gitfile::REF_MAX)?,
-            Ok(m) if m.is_file() => worktree_head(d)?,
+            Ok(m) if gitfile::plain_dir(&m) => gitfile::read(&d.join(".git"), "HEAD", gitfile::REF_MAX)?,
+            Ok(m) if gitfile::plain_file(&m) => worktree_head(d)?,
             Ok(_) => return None,
         };
         let r = head.trim().strip_prefix("ref: ")?.trim();
@@ -111,7 +111,7 @@ fn worktree_head(d: &Path) -> Option<String> {
     let mut at: PathBuf = parts[..shared].iter().collect();
     for c in &parts[shared..] {
         at.push(c);
-        if !std::fs::symlink_metadata(&at).ok()?.file_type().is_dir() {
+        if !gitfile::plain_dir(&std::fs::symlink_metadata(&at).ok()?) {
             return None;
         }
     }
@@ -127,7 +127,7 @@ fn lexical(p: &Path) -> Option<PathBuf> {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
-                let real_dir = !out.as_os_str().is_empty() && std::fs::symlink_metadata(&out).is_ok_and(|m| m.file_type().is_dir());
+                let real_dir = !out.as_os_str().is_empty() && std::fs::symlink_metadata(&out).is_ok_and(|m| gitfile::plain_dir(&m));
                 if !real_dir || !out.pop() {
                     return None;
                 }
@@ -256,6 +256,46 @@ mod tests {
         std::fs::write(wt.join(".git"), format!("gitdir: {}\n", root.join(".git/worktrees/wt").display())).unwrap();
         mkfifo(&root.join(".git/worktrees/wt/HEAD"));
         assert_eq!(head_within_5s(&wt), None, "worktree HEAD FIFO");
+    }
+
+    /// Windows: the same refusals without symlinks or FIFOs. A junction as `.git` or on a
+    /// worktree's gitdir, a `..` after one, and a hard-linked HEAD are `None`; a plain repo and a
+    /// worktree whose gitdir uses `C:/...` with forward slashes (as Git for Windows writes) read.
+    #[cfg(windows)]
+    #[test]
+    fn head_branch_refuses_junctions_and_hard_links_on_windows() {
+        use crate::server::gitfile::windows_tests::junction;
+        let (d, root) = head_repo();
+        assert_eq!(head_within_5s(&root).as_deref(), Some("lin-dev-core"), "a plain repo");
+        let other = d.path().join("other");
+        std::fs::create_dir_all(other.join(".git/worktrees/wt")).unwrap();
+        std::fs::write(other.join(".git/HEAD"), "ref: refs/heads/LEAKED\n").unwrap();
+        std::fs::write(other.join(".git/worktrees/wt/HEAD"), "ref: refs/heads/LEAKED\n").unwrap();
+        let linked = d.path().join("linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        junction(&linked.join(".git"), &other.join(".git"));
+        assert_eq!(head_within_5s(&linked), None, ".git a junction");
+        let wt = d.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        junction(&wt.join("hop"), &other);
+        std::fs::write(wt.join(".git"), "gitdir: hop/.git/worktrees/wt\n").unwrap();
+        assert_eq!(head_within_5s(&wt), None, "gitdir through a junction");
+        std::fs::write(wt.join(".git"), "gitdir: hop/../../other/.git/worktrees/wt\n").unwrap();
+        assert_eq!(head_within_5s(&wt), None, "`..` after a junction");
+        // a real worktree, gitdir written the Git for Windows way
+        std::fs::create_dir_all(root.join(".git/worktrees/w2")).unwrap();
+        std::fs::write(root.join(".git/worktrees/w2/HEAD"), "ref: refs/heads/side\n").unwrap();
+        let w2 = d.path().join("w2");
+        std::fs::create_dir_all(&w2).unwrap();
+        let gd = root.join(".git/worktrees/w2").display().to_string().replace('\\', "/");
+        std::fs::write(w2.join(".git"), format!("gitdir: {gd}\n")).unwrap();
+        assert_eq!(head_within_5s(&w2).as_deref(), Some("side"), "{gd}");
+        // HEAD as a second name of a host file
+        let host = d.path().join("host-file");
+        std::fs::write(&host, "ref: refs/heads/LEAKED\n").unwrap();
+        std::fs::remove_file(root.join(".git/HEAD")).unwrap();
+        std::fs::hard_link(&host, root.join(".git/HEAD")).unwrap();
+        assert_eq!(head_within_5s(&root), None, "a hard-linked HEAD");
     }
 
     /// F-2: a HEAD that is another name for some other file isn't read.

@@ -1,0 +1,245 @@
+name: Windows
+
+# The Windows port (0.7.6, branch win-076). Runs only on win-* branches and by hand,
+# so it never touches the Mac and Linux releases.
+on:
+  push:
+    branches: ['win-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 1
+
+  rust:
+    name: rust (windows)
+    runs-on: windows-latest
+    needs: frontend
+    timeout-minutes: 90
+    steps:
+      # Byte-for-byte checkout: the test fixtures (PDFs, the docker files whose hash is pinned)
+      # must not get CRLF line endings
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build (every error, short)
+        run: cargo check --all-targets --locked --keep-going --message-format short
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      # The first full run on Windows (125fc52) hung in ask_user_test: most integration tests drive
+      # fake `sh` CLIs and aren't ported yet (plan.md, "Tests not ported to Windows yet"). The gate is
+      # the unit tests, less the modules listed there, plus the integration tests for Windows behaviour.
+      - name: Unit tests
+        timeout-minutes: 20
+        run: 'cargo test --locked --lib --no-fail-fast -- --skip server::dev:: --skip parallel::harness::'
+      # Dev mode's git readers on Windows (0.7.7: #444 head_branch and its refusals, #447 the
+      # freshness window, #448 diff sections matched by path). The rest of server::dev:: stays out
+      # of the gate above (next-076/windows/plan.md, "Tests not ported").
+      - name: Dev mode git readers (head_branch, fresh reviews, diff paths)
+        timeout-minutes: 15
+        run: 'cargo test --locked --lib --no-fail-fast -- server::dev::floor:: server::dev::poller::tests::fresh_means server::dev::poller::tests::candidates_go_newest server::dev::poller::tests::the_skipped_count server::dev::git::tests::diff_output_parses server::dev::git::tests::patches_are_matched'
+      - name: Windows integration tests (bash, Stop ends the process tree)
+        timeout-minutes: 20
+        run: cargo test --locked --no-fail-fast --test shell_stop_tree_test --test shell_tool_test
+      # kwnt.exe on its own: a scratch data dir and a free port, /api/health answers, then Stop and
+      # nothing it started is left. Laya stays off (--no-laya) so the step never downloads Python.
+      - name: Build kwnt.exe
+        run: cargo build --locked --bin kwnt
+      - name: kwnt.exe smoke (health, stop, process tree gone)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'target\debug\kwnt.exe'
+          $data = Join-Path $env:RUNNER_TEMP 'kwnt-smoke'
+          New-Item -ItemType Directory -Force $data | Out-Null
+          $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+          $l.Start(); $port = $l.LocalEndpoint.Port; $l.Stop()
+          "port $port"
+          $env:KWNT_DATA_DIR = $data
+          $out = Join-Path $env:RUNNER_TEMP 'kwnt-smoke.out'
+          $err = Join-Path $env:RUNNER_TEMP 'kwnt-smoke.err'
+          $proc = Start-Process -FilePath $exe -ArgumentList @('serve', '--host', '127.0.0.1', '--port', "$port", '--no-laya') `
+            -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -WindowStyle Hidden
+
+          function Get-Tree([int]$root) {
+            $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
+            $tree = @($root); $grew = $true
+            while ($grew) {
+              $grew = $false
+              foreach ($p in $all) {
+                if ($tree -contains [int]$p.ParentProcessId -and -not ($tree -contains [int]$p.ProcessId)) {
+                  $tree += [int]$p.ProcessId; $grew = $true
+                }
+              }
+            }
+            $all | Where-Object { $tree -contains [int]$_.ProcessId }
+          }
+
+          $health = $null
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Get-Date) -lt $deadline -and -not $health) {
+            if ($proc.HasExited) { break }
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "http://127.0.0.1:$port/api/health"
+              if ($r.StatusCode -eq 200) { $health = $r.Content }
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          if (-not $health) {
+            "kwnt.exe exited: $($proc.HasExited)"
+            Get-Content $out -Tail 40 -ErrorAction SilentlyContinue
+            Get-Content $err -Tail 40 -ErrorAction SilentlyContinue
+            Write-Error "kwnt.exe never answered /api/health"; exit 1
+          }
+          "/api/health: $health"
+          $json = $health | ConvertFrom-Json
+          if ($json.app -ne 'kwnt' -or $json.status -ne 'ok') { Write-Error "that isn't kwant's health answer"; exit 1 }
+          if (-not (Test-Path (Join-Path $data 'config.toml')) -and -not (Get-ChildItem $data)) {
+            Write-Error "kwnt.exe didn't use the scratch data dir"; exit 1
+          }
+
+          $tree = @(Get-Tree $proc.Id)
+          "process tree while running:"; $tree | Format-Table ProcessId, ParentProcessId, Name
+          Stop-Process -Id $proc.Id -Force
+          $proc.WaitForExit(15000) | Out-Null
+          $left = @()
+          $deadline = (Get-Date).AddSeconds(15)
+          do {
+            Start-Sleep -Milliseconds 500
+            $left = @($tree | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+          } while ($left.Count -gt 0 -and (Get-Date) -lt $deadline)
+          if ($left.Count -gt 0) {
+            "still running after Stop:"; $left | Format-Table ProcessId, Name
+            $left | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            Write-Error "kwnt.exe's process tree wasn't gone after Stop"; exit 1
+          }
+          "stopped: all $($tree.Count) process(es) of the tree are gone"
+          Get-Content $out -Tail 15 -ErrorAction SilentlyContinue
+
+  # The desktop app and its installer (Pixel): an unsigned per-user NSIS .exe with the WebView2
+  # download bootstrapper (apps/mac/tauri.windows.conf.json), then a silent install and a smoke test.
+  app:
+    name: app (windows installer)
+    runs-on: windows-latest
+    needs: frontend
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: apps/mac -> target
+      - name: App tests
+        working-directory: apps/mac
+        run: cargo test --locked
+      - name: Build the NSIS installer
+        working-directory: apps/mac
+        shell: bash
+        run: npx --yes @tauri-apps/cli@2.12.4 build --ci --bundles nsis -- --locked
+      - name: Installer file
+        id: nsis
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem apps/mac/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "no NSIS installer was built"; exit 1 }
+          "{0}  {1:N1} MB" -f $exe.Name, ($exe.Length / 1MB)
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kwant-windows-installer
+          path: ${{ steps.nsis.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Silent install, start, /api/auth/status, quit
+        shell: pwsh
+        env:
+          SETUP: ${{ steps.nsis.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = Start-Process -FilePath $env:SETUP -ArgumentList '/S' -Wait -PassThru
+          if ($install.ExitCode -ne 0) { Write-Error "the installer exited with $($install.ExitCode)"; exit 1 }
+          $dir = Join-Path $env:LOCALAPPDATA 'kwant'
+          $app = Join-Path $dir 'kwant.exe'
+          if (-not (Test-Path $app)) {
+            Get-ChildItem $dir -ErrorAction SilentlyContinue | Format-Table Name, Length
+            Write-Error "kwant.exe isn't in $dir after a per-user install"; exit 1
+          }
+          Get-ChildItem $dir | Format-Table Name, Length
+          $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\kwant'
+          "Start menu: $(Test-Path $shortcut)"
+
+          $proc = Start-Process -FilePath $app -PassThru
+          $status = $null
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and -not $status) {
+            if ($proc.HasExited) { break }
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 'http://127.0.0.1:8799/api/auth/status'
+              if ($r.StatusCode -eq 200) { $status = $r.Content }
+            } catch { Start-Sleep -Milliseconds 500 }
+          }
+          $log = Join-Path $env:USERPROFILE '.kwnt\desktop-app.log'
+          if (-not $status) {
+            "app exited: $($proc.HasExited)"
+            if (Test-Path $log) { Get-Content $log -Tail 80 }
+            Write-Error "kwant inside the app never answered /api/auth/status"; exit 1
+          }
+          "/api/auth/status: $status"
+          $json = $status | ConvertFrom-Json
+          if ($null -eq $json.auth_required) { Write-Error "that isn't kwant's auth status"; exit 1 }
+          "data dir: $(Test-Path (Join-Path $env:USERPROFILE '.kwnt'))"
+          if (Test-Path $log) { Get-Content $log -Tail 20 }
+
+          Stop-Process -Id $proc.Id
+          $proc.WaitForExit(15000) | Out-Null
+          Get-Process kwant -ErrorAction SilentlyContinue | Stop-Process -Force
+          $uninstaller = Join-Path $dir 'uninstall.exe'
+          if (Test-Path $uninstaller) {
+            $u = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+            "uninstall exit code: $($u.ExitCode)"
+          }

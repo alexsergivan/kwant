@@ -21,6 +21,12 @@ pub type ServeError = Box<dyn std::error::Error + Send + Sync>;
 /// Runs the server on `config.host:config.port` until `shutdown` resolves, then stops the
 /// background jobs, stops kwant's browser container and gives the Laya sidecar up to 5 s to exit.
 pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(), ServeError> {
+    #[cfg(windows)]
+    {
+        // Keys, tokens and logins live here: this user and SYSTEM only, before anything is in it
+        let _ = std::fs::create_dir_all(&config.data_dir);
+        crate::fsx::restrict_to_user(&config.data_dir);
+    }
     let db = Database::init(&config.data_dir).await?;
     restrict_data_dir(&config.data_dir);
     let tools = ToolRunner::new(config.data_dir.join("workspace"));

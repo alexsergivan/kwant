@@ -1459,10 +1459,12 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tz-rs",
+ "tzdb_data",
  "unicode-normalization",
  "url",
  "uuid",
  "webpki-roots 1.0.9",
+ "windows-sys 0.61.2",
  "zeroize",
  "zip",
 ]
@@ -3241,6 +3243,15 @@ name = "tz-rs"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fc6c929ffa10fb34f4a3c7e9a73620a83ef2e85e47f9ec3381b8289e6762f42"
+
+[[package]]
+name = "tzdb_data"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "febaa995f6852367564e16c3369988b99d471d43ed12b1255b8d294661797f1c"
+dependencies = [
+ "tz-rs",
+]
 
 [[package]]
 name = "unicase"

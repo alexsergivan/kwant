@@ -70,6 +70,12 @@ mail-parser = "0.11"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Windows: a Job Object per bot turn, so Stop ends the whole process tree (0.7.6 Windows port)
+[target.'cfg(windows)'.dependencies]
+# Windows has no system tz database: the IANA zones, bundled (routines::parse_tz)
+tzdb_data = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
 [features]
 # Test-only seams: the moved clock (src/clock.rs, KWNT_TEST_NOW_OFFSET_SECS) and the Telegram API
 # address (KWNT_TELEGRAM_API_BASE). Never on by default and never in a shipped or `make run` build;

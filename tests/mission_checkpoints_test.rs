@@ -25,6 +25,7 @@ use kwnt::{
     tools::ToolRunner,
 };
 use serde_json::{json, Value};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -458,7 +459,8 @@ async fn a_stale_preview_is_refused_and_a_repeated_key_writes_nothing() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
 
-// 5
+// 5 (symlinks need Developer Mode or admin rights on Windows)
+#[cfg(unix)]
 #[tokio::test]
 async fn unsafe_manifest_paths_and_symlinks_are_skipped_and_never_followed() {
     let e = setup().await;
@@ -561,6 +563,7 @@ async fn no_route_returns_manifest_or_blob_paths_or_file_contents() {
     }
     // The snapshot holds the secrets (it must), under a 0700 folder
     let root = e.state.config.data_dir.join("checkpoints");
+    #[cfg(unix)]
     assert_eq!(std::fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
     assert!(blobs(&e).join(sha(b"API_KEY=SECRET-CONTENT-4242")).exists());
     let root_s = root.display().to_string();
@@ -591,7 +594,8 @@ async fn a_bot_token_cant_checkpoint_restore_or_fork() {
     assert_eq!(checkpoints(&e, tid).await.len(), 2, "nothing was taken");
 }
 
-// 9
+// 9 (Unix permission bits; Windows folders use ACLs)
+#[cfg(unix)]
 #[tokio::test]
 async fn an_unreadable_folder_fails_the_checkpoint_but_not_the_turn() {
     let e = setup().await;

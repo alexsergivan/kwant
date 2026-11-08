@@ -11,9 +11,12 @@ impl Drop for ChromeGuard {
         // Nothing when the test closed its Chrome itself
         if let Some(pid) = kwnt::sandbox::computer::profile_owner(&self.0) {
             // SAFETY: kill(2) with a pid that profile_owner just saw as this profile's Chrome
+            #[cfg(unix)]
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGKILL);
             }
+            #[cfg(windows)]
+            let _ = std::process::Command::new("taskkill").args(["/F", "/T", "/PID", &pid.to_string()]).output();
         }
     }
 }
