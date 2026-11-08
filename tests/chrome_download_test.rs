@@ -51,9 +51,13 @@ struct Fake {
     zip: Arc<Mutex<Result<Vec<u8>, u16>>>,
     /// Where the build list says the download is (None: on the fake storage).
     url: Arc<Mutex<Option<String>>>,
+    /// Storage answers the build's address with a 302 to here (relative or full).
+    redirect: Arc<Mutex<Option<String>>>,
     base: String,
     list_hits: Arc<AtomicUsize>,
     zip_hits: Arc<AtomicUsize>,
+    /// Requests to /elsewhere/, a host path outside Google's storage.
+    elsewhere_hits: Arc<AtomicUsize>,
 }
 
 impl Fake {
@@ -102,10 +106,19 @@ async fn list(State(f): State<Fake>) -> Json<serde_json::Value> {
 async fn storage(State(f): State<Fake>, uri: Uri) -> Response {
     f.zip_hits.fetch_add(1, Ordering::SeqCst);
     assert!(uri.path().ends_with("/linux64/chrome-linux64.zip"), "{}", uri.path());
+    let to = f.redirect.lock().unwrap().clone();
+    if let Some(to) = to.filter(|to| !to.ends_with(uri.path())) {
+        return Response::builder().status(StatusCode::FOUND).header("location", to).body(axum::body::Body::empty()).unwrap();
+    }
     match f.zip.lock().unwrap().clone() {
         Ok(bytes) => bytes.into_response(),
         Err(code) => StatusCode::from_u16(code).unwrap().into_response(),
     }
+}
+
+async fn elsewhere(State(f): State<Fake>) -> Response {
+    f.elsewhere_hits.fetch_add(1, Ordering::SeqCst);
+    f.zip.lock().unwrap().clone().unwrap_or_default().into_response()
 }
 
 async fn fake() -> Fake {
@@ -114,14 +127,16 @@ async fn fake() -> Fake {
     let f = Fake {
         zip: Arc::new(Mutex::new(Ok(good_build()))),
         url: Default::default(),
+        redirect: Default::default(),
         base,
         list_hits: Default::default(),
         zip_hits: Default::default(),
+        elsewhere_hits: Default::default(),
     };
     let app = Router::new()
         .route("/cft.json", get(list))
         .route("/storage/*rest", get(storage))
-        .route("/elsewhere/*rest", get(storage))
+        .route("/elsewhere/*rest", get(elsewhere))
         .with_state(f.clone());
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
@@ -277,6 +292,34 @@ async fn a_download_outside_googles_storage_or_over_the_size_cap_is_refused() {
     let err = f.setup(home.path()).max_bytes(1000).ensure().await.unwrap_err();
     assert!(err.contains("larger than"), "{err}");
     assert_eq!(left_in(&cache_root("linux", home.path())), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn a_redirect_off_googles_storage_is_not_followed() {
+    let f = fake().await;
+    // N-3 (Rigel's x6): the build list points at storage, and storage redirects the zip elsewhere
+    let away = [
+        format!("{}/elsewhere/{VERSION}/linux64/chrome-linux64.zip", f.base),
+        format!("/storage/../elsewhere/{VERSION}/linux64/chrome-linux64.zip"),
+    ];
+    for to in away {
+        *f.redirect.lock().unwrap() = Some(to.clone());
+        let home = tempfile::tempdir().unwrap();
+        let setup = f.setup(home.path());
+        let err = setup.ensure().await.unwrap_err();
+        assert!(err.starts_with(FAILED_LINE) && err.contains("redirected away from Google's storage"), "{to}: {err}");
+        assert_eq!(setup.view().state, SetupState::Failed, "{to}");
+        assert_eq!(f.elsewhere_hits.load(Ordering::SeqCst), 0, "{to}: the redirect was followed");
+        assert_eq!(setup.installed(), None, "{to}");
+        assert_eq!(left_in(&cache_root("linux", home.path())), Vec::<String>::new(), "{to}");
+    }
+
+    // a hop that stays inside the storage folder is still followed
+    *f.redirect.lock().unwrap() = Some(format!("{}moved/{VERSION}/linux64/chrome-linux64.zip", f.storage()));
+    let home = tempfile::tempdir().unwrap();
+    let setup = f.setup(home.path());
+    assert_eq!(setup.ensure().await.unwrap(), installed_at(home.path()));
+    assert_eq!(f.elsewhere_hits.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

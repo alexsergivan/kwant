@@ -270,8 +270,23 @@ impl ChromeSetup {
         use futures::StreamExt;
         use tokio::io::AsyncWriteExt;
 
+        // A download that starts on Google's storage may only be redirected within it: the prefix
+        // check below would mean nothing if a hop could take the zip from anywhere. A refused hop
+        // comes back as the 3xx itself and fails the download. The list keeps ordinary redirects.
+        let storage = self.storage.clone();
+        let redirects = reqwest::redirect::Policy::custom(move |hop| {
+            let from_storage = hop.previous().first().is_some_and(|u| u.as_str().starts_with(&storage));
+            if from_storage && !hop.url().as_str().starts_with(&storage) {
+                hop.stop()
+            } else if hop.previous().len() > 10 {
+                hop.error("too many redirects")
+            } else {
+                hop.follow()
+            }
+        });
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(30))
+            .redirect(redirects)
             .user_agent(concat!("kwnt/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|e| e.to_string())?;
@@ -325,6 +340,9 @@ impl ChromeSetup {
             .send()
             .await
             .map_err(|_| "couldn't reach Google's storage to download Chrome for Testing (offline?)".to_string())?;
+        if resp.status().is_redirection() {
+            return Err("the Chrome for Testing download was redirected away from Google's storage, so it wasn't downloaded".into());
+        }
         if !resp.status().is_success() {
             return Err(format!("the Chrome for Testing download answered {}", resp.status()));
         }
