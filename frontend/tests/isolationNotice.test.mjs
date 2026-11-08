@@ -52,15 +52,15 @@ test('parses the meta and ignores other messages', () => {
 // The table: every code the server sends, with first line, reason, safety and buttons.
 const ROWS = [
   ['docker_unavailable', /couldn’t start inside the VM\.$/, /^Docker isn’t running on this computer\. Start Docker, then Retry\.$/, 'standard', ['retry', 'computer']],
-  ['preparing', /VM isn’t ready yet\.$/, /^The one-time download is still running\. Retry when it’s done\.$/, 'standard', ['retry', 'computer']],
-  ['download_failed', /VM isn’t ready yet\.$/, /^The one-time download didn’t finish\. Try it again in Computer settings, then Retry\.$/, 'standard', ['retry', 'computer']],
-  ['download_needed', /VM isn’t ready yet\.$/, /^The one-time download didn’t finish\./, 'standard', ['retry', 'computer']],
-  ['relay_down', /couldn’t start inside the VM\.$/, /^The app couldn’t connect Claude to your sign-in\. Restart the app, then Retry\.$/, 'standard', ['retry', 'computer']],
+  ['preparing', /VM isn’t ready yet\.$/, /^The one-time setup is still running\. Retry when it’s done\.$/, 'standard', ['retry', 'computer']],
+  ['download_failed', /VM isn’t ready yet\.$/, /^The one-time setup didn’t finish\. Try it again in Computer settings, then Retry\.$/, 'standard', ['retry', 'computer']],
+  ['download_needed', /VM isn’t ready yet\.$/, /^The one-time setup didn’t finish\./, 'standard', ['retry', 'computer']],
+  ['relay_down', /couldn’t start inside the VM\.$/, /^kwant couldn’t connect Claude to your sign-in\. Restart kwant, then Retry\.$/, 'standard', ['retry', 'computer']],
   ['sign_in_expired', /your Claude sign-in has expired\.$/, /^Sign in again in Settings › This space › Accounts, then Retry\.$/, null, ['retry', 'accounts']],
   ['no_credential', /there’s no Claude sign-in for it on this computer\.$/, /^Sign in to Claude in Settings › This space › Accounts, then Retry\.$/, null, ['retry', 'accounts']],
-  ['host_is_root', /couldn’t start inside the VM\.$/, /^The app is running as root, so Claude can’t run inside the VM as you\./, 'standard', ['retry', 'computer']],
-  ['folder_name_unsupported', /Claude can’t use this folder inside the VM\.$/, /^The folder’s name has characters the app can’t pass to the VM, like a line break\. Rename the folder, then Retry\.$/, 'nothing_ran', ['retry']],
-  ['folder_record_failed', /couldn’t start inside the VM\.$/, /^The app couldn’t note that this folder is used inside the VM, so it didn’t start Claude\./, 'standard', ['retry', 'computer']],
+  ['host_is_root', /couldn’t start inside the VM\.$/, /^kwant is running as root, so Claude can’t run inside the VM as you\./, 'standard', ['retry', 'computer']],
+  ['folder_name_unsupported', /Claude can’t use this folder inside the VM\.$/, /^The folder’s name has characters kwant can’t pass to the VM, like a line break\. Rename the folder, then Retry\.$/, 'nothing_ran', ['retry']],
+  ['folder_record_failed', /couldn’t start inside the VM\.$/, /^kwant couldn’t note that this folder is used inside the VM, so it didn’t start Claude\./, 'standard', ['retry', 'computer']],
   ['container_failed', /couldn’t start inside the VM\.$/, /^The VM couldn’t start Claude\. Retry; if it keeps happening, restart Docker\.$/, 'standard', ['retry', 'computer']],
   ['unsupported_os', /couldn’t start inside the VM\.$/, /^Isolation is only on Linux for now\. Turn off Run Claude inside the VM to run Claude on this computer\.$/, 'standard', ['computer']],
 ];
@@ -128,7 +128,7 @@ test('notice 6: unsafe folder, by kind, with ~ and Change folder for a team', ()
     contains_home: /holds your home folder/,
     root: /holds your home folder/,
     sign_ins: /holds sign-ins, like your SSH keys/,
-    kwant_data: /holds the app’s own data/,
+    kwant_data: /holds kwant’s own data/,
     docker: /Docker’s control socket/,
     mystery: /^This folder holds your home folder or sign-ins/,
   };

@@ -154,7 +154,7 @@ export const ClaudeIsolationRow: React.FC<{ api: ComputerModeApi }> = ({ api }) 
       </div>
 
       <div className={`mt-2.5 pl-[23px] flex flex-wrap items-center gap-1.5 ${busy ? 'opacity-60' : ''}`}>
-        <span className="text-[11px] text-zinc-500" aria-hidden="true">
+        <span className="basis-full sm:basis-auto text-[11px] text-zinc-500" aria-hidden="true">
           Right now
         </span>
         <ul aria-label="Where each AI runs right now" className="contents">
@@ -207,8 +207,8 @@ export const ClaudeIsolationRow: React.FC<{ api: ComputerModeApi }> = ({ api }) 
           )}
         </div>
       )}
-      {api.isoError && (
-        <div className="mt-2.5">
+      {api.isoError && api.isoError !== model.hint && !(status?.kind === 'quiet' && status.text === api.isoError) && (
+        <div className="mt-2.5 ml-[23px]">
           <ComputerModeError error={api.isoError} onDismiss={api.dismissIsoError} />
         </div>
       )}

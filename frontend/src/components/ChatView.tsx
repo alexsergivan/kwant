@@ -1764,9 +1764,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     : streamingSpeakerName || title}
                 </span>
                 {queued ? (
-                  <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
-                    Queued
+                  <span className="inline-flex items-center gap-1 text-zinc-400 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" aria-hidden="true" />
+                    In line
                   </span>
                 ) : (awaitingAnswer || bubble === 'approval') && !phone ? (
                   <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">

@@ -113,15 +113,15 @@ function unsafeSentence(kind: string | null, folder: string | null): Seg[] {
     case 'root':
       return withPath('This folder', ' holds your home folder. Inside the VM, Claude would see all your files and sign-ins.');
     case 'sign_ins':
-      return withPath('This folder', ' holds sign-ins, like your SSH keys or Claude, Codex or Grok sign-in, so the app won’t share it with the VM.');
+      return withPath('This folder', ' holds sign-ins, like your SSH keys or Claude, Codex or Grok sign-in, so kwant won’t share it with the VM.');
     case 'kwant_data':
-      return withPath('This folder', ' holds the app’s own data, including your sign-ins, so the app won’t share it with the VM.');
+      return withPath('This folder', ' holds kwant’s own data, including your sign-ins, so kwant won’t share it with the VM.');
     case 'docker':
       return withPath('This folder', ' holds Docker’s control socket, which would let Claude out of the VM.');
     case 'shared_folder':
       return [t('This is the folder teams share when they don’t have their own. If Claude used it inside the VM, Codex and Grok bots in every team would be kept out of it.')];
     default:
-      return [t('This folder holds your home folder or sign-ins, so the app won’t share it with the VM.')];
+      return [t('This folder holds your home folder or sign-ins, so kwant won’t share it with the VM.')];
   }
 }
 
@@ -159,10 +159,10 @@ function folderUsedCard(m: IsolationFailedMeta): IsolationCard {
   } else if (m.folderFrom === 'team') {
     row = 'folder_used_by_isolated_bot:team';
     const other = team(m) ? `pick another folder for ${team(m)}` : 'pick another folder';
-    reason = [t('A bot inside the VM could have left settings in '), f, t(` that ${E} would load on this computer, so the app keeps ${E} out of it for now. Switch ${bot} to Claude, or ${other}, then Retry.`)];
+    reason = [t('A bot inside the VM could have left settings in '), f, t(` that ${E} would load on this computer, so kwant keeps ${E} out of it for now. Switch ${bot} to Claude, or ${other}, then Retry.`)];
   } else {
     row = 'folder_used_by_isolated_bot:other';
-    reason = [t('A bot inside the VM could have left settings in '), f, t(` that ${E} would load on this computer, so the app keeps ${E} out of it for now. Switch ${bot} to Claude, then Retry.`)];
+    reason = [t('A bot inside the VM could have left settings in '), f, t(` that ${E} would load on this computer, so kwant keeps ${E} out of it for now. Switch ${bot} to Claude, then Retry.`)];
   }
   const second: NoticeAction[] = canChangeFolder(m) ? ['change_folder'] : ['retry'];
   return {
@@ -241,29 +241,29 @@ export function isolationCard(m: IsolationFailedMeta, savedText?: string | null)
       return std(
         'preparing',
         notReady,
-        m.progressPct !== null ? `The one-time download is at ${m.progressPct}%. Retry when it’s done.` : 'The one-time download is still running. Retry when it’s done.',
+        m.progressPct !== null ? `The one-time setup is at ${m.progressPct}%. Retry when it’s done.` : 'The one-time setup is still running. Retry when it’s done.',
       );
     case 'download_failed':
     case 'download_needed':
-      return std(m.reason, notReady, 'The one-time download didn’t finish. Try it again in Computer settings, then Retry.');
+      return std(m.reason, notReady, 'The one-time setup didn’t finish. Try it again in Computer settings, then Retry.');
     case 'relay_down':
-      return std('relay_down', couldnt, 'The app couldn’t connect Claude to your sign-in. Restart the app, then Retry.');
+      return std('relay_down', couldnt, 'kwant couldn’t connect Claude to your sign-in. Restart kwant, then Retry.');
     case 'sign_in_expired':
       return std('sign_in_expired', `${bot} didn’t reply: your Claude sign-in has expired.`, 'Sign in again in Settings › This space › Accounts, then Retry.', ['retry', 'accounts'], null);
     case 'no_credential':
       return std('no_credential', `${bot} didn’t reply: there’s no Claude sign-in for it on this computer.`, 'Sign in to Claude in Settings › This space › Accounts, then Retry.', ['retry', 'accounts'], null);
     case 'host_is_root':
-      return std('host_is_root', couldnt, 'The app is running as root, so Claude can’t run inside the VM as you. Start the app as your normal user, then Retry.');
+      return std('host_is_root', couldnt, 'kwant is running as root, so Claude can’t run inside the VM as you. Start kwant as your normal user, then Retry.');
     case 'folder_name_unsupported':
       return std(
         'folder_name_unsupported',
         `${bot} didn’t reply: Claude can’t use this folder inside the VM.`,
-        'The folder’s name has characters the app can’t pass to the VM, like a line break. Rename the folder, then Retry.',
+        'The folder’s name has characters kwant can’t pass to the VM, like a line break. Rename the folder, then Retry.',
         ['retry'],
         'nothing_ran',
       );
     case 'folder_record_failed':
-      return std('folder_record_failed', couldnt, 'The app couldn’t note that this folder is used inside the VM, so it didn’t start Claude. Retry; if it keeps happening, restart the app.');
+      return std('folder_record_failed', couldnt, 'kwant couldn’t note that this folder is used inside the VM, so it didn’t start Claude. Retry; if it keeps happening, restart kwant.');
     case 'container_failed':
       return std('container_failed', couldnt, 'The VM couldn’t start Claude. Retry; if it keeps happening, restart Docker.');
     case 'unsupported_os':

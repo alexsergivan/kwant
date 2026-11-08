@@ -62,7 +62,7 @@ export const PLATFORM_HINTS: Record<string, string> = {
 };
 
 export const ISOLATION_HINT =
-  'Claude sees only the task folder. Its own tools, web search included, can’t go online, so it browses with the app’s browser. Your Claude sign-in or key stays on this computer; the app adds it on the way out.';
+  'Claude sees only the task folder. Its own tools, web search included, can’t go online, so it browses with kwant’s browser. Your Claude sign-in or key stays on this computer; kwant adds it on the way out.';
 
 /** Whether this host could run Claude in the VM (Linux), whatever Docker is doing. */
 export const hostSupportsIsolation = (vm: ClaudeVm | null | undefined) => !!vm && !(vm.toggle.reason && vm.toggle.reason in PLATFORM_HINTS);
@@ -151,13 +151,13 @@ export function stoppedLine(a: AgentVmState): Extract<RowStatus, { kind: 'stoppe
     case 'download_failed':
       return {
         kind: 'stopped',
-        text: `The setup stopped: ${sentence(a.detail ?? 'the setup failed (the app’s log has the details)')}. Claude can’t reply until it finishes.`,
+        text: `The setup stopped: ${sentence(a.detail ?? 'the setup failed (kwant’s log has the details)')}. Claude can’t reply until it finishes.`,
         action: 'retry',
       };
     case 'download_needed':
       return { kind: 'stopped', text: 'Claude’s VM isn’t set up yet, so Claude can’t reply. Try again to start the one-time setup.', action: 'retry' };
     case 'relay_down':
-      return { kind: 'stopped', text: 'The app couldn’t connect Claude to your sign-in. Restart the app; if it keeps happening, turn this off.', action: null };
+      return { kind: 'stopped', text: 'kwant couldn’t connect Claude to your sign-in. Restart kwant; if it keeps happening, turn this off.', action: null };
     case 'sign_in_expired':
       return { kind: 'stopped', text: 'Your Claude sign-in has expired, so Claude can’t reply. Sign in again in Settings › This space › Accounts.', action: null };
     default: {
