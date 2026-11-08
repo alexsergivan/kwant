@@ -81,7 +81,7 @@ export function scaleQty(qty: string, k: number, after = ''): { qty: string; sca
   if (fa === null || (b !== null && fb === null)) return { qty, scaled: false };
   const top = b ?? a;
   const nounFollows = /^\s*\p{L}/u.test(after);
-  const rest = qty.slice(m[0].length).replace(/^(\s+)([A-Za-z]+)(?=\s*$|[^A-Za-z])/, (all, sp: string, w: string, off: number, whole: string) => {
+  const rest = qty.slice(m[0].length).replace(/^(\s+)([A-Za-z]+)(?=\s*$|[^A-Za-z])/, (all, sp: string, w: string, _off: number, whole: string) => {
     const lw = w.toLowerCase();
     // Another word after a counted thing, in the amount or in the text, makes it a modifier.
     if (THINGS.has(lw) && (nounFollows || /\p{L}/u.test(whole.slice(sp.length + w.length)))) return all;
