@@ -1950,7 +1950,10 @@ pub(super) async fn turn_once(
     // The daily spending stop: the one check every turn passes, whatever started it (see
     // [`super::spend_stop`]). Checked again once the slot is taken, for turns that queued.
     let quiet_stop = opts.quiet_failure || opts.unsaved;
-    super::spend_stop::gate(scope, target_kwant, quiet_stop).await?;
+    // Only the person's own message carries a nav prompt (hand-offs, routines, missions and Jira
+    // tasks never do), so this is how the stop knows it held the person's message
+    let person_turn = opts.nav_prompt.is_some();
+    super::spend_stop::gate(scope, target_kwant, quiet_stop, person_turn).await?;
     let turns = &scope.state.turns;
     turns.add_keys(&scope.job_id, std::slice::from_ref(&tag.turn_id));
     // Sends turn_ended even if this future is dropped, queued or mid-turn
@@ -1966,7 +1969,7 @@ pub(super) async fn turn_once(
     let Some(_slot) = turns.acquire(&tag, &scope.cancel_token, &scope.state.event_sender).await else {
         return Err("stopped by the user".into());
     };
-    super::spend_stop::gate(scope, target_kwant, quiet_stop).await?;
+    super::spend_stop::gate(scope, target_kwant, quiet_stop, person_turn).await?;
     turns.set_turn(super::turns::ActiveTurn {
         turn_id: tag.turn_id.clone(),
         kwant_id: tag.kwant_id.clone(),
