@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - **A checkpoint's git commit only comes from the task's own git files.** When a mission takes a checkpoint, kwant notes the commit the task's folder is on. It now never follows a symlink inside `.git`, ignores a `ref:` that points outside it, skips FIFOs and oversized files, and keeps the value only when it's a real 40- or 64-character commit id. Before, a bot that could write its task folder could make a checkpoint show the first 64 characters of another file kwant can read. (#443)
 - **Dev mode reads the checked-out branch safely too.** The production safeguard reads which branch a bot's folder is on. A planted FIFO could stall that check, and a symlink, a hard link or a `.git` file could point it at another file. It now reads `.git` the same careful way checkpoints do, and only follows a worktree's pointer into a real `.git/worktrees/` folder. Checkpoints also now skip a hard-linked git file. (#444)
+- **Dev mode's branch check stays inside the bot's folder.** It reads `.git` only in the bot's folder and below, never through a symlink (it now holds each folder open while it reads), counts a `.git` folder as a repo only when it has `objects` and `refs` as git does, and doesn't follow a worktree pointer out of the folder. When it can't tell the branch, a plain `git push` asks, as before.
 
 ## [Mac 0.7.6] - 2026-11-08
 

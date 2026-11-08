@@ -1,7 +1,10 @@
 //! Reading small files under a `.git` that a bot can write (missions' `git_head`, Dev mode's
 //! `head_branch`). Everything there is untrusted: never follow a symlink, never block on a FIFO,
 //! socket or device, never read a hard link (it may be a host file's other name), and cap sizes.
+//! Every read walks from an open folder with `openat` ([`crate::sandbox::safe_fs::Dir`], S-8), so
+//! a folder the bot swaps for a symlink between two checks is never followed.
 
+use crate::sandbox::safe_fs::Dir;
 use std::io::Read;
 use std::path::Path;
 
@@ -10,29 +13,14 @@ pub(crate) const REF_MAX: u64 = 4 * 1024;
 /// packed-refs can list many refs, but never this many for a bot's folder.
 pub(crate) const PACKED_MAX: u64 = 1024 * 1024;
 
-/// Reads `<base>/<rel>` (`rel` is `/`-separated and already checked) only when every component
-/// below `base` is a real folder and the last a regular file of at most `max` bytes with one
-/// link. Never follows a symlink and never blocks on a FIFO, socket or device.
-pub(crate) fn read(base: &Path, rel: &str, max: u64) -> Option<String> {
-    let mut at = base.to_path_buf();
-    let parts: Vec<&str> = rel.split('/').collect();
-    for (i, p) in parts.iter().enumerate() {
-        at.push(p);
-        let ft = std::fs::symlink_metadata(&at).ok()?.file_type();
-        let last = i + 1 == parts.len();
-        if (last && !ft.is_file()) || (!last && !ft.is_dir()) {
-            return None;
-        }
-    }
-    let mut o = std::fs::OpenOptions::new();
-    o.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // A symlink swapped in after the check fails to open; a FIFO opens without waiting
-        o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let f = o.open(&at).ok()?;
+/// Reads `rel` (`/`-separated plain names) below the open folder `dir` with [`Dir`]'s openat
+/// walk (S-8): every component must be a real folder and the last a regular file of at most
+/// `max` bytes with one link. Nothing is resolved twice, a symlink is never followed and a FIFO,
+/// socket or device never blocks it.
+pub(crate) fn read(dir: &Dir, rel: &str, max: u64) -> Option<String> {
+    // `open_file` walks with O_NOFOLLOW|O_DIRECTORY, opens the last part O_NOFOLLOW|O_NONBLOCK
+    // and checks with fstat that it holds a regular file
+    let f = dir.open_file(Path::new(rel)).ok()?;
     let m = f.metadata().ok()?;
     if !m.file_type().is_file() || m.len() > max {
         return None;
@@ -67,6 +55,10 @@ pub(crate) fn plain_ref(r: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn read(base: &Path, rel: &str, max: u64) -> Option<String> {
+        super::read(&Dir::open(base).unwrap(), rel, max)
+    }
+
     #[test]
     fn reads_one_regular_file_and_nothing_else() {
         let d = tempfile::tempdir().unwrap();
@@ -78,5 +70,25 @@ mod tests {
         std::fs::hard_link(d.path().join("a/f"), d.path().join("g")).unwrap();
         assert_eq!(read(d.path(), "a/f", 10), None, "a file with two names");
         assert_eq!(read(d.path(), "g", 10), None);
+    }
+
+    #[test]
+    fn never_follows_a_symlink_or_blocks_on_a_fifo() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(out.path().join("a")).unwrap();
+        std::fs::write(out.path().join("a/f"), "secret").unwrap();
+        symlink(out.path().join("a"), d.path().join("a")).unwrap();
+        assert_eq!(read(d.path(), "a/f", 10), None, "a symlinked folder on the way");
+        symlink(out.path().join("a/f"), d.path().join("f")).unwrap();
+        assert_eq!(read(d.path(), "f", 10), None, "a symlinked file");
+        assert_eq!(read(d.path(), "../x", 10), None, "`..` is no plain name");
+        let fifo = std::ffi::CString::new(d.path().join("p").as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o644) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let base = d.path().to_path_buf();
+        std::thread::spawn(move || tx.send(read(&base, "p", 10)).unwrap());
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)).expect("blocked on a FIFO"), None);
     }
 }

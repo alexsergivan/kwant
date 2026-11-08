@@ -203,10 +203,9 @@ fn store_blob(blobs: &FsPath, mut input: std::fs::File) -> std::io::Result<Strin
 /// [`gitfile::PACKED_MAX`] bytes, only follows a `ref:` that is a plain `refs/...` name, and only returns 40 or 64 hex characters. Anything else,
 /// including a `.git` file (a `gitdir:` worktree pointer), is `None`.
 fn git_head(folder: &FsPath) -> Option<String> {
-    let git = folder.join(".git");
-    if !std::fs::symlink_metadata(&git).ok()?.file_type().is_dir() {
-        return None;
-    }
+    // `.git` is opened once, without following it (a symlink or a `.git` file fails), and HEAD,
+    // the ref and packed-refs are all read from that one descriptor
+    let git = crate::sandbox::safe_fs::Dir::open(folder).ok()?.open_dir(FsPath::new(".git")).ok()?;
     let head = gitfile::read(&git, "HEAD", gitfile::REF_MAX)?;
     let head = head.trim();
     let Some(r) = head.strip_prefix("ref: ") else {
