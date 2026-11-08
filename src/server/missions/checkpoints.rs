@@ -10,6 +10,7 @@ use super::routes::{bad, internal, load_task, not_found};
 use super::{emit_task, int_setting, task_folder, task_json, transition, Actor};
 use crate::db::checkpoints::{new_id, Checkpoint, NewCheckpoint, ToolCall};
 use crate::db::missions::{Claim, Task, TaskChange};
+use crate::server::gitfile::{self, plain_ref};
 use crate::server::AppState;
 use axum::{
     extract::{Path, RawQuery, State},
@@ -195,24 +196,19 @@ fn store_blob(blobs: &FsPath, src: &FsPath) -> std::io::Result<String> {
     Ok(sha)
 }
 
-/// HEAD and loose ref files are tiny; a bigger one isn't git's.
-const GIT_REF_MAX: u64 = 4 * 1024;
-/// packed-refs can list many refs, but never this many for a task folder.
-const GIT_PACKED_MAX: u64 = 1024 * 1024;
-
 /// The commit the folder's git checkout is on, if it is one (read-only info).
 ///
 /// The folder is written by the task's bots, so everything under `.git` is untrusted: it never
-/// follows a symlink (at any component), never opens anything but a regular file (a FIFO can't
-/// block it), reads at most [`GIT_REF_MAX`] / [`GIT_PACKED_MAX`] bytes, only follows a `ref:`
-/// that is a plain `refs/...` name, and only returns 40 or 64 hex characters. Anything else,
+/// follows a symlink (at any component), never opens anything but a regular file with one link (a
+/// FIFO can't block it, a hard link can't name a host file), reads at most [`gitfile::REF_MAX`] /
+/// [`gitfile::PACKED_MAX`] bytes, only follows a `ref:` that is a plain `refs/...` name, and only returns 40 or 64 hex characters. Anything else,
 /// including a `.git` file (a `gitdir:` worktree pointer), is `None`.
 fn git_head(folder: &FsPath) -> Option<String> {
     let git = folder.join(".git");
     if !std::fs::symlink_metadata(&git).ok()?.file_type().is_dir() {
         return None;
     }
-    let head = read_git_file(&git, "HEAD", GIT_REF_MAX)?;
+    let head = gitfile::read(&git, "HEAD", gitfile::REF_MAX)?;
     let head = head.trim();
     let Some(r) = head.strip_prefix("ref: ") else {
         return commit_id(head);
@@ -221,10 +217,10 @@ fn git_head(folder: &FsPath) -> Option<String> {
     if !plain_ref(r) {
         return None;
     }
-    if let Some(s) = read_git_file(&git, r, GIT_REF_MAX) {
+    if let Some(s) = gitfile::read(&git, r, gitfile::REF_MAX) {
         return commit_id(s.trim());
     }
-    let packed = read_git_file(&git, "packed-refs", GIT_PACKED_MAX)?;
+    let packed = gitfile::read(&git, "packed-refs", gitfile::PACKED_MAX)?;
     packed
         .lines()
         .filter(|l| !l.starts_with('#') && !l.starts_with('^'))
@@ -232,54 +228,9 @@ fn git_head(folder: &FsPath) -> Option<String> {
         .and_then(commit_id)
 }
 
-/// A `ref:` target git would write: `refs/` then plain components of `[A-Za-z0-9._-]`, so it
-/// can't leave `.git` (no `..`, no empty or absolute part, no backslash).
-fn plain_ref(r: &str) -> bool {
-    r.len() <= 1024
-        && r.starts_with("refs/")
-        && !r.contains("..")
-        && r.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'/' | b'-'))
-        && r.split('/').all(|c| !c.is_empty() && c != ".")
-}
-
 /// A full SHA-1 (40) or SHA-256 (64) commit id, lowercased.
 fn commit_id(s: &str) -> Option<String> {
     ((s.len() == 40 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_hexdigit())).then(|| s.to_ascii_lowercase())
-}
-
-/// Reads `<git>/<rel>` (`rel` is `/`-separated and already checked) only when every component
-/// below `git` is a real folder and the last a regular file of at most `max` bytes. Never
-/// follows a symlink and never blocks on a FIFO, socket or device.
-fn read_git_file(git: &FsPath, rel: &str, max: u64) -> Option<String> {
-    let mut at = git.to_path_buf();
-    let parts: Vec<&str> = rel.split('/').collect();
-    for (i, p) in parts.iter().enumerate() {
-        at.push(p);
-        let ft = std::fs::symlink_metadata(&at).ok()?.file_type();
-        let last = i + 1 == parts.len();
-        if (last && !ft.is_file()) || (!last && !ft.is_dir()) {
-            return None;
-        }
-    }
-    let mut o = std::fs::OpenOptions::new();
-    o.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // A symlink swapped in after the check fails to open; a FIFO opens without waiting
-        o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let f = o.open(&at).ok()?;
-    let m = f.metadata().ok()?;
-    if !m.file_type().is_file() || m.len() > max {
-        return None;
-    }
-    let mut buf = Vec::with_capacity(m.len() as usize);
-    f.take(max + 1).read_to_end(&mut buf).ok()?;
-    if buf.len() as u64 > max {
-        return None;
-    }
-    String::from_utf8(buf).ok()
 }
 
 struct Taken {
@@ -1465,6 +1416,21 @@ mod tests {
         fifo(&git.join("refs/heads/main"));
         fifo(&git.join("packed-refs"));
         assert_eq!(run(folder), None, "ref and packed-refs FIFOs");
+    }
+
+    /// F-2: a hard link is a regular file, so a HEAD (or ref) that is another name for a host
+    /// file whose whole content is hex would pass every other check.
+    #[cfg(unix)]
+    #[test]
+    fn git_head_never_reads_a_hard_link() {
+        let (_d, folder, canary) = repo();
+        let git = folder.join(".git");
+        std::fs::hard_link(&canary, git.join("HEAD")).unwrap();
+        assert_eq!(head_of(&folder), None, "HEAD hard-linked to a host file");
+        std::fs::remove_file(git.join("HEAD")).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::hard_link(&canary, git.join("refs/heads/main")).unwrap();
+        assert_eq!(head_of(&folder), None, "loose ref hard-linked to a host file");
     }
 
     #[test]

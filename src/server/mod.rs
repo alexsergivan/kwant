@@ -58,6 +58,7 @@ pub mod goals;
 pub mod app_update_routes;
 pub mod smart_results;
 pub mod dev;
+pub(crate) mod gitfile;
 pub mod show_once;
 pub mod agents_connect;
 pub mod teams;
