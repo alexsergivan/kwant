@@ -362,7 +362,7 @@ const STOPPED_BY_USER: &str = "stopped by the user";
 /// S-F9 (Mira, copy.md): `write_error` when the drafting turn failed. The banner already leads with
 /// "**{bot} couldn't write the skill.**" and ends with "Your steps are kept until {day}, so try
 /// again.", so this never repeats the lead and never carries the engine's own words.
-pub const WRITE_TIMED_OUT: &str = "Writing took longer than 10 minutes, so kwant stopped it.";
+pub const WRITE_TIMED_OUT: &str = "Writing took longer than 10 minutes, so kwant bots stopped it.";
 pub const WRITE_STOPPED: &str = "You stopped it before the draft was done.";
 pub const WRITE_SPEND_STOP: &str = "Today's spending stop was on, so it didn't start. Press Continue today in Needs you first.";
 const CHECK_SIGN_IN: &str = "Check that it's signed in under Settings › This space › Accounts.";
@@ -603,10 +603,12 @@ mod tests {
         let no_lead = |s: &str| {
             assert!(!s.contains("couldn't write the skill"), "repeats the lead: {s}");
             assert!(!s.contains(':'), "no engine text after a colon: {s}");
+            // the app names itself "kwant bots" wherever the person reads it, never a bare "kwant"
+            assert!(!s.replace("kwant bots", "").contains("kwant"), "a bare kwant: {s}");
         };
         // 1 · the 10-minute timeout
         let s = failed_turn_reason(TIMED_OUT, "Rook", Some("claude"));
-        assert_eq!(s, "Writing took longer than 10 minutes, so kwant stopped it.");
+        assert_eq!(s, "Writing took longer than 10 minutes, so kwant bots stopped it.");
         no_lead(&s);
         // 2 · the person pressed Stop
         let s = failed_turn_reason("stopped by the user", "Rook", Some("claude"));
