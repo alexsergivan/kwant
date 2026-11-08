@@ -7,6 +7,7 @@ import { ReplySource, resolveBlock } from './registry';
 import { blockCsv, blockJson, blockMarkdown } from './exporters';
 import { SmartActions, actionClass, actionOnClass, evidenceClass } from './SmartActions';
 import { VerifiedStamp } from '../Signature';
+import { RecipeActions } from './RecipeActions';
 import { stampText } from '../../signature';
 
 /** "Ask about this": ChatView puts `text` in the composer and focuses it. Nothing is sent. */
@@ -37,6 +38,7 @@ const saveAsText = (messageId: string, on: boolean) => {
 };
 
 const TYPE_LABEL: Record<SmartBlock['type'], string> = {
+  recipe: 'Recipe',
   comparison: 'Comparison',
   chart: 'Chart',
   metrics: 'Key numbers',
@@ -221,11 +223,13 @@ const Footer: React.FC<{ block: SmartBlock; messageId: string; asText: boolean; 
           label={`All ${verified.total} ${verified.total === 1 ? 'check' : 'checks'} passed`}
         />
       )}
+      {/* A recipe copies itself or its shopping list; its CSV/JSON aren't useful (design §6). */}
+      {block.type === 'recipe' && <RecipeActions block={block} messageId={messageId} />}
       <button type="button" aria-pressed={asText} onClick={onToggle} className={`${actionClass} ${asText ? actionOnClass : ''}`}>
         <FileText size={14} aria-hidden="true" />
         Show as text
       </button>
-      <CopyData block={block} messageId={messageId} />
+      {block.type !== 'recipe' && <CopyData block={block} messageId={messageId} />}
       {/* Where the numbers come from: a chip in the row's style, a fact rather than a button. */}
       <span className={evidenceClass} data-evidence title={evidenceText(block)}>
         <EvidenceIcon block={block} />
@@ -258,6 +262,7 @@ export const SmartResult: React.FC<SmartResultProps> = ({ raw, reply, messageId,
   const { block, renderer } = resolved;
   const { Component } = renderer;
   const slot = reply === null;
+  // A recipe's stretch of the reply ("Show as text", or a render error) is that stretch as written.
   const text = slot ? renderText?.(blockMarkdown(block)) ?? null : fallback;
   const toggle = () => {
     saveAsText(messageId, !asText);
@@ -267,7 +272,8 @@ export const SmartResult: React.FC<SmartResultProps> = ({ raw, reply, messageId,
 
   return (
     <div role="group" aria-label={name} data-smart-frame={block.type} className={slot ? 'mt-3 min-w-0 max-w-full' : 'min-w-0 max-w-full'}>
-      {slot && block.title && <div className="mb-1.5 text-xs font-semibold text-zinc-300">{block.title}</div>}
+      {/* A recipe's card already leads with the dish name. */}
+      {slot && block.title && block.type !== 'recipe' && <div className="mb-1.5 text-xs font-semibold text-zinc-300">{block.title}</div>}
       {asText ? (
         text
       ) : (

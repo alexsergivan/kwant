@@ -12,7 +12,13 @@ export type Source =
   /** `ordered` absent means true (v1). Ordered and unordered lists are counted separately. */
   | { kind: 'markdown_list'; index: number; ordered?: boolean }
   /** No source in the text: drawn after the reply. */
-  | { kind: 'slot' };
+  | { kind: 'slot' }
+  /**
+   * A stretch of the reply (recipe, 0.7.6, contract.md §2): from `lead` top-level blocks before the list
+   * (index, ordered) through the list (last_index, last_ordered). Lists are counted as for markdown_list.
+   * The block is drawn where the stretch was.
+   */
+  | { kind: 'markdown_section'; index: number; ordered: boolean; last_index: number; last_ordered: boolean; lead: number };
 
 export type Provenance =
   | { kind: 'reply_text' }
@@ -223,7 +229,35 @@ export interface FilesBlock extends BlockCommon<'files'> {
   items: FileItem[];
 }
 
+export interface RecipeTime {
+  /** The reply's own words: "Prep", "Cook", "Total". */
+  label: string;
+  text: string;
+}
+export interface RecipeIngredient {
+  id: string;
+  /** The line after `qty`: qty + text is the reply's full line ("1 onion" + ", diced"). */
+  text: string;
+  /** The leading amount exactly as written ("2 cups", "½", "1–2 tsp"); null when the line has none. */
+  qty: string | null;
+  /** The sub-heading it sits under ("For the sauce"). */
+  group: string | null;
+}
+export interface RecipeStep {
+  id: string;
+  text: string;
+}
+/** 2–40 ingredients, 2–30 steps, 0–3 times, 0–6 notes. */
+export interface RecipeBlock extends BlockCommon<'recipe'> {
+  serves: number | null;
+  times: RecipeTime[];
+  ingredients: RecipeIngredient[];
+  steps: RecipeStep[];
+  notes: string[];
+}
+
 export type SmartBlock =
+  | RecipeBlock
   | ComparisonBlock
   | ChartBlock
   | MetricsBlock
@@ -293,6 +327,12 @@ export const isHttpUrl = (v: unknown): v is string => {
 export function parseSource(v: unknown): Source | null {
   if (!isObj(v)) return null;
   if (v.kind === 'slot') return { kind: 'slot' };
+  if (v.kind === 'markdown_section') {
+    const lead = v.lead ?? 0;
+    if (!isIndex(v.index) || typeof v.ordered !== 'boolean' || !isIndex(v.last_index) || typeof v.last_ordered !== 'boolean') return null;
+    if (!isIndex(lead) || lead > 12) return null;
+    return { kind: 'markdown_section', index: v.index, ordered: v.ordered, last_index: v.last_index, last_ordered: v.last_ordered, lead };
+  }
   if (!isIndex(v.index)) return null;
   if (v.kind === 'markdown_table') return { kind: 'markdown_table', index: v.index };
   if (v.kind === 'markdown_list') {
@@ -544,6 +584,47 @@ export interface HastNode {
   children?: HastNode[];
   properties?: Record<string, unknown>;
   data?: Record<string, unknown>;
+  position?: { start: { offset?: number }; end: { offset?: number } };
+}
+
+/** The unchecked block whose source is a stretch of the reply (a recipe), if any. */
+export function sectionBlock(results: unknown): (Record<string, unknown> & { source: Extract<Source, { kind: 'markdown_section' }> }) | null {
+  for (const b of resultBlocks(results)) {
+    const src = parseSource(b.source);
+    if (src?.kind === 'markdown_section') return { ...b, source: src };
+  }
+  return null;
+}
+
+/**
+ * Runs after rehypeSmartIndex. When a block's source is a markdown_section, the reply's top-level blocks
+ * from `lead` before the first list through the last list become one placeholder `div` that carries
+ * that stretch's markdown (data.smartSection), so the block is drawn once in their place and never
+ * repeats them. When the lists aren't where the block says, nothing changes and the reply stays text.
+ */
+export function rehypeSmartSection(markdown: string, results: unknown) {
+  return () => (tree: HastNode) => {
+    const raw = sectionBlock(results);
+    const kids = tree.children;
+    if (!raw || !kids) return;
+    const { index, ordered, last_index, last_ordered, lead } = raw.source;
+    const els = kids.filter((n) => n.type === 'element');
+    const at = (i: number, o: boolean) => els.findIndex((n) => (n.tagName === 'ol' || n.tagName === 'ul') && n.data?.smartIndex === i && n.data.smartOrdered === o);
+    const a = at(index, ordered), z = at(last_index, last_ordered);
+    if (a < 0 || z < a || a - lead < 0) return;
+    const from = els[a - lead], to = els[z];
+    const start = from.position?.start.offset, end = to.position?.end.offset;
+    if (start === undefined || end === undefined) return;
+    const i = kids.indexOf(from), j = kids.indexOf(to);
+    const holder: HastNode = {
+      type: 'element',
+      tagName: 'div',
+      properties: {},
+      children: [],
+      data: { smartSection: true, markdown: markdown.slice(start, end) },
+    };
+    kids.splice(i, j - i + 1, holder);
+  };
 }
 
 export const hastText = (n: HastNode | undefined): string =>

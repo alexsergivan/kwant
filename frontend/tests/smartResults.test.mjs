@@ -460,7 +460,7 @@ test('a task list only becomes a checklist; nested or quoted lists stay markdown
 
 test('fixtures: one per block type, every block well formed; Pixel’s types render from them', async () => {
   const types = new Set(Object.values(m.FIXTURES).map((f) => f.results.blocks[0].type));
-  assert.deepEqual([...types].sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'steps', 'verification']);
+  assert.deepEqual([...types].sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'recipe', 'steps', 'verification']);
   const strings = (v) => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(strings) : v && typeof v === 'object' ? Object.values(v).flatMap(strings) : []);
   for (const [name, f] of Object.entries(m.FIXTURES)) {
     assert.equal(m.resultBlocks(f.results).length, 1, name);
@@ -471,7 +471,7 @@ test('fixtures: one per block type, every block well formed; Pixel’s types ren
       assert.ok(v.host.querySelector('[data-smart-frame]'), `${name} renders`);
     }
   }
-  assert.deepEqual(Object.keys(m.REGISTRY).sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'steps', 'verification']);
+  assert.deepEqual(Object.keys(m.REGISTRY).sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'recipe', 'steps', 'verification']);
 });
 
 test('a slot block renders after the reply with its title; Show as text gives its data as markdown', async () => {
@@ -517,7 +517,7 @@ test('generic Copy data: every fixture exports CSV and Markdown with one row per
   for (const [name, f] of Object.entries(m.FIXTURES)) {
     const block = f.results.blocks[0];
     const rows = m.blockRows(block);
-    const n = (block.rows ?? block.points ?? block.checks ?? block.items).length;
+    const n = (block.rows ?? block.points ?? block.checks ?? block.items ?? block.ingredients).length;
     assert.equal(rows.length, n, name);
     assert.equal(m.blockCsv(block).trim().split('\n').length, n + 1, `${name}: header + rows`);
     assert.ok(m.blockMarkdown(block).length > 0, name);
