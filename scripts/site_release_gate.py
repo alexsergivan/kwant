@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""kwant.si and the GitHub README must show the newest release before that release counts as done.
+"""kwant.si, the GitHub README and the in-app "What's new" must cover the newest release before it counts as done.
 
-Reads the newest `## [Mac X.Y.Z]` heading in CHANGELOG.md and checks site-src/ and README.md:
+Reads the newest `## [Mac X.Y.Z]` heading in CHANGELOG.md and checks site-src/, README.md and frontend/src/whatsnew/:
 
 1. features.html has a "New in" section for it: `id="new-<id>"`, where <id> is the version without dots or a
    trailing .0 (0.7.0 -> new-07, 0.7.1 -> new-071, 0.6.11 -> new-0611), or any section whose `data-covers` lists
@@ -13,12 +13,17 @@ Reads the newest `## [Mac X.Y.Z]` heading in CHANGELOG.md and checks site-src/ a
 5. README.md has a `## New in X.Y` section for the release's minor version, and that section names the release
    (0.7.2 as "(0.7.2)" on a bullet, say). A small fix release with no bullet of its own can be named in an HTML
    comment in the section: `<!-- covers: 0.7.3 -->`.
+6. frontend/src/whatsnew/X.Y.Z.json exists and keeps the limits of the in-app "What's new" sheet: 2-6 highlights
+   (title 60 characters or fewer, text 200 or fewer, image null or a .webp of 80 KB or less in
+   frontend/public/whatsnew/X.Y.Z/, open null or an in-app place such as "settings/teams") and 0-15 fixes of 140
+   characters or fewer. frontend/src/whatsNewSheet.ts checks the same limits in the app.
 
 Usage: python3 scripts/site_release_gate.py [--warn]
 Exit 0 when kwant.si and the README are current, else 1 with one line per gap. --warn prints the gaps and exits 0:
 check_site.py uses it, because the release PR bumps CHANGELOG.md before the site PR lands. The release script uses
 the strict form, so a release isn't done until the site and the README are.
 """
+import json
 import re
 import sys
 from pathlib import Path
@@ -75,6 +80,91 @@ def media_files(name):
     return [f"{name}-1440.webp", f"{name}-2880.webp"]
 
 
+# The "What's new" limits, as in frontend/src/whatsNewSheet.ts (LIMITS).
+WN_HIGHLIGHTS = (2, 6)
+WN_TITLE, WN_TEXT, WN_FIXES, WN_FIX = 60, 200, 15, 140
+WN_IMAGE_BYTES = 80 * 1024
+WN_TOP = {"inbox", "inbox/loose-ends", "board", "parallel", "dev", "jar", "settings/app"}
+
+
+def whatsnew_places(root):
+    """The in-app places a highlight's "open" may name: the views in frontend/src/nav.ts."""
+    nav = root / "frontend" / "src" / "nav.ts"
+    tabs = re.search(r"SPACE_SETTINGS_TABS = \[([^\]]*)\]", nav.read_text()) if nav.exists() else None
+    return WN_TOP | {f"settings/{t}" for t in re.findall(r"'([a-z-]+)'", tabs[1] if tabs else "")}
+
+
+def whatsnew_gaps(version, root=ROOT):
+    """Every way frontend/src/whatsnew/<version>.json is missing or breaks the sheet's limits."""
+    rel = f"frontend/src/whatsnew/{version}.json"
+    path = root / rel
+    if not path.exists():
+        return [f"{rel} is missing: write the in-app \"What's new in kwant {version}\" from the CHANGELOG entry "
+                f"(2-6 highlights and the fixes; see next-076/whats-new/spec.md)"]
+    try:
+        e = json.loads(path.read_text())
+    except ValueError as err:
+        return [f"{rel} isn't valid JSON ({err})"]
+    if not isinstance(e, dict):
+        return [f"{rel} must be a JSON object"]
+    out = []
+    say = lambda msg: out.append(f"{rel}: {msg}")
+    if e.get("version") != version:
+        say(f"version is {e.get('version')!r}, should be {version!r}")
+    if not isinstance(e.get("date"), str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", e["date"]):
+        say("date must be YYYY-MM-DD")
+    hs = e.get("highlights")
+    places = whatsnew_places(root)
+    if not isinstance(hs, list):
+        say("highlights must be a list")
+        hs = []
+    elif not WN_HIGHLIGHTS[0] <= len(hs) <= WN_HIGHLIGHTS[1]:
+        say(f"{len(hs)} highlights, needs {WN_HIGHLIGHTS[0]}-{WN_HIGHLIGHTS[1]}")
+    ids = set()
+    for i, h in enumerate(hs):
+        at = f"highlights[{i}]"
+        if not isinstance(h, dict):
+            say(f"{at} must be an object")
+            continue
+        hid = h.get("id")
+        if not isinstance(hid, str) or not re.fullmatch(r"[a-z0-9-]+", hid):
+            say(f"{at}.id must be lowercase letters, digits and dashes")
+        elif hid in ids:
+            say(f"{at}.id {hid!r} is used twice")
+        ids.add(hid)
+        for key, limit in (("title", WN_TITLE), ("text", WN_TEXT)):
+            v = h.get(key)
+            if not isinstance(v, str) or not v.strip():
+                say(f"{at}.{key} is empty")
+            elif len(v) > limit:
+                say(f"{at}.{key} is {len(v)} characters, max {limit}")
+        img = h.get("image")
+        if img is not None:
+            if not isinstance(img, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*\.webp", img):
+                say(f"{at}.image must be null or a .webp file name")
+            else:
+                f = root / "frontend" / "public" / "whatsnew" / version / img
+                if not f.exists():
+                    say(f"{at}.image: frontend/public/whatsnew/{version}/{img} is missing")
+                elif f.stat().st_size > WN_IMAGE_BYTES:
+                    say(f"{at}.image: {img} is {f.stat().st_size / 1024:.1f} KB, max 80 KB")
+        place = h.get("open")
+        if place is not None and (not isinstance(place, str) or place.strip("/").lower() not in places):
+            say(f"{at}.open {place!r} isn't an in-app place (null, or one of: {', '.join(sorted(places))})")
+    fixes = e.get("fixes")
+    if not isinstance(fixes, list):
+        say("fixes must be a list")
+    else:
+        if len(fixes) > WN_FIXES:
+            say(f"{len(fixes)} fixes, max {WN_FIXES}")
+        for i, f in enumerate(fixes):
+            if not isinstance(f, str) or not f.strip():
+                say(f"fixes[{i}] is empty")
+            elif len(f) > WN_FIX:
+                say(f"fixes[{i}] is {len(f)} characters, max {WN_FIX}")
+    return out
+
+
 def gaps(root=ROOT):
     src, media = root / "site-src", root / "site" / "assets" / "media"
     version, entry = newest((root / "CHANGELOG.md").read_text())
@@ -115,6 +205,7 @@ def gaps(root=ROOT):
     gap = readme_gap(version, readme.read_text()) if readme.exists() else "README.md is missing"
     if gap:
         out.append(gap)
+    out += whatsnew_gaps(version, root)
     return out
 
 
@@ -125,7 +216,7 @@ def main():
     for g in found:
         print(("WARN " if warn else "GAP ") + g)
     if not found:
-        print(f"kwant.si and README.md cover {version}")
+        print(f"kwant.si, README.md and What's new cover {version}")
     sys.exit(0 if warn or not found else 1)
 
 

@@ -6,6 +6,7 @@ import { InboxPage } from './components/InboxPage';
 import { InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
 import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
+import { WhatsNewHost } from './components/WhatsNewSheet';
 import { FirstRunWelcome } from './components/FirstRunWelcome';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState, SendOptions } from './components/ChatView';
@@ -3839,6 +3840,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
+  // What's new after an update: only for someone who has used kwant (an account works, or they've
+  // written here). A brand-new person gets Get started instead; unknown until the space has loaded.
+  const wroteHere = messages.some((m) => m.sender_role === 'user');
+  const whatsNewEstablished = wroteHere || canRun === true ? true : !loaded || canRun == null ? null : false;
   const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (
@@ -4143,6 +4148,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         {jarAnnouncement}
       </p>
       <NeedsYouPill items={pill.items} rev={pill.rev} spriteOf={spriteOf} onOpen={openPill} onDismiss={dismissPill} />
+      <WhatsNewHost established={whatsNewEstablished} onOpen={(v) => applyViewRef.current(v)} />
     </div>
     </ReadyTeamsProvider>
   );
