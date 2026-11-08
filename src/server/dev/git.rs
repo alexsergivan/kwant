@@ -1433,6 +1433,25 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    /// Writes an executable script at `path` that is safe to run while other tests start
+    /// processes (D-2). Writing it here would hold a write fd on it in this process, and a
+    /// thread that forks at that moment hands the fd to its child until that child execs; running
+    /// the script then fails with "text file busy" (ETXTBSY), which `run` reports as `Failed`.
+    /// So the bytes go to a draft, and a separate `cp` makes the real file: the only fd ever open
+    /// for writing on it lives and dies in that `cp`, which has exited before anything runs it.
+    fn exe(path: &Path, text: &str) {
+        let draft = path.with_extension("draft");
+        std::fs::write(&draft, text).unwrap();
+        let copied = Command::new("cp").arg(&draft).arg(path).status().unwrap();
+        assert!(copied.success(), "cp {copied}");
+        std::fs::remove_file(&draft).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     /// Plain git for setting a throwaway repo up (never the code under test).
     fn sh(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
@@ -1700,12 +1719,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let fake = tmp.path().join("git");
         let pid_file = tmp.path().join("child.pid");
-        std::fs::write(&fake, format!("#!/bin/sh\nsleep 30 &\necho $! > {}\nwait\n", pid_file.display())).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        exe(&fake, &format!("#!/bin/sh\nsleep 30 &\necho $! > {}\nwait\n", pid_file.display()));
         let t = Instant::now();
         let r = run(fake.to_str().unwrap(), None, &["x"], Opts { timeout: Duration::from_millis(500), ..Opts::read() }).await;
         assert_eq!(r, Err(GitError::Timeout));
@@ -1723,19 +1737,13 @@ mod tests {
         let fake = tmp.path().join("git");
         let seen = tmp.path().join("seen");
         // Records its argv and the config git would read from the environment
-        std::fs::write(
+        exe(
             &fake,
-            format!(
+            &format!(
                 "#!/bin/sh\nprintf '%s\\n' \"$@\" > {0}.argv\nenv | grep -E '^(GIT_|SSH_ASKPASS|GCM_)' | sort > {0}.env\n",
                 seen.display()
             ),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        );
         let token = format!("{}{}", ["gh", "s_"].concat(), "c4n4ry".repeat(6));
         let header = Zeroizing::new(format!("Basic {token}"));
         let auth = Auth::header("https://github.com/o/n.git", header).unwrap();
@@ -1963,14 +1971,6 @@ mod tests {
     // -----------------------------------------------------------------------------------------
     // G2 review (Lin, at 6dd0243): one test per probe.
 
-    fn exe(path: &Path, text: &str) {
-        std::fs::write(path, text).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-    }
 
     /// F1 (probe P1): an ssh remote runs `ssh`, never an empty command, whatever the repo's own
     /// config says. A fake `ssh` first on PATH logs what git asked it for.
