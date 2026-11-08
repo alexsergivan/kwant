@@ -422,3 +422,110 @@ async fn nothing_the_bot_started_outlives_the_containers_last_turn() {
     drop(next);
     vm.remove_containers(|_| true).await;
 }
+
+/// Answers each approval after `wait`, recording what it was asked.
+struct Delayed {
+    wait: std::time::Duration,
+    answer: bool,
+    asked: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait::async_trait]
+impl kwnt::mcp::ToolApprover for Delayed {
+    async fn approve(&self, r: kwnt::mcp::ToolApprovalRequest) -> bool {
+        self.asked.lock().unwrap().push(r.tool_name.clone());
+        tokio::time::sleep(self.wait).await;
+        self.answer
+    }
+}
+
+/// One turn with kwnt's approval tool (`--permission-prompt-tool`), as the Claude driver runs
+/// it: the Bash call goes to kwnt's permission route and back. What was asked, whether the
+/// command ran, and how many model calls the broker passed.
+async fn approval_turn(name: &str, answer: bool) -> (Vec<String>, bool, usize, String) {
+    use kwnt::{broker::PermissionBroker, config::Config, db::Database, router::LayaRouter, server::mcp_runtime::PermissionSession, server::AppState, tools::ToolRunner};
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::init(tmp.path()).await.unwrap();
+    let config = Config { data_dir: tmp.path().to_path_buf(), browser_cdp_url: Some("http://127.0.0.1:9".into()), ..Config::default() };
+    let state = AppState::new(config.clone(), db, ToolRunner::new(tmp.path().join("workspace")), PermissionBroker::new(), LayaRouter::new(config.laya_url.clone()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let router = kwnt::server::create_router(state.clone());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let up = Upstream::default();
+    let mut cfg = BrokerConfig::new(data.path().join("broker.log"));
+    cfg.anthropic_origin = start_upstream(up.clone()).await;
+    cfg.oauth_token_url = format!("{}/v1/oauth/token", cfg.anthropic_origin);
+    let vm = AgentVm::with_parts(data.path(), cfg, Some(image_tag()), AgentsInVmConfig::default(), None);
+    let turn = vm
+        .prepare_turn(TurnRequest {
+            bot_id: format!("adversarial-{name}"),
+            folder: Some(work.path().to_path_buf()),
+            credential: Credential::ApiKey(Secret::new("sk-ant-api03-APPROVALTEST")),
+            credential_home: None,
+            kwnt_origin: Some(base.clone()),
+        })
+        .await
+        .unwrap_or_else(|r| panic!("the turn didn't start: {r:?}"));
+    let _cleanup = Cleanup(turn.container().to_string());
+
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let approver = Arc::new(Delayed { wait: std::time::Duration::from_millis(200), answer, asked: asked.clone() });
+    let token = format!("tok-{name}-{}", uuid::Uuid::new_v4().simple());
+    let ctx = kwnt::mcp::McpTurnContext {
+        servers: vec![],
+        approver,
+        config_dir: tmp.path().join("mcp"),
+        permission_url: Some(format!("{base}/api/mcp/permission/{token}")),
+        gateway: None,
+        max_tool_iterations: 8,
+        smart_approvals: false,
+        records: Default::default(),
+    };
+    state
+        .mcp_sessions
+        .lock()
+        .await
+        .insert(token, PermissionSession::new("k1".into(), "Adversarial".into(), "t1".into(), ctx.clone(), Some(turn.workdir().to_path_buf())));
+    let (cfg_path, _dropped) = turn.write_mcp_config(&ctx).unwrap();
+
+    let marker = format!("approval-marker-{name}");
+    let mut claude = Command::new("claude");
+    claude.args(["--model", "haiku", "--permission-mode", "default", "--output-format", "stream-json", "--verbose"]);
+    claude.args(["--strict-mcp-config", "--mcp-config", &cfg_path, "--permission-prompt-tool", "mcp__kwnt__approve", "-p"]);
+    claude.arg(format!("RUN: touch {marker}"));
+    claude.env("MCP_TOOL_TIMEOUT", "330000").env("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT", "330000").env("MCP_TIMEOUT", "30000");
+    let mut cmd = turn.wrap(&claude);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+    let out = tokio::time::timeout(std::time::Duration::from_secs(420), cmd.spawn().unwrap().wait_with_output()).await.expect("claude finished").unwrap();
+    let ran = turn.workdir().join(&marker).exists() || work.path().join(&marker).exists();
+    let said = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let calls = up.calls.lock().unwrap().len();
+    drop(turn);
+    vm.remove_containers(|_| true).await;
+    let asked = asked.lock().unwrap().clone();
+    (asked, ran, calls, said)
+}
+
+/// QA F-1: with kwnt's approval tool on (every real Claude turn), the request carries the
+/// AskUserQuestion schema, whose `metadata.properties.source` the broker once took for a fetch
+/// by reference and refused. Every model call now passes, and Allow and Deny both work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_approval_goes_through_kwnt_and_both_answers_work() {
+    if !docker_ok() {
+        assert!(std::env::var("KWNT_AGENT_TEST_REQUIRE").is_err(), "Docker or the agent image {} is missing", image_tag());
+        eprintln!("skipped: needs Docker and the agent image {}", image_tag());
+        return;
+    }
+    let (asked, ran, calls, said) = approval_turn("allow", true).await;
+    assert_eq!(asked, vec!["Bash".to_string()], "the Bash call asked kwnt once:\n{said}");
+    assert!(ran, "allowed: the command ran:\n{said}");
+    assert!(calls >= 2, "the broker passed the call that asked and the one after the answer:\n{said}");
+    let (asked, ran, calls, said) = approval_turn("deny", false).await;
+    assert_eq!(asked, vec!["Bash".to_string()], "{said}");
+    assert!(!ran, "denied: the command didn't run:\n{said}");
+    assert!(calls >= 2, "{said}");
+}

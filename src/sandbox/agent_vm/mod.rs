@@ -929,7 +929,14 @@ fn primary_api_key(path: &Path) -> Option<String> {
 }
 
 /// Environment the CLI keeps inside the container; everything else kwnt set is dropped.
-const PASS_ENV: &[&str] = &["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "MCP_TOOL_TIMEOUT", "MCP_TIMEOUT", "BROWSER", "DISPLAY"];
+const PASS_ENV: &[&str] = &[
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR",
+    "MCP_TOOL_TIMEOUT",
+    "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT",
+    "MCP_TIMEOUT",
+    "BROWSER",
+    "DISPLAY",
+];
 
 /// Provider and model settings that would point the CLI somewhere else (as for a profile run).
 const SETTINGS_OVERRIDE: &[(&str, &str)] = &[
@@ -1257,6 +1264,60 @@ mod tests {
         assert_eq!(vm.waiting.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
+    /// QA P-5b: two replies each waiting on an approval card hold both spots for up to 300 s; a
+    /// third is shown queued ("vm_busy") and its wait never counts toward the stall watchdog,
+    /// which starts only once it gets the spot an expired card frees.
+    #[tokio::test]
+    async fn two_replies_waiting_for_approval_queue_a_third_without_a_stall() {
+        use crate::drivers::events::RuntimeEvent as E;
+        use crate::server::turns::StallClock;
+        let d = tempfile::tempdir().unwrap();
+        let vm = AgentVm::with_parts(d.path(), BrokerConfig::new(d.path().join("broker.log")), None, AgentsInVmConfig { max_turns: 2, ..Default::default() }, None);
+        let (limit, t0) = (Duration::from_secs(120), tokio::time::Instant::now());
+        let mut clocks = vec![StallClock::new(Some(limit), t0); 3];
+        // Two replies get a spot each, and each asks for an approval nobody answers yet
+        let mut quiet = |_| std::future::ready(());
+        let first = vm.turn_permit(&mut quiet).await.unwrap();
+        let _second = vm.turn_permit(&mut quiet).await.unwrap();
+        let approval = |id: &str| E::ToolCallPending { id: id.into(), name: "Bash".into(), args: serde_json::json!({}) };
+        clocks[0].saw(&approval("a"), t0);
+        clocks[1].saw(&approval("b"), t0);
+        // A third is queued, the way the Claude driver reports it
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let vm3 = vm.clone();
+        let third = tokio::spawn(async move {
+            let mut report = move |w| {
+                let tx = tx.clone();
+                async move {
+                    let e = match w {
+                        TurnWait::Queued { position, slots } => E::WaitingForRoom { reason: "vm_busy".into(), position, slots },
+                        TurnWait::Started => E::RoomTaken,
+                    };
+                    let _ = tx.send(e).await;
+                }
+            };
+            vm3.turn_permit(&mut report).await.map(|_| ())
+        });
+        let queued = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await.unwrap().unwrap();
+        assert!(matches!(&queued, E::WaitingForRoom { reason, position: 1, slots: 2 } if reason == "vm_busy"), "{queued:?}");
+        clocks[2].saw(&queued, t0);
+        // Nobody stalls while the cards wait, however long that is
+        assert!(clocks.iter().all(|c| c.deadline().is_none()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!third.is_finished(), "the third still waits");
+        // At 300 s the first card expires: that reply ends and frees its spot
+        let t1 = t0 + Duration::from_secs(300);
+        clocks[0].saw(&E::ToolCallCompleted { id: "a".into(), result: serde_json::json!({"expired": true}) }, t1);
+        drop(first);
+        let taken = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await.unwrap().unwrap();
+        assert!(matches!(taken, E::RoomTaken), "{taken:?}");
+        clocks[2].saw(&taken, t1);
+        // The third's watchdog starts from the moment it got the spot, not from when it queued
+        assert_eq!(clocks[2].deadline(), Some(t1 + limit));
+        assert_eq!(clocks[1].deadline(), None, "the second card still waits");
+        tokio::time::timeout(Duration::from_secs(2), third).await.unwrap().unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn at_most_max_turns_hold_a_permit_and_every_drop_frees_one() {
         let d = tempfile::tempdir().unwrap();
@@ -1363,6 +1424,8 @@ mod tests {
         let key = turn.lease.key().to_string();
         let mut cmd = Command::new("/host/claude");
         cmd.env("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1")
+            .env("MCP_TOOL_TIMEOUT", "330000")
+            .env("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT", "330000")
             .env("ANTHROPIC_API_KEY", "sk-real")
             .env("CLAUDE_CONFIG_DIR", "/home/p/.claude")
             .env("AWS_SECRET_ACCESS_KEY", "x")
@@ -1375,6 +1438,9 @@ mod tests {
         assert!(args.contains(&format!("ANTHROPIC_BASE_URL=http://127.0.0.1:8080/t/{key}/anthropic")));
         assert!(args.contains(&format!("ANTHROPIC_API_KEY={DUMMY_API_KEY}")));
         assert!(args.contains(&"CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1".to_string()));
+        // The approval wait's limits reach claude in the container too (QA F-2)
+        assert!(args.contains(&"MCP_TOOL_TIMEOUT=330000".to_string()), "{args:?}");
+        assert!(args.contains(&"CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=330000".to_string()), "{args:?}");
         assert!(args.windows(2).any(|p| p == ["exec", "-w"]));
         let settings = args.last().unwrap();
         assert!(settings.contains(&format!("/t/{key}/anthropic")) && settings.contains("CLAUDE_CODE_USE_BEDROCK"));

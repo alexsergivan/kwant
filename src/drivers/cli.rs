@@ -1590,6 +1590,10 @@ impl Driver for CliDriver {
                             let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
                             let tool_timeout_ms = (crate::mcp::APPROVAL_TIMEOUT_SECS + 30).max(slowest) * 1000;
                             cmd.env("MCP_TOOL_TIMEOUT", tool_timeout_ms.to_string());
+                            // claude also gives up on a tool call with no progress for 300 s, which
+                            // MCP_TOOL_TIMEOUT doesn't raise: the same limit, so kwnt's own approval
+                            // timeout (300 s) always ends a waiting card first (QA F-2)
+                            cmd.env("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT", tool_timeout_ms.to_string());
                             cmd.env("MCP_TIMEOUT", "30000");
                             _mcp_config = file;
                         }

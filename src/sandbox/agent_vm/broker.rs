@@ -979,20 +979,44 @@ pub fn parse_strict(body: &[u8]) -> Result<Value, String> {
     Ok(v)
 }
 
-/// Whether any content block has a `source` Anthropic would fetch (`url`, `file`).
-fn fetches_by_reference(v: &Value) -> bool {
-    match v {
-        Value::Object(m) => {
-            let by_ref = m
-                .get("source")
-                .and_then(|s| s.get("type"))
-                .and_then(Value::as_str)
-                .is_some_and(|t| t != "base64" && t != "text" && t != "content");
-            by_ref || m.values().any(fetches_by_reference)
-        }
-        Value::Array(a) => a.iter().any(fetches_by_reference),
-        _ => false,
+/// Whether a content block Anthropic reads has a `source` it would fetch (`url`, `file`, or any
+/// type but `base64`, `text` and `content`), or names a Files API upload. Only where Anthropic
+/// reads content: `system` and `messages[].content`, with the blocks nested in a `tool_result`'s
+/// `content` and a `content` document's `source.content`. Never `tools` (a tool's input schema can
+/// have a property called `source`, as Claude's `AskUserQuestion` does: QA F-1) and never a
+/// `tool_use`'s `input` (the model's own arguments, which Anthropic doesn't fetch from).
+fn fetches_by_reference(doc: &Value) -> bool {
+    let system = doc.get("system").is_some_and(blocks_fetch);
+    let messages = doc
+        .get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|ms| ms.iter().any(|m| m.get("content").is_some_and(blocks_fetch)));
+    system || messages
+}
+
+/// `content` (a string, or a list of content blocks): whether any block fetches by reference.
+fn blocks_fetch(content: &Value) -> bool {
+    content.as_array().is_some_and(|blocks| blocks.iter().any(block_fetches))
+}
+
+fn block_fetches(block: &Value) -> bool {
+    let Some(b) = block.as_object() else { return false };
+    if b.get("type").and_then(Value::as_str) == Some("container_upload") || b.contains_key("file_id") {
+        return true;
     }
+    if let Some(source) = b.get("source").and_then(Value::as_object) {
+        match source.get("type").and_then(Value::as_str) {
+            Some("base64" | "text") => {}
+            Some("content") => {
+                if source.get("content").is_some_and(blocks_fetch) {
+                    return true;
+                }
+            }
+            // `url`, `file`, anything newer, or a source without a type
+            _ => return true,
+        }
+    }
+    b.get("type").and_then(Value::as_str) == Some("tool_result") && b.get("content").is_some_and(blocks_fetch)
 }
 
 /// reqwest's error text without the URL (it can carry a token in the kwnt route's path).
@@ -1626,6 +1650,44 @@ mod tests {
         let fine = r#"{"model":"claude-haiku","tools":[{"name":"Bash","input_schema":{}},{"type":"custom","name":"x","input_schema":{}}],
             "messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]}]}"#;
         assert!(check_messages_body(fine.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn a_source_is_checked_only_where_anthropic_reads_content() {
+        // QA F-1: Claude's AskUserQuestion tool (sent with --permission-prompt-tool) has a schema
+        // property called `source`. Refusing it refused every turn with kwnt's tools.
+        let ask = r#"{"name":"AskUserQuestion","input_schema":{"type":"object","properties":{"metadata":{"type":"object",
+            "properties":{"source":{"type":"string","description":"Optional identifier for the source of this question"}}}}}}"#;
+        let body = format!(r#"{{"model":"m","tools":[{ask}],"messages":[{{"role":"user","content":"hi"}}]}}"#);
+        assert!(check_messages_body(body.as_bytes()).is_ok(), "a tool schema's `source` property");
+        let body = r#"{"tools":[{"name":"x","input_schema":{"properties":{"source":{"type":"url"}}}}]}"#;
+        assert!(check_messages_body(body.as_bytes()).is_ok(), "even one whose type looks like a fetch");
+        // The model's own tool arguments in the history aren't fetched either
+        let body = r#"{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{"source":{"type":"url","url":"https://a.example"}}}]}]}"#;
+        assert!(check_messages_body(body.as_bytes()).is_ok(), "tool_use input");
+        // A search result's `source` is a string it cites, not a fetch
+        let body = r#"{"messages":[{"role":"user","content":[{"type":"search_result","source":"https://a.example","title":"t","content":[{"type":"text","text":"x"}]}]}]}"#;
+        assert!(check_messages_body(body.as_bytes()).is_ok(), "search_result");
+
+        // Still refused wherever Anthropic reads content
+        let refused = [
+            r#"{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://evil.example"}}]}]}"#,
+            r#"{"system":[{"type":"document","source":{"type":"url","url":"https://evil.example/a.pdf"}}]}"#,
+            r#"{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"image","source":{"type":"file","file_id":"f"}}]}]}]}"#,
+            r#"{"messages":[{"role":"user","content":[{"type":"document","source":{"type":"content","content":[{"type":"image","source":{"type":"url","url":"https://e.example"}}]}}]}]}"#,
+            r#"{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"something_new"}}]}]}"#,
+            r#"{"messages":[{"role":"user","content":[{"type":"image","source":{"url":"https://e.example"}}]}]}"#,
+            r#"{"messages":[{"role":"user","content":[{"type":"container_upload","file_id":"file_1"}]}]}"#,
+        ];
+        for body in refused {
+            let d = check_messages_body(body.as_bytes()).unwrap_err();
+            assert_eq!(d.message, crate::sandbox::agent_vm::notice::body::FETCH_BY_REFERENCE, "{body}");
+        }
+        // Inline content still passes, nested too
+        let body = r#"{"system":[{"type":"text","text":"x"}],"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA=="}}]},
+            {"type":"document","source":{"type":"text","media_type":"text/plain","data":"x"}},
+            {"type":"document","source":{"type":"content","content":[{"type":"text","text":"x"}]}}]}]}"#;
+        assert!(check_messages_body(body.as_bytes()).is_ok());
     }
 
     #[test]

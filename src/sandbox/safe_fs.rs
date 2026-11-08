@@ -116,6 +116,70 @@ mod imp {
             check(unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) }).map(|fd| Self { fd })
         }
 
+        /// Opens the absolute folder `path` one part at a time from `/`, each with
+        /// `O_NOFOLLOW|O_DIRECTORY` (QA F-3): a symlink on any part, the folder itself included, is
+        /// refused (`ELOOP`/`ENOTDIR`), so a folder the bot swapped for a symlink is never entered.
+        /// One exception: a symlink owned by root (macOS's `/var`, `/tmp`), which a bot running as
+        /// the person can neither make nor swap, is followed under the same rule.
+        pub fn open_strict(path: &Path) -> io::Result<Self> {
+            if !path.is_absolute() {
+                return Err(io::Error::new(io::ErrorKind::InvalidInput, "not an absolute path"));
+            }
+            let mut links = 0;
+            Self::walk(Self::open(Path::new("/"))?, path, &mut links)
+        }
+
+        // `mode_t` is u32 on Linux and u16 on macOS, so the cast is needed there
+        #[allow(clippy::unnecessary_cast)]
+        fn walk(start: Dir, path: &Path, links: &mut u32) -> io::Result<Dir> {
+            let mut cur = start;
+            for c in path.components() {
+                cur = match c {
+                    Component::RootDir => Self::open(Path::new("/"))?,
+                    Component::CurDir => cur,
+                    Component::ParentDir => Dir { fd: cur.at(OsStr::new(".."), DIR_FLAGS)? },
+                    Component::Normal(n) => match cur.at(n, DIR_FLAGS) {
+                        Ok(fd) => Dir { fd },
+                        Err(e) if matches!(e.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)) => {
+                            let st = cur.lstat_at(n)?;
+                            if mode_kind(st.st_mode as u32) != Kind::Symlink || st.st_uid != 0 || *links >= 16 {
+                                return Err(e);
+                            }
+                            *links += 1;
+                            let target = cur.read_link_at(n)?;
+                            Self::walk(cur, &target, links)?
+                        }
+                        Err(e) => return Err(e),
+                    },
+                    Component::Prefix(_) => return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a unix path")),
+                };
+            }
+            Ok(cur)
+        }
+
+        fn lstat_at(&self, name: &OsStr) -> io::Result<libc::stat> {
+            let c = cstr(name)?;
+            let mut st = std::mem::MaybeUninit::<libc::stat>::zeroed();
+            // SAFETY: a valid descriptor, C string and out pointer
+            if unsafe { libc::fstatat(self.fd.as_raw_fd(), c.as_ptr(), st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // SAFETY: fstatat succeeded and filled it
+            Ok(unsafe { st.assume_init() })
+        }
+
+        fn read_link_at(&self, name: &OsStr) -> io::Result<std::path::PathBuf> {
+            let c = cstr(name)?;
+            let mut buf = vec![0u8; libc::PATH_MAX as usize];
+            // SAFETY: a valid descriptor, C string and buffer of the given length
+            let n = unsafe { libc::readlinkat(self.fd.as_raw_fd(), c.as_ptr(), buf.as_mut_ptr().cast(), buf.len()) };
+            if n < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            buf.truncate(n as usize);
+            Ok(std::path::PathBuf::from(OsString::from_vec(buf)))
+        }
+
         fn at(&self, name: &OsStr, flags: libc::c_int) -> io::Result<OwnedFd> {
             let c = cstr(name)?;
             // SAFETY: a valid descriptor and C string; the flags never create anything
@@ -273,6 +337,18 @@ mod imp {
                 return Err(not_a_file());
             }
             Ok(Self { path: root.to_path_buf() })
+        }
+
+        /// Off unix: every part checked by path (isolation never runs here).
+        pub fn open_strict(path: &Path) -> io::Result<Self> {
+            let mut p = PathBuf::new();
+            for c in path.components() {
+                p.push(c);
+                if matches!(c, Component::Normal(_)) && std::fs::symlink_metadata(&p)?.file_type().is_symlink() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "a symlink on the way"));
+                }
+            }
+            Self::open(path)
         }
 
         pub fn open_dir(&self, rel: &Path) -> io::Result<Dir> {
@@ -537,5 +613,30 @@ mod tests {
         swapper.join().unwrap();
         // Not a requirement, just that the race really ran both ways
         eprintln!("{ok} of 5000 reads saw the real folder");
+    }
+
+    #[test]
+    fn a_strict_open_refuses_a_symlink_on_any_part_of_the_path() {
+        let t = tempfile::tempdir().unwrap();
+        // A tempdir's own path may go through root's symlinks (macOS's /var): those are followed
+        let base = Dir::open_strict(t.path()).map(|_| t.path().to_path_buf()).unwrap();
+        std::fs::create_dir_all(base.join("bot/proj")).unwrap();
+        std::fs::create_dir_all(base.join("outside")).unwrap();
+        assert!(Dir::open_strict(&base.join("bot/proj")).is_ok());
+        symlink(base.join("outside"), base.join("bot/link")).unwrap();
+        symlink(base.join("bot"), base.join("botlink")).unwrap();
+        for p in ["bot/link", "botlink/proj", "botlink"] {
+            let e = Dir::open_strict(&base.join(p)).unwrap_err();
+            assert!(matches!(e.raw_os_error(), Some(libc::ELOOP) | Some(libc::ENOTDIR)), "{p}: {e}");
+        }
+        assert_eq!(Dir::open_strict(Path::new("bot/proj")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        // A symlink root owns (usr-merged /bin on Linux, /var on macOS) is followed
+        for sys in ["/bin", "/var", "/tmp"] {
+            if let Ok(m) = std::fs::symlink_metadata(sys) {
+                if m.file_type().is_symlink() && std::os::unix::fs::MetadataExt::uid(&m) == 0 {
+                    assert!(Dir::open_strict(Path::new(sys)).is_ok(), "{sys}");
+                }
+            }
+        }
     }
 }
