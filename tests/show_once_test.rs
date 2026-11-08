@@ -349,6 +349,46 @@ async fn a_draft_that_fails_a_check_shows_the_person_a_sentence_not_the_check() 
     }
 }
 
+/// S-F9: a drafting turn that fails leaves the recording stopped with its steps, and
+/// `write_error` is one of Mira's four sentences: never the banner's lead again, never the
+/// engine's own words.
+#[tokio::test]
+async fn a_failed_drafting_turn_shows_a_sentence_never_the_engines_error() {
+    use kwnt::server::show_once::draft::{write_with, TIMED_OUT, WRITE_SPEND_STOP, WRITE_STOPPED, WRITE_TIMED_OUT};
+    let env = env().await;
+    let engine = kwnt::server::show_once::engine_for(&env.state, &env.a).await;
+    let other = kwnt::server::show_once::draft::failed_turn_reason("x", "Rook", engine.as_deref());
+    assert!(other.ends_with(" stopped with an error before the draft was done. Check that it's signed in under Settings › This space › Accounts."), "{other}");
+    let raw = "Error: 401 Unauthorized: OAuth token sk-ant-xyz has expired";
+    for (err, shown) in [
+        (TIMED_OUT.to_string(), WRITE_TIMED_OUT.to_string()),
+        ("stopped by the user".to_string(), WRITE_STOPPED.to_string()),
+        ("spend_stopped: 120k of 100k tokens today".to_string(), WRITE_SPEND_STOP.to_string()),
+        (raw.to_string(), other.clone()),
+    ] {
+        let rec = stopped_recording(&env, "watch me").await;
+        let rec = env.state.db.begin_writing(&rec).await.unwrap();
+        let id = rec.id.clone();
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        write_with(&env.state, rec, "Rook", |_| {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let e = err.clone();
+            async move { Err(e) }
+        })
+        .await;
+        assert_eq!(asked.into_inner(), 1, "a failed turn isn't asked again");
+        let (_, v) = call(&env.app, "GET", &format!("/api/show-once/recordings/{id}"), None).await;
+        assert_eq!(v["recording"]["state"], "stopped", "{v}");
+        assert_eq!(v["recording"]["write_error"], shown.as_str(), "{v}");
+        let banner = v["recording"]["write_error"].as_str().unwrap();
+        assert!(!banner.contains("couldn't write the skill"), "the lead isn't repeated: {banner}");
+        assert!(!banner.contains("401") && !banner.contains("sk-ant") && !banner.contains("120k"), "{banner}");
+        assert_eq!(v["steps"].as_array().unwrap().len(), 3, "the steps are kept");
+        let (s, _) = call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+        assert!(s.is_success(), "the next case starts its own recording");
+    }
+}
+
 #[tokio::test]
 async fn approve_keeps_the_steps_seven_days_then_the_sweep_purges_them() {
     let env = env().await;
