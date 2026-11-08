@@ -123,6 +123,23 @@ fn restrict_windows(dir: &Path) -> Result<(), String> {
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("icacls: {}", e.kind()))?;
+    icacls_answer(out)?;
+    // `/grant:r` leaves other explicit entries; a folder made by an elevated process carries one for
+    // BUILTIN\Administrators from the token's default access list, so drop it by its SID
+    let out = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(["/remove:g", &format!("*{ADMINISTRATORS_SID}"), "/q"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("icacls: {}", e.kind()))?;
+    icacls_answer(out)
+}
+
+#[cfg(windows)]
+const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+
+#[cfg(windows)]
+fn icacls_answer(out: std::process::Output) -> Result<(), String> {
     if out.status.success() {
         Ok(())
     } else {
