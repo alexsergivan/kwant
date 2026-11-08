@@ -8,7 +8,7 @@ import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
-import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted } from './gettingStarted';
+import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState, SendOptions } from './components/ChatView';
@@ -240,6 +240,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messagesError, setMessagesError] = useState<string | null>(null);
+  /** The chat whose messages have finished loading at least once since it opened (What's new waits for it). */
+  const [messagesLoadedFor, setMessagesLoadedFor] = useState<string | null>(null);
   // The open thread of the selected bot; null for its direct chat (and for channels).
   const [openThreadId, setOpenThreadId] = useState<string | null>(null);
   const openCtx = openThreadId || selectedId;
@@ -932,6 +934,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setMessagesError(null);
     refreshContext(openCtx).then(() => {
       if (openCtxRef.current !== openCtx) return;
+      setMessagesLoadedFor(openCtx);
       const data = messagesCacheRef.current[openCtx] || [];
       setTokensUsed(data.reduce((acc, m) => acc + (m.tokens_used || 0), 0));
     });
@@ -3386,11 +3389,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     loaded && kwants.length > 0 && canRun === false && !gsDismissed ? (
       <GetStartedBanner space={space.id} engines={engines.engines} onOpen={openGetStarted} />
     ) : null;
+  const getStartedEligible = showGetStarted({
+    dismissed: gsDismissed,
+    canRun,
+    generalMessages: messages.length,
+    teams: teams.length,
+    started: getStartedWasStarted(space.id),
+  });
   const getStartedCard =
-    loaded &&
-    kwants.length > 0 &&
-    isGeneral &&
-    showGetStarted({ dismissed: gsDismissed, canRun, generalMessages: messages.length, teams: teams.length, started: getStartedWasStarted(space.id) }) ? (
+    loaded && kwants.length > 0 && isGeneral && getStartedEligible ? (
       <GetStarted
         space={space.id}
         bots={kwants}
@@ -3848,10 +3855,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;
-  // What's new after an update: only for someone who has used kwant (an account works, or they've
-  // written here). A brand-new person gets Get started instead; unknown until the space has loaded.
+  // What's new after an update: only for someone who has used kwant (they've written here, or an account
+  // works and Get started isn't showing). A brand-new person gets Get started instead (F-1); unknown until
+  // the space and the open chat's messages have loaded.
   const wroteHere = messages.some((m) => m.sender_role === 'user');
-  const whatsNewEstablished = wroteHere || canRun === true ? true : !loaded || canRun == null ? null : false;
+  const whatsNewEstablished = decideWhatsNewEstablished({
+    loaded,
+    messagesLoaded: !openCtx || messagesLoadedFor === openCtx,
+    canRun,
+    wroteHere,
+    getStartedShowing: getStartedEligible,
+  });
   const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (
