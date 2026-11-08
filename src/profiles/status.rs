@@ -200,7 +200,7 @@ pub async fn probe(engine: Engine, home: Option<&Path>) -> ProfileStatus {
     };
     let mut cmd = match home {
         Some(home) => super::CliEnv::for_home(engine, home).command(bin),
-        None => tokio::process::Command::new(bin),
+        None => crate::drivers::cli::cli_command(bin),
     };
     match engine {
         Engine::Claude => cmd.args(["auth", "status", "--json"]),

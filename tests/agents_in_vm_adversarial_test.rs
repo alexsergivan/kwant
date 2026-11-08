@@ -460,7 +460,7 @@ async fn approval_turn(name: &str, answer: bool) -> (Vec<String>, bool, usize, S
     cfg.anthropic_origin = start_upstream(up.clone()).await;
     cfg.oauth_token_url = format!("{}/v1/oauth/token", cfg.anthropic_origin);
     let vm = AgentVm::with_parts(data.path(), cfg, Some(image_tag()), AgentsInVmConfig::default(), None);
-    let turn = vm
+    let mut turn = vm
         .prepare_turn(TurnRequest {
             bot_id: format!("adversarial-{name}"),
             folder: Some(work.path().to_path_buf()),

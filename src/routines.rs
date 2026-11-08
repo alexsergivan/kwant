@@ -3,6 +3,7 @@
 
 use chrono::{DateTime, Datelike, Duration, LocalResult, NaiveDate, NaiveTime, Utc, Weekday};
 use serde::{Deserialize, Serialize};
+#[cfg(not(windows))]
 use std::path::Path;
 
 /// Shortest interval a routine may repeat at.
@@ -103,6 +104,7 @@ fn parse_time(time: &str) -> Result<NaiveTime, String> {
 }
 
 /// Where the system tz database lives (Linux, macOS, BSDs).
+#[cfg(not(windows))]
 const ZONEINFO_DIRS: &[&str] = &["/usr/share/zoneinfo", "/usr/lib/zoneinfo", "/etc/zoneinfo"];
 
 /// An IANA time zone read from the system tz database. Reading it per use (rather than
@@ -199,9 +201,12 @@ fn parse_tz(tz: &str) -> Result<Zone, String> {
     if !well_formed {
         return Err(unknown());
     }
-    ZONEINFO_DIRS
-        .iter()
-        .find_map(|dir| std::fs::read(Path::new(dir).join(name)).ok())
+    #[cfg(not(windows))]
+    let bytes = ZONEINFO_DIRS.iter().find_map(|dir| std::fs::read(Path::new(dir).join(name)).ok());
+    // Windows ships no tz database, so the IANA zones come bundled
+    #[cfg(windows)]
+    let bytes = tzdb_data::find_raw(name.as_bytes()).map(<[u8]>::to_vec);
+    bytes
         .and_then(|bytes| tz::TimeZone::from_tz_data(&bytes).ok())
         .map(Zone)
         .ok_or_else(unknown)

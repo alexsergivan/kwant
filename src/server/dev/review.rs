@@ -701,7 +701,7 @@ mod tests {
         f.files.push(FileDiff { path: "tests/big_test.rs".into(), status: "modified".into(), additions: 0, deletions: 300, patch: None, previous_path: None });
         let (_, c) = card::<Stub>(&f, None, None).await;
         assert_eq!(c["tamper"]["unread"], json!(["tests/big_test.rs"]));
-        assert!(c["risk"]["reasons"].as_array().unwrap().contains(&json!("Couldn't read 1 file (too large to diff)")), "{}", c["risk"]);
+        assert!(c["risk"]["reasons"].as_array().unwrap().contains(&json!("Couldn't read 1 file (no diff available)")), "{}", c["risk"]);
         assert_ne!(c["risk"]["level"], "low");
     }
 

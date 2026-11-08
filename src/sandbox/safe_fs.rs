@@ -339,6 +339,12 @@ mod imp {
             Ok(Self { path: root.to_path_buf() })
         }
 
+        /// The folder's path: off unix a [`Dir`] is a checked path, and Windows-only checks
+        /// (reparse points, device names) run on it ([`crate::server::gitfile`]).
+        pub fn path(&self) -> &Path {
+            &self.path
+        }
+
         /// Off unix: every part checked by path (isolation never runs here).
         pub fn open_strict(path: &Path) -> io::Result<Self> {
             let mut p = PathBuf::new();

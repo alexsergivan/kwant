@@ -6,6 +6,8 @@ pub mod custom;
 pub mod engines;
 pub mod events;
 pub mod grok;
+#[cfg(windows)]
+pub(crate) mod win_job;
 
 pub use api::ApiDriver;
 pub use cli::{find_cli_binary, forget_cli_binaries, CliDriver};
