@@ -233,10 +233,11 @@ export function putErrorText(status: number, data: unknown): string {
   const d = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
   const error = str(d.error);
   const code = str(d.code);
-  // A known code reads in our words; then a human `error`; never a bare code.
+  // The server's readable `error` first (#446 final: same words as ours); a code alone (older
+  // servers sent the code as `error`) reads in our words; never a bare code.
+  if (error && !/^[a-z_]+$/.test(error)) return error;
   if (code && PUT_ERRORS[code]) return PUT_ERRORS[code];
   if (error && PUT_ERRORS[error]) return PUT_ERRORS[error];
-  if (error && !/^[a-z_]+$/.test(error)) return error;
   return `Couldn’t change this (HTTP ${status}).`;
 }
 

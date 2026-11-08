@@ -1251,7 +1251,10 @@ export function restoreErrorText(e: unknown): string {
       case 'unknown_force_path':
         return 'A file you picked isn’t in the preview any more. Look at the new preview.';
       case 'checkpoint_failed':
-        return 'The safety checkpoint couldn’t be taken, so nothing was restored.';
+        // #446: the same code when the task's folder is missing, moved or a symlink now.
+        return /missing, moved or a symlink/.test(e.message)
+          ? 'Couldn’t restore: the task’s folder was moved or replaced. Nothing was changed.'
+          : 'The safety checkpoint couldn’t be taken, so nothing was restored.';
       case 'not_held':
         return 'It isn’t on hold any more, maybe Run was pressed in another tab.';
       default:

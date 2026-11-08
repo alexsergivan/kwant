@@ -181,7 +181,8 @@ test('saving: the switch shows the pending value and is busy; errors show', () =
 test('PUT errors read in people’s words, never as a raw code (fix 5)', () => {
   assert.equal(m.putErrorText(400, { error: 'mac_later' }), m.PLATFORM_HINTS.mac_later);
   assert.equal(m.putErrorText(400, { error: 'x', code: 'docker_unavailable' }), 'Start Docker to turn this on.');
-  assert.equal(m.putErrorText(400, { error: 'Docker is not running.', code: 'docker_unavailable' }), 'Start Docker to turn this on.');
+  assert.equal(m.putErrorText(400, { error: 'Docker is not running.', code: 'docker_unavailable' }), 'Docker is not running.', 'the server’s readable error wins');
+  assert.equal(m.putErrorText(400, { error: 'Coming to Mac later. For now, Claude runs on this computer in both modes.', code: 'mac_later' }), m.PLATFORM_HINTS.mac_later);
   assert.equal(m.putErrorText(400, { error: 'Something human.' }), 'Something human.');
   assert.equal(m.putErrorText(500, { error: 'boom_code' }), 'Couldn’t change this (HTTP 500).');
 });

@@ -273,6 +273,9 @@ test('restore errors and results read plainly', () => {
   assert.match(m.restoreErrorText(err('stale_preview')), /Files changed since this preview/);
   assert.match(m.restoreErrorText(err('not_held')), /isn’t on hold any more/);
   assert.match(m.restoreErrorText(err('unknown_force_path', 422)), /isn’t in the preview any more/);
+  assert.match(m.restoreErrorText(err('checkpoint_failed', 500)), /^The safety checkpoint couldn’t be taken/);
+  const moved = new m.MissionError("the task's folder is missing, moved or a symlink now, so the safety checkpoint couldn't be taken and nothing was restored", 500, 'checkpoint_failed');
+  assert.equal(m.restoreErrorText(moved), 'Couldn’t restore: the task’s folder was moved or replaced. Nothing was changed.');
   assert.match(m.autofixErrorText(err('over_recovery_budget')), /retry budget/);
   const r = { restored: ['a.md', 'b.md'], deleted: ['c.md'], failed: [], task: task({ state: 'ready', held_at: '2026-10-27T12:00:00Z' }) };
   assert.equal(m.restoredText(r, false), 'Restored: 2 files put back, 1 file removed. It’s on hold until you press Run.');
