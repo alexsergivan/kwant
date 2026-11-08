@@ -638,7 +638,6 @@ const SkeletonCards: React.FC<{ line?: string; n?: number }> = ({ line = 'Readin
   </div>
 );
 
-/** Flow copy §6: a first-visit empty state as a tiny terminal, `$ git log main -5` and its output. */
 /** 0.7.7: the Reviews tab's quiet caption: no link, no setting. Plain text, read in order by a screen reader. */
 const FreshLine: React.FC<{ text: string }> = ({ text }) => (
   <p className="px-1 text-meta text-zinc-400" data-dev-fresh-line>
@@ -646,6 +645,7 @@ const FreshLine: React.FC<{ text: string }> = ({ text }) => (
   </p>
 );
 
+/** Flow copy §6: a first-visit empty state as a tiny terminal, `$ git log main -5` and its output. */
 const TermEmpty: React.FC<{ cmd?: string; out: string; title: string; line: string; children?: React.ReactNode }> = ({ cmd = 'git log main -5', out, title, line, children }) => (
   <div className="rounded-2xl border border-dashed border-hairline-strong px-5 py-6" data-dev-empty data-dev-empty-term>
     <p className="font-mono text-[12px] text-zinc-500 break-words" aria-hidden="true">
