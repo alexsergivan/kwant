@@ -470,3 +470,21 @@ export function showCard(opts: { dismissed: boolean; canRun: boolean | null; gen
   // A fresh install comes with one starter team (core-engineering), so one team still counts as fresh.
   return opts.generalMessages === 0 && opts.teams <= 1;
 }
+
+/**
+ * Whether What's new may treat this person as someone who has used kwant (true), as brand new (false: the
+ * version is recorded silently), or can't tell yet (null: wait). Get started wins (F-1): a fresh install that
+ * found an AI already signed in gets the card, never the sheet on top of it. Until the space and the open
+ * chat's messages have loaded, an upgrading user could look new, so the answer waits.
+ */
+export function whatsNewEstablished(opts: {
+  loaded: boolean;
+  messagesLoaded: boolean;
+  canRun: boolean | null;
+  wroteHere: boolean;
+  getStartedShowing: boolean;
+}): boolean | null {
+  if (opts.wroteHere) return true;
+  if (!opts.loaded || opts.canRun == null || !opts.messagesLoaded) return null;
+  return opts.canRun === true && !opts.getStartedShowing;
+}
