@@ -18,6 +18,7 @@ const settings = (mode, local = true, vm = true, reasons = {}, window = {}, isol
   reasons: { local: null, vm: null, ...reasons },
   window: { visible: false, available: false, reason: null, ...window },
   isolates,
+  claudeVm: null,
 });
 const api = (state, extra = {}) => ({ state, select: () => {}, dismissError: () => {}, setWindow: () => {}, windowPending: false, ...extra });
 const render = (C, state) => m.renderToStaticMarkup(m.createElement(C, { api: api(state) }));

@@ -13,12 +13,14 @@ import {
   modeLabel,
   otherMode,
   saveComputerMode,
+  saveIsolateClaude,
   saveLocalWindow,
   showsLocalWindow,
   shownMode,
   switchReducer,
   unavailableReason,
 } from '../computerMode';
+import { pollInterval } from '../claudeVm';
 
 export interface ComputerModeApi {
   state: SwitchState;
@@ -29,6 +31,14 @@ export interface ComputerModeApi {
   setWindow: (visible: boolean) => void;
   /** True while a window switch restarts Chrome. */
   windowPending: boolean;
+  /** "Run Claude inside the VM": saves at once; on failure the switch goes back and `isoError` says why. */
+  setIsolateClaude?: (on: boolean) => void;
+  /** The value being saved, shown until the server answers. */
+  isoPending?: boolean | null;
+  isoError?: string | null;
+  dismissIsoError?: () => void;
+  /** Reads the setting again ("Check again"). */
+  refresh?: () => Promise<void>;
 }
 
 /** Loads the setting while `enabled`, and follows switches made elsewhere in this tab. */
@@ -94,8 +104,44 @@ export function useComputerMode(enabled: boolean): ComputerModeApi {
     return () => window.clearInterval(timer);
   }, [windowOpen]);
 
+  const refresh = useCallback(async () => {
+    const s = await fetchComputerSettings().catch(() => null);
+    if (s) dispatch({ type: 'loaded', settings: s });
+  }, []);
+
+  const [isoPending, setIsoPending] = useState<boolean | null>(null);
+  const [isoError, setIsoError] = useState<string | null>(null);
+  const isoLock = useRef(false);
+  const setIsolateClaude = useCallback((on: boolean) => {
+    if (isoLock.current || !stateRef.current.settings?.claudeVm) return;
+    isoLock.current = true;
+    playSfx('click');
+    setIsoPending(on);
+    setIsoError(null);
+    saveIsolateClaude(on).then((r) => {
+      isoLock.current = false;
+      setIsoPending(null);
+      if (r.ok) {
+        dispatch({ type: 'saved', settings: r.settings });
+        window.dispatchEvent(new CustomEvent(COMPUTER_MODE_EVENT, { detail: r.settings }));
+      } else {
+        setIsoError(r.error);
+      }
+    });
+  }, []);
+  const dismissIsoError = useCallback(() => setIsoError(null), []);
+
+  // Every second while Claude's VM gets ready, every 10 s while it's stopped, so the chip clears
+  // after someone starts Docker even if they never press Check again.
+  const every = enabled ? pollInterval(state.settings?.claudeVm) : null;
+  useEffect(() => {
+    if (!every) return;
+    const timer = window.setInterval(() => void refresh(), every);
+    return () => window.clearInterval(timer);
+  }, [every, refresh]);
+
   const dismissError = useCallback(() => dispatch({ type: 'dismiss' }), []);
-  return { state, select, dismissError, setWindow, windowPending };
+  return { state, select, dismissError, setWindow, windowPending, setIsolateClaude, isoPending, isoError, dismissIsoError, refresh };
 }
 
 const ICONS: Record<ComputerMode, typeof Laptop> = { local: Laptop, vm: Box };

@@ -62,6 +62,8 @@ import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainB
 import { parseSpendStopped } from '../spendStop';
 import { SpendStoppedNotice } from './SpendStop';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
+import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
+import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
 import { ideaBlockedLine, ideaLength } from '../ideaShell';
 import { JarIcon } from './JarIcon';
@@ -277,6 +279,12 @@ export interface ChatViewProps {
   onOpenAccounts?: () => void;
   /** Opens Settings › All spaces › Usage at the daily spending stop. */
   onOpenUsage?: () => void;
+  /** Opens App settings at the Computer card, "Run Claude inside the VM" focused (isolation notices). */
+  onOpenComputerSettings?: () => void;
+  /** Opens Manage Team with its folder input focused (isolation notices 6 and 7). */
+  onChangeTeamFolder?: (teamId: string) => void;
+  /** Opens the named bot's Edit modal on Profile, where its AI is picked (notice 7). */
+  onEditBot?: (botName: string) => void;
   /** Whether anything can run a bot in this space now (null while unknown). */
   canRun?: boolean | null;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
@@ -479,6 +487,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSendToOtherBot,
   onOpenAccounts,
   onOpenUsage,
+  onOpenComputerSettings,
+  onChangeTeamFolder,
+  onEditBot,
   canRun = null,
   awaitingAnswer,
   awaitingBrowser,
@@ -1119,6 +1130,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
           interruption={interruption}
           retry={retries.get(msg.id)}
           onRetry={retrySend}
+          flash={flashId === msg.id}
+        />
+      );
+    const isolation = parseIsolationFailed(msg);
+    if (isolation)
+      return (
+        <IsolationNotice
+          key={msg.id}
+          messageId={msg.id}
+          meta={isolation}
+          text={msg.text}
+          retry={canRun === false ? null : retries.get(msg.id)}
+          onRetry={retrySend}
+          onOpenComputerSettings={onOpenComputerSettings}
+          onOpenAccounts={onOpenAccounts}
+          onChangeTeamFolder={onChangeTeamFolder}
+          onEditBot={onEditBot}
+          flash={flashId === msg.id}
+        />
+      );
+    const requestLimit = parseRequestLimit(msg);
+    if (requestLimit)
+      return (
+        <RequestLimitNotice
+          key={msg.id}
+          messageId={msg.id}
+          meta={requestLimit}
+          canContinue={canRun !== false && retries.has(msg.id)}
+          onSend={async (text) => {
+            stickRef.current = true;
+            if ((await onSendMessage(text, [])) === false) throw new Error('not sent');
+          }}
           flash={flashId === msg.id}
         />
       );

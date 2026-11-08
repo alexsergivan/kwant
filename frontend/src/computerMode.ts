@@ -1,5 +1,6 @@
 // "Local computer" vs "VM": which computer kwant's browser and shell use.
 // Contract: GET/PUT /api/settings/computer (docs/browser-service.md)
+import { ClaudeVm, hostSupportsIsolation, parseClaudeVm, putErrorText } from './claudeVm';
 
 export type ComputerMode = 'local' | 'vm';
 
@@ -18,6 +19,8 @@ export interface ComputerSettings {
   window: LocalWindow;
   /** What vm mode runs in containers, as the server reports it ("browser", "kwnt_shell", later "cli_agents"). */
   isolates: string[];
+  /** "Run Claude inside the VM"; null on servers without it. */
+  claudeVm: ClaudeVm | null;
 }
 
 /** What vm mode isolated before the server said so: never the CLI agents. */
@@ -26,7 +29,15 @@ export const DEFAULT_VM_ISOLATES = ['browser', 'kwnt_shell'];
 const ISOLATED_PARTS: Record<string, string> = { browser: 'browser', kwnt_shell: 'built-in shell' };
 
 /** VM copy built from what it really isolates, so it can't promise more than the server does. */
-export function vmCopy(isolates: string[]): { label: string; hint: string; note: string | null } {
+export function vmCopy(isolates: string[], claudeOn = false): { label: string; hint: string; note: string | null } {
+  // The setting, not the old umbrella flag, says whether Claude moved (ui.md decision 5)
+  if (claudeOn && isolates.includes('kwnt_shell')) {
+    return {
+      label: 'VM (browser, shell and Claude isolated)',
+      hint: 'The browser, built-in shell and Claude run in Docker containers, away from your files.',
+      note: 'Codex and Grok still run on this computer, with their own file and shell tools. They won’t run in a folder Claude used inside the VM.',
+    };
+  }
   if (isolates.includes('cli_agents')) {
     return { label: 'VM (isolated)', hint: 'Runs bots in Docker containers, away from your files.', note: null };
   }
@@ -60,9 +71,21 @@ export const COMPUTER_MODES: ModeCopy[] = [
   { id: 'vm', short: 'VM', ...vmCopy(DEFAULT_VM_ISOLATES) },
 ];
 
+/** Said under the VM card in Local mode, on hosts where the switch would work, while it's off (state H). */
+export const PICK_VM_FOR_CLAUDE = 'Pick VM to run Claude inside it too.';
+
 /** Both options, with the VM copy taken from what this server says it isolates. */
-export const computerModes = (s: ComputerSettings | null | undefined): ModeCopy[] =>
-  s ? COMPUTER_MODES.map((m) => (m.id === 'vm' ? { ...m, ...vmCopy(s.isolates) } : m)) : COMPUTER_MODES;
+export const computerModes = (s: ComputerSettings | null | undefined): ModeCopy[] => {
+  if (!s) return COMPUTER_MODES;
+  return COMPUTER_MODES.map((m) => {
+    if (m.id !== 'vm') return m;
+    const copy = vmCopy(s.isolates, !!s.claudeVm?.on);
+    if (s.mode === 'local' && s.claudeVm && !s.claudeVm.on && hostSupportsIsolation(s.claudeVm) && s.isolates.includes('kwnt_shell')) {
+      copy.note = copy.note ? `${copy.note} ${PICK_VM_FOR_CLAUDE}` : PICK_VM_FOR_CLAUDE;
+    }
+    return { ...m, ...copy };
+  });
+};
 
 export const LOCAL_BROWSER_NOTE = "Your bots' Chrome is open as a window on your computer.";
 
@@ -105,6 +128,7 @@ export function parseComputerSettings(data: unknown): ComputerSettings | null {
     },
     // Older servers don't send it; they isolated the same things.
     isolates: Array.isArray(d.isolates) ? d.isolates.filter((x: unknown): x is string => typeof x === 'string') : DEFAULT_VM_ISOLATES,
+    claudeVm: parseClaudeVm(d),
   };
 }
 
@@ -187,3 +211,21 @@ export const saveComputerMode = (mode: ComputerMode) => putSettings('/api/settin
 /** Opens the bots' Chrome as a window (`true`) or puts it back in the app (`false`). */
 export const saveLocalWindow = (visible: boolean) =>
   putSettings('/api/settings/computer/window', { visible }, visible ? 'Could not open the window' : 'Could not bring the browser back');
+
+/** Turns "Run Claude inside the VM" on or off. A 400's code is put in people's words (fix 5). */
+export async function saveIsolateClaude(on: boolean): Promise<SaveResult> {
+  let res: Response;
+  try {
+    res = await fetch('/api/settings/computer', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isolate_claude: on }),
+    });
+  } catch {
+    return { ok: false, error: 'Could not reach the server.' };
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) return { ok: false, error: putErrorText(res.status, data) };
+  const settings = parseComputerSettings(data);
+  return settings ? { ok: true, settings } : { ok: false, error: 'The server sent an unexpected answer.' };
+}

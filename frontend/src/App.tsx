@@ -344,6 +344,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSettingsFocusRow('spend-stop');
     openAppSettings();
   };
+  // Isolation notices: App settings at the Computer card, "Run Claude inside the VM" focused.
+  const openComputerSettings = () => {
+    setSettingsFocusRow('claude-isolation');
+    openAppSettings();
+  };
   const openConnections = () => openSpaceSettings('connections');
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
@@ -824,7 +829,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
   const [isNewChannelOpen, setIsNewChannelOpen] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
-  const [editingTeamFocusWs, setEditingTeamFocusWs] = useState(false);
+  const [editingTeamFocusWs, setEditingTeamFocusWs] = useState<boolean | 'folder'>(false);
   useEffect(() => {
     if (!editingTeam) setEditingTeamFocusWs(false);
   }, [editingTeam]);
@@ -3738,6 +3743,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           welcome={getStartedCard && messages.length === 0 ? getStartedCard : undefined}
           onOpenAccounts={openSettings}
           onOpenUsage={openUsageSettings}
+          onOpenComputerSettings={openComputerSettings}
+          onChangeTeamFolder={(teamId) => {
+            const t = teams.find((x) => x.id === teamId);
+            if (!t) return;
+            setEditingTeamFocusWs('folder');
+            setEditingTeam(t);
+          }}
+          onEditBot={(name) => {
+            const k = kwants.find((x) => x.name === name) ?? kwants.find((x) => x.name.toLowerCase() === name.toLowerCase());
+            if (k) openAgentSettings(k, 'profile');
+          }}
           canRun={canRun}
           titleExtra={
             workingBadge || skillsBadge || approvalsBadge ? (

@@ -29,8 +29,10 @@ interface ManageTeamModalProps {
     }
   ) => Promise<void>;
   onDeleteTeam: (id: string) => Promise<void>;
-  /** A8 ("Pick a repo"): open with the Team Workspace group in view and its input focused. */
-  focusWorkspace?: boolean;
+  /** A8 ("Pick a repo"): open with the Team Workspace group in view and its input focused.
+   *  'folder' (an isolation notice's Change folder): the same, but a team with no workspace yet
+   *  lands on Local Path, not Git Repo. */
+  focusWorkspace?: boolean | 'folder';
 }
 
 /**
@@ -145,7 +147,7 @@ export const ManageTeamModal: React.FC<ManageTeamModalProps> = ({
         setRepoUrl(team.repo_url);
       } else {
         // A8: no workspace yet, so "Pick a repo" lands on Git Repo.
-        setWorkspaceType(focusWorkspace ? 'repo' : 'default');
+        setWorkspaceType(focusWorkspace === 'folder' ? 'local' : focusWorkspace ? 'repo' : 'default');
         setWorkspacePath('');
         setRepoUrl('');
       }
