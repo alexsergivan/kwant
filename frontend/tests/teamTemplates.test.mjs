@@ -44,7 +44,7 @@ const m = await loadBundled(`
   export * as fx from './src/teams/suggestFixtures';
   export { TEMPLATES_FIXTURE, TEMPLATES_WIRE } from './src/teams/templateFixtures';
   export { TeamPreviewSheet } from './src/components/TeamPreviewSheet';
-  export { TeamNeedsCard, TeamCreatedToast, UndoTeamConfirm } from './src/components/TeamNeedsCard';
+  export { TeamNeedsCard, TeamCreatedToast, UndoTeamConfirm, archivedChatLine } from './src/components/TeamNeedsCard';
   export { TemplateWelcome, TemplateTiles, TemplateSidebarBox } from './src/components/TeamTemplatePicks';
   export { ReadyTeamsProvider, TeamNeedsTop, madeFromRow, useNeedsContext } from './src/components/ReadyTeams';
   export { ReadyTeamsTiles, SuggestMembersButton, ReadyTeamsSidebarBox } from './src/components/ReadyTeamsEntry';
@@ -630,6 +630,55 @@ test('the Undo confirm says where a chat with messages goes: under Channels as #
   assert.doesNotMatch(d.textContent, /Archived chats/, 'no such place exists');
   await v.rerender(h(m.UndoTeamConfirm, { label: 'Inbox', handle: 'mail', teamName: 'inbox', botNames: ['Drafter'], skills: 1, routine: false, messages: 1, onKeep() {}, onUndo() {} }));
   assert.match(document.querySelector('[data-undo-confirm]').textContent, /The chat has 1 message, so/);
+  v.unmount();
+});
+
+test('N-6: the Undo confirm names the chat the server gives back, -2 included, and drops the line on null', async () => {
+  const props = { label: 'Inbox', handle: 'inbox', teamName: 'inbox', botNames: ['Drafter'], skills: 1, routine: false, messages: 4, onKeep() {}, onUndo() {} };
+  // #archived-team-inbox is taken, so the server's preview says -2: the line must say -2 too.
+  const v = await mount(h(m.UndoTeamConfirm, { ...props, archivedChat: 'archived-team-inbox-2' }));
+  let d = document.querySelector('[data-undo-confirm]');
+  assert.match(d.textContent, /The chat has 4 messages, so it’s kept, not deleted: it moves under Channels as #archived-team-inbox-2\./);
+  assert.equal(d.querySelector('[data-archived-chat]').dataset.archivedChat, 'archived-team-inbox-2');
+  // A server name is used as is, never rebuilt from the team name.
+  await v.rerender(h(m.UndoTeamConfirm, { ...props, teamName: 'Inbox', archivedChat: 'ARCHIVED-team-inbox-3' }));
+  assert.match(document.querySelector('[data-undo-confirm]').textContent, /as #ARCHIVED-team-inbox-3\./);
+  // null: Undo deletes the chat or leaves it alone, so there's no archive line at all.
+  await v.rerender(h(m.UndoTeamConfirm, { ...props, archivedChat: null }));
+  d = document.querySelector('[data-undo-confirm]');
+  assert.equal(d.querySelector('[data-archived-chat]'), null);
+  assert.doesNotMatch(d.textContent, /archived|kept, not deleted/);
+  // An older server without the field: the old guess, only when the chat has messages.
+  await v.rerender(h(m.UndoTeamConfirm, { ...props }));
+  assert.match(document.querySelector('[data-undo-confirm]').textContent, /as #archived-team-inbox\./);
+  v.unmount();
+
+  assert.equal(m.archivedChatLine('archived-team-inbox-2', 4, 'inbox'), 'archived-team-inbox-2');
+  assert.equal(m.archivedChatLine('#archived-team-inbox-2', 4, 'inbox'), 'archived-team-inbox-2', 'no double #');
+  assert.equal(m.archivedChatLine(null, 4, 'inbox'), null);
+  assert.equal(m.archivedChatLine('  ', 4, 'inbox'), null);
+  assert.equal(m.archivedChatLine(undefined, 0, 'inbox'), null);
+  assert.equal(m.archivedChatLine(undefined, 2, 'inbox'), 'archived-team-inbox');
+});
+
+test('N-6: Undo through the provider reads archived_chat from the preview and shows it in the confirm', async () => {
+  const info = { template_id: 'inbox', action_id: 'act_i', created_at: new Date(Date.now() - 60_000).toISOString(), undo_until: new Date(Date.now() + 3_600_000).toISOString(), can_undo: true, blocked: [], removes: { bots: ['Drafter'], skills: 1, routines: 0, handle: 'inbox' }, chat_messages: 3, archived_chat: 'archived-team-inbox-2', also_in: [], edited_skills: [], needs_done: [] };
+  m.setTeamsTransport(async (url) => {
+    if (url.startsWith('/api/team-templates?')) return { status: 200, body: { templates: m.TEMPLATES_WIRE } };
+    if (url.startsWith('/api/teams/team_i/template')) return { status: 200, body: info };
+    return { status: 404, body: { code: 'not_a_template_team', error: 'no' } };
+  });
+  const team = { id: 'team_i', name: 'inbox' };
+  const v = await mount(h(m.ReadyTeamsProvider, { space: 'spc_demo', bots: [], teams: [team], onChanged() {}, onOpenTeam() {} }, h(m.TeamNeedsTop, { team, canRun: true, personPosts: 0, onAddAccount() {}, onOpenNeed() {} })));
+  await settle(30);
+  const undo = document.querySelector('[aria-label="Undo team @inbox"]');
+  assert.ok(undo, 'the Needs card offers Undo');
+  await click(undo);
+  await settle(30);
+  const d = document.querySelector('[data-undo-confirm]');
+  assert.ok(d, 'a chat with messages asks first');
+  assert.match(d.textContent, /moves under Channels as #archived-team-inbox-2\./);
+  assert.doesNotMatch(d.textContent, /#archived-team-inbox\./);
   v.unmount();
 });
 

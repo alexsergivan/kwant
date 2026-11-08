@@ -145,6 +145,11 @@ export interface TeamTemplateInfo {
   blocked: unknown[];
   removes: { bots: string[]; skills: number; routines: number; handle: string };
   chat_messages: number;
+  /**
+   * 0.7.6 (teams-api.md §6): the name Undo gives the kept team chat, e.g. `archived-team-inbox-2`; null when
+   * Undo deletes the chat or leaves it alone. Missing from older servers.
+   */
+  archived_chat?: string | null;
   /** Other teams a bot it made has joined since; it leaves them too. */
   other_teams: { bot: string; team: string }[];
   edited_skills: string[];
