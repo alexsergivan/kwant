@@ -127,10 +127,12 @@ export interface TicketBriefProps {
   /** The lead's name for "by Ann" and "Ann won't act on it"; falls back to the brief's author. */
   lead?: string | null;
   defaultOpen?: boolean;
+  /** D8: the ticket's key, so the toggle reads "Show brief TRAIL-142" with several cards on screen. */
+  ticketKey?: string | null;
 }
 
 /** The brief, open or collapsed. Collapsed: "BRIEF Ann · 10:03 · 6 parts, 11 sources" and Show brief. */
-export const TicketBrief: React.FC<TicketBriefProps> = ({ brief, fallbackText = null, lead = null, defaultOpen = false }) => {
+export const TicketBrief: React.FC<TicketBriefProps> = ({ brief, fallbackText = null, lead = null, defaultOpen = false, ticketKey = null }) => {
   const [open, setOpen] = useState(defaultOpen);
   const bodyId = useId();
   const origins = useContext(SiteOrigins);
@@ -151,7 +153,14 @@ export const TicketBrief: React.FC<TicketBriefProps> = ({ brief, fallbackText = 
           Brief
         </h4>
         <span className="by">{by.filter(Boolean).join(' · ')}</span>
-        <button type="button" className="tk-textbtn" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((o) => !o)}>
+        <button
+          type="button"
+          className="tk-textbtn"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          aria-label={ticketKey ? `${open ? 'Hide' : 'Show'} brief ${ticketKey}` : undefined}
+          onClick={() => setOpen((o) => !o)}
+        >
           {open ? 'Hide' : 'Show brief'}
           {open ? <Minus size={12} aria-hidden="true" /> : <ChevronDown size={12} aria-hidden="true" />}
         </button>
