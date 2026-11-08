@@ -294,3 +294,41 @@ async fn forge_prs_are_reviewed_only_while_updated_in_the_window() {
     assert_eq!(all.iter().filter(|c| c.ref_ == "pr:20").map(|c| c.status.as_str()).collect::<Vec<_>>(), [STALE], "the old MR's card went stale and got no new one");
     assert_eq!(poller::old_reviews_skipped(space.as_str(), &row.key), 2);
 }
+
+/// Rigel's probe2 on #447 (F-1): a fresh branch that turns a symlink into a file next to a +1
+/// edit. git prints two `-p` sections for the one type-changed file, and every patch used to be
+/// dropped, so the card said "Couldn't read 2 files (too large to diff)" and went to Medium for a
+/// +2 −1 change. Now every file keeps its own patch and nothing is unread.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_type_change_leaves_no_file_unread() {
+    let env = setup().await;
+    let (folder, row) = watched(&env, "typechange").await;
+    std::fs::write(folder.join("a.txt"), "hi\n").unwrap();
+    std::os::unix::fs::symlink("a.txt", folder.join("link")).unwrap();
+    git(&folder, &["add", "-A"]);
+    git_at(&folder, &["commit", "-q", "-m", "Add a.txt and a link to it"], Some(days_ago(60)));
+    git(&folder, &["checkout", "-q", "-b", "typechange", "main"]);
+    std::fs::remove_file(folder.join("link")).unwrap();
+    std::fs::write(folder.join("link"), "real file now\n").unwrap();
+    std::fs::write(folder.join("a.txt"), "hi\nmore\n").unwrap();
+    git(&folder, &["add", "-A"]);
+    git_at(&folder, &["commit", "-q", "-m", "Tiny change"], Some(days_ago(1)));
+    git(&folder, &["checkout", "-q", "main"]);
+
+    poll(&env).await;
+    let all = cards(&env, &row.key).await;
+    assert_eq!(all.len(), 1, "{all:?}");
+    let f: DevFacts = serde_json::from_str(&all[0].facts).unwrap();
+    let got: Vec<_> = f.files.iter().map(|x| (x.path.as_str(), x.status.as_str(), x.additions, x.deletions, x.patch.is_some())).collect();
+    assert_eq!(got, [("a.txt", "modified", 1, 0, true), ("link", "changed", 1, 1, true)]);
+    assert!(kwnt::server::dev::risk::unread_files(&f.files).is_empty());
+    let r = kwnt::server::dev::risk::assess(&kwnt::server::dev::risk::Inputs { files: &f.files, ..Default::default() });
+    assert!(r.reasons.iter().all(|x| !x.starts_with("Couldn't read")), "{:?}", r.reasons);
+    // The card itself, once made, says the same
+    if let Some(card) = &all[0].card {
+        let c: Value = serde_json::from_str(card).unwrap();
+        assert!(c["risk"]["reasons"].as_array().into_iter().flatten().all(|x| !x.as_str().unwrap_or("").starts_with("Couldn't read")), "{}", c["risk"]);
+        assert_eq!(c["tamper"]["unread"].as_array().map_or(0, Vec::len), 0, "{}", c["tamper"]);
+    }
+}
