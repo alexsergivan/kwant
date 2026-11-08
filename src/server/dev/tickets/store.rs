@@ -84,8 +84,8 @@ pub enum FailCode {
     JiraUnreachable,
     /// Reading the ticket into a brief failed (Vega's brief turn).
     BriefFailed,
-    /// The brief turn was refused before it ran: the lead isn't on Claude or Codex, or kwant's
-    /// tool checks are off (J7, D6). Nothing of the ticket was read.
+    /// The brief turn was refused before it ran: the lead isn't on Claude or Codex, or its turn has
+    /// no tools to check (J7, D6). Nothing of the ticket was read.
     EngineRefused,
     /// The team's work stopped with an error.
     WorkFailed,
@@ -272,9 +272,20 @@ mod tests {
         assert_eq!(FailCode::of("nonsense"), FailCode::Failed);
         assert_eq!(FailCode::EngineRefused.code(), "engine_refused");
         let m = FailCode::EngineRefused.message();
-        assert_eq!(m, "A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on. Put the team's lead on one of them, then press Start.");
+        assert_eq!(m, "A Jira brief is prepared only on Claude or Codex, with tool checks on. Put the team's lead on one of them, then press Start.");
         assert_ne!(m, FailCode::Failed.message());
         assert!(m.chars().count() <= 300, "the card keeps 300 characters");
+    }
+
+    #[test]
+    fn no_card_sentence_says_a_bare_kwant() {
+        // the frontend's wording rule (frontend/tests/wording.test.mjs): never a bare "kwant", "kwnt" or "agent"
+        let bad = |w: &str| matches!(w.to_lowercase().as_str(), "kwant" | "kwants" | "kwant's" | "kwnt" | "agent" | "agents");
+        for c in FailCode::ALL {
+            let m = c.message();
+            let words = m.split(|ch: char| !(ch.is_alphanumeric() || ch == '\''));
+            assert!(!words.into_iter().any(bad), "{c:?}: {m}");
+        }
     }
 
     #[test]
@@ -285,6 +296,8 @@ mod tests {
         assert!(!is_engine_refusal("The brief took longer than 15 minutes"));
         assert!(!is_engine_refusal(super::super::ENGINE_REFUSED), "without the chat's lead prefix");
         assert!(!is_engine_refusal(&format!("{} and more", engine_refused_line("Lead"))));
+        let old = "⚠️ [Lead] A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on.";
+        assert!(!is_engine_refusal(old), "only the current sentence counts");
     }
 
     #[test]

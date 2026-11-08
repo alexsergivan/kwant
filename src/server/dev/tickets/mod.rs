@@ -37,9 +37,9 @@ pub fn brief_engine(engine: crate::profiles::Engine) -> bool {
 }
 
 /// Why a brief turn was refused before it ran (J7, D6): the lead's engine isn't one
-/// [`brief_engine`] allows, or kwant's tool checks are off. kwant's own words, shown in the brief's
+/// [`brief_engine`] allows, or the lead's turn has no tools to check. kwant's own words, shown in the brief's
 /// chat and, through `engine_refused`, on the ticket card.
-pub const ENGINE_REFUSED: &str = "A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on.";
+pub const ENGINE_REFUSED: &str = "A Jira brief is prepared only on Claude or Codex, with tool checks on.";
 
 /// The brief's chat line for a refused brief turn, naming the lead.
 pub fn engine_refused_line(lead: &str) -> String {

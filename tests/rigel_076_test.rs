@@ -323,7 +323,7 @@ async fn rigel_x3_grok_and_custom_leads_never_read_a_ticket() {
         let code = row["ticket"]["error"]["code"].as_str().unwrap_or_default();
         if model != "codex" {
             assert_eq!(code, "engine_refused", "{model}: {row}");
-            assert_eq!(msg, "A Jira brief is prepared only on Claude or Codex, with kwant's tool checks on. Put the team's lead on one of them, then press Start.");
+            assert_eq!(msg, "A Jira brief is prepared only on Claude or Codex, with tool checks on. Put the team's lead on one of them, then press Start.");
             let (_, b) = call(&env.app, "GET", &uri(&format!("tickets/{key}/brief")), None).await;
             assert_eq!(b["note"].as_str(), Some(msg), "{model}: the brief's note says the same: {b}");
         } else {
