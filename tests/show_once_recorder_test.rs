@@ -1,6 +1,7 @@
 //! Show it once: the recorder script in a real Chrome/Chromium, typed into with real key events
 //! (`Input.dispatchKeyEvent`, the in-app viewer's path), its payloads read by the server's own
-//! parser. Covers S-F2: a field a script filled and the person then edited is masked. Skipped
+//! parser. Covers S-F2 (a field a script filled and the person then edited is masked) and S-F5
+//! (a field left by kwnt's own navigation, with no blur, is committed first, masked). Skipped
 //! when no Chrome is installed.
 #[path = "support/chrome_guard.rs"]
 mod chrome_guard;
@@ -259,4 +260,103 @@ async fn a_pick_in_the_drawn_list_is_a_select_step_and_a_wrapping_label_names_th
     assert!(!payloads[0].contains("Prefilled"), "{}", payloads[0]);
     let c = capture::parse(&payloads[0]).unwrap();
     assert_eq!(c.step.label.as_deref(), Some("Note"));
+}
+
+/// A sign-in form: a password field and a one-time code field.
+const SIGN_IN_PAGE: &str = "<!doctype html><title>sign in</title><body>\
+<input id=user name=user>\
+<input id=pw name=pw type=password>\
+<input id=otp name=otp autocomplete=one-time-code>";
+
+#[tokio::test]
+async fn leaving_by_the_address_bar_with_no_blur_records_the_secret_fields_masked() {
+    std::env::remove_var("DISPLAY");
+    std::env::remove_var("WAYLAND_DISPLAY");
+    if computer::local_chrome_path().is_none() {
+        eprintln!("skipped: no Chrome or Chromium installed");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let _chrome = ChromeGuard(tmp.path().join("local-chrome"));
+    let service = BrowserService::new(tmp.path().to_path_buf(), None);
+    service.set_mode(ComputerMode::Local).await;
+    let ctrl = service.session("bot", tmp.path()).await.expect("local session");
+    let url = serve(SIGN_IN_PAGE).await;
+    ctrl.navigate(&url).await.unwrap();
+
+    let tree = ctrl.send_cdp_command("Page.getFrameTree", json!({})).await.unwrap();
+    let frame = tree["frameTree"]["frame"]["id"].as_str().unwrap().to_string();
+    let world = ctrl.send_cdp_command("Page.createIsolatedWorld", json!({"frameId": frame, "worldName": capture::WORLD})).await.unwrap();
+    let ctx = world["executionContextId"].clone();
+    let in_world = |expr: String| {
+        let ctrl = &ctrl;
+        let ctx = ctx.clone();
+        async move {
+            let r = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression": expr, "contextId": ctx, "returnByValue": true})).await.unwrap();
+            assert!(r.get("exceptionDetails").is_none(), "{r}");
+            r["result"]["value"].clone()
+        }
+    };
+    let sent = || in_world("JSON.stringify(__sent.splice(0))".to_string());
+    let take = |v: Value| -> Vec<String> { serde_json::from_str(v.as_str().unwrap()).unwrap() };
+    let ctrl_ref = &ctrl;
+    let commit = || {
+        let call = move |method: &'static str, params: Value| async move { ctrl_ref.send_cdp_command(method, params).await.ok() };
+        capture::commit_pending(call)
+    };
+    in_world(format!("globalThis.__sent = []; globalThis.{} = function (s) {{ __sent.push(s); }}; true", capture::BINDING)).await;
+
+    // no recording on: no recorder in its world, nothing taken
+    assert!(!commit().await, "no recorder, nothing committed");
+    in_world(capture::recorder_js()).await;
+    // the page's own scripts can't reach the commit
+    assert_eq!(page_js(&ctrl, "typeof globalThis.__kwntRecorderCommit").await, "undefined");
+
+    // the person types the user name, the password, then the code, and never leaves the code
+    // field: its edit is still pending
+    focus(&ctrl, "user").await;
+    person_types(&ctrl, "sam").await;
+    focus(&ctrl, "pw").await;
+    person_types(&ctrl, "hunter").await;
+    focus(&ctrl, "otp").await;
+    person_types(&ctrl, "4821").await;
+    let before = take(sent().await);
+    let labels = |ps: &[String]| -> Vec<String> { ps.iter().filter_map(|p| capture::parse(p)).map(|c| c.step.label.unwrap_or_default()).collect() };
+    assert!(!labels(&before).contains(&"otp".to_string()), "the code isn't a step yet: {before:?}");
+    // an address-bar navigation moves no focus, so kwnt's server commits before it navigates
+    assert!(commit().await, "the recorder took the commit");
+    let committed = take(sent().await);
+    assert!(labels(&committed).contains(&"otp".to_string()), "the pending code field: {committed:?}");
+
+    let all = [before, committed].concat();
+    let raw = all.join("\n");
+    for secret in ["hunter", "4821"] {
+        assert!(!raw.contains(secret), "{secret:?} left the page: {raw}");
+    }
+    let mut steps: BTreeMap<String, (Option<String>, Option<String>, String)> = BTreeMap::new();
+    for p in &all {
+        let c = capture::parse(p).unwrap_or_else(|| panic!("the server reads every payload: {p}"));
+        assert_eq!(c.step.kind, "type");
+        assert_eq!(c.page.path, "/form", "recorded on the page being left");
+        assert!(steps.insert(c.step.label.clone().unwrap_or_default(), (c.step.value, c.step.masked, c.page.path)).is_none(), "one step per field: {all:?}");
+    }
+    assert_eq!(steps.len(), 3, "{steps:?}");
+    assert_eq!(steps["user"].0.as_deref(), Some("sam"));
+    assert_eq!((steps["pw"].0.as_deref(), steps["pw"].1.as_deref()), (None, Some("password")), "recorded, masked");
+    assert_eq!((steps["otp"].0.as_deref(), steps["otp"].1.as_deref()), (None, Some("code")), "recorded, masked");
+
+    // nothing is left pending, and a second commit adds nothing
+    assert!(commit().await);
+    assert!(take(sent().await).is_empty(), "no duplicate step");
+    assert!(take(in_world(format!("JSON.stringify({})", capture::FLUSH)).await).is_empty());
+
+    // the same with a password left focused
+    focus(&ctrl, "pw").await;
+    person_types(&ctrl, "x").await;
+    assert!(commit().await);
+    let committed = take(sent().await);
+    assert_eq!(committed.len(), 1, "{committed:?}");
+    let c = capture::parse(&committed[0]).unwrap();
+    assert_eq!((c.step.value.as_deref(), c.step.masked.as_deref()), (None, Some("password")));
+    assert!(!committed[0].contains("hunterx"));
 }

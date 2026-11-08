@@ -309,6 +309,46 @@ async fn a_reply_that_isnt_a_draft_fails_the_write_and_keeps_the_steps() {
     assert!(pending.as_array().unwrap().is_empty(), "{pending}");
 }
 
+/// S-F3: a draft whose input takes its example from a step where nothing was typed (step 1 is a
+/// click). The engine is told the check's own words on the retry; the person's banner gets Mira's
+/// sentence, never the raw check. Any other failed check gets the fallback sentence.
+#[tokio::test]
+async fn a_draft_that_fails_a_check_shows_the_person_a_sentence_not_the_check() {
+    use kwnt::server::show_once::draft::{write_with, SHOWN_DRAFT_MISMATCH, SHOWN_NOTHING_TYPED};
+    let env = env().await;
+    let mut from_click: Value = serde_json::from_str(&canned_draft()).unwrap();
+    from_click["inputs"][0]["from_step"] = json!(1);
+    let mut no_checks: Value = serde_json::from_str(&canned_draft()).unwrap();
+    no_checks["checks"] = json!([]);
+    for (reply, shown, raw) in [
+        (from_click, SHOWN_NOTHING_TYPED, "input 1's from_step 1 has no value"),
+        (no_checks, SHOWN_DRAFT_MISMATCH, "\"checks\""),
+    ] {
+        let rec = stopped_recording(&env, "watch me").await;
+        let rec = env.state.db.begin_writing(&rec).await.unwrap();
+        let id = rec.id.clone();
+        let prompts = std::sync::Mutex::new(Vec::<String>::new());
+        let reply = reply.to_string();
+        write_with(&env.state, rec, "Rook", |p| {
+            prompts.lock().unwrap().push(p);
+            let r = reply.clone();
+            async move { Ok(r) }
+        })
+        .await;
+        let prompts = prompts.into_inner().unwrap();
+        assert_eq!(prompts.len(), 2, "asked once more after the failed check");
+        assert!(prompts[1].contains(raw), "the engine hears the check's own words: {}", prompts[1]);
+        let (_, v) = call(&env.app, "GET", &format!("/api/show-once/recordings/{id}"), None).await;
+        assert_eq!(v["recording"]["state"], "stopped", "{v}");
+        assert_eq!(v["recording"]["write_error"], shown, "{v}");
+        let banner = v["recording"]["write_error"].as_str().unwrap();
+        assert!(!banner.contains("from_step") && !banner.contains("input 1"), "{banner}");
+        assert_eq!(v["steps"].as_array().unwrap().len(), 3, "the steps are kept");
+        let (s, _) = call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+        assert!(s.is_success(), "the next case starts its own recording");
+    }
+}
+
 #[tokio::test]
 async fn approve_keeps_the_steps_seven_days_then_the_sweep_purges_them() {
     let env = env().await;
@@ -775,6 +815,72 @@ async fn a_start_url_is_the_first_page_and_the_page_before_isnt_a_step() {
     assert!(stage.on_start_failed(Some("http://127.0.0.1:9483/shop/orders.html")).await.iter().any(is_step));
     let steps = steps_of(&env, &id).await;
     assert_eq!(steps.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["note", "page"], "{steps:?}");
+    stage.handed_back().await;
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+}
+
+/// Starts a recording with a `start_url` on `stage` and installs the recorder while the browser
+/// is still on `before`. The recording's id.
+async fn start_at(env: &Env, stage: &mut kwnt::server::show_once::stage::StageRecorder, start: &str, before: &str) -> String {
+    stage.claim().await;
+    let body = json!({"bot": env.b, "first_note": "watch me", "start_url": start});
+    let (s, v) = call(&env.app, "POST", "/api/show-once/recordings", Some(body)).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let id = v["recording"]["id"].as_str().unwrap().to_string();
+    let cmd = next_cmd_for(stage, &id).await;
+    stage.on_cmd(cmd).await;
+    assert!(stage.on_installed(before).await.is_empty(), "the page before Start isn't a step yet");
+    id
+}
+
+#[tokio::test]
+async fn a_start_url_that_cant_load_keeps_the_page_the_browser_was_on() {
+    use kwnt::server::show_once::stage::StageRecorder;
+    let env = env().await;
+    let before = "http://127.0.0.1:9483/shop/orders.html";
+    let error_page = "chrome-error://chromewebdata/";
+    let mut stage = StageRecorder::new(env.state.clone(), env.b.clone(), 32);
+    let kinds = |steps: &[(String, Option<String>)]| steps.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
+
+    // S-F1: Page.navigate reports the failure and Chromium now shows its own error page there,
+    // which is never recorded: the page the browser was on when Start was pressed is step 1
+    let id = start_at(&env, &mut stage, "http://127.0.0.1:1/refused", before).await;
+    assert!(stage.on_start_failed(Some(error_page)).await.iter().any(is_step));
+    // the error page's own load event that follows adds nothing
+    assert!(stage.on_navigated(error_page).await.is_empty());
+    let steps = steps_of(&env, &id).await;
+    assert_eq!(kinds(&steps), ["note", "page"], "{steps:?}");
+    assert_eq!(steps[1].1.as_deref(), Some("/shop/orders.html"));
+    // the person goes on from there: the next page is recorded as usual
+    assert!(stage.on_navigated("http://127.0.0.1:9483/shop/new.html").await.iter().any(is_step));
+    assert_eq!(kinds(&steps_of(&env, &id).await), ["note", "page", "page"]);
+    stage.handed_back().await;
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+
+    // the history can't be read either: still the page before
+    let id = start_at(&env, &mut stage, "http://no-such-host.invalid/", before).await;
+    assert!(stage.on_start_failed(None).await.iter().any(is_step));
+    let steps = steps_of(&env, &id).await;
+    assert_eq!((kinds(&steps), steps[1].1.clone()), (vec!["note".to_string(), "page".to_string()], Some("/shop/orders.html".to_string())));
+    stage.handed_back().await;
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+
+    // Page.navigate didn't report it, but the error page is what loaded: the same
+    let id = start_at(&env, &mut stage, "http://no-such-host.invalid/", before).await;
+    assert!(stage.on_navigated(error_page).await.iter().any(is_step));
+    let steps = steps_of(&env, &id).await;
+    assert_eq!((kinds(&steps), steps[1].1.clone()), (vec!["note".to_string(), "page".to_string()], Some("/shop/orders.html".to_string())));
+    stage.handed_back().await;
+    call(&env.app, "DELETE", &format!("/api/show-once/recordings/{id}"), None).await;
+
+    // a start page that loads is still the first page step, and the page before never is
+    let id = start_at(&env, &mut stage, "http://127.0.0.1:9483/", before).await;
+    assert!(stage.on_navigated("http://127.0.0.1:9483/").await.iter().any(is_step));
+    // an error page later on (the person's own link to a dead host) is never a step
+    assert!(stage.on_navigated(error_page).await.is_empty());
+    let steps = steps_of(&env, &id).await;
+    assert_eq!(kinds(&steps), ["note", "page"], "{steps:?}");
+    assert_eq!(steps[1].1.as_deref(), Some("/"));
 }
 
 #[tokio::test]

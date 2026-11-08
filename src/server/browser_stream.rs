@@ -627,12 +627,14 @@ impl Worker {
                 let address = web_address(&url)?;
                 let parsed = reqwest::Url::parse(&address).map_err(|e| BrowserError::Protocol(e.to_string()))?;
                 if !matches!(parsed.scheme(), "http"|"https") { return Err(protocol("Use an HTTP or HTTPS URL")); }
+                self.commit_recorder().await;
                 self.ctrl.navigate_unlocked(&address).await?;
                 refresh_location(&self.cdp, &self.ctrl, &self.shared, &self.client);
                 let _ = self.client.send(ack(id, json!({})));
             }
             BrowserInput::History { direction } => {
                 self.close_select();
+                self.commit_recorder().await;
                 self.ctrl.navigate_history(direction).await?;
                 refresh_location(&self.cdp, &self.ctrl, &self.shared, &self.client);
                 let _ = self.client.send(ack(id, json!({})));
@@ -792,6 +794,18 @@ impl Worker {
         self.open_select = Some(object);
         let _ = self.client.send(json!({"type":"select","options":info["options"],"multiple":info["multiple"],"rect":info["rect"]}));
         true
+    }
+
+    /// Show it once (S-F5): the person is leaving through kwnt's address bar or back/forward,
+    /// which moves no focus in the page, so the recorder posts its pending field edits as steps
+    /// first (masked as always). Nothing happens while no recording is on.
+    async fn commit_recorder(&self) {
+        if !self.shared.recording.load(Ordering::SeqCst) { return; }
+        let cdp = &self.cdp;
+        let call = |method: &'static str, params: Value| async move { cdp.call(method, params, PROBE_WAIT).await.ok() };
+        if !recorder::commit_pending(call).await {
+            tracing::debug!("show it once: pending edits weren't committed before the person's navigation");
+        }
     }
 
     fn close_select(&mut self) {

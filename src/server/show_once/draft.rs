@@ -167,8 +167,27 @@ fn input_name(raw: &str) -> Option<String> {
     ok.then_some(n)
 }
 
+/// What the Write failed banner says when the draft's input took its example from a step where
+/// nothing was typed (a page step, a click, a note): Mira's copy, next-076/copy.md §S-F3.
+pub const SHOWN_NOTHING_TYPED: &str = "Its draft took a value from a step where nothing was typed.";
+/// What it says for any other draft check that failed (the same slot).
+pub const SHOWN_DRAFT_MISMATCH: &str = "Its draft didn't match your recorded steps.";
+/// The end of the check that an input's `from_step` has no typed value.
+const NO_VALUE: &str = "has no value";
+const IS_A_NOTE: &str = "is a note; a note can't be an input";
+
+/// The person's sentence for a draft that failed a check (S-F3). The check's own words
+/// (`input 1's from_step 1 has no value`) go to the engine on the retry only, never to the banner.
+pub fn shown_reason(why: &str) -> &'static str {
+    if why.starts_with("input ") && (why.ends_with(NO_VALUE) || why.ends_with(IS_A_NOTE)) {
+        SHOWN_NOTHING_TYPED
+    } else {
+        SHOWN_DRAFT_MISMATCH
+    }
+}
+
 /// Reads the turn's reply against the recording's steps. `Err` is the reason, said to the bot on
-/// the retry and to the person as `write_error`.
+/// the retry; the person sees [`shown_reason`] of it as `write_error`.
 pub fn parse(reply: &str, steps: &[StepRow]) -> Result<Draft, String> {
     let m = json_object(reply)?;
     // Everything the engine wrote is masked like any other text kwant keeps (S-F4): a key it
@@ -210,10 +229,10 @@ pub fn parse(reply: &str, steps: &[StepRow]) -> Result<Draft, String> {
             return Err(format!("input {at}'s from_step {from} is masked; a masked step can't be an input"));
         }
         if step.kind == "note" {
-            return Err(format!("input {at}'s from_step {from} is a note; a note can't be an input"));
+            return Err(format!("input {at}'s from_step {from} {IS_A_NOTE}"));
         }
         let Some(example) = step.value.clone().filter(|v| !v.trim().is_empty()) else {
-            return Err(format!("input {at}'s from_step {from} has no value"));
+            return Err(format!("input {at}'s from_step {from} {NO_VALUE}"));
         };
         // Duplicate names get _2, _3...
         let mut unique = name.clone();
@@ -360,8 +379,9 @@ where
                     break;
                 }
                 Err(why) => {
-                    last = Some(why.clone());
-                    result = Err(why);
+                    // the check's own words go back to the engine; the person gets a sentence
+                    result = Err(shown_reason(&why).to_string());
+                    last = Some(why);
                 }
             },
             Err(e) => {
@@ -532,6 +552,24 @@ mod tests {
             let e = parse(&reply(json!([{"name": "x", "description": "d", "from_step": n}])), &steps()).unwrap_err();
             assert!(e.contains(why), "{n}: {e}");
         }
+    }
+
+    #[test]
+    fn the_person_sees_a_sentence_for_a_failed_check_never_the_check() {
+        // a page step, a click and a note have nothing typed: Mira's sentence (S-F3)
+        for n in [1, 4, 5] {
+            let e = parse(&reply(json!([{"name": "x", "description": "d", "from_step": n}])), &steps()).unwrap_err();
+            assert_eq!(shown_reason(&e), SHOWN_NOTHING_TYPED, "{n}: {e}");
+        }
+        // a masked step, a step that isn't there, and every other check: the fallback
+        for n in [2, 9] {
+            let e = parse(&reply(json!([{"name": "x", "description": "d", "from_step": n}])), &steps()).unwrap_err();
+            assert_eq!(shown_reason(&e), SHOWN_DRAFT_MISMATCH, "{n}: {e}");
+        }
+        assert_eq!(shown_reason(&parse("Sure! Here is your skill.", &steps()).unwrap_err()), SHOWN_DRAFT_MISMATCH);
+        assert_eq!(shown_reason("input 1's name must be 1 to 40 lowercase letters"), SHOWN_DRAFT_MISMATCH);
+        assert_eq!(SHOWN_NOTHING_TYPED, "Its draft took a value from a step where nothing was typed.");
+        assert_eq!(SHOWN_DRAFT_MISMATCH, "Its draft didn't match your recorded steps.");
     }
 
     #[test]
