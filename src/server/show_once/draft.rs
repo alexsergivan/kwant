@@ -347,11 +347,54 @@ pub async fn write(state: AppState, id: String) {
         match scope_for(st, b, None, None, job, 0).await {
             Ok(scope) => tokio::time::timeout(TURN_TIMEOUT, turn_once(&scope, b, p, draft_opts()))
                 .await
-                .unwrap_or_else(|_| Err("the draft took longer than 10 minutes".into())),
+                .unwrap_or_else(|_| Err(TIMED_OUT.into())),
             Err(e) => Err(e),
         }
     };
     write_with(&state, rec, &bot.name, ask).await;
+}
+
+/// What [`write`]'s turn returns when it ran out of time.
+pub const TIMED_OUT: &str = "the draft took longer than 10 minutes";
+/// What a turn returns when the person pressed Stop on the bot (`turn_once`'s cancel token).
+const STOPPED_BY_USER: &str = "stopped by the user";
+
+/// S-F9 (Mira, copy.md): `write_error` when the drafting turn failed. The banner already leads with
+/// "**{bot} couldn't write the skill.**" and ends with "Your steps are kept until {day}, so try
+/// again.", so this never repeats the lead and never carries the engine's own words.
+pub const WRITE_TIMED_OUT: &str = "Writing took longer than 10 minutes, so kwant bots stopped it.";
+pub const WRITE_STOPPED: &str = "You stopped it before the draft was done.";
+pub const WRITE_SPEND_STOP: &str = "Today's spending stop was on, so it didn't start. Press Continue today in Needs you first.";
+const CHECK_SIGN_IN: &str = "Check that it's signed in under Settings › This space › Accounts.";
+
+/// The engine as the review's lock note names it, when Write goes to exactly one engine
+/// ([`super::engine_for`] gives one id, or several joined by " or ").
+fn one_engine_name(engine: Option<&str>) -> Option<&'static str> {
+    match engine? {
+        "claude" => Some("Claude"),
+        "codex" => Some("Codex"),
+        "grok" => Some("Grok"),
+        "custom" => Some("Custom API"),
+        _ => None,
+    }
+}
+
+/// The banner's sentence for a drafting turn that failed with `err` (S-F9's four cases, and the
+/// "run with no tools" note). `engine` is what [`super::engine_for`] says for the bot.
+pub fn failed_turn_reason(err: &str, bot_name: &str, engine: Option<&str>) -> String {
+    let err = err.trim();
+    let engine = one_engine_name(engine).unwrap_or("Its engine");
+    if err == TIMED_OUT {
+        WRITE_TIMED_OUT.into()
+    } else if err == STOPPED_BY_USER {
+        WRITE_STOPPED.into()
+    } else if crate::server::spend_stop::is_stop_error(err) {
+        WRITE_SPEND_STOP.into()
+    } else if err.contains("run with no tools") {
+        format!("{engine} can't write with every tool switched off. Turn on one tool for {bot_name}, or give {bot_name} another engine.")
+    } else {
+        format!("{engine} stopped with an error before the draft was done. {CHECK_SIGN_IN}")
+    }
 }
 
 /// [`write`] with `ask` in place of the turn (tests give a canned reply).
@@ -385,12 +428,11 @@ where
                 }
             },
             Err(e) => {
+                // The engine's own words stay in the log, as before; the banner gets a sentence (S-F9)
                 let first: String = e.lines().next().unwrap_or(&e).chars().take(300).collect();
-                result = Err(if e.contains("run with no tools") {
-                    format!("{bot_name}'s engine can't run a turn with every tool switched off, so the skill wasn't written.")
-                } else {
-                    format!("{bot_name} couldn't write the skill: {first}")
-                });
+                tracing::info!(recording = %id, "show it once: the drafting turn failed: {first}");
+                let engine = super::engine_for(state, &rec.kwant_id).await;
+                result = Err(failed_turn_reason(&e, bot_name, engine.as_deref()));
                 // A failed turn isn't a bad reply: no retry
                 break;
             }
@@ -552,6 +594,59 @@ mod tests {
             let e = parse(&reply(json!([{"name": "x", "description": "d", "from_step": n}])), &steps()).unwrap_err();
             assert!(e.contains(why), "{n}: {e}");
         }
+    }
+
+    /// S-F9: one sentence per way the drafting turn can fail; none repeats the banner's lead or
+    /// carries the engine's text.
+    #[test]
+    fn a_failed_turn_gets_one_of_miras_sentences_never_the_engines_words() {
+        let no_lead = |s: &str| {
+            assert!(!s.contains("couldn't write the skill"), "repeats the lead: {s}");
+            assert!(!s.contains(':'), "no engine text after a colon: {s}");
+            // the app names itself "kwant bots" wherever the person reads it, never a bare "kwant"
+            assert!(!s.replace("kwant bots", "").contains("kwant"), "a bare kwant: {s}");
+        };
+        // 1 · the 10-minute timeout
+        let s = failed_turn_reason(TIMED_OUT, "Rook", Some("claude"));
+        assert_eq!(s, "Writing took longer than 10 minutes, so kwant bots stopped it.");
+        no_lead(&s);
+        // 2 · the person pressed Stop
+        let s = failed_turn_reason("stopped by the user", "Rook", Some("claude"));
+        assert_eq!(s, "You stopped it before the draft was done.");
+        no_lead(&s);
+        // 3 · the spend stop, whatever its details say
+        let s = failed_turn_reason("spend_stopped: 120k of 100k tokens today, until 00:00 CET", "Rook", Some("codex"));
+        assert_eq!(s, "Today's spending stop was on, so it didn't start. Press Continue today in Needs you first.");
+        assert!(!s.contains("120k"), "no amounts: {s}");
+        no_lead(&s);
+        // 4 · anything else: the engine's name, never its words
+        let raw = "Error: 401 Unauthorized: OAuth token has expired at /home/someone/.claude";
+        let s = failed_turn_reason(raw, "Rook", Some("claude"));
+        assert_eq!(s, "Claude stopped with an error before the draft was done. Check that it's signed in under Settings › This space › Accounts.");
+        assert!(!s.contains("401") && !s.contains("OAuth") && !s.contains("/home"), "{s}");
+        no_lead(&s);
+        assert!(failed_turn_reason(raw, "Rook", Some("grok")).starts_with("Grok stopped with an error"));
+        assert!(failed_turn_reason(raw, "Rook", Some("codex")).starts_with("Codex stopped with an error"));
+    }
+
+    /// S-F9 case 4's fallback: no single engine (several, none, or an unknown id) says "Its engine".
+    #[test]
+    fn a_failed_turn_without_one_engine_says_its_engine() {
+        let want = "Its engine stopped with an error before the draft was done. Check that it's signed in under Settings › This space › Accounts.";
+        for engine in [None, Some("claude or codex"), Some("something-new")] {
+            assert_eq!(failed_turn_reason("boom", "Rook", engine), want, "{engine:?}");
+        }
+    }
+
+    /// Mira's note: the "run with no tools" failure names the engine and the fix, not the lead.
+    #[test]
+    fn a_turn_with_every_tool_off_names_the_fix() {
+        let e = "the engine can't run with no tools here";
+        assert_eq!(
+            failed_turn_reason(e, "Rook", Some("grok")),
+            "Grok can't write with every tool switched off. Turn on one tool for Rook, or give Rook another engine."
+        );
+        assert!(failed_turn_reason(e, "Rook", None).starts_with("Its engine can't write with every tool switched off."));
     }
 
     #[test]
