@@ -95,12 +95,18 @@ struct Env {
 
 /// kwant on a real port (the stand-in CLI calls back), with the mission board on.
 async fn setup() -> Env {
+    setup_in(|tmp| tmp.to_path_buf()).await
+}
+
+/// [`setup`] with kwant's data folder at `data(tmp)` (QA F-4 puts it behind a symlink).
+async fn setup_in(data: impl FnOnce(&Path) -> PathBuf) -> Env {
     let tmp = tempdir().unwrap();
+    let data_dir = data(tmp.path());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let db = Database::init(tmp.path()).await.unwrap();
+    let db = Database::init(&data_dir).await.unwrap();
     let config = Config {
-        data_dir: tmp.path().to_path_buf(),
+        data_dir: data_dir.clone(),
         host: "127.0.0.1".into(),
         port,
         laya_url: "http://127.0.0.1:9".into(),
@@ -110,7 +116,7 @@ async fn setup() -> Env {
     let state = AppState::new(
         config.clone(),
         db,
-        ToolRunner::new(tmp.path().join("workspace")),
+        ToolRunner::new(data_dir.join("workspace")),
         PermissionBroker::new(),
         LayaRouter::new(config.laya_url.clone()),
     );
@@ -835,4 +841,63 @@ async fn a_conflict_names_another_task_only_when_its_own_calls_wrote_the_path() 
     assert!(conflict(&pa, "seed.txt").is_some_and(|c| c["changed_by_task"].is_null()), "{pa}");
     let named: Vec<&Value> = pa["conflicts"].as_array().unwrap().iter().chain(pb["conflicts"].as_array().unwrap()).filter(|c| !c["changed_by_task"].is_null()).collect();
     assert_eq!(named.len(), 2, "only proven writes name a task: {named:?}");
+}
+
+/// QA F-4: kwant's data folder behind a symlink the person made (a linked home or `~/Projects ->
+/// /mnt/ssd/Projects`). Checkpoints still work and so does a restore, as on main.
+#[tokio::test]
+async fn a_symlink_the_person_made_above_the_folder_keeps_checkpoints_and_restore_working() {
+    let e = setup_in(|tmp| {
+        std::fs::create_dir(tmp.join("ssd")).unwrap();
+        std::os::unix::fs::symlink(tmp.join("ssd"), tmp.join("data")).unwrap();
+        tmp.join("data")
+    })
+    .await;
+    let (mid, ids) = mission(&e, &e.bot.id, json!([{"title": "A", "owner": e.bot.id}])).await;
+    let dir = folder(&e, &mid).await;
+    assert!(dir.starts_with(e._tmp.path().join("data")), "the folder is typed through the symlink: {dir:?}");
+    std::fs::write(dir.join("a.txt"), "v0").unwrap();
+    run(&e, &mid, &ids[0], &[("a.txt", Some("v1"))]).await;
+    assert!(events(&e, &ids[0], "checkpoint_failed").await.is_empty(), "no checkpoint fails");
+    let list = checkpoints(&e, &ids[0]).await;
+    let before = of_kind(&list, "before_run");
+    assert_eq!(before.len(), 1, "{list:?}");
+    assert_eq!(before[0]["restorable"], true, "{list:?}");
+    let cid = id(before[0]);
+    let p = preview(&e, &ids[0], &cid).await;
+    assert_eq!(p["changes"], json!([{"path": "a.txt", "action": "overwrite"}]), "{p}");
+    let (s, r, _) = restore(&e, &ids[0], &cid, "f4-restore", &p["preview_sha256"]).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "v0");
+}
+
+/// QA F-3 kept with F-4: the task folder swapped for a symlink after its checkpoint was taken is
+/// refused at restore (nothing written, the other folder untouched), even with the person's own
+/// symlink above it.
+#[tokio::test]
+async fn a_folder_swapped_for_a_symlink_after_its_checkpoint_is_refused_at_restore() {
+    let e = setup_in(|tmp| {
+        std::fs::create_dir(tmp.join("ssd")).unwrap();
+        std::os::unix::fs::symlink(tmp.join("ssd"), tmp.join("data")).unwrap();
+        tmp.join("data")
+    })
+    .await;
+    let (mid, ids) = mission(&e, &e.bot.id, json!([{"title": "A", "owner": e.bot.id}])).await;
+    let dir = folder(&e, &mid).await;
+    std::fs::write(dir.join("a.txt"), "v0").unwrap();
+    run(&e, &mid, &ids[0], &[("a.txt", Some("v1"))]).await;
+    let cid = id(of_kind(&checkpoints(&e, &ids[0]).await, "before_run")[0]);
+    let p = preview(&e, &ids[0], &cid).await;
+    assert!(p["refused"].is_null(), "{p}");
+    // The bot swaps its task folder for a symlink to a folder outside it
+    let victim = e._tmp.path().join("victim");
+    std::fs::create_dir(&victim).unwrap();
+    std::fs::write(victim.join("a.txt"), "ORIGINAL").unwrap();
+    std::fs::rename(&dir, dir.with_file_name("moved")).unwrap();
+    std::os::unix::fs::symlink(&victim, &dir).unwrap();
+    let (s, r, _) = restore(&e, &ids[0], &cid, "f4-swapped", &p["preview_sha256"]).await;
+    assert_ne!(s, StatusCode::OK, "{r}");
+    assert_eq!(std::fs::read_to_string(victim.join("a.txt")).unwrap(), "ORIGINAL", "nothing written through the symlink");
+    assert_eq!(std::fs::read_to_string(dir.with_file_name("moved").join("a.txt")).unwrap(), "v1");
+    assert!(of_kind(&checkpoints(&e, &ids[0]).await, "before_restore").is_empty(), "no safety checkpoint either");
 }

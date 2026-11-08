@@ -274,6 +274,29 @@ struct Taken {
     git_head: Option<String>,
 }
 
+/// The task folder as a checkpoint records it (QA F-4): the folders above it resolved now, its own
+/// name kept as it is. A checkpoint's restore writes back only into the folder it recorded, opened
+/// with [`Dir::open_strict`](crate::sandbox::safe_fs::Dir::open_strict), so a symlink the person
+/// made above the folder (`~/Projects -> /mnt/ssd/Projects`, a linked home or data folder) works
+/// as before, while any part swapped for a symlink after the checkpoint is refused (QA F-3).
+/// Content and place stay bound: what a checkpoint read is only ever written back where it was
+/// read. Never resolved at restore time. The folder itself, if a symlink, stays refused by
+/// [`snapshot`] as before. A parent that can't be resolved (missing) is kept as typed.
+#[cfg(unix)]
+fn resolve_above(folder: &FsPath) -> PathBuf {
+    match (folder.parent(), folder.file_name()) {
+        (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => parent.canonicalize().map(|p| p.join(name)).unwrap_or_else(|_| folder.to_path_buf()),
+        _ => folder.to_path_buf(),
+    }
+}
+
+/// Off unix the folder is kept as typed: Windows' `canonicalize` gives `\\?\` paths, and
+/// checkpoints are new there in 0.7.7 (nothing to stay compatible with).
+#[cfg(not(unix))]
+fn resolve_above(folder: &FsPath) -> PathBuf {
+    folder.to_path_buf()
+}
+
 /// Walks `folder` (never following symlinks) and stores each file's content as a blob.
 /// A missing folder is an empty snapshot; an unreadable one is an error.
 fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, String> {
@@ -505,7 +528,7 @@ async fn take_in(
     }
     let (folder, pinned) = match pinned {
         Some((f, d)) => (Some(f), Some(d)),
-        None => (task_folder(state, task).await, None),
+        None => (task_folder(state, task).await.map(|f| resolve_above(&f)), None),
     };
     let max_bytes = max_mb(state).await as u64 * 1024 * 1024;
     let root = root(state);
@@ -1690,5 +1713,57 @@ mod tests {
         assert!(swapper.join().unwrap() > 0, "the folder was really swapped");
         assert!(applied > 0, "some restores ran");
         assert_eq!(hits, 0, "a restore wrote into the folder the task folder was swapped for");
+    }
+
+    /// QA F-4: a symlink the person made above the task folder (`~/Projects -> /mnt/ssd/Projects`)
+    /// works for checkpoint and restore, because a checkpoint records the folder with the parts
+    /// above it resolved when it is taken; a swap after that is still refused (QA F-3).
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_the_person_made_above_the_folder_works_and_a_later_swap_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let ssd = d.path().join("ssd");
+        std::fs::create_dir_all(ssd.join("Projects/proj")).unwrap();
+        std::fs::write(ssd.join("Projects/proj/authorized_keys"), "V0\n").unwrap();
+        let home = d.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        std::os::unix::fs::symlink(ssd.join("Projects"), home.join("Projects")).unwrap();
+        let typed = home.join("Projects/proj");
+        let blobs = d.path().join("blobs");
+        assert!(crate::sandbox::safe_fs::Dir::open_strict(&typed).is_err(), "the typed path has the person's symlink on the way");
+
+        // Checkpoint: recorded with the parts above resolved, so it is taken, read and restored
+        let folder = resolve_above(&typed);
+        assert_eq!(folder, ssd.canonicalize().unwrap().join("Projects/proj"));
+        let taken = snapshot(&blobs, &folder, 1 << 30).unwrap();
+        assert_eq!(taken.manifest.files.len(), 1);
+        std::fs::write(typed.join("authorized_keys"), "CHANGED\n").unwrap();
+        assert!(matches!(current(&folder, "authorized_keys"), Ok(Some(_))));
+        let root = crate::sandbox::safe_fs::Dir::open_strict(&folder).unwrap();
+        let (restored, _deleted, failed) = apply(&blobs, &overwrite_plan(&folder, &taken), &BTreeSet::new(), &root);
+        assert_eq!(restored, vec!["authorized_keys".to_string()], "{failed:?}");
+        assert_eq!(std::fs::read_to_string(typed.join("authorized_keys")).unwrap(), "V0\n");
+
+        // The folder swapped for a symlink after the checkpoint: refused, the other folder untouched
+        let victim = d.path().join("victim");
+        std::fs::create_dir(&victim).unwrap();
+        std::fs::write(victim.join("authorized_keys"), "ORIGINAL\n").unwrap();
+        std::fs::rename(&folder, folder.with_file_name("proj.moved")).unwrap();
+        std::os::unix::fs::symlink(&victim, &folder).unwrap();
+        assert!(crate::sandbox::safe_fs::Dir::open_strict(&folder).is_err());
+        assert!(snapshot(&blobs, &folder, 1 << 30).is_err());
+        assert_eq!(current(&folder, "authorized_keys"), Err("symlink, not followed".into()));
+        std::fs::remove_file(&folder).unwrap();
+        std::fs::rename(folder.with_file_name("proj.moved"), &folder).unwrap();
+
+        // A part above it swapped for a symlink after the checkpoint: refused too
+        std::fs::rename(&ssd, d.path().join("ssd.real")).unwrap();
+        std::os::unix::fs::symlink(d.path().join("ssd.real"), &ssd).unwrap();
+        assert!(crate::sandbox::safe_fs::Dir::open_strict(&folder).is_err());
+        assert_eq!(std::fs::read_to_string(victim.join("authorized_keys")).unwrap(), "ORIGINAL\n");
+
+        // The task folder itself a symlink is never resolved, and stays refused as on main
+        assert_eq!(resolve_above(&home.join("Projects")), home.canonicalize().unwrap().join("Projects"));
+        assert!(snapshot(&blobs, &resolve_above(&home.join("Projects")), 1 << 30).is_err());
     }
 }
