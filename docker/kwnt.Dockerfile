@@ -9,6 +9,8 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+# The What's new plugin in vite.config.ts bundles CHANGELOG sections from ../CHANGELOG.md
+COPY CHANGELOG.md /app/CHANGELOG.md
 RUN npm run build
 
 FROM rust:1-bookworm AS build

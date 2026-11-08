@@ -1,0 +1,44 @@
+{
+  "version": "0.7.6",
+  "date": "2026-11-08",
+  "highlights": [
+    {
+      "id": "sign-in",
+      "title": "Sign in to ChatGPT and Grok in the app",
+      "text": "From Get started, approve a short code in your browser and you're signed in. No Terminal needed. No Node? kwant still installs Codex and the bots' browser.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "recipe",
+      "title": "Recipes you can cook from",
+      "text": "A recipe in a reply shows as a card with its ingredients and steps. Change the servings and the amounts follow. Oven temperatures stay as written.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "linux-install",
+      "title": "Set up a Linux server in one line",
+      "text": "One command installs kwant on a Linux server. It checks the download, never uses sudo and ends with your sign-in link: curl -fsSL https://kwant.si/install.sh | sh",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "get-started",
+      "title": "Get started in three steps",
+      "text": "A new person's #general opens with one card: Choose your AI, Sign in, Pick a team. Choosing an AI installs it when it's missing.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Take over says when you're already controlling the browser in another window, instead of retrying.",
+    "Undo for a ready-made team names the exact archived chat it keeps.",
+    "A Jira ticket whose lead can't prepare a brief says why, and what to change.",
+    "Show it once explains a failed draft or an empty trial reply in plain words.",
+    "A GitLab address without .git now works, just as a GitHub one does.",
+    "After \"folder in use\", a ready-made team's button says Pick another folder instead of Try again.",
+    "Telegram no longer says your message wasn't run when a routine or a Jira task hit today's spending stop.",
+    "A Linux server reports its real version, not 0.1.0."
+  ]
+}
