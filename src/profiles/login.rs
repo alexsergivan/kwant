@@ -14,8 +14,15 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::ChildStdin;
 use tokio::sync::Notify;
 
-/// A login nobody finishes is killed after this long.
+/// A login nobody finishes is killed after this long, unless the CLI says how long its code
+/// works (see [`cli_lifetime`]).
 pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// The longest code lifetime kwnt takes from a CLI's output.
+const MAX_CLI_LIFETIME: Duration = Duration::from_secs(30 * 60);
+
+/// How long past the code's own expiry kwnt waits for the CLI to give up by itself.
+const EXPIRY_GRACE: Duration = Duration::from_secs(10);
 
 /// Hosts a sign-in link may point at. Anything else ends the login: kwnt never shows the user
 /// a link a compromised or unexpected binary printed.
@@ -65,9 +72,20 @@ pub struct LoginView {
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
+impl LoginView {
+    /// Everything the user needs is known: the link, and the device code unless they paste one.
+    pub fn shows_everything(&self) -> bool {
+        self.url.is_some() && (self.needs_code || self.user_code.is_some())
+    }
+}
+
 struct Flow {
     view: Mutex<LoginView>,
     home: PathBuf,
+    /// When the login started, for a lifetime the CLI prints ("expires in 15 minutes").
+    started: (tokio::time::Instant, chrono::DateTime<chrono::Utc>),
+    /// The CLI said the code expired, so its failing exit is an expiry.
+    said_expired: std::sync::atomic::AtomicBool,
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
     cancel: Notify,
 }
@@ -176,6 +194,7 @@ impl LoginManager {
         })?;
         let timeout = self.timeout;
         let flow_id = format!("login_{}", uuid::Uuid::new_v4().simple());
+        let started = (tokio::time::Instant::now(), chrono::Utc::now());
         let flow = Arc::new(Flow {
             view: Mutex::new(LoginView {
                 flow_id: flow_id.clone(),
@@ -186,9 +205,11 @@ impl LoginManager {
                 needs_code: engine == Engine::Claude,
                 code_sent: false,
                 error: None,
-                expires_at: chrono::Utc::now() + chrono::Duration::from_std(timeout).unwrap(),
+                expires_at: started.1 + chrono::Duration::from_std(timeout).unwrap(),
             }),
             home: home.to_path_buf(),
+            started,
+            said_expired: Default::default(),
             stdin: tokio::sync::Mutex::new(child.stdin.take()),
             cancel: Notify::new(),
         });
@@ -211,11 +232,13 @@ impl LoginManager {
             let end = loop {
                 tokio::select! {
                     line = line_rx.recv(), if lines_open => match line {
-                        Some(line) => {
-                            if let Err(e) = flow.take_line(&line) {
-                                break (LoginStatus::Failed, Some(e));
-                            }
-                        }
+                        Some(line) => match flow.take_line(&line) {
+                            Err(e) => break (LoginStatus::Failed, Some(e)),
+                            // The code's own lifetime: kwnt waits that long, plus a moment for
+                            // the CLI to say it expired itself
+                            Ok(Some(lifetime)) => deadline.as_mut().reset(flow.started.0 + lifetime + EXPIRY_GRACE),
+                            Ok(None) => {}
+                        },
                         None => lines_open = false,
                     },
                     status = child.wait() => {
@@ -225,6 +248,7 @@ impl LoginManager {
                         }
                         break match status {
                             Ok(s) if s.success() => (LoginStatus::Succeeded, None),
+                            Ok(_) if flow.code_expired() => (LoginStatus::Expired, Some("sign-in timed out".into())),
                             Ok(s) => (LoginStatus::Failed, Some(format!("sign-in did not finish (exit {})", s.code().unwrap_or(-1)))),
                             Err(_) => (LoginStatus::Failed, Some("sign-in process failed".into())),
                         };
@@ -245,10 +269,11 @@ impl LoginManager {
                 on_success(finished);
             }
         });
-        // Give the CLI a moment to print its link so the first response usually has it
+        // Give the CLI a moment to print its link (and device code) so the first response
+        // usually has them
         for _ in 0..30 {
             match self.get(&flow_id) {
-                Some(view) if view.url.is_none() && view.status.is_active() => {}
+                Some(view) if !view.shows_everything() && view.status.is_active() => {}
                 Some(view) => return Ok(view),
                 None => break,
             }
@@ -341,9 +366,14 @@ async fn read_lines<R: tokio::io::AsyncRead + Unpin>(
 }
 
 impl Flow {
-    /// Picks the sign-in link and device code out of a line of CLI output.
-    fn take_line(&self, raw: &str) -> Result<(), String> {
+    /// Picks the sign-in link, device code and the code's lifetime out of a line of CLI output.
+    /// `Ok(Some(lifetime))` when the line says how long the code works.
+    fn take_line(&self, raw: &str) -> Result<Option<Duration>, String> {
         let line = strip_ansi(raw);
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("expired") {
+            self.said_expired.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let mut view = self.view.lock().unwrap();
         if view.url.is_none() {
             if let Some(url) = first_https_url(&line) {
@@ -353,14 +383,40 @@ impl Flow {
                 }
                 view.url = Some(url);
                 view.status = LoginStatus::Waiting;
-                return Ok(());
+                return Ok(None);
             }
+        }
+        let lifetime = cli_lifetime(&lower);
+        if let Some(d) = lifetime {
+            view.expires_at = self.started.1 + chrono::Duration::from_std(d).unwrap();
         }
         if view.user_code.is_none() && view.url.is_some() {
             view.user_code = device_code(&line);
         }
-        Ok(())
+        Ok(lifetime)
     }
+
+    /// The CLI said the code expired, or it is past the code's lifetime.
+    fn code_expired(&self) -> bool {
+        self.said_expired.load(std::sync::atomic::Ordering::Relaxed)
+            || self.view.lock().unwrap().expires_at <= chrono::Utc::now()
+    }
+}
+
+/// "expires in 15 minutes" (Codex) in a lowercased line: the code's lifetime, at most
+/// [`MAX_CLI_LIFETIME`].
+fn cli_lifetime(lower: &str) -> Option<Duration> {
+    let rest = &lower[lower.find("expires in ")? + "expires in ".len()..];
+    let mut words = rest.split_whitespace();
+    let n: u64 = words.next()?.parse().ok()?;
+    let unit = words.next()?.trim_end_matches(|c: char| !c.is_ascii_alphabetic());
+    let secs = match unit {
+        "second" | "seconds" => n,
+        "minute" | "minutes" | "min" | "mins" => n.checked_mul(60)?,
+        "hour" | "hours" => n.checked_mul(3600)?,
+        _ => return None,
+    };
+    (secs > 0).then(|| Duration::from_secs(secs).min(MAX_CLI_LIFETIME))
 }
 
 /// Removes terminal escape sequences (colors, cursor moves, OSC hyperlinks).
@@ -460,6 +516,18 @@ fn is_device_code(w: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_lifetime_reads_the_codes_own_expiry() {
+        let line = strip_ansi("2. Enter this one-time code \u{1b}[90m(expires in 15 minutes)\u{1b}[0m").to_lowercase();
+        assert_eq!(cli_lifetime(&line), Some(Duration::from_secs(900)));
+        assert_eq!(cli_lifetime("the code expires in 90 seconds."), Some(Duration::from_secs(90)));
+        assert_eq!(cli_lifetime("expires in 1 hour"), Some(Duration::from_secs(3600).min(MAX_CLI_LIFETIME)));
+        assert_eq!(cli_lifetime("expires in 99999999 hours"), Some(MAX_CLI_LIFETIME));
+        for none in ["expires in 0 minutes", "expires in soon", "expires in 5 days", "waiting for authorization...", "expired"] {
+            assert_eq!(cli_lifetime(none), None, "{none}");
+        }
+    }
 
     #[test]
     fn login_url_allowlist() {
