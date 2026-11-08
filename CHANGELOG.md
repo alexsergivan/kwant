@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **Get started offers to bring your bots.** Step 3, "Pick a team", has a new "Bring your bots" tile next to "Keep the starter bots". It opens the same importer as Space settings › Import bots, so you can bring a bot from Grok Bot, ChatGPT or Claude, or from a file, and check a preview first. A finished import completes step 3. Closing the importer without importing leaves step 3 as it was.
+
 ### Changed
 - **Dev mode reviews only fresh work.** A branch or PR gets a review card only if it moved in the last 7 days, so old branches no longer fill the desk or spend model calls. Cards on branches that went quiet go stale, and a new push brings a branch back. The newest branches are reviewed first, and Dev mode's status says how many old ones it skipped. A card that couldn't read a file now says "Couldn't read N files (no diff available)" instead of "(no diff from GitHub)". A type change (a symlink turned into a file) no longer leaves every file in the change unread.
 

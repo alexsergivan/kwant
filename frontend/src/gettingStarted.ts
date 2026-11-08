@@ -421,14 +421,16 @@ export const isDismissed = (space: string) => store()?.getItem(dismissKey(space)
 /** The card was shown here before (so it stays until dismissed, C4, even once an account works). */
 export const wasStarted = (space: string) => {
   const v = store()?.getItem(dismissKey(space));
-  return v === 'open' || v === 'kept';
+  return v === 'open' || v === 'kept' || v === 'imported';
 };
 /** "Keep the starter bots" pressed before sign-in finished: step 3 is done, the card waits for step 2. */
 export const isKept = (space: string) => store()?.getItem(dismissKey(space)) === 'kept';
-export function markStarted(space: string, value: 'open' | 'kept' = 'open') {
+/** Step 3 was done by importing bots ("Bring your bots"), before step 2 was done. */
+export const isImported = (space: string) => store()?.getItem(dismissKey(space)) === 'imported';
+export function markStarted(space: string, value: 'open' | 'kept' | 'imported' = 'open') {
   try {
     const cur = store()?.getItem(dismissKey(space));
-    if (cur === 'dismissed' || (cur === 'kept' && value === 'open')) return;
+    if (cur === 'dismissed' || ((cur === 'kept' || cur === 'imported') && value === 'open')) return;
     store()?.setItem(dismissKey(space), value);
   } catch {
     /* nothing to keep */
