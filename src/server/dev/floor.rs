@@ -88,9 +88,13 @@ pub fn head_branch(cwd: &Path) -> Option<String> {
 
 /// `HEAD` of the worktree whose `.git` file is in `d`. The file must say
 /// `gitdir: <repo>/.git/worktrees/<name>` (relative to `d` unless absolute). `.` and `..` are
-/// resolved on the text, so only a path that was checked is opened, and every folder on it that
-/// `d`'s own path doesn't already name (always `.git`, `worktrees` and `<name>`) must be a real
-/// folder, not a symlink. So a common sibling worktree reads, and a planted link can't redirect it.
+/// resolved on the text by [`lexical`], so only a path that was checked is opened, and every
+/// folder on it that `d`'s own path doesn't already name (always `.git`, `worktrees` and `<name>`)
+/// must be a real folder, not a symlink. The kernel and git take `link/..` to the parent of the
+/// link's *target*, not to the folder the text names, so a `..` that would climb over a symlink
+/// (in the gitdir or in `d` itself) makes this `None` rather than read a different `HEAD` than
+/// git would (F-3). A common sibling worktree still reads. Folder races between the checks and
+/// the open remain, as in `discover::read_file`; the 0.7.8 openat walk closes them.
 fn worktree_head(d: &Path) -> Option<String> {
     let text = gitfile::read(d, ".git", gitfile::REF_MAX)?;
     let gd = text.trim().strip_prefix("gitdir:")?.trim();
@@ -114,14 +118,17 @@ fn worktree_head(d: &Path) -> Option<String> {
     gitfile::read(&target, "HEAD", gitfile::REF_MAX)
 }
 
-/// `p` with `.` dropped and `..` taken off the text (never past its start), not by the kernel.
+/// `p` with `.` dropped and each `..` taken off the text, but only where the kernel would land in
+/// the same folder: `a/..` is `.` only when `a` is a real folder, not a symlink (`link/..` is the
+/// link target's parent). A `..` after a symlink, or past the start, is `None`.
 fn lexical(p: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !out.pop() {
+                let real_dir = !out.as_os_str().is_empty() && std::fs::symlink_metadata(&out).is_ok_and(|m| m.file_type().is_dir());
+                if !real_dir || !out.pop() {
                     return None;
                 }
             }
@@ -292,6 +299,54 @@ mod tests {
         symlink(other.parent().unwrap(), wt.join("hop")).unwrap();
         std::fs::write(wt.join(".git"), "gitdir: hop/repo/.git/worktrees/wt\n").unwrap();
         assert_eq!(head_branch(&wt), None, "gitdir through a symlinked folder");
+    }
+
+    /// F-3, M1: `link/..` in the gitdir is the link target's parent to the kernel and git, not
+    /// the folder the text names. A decoy on the text path says `feature`, the real gitdir `main`.
+    #[cfg(unix)]
+    #[test]
+    fn head_branch_refuses_dotdot_after_a_symlink_in_the_gitdir() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        let wt = p.join("wt");
+        std::fs::create_dir_all(p.join("phys/sub")).unwrap();
+        std::fs::create_dir_all(p.join("phys/decoy/.git/worktrees/x")).unwrap();
+        std::fs::write(p.join("phys/decoy/.git/worktrees/x/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::create_dir_all(wt.join("decoy/.git/worktrees/x")).unwrap();
+        std::fs::write(wt.join("decoy/.git/worktrees/x/HEAD"), "ref: refs/heads/feature\n").unwrap();
+        symlink(p.join("phys/sub"), wt.join("link")).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: link/../decoy/.git/worktrees/x\n").unwrap();
+        // What git and the kernel open: the physical copy, on `main`
+        let kernel = std::fs::read_to_string(wt.join("link/../decoy/.git/worktrees/x/HEAD")).unwrap();
+        assert_eq!(kernel, "ref: refs/heads/main\n");
+        assert_eq!(head_branch(&wt), None, "M1: must not read the text path's `feature`");
+        // `..` after a real folder still reads
+        std::fs::create_dir_all(wt.join("real")).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: real/../decoy/.git/worktrees/x\n").unwrap();
+        assert_eq!(head_branch(&wt).as_deref(), Some("feature"));
+    }
+
+    /// F-3, M2: the start folder sits under a symlink, and the gitdir's leading `..` climb over it.
+    /// The text lands beside the link; the kernel lands beside the link's target.
+    #[cfg(unix)]
+    #[test]
+    fn head_branch_refuses_dotdot_over_a_symlink_in_the_start_folder() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path();
+        let real = p.join("deep/er/real");
+        std::fs::create_dir_all(real.join("wt")).unwrap();
+        symlink(&real, p.join("lnk")).unwrap();
+        std::fs::create_dir_all(p.join("deep/er/decoy2/.git/worktrees/x")).unwrap();
+        std::fs::write(p.join("deep/er/decoy2/.git/worktrees/x/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::create_dir_all(p.join("decoy2/.git/worktrees/x")).unwrap();
+        std::fs::write(p.join("decoy2/.git/worktrees/x/HEAD"), "ref: refs/heads/feature\n").unwrap();
+        std::fs::write(real.join("wt/.git"), "gitdir: ../../decoy2/.git/worktrees/x\n").unwrap();
+        let start = p.join("lnk/wt");
+        let kernel = std::fs::read_to_string(start.join("../../decoy2/.git/worktrees/x/HEAD")).unwrap();
+        assert_eq!(kernel, "ref: refs/heads/main\n");
+        assert_eq!(head_branch(&start), None, "M2: must not read the text path's `feature`");
     }
 
     #[test]
