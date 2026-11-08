@@ -171,6 +171,10 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
             // A code for the one error the desk words differently; null for the rest
             "poll_code": e.row.and_then(|r| r.poll_error.as_deref()).and_then(super::git::GitError::poll_code),
             "polled_at": e.row.and_then(|r| r.polled_at),
+            // Branches and PRs get review cards only while fresh: this many days, and how many
+            // the last poll skipped as older (0 until the first poll after a restart)
+            "fresh_days": super::review_days(),
+            "old_reviews_skipped": e.row.map_or(0, |r| poller::old_reviews_skipped(space.as_str(), &r.key)),
             "last_tag": e.row.and_then(|r| poller::last_tag(space.as_str(), &r.key)),
             "added_by": e.row.map(|r| r.added_by_shown()),
         }));
@@ -186,6 +190,8 @@ pub async fn mode_json(state: &AppState, space: &SpaceId) -> Result<Value, Respo
         "deploy_hint": first.and_then(|r| r.deploy_hint.clone()),
         "last_seen_sha": first.and_then(|r| r.last_seen_sha.clone()),
         "polled_at": first.and_then(|r| r.polled_at),
+        "fresh_days": super::review_days(),
+        "old_reviews_skipped": first.map_or(0, |r| poller::old_reviews_skipped(space.as_str(), &r.key)),
         "poll_error": first.and_then(|r| r.poll_error.clone()),
         "backup_command": row.as_ref().and_then(|r| r.backup_command.clone()),
         "calls_today": calls,

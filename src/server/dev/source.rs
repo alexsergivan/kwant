@@ -9,6 +9,7 @@ use super::git::{Auth, GitError, Repo};
 use super::forge::ForgeKind;
 use crate::zombie::github::{EtagCache, GhCheck, GhCommit, GhError, GhFile, GhGitPerson, GhPull, GhReview, GithubSource, PostError, ReviewPost};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 /// A git author or committer.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -280,6 +281,42 @@ impl<'a> History<'a> {
             g.drop_ref(&local).await;
         }
         got
+    }
+
+    /// The committer dates of those of `shas` git already has (see [`Repo::commit_dates`]): every
+    /// branch head of a team folder, and those a mirror fetched before (their objects stay after
+    /// [`Self::branch_files`] drops its ref). Empty with no git, or when git can't read them.
+    pub async fn commit_dates(&self, shas: &[&str]) -> HashMap<String, DateTime<Utc>> {
+        match &self.git {
+            Some(g) if !shas.is_empty() => g.commit_dates(shas).await.unwrap_or_default(),
+            _ => HashMap::new(),
+        }
+    }
+
+    /// Whether branch heads are fetched before they can be read (a mirror), rather than read in
+    /// place (a team folder).
+    pub fn fetches_branches(&self) -> bool {
+        self.git.as_ref().is_some_and(|g| !g.is_local())
+    }
+
+    /// When branch `name`'s head `sha`, which the mirror doesn't have yet, was committed: fetches
+    /// the branch the way [`Self::branch_files`] does, reads the date and drops the ref. The
+    /// objects stay, so a fresh branch's [`Self::branch_files`] right after fetches nothing more,
+    /// and later polls read the date with no fetch. `None` when the fetch failed or didn't bring
+    /// `sha` (the branch moved since it was listed): the branch waits for the next poll, as when
+    /// [`Self::branch_files`] can't read it.
+    pub async fn fetch_branch_date(&self, name: &str, sha: &str) -> Option<DateTime<Utc>> {
+        let g = self.git.as_ref()?;
+        if g.resolve(sha).await.is_ok() {
+            return g.commit_dates(&[sha]).await.ok().and_then(|d| d.get(sha).copied());
+        }
+        let local = format!("refs/kwant/branch/{name}");
+        let at = match g.fetch_ref(&self.url, &format!("refs/heads/{name}"), &local, self.auth.as_ref()).await {
+            Ok(_) => g.commit_dates(&[sha]).await.ok().and_then(|d| d.get(sha).copied()),
+            Err(_) => None,
+        };
+        g.drop_ref(&local).await;
+        at
     }
 
     /// Whether `sha` is already in `base_branch` (a pushed branch that merged, or never moved
