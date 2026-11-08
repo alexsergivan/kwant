@@ -301,11 +301,14 @@ Before it, the sheet's confirm reads `GET /api/teams/:id/template`:
     "handle": "inbox"
   },
   "chat_messages": 4,
+  "archived_chat": "archived-team-inbox-2",
   "also_in": [{"bot": "Drafter", "team": "support"}],
   "edited_skills": [],
   "needs_done": []
 }
 ```
+
+`archived_chat`: the name Undo will give the team chat when it keeps it (it has messages): `archived-team-<handle>`, or with `-2`, `-3`… when that name is taken, ignoring case. `null` when Undo deletes the chat (no messages) or doesn't touch it (an existing team). It's worked out from the chats as they are now, so a chat made with that name before the person clicks Undo can still move it on by one.
 
 `needs_done`: ids of the template's Needs (§1) the server can see are done. Today that's only the `composer_prompt` need, Sales' `what_you_sell` (A5): done once the team chat has a message from the person. The other Needs (connect email, a CRM, a repo) are ticked by the client from its own state, as before.
 
