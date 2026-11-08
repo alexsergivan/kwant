@@ -58,31 +58,33 @@ const LOG_ROTATE_BYTES: u64 = 5 << 20;
 /// The model-API calls a Claude turn needs, and nothing else: from Gate 0 against the real API
 /// (`proto/agents-in-vm/evidence/real-upstream.txt`). Each is `(method, path, allowed queries)`.
 pub const ANTHROPIC_ALLOWED: &[(&str, &str, &[&str])] = &[
-    // every turn, tool step and `--resume` turn
+    // Gate 0 (CLI 2.1.316, real API): every call of a normal, a `--resume` and a Bash-tool turn
+    // was this one, with `?beta=true`. Nothing else was sent; anything else is refused and logged
     ("POST", "/v1/messages", &["", "beta=true"]),
-    // the CLI sizes a long context before compacting it
-    ("POST", "/v1/messages/count_tokens", &["", "beta=true"]),
 ];
 
 /// Request headers forwarded to Anthropic (an allow-list: anything else the container sent,
 /// every credential included, is dropped). `x-stainless-*` are the SDK's own descriptive headers.
 const ANTHROPIC_FORWARD: &[&str] = &[
     "accept", "content-type", "anthropic-version", "anthropic-beta", "user-agent", "x-app",
-    "x-claude-code-session-id", "x-client-request-id", "anthropic-dangerous-direct-browser-access",
+    "x-claude-code-session-id", "anthropic-dangerous-direct-browser-access",
 ];
 const ANTHROPIC_FORWARD_PREFIX: &str = "x-stainless-";
 
 /// `anthropic-beta` values passed on (Gate 0); others are stripped and logged, not refused.
 pub const KNOWN_BETAS: &[&str] = &[
+    // Gate 0: every value the real CLI sent (API-key mode, Haiku 5.5)
+    "advanced-tool-use-2025-11-20",
     "claude-code-20250219",
-    "oauth-2025-04-20",
-    "interleaved-thinking-2025-05-14",
-    "fine-grained-tool-streaming-2025-05-14",
     "context-management-2025-06-27",
-    "context-1m-2025-08-07",
-    "prompt-caching-scope-2026-01-05",
-    "token-efficient-tools-2025-02-19",
     "effort-2025-11-24",
+    "interleaved-thinking-2025-05-14",
+    "mid-conversation-tool-changes-2026-07-01",
+    "per-turn-control-2026-07-01",
+    "thinking-display-updates-2026-08-18",
+    "thinking-token-count-2026-05-13",
+    // Not in Gate 0 (it used an API key): the CLI adds it for a Claude sign-in, which needs it
+    "oauth-2025-04-20",
 ];
 
 /// Tool `type`s a request may declare besides plain client tools (no `type`, or `custom`).
@@ -1698,6 +1700,36 @@ mod tests {
         let tail: Vec<Result<Bytes, std::io::Error>> = vec![Ok(Bytes::from_static(b"ok sk-ant"))];
         let out: Vec<u8> = scrubbed(futures::stream::iter(tail), secret).map(|c| c.unwrap().to_vec()).collect::<Vec<_>>().await.concat();
         assert_eq!(out, b"ok sk-ant".to_vec());
+    }
+
+    /// The allow-list and the betas are exactly what Gate 0 saw the real CLI send (plus the
+    /// sign-in beta, which an API-key run can't show).
+    #[test]
+    fn the_anthropic_lists_match_the_gate_0_evidence() {
+        let ev = include_str!("../../../proto/agents-in-vm/evidence/real-upstream.txt");
+        let mut seen = std::collections::BTreeSet::new();
+        for l in ev.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
+            let f: Vec<&str> = l.split('\t').collect();
+            assert_eq!(f[4], "forward", "Gate 0 had a refused call: {l}");
+            let (path, query) = f[2].strip_prefix("/anthropic").unwrap().split_once('?').unwrap_or((f[2], ""));
+            seen.insert((f[1].to_string(), path.to_string(), query.to_string()));
+        }
+        assert!(!seen.is_empty());
+        for (m, p, q) in &seen {
+            assert!(ANTHROPIC_ALLOWED.iter().any(|(am, ap, aq)| am == m && ap == p && aq.contains(&q.as_str())), "{m} {p}?{q}");
+        }
+        for (m, p, _) in ANTHROPIC_ALLOWED {
+            assert!(seen.iter().any(|(sm, sp, _)| sm == m && sp == p), "{m} {p} is allowed but Gate 0 never saw it");
+        }
+        let betas = ev.lines().find_map(|l| l.strip_prefix("#   betas: ")).unwrap();
+        let mut betas: Vec<&str> = betas.split(", ").collect();
+        betas.push("oauth-2025-04-20");
+        betas.sort_unstable();
+        let mut known = KNOWN_BETAS.to_vec();
+        known.sort_unstable();
+        assert_eq!(known, betas);
+        let types = ev.lines().find_map(|l| l.strip_prefix("#   tool_types: ")).unwrap();
+        assert_eq!(types.split(", ").collect::<Vec<_>>(), ALLOWED_TOOL_TYPES);
     }
 
     #[test]

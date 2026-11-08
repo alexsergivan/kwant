@@ -23,7 +23,7 @@ text, can't do these things while it runs inside the VM:
   stays in the broker. A folder that is, holds or sits inside one of these is refused before the
   container starts (`unsafe_folder`).
 - **Send your key or files anywhere.** The container runs with `--network none`. The broker
-  forwards only `POST /v1/messages` and the few calls Gate 0 saw the real CLI make. It refuses
+  forwards only `POST /v1/messages`, the one call Gate 0 saw the real CLI make (Claude Code 2.1.316). It refuses
   `..`, `%2e`, `//`, absolute-form targets, smuggled or oversized requests, server-side tools,
   `mcp_servers` and bodies with repeated keys, and drops unknown `anthropic-beta` values.
 - **Run up an unbounded bill in one reply.** Each reply may make 200 model requests (configurable);

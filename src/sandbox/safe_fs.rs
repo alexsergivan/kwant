@@ -84,6 +84,8 @@ mod imp {
         Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     }
 
+    // `mode_t` is u32 on Linux and u16 on macOS, so the casts are needed there
+    #[allow(clippy::unnecessary_cast)]
     fn mode_kind(mode: u32) -> Kind {
         match mode & libc::S_IFMT as u32 {
             m if m == libc::S_IFREG as u32 => Kind::File,
@@ -233,6 +235,7 @@ mod imp {
                 }
                 // SAFETY: fstatat succeeded and filled it
                 let st = unsafe { st.assume_init() };
+                #[allow(clippy::unnecessary_cast)] // u16 on macOS
                 let mode = st.st_mode as u32;
                 out.push(Entry { name, kind: mode_kind(mode), len: st.st_size.max(0) as u64, mode: mode & 0o7777 });
             }

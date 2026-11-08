@@ -64,16 +64,22 @@ async fn messages(up: Upstream, headers: HeaderMap, body: Bytes) -> axum::respon
         .to_string();
     up.auth.lock().unwrap().push(cred);
     let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-    let last = req["messages"].as_array().and_then(|m| m.last()).cloned().unwrap_or(Value::Null);
+    // The CLI may end the list with a `system` message of its own (the environment); the turn
+    // is the last `user` message
+    let last = req["messages"].as_array().and_then(|m| m.iter().rev().find(|m| m["role"] == "user")).cloned().unwrap_or(Value::Null);
     let blocks = match &last["content"] {
         Value::Array(a) => a.clone(),
         other => vec![other.clone()],
     };
     let results: Vec<String> = blocks.iter().filter(|b| b["type"] == "tool_result").map(text_of).collect();
     let prompt: String = blocks.iter().filter(|b| b["type"] != "tool_result").map(text_of).collect();
-    let n = req["messages"].as_array().map_or(0, Vec::len);
+    let n = req["messages"].as_array().map_or(0, |m| m.iter().filter(|m| m["role"] != "system").count());
     up.calls.lock().unwrap().push((n, prompt.clone()));
     let offers_bash = req["tools"].as_array().is_some_and(|t| t.iter().any(|t| t["name"] == "Bash"));
+    if std::env::var_os("KWNT_AGENT_TEST_DUMP").is_some() {
+        let names: Vec<String> = req["tools"].as_array().map(|t| t.iter().map(|t| t["name"].as_str().unwrap_or("?").to_string()).collect()).unwrap_or_default();
+        eprintln!("MOCK call: messages={n} bash={offers_bash} tools={names:?} last_role={} prompt={:?}", last["role"], prompt.chars().take(400).collect::<String>());
+    }
     let tool = if !results.is_empty() {
         up.tool_results.lock().unwrap().extend(results);
         None

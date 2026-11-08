@@ -60,10 +60,13 @@ turn 2-resume "What exact words did you reply last time? One line." --resume "$S
 turn 3-bash "Use the Bash tool to run: echo gate0-bash > probe.txt && cat probe.txt. Then reply with the output." --allowedTools Bash
 BASH_OK=$(cat "$RUN/task/probe.txt" 2>/dev/null)
 OWNER=$(stat -c '%u:%g' "$RUN/task/probe.txt" 2>/dev/null)
+# Peak memory of the whole container over the three turns (cgroup v2), in bytes
+CID=$(docker inspect -f '{{.Id}}' "$C")
+PEAK=$(docker exec "$C" cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat "/sys/fs/cgroup/system.slice/docker-$CID.scope/memory.peak" 2>/dev/null || echo unknown)
 OUT="$HERE/evidence/real-upstream.txt"
-python3 -I - "$RUN" "$KEYSHA" "$BASH_OK" "$OWNER" "$(id -u):$(id -g)" > "$OUT" <<'P'
+python3 -I - "$RUN" "$KEYSHA" "$BASH_OK" "$OWNER" "$(id -u):$(id -g)" "$PEAK" > "$OUT" <<'P'
 import collections, glob, json, os, sys
-run, keysha, bash_ok, owner, me = sys.argv[1:6]
+run, keysha, bash_ok, owner, me, peak = sys.argv[1:7]
 recs = [json.loads(l) for l in open(f"{run}/host/broker.log")]
 marks = sorted((float(open(m).read()), os.path.basename(m)[5:]) for m in glob.glob(f"{run}/host/mark-*"))
 def turn_of(t):
@@ -81,12 +84,22 @@ print()
 print("# summary (method path status decision -> count)")
 for k, n in sorted(collections.Counter((r["method"], r["path"], r.get("status", "-"), r["decision"]) for r in recs).items()):
     print(f"#   {n:3d}  {' '.join(map(str, k))}")
+print()
+print("# what the CLI sent on /anthropic (union over every call; names and types only, no values)")
+for field in ("anthropic_version", "model", "stream", "betas", "tool_types", "block_types", "body_keys", "header_names"):
+    vals = set()
+    for r in recs:
+        v = r.get(field)
+        vals.update(v if isinstance(v, list) else ([] if v is None else [v]))
+    print(f"#   {field}: {', '.join(sorted(map(str, vals))) or '-'}")
+print(f"#   tool_count per call: {[r.get('tool_count') for r in recs if 'tool_count' in r]}")
 for n in ("1-normal", "2-resume", "3-bash"):
     res = [json.loads(l) for l in open(f"{run}/{n}.jsonl") if l.startswith("{")]
     fin = next((x for x in res if x.get("type") == "result"), {})
     print(f"# turn {n}: subtype={fin.get('subtype')} is_error={fin.get('is_error')} num_turns={fin.get('num_turns')} "
           f"result_sha8={__import__('hashlib').sha256(str(fin.get('result')).encode()).hexdigest()[:8]} result_len={len(str(fin.get('result') or ''))}")
 print(f"# bash tool wrote probe.txt: {bash_ok!r}; file owner uid:gid {owner} (host user {me})")
+print(f"# container memory.peak over the three turns: {peak} bytes" + (f" ({int(peak)/1048576:.1f} MiB)" if peak.isdigit() else ""))
 print(f"# calls forwarded upstream: {sum(r['decision']=='forward' for r in recs)}; denied: {sum(r['decision'].startswith('deny') for r in recs)}")
 P
 echo "--- $OUT"; cat "$OUT"

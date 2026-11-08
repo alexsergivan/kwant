@@ -151,6 +151,25 @@ class H(BaseHTTPRequestHandler):
             return self.reply(403, {"error": "kwnt broker: host not allowed"})
         host, port, up_prefix, allowed = ROUTES[route]
         rest = self.path[len(route):] or ""
+        if route == "/anthropic":
+            # Gate 0 evidence: what the CLI asks for, never a value that could hold a secret
+            rec["header_names"] = sorted({k.lower() for k in self.headers.keys()})
+            rec["betas"] = sorted({b.strip() for v in self.headers.get_all("anthropic-beta") or [] for b in v.split(",") if b.strip()})
+            rec["anthropic_version"] = self.headers.get("anthropic-version")
+            try:
+                j = json.loads(body or b"null")
+            except ValueError:
+                j = None
+            if isinstance(j, dict):
+                rec["body_keys"] = sorted(j)
+                rec["model"] = j.get("model")
+                rec["stream"] = j.get("stream")
+                tools = j.get("tools") if isinstance(j.get("tools"), list) else []
+                rec["tool_types"] = sorted({t.get("type", "custom") for t in tools if isinstance(t, dict)})
+                rec["tool_count"] = len(tools)
+                rec["block_types"] = sorted({b.get("type") for m in j.get("messages") or [] if isinstance(m, dict)
+                                             for b in (m.get("content") if isinstance(m.get("content"), list) else [])
+                                             if isinstance(b, dict)})
         if not any(m == self.command and re.fullmatch(rx, rest) for m, rx in allowed):
             rec["decision"], rec["status"] = "deny_path", 403
             log(rec)

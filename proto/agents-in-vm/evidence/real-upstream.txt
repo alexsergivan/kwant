@@ -1,0 +1,30 @@
+# Gate 0: Claude Code CLI against the real api.anthropic.com through the spike broker
+# CLI 2.1.316 (native, aarch64) in --network none; ANTHROPIC_BASE_URL=http://127.0.0.1:8080/anthropic;
+# HTTPS_PROXY/HTTP_PROXY also point at the broker so calls to any other host are logged (CONNECT) and denied.
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1; --model haiku; API-key mode.
+# real key sha8=79bf588b (injected by the broker); container credential = a dummy
+# columns: turn  method  path(long/id-like parts hashed)  status  broker-decision  sent-cred-sha8  injected-cred-sha8
+1-normal	POST	/anthropic/v1/messages?beta=true	200	forward	75b6c1d4	79bf588b
+2-resume	POST	/anthropic/v1/messages?beta=true	200	forward	75b6c1d4	79bf588b
+3-bash	POST	/anthropic/v1/messages?beta=true	200	forward	75b6c1d4	79bf588b
+3-bash	POST	/anthropic/v1/messages?beta=true	200	forward	75b6c1d4	79bf588b
+
+# summary (method path status decision -> count)
+#     4  POST /anthropic/v1/messages?beta=true 200 forward
+
+# what the CLI sent on /anthropic (union over every call; names and types only, no values)
+#   anthropic_version: 2023-06-01
+#   model: claude-haiku-5-5
+#   stream: True
+#   betas: advanced-tool-use-2025-11-20, claude-code-20250219, context-management-2025-06-27, effort-2025-11-24, interleaved-thinking-2025-05-14, mid-conversation-tool-changes-2026-07-01, per-turn-control-2026-07-01, thinking-display-updates-2026-08-18, thinking-token-count-2026-05-13
+#   tool_types: custom
+#   block_types: text, tool_result, tool_use
+#   body_keys: context_management, max_tokens, messages, metadata, model, output_config, stream, system, thinking, tools
+#   header_names: accept, accept-encoding, anthropic-beta, anthropic-dangerous-direct-browser-access, anthropic-version, connection, content-length, content-type, host, user-agent, x-api-key, x-app, x-claude-code-session-id, x-stainless-arch, x-stainless-lang, x-stainless-os, x-stainless-package-version, x-stainless-retry-count, x-stainless-runtime, x-stainless-runtime-version, x-stainless-timeout
+#   tool_count per call: [11, 11, 11, 11]
+# turn 1-normal: subtype=success is_error=False num_turns=1 result_sha8=12111762 result_len=8
+# turn 2-resume: subtype=success is_error=False num_turns=1 result_sha8=12111762 result_len=8
+# turn 3-bash: subtype=success is_error=False num_turns=2 result_sha8=b8f8777e result_len=10
+# bash tool wrote probe.txt: 'gate0-bash'; file owner uid:gid 1003:1003 (host user 1003:1003)
+# container memory.peak over the three turns: 130555904 bytes (124.5 MiB)
+# calls forwarded upstream: 4; denied: 0

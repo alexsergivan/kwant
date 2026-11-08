@@ -86,8 +86,12 @@ because those protect writes, not the token.
 - Files written by the container uid need ownership fixed on the host.
 
 ## Still unproven
-Real upstreams (the whole spike ran against the mock, with no real key). Mac and Docker Desktop. A full Grok turn,
-and Grok sign-in inference. Refresh for ChatGPT and Grok. The allow-list CONNECT proxy. The Claude sandbox's read policy in practice.
+Proven since Gate 0 (2026-11-08): a real Claude turn and a `--resume` turn with an API key, through the Python spike broker
+and through kwnt's Rust broker (`tests/agents_in_vm_real_api_test.rs`, runs only with `KWNT_GATE0_KEY_FILE`).
+Still unproven: a Claude sign-in (OAuth) against the real API, and token refresh (never tested with the team's sign-ins on
+this server). Long-session compaction (`count_tokens` is refused until it's seen). The approval round trip end to end.
+Mac and Docker Desktop. A full Grok turn, and Grok sign-in inference. Refresh for ChatGPT and Grok. The allow-list CONNECT
+proxy. The Claude sandbox's read policy in practice.
 
 ## Open questions for Oleks
 1. Ship the first slice for Linux only and add Mac after a Docker Desktop test on your Mac? *Default: yes.*
@@ -104,14 +108,39 @@ field names, statuses, error codes and the host git calls.
 ## Gate 0: the real API
 
 `proto/agents-in-vm/gate0.sh` runs the spike broker against `https://api.anthropic.com` with Haiku: a normal turn, a
-`--resume` turn and one Bash tool call (about six calls), with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and
+`--resume` turn and one Bash tool call (about six calls; it took four), with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and
 `DISABLE_AUTOUPDATER=1`. It writes `evidence/real-upstream.txt`: every (method, path, status) the CLI sent, denied ones
 included, with hashes only, plus the tool types and `anthropic-beta` values seen and the container's peak memory.
 
-**Status: not run yet.** The API key hasn't been provided, so the allow-list (`ANTHROPIC_ALLOWED`), `ALLOWED_TOOL_TYPES`
-and `KNOWN_BETAS` in `broker.rs` are still taken from the mock run and the CLI 2.1.316 sources. After the run:
-derive those three from the evidence, raise `memory_mb` if the peak is above 716.8 MB (70% of 1024), and shred every
-copy of the key.
+**Status: passed, 2026-11-08 16:30 UTC** (CLI 2.1.316, `claude-haiku-5-5`, API-key mode, Oleks's key).
+
+| Turn | Result | Calls |
+|---|---|---|
+| 1, normal | success, reply "gate0 ok" | 1 |
+| 2, `--resume` | success, recalled turn 1's reply | 1 |
+| 3, Bash tool | success; `probe.txt` written in the folder, owned by the host uid:gid (1003:1003) | 2 |
+
+- **Calls.** 4 in all, every one `POST /anthropic/v1/messages?beta=true` → 200. No other path, no other host
+  (the proxy variables point at the broker, so a call elsewhere would have been logged as a refused `CONNECT`), no
+  `count_tokens`, no telemetry.
+- **Derived.** `ANTHROPIC_ALLOWED` is now only `POST /v1/messages` (`count_tokens` is dropped: never seen).
+  `ALLOWED_TOOL_TYPES` stays `["custom"]` (the only type seen; 11 tools per call). `KNOWN_BETAS` is the 9 values
+  seen (`advanced-tool-use-2025-11-20`, `claude-code-20250219`, `context-management-2025-06-27`,
+  `effort-2025-11-24`, `interleaved-thinking-2025-05-14`, `mid-conversation-tool-changes-2026-07-01`,
+  `per-turn-control-2026-07-01`, `thinking-display-updates-2026-08-18`, `thinking-token-count-2026-05-13`) plus
+  `oauth-2025-04-20`, which only a Claude sign-in sends. The forwarded-header list dropped `x-client-request-id`
+  (never sent). The broker test `the_anthropic_lists_match_the_gate_0_evidence` fails if the lists and the
+  evidence drift apart.
+- **Body.** Top-level keys seen: `context_management, max_tokens, messages, metadata, model, output_config, stream,
+  system, thinking, tools`; content blocks `text, tool_use, tool_result`. No `mcp_servers`, no `container`, no
+  server tool, so the broker's 400s cost nothing.
+- **Memory.** The container's `memory.peak` over the three turns was 124.5 MiB, far under 716.8 MB (70% of 1024), so
+  `memory_mb` stays 1024.
+- **Key.** The only copy the script made (the spike broker's 0600 creds file) was shredded on exit. A scan of the
+  worktree, the logs, this folder and the branch's git history for the key or its first or last 24 characters
+  found nothing, and it never appeared in the process list.
+- **Not covered:** a Claude sign-in (OAuth) turn and the broker's refresh against the real token endpoint (we don't
+  refresh-test with the team's sign-ins on this server), and long sessions that compact.
 
 ## Mac (design only, not in slice 1)
 
