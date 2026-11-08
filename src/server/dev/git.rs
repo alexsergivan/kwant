@@ -1628,6 +1628,7 @@ mod tests {
     /// the script then fails with "text file busy" (ETXTBSY), which `run` reports as `Failed`.
     /// So the bytes go to a draft, and a separate `cp` makes the real file: the only fd ever open
     /// for writing on it lives and dies in that `cp`, which has exited before anything runs it.
+    #[cfg(unix)]
     fn exe(path: &Path, text: &str) {
         let draft = path.with_extension("draft");
         std::fs::write(&draft, text).unwrap();
