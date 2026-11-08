@@ -3397,7 +3397,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     started: getStartedWasStarted(space.id),
   });
   const getStartedCard =
-    loaded && kwants.length > 0 && isGeneral && getStartedEligible ? (
+    loaded && (!openCtx || messagesLoadedFor === openCtx) && kwants.length > 0 && isGeneral && getStartedEligible ? (
       <GetStarted
         space={space.id}
         bots={kwants}
