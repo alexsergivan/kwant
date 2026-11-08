@@ -28,7 +28,8 @@ pub enum Kind {
 pub struct Entry {
     pub name: OsString,
     pub kind: Kind,
-    /// Size in bytes (from `lstat`; a file's real size is checked again once it's open).
+    /// Size in bytes from `lstat` at listing time. The file can grow after that: a reader caps
+    /// what it reads from the open handle ([`read_capped`], [`copy_capped`]), never this.
     pub len: u64,
     /// Permission bits.
     pub mode: u32,
@@ -347,6 +348,45 @@ mod imp {
 }
 
 pub use imp::Dir;
+
+/// The error a capped reader gives for a file past its limit; see [`is_too_large`].
+pub fn too_large() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "over the size limit")
+}
+
+/// Whether `e` is [`read_capped`]'s or [`copy_capped`]'s "over the size limit".
+pub fn is_too_large(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::InvalidData && e.to_string() == "over the size limit"
+}
+
+/// Opens `real`, a path a caller already resolved and checked to lie under the resolved `root`,
+/// by walking from `root`'s descriptor instead of opening it by path again (test plan S-8): if any
+/// part became a symlink, a FIFO or anything but a regular file since the check, the open fails
+/// instead of reading what it points at.
+pub fn open_checked(root: &Path, real: &Path) -> io::Result<File> {
+    let rel = real.strip_prefix(root).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "not under the folder"))?;
+    Dir::open(root)?.open_file(rel)
+}
+
+/// All of `r`, refused once it passes `cap` bytes: a size seen before the open is never trusted,
+/// since the file can grow after it.
+pub fn read_capped(r: impl io::Read, cap: u64) -> io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    io::Read::read_to_end(&mut r.take(cap.saturating_add(1)), &mut out)?;
+    if out.len() as u64 > cap {
+        return Err(too_large());
+    }
+    Ok(out)
+}
+
+/// Copies `r` into `w` (a hasher, a file), refused once it passes `cap` bytes; the bytes copied.
+pub fn copy_capped(r: impl io::Read, w: &mut impl io::Write, cap: u64) -> io::Result<u64> {
+    let n = io::copy(&mut r.take(cap.saturating_add(1)), w)?;
+    if n > cap {
+        return Err(too_large());
+    }
+    Ok(n)
+}
 
 #[cfg(all(test, unix))]
 mod tests {

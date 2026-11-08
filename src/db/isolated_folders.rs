@@ -85,6 +85,25 @@ impl Database {
         }
     }
 
+    /// The recorded folder a program kwnt starts on this computer in `cwd` would be near, or `None`
+    /// when there's none (D4). With a folder: equal, inside or holding a recorded one. Without one
+    /// (or a missing one) the program starts in kwnt's own working folder, often the home folder
+    /// that holds every recorded folder: there only a recorded folder it sits in counts (programs
+    /// read settings walking up, not down). Fails closed: an unreadable record counts as near.
+    pub async fn isolated_folder_near(&self, cwd: Option<&Path>) -> Option<PathBuf> {
+        let found = match cwd.filter(|d| d.exists()) {
+            Some(d) => self.isolated_folder_for(d).await.map_err(|e| (e, d.to_path_buf())),
+            None => {
+                let here = std::env::current_dir().map(|d| canonical(&d)).unwrap_or_default();
+                self.isolated_folders().await.map(|all| all.into_iter().find(|r| here.starts_with(r))).map_err(|e| (e, here))
+            }
+        };
+        found.unwrap_or_else(|(e, at)| {
+            tracing::warn!(error = %e, "couldn't read the folders isolated bots used; treating this one as used");
+            Some(at)
+        })
+    }
+
     /// Forgets a recorded folder (the person cleared it). Returns whether one was there.
     pub async fn forget_isolated_folder(&self, folder: &Path) -> Result<bool, DbError> {
         let done = sqlx::query("DELETE FROM isolated_folders WHERE path = ?")

@@ -1888,27 +1888,14 @@ fn isolated_end(
 }
 
 /// The folder an isolated Claude turn used that this turn's CLI would start in (equal, inside or
-/// holding it), if any. Fails closed: when kwnt can't read its record, the folder counts as used.
+/// holding it, see [`crate::db::Database::isolated_folder_near`]), if any. Fails closed: when
+/// kwnt can't read its record, the folder counts as used.
 async fn isolated_folder_used(input: &TurnInput) -> Option<std::path::PathBuf> {
-    use crate::db::isolated_folders::canonical;
+    // The server's one TurnInput (`routes.rs`, the chat runner) always sets the store, and the
+    // isolated turns that record folders exist only there. A turn without one is a driver test
+    // (unit or integration) with no record to check; refusing it would refuse every such test
     let db = input.store.as_ref()?;
-    // The bot's folder: equal, inside or holding a recorded one. Without one the CLI starts in
-    // kwnt's own working folder, often the home folder that holds every recorded folder: there
-    // only a recorded folder it sits in counts (the CLIs read settings walking up, not down)
-    let (cwd, own) = match input.workspace_dir.clone().filter(|d| d.exists()) {
-        Some(d) => (d, true),
-        None => (std::env::current_dir().ok()?, false),
-    };
-    let found = if own {
-        db.isolated_folder_for(&cwd).await
-    } else {
-        let here = canonical(&cwd);
-        db.isolated_folders().await.map(|all| all.into_iter().find(|r| here.starts_with(r)))
-    };
-    found.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "couldn't read the folders isolated bots used; treating this one as used");
-        Some(cwd)
-    })
+    db.isolated_folder_near(input.workspace_dir.as_deref()).await
 }
 
 /// The CLI's result when it couldn't reach the API at all (here: the broker).

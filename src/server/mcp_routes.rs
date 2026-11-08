@@ -152,13 +152,31 @@ pub(super) async fn run_test(state: &AppState, stored: &McpServer) -> Value {
     let mut server = stored.clone();
     let token_use = mcp_oauth::authorize_server(state, &mut server).await;
     let mut secrets = server.secret_values();
+    // The same D4 rule as a turn's (C8): from a folder an isolated bot used, a stdio server
+    // starts from an empty one, or not at all when it runs a file from there
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let mut one = vec![server];
+    let empty = super::mcp_runtime::isolate_stdio_servers(state, &mut one, Some(&cwd), &token).await;
+    let Some(server) = one.pop() else {
+        let outcome = json!({ "ok": false, "error": "Not started: it runs a file from a folder an isolated bot used, \
+                                                   or no empty folder could be made for it",
+                              "duration_ms": start.elapsed().as_millis() as u64 });
+        super::connections::record_mcp_check(&stored.id, &outcome);
+        return outcome;
+    };
     let mut result = try_list(&server, &cwd).await;
     if token_use == TokenUse::Injected && matches!(result, Err((McpError::Unauthorized { .. }, _))) {
         // The token was rejected early (revoked, or the server's clock): refresh once
-        if let Some(retry) = mcp_oauth::retry_after_unauthorized(state, stored).await {
+        if let Some(mut retry) = mcp_oauth::retry_after_unauthorized(state, stored).await {
+            if let Some(dir) = &empty {
+                mcp::start_in(&mut retry, dir);
+            }
             secrets.extend(retry.secret_values());
             result = try_list(&retry, &cwd).await;
         }
+    }
+    if empty.is_some() {
+        super::mcp_runtime::remove_mcp_cwd(state, &token).await;
     }
 
     let mut outcome = match result {

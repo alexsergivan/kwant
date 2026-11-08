@@ -353,8 +353,10 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// Stores a file from disk (an agent's `share_file`).
-async fn store_file(root: &FsPath, path: &FsPath, name: &str) -> Result<Stored, StoreError> {
-    let mut file = tokio::fs::File::open(path).await.map_err(|_| StoreError::Io)?;
+/// Stores an already opened file: never reopened by path (S-8). The sink's caps count the bytes
+/// actually read, so a file that grows after it was opened is still refused.
+async fn store_file(root: &FsPath, file: std::fs::File, name: &str) -> Result<Stored, StoreError> {
+    let mut file = tokio::fs::File::from_std(file);
     let mut sink = Sink::new(root, name).await?;
     let mut buf = vec![0u8; 64 * 1024];
     loop {
@@ -832,11 +834,11 @@ pub async fn tool_share(state: &AppState, scope: &SelfScope, args: &Value) -> (S
             let Some(ws) = &scope.workspace else {
                 return ("This chat has no workspace; share text with `content` instead.".into(), true);
             };
-            let Some(real) = inside_workspace(ws, p) else {
+            let Some((file, real)) = inside_workspace(ws, p) else {
                 return ("That path isn't a file inside your workspace.".into(), true);
             };
             let name = clean_name(raw_name.unwrap_or_else(|| real.file_name().and_then(|n| n.to_str()).unwrap_or("file")));
-            (store_file(&root, &real, &name).await, name)
+            (store_file(&root, file, &name).await, name)
         }
         (None, Some(text)) => {
             if text.len() > MAX_SHARED_TEXT_BYTES {
@@ -906,14 +908,20 @@ pub async fn tool_share(state: &AppState, scope: &SelfScope, args: &Value) -> (S
     (format!("Shared {name} with the user as a download (id {}).", a.id), false)
 }
 
-/// `p` (relative to the workspace, or absolute) resolved with symlinks; `None` unless it is a
-/// regular file inside the workspace.
-pub fn inside_workspace(workspace: &FsPath, p: &str) -> Option<PathBuf> {
+/// `p` (relative to the workspace, or absolute) opened, with its resolved path for the name;
+/// `None` unless it is a regular file inside the workspace. The open walks from the workspace's
+/// descriptor (S-8): in vm mode the bot can swap the file for a symlink to a host file, or a FIFO,
+/// after the check by path, and then the open fails instead of sharing that file or hanging.
+pub fn inside_workspace(workspace: &FsPath, p: &str) -> Option<(std::fs::File, PathBuf)> {
     let ws = workspace.canonicalize().ok()?;
     let given = FsPath::new(p);
     let full = if given.is_absolute() { given.to_path_buf() } else { ws.join(given) };
     let real = full.canonicalize().ok()?;
-    (real.starts_with(&ws) && real.is_file()).then_some(real)
+    if !real.starts_with(&ws) {
+        return None;
+    }
+    let file = crate::sandbox::safe_fs::open_checked(&ws, &real).ok()?;
+    Some((file, real))
 }
 
 #[cfg(test)]

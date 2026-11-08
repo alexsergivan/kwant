@@ -220,7 +220,6 @@ pub fn build_server(input: McpServerInput, existing: Option<&McpServer>) -> Resu
     })
 }
 
-/// Replaces every non-empty secret in `text` with [`SECRET_MASK`].
 /// Whether stdio `server` would run a file from `folder`, its working folder (D4, C8): a program
 /// or argument that is a relative path (`./x.js`, `bin/serve`, or a bare name that exists in the
 /// folder, like `server.js`), or an absolute path inside the folder, including after `--opt=`.
@@ -259,6 +258,24 @@ pub fn runs_folder_file(server: &McpServer, folder: &std::path::Path) -> bool {
         })
 }
 
+/// Makes stdio `server` start from `dir`, whatever folder its starter runs it in (D4, C8):
+/// `/bin/sh -c 'cd -- "$0" && exec "$@"' <dir> <command> <args...>`. Both starters honour it:
+/// kwnt's own client, which sets the folder it's given, and a CLI agent, which starts the servers
+/// in its config from its own folder (that config has no folder field). A program started in a
+/// folder an isolated bot used can load what the bot planted there (`python3 -m x` imports
+/// `./x.py`, `npx x` runs `./node_modules/.bin/x`), so it starts from an empty folder instead.
+pub fn start_in(server: &mut McpServer, dir: &std::path::Path) {
+    if server.transport != "stdio" {
+        return;
+    }
+    let Some(program) = server.command.take() else { return };
+    let mut args = vec!["-c".to_string(), r#"cd -- "$0" && exec "$@""#.to_string(), dir.to_string_lossy().into_owned(), program];
+    args.append(&mut server.args);
+    server.command = Some("/bin/sh".into());
+    server.args = args;
+}
+
+/// Replaces every non-empty secret in `text` with [`SECRET_MASK`].
 pub fn redact(text: &str, secrets: &[String]) -> String {
     let mut out = text.to_string();
     let mut sorted: Vec<&String> = secrets.iter().filter(|s| !s.is_empty()).collect();

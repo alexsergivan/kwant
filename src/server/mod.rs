@@ -63,6 +63,8 @@ pub mod show_once;
 pub mod agents_connect;
 pub mod teams;
 pub mod telegram;
+#[cfg(all(test, unix))]
+mod s8_readers_test;
 
 use crate::broker::PermissionBroker;
 use crate::config::Config;
@@ -158,7 +160,7 @@ impl AppState {
         let profiles = Arc::new(crate::profiles::ProfileManager::new(config.data_dir.clone()));
         let api_token = Arc::new(auth::ApiToken::load(&config));
         let browser_service = Arc::new(crate::sandbox::service::BrowserService::new(config.data_dir.clone(), config.browser_cdp_url.clone()));
-        let agent_vm = crate::sandbox::agent_vm::AgentVm::new(&config.data_dir, config.agents_in_vm.clone(), Some(db.clone()));
+        let agent_vm = crate::sandbox::agent_vm::AgentVm::new(&config.data_dir, config.agents_in_vm.clone(), db.clone());
         Self {
             config,
             db,

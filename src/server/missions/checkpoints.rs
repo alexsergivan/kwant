@@ -158,22 +158,36 @@ fn current(folder: &FsPath, rel: &str) -> Result<Option<String>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => return Err("not a regular file".into()),
         Err(_) => return Err("can't be read".into()),
     };
+    // At most FILE_MAX_BYTES + 1 bytes, however large the file is or grows: a longer file's hash
+    // (of that much) still never equals a stored copy's, which is at most FILE_MAX_BYTES long
     let mut h = <sha2::Sha256 as sha2::Digest>::new();
-    std::io::copy(&mut f, &mut h).map_err(|_| "can't be read".to_string())?;
+    std::io::copy(&mut (&mut f).take(FILE_MAX_BYTES + 1), &mut h).map_err(|_| "can't be read".to_string())?;
     Ok(Some(hex(&sha2::Digest::finalize(h))))
 }
 
-/// Streams `input` (already opened, never by path: S-8) into the blob store, returning its sha256.
-fn store_blob(blobs: &FsPath, mut input: std::fs::File) -> std::io::Result<String> {
+/// Streams `input` (already opened, never by path: S-8) into the blob store, returning its sha256
+/// and how many bytes it really held. The listing's size is only a hint: the file can grow after
+/// it, so at most `cap` bytes are read and a longer file is refused
+/// ([`crate::sandbox::safe_fs::is_too_large`]), with nothing stored.
+fn store_blob(blobs: &FsPath, input: std::fs::File, cap: u64) -> std::io::Result<(String, u64)> {
+    if input.metadata()?.len() > cap {
+        return Err(crate::sandbox::safe_fs::too_large());
+    }
     let tmp = blobs.join(format!(".tmp-{}", new_id()));
     let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
     let mut h = <sha2::Sha256 as sha2::Digest>::new();
     let mut buf = vec![0u8; 64 * 1024];
+    let mut input = input.take(cap + 1);
+    let mut total: u64 = 0;
     let res = (|| -> std::io::Result<()> {
         loop {
             let n = input.read(&mut buf)?;
             if n == 0 {
                 break;
+            }
+            total += n as u64;
+            if total > cap {
+                return Err(crate::sandbox::safe_fs::too_large());
             }
             sha2::Digest::update(&mut h, &buf[..n]);
             out.write_all(&buf[..n])?;
@@ -192,7 +206,7 @@ fn store_blob(blobs: &FsPath, mut input: std::fs::File) -> std::io::Result<Strin
     } else {
         std::fs::rename(&tmp, &dest)?;
     }
-    Ok(sha)
+    Ok((sha, total))
 }
 
 /// The commit the folder's git checkout is on, if it is one (read-only info).
@@ -317,13 +331,20 @@ fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, St
         }
         candidates = kept;
     }
-    let mut bytes = 0;
-    for (rel, at, len, mode) in candidates {
-        match top.open_file(&at).and_then(|f| store_blob(blobs, f)) {
-            Ok(sha) => {
+    // What counts toward the cap is what was really stored, not the listing's sizes
+    let mut bytes: u64 = 0;
+    let mb = max_bytes / (1024 * 1024);
+    for (rel, at, _listed, mode) in candidates {
+        let cap = FILE_MAX_BYTES.min(max_bytes.saturating_sub(bytes));
+        match top.open_file(&at).and_then(|f| store_blob(blobs, f, cap)) {
+            Ok((sha, len)) => {
                 bytes += len;
                 m.files.push(Entry { path: rel, sha256: sha, bytes: len, mode });
             }
+            Err(e) if crate::sandbox::safe_fs::is_too_large(&e) && cap < FILE_MAX_BYTES => {
+                m.skipped.push(Skip { path: rel, why: format!("over the {mb} MB checkpoint cap") })
+            }
+            Err(e) if crate::sandbox::safe_fs::is_too_large(&e) => m.skipped.push(Skip { path: rel, why: "over 20 MB".into() }),
             Err(_) => m.skipped.push(Skip { path: rel, why: "can't be read".into() }),
         }
     }
@@ -1186,6 +1207,27 @@ pub async fn restore_for_fork(state: &AppState, orig: &Task, cid: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Should-fix 1: the blob store reads at most its cap from the open handle and returns what
+    /// it really read; a longer file is refused with nothing stored.
+    #[test]
+    fn a_blob_is_read_up_to_its_cap_and_counted_by_its_real_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let blobs = d.path().join("blobs");
+        std::fs::create_dir(&blobs).unwrap();
+        let src = d.path().join("f");
+        std::fs::write(&src, b"0123456789").unwrap();
+        let (sha, n) = store_blob(&blobs, std::fs::File::open(&src).unwrap(), 10).unwrap();
+        assert_eq!(n, 10);
+        assert_eq!(std::fs::read(blobs.join(&sha)).unwrap(), b"0123456789");
+        let e = store_blob(&blobs, std::fs::File::open(&src).unwrap(), 9).unwrap_err();
+        assert!(crate::sandbox::safe_fs::is_too_large(&e), "{e}");
+        // Grown past the cap after an open that saw it small: the read itself stops
+        let f = std::fs::File::open(&src).unwrap();
+        std::fs::write(&src, vec![b'x'; 64]).unwrap();
+        assert!(crate::sandbox::safe_fs::is_too_large(&store_blob(&blobs, f, 20).unwrap_err()));
+        assert_eq!(std::fs::read_dir(&blobs).unwrap().count(), 1, "nothing stored for a refused file, no temp left");
+    }
 
     #[test]
     fn only_plain_relative_paths_are_safe() {

@@ -2,14 +2,13 @@
 //! `task_attach_evidence`, `task_request_check`, `task_review`, and the auditor's `audit_challenge`,
 //! `audit_rebut` (§18). Offered only while `mission_board` is on. None of them can set `verified`: only a passing check that isn't the owner's does.
 
-use super::checks::{hex, inside, run_task_checks};
+use super::checks::{hash_open, open_inside, run_task_checks, HASH_MAX_BYTES};
 use super::{evaluate, task_folder, transition, validate_check, Actor, PlanBy, PlanPlace, PlanTask};
 use crate::db::missions::{now_ms, NewCheck, NewEvidence, Task, TaskChange};
 use crate::db::spaces::SpaceId;
 use crate::server::continuity::SelfScope;
 use crate::server::AppState;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 type ToolResult = (String, bool);
 
@@ -412,16 +411,24 @@ async fn evidence(state: &AppState, scope: &SelfScope, task: &Task, args: &Value
         "file" | "screenshot" => {
             let Some(rel) = s("path") else { return fail("path is required for a file.") };
             let Some(folder) = task_folder(state, task).await else { return fail("This task has no folder.") };
-            let path = match inside(&folder, &rel) {
-                Ok(p) => p,
-                Err(why) => return fail(format!("Not attached: {why}.")),
+            // Opened by walking from the folder and hashed from that handle, capped (S-8)
+            let (f, r) = (folder.clone(), rel.clone());
+            let hashed = tokio::task::spawn_blocking(move || match open_inside(&f, &r) {
+                Err(why) => Err(Some(why)),
+                Ok(Err(_)) => Err(None),
+                Ok(Ok(file)) => hash_open(file).map_err(|e| {
+                    crate::sandbox::safe_fs::is_too_large(&e).then(|| format!("it is over {} MB", HASH_MAX_BYTES / (1024 * 1024)))
+                }),
+            })
+            .await
+            .unwrap_or(Err(None));
+            let (sha, n) = match hashed {
+                Ok(h) => h,
+                Err(Some(why)) => return fail(format!("Not attached: {why}.")),
+                Err(None) => return fail(format!("{rel} doesn't exist or can't be read.")),
             };
-            let bytes = match tokio::fs::read(&path).await {
-                Ok(b) => b,
-                Err(_) => return fail(format!("{rel} doesn't exist or can't be read.")),
-            };
-            e.sha256 = Some(hex(&Sha256::digest(&bytes)));
-            e.bytes = i64::try_from(bytes.len()).ok();
+            e.sha256 = Some(sha);
+            e.bytes = i64::try_from(n).ok();
             e.path = Some(rel);
         }
         "url" => {

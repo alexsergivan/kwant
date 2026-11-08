@@ -5,7 +5,7 @@
 
 use super::AppState;
 use crate::broker::{ApprovalDecision, ApprovalRequest, PermissionBroker};
-use crate::db::models::{Kwant, NewApproval};
+use crate::db::models::{Kwant, McpServer, NewApproval};
 use crate::db::Database;
 use crate::drivers::events::RuntimeEvent;
 use crate::mcp::{
@@ -22,7 +22,7 @@ use axum::{
     Json,
 };
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, Mutex};
@@ -610,25 +610,13 @@ pub async fn prepare_turn_with_opts(
             Vec::new()
         }
     };
-    // D4 (C8): in a folder an isolated bot used, a stdio server that runs a file from that
-    // folder would run whatever the bot left there, on this computer: it isn't started
-    if let Some(dir) = cwd.as_deref().filter(|d| d.exists()) {
-        if servers.iter().any(|s| mcp::runs_folder_file(s, dir)) && state.db.host_command_refusal(dir).await.is_some() {
-            servers.retain(|s| {
-                let runs = mcp::runs_folder_file(s, dir);
-                if runs {
-                    tracing::warn!(kwant = %kwant.id, server = %s.name, "not starting an MCP server that runs a file from a folder an isolated bot used");
-                }
-                !runs
-            });
-        }
-    }
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    isolate_stdio_servers(state, &mut servers, cwd.as_deref(), &token).await;
     if servers.is_empty() && self_scope.is_none() {
         return None;
     }
     // Signed-in http servers get their (refreshed) access token as a secret header
     super::mcp_oauth::authorize_servers(state, &mut servers).await;
-    let token = uuid::Uuid::new_v4().simple().to_string();
     let browser = self_scope.as_ref().and_then(|s| s.sandbox_target.clone()).map(|t| (state.clone(), t));
     let self_tools = self_scope.is_some() && !servers.iter().any(|s| s.name.eq_ignore_ascii_case(mcp::SELF_SERVER_NAME));
     if self_tools {
@@ -696,6 +684,70 @@ pub async fn finish_turn(state: &AppState, token: &str) {
     if let Some(session) = session {
         super::missions::truth_ledger::end_turn(&session.turn_id);
         session.close().await;
+    }
+    remove_mcp_cwd(state, token).await;
+}
+
+/// The empty folder stdio servers start from for the turn (or test) `token`, when its folder is
+/// one an isolated bot used ([`isolate_stdio_servers`]).
+pub fn mcp_cwd(data_dir: &FsPath, token: &str) -> PathBuf {
+    data_dir.join("run").join("mcp-cwd").join(token)
+}
+
+/// D4 (C8): when `cwd` is equal to, inside or holding a folder an isolated bot used (or, with no
+/// folder, kwnt's own working folder sits in one; see [`Database::isolated_folder_near`]), a stdio
+/// server could run what the bot left there, on this computer. Then:
+/// - a server that names a file in that folder (`./serve.js`, an absolute path into it) isn't
+///   started ([`mcp::runs_folder_file`]);
+/// - every other stdio server starts from a fresh, empty, kwnt-owned folder [`mcp_cwd`]
+///   ([`mcp::start_in`]), so `python3 -m x` or `npx x` can't pick up a planted file. The caller
+///   removes it ([`finish_turn`], [`remove_mcp_cwd`]).
+///
+/// When that folder can't be made, no stdio server starts. Returns the folder when one was made.
+pub(crate) async fn isolate_stdio_servers(state: &AppState, servers: &mut Vec<McpServer>, cwd: Option<&FsPath>, token: &str) -> Option<PathBuf> {
+    if !servers.iter().any(|s| s.transport == "stdio") {
+        return None;
+    }
+    let near = state.db.isolated_folder_near(cwd).await?;
+    let here = cwd.filter(|d| d.exists()).map(FsPath::to_path_buf).or_else(|| std::env::current_dir().ok());
+    servers.retain(|s| {
+        let runs = mcp::runs_folder_file(s, &near) || here.as_deref().is_some_and(|h| mcp::runs_folder_file(s, h));
+        if runs {
+            tracing::warn!(server = %s.name, "not starting an MCP server that runs a file from a folder an isolated bot used");
+        }
+        !runs
+    });
+    if !servers.iter().any(|s| s.transport == "stdio") {
+        return None;
+    }
+    let dir = mcp_cwd(&state.config.data_dir, token);
+    let private = || {
+        let mut b = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b
+    };
+    let parent = dir.parent().unwrap_or(&dir);
+    // The turn's own folder isn't made recursively: it must be new, never one already there
+    let made = private().recursive(true).create(parent).and_then(|()| private().create(&dir));
+    if let Err(e) = made {
+        tracing::warn!(error = %e, "couldn't make an empty folder for MCP servers; not starting the stdio ones");
+        servers.retain(|s| s.transport != "stdio");
+        return None;
+    }
+    for s in servers.iter_mut() {
+        mcp::start_in(s, &dir);
+    }
+    Some(dir)
+}
+
+/// Removes [`mcp_cwd`] for `token`, if it was made.
+pub(crate) async fn remove_mcp_cwd(state: &AppState, token: &str) {
+    let dir = mcp_cwd(&state.config.data_dir, token);
+    if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(error = %e, dir = %dir.display(), "couldn't remove an MCP server folder");
+        }
     }
 }
 

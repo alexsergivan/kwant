@@ -325,3 +325,100 @@ async fn the_three_attacks_fail_in_a_shell_and_in_the_agents_own_bash() {
     drop(turn);
     vm.remove_containers(|_| true).await;
 }
+
+fn running(container: &str) -> bool {
+    StdCommand::new("docker")
+        .args(["inspect", "-f", "{{.State.Running}}", container])
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+}
+
+/// Every process's command line in `container` (the image has no `ps`).
+fn processes(container: &str) -> String {
+    let list = r#"for p in /proc/[0-9]*; do tr '\0' ' ' < "$p/cmdline" 2>/dev/null; echo; done"#;
+    let out = StdCommand::new("docker").args(["exec", container, "sh", "-c", list]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn size(p: &Path) -> u64 {
+    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// M3 (R-9, S-9): what the bot starts with `setsid` leaves the turn's process group, so the
+/// group's TERM at the turn's end misses it. While another turn uses the container it keeps
+/// running; after the container's last turn the container is removed (after a 1 s grace), so
+/// nothing the bot started runs on and its file stops growing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nothing_the_bot_started_outlives_the_containers_last_turn() {
+    if !docker_ok() {
+        assert!(std::env::var("KWNT_AGENT_TEST_REQUIRE").is_err(), "Docker or the agent image {} is missing", image_tag());
+        eprintln!("skipped: needs Docker and the agent image {}", image_tag());
+        return;
+    }
+    let data = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let vm = AgentVm::with_parts(data.path(), BrokerConfig::new(data.path().join("broker.log")), Some(image_tag()), AgentsInVmConfig::default(), None);
+    let request = || TurnRequest {
+        bot_id: "r9-escapees".into(),
+        folder: Some(work.path().to_path_buf()),
+        credential: Credential::ApiKey(Secret::new("sk-ant-api03-r9-test")),
+        credential_home: None,
+        kwnt_origin: None,
+    };
+    let first = vm.prepare_turn(request()).await.unwrap_or_else(|r| panic!("the turn didn't start: {r:?}"));
+    let second = vm.prepare_turn(request()).await.unwrap_or_else(|r| panic!("the second turn didn't start: {r:?}"));
+    let container = first.container().to_string();
+    assert_eq!(second.container(), container, "both turns share the bot's container");
+    let _cleanup = Cleanup(container.clone());
+    let tick = first.workdir().join("tick");
+
+    // The bot's escape: two processes out of every turn's process group
+    let escape = format!(
+        "setsid sh -c 'while :; do date >> {t}; sleep 0.2; done' </dev/null >/dev/null 2>&1 & \
+         setsid sleep 3600 </dev/null >/dev/null 2>&1 &",
+        t = tick.display()
+    );
+    assert!(StdCommand::new("docker").args(["exec", &container, "sh", "-c", &escape]).status().unwrap().success());
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    let ps = processes(&container);
+    assert!(ps.contains("sleep 3600"), "control: the escapees run\n{ps}");
+    let grown = size(&tick);
+    assert!(grown > 0, "control: tick grows");
+
+    // Not the last turn: the container and what runs in it stay for the other turn
+    drop(first);
+    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+    assert!(running(&container), "the other turn still uses the container");
+    assert!(size(&tick) > grown, "the escapee still runs while a turn uses the container");
+
+    // The last turn: within the grace and a removal, nothing runs and tick stops
+    drop(second);
+    let ended = std::time::Instant::now();
+    while running(&container) {
+        assert!(ended.elapsed() < std::time::Duration::from_secs(15), "the container outlived its last turn");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    eprintln!("container stopped {:?} after the last turn ended", ended.elapsed());
+    // `docker rm -f` kills first and deletes after, so the record goes a moment later
+    let listed = || {
+        let out = StdCommand::new("docker").args(["ps", "-aq", "--filter", &format!("name=^{container}$")]).output().unwrap();
+        !String::from_utf8_lossy(&out.stdout).trim().is_empty()
+    };
+    while listed() {
+        assert!(ended.elapsed() < std::time::Duration::from_secs(15), "removed, not just stopped");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    eprintln!("container removed {:?} after the last turn ended", ended.elapsed());
+    let at_end = size(&tick);
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert_eq!(size(&tick), at_end, "tick stopped growing");
+    let host_ps = StdCommand::new("ps").args(["-eo", "args"]).output().unwrap();
+    assert!(!String::from_utf8_lossy(&host_ps.stdout).lines().any(|l| l.trim() == "sleep 3600"), "no escapee left on this computer");
+
+    // The next turn gets a fresh container in the same folder
+    let next = vm.prepare_turn(request()).await.unwrap_or_else(|r| panic!("the next turn didn't start: {r:?}"));
+    assert!(running(next.container()));
+    assert!(!processes(next.container()).contains("sleep 3600"), "nothing carried over");
+    drop(next);
+    vm.remove_containers(|_| true).await;
+}

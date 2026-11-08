@@ -35,6 +35,8 @@ pub const IN_CONTAINER_ORIGIN: &str = "http://127.0.0.1:8080";
 const CONTAINER_HOME: &str = "/home/agent";
 const CONTAINER_RUN: &str = "/run/kwnt";
 const IDLE_REMOVE_AFTER: Duration = Duration::from_secs(30 * 60);
+/// How long a turn's processes get to exit after its TERM before the container goes (R-9).
+const STOP_GRACE: Duration = Duration::from_secs(1);
 /// Stand-in credentials the CLI in the container holds; the broker drops them.
 pub const DUMMY_API_KEY: &str = "sk-ant-api03-kwnt-broker-stand-in-not-a-key-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 pub const DUMMY_OAUTH_TOKEN: &str = "sk-ant-oat01-kwnt-broker-stand-in-not-a-token-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -263,12 +265,15 @@ pub struct TurnRequest {
 }
 
 impl AgentVm {
-    pub fn new(data_dir: &Path, limits: AgentsInVmConfig, db: Option<crate::db::Database>) -> Arc<Self> {
+    /// The server's: always with its database, so every isolated turn's folder is recorded before
+    /// it runs (D4); a turn whose record can't be written is refused.
+    pub fn new(data_dir: &Path, limits: AgentsInVmConfig, db: crate::db::Database) -> Arc<Self> {
         let broker_cfg = BrokerConfig::new(data_dir.join("agent-vm").join("broker.log"));
-        Self::with_parts(data_dir, broker_cfg, None, limits, db)
+        Self::with_parts(data_dir, broker_cfg, None, limits, Some(db))
     }
 
-    /// For tests: a broker with other upstreams, and a prebuilt image.
+    /// For tests: a broker with other upstreams, and a prebuilt image. Without a database, folders
+    /// aren't recorded (only tests build it so).
     pub fn with_parts(
         data_dir: &Path,
         cfg: BrokerConfig,
@@ -424,7 +429,9 @@ impl AgentVm {
             None => {
                 let w = bot_dir.join("work");
                 std::fs::create_dir_all(&w).map_err(|e| Refusal::new(codes::CONTAINER_FAILED, format!("Couldn't make the bot's folder: {e}")))?;
-                w
+                // Recorded (D4) and mounted by its real path, like a chosen folder: kwnt's data
+                // folder may be reached through a symlink
+                w.canonicalize().map_err(|e| Refusal::new(codes::CONTAINER_FAILED, format!("Couldn't find the bot's folder: {e}")))?
             }
         };
         check_mountable(&workdir)?;
@@ -449,7 +456,6 @@ impl AgentVm {
             kwnt_origin: req.kwnt_origin.clone(),
             cap: self.limits.request_limit,
         });
-        self.containers.lock().unwrap().entry(container.clone()).or_default().active += 1;
         Ok(IsolatedTurn {
             vm: self.clone(),
             lease,
@@ -505,6 +511,7 @@ impl AgentVm {
     }
 
     async fn record_folder(&self, workdir: &Path, bot_id: &str) -> Result<(), Refusal> {
+        // Only `with_parts` (tests) builds a VM without a database; the server's `new` can't
         let Some(db) = &self.db else { return Ok(()) };
         db.record_isolated_folder(workdir, bot_id).await.map_err(|e| {
             tracing::warn!(error = %e, "couldn't record the isolated folder");
@@ -512,8 +519,17 @@ impl AgentVm {
         })
     }
 
+    /// The bot's running container for `workdir`, started when there's none, counted as in use
+    /// by one more turn. The count goes up under `container_start`, the lock [`Self::end_container`]
+    /// takes too, so a container is never removed under a turn that just picked it.
     async fn ensure_container(&self, bot_id: &str, workdir: &Path, home: &Path, run_dir: &Path) -> Result<String, Refusal> {
         let _held = self.container_start.lock().await;
+        let name = self.start_container(bot_id, workdir, home, run_dir).await?;
+        self.containers.lock().unwrap().entry(name.clone()).or_default().active += 1;
+        Ok(name)
+    }
+
+    async fn start_container(&self, bot_id: &str, workdir: &Path, home: &Path, run_dir: &Path) -> Result<String, Refusal> {
         let name = Self::container_name(bot_id, workdir);
         let fail = |why: String| Refusal::new(codes::CONTAINER_FAILED, why);
         let running = Command::new("docker")
@@ -546,10 +562,34 @@ impl AgentVm {
         Ok(name)
     }
 
-    fn release(&self, container: &str) {
-        if let Some(u) = self.containers.lock().unwrap().get_mut(container) {
-            u.active = u.active.saturating_sub(1);
-            u.last_used = Some(Instant::now());
+    /// One turn fewer in `container`; true when that was its last one.
+    fn release(&self, container: &str) -> bool {
+        let mut map = self.containers.lock().unwrap();
+        let Some(u) = map.get_mut(container) else { return false };
+        u.active = u.active.saturating_sub(1);
+        u.last_used = Some(Instant::now());
+        u.active == 0
+    }
+
+    /// R-9 (S-9): after a container's last turn, nothing the bot started may keep running until
+    /// the next one: a `setsid` child leaves the turn's process group, so the group's TERM misses
+    /// it. After [`STOP_GRACE`] the container is removed (`docker rm -f`: SIGKILL to every process
+    /// in it, PID 1 included) unless a turn picked it up meanwhile; the next turn starts a fresh
+    /// one. The folders are mounts, so nothing the bot keeps is lost, only `/tmp` (a tmpfs).
+    async fn end_container(&self, container: &str) {
+        tokio::time::sleep(STOP_GRACE).await;
+        let _held = self.container_start.lock().await;
+        {
+            let mut map = self.containers.lock().unwrap();
+            if map.get(container).is_some_and(|u| u.active > 0) {
+                return;
+            }
+            map.remove(container);
+        }
+        match Command::new("docker").args(["rm", "-f", container]).kill_on_drop(true).output().await {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => tracing::warn!(container, error = %String::from_utf8_lossy(&o.stderr).trim(), "couldn't remove an agent container after its last turn"),
+            Err(e) => tracing::warn!(container, error = %e, "couldn't remove an agent container after its last turn"),
         }
     }
 
@@ -979,15 +1019,20 @@ impl IsolatedTurn {
 
 impl Drop for IsolatedTurn {
     fn drop(&mut self) {
-        self.vm.release(&self.container);
-        // Killing `docker exec` doesn't stop what it started in the container
-        let container = self.container.clone();
+        let last = self.vm.release(&self.container);
+        // Killing `docker exec` doesn't stop what it started in the container: TERM the turn's
+        // process group, then, after the container's last turn, remove the container (R-9)
+        let (vm, container) = (self.vm.clone(), self.container.clone());
         let script = format!("p=$(cat {f} 2>/dev/null) && kill -TERM -- -$p 2>/dev/null; rm -f {f}", f = self.pid_file());
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             rt.spawn(async move {
                 let _ = Command::new("docker").args(["exec", &container, "sh", "-c", &script]).kill_on_drop(true).output().await;
+                if last {
+                    vm.end_container(&container).await;
+                }
             });
         }
+        // Without a runtime (kwnt is exiting) the reaper removes it at the next start
     }
 }
 
@@ -1092,7 +1137,7 @@ mod tests {
     #[tokio::test]
     async fn at_most_max_turns_hold_a_permit_and_every_drop_frees_one() {
         let d = tempfile::tempdir().unwrap();
-        let vm = AgentVm::new(d.path(), AgentsInVmConfig { max_turns: 2, ..Default::default() }, None);
+        let vm = AgentVm::with_parts(d.path(), BrokerConfig::new(d.path().join("broker.log")), None, AgentsInVmConfig { max_turns: 2, ..Default::default() }, None);
         let p1 = vm.turns.clone().acquire_owned().await.unwrap();
         let p2 = vm.turns.clone().acquire_owned().await.unwrap();
         assert_eq!(vm.free_turn_slots(), 0);
@@ -1132,7 +1177,7 @@ mod tests {
     fn the_request_limit_and_memory_come_from_server_config() {
         let d = tempfile::tempdir().unwrap();
         let limits = AgentsInVmConfig { request_limit: 7, memory_mb: 2048, max_turns: 3 };
-        let vm = AgentVm::new(d.path(), limits.clone(), None);
+        let vm = AgentVm::with_parts(d.path(), BrokerConfig::new(d.path().join("broker.log")), None, limits.clone(), None);
         assert_eq!(vm.limits(), &limits);
         assert_eq!(vm.free_turn_slots(), 3);
         assert_eq!(AgentsInVmConfig::default(), AgentsInVmConfig { request_limit: 200, memory_mb: 1024, max_turns: 2 });
@@ -1190,7 +1235,7 @@ mod tests {
     #[tokio::test]
     async fn wrap_keeps_only_allowed_env_and_points_claude_at_the_broker() {
         let d = tempfile::tempdir().unwrap();
-        let vm = AgentVm::new(d.path(), AgentsInVmConfig::default(), None);
+        let vm = AgentVm::with_parts(d.path(), BrokerConfig::new(d.path().join("broker.log")), None, AgentsInVmConfig::default(), None);
         let mut turn = test_turn(&vm, None, d.path());
         let key = turn.lease.key().to_string();
         let mut cmd = Command::new("/host/claude");
