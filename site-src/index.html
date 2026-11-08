@@ -16,7 +16,32 @@ card_art: scene
         <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
         <p class="cta-alt"><a href="docs/quickstart.html">A VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
-      <p class="mac-dl">Free, for Apple silicon and Intel. <a href="docs/install.html#mac">First open</a> needs one extra step. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>).</p>
+      <details class="mac-first" id="mac-first">
+        <summary>
+          <span class="mf-ico" aria-hidden="true"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v1H4zM3 5h1v8H3zM16 5h1v8h-1zM4 12h12v1H4zM1 14h18v2H1z"/><path d="M5 6h10v6H5z" opacity=".22"/><path d="M8 8h1v2H8zM11 8h1v2h-1z"/></svg></span>
+          <span class="mf-sum"><b>First time on a Mac?</b><span>macOS asks once, because kwant isn't notarized by Apple yet.</span></span>
+          <svg class="mf-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+        <div class="mf-body">
+          <ol class="mf-steps">
+            <li><span>Drag kwant to Applications and open it. When macOS says it couldn't verify it, click <b>Done</b>.</span></li>
+            <li><span>Open <b>System Settings › Privacy &amp; Security</b> and scroll down to <b>Security</b>.</span></li>
+            <li><span>Click <b>Open Anyway</b> next to “kwant” was blocked, then <b>Open Anyway</b> again, and enter your Mac password or use Touch ID.</span></li>
+          </ol>
+          <figure class="mf-fig">
+            <a class="zoom" href="{{root}}assets/media/open-anyway-wide.svg" data-caption="A mock-up of macOS 15: the “kwant” Not Opened alert (click Done), System Settings › Privacy &amp; Security, and Open Anyway under Security.">
+            <picture>
+              <source media="(max-width: 640px)" srcset="{{root}}assets/media/open-anyway-phone.svg">
+              <img src="{{root}}assets/media/open-anyway-wide.svg" width="560" height="360" loading="lazy" decoding="async"
+                   alt="A mock-up of the three macOS steps: the “kwant” Not Opened alert with Done marked, System Settings › Privacy &amp; Security, and the Security row “kwant” was blocked to protect your Mac with Open Anyway marked.">
+            </picture>
+            </a>
+          </figure>
+          <p class="mf-after">You only do this once. On macOS 14 or earlier, right-click kwant in Applications and choose <b>Open</b> instead.</p>
+          <p class="mf-term" data-term="soon"><span class="soon">Soon</span>A one-line Terminal install that skips this step.</p>
+        </div>
+      </details>
+      <p class="mac-dl">Free, for Apple silicon and Intel. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>).</p>
       {{install:hero}}
       {{releases}}
     </div>
