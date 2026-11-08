@@ -183,7 +183,7 @@ pub(super) fn recipe(doc: &Doc) -> Option<(usize, Recipe)> {
         times: meta.times.iter().map(|(l, t)| RecipeTime { label: l.to_string(), text: t.to_string() }).collect(),
         ingredients,
         steps: steps.collect(),
-        notes: notes.map(|l| l.items.iter().map(|t| t.to_string()).collect()).unwrap_or_default(),
+        notes: notes.map(|l| l.items.iter().map(|t| strip_task(t).to_string()).collect()).unwrap_or_default(),
         provenance: Provenance::reply_text(),
     };
     fits(&r).then_some((doc.starts[start], r))
@@ -537,6 +537,10 @@ const UNIT_WORDS: [&str; 78] = [
 pub(super) fn split_qty(line: &str) -> (Option<&str>, &str) {
     let Some(amount) = amount_end(line) else { return (None, line) };
     let rest = &line[amount..];
+    // "350 °F oven" is a temperature, not an amount to scale
+    if is_temperature(rest) {
+        return (None, line);
+    }
     let glued = alpha_run(rest);
     let (qty, text) = if !glued.is_empty() {
         // "200g flour": only a known abbreviation may be glued on
@@ -575,6 +579,18 @@ pub(super) fn split_qty(line: &str) -> (Option<&str>, &str) {
         return (None, line);
     }
     (Some(qty), text)
+}
+
+/// What follows an amount marks it as a temperature: a degree sign (`°`, `º`, `℃`, `℉`), a
+/// capital `F` or `C` on its own ("350F", "180 C"), or a degree word ("350 degrees").
+fn is_temperature(rest: &str) -> bool {
+    let r = rest.trim_start();
+    if r.starts_with(['°', 'º', '℃', '℉']) {
+        return true;
+    }
+    let w = alpha_run(r);
+    matches!(w, "F" | "C")
+        || matches!(w.to_lowercase().as_str(), "degree" | "degrees" | "deg" | "fahrenheit" | "celsius" | "centigrade")
 }
 
 /// The leading letters of `s`.

@@ -165,7 +165,9 @@ labels), the method and optional notes. The intro and the closing question stay 
 - `serves` (1–24) and up to 3 `times` come from a meta line or list (`**Serves 4** · Prep 15 min`,
   `- **Prep time:** 10 minutes`); one the server can't read ("Serves 4–6") stays text above the card.
 - `qty` is the leading amount as written, split off only when `qty + text` (with a space, or none
-  when the text starts with ",") rebuilds the line exactly.
+  when the text starts with ",") rebuilds the line exactly. A temperature ("350 °F oven", "180C",
+  "350 degrees") is not an amount, so it gets no `qty` and never scales. A GFM task box in front
+  of an ingredient or a note is dropped.
 - Ranks above every other reply selector; recipe replies hold lists the steps and metrics selectors
   would otherwise take.
 - Source `markdown_section` `{index, ordered, last_index, last_ordered, lead}`: the first and last

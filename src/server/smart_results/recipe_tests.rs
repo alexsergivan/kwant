@@ -218,6 +218,31 @@ fn tips_after_the_method_and_task_boxes_on_ingredients() {
 }
 
 #[test]
+fn task_boxes_on_notes_are_dropped_like_on_ingredients() {
+    // F-4: a task-list Tips list loses its boxes, as the ingredients do
+    let text = "### Garlic bread
+
+### Ingredients
+- [ ] 1 baguette
+- [x] 3 cloves garlic
+
+### Method
+1. Spread the garlic butter.
+2. Bake.
+
+### Tips
+- [ ] Use fresh garlic
+- [x] Wrap in foil to keep it soft
+- [X] Serve warm
+- Plain tip
+";
+    let r = recipe_in(text);
+    assert_eq!(split(&r)[1], (Some("3 cloves"), "garlic"));
+    assert_eq!(r.notes, ["Use fresh garlic", "Wrap in foil to keep it soft", "Serve warm", "Plain tip"]);
+    assert!(r.ingredients.iter().all(|i| !i.text.contains('[')));
+}
+
+#[test]
 fn a_setext_title_and_a_bullet_method_under_its_heading() {
     let text = "Tomato soup\n===========\n\nIngredients\n-----------\n\n- 1 kg tomatoes\n- 1 onion\n- 500 ml stock\n\nMethod\n------\n\n- Soften the onion.\n- Add the tomatoes and stock, simmer 20 minutes, blend.\n";
     let r = recipe_in(text);
@@ -338,6 +363,28 @@ fn split_qty_takes_the_leading_amount_as_written() {
         ("2  cups flour", None, "2  cups flour"),
         ("3", None, "3"),
         ("500g/1lb beef", None, "500g/1lb beef"),
+        // A temperature is not an amount (F-2): no qty, so it never scales
+        ("350 °F oven", None, "350 °F oven"),
+        ("350°F oven", None, "350°F oven"),
+        ("180 °C fan oven", None, "180 °C fan oven"),
+        ("180ºC oven", None, "180ºC oven"),
+        ("200 ℃ oven", None, "200 ℃ oven"),
+        ("350F oven", None, "350F oven"),
+        ("350 F oven", None, "350 F oven"),
+        ("180 C fan", None, "180 C fan"),
+        ("350 degrees oven", None, "350 degrees oven"),
+        ("180 Degrees C", None, "180 Degrees C"),
+        ("350–375 °F oven", None, "350–375 °F oven"),
+        ("400 deg. oven", None, "400 deg. oven"),
+        ("180 Celsius oven", None, "180 Celsius oven"),
+        // Near misses that stay amounts: a unit or word that only starts with F or C
+        ("2 cups flour", Some("2 cups"), "flour"),
+        ("2 Cups flour", Some("2 Cups"), "flour"),
+        ("1 can chickpeas", Some("1 can"), "chickpeas"),
+        ("2 c. flour", Some("2"), "c. flour"),
+        ("3 Fuji apples", Some("3"), "Fuji apples"),
+        ("1 cl rum", Some("1 cl"), "rum"),
+        ("4 fl oz cream", Some("4"), "fl oz cream"),
     ];
     for (line, qty, text) in cases {
         let got = split_qty(line);
