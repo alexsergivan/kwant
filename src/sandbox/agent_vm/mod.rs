@@ -1,5 +1,5 @@
-//! Agents in the computer, slice 1: Claude turns run in a per-bot container with no network and
-//! no real credential, when the person turns on "Run Claude in the computer" (Linux only, off by
+//! Agents in the VM, slice 1: Claude turns run in a per-bot container with no network and no
+//! real credential, when the person turns on "Run Claude inside the VM" (Linux only, off by
 //! default). Design: `docs/agents-in-vm.md`.
 //!
 //! A turn is prepared by [`AgentVm::prepare_turn`], which fails closed: with the setting on, any
@@ -80,6 +80,23 @@ pub mod codes {
     pub const UNSAFE_FOLDER: &str = "unsafe_folder";
     /// D4b: a host Codex or Grok turn in a folder an isolated bot used.
     pub const FOLDER_USED_BY_ISOLATED_BOT: &str = "folder_used_by_isolated_bot";
+
+    /// Every code above: each has its own words in [`super::notice`] (ui-check-446 fix 4).
+    pub const ALL: &[&str] = &[
+        UNSUPPORTED_OS,
+        DOCKER_UNAVAILABLE,
+        PREPARING,
+        DOWNLOAD_FAILED,
+        RELAY_DOWN,
+        CONTAINER_FAILED,
+        NO_CREDENTIAL,
+        SIGN_IN_EXPIRED,
+        HOST_IS_ROOT,
+        FOLDER_NAME_UNSUPPORTED,
+        FOLDER_RECORD_FAILED,
+        UNSAFE_FOLDER,
+        FOLDER_USED_BY_ISOLATED_BOT,
+    ];
 }
 
 impl Refusal {
@@ -87,14 +104,6 @@ impl Refusal {
         Self { code, message: message.into(), unsafe_kind: None }
     }
 
-    /// The turn's error text: the reason, and that nothing ran on this computer instead.
-    pub fn turn_error(&self) -> String {
-        format!(
-            "Claude didn't run: {} Nothing ran on this computer instead, because \"Run Claude in the computer\" is on. [{}]",
-            self.message.trim_end_matches('.').to_string() + ".",
-            self.code
-        )
-    }
 }
 
 /// The OS gate: slice 1 is Linux only (Mac shows the toggle disabled).
@@ -129,6 +138,10 @@ pub struct Toggle {
     /// `mac_later` | `docker_unavailable` | `not_supported_yet` (Windows; added to Mira's list)
     pub reason: Option<&'static str>,
 }
+
+/// The `download_failed` detail after a failed image build (Mira's E line, ui-check-446 fix 7).
+/// The chip reads "Claude · Stopped: the setup failed (…)", so it starts in lower case.
+pub const SETUP_FAILED: &str = "the setup failed (kwant’s log has the details)";
 
 /// Download progress while `state` is `preparing`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -181,6 +194,18 @@ enum ImageView {
     Failed(String),
 }
 
+/// What the person reads when they try to turn the switch on and it isn't available: the PUT
+/// 400's `error`, which the Settings error line prints as it is (ui-check-446 fix 5). The code
+/// goes in `code`.
+pub fn toggle_message(reason: &str) -> &'static str {
+    match reason {
+        "mac_later" => "Coming to Mac later. For now, Claude runs on this computer in both modes.",
+        "not_supported_yet" => "Only on Linux for now. Claude runs on this computer in both modes.",
+        codes::DOCKER_UNAVAILABLE => "Start Docker to turn this on.",
+        _ => "Run Claude inside the VM can't be turned on here right now.",
+    }
+}
+
 fn toggle(docker: bool) -> Toggle {
     if cfg!(target_os = "macos") {
         Toggle { available: false, reason: Some("mac_later") }
@@ -222,7 +247,7 @@ fn claude_state(inp: ViewInputs, image: impl FnOnce() -> ImageView) -> AgentStat
     }
 }
 
-/// Codex and Grok always run on this computer in 0.7.8.
+/// Codex and Grok always run on this computer in 0.7.7.
 fn other_state() -> AgentState {
     AgentState::new("not_isolated", Some("not_supported_yet"))
 }
@@ -241,6 +266,8 @@ pub struct AgentVm {
     limits: AgentsInVmConfig,
     /// At most `limits.max_turns` isolated turns at once; a turn holds its permit until it ends.
     turns: Arc<Semaphore>,
+    /// Turns waiting for a permit now, for the position a new one reports ([`TurnWait::Queued`]).
+    waiting: std::sync::atomic::AtomicUsize,
     /// Where D4's folder record goes; `None` only in tests that don't start a container.
     db: Option<crate::db::Database>,
 }
@@ -249,6 +276,15 @@ impl std::fmt::Debug for AgentVm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AgentVm").field("root", &self.root).finish_non_exhaustive()
     }
+}
+
+/// What a turn reports while it waits for a free spot in the VM ([`AgentVm::prepare_turn_reporting`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnWait {
+    /// Every spot is taken: `slots` turns run, and this one is `position` in line (1 is next).
+    Queued { position: usize, slots: usize },
+    /// It got its spot (sent only after `Queued`).
+    Started,
 }
 
 /// One turn's inputs to [`AgentVm::prepare_turn`].
@@ -292,6 +328,7 @@ impl AgentVm {
             container_start: tokio::sync::Mutex::new(()),
             image_override: image,
             turns: Arc::new(Semaphore::new(limits.max_turns.max(1))),
+            waiting: Default::default(),
             limits,
             db,
         })
@@ -365,6 +402,37 @@ impl AgentVm {
         });
     }
 
+    /// A spot for one isolated turn, waiting in line (FIFO) when all `max_turns` are taken, and
+    /// telling `report` that it waits and when it's through.
+    async fn turn_permit<F, Fut>(&self, report: &mut F) -> Result<OwnedSemaphorePermit, Refusal>
+    where
+        F: FnMut(TurnWait) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        use std::sync::atomic::Ordering;
+        use tokio::sync::TryAcquireError;
+        let closed = || Refusal::new(codes::CONTAINER_FAILED, "kwnt is shutting down");
+        match self.turns.clone().try_acquire_owned() {
+            Ok(p) => return Ok(p),
+            Err(TryAcquireError::Closed) => return Err(closed()),
+            Err(TryAcquireError::NoPermits) => {}
+        }
+        /// Leaves the line however the wait ends (a stopped reply drops the future).
+        struct InLine<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl Drop for InLine<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let position = self.waiting.fetch_add(1, Ordering::SeqCst) + 1;
+        let in_line = InLine(&self.waiting);
+        report(TurnWait::Queued { position, slots: self.limits.max_turns.max(1) }).await;
+        let permit = self.turns.clone().acquire_owned().await.map_err(|_| closed())?;
+        drop(in_line);
+        report(TurnWait::Started).await;
+        Ok(permit)
+    }
+
     pub fn image_ready(&self) -> bool {
         *self.image.lock().unwrap() == ImageState::Ready
     }
@@ -403,7 +471,7 @@ impl AgentVm {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "agent image build failed");
-                let why = "Claude couldn't be set up in the computer (the image build failed; see kwnt's log)".to_string();
+                let why = SETUP_FAILED.to_string();
                 *self.image.lock().unwrap() = ImageState::Failed(why.clone());
                 Err(Refusal::new(codes::DOWNLOAD_FAILED, why))
             }
@@ -412,6 +480,16 @@ impl AgentVm {
 
     /// Everything a Claude turn needs to run isolated, or why it can't. Fails closed.
     pub async fn prepare_turn(self: &Arc<Self>, req: TurnRequest) -> Result<IsolatedTurn, Refusal> {
+        self.prepare_turn_reporting(req, |_| std::future::ready(())).await
+    }
+
+    /// [`Self::prepare_turn`], telling `report` when the turn has to wait for a free spot and
+    /// when it gets one, so the waiting isn't taken for a stalled reply.
+    pub async fn prepare_turn_reporting<F, Fut>(self: &Arc<Self>, req: TurnRequest, mut report: F) -> Result<IsolatedTurn, Refusal>
+    where
+        F: FnMut(TurnWait) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
         supported_os()?;
         if !super::manager::SandboxManager::new().is_docker_available().await {
             return Err(Refusal::new(codes::DOCKER_UNAVAILABLE, "Docker isn't running on this computer"));
@@ -439,7 +517,7 @@ impl AgentVm {
         // A reply during the image setup fails with notice 2 rather than waiting for it
         self.image_or_start_setup()?;
         // At most `max_turns` at once: a queued turn starts no container until it has a permit
-        let permit = self.turns.clone().acquire_owned().await.map_err(|_| Refusal::new(codes::CONTAINER_FAILED, "kwnt is shutting down"))?;
+        let permit = self.turn_permit(&mut report).await?;
         // D4: written down before anything runs in the folder, so a turn that fails later counts
         self.record_folder(&workdir, &req.bot_id).await?;
         let run_dir = bot_dir.join("run");
@@ -756,13 +834,13 @@ pub fn check_folder(folder: &Path, places: &folder_rule::Places) -> Result<(), R
         folder_rule::UnsafeKind::Home => "is your home folder",
         folder_rule::UnsafeKind::ContainsHome | folder_rule::UnsafeKind::Root => "holds your home folder",
         folder_rule::UnsafeKind::SignIns => "holds sign-ins",
-        folder_rule::UnsafeKind::KwantData => "holds kwnt's own data",
+        folder_rule::UnsafeKind::KwantData => "holds kwant's own data",
         folder_rule::UnsafeKind::Docker => "holds Docker's control socket",
         folder_rule::UnsafeKind::SharedFolder => "is the folder every team without its own folder shares",
     };
     let mut r = Refusal::new(
         codes::UNSAFE_FOLDER,
-        format!("The bot's folder {} {why}, so it can't be shared with the computer. Pick a project folder instead", folder.display()),
+        format!("The bot's folder {} {why}, so kwant won't share it with the VM. Pick a project folder instead", folder.display()),
     );
     r.unsafe_kind = Some(kind);
     Err(r)
@@ -851,7 +929,14 @@ fn primary_api_key(path: &Path) -> Option<String> {
 }
 
 /// Environment the CLI keeps inside the container; everything else kwnt set is dropped.
-const PASS_ENV: &[&str] = &["CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "MCP_TOOL_TIMEOUT", "MCP_TIMEOUT", "BROWSER", "DISPLAY"];
+const PASS_ENV: &[&str] = &[
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR",
+    "MCP_TOOL_TIMEOUT",
+    "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT",
+    "MCP_TIMEOUT",
+    "BROWSER",
+    "DISPLAY",
+];
 
 /// Provider and model settings that would point the CLI somewhere else (as for a profile run).
 const SETTINGS_OVERRIDE: &[(&str, &str)] = &[
@@ -1041,6 +1126,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_switch_refusals_read_as_words_not_codes() {
+        assert_eq!(toggle_message("mac_later"), "Coming to Mac later. For now, Claude runs on this computer in both modes.");
+        assert_eq!(toggle_message("not_supported_yet"), "Only on Linux for now. Claude runs on this computer in both modes.");
+        assert_eq!(toggle_message("docker_unavailable"), "Start Docker to turn this on.");
+        assert!(!toggle_message("brand_new").contains('_'));
+        // The chip detail after a failed setup (fix 7)
+        assert!(SETUP_FAILED.starts_with("the setup failed") && !SETUP_FAILED.contains("computer") && !SETUP_FAILED.contains("kwnt"));
+    }
+
+    #[test]
     fn the_chips_follow_miras_contract_and_d1() {
         let on = ViewInputs { setting_on: true, vm_mode: true, docker: true, cli_account: true };
         let st = |inp: ViewInputs, img: ImageView| {
@@ -1132,6 +1227,95 @@ mod tests {
     fn the_container_never_runs_as_root() {
         assert_eq!(refuse_root(Some((0, 0))).unwrap_err().code, codes::HOST_IS_ROOT);
         assert!(refuse_root(Some((1000, 1000))).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_waits_for_a_spot_says_so_and_when_it_gets_one() {
+        let d = tempfile::tempdir().unwrap();
+        let vm = AgentVm::with_parts(d.path(), BrokerConfig::new(d.path().join("broker.log")), None, AgentsInVmConfig { max_turns: 1, ..Default::default() }, None);
+        // A free spot: no report at all
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        let log = |seen: &Arc<StdMutex<Vec<TurnWait>>>| {
+            let seen = seen.clone();
+            move |w| {
+                seen.lock().unwrap().push(w);
+                std::future::ready(())
+            }
+        };
+        let first = vm.turn_permit(&mut log(&seen)).await.unwrap();
+        assert!(seen.lock().unwrap().is_empty());
+        // Taken: the next one is first in line, then the one after it second
+        let (vm2, s2) = (vm.clone(), seen.clone());
+        let second = tokio::spawn(async move { vm2.turn_permit(&mut log(&s2)).await.map(|_| ()) });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(*seen.lock().unwrap(), vec![TurnWait::Queued { position: 1, slots: 1 }]);
+        let third_seen = Arc::new(StdMutex::new(Vec::new()));
+        let (vm3, s3) = (vm.clone(), third_seen.clone());
+        let third = tokio::spawn(async move { vm3.turn_permit(&mut log(&s3)).await.map(|_| ()) });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(*third_seen.lock().unwrap(), vec![TurnWait::Queued { position: 2, slots: 1 }]);
+        // A stopped reply leaves the line
+        third.abort();
+        let _ = third.await;
+        assert_eq!(vm.waiting.load(std::sync::atomic::Ordering::SeqCst), 1);
+        drop(first);
+        second.await.unwrap().unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec![TurnWait::Queued { position: 1, slots: 1 }, TurnWait::Started]);
+        assert_eq!(vm.waiting.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// QA P-5b: two replies each waiting on an approval card hold both spots for up to 300 s; a
+    /// third is shown queued ("vm_busy") and its wait never counts toward the stall watchdog,
+    /// which starts only once it gets the spot an expired card frees.
+    #[tokio::test]
+    async fn two_replies_waiting_for_approval_queue_a_third_without_a_stall() {
+        use crate::drivers::events::RuntimeEvent as E;
+        use crate::server::turns::StallClock;
+        let d = tempfile::tempdir().unwrap();
+        let vm = AgentVm::with_parts(d.path(), BrokerConfig::new(d.path().join("broker.log")), None, AgentsInVmConfig { max_turns: 2, ..Default::default() }, None);
+        let (limit, t0) = (Duration::from_secs(120), tokio::time::Instant::now());
+        let mut clocks = vec![StallClock::new(Some(limit), t0); 3];
+        // Two replies get a spot each, and each asks for an approval nobody answers yet
+        let mut quiet = |_| std::future::ready(());
+        let first = vm.turn_permit(&mut quiet).await.unwrap();
+        let _second = vm.turn_permit(&mut quiet).await.unwrap();
+        let approval = |id: &str| E::ToolCallPending { id: id.into(), name: "Bash".into(), args: serde_json::json!({}) };
+        clocks[0].saw(&approval("a"), t0);
+        clocks[1].saw(&approval("b"), t0);
+        // A third is queued, the way the Claude driver reports it
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let vm3 = vm.clone();
+        let third = tokio::spawn(async move {
+            let mut report = move |w| {
+                let tx = tx.clone();
+                async move {
+                    let e = match w {
+                        TurnWait::Queued { position, slots } => E::WaitingForRoom { reason: "vm_busy".into(), position, slots },
+                        TurnWait::Started => E::RoomTaken,
+                    };
+                    let _ = tx.send(e).await;
+                }
+            };
+            vm3.turn_permit(&mut report).await.map(|_| ())
+        });
+        let queued = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await.unwrap().unwrap();
+        assert!(matches!(&queued, E::WaitingForRoom { reason, position: 1, slots: 2 } if reason == "vm_busy"), "{queued:?}");
+        clocks[2].saw(&queued, t0);
+        // Nobody stalls while the cards wait, however long that is
+        assert!(clocks.iter().all(|c| c.deadline().is_none()));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!third.is_finished(), "the third still waits");
+        // At 300 s the first card expires: that reply ends and frees its spot
+        let t1 = t0 + Duration::from_secs(300);
+        clocks[0].saw(&E::ToolCallCompleted { id: "a".into(), result: serde_json::json!({"expired": true}) }, t1);
+        drop(first);
+        let taken = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await.unwrap().unwrap();
+        assert!(matches!(taken, E::RoomTaken), "{taken:?}");
+        clocks[2].saw(&taken, t1);
+        // The third's watchdog starts from the moment it got the spot, not from when it queued
+        assert_eq!(clocks[2].deadline(), Some(t1 + limit));
+        assert_eq!(clocks[1].deadline(), None, "the second card still waits");
+        tokio::time::timeout(Duration::from_secs(2), third).await.unwrap().unwrap().unwrap();
     }
 
     #[tokio::test]
@@ -1240,6 +1424,8 @@ mod tests {
         let key = turn.lease.key().to_string();
         let mut cmd = Command::new("/host/claude");
         cmd.env("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1")
+            .env("MCP_TOOL_TIMEOUT", "330000")
+            .env("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT", "330000")
             .env("ANTHROPIC_API_KEY", "sk-real")
             .env("CLAUDE_CONFIG_DIR", "/home/p/.claude")
             .env("AWS_SECRET_ACCESS_KEY", "x")
@@ -1252,6 +1438,9 @@ mod tests {
         assert!(args.contains(&format!("ANTHROPIC_BASE_URL=http://127.0.0.1:8080/t/{key}/anthropic")));
         assert!(args.contains(&format!("ANTHROPIC_API_KEY={DUMMY_API_KEY}")));
         assert!(args.contains(&"CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1".to_string()));
+        // The approval wait's limits reach claude in the container too (QA F-2)
+        assert!(args.contains(&"MCP_TOOL_TIMEOUT=330000".to_string()), "{args:?}");
+        assert!(args.contains(&"CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=330000".to_string()), "{args:?}");
         assert!(args.windows(2).any(|p| p == ["exec", "-w"]));
         let settings = args.last().unwrap();
         assert!(settings.contains(&format!("/t/{key}/anthropic")) && settings.contains("CLAUDE_CODE_USE_BEDROCK"));

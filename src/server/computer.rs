@@ -134,8 +134,10 @@ pub async fn put_computer(
         if on {
             let current = view(&state).await;
             if current["isolate_claude_toggle"]["available"] != json!(true) {
-                let reason = current["isolate_claude_toggle"]["reason"].as_str().unwrap_or("unavailable");
-                return Err(bad(reason.to_string()));
+                // People's words in `error` (the Settings error line prints it); the code apart
+                let reason = current["isolate_claude_toggle"]["reason"].as_str().unwrap_or("unavailable").to_string();
+                let error = agent_vm::toggle_message(&reason);
+                return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": error, "code": reason }))));
             }
         }
         state.db.set_setting(agent_vm::SETTING_KEY, if on { "true" } else { "false" }).await.map_err(failed)?;

@@ -18,6 +18,18 @@ pub enum RuntimeEvent {
     /// A driver is still working: it printed something that isn't reply text or a tool call.
     /// Only feeds the turn's stall watchdog; it is never broadcast.
     Progress,
+    /// The driver waits for room before its engine can start: an isolated Claude reply behind
+    /// others in the VM (`reason` "vm_busy"; `position` 1 is next; `slots` run at once). The
+    /// server stops the turn's stall watchdog and shows the turn as queued (`turn_queued`) until
+    /// [`RuntimeEvent::RoomTaken`]. Never broadcast as is.
+    WaitingForRoom {
+        reason: String,
+        position: usize,
+        slots: usize,
+    },
+    /// The wait in [`RuntimeEvent::WaitingForRoom`] is over: the stall watchdog starts again from
+    /// now and the server sends `turn_started` again. Never broadcast as is.
+    RoomTaken,
     /// The turn's fresh tokens so far (see `TurnUsage::fresh`), when the engine reports usage
     /// mid-turn, so a task the bot hands in during the turn can pay for it then. Never broadcast.
     UsageSoFar {
@@ -83,6 +95,10 @@ pub enum RuntimeEvent {
     /// A turn is waiting for a free slot: its agent already runs as many turns as allowed
     /// (`reason` "agent_busy") or the whole server does ("server_busy"). It starts on its own,
     /// with `turn_started`; it is never dropped. `position` is 1 for the next to start.
+    ///
+    /// `reason` "vm_busy": a turn that had started waits for a free spot in the VM, because
+    /// `slots` isolated Claude replies already run there. It is sent after that turn's
+    /// `turn_started`, and a second `turn_started` follows when it gets its spot.
     #[serde(rename = "turn_queued", alias = "TurnQueued")]
     TurnQueued {
         turn_id: String,
@@ -92,6 +108,9 @@ pub enum RuntimeEvent {
         thread_id: Option<String>,
         position: usize,
         reason: String,
+        /// "vm_busy" only: how many isolated Claude replies run at once.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slots: Option<usize>,
     },
     /// A thread was created, renamed or archived.
     #[serde(rename = "thread_updated", alias = "ThreadUpdated")]

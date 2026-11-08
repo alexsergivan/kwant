@@ -389,7 +389,7 @@ async fn run(bin: &str, args: &[&str]) -> Result<CmdOut, String> {
 async fn run_in(bin: &str, args: &[&str], claude_home: Option<&std::path::Path>) -> Result<CmdOut, String> {
     let mut cmd = match claude_home {
         Some(home) => crate::profiles::CliEnv::for_home(crate::profiles::Engine::Claude, home).command(bin),
-        None => tokio::process::Command::new(bin),
+        None => crate::drivers::cli::cli_command(bin),
     };
     let out = cmd
         .args(args)

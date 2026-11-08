@@ -1,4 +1,6 @@
 //! Turn-time MCP: broker approvals, the claude permission endpoint and the claude config file.
+// The fake CLI and agent runs are shell scripts, so their tests and helpers are Unix only
+#![cfg_attr(not(unix), allow(dead_code))]
 
 #[path = "common/exe.rs"]
 mod exe;
@@ -318,7 +320,7 @@ fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
 async fn fake_cli_run(kind: &str, mcp: Option<McpTurnContext>) -> String {
     let dir = tempdir().unwrap();
     let script = dir.path().join("fake-cli");
-    exe::write_executable(&script, "#!/bin/sh\necho \"ARGS: $*\"\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --mcp-config ]; then echo \"MODE: $(stat -c %a \"$2\")\"; fi\n  shift\ndone\necho \"TOOL_TIMEOUT: $MCP_TOOL_TIMEOUT\"\n");
+    exe::write_executable(&script, "#!/bin/sh\necho \"ARGS: $*\"\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = --mcp-config ]; then echo \"MODE: $(stat -c %a \"$2\")\"; fi\n  shift\ndone\necho \"TOOL_TIMEOUT: $MCP_TOOL_TIMEOUT\"\necho \"IDLE_TIMEOUT: $CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT\"\n");
     let driver = CliDriver::new(Some(script.to_string_lossy().into_owned()), Some(kind.into()));
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
@@ -340,6 +342,9 @@ async fn claude_cli_gets_mcp_config_without_secrets_in_argv() {
     assert!(out.contains("--permission-mode default"), "{out}");
     assert!(out.contains("MODE: 600"), "{out}");
     assert!(out.contains("TOOL_TIMEOUT: 330000"), "{out}");
+    // claude's own idle limit on a tool call is raised with it, so kwnt's 300 s approval timeout
+    // ends an unanswered card first (QA F-2)
+    assert!(out.contains("IDLE_TIMEOUT: 330000"), "{out}");
     assert!(!out.contains("sk-very-secret") && !out.contains("hdr-secret"), "secrets leaked into argv: {out}");
     assert_eq!(std::fs::read_dir(tmp.path().join("mcp")).unwrap().count(), 0, "config file left behind");
 

@@ -68,7 +68,7 @@ pub fn prod_names<'a>(marked: &[String], servers: impl Iterator<Item = (&'a str,
 /// push then counts as one to a protected branch, so `None` asks).
 ///
 /// `folder` is the bot's folder for the turn, the host's own path; `cwd` and everything under
-/// `folder` are untrusted. The rules (0.7.8, S-8):
+/// `folder` are untrusted. The rules (0.7.7, S-8):
 /// - **Q3:** a `cwd` that isn't `folder` or below it (by its text: no `..`) is refused before
 ///   any `.git` is read, and no `.git` above `folder` is read.
 /// - Every folder and file is reached by one openat walk from `folder` ([`Dir`]): no symlink is
@@ -302,6 +302,46 @@ mod tests {
         std::fs::write(wt.join(".git"), format!("gitdir: {}\n", root.join(".git/worktrees/wt").display())).unwrap();
         mkfifo(&root.join(".git/worktrees/wt/HEAD"));
         assert_eq!(head_within_5s(&wt), None, "worktree HEAD FIFO");
+    }
+
+    /// Windows: the same refusals without symlinks or FIFOs. A junction as `.git` or on a
+    /// worktree's gitdir, a `..` after one, and a hard-linked HEAD are `None`; a plain repo and a
+    /// worktree whose gitdir uses `C:/...` with forward slashes (as Git for Windows writes) read.
+    #[cfg(windows)]
+    #[test]
+    fn head_branch_refuses_junctions_and_hard_links_on_windows() {
+        use crate::server::gitfile::windows_tests::junction;
+        let (d, root) = head_repo();
+        assert_eq!(head_within_5s(&root).as_deref(), Some("lin-dev-core"), "a plain repo");
+        let other = d.path().join("other");
+        std::fs::create_dir_all(other.join(".git/worktrees/wt")).unwrap();
+        std::fs::write(other.join(".git/HEAD"), "ref: refs/heads/LEAKED\n").unwrap();
+        std::fs::write(other.join(".git/worktrees/wt/HEAD"), "ref: refs/heads/LEAKED\n").unwrap();
+        let linked = d.path().join("linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        junction(&linked.join(".git"), &other.join(".git"));
+        assert_eq!(head_within_5s(&linked), None, ".git a junction");
+        let wt = d.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        junction(&wt.join("hop"), &other);
+        std::fs::write(wt.join(".git"), "gitdir: hop/.git/worktrees/wt\n").unwrap();
+        assert_eq!(head_within_5s(&wt), None, "gitdir through a junction");
+        std::fs::write(wt.join(".git"), "gitdir: hop/../../other/.git/worktrees/wt\n").unwrap();
+        assert_eq!(head_within_5s(&wt), None, "`..` after a junction");
+        // a real worktree, gitdir written the Git for Windows way
+        std::fs::create_dir_all(root.join(".git/worktrees/w2")).unwrap();
+        std::fs::write(root.join(".git/worktrees/w2/HEAD"), "ref: refs/heads/side\n").unwrap();
+        let w2 = d.path().join("w2");
+        std::fs::create_dir_all(&w2).unwrap();
+        let gd = root.join(".git/worktrees/w2").display().to_string().replace('\\', "/");
+        std::fs::write(w2.join(".git"), format!("gitdir: {gd}\n")).unwrap();
+        assert_eq!(head_within_5s(&w2).as_deref(), Some("side"), "{gd}");
+        // HEAD as a second name of a host file
+        let host = d.path().join("host-file");
+        std::fs::write(&host, "ref: refs/heads/LEAKED\n").unwrap();
+        std::fs::remove_file(root.join(".git/HEAD")).unwrap();
+        std::fs::hard_link(&host, root.join(".git/HEAD")).unwrap();
+        assert_eq!(head_within_5s(&root), None, "a hard-linked HEAD");
     }
 
     /// F-2: a HEAD that is another name for some other file isn't read.

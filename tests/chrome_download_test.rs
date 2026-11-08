@@ -196,6 +196,7 @@ async fn the_first_need_downloads_the_build_once_and_it_is_found_after() {
     let bin = tempfile::tempdir().unwrap();
     // never run here, so a plain executable file is enough
     std::fs::write(bin.path().join("chromium"), "#!/bin/sh\n").unwrap();
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(bin.path().join("chromium"), std::fs::Permissions::from_mode(0o755)).unwrap();

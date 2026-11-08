@@ -147,16 +147,17 @@ pub fn assess(i: &Inputs) -> Risk {
     Risk { level, reasons }
 }
 
-/// Files with changed lines but no patch (too large to diff, from git or the forge alike). Binary
-/// files (no lines) aren't counted: there's no text to read.
+/// Files with changed lines but no patch, from git or the forge alike: too large to diff, or a
+/// forge that sends no patch at all (Gitea's fallback to its files list). Binary files (no lines)
+/// aren't counted: there's no text to read.
 pub fn unread_files(files: &[FileDiff]) -> Vec<&str> {
     files.iter().filter(|f| f.patch.is_none() && f.additions + f.deletions > 0).map(|f| f.path.as_str()).collect()
 }
 
-/// "Couldn't read 2 files (too large to diff)". It names no host: the files may have come from
-/// git, GitHub, GitLab, Gitea or Forgejo.
+/// "Couldn't read 2 files (no diff available)". It names no host (the files may have come from
+/// git, GitHub, GitLab, Gitea or Forgejo) and no single cause: size is only one of them.
 pub fn unread_reason(n: usize) -> String {
-    format!("Couldn't read {n} file{} (too large to diff)", if n == 1 { "" } else { "s" })
+    format!("Couldn't read {n} file{} (no diff available)", if n == 1 { "" } else { "s" })
 }
 
 /// "+27 −9 in 2 files" (a real minus sign, as the design writes it).
@@ -663,16 +664,17 @@ mod tests {
         assert!(has_ddl("ALTER TABLE x") && has_ddl("alter table x") && has_ddl("ALTER TABLE") && !has_ddl("alter table"));
     }
 
-    /// 0.7.7: the reason names no host. A GitLab repo read with plain git said "no diff from
-    /// GitHub"; git and every forge leave the patch out for the same reason, its size.
+    /// 0.7.7: the reason names no host and no cause. A GitLab repo read with plain git said "no
+    /// diff from GitHub"; then "too large to diff" showed on a +2/−1 type change (Rigel's F-1),
+    /// and Gitea's fallback to its files list sends no patch whatever the size.
     #[test]
-    fn the_unread_reason_says_why_and_names_no_host() {
-        assert_eq!(unread_reason(1), "Couldn't read 1 file (too large to diff)");
-        assert_eq!(unread_reason(3), "Couldn't read 3 files (too large to diff)");
+    fn the_unread_reason_names_no_host_and_no_cause() {
+        assert_eq!(unread_reason(1), "Couldn't read 1 file (no diff available)");
+        assert_eq!(unread_reason(3), "Couldn't read 3 files (no diff available)");
         for n in [1, 2] {
             let r = unread_reason(n);
-            for host in ["GitHub", "GitLab", "Gitea", "Forgejo", "git"] {
-                assert!(!r.contains(host), "{r}");
+            for word in ["GitHub", "GitLab", "Gitea", "Forgejo", "git", "large", "size"] {
+                assert!(!r.contains(word), "{r}");
             }
         }
     }
@@ -685,14 +687,14 @@ mod tests {
         // A test file losing 300 lines, unread: at least Medium, and said
         let r = risk(&[unread("tests/a_test.rs", 0, 300)]);
         assert_eq!(r.level, Level::Medium);
-        assert_eq!(r.reasons, vec!["Couldn't read 1 file (too large to diff)".to_string(), "+0 \u{2212}300 in 1 file".into()]);
+        assert_eq!(r.reasons, vec!["Couldn't read 1 file (no diff available)".to_string(), "+0 \u{2212}300 in 1 file".into()]);
         // A big source file, unread: large plus unread
         let r = risk(&[unread("src/a.rs", 900, 0)]);
         assert!(r.level >= Level::Medium);
-        assert!(r.reasons.contains(&"Couldn't read 1 file (too large to diff)".into()));
+        assert!(r.reasons.contains(&"Couldn't read 1 file (no diff available)".into()));
         // Next to a small read change: still no "Small change"
         let r = risk(&[code("src/runner.rs", 2), test_edit("tests/runner_test.rs"), unread("src/big.rs", 4, 0), unread("tests/big_test.rs", 1, 9)]);
-        assert!(r.reasons.contains(&"Couldn't read 2 files (too large to diff)".into()), "{:?}", r.reasons);
+        assert!(r.reasons.contains(&"Couldn't read 2 files (no diff available)".into()), "{:?}", r.reasons);
         assert!(r.reasons.iter().all(|x| !x.starts_with("Small change") && !x.contains("no code changed")), "{:?}", r.reasons);
         // A binary file (no lines) has no text to read: not counted
         let png = FileDiff { path: "site/a.png".into(), status: "modified".into(), additions: 0, deletions: 0, patch: None, previous_path: None };

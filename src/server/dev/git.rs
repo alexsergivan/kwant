@@ -23,6 +23,7 @@
 use super::facts::FileDiff;
 use super::source::{Commit, Person};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -388,6 +389,11 @@ async fn run_once(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>,
             Ok(())
         });
     }
+    // Windows has no setsid, nice or RLIMIT_FSIZE: git runs below normal priority with no
+    // console window, and a mirror's size is checked after each fetch (`Repo::cap`) instead of
+    // stopping the write at the cap.
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
     let mut child = cmd.spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { GitError::NoGit } else { GitError::Failed })?;
     let mut group = crate::drivers::cli::ProcessGroup::of(&child);
     let (so, se) = (child.stdout.take(), child.stderr.take());
@@ -411,6 +417,11 @@ async fn run_once(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>,
     }
 }
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+
 /// Whether a size-limited git (or the index-pack it ran) stopped at `RLIMIT_FSIZE`: killed by
 /// SIGXFSZ, or told "File too large" if that signal is ignored.
 fn hit_size_limit(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
@@ -423,7 +434,11 @@ fn hit_size_limit(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
     }
     let _ = status;
     let e = String::from_utf8_lossy(stderr).to_lowercase();
-    e.contains(&format!("died of signal {}", libc::SIGXFSZ)) || e.contains("file too large")
+    #[cfg(unix)]
+    if e.contains(&format!("died of signal {}", libc::SIGXFSZ)) {
+        return true;
+    }
+    e.contains("file too large")
 }
 
 /// [`read_capped`]; with `head`, the first `cap` bytes and `true` once it passes `cap` (and `r`
@@ -1290,14 +1305,9 @@ impl Repo {
                 f.deletions = d;
             }
         }
-        // Hunks: one section per file, in the same order; anything else and none are kept
+        // Hunks: each file takes its own section, found by path (a type change prints two)
         if let Ok(p) = self.git(&with(&["-p", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"])).await {
-            let patches = split_patches(&String::from_utf8_lossy(&p));
-            if patches.len() == files.len() {
-                for (f, p) in files.iter_mut().zip(patches) {
-                    f.patch = p;
-                }
-            }
+            match_patches(&mut files, split_patches(&String::from_utf8_lossy(&p)));
         }
         files.truncate(MAX_FILES);
         Ok(files)
@@ -1509,22 +1519,114 @@ fn parse_numstat(out: &[u8]) -> Vec<(u64, u64)> {
     out
 }
 
-/// A `-p` diff split per file: each file's hunks from its first `@@` (GitHub's `patch`), `None`
-/// for a binary file or one with no hunks (a mode change, an empty file).
-fn split_patches(text: &str) -> Vec<Option<String>> {
+/// One file's section of a `-p` diff: the paths on its `--- a/` and `+++ b/` lines (`None` for
+/// `/dev/null`, or when the section has no hunks and so no such lines) and its hunks from the
+/// first `@@` (GitHub's `patch`).
+#[derive(Debug, PartialEq)]
+struct Section {
+    old: Option<String>,
+    new: Option<String>,
+    patch: Option<String>,
+}
+
+/// A `-p` diff split per section. `patch` is `None` for a binary file or one with no hunks (a
+/// mode change, an empty file, a pure rename). A type change (symlink to file) prints two
+/// sections for one file: a delete, then an add.
+fn split_patches(text: &str) -> Vec<Section> {
     if text.trim().is_empty() {
         return Vec::new();
     }
     let Some(body) = text.strip_prefix("diff --git ") else { return Vec::new() };
     body.split("\ndiff --git ")
         .map(|sec| {
-            let hunks = sec.find("\n@@ ").map(|i| &sec[i + 1..])?;
-            if sec[..sec.len() - hunks.len()].contains("\nBinary files ") {
-                return None;
+            let none = Section { old: None, new: None, patch: None };
+            let Some(i) = sec.find("\n@@ ") else { return none };
+            let (head, hunks) = (&sec[..i], &sec[i + 1..]);
+            if head.contains("\nBinary files ") {
+                return none;
             }
-            Some(hunks.trim_end_matches('\n').to_string())
+            let side = |mark: &str, prefix: &str| head.lines().find_map(|l| l.strip_prefix(mark)).and_then(|n| patch_path(n, prefix));
+            Section { old: side("--- ", "a/"), new: side("+++ ", "b/"), patch: Some(hunks.trim_end_matches('\n').to_string()) }
         })
         .collect()
+}
+
+/// A path from a `---`/`+++` line, without its `a/` or `b/`: `None` for `/dev/null`. Git ends
+/// the line with a tab when the name has a space, and C-quotes a name with control characters,
+/// `"` or `\` (and bytes over 0x7f while `core.quotePath` is on).
+fn patch_path(name: &str, prefix: &str) -> Option<String> {
+    let name = name.strip_suffix('\t').unwrap_or(name);
+    if name == "/dev/null" {
+        return None;
+    }
+    let name = match name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) {
+        Some(q) => unquote_c(q)?,
+        None => name.to_string(),
+    };
+    name.strip_prefix(prefix).map(str::to_string)
+}
+
+/// Git's C-style quoting undone: `\\`, `\"`, `\t`, `\n` and the like, and `\ooo` octal bytes.
+fn unquote_c(q: &str) -> Option<String> {
+    let b = q.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'\\' {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let c = *b.get(i + 1)?;
+        i += 2;
+        out.push(match c {
+            b'a' => 7,
+            b'b' => 8,
+            b't' => b'\t',
+            b'n' => b'\n',
+            b'v' => 11,
+            b'f' => 12,
+            b'r' => b'\r',
+            b'0'..=b'3' => {
+                let d = b.get(i..i + 2)?;
+                if !d.iter().all(|x| (b'0'..=b'7').contains(x)) {
+                    return None;
+                }
+                i += 2;
+                (c - b'0') * 64 + (d[0] - b'0') * 8 + (d[1] - b'0')
+            }
+            other => other,
+        });
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Gives each file the hunks of its own section, matched by path, never by position: the `+++ b/`
+/// path for a modify, add, rename or copy, the `--- a/` path for a delete. A type change takes
+/// its add section's hunks (the new side, where review comments go), else its delete section's.
+/// A file with no section of its own, or whose section is binary or has no hunks, keeps `None`.
+fn match_patches(files: &mut [FileDiff], sections: Vec<Section>) {
+    let mut by_new: HashMap<String, String> = HashMap::new();
+    let mut deleted: HashMap<String, String> = HashMap::new();
+    for s in sections {
+        let Some(patch) = s.patch else { continue };
+        match (s.old, s.new) {
+            (_, Some(n)) => {
+                by_new.entry(n).or_insert(patch);
+            }
+            (Some(o), None) => {
+                deleted.entry(o).or_insert(patch);
+            }
+            (None, None) => {}
+        }
+    }
+    for f in files.iter_mut() {
+        f.patch = match f.status.as_str() {
+            "removed" => deleted.remove(&f.path),
+            "changed" => by_new.remove(&f.path).or_else(|| deleted.remove(&f.path)),
+            _ => by_new.remove(&f.path),
+        };
+    }
 }
 
 #[cfg(test)]
@@ -1538,6 +1640,7 @@ mod tests {
     /// the script then fails with "text file busy" (ETXTBSY), which `run` reports as `Failed`.
     /// So the bytes go to a draft, and a separate `cp` makes the real file: the only fd ever open
     /// for writing on it lives and dies in that `cp`, which has exited before anything runs it.
+    #[cfg(unix)]
     fn exe(path: &Path, text: &str) {
         let draft = path.with_extension("draft");
         std::fs::write(&draft, text).unwrap();
@@ -1833,6 +1936,8 @@ mod tests {
         assert!(available().await, "the test machine has git {MIN_VERSION:?} or newer");
     }
 
+    // Unix only: the fake git is a `#!/bin/sh` script, which Windows can't run as a program
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_slow_git_is_killed_with_its_children() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1850,6 +1955,8 @@ mod tests {
         assert!(!alive, "the grandchild was killed with the group");
     }
 
+    // Unix only: the fake git is a `#!/bin/sh` script, which Windows can't run as a program
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_token_reaches_git_by_environment_only() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2171,8 +2278,93 @@ mod tests {
         assert_eq!(files.iter().map(|f| (f.path.as_str(), f.status.as_str(), f.previous_path.as_deref())).collect::<Vec<_>>(), [("src/a.rs", "modified", None), ("new.txt", "added", None), ("new.rs", "renamed", Some("old.rs"))]);
         assert_eq!(parse_numstat(b"3\t1\tsrc/a.rs\0-\t-\tnew.txt\x002\t0\t\0old.rs\0new.rs\0"), [(3, 1), (0, 0), (2, 0)]);
         let p = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/y b/y\nBinary files a/y and b/y differ\ndiff --git a/z b/z\nold mode 100644\nnew mode 100755\n";
-        assert_eq!(split_patches(p), [Some("@@ -1 +1 @@\n-a\n+b".to_string()), None, None]);
+        let sec = |old: Option<&str>, new: Option<&str>, patch: Option<&str>| Section { old: old.map(Into::into), new: new.map(Into::into), patch: patch.map(Into::into) };
+        assert_eq!(split_patches(p), [sec(Some("x"), Some("x"), Some("@@ -1 +1 @@\n-a\n+b")), sec(None, None, None), sec(None, None, None)]);
         assert!(split_patches("").is_empty());
+        // A name with a space ends in a tab; an odd one is C-quoted, prefix and all
+        let p = "diff --git a/sp ace b/sp ace\n--- a/sp ace\t\n+++ b/sp ace\t\n@@ -1 +1 @@\n-a\n+b\ndiff --git \"a/q\\\"t\\303\\251\" \"b/q\\\"t\\303\\251\"\ndeleted file mode 100644\n--- \"a/q\\\"t\\303\\251\"\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n";
+        assert_eq!(split_patches(p), [sec(Some("sp ace"), Some("sp ace"), Some("@@ -1 +1 @@\n-a\n+b")), sec(Some("q\"t\u{e9}"), None, Some("@@ -1 +0,0 @@\n-a"))]);
+        assert_eq!(unquote_c("a\\tb\\\\c\\nd"), Some("a\tb\\c\nd".into()));
+        assert_eq!(unquote_c("bad\\9"), Some("bad9".into()), "an unknown escape is the character itself");
+        assert_eq!(unquote_c("cut\\30"), None);
+        assert_eq!(unquote_c("cut\\"), None);
+    }
+
+    /// Rigel's F-1 on #447: patches were matched to files by position, and dropped when the counts
+    /// differed. Now each file finds its own section by path, so a section too many or too few
+    /// costs only the file it belongs to.
+    #[test]
+    fn patches_are_matched_to_files_by_path() {
+        let file = |path: &str, status: &str| FileDiff { path: path.into(), status: status.into(), additions: 1, deletions: 1, patch: None, previous_path: None };
+        let sec = |old: Option<&str>, new: Option<&str>, patch: Option<&str>| Section { old: old.map(Into::into), new: new.map(Into::into), patch: patch.map(Into::into) };
+        let mut files = vec![file("gone.rs", "removed"), file("link", "changed"), file("new.rs", "renamed"), file("lost.rs", "modified"), file("mode.sh", "modified"), file("back", "changed")];
+        match_patches(
+            &mut files,
+            vec![
+                sec(Some("gone.rs"), None, Some("@@ gone")),
+                // A type change: the delete, then the add; the add (the new side) wins
+                sec(Some("link"), None, Some("@@ old link")),
+                sec(None, Some("link"), Some("@@ new link")),
+                sec(Some("old.rs"), Some("new.rs"), Some("@@ renamed")),
+                // mode.sh: a mode change has no hunks
+                sec(None, None, None),
+                // A type change whose new side is binary: the old side's hunks
+                sec(Some("back"), None, Some("@@ old back")),
+                sec(None, None, None),
+                // A section for no file in the list is ignored
+                sec(Some("other.rs"), Some("other.rs"), Some("@@ other")),
+            ],
+        );
+        let got: Vec<_> = files.iter().map(|f| (f.path.as_str(), f.patch.as_deref())).collect();
+        assert_eq!(got, [("gone.rs", Some("@@ gone")), ("link", Some("@@ new link")), ("new.rs", Some("@@ renamed")), ("lost.rs", None), ("mode.sh", None), ("back", Some("@@ old back"))]);
+        // A delete never takes an add's hunks, nor a modify a delete's
+        let mut files = vec![file("a", "removed"), file("b", "modified")];
+        match_patches(&mut files, vec![sec(None, Some("a"), Some("@@ a")), sec(Some("b"), None, Some("@@ b"))]);
+        assert!(files.iter().all(|f| f.patch.is_none()), "{files:?}");
+    }
+
+    /// F-1 with real git: a symlink turned into a file prints two `-p` sections for one `T` file.
+    /// The edited text file next to it keeps its patch, the type-changed file gets its new side,
+    /// and the card has no unread reason. A rename next to a modify still matches too.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_type_change_keeps_every_files_patch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let w = tmp.path().join("work");
+        std::fs::create_dir_all(&w).unwrap();
+        sh(&w, &["init", "-q"]);
+        write(&w, "a.txt", b"hi\n");
+        std::os::unix::fs::symlink("a.txt", w.join("link")).unwrap();
+        write(&w, "old name.rs", b"fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n");
+        write(&w, "src/m.rs", b"fn m() {}\n");
+        let base = commit_all(&w, "Base");
+        std::fs::remove_file(w.join("link")).unwrap();
+        write(&w, "link", b"real file now\n");
+        write(&w, "a.txt", b"hi\nmore\n");
+        let head = commit_all(&w, "Tiny change");
+        let repo = Repo::local(&w, &tmp.path().join("data")).await.unwrap();
+        let files = repo.diff(Some(&base), &head).await.unwrap();
+        let got: Vec<_> = files.iter().map(|f| (f.path.as_str(), f.status.as_str(), f.additions, f.deletions, f.patch.as_deref())).collect();
+        assert_eq!(got, [("a.txt", "modified", 1, 0, Some("@@ -1 +1,2 @@\n hi\n+more")), ("link", "changed", 1, 1, Some("@@ -0,0 +1 @@\n+real file now"))]);
+        assert!(super::super::risk::unread_files(&files).is_empty());
+        let r = super::super::risk::assess(&super::super::risk::Inputs { files: &files, ..Default::default() });
+        assert!(r.reasons.iter().all(|x| !x.starts_with("Couldn't read")), "{:?}", r.reasons);
+        assert_eq!(r.level, super::super::risk::Level::Low, "{:?}", r.reasons);
+
+        // A rename (with a space in its name) next to a modify, and a delete
+        sh(&w, &["mv", "old name.rs", "new name.rs"]);
+        write(&w, "new name.rs", b"fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\nfn five() {}\n");
+        write(&w, "src/m.rs", b"fn m() { 1 }\n");
+        std::fs::remove_file(w.join("a.txt")).unwrap();
+        let next = commit_all(&w, "Rename and edit");
+        let files = repo.diff(Some(&head), &next).await.unwrap();
+        let by = |p: &str| files.iter().find(|f| f.path == p).unwrap_or_else(|| panic!("{p}: {files:?}")).clone();
+        assert_eq!(files.len(), 3, "{files:?}");
+        assert_eq!(by("a.txt").status, "removed");
+        assert_eq!(by("a.txt").patch.as_deref(), Some("@@ -1,2 +0,0 @@\n-hi\n-more"));
+        assert_eq!((by("new name.rs").status.as_str(), by("new name.rs").previous_path.as_deref()), ("renamed", Some("old name.rs")));
+        assert_eq!(by("new name.rs").patch.as_deref(), Some("@@ -2,3 +2,4 @@ fn one() {}\n fn two() {}\n fn three() {}\n fn four() {}\n+fn five() {}"));
+        assert_eq!(by("src/m.rs").patch.as_deref(), Some("@@ -1 +1 @@\n-fn m() {}\n+fn m() { 1 }"));
     }
 
     // -----------------------------------------------------------------------------------------
@@ -2181,6 +2373,8 @@ mod tests {
 
     /// F1 (probe P1): an ssh remote runs `ssh`, never an empty command, whatever the repo's own
     /// config says. A fake `ssh` first on PATH logs what git asked it for.
+    // Unix only: the fake git is a `#!/bin/sh` script, which Windows can't run as a program
+    #[cfg(unix)]
     #[tokio::test]
     async fn ssh_remotes_run_ssh_and_never_the_repos_own_command() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2244,6 +2438,8 @@ mod tests {
     }
 
     /// F2 (probe P3, setup 2): a `.git` symlink is refused.
+    // Unix only: making a symlink on Windows needs admin rights or Developer Mode
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_git_symlink_is_refused() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2269,6 +2465,8 @@ mod tests {
 
     /// F2: the same reach by other routes: a `.git` directory with a `commondir`, or with its
     /// objects or refs a symlink to another repo's.
+    // Unix only: making a symlink on Windows needs admin rights or Developer Mode
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_git_dir_borrowing_another_repos_objects_or_refs_is_refused() {
         let tmp = tempfile::tempdir().unwrap();

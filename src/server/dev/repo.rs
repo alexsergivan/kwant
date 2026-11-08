@@ -986,6 +986,8 @@ mod tests {
         }
     }
 
+    // Unix only: making a symlink on Windows needs admin rights or Developer Mode
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_team_folder_whose_git_is_a_symlink_to_another_repo_is_not_detected() {
         let tmp = tempfile::tempdir().unwrap();

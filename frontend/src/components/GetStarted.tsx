@@ -8,6 +8,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { TemplateGlyph } from './TeamPreviewSheet';
 import { NewKeyAccountForm } from './EngineAccounts';
 import { useReadyTeams } from './ReadyTeams';
+import { ImportDialog } from './ImportDialog';
 import type { WelcomeBot } from './FirstRunWelcome';
 import { useMedia } from '../useMedia';
 import { PHONE_QUERY } from '../layout';
@@ -34,6 +35,7 @@ import {
   heroText,
   installFailView,
   installable,
+  isImported,
   isKept,
   isLive,
   isSignInUrl,
@@ -750,8 +752,26 @@ const KeyPanel: React.FC<{ phone: boolean; onAdded: () => void }> = ({ phone, on
 
 // ------------------------------------------------------------------ step 3: pick a team
 
-const TeamStep: React.FC<{ phone: boolean; onKeep: () => void; onPicked: () => void }> = ({ phone, onKeep, onPicked }) => {
+const TeamStep: React.FC<{
+  phone: boolean;
+  spaceName: string;
+  onKeep: () => void;
+  onPicked: () => void;
+  /** After the import dialog closes with at least one import done: step 3 is done. */
+  onImported: () => void;
+  /** Each Import or Undo inside the dialog, so the sidebar loads the new bots. */
+  onImportChanged?: () => void;
+}> = ({ phone, spaceName, onKeep, onPicked, onImported, onImportChanged }) => {
   const rt = useReadyTeams();
+  const [importing, setImporting] = useState(false);
+  const imported = useRef(false);
+  const importTile = useRef<HTMLButtonElement>(null);
+  const closeImport = () => {
+    setImporting(false);
+    // An import that went in (even if undone in the dialog) counts; Cancel or Close leaves step 3 as it was.
+    if (imported.current) onImported();
+    else window.setTimeout(() => importTile.current?.focus(), 0);
+  };
   const templates = rt?.available ? (rt.templates ?? []) : [];
   const tile = `w-full rounded-xl border text-left ${phone ? 'min-h-16 p-3' : 'p-3'} ${FOCUS}`;
   return (
@@ -795,7 +815,37 @@ const TeamStep: React.FC<{ phone: boolean; onKeep: () => void; onPicked: () => v
             </span>
           </button>
         </li>
+        <li>
+          <button
+            ref={importTile}
+            type="button"
+            data-import-bots
+            aria-haspopup="dialog"
+            aria-label="Bring your bots: from Grok Bot, ChatGPT or Claude, or from a file. You check a preview first. Import"
+            onClick={() => {
+              imported.current = false;
+              setImporting(true);
+            }}
+            className={`${tile} h-full flex flex-col gap-1 border-dashed border-zinc-600 bg-transparent hover:border-zinc-500`}
+          >
+            <span className="text-sm font-semibold text-zinc-100">Bring your bots</span>
+            <span className="text-[12.5px] leading-[18px] text-zinc-300">From Grok Bot, ChatGPT or Claude, or from a file. You check a preview first.</span>
+            <span className="mt-auto text-right text-xs text-sky-300" aria-hidden="true">
+              Import ›
+            </span>
+          </button>
+        </li>
       </ul>
+      {importing && (
+        <ImportDialog
+          spaceName={spaceName}
+          onClose={closeImport}
+          onChanged={() => {
+            imported.current = true;
+            onImportChanged?.();
+          }}
+        />
+      )}
     </div>
   );
 };
@@ -813,9 +863,13 @@ export interface GetStartedProps {
   loginApiOverride?: LoginApi;
   /** For tests and shots: the address it's opened on. */
   hostOverride?: string | null;
+  /** The space's name, for the import dialog's title. */
+  spaceName?: string;
+  /** After an Import or Undo from "Bring your bots": new bots, teams and team chats. */
+  onImported?: () => void;
 }
 
-export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, reloadEngines, onDismissed, loginApiOverride, hostOverride }) => {
+export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, reloadEngines, onDismissed, loginApiOverride, hostOverride, spaceName, onImported }) => {
   const api = loginApiOverride ?? defaultLoginApi;
   const phone = useMedia(PHONE_QUERY);
   useStartVersion();
@@ -831,6 +885,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
   const [resumed] = useState(() => !!chosen && !(engines && tileStatus(engines, chosen) === 'signed_in'));
   const v: StepsView = stepsView({ engines, chosen, teamEarly, changing });
   const kept = isKept(space);
+  const importedHere = isImported(space);
   const titleId = useId();
   const stepIds = [useId(), useId(), useId()];
   const cardRef = useRef<HTMLElement>(null);
@@ -892,6 +947,13 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
       onDismissed();
     } else markStarted(space, 'kept');
   };
+  // "Bring your bots": like Keep, the card goes once step 2 is done; before that step 3 reads done.
+  const importedBots = () => {
+    if (v.done2) {
+      dismiss(space);
+      onDismissed();
+    } else markStarted(space, 'imported');
+  };
 
   // §13: focus doesn't jump unless it was inside the step that closed; then it goes to the new heading.
   const lastOpen = useRef(v.open);
@@ -906,7 +968,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
   const name = choice ? choiceName(choice) : '';
   const stepTitle2 = choice === 'key' ? 'Add your key' : 'Sign in';
   const slow = !!track && track.state === 'running' && Date.now() - track.startedAt >= SLOW_S * 1000;
-  const done3 = kept;
+  const done3 = kept || importedHere;
   const row = phone ? 'px-3.5 py-3' : 'px-[18px] py-3.5';
   const body = phone ? 'pt-2.5' : 'pl-[33px] pt-2.5';
   const engineOf = (id: string) => engines?.find((e) => e.id === id);
@@ -1035,7 +1097,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
             3,
             'Pick a team',
             v.open === 3 && !done3 ? 'open' : done3 ? 'done' : 'todo',
-            done3 ? 'Starter bots' : undefined,
+            done3 ? (importedHere ? 'Your imported bots' : 'Starter bots') : undefined,
             v.open === 2 && slow && !done3 ? (
               <Btn phone={phone} kind="link" className="ml-auto shrink-0" onClick={() => setTeamEarly(true)}>
                 Open
@@ -1044,7 +1106,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
           )}
           {v.open === 3 && !done3 ? (
             <div className={`${body} gs-open`}>
-              <TeamStep phone={phone} onKeep={keep} onPicked={() => undefined} />
+              <TeamStep phone={phone} spaceName={spaceName ?? 'this space'} onKeep={keep} onPicked={() => undefined} onImported={importedBots} onImportChanged={onImported} />
             </div>
           ) : null}
         </div>

@@ -336,6 +336,141 @@ test('card: already signed in → hero D2, steps 1–2 done with Change, step 3 
   r2.done();
 });
 
+// ------------------------------------------------------------------ step 3: Bring your bots (0.7.7)
+
+/** Fake import routes: prompts, a one-bot preview, apply. Records each call. */
+function importRoutes() {
+  const calls = [];
+  const bundle = { format: 'kwant.bundle/1', source: { kind: 'grok', label: 'Grok' }, bots: [{ ref: 'g', name: 'Grokky', title: '', persona_prompt: 'Hi.', memories: [], skills: [], routines: [] }], teams: [], skills: [], omitted: [] };
+  const record = { id: 'imp1', space_id: 'r', source_kind: 'grok', status: 'applied', created: { kwants: [{ ref: 'g', id: 'k1', name: 'Grokky' }], skills: [], routines: [], teams: [], channels: [], memories: 0 }, created_at: '', undone_at: null };
+  const json = (b) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const fetch = async (url, init = {}) => {
+    const u = String(url);
+    calls.push([init.method ?? 'GET', u]);
+    if (u === '/api/import/prompts') return json([{ id: 'grok', label: 'Grok', where_to_send: 'Open your Grok bot.', prompt: 'Export yourself.' }]);
+    if (u.startsWith('/api/import/preview')) return json({ bundle, warnings: [], dropped: [], problems: [], renames: [], can_apply: true });
+    if (u === '/api/import/apply') return json({ import: record, warnings: [], dropped: [], renames: [] });
+    return new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } });
+  };
+  return { calls, fetch };
+}
+const byText = (root, re) => [...root.querySelectorAll('button')].find((b) => re.test(b.textContent));
+function typeInto(el, value) {
+  Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set.call(el, value);
+  el.dispatchEvent(new window.Event('input', { bubbles: true }));
+}
+function mountStep3(space, extra = {}) {
+  localStorage.clear();
+  return mount(h(m.GetStarted, { space, spaceName: 'Home', bots: [{ id: 'a', name: 'Architect' }], engines: [ready('claude')], reloadEngines() {}, onDismissed() {}, hostOverride: null, ...extra }));
+}
+
+test('step 3: "Bring your bots" sits next to Keep the starter bots and opens the importer for this space', async () => {
+  const real = g.fetch;
+  const r0 = importRoutes();
+  g.fetch = g.window.fetch = r0.fetch;
+  try {
+    const r = mountStep3('imp-open');
+    await settle();
+    const tile = r.host.querySelector('[data-import-bots]');
+    assert.ok(tile, 'the tile is in step 3');
+    assert.equal(tile.closest('ul'), r.host.querySelector('[data-keep-starter]').closest('ul'));
+    assert.match(tile.textContent, /^Bring your botsFrom Grok Bot, ChatGPT or Claude, or from a file\. You check a preview first\./);
+    assert.match(tile.getAttribute('aria-label'), /^Bring your bots: /);
+    assert.equal(tile.getAttribute('aria-haspopup'), 'dialog');
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    tile.click();
+    await settle();
+    const dlg = document.querySelector('[role="dialog"]');
+    assert.ok(dlg, 'the import dialog opens');
+    assert.match(dlg.textContent, /Import bots into Home/);
+    assert.ok(byText(dlg, /^Grok/), 'the sources load');
+    assert.ok(r0.calls.some(([, u]) => u === '/api/import/prompts'));
+    r.done();
+  } finally {
+    g.fetch = g.window.fetch = real;
+  }
+});
+
+test('step 3: closing the importer without importing leaves step 3 open and focus on the tile', async () => {
+  const real = g.fetch;
+  g.fetch = g.window.fetch = importRoutes().fetch;
+  try {
+    let dismissed = 0;
+    const r = mountStep3('imp-cancel', { onDismissed: () => dismissed++ });
+    await settle();
+    const tile = r.host.querySelector('[data-import-bots]');
+    tile.focus();
+    tile.click();
+    await settle();
+    document.querySelector('[role="dialog"] button[aria-label="Close"]').click();
+    await settle();
+    await sleep(5);
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    assert.equal(dismissed, 0);
+    assert.equal(m.isDismissed('imp-cancel'), false);
+    assert.equal(m.isImported('imp-cancel'), false);
+    assert.equal([...r.host.querySelectorAll('h3')][2].textContent, 'Step 3 of 3, Pick a team, open');
+    assert.equal(document.activeElement, r.host.querySelector('[data-import-bots]'));
+    r.done();
+  } finally {
+    g.fetch = g.window.fetch = real;
+  }
+});
+
+test('step 3: a successful import completes step 3 once the dialog closes; an undo afterwards does not bring the card back', async () => {
+  const real = g.fetch;
+  const r0 = importRoutes();
+  g.fetch = g.window.fetch = r0.fetch;
+  try {
+    let dismissed = 0;
+    let changed = 0;
+    const r = mountStep3('imp-done', { onDismissed: () => dismissed++, onImported: () => changed++ });
+    await settle();
+    r.host.querySelector('[data-import-bots]').click();
+    await settle();
+    let dlg = document.querySelector('[role="dialog"]');
+    byText(dlg, /^Grok/).click();
+    await settle();
+    typeInto(document.getElementById('import-reply'), '{"name":"Grokky"}');
+    await settle();
+    byText(dlg, /Preview/).click();
+    await settle();
+    dlg = document.querySelector('[role="dialog"]');
+    const go = byText(dlg, /^\s*Import 1 bot/);
+    assert.ok(go, dlg.textContent);
+    go.click();
+    await settle();
+    assert.ok(r0.calls.some(([meth, u]) => meth === 'POST' && u === '/api/import/apply'));
+    assert.equal(changed, 1, 'the sidebar reloads after the import');
+    // Still open on the Done view (with Undo); the card waits for the dialog to close.
+    assert.equal(dismissed, 0);
+    assert.equal(m.isDismissed('imp-done'), false);
+    dlg = document.querySelector('[role="dialog"]');
+    byText(dlg, /^Done$/).click();
+    await settle();
+    // Step 2 is done here, so like Keep the starter bots the card goes for good.
+    assert.equal(dismissed, 1);
+    assert.equal(m.isDismissed('imp-done'), true);
+    assert.equal(m.showCard({ dismissed: m.isDismissed('imp-done'), canRun: true, generalMessages: 0, teams: 1, started: m.wasStarted('imp-done') }), false);
+    r.done();
+  } finally {
+    g.fetch = g.window.fetch = real;
+  }
+});
+
+test('step 3: imported before step 2 is done → step 3 reads done with "Your imported bots"; Open never undoes it', () => {
+  localStorage.clear();
+  m.markStarted('imp-early', 'imported');
+  assert.equal(m.isImported('imp-early'), true);
+  assert.equal(m.wasStarted('imp-early'), true);
+  m.markStarted('imp-early');
+  assert.equal(m.isImported('imp-early'), true, 'a later visit does not reset it');
+  const r = mount(h(m.GetStarted, { space: 'imp-early', bots: [{ id: 'a', name: 'Architect' }], engines: [signedOut('claude')], reloadEngines() {}, onDismissed() {}, hostOverride: null }));
+  const heads = [...r.host.querySelectorAll('h3')].map((x) => x.textContent);
+  assert.equal(heads[2], 'Step 3 of 3, Pick a team, doneYour imported bots');
+  r.done();
+});
+
 test('card: step 1 tiles are a radiogroup; arrows move, a tap starts at once; server shows the host', async () => {
   localStorage.clear();
   const r = mount(h(m.GetStarted, { space: 't1', bots: [], engines: [engine('claude'), signedOut('codex')], reloadEngines() {}, onDismissed() {}, hostOverride: 'vps.example.net' }));

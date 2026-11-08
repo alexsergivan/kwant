@@ -96,7 +96,7 @@ proxy. The Claude sandbox's read policy in practice.
 ## Open questions for Oleks
 1. Ship the first slice for Linux only and add Mac after a Docker Desktop test on your Mac? *Default: yes.*
 2. Is a 421 MB one-time image pull acceptable, or should the CLIs download on first use? *Default: ship in the image.*
-3. Should vm mode's isolated Claude become the default once proven, or stay opt-in? *Default: opt-in for 0.7.8.*
+3. Should vm mode's isolated Claude become the default once proven, or stay opt-in? *Default: opt-in for 0.7.7.*
 
 ## Slice 1 as built (branch `lin-078-agents-in-vm`)
 

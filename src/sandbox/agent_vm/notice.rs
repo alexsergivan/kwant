@@ -57,13 +57,19 @@ pub mod body {
     }
 }
 
+/// The safety line shared by notices 1–3 and the rows below: nothing ran outside the VM.
+pub const SAFETY: &str = "While Run Claude inside the VM is on, Claude never runs outside it, so nothing ran on this computer.";
+
 /// The chat text saved with a `turn_isolation_failed` notice that stopped Claude before it
-/// started (Mira's notices 1, 2, 2b, 2c, 4, 6 and the unknown-code row). The card is drawn from
-/// the meta; this is what a client without the card, and the chat history, show.
-pub fn start_text(bot: &str, reason: &str, detail: &str) -> String {
-    const SAFETY: &str = "While Run Claude inside the VM is on, Claude never runs outside it, so nothing ran on this computer.";
+/// started (Mira's notices 1, 2, 2b, 2c, 4 and the rows of ui-check-446 fix 4). The card is drawn
+/// from the meta; this is what a client without the card, and the chat history, show. Every
+/// refusal code kwant sends has its own row ([`super::codes::ALL`]); the "Something went wrong"
+/// row is only for a code a newer kwant adds. `unsafe_folder` with its folder is
+/// [`unsafe_folder_text`].
+pub fn start_text(bot: &str, reason: &str) -> String {
     let couldnt_start = format!("{bot} didn't reply: Claude couldn't start inside the VM.");
     let not_ready = format!("{bot} didn't reply: Claude's VM isn't ready yet.");
+    let this_folder = format!("{bot} didn't reply: Claude can't use this folder inside the VM.");
     match reason {
         "docker_unavailable" => format!("{couldnt_start} Docker isn't running on this computer. Start Docker, then Retry. {SAFETY}"),
         "preparing" => format!("{not_ready} The one-time download is still running. Retry when it's done. {SAFETY}"),
@@ -72,14 +78,83 @@ pub fn start_text(bot: &str, reason: &str, detail: &str) -> String {
         }
         "relay_down" => format!("{couldnt_start} kwant couldn't connect Claude to your sign-in. Restart kwant, then Retry. {SAFETY}"),
         "sign_in_expired" => format!("{bot} didn't reply: your Claude sign-in has expired. Sign in again in Settings › This space › Accounts, then Retry."),
+        "no_credential" => format!(
+            "{bot} didn't reply: there's no Claude sign-in for it on this computer. Sign in to Claude in Settings › This space › Accounts, then Retry."
+        ),
+        "host_is_root" => format!(
+            "{couldnt_start} kwant is running as root, so Claude can't run inside the VM as you. Start kwant as your normal user, then Retry. {SAFETY}"
+        ),
+        "folder_name_unsupported" => format!(
+            "{this_folder} The folder's name has characters kwant can't pass to the VM, like a line break. Rename the folder, then Retry. Nothing ran."
+        ),
+        "folder_record_failed" => format!(
+            "{couldnt_start} kwant couldn't note that this folder is used inside the VM, so it didn't start Claude. Retry; if it keeps happening, restart kwant. {SAFETY}"
+        ),
+        "container_failed" => format!("{couldnt_start} The VM couldn't start Claude. Retry; if it keeps happening, restart Docker. {SAFETY}"),
+        "unsupported_os" => format!(
+            "{couldnt_start} Isolation is only on Linux for now. Turn off Run Claude inside the VM to run Claude on this computer. {SAFETY}"
+        ),
+        // Without its folder (Mira's "missing or unknown" row)
         reason::UNSAFE_FOLDER => format!(
-            "{bot} didn't reply: Claude can't use this folder inside the VM. {}. Pick a project folder instead, then Retry. Nothing ran.",
-            detail.trim_end_matches('.')
+            "{this_folder} This folder holds your home folder or sign-ins, so kwant won't share it with the VM. Pick a project folder instead, then Retry. Nothing ran."
         ),
         code => format!(
             "{couldnt_start} Something went wrong ({code}). Retry, or turn off Run Claude inside the VM to run Claude on this computer. {SAFETY}"
         ),
     }
+}
+
+/// The chat text saved with notice 6 (`unsafe_folder`), from Mira's two tables in `design/ui.md`:
+/// one sentence for `kind`, one for where the folder came from. `home` shortens the folder.
+pub fn unsafe_folder_text(bot: &str, kind: UnsafeKind, folder: &FolderInfo, home: Option<&Path>) -> String {
+    let shown = tilde(&folder.folder, home);
+    let team = folder.team.as_ref().map(|(_, name)| name.as_str());
+    let first = format!("{bot} didn't reply: Claude can't use this folder inside the VM.");
+    let why = match kind {
+        UnsafeKind::Home => format!("{shown} is your home folder. Inside the VM, Claude would see all your files and sign-ins."),
+        UnsafeKind::ContainsHome | UnsafeKind::Root => {
+            format!("{shown} holds your home folder. Inside the VM, Claude would see all your files and sign-ins.")
+        }
+        UnsafeKind::SignIns => format!(
+            "{shown} holds sign-ins, like your SSH keys or Claude, Codex or Grok sign-in, so kwant won't share it with the VM."
+        ),
+        UnsafeKind::KwantData => format!("{shown} holds kwant's own data, including your sign-ins, so kwant won't share it with the VM."),
+        UnsafeKind::Docker => format!("{shown} holds Docker's control socket, which would let Claude out of the VM."),
+        // No path: kwant's own path means nothing to people
+        UnsafeKind::SharedFolder => {
+            let give = match team {
+                Some(t) => format!("Give @{t} its own folder"),
+                None => "Give this team its own folder".into(),
+            };
+            return format!(
+                "{first} This is the folder teams share when they don't have their own. If Claude used it inside the VM, Codex and Grok bots in every team would be kept out of it. {give}, then Retry. Nothing ran."
+            );
+        }
+    };
+    let pick = match (folder.from, team) {
+        (FolderFrom::Team, Some(t)) => format!("Pick a project folder for @{t} instead"),
+        (FolderFrom::Goal, _) => "Pick a project folder for this goal instead".into(),
+        _ => "Pick a project folder instead".into(),
+    };
+    format!("{first} {why} {pick}, then Retry. Nothing ran.")
+}
+
+/// `folder` with `home` (the person's home folder) shortened to `~`.
+pub fn tilde(folder: &str, home: Option<&Path>) -> String {
+    let Some(home) = home.map(|h| h.to_string_lossy()).filter(|h| h.len() > 1) else { return folder.to_string() };
+    let home = home.trim_end_matches('/');
+    match folder.strip_prefix(home) {
+        Some("") => "~".into(),
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => folder.to_string(),
+    }
+}
+
+/// The text saved when an isolated reply stopped partway (notice 3).
+pub fn mid_turn_text(bot: &str) -> String {
+    format!(
+        "{bot}'s reply stopped partway: Claude lost its connection inside the VM. What it changed before that is in the task folder, and Undo still works. Retry to start the reply again. {SAFETY}"
+    )
 }
 
 /// The chat text saved with notice 7 (`folder_used_by_isolated_bot`). `engine`: `codex` or `grok`.
@@ -227,15 +302,81 @@ mod tests {
 
     #[test]
     fn saved_texts_use_miras_first_lines_and_never_claim_a_host_run() {
-        assert!(start_text("Ada", "docker_unavailable", "").starts_with("Ada didn't reply: Claude couldn't start inside the VM. Docker isn't running"));
-        assert!(start_text("Ada", "preparing", "").starts_with("Ada didn't reply: Claude's VM isn't ready yet."));
-        assert!(start_text("Ada", "sign_in_expired", "").contains("Settings › This space › Accounts"));
-        assert!(start_text("Ada", "container_failed", "").contains("Something went wrong (container_failed)"));
-        for r in ["docker_unavailable", "preparing", "download_failed", "relay_down", "container_failed"] {
-            assert!(start_text("Ada", r, "").contains("nothing ran on this computer"), "{r}");
+        assert!(start_text("Ada", "docker_unavailable").starts_with("Ada didn't reply: Claude couldn't start inside the VM. Docker isn't running"));
+        assert!(start_text("Ada", "preparing").starts_with("Ada didn't reply: Claude's VM isn't ready yet."));
+        assert!(start_text("Ada", "sign_in_expired").contains("Settings › This space › Accounts"));
+        for r in ["docker_unavailable", "preparing", "download_failed", "relay_down", "container_failed", "host_is_root", "folder_record_failed", "unsupported_os"] {
+            assert!(start_text("Ada", r).ends_with(SAFETY), "{r}");
         }
+        // A code from a newer kwant still reads, naming the code
+        assert!(start_text("Ada", "brand_new").contains("Something went wrong (brand_new)"));
+        // Notice 3 has the safety line too (ui-check-446 fix 10)
+        let mid = mid_turn_text("Ada");
+        assert!(mid.starts_with("Ada's reply stopped partway: Claude lost its connection inside the VM."), "{mid}");
+        assert!(mid.ends_with(SAFETY), "{mid}");
         let used = folder_used_text("Rex", "codex");
         assert!(used.starts_with("Rex didn't reply: Codex won't run in a folder Claude used inside the VM."), "{used}");
+    }
+
+    #[test]
+    fn every_refusal_code_has_its_own_words() {
+        // ui-check-446 fix 4: no code kwant sends falls to "Something went wrong (code)"
+        for &code in super::super::codes::ALL {
+            if code == reason::FOLDER_USED_BY_ISOLATED_BOT {
+                continue; // folder_used_text
+            }
+            let t = start_text("Ada", code);
+            assert!(!t.contains("Something went wrong"), "{code}: {t}");
+            assert!(t.starts_with("Ada didn't reply:"), "{code}: {t}");
+            for never in ["kwnt", "in the computer", "shared with the computer"] {
+                assert!(!t.contains(never), "{code}: {t}");
+            }
+        }
+        let t = start_text("Ada", "no_credential");
+        assert_eq!(
+            t,
+            "Ada didn't reply: there's no Claude sign-in for it on this computer. Sign in to Claude in Settings › This space › Accounts, then Retry."
+        );
+        assert!(start_text("Ada", "host_is_root").contains("kwant is running as root"));
+        assert!(start_text("Ada", "folder_name_unsupported").contains("like a line break. Rename the folder, then Retry. Nothing ran."));
+    }
+
+    #[test]
+    fn the_unsafe_folder_text_says_each_thing_once_with_miras_words() {
+        let home = Path::new("/home/oleks");
+        let bot = FolderInfo::new(Path::new("/home/oleks"), FolderFrom::Bot);
+        let t = unsafe_folder_text("Ada", UnsafeKind::Home, &bot, Some(home));
+        assert_eq!(
+            t,
+            "Ada didn't reply: Claude can't use this folder inside the VM. ~ is your home folder. Inside the VM, Claude would see all your files and sign-ins. Pick a project folder instead, then Retry. Nothing ran."
+        );
+        assert_eq!(t.matches("Pick a project folder").count(), 1, "{t}");
+        assert!(!t.contains("the computer"), "{t}");
+        // A team's folder names the team; the path is shortened under home
+        let team = FolderInfo::team(Path::new("/home/oleks/.ssh"), "t_1", "Checkout");
+        let t = unsafe_folder_text("Ada", UnsafeKind::SignIns, &team, Some(home));
+        assert!(t.contains("~/.ssh holds sign-ins, like your SSH keys"), "{t}");
+        assert!(t.ends_with("Pick a project folder for @Checkout instead, then Retry. Nothing ran."), "{t}");
+        // kwant's own shared folder: no path at all
+        let shared = FolderInfo::team(Path::new("/home/oleks/.kwnt/workspace"), "t_1", "Checkout");
+        let t = unsafe_folder_text("Ada", UnsafeKind::SharedFolder, &shared, Some(home));
+        assert!(!t.contains("/") && !t.contains('~'), "{t}");
+        assert!(t.ends_with("Give @Checkout its own folder, then Retry. Nothing ran."), "{t}");
+        let alone = FolderInfo::new(Path::new("/home/oleks/.kwnt/workspace"), FolderFrom::Bot);
+        assert!(unsafe_folder_text("Ada", UnsafeKind::SharedFolder, &alone, Some(home)).contains("Give this team its own folder, then Retry."));
+        for (kind, words) in [
+            (UnsafeKind::Root, "/ holds your home folder."),
+            (UnsafeKind::KwantData, "holds kwant's own data, including your sign-ins"),
+            (UnsafeKind::Docker, "holds Docker's control socket, which would let Claude out of the VM."),
+        ] {
+            let f = FolderInfo::new(Path::new(if kind == UnsafeKind::Root { "/" } else { "/srv/x" }), FolderFrom::Bot);
+            let t = unsafe_folder_text("Ada", kind, &f, Some(home));
+            assert!(t.contains(words), "{t}");
+            assert_eq!(t.matches("Pick a project folder").count(), 1, "{t}");
+        }
+        assert_eq!(tilde("/home/oleksandr/x", Some(home)), "/home/oleksandr/x", "only whole folder names");
+        assert_eq!(tilde("/home/oleks/site", Some(Path::new("/home/oleks/"))), "~/site");
+        assert_eq!(tilde("/srv", None), "/srv");
     }
 
     #[test]

@@ -515,8 +515,11 @@ async fn scratch_checks_run_file_checks_and_mark_network_ones_not_replayable() {
     let n = kwnt::server::missions::checkpoints::materialize_first(&e.state, &tid, &scratch).await.unwrap();
     assert_eq!(n, 1);
     assert_eq!(std::fs::read_to_string(scratch.join("NOTES.md")).unwrap(), "v1.2: export fixed");
-    use std::os::unix::fs::PermissionsExt;
-    assert_eq!(std::fs::metadata(&scratch).unwrap().permissions().mode() & 0o777, 0o700);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&scratch).unwrap().permissions().mode() & 0o777, 0o700);
+    }
 
     let checks = vec![
         json!({"kind": "file_exists", "spec": {"path": "NOTES.md"}}),

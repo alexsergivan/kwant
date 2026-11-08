@@ -57,8 +57,11 @@ async fn the_switch_saves_and_the_chips_say_where_each_engine_runs() {
         }
     } else {
         assert_eq!(s, StatusCode::BAD_REQUEST);
-        let reason = v["error"].as_str().unwrap_or_default();
-        assert!(["mac_later", "docker_unavailable", "not_supported_yet"].contains(&reason), "{v}");
+        // The code for the client, and words for the person (ui-check-446 fix 5)
+        let code = v["code"].as_str().unwrap_or_default();
+        assert!(["mac_later", "docker_unavailable", "not_supported_yet"].contains(&code), "{v}");
+        assert_eq!(v["error"].as_str(), Some(kwnt::sandbox::agent_vm::toggle_message(code)), "{v}");
+        assert!(!v["error"].as_str().unwrap().contains('_'), "{v}");
         let (_, v) = common::call(&env.app, "GET", "/api/settings/computer", None).await;
         assert_eq!(v["isolate_claude"], false);
     }

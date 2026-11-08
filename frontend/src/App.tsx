@@ -3401,6 +3401,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     teams: teams.length,
     started: getStartedWasStarted(space.id),
   });
+  // New bots, teams and their team chats after an import (Space settings or Get started).
+  const reloadAfterImport = () => {
+    refreshRoster();
+    fetch('/api/channels')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c) => Array.isArray(c) && setChannels(c))
+      .catch(() => undefined);
+  };
   const getStartedCard =
     loaded && (!openCtx || messagesLoadedFor === openCtx) && kwants.length > 0 && isGeneral && getStartedEligible ? (
       <GetStarted
@@ -3409,6 +3417,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         engines={engines.engines}
         reloadEngines={engines.reload}
         onDismissed={() => undefined}
+        spaceName={space.name}
+        onImported={reloadAfterImport}
       />
     ) : null;
   const setupChecklist = (
@@ -4113,14 +4123,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           routineFocus={routineFocus}
           isPhone={isPhone}
           onApprovalsChanged={refreshRoster}
-          onImported={() => {
-            // New bots, teams and their team chats.
-            refreshRoster();
-            fetch('/api/channels')
-              .then((r) => (r.ok ? r.json() : null))
-              .then((c) => Array.isArray(c) && setChannels(c))
-              .catch(() => undefined);
-          }}
+          onImported={reloadAfterImport}
         />
       )}
 

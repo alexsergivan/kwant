@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use crate::fsx::UnixMode;
 use std::path::{Component, Path as FsPath, PathBuf};
 
 pub const SETTING: &str = "checkpoints";
@@ -114,7 +114,7 @@ struct Run {
 
 fn private_dir(dir: &FsPath) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+    crate::fsx::set_mode(dir, 0o700)
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -144,12 +144,13 @@ fn through_symlink(folder: &FsPath, rel: &str) -> bool {
 }
 
 /// What the folder holds at `rel` now: `Ok(Some(sha))`, `Ok(None)` when absent, `Err(why)`.
-/// Opened from the folder's descriptor, never through a symlink (S-8).
+/// Opened from the folder's descriptor, never through a symlink (S-8), the folder's own path
+/// included (QA F-3).
 fn current(folder: &FsPath, rel: &str) -> Result<Option<String>, String> {
     if through_symlink(folder, rel) {
         return Err("symlink, not followed".into());
     }
-    let opened = crate::sandbox::safe_fs::Dir::open(folder).and_then(|d| d.open_file(FsPath::new(rel)));
+    let opened = crate::sandbox::safe_fs::Dir::open_strict(folder).and_then(|d| d.open_file(FsPath::new(rel)));
     let mut f = match opened {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -174,7 +175,7 @@ fn store_blob(blobs: &FsPath, input: std::fs::File, cap: u64) -> std::io::Result
         return Err(crate::sandbox::safe_fs::too_large());
     }
     let tmp = blobs.join(format!(".tmp-{}", new_id()));
-    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+    let mut out = std::fs::OpenOptions::new().write(true).create_new(true).unix_mode(0o600).open(&tmp)?;
     let mut h = <sha2::Sha256 as sha2::Digest>::new();
     let mut buf = vec![0u8; 64 * 1024];
     let mut input = input.take(cap + 1);
@@ -209,17 +210,24 @@ fn store_blob(blobs: &FsPath, input: std::fs::File, cap: u64) -> std::io::Result
     Ok((sha, total))
 }
 
+/// [`git_head_in`] of `folder`, opened with no symlink followed.
+#[cfg(test)]
+fn git_head(folder: &FsPath) -> Option<String> {
+    git_head_in(&crate::sandbox::safe_fs::Dir::open_strict(folder).ok()?)
+}
+
 /// The commit the folder's git checkout is on, if it is one (read-only info).
 ///
 /// The folder is written by the task's bots, so everything under `.git` is untrusted: it never
 /// follows a symlink (at any component), never opens anything but a regular file with one link (a
 /// FIFO can't block it, a hard link can't name a host file), reads at most [`gitfile::REF_MAX`] /
 /// [`gitfile::PACKED_MAX`] bytes, only follows a `ref:` that is a plain `refs/...` name, and only returns 40 or 64 hex characters. Anything else,
-/// including a `.git` file (a `gitdir:` worktree pointer), is `None`.
-fn git_head(folder: &FsPath) -> Option<String> {
+/// including a `.git` file (a `gitdir:` worktree pointer), is `None`. Read from the folder's
+/// descriptor, the one its snapshot walked (QA F-3).
+fn git_head_in(folder: &crate::sandbox::safe_fs::Dir) -> Option<String> {
     // `.git` is opened once, without following it (a symlink or a `.git` file fails), and HEAD,
     // the ref and packed-refs are all read from that one descriptor
-    let git = crate::sandbox::safe_fs::Dir::open(folder).ok()?.open_dir(FsPath::new(".git")).ok()?;
+    let git = folder.open_dir(FsPath::new(".git")).ok()?;
     let head = gitfile::read(&git, "HEAD", gitfile::REF_MAX)?;
     let head = head.trim();
     let Some(r) = head.strip_prefix("ref: ") else {
@@ -254,19 +262,31 @@ struct Taken {
 /// Walks `folder` (never following symlinks) and stores each file's content as a blob.
 /// A missing folder is an empty snapshot; an unreadable one is an error.
 fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, String> {
-    private_dir(blobs).map_err(|e| format!("the checkpoint store can't be written: {e}"))?;
-    let mut m = Manifest::default();
     match std::fs::symlink_metadata(folder) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Taken { manifest: m, bytes: 0, git_head: None }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            private_dir(blobs).map_err(|e| format!("the checkpoint store can't be written: {e}"))?;
+            return Ok(Taken { manifest: Manifest::default(), bytes: 0, git_head: None });
+        }
         Err(e) => return Err(format!("the folder can't be read: {e}")),
         Ok(meta) if !meta.is_dir() => return Err("the task's folder isn't a folder".into()),
         Ok(_) => {}
     }
+    // No part of the folder's own path is followed if it is a symlink (QA F-3): a task folder
+    // nested in a bot's folder can be swapped by that bot
+    let top = crate::sandbox::safe_fs::Dir::open_strict(folder).map_err(|e| format!("the folder can't be read: {e}"))?;
+    snapshot_in(blobs, top, max_bytes)
+}
+
+/// [`snapshot`] of a folder already open: a restore snapshots and writes through the same
+/// descriptor, so a folder swapped in between is never the one written (QA F-3).
+fn snapshot_in(blobs: &FsPath, top: crate::sandbox::safe_fs::Dir, max_bytes: u64) -> Result<Taken, String> {
+    private_dir(blobs).map_err(|e| format!("the checkpoint store can't be written: {e}"))?;
+    let mut m = Manifest::default();
     // Every folder is reached from its parent's descriptor and every file opened from the
     // folder's with `openat(…, O_NOFOLLOW)` (S-8): a part swapped for a symlink mid-walk is
     // skipped, never followed. Candidates keep their exact relative path to open later.
     use crate::sandbox::safe_fs::{Dir, Kind};
-    let top = std::rc::Rc::new(Dir::open(folder).map_err(|e| format!("the folder can't be read: {e}"))?);
+    let top = std::rc::Rc::new(top);
     let mut candidates: Vec<(String, PathBuf, u64, u32)> = Vec::new();
     let mut stack: Vec<(std::rc::Rc<Dir>, Option<std::ffi::OsString>, String, PathBuf)> =
         vec![(top.clone(), None, String::new(), PathBuf::new())];
@@ -349,14 +369,14 @@ fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, St
         }
     }
     m.skipped.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(Taken { manifest: m, bytes, git_head: git_head(folder) })
+    Ok(Taken { manifest: m, bytes, git_head: git_head_in(&top) })
 }
 
 fn write_manifest(dir: &FsPath, id: &str, m: &Manifest) -> std::io::Result<(PathBuf, String)> {
     private_dir(dir)?;
     let body = serde_json::to_vec(m).map_err(std::io::Error::other)?;
     let path = dir.join(format!("{id}.json"));
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path)?;
+    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).unix_mode(0o600).open(&path)?;
     f.write_all(&body)?;
     Ok((path, hex(&<sha2::Sha256 as sha2::Digest>::digest(&body))))
 }
@@ -380,7 +400,7 @@ pub async fn materialize_first(state: &AppState, task_id: &str, dest: &FsPath) -
             }
             // A missing blob is skipped: the replay sees less, never something else
             if std::fs::copy(blobs.join(&e.sha256), &to).is_ok() {
-                let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode((e.mode & 0o700) | 0o600));
+                let _ = crate::fsx::set_mode(&to, (e.mode & 0o700) | 0o600);
                 n += 1;
             }
         }
@@ -442,7 +462,7 @@ fn read_runs(dir: &FsPath) -> Vec<Run> {
 
 fn append_run(dir: &FsPath, run: &Run) -> std::io::Result<()> {
     private_dir(dir)?;
-    let mut f = std::fs::OpenOptions::new().append(true).create(true).mode(0o600).open(dir.join("runs.jsonl"))?;
+    let mut f = std::fs::OpenOptions::new().append(true).create(true).unix_mode(0o600).open(dir.join("runs.jsonl"))?;
     writeln!(f, "{}", serde_json::to_string(run).map_err(std::io::Error::other)?)
 }
 
@@ -453,10 +473,25 @@ fn append_run(dir: &FsPath, run: &Run) -> std::io::Result<()> {
 /// Run checkpoints (`before_run`, `after_run`) follow the `checkpoints` setting; manual and
 /// `before_restore` ones are always taken.
 pub async fn take(state: &AppState, task: &Task, kind: &str, claim: Option<&Claim>, created_by: &str) -> Option<Checkpoint> {
+    take_in(state, task, kind, claim, created_by, None).await
+}
+
+/// [`take`], of `pinned`'s folder (already open, by that path) instead of the task's folder.
+async fn take_in(
+    state: &AppState,
+    task: &Task,
+    kind: &str,
+    claim: Option<&Claim>,
+    created_by: &str,
+    pinned: Option<(PathBuf, std::sync::Arc<crate::sandbox::safe_fs::Dir>)>,
+) -> Option<Checkpoint> {
     if matches!(kind, "before_run" | "after_run") && !enabled(state).await {
         return None;
     }
-    let folder = task_folder(state, task).await;
+    let (folder, pinned) = match pinned {
+        Some((f, d)) => (Some(f), Some(d)),
+        None => (task_folder(state, task).await, None),
+    };
     let max_bytes = max_mb(state).await as u64 * 1024 * 1024;
     let root = root(state);
     let task_dir = root.join(&task.id);
@@ -468,7 +503,10 @@ pub async fn take(state: &AppState, task: &Task, kind: &str, claim: Option<&Clai
             let (root, task_dir, id) = (root.clone(), task_dir.clone(), id.clone());
             tokio::task::spawn_blocking(move || -> Result<(Taken, PathBuf, String), String> {
                 private_dir(&root).map_err(|e| format!("the checkpoint store can't be written: {e}"))?;
-                let taken = snapshot(&root.join("blobs"), &folder, max_bytes)?;
+                let taken = match pinned {
+                    Some(d) => snapshot_in(&root.join("blobs"), d.open_dir(FsPath::new("")).map_err(|e| format!("the folder can't be read: {e}"))?, max_bytes)?,
+                    None => snapshot(&root.join("blobs"), &folder, max_bytes)?,
+                };
                 let (path, sha) = write_manifest(&task_dir, &id, &taken.manifest).map_err(|e| format!("the manifest can't be written: {e}"))?;
                 Ok((taken, path, sha))
             })
@@ -942,8 +980,10 @@ fn plan_json(c: &Checkpoint, p: &Plan) -> Value {
     })
 }
 
-/// Writes the plan's changes (plus the forced conflicts) into the folder; never through a symlink.
-fn apply(blobs: &FsPath, p: &Plan, force: &BTreeSet<String>) -> (Vec<String>, Vec<String>, Vec<Value>) {
+/// Writes the plan's changes (plus the forced conflicts) into `root`, the plan's folder opened
+/// once with [`Dir::open_strict`](crate::sandbox::safe_fs::Dir::open_strict) (the same descriptor
+/// the safety checkpoint read: QA F-3); never through a symlink.
+fn apply(blobs: &FsPath, p: &Plan, force: &BTreeSet<String>, root: &crate::sandbox::safe_fs::Dir) -> (Vec<String>, Vec<String>, Vec<Value>) {
     let mut todo: Vec<(String, &'static str)> = p.changes.iter().map(|c| (c.path.clone(), c.action)).collect();
     todo.extend(p.forced.iter().filter(|(k, _)| force.contains(*k)).map(|(k, a)| (k.clone(), *a)));
     let (mut restored, mut deleted, mut failed) = (Vec::new(), Vec::new(), Vec::new());
@@ -954,10 +994,10 @@ fn apply(blobs: &FsPath, p: &Plan, force: &BTreeSet<String>) -> (Vec<String>, Ve
         }
         // Every folder on the way is opened (or made) from the task folder's descriptor with
         // `O_NOFOLLOW`, and the file goes in with `openat`/`renameat` (S-8): a folder swapped for
-        // a symlink after the check above is refused, never written through
+        // a symlink is refused, never written through
         let relp = FsPath::new(&rel);
         let (parent, name) = (relp.parent().unwrap_or(FsPath::new("")), relp.file_name().unwrap_or_default());
-        let r = crate::sandbox::safe_fs::Dir::open(&p.folder).and_then(|root| {
+        let r = (|| {
             if action == "delete" {
                 root.open_dir(parent)?.remove_file(name).map(|_| false)
             } else {
@@ -967,7 +1007,7 @@ fn apply(blobs: &FsPath, p: &Plan, force: &BTreeSet<String>) -> (Vec<String>, Ve
                 dir.replace_file(name, &format!(".kwant-restore-{}", new_id()), &mut src, if e.mode == 0 { 0o644 } else { e.mode })?;
                 Ok(true)
             }
-        });
+        })();
         match r {
             Ok(true) => restored.push(rel),
             Ok(false) => deleted.push(rel),
@@ -980,12 +1020,24 @@ fn apply(blobs: &FsPath, p: &Plan, force: &BTreeSet<String>) -> (Vec<String>, Ve
 /// Takes a `before_restore` checkpoint, then writes the plan. Returns the counts JSON.
 #[allow(clippy::result_large_err)]
 async fn write_back(state: &AppState, task: &Task, c: &Checkpoint, p: &Plan, force: BTreeSet<String>) -> Result<Value, Response> {
-    let Some(safety) = take(state, task, "before_restore", None, "person").await.filter(|s| !s.failed()) else {
+    // The folder is opened once, no symlink followed on any part of its path, and the safety
+    // checkpoint and the writes both go through that descriptor (QA F-3): a task folder nested in
+    // a bot's folder swapped for a symlink in between is never written through
+    let folder = p.folder.clone();
+    let opened = tokio::task::spawn_blocking(move || crate::sandbox::safe_fs::Dir::open_strict(&folder)).await.map_err(internal)?;
+    let Ok(dir) = opened.map(std::sync::Arc::new) else {
+        return Err(coded(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "checkpoint_failed",
+            "the task's folder is missing, moved or a symlink now, so the safety checkpoint couldn't be taken and nothing was restored",
+        ));
+    };
+    let Some(safety) = take_in(state, task, "before_restore", None, "person", Some((p.folder.clone(), dir.clone()))).await.filter(|s| !s.failed()) else {
         return Err(coded(StatusCode::INTERNAL_SERVER_ERROR, "checkpoint_failed", "the safety checkpoint couldn't be taken, so nothing was restored"));
     };
     let held = STORE.lock().await;
     let (blobs, plan) = (root(state).join("blobs"), p.clone());
-    let (restored, deleted, failed) = tokio::task::spawn_blocking(move || apply(&blobs, &plan, &force)).await.map_err(internal)?;
+    let (restored, deleted, failed) = tokio::task::spawn_blocking(move || apply(&blobs, &plan, &force, &dir)).await.map_err(internal)?;
     drop(held);
     let detail = json!({
         "checkpoint_id": c.id,
@@ -1431,6 +1483,36 @@ mod tests {
         assert_eq!(head_of(&folder), None, ".git symlink");
     }
 
+    /// Windows: no FIFOs or O_NOFOLLOW there, so the same refusals come from the reparse-point and
+    /// link-count checks (gitfile). A hard-linked ref, a junction on the way or as `.git` is `None`.
+    #[cfg(windows)]
+    #[test]
+    fn git_head_refuses_junctions_and_hard_links_on_windows() {
+        use crate::server::gitfile::windows_tests::junction;
+        let (d, folder, canary) = repo();
+        let git = folder.join(".git");
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git.join("refs/heads/main"), format!("{SHA}\n")).unwrap();
+        assert_eq!(head_of(&folder).as_deref(), Some(SHA), "a plain repo reads");
+        std::fs::remove_file(git.join("refs/heads/main")).unwrap();
+        std::fs::hard_link(&canary, git.join("refs/heads/main")).unwrap();
+        assert_eq!(head_of(&folder), None, "a ref that is the canary's second name");
+        std::fs::remove_file(git.join("refs/heads/main")).unwrap();
+        let elsewhere = d.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::copy(&canary, elsewhere.join("main")).unwrap();
+        std::fs::remove_dir(git.join("refs/heads")).unwrap();
+        junction(&git.join("refs/heads"), &elsewhere);
+        assert_eq!(head_of(&folder), None, "refs/heads a junction");
+        let other = d.path().join("other");
+        std::fs::create_dir_all(other.join("refs/heads")).unwrap();
+        std::fs::write(other.join("HEAD"), format!("{CANARY}\n")).unwrap();
+        let task2 = d.path().join("task2");
+        std::fs::create_dir_all(&task2).unwrap();
+        junction(&task2.join(".git"), &other);
+        assert_eq!(head_of(&task2), None, ".git a junction");
+    }
+
     #[cfg(unix)]
     #[test]
     fn git_head_does_not_block_on_a_fifo() {
@@ -1474,5 +1556,124 @@ mod tests {
         let before = m(&[("same", "1"), ("edited", "1"), ("gone", "1")], &["big", "node_modules/"]);
         let after = m(&[("same", "1"), ("edited", "2"), ("new", "1")], &["big", "node_modules/", "huge"]);
         assert_eq!(changed(&before, &after), vec!["edited", "gone", "huge", "new"]);
+    }
+
+    // QA F-3 (Rigel's probes in 446-probes/checkpoints-nested-probes.diff): a task folder nested in
+    // a bot's folder, which that bot's container can write, swapped for a symlink to a folder
+    // outside it between the safety checkpoint and the writes
+    #[cfg(target_os = "linux")]
+    fn exchange(a: &FsPath, b: &FsPath) -> bool {
+        use std::os::unix::ffi::OsStrExt;
+        let (a, b) = (std::ffi::CString::new(a.as_os_str().as_bytes()).unwrap(), std::ffi::CString::new(b.as_os_str().as_bytes()).unwrap());
+        // SAFETY: valid C strings; RENAME_EXCHANGE (2) swaps two existing entries atomically
+        unsafe { libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, a.as_ptr(), libc::AT_FDCWD, b.as_ptr(), 2u32) == 0 }
+    }
+
+    #[cfg(unix)]
+    fn nested() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, PathBuf) {
+        let d = tempfile::tempdir().unwrap();
+        let bot = d.path().join("bot-folder");
+        let task = bot.join("proj");
+        std::fs::create_dir_all(&task).unwrap();
+        std::fs::write(task.join("authorized_keys"), "ATTACKER-KEY\n").unwrap();
+        let victim = d.path().join("victim-ssh");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("authorized_keys"), "ORIGINAL\n").unwrap();
+        let blobs = d.path().join("blobs");
+        (d, bot, task, victim, blobs)
+    }
+
+    #[cfg(unix)]
+    fn overwrite_plan(task: &FsPath, taken: &Taken) -> Plan {
+        let entries: BTreeMap<String, Entry> = taken.manifest.files.iter().map(|e| (e.path.clone(), e.clone())).collect();
+        Plan {
+            changes: vec![Change { path: "authorized_keys".into(), action: "overwrite" }],
+            conflicts: vec![],
+            forced: BTreeMap::new(),
+            skipped: vec![],
+            external: vec![],
+            effects_known: true,
+            refused: None,
+            state_after: None,
+            sha: String::new(),
+            folder: task.to_path_buf(),
+            entries,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_task_folder_swapped_for_a_symlink_is_refused_by_the_safety_checkpoint() {
+        let (_d, bot, task, victim, blobs) = nested();
+        std::fs::rename(&task, bot.join("proj.moved")).unwrap();
+        std::os::unix::fs::symlink(&victim, &task).unwrap();
+        assert!(snapshot(&blobs, &task, 1 << 30).is_err(), "a symlinked task folder is never snapshotted");
+        assert!(crate::sandbox::safe_fs::Dir::open_strict(&task).is_err(), "nor opened for a restore");
+        assert_eq!(current(&task, "authorized_keys"), Err("symlink, not followed".into()));
+        // A symlink on a part above the task folder is refused too
+        std::fs::rename(&bot, bot.with_file_name("bot-real")).unwrap();
+        std::os::unix::fs::symlink(bot.with_file_name("bot-real"), &bot).unwrap();
+        assert!(crate::sandbox::safe_fs::Dir::open_strict(&bot.join("proj.moved")).is_err());
+        assert_eq!(std::fs::read_to_string(victim.join("authorized_keys")).unwrap(), "ORIGINAL\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_restore_writes_through_the_descriptor_its_safety_checkpoint_read() {
+        let (_d, bot, task, victim, blobs) = nested();
+        let taken = snapshot(&blobs, &task, 1 << 30).unwrap();
+        let plan = overwrite_plan(&task, &taken);
+        std::fs::write(task.join("authorized_keys"), "CHANGED\n").unwrap();
+        // write_back: open the folder, take the safety checkpoint through it…
+        let root = crate::sandbox::safe_fs::Dir::open_strict(&task).unwrap();
+        let safety = snapshot_in(&blobs, root.open_dir(FsPath::new("")).unwrap(), 1 << 30).unwrap();
+        assert_eq!(safety.manifest.files.len(), 1);
+        // …the bot swaps the folder for a symlink to one outside its own…
+        std::fs::rename(&task, bot.join("proj.moved")).unwrap();
+        std::os::unix::fs::symlink(&victim, &task).unwrap();
+        // …and the writes still land in the folder the checkpoint read, never in the other one
+        let (restored, _deleted, failed) = apply(&blobs, &plan, &BTreeSet::new(), &root);
+        assert_eq!(restored, vec!["authorized_keys".to_string()], "{failed:?}");
+        assert_eq!(std::fs::read_to_string(victim.join("authorized_keys")).unwrap(), "ORIGINAL\n");
+        assert_eq!(std::fs::read_to_string(bot.join("proj.moved/authorized_keys")).unwrap(), "ATTACKER-KEY\n");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_restore_racing_a_folder_swap_never_writes_outside_it() {
+        let (_d, bot, task, victim, blobs) = nested();
+        let lnk = bot.join("lnk");
+        std::os::unix::fs::symlink(&victim, &lnk).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let swapper = {
+            let (stop, t, l) = (stop.clone(), task.clone(), lnk.clone());
+            std::thread::spawn(move || {
+                let mut swaps = 0u32;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    swaps += u32::from(exchange(&t, &l));
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                }
+                swaps
+            })
+        };
+        let (mut hits, mut applied) = (0, 0);
+        for _ in 0..300 {
+            // As write_back does: one strict open, then the snapshot and the writes through it
+            let Ok(root) = crate::sandbox::safe_fs::Dir::open_strict(&task) else { continue };
+            let Ok(taken) = snapshot_in(&blobs, root.open_dir(FsPath::new("")).unwrap(), 1 << 30) else { continue };
+            if taken.manifest.files.is_empty() {
+                continue;
+            }
+            let _ = apply(&blobs, &overwrite_plan(&task, &taken), &BTreeSet::new(), &root);
+            applied += 1;
+            if std::fs::read_to_string(victim.join("authorized_keys")).unwrap_or_default().contains("ATTACKER") {
+                hits += 1;
+                std::fs::write(victim.join("authorized_keys"), "ORIGINAL\n").unwrap();
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(swapper.join().unwrap() > 0, "the folder was really swapped");
+        assert!(applied > 0, "some restores ran");
+        assert_eq!(hits, 0, "a restore wrote into the folder the task folder was swapped for");
     }
 }

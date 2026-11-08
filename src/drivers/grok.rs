@@ -89,6 +89,7 @@ impl GrokHome {
     pub fn create(base: &Path, config: &toml::Table) -> std::io::Result<Self> {
         sweep_stale(base);
         let path = base.join(format!("{DIR_PREFIX}{}", uuid::Uuid::new_v4().simple()));
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
@@ -831,6 +832,8 @@ include_only = ["*"]
         assert!(auth.exists(), "the user's own file is untouched");
     }
 
+    // Windows can't open a folder as a file to date it, and Grok is off on Windows
+    #[cfg(unix)]
     #[test]
     fn sweeps_only_stale_kwnt_homes() {
         let base = tempfile::tempdir().unwrap();

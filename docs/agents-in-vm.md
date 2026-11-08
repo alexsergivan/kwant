@@ -1,4 +1,4 @@
-# Run Claude inside the VM (0.7.8, slice 1)
+# Run Claude inside the VM (0.7.7, slice 1)
 
 When the computer is in **VM** mode and **Run Claude inside the VM** is on, a bot's Claude turn
 runs the `claude` CLI in a container of its own, with no network. The container never holds a
@@ -7,7 +7,7 @@ real key or sign-in. Its only way out is kwnt's broker, a Unix socket mounted re
 Anthropic calls, and refuses everything else.
 
 - **Off by default.** Settings › Computer, under the VM card.
-- **Linux only in 0.7.8.** On a Mac the switch is shown disabled with "Coming to Mac later".
+- **Linux only in 0.7.7.** On a Mac the switch is shown disabled with "Coming to Mac later".
 - **Claude only.** Codex and Grok still run on this computer ("Not isolated yet").
 - **Claude sign-ins only.** A Claude API-key or Custom account still runs on this computer; its
   chip says "Not isolated".
@@ -100,7 +100,7 @@ In `<data>/config.toml`:
 [agents_in_vm]
 request_limit = 200   # model requests per reply (env KWNT_AGENT_REQUEST_LIMIT)
 memory_mb = 1024      # per bot container (env KWNT_AGENT_MEMORY_MB)
-max_turns = 2         # isolated replies at once; the next one waits (env KWNT_AGENT_MAX_TURNS)
+max_turns = 2         # isolated replies at once; the next one waits, and the chat says so (env KWNT_AGENT_MAX_TURNS)
 ```
 
 ## Who refreshes a sign-in
