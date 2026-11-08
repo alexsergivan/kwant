@@ -1158,6 +1158,30 @@ impl Repo {
         Ok(heads)
     }
 
+    /// The committer dates of those of `shas` this repo has, by sha, in one `git log --no-walk`.
+    /// A sha it doesn't have (a mirror that never fetched it) is left out, as is one whose date
+    /// doesn't read; a name that isn't a sha is refused.
+    pub async fn commit_dates(&self, shas: &[&str]) -> Result<std::collections::HashMap<String, DateTime<Utc>>, GitError> {
+        if shas.iter().any(|s| !is_sha(s)) {
+            return Err(GitError::Refused);
+        }
+        let mut dates = std::collections::HashMap::new();
+        for chunk in shas.chunks(MAX_HEADS) {
+            let mut args = vec!["log", "--no-walk=unsorted", "--ignore-missing", "--format=%H %ct", "--end-of-options"];
+            args.extend_from_slice(chunk);
+            args.push("--");
+            let out = self.text(&args).await?;
+            for line in out.lines() {
+                let Some((sha, at)) = line.trim().split_once(' ') else { continue };
+                let Some(at) = at.parse::<i64>().ok().and_then(|t| DateTime::from_timestamp(t, 0)) else { continue };
+                if is_sha(sha) {
+                    dates.insert(sha.to_string(), at);
+                }
+            }
+        }
+        Ok(dates)
+    }
+
     /// Whether `a` is `b` or an ancestor of it.
     pub async fn is_ancestor(&self, a: &str, b: &str) -> Result<bool, GitError> {
         if !(is_sha(a) || ok_ref(a)) || !(is_sha(b) || ok_ref(b)) {
@@ -1567,6 +1591,26 @@ mod tests {
         write(&w, "README.md", b"hello\nworld\n");
         let c3 = commit_all(&w, "Rename a, add a logo");
         (w, vec![c0, c1, f1, m, c3])
+    }
+
+    /// 0.7.7 fresh reviews: every head git has gets its committer date in one call; a head it
+    /// doesn't have (a mirror that never fetched it) is left out, not an error.
+    #[tokio::test]
+    async fn commit_dates_read_what_git_has_and_leave_out_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (w, c) = upstream(tmp.path());
+        let repo = Repo::local(&w, &tmp.path().join("data")).await.unwrap();
+        let missing = "e".repeat(40);
+        let dates = repo.commit_dates(&[c[0].as_str(), missing.as_str(), c[2].as_str()]).await.unwrap();
+        assert_eq!(dates.len(), 2, "{dates:?}");
+        for sha in [&c[0], &c[2]] {
+            let want: i64 = sh(&w, &["log", "-1", "--format=%ct", sha]).parse().unwrap();
+            assert_eq!(dates[sha.as_str()].timestamp(), want);
+        }
+        assert!(repo.commit_dates(&[]).await.unwrap().is_empty());
+        // Only shas reach git
+        assert_eq!(repo.commit_dates(&["main"]).await, Err(GitError::Refused));
+        assert_eq!(repo.commit_dates(&["--all"]).await, Err(GitError::Refused));
     }
 
     #[tokio::test]
