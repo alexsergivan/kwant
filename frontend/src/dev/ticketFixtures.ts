@@ -78,6 +78,11 @@ export function ticket(state: TicketState, extra: Record<string, unknown> & { wo
   return { ...base, state, ...back, ...at, ...err, ...rest, work: w };
 }
 
+/** D6 (next-076/jira-tickets/d6-contract.md): the lead's engine can't prepare a brief (Grok, Custom API, or
+ * tool checks off), so the brief turn was refused before it read anything. The card shows the server's
+ * `message` as is; the contract's sentence lives in tests/fixtures/tickets.mjs, so pass it in. */
+export const TICKET_ENGINE_REFUSED = (message: string) => ticket('failed', { error: { code: 'engine_refused', message } });
+
 export const TICKET_151 = {
   ...base,
   key: 'TRAIL-151',

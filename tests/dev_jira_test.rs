@@ -164,7 +164,17 @@ async fn wait_state(env: &Env, key: &str, want: &[&str]) -> String {
 async fn until_working(env: &Env, key: &str) {
     let st = wait_state(env, key, &[dev_jira::WORKING, dev_jira::FAILED, dev_jira::NEEDS_ANSWER]).await;
     assert_eq!(st, dev_jira::WORKING, "{key}: {:?}", events(env, key).await);
-    assert_eq!(brief_state(env, key).await, dev_jira::WORKING, "the brief row mirrors the card");
+    // The brief row is written next to the card and can lag it a moment under load: wait for it
+    // (up to 30 s) instead of asserting at once
+    let mut brief = String::new();
+    for _ in 0..300 {
+        brief = brief_state(env, key).await;
+        if brief == dev_jira::WORKING {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(brief, dev_jira::WORKING, "the brief row mirrors the card");
 }
 
 /// The brief row's state, from the brief route.

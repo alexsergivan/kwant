@@ -1195,26 +1195,37 @@ async fn insert_message_core(
     Ok(msg)
 }
 
-/// Renames chat `chat`, now called `chat_name` (`team-<name>`), to `archived-team-<name>`, or
-/// `archived-team-<name>-2`, `-3`… when that is taken (ignoring case). No team answers to an
-/// `archived-` name, so it becomes an ordinary channel; its messages, lead and members stay.
-/// Returns the new name.
+/// Renames chat `chat`, now called `chat_name` (`team-<name>`), to [`archived_chat_name`].
+/// No team answers to an `archived-` name, so it becomes an ordinary channel; its messages, lead
+/// and members stay. Returns the new name.
 async fn archive_team_chat(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     space: &SpaceId,
     chat: &str,
     chat_name: &str,
 ) -> Result<String, DbError> {
+    let name = archived_chat_name(tx, space.as_str(), chat_name).await?;
+    sqlx::query("UPDATE channels SET name = ? WHERE id = ?").bind(&name).bind(chat).execute(&mut **tx).await?;
+    Ok(name)
+}
+
+/// The name [`archive_team_chat`] gives chat `chat_name` in `space` right now:
+/// `archived-<chat_name>`, or `archived-<chat_name>-2`, `-3`… when that is taken (ignoring case).
+/// Read-only, so the Undo preview can show the same name the Undo will use.
+pub(crate) async fn archived_chat_name(
+    conn: &mut sqlx::SqliteConnection,
+    space: &str,
+    chat_name: &str,
+) -> Result<String, DbError> {
     let base = format!("archived-{chat_name}");
     for n in 1..1000 {
         let candidate = if n == 1 { base.clone() } else { format!("{base}-{n}") };
         let (taken,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM channels WHERE space_id = ? AND name = ? COLLATE NOCASE")
-            .bind(space.as_str())
+            .bind(space)
             .bind(&candidate)
-            .fetch_one(&mut **tx)
+            .fetch_one(&mut *conn)
             .await?;
         if taken == 0 {
-            sqlx::query("UPDATE channels SET name = ? WHERE id = ?").bind(&candidate).bind(chat).execute(&mut **tx).await?;
             return Ok(candidate);
         }
     }

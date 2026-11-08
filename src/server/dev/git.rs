@@ -23,6 +23,7 @@
 use super::facts::FileDiff;
 use super::source::{Commit, Person};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -237,7 +238,68 @@ async fn run(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>) -> R
 
 /// [`run`]; with `head`, stdout past `o.max_out` isn't an error: reading stops there (git then
 /// stops at a closed pipe) and the first `o.max_out` bytes come back with `true`.
+///
+/// A remote that answers with a redirect is asked once more at the same address with `.git`
+/// when it had none (N-4: GitLab sends `/group/repo` to `/group/repo.git`, and git is never let
+/// follow a redirect itself). Any other redirect is [`GitError::Failed`], as before.
 async fn run_with(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>, head: bool) -> Result<(Vec<u8>, bool), GitError> {
+    match run_once(bin, git_dir, args, o, head).await {
+        Err(Ran::Moved) => {
+            let Some((i, url)) = args.iter().position(|a| *a == "--").and_then(|i| Some((i + 1, with_dot_git(args.get(i + 1)?)?))) else {
+                return Err(GitError::Failed);
+            };
+            let mut again = args.to_vec();
+            again[i] = &url;
+            run_once(bin, git_dir, &again, o, head).await.map_err(Ran::error)
+        }
+        r => r.map_err(Ran::error),
+    }
+}
+
+/// How one run of git failed: a [`GitError`], or a redirect from the remote.
+enum Ran {
+    Git(GitError),
+    Moved,
+}
+
+impl Ran {
+    fn error(self) -> GitError {
+        match self {
+            Ran::Git(e) => e,
+            Ran::Moved => GitError::Failed,
+        }
+    }
+}
+
+impl From<GitError> for Ran {
+    fn from(e: GitError) -> Self {
+        Ran::Git(e)
+    }
+}
+
+/// Whether git stopped at an HTTP redirect it wasn't allowed to follow.
+fn redirected(stderr: &[u8]) -> bool {
+    let e = String::from_utf8_lossy(stderr).to_lowercase();
+    ["301", "302", "303", "307", "308"].iter().any(|c| e.contains(&format!("the requested url returned error: {c}")))
+}
+
+/// `url` with `.git` added, for an http(s) [`fetch_url`] whose path doesn't end in it: the same
+/// scheme, host and port, so the address check, its pin and a token's origin all still hold.
+/// `None` for anything else (ssh, scp-like, a path that already ends in `.git`, no path).
+fn with_dot_git(url: &str) -> Option<String> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://")) || fetch_url(url).as_deref() != Some(url) {
+        return None;
+    }
+    let base = url.trim_end_matches('/');
+    if base.to_ascii_lowercase().ends_with(".git") {
+        return None;
+    }
+    let next = format!("{base}.git");
+    (fetch_url(&next).as_deref() == Some(next.as_str()) && remote_host(&next) == remote_host(url)).then_some(next)
+}
+
+async fn run_once(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>, head: bool) -> Result<(Vec<u8>, bool), Ran> {
     let mut cmd = tokio::process::Command::new(bin);
     if let Some(d) = git_dir {
         cmd.arg("--git-dir").arg(d);
@@ -335,9 +397,11 @@ async fn run_with(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>,
     } else if status.success() {
         Ok((out, false))
     } else if o.fsize.is_some() && hit_size_limit(&status, &err) {
-        Err(GitError::RepoTooBig)
+        Err(GitError::RepoTooBig.into())
+    } else if redirected(&err) {
+        Err(Ran::Moved)
     } else {
-        Err(classify(&err))
+        Err(classify(&err).into())
     }
 }
 
@@ -1109,6 +1173,30 @@ impl Repo {
         Ok(heads)
     }
 
+    /// The committer dates of those of `shas` this repo has, by sha, in one `git log --no-walk`.
+    /// A sha it doesn't have (a mirror that never fetched it) is left out, as is one whose date
+    /// doesn't read; a name that isn't a sha is refused.
+    pub async fn commit_dates(&self, shas: &[&str]) -> Result<std::collections::HashMap<String, DateTime<Utc>>, GitError> {
+        if shas.iter().any(|s| !is_sha(s)) {
+            return Err(GitError::Refused);
+        }
+        let mut dates = std::collections::HashMap::new();
+        for chunk in shas.chunks(MAX_HEADS) {
+            let mut args = vec!["log", "--no-walk=unsorted", "--ignore-missing", "--format=%H %ct", "--end-of-options"];
+            args.extend_from_slice(chunk);
+            args.push("--");
+            let out = self.text(&args).await?;
+            for line in out.lines() {
+                let Some((sha, at)) = line.trim().split_once(' ') else { continue };
+                let Some(at) = at.parse::<i64>().ok().and_then(|t| DateTime::from_timestamp(t, 0)) else { continue };
+                if is_sha(sha) {
+                    dates.insert(sha.to_string(), at);
+                }
+            }
+        }
+        Ok(dates)
+    }
+
     /// Whether `a` is `b` or an ancestor of it.
     pub async fn is_ancestor(&self, a: &str, b: &str) -> Result<bool, GitError> {
         if !(is_sha(a) || ok_ref(a)) || !(is_sha(b) || ok_ref(b)) {
@@ -1205,14 +1293,9 @@ impl Repo {
                 f.deletions = d;
             }
         }
-        // Hunks: one section per file, in the same order; anything else and none are kept
+        // Hunks: each file takes its own section, found by path (a type change prints two)
         if let Ok(p) = self.git(&with(&["-p", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"])).await {
-            let patches = split_patches(&String::from_utf8_lossy(&p));
-            if patches.len() == files.len() {
-                for (f, p) in files.iter_mut().zip(patches) {
-                    f.patch = p;
-                }
-            }
+            match_patches(&mut files, split_patches(&String::from_utf8_lossy(&p)));
         }
         files.truncate(MAX_FILES);
         Ok(files)
@@ -1424,28 +1507,139 @@ fn parse_numstat(out: &[u8]) -> Vec<(u64, u64)> {
     out
 }
 
-/// A `-p` diff split per file: each file's hunks from its first `@@` (GitHub's `patch`), `None`
-/// for a binary file or one with no hunks (a mode change, an empty file).
-fn split_patches(text: &str) -> Vec<Option<String>> {
+/// One file's section of a `-p` diff: the paths on its `--- a/` and `+++ b/` lines (`None` for
+/// `/dev/null`, or when the section has no hunks and so no such lines) and its hunks from the
+/// first `@@` (GitHub's `patch`).
+#[derive(Debug, PartialEq)]
+struct Section {
+    old: Option<String>,
+    new: Option<String>,
+    patch: Option<String>,
+}
+
+/// A `-p` diff split per section. `patch` is `None` for a binary file or one with no hunks (a
+/// mode change, an empty file, a pure rename). A type change (symlink to file) prints two
+/// sections for one file: a delete, then an add.
+fn split_patches(text: &str) -> Vec<Section> {
     if text.trim().is_empty() {
         return Vec::new();
     }
     let Some(body) = text.strip_prefix("diff --git ") else { return Vec::new() };
     body.split("\ndiff --git ")
         .map(|sec| {
-            let hunks = sec.find("\n@@ ").map(|i| &sec[i + 1..])?;
-            if sec[..sec.len() - hunks.len()].contains("\nBinary files ") {
-                return None;
+            let none = Section { old: None, new: None, patch: None };
+            let Some(i) = sec.find("\n@@ ") else { return none };
+            let (head, hunks) = (&sec[..i], &sec[i + 1..]);
+            if head.contains("\nBinary files ") {
+                return none;
             }
-            Some(hunks.trim_end_matches('\n').to_string())
+            let side = |mark: &str, prefix: &str| head.lines().find_map(|l| l.strip_prefix(mark)).and_then(|n| patch_path(n, prefix));
+            Section { old: side("--- ", "a/"), new: side("+++ ", "b/"), patch: Some(hunks.trim_end_matches('\n').to_string()) }
         })
         .collect()
+}
+
+/// A path from a `---`/`+++` line, without its `a/` or `b/`: `None` for `/dev/null`. Git ends
+/// the line with a tab when the name has a space, and C-quotes a name with control characters,
+/// `"` or `\` (and bytes over 0x7f while `core.quotePath` is on).
+fn patch_path(name: &str, prefix: &str) -> Option<String> {
+    let name = name.strip_suffix('\t').unwrap_or(name);
+    if name == "/dev/null" {
+        return None;
+    }
+    let name = match name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) {
+        Some(q) => unquote_c(q)?,
+        None => name.to_string(),
+    };
+    name.strip_prefix(prefix).map(str::to_string)
+}
+
+/// Git's C-style quoting undone: `\\`, `\"`, `\t`, `\n` and the like, and `\ooo` octal bytes.
+fn unquote_c(q: &str) -> Option<String> {
+    let b = q.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'\\' {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let c = *b.get(i + 1)?;
+        i += 2;
+        out.push(match c {
+            b'a' => 7,
+            b'b' => 8,
+            b't' => b'\t',
+            b'n' => b'\n',
+            b'v' => 11,
+            b'f' => 12,
+            b'r' => b'\r',
+            b'0'..=b'3' => {
+                let d = b.get(i..i + 2)?;
+                if !d.iter().all(|x| (b'0'..=b'7').contains(x)) {
+                    return None;
+                }
+                i += 2;
+                (c - b'0') * 64 + (d[0] - b'0') * 8 + (d[1] - b'0')
+            }
+            other => other,
+        });
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Gives each file the hunks of its own section, matched by path, never by position: the `+++ b/`
+/// path for a modify, add, rename or copy, the `--- a/` path for a delete. A type change takes
+/// its add section's hunks (the new side, where review comments go), else its delete section's.
+/// A file with no section of its own, or whose section is binary or has no hunks, keeps `None`.
+fn match_patches(files: &mut [FileDiff], sections: Vec<Section>) {
+    let mut by_new: HashMap<String, String> = HashMap::new();
+    let mut deleted: HashMap<String, String> = HashMap::new();
+    for s in sections {
+        let Some(patch) = s.patch else { continue };
+        match (s.old, s.new) {
+            (_, Some(n)) => {
+                by_new.entry(n).or_insert(patch);
+            }
+            (Some(o), None) => {
+                deleted.entry(o).or_insert(patch);
+            }
+            (None, None) => {}
+        }
+    }
+    for f in files.iter_mut() {
+        f.patch = match f.status.as_str() {
+            "removed" => deleted.remove(&f.path),
+            "changed" => by_new.remove(&f.path).or_else(|| deleted.remove(&f.path)),
+            _ => by_new.remove(&f.path),
+        };
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::process::Command;
+
+    /// Writes an executable script at `path` that is safe to run while other tests start
+    /// processes (D-2). Writing it here would hold a write fd on it in this process, and a
+    /// thread that forks at that moment hands the fd to its child until that child execs; running
+    /// the script then fails with "text file busy" (ETXTBSY), which `run` reports as `Failed`.
+    /// So the bytes go to a draft, and a separate `cp` makes the real file: the only fd ever open
+    /// for writing on it lives and dies in that `cp`, which has exited before anything runs it.
+    fn exe(path: &Path, text: &str) {
+        let draft = path.with_extension("draft");
+        std::fs::write(&draft, text).unwrap();
+        let copied = Command::new("cp").arg(&draft).arg(path).status().unwrap();
+        assert!(copied.success(), "cp {copied}");
+        std::fs::remove_file(&draft).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
 
     /// Plain git for setting a throwaway repo up (never the code under test).
     fn sh(dir: &Path, args: &[&str]) -> String {
@@ -1499,6 +1693,26 @@ mod tests {
         write(&w, "README.md", b"hello\nworld\n");
         let c3 = commit_all(&w, "Rename a, add a logo");
         (w, vec![c0, c1, f1, m, c3])
+    }
+
+    /// 0.7.7 fresh reviews: every head git has gets its committer date in one call; a head it
+    /// doesn't have (a mirror that never fetched it) is left out, not an error.
+    #[tokio::test]
+    async fn commit_dates_read_what_git_has_and_leave_out_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (w, c) = upstream(tmp.path());
+        let repo = Repo::local(&w, &tmp.path().join("data")).await.unwrap();
+        let missing = "e".repeat(40);
+        let dates = repo.commit_dates(&[c[0].as_str(), missing.as_str(), c[2].as_str()]).await.unwrap();
+        assert_eq!(dates.len(), 2, "{dates:?}");
+        for sha in [&c[0], &c[2]] {
+            let want: i64 = sh(&w, &["log", "-1", "--format=%ct", sha]).parse().unwrap();
+            assert_eq!(dates[sha.as_str()].timestamp(), want);
+        }
+        assert!(repo.commit_dates(&[]).await.unwrap().is_empty());
+        // Only shas reach git
+        assert_eq!(repo.commit_dates(&["main"]).await, Err(GitError::Refused));
+        assert_eq!(repo.commit_dates(&["--all"]).await, Err(GitError::Refused));
     }
 
     #[tokio::test]
@@ -1716,12 +1930,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let fake = tmp.path().join("git");
         let pid_file = tmp.path().join("child.pid");
-        std::fs::write(&fake, format!("#!/bin/sh\nsleep 30 &\necho $! > {}\nwait\n", pid_file.display())).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        exe(&fake, &format!("#!/bin/sh\nsleep 30 &\necho $! > {}\nwait\n", pid_file.display()));
         let t = Instant::now();
         let r = run(fake.to_str().unwrap(), None, &["x"], Opts { timeout: Duration::from_millis(500), ..Opts::read() }).await;
         assert_eq!(r, Err(GitError::Timeout));
@@ -1741,19 +1950,13 @@ mod tests {
         let fake = tmp.path().join("git");
         let seen = tmp.path().join("seen");
         // Records its argv and the config git would read from the environment
-        std::fs::write(
+        exe(
             &fake,
-            format!(
+            &format!(
                 "#!/bin/sh\nprintf '%s\\n' \"$@\" > {0}.argv\nenv | grep -E '^(GIT_|SSH_ASKPASS|GCM_)' | sort > {0}.env\n",
                 seen.display()
             ),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        );
         let token = format!("{}{}", ["gh", "s_"].concat(), "c4n4ry".repeat(6));
         let header = Zeroizing::new(format!("Basic {token}"));
         let auth = Auth::header("https://github.com/o/n.git", header).unwrap();
@@ -1895,6 +2098,92 @@ mod tests {
         assert!(request.to_ascii_lowercase().contains(&format!("host: pinned.invalid:{port}")), "{request}");
     }
 
+    #[test]
+    fn only_an_http_address_without_dot_git_gets_one() {
+        let g = |u: &str| with_dot_git(u);
+        assert_eq!(g("https://gitlab.com/gitlab-org/gitter/webapp").as_deref(), Some("https://gitlab.com/gitlab-org/gitter/webapp.git"));
+        assert_eq!(g("https://gitlab.com/group/sub/app/").as_deref(), Some("https://gitlab.com/group/sub/app.git"));
+        assert_eq!(g("https://git.example.org:8443/g/r").as_deref(), Some("https://git.example.org:8443/g/r.git"));
+        assert_eq!(g("http://gitea.lan/o/n").as_deref(), Some("http://gitea.lan/o/n.git"));
+        for u in ["https://gitlab.com/g/r.git", "https://gitlab.com/g/r.GIT", "https://gitlab.com", "https://gitlab.com/", "ssh://git@gitlab.com/g/r", "git@gitlab.com:g/r", "git://gitlab.com/g/r", "https://u:p@gitlab.com/g/r", "https://gitlab.com/g/r?x=1"] {
+            assert_eq!(g(u), None, "{u}");
+        }
+        assert!(redirected(b"fatal: unable to access 'https://gitlab.com/g/r/': The requested URL returned error: 301\n"));
+        assert!(!redirected(b"fatal: unable to access 'https://gitlab.com/g/r/': The requested URL returned error: 404\n"));
+    }
+
+    /// A listener on this machine that answers each request by its path (`answer` gets the
+    /// request line) and keeps the request lines it saw, for `n` requests.
+    fn http_host(n: usize, answer: fn(&str) -> String) -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(false).unwrap();
+        let seen = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut lines = Vec::new();
+            for _ in 0..n {
+                let Ok((mut c, _)) = listener.accept() else { break };
+                c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut buf = [0u8; 8192];
+                let k = c.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..k]).to_string();
+                let line = req.lines().next().unwrap_or_default().to_string();
+                let _ = c.write_all(answer(&line).as_bytes());
+                lines.push(line);
+            }
+            lines
+        });
+        (port, seen)
+    }
+
+    /// N-4: GitLab answers `/group/repo` with a redirect to `/group/repo.git`. git isn't let follow
+    /// it; kwant asks the same host once more with `.git`, and a private repo there is `Auth`
+    /// (so Suggest offers "Connect GitLab"), not a generic failure.
+    #[tokio::test]
+    async fn an_address_without_dot_git_is_asked_again_with_it() {
+        const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+        fn gitlab(line: &str) -> String {
+            let path = line.split(' ').nth(1).unwrap_or_default();
+            if let Some(rest) = path.strip_prefix("/group/app/") {
+                format!("HTTP/1.0 301 Moved Permanently\r\nLocation: /group/app.git/{rest}\r\nContent-Length: 0\r\n\r\n")
+            } else if path.starts_with("/group/app.git/info/refs") {
+                let body = format!("{SHA}\trefs/heads/main\n");
+                format!("HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{body}", body.len())
+            } else if let Some(rest) = path.strip_prefix("/private/app/") {
+                format!("HTTP/1.0 301 Moved Permanently\r\nLocation: /private/app.git/{rest}\r\nContent-Length: 0\r\n\r\n")
+            } else if path.starts_with("/private/app.git/") {
+                "HTTP/1.0 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"x\"\r\nContent-Length: 0\r\n\r\n".into()
+            } else {
+                // Moves every time: kwant asks twice at most and never follows it
+                "HTTP/1.0 302 Found\r\nLocation: http://elsewhere.invalid/\r\nContent-Length: 0\r\n\r\n".into()
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let o = Opts { timeout: REMOTE_TIMEOUT, ..Opts::read() };
+
+        let (port, seen) = http_host(2, gitlab);
+        let url = format!("http://127.0.0.1:{port}/group/app");
+        let out = run("git", Some(tmp.path()), &["ls-remote", "--heads", "--", &url], o).await.unwrap();
+        assert_eq!(String::from_utf8_lossy(&out), format!("{SHA}\trefs/heads/main\n"));
+        let seen = seen.join().unwrap();
+        assert!(seen[0].starts_with("GET /group/app/info/refs"), "{seen:?}");
+        assert!(seen[1].starts_with("GET /group/app.git/info/refs"), "{seen:?}");
+
+        let (port, seen) = http_host(2, gitlab);
+        let url = format!("http://127.0.0.1:{port}/private/app");
+        assert_eq!(run("git", Some(tmp.path()), &["ls-remote", "--", &url], o).await, Err(GitError::Auth));
+        assert!(seen.join().unwrap()[1].starts_with("GET /private/app.git/info/refs"));
+
+        let (port, seen) = http_host(3, gitlab);
+        let url = format!("http://127.0.0.1:{port}/moved/app");
+        assert_eq!(run("git", Some(tmp.path()), &["ls-remote", "--", &url], o).await, Err(GitError::Failed));
+        // Close the listener's third wait: there must be no third request
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+        let seen = seen.join().unwrap();
+        assert!(seen[0].starts_with("GET /moved/app/info/refs") && seen[1].starts_with("GET /moved/app.git/info/refs"), "{seen:?}");
+        assert_eq!(seen[2], "", "asked twice, never followed: {seen:?}");
+    }
+
     #[tokio::test]
     async fn a_fetch_checks_its_remote_first() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1974,22 +2263,98 @@ mod tests {
         assert_eq!(files.iter().map(|f| (f.path.as_str(), f.status.as_str(), f.previous_path.as_deref())).collect::<Vec<_>>(), [("src/a.rs", "modified", None), ("new.txt", "added", None), ("new.rs", "renamed", Some("old.rs"))]);
         assert_eq!(parse_numstat(b"3\t1\tsrc/a.rs\0-\t-\tnew.txt\x002\t0\t\0old.rs\0new.rs\0"), [(3, 1), (0, 0), (2, 0)]);
         let p = "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/y b/y\nBinary files a/y and b/y differ\ndiff --git a/z b/z\nold mode 100644\nnew mode 100755\n";
-        assert_eq!(split_patches(p), [Some("@@ -1 +1 @@\n-a\n+b".to_string()), None, None]);
+        let sec = |old: Option<&str>, new: Option<&str>, patch: Option<&str>| Section { old: old.map(Into::into), new: new.map(Into::into), patch: patch.map(Into::into) };
+        assert_eq!(split_patches(p), [sec(Some("x"), Some("x"), Some("@@ -1 +1 @@\n-a\n+b")), sec(None, None, None), sec(None, None, None)]);
         assert!(split_patches("").is_empty());
+        // A name with a space ends in a tab; an odd one is C-quoted, prefix and all
+        let p = "diff --git a/sp ace b/sp ace\n--- a/sp ace\t\n+++ b/sp ace\t\n@@ -1 +1 @@\n-a\n+b\ndiff --git \"a/q\\\"t\\303\\251\" \"b/q\\\"t\\303\\251\"\ndeleted file mode 100644\n--- \"a/q\\\"t\\303\\251\"\n+++ /dev/null\n@@ -1 +0,0 @@\n-a\n";
+        assert_eq!(split_patches(p), [sec(Some("sp ace"), Some("sp ace"), Some("@@ -1 +1 @@\n-a\n+b")), sec(Some("q\"t\u{e9}"), None, Some("@@ -1 +0,0 @@\n-a"))]);
+        assert_eq!(unquote_c("a\\tb\\\\c\\nd"), Some("a\tb\\c\nd".into()));
+        assert_eq!(unquote_c("bad\\9"), Some("bad9".into()), "an unknown escape is the character itself");
+        assert_eq!(unquote_c("cut\\30"), None);
+        assert_eq!(unquote_c("cut\\"), None);
+    }
+
+    /// Rigel's F-1 on #447: patches were matched to files by position, and dropped when the counts
+    /// differed. Now each file finds its own section by path, so a section too many or too few
+    /// costs only the file it belongs to.
+    #[test]
+    fn patches_are_matched_to_files_by_path() {
+        let file = |path: &str, status: &str| FileDiff { path: path.into(), status: status.into(), additions: 1, deletions: 1, patch: None, previous_path: None };
+        let sec = |old: Option<&str>, new: Option<&str>, patch: Option<&str>| Section { old: old.map(Into::into), new: new.map(Into::into), patch: patch.map(Into::into) };
+        let mut files = vec![file("gone.rs", "removed"), file("link", "changed"), file("new.rs", "renamed"), file("lost.rs", "modified"), file("mode.sh", "modified"), file("back", "changed")];
+        match_patches(
+            &mut files,
+            vec![
+                sec(Some("gone.rs"), None, Some("@@ gone")),
+                // A type change: the delete, then the add; the add (the new side) wins
+                sec(Some("link"), None, Some("@@ old link")),
+                sec(None, Some("link"), Some("@@ new link")),
+                sec(Some("old.rs"), Some("new.rs"), Some("@@ renamed")),
+                // mode.sh: a mode change has no hunks
+                sec(None, None, None),
+                // A type change whose new side is binary: the old side's hunks
+                sec(Some("back"), None, Some("@@ old back")),
+                sec(None, None, None),
+                // A section for no file in the list is ignored
+                sec(Some("other.rs"), Some("other.rs"), Some("@@ other")),
+            ],
+        );
+        let got: Vec<_> = files.iter().map(|f| (f.path.as_str(), f.patch.as_deref())).collect();
+        assert_eq!(got, [("gone.rs", Some("@@ gone")), ("link", Some("@@ new link")), ("new.rs", Some("@@ renamed")), ("lost.rs", None), ("mode.sh", None), ("back", Some("@@ old back"))]);
+        // A delete never takes an add's hunks, nor a modify a delete's
+        let mut files = vec![file("a", "removed"), file("b", "modified")];
+        match_patches(&mut files, vec![sec(None, Some("a"), Some("@@ a")), sec(Some("b"), None, Some("@@ b"))]);
+        assert!(files.iter().all(|f| f.patch.is_none()), "{files:?}");
+    }
+
+    /// F-1 with real git: a symlink turned into a file prints two `-p` sections for one `T` file.
+    /// The edited text file next to it keeps its patch, the type-changed file gets its new side,
+    /// and the card has no unread reason. A rename next to a modify still matches too.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_type_change_keeps_every_files_patch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let w = tmp.path().join("work");
+        std::fs::create_dir_all(&w).unwrap();
+        sh(&w, &["init", "-q"]);
+        write(&w, "a.txt", b"hi\n");
+        std::os::unix::fs::symlink("a.txt", w.join("link")).unwrap();
+        write(&w, "old name.rs", b"fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n");
+        write(&w, "src/m.rs", b"fn m() {}\n");
+        let base = commit_all(&w, "Base");
+        std::fs::remove_file(w.join("link")).unwrap();
+        write(&w, "link", b"real file now\n");
+        write(&w, "a.txt", b"hi\nmore\n");
+        let head = commit_all(&w, "Tiny change");
+        let repo = Repo::local(&w, &tmp.path().join("data")).await.unwrap();
+        let files = repo.diff(Some(&base), &head).await.unwrap();
+        let got: Vec<_> = files.iter().map(|f| (f.path.as_str(), f.status.as_str(), f.additions, f.deletions, f.patch.as_deref())).collect();
+        assert_eq!(got, [("a.txt", "modified", 1, 0, Some("@@ -1 +1,2 @@\n hi\n+more")), ("link", "changed", 1, 1, Some("@@ -0,0 +1 @@\n+real file now"))]);
+        assert!(super::super::risk::unread_files(&files).is_empty());
+        let r = super::super::risk::assess(&super::super::risk::Inputs { files: &files, ..Default::default() });
+        assert!(r.reasons.iter().all(|x| !x.starts_with("Couldn't read")), "{:?}", r.reasons);
+        assert_eq!(r.level, super::super::risk::Level::Low, "{:?}", r.reasons);
+
+        // A rename (with a space in its name) next to a modify, and a delete
+        sh(&w, &["mv", "old name.rs", "new name.rs"]);
+        write(&w, "new name.rs", b"fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\nfn five() {}\n");
+        write(&w, "src/m.rs", b"fn m() { 1 }\n");
+        std::fs::remove_file(w.join("a.txt")).unwrap();
+        let next = commit_all(&w, "Rename and edit");
+        let files = repo.diff(Some(&head), &next).await.unwrap();
+        let by = |p: &str| files.iter().find(|f| f.path == p).unwrap_or_else(|| panic!("{p}: {files:?}")).clone();
+        assert_eq!(files.len(), 3, "{files:?}");
+        assert_eq!(by("a.txt").status, "removed");
+        assert_eq!(by("a.txt").patch.as_deref(), Some("@@ -1,2 +0,0 @@\n-hi\n-more"));
+        assert_eq!((by("new name.rs").status.as_str(), by("new name.rs").previous_path.as_deref()), ("renamed", Some("old name.rs")));
+        assert_eq!(by("new name.rs").patch.as_deref(), Some("@@ -2,3 +2,4 @@ fn one() {}\n fn two() {}\n fn three() {}\n fn four() {}\n+fn five() {}"));
+        assert_eq!(by("src/m.rs").patch.as_deref(), Some("@@ -1 +1 @@\n-fn m() {}\n+fn m() { 1 }"));
     }
 
     // -----------------------------------------------------------------------------------------
     // G2 review (Lin, at 6dd0243): one test per probe.
 
-    #[cfg(unix)]
-    fn exe(path: &Path, text: &str) {
-        std::fs::write(path, text).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-    }
 
     /// F1 (probe P1): an ssh remote runs `ssh`, never an empty command, whatever the repo's own
     /// config says. A fake `ssh` first on PATH logs what git asked it for.

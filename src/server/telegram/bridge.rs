@@ -417,8 +417,8 @@ async fn on_event(state: &AppState, event: &RuntimeEvent) {
             approval_closed(state, id, &format!("<i>{}</i>", text::escape(copy::NO_LONGER_WAITING))).await
         }
         RuntimeEvent::HumanStepUpdated { step } => on_human_step(state, step).await,
-        RuntimeEvent::Notify { kind, kwant_name, title, body, space_id: Some(space), channel_id, kwant_id, .. } => {
-            on_notify(state, space, kind, kwant_name, title, body, channel_id.as_deref(), kwant_id).await
+        RuntimeEvent::Notify { kind, kwant_name, title, body, space_id: Some(space), channel_id, kwant_id, held_message, .. } => {
+            on_notify(state, space, kind, kwant_name, title, body, channel_id.as_deref(), kwant_id, *held_message).await
         }
         _ => {}
     }
@@ -576,7 +576,7 @@ async fn on_human_step(state: &AppState, step: &Value) {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn on_notify(state: &AppState, space: &str, kind: &str, who: &str, title: &str, body: &str, channel: Option<&str>, kwant: &str) {
+async fn on_notify(state: &AppState, space: &str, kind: &str, who: &str, title: &str, body: &str, channel: Option<&str>, kwant: &str, held_message: bool) {
     let tg_kind = if STUCK_KINDS.contains(&kind) {
         "stuck"
     } else if DONE_KINDS.contains(&kind) {
@@ -591,9 +591,11 @@ async fn on_notify(state: &AppState, space: &str, kind: &str, who: &str, title: 
     }
     let head = if tg_kind == "done" { format!("Done: {}", text::escape(title)) } else { format!("<b>{}</b>", text::escape(title)) };
     let mut html = head;
-    // The spending stop while the person writes from here: what held is most likely their own
-    // message, which isn't replayed after Continue, so say to send it again (Rigel's F-D1)
-    let body = if kind == crate::server::spend_stop::REASON && link.reply_window_from.is_some() { copy::SPEND_HELD } else { body };
+    // The spending stop held the person's own message while they write from here: it isn't
+    // replayed after Continue, so say to send it again (Rigel's F-D1). A routine, mission or Jira
+    // task that tripped the stop inside the reply window keeps the plain line (D-1)
+    let own = kind == crate::server::spend_stop::REASON && held_message && link.reply_window_from.is_some();
+    let body = if own { copy::SPEND_HELD } else { body };
     if !body.trim().is_empty() {
         html.push('\n');
         html.push_str(&text::escape(body));

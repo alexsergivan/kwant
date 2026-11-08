@@ -70,6 +70,12 @@ jobs:
       - name: Unit tests
         timeout-minutes: 20
         run: 'cargo test --locked --lib --no-fail-fast -- --skip server::dev:: --skip parallel::harness::'
+      # Dev mode's git readers on Windows (0.7.7: #444 head_branch and its refusals, #447 the
+      # freshness window, #448 diff sections matched by path). The rest of server::dev:: stays out
+      # of the gate above (next-076/windows/plan.md, "Tests not ported").
+      - name: Dev mode git readers (head_branch, fresh reviews, diff paths)
+        timeout-minutes: 15
+        run: 'cargo test --locked --lib --no-fail-fast -- server::dev::floor:: server::dev::poller::tests::fresh_means server::dev::poller::tests::candidates_go_newest server::dev::poller::tests::the_skipped_count server::dev::git::tests::diff_output_parses server::dev::git::tests::patches_are_matched'
       - name: Windows integration tests (bash, Stop ends the process tree)
         timeout-minutes: 20
         run: cargo test --locked --no-fail-fast --test shell_stop_tree_test --test shell_tool_test

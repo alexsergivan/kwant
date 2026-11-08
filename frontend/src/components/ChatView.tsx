@@ -1,10 +1,11 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import type { SwitchEntry } from '../watchLive';
-import { trialCardsAfter } from '../showOnce';
+import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
+import { parsePick } from '../engines';
 import { onContinuity } from '../continuity';
 import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel } from '../agentConnections';
-import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor } from 'lucide-react';
+import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Copy, Check, ChevronLeft, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { BotHome } from './BotHome';
 import { ChatHome, answerTarget, goodAt, recipientsOf } from '../botHome';
@@ -182,7 +183,7 @@ export interface ChatViewProps {
   /** Saves the person's thumbs on a bot reply; absent hides the thumbs. */
   onReact?: (msg: ChatMessage, reaction: Reaction | null) => Promise<ReactResult> | void;
   onResolveApproval: (id: string, decision: 'allow_once' | 'always_allow' | 'deny') => void;
-  kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
+  kwants?: Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>;
   teams?: Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>;
   /** Prompts offered above an empty chat, made from who is in it; none hides the bar. */
   suggestions?: string[];
@@ -524,7 +525,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   // Fallback to fetch kwants and teams if not provided as props
-  const [internalKwants, setInternalKwants] = useState<Array<{ id: string; name: string; title: string; avatar_sprite: string }>>([]);
+  const [internalKwants, setInternalKwants] = useState<Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>>([]);
   const [internalTeams, setInternalTeams] = useState<Array<{ id: string; name: string; description?: string; member_kwants?: string[] }>>([]);
 
   useEffect(() => {
@@ -1207,6 +1208,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const shownDecisions = isUser ? null : messageDecisions(msg.text, msg.meta);
     const decisions = shownDecisions?.decisions ?? [];
     const text = shownDecisions ? shownDecisions.text : msg.text;
+    // S-F7: a trial turn that came back empty says so, in muted text, instead of a blank bubble.
+    const emptyTrial =
+      !isUser && msg.sender_role === 'kwant' && !(text ?? '').trim() && !files.length && msg.results == null && trialOf(msg)
+        ? emptyTrialReplyLine(parsePick(activeKwants.find((k) => k.id === msg.sender_id || k.name === msg.sender_id)?.preferred_model).family)
+        : null;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
     const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
     const replyQuote = isUser ? replyRefOf(msg.reply_to) : null;
@@ -1332,6 +1338,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
               </>
             ) : workAhead ? (
               <WorkAheadBody messageId={msg.id} text={text} />
+            ) : emptyTrial ? (
+              <p className="flex items-start gap-2 text-sm leading-5 text-zinc-400" data-empty-trial-reply="">
+                <CircleSlash size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
+                <span>{emptyTrial}</span>
+              </p>
             ) : (
               <MarkdownRenderer content={text} results={msg.results} messageId={msg.id} />
             )}
@@ -1782,7 +1793,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
-      {messages.length <= 1 && suggestions.length > 0 && !showHome && (
+      {/* O2 §6: hidden while nothing can run, instead of shown disabled */}
+      {messages.length <= 1 && suggestions.length > 0 && !showHome && canRun !== false && (
         <ScrollRow
           className="kw-scroll-row px-3 sm:px-6 py-2 flex flex-nowrap sm:flex-wrap items-center gap-2 overflow-x-auto sm:overflow-visible select-none"
           role="group"
@@ -1794,9 +1806,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               key={prompt}
               type="button"
               onClick={() => handlePromptSuggestion(prompt)}
-              disabled={canRun === false}
-              title={canRun === false ? 'Add an account first' : undefined}
-              className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 transition-all shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-zinc-800 disabled:hover:text-zinc-400"
+              className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-xs text-zinc-400 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:text-zinc-200 transition-all shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
             >
               {prompt}
             </button>

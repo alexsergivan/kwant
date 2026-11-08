@@ -72,6 +72,10 @@ export interface DevRepo {
   forge: Forge | null;
   /** 0.7.4: a connection reads that forge (GitHub's own, or a Loose ends `forge` connection for the host). */
   forge_connected: boolean;
+  /** 0.7.7: how many days back a branch or pull request counts as fresh for a review. null on an older server. */
+  fresh_days: number | null;
+  /** 0.7.7: branches or pull requests the last poll left unreviewed for being older than that. null on an older server. */
+  old_reviews_skipped: number | null;
 }
 
 /** Where a space's repo was found: a team's repo link, a git folder with a remote, or a folder with no remote. */
@@ -105,6 +109,8 @@ export const forgeOf = (v: unknown): Forge | null => (v === 'github' || v === 'g
 export type OtherForge = Exclude<Forge, 'github'>;
 export const otherForge = (v: unknown): OtherForge | null => (v === 'gitlab' || v === 'gitea' || v === 'forgejo' ? v : null);
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+/** A whole, non-negative count from the server, else null (missing, a string, NaN, negative, fractional). */
+const count = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
 const STATUSES: readonly DevStatus[] = ['watching', 'no_repo', 'not_connected', 'no_git', 'other_host'];
 
 /** Drops userinfo from a URL-looking repo (`https://user:token@host/…`), so a token never reaches the screen. */
@@ -185,6 +191,8 @@ export function parseRepos(v: unknown): DevRepo[] {
       added_by: o.added_by === 'hand' || o.added_by === 'migrated' || (from === 'hand' && o.added_by !== 'team') ? 'hand' : o.added_by === 'team' ? 'team' : null,
       provider: providerOf(o.provider, from, host, key),
       ...repoForge(o, providerOf(o.provider, from, host, key), status),
+      fresh_days: count(o.fresh_days),
+      old_reviews_skipped: count(o.old_reviews_skipped),
     });
   }
   return out;
@@ -216,6 +224,8 @@ function legacyRepos(o: Record<string, unknown>, sources: DevSource[], status: D
       added_by: src ? 'team' : null,
       provider: providerOf(null, src?.from, src?.host ?? null),
       ...repoForge({}, providerOf(null, src?.from, src?.host ?? null), st),
+      fresh_days: null,
+      old_reviews_skipped: null,
     },
   ];
 }
@@ -391,6 +401,19 @@ export const forgeFix = (r: DevRepo): ForgeFix | null => {
 };
 /** Read with plain git only: no forge connection reads its reviews and CI (landed cards only). */
 export const landedOnly = (r: Pick<DevRepo, 'provider' | 'forge' | 'forge_connected'>): boolean => r.provider === 'git' && !(r.forge && r.forge_connected);
+/** 0.7.7 (fresh reviews): the Reviews tab's one quiet line when the last poll skipped older branches or pull requests.
+ *  With a repo picked, that repo's count; with All, the repos' counts added up (the server's numbers, nothing new).
+ *  null: nothing skipped, or an older server that sends no count. Plain git reviews branches; a connected forge,
+ *  pull requests. */
+export function freshReviewsLine(s: DevModeState | null, repo: string | null = null): string | null {
+  const rows = (s?.repos ?? []).filter((r) => (!repo || r.key === repo) && (r.old_reviews_skipped ?? 0) > 0 && (r.fresh_days ?? 0) > 0);
+  if (!rows.length) return null;
+  const skipped = rows.reduce((n, r) => n + (r.old_reviews_skipped ?? 0), 0);
+  const days = Math.max(...rows.map((r) => r.fresh_days ?? 0));
+  const git = rows.filter(landedOnly).length;
+  const what = git === rows.length ? 'branches with new commits' : git === 0 ? 'pull requests updated' : 'branches and pull requests updated';
+  return `Reviewing ${what} in the last ${days === 1 ? 'day' : `${days} days`}. ${skipped === 1 ? '1 older one' : `${skipped} older ones`} skipped.`;
+}
 /** §1b: a repo read with plain git (GitLab, Gitea, a plain git server or a folder): landed cards only. */
 export const LANDED_ONLY = 'Landed changes only';
 /** §1b tooltips. With no branch name (the remote's default branch) it says "its default branch" (not in Mira's file). */

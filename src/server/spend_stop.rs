@@ -185,7 +185,7 @@ pub async fn check(state: &AppState, space: Option<&SpaceId>) -> Result<(), Stri
     if !s.stopped {
         return Ok(());
     }
-    tripped(state, &s, space).await;
+    tripped(state, &s, space, false).await;
     Err(stop_error(&s))
 }
 
@@ -197,8 +197,10 @@ const NOTIFY_KEY: &str = "notify";
 /// so routines going quiet overnight are heard. It names no bot (the stop holds them all) but
 /// carries `space`, the held turn's, so Telegram and push know where it belongs (Rigel's F-D1:
 /// without it the Telegram "stuck" message was never sent). A tap opens Needs you, where
-/// Continue is.
-async fn tripped(state: &AppState, s: &Status, space: Option<&SpaceId>) {
+/// Continue is. `held_message` is true only when the held turn was the person's own message
+/// (D-1): a routine, mission or Jira task tripping the stop while the person writes from Telegram
+/// must not be told to them as "your message wasn't run".
+async fn tripped(state: &AppState, s: &Status, space: Option<&SpaceId>, held_message: bool) {
     let key = match space {
         Some(id) => format!("{NOTIFY_KEY}:{}", id.as_str()),
         None => NOTIFY_KEY.to_string(),
@@ -214,13 +216,13 @@ async fn tripped(state: &AppState, s: &Status, space: Option<&SpaceId>) {
         title: "Today's spending limit is reached".into(),
         body: format!("Used {}, so bots won't start new work until tomorrow. Open to continue today.", used_of(s)),
     };
-    super::continuity::notify_in(state, n, space).await;
+    super::continuity::notify_held(state, n, space, held_message).await;
 }
 
 /// Before a turn takes its slot (`routes::turn_once`): `Err` when today's spending stop holds new
 /// turns. Unless the turn is `quiet` (its caller records its own skip), the chat gets one notice
-/// a day, with Continue.
-pub(super) async fn gate(scope: &TurnScope, speaker: &Kwant, quiet: bool) -> Result<(), String> {
+/// a day, with Continue. `person` is true for a turn on the person's own message.
+pub(super) async fn gate(scope: &TurnScope, speaker: &Kwant, quiet: bool, person: bool) -> Result<(), String> {
     let s = status(&scope.state).await;
     if !s.stopped {
         return Ok(());
@@ -228,7 +230,7 @@ pub(super) async fn gate(scope: &TurnScope, speaker: &Kwant, quiet: bool) -> Res
     let context = scope.context_id(speaker);
     tracing::info!(context = %context, day = %s.day, tokens = s.today_tokens, usd = s.today_usd, "daily spending stop: turn not started");
     let space = scope.state.db.space_of_kwant(&speaker.id).await.ok().flatten();
-    tripped(&scope.state, &s, space.as_ref()).await;
+    tripped(&scope.state, &s, space.as_ref(), person).await;
     if !quiet && scope.state.db.first_spend_notice(&s.day, &format!("chat:{context}")).await.unwrap_or(false) {
         let meta = json!({
             "kind": REASON,

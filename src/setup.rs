@@ -23,6 +23,10 @@ pub const PLAYWRIGHT_VERSION: &str = "1.64.1";
 pub const CODEX_NPM: &str = "@openai/codex";
 /// Claude Code's npm package, for Windows (elsewhere its own installer script is used).
 pub const CLAUDE_NPM: &str = "@anthropic-ai/claude-code";
+/// Where Codex publishes its standalone builds (one tag per release, `rust-v<version>`).
+pub const CODEX_RELEASES: &str = "https://github.com/openai/codex/releases";
+/// The release's checksum file for its `codex-package-<target>.tar.gz` archives.
+pub const CODEX_SUMS: &str = "codex-package_SHA256SUMS";
 
 /// A part `kwnt setup` can install.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -222,6 +226,9 @@ pub enum Step {
     LayaModel { label: String },
     /// Opens the found Chrome without a window to check it starts.
     CheckChrome { label: String },
+    /// Downloads Codex's standalone build from its latest GitHub release, checks it against the
+    /// release's SHA-256 list, and links it as `~/.local/bin/codex` (see [`install_codex_release`]).
+    CodexRelease { label: String },
     /// Needs admin rights or a download page: shown to the person, never run.
     Manual { label: String, command: String },
 }
@@ -230,7 +237,7 @@ impl Step {
     pub fn label(&self) -> &str {
         match self {
             Step::Run(c) => &c.label,
-            Step::LayaModel { label } | Step::CheckChrome { label } | Step::Manual { label, .. } => label,
+            Step::LayaModel { label } | Step::CheckChrome { label } | Step::CodexRelease { label } | Step::Manual { label, .. } => label,
         }
     }
 
@@ -239,6 +246,9 @@ impl Step {
             Step::Run(c) => c.display(),
             Step::LayaModel { .. } => "(kwant starts Laya once to download and test its routing model)".into(),
             Step::CheckChrome { .. } => "(kwant opens the browser once without a window to check it starts)".into(),
+            Step::CodexRelease { .. } => format!(
+                "(kwant downloads codex-package-<this computer>.tar.gz from {CODEX_RELEASES}/latest, checks it against {CODEX_SUMS}, and links ~/.local/bin/codex)"
+            ),
             Step::Manual { command, .. } => command.clone(),
         }
     }
@@ -406,6 +416,10 @@ pub fn plan(item: ItemId, p: &Probe) -> Plan {
             (Platform::Mac, None, Some(_)) => {
                 steps.push(Step::Run(Cmd::new("Install the Codex CLI with Homebrew", &["brew", "install", "--cask", "codex"])))
             }
+            // No Node: Codex's own standalone build, which needs nothing else
+            (platform, None, _) if codex_target(platform).is_some() => steps.push(Step::CodexRelease {
+                label: "Download the Codex CLI from its GitHub release into ~/.local/bin (no Node needed)".into(),
+            }),
             (Platform::Mac, None, None) => steps.push(Step::Manual {
                 label: "Install Node.js, then the Codex CLI".into(),
                 command: format!("Install Node.js from https://nodejs.org, then: npm install -g {CODEX_NPM}"),
@@ -714,6 +728,14 @@ pub async fn run_plan(plan: &Plan, config: &crate::config::Config, log: &(dyn Fn
             Step::CheckChrome { label } => {
                 log(format!("▸ {label}"));
                 check_chrome(log).await.map_err(|e| format!("{label}: {e}"))?;
+            }
+            Step::CodexRelease { label } => {
+                log(format!("▸ {label}"));
+                let home = dirs::home_dir().ok_or_else(|| format!("{label}: no home folder"))?;
+                let target = codex_target(Platform::detect()).ok_or_else(|| format!("{label}: no Codex build for this computer"))?;
+                let codex_home = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+                let at = CodexInstall::new(&home, codex_home, target).releases(&codex_releases_url());
+                install_codex_release(&at, log).await.map_err(|e| format!("{label}: {e}"))?;
             }
         }
     }
@@ -1025,6 +1047,256 @@ pub async fn run_cli(config: &crate::config::Config, opts: Options) -> i32 {
     }
 }
 
+/// Codex's build name for this computer, as its releases name them (`codex-package-<target>`).
+/// `None` where Codex publishes no standalone build.
+pub fn codex_target(platform: Platform) -> Option<&'static str> {
+    match (platform, std::env::consts::ARCH) {
+        (Platform::Mac, "aarch64") => Some("aarch64-apple-darwin"),
+        (Platform::Mac, "x86_64") => Some("x86_64-apple-darwin"),
+        (Platform::Linux, "aarch64") => Some("aarch64-unknown-linux-musl"),
+        (Platform::Linux, "x86_64") => Some("x86_64-unknown-linux-musl"),
+        _ => None,
+    }
+}
+
+/// [`CODEX_RELEASES`], or in a test build `KWNT_CODEX_RELEASES_URL` (a local fake server).
+pub fn codex_releases_url() -> String {
+    #[cfg(feature = "test-seams")]
+    if let Some(url) = std::env::var("KWNT_CODEX_RELEASES_URL").ok().filter(|u| !u.is_empty()) {
+        return url;
+    }
+    CODEX_RELEASES.to_string()
+}
+
+/// Where [`install_codex_release`] downloads from and installs to. The layout is the one Codex's
+/// own `install.sh` uses, so its updater and kwant agree: each release unpacked in
+/// `$CODEX_HOME/packages/standalone/releases/<version>-<target>`, `current` linking the live one,
+/// and `~/.local/bin/codex` linking `current/bin/codex`.
+#[derive(Clone, Debug)]
+pub struct CodexInstall {
+    pub releases: String,
+    pub target: String,
+    /// `$CODEX_HOME/packages/standalone`.
+    pub root: PathBuf,
+    /// `~/.local/bin`.
+    pub bin_dir: PathBuf,
+    /// Largest archive accepted; the real ones are about 200 MB.
+    pub max_bytes: u64,
+}
+
+impl CodexInstall {
+    pub fn new(home: &Path, codex_home: Option<PathBuf>, target: &str) -> Self {
+        let codex_home = codex_home.unwrap_or_else(|| home.join(".codex"));
+        Self {
+            releases: CODEX_RELEASES.to_string(),
+            target: target.to_string(),
+            root: codex_home.join("packages").join("standalone"),
+            bin_dir: home.join(".local").join("bin"),
+            max_bytes: 1 << 30,
+        }
+    }
+
+    pub fn releases(mut self, url: &str) -> Self {
+        self.releases = url.trim_end_matches('/').to_string();
+        self
+    }
+
+    pub fn asset(&self) -> String {
+        format!("codex-package-{}.tar.gz", self.target)
+    }
+
+    /// `~/.local/bin/codex`.
+    pub fn command(&self) -> PathBuf {
+        self.bin_dir.join("codex")
+    }
+}
+
+/// Installs Codex's latest standalone build: finds the latest tag, reads the release's
+/// [`CODEX_SUMS`], downloads `codex-package-<target>.tar.gz` and checks its SHA-256 before
+/// anything is unpacked, then unpacks it next to earlier releases, switches `current` to it and
+/// links `~/.local/bin/codex`. A download that doesn't match is deleted and nothing changes.
+/// Returns the linked command.
+pub async fn install_codex_release(at: &CodexInstall, log: &(dyn Fn(String) + Send + Sync)) -> Result<PathBuf, String> {
+    use futures::StreamExt;
+    use sha2::{Digest, Sha256};
+    use tokio::io::AsyncWriteExt;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .user_agent(concat!("kwnt/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let fetch = |url: String| {
+        let client = client.clone();
+        async move {
+            let r = client.get(&url).send().await.map_err(|e| format!("couldn't reach {url}: {e}"))?;
+            if !r.status().is_success() {
+                return Err(format!("{url} answered {}", r.status()));
+            }
+            Ok::<_, String>(r)
+        }
+    };
+
+    // The latest tag, from where /latest redirects to (…/releases/tag/rust-v0.167.0)
+    let latest = fetch(format!("{}/latest", at.releases)).await?;
+    let tag = latest
+        .url()
+        .path_segments()
+        .and_then(|mut s| s.next_back())
+        .map(str::to_string)
+        .filter(|t| t.starts_with("rust-v") && t.len() > 6 && t.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)))
+        .ok_or_else(|| format!("couldn't tell the latest Codex release from {}", latest.url()))?;
+    drop(latest);
+    let version = tag.trim_start_matches("rust-v").to_string();
+    let asset = at.asset();
+    log(format!("  Codex {version} ({asset})"));
+
+    let sums_url = format!("{}/download/{tag}/{CODEX_SUMS}", at.releases);
+    let sums = fetch(sums_url.clone()).await?.text().await.map_err(|e| format!("{sums_url}: {e}"))?;
+    let want = sums
+        .lines()
+        .filter_map(|l| {
+            let mut w = l.split_whitespace();
+            Some((w.next()?, w.next()?.trim_start_matches('*')))
+        })
+        .find(|(_, name)| *name == asset)
+        .map(|(sum, _)| sum.to_ascii_lowercase())
+        .filter(|sum| sum.len() == 64 && sum.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or_else(|| format!("{CODEX_SUMS} of Codex {version} has no SHA-256 for {asset}"))?;
+
+    std::fs::create_dir_all(&at.root).map_err(|e| format!("couldn't make {}: {e}", at.root.display()))?;
+    let archive = at.root.join(format!(".download.{}.tar.gz", std::process::id()));
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(archive.clone());
+
+    let url = format!("{}/download/{tag}/{asset}", at.releases);
+    let resp = fetch(url.clone()).await?;
+    let total = resp.content_length().filter(|n| *n > 0);
+    if total.is_some_and(|n| n > at.max_bytes) {
+        return Err(format!("{asset} is larger than {} MB", at.max_bytes >> 20));
+    }
+    let mut file = tokio::fs::File::create(&archive).await.map_err(|e| format!("couldn't write {}: {e}", archive.display()))?;
+    let mut hasher = Sha256::new();
+    let (mut got, mut next_note) = (0u64, 0u64);
+    let mut body = resp.bytes_stream();
+    loop {
+        let chunk = match tokio::time::timeout(Duration::from_secs(120), body.next()).await {
+            Err(_) => return Err(format!("the download of {asset} stalled")),
+            Ok(None) => break,
+            Ok(Some(c)) => c.map_err(|e| format!("the download of {asset} broke off: {e}"))?,
+        };
+        got += chunk.len() as u64;
+        if got > at.max_bytes {
+            return Err(format!("{asset} is larger than {} MB", at.max_bytes >> 20));
+        }
+        hasher.update(&chunk);
+        file.write_all(&chunk).await.map_err(|e| format!("couldn't write {}: {e}", archive.display()))?;
+        if got >= next_note {
+            match total {
+                Some(t) => log(format!("  downloaded {} of {} MB", got >> 20, t >> 20)),
+                None => log(format!("  downloaded {} MB", got >> 20)),
+            }
+            next_note = got + (25 << 20);
+        }
+    }
+    file.flush().await.map_err(|e| e.to_string())?;
+    drop(file);
+    let have: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    if have != want {
+        return Err(format!(
+            "the download doesn't match the SHA-256 in Codex {version}'s {CODEX_SUMS}, so it wasn't installed (try again later)"
+        ));
+    }
+    log(format!("  SHA-256 matches {CODEX_SUMS}"));
+
+    // Unpack beside earlier releases, then switch over
+    let releases = at.root.join("releases");
+    let release = releases.join(format!("{version}-{}", at.target));
+    let staging = releases.join(format!(".staging.{version}-{}.{}", at.target, std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| format!("couldn't make {}: {e}", staging.display()))?;
+    let unpack = tokio::process::Command::new("tar")
+        .arg("-xzf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&staging)
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| format!("couldn't run tar: {e}"))?;
+    let codex = staging.join("bin").join("codex");
+    if !unpack.status.success() || !codex.is_file() {
+        let _ = std::fs::remove_dir_all(&staging);
+        let why = String::from_utf8_lossy(&unpack.stderr).lines().next().unwrap_or_default().to_string();
+        return Err(format!("{asset} didn't unpack to bin/codex {why}").trim_end().to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&codex, std::fs::Permissions::from_mode(0o755));
+        let _ = std::os::unix::fs::symlink("bin/codex", staging.join("codex"));
+    }
+    if release.exists() {
+        std::fs::remove_dir_all(&release).map_err(|e| format!("couldn't replace {}: {e}", release.display()))?;
+    }
+    std::fs::rename(&staging, &release).map_err(|e| format!("couldn't move Codex into place: {e}"))?;
+
+    let current = at.root.join("current");
+    replace_with_symlink(&current, &release)?;
+    std::fs::create_dir_all(&at.bin_dir).map_err(|e| format!("couldn't make {}: {e}", at.bin_dir.display()))?;
+    let command = at.command();
+    replace_with_symlink(&command, &current.join("bin").join("codex"))?;
+    // Codex looks for its code-mode helper on the PATH on a Mac (as its own installer links it)
+    let helper = current.join("bin").join("codex-code-mode-host");
+    if at.target.ends_with("apple-darwin") && release.join("bin").join("codex-code-mode-host").is_file() {
+        replace_with_symlink(&at.bin_dir.join("codex-code-mode-host"), &helper)?;
+    }
+
+    let check = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new(&command).arg("--version").stdin(Stdio::null()).output(),
+    )
+    .await;
+    match check {
+        Ok(Ok(out)) if out.status.success() => {
+            let said = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or_default().trim().to_string();
+            log(format!("  {} → {said}", command.display()));
+            Ok(command)
+        }
+        Ok(Ok(out)) => Err(format!("the installed codex didn't start ({})", out.status)),
+        Ok(Err(e)) => Err(format!("the installed codex didn't start: {e}")),
+        Err(_) => Err("the installed codex didn't answer --version within a minute".into()),
+    }
+}
+
+/// Points `link` at `target`, replacing what was there in one rename.
+fn replace_with_symlink(link: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let tmp = link.with_file_name(format!(
+            ".{}.{}",
+            link.file_name().and_then(|n| n.to_str()).unwrap_or("link"),
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        std::os::unix::fs::symlink(target, &tmp).map_err(|e| format!("couldn't link {}: {e}", link.display()))?;
+        std::fs::rename(&tmp, link).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("couldn't link {}: {e}", link.display())
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (link, target);
+        Err("Codex's standalone build is installed on a Mac or Linux only".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1192,10 +1464,12 @@ mod tests {
         assert_eq!(shown(&plan(ItemId::Claude, &p)), vec!["curl -fsSL https://claude.ai/install.sh | bash"]);
         assert_eq!(shown(&plan(ItemId::Grok, &p)), vec!["curl -fsSL https://x.ai/cli/install.sh | bash"]);
 
-        // codex: no Node on Linux → the person installs Node (sudo), nothing runs
+        // codex: no Node on Linux → Codex's standalone build, no sudo (0.7.6, O4)
         let pl = plan(ItemId::Codex, &p);
-        assert!(!pl.automatic());
-        assert!(shown(&pl)[0].starts_with("sudo apt-get install -y nodejs npm, then: npm install -g --prefix ~/.local @openai/codex"));
+        assert!(pl.automatic());
+        assert!(matches!(pl.steps.as_slice(), [Step::CodexRelease { .. }]), "{pl:?}");
+        assert!(shown(&pl)[0].contains("codex-package_SHA256SUMS"), "{:?}", shown(&pl));
+        never_sudo(&pl);
 
         let mut p = bare(Platform::Linux);
         p.npm = Some("/usr/bin/npm".into());
@@ -1206,8 +1480,11 @@ mod tests {
         let mut m = mac();
         m.brew = Some("/opt/homebrew/bin/brew".into());
         assert_eq!(shown(&plan(ItemId::Codex, &m)), vec!["brew install --cask codex"]);
+        // No Node and no Homebrew: Codex's standalone build (0.7.6, O4)
         m.brew = None;
-        assert!(shown(&plan(ItemId::Codex, &m))[0].contains("https://nodejs.org"));
+        let pl = plan(ItemId::Codex, &m);
+        assert!(pl.automatic());
+        assert!(matches!(pl.steps.as_slice(), [Step::CodexRelease { .. }]), "{pl:?}");
 
         let mut installed = bare(Platform::Linux);
         installed.clis[0].1 = Some("/home/u/.local/bin/claude".into());
@@ -1255,7 +1532,7 @@ mod tests {
         assert!(row(ItemId::Browser).can_install);
         assert_eq!(row(ItemId::Laya).need, Need::Recommended);
         assert_eq!(row(ItemId::Claude).need, Need::Recommended);
-        assert!(!row(ItemId::Codex).can_install, "codex needs Node via sudo here");
+        assert!(row(ItemId::Codex).can_install, "codex installs without Node (O4)");
         assert_eq!(row(ItemId::Docker).need, Need::Optional);
         assert!(!row(ItemId::Docker).can_install);
 

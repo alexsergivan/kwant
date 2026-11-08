@@ -42,7 +42,8 @@ pub async fn recheck_all(state: &AppState, space: &SpaceId) -> Vec<EngineReport>
 
 /// What the checks run with: Settings and the env, and Claude's sign-in config dir.
 pub async fn probe_env(state: &AppState) -> ProbeEnv {
-    state.claude_login.probe_env(ProbeEnv::from_settings(&state.db).await)
+    let env = state.claude_login.probe_env(ProbeEnv::from_settings(&state.db).await);
+    state.grok_login.probe_env(state.codex_login.probe_env(env))
 }
 
 /// Reads which engines are off from Settings into the registry.

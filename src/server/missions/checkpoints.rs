@@ -10,6 +10,7 @@ use super::routes::{bad, internal, load_task, not_found};
 use super::{emit_task, int_setting, task_folder, task_json, transition, Actor};
 use crate::db::checkpoints::{new_id, Checkpoint, NewCheckpoint, ToolCall};
 use crate::db::missions::{Claim, Task, TaskChange};
+use crate::server::gitfile::{self, plain_ref};
 use crate::server::AppState;
 use axum::{
     extract::{Path, RawQuery, State},
@@ -196,18 +197,40 @@ fn store_blob(blobs: &FsPath, src: &FsPath) -> std::io::Result<String> {
 }
 
 /// The commit the folder's git checkout is on, if it is one (read-only info).
+///
+/// The folder is written by the task's bots, so everything under `.git` is untrusted: it never
+/// follows a symlink (at any component), never opens anything but a regular file with one link (a
+/// FIFO can't block it, a hard link can't name a host file), reads at most [`gitfile::REF_MAX`] /
+/// [`gitfile::PACKED_MAX`] bytes, only follows a `ref:` that is a plain `refs/...` name, and only returns 40 or 64 hex characters. Anything else,
+/// including a `.git` file (a `gitdir:` worktree pointer), is `None`.
 fn git_head(folder: &FsPath) -> Option<String> {
     let git = folder.join(".git");
-    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+    if !gitfile::plain_dir(&std::fs::symlink_metadata(&git).ok()?) {
+        return None;
+    }
+    let head = gitfile::read(&git, "HEAD", gitfile::REF_MAX)?;
     let head = head.trim();
     let Some(r) = head.strip_prefix("ref: ") else {
-        return Some(head.chars().take(64).collect());
+        return commit_id(head);
     };
-    if let Ok(s) = std::fs::read_to_string(git.join(r)) {
-        return Some(s.trim().chars().take(64).collect());
+    let r = r.trim();
+    if !plain_ref(r) {
+        return None;
     }
-    let packed = std::fs::read_to_string(git.join("packed-refs")).ok()?;
-    packed.lines().find_map(|l| l.strip_suffix(r).map(|sha| sha.trim().chars().take(64).collect()))
+    if let Some(s) = gitfile::read(&git, r, gitfile::REF_MAX) {
+        return commit_id(s.trim());
+    }
+    let packed = gitfile::read(&git, "packed-refs", gitfile::PACKED_MAX)?;
+    packed
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with('^'))
+        .find_map(|l| l.split_once(' ').filter(|(_, name)| name.trim_end() == r).map(|(sha, _)| sha))
+        .and_then(commit_id)
+}
+
+/// A full SHA-1 (40) or SHA-256 (64) commit id, lowercased.
+fn commit_id(s: &str) -> Option<String> {
+    ((s.len() == 40 || s.len() == 64) && s.bytes().all(|b| b.is_ascii_hexdigit())).then(|| s.to_ascii_lowercase())
 }
 
 struct Taken {
@@ -1229,6 +1252,215 @@ mod tests {
         let s = summary("Bash", &json!({"command": "curl -H 'Authorization: Bearer sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789' https://x"}));
         assert!(!s.contains("abcdefghijklmnopqrstuvwxyz0123456789"), "{s}");
         assert!(summary("Bash", &json!({"command": "x".repeat(1000)})).chars().count() <= 300);
+    }
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+    /// Hex-shaped on purpose: only the symlink and path checks can keep it out, not the hex check.
+    const CANARY: &str = "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeec0ff";
+
+    /// A task folder with `.git/` and a canary file outside it.
+    fn repo() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("task");
+        std::fs::create_dir_all(folder.join(".git/refs/heads")).unwrap();
+        let canary = dir.path().join("canary");
+        std::fs::write(&canary, format!("{CANARY}\n")).unwrap();
+        (dir, folder, canary)
+    }
+
+    fn head_of(folder: &FsPath) -> Option<String> {
+        let h = git_head(folder);
+        assert!(!h.as_deref().unwrap_or("").contains("c0ffee"), "canary leaked: {h:?}");
+        h
+    }
+
+    #[test]
+    fn git_head_reads_a_branch_a_detached_head_and_a_packed_ref() {
+        let (_d, folder, _) = repo();
+        let git = folder.join(".git");
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git.join("refs/heads/main"), format!("{SHA}\n")).unwrap();
+        assert_eq!(head_of(&folder).as_deref(), Some(SHA));
+
+        std::fs::write(git.join("HEAD"), format!("{}\n", SHA.to_uppercase())).unwrap();
+        assert_eq!(head_of(&folder).as_deref(), Some(SHA), "detached, lowercased");
+        let sha256 = "ab".repeat(32);
+        std::fs::write(git.join("HEAD"), &sha256).unwrap();
+        assert_eq!(head_of(&folder), Some(sha256), "a SHA-256 repo");
+
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/feature/x\n").unwrap();
+        std::fs::write(
+            git.join("packed-refs"),
+            format!("# pack-refs with: peeled fully-peeled sorted\n{CANARY} refs/heads/feature/xy\n{SHA} refs/heads/feature/x\n^{CANARY}\n"),
+        )
+        .unwrap();
+        assert_eq!(head_of(&folder).as_deref(), Some(SHA), "exact name in packed-refs");
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/none\n").unwrap();
+        assert_eq!(head_of(&folder), None, "a branch with no commit yet");
+        assert_eq!(head_of(&folder.join("missing")), None);
+    }
+
+    #[test]
+    fn git_head_only_returns_a_commit_id() {
+        let (_d, folder, _) = repo();
+        let git = folder.join(".git");
+        for bad in ["hello world", "0123456789abcdef", &format!("{SHA}0"), "g123456789abcdef0123456789abcdef01234567", "", "ref: "] {
+            std::fs::write(git.join("HEAD"), bad).unwrap();
+            assert_eq!(head_of(&folder), None, "{bad:?}");
+        }
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main").unwrap();
+        std::fs::write(git.join("refs/heads/main"), "root:x:0:0:root:/root:/bin/bash\n").unwrap();
+        assert_eq!(head_of(&folder), None, "a ref file that isn't a commit id");
+        std::fs::write(git.join("refs/heads/main"), format!("{SHA}\n{}", " ".repeat(5000))).unwrap();
+        assert_eq!(head_of(&folder), None, "over the 4 KB cap");
+    }
+
+    #[test]
+    fn git_head_never_leaves_dot_git() {
+        let (dir, folder, _) = repo();
+        let git = folder.join(".git");
+        // A real loose ref outside .git that a traversal would reach
+        std::fs::create_dir_all(dir.path().join("refs/heads")).unwrap();
+        std::fs::write(dir.path().join("refs/heads/main"), CANARY).unwrap();
+        for r in [
+            "../../canary",
+            "refs/../../../canary",
+            "refs/heads/../../../../canary",
+            "/etc/hostname",
+            "refs//heads/main",
+            "refs/./heads/main",
+            "refs\\heads\\main",
+            "refs/heads/ma in",
+            "heads/main",
+            "refs/",
+        ] {
+            std::fs::write(git.join("HEAD"), format!("ref: {r}\n")).unwrap();
+            assert_eq!(head_of(&folder), None, "{r:?}");
+        }
+        assert!(plain_ref("refs/heads/feature/x-1_2.3") && !plain_ref("refs/heads/a..b"));
+    }
+
+    #[test]
+    fn git_head_ignores_a_gitdir_file() {
+        let (dir, folder, _) = repo();
+        std::fs::remove_dir_all(folder.join(".git")).unwrap();
+        let other = dir.path().join("other.git");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("HEAD"), CANARY).unwrap();
+        std::fs::write(folder.join(".git"), format!("gitdir: {}\n", other.display())).unwrap();
+        assert_eq!(head_of(&folder), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_head_never_follows_a_symlink() {
+        use std::os::unix::fs::symlink;
+        let (dir, folder, canary) = repo();
+        let git = folder.join(".git");
+
+        // HEAD → canary
+        symlink(&canary, git.join("HEAD")).unwrap();
+        assert_eq!(head_of(&folder), None, "HEAD symlink");
+        std::fs::remove_file(git.join("HEAD")).unwrap();
+
+        // the ref file → canary
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        symlink(&canary, git.join("refs/heads/main")).unwrap();
+        assert_eq!(head_of(&folder), None, "ref file symlink");
+        std::fs::remove_file(git.join("refs/heads/main")).unwrap();
+
+        // a folder on the ref's way → elsewhere
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("main"), CANARY).unwrap();
+        std::fs::remove_dir(git.join("refs/heads")).unwrap();
+        symlink(&elsewhere, git.join("refs/heads")).unwrap();
+        assert_eq!(head_of(&folder), None, "refs/heads symlink");
+        std::fs::remove_file(git.join("refs/heads")).unwrap();
+        std::fs::create_dir(git.join("refs/heads")).unwrap();
+
+        // packed-refs → a canary in packed-refs shape
+        let packed = dir.path().join("packed");
+        std::fs::write(&packed, format!("{CANARY} refs/heads/main\n")).unwrap();
+        symlink(&packed, git.join("packed-refs")).unwrap();
+        assert_eq!(head_of(&folder), None, "packed-refs symlink");
+        std::fs::remove_file(git.join("packed-refs")).unwrap();
+
+        // .git → a whole other repo whose HEAD is the canary
+        let other = dir.path().join("other.git");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("HEAD"), CANARY).unwrap();
+        std::fs::remove_dir_all(&git).unwrap();
+        symlink(&other, &git).unwrap();
+        assert_eq!(head_of(&folder), None, ".git symlink");
+    }
+
+    /// Windows: no FIFOs or O_NOFOLLOW there, so the same refusals come from the reparse-point and
+    /// link-count checks (gitfile). A hard-linked ref, a junction on the way or as `.git` is `None`.
+    #[cfg(windows)]
+    #[test]
+    fn git_head_refuses_junctions_and_hard_links_on_windows() {
+        use crate::server::gitfile::windows_tests::junction;
+        let (d, folder, canary) = repo();
+        let git = folder.join(".git");
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git.join("refs/heads/main"), format!("{SHA}\n")).unwrap();
+        assert_eq!(head_of(&folder).as_deref(), Some(SHA), "a plain repo reads");
+        std::fs::remove_file(git.join("refs/heads/main")).unwrap();
+        std::fs::hard_link(&canary, git.join("refs/heads/main")).unwrap();
+        assert_eq!(head_of(&folder), None, "a ref that is the canary's second name");
+        std::fs::remove_file(git.join("refs/heads/main")).unwrap();
+        let elsewhere = d.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::copy(&canary, elsewhere.join("main")).unwrap();
+        std::fs::remove_dir(git.join("refs/heads")).unwrap();
+        junction(&git.join("refs/heads"), &elsewhere);
+        assert_eq!(head_of(&folder), None, "refs/heads a junction");
+        let other = d.path().join("other");
+        std::fs::create_dir_all(other.join("refs/heads")).unwrap();
+        std::fs::write(other.join("HEAD"), format!("{CANARY}\n")).unwrap();
+        let task2 = d.path().join("task2");
+        std::fs::create_dir_all(&task2).unwrap();
+        junction(&task2.join(".git"), &other);
+        assert_eq!(head_of(&task2), None, ".git a junction");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_head_does_not_block_on_a_fifo() {
+        let (_d, folder, _) = repo();
+        let git = folder.join(".git");
+        let fifo = |p: &FsPath| {
+            let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+        };
+        fifo(&git.join("HEAD"));
+        let run = |folder: PathBuf| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || tx.send(git_head(&folder)).unwrap());
+            rx.recv_timeout(std::time::Duration::from_secs(5)).expect("git_head blocked on a FIFO")
+        };
+        assert_eq!(run(folder.clone()), None, "HEAD FIFO");
+        std::fs::remove_file(git.join("HEAD")).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        fifo(&git.join("refs/heads/main"));
+        fifo(&git.join("packed-refs"));
+        assert_eq!(run(folder), None, "ref and packed-refs FIFOs");
+    }
+
+    /// F-2: a hard link is a regular file, so a HEAD (or ref) that is another name for a host
+    /// file whose whole content is hex would pass every other check.
+    #[cfg(unix)]
+    #[test]
+    fn git_head_never_reads_a_hard_link() {
+        let (_d, folder, canary) = repo();
+        let git = folder.join(".git");
+        std::fs::hard_link(&canary, git.join("HEAD")).unwrap();
+        assert_eq!(head_of(&folder), None, "HEAD hard-linked to a host file");
+        std::fs::remove_file(git.join("HEAD")).unwrap();
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::hard_link(&canary, git.join("refs/heads/main")).unwrap();
+        assert_eq!(head_of(&folder), None, "loose ref hard-linked to a host file");
     }
 
     #[test]

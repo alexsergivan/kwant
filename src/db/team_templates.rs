@@ -245,6 +245,10 @@ pub struct TemplateInfo {
     pub blocked: Vec<Blocked>,
     pub removes: Removes,
     pub chat_messages: i64,
+    /// What Undo will rename the team chat to (`archived-team-<handle>`, with `-2`, `-3`… when
+    /// that is taken), when it keeps the chat because it has messages. `None` when Undo deletes
+    /// the chat or leaves it alone.
+    pub archived_chat: Option<String>,
     pub also_in: Vec<AlsoIn>,
     pub edited_skills: Vec<String>,
     /// Needs (T5) the server can see are done. A `composer_prompt` need, such as Sales'
@@ -471,6 +475,17 @@ impl Database {
             }
             _ => 0,
         };
+        // The same choice `undo_in` makes: a new team's chat with messages, still `team-…`.
+        let archived_chat = match (&c.created.channel_id, chat_messages > 0) {
+            (Some(ch), true) => {
+                let name: Option<(String,)> = sqlx::query_as("SELECT name FROM channels WHERE id = ?").bind(ch).fetch_optional(&mut *conn).await?;
+                match name {
+                    Some((name,)) if name.starts_with("team-") => Some(super::archived_chat_name(&mut conn, &c.space_id, &name).await?),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
         let person_posted = match &c.created.channel_id {
             Some(ch) => {
                 sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM messages WHERE channel_id = ? AND sender_role = 'user'")
@@ -507,6 +522,7 @@ impl Database {
             blocked,
             removes: Removes { bots, skills, routines, handle: handle.map(|(h,)| h) },
             chat_messages,
+            archived_chat,
             also_in,
             edited_skills,
             needs_done,

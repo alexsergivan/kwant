@@ -1,11 +1,16 @@
 # Kwant server: React UI embedded in a single Rust binary.
 # AI CLIs are optional: --build-arg KWNT_CLIS=claude,codex,grok (any subset; default none).
 # With Compose: KWNT_CLIS=claude,codex docker compose up -d --build
+# Needs BuildKit (the default in Docker 23+ and Compose v2). The last stage builds kwnt from source;
+# the `prebuilt` stage is the published ghcr.io image, made from the release's own binaries
+# (dist/docker/<amd64|arm64>/kwnt, unpacked from kwnt-linux-<arch>.tar.gz by the workflow).
 FROM node:20-bookworm-slim AS web
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
+# The What's new plugin in vite.config.ts bundles CHANGELOG sections from ../CHANGELOG.md
+COPY CHANGELOG.md /app/CHANGELOG.md
 RUN npm run build
 
 FROM rust:1-bookworm AS build
@@ -39,7 +44,7 @@ RUN set -eu; mkdir -p /opt/clis/bin; \
     fi; \
     ls /opt/clis/bin
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS runtime
 ARG KWNT_CLIS=""
 # kwnt needs CA certificates, and git (2.31+) with ssh for Dev mode, which reads every watched repo
 # with git; the CLIs' own tools want a few more basics.
@@ -50,7 +55,6 @@ RUN apt-get update \
  && useradd --uid 10001 --create-home --home-dir /home/kwnt --shell /bin/bash kwnt \
  && mkdir -p /data && chown kwnt:kwnt /data
 COPY --from=clis /opt/clis /opt/clis
-COPY --from=build /app/target/release/kwnt /usr/local/bin/kwnt
 COPY docker/kwnt-entrypoint.sh /usr/local/bin/kwnt-entrypoint
 RUN chmod 755 /usr/local/bin/kwnt-entrypoint
 ENV PATH=/opt/clis/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -68,3 +72,15 @@ VOLUME /data
 EXPOSE 8799
 ENTRYPOINT ["/usr/local/bin/kwnt-entrypoint"]
 CMD ["kwnt", "serve"]
+
+# The release image: the same kwnt the release ships for this architecture
+FROM runtime AS prebuilt
+ARG TARGETARCH
+LABEL org.opencontainers.image.source="https://github.com/alexsergivan/kwant" \
+      org.opencontainers.image.description="kwant server (kwnt serve), the web UI embedded" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
+COPY dist/docker/${TARGETARCH}/kwnt /usr/local/bin/kwnt
+
+# The default (docker compose build, docker build .): kwnt built from this checkout
+FROM runtime
+COPY --from=build /app/target/release/kwnt /usr/local/bin/kwnt

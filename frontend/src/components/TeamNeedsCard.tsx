@@ -279,6 +279,13 @@ export const TeamCreatedToast: React.FC<{ text: string; onUndo?: () => void; onD
 // ---------------------------------------------------------------------------------------------------
 // T4 confirm (only when the chat has messages)
 
+/** The chat name for the confirm's archive line, or null for no line (see `archivedChat` below). */
+export const archivedChatLine = (archivedChat: string | null | undefined, messages: number, teamName: string): string | null => {
+  if (archivedChat === null) return null;
+  if (typeof archivedChat === 'string') return archivedChat.trim().replace(/^#+/, '') || null;
+  return messages > 0 ? `archived-team-${teamName}` : null;
+};
+
 export const UndoTeamConfirm: React.FC<{
   label: string;
   handle: string;
@@ -286,8 +293,14 @@ export const UndoTeamConfirm: React.FC<{
   skills: number;
   routine: boolean;
   messages: number;
-  /** The team's name: the server renames its chat to #archived-team-<name> (a number added when taken). */
+  /** The team's name: only for a server older than 0.7.6 that doesn't send `archivedChat`. */
   teamName: string;
+  /**
+   * The undo preview's `archived_chat` (teams-api.md §6): the exact name the kept chat gets, `-2`… included
+   * when the plain name is taken. null: Undo deletes the chat or leaves it alone, so there's no line.
+   * undefined: an older server; we fall back to #archived-team-<teamName> when the chat has messages.
+   */
+  archivedChat?: string | null;
   /** "Drafter is also in @support; it will leave that team." */
   alsoIn?: { bot: string; team: string }[];
   /** Starter skills the person edited; Undo removes them too (Q-T2). */
@@ -296,7 +309,8 @@ export const UndoTeamConfirm: React.FC<{
   error?: string | null;
   onKeep: () => void;
   onUndo: () => void;
-}> = ({ label, handle, botNames, skills, routine, messages, teamName, alsoIn = [], editedSkills = [], busy, error, onKeep, onUndo }) => {
+}> = ({ label, handle, botNames, skills, routine, messages, teamName, archivedChat, alsoIn = [], editedSkills = [], busy, error, onKeep, onUndo }) => {
+  const archivedAs = archivedChatLine(archivedChat, messages, teamName);
   const phone = useMedia(PHONE_QUERY);
   const ref = useRef<HTMLDivElement>(null);
   const keep = useRef<HTMLButtonElement>(null);
@@ -339,9 +353,11 @@ export const UndoTeamConfirm: React.FC<{
               You edited {editedSkills.join(', ')}. {editedSkills.length === 1 ? 'It’s' : 'They’re'} removed too.
             </p>
           )}
-          {messages > 0 && (
-            <p className="mt-2">
-              The chat has {plural(messages, 'message')}, so it’s kept, not deleted: it moves under Channels as #archived-team-{teamName}.
+          {archivedAs && (
+            <p className="mt-2" data-archived-chat={archivedAs}>
+              {messages > 0 ? `The chat has ${plural(messages, 'message')}, so it’s kept, not deleted` : 'The chat is kept, not deleted'}: it moves under Channels as{' '}
+              {/* One unit: the name wraps onto its own line rather than splitting at a hyphen; a very long one still wraps. */}
+              <span className="inline-block max-w-full [overflow-wrap:anywhere]">#{archivedAs}.</span>
             </p>
           )}
           {error && (

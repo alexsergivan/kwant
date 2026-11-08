@@ -34,6 +34,7 @@ import { signedInDevicesVisible } from '../deviceSignIn';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
 import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
+import { WhatsNewAbout } from './WhatsNewSheet';
 import { StarAskSettingsLink } from './StarAsk';
 import { ProactiveSettings, WORK_AHEAD_CAP_MAX, WORK_AHEAD_CAP_MIN, parseProactiveSettings } from '../decideFirst';
 import { IDEA_CAP_DEFAULT, IDEA_CAP_MAX, IDEA_CAP_MIN, ideaCapForSwitch, lastIdeaCap, parseIdeaCap, rememberIdeaCap } from '../ideaShell';
@@ -664,6 +665,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         </div>
 
         <AppUpdateAbout />
+        <WhatsNewAbout />
         <StarAskSettingsLink />
 
         {computer.state.settings && (

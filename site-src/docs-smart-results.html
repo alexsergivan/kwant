@@ -25,6 +25,7 @@ card_art: avatar:designer
     <tr><td>Facts</td><td>Lines like <strong>Owner:</strong> Sam</td></tr>
     <tr><td>Links</td><td>A list of links or titled items, shown as cards</td></tr>
     <tr><td>Findings</td><td>A list where each item starts with a severity, such as a review's results</td></tr>
+    <tr><td>Recipe</td><td>One recipe, with an ingredients list and the method (new in 0.7.6, <a href="#recipes">below</a>)</td></tr>
     <tr><td>Steps, checklist, timeline</td><td>Numbered steps, a list with ticks, or dated events</td></tr>
     <tr><td>Checks</td><td>A task's checks, on its report card</td></tr>
     <tr><td>Files</td><td>A preview of files a bot shared</td></tr>
@@ -32,9 +33,30 @@ card_art: avatar:designer
 </table></div>
 <p>Bots are asked to write tables, numbered steps and <strong>Label:</strong> value lines, so most replies need nothing extra: comparing even two options gets a table, a column each and a row per point. A link in a table counts as its text, so a table with long source links still gets a card. A bot can also point at the table or list it wants drawn, and kwant holds it to the reply: every row must match the reply's table, cell by cell, with the same numbers. Checks and Files cards come from kwant's own records, never from a bot.</p>
 
+<h2 id="recipes">Recipe cards</h2>
+<p>New in 0.7.6. When a reply holds one recipe, with an ingredients list and the method, it shows as a recipe card: the ingredients in their groups, numbered steps, and any times and notes. The text before and after the recipe stays as it is. On a wide window the ingredients and steps sit side by side.</p>
+<figure>
+  <div class="frame">{{video:clip-v076-recipe|Demo: a camp chili recipe card in a kwant chat. Plus is pressed twice and the servings go from 4 to 6, so 1 tbsp olive oil becomes 1½ tbsp and 500 g ground beef becomes 750 g. Then Back to 4 puts the amounts back.}}</div>
+  <figcaption>Change the servings and the amounts follow. Back to 4 puts them back.</figcaption>
+</figure>
+<ul>
+  <li><strong>Servings:</strong> the stepper goes from 1 to 24 and rescales every amount kwant can read, in kitchen fractions such as ¼, ⅓ and ½. A screen reader hears the old amount after each change.</li>
+  <li><strong>What changed:</strong> each changed amount is highlighted, and <strong>Back to 4</strong> (the recipe's own number) puts the amounts back.</li>
+  <li><strong>What stays:</strong> oven temperatures, and any amount kwant can't read, stay as written. Nothing is worked out with a model.</li>
+  <li><strong>When in doubt, text:</strong> a reply that doesn't match a recipe's shape exactly stays plain text, and <strong>Show as text</strong> always gives the reply back word for word.</li>
+</ul>
+<figure>
+  <div class="frame">{{shot:v076-recipe|A recipe card in a kwant chat for one-pot camp chili, set to 6 servings instead of 4. The amounts read 1½ tbsp olive oil, 750 g ground beef and so on, the numbered steps sit next to the ingredients, and a Back to 4 button is above them.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>On a wide window, ingredients and steps side by side.</figcaption>
+</figure>
+<figure>
+  <div class="phone">{{shot:phone-v076-recipe|The camp chili recipe card on a phone, set to 6 servings, with the scaled ingredient amounts in a single column.|300px}}</div>
+  <figcaption>The same card on a phone.</figcaption>
+</figure>
+
 <h2 id="trust">Copied, never worked out</h2>
 <ul>
-  <li><strong>Word for word.</strong> Every value is copied from the reply. Nothing is added up, averaged or rounded, and a chart never puts different units on one axis.</li>
+  <li><strong>Word for word.</strong> Every value is copied from the reply. Nothing is added up, averaged or rounded, and a chart never puts different units on one axis. The one exception is a <a href="#recipes">recipe card</a>'s servings stepper, which rescales amounts only when you change the servings.</li>
   <li><strong>Where it came from.</strong> Under each card a line says <strong>From this reply</strong>, <strong>From task checks</strong> or which attachment it came from.</li>
   <li><strong>The text is still there.</strong> <strong>Show as text</strong> swaps the card for the reply's own words, and <strong>Copy markdown</strong> copies the reply as it was written.</li>
   <li><strong>When in doubt, text.</strong> A card that fails a check, or can't be drawn, shows the reply's text instead. Editing a reply removes its card, since the card was copied from the old text.</li>

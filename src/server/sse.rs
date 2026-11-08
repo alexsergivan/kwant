@@ -330,6 +330,7 @@ mod tests {
                 body: s("x"),
                 space_id: Some(s("spc_x")),
                 space_name: None,
+                held_message: false,
             },
         ];
         for e in &all {

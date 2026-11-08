@@ -16,7 +16,32 @@ card_art: scene
         <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
         <p class="cta-alt"><a href="docs/quickstart.html">A VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
-      <p class="mac-dl">Free, for Apple silicon and Intel. <a href="docs/install.html#mac">First open</a> needs one extra step. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>).</p>
+      <details class="mac-first" id="mac-first">
+        <summary>
+          <span class="mf-ico" aria-hidden="true"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v1H4zM3 5h1v8H3zM16 5h1v8h-1zM4 12h12v1H4zM1 14h18v2H1z"/><path d="M5 6h10v6H5z" opacity=".22"/><path d="M8 8h1v2H8zM11 8h1v2h-1z"/></svg></span>
+          <span class="mf-sum"><b>First time on a Mac?</b><span>macOS asks once, because kwant isn't notarized by Apple yet.</span></span>
+          <svg class="mf-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </summary>
+        <div class="mf-body">
+          <ol class="mf-steps">
+            <li><span>Drag kwant to Applications and open it. When macOS says it couldn't verify it, click <b>Done</b>.</span></li>
+            <li><span>Open <b>System Settings › Privacy &amp; Security</b> and scroll down to <b>Security</b>.</span></li>
+            <li><span>Click <b>Open Anyway</b> next to “kwant” was blocked, then <b>Open Anyway</b> again, and enter your Mac password or use Touch ID.</span></li>
+          </ol>
+          <figure class="mf-fig">
+            <a class="zoom" href="{{root}}assets/media/open-anyway-wide.svg" data-caption="A mock-up of macOS 15: the “kwant” Not Opened alert (click Done), System Settings › Privacy &amp; Security, and Open Anyway under Security.">
+            <picture>
+              <source media="(max-width: 640px)" srcset="{{root}}assets/media/open-anyway-phone.svg">
+              <img src="{{root}}assets/media/open-anyway-wide.svg" width="560" height="360" loading="lazy" decoding="async"
+                   alt="A mock-up of the three macOS steps: the “kwant” Not Opened alert with Done marked, System Settings › Privacy &amp; Security, and the Security row “kwant” was blocked to protect your Mac with Open Anyway marked.">
+            </picture>
+            </a>
+          </figure>
+          <p class="mf-after">You only do this once. On macOS 14 or earlier, right-click kwant in Applications and choose <b>Open</b> instead.</p>
+          <p class="mf-term" data-term="soon"><span class="soon">Soon</span>A one-line Terminal install that skips this step.</p>
+        </div>
+      </details>
+      <p class="mac-dl">Free, for Apple silicon and Intel. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>).</p>
       {{install:hero}}
       {{releases}}
     </div>
@@ -38,14 +63,14 @@ card_art: scene
 
 <section class="new-strip new-shots" aria-labelledby="new-title">
   <div class="wrap">
-    <h2 id="new-title" class="new-title">Added in 0.7.5</h2>
+    <h2 id="new-title" class="new-title">Added in 0.7.6</h2>
     <ul class="new-list">
-      <li><a href="docs/install.html#side-by-side"><img src="assets/media/thumb-v075-side-by-side-640.webp" srcset="assets/media/thumb-v075-side-by-side-640.webp 640w, assets/media/thumb-v075-side-by-side-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>This Mac and your servers, side by side</b><span>The app opens This Mac and every server you add, each in its own window. Servers stay signed in.</span></a></li>
-      <li><a href="docs/bots-and-teams.html#ready-made"><img src="assets/media/thumb-v075-teams-640.webp" srcset="assets/media/thumb-v075-teams-640.webp 640w, assets/media/thumb-v075-teams-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Ready-made teams</b><span>An Inbox, Sales or Coding team in one step, or members suggested from your code. One Undo removes it.</span></a></li>
-      <li><a href="docs/dev-mode.html#jira"><img src="assets/media/thumb-v075-jira-640.webp" srcset="assets/media/thumb-v075-jira-640.webp 640w, assets/media/thumb-v075-jira-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Work from Jira tickets</b><span>Hand a ticket over and a bot writes the brief, asks what's unclear and builds. Jira changes only when you say so.</span></a></li>
-      <li><a href="docs/telegram.html"><img src="assets/media/thumb-v075-telegram-640.webp" srcset="assets/media/thumb-v075-telegram-640.webp 640w, assets/media/thumb-v075-telegram-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Your bots in Telegram</b><span>Write to your bots from Telegram and get what needs you on your phone. Some approvals can be allowed once.</span></a></li>
+      <li><a href="docs/smart-results.html#recipes"><img src="assets/media/thumb-v076-recipe-640.webp" srcset="assets/media/thumb-v076-recipe-640.webp 640w, assets/media/thumb-v076-recipe-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Recipes you can cook from</b><span>A recipe in a reply becomes a card. Change the servings and the amounts rescale. Oven temperatures stay as written.</span></a></li>
+      <li><a href="docs/quickstart.html#get-started"><img src="assets/media/thumb-v076-get-started-640.webp" srcset="assets/media/thumb-v076-get-started-640.webp 640w, assets/media/thumb-v076-get-started-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>Get started in three steps</b><span>Choose your AI, sign in, pick a team. ChatGPT and Grok sign in with a short code, with no Terminal.</span></a></li>
+      <li><a href="docs/install.html#one-line"><img src="assets/media/thumb-v076-linux-install-640.webp" srcset="assets/media/thumb-v076-linux-install-640.webp 640w, assets/media/thumb-v076-linux-install-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>A Linux server in one line</b><span>One command installs kwant on Ubuntu or Debian, with no sudo, and ends with your sign-in link.</span></a></li>
+      <li><a href="docs/install.html#whats-new"><img src="assets/media/thumb-v076-whats-new-640.webp" srcset="assets/media/thumb-v076-whats-new-640.webp 640w, assets/media/thumb-v076-whats-new-1280.webp 1280w" sizes="(max-width: 640px) 112px, (max-width: 1000px) 50vw, 290px" width="640" height="400" loading="lazy" decoding="async" alt=""><b>What's new, in the app</b><span>After an update, a sheet shows what changed, once on each device. Settings › About keeps every version's notes.</span></a></li>
     </ul>
-    <p class="new-note">Also new: <a href="docs/browser.html#show-once">show a bot a task once</a> and it writes the skill, and <a href="docs/browser.html#watch-live">watch its browser live</a>. <a href="features.html#new-075">What's new in 0.7.5</a> · <a href="features.html#new-074">in 0.7.4</a> · <a href="features.html#new-073">in 0.7.3</a> · <a href="features.html#new-072">in 0.7.2</a> · <a href="features.html#new-071">in 0.7.1</a> · <a href="features.html#new-07">in 0.7</a> · <a href="features.html#new-0611">in 0.6.11</a> · <a href="features.html#new-069">in 0.6.9</a></p>
+    <p class="new-note">Also new: <a href="features.html#no-node">Codex and the bots' browser without Node</a>. <a href="features.html#new-076">What's new in 0.7.6</a> · <a href="features.html#new-075">in 0.7.5</a> · <a href="features.html#new-074">in 0.7.4</a> · <a href="features.html#new-073">in 0.7.3</a> · <a href="features.html#new-072">in 0.7.2</a> · <a href="features.html#new-071">in 0.7.1</a> · <a href="features.html#new-07">in 0.7</a> · <a href="features.html#new-0611">in 0.6.11</a></p>
   </div>
 </section>
 

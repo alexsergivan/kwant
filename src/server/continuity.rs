@@ -1729,6 +1729,12 @@ pub async fn notify(state: &AppState, n: Notification) {
 /// the space of the turn it held), so the space's Telegram chat and push still get it. With
 /// `None`, the space is the bot's.
 pub async fn notify_in(state: &AppState, n: Notification, space: Option<&crate::db::spaces::SpaceId>) {
+    notify_held(state, n, space, false).await
+}
+
+/// [`notify_in`], marking a `spend_stopped` notification whose held turn was the person's own
+/// message (see [`super::spend_stop`]).
+pub async fn notify_held(state: &AppState, n: Notification, space: Option<&crate::db::spaces::SpaceId>, held_message: bool) {
     if !notify_on(state).await.iter().any(|k| k == n.kind) {
         return;
     }
@@ -1760,6 +1766,7 @@ pub async fn notify_in(state: &AppState, n: Notification, space: Option<&crate::
         body: body.clone(),
         space_id,
         space_name,
+        held_message,
     });
     let Some(url) = state
         .db

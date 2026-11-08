@@ -66,6 +66,25 @@ pub fn call_cap() -> i64 {
     *CAP.get_or_init(|| env_num("KWANT_DEV_CALL_CAP", 0, 1000).map_or(CALLS_CAP, |v| v as i64))
 }
 
+/// How many days a pushed branch or open PR counts as fresh, so it gets a review card:
+/// `KWANT_DEV_REVIEW_DAYS` (1–90), else [`poller::REVIEW_FRESH_DAYS`] (7).
+pub fn review_days() -> u32 {
+    static DAYS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *DAYS.get_or_init(|| {
+        let raw = std::env::var("KWANT_DEV_REVIEW_DAYS").ok();
+        let days = review_days_from(raw.as_deref());
+        if raw.is_some() {
+            tracing::info!("dev: KWANT_DEV_REVIEW_DAYS read as {days} (whole days from 1 to 90; anything else is {})", poller::REVIEW_FRESH_DAYS);
+        }
+        days
+    })
+}
+
+/// [`review_days`] from the variable's text: a whole number from 1 to 90, else the default.
+pub fn review_days_from(raw: Option<&str>) -> u32 {
+    raw.and_then(|r| r.trim().parse::<u32>().ok()).filter(|d| (1..=90).contains(d)).unwrap_or(poller::REVIEW_FRESH_DAYS)
+}
+
 /// The most disk one repo's git mirror may use: `KWANT_DEV_MIRROR_CAP_BYTES` (1 B–1 TB, so a test
 /// can use a tiny cap), else [`git::MIRROR_CAP`] (1 GB).
 pub fn mirror_cap() -> u64 {
@@ -152,7 +171,21 @@ mod tests {
         // CI sets neither variable
         assert_eq!(poll_every(), std::time::Duration::from_secs(300));
         assert_eq!(call_cap(), 30);
+        assert_eq!(review_days(), 7);
         assert!((now() - Utc::now()).num_seconds().abs() <= 1);
+    }
+
+    #[test]
+    fn the_review_days_variable_is_held_to_1_to_90() {
+        assert_eq!(review_days_from(None), 7);
+        for (raw, days) in [("1", 1), ("14", 14), (" 30 ", 30), ("90", 90)] {
+            assert_eq!(review_days_from(Some(raw)), days, "{raw:?}");
+        }
+        // Out of range or not a whole number of days: the default, never 0 (which would skip
+        // every review) and never more than 90
+        for raw in ["0", "91", "365", "-3", "7.5", "", "seven", "4294967296"] {
+            assert_eq!(review_days_from(Some(raw)), 7, "{raw:?}");
+        }
     }
 
     #[tokio::test]

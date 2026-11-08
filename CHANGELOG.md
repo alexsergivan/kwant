@@ -8,6 +8,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- **Dev mode reviews only fresh work.** A branch or PR gets a review card only if it moved in the last 7 days, so old branches no longer fill the desk or spend model calls. Cards on branches that went quiet go stale, and a new push brings a branch back. The newest branches are reviewed first, and Dev mode's status says how many old ones it skipped. A card that couldn't read a file now says "Couldn't read N files (no diff available)" instead of "(no diff from GitHub)". A type change (a symlink turned into a file) no longer leaves every file in the change unread.
+
+### Fixed
+- **A checkpoint's git commit only comes from the task's own git files.** When a mission takes a checkpoint, kwant notes the commit the task's folder is on. It now never follows a symlink inside `.git`, ignores a `ref:` that points outside it, skips FIFOs and oversized files, and keeps the value only when it's a real 40- or 64-character commit id. Before, a bot that could write its task folder could make a checkpoint show the first 64 characters of another file kwant can read. (#443)
+- **Dev mode reads the checked-out branch safely too.** The production safeguard reads which branch a bot's folder is on. A planted FIFO could stall that check, and a symlink, a hard link or a `.git` file could point it at another file. It now reads `.git` the same careful way checkpoints do, and only follows a worktree's pointer into a real `.git/worktrees/` folder. Checkpoints also now skip a hard-linked git file. (#444)
+
+## [Mac 0.7.6] - 2026-11-08
+
+### Added
+- **Recipes as cards.** When a reply holds one recipe, with an ingredients list and the method, it shows as a recipe card. The card has the ingredients in their groups, numbered steps, and any times and notes. The text before and after the recipe stays as it is. The servings stepper (1 to 24) rescales every amount it can read, in kitchen fractions such as ¼, ⅓ and ½, and highlights each changed amount, with a **Back to N** button. Oven temperatures, and anything it can't read, stay as written. A screen reader hears the old amount after each change. On a wide window the ingredients and steps sit side by side. If a reply doesn't match a recipe's shape exactly, it stays plain text, and **Show as text** always gives the reply back word for word. (#424, #417)
+- **Get started.** A new person's #general now starts with one Get started card in three steps: **Choose your AI** (Claude, ChatGPT, Grok or an API key), **Sign in**, and **Pick a team**. Choosing an AI installs it when it's missing. The card replaces the old welcome. (#425)
+- **Sign in to ChatGPT and Grok inside the app.** ChatGPT (Codex) and Grok now sign in with a device code. kwant shows the link and a short code, you approve in your browser, and the sign-in finishes on its own, with no Terminal needed. You can sign out from the app too. Claude's sign-in works as before. (#419)
+- **Codex without Node.** On a Mac or Linux computer without Node, kwant installs Codex from OpenAI's standalone release. It checks the download's SHA-256 before anything is unpacked, and refuses a mismatch without changing anything. (#420)
+- **The bots' private browser without Node.** When the computer has no Chrome, kwant downloads Chrome for Testing into its own cache the first time a bot needs the browser. Bots that need the browser before it's ready wait for it. It stays quiet unless the download fails, and then Settings says why. (#422)
+- **kwnt on a Linux server in one line.** `curl -fsSL https://kwant.si/install.sh | sh` installs the kwant server on Linux, on x86_64 or arm64, with Ubuntu 22.04 or newer, or Debian 12 or newer. It never uses sudo. It checks the download's SHA-256 before installing anything, starts kwnt as a user service (or in the background), and ends with your sign-in link. For a server that only listens on itself, it also prints the SSH tunnel command to reach it from your laptop. The container image is `ghcr.io/alexsergivan/kwnt`. (#436)
+- **What's new, in the app.** After an update, a sheet shows what's new and what's fixed, once on each device, and on the web app when its server updates. **See what's new** on the "Updated" banner opens it, and Settings › About keeps every version's notes. (#421)
+
+### Changed
+- **kwnt reports its real version.** `kwnt --version`, the server's health check and its update status now show the release's version instead of 0.1.0. (#423)
+- **First time on a Mac?** On kwant.si, Download for Mac now opens the three Open Anyway steps for the first launch, with a picture. The install guide shows the same steps. (#413)
+
+### Fixed
+- **Take over says when you're already controlling the browser in another window.** It tells you to press Hand back there, instead of retrying every second. When other chats are browsing, the Hand back button's tooltip says "Hand back first to switch browser". (#429, #434, #412)
+- **Undo for a ready-made team names the exact archived chat it keeps**, including a -2 or -3 when that name was taken. (#433, #435)
+- **A Jira ticket whose lead can't prepare a brief says why.** A brief is prepared only on Claude or Codex with tool checks on, and the card says so. The brief toggle and See the review now name their ticket. (#427, #431)
+- **Show it once.** A failed draft shows a plain sentence instead of the engine's error. An empty trial reply says so. A draft that fails its checks says what went wrong in plain words. A start page that doesn't load records the page you were on. A password or code field you leave by typing an address is still recorded as a masked step. Readable path names in recorded addresses are no longer scrubbed. (#426, #430, #437)
+- **A GitLab address without .git now works**, just as a GitHub address does. (#428)
+- **After "folder in use", a ready-made team's main button says Pick another folder** instead of Try again. (#411)
+- **Telegram says "your message wasn't run" only for your own message**, not when a routine or a Jira task hit the spending stop. (#416)
+- Three flaky tests are steady again. (#414, #415, #432)
+
 ## [Mac 0.7.5] - 2026-11-07
 
 ### Added

@@ -17,8 +17,19 @@ use super::{Block, Column, Comparison, Provenance, Role, Row, Source, Steps, Var
 
 /// The order types win in when a reply has more than one candidate (plan §A.2), best first.
 /// `present_result`, `verification` and `files` come from typed sources, not from these selectors.
-pub const PRIORITY: &[&str] =
-    &["present_result", "verification", "chart", "comparison", "metrics", "findings", "cards", "steps", "facts", "files"];
+pub const PRIORITY: &[&str] = &[
+    "present_result",
+    "verification",
+    "recipe",
+    "chart",
+    "comparison",
+    "metrics",
+    "findings",
+    "cards",
+    "steps",
+    "facts",
+    "files",
+];
 
 /// Where `block` stands in [`PRIORITY`] (lower wins); steps rank timeline, then checklist, then
 /// plain steps.
@@ -46,6 +57,9 @@ pub fn candidates(text: &str) -> Vec<Block> {
     let said = OnceCell::new();
     let said = || said.get_or_init(|| recommending(&doc.prose)).as_deref();
     let mut found: Vec<(usize, Block)> = Vec::new();
+    if let Some((start, r)) = super::recipe::recipe(&doc) {
+        found.push((start, Block::Recipe(r)));
+    }
     let tables = doc.tables.iter().filter(|t| t.clean && t.start < doc.tables_unsure_at).take(MAX_TRIES);
     for t in tables {
         if let Some(b) = table_block(t, &said) {
@@ -166,10 +180,27 @@ pub(super) struct List<'a> {
     pub heading: Option<&'a str>,
 }
 
+/// A top-level block of the reply, in the chat's order of root children.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Top<'a> {
+    /// A one-line heading (ATX, or setext over one line), its text.
+    Heading(&'a str),
+    /// A paragraph: its first and last line.
+    Para { start: usize, end: usize },
+    /// `Doc::lists[n]`.
+    List(usize),
+    /// Code, a table, a quote, HTML, a rule or a heading over several lines.
+    Other,
+}
+
 #[derive(Default)]
-struct Doc<'a> {
-    tables: Vec<Table<'a>>,
-    lists: Vec<List<'a>>,
+pub(super) struct Doc<'a> {
+    pub lines: Vec<&'a str>,
+    pub blocks: Vec<Top<'a>>,
+    /// The line each of `blocks` starts on.
+    pub starts: Vec<usize>,
+    pub tables: Vec<Table<'a>>,
+    pub lists: Vec<List<'a>>,
     /// Lines outside code, HTML and tables, where a pick can be named.
     prose: Vec<&'a str>,
     /// The first line from which table (numbered list, bullet list) counts may differ from the
@@ -179,6 +210,13 @@ struct Doc<'a> {
     ul_unsure_at: usize,
     ol_count: usize,
     ul_count: usize,
+}
+
+impl<'a> Doc<'a> {
+    fn push(&mut self, line: usize, top: Top<'a>) {
+        self.blocks.push(top);
+        self.starts.push(line);
+    }
 }
 
 impl Doc<'_> {
@@ -205,7 +243,11 @@ impl Doc<'_> {
             self.unsure_ul(line);
         }
     }
-    fn list_unsure_at(&self, ordered: bool) -> usize {
+    /// The first line from which any count may differ from the chat's.
+    pub(super) fn unsure_at(&self) -> usize {
+        self.tables_unsure_at.min(self.ol_unsure_at).min(self.ul_unsure_at)
+    }
+    pub(super) fn list_unsure_at(&self, ordered: bool) -> usize {
         if ordered {
             self.ol_unsure_at
         } else {
@@ -241,7 +283,7 @@ struct Fence {
     inside: Option<usize>,
 }
 
-fn parse(text: &str) -> Doc<'_> {
+pub(super) fn parse(text: &str) -> Doc<'_> {
     let lines: Vec<&str> = text.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l)).collect();
     let mut doc = Doc { tables_unsure_at: usize::MAX, ol_unsure_at: usize::MAX, ul_unsure_at: usize::MAX, ..Doc::default() };
     // The chat takes the last `[DECISIONS]` block still in a reply out of it, code or not, and
@@ -455,6 +497,14 @@ fn parse(text: &str) -> Doc<'_> {
                                 doc.unsure_tables(i);
                             }
                             heading = prev.map(str::trim);
+                            if let Some(top) = doc.blocks.last_mut() {
+                                if let Top::Para { start, end } = *top {
+                                    *top = match heading {
+                                        Some(h) if start == end => Top::Heading(h),
+                                        _ => Top::Other,
+                                    };
+                                }
+                            }
                             state = State::None;
                             break;
                         }
@@ -492,6 +542,7 @@ fn parse(text: &str) -> Doc<'_> {
                         break;
                     }
                     if indent >= 4 {
+                        doc.push(i, Top::Other);
                         state = State::Code;
                         prose = false;
                         code = true;
@@ -503,23 +554,28 @@ fn parse(text: &str) -> Doc<'_> {
                         break;
                     }
                     if let Some((ch, len)) = fence_open(rest) {
+                        doc.push(i, Top::Other);
                         fence = Some(Fence { ch, len, inside: None });
                         prose = false;
                         break;
                     }
                     if let Some(h) = atx_heading(rest) {
+                        doc.push(i, Top::Heading(h));
                         heading = Some(h);
                         break;
                     }
                     if thematic_break(rest) {
+                        doc.push(i, Top::Other);
                         break;
                     }
                     if rest.starts_with('>') {
+                        doc.push(i, Top::Other);
                         doc.unsure_nested(i, rest);
                         state = State::Quote;
                         break;
                     }
                     if html_start(rest) {
+                        doc.push(i, Top::Other);
                         doc.unsure(i);
                         prose = false;
                         state = State::Html;
@@ -532,6 +588,7 @@ fn parse(text: &str) -> Doc<'_> {
                         if fence_open(m.content).is_some() {
                             l.clean = false;
                         }
+                        doc.push(i, Top::List(doc.lists.len()));
                         doc.lists.push(l);
                         fence = item_fence(m.content, m.offset);
                         state = State::List { list: doc.lists.len() - 1, offset: m.offset, blank: false };
@@ -544,6 +601,7 @@ fn parse(text: &str) -> Doc<'_> {
                         if fence_open(b.content).is_some() {
                             l.clean = false;
                         }
+                        doc.push(i, Top::List(doc.lists.len()));
                         doc.lists.push(l);
                         fence = item_fence(b.content, b.offset);
                         state = State::Bullet { list: doc.lists.len() - 1, offset: b.offset, blank: false };
@@ -551,6 +609,7 @@ fn parse(text: &str) -> Doc<'_> {
                     }
                     if let Some(header) = table_start(&lines, i) {
                         let index = doc.tables.len();
+                        doc.push(i, Top::Other);
                         doc.tables.push(Table { index, start: i, clean: true, header, rows: Vec::new() });
                         delimiter_row = Some(i + 1);
                         state = State::Table(index);
@@ -558,10 +617,16 @@ fn parse(text: &str) -> Doc<'_> {
                         in_table = true;
                         break;
                     }
+                    doc.push(i, Top::Para { start: i, end: i });
                     state = State::Para;
                 }
             }
             break;
+        }
+        if matches!(state, State::Para) {
+            if let Some(Top::Para { end, .. }) = doc.blocks.last_mut() {
+                *end = i;
+            }
         }
         if !in_table && !code && delimiter_like(line) {
             // A table this reader didn't take as top-level (in a quote or an item, or orphaned)
@@ -577,6 +642,7 @@ fn parse(text: &str) -> Doc<'_> {
             prev = Some(line);
         }
     }
+    doc.lines = lines;
     doc
 }
 

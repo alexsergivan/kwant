@@ -15,6 +15,20 @@ export interface BrowserFrame {
 /** Said when taking control fails because the bot is in the middle of something. */
 export const BOT_BUSY_TEXT = 'The bot is finishing a step, try again in a moment.';
 
+/** Said when taking control fails because the person already holds this browser in another window (code held_by_person). */
+export const HELD_BY_PERSON_TEXT = "You're controlling this browser in another window. Press Hand back there to take over here.";
+
+/**
+ * A refused take_control: `held_by_person` can never win by retrying, so it gets its own sentence.
+ * `bot_busy`, `failed` and an older server's error with no code read as the busy bot, as before;
+ * the text match covers a server that sends the held sentence without a code.
+ */
+export function takeoverRefusedText(message: { code?: unknown; error?: unknown }): string {
+  if (message.code === 'held_by_person') return HELD_BY_PERSON_TEXT;
+  if (message.code === undefined && /another window/i.test(String(message.error ?? ''))) return HELD_BY_PERSON_TEXT;
+  return BOT_BUSY_TEXT;
+}
+
 export function useBrowserStream(id: string | undefined, visible: boolean) {
   const socket = useRef<WebSocket | null>(null);
   const sequence = useRef(0);
@@ -89,7 +103,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
               setUnsupported((s) => new Set(s).add(action));
             } else if (action === 'take_control' || (takingControl.current && message.id === undefined)) {
               takingControl.current = false;
-              setError(BOT_BUSY_TEXT);
+              setError(takeoverRefusedText(message));
             } else {
               const text = streamErrorText(action, message.error);
               if (text) setError(text);

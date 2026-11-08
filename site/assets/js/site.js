@@ -182,3 +182,12 @@
     });
   });
 })();
+
+// O7a: opening the dmg download also opens the Mac first-open steps, so they're there when macOS asks.
+(function () {
+  var d = document.getElementById("mac-first");
+  if (!d) return;
+  document.querySelectorAll('a[href$="kwant_universal.dmg"]').forEach(function (a) {
+    a.addEventListener("click", function () { d.open = true; });
+  });
+})();

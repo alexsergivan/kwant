@@ -30,6 +30,10 @@ pub const BACKFILL: usize = 5;
 pub const MAX_NEW: usize = 20;
 /// Most new review heads one poll reads (each costs a few requests).
 pub const MAX_REVIEWS: usize = 10;
+/// Pushed branches and open PRs get a review card only while their last commit (a PR's last
+/// update) is at most this many days old, unless `KWANT_DEV_REVIEW_DAYS` says otherwise
+/// ([`super::review_days`]). Older work gets no card and no model call; a new push makes it fresh.
+pub const REVIEW_FRESH_DAYS: u32 = 7;
 /// Files whose history is read for `first_edit_files`.
 pub const FIRST_EDIT_FILES: usize = 20;
 /// "First edit" means no commit to the file in this many days.
@@ -47,6 +51,9 @@ struct Shared {
     resume_at: HashMap<String, DateTime<Utc>>,
     /// The newest tag of each watched repo (by [`tag_key`]), and when its commit was made.
     tags: HashMap<String, (String, Option<DateTime<Utc>>)>,
+    /// Branches or PRs of each watched repo (by [`tag_key`]) the last poll gave no review card
+    /// because they weren't fresh ([`is_fresh`]). In memory only: 0 after a restart until a poll.
+    old_skipped: HashMap<String, u32>,
 }
 
 fn shared() -> &'static Mutex<Shared> {
@@ -93,6 +100,21 @@ pub fn last_tag(space_id: &str, repo_key: &str) -> Option<String> {
 /// When that tag's commit was made: release notes cover the repo's landed cards after it.
 pub fn last_tag_at(space_id: &str, repo_key: &str) -> Option<DateTime<Utc>> {
     shared().lock().unwrap().tags.get(&tag_key(space_id, repo_key)).and_then(|(_, at)| *at)
+}
+
+/// How many branches or PRs of one watched repo the last poll skipped as too old for a review.
+pub fn old_reviews_skipped(space_id: &str, repo_key: &str) -> u32 {
+    shared().lock().unwrap().old_skipped.get(&tag_key(space_id, repo_key)).copied().unwrap_or(0)
+}
+
+fn set_old_skipped(space_id: &str, repo_key: &str, n: u32) {
+    shared().lock().unwrap().old_skipped.insert(tag_key(space_id, repo_key), n);
+}
+
+/// Whether work last touched at `at` is fresh enough for a review card: within `days` of `now`.
+/// An unknown date is fresh, so real work is never dropped because git or the forge didn't say.
+pub fn is_fresh(at: Option<DateTime<Utc>>, now: DateTime<Utc>, days: u32) -> bool {
+    at.is_none_or(|t| t >= now - Duration::days(i64::from(days)))
 }
 
 /// Starts the poller, after picking up what a restart left: pending cards go to `generate`
@@ -383,17 +405,33 @@ async fn landed(state: &AppState, h: &History<'_>, forge: Option<&dyn Forge>, mo
     Ok(true)
 }
 
+/// Review cards for the open PRs: each fresh, non-draft PR gets one per head (see [`is_fresh`]:
+/// its last update, else its head commit's date), newest first, at most [`MAX_REVIEWS`] read per
+/// poll. A PR that isn't fresh gets no card and no model call, and its old card goes stale; a new
+/// push updates it, so it's fresh again.
 async fn reviews(state: &AppState, h: &History<'_>, forge: &dyn Forge, mode: &DevRepoRow, kwants: &[Kwant], pulls: &[Change]) -> Result<(), GhError> {
     let mut open = HashSet::new();
     let mut read = 0;
-    for p in pulls {
+    let mut old = 0;
+    let (now, days) = (Utc::now(), super::review_days());
+    let undated: Vec<&str> = pulls.iter().filter(|p| p.updated_at.is_none() && !p.draft).map(|p| p.head_sha.as_str()).filter(|s| git::is_sha(s)).collect();
+    let dates = h.commit_dates(&undated).await;
+    let mut pulls: Vec<(&Change, Option<DateTime<Utc>>)> = pulls.iter().map(|p| (p, p.updated_at.or_else(|| dates.get(&p.head_sha).copied()))).collect();
+    newest_first(&mut pulls);
+    for (p, at) in pulls {
         let ref_ = format!("pr:{}", p.number);
-        open.insert(ref_.clone());
         if p.draft {
             // Drafts are skipped (D8); a PR that went back to draft loses its card
+            open.insert(ref_.clone());
             stale(state, mode, &ref_, None).await;
             continue;
         }
+        if !is_fresh(at, now, days) {
+            // Not touched in `days`: no card, and its old one goes stale below
+            old += 1;
+            continue;
+        }
+        open.insert(ref_.clone());
         let have = state.db.dev_cards_of_ref_in(&mode.space_id, &mode.key, REVIEW, &ref_).await.unwrap_or_default();
         if have.iter().any(|c| c.head_sha == p.head_sha) {
             stale(state, mode, &ref_, Some(&p.head_sha)).await;
@@ -421,32 +459,61 @@ async fn reviews(state: &AppState, h: &History<'_>, forge: &dyn Forge, mode: &De
         insert(state, mode, REVIEW, &ref_, &p.head_sha, &facts).await;
         stale(state, mode, &ref_, Some(&p.head_sha)).await;
     }
-    // A PR of this repo that closed or merged: its review cards go stale
+    // A PR of this repo that closed, merged or went quiet: its review cards go stale
     if let Ok(cards) = state.db.dev_cards_in(&mode.space_id, Some(&mode.key), REVIEW, None, 200).await {
         let gone: HashSet<String> = cards.into_iter().filter(|c| c.status != STALE && !open.contains(&c.ref_)).map(|c| c.ref_).collect();
         for r in gone {
             stale(state, mode, &r, None).await;
         }
     }
+    set_old_skipped(&mode.space_id, &mode.key, old);
     Ok(())
 }
 
+/// Sorts candidates for review newest first; an unknown date counts as newest (it's fresh, and on
+/// a mirror it's a head kwant hasn't fetched yet: a new push). Ties keep their order.
+fn newest_first<T>(list: &mut [(T, Option<DateTime<Utc>>)]) {
+    list.sort_by_key(|(_, at)| std::cmp::Reverse(at.unwrap_or(DateTime::<Utc>::MAX_UTC)));
+}
+
 /// Review cards for pushed branches when the repo has no forge, or no token for it (any-git.md
-/// G5): each branch other than the watched one with commits the watched branch doesn't have gets a
-/// card (ref `branch:<name>`), compared against the watched branch, with no PR, no CI and no Post
-/// (`no_forge`). A branch whose head already has a card keeps it; a new push makes a new card and
-/// the old one goes stale, as a PR's does. A branch that merged or was deleted goes stale. At most
-/// [`MAX_REVIEWS`] are read per poll; the rest wait for the next.
+/// G5): each fresh branch other than the watched one with commits the watched branch doesn't have
+/// gets a card (ref `branch:<name>`), compared against the watched branch, with no PR, no CI and no
+/// Post (`no_forge`). A branch whose head already has a card keeps it; a new push makes a new card
+/// and the old one goes stale, as a PR's does. A branch that merged or was deleted goes stale.
+///
+/// Fresh means its head commit's committer date is at most [`super::review_days`] old
+/// ([`is_fresh`]); an older branch gets no card and no model call, and its old card goes stale. A
+/// new push makes it fresh again. Branches are read newest first, at most [`MAX_REVIEWS`] per poll;
+/// the rest wait for the next. A team folder has every date; a mirror has the dates of heads it
+/// fetched before, and fetches a new head once to learn its date. That fetch is the one
+/// [`History::branch_files`] made before, and counts toward [`MAX_REVIEWS`] the same way, so a
+/// poll never fetches more than it did, and an old branch costs one fetch and never a model call.
 pub async fn branches(state: &AppState, mode: &DevRepoRow, h: &History<'_>) -> Result<(), GhError> {
     let space = SpaceId::new(&mode.space_id);
     let kwants = state.db.list_kwants(&space).await.unwrap_or_default();
     let heads = h.branches().await?;
+    let mut ahead = Vec::new();
+    for (name, sha) in heads.iter().filter(|(n, _)| *n != mode.branch) {
+        // Merged (or level with the watched branch): no card, and its old one goes stale below
+        if !h.in_branch(sha, &mode.branch).await {
+            ahead.push((name, sha));
+        }
+    }
+    let shas: Vec<&str> = ahead.iter().map(|(_, s)| s.as_str()).collect();
+    let dates = h.commit_dates(&shas).await;
+    let mirror = h.fetches_branches();
+    let mut ahead: Vec<_> = ahead.into_iter().map(|b| (b, dates.get(b.1.as_str()).copied())).collect();
+    newest_first(&mut ahead);
+    let (now, days) = (Utc::now(), super::review_days());
     let mut open = HashSet::new();
     let mut read = 0;
-    for (name, sha) in heads.iter().filter(|(n, _)| *n != mode.branch) {
+    let mut old = 0;
+    for ((name, sha), at) in ahead {
         let ref_ = format!("branch:{name}");
-        // Merged (or level with the watched branch): no card, and its old one goes stale below
-        if h.in_branch(sha, &mode.branch).await {
+        if !is_fresh(at, now, days) {
+            // No new commit in `days`: no card, and its old one goes stale below
+            old += 1;
             continue;
         }
         let have = state.db.dev_cards_of_ref_in(&mode.space_id, &mode.key, REVIEW, &ref_).await.unwrap_or_default();
@@ -461,6 +528,17 @@ pub async fn branches(state: &AppState, mode: &DevRepoRow, h: &History<'_>) -> R
             continue;
         }
         read += 1;
+        if mirror && at.is_none() {
+            // A head the mirror hasn't fetched: fetch it once for its date (and its files)
+            match h.fetch_branch_date(name, sha).await {
+                None => continue,
+                Some(t) if !is_fresh(Some(t), now, days) => {
+                    old += 1;
+                    continue;
+                }
+                Some(_) => {}
+            }
+        }
         let Some(mut files) = h.branch_files(name, sha, &mode.branch).await else { continue };
         if files.is_empty() {
             continue;
@@ -480,13 +558,14 @@ pub async fn branches(state: &AppState, mode: &DevRepoRow, h: &History<'_>) -> R
         insert(state, mode, REVIEW, &ref_, sha, &facts).await;
         stale(state, mode, &ref_, Some(sha)).await;
     }
-    // A branch that merged, was deleted or has nothing new any more: its cards go stale
+    // A branch that merged, was deleted, went quiet or has nothing new any more: its cards go stale
     if let Ok(cards) = state.db.dev_cards_in(&mode.space_id, Some(&mode.key), REVIEW, None, 200).await {
         let gone: HashSet<String> = cards.into_iter().filter(|c| c.status != STALE && !open.contains(&c.ref_)).map(|c| c.ref_).collect();
         for r in gone {
             stale(state, mode, &r, None).await;
         }
     }
+    set_old_skipped(&mode.space_id, &mode.key, old);
     Ok(())
 }
 
@@ -714,6 +793,36 @@ mod tests {
             "level": 1, "turns_completed": 0, "created_at": null, "space_id": "s1"
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn fresh_means_within_the_window_and_an_unknown_date_is_fresh() {
+        let now = Utc::now();
+        assert!(is_fresh(None, now, 7), "unknown: fresh, never silently dropped");
+        assert!(is_fresh(Some(now - Duration::days(7)), now, 7));
+        assert!(!is_fresh(Some(now - Duration::days(7) - Duration::seconds(1)), now, 7));
+        assert!(!is_fresh(Some(now - Duration::days(30)), now, 7));
+        assert!(is_fresh(Some(now + Duration::hours(1)), now, 7), "a clock ahead of ours");
+        assert!(is_fresh(Some(now - Duration::days(30)), now, 30));
+    }
+
+    #[test]
+    fn candidates_go_newest_first_with_unknown_dates_first() {
+        let now = Utc::now();
+        let mut list = vec![("a", Some(now - Duration::days(3))), ("b", None), ("c", Some(now)), ("d", Some(now - Duration::days(9))), ("e", None)];
+        newest_first(&mut list);
+        assert_eq!(list.iter().map(|(n, _)| *n).collect::<Vec<_>>(), ["b", "e", "c", "a", "d"]);
+    }
+
+    #[test]
+    fn the_skipped_count_is_per_repo_and_set_by_each_poll() {
+        assert_eq!(old_reviews_skipped("skip-space", "a"), 0, "0 until a poll");
+        set_old_skipped("skip-space", "a", 24);
+        set_old_skipped("skip-space", "b", 1);
+        assert_eq!((old_reviews_skipped("skip-space", "a"), old_reviews_skipped("skip-space", "b")), (24, 1));
+        set_old_skipped("skip-space", "a", 0);
+        assert_eq!(old_reviews_skipped("skip-space", "a"), 0);
+        assert_eq!(old_reviews_skipped("other-space", "b"), 0);
     }
 
     /// Built from GitHub's JSON, so the conversion is under test too.

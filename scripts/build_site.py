@@ -188,7 +188,8 @@ def parse(path):
 CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-human-check-card",
             "v071-post-github-card", "v071-dev-on-card", "v071-dev-off-armed-card", "v071-lgtm-card",
             "v072-dev-repos-card", "v072-dev-explainer-card", "v072-dev-repo-chips-card", "v072-switch-on-card",
-            "v07-dev-review-card"}
+            "v07-dev-review-card", "v076-get-started-card", "v076-device-sign-in-card",
+            "v076-linux-install-card", "v076-whats-new-card"}
 
 
 def shot(root, name, alt, sizes):
@@ -346,6 +347,7 @@ def footer(root):
       <a href="{GITHUB}/issues" rel="noopener">Issues</a>
       <a href="{GITHUB}/blob/main/SECURITY.md" rel="noopener">Security</a>
       <a href="{root}contact.html">Contact</a>
+      <a href="https://x.com/kwantbot" rel="noopener">X (@kwantbot)</a>
     </nav>
     <nav aria-label="Legal">
       <h2>Legal</h2>
@@ -354,6 +356,7 @@ def footer(root):
       <a href="{root}terms.html#license">License</a>
     </nav>
     <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
     <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
   </div>
 </footer>
@@ -550,6 +553,7 @@ def page(meta, body, root, dates):
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="{img_alt}">
 {article}<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@kwantbot">
 <meta name="twitter:title" content="{ftitle}">
 <meta name="twitter:description" content="{desc}">
 <meta name="twitter:image" content="{image}">
@@ -992,6 +996,7 @@ Key facts:
 
 - License: AGPL-3.0, with commercial licenses available (contact@kwant.si).
 - Source: https://github.com/alexsergivan/kwant
+- kwant has no token (no coin, no crypto). The official X account is @kwantbot (https://x.com/kwantbot).
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
 - The program you install and run is called `kwnt` (`kwnt serve`).
