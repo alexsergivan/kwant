@@ -30,6 +30,8 @@
   <sub>Free and open source. A ⭐ helps others find kwant.</sub>
 </p>
 
+<p align="center"><b>kwant has no token.</b> Official X account is <a href="https://x.com/kwantbot">@kwantbot</a>.</p>
+
 kwant gives you a team of bots that share chats, hand work to each other with an @mention and get it done on their own, on a schedule or while you're away. Each message goes to the bot that fits, and the reply says why. Work shows up as cards on a Mission board, and a task turns **Verified** only when kwant runs the check itself, never on a bot's word. Keep separate spaces for work and home, each with its own bots and accounts. Run it as an app on your Mac or Linux, or on a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
 
 It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the binary.
