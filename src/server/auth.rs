@@ -243,6 +243,22 @@ pub fn one_time_notice(link: &str, qr: bool) -> Vec<String> {
     lines
 }
 
+/// The link and its QR code alone, indented, for install.sh (`kwnt signin-link --bare`), which says
+/// the rest in its own words (Mira's S1 lines): no "works once" or "Used or expired?" line here.
+pub fn bare_notice(link: &str, qr: bool) -> Vec<String> {
+    let mut lines = vec![format!("  {link}")];
+    if link.contains(THIS_HOST) {
+        lines.push(format!("  Replace {THIS_HOST} with this server's address. Set KWNT_ALLOWED_ORIGINS to your HTTPS address for a ready link and a QR code."));
+    } else if qr {
+        let code = signin::qr_lines(link);
+        if !code.is_empty() {
+            lines.push(String::new());
+            lines.extend(code.into_iter().map(|l| format!("  {l}")));
+        }
+    }
+    lines
+}
+
 /// Stands in for the server's address when kwnt listens on every address.
 pub const THIS_HOST: &str = "<this-host>";
 
@@ -1101,6 +1117,16 @@ mod tests {
         assert!(real.iter().any(|l| l.contains('█')), "QR code");
         assert!(real.last().unwrap().contains("kwnt signin-link"));
         assert!(!one_time_notice("https://kwant.example.com/#kwnt_token=kl1.abc", false).iter().any(|l| l.contains('█')));
+        // install.sh's bare form: the link (indented), then the QR code, and none of the notice's sentences
+        let bare = bare_notice("https://kwant.example.com/#kwnt_token=kl1.abc", true);
+        assert_eq!(bare[0], "  https://kwant.example.com/#kwnt_token=kl1.abc");
+        assert!(bare.iter().any(|l| l.contains('█')), "QR code");
+        assert!(bare.iter().skip(1).all(|l| l.is_empty() || l.starts_with("  ")), "{bare:?}");
+        assert!(!bare.iter().any(|l| l.contains("works once") || l.contains("signin-link")), "{bare:?}");
+        let bare_placeholder = bare_notice(&one_time_link("0.0.0.0", 8799, None, code), true);
+        assert!(bare_placeholder.iter().any(|l| l.contains("KWNT_ALLOWED_ORIGINS")));
+        assert!(!bare_placeholder.iter().any(|l| l.contains('█')));
+        assert_eq!(bare_notice("https://kwant.example.com/#kwnt_token=kl1.abc", false).len(), 1);
         // The API token itself is never printed at startup any more
         assert!(!real.iter().chain(&placeholder).any(|l| l.contains("kwnt token")));
         assert_eq!(token_command_link("0.0.0.0", 8799, "tok"), "http://<this-host>:8799/#kwnt_token=tok");
