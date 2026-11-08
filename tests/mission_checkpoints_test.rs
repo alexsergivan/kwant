@@ -845,6 +845,8 @@ async fn a_conflict_names_another_task_only_when_its_own_calls_wrote_the_path() 
 
 /// QA F-4: kwant's data folder behind a symlink the person made (a linked home or `~/Projects ->
 /// /mnt/ssd/Projects`). Checkpoints still work and so does a restore, as on main.
+// F-4 records the resolved folder on unix only; the symlinks here are unix too
+#[cfg(unix)]
 #[tokio::test]
 async fn a_symlink_the_person_made_above_the_folder_keeps_checkpoints_and_restore_working() {
     let e = setup_in(|tmp| {
@@ -874,6 +876,8 @@ async fn a_symlink_the_person_made_above_the_folder_keeps_checkpoints_and_restor
 /// QA F-3 kept with F-4: the task folder swapped for a symlink after its checkpoint was taken is
 /// refused at restore (nothing written, the other folder untouched), even with the person's own
 /// symlink above it.
+// F-4 records the resolved folder on unix only; the symlinks here are unix too
+#[cfg(unix)]
 #[tokio::test]
 async fn a_folder_swapped_for_a_symlink_after_its_checkpoint_is_refused_at_restore() {
     let e = setup_in(|tmp| {

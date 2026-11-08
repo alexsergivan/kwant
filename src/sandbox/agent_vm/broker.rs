@@ -105,6 +105,7 @@ pub fn kwnt_path_allowed(path: &str) -> bool {
 }
 
 /// Header read timeout on the socket, and the longest a request body may take to arrive.
+#[cfg(unix)]
 const HEADER_TIMEOUT: Duration = Duration::from_secs(10);
 const BODY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Open connections one bot's socket serves at once; more are closed straight away.
@@ -1521,6 +1522,7 @@ mod tests {
         b.close_all().await;
     }
 
+    #[cfg(target_os = "linux")]
     fn rss_kb() -> u64 {
         std::fs::read_to_string("/proc/self/status")
             .ok()
