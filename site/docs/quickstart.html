@@ -31,7 +31,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=94d7040e8f">
+<link rel="stylesheet" href="../assets/css/site.css?v=2f79016a41">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -65,7 +65,7 @@
   <li><strong>A Mac</strong> (Apple silicon or Intel) <strong>or a Linux x86_64 desktop</strong> for the app. On other machines, or on a server, <a href="#run">build from source</a> or use Docker (see <a href="/docs/install">Install &amp; run</a>).</li>
   <li><strong>At least one AI account</strong> for your bots. Any one of these is enough:
     <ul>
-      <li>a Claude, ChatGPT or Grok account. When kwant's Get started card is there, you don't need to install or sign in to anything first: the card installs the AI when it's missing, and you sign in from the app;</li>
+      <li>a Claude, ChatGPT or Grok account. You don't need to install or sign in to anything first: the Get started card installs the AI when it's missing, and you sign in from the app;</li>
       <li>an Anthropic, OpenAI or xAI API key, which you add in the card or under <strong>Settings → This space → Accounts</strong>.</li>
     </ul>
   </li>
@@ -112,7 +112,7 @@ make run   <span class="c"># builds the web app, then runs `cargo run -- serve`<
   <figcaption>The same card on a phone.</figcaption>
 </figure>
 <figure>
-  <div class="frame"><a class="zoom" href="../assets/media/v076-device-sign-in-2880.webp?v=56687f6bf0" data-caption="The Sign in step of the Get started card after choosing ChatGPT. It says to open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button and a note that kwant is waiting for you to finish there."><img class="app" src="../assets/media/v076-device-sign-in-1440.webp?v=54b4698ebf" srcset="../assets/media/v076-device-sign-in-1440.webp?v=54b4698ebf 1440w, ../assets/media/v076-device-sign-in-2880.webp?v=56687f6bf0 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Sign in step of the Get started card after choosing ChatGPT. It says to open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button and a note that kwant is waiting for you to finish there."></a></div>
+  <div class="frame"><a class="zoom" href="../assets/media/v076-device-sign-in-card-2880.webp?v=f5c812f225" data-caption="The Sign in step of the Get started card after choosing ChatGPT. It says to open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button, an Open auth.openai.com/codex/device button and a note that kwant is waiting for you to finish there."><img src="../assets/media/v076-device-sign-in-card-1440.webp?v=b2e3e868d0" srcset="../assets/media/v076-device-sign-in-card-1440.webp?v=b2e3e868d0 1440w, ../assets/media/v076-device-sign-in-card-2880.webp?v=f5c812f225 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The Sign in step of the Get started card after choosing ChatGPT. It says to open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button, an Open auth.openai.com/codex/device button and a note that kwant is waiting for you to finish there."></a></div>
   <figcaption>Signing in to ChatGPT with a short code. The code here is made up.</figcaption>
 </figure>
 <p>The short-code sign-in for ChatGPT and Grok is in the Get started card. <strong>Settings → This space → Accounts</strong> still asks you to sign the <code>codex</code> or <code>grok</code> CLI in on this machine (<code>codex login</code>, <code>grok login</code>), and that's also where you add API keys. You can add several accounts per engine, such as a work and a personal one. See <a href="/docs/accounts">Accounts &amp; profiles</a>.</p>

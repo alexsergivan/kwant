@@ -31,7 +31,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=94d7040e8f">
+<link rel="stylesheet" href="../assets/css/site.css?v=2f79016a41">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -86,17 +86,17 @@
 <h2 id="recipes">Recipe cards</h2>
 <p>New in 0.7.6. When a reply holds one recipe, with an ingredients list and the method, it shows as a recipe card: the ingredients in their groups, numbered steps, and any times and notes. The text before and after the recipe stays as it is. On a wide window the ingredients and steps sit side by side.</p>
 <figure>
-  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v076-recipe-poster.webp?v=0bf7b171ef" width="1280" height="800" aria-label="Demo: a camp chili recipe card in a kwant chat. Plus is pressed twice, the servings go from 4 to 6 and the changed ingredient amounts are highlighted, then Back to 4 puts them back."><source src="../assets/media/clip-v076-recipe.mp4?v=4dbc33d499" type="video/mp4"></video></div>
+  <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="../assets/media/clip-v076-recipe-poster.webp?v=b7555ec296" width="1280" height="800" aria-label="Demo: a camp chili recipe card in a kwant chat. Plus is pressed twice and the servings go from 4 to 6, so 1 tbsp olive oil becomes 1½ tbsp and 500 g ground beef becomes 750 g. Then Back to 4 puts the amounts back."><source src="../assets/media/clip-v076-recipe.mp4?v=4dbc33d499" type="video/mp4"></video></div>
   <figcaption>Change the servings and the amounts follow. Back to 4 puts them back.</figcaption>
 </figure>
 <ul>
   <li><strong>Servings:</strong> the stepper goes from 1 to 24 and rescales every amount kwant can read, in kitchen fractions such as ¼, ⅓ and ½. A screen reader hears the old amount after each change.</li>
-  <li><strong>What changed:</strong> each changed amount is highlighted, and <strong>Back to 4</strong> (or whatever the recipe said) puts the amounts back.</li>
+  <li><strong>What changed:</strong> each changed amount is highlighted, and <strong>Back to 4</strong> (the recipe's own number) puts the amounts back.</li>
   <li><strong>What stays:</strong> oven temperatures, and any amount kwant can't read, stay as written. Nothing is worked out with a model.</li>
   <li><strong>When in doubt, text:</strong> a reply that doesn't match a recipe's shape exactly stays plain text, and <strong>Show as text</strong> always gives the reply back word for word.</li>
 </ul>
 <figure>
-  <div class="frame"><a class="zoom" href="../assets/media/v076-recipe-2880.webp?v=6c2d3f4c07" data-caption="A recipe card in a kwant chat for one-pot camp chili, set to 6 servings instead of 4. The changed ingredient amounts are highlighted, the numbered steps sit next to the ingredients, and a Back to 4 button is above them."><img class="app" src="../assets/media/v076-recipe-1440.webp?v=a3d7b6dbef" srcset="../assets/media/v076-recipe-1440.webp?v=a3d7b6dbef 1440w, ../assets/media/v076-recipe-2880.webp?v=6c2d3f4c07 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A recipe card in a kwant chat for one-pot camp chili, set to 6 servings instead of 4. The changed ingredient amounts are highlighted, the numbered steps sit next to the ingredients, and a Back to 4 button is above them."></a></div>
+  <div class="frame"><a class="zoom" href="../assets/media/v076-recipe-2880.webp?v=6c2d3f4c07" data-caption="A recipe card in a kwant chat for one-pot camp chili, set to 6 servings instead of 4. The amounts read 1½ tbsp olive oil, 750 g ground beef and so on, the numbered steps sit next to the ingredients, and a Back to 4 button is above them."><img class="app" src="../assets/media/v076-recipe-1440.webp?v=a3d7b6dbef" srcset="../assets/media/v076-recipe-1440.webp?v=a3d7b6dbef 1440w, ../assets/media/v076-recipe-2880.webp?v=6c2d3f4c07 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A recipe card in a kwant chat for one-pot camp chili, set to 6 servings instead of 4. The amounts read 1½ tbsp olive oil, 750 g ground beef and so on, the numbered steps sit next to the ingredients, and a Back to 4 button is above them."></a></div>
   <figcaption>On a wide window, ingredients and steps side by side.</figcaption>
 </figure>
 <figure>

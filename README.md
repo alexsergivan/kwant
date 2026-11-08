@@ -41,7 +41,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 ## New in 0.7
 
 - **Recipes you can cook from** (0.7.6). When a reply holds one recipe, with an ingredients list and the method, it shows as a recipe card. Change the servings (1 to 24) and every amount kwant can read rescales, in kitchen fractions such as ¼, ⅓ and ½, with each changed amount highlighted and a **Back to N** button. Oven temperatures, and anything it can't read, stay as written, and **Show as text** gives the reply back word for word. [Guide](https://kwant.si/docs/smart-results#recipes)
-- **Get started** (0.7.6). A new person's #general starts with one card in three steps: **Choose your AI** (Claude, ChatGPT, Grok or an API key), **Sign in**, and **Pick a team**. Choosing an AI installs it when it's missing. ChatGPT (Codex) and Grok sign in there with a short code you approve in your browser, with no Terminal; Claude signs in as before. [Guide](https://kwant.si/docs/quickstart#get-started)
+- **Get started** (0.7.6). A new person's #general starts with one card in three steps: **Choose your AI** (Claude, ChatGPT, Grok or an API key), **Sign in**, and **Pick a team**. Choosing an AI installs it when it's missing. ChatGPT (Codex) and Grok sign in there with a short code you approve in your browser, with no Terminal; Claude signs in through claude.ai, as before. [Guide](https://kwant.si/docs/quickstart#get-started)
 - **A Linux server in one line** (0.7.6). `curl -fsSL https://kwant.si/install.sh | sh` installs kwant on Ubuntu 22.04+ or Debian 12+ (x86_64 or arm64), never with sudo. It checks the download's SHA-256 first, runs kwant as a user service or in the background, and ends with your sign-in link. Run it again to update; your data stays. Docker Compose now pulls the released image, `ghcr.io/alexsergivan/kwnt`. [Guide](https://kwant.si/docs/install#one-line)
 - **What's new, in the app** (0.7.6). After an update, a sheet shows what's new and what's fixed, once on each device. **See what's new** on the Updated banner opens it again, and **Settings › About** keeps every version's notes. Also: Codex and the bots' browser install without Node, and `kwnt --version` shows the real version. [Guide](https://kwant.si/docs/install#whats-new)
 - **This Mac and your servers, side by side** (0.7.5). The Mac and Linux app opens This Mac and every server you add, each in its own window, all at once. **Add a server…** in the menu bar takes an address or a sign-in link, and a server stays listed and signed in until you remove it. The list holds addresses only, never a token. [Guide](https://kwant.si/docs/install#side-by-side)
@@ -128,9 +128,8 @@ The quickest way is the app for Mac or Linux: download it, add an AI account you
 
 - **A Mac** (Apple silicon or Intel) **or a Linux x86_64 desktop** for the app.
 - **At least one AI account.** Any one of these is enough:
-  - the [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI, installed. You don't need to sign it in first: kwant has a **Sign in with Claude** button;
-  - the `codex` or `grok` CLI, signed in on the same machine (`codex login`, `grok login`);
-  - an Anthropic, OpenAI or xAI API key, which you add in the app under **Settings → This space → Accounts**.
+  - a Claude, ChatGPT or Grok account. You don't need to install or sign in to anything first: the **Get started** card installs the AI when it's missing, and you sign in from the app;
+  - an Anthropic, OpenAI or xAI API key, which you add in the card or under **Settings → This space → Accounts**.
 - To [build from source](#run-from-a-fresh-clone) instead: **Rust** (stable), installed with [rustup](https://rustup.rs), and **Node.js 20 or newer** with npm, to build the web app. The finished binary doesn't need Node.
 - Optional: **Docker** for VM mode and the bots' shared browser, and [`uv`](https://docs.astral.sh/uv/) or `python3` for the Laya router.
 
@@ -159,7 +158,7 @@ cd kwant
 make run          # builds the web app (frontend/dist), then runs `cargo run -- serve`
 ```
 
-Open **http://127.0.0.1:8799**. Until an account works, a banner above the chat says **One step left: add an account**, with a button to add one. A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
+Open **http://127.0.0.1:8799**. A new person's `#general` opens with the **Get started** card: choose your AI, sign in, pick a team ([guide](https://kwant.si/docs/quickstart#get-started)). A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
 
 The binary embeds `frontend/dist`, so on a fresh clone `cargo build`, `cargo test` and `cargo run -- serve` fail to compile until you've run `make run` or `make frontend` once.
 

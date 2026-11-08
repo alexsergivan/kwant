@@ -14,7 +14,7 @@ card_art: avatar:brand
   <li><strong>A Mac</strong> (Apple silicon or Intel) <strong>or a Linux x86_64 desktop</strong> for the app. On other machines, or on a server, <a href="#run">build from source</a> or use Docker (see <a href="install.html">Install &amp; run</a>).</li>
   <li><strong>At least one AI account</strong> for your bots. Any one of these is enough:
     <ul>
-      <li>a Claude, ChatGPT or Grok account. When kwant's Get started card is there, you don't need to install or sign in to anything first: the card installs the AI when it's missing, and you sign in from the app;</li>
+      <li>a Claude, ChatGPT or Grok account. You don't need to install or sign in to anything first: the Get started card installs the AI when it's missing, and you sign in from the app;</li>
       <li>an Anthropic, OpenAI or xAI API key, which you add in the card or under <strong>Settings → This space → Accounts</strong>.</li>
     </ul>
   </li>
@@ -61,7 +61,7 @@ make run   <span class="c"># builds the web app, then runs `cargo run -- serve`<
   <figcaption>The same card on a phone.</figcaption>
 </figure>
 <figure>
-  <div class="frame">{{shot:v076-device-sign-in|The Sign in step of the Get started card after choosing ChatGPT. It says to open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button and a note that kwant is waiting for you to finish there.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v076-device-sign-in-card|The Sign in step of the Get started card after choosing ChatGPT. It says to open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button, an Open auth.openai.com/codex/device button and a note that kwant is waiting for you to finish there.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Signing in to ChatGPT with a short code. The code here is made up.</figcaption>
 </figure>
 <p>The short-code sign-in for ChatGPT and Grok is in the Get started card. <strong>Settings → This space → Accounts</strong> still asks you to sign the <code>codex</code> or <code>grok</code> CLI in on this machine (<code>codex login</code>, <code>grok login</code>), and that's also where you add API keys. You can add several accounts per engine, such as a work and a personal one. See <a href="accounts.html">Accounts &amp; profiles</a>.</p>
