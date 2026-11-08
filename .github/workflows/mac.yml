@@ -19,6 +19,11 @@ name: mac
 # carries them next to the Mac files, with linux-x86_64-* entries added after the darwin-* ones in
 # the same latest.json. There is never a separate Linux release: it would become "latest" and hide
 # the Mac latest.json from installed Macs.
+#
+# Own server: a tag also builds the standalone kwnt for Linux x86_64 and arm64 (kwnt-linux.yml) that
+# site/install.sh downloads; the release carries kwnt-linux-<arch>.tar.gz with a .sha256 each (and
+# kwant_universal.app.tar.gz.sha256 for the installer's Mac path), and once the release exists the
+# image job pushes the same binaries as ghcr.io/<owner>/kwnt:<version> (and :latest for a full release).
 on:
   workflow_dispatch:
   pull_request:
@@ -442,9 +447,18 @@ jobs:
     uses: ./.github/workflows/linux.yml
     secrets: inherit
 
+  # The standalone kwnt for servers (no secrets: nothing in it is signed)
+  kwnt-linux:
+    name: kwnt-linux
+    needs: version
+    if: startsWith(github.ref, 'refs/tags/mac-v')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/kwnt-linux.yml
+
   release:
     name: release
-    needs: [version, dmg, linux]
+    needs: [version, dmg, linux, kwnt-linux]
     if: startsWith(github.ref, 'refs/tags/mac-v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -491,6 +505,18 @@ jobs:
           cp "$zsync_file" kwant_x86_64.AppImage.zsync
           test "$(sed -n 's/^SHA-1: //p' kwant_x86_64.AppImage.zsync | head -1)" = "$(sha1sum kwant_x86_64.AppImage | cut -d' ' -f1)"
           assets+=(kwant_x86_64.AppImage.zsync)
+          # The one-line install (site/install.sh) checks each download against its .sha256: the
+          # Mac app's updater bundle, and the standalone kwnt for Linux servers (kwnt-linux.yml)
+          sha256sum kwant_universal.app.tar.gz > kwant_universal.app.tar.gz.sha256
+          assets+=(kwant_universal.app.tar.gz.sha256)
+          for arch in x86_64 aarch64; do
+            f="kwnt-linux-$arch.tar.gz"
+            test -f "dist/kwnt-linux-$arch/$f"
+            test -f "dist/kwnt-linux-$arch/$f.sha256"
+            cp "dist/kwnt-linux-$arch/$f" "dist/kwnt-linux-$arch/$f.sha256" .
+            sha256sum -c "$f.sha256"
+            assets+=("$f" "$f.sha256")
+          done
           dl="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           # Installed apps read releases/latest/download/latest.json, which only ever resolves to the
           # newest full release; a prerelease gets no latest.json, so it's never offered as an update
@@ -527,6 +553,14 @@ jobs:
           \`kwant_amd64.deb\` for Ubuntu 22.04 or later and Debian 12 (\`sudo apt install ./kwant_amd64.deb\`), or \`kwant_x86_64.AppImage\` for other distros with a GTK desktop (\`chmod +x\` it and run it). Both update themselves in the app.
 
           SHA-256: \`$(cut -d' ' -f1 kwant_amd64.deb.sha256)\` (.deb), \`$(cut -d' ' -f1 kwant_x86_64.AppImage.sha256)\` (AppImage)
+
+          ### Own server (Linux x86_64 or arm64)
+
+          One line, no sudo: \`curl -fsSL https://kwant.si/install.sh | sh\`. It checks the download, runs kwant as a service for your user and prints a one-time sign-in link. Running it again upgrades. Needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+).
+
+          With Docker: \`docker compose up -d\` in a clone of this repository (the kwnt image is \`ghcr.io/$GITHUB_REPOSITORY_OWNER/kwnt:$VERSION\`).
+
+          SHA-256: \`$(cut -d' ' -f1 kwnt-linux-x86_64.tar.gz.sha256)\` (x86_64), \`$(cut -d' ' -f1 kwnt-linux-aarch64.tar.gz.sha256)\` (arm64)
           NOTES
           sed -i 's/^          //' notes.md
           flags=()
@@ -534,3 +568,57 @@ jobs:
           gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag \
             --title "kwant $VERSION for Mac and Linux" --notes-file notes.md "${flags[@]}" \
             "${assets[@]}"
+
+  # The kwnt image, from the binaries the release just published, for amd64 and arm64. After the
+  # release, so an image never points at a version that has no release.
+  image:
+    name: image
+    needs: [version, release]
+    if: startsWith(github.ref, 'refs/tags/mac-v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kwnt-linux-*
+          path: dist
+      - name: Binaries for the image (dist/docker/<docker arch>/kwnt)
+        run: |
+          set -euo pipefail
+          for pair in x86_64:amd64 aarch64:arm64; do
+            arch=${pair%%:*} darch=${pair#*:}
+            (cd "dist/kwnt-linux-$arch" && sha256sum -c "kwnt-linux-$arch.tar.gz.sha256")
+            mkdir -p "dist/docker/$darch"
+            tar -xzf "dist/kwnt-linux-$arch/kwnt-linux-$arch.tar.gz" -C "dist/docker/$darch"
+          done
+      - name: Tags
+        id: tags
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')/kwnt"
+          tags="$image:$VERSION"
+          # a prerelease never moves :latest, as it never becomes the latest release
+          if [ "$PRERELEASE" != "true" ]; then tags="$tags,$image:latest"; fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/kwnt.Dockerfile
+          target: prebuilt
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}

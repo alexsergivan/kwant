@@ -1,0 +1,203 @@
+name: kwnt-linux
+
+# The standalone kwnt for Linux servers (x86_64 and arm64, the web UI embedded), the one-line
+# installer that downloads it (site/install.sh, served at kwant.si/install.sh) and the kwnt
+# container image built from the same binaries.
+#
+# Pull requests and manual runs build kwnt-linux-<arch>.tar.gz (+ .sha256) as workflow artifacts,
+# start each binary and check /api/health, run install.sh in clean Ubuntu 22.04 and Debian 12
+# containers against a local mock release (scripts/test_install_sh.sh), and build the image for
+# amd64 and arm64 without pushing it.
+# A mac-v* tag runs this from mac.yml (workflow_call): its release job attaches the tarballs to the
+# same release as the Mac app, and its image job pushes ghcr.io/<owner>/kwnt after the release exists.
+#
+# Built on ubuntu-22.04 (and the arm runner of the same release) so it runs on glibc 2.35 or newer;
+# a check below fails if a newer glibc symbol slips in.
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/main.rs"
+      - "src/serve.rs"
+      - "src/config.rs"
+      - "src/server/auth.rs"
+      - "src/server/signin.rs"
+      - "docker/kwnt.Dockerfile"
+      - "docker/kwnt-entrypoint.sh"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "site/install.sh"
+      - "scripts/test_install_sh.sh"
+      - "scripts/test_install_sh.inner.sh"
+      - ".github/workflows/kwnt-linux.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kwnt-linux-${{ github.ref }}
+  # never cancel a release half-way
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  binary:
+    name: kwnt ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # kwnt embeds frontend/dist, so the UI is built first
+      - name: Build the web UI
+        working-directory: frontend
+        run: npm ci && npm run build
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build kwnt
+        run: cargo build --release --locked --bin kwnt
+      - name: Runs on glibc 2.35 (Ubuntu 22.04, Debian 12)
+        run: |
+          set -euo pipefail
+          ldd target/release/kwnt
+          newest=$(objdump -T target/release/kwnt | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "newest glibc symbol: $newest"
+          if [ "$(printf '%s\n2.35\n' "$newest" | sort -V | tail -1)" != "2.35" ]; then
+            echo "::error::kwnt needs glibc $newest, newer than Ubuntu 22.04's 2.35"
+            exit 1
+          fi
+      - name: Smoke test (--version, then /api/health)
+        run: |
+          set -euo pipefail
+          ./target/release/kwnt --version
+          tmp=$(mktemp -d)
+          HOME="$tmp" KWNT_DATA_DIR="$tmp/data" KWNT_LAYA_MANAGED=0 KWNT_PORT=18799 \
+            ./target/release/kwnt serve > "$tmp/serve.log" 2>&1 &
+          pid=$!
+          ok=""
+          for _ in $(seq 60); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18799/api/health > "$tmp/health.json" 2>/dev/null \
+              && grep -q '"app":"kwnt"' "$tmp/health.json"; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$pid" || true
+          if [ -z "$ok" ]; then tail -n 40 "$tmp/serve.log"; exit 1; fi
+          cat "$tmp/health.json"; echo
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="kwnt-linux-${{ matrix.arch }}.tar.gz"
+          mkdir -p pkg out
+          cp target/release/kwnt pkg/kwnt
+          strip pkg/kwnt
+          chmod 755 pkg/kwnt
+          tar -czf "out/$name" -C pkg --owner=0 --group=0 kwnt
+          (cd out && sha256sum "$name" > "$name.sha256" && cat "$name.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kwnt-linux-${{ matrix.arch }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+
+  install-test:
+    name: install.sh ${{ matrix.arch }}
+    needs: binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -s sh site/install.sh scripts/test_install_sh.sh scripts/test_install_sh.inner.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: kwnt-linux-${{ matrix.arch }}
+          path: dist
+      - name: install.sh in clean Ubuntu 22.04 and Debian 12
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c "kwnt-linux-${{ matrix.arch }}.tar.gz.sha256")
+          mkdir -p bin
+          tar -xzf "dist/kwnt-linux-${{ matrix.arch }}.tar.gz" -C bin
+          scripts/test_install_sh.sh bin/kwnt ubuntu:22.04 debian:12
+
+  image:
+    name: image (amd64 + arm64, not pushed)
+    needs: binary
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kwnt-linux-*
+          path: dist
+      - name: Binaries for the image (dist/docker/<docker arch>/kwnt)
+        run: |
+          set -euo pipefail
+          for pair in x86_64:amd64 aarch64:arm64; do
+            arch=${pair%%:*} darch=${pair#*:}
+            (cd "dist/kwnt-linux-$arch" && sha256sum -c "kwnt-linux-$arch.tar.gz.sha256")
+            mkdir -p "dist/docker/$darch"
+            tar -xzf "dist/kwnt-linux-$arch/kwnt-linux-$arch.tar.gz" -C "dist/docker/$darch"
+          done
+          ls -l dist/docker/*/kwnt
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build for amd64 and arm64
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/kwnt.Dockerfile
+          target: prebuilt
+          platforms: linux/amd64,linux/arm64
+          push: false
+      - name: Build amd64 into the local Docker
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/kwnt.Dockerfile
+          target: prebuilt
+          platforms: linux/amd64
+          load: true
+          tags: kwnt-ci:test
+      - name: The image starts and answers /api/health
+        run: |
+          set -euo pipefail
+          docker run -d --name kwnt-ci -p 127.0.0.1:18799:8799 kwnt-ci:test
+          ok=""
+          for _ in $(seq 60); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18799/api/health > health.json 2>/dev/null \
+              && grep -q '"app":"kwnt"' health.json; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then docker logs --tail 40 kwnt-ci; exit 1; fi
+          cat health.json; echo
+          docker run --rm --entrypoint kwnt kwnt-ci:test --version
+          docker rm -f kwnt-ci
