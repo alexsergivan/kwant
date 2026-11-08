@@ -6,8 +6,9 @@
 # Linux (x86_64 or arm64, glibc 2.35+: Ubuntu 22.04+, Debian 12+): downloads the prebuilt kwnt from the
 # latest release, checks it against its .sha256 (a mismatch installs nothing), puts it in ~/.local/bin,
 # runs it as a systemd user service when this user has one (otherwise in the background, and says how to
-# start it again), starts `kwnt setup --yes` in the background and prints a one-time sign-in link with
-# its QR code.
+# start it again), starts `kwnt setup --yes` in the background and prints a one-time sign-in link: a
+# loopback one with the SSH tunnel to reach it from a laptop, any other with its QR code. A kwnt it
+# didn't start (by hand, no pid file) keeps running; it says so instead of "updated".
 # macOS: the same checked download of the Mac app, into ~/Applications.
 # Never uses sudo. Running it again upgrades kwant in place and keeps your data (~/.kwnt).
 #
@@ -101,12 +102,22 @@ install_linux() {
     fail "Couldn't write $bindir/kwnt."
   run_path="$bindir:$HOME/.grok/bin:/usr/local/bin:/usr/bin:/bin"
 
+  # A kwnt this installer didn't start (no pidfile, no service) keeps running the old version
+  port=$("$bindir/kwnt" status </dev/null 2>/dev/null | awk '$1 == "port" {print $2; exit}')
+  port=${port:-8799}
   linger_cmd=""
   if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
     mode=service
-    start_service
+    ours=$(systemctl --user show -p MainPID --value kwnt.service 2>/dev/null)
   else
     mode=background
+    ours=$(cat "$data/kwnt.pid" 2>/dev/null)
+  fi
+  case "$ours" in "" | *[!0-9]*) ours=0 ;; esac
+  outside=$(outside_kwnt "$ours")
+  if [ "$mode" = service ]; then
+    start_service
+  else
     start_background
   fi
 
@@ -122,8 +133,6 @@ install_linux() {
   # shellcheck disable=SC2086 # the test flags are meant to split into words
   PATH="$run_path" nohup "$bindir/kwnt" setup --yes --only "$parts" ${KWNT_INSTALL_SETUP_FLAGS:-} >"$data/setup.log" 2>&1 </dev/null &
 
-  port=$("$bindir/kwnt" status </dev/null 2>/dev/null | awk '$1 == "port" {print $2; exit}')
-  port=${port:-8799}
   tries=0
   until fetch_quiet "http://127.0.0.1:$port/api/health" | grep -q '"app":"kwnt"'; do
     tries=$((tries + 1))
@@ -140,7 +149,10 @@ install_linux() {
     *) run="$bindir/kwnt" ;;
   esac
 
-  if [ -n "$old" ] && [ "$old" != "$version" ]; then
+  if [ -n "$outside" ]; then
+    say "✓ kwant $version for Linux $label"
+    say "kwnt is already running outside this installer. Restart it to use the new version."
+  elif [ -n "$old" ] && [ "$old" != "$version" ]; then
     say "✓ kwant $version for Linux $label (updated from $old)"
   else
     say "✓ kwant $version for Linux $label"
@@ -156,12 +168,49 @@ install_linux() {
   fi
   say "✓ Laya and a browser for the bots are getting ready in the background"
   say ""
-  say "Open this on your phone or laptop to finish. It works once, for 15 minutes:"
-  say ""
-  "$bindir/kwnt" signin-link --bare </dev/null || fail "Couldn't make a sign-in link. Run: $run signin-link"
-  say ""
+  notice=$("$bindir/kwnt" signin-link --bare </dev/null) || fail "Couldn't make a sign-in link. Run: $run signin-link"
+  link=$(printf '%s\n' "$notice" | awk '/:\/\// {print $1; exit}')
+  case "$link" in
+    http://127.0.0.1:* | http://localhost:* | "http://[::1]:"*)
+      # Only this machine can open a loopback link (and its QR code): a laptop needs a tunnel
+      say "Open $link in a browser on this machine."
+      say "On a server? On your laptop, first run:"
+      say "  ssh -N -L $port:127.0.0.1:$port $(id -un)@<this-server>"
+      say "then open the same link there. For a phone (HTTPS), see https://kwant.si/docs/install"
+      say ""
+      say "The link works once, for 15 minutes."
+      ;;
+    *)
+      say "Open this on your phone or laptop to finish. It works once, for 15 minutes:"
+      say ""
+      say "$notice"
+      say ""
+      ;;
+  esac
   say "There you choose your AI and sign in. Nothing else to type here."
   say "Lost the link? Run: $run signin-link"
+}
+
+# outside_kwnt OURS: "yes" when this user runs a `kwnt serve` other than pid OURS, or, with no pid of
+# ours, when something already answers as kwnt on the port
+outside_kwnt() {
+  me=$(id -u)
+  for proc in /proc/[0-9]*; do
+    [ "${proc#/proc/}" = "$1" ] && continue
+    # The program and its first argument (cmdline is NUL-separated)
+    args=$(tr '\0' '\n' <"$proc/cmdline" 2>/dev/null | head -n 2 | tr '\n' ' ') || continue
+    prog=${args%% *}
+    first=${args#* }
+    first=${first%% *}
+    if [ "${prog##*/}" = kwnt ] && [ "$first" = serve ] &&
+      [ "$(awk '$1 == "Uid:" {print $2; exit}' "$proc/status" 2>/dev/null)" = "$me" ]; then
+      echo yes
+      return
+    fi
+  done
+  if [ "$1" = 0 ] && fetch_quiet "http://127.0.0.1:$port/api/health" | grep -q '"app":"kwnt"'; then
+    echo yes
+  fi
 }
 
 start_service() {

@@ -73,9 +73,15 @@ check "/api/health says app kwnt" health
 check "first line names kwant and the arch" grep -Eq '^✓ kwant [0-9][^ ]* for Linux (x86_64|arm64)$' /tmp/out
 check "says it runs in the background" grep -q '^✓ Runs in the background' /tmp/out
 check "Mira's background line" grep -qx '✓ Laya and a browser for the bots are getting ready in the background' /tmp/out
-check "Mira's link line" grep -qx 'Open this on your phone or laptop to finish. It works once, for 15 minutes:' /tmp/out
-check "the one-time link" grep -Eq '^  http://127\.0\.0\.1:18799/#kwnt_token=[A-Za-z0-9._-]{16,}$' /tmp/out
-check "a QR code under it" grep -q '█' /tmp/out
+link_line='^Open http://127\.0\.0\.1:18799/#kwnt_token=[A-Za-z0-9._-]{16,} in a browser on this machine\.$'
+check "the one-time link, to open on this machine" grep -Eq "$link_line" /tmp/out
+check "on a server: the ssh tunnel first" grep -qx 'On a server? On your laptop, first run:' /tmp/out
+check "the tunnel uses the port and this user" grep -qx '  ssh -N -L 18799:127.0.0.1:18799 tester@<this-server>' /tmp/out
+check "then the same link; HTTPS for a phone" grep -qx 'then open the same link there. For a phone (HTTPS), see https://kwant.si/docs/install' /tmp/out
+check "how long the link lasts" grep -qx 'The link works once, for 15 minutes.' /tmp/out
+check "no 'phone or laptop' for a loopback link" sh -c '! grep -q "Open this on your phone or laptop" /tmp/out'
+check "no QR code for a loopback link" sh -c '! grep -q "█" /tmp/out'
+check "not running outside the installer" sh -c '! grep -q "already running outside this installer" /tmp/out'
 check "Mira's closing lines" grep -qx 'There you choose your AI and sign in. Nothing else to type here.' /tmp/out
 check "how to get another link" grep -Eq '^Lost the link\? Run: .*kwnt signin-link$' /tmp/out
 check "no kwnt serve banner in the output" sh -c '! grep -q "To sign in from another device" /tmp/out'
@@ -92,11 +98,51 @@ check "/api/health answers" health
 pid2=$(cat "$home/.kwnt/kwnt.pid")
 check "kwnt was restarted" [ "$pid2" != "$pid1" ]
 check "the old process is gone" sh -c "! kill -0 $pid1 2>/dev/null"
-check "a new link was printed" grep -Eq '^  http://127\.0\.0\.1:18799/#kwnt_token=' /tmp/out
+check "a new link was printed" grep -Eq "$link_line" /tmp/out
 check "only one kwnt serve runs" [ "$(pgrep -f 'kwnt serve' | wc -l)" -eq 1 ]
+check "not running outside the installer" sh -c '! grep -q "already running outside this installer" /tmp/out'
 kill "$pid2"
 i=0
 while kill -0 "$pid2" 2>/dev/null && [ "$i" -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
+
+# stop_all: every kwnt this user runs, by the installer or by hand
+stop_all() {
+  pkill -u tester -f 'kwnt(-hand)? serve' 2>/dev/null || true
+  i=0
+  while pgrep -u tester -f 'kwnt(-hand)? serve' >/dev/null && [ "$i" -lt 20 ]; do sleep 0.5; i=$((i + 1)); done
+}
+outside_line='kwnt is already running outside this installer. Restart it to use the new version.'
+
+echo "- a kwnt started by hand (no pid file): found by its process"
+rm -f "$home/.kwnt/kwnt.pid"
+su tester -c "cd && KWNT_DATA_DIR=$home/hand KWNT_PORT=18800 KWNT_LAYA_MANAGED=0 nohup $home/.local/bin/kwnt serve >/tmp/hand.log 2>&1 </dev/null &"
+i=0
+until curl -fsS --max-time 2 http://127.0.0.1:18800/api/health 2>/dev/null | grep -q '"app":"kwnt"'; do
+  i=$((i + 1))
+  [ "$i" -lt 60 ] || { cat /tmp/hand.log; exit 1; }
+  sleep 0.5
+done
+install good
+check "says it runs outside the installer" grep -qx "$outside_line" /tmp/out
+check "doesn't say updated" sh -c '! grep -q "(updated from" /tmp/out'
+check "the hand-started kwnt still runs" curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:18800/api/health
+check "the link is still printed" grep -Eq "$link_line" /tmp/out
+stop_all
+
+echo "- a kwnt started by hand under another name: found by its port"
+rm -f "$home/.kwnt/kwnt.pid"
+su tester -c "cp $home/.local/bin/kwnt $home/kwnt-hand && cd && KWNT_PORT=18799 KWNT_LAYA_MANAGED=0 nohup $home/kwnt-hand serve >/tmp/hand.log 2>&1 </dev/null &"
+i=0
+until health; do
+  i=$((i + 1))
+  [ "$i" -lt 60 ] || { cat /tmp/hand.log; exit 1; }
+  sleep 0.5
+done
+install v2
+check "says it runs outside the installer" grep -qx "$outside_line" /tmp/out
+check "doesn't say updated" sh -c '! grep -q "(updated from" /tmp/out'
+check "the hand-started kwnt still answers" health
+stop_all
 
 echo "- with a systemd user session: a service, and the linger command when it needs admin"
 mkdir -p /tmp/stubs
@@ -140,7 +186,7 @@ check "says it runs as a service" grep -qx '✓ Runs as a service for this user'
 check "prints the one admin command" grep -q 'runs once: sudo loginctl enable-linger tester$' /tmp/out
 check "/api/health answers" health
 check "the downgrade back to v1 replaced the binary" [ "$(sha "$home/.local/bin/kwnt")" = "$v1" ]
-check "the link is printed" grep -Eq '^  http://127\.0\.0\.1:18799/#kwnt_token=' /tmp/out
+check "the link is printed" grep -Eq "$link_line" /tmp/out
 kill "$(cat "$home/unit.pid")" 2>/dev/null || true
 
 echo "- never sudo"
