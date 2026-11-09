@@ -74,13 +74,21 @@ pub enum Parsed {
 
 const SEGMENT_SPLIT: [char; 7] = [';', '&', '|', '\n', '(', ')', '`'];
 
+/// What a bot is told when something runs before its push in the same command.
+pub const RUN_ALONE: &str = "kwant checks the commit a push sends before the command runs, so nothing else may run before      `git push` in the same command (a commit, an amend, a pull or a merge would change what is sent). Run them first,      then run `git push` as its own command (`cd <repo> && git push` is fine).";
+
 /// The `git push`es in `command`, in order. Finds `git` anywhere in a segment, so `env X=1 git
 /// push`, `sudo git push`, `nice git push` and `bash -c 'git push'` all count; `cd <dir>` before it
 /// moves where it runs (inside the bot's folder only). A push kwant can't pin down (`git -C`,
-/// `--git-dir`, `--all`, `cd ..`) is refused rather than let through.
+/// `--git-dir`, `--all`, `cd ..`, a matching `:` refspec, `--repo`) is refused rather than let
+/// through, and so is a push after anything but `cd`/`pushd` or another push in the same command:
+/// the gate reads the commit before the command runs, so `git commit -am x && git push` would
+/// send a commit nobody checked.
 pub fn pushes(command: &str) -> Parsed {
     let mut out = Vec::new();
     let mut dir = PathBuf::new();
+    // Something ran before the next push that could move what it sends
+    let mut ran_before = false;
     for segment in command.split(SEGMENT_SPLIT) {
         let words: Vec<String> = segment
             .split_whitespace()
@@ -97,7 +105,10 @@ pub fn pushes(command: &str) -> Parsed {
             }
             continue;
         }
-        let Some(at) = words.iter().position(|w| w.rsplit('/').next() == Some("git")) else { continue };
+        let Some(at) = words.iter().position(|w| w.rsplit('/').next() == Some("git")) else {
+            ran_before |= !words.is_empty();
+            continue;
+        };
         let a: Vec<&str> = words[at + 1..].iter().map(String::as_str).collect();
         let mut i = 0;
         let mut refused = None;
@@ -108,6 +119,8 @@ pub fn pushes(command: &str) -> Parsed {
             i += if matches!(a[i], "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path") { 2 } else { 1 };
         }
         if a.get(i) != Some(&"push") {
+            // `git stash push` and the like are not a push, but still run before one
+            ran_before = true;
             continue;
         }
         if let Some(r) = refused {
@@ -117,6 +130,7 @@ pub fn pushes(command: &str) -> Parsed {
             return Parsed::Refused("kwant checks a push before it goes, and only inside the bot's own folder: `cd` into the repo there, then push.".into());
         }
         match push_args(&a[i + 1..]) {
+            Ok(list) if !list.is_empty() && ran_before => return Parsed::Refused(RUN_ALONE.into()),
             Ok(list) => out.extend(list.into_iter().map(|(src, dst)| Push { dir: dir.clone(), src, dst })),
             Err(why) => return Parsed::Refused(why),
         }
@@ -160,7 +174,16 @@ fn push_args(args: &[&str]) -> Result<Vec<(String, Option<String>)>, String> {
             "-d" | "--delete" => delete = true,
             "--tags" | "--follow-tags" => tags |= x == "--tags",
             "--all" | "--branches" | "--mirror" => return Err("kwant checks one branch at a time before a push: push the branch by name.".into()),
-            "-o" | "--push-option" | "--repo" | "--receive-pack" | "--exec" => j += 1,
+            // git takes a remote given as an argument over `--repo`, so either word could be the
+            // remote or a refspec: kwant won't guess which branch is written
+            _ if x == "--repo" || x.starts_with("--repo=") => {
+                return Err("kwant checks a push before it goes, and can't follow `--repo`: name the remote as an argument, `git push origin <branch>`.".into())
+            }
+            // Pushes the submodules' own commits, which kwant doesn't check
+            _ if x.starts_with("--recurse-submodules=") && !matches!(x, "--recurse-submodules=no" | "--recurse-submodules=check") => {
+                return Err("kwant checks a push before it goes, and doesn't check a submodule's commits: push each submodule from inside its own folder.".into())
+            }
+            "-o" | "--push-option" | "--receive-pack" | "--exec" => j += 1,
             "--" => {}
             _ if x.starts_with('-') => {
                 if !x.starts_with("--") && x.contains('d') {
@@ -176,6 +199,11 @@ fn push_args(args: &[&str]) -> Result<Vec<(String, Option<String>)>, String> {
     }
     if delete {
         return Ok(Vec::new());
+    }
+    // `:` alone is a matching push: every branch that also exists on the remote (refused in any
+    // place, so a `:` taken for the remote never slips through)
+    if pos.iter().any(|p| p.trim_start_matches('+') == ":") {
+        return Err("kwant checks one branch at a time before a push, and `:` pushes every matching branch: push the branch by name.".into());
     }
     let refspecs = &pos[pos.len().min(1)..];
     if refspecs.is_empty() {
@@ -917,7 +945,6 @@ mod tests {
     #[test]
     fn wrapped_and_chained_pushes_are_found() {
         for cmd in [
-            "git add -A && git commit -m x && git push origin juno-x",
             "env GIT_TRACE=0 git push origin juno-x",
             "sudo -u me git push origin juno-x",
             "nice -n 10 /usr/bin/git push origin juno-x",
@@ -927,6 +954,53 @@ mod tests {
         ] {
             assert_eq!(pushes(cmd), Parsed::Pushes(vec![one("juno-x", Some("juno-x"))]), "{cmd}");
         }
+    }
+
+    /// Ada's review of #456, must-fix 2: the gate reads the commit before the command runs, so a
+    /// commit (or amend, pull, merge, reset...) before the push in the same command is refused.
+    #[test]
+    fn a_push_after_anything_but_cd_in_the_same_command_is_refused() {
+        for cmd in [
+            "git commit -am x && git push",
+            "git add -A && git commit -m x && git push origin juno-x",
+            "git commit --amend --no-edit; git push -f",
+            "git pull && git push",
+            "bash -c 'git commit -m x && git push'",
+            "git commit -m x\ngit push",
+            "git merge other || git push origin juno-x",
+            "make fmt && git commit -am fmt && git push",
+            "echo y | git push",
+            "git stash push -m wip && git push",
+            "cd kwant && git commit -am x && git push",
+            "git push origin a && git commit -am x && git push origin b",
+        ] {
+            assert_eq!(pushes(cmd), Parsed::Refused(RUN_ALONE.into()), "{cmd}");
+        }
+        // cd, pushd and other pushes may come first; anything may come after
+        assert_eq!(pushes("cd kwant && pushd sub && git push origin juno-x"), Parsed::Pushes(vec![Push { dir: PathBuf::from("kwant/sub"), src: "juno-x".into(), dst: Some("juno-x".into()) }]));
+        assert_eq!(pushes("git push origin a && git push origin b"), Parsed::Pushes(vec![one("a", Some("a")), one("b", Some("b"))]));
+        assert_eq!(pushes("git push origin juno-x && git log -1"), Parsed::Pushes(vec![one("juno-x", Some("juno-x"))]));
+        // A push that sends no code isn't gated, whatever runs first
+        assert_eq!(pushes("git commit -am x && git push --dry-run"), Parsed::NoPush);
+    }
+
+    /// Must-fix 3: a matching `:` refspec and `--repo` push branches kwant didn't pin, so they're
+    /// refused like `--all`.
+    #[test]
+    fn matching_refspecs_and_repo_are_refused() {
+        for cmd in [
+            "git push origin :",
+            "git push origin +:",
+            "git push :",
+            "git push --repo=origin main:prod",
+            "git push --repo origin main:prod",
+            "git push --repo=origin",
+            "git push --recurse-submodules=on-demand origin juno-x",
+            "git push --recurse-submodules=only",
+        ] {
+            assert!(matches!(pushes(cmd), Parsed::Refused(_)), "{cmd}: {:?}", pushes(cmd));
+        }
+        assert_eq!(pushes("git push --recurse-submodules=check origin juno-x"), Parsed::Pushes(vec![one("juno-x", Some("juno-x"))]));
     }
 
     #[test]

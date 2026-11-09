@@ -229,6 +229,10 @@ def check_release_line(errors):
             "index.html: release line does not match CHANGELOG.md (run python3 scripts/build_site.py): "
             + (found[0] if found else "missing")
         )
+    exe = build_site.windows_installer()
+    for page in ("index.html", "docs/install.html", "llms.txt"):
+        if exe not in (OUT / page).read_text():
+            errors.append(f"{page}: no link to {exe}, the latest Windows installer (run python3 scripts/build_site.py)")
 
 
 def main():

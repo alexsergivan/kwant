@@ -35,14 +35,17 @@ case "$1" in
 esac
 for a; do last="$a"; done
 printf '%s' "$last" > "$KWNT_TEST_PROMPTS/$$-$(date +%s%N)"
+out=done
 case "$last" in
+  *"[Decide first]"*) out="I'd pick B." ;;
+  *HOLDMARK*"Review each one now"*) out='The count looks right.\n\nTwo decisions for you:\n1. A, B or C?\n2. FM monogram or plain?' ;;
 esac
 release=$(printf '%s\n' "$last" | sed -n 's/.*LONGTASK:\([^ ]*\).*/\1/p' | head -n 1)
 if [ -n "$release" ]; then
   i=0
   while [ ! -f "$release" ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
 fi
-echo '{"type":"result","is_error":false,"num_turns":1,"result":"done"}'
+printf '%s\n' "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"$out\"}"
 "#;
 
 fn prompts_dir() -> &'static PathBuf {
@@ -301,6 +304,26 @@ async fn the_lead_reviews_with_fresh_eyes_never_the_chat() {
         assert!(!p.contains("LEADCHATMARK"), "a review turn never gets the lead's chat: {p}");
         assert!(!p.contains("finished the task you delegated"), "nor the results turn: {p}");
     }
+}
+
+/// B1 through Decide-first (Ada's review of #456, must-fix 1): a review reply that ends by asking
+/// the person to pick is never held, so no consult turn and no follow-up lead turn (which see the
+/// whole chat and every tool) ever runs for it.
+#[tokio::test]
+async fn a_review_that_asks_to_pick_never_goes_to_the_hidden_round() {
+    let env = setup().await;
+    let (s, v) = call(&env.app, "POST", "/api/settings", Some(json!({"decide_first": true}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"kwant_id": env.lead, "sender_id": "user",
+        "prompt": "Keep HOLDCHATMARK between us"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("the lead's chat turn", || async { !prompts_with(&["HOLDCHATMARK"]).is_empty() }).await;
+    finished(&env, "Count the gadgets HOLDMARK", "Gadget count").await;
+    wait_for("the lead's review turn", || async { !prompts_with(&[FRESH, "Gadget count"]).is_empty() }).await;
+    settle().await;
+    // The review did answer with a choice (the fake's reply), and nothing held it
+    let decide = prompts_with(&["[Decide first]", "The count looks right"]);
+    assert!(decide.is_empty(), "no hidden round for a review: {decide:?}");
 }
 
 fn review_asks_for(task_id: &str) -> usize {

@@ -26,7 +26,7 @@ const MAESTRO = /\bAgent Maestro\b/g;
 // as the subject in these three sentences only.
 // Run Claude inside the VM (0.7.7): Mira's ui-check-450 must-fix 2 names kwant, the program on the computer,
 // in these settings and chat-notice sentences ("Restart kwant" is what a person on a phone has to do).
-const RULED = /\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass)\b|\b[Rr]estart kwant\b|\bStart kwant as\b/g;
+const RULED = /\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass)\b|\b[Rr]estart kwant\b|\bStart kwant as\b/g;
 
 /** Whether a literal reads like text a person sees (a sentence, or a capitalised word). */
 const looksVisible = (text, node) => {

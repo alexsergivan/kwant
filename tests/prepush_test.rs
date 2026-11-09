@@ -95,7 +95,7 @@ async fn a_switched_off_test_blocks_the_push_until_the_person_overrides() {
     let tampered = TEST_BODY.replace("#[test]\n", "#[test]\n#[ignore]\n");
     commit(&folder, "src/widgets.rs", &format!("{}pub fn count() -> u32 {{ 4 }}\n", clean_review("SKIPMARK")), "Count widgets");
     let sha = commit(&folder, TEST_FILE, &tampered, "Skip the slow test");
-    let push = "git add -A && git commit -m wip ; git push -u origin juno-skip";
+    let push = "git push -u origin juno-skip";
 
     // Dev mode off: the push isn't held and no card is made
     assert_eq!(prepush::gate(&env.state, &env.a, push, &folder).await, None);
@@ -247,9 +247,23 @@ async fn pushes_kwant_cant_follow_are_refused_in_dev_mode() {
     let space = space_of_a(&env).await;
     let folder = repo(&env, "refused");
     env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
-    for cmd in ["git -C /tmp/elsewhere push origin x", "cd .. && git push origin x", "git --git-dir=/tmp/x/.git push origin x"] {
+    // On a work branch, so a bare push isn't the production floor's (main is protected)
+    git(&folder, &["checkout", "-q", "-b", "juno-z"]);
+    for cmd in [
+        "git -C /tmp/elsewhere push origin x",
+        "cd .. && git push origin x",
+        "git --git-dir=/tmp/x/.git push origin x",
+        // Ada's review of #456: `--repo` writes a branch kwant didn't pin (a matching `:` push is
+        // the production floor's card in Dev mode, and refused by the parser: unit tests)
+        "git push --repo=origin juno-a:juno-b",
+    ] {
         let why = prepush::gate(&env.state, &env.a, cmd, &folder).await;
         assert!(why.is_some(), "{cmd}");
+    }
+    // A commit in the same command as the push would send a commit nobody checked
+    for cmd in ["git commit -am x && git push", "git commit --amend --no-edit; git push -f", "git pull && git push", "bash -c 'git commit -m x && git push'"] {
+        let why = prepush::gate(&env.state, &env.a, cmd, &folder).await.expect("refused");
+        assert!(why.contains("as its own command"), "{cmd}: {why}");
     }
     // A push from a folder inside the repo but not its top is refused, not let through
     std::fs::create_dir_all(folder.join("sub")).unwrap();

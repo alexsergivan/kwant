@@ -1,7 +1,8 @@
 //! The bots' private browser without Node (0.7.6, O5): when a bot first needs the local browser
 //! and this computer has no Chrome or Chromium, kwnt downloads Google's Chrome for Testing build
 //! into its own cache folder (`~/Library/Caches/kwant/chrome` on a Mac, `~/.cache/kwant/chrome`
-//! on Linux) and uses that. No admin rights, no Homebrew, no Node.
+//! on Linux, `%USERPROFILE%\AppData\Local\kwant\chrome` on Windows) and uses that. No admin
+//! rights, no Homebrew, no Node.
 //!
 //! It is silent unless it fails. Then [`FAILED_LINE`] is what the person sees, with "Try again"
 //! ([`ChromeSetup::retry`]).
@@ -11,9 +12,10 @@
 //! in Google's JSON), checked for a complete body and the expected browser inside, and has to
 //! start (`--version`) before it is used.
 //!
-//! There's no build for Linux on ARM, and a Linux that blocks the sandbox of a browser in the
-//! home folder (Ubuntu 23.10+) couldn't start one, so neither downloads: they keep the existing
-//! "install Chromium" advice.
+//! Google builds it for Mac (Apple silicon and Intel), Linux (x86-64 and, since 0.8.0 here, ARM)
+//! and Windows (x64, since 0.8.0): see the `platform` of each download in [`CFT_JSON`]. A Linux
+//! that blocks the sandbox of a browser in the home folder (Ubuntu 23.10+) couldn't start one, so
+//! it doesn't download: it keeps the existing "install Chromium" advice.
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -35,32 +37,49 @@ pub const RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 pub const MAX_BYTES: u64 = 1 << 30;
 
 /// The Chrome for Testing platform for this OS and CPU, or `None` where Google has no build
-/// (Linux on ARM) or kwnt doesn't download one (Windows).
+/// (32-bit and other CPUs; kwnt's Windows app is x64 only, so `win32` isn't used). The names are
+/// Google's, as in [`CFT_JSON`]: `mac-arm64`, `mac-x64`, `linux64`, `linux-arm64`, `win64`.
 pub fn cft_platform(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("macos", "aarch64") => Some("mac-arm64"),
         ("macos", "x86_64") => Some("mac-x64"),
         ("linux", "x86_64") => Some("linux64"),
+        ("linux", "aarch64") => Some("linux-arm64"),
+        ("windows", "x86_64") => Some("win64"),
         _ => None,
     }
 }
 
-/// The browser inside a build's zip (and inside its install folder).
+/// The browser inside a build's zip (and inside its install folder): the app bundle's binary on
+/// a Mac, `chrome-win64/chrome.exe` on Windows, `chrome-<platform>/chrome` on Linux.
 pub fn binary_in(platform: &str) -> PathBuf {
     let app = "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
     match platform {
         "mac-arm64" | "mac-x64" => PathBuf::from(format!("chrome-{platform}")).join(app),
+        "win64" => PathBuf::from("chrome-win64").join("chrome.exe"),
         _ => PathBuf::from(format!("chrome-{platform}")).join("chrome"),
     }
 }
 
 /// kwnt's own browser cache under `home`: `Library/Caches/kwant/chrome` on a Mac,
-/// `.cache/kwant/chrome` elsewhere.
+/// `AppData/Local/kwant/chrome` (the default `%LOCALAPPDATA%`) on Windows, `.cache/kwant/chrome`
+/// elsewhere.
 pub fn cache_root(os: &str, home: &Path) -> PathBuf {
-    if os == "macos" {
-        home.join("Library/Caches/kwant/chrome")
+    match os {
+        "macos" => home.join("Library/Caches/kwant/chrome"),
+        "windows" => home.join("AppData").join("Local").join("kwant").join("chrome"),
+        _ => home.join(".cache/kwant/chrome"),
+    }
+}
+
+/// The home folder the private browser lives under: `$HOME`, or on Windows (where `HOME` is
+/// usually unset) the user's profile folder.
+pub fn browser_home() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+    if cfg!(windows) {
+        home.or_else(dirs::home_dir)
     } else {
-        home.join(".cache/kwant/chrome")
+        home
     }
 }
 
@@ -98,7 +117,7 @@ pub enum SetupState {
     Ready,
     /// The last attempt failed: show [`FAILED_LINE`] and "Try again".
     Failed,
-    /// No build for this computer (Linux on ARM, Windows) or its sandbox is blocked: the
+    /// No build for this computer (32-bit, Docker, no home folder) or its sandbox is blocked: the
     /// existing "install Chrome" advice applies.
     Unavailable,
 }
@@ -152,7 +171,7 @@ impl ChromeSetup {
     /// For this computer: `$HOME`'s cache folder and this OS and CPU. Linux whose sandbox is
     /// blocked, and Docker, get no download.
     pub fn system() -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let home = browser_home().unwrap_or_default();
         let os = std::env::consts::OS;
         let platform = cft_platform(os, std::env::consts::ARCH).filter(|_| {
             !super::computer::chrome_sandbox_blocked()
@@ -400,7 +419,16 @@ impl ChromeSetup {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755));
         }
-        let said = starts(&bin).await?;
+        let said = if cfg!(windows) {
+            // `chrome.exe --version` opens a browser window instead of printing, so on Windows the
+            // build has to start for real: windowless, on a scratch profile, until it listens
+            let probe = self.root.join(format!(".probe.{}", std::process::id()));
+            let started = starts_headless(&bin, &probe, Duration::from_secs(60)).await;
+            remove_profile(&probe).await;
+            started.map(|()| format!("Chrome for Testing {version}"))?
+        } else {
+            starts(&bin).await?
+        };
         tracing::info!(version = %said, "the bots' private browser starts");
 
         let dest = self.root.join(format!("{version}-{platform}"));
@@ -449,6 +477,55 @@ async fn starts(bin: &Path) -> Result<String, String> {
     Ok(said)
 }
 
+/// Starts `bin` without a window on the scratch profile `profile`, and waits for it to write its
+/// DevTools port there (it started and listens) for at most `wait`. The browser is stopped
+/// either way. Used on Windows, where `--version` doesn't print.
+pub async fn starts_headless(bin: &Path, profile: &Path, wait: Duration) -> Result<(), String> {
+    std::fs::create_dir_all(profile).map_err(|_| "couldn't make a scratch profile to start the browser".to_string())?;
+    let mut child = tokio::process::Command::new(bin)
+        .args([
+            "--headless".to_string(),
+            "--no-first-run".into(),
+            "--no-default-browser-check".into(),
+            "--disable-gpu".into(),
+            format!("--user-data-dir={}", profile.display()),
+            "--remote-debugging-port=0".into(),
+            "about:blank".into(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| "the downloaded browser couldn't be started".to_string())?;
+    let until = Instant::now() + wait;
+    let result = loop {
+        if super::computer::read_devtools_port(profile).is_some() {
+            break Ok(());
+        }
+        if let Ok(Some(_)) = child.try_wait() {
+            break Err("the downloaded browser stopped right after starting (missing system files?)".to_string());
+        }
+        if Instant::now() >= until {
+            break Err("the downloaded browser didn't start in time".to_string());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let _ = child.kill().await;
+    result
+}
+
+/// Removes a scratch profile; on Windows the stopped browser's helpers can hold its files for a
+/// moment. Left behind if it still can't go (it's ignored as a build: no `<version>-<platform>`).
+async fn remove_profile(profile: &Path) {
+    for _ in 0..50 {
+        if std::fs::remove_dir_all(profile).is_ok() || !profile.exists() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,9 +535,81 @@ mod tests {
         assert_eq!(cft_platform("macos", "aarch64"), Some("mac-arm64"));
         assert_eq!(cft_platform("macos", "x86_64"), Some("mac-x64"));
         assert_eq!(cft_platform("linux", "x86_64"), Some("linux64"));
-        // Google has no Linux ARM build; Windows isn't downloaded
-        assert_eq!(cft_platform("linux", "aarch64"), None);
-        assert_eq!(cft_platform("windows", "x86_64"), None);
+        // 0.8.0: Google's list has linux-arm64 and win64 builds (F, Vega), see CFT_JSON
+        assert_eq!(cft_platform("linux", "aarch64"), Some("linux-arm64"));
+        assert_eq!(cft_platform("windows", "x86_64"), Some("win64"));
+        // no build: 32-bit Windows (kwnt's app is x64), Windows on ARM, other CPUs and systems
+        assert_eq!(cft_platform("windows", "x86"), None);
+        assert_eq!(cft_platform("windows", "aarch64"), None);
+        assert_eq!(cft_platform("linux", "x86"), None);
+        assert_eq!(cft_platform("linux", "riscv64"), None);
+        assert_eq!(cft_platform("freebsd", "x86_64"), None);
+    }
+
+    /// The paths inside Google's zips (read from the 157.0.8103.38 Stable zips' listings,
+    /// 2026-11-09): chrome-win64/chrome.exe and chrome-linux-arm64/chrome.
+    #[test]
+    fn the_browser_inside_each_platforms_zip() {
+        let path = |p: &str| binary_in(p).to_string_lossy().replace('\\', "/");
+        assert_eq!(path("win64"), "chrome-win64/chrome.exe");
+        assert_eq!(path("linux-arm64"), "chrome-linux-arm64/chrome");
+        assert_eq!(path("linux64"), "chrome-linux64/chrome");
+        assert_eq!(path("mac-x64"), "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
+    }
+
+    #[test]
+    fn windows_and_linux_arm_builds_are_found_in_their_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let win = cache_root("windows", home);
+        assert_eq!(win, home.join("AppData").join("Local").join("kwant").join("chrome"));
+        for (os, root, platform) in [("windows", win, "win64"), ("linux", cache_root("linux", home), "linux-arm64")] {
+            assert_eq!(downloaded_chrome(os, home), None);
+            for v in ["131.0.6778.85", "157.0.8103.38"] {
+                let bin = root.join(format!("{v}-{platform}")).join(binary_in(platform));
+                std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+                std::fs::write(&bin, "").unwrap();
+            }
+            // a scratch profile from the Windows start check is never taken for a build
+            std::fs::create_dir_all(root.join(".probe.42")).unwrap();
+            assert_eq!(
+                downloaded_chrome(os, home),
+                Some(root.join(format!("157.0.8103.38-{platform}")).join(binary_in(platform))),
+                "{os}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_finds_its_home_without_home_set() {
+        assert!(browser_home().is_some_and(|h| h.is_absolute()));
+    }
+
+    /// The Windows start check, run here against whatever Chrome this computer has (the GitHub
+    /// Windows runner has Google Chrome; Linux uses the local one). Skipped without one.
+    #[tokio::test]
+    async fn the_headless_start_check_passes_a_real_browser_and_fails_a_non_browser() {
+        let tmp = tempfile::tempdir().unwrap();
+        // not a browser: this test binary rejects Chrome's flags and exits at once
+        let me = std::env::current_exe().unwrap();
+        let err = starts_headless(&me, &tmp.path().join("p0"), Duration::from_secs(30)).await.unwrap_err();
+        assert!(err.contains("stopped right after starting"), "{err}");
+
+        let installed = Path::new(r"C:\Program Files\Google\Chrome\Application\chrome.exe");
+        let chrome = if cfg!(windows) && installed.is_file() {
+            Some(installed.to_path_buf())
+        } else {
+            super::super::computer::local_chrome_path()
+        };
+        let Some(chrome) = chrome else {
+            eprintln!("skipped: no Chrome or Chromium installed");
+            return;
+        };
+        let profile = tmp.path().join("p1");
+        starts_headless(&chrome, &profile, Duration::from_secs(60)).await.unwrap();
+        remove_profile(&profile).await;
+        assert!(!profile.exists() || cfg!(windows), "the scratch profile is removed");
     }
 
     #[test]

@@ -101,7 +101,9 @@ export const GlobeSlot: React.FC<{ browsing?: Browsing | null; name: string; pho
 };
 
 /** W1: "Watch" on the working strip while this chat's browser is active and the panel is closed. */
-export const WatchButton: React.FC<{ name: string; phone?: boolean; onWatch: () => void }> = ({ name, phone, onWatch }) => (
+/** phone: the phone strip's muted 28 px button. line: the desktop status line's (28 px, -mr-2 so the word
+ * ends where the composer's Stop square does). Otherwise the 32 px desktop button. */
+export const WatchButton: React.FC<{ name: string; phone?: boolean; line?: boolean; onWatch: () => void }> = ({ name, phone, line, onWatch }) => (
   <button
     type="button"
     data-watch-button=""
@@ -111,7 +113,9 @@ export const WatchButton: React.FC<{ name: string; phone?: boolean; onWatch: () 
     className={
       phone
         ? `textbtn kws-hit -mr-2 shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 ${FOCUS}`
-        : `textbtn shrink-0 inline-flex items-center gap-1 rounded-lg px-2 font-medium text-[#b8adff] hover:bg-[rgb(157_143_255/.10)] min-h-8 text-xs ${FOCUS}`
+        : line
+          ? `textbtn -mr-2 shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 font-medium text-[#b8adff] hover:bg-[rgb(157_143_255/.10)] text-xs ${FOCUS}`
+          : `textbtn shrink-0 inline-flex items-center gap-1 rounded-lg px-2 font-medium text-[#b8adff] hover:bg-[rgb(157_143_255/.10)] min-h-8 text-xs ${FOCUS}`
     }
   >
     <Eye size={phone ? 12 : 13} aria-hidden="true" />

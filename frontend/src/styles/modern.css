@@ -155,8 +155,9 @@
   width: 100%;
 }
 
-/* The phone strip's working avatar: a softer, slower bob than in the stream. */
-.kws-strip-phone .kw-avatar-working .kw-avatar-body {
+/* The phone strip's and desktop status line's working avatar: a softer, slower bob than in the stream. */
+.kws-strip-phone .kw-avatar-working .kw-avatar-body,
+.kws-strip-line .kw-avatar-working .kw-avatar-body {
   animation-duration: 1.6s;
 }
 

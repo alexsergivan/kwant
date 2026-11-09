@@ -19,6 +19,9 @@ Shortcodes in the HTML:
   {{avatar:ROLE}}                         a kwant app avatar (the same CRT-framed creature the app draws)
   {{releases}}                            the release line under the hero: latest Mac version and date, release count
                                           since the first one, licence (from CHANGELOG.md, see release_line)
+  {{windows_exe}}                         the latest release's Windows (beta) installer URL (from CHANGELOG.md, see
+                                          windows_installer); its file name carries the version, so it can't use
+                                          releases/latest/download like the .dmg
 
 Every local asset URL in the pages and in site.css gets a `?v=<content hash>` query, so a deploy never pairs new HTML
 with a browser's cached old CSS, JS, fonts or images.
@@ -277,6 +280,13 @@ def release_line(changelog=None):
     )
 
 
+def windows_installer(changelog=None):
+    """The latest release's Windows (beta) installer. windows-release.yml names it kwant_<version>_windows_x64_beta_setup.exe
+    and attaches it to the mac-v<version> release, so the link points at that exact file."""
+    latest = releases(changelog)[0][0]
+    return f"{GITHUB}/releases/download/mac-v{latest}/kwant_{latest}_windows_x64_beta_setup.exe"
+
+
 def operator(key):
     value = OPERATOR[key].strip()
     if not value:
@@ -292,6 +302,8 @@ def expand(body, root):
     body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
     if "{{releases}}" in body:
         body = body.replace("{{releases}}", release_line())
+    if "{{windows_exe}}" in body:
+        body = body.replace("{{windows_exe}}", windows_installer())
     body = re.sub(r"\{\{avatar:([a-z_]+)\}\}", lambda m: avatar(m[1]), body)
     body = re.sub(r"\{\{shot:([^|}]+)\|([^|}]+)(?:\|([^}]*))?\}\}", lambda m: shot(root, m[1], m[2], m[3]), body)
     body = re.sub(
@@ -1002,7 +1014,7 @@ Key facts:
 - kwant has no token (no coin, no crypto). The official X account is @kwantbot (https://x.com/kwantbot).
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
-- Windows app (beta, 64-bit): the kwant_X.Y.Z_windows_x64_beta_setup.exe installer on https://github.com/alexsergivan/kwant/releases/latest (per-user install, no admin rights).
+- Windows app (beta, 64-bit): {{windows_exe}} (per-user install, no admin rights; the latest one is always on https://github.com/alexsergivan/kwant/releases/latest).
 - Run Claude inside the VM (Linux, off by default): each bot's Claude replies run in a container with no network, and the real key stays outside. https://kwant.si/docs/agents-in-vm
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers. The kwant.si website sets no cookies and counts page views with
@@ -1037,7 +1049,7 @@ def llms_txt(pages):
                                                                         key=lambda p: pages[p]["date"], reverse=True)
     main = sorted((p for p in pages if p not in docs + alternatives + blog and p not in ("privacy.html", "terms.html", "404.html")), key=lambda p: p != "index.html")
     legal = [p for p in ("privacy.html", "terms.html") if p in pages]
-    out = [LLMS_INTRO, "## Site", *map(line, main), "", "## Docs", *map(line, docs), ""]
+    out = [LLMS_INTRO.replace("{{windows_exe}}", windows_installer()), "## Site", *map(line, main), "", "## Docs", *map(line, docs), ""]
     if alternatives:
         out += ["## Alternatives", *map(line, alternatives), ""]
     if blog:

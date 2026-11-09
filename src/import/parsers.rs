@@ -11,6 +11,8 @@
 //! | OpenMausBot | JSON `"format": "openmaus.package"` (v1, v2), or `"openmaus.grok/1"` |
 //! | export-prompt reply | pasted text holding one of the JSON forms above, usually in a ```json block |
 //! | plain instructions | any other pasted text: one bot, the text as its instructions |
+//! | OpenClaw, Hermes Agent, Codex, Paperclip, ai-employees | a folder (zip, folder pick, GitHub repo, this computer); see [`formats`] |
+//! | Codex `AGENTS.md` | a lone `AGENTS.md` / `AGENTS.override.md` file |
 //! | zip | any mix of the files above |
 
 use super::archive::{self, PNG_SIGNATURE};
@@ -20,6 +22,8 @@ use super::{
     MAX_TEXT_BYTES, MAX_ZIP_BYTES, PLAIN_TEXT_KIND,
 };
 use serde_json::Value;
+
+pub mod formats;
 
 const ZIP_MAGIC: [u8; 4] = [b'P', b'K', 3, 4];
 const EMPTY_ZIP_MAGIC: [u8; 4] = [b'P', b'K', 5, 6];
@@ -133,6 +137,9 @@ fn from_plain_text(text: &str) -> Bundle {
 fn from_text(text: &str, filename: Option<&str>) -> Result<Bundle, ImportError> {
     let text = text.trim_start_matches('\u{feff}');
     let trimmed = text.trim_start();
+    if is_agents_md(filename) {
+        return Ok(agents_md_file(text));
+    }
     if trimmed.starts_with('{') {
         let v: Value = serde_json::from_str(trimmed).map_err(|e| invalid(format!("This JSON isn't valid ({e}).")))?;
         return from_value(v);
@@ -279,6 +286,38 @@ fn front_matter(text: &str) -> Result<(Value, &str), ImportError> {
         return Err(invalid("The front matter isn't a list of fields."));
     }
     Ok((v, body))
+}
+
+fn base_name(filename: Option<&str>) -> &str {
+    filename.map(|f| f.rsplit(['/', '\\']).next().unwrap_or(f)).unwrap_or("")
+}
+
+/// `AGENTS.md` or `AGENTS.override.md` (Codex, and Paperclip agents).
+fn is_agents_md(filename: Option<&str>) -> bool {
+    let b = base_name(filename);
+    b.eq_ignore_ascii_case("AGENTS.md") || b.eq_ignore_ascii_case("AGENTS.override.md")
+}
+
+/// A lone `AGENTS.md`: a Paperclip agent when it has front matter with a `name`, else one Codex
+/// bot whose instructions are the file.
+fn agents_md_file(text: &str) -> Bundle {
+    if let Ok((mut fm, body)) = front_matter(text) {
+        drop_secret_fields(&mut fm);
+        if !s(&fm, "name").trim().is_empty() {
+            let mut b = bundle(formats::PAPERCLIP, Some("Paperclip".into()));
+            b.bots.push(BotSpec {
+                ref_: super::slug(&any_s(&fm, &["slug", "name"])),
+                name: s(&fm, "name"),
+                title: any_s(&fm, &["title", "role"]),
+                persona_prompt: body.trim().to_string(),
+                ..BotSpec::default()
+            });
+            return b;
+        }
+    }
+    let mut b = bundle(formats::CODEX, Some("Codex".into()));
+    b.bots.push(formats::codex_bot(text.trim().to_string(), Vec::new()));
+    b
 }
 
 fn is_skill_file(filename: Option<&str>) -> bool {
@@ -604,16 +643,78 @@ fn from_openmaus_grok(v: &Value) -> Bundle {
 // ── zip ───────────────────────────────────────────────────────────────────
 
 fn from_zip(bytes: &[u8]) -> Result<Bundle, ImportError> {
-    let unzipped = archive::read_zip(bytes)?;
+    from_entries(archive::read_zip(bytes)?, false)
+}
+
+/// What a GitHub repository archive held besides its bots: the commit and its licence file.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct RepoZip {
+    /// codeload writes the commit id into the archive comment.
+    pub commit: Option<String>,
+    /// The licence file at the top of the repo (else of the folder imported): path and text.
+    pub licence: Option<(String, String)>,
+}
+
+/// A repository archive from codeload: `<repo>-<ref>/…`. `subpath` limits the import to one
+/// folder or file of the repo. Files no format reads aren't inflated, and nothing that fails to
+/// parse stops the rest.
+pub fn parse_repo_zip(bytes: &[u8], subpath: Option<&str>) -> Result<(Bundle, RepoZip), ImportError> {
+    if bytes.len() > MAX_ZIP_BYTES {
+        return Err(too_large("A repository", "20 MB"));
+    }
+    // The reader strips `<repo>-<ref>/` and inflates nothing outside `subpath` but top licences.
+    let mut unzipped = archive::read_zip_as(bytes, archive::ZipKind::Repo { subpath })?;
+    let licence_at = |dir: &str| {
+        unzipped
+            .entries
+            .iter()
+            .filter(|e| {
+                let (d, b) = e.path.rsplit_once('/').unwrap_or(("", &e.path));
+                d.eq_ignore_ascii_case(dir) && archive::is_licence_file(&b.to_lowercase())
+            })
+            .min_by_key(|e| e.path.len())
+            .map(|e| (e.path.clone(), String::from_utf8_lossy(&e.bytes).into_owned()))
+    };
+    let sub = subpath.map(|p| p.trim_matches('/').to_lowercase()).filter(|p| !p.is_empty());
+    let licence = licence_at("").or_else(|| sub.as_deref().and_then(licence_at));
+    let info = RepoZip { commit: unzipped.comment.take(), licence };
+    if let Some(sub) = &sub {
+        let inside = |p: &str| {
+            let l = p.to_lowercase();
+            l == *sub || l.starts_with(&format!("{sub}/"))
+        };
+        unzipped.entries.retain(|e| inside(&e.path));
+        unzipped.skipped.retain(|p| inside(p));
+        if unzipped.entries.is_empty() && unzipped.skipped.is_empty() {
+            return Err(ImportError::Unsupported(format!("There's nothing at {sub} in this repository.")));
+        }
+    }
+    let bundle = from_entries(unzipped, true)?;
+    Ok((bundle, info))
+}
+
+/// A folder's files (from a zip, a repo or this computer): one of the [`formats`] when the files
+/// say so, else each file on its own. `lenient` (repos, this computer) leaves a file that fails
+/// to parse unread instead of refusing the whole import.
+pub(crate) fn from_entries(unzipped: archive::Unzipped, lenient: bool) -> Result<Bundle, ImportError> {
+    let tree = formats::Tree::new(&unzipped.entries, &unzipped.skipped);
+    if let Some(b) = formats::detect(&tree) {
+        if b.bots.is_empty() && b.skills.is_empty() {
+            return Err(ImportError::Unsupported("This folder has no bots or skills kwant can read.".into()));
+        }
+        return Ok(b);
+    }
     let mut merged = bundle("zip", None);
     let mut skills = Vec::new();
     let mut kinds = std::collections::BTreeSet::new();
     let mut unread = Vec::new();
     for e in &unzipped.entries {
         let lower = e.path.to_lowercase();
+        let base = lower.rsplit('/').next().unwrap_or(&lower);
         if is_skill_file(Some(&e.path)) {
-            match std::str::from_utf8(&e.bytes).ok().and_then(|t| front_matter(t).ok()) {
-                Some((fm, body)) => {
+            match std::str::from_utf8(&e.bytes).ok().and_then(|t| front_matter(t.trim_start_matches('\u{feff}')).ok()) {
+                Some((mut fm, body)) => {
+                    drop_secret_fields(&mut fm);
                     skills.push(skill_from_markdown(&fm, body, Some(&e.path)));
                     kinds.insert("skill".to_string());
                 }
@@ -622,9 +723,20 @@ fn from_zip(bytes: &[u8]) -> Result<Bundle, ImportError> {
             continue;
         }
         if e.bytes.starts_with(&ZIP_MAGIC) || e.bytes.starts_with(&EMPTY_ZIP_MAGIC) {
+            if lenient {
+                unread.push(e.path.clone());
+                continue;
+            }
             return Err(invalid("This zip contains another archive. Unpack it and import the inner file instead."));
         }
-        if lower.ends_with(".txt") || lower.ends_with("readme.md") {
+        // A repo's AGENTS.md is notes for coding agents, not a bot; licences and dotfiles are
+        // only read by the formats above.
+        if lower.ends_with(".txt")
+            || lower.ends_with("readme.md")
+            || is_agents_md(Some(&e.path))
+            || archive::is_licence_file(base)
+            || archive::READ_DOTFILES.contains(&base)
+        {
             unread.push(e.path.clone());
             continue;
         }
@@ -637,6 +749,7 @@ fn from_zip(bytes: &[u8]) -> Result<Bundle, ImportError> {
                 merged.omitted.extend(b.omitted);
             }
             Err(ImportError::Unsupported(_)) => unread.push(e.path.clone()),
+            Err(_) if lenient => unread.push(e.path.clone()),
             Err(err) => return Err(invalid(format!("{}: {err}", e.path))),
         }
     }
@@ -647,7 +760,7 @@ fn from_zip(bytes: &[u8]) -> Result<Bundle, ImportError> {
     }
     if merged.bots.is_empty() && merged.skills.is_empty() {
         return Err(ImportError::Unsupported(
-            "This zip has no bots or skills kwant can read. Chat-history exports aren't imported.".into(),
+            if lenient { "This has no bots or skills kwant can read." } else { "This zip has no bots or skills kwant can read. Chat-history exports aren't imported." }.into(),
         ));
     }
     if kinds.len() == 1 {
@@ -657,7 +770,8 @@ fn from_zip(bytes: &[u8]) -> Result<Bundle, ImportError> {
     if !not_read.is_empty() {
         let shown: Vec<String> = not_read.iter().take(10).cloned().collect();
         let more = if not_read.len() > 10 { format!(" and {} more", not_read.len() - 10) } else { String::new() };
-        merged.omitted.push(cut(&format!("Files in the zip that weren't read: {}{more}", shown.join(", ")), 200));
+        let what = if lenient { "Files that weren't read" } else { "Files in the zip that weren't read" };
+        merged.omitted.push(cut(&format!("{what}: {}{more}", shown.join(", ")), 200));
     }
     Ok(merged)
 }

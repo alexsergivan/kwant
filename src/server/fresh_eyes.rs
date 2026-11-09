@@ -17,9 +17,18 @@ use std::sync::{LazyLock, Mutex};
 
 /// kwant's own tools a fresh-eyes turn neither sees nor runs: each reads something besides the
 /// brief and the result (chats, the reviewer's notes, other tasks' notes, hand-off results,
-/// attachments of chats).
-pub const BLOCKED_TOOLS: &[&str] =
-    &["search_history", "memory_search", "task_list", "delegation_status", "list_attachments", "read_attachment"];
+/// attachments of chats, the team's truth ledger; `task_cite_fact` reads a fact onto a card).
+pub const BLOCKED_TOOLS: &[&str] = &[
+    "search_history",
+    "memory_search",
+    "task_list",
+    "delegation_status",
+    "list_attachments",
+    "read_attachment",
+    "fact_search",
+    "fact_get",
+    "task_cite_fact",
+];
 
 /// What a blocked tool answers.
 pub const REFUSED_TEXT: &str = "This is a fresh-eyes review: judge only the brief or spec and the result in your prompt. \
@@ -94,6 +103,11 @@ mod tests {
             assert!(is_fresh(Some("fe-turn-1")));
             assert!(refuses(Some("fe-turn-1"), "search_history"));
             assert!(refuses(Some("fe-turn-1"), "memory_search"));
+            // The truth ledger is the team's notes (Ada's review of #456, must-fix 4)
+            for t in ["fact_search", "fact_get", "task_cite_fact"] {
+                assert!(refuses(Some("fe-turn-1"), t), "{t}");
+            }
+            assert!(!refuses(Some("fe-turn-1"), "fact_propose"), "proposing a fact reads nothing back");
             assert!(!refuses(Some("fe-turn-1"), "audit_challenge"), "the review's own tools still run");
             assert!(!refuses(Some("fe-turn-2"), "search_history"), "another turn is untouched");
             assert!(!refuses(None, "search_history"));
@@ -104,7 +118,8 @@ mod tests {
     #[test]
     fn blocked_tools_are_hidden_from_a_fresh_turns_list() {
         let _g = Guard::new("fe-turn-list");
-        let mut tools = json!([{"name": "search_history"}, {"name": "task_review"}, {"name": "memory_search"}, {"name": "audit_challenge"}]);
+        let mut tools = json!([{"name": "search_history"}, {"name": "task_review"}, {"name": "memory_search"}, {"name": "fact_search"},
+            {"name": "fact_get"}, {"name": "task_cite_fact"}, {"name": "audit_challenge"}]);
         filter_tools(Some("fe-turn-list"), &mut tools);
         let names: Vec<&str> = tools.as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
         assert_eq!(names, ["task_review", "audit_challenge"]);

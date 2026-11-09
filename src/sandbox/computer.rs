@@ -210,7 +210,7 @@ pub fn vm_unavailable_reason(docker: bool, browser_url_configured: bool, platfor
 /// The local Chrome this process would launch, from the real environment. A Playwright Chromium,
 /// or one kwnt downloaded, counts only where its sandbox can start (see [`chrome_sandbox_blocked`]).
 pub fn local_chrome_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = super::chrome_download::browser_home();
     let found = find_chrome(
         std::env::var(CHROME_PATH_ENV).ok().as_deref(),
         std::env::consts::OS,

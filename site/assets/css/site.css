@@ -94,7 +94,12 @@ kbd { display: inline-block; padding: 0 5px; font-size: 0.82em; line-height: 1.5
 .cta-alt { margin: 0; font-weight: 600; }
 .cta-alt a { text-decoration: none; }
 .cta-alt a:hover { text-decoration: underline; }
-.hero .cta-one + .mac-dl { margin-top: 12px; }
+/* Downloads show one platform at a time: .dl has data-os="mac" in the HTML, and site.js switches it to the visitor's. */
+.dl[data-os="mac"] :is(.on-windows, .on-linux),
+.dl[data-os="windows"] :is(.on-mac, .on-linux),
+.dl[data-os="linux"] :is(.on-mac, .on-windows) { display: none; }
+.dl-note { max-width: 600px; margin: 12px 0 0; color: var(--dim); font-size: 14px; line-height: 21px; }
+.dl-note a { text-underline-offset: 2px; }
 .proof { margin-top: 14px; color: var(--dim); font-size: 14px; }
 .proof a { color: inherit; text-underline-offset: 2px; }
 .proof a:hover { color: var(--v4); }
@@ -670,7 +675,6 @@ td code { white-space: nowrap; }
   .hero-grid:has(.mac-first[open]) { align-items: start; }
   .hero-grid:has(.mac-first[open]) .hero-crt { margin-top: 72px; }
 }
-.hero .mac-first + .mac-dl { margin-top: 12px; }
 
 @media (prefers-reduced-motion: no-preference) {
   .mf-chev { transition: transform 160ms ease-out; }
