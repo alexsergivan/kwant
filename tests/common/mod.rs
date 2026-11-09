@@ -10,6 +10,8 @@
 //!   it resets in 2 s, or in `QUOTARESET:<secs>`.
 //! - A no-tools turn (`--tools ""`) first prints claude's init line with no tools.
 //! - `CAPPED:<tag>` / `CAPALWAYS:<tag>`: end at the model-call cap; the continuation doesn't / does too.
+//! - `SLEEPONCE:<tag>:<ms>`: wait that long, printing nothing, before answering; once per tag (a
+//!   slow reply, or a stall when it waits past the stall limit).
 //! - `FAILTURN`: die with no output. `APIERROR:<tag>` / `APIERRORPLAIN:<tag>`: end with "API Error:
 //!   500 test stub" as claude's error result / as plain text, once per tag.
 //!
@@ -57,6 +59,12 @@ if ae and not os.path.exists(ae_flag):
     print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "num_turns": 1,
         "result": "API Error: 500 test stub"}))
     sys.exit(1)
+# SLEEPONCE:<tag>:<ms>: wait silently that long first, once per tag
+so = re.findall(r"SLEEPONCE:([A-Za-z0-9_]+):([0-9]+)", prompt)
+so_flag = so and os.path.join(os.path.dirname(out_dir), "slept-" + so[-1][0])
+if so and not os.path.exists(so_flag):
+    open(so_flag, "w").close()
+    time.sleep(int(so[-1][1]) / 1000.0)
 # A no-tools turn (--tools ""): say so first, like claude's init line, or kwnt stops the run
 if "--tools" in args:
     print(json.dumps({"type": "system", "subtype": "init", "tools": [], "mcp_servers": [],

@@ -490,6 +490,13 @@ pub struct Slot {
     chat: Option<String>,
 }
 
+impl Slot {
+    /// The slot also holds its bot's chat (a turn taken with `one_per_chat`).
+    pub fn holds_chat(&self) -> bool {
+        self.chat.is_some()
+    }
+}
+
 impl Drop for Slot {
     fn drop(&mut self) {
         self.limiter.release(&self.kwant_id, self.chat.as_deref());

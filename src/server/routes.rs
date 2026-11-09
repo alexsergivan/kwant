@@ -1866,6 +1866,12 @@ pub(super) struct TurnOpts {
     /// prompt and the plan it is checked against, for [`try_kwant_turn`] to run once the turn has
     /// ended. A held reply passes it on to the decided reply (see [`super::decide::Held`]).
     pub(super) delivery_next: Option<DeliveryNext>,
+    /// The chat slot passed from a turn to its delivery continuation: the first turn leaves its
+    /// slot here when it holds the chat and the save step asked for a continuation, and the
+    /// continuation starts on it instead of queueing. So a message that arrived meanwhile (and
+    /// waits for the chat, P6) never gets in between the reply and its continuation. Empty for
+    /// every other turn, and for a decided reply (which holds no chat): that continuation queues.
+    pub(super) chat_handover: Option<ChatHandover>,
     /// The turn may run beside a turn of the same bot in the same chat, instead of waiting for it
     /// (P6's one reply per bot per chat). Only for the lead hearing its hand-offs while the turn
     /// that handed them out still runs past the hold limit (see `delegation::continue_lead`):
@@ -1883,6 +1889,9 @@ pub(super) struct TurnOpts {
     /// message, or there is none (see [`crate::router::delivery::plan_for_turn`]).
     pub(super) delivery: Option<crate::router::delivery::DeliveryPlan>,
 }
+
+/// See [`TurnOpts::chat_handover`].
+pub(super) type ChatHandover = std::sync::Arc<std::sync::Mutex<Option<super::turns::Slot>>>;
 
 /// See [`TurnOpts::delivery_next`].
 pub(super) type DeliveryNext = std::sync::Arc<std::sync::Mutex<Option<(String, crate::router::delivery::DeliveryPlan)>>>;
@@ -1982,13 +1991,17 @@ pub(super) async fn try_kwant_turn(
     // step leaves its prompt here when the reply missed what the person expected
     let next = opts.continuation_slot();
     opts.delivery_next = next.clone();
+    // ...and the first turn's chat slot, so the continuation runs on it, never queued behind it or
+    // behind a message that waits for the chat (P6's one turn per bot per chat)
+    let handover = next.as_ref().map(|_| ChatHandover::default());
+    opts.chat_handover = handover.clone();
     let carried = Carried::of(&opts);
     let first = try_kwant_turn_once(scope, target_kwant, prompt, opts).await;
     let Some((prompt, plan)) = next.and_then(|n| n.lock().ok().and_then(|mut n| n.take())) else {
         return first;
     };
     tracing::info!(kwant = %target_kwant.id, "reply missed what the person expected: one automatic continuation");
-    let again = |prompt: String| try_kwant_turn_once(scope, target_kwant, prompt, carried.continuation(plan));
+    let again = |prompt: String| try_kwant_turn_once(scope, target_kwant, prompt, carried.continuation(plan, handover));
     super::delivery_check::after_turn(first, Some(prompt), scope.cancel_token.is_cancelled(), again).await
 }
 
@@ -2050,6 +2063,9 @@ struct Carried {
     tier: Option<crate::drivers::engines::Tier>,
     purpose: Option<String>,
     task: Option<super::missions::lessons::TaskHint>,
+    /// A turn that ran beside its bot's running turn in the chat (a lead hearing its hand-offs)
+    /// is continued beside it too: it never waits for that turn.
+    beside_running: bool,
 }
 
 impl Carried {
@@ -2062,21 +2078,24 @@ impl Carried {
             tier: o.tier,
             purpose: o.purpose.clone(),
             task: o.task.clone(),
+            beside_running: o.beside_running,
         }
     }
 
     fn into_opts(self) -> TurnOpts {
-        let Carried { always_ask, delegation_id, routed, routing, tier, purpose, task } = self;
-        TurnOpts { always_ask, delegation_id, routed, routing, tier, purpose, task, ..Default::default() }
+        let Carried { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running } = self;
+        TurnOpts { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, ..Default::default() }
     }
 
     /// The delivery check's continuation of the turn: checked against the first turn's `plan`
-    /// (kwant's continuation prompt never makes a new one), and never continued again.
-    fn continuation(self, plan: crate::router::delivery::DeliveryPlan) -> TurnOpts {
+    /// (kwant's continuation prompt never makes a new one), and never continued again. It starts
+    /// on the first turn's chat slot when `handover` holds it (see [`TurnOpts::chat_handover`]).
+    fn continuation(self, plan: crate::router::delivery::DeliveryPlan, handover: Option<ChatHandover>) -> TurnOpts {
         TurnOpts {
             label: Some("Automatic continuation (once): the reply was missing what the person expected".into()),
             delivery: Some(plan),
             delivery_continued: true,
+            chat_handover: handover,
             ..self.into_opts()
         }
     }
@@ -2144,8 +2163,15 @@ pub(super) async fn turn_once(
     // for that reply (queued, "agent_busy") instead of starting a parallel turn (P6, 2026-11-09).
     // Unsaved views and purpose turns (checks, audits) aren't replies in the chat.
     let one_per_chat = !opts.unsaved && opts.purpose.is_none() && !opts.beside_running;
-    let Some(_slot) = turns.acquire(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender).await else {
-        return Err("stopped by the user".into());
+    // A delivery continuation starts on the slot its first turn handed over (see
+    // [`TurnOpts::chat_handover`]); every other turn takes one
+    let handed = opts.chat_handover.as_ref().and_then(|h| h.lock().ok()?.take());
+    let slot = match handed {
+        Some(slot) => slot,
+        None => match turns.acquire(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender).await {
+            Some(slot) => slot,
+            None => return Err("stopped by the user".into()),
+        },
     };
     super::spend_stop::gate(scope, target_kwant, quiet_stop, person_turn).await?;
     turns.set_turn(super::turns::ActiveTurn {
@@ -2187,6 +2213,7 @@ pub(super) async fn turn_once(
     // A discussion round's reply isn't saved as is, so it isn't followed up; nor is a held one
     let follow_up = opts.discussion.is_none() && !opts.unsaved;
     let hook = opts.hook.clone();
+    let (next, handover) = (opts.delivery_next.clone(), opts.chat_handover.clone());
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts, &tag).await;
     let follow_up = follow_up && !hook.is_some_and(|h| h.lock().is_ok_and(|h| h.held.is_some()));
     if scope.cancel_token.is_cancelled() {
@@ -2200,6 +2227,13 @@ pub(super) async fn turn_once(
         (Err(_), true) => "cancelled",
         (Err(_), false) => "failed",
     };
+    // The save step asked for the delivery continuation: it starts on this turn's chat slot
+    let continues = next.is_some_and(|n| n.lock().is_ok_and(|n| n.is_some()));
+    if let (true, false, Some(h)) = (continues && slot.holds_chat(), scope.cancel_token.is_cancelled(), handover) {
+        if let Ok(mut h) = h.lock() {
+            *h = Some(slot);
+        }
+    }
     reply.map_err(|why| truncate_chars(&scrub_urls(why.trim()), MAX_FAILURE_CHARS).to_string())
 }
 
@@ -6180,7 +6214,7 @@ mod tests {
         let first = person_turn();
         assert!(first.continuation_slot().is_some());
         let ideas = turn_plan(&first, Some(&saved("user", "user", "What cool feature can we add?", None)), &[], true).unwrap();
-        let next = Carried::of(&first).continuation(ideas.clone());
+        let next = Carried::of(&first).continuation(ideas.clone(), None);
         assert_eq!(next.delivery.as_ref(), Some(&ideas));
         assert!(next.delivery_continued && next.continuation_slot().is_none(), "continued once at most");
         // kwant's continuation prompt can't make a plan of its own
