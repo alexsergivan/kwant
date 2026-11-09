@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- **kwant's own browser on Windows and Linux ARM.** When no Chrome is found, kwant can now download Google's Chrome for Testing on 64-bit Windows and on Linux ARM (aarch64) too, as it already did on Mac and Linux x64. On Windows it's kept in `AppData\Local\kwant\chrome` in your user folder. (#PR)
+
+### Fixed
+- **A bot's Enter now submits forms.** When a bot pressed Enter in kwant's browser, the page saw the key but a search box or login form never sent. Enter, Tab, Backspace, Space, the arrows and single characters now go out as a real keyboard sends them. A key kwant can't press, such as `Control+a` or a whole word, is refused with a hint to type text instead. (#PR)
+- Every pull request now builds the web part of `docker compose up --build`, so a source build can't break unnoticed again as it did in 0.7.6. (#PR)
+
 ## [Mac 0.7.7] - 2026-11-09
 
 ### Added
