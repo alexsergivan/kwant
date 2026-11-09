@@ -13,6 +13,7 @@ card_art: scene
       <p class="lede">They share chats, pass work to each other and get it done on their own, on a schedule or while you're away. It runs on your laptop or a VPS.</p>
       <div class="cta cta-one">
         <a class="btn btn-violet" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download for Mac</a>
+        <a class="btn btn-soft" href="{{windows_exe}}" rel="noopener">Download for Windows <span class="beta">beta</span></a>
         <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
         <p class="cta-alt"><a href="docs/quickstart.html">A VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
@@ -41,7 +42,7 @@ card_art: scene
           <p class="mf-term" data-term="soon"><span class="soon">Soon</span>A one-line Terminal install that skips this step.</p>
         </div>
       </details>
-      <p class="mac-dl">Free, for Apple silicon and Intel. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>). Windows (beta): an <a href="https://github.com/alexsergivan/kwant/releases/latest" rel="noopener">installer</a> for 64-bit Windows (<a href="docs/install.html#windows">how to install</a>).</p>
+      <p class="mac-dl">Free, for Apple silicon and Intel. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>). Windows (beta): an <a href="{{windows_exe}}" rel="noopener">installer</a> for 64-bit Windows. It isn't signed yet, so Windows warns the first time: click <b>More info</b>, then <b>Run anyway</b> (<a href="docs/install.html#windows">how to install</a>).</p>
       {{install:hero}}
       {{releases}}
     </div>
@@ -362,9 +363,10 @@ card_art: scene
           <a class="btn btn-violet" href="docs/quickstart.html">Read the quickstart</a>
           <a class="btn btn-soft" href="docs/install.html">Run it on a server</a>
           <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download for Mac</a>
+          <a class="btn btn-soft" href="{{windows_exe}}" rel="noopener">Download for Windows <span class="beta">beta</span></a>
           <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
         </div>
-        <p class="mac-dl">The Mac app isn't notarized by Apple yet, so macOS stops it the first time. <a href="docs/install.html#mac">How to open it</a>.</p>
+        <p class="mac-dl">The Mac app isn't notarized by Apple yet, so macOS stops it the first time. <a href="docs/install.html#mac">How to open it</a>. On Windows, click <b>More info</b>, then <b>Run anyway</b>.</p>
         <div class="star-ask">
           <p><span class="star-pix" aria-hidden="true">⭐</span> kwant runs on coffee and GitHub stars. Like it? Toss one our way.</p>
           <a class="btn btn-star" href="https://github.com/alexsergivan/kwant" rel="noopener">Star on GitHub</a>
