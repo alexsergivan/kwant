@@ -323,7 +323,8 @@ pub fn learn(mut plan: DeliveryPlan, notes: &[Note]) -> DeliveryPlan {
 pub enum Why {
     /// The model's plan.
     Analyzer,
-    /// Nothing to plan (a greeting or thanks): the keyword plan.
+    /// Nothing to plan (a greeting, thanks or acknowledgement only, [`needs_no_plan`]): the
+    /// keyword plan.
     SmallTalk,
     /// The planner is off or has no model: the keyword plan.
     NoModel,
@@ -345,16 +346,24 @@ impl Why {
     }
 }
 
+/// Whether `message` only greets, thanks or acknowledges ("hi team!", "thanks!", "lgtm", "ok, see
+/// you tomorrow"), so there is nothing for the model to plan. Anything else is asked, keyword match
+/// or not: the analyzer is for what keywords miss ("the export is slow", "Покажи мне макет").
+pub fn needs_no_plan(message: &str) -> bool {
+    use super::team::is_small_talk;
+    is_small_talk(message) || super::delivery::without_acknowledgements(message).is_none_or(|own| is_small_talk(&own))
+}
+
 /// The plan for `input`: the model's, asked once with `wait` to answer, or `keyword` when there is
-/// nothing to plan, no model, no answer in time, or an answer [`parse_plan`] refuses. The person's
-/// notes are applied either way ([`learn`]).
+/// nothing to plan ([`needs_no_plan`]), no model, no answer in time, or an answer [`parse_plan`]
+/// refuses. The person's notes are applied either way ([`learn`]).
 pub async fn plan(
     model: Option<&dyn crate::zombie::classify::Classifier>,
     input: &Input,
     keyword: DeliveryPlan,
     wait: Duration,
 ) -> (DeliveryPlan, Why) {
-    if keyword.kind == Deliverable::Other {
+    if needs_no_plan(&input.message) {
         return (keyword, Why::SmallTalk);
     }
     let Some(model) = model else { return (learn(keyword, &input.notes), Why::NoModel) };
@@ -613,7 +622,7 @@ mod tests {
             assert!(!p.done_when.is_empty(), "{msg}");
         }
         // Names resolve to ids, and the team chat gets one replier first. The keyword plan is the
-        // message's own: since #470 one no keyword matches is `Other`, which never asks the model
+        // message's own (since #470 one no keyword matches is `Other`; the model is still asked)
         let team_ask = "Hey team! What some cool feature we can add?";
         let (p, _) = plan(Some(&stub), &input(team_ask), keyword_plan(team_ask, &[]), WAIT).await;
         assert_eq!(p.who.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["b-front", "b-growth"]);
@@ -654,6 +663,37 @@ mod tests {
         // A greeting asks no model at all
         let never = Stub::new(vec![]);
         assert_eq!(plan(Some(&never), &input("thanks!"), keyword_plan("thanks!", &[]), WAIT).await.1, Why::SmallTalk);
+        assert!(never.asked.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_message_but_greetings_and_thanks_reaches_the_analyzer() {
+        let stub = Stub::new(vec![
+            ("export is slow", r#"{"kind":"change","show":["link"],"done_when":["the export is faster"]}"#.into()),
+            ("login page is broken", r#"{"kind":"change","show":["link","image"],"done_when":["login works"]}"#.into()),
+            ("Покажи", r#"{"kind":"visual","show":["image"],"done_when":["the mockup is shown"]}"#.into()),
+        ]);
+        // What keywords miss, or read as nothing to deliver, is exactly what the model is for
+        for msg in ["the export is slow", "the login page is broken", "Покажи мне макет"] {
+            let keyword = keyword_plan(msg, &[]);
+            let (p, why) = plan(Some(&stub), &input(msg), keyword, WAIT).await;
+            assert_eq!(why, Why::Analyzer, "{msg}");
+            assert_eq!(p.source, PlanSource::Analyzer, "{msg}");
+            assert_ne!(p.kind, Deliverable::Other, "{msg}");
+        }
+        assert_eq!(stub.asked.lock().unwrap().len(), 3);
+        // A message with thanks and an ask is still an ask
+        let mixed = "thanks! the export is slow";
+        assert_eq!(plan(Some(&stub), &input(mixed), keyword_plan(mixed, &[]), WAIT).await.1, Why::Analyzer);
+
+        // Greetings, thanks and acknowledgements alone ask no model
+        let never = Stub::new(vec![]);
+        for msg in ["thanks!", "lgtm", "ok, see you tomorrow", "Love it!", "Hi everyone!", "Thanks, looks great!", "thanks, ok!"] {
+            assert!(needs_no_plan(msg), "{msg}");
+            let (p, why) = plan(Some(&never), &input(msg), keyword_plan(msg, &[]), WAIT).await;
+            assert_eq!(why, Why::SmallTalk, "{msg}");
+            assert_eq!(p, keyword_plan(msg, &[]), "{msg}");
+        }
         assert!(never.asked.lock().unwrap().is_empty());
     }
 

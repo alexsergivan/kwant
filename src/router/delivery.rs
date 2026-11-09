@@ -240,7 +240,7 @@ fn is_acknowledgement(clause: &str) -> bool {
 
 /// `text` without its thank-you and acknowledgement clauses ("Looks good to me, merge it" →
 /// " merge it"), or `None` when that is all it says ("Thanks, looks great!").
-fn without_acknowledgements(text: &str) -> Option<String> {
+pub(crate) fn without_acknowledgements(text: &str) -> Option<String> {
     let clauses: Vec<&str> = text.split_inclusive([',', '.', '!', ';', ':', '?', '\n']).collect();
     let kept: Vec<&str> = clauses.iter().copied().filter(|c| !is_acknowledgement(c)).collect();
     if kept.len() == clauses.len() {
