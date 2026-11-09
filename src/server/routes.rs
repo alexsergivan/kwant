@@ -1022,7 +1022,7 @@ pub(super) async fn run_routed_turn(
                 .unwrap_or_default()
                 .into_iter()
                 .rev()
-                .find(|m| m.sender_role == "kwant" && m.sender_id == kwant.name)
+                .find(|m| is_reply_by(m, &kwant.name))
                 .map(|m| m.id);
             run_handoffs(&scope, std::slice::from_ref(&kwant.id), &[(kwant.clone(), text)], &prompt).await;
             Ok(reply_id)
@@ -1949,8 +1949,7 @@ pub(super) async fn try_kwant_turn(
     // step leaves its prompt here when the reply missed what the person expected
     let next = (!opts.delivery_continued && opts.delivery_checked()).then(DeliveryNext::default);
     opts.delivery_next = next.clone();
-    let always_ask = opts.always_ask;
-    let delegation_id = opts.delegation_id.clone();
+    let carried = Carried::of(&opts);
     let first = try_kwant_turn_once(scope, target_kwant, prompt, opts).await;
     let Some((prompt, expect)) = next.and_then(|n| n.lock().ok().and_then(|mut n| n.take())) else {
         return first;
@@ -1959,15 +1958,71 @@ pub(super) async fn try_kwant_turn(
     let again = |prompt: String| {
         let opts = TurnOpts {
             label: Some("Automatic continuation (once): the reply was missing what the person expected".into()),
-            always_ask,
-            delegation_id,
             expect: Some(expect),
             delivery_continued: true,
-            ..Default::default()
+            ..carried.into_opts()
         };
         try_kwant_turn_once(scope, target_kwant, prompt, opts)
     };
     super::delivery_check::after_turn(first, Some(prompt), scope.cancel_token.is_cancelled(), again).await
+}
+
+/// Set in the meta of a "user" message a bot sent through the chat API (its turn token, not the
+/// person's): its words are never read as the person's (see [`person_words`]).
+pub(crate) const SENT_BY_BOT: &str = "sent_by_bot";
+
+/// The person's own words this turn answers, which the delivery check reads what they expect
+/// from: the saved message the prompt was built from, never the prompt itself (kwnt adds
+/// attachment, hand-back and routing notes to it). Only a turn started by the person
+/// (`person_turn`, a `nav_prompt`) has them, and only when that message is the person's: not one a
+/// bot sent through the chat API, nor a connected outside agent's.
+fn person_words(person_turn: bool, current: Option<&Message>) -> Option<&str> {
+    let m = current.filter(|_| person_turn)?;
+    if m.sender_role != "user" || crate::drivers::from_agent(m).is_some() {
+        return None;
+    }
+    let meta: Option<serde_json::Value> = m.meta.as_deref().and_then(|s| serde_json::from_str(s).ok());
+    if meta.as_ref().is_some_and(|v| v[SENT_BY_BOT] == true) {
+        return None;
+    }
+    Some(m.text.as_str())
+}
+
+/// `m` is a reply `bot` (by name) wrote: a file it shared (`meta.kind == "file"`, saved next to its
+/// reply) is not.
+pub(super) fn is_reply_by(m: &Message, bot: &str) -> bool {
+    m.sender_role == "kwant" && m.sender_id == bot && !super::attachments::is_file_share(m)
+}
+
+/// What the delivery check's continuation keeps of the turn it continues: who asked for it and how
+/// it was routed, so a routed turn's continuation runs on the same agent, effort and tier.
+struct Carried {
+    always_ask: bool,
+    delegation_id: Option<String>,
+    routed: Option<(String, String)>,
+    routing: Option<serde_json::Value>,
+    tier: Option<crate::drivers::engines::Tier>,
+    purpose: Option<String>,
+    task: Option<super::missions::lessons::TaskHint>,
+}
+
+impl Carried {
+    fn of(o: &TurnOpts) -> Self {
+        Carried {
+            always_ask: o.always_ask,
+            delegation_id: o.delegation_id.clone(),
+            routed: o.routed.clone(),
+            routing: o.routing.clone(),
+            tier: o.tier,
+            purpose: o.purpose.clone(),
+            task: o.task.clone(),
+        }
+    }
+
+    fn into_opts(self) -> TurnOpts {
+        let Carried { always_ask, delegation_id, routed, routing, tier, purpose, task } = self;
+        TurnOpts { always_ask, delegation_id, routed, routing, tier, purpose, task, ..Default::default() }
+    }
 }
 
 /// [`try_kwant_turn`] without the delivery check's continuation.
@@ -2382,6 +2437,8 @@ async fn run_kwant_turn_inner(
         crate::drivers::drop_current_message(&mut history, &prompt);
         // The person's message this turn answers, when the prompt is that message
         let current_message = last_before_drop.filter(|_| history.len() < had);
+        // What the delivery check reads the person's expectation from (see [`person_words`])
+        let person_said = person_words(opts.nav_prompt.is_some(), current_message.as_ref()).map(str::to_string);
         // Replies and reactions show in the history the bot reads
         db.mark_history(&mut history).await;
 
@@ -3179,8 +3236,9 @@ async fn run_kwant_turn_inner(
                 // The delivery check (P4, P9, P10): a claimed picture the turn didn't share, or what
                 // the person expected and didn't get (see [`super::delivery_check`])
                 let pictures = state.turns.take_pictures(&tag.turn_id);
-                let expect = opts.expect.clone().or_else(|| opts.nav_prompt.as_deref().and_then(super::delivery_check::expect_for));
-                let verdict = if opts.delivery_checked() {
+                let expect = opts.expect.clone().or_else(|| person_said.as_deref().and_then(super::delivery_check::expect_for));
+                let checked = opts.delivery_checked();
+                let verdict = if checked {
                     let seen = super::delivery_check::Seen {
                         image_shared: pictures.shared_image,
                         has_shot: pictures.last_shot.is_some(),
@@ -3223,11 +3281,19 @@ async fn run_kwant_turn_inner(
                         m[k] = v.clone();
                     }
                 }
-                if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref()) {
+                if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref(), checked) {
                     meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
                 }
                 let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);
+                // The claimed picture goes with the reply, posted as the bot. Saved before the reply,
+                // so "the bot's latest message" is still its reply (the app shows the two together)
+                if let (true, Some(shot)) = (verdict.share_last_shot, &pictures.last_shot) {
+                    let name = super::continuity::screenshot_name(&shot.url);
+                    if let Err(why) = super::attachments::post_screenshot(state, &turn_scope, &shot.data, &name, true).await {
+                        tracing::warn!(kwant = %target_kwant.id, %why, "couldn't share the turn's screenshot with its reply");
+                    }
+                }
                 let hold = opts.hook.as_ref().and_then(|h| {
                     let h = h.lock().ok()?;
                     let names: Vec<&str> = h.teammates.iter().map(String::as_str).collect();
@@ -3259,13 +3325,6 @@ async fn run_kwant_turn_inner(
                         if let Ok(mut next) = next.lock() {
                             *next = Some((prompt.clone(), e.clone()));
                         }
-                    }
-                }
-                // The claimed picture goes under the reply, posted as the bot
-                if let (true, Some(shot)) = (verdict.share_last_shot, &pictures.last_shot) {
-                    let name = super::continuity::screenshot_name(&shot.url);
-                    if let Err(why) = super::attachments::post_screenshot(state, &turn_scope, &shot.data, &name, true).await {
-                        tracing::warn!(kwant = %target_kwant.id, %why, "couldn't share the turn's screenshot under its reply");
                     }
                 }
                 if let (Some(outcome), Some(e)) = (verdict.outcome, &expect) {
@@ -3389,7 +3448,7 @@ pub(crate) async fn send_chat_inner(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let uploads = super::attachments::check_uploads(&state, &payload.attachment_ids).await?;
     if let Some(thread_id) = payload.thread_id.clone() {
-        return send_to_thread(state, thread_id, payload, uploads).await;
+        return send_to_thread(state, thread_id, payload, uploads, from_person).await;
     }
     // Everything this message can reach (mentions, teams, Laya's candidates) is in its space
     let space = chat_space(&state, &payload).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -3602,6 +3661,9 @@ pub(crate) async fn send_chat_inner(
     let mut user_meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
     if let Some(source) = &payload.source {
         user_meta.get_or_insert_with(|| json!({}))["source"] = json!(source);
+    }
+    if !from_person {
+        user_meta.get_or_insert_with(|| json!({}))[SENT_BY_BOT] = json!(true);
     }
     let user_extra = MessageExtra { thread_id: None, meta: user_meta };
     let saved_user_msg = state
@@ -4004,6 +4066,7 @@ async fn send_to_thread(
     thread_id: String,
     payload: SendChatPayload,
     uploads: Vec<crate::db::attachments::Attachment>,
+    from_person: bool,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let thread = state.db.get_thread(&thread_id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
     if thread.archived {
@@ -4027,7 +4090,10 @@ async fn send_to_thread(
         tool_calls: None,
         tokens_used: payload.prompt.len() as i64 / 4,
     };
-    let meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
+    let mut meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
+    if !from_person {
+        meta.get_or_insert_with(|| json!({}))[SENT_BY_BOT] = json!(true);
+    }
     let extra = MessageExtra { thread_id: Some(thread.id.clone()), meta };
     let saved = state.db.insert_message_with(&user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if let Some(target) = &payload.reply_to_message_id {
@@ -5856,8 +5922,101 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{scrub_urls, turn_failed_text, with_failure_meta, TurnOpts};
+    use super::{is_reply_by, person_words, scrub_urls, turn_failed_text, with_failure_meta, Carried, TurnOpts};
+    use crate::db::models::Message;
     use serde_json::json;
+
+    fn saved(role: &str, sender: &str, text: &str, meta: Option<serde_json::Value>) -> Message {
+        Message {
+            id: format!("m-{}", text.len()),
+            channel_id: None,
+            direct_kwant_id: Some("k".into()),
+            sender_role: role.into(),
+            sender_id: sender.into(),
+            text: text.into(),
+            reasoning_content: None,
+            tool_calls: None,
+            tokens_used: 0,
+            created_at: None,
+            thread_id: None,
+            meta: meta.map(|m| m.to_string()),
+            results: None,
+            reply_to_message_id: None,
+            reaction: None,
+            reply_to: None,
+        }
+    }
+
+    /// #469 review, must-fix 1: the delivery check reads the person's saved message, never the
+    /// prompt kwnt built from it (attachment and hand-back notes) or a message a bot sent.
+    #[test]
+    fn the_delivery_check_reads_only_the_persons_own_words() {
+        let words = "Fix the login button colour";
+        let prompt = format!("{words}\n\n[Attached files]\n- login.png (image/png, 3 KB): an image the person sent");
+        let mut history = vec![saved("user", "user", words, Some(json!({"attachments": []})))];
+        let last = history.last().cloned();
+        crate::drivers::drop_current_message(&mut history, &prompt);
+        assert!(history.is_empty(), "the prompt is the saved message plus kwnt's attachment note");
+        let current = last.filter(|_| history.is_empty());
+        let said = person_words(true, current.as_ref());
+        assert_eq!(said, Some(words), "not the prompt with kwnt's note");
+        assert!(prompt.contains("image") && !said.unwrap().contains("image"));
+        let expect = said.and_then(crate::server::delivery_check::expect_for);
+        assert!(!expect.is_some_and(|e| e.image), "an attachment note's \"image\" isn't the person asking for one");
+
+        // A message a bot sent through the chat API, a connected agent's, a bot's reply, or a turn
+        // the person didn't start: no expectation
+        let by_bot = saved("user", "user", "send me an image of the page", Some(json!({"sent_by_bot": true})));
+        assert_eq!(person_words(true, Some(&by_bot)), None);
+        let by_agent = saved("user", "user", "send me an image", Some(json!({"from_agent": "Codex"})));
+        assert_eq!(person_words(true, Some(&by_agent)), None);
+        assert_eq!(person_words(true, Some(&saved("kwant", "Lin", "here is an image", None))), None);
+        assert_eq!(person_words(false, Some(&saved("user", "user", "send me an image", None))), None);
+        assert_eq!(person_words(true, None), None);
+        assert_eq!(person_words(true, Some(&saved("user", "user", "send me an image", None))), Some("send me an image"));
+    }
+
+    /// #469 review, must-fix 2: "the bot's latest reply" (a routine run's message, the
+    /// coordinator's consolidated list) is never a file it shared next to the reply, whichever
+    /// was saved last.
+    #[test]
+    fn a_shared_file_is_not_the_bots_reply() {
+        let reply = saved("kwant", "Lin", "Here is the pricing page.", None);
+        let share = saved("kwant", "Lin", "Shared a file: screenshot-kwant.si.jpg", Some(json!({"kind": "file", "auto": true})));
+        let other = saved("kwant", "Iris", "Mine", None);
+        for chat in [vec![reply.clone(), share.clone(), other.clone()], vec![share.clone(), reply.clone(), other.clone()]] {
+            let found = chat.iter().rev().find(|m| is_reply_by(m, "Lin")).unwrap();
+            assert_eq!(found.text, reply.text);
+        }
+        assert!(!is_reply_by(&share, "Lin") && !is_reply_by(&reply, "Iris"));
+    }
+
+    /// #469 review, should-fix: the delivery check's continuation of a routed turn keeps its
+    /// agent, effort, tier, purpose, task and routing.
+    #[test]
+    fn a_continuation_keeps_the_routed_turns_settings() {
+        let first = TurnOpts {
+            routed: Some(("claude".into(), "high".into())),
+            routing: Some(json!({"by": "lead"})),
+            tier: Some(crate::drivers::engines::Tier::Deep),
+            purpose: Some("routine".into()),
+            task: Some(Default::default()),
+            always_ask: true,
+            delegation_id: Some("d1".into()),
+            nav_prompt: Some("open https://example.org".into()),
+            fresh_eyes: false,
+            ..Default::default()
+        };
+        let next = Carried::of(&first).into_opts();
+        assert_eq!(next.routed, first.routed);
+        assert_eq!(next.routing, first.routing);
+        assert_eq!(next.tier, first.tier);
+        assert_eq!(next.purpose, first.purpose);
+        assert_eq!(next.task, first.task);
+        assert!(next.always_ask);
+        assert_eq!(next.delegation_id.as_deref(), Some("d1"));
+        assert!(next.nav_prompt.is_none(), "the continuation's prompt is kwnt's, it never moves the browser");
+    }
 
     #[test]
     fn fresh_eyes_and_no_tools_turns_skip_the_delivery_check() {

@@ -884,6 +884,12 @@ pub enum Posted {
     Already(Attachment),
 }
 
+/// `m` is a file a bot shared ([`post_file`], `meta.kind == "file"`), not a reply, though it carries
+/// the bot's name the way a reply does.
+pub fn is_file_share(m: &crate::db::models::Message) -> bool {
+    m.meta.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).is_some_and(|v| v["kind"] == "file")
+}
+
 /// Posts a stored file into the turn's chat as a message from the bot: `share_file`,
 /// `browser_screenshot` with `share: true`, and the reply guard's automatic share
 /// ([`super::picture_claims`]) all come here.

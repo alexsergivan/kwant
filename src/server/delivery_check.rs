@@ -32,7 +32,7 @@ pub struct Expect {
 /// Only the person's own message has one; hand-offs, routines and other prompts kwnt or a bot
 /// wrote never do.
 pub fn expect_for(_person_prompt: &str) -> Option<Expect> {
-    // P9/P10 hookup once lin-080-proactive-prompt (e2054d4e) is on main: read the plan the turn
+    // P9/P10 hookup once #470 (lin-080-proactive-prompt) is on main: read the plan the turn
     // carried (`TurnInput::delivery`), else `keyword_plan(prompt, &[])`, and keep only plans with
     // something to check, so Explain and Other turns record nothing:
     //     use crate::router::delivery::{keyword_plan, Show};
@@ -252,10 +252,11 @@ pub fn apply(reply: String, v: &Verdict) -> String {
     }
 }
 
-/// The reply's `meta.delivery`, when the check did something: `{"missing": [...],
-/// "auto_shared": bool, "no_picture": bool, "continues": bool, "outcome": "hit"|"miss"}`.
-pub fn meta(v: &Verdict, expect: Option<&Expect>) -> Option<Value> {
-    if *v == Verdict::default() && expect.is_none() {
+/// The reply's `meta.delivery`, when the check ran (`checked`) and did something or had an
+/// expectation: `{"missing": [...], "auto_shared": bool, "no_picture": bool, "continues": bool,
+/// "outcome": "hit"|"miss"}`. A turn the check skips (see `TurnOpts::delivery_checked`) has none.
+pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value> {
+    if !checked || (*v == Verdict::default() && expect.is_none()) {
         return None;
     }
     Some(serde_json::json!({
@@ -398,8 +399,11 @@ mod tests {
         assert_eq!(check("The button is orange now.", None, false, &SHOT), Verdict::default());
         assert_eq!(check("I can take a screenshot if you want.", None, false, &NOTHING), Verdict::default());
         assert_eq!(apply(claim.into(), &v(NOTHING)), format!("{claim}\n\n{NO_PICTURE_LINE}"));
-        assert_eq!(meta(&Verdict::default(), None), None);
-        assert_eq!(meta(&v(NOTHING), None).unwrap()["no_picture"], true);
+        assert_eq!(meta(&Verdict::default(), None, true), None);
+        assert_eq!(meta(&v(NOTHING), None, true).unwrap()["no_picture"], true);
+        // A turn the check skipped records nothing, even with an expectation
+        assert_eq!(meta(&Verdict::default(), Some(&ideas()), false), None);
+        assert!(meta(&Verdict::default(), Some(&ideas()), true).is_some());
     }
 
     #[tokio::test]

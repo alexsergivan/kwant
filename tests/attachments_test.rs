@@ -524,3 +524,22 @@ async fn a_shared_screenshot_posts_as_the_bot_and_counts_for_the_turn() {
     assert!(post_screenshot(&env.state, &scope, &text, "x.jpg", false).await.is_err());
     assert!(post_screenshot(&env.state, &scope, "%%%not base64", "x.jpg", false).await.is_err());
 }
+
+/// #469 review, must-fix 1: a message a bot sends through the chat API with its turn token is
+/// marked, so the delivery check never reads it as the person's; the person's own isn't.
+#[tokio::test]
+async fn a_message_a_bot_sends_is_marked_as_the_bots() {
+    let env = setup().await;
+    direct_turn(&env, "turn-token-sender", &env.b, None).await;
+    let body = json!({"prompt": "please send an image REPLYTAG:bot-sent", "sender_id": "user", "kwant_id": env.a});
+    let (s, v) = call_with(&env.app, "POST", "/api/chat/send", Some(body), &[("authorization", "Bearer turn-token-sender")]).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    send_direct(&env, &env.a, "my own words REPLYTAG:person-sent", json!({})).await;
+    let msgs = messages(&env, &env.a).await;
+    let meta = |needle: &str| -> Value {
+        let m = msgs.iter().find(|m| m.sender_role == "user" && m.text.contains(needle)).unwrap();
+        m.meta.as_deref().map(|s| serde_json::from_str(s).unwrap()).unwrap_or(Value::Null)
+    };
+    assert_eq!(meta("bot-sent")["sent_by_bot"], true);
+    assert!(meta("person-sent").get("sent_by_bot").is_none());
+}
