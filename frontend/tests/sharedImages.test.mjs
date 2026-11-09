@@ -233,3 +233,46 @@ test("ChatView: in a bot's own chat an id row resolves to that bot even before t
   assert.doesNotMatch(v.host.querySelector('[data-message-id="f1"]').textContent, /A bot/);
   v.unmount();
 });
+
+// ---- the server's new shape (vega-080-share-screens) --------------------------------------------
+
+const newShare = (id, bot, name, when, auto = false) => ({
+  id,
+  sender_role: 'kwant',
+  sender_id: bot.name,
+  text: `Shared a file: ${name}`,
+  created_at: when,
+  meta: JSON.stringify({ kind: 'file', attachments: [{ id: fileId(), name, mime: 'image/jpeg', size: 48213 }], kwant_id: bot.id, kwant_name: bot.name, turn_id: 't1', auto }),
+});
+
+test("shareInfo reads kwant_id and auto; a new-shape share follows its bot's reply", () => {
+  const s = newShare('n1', bots[0], 'screenshot-booktun.ing.jpg', at('11:00'), true);
+  assert.deepEqual(m.shareInfo(s.meta), { kwantId: FRONTEND, auto: true });
+  assert.deepEqual(m.shareInfo(null), { kwantId: null, auto: false });
+  assert.deepEqual(m.shareInfo('{"kind":"file","auto":"yes"}'), { kwantId: null, auto: false }, 'only a real true counts');
+  // A share named after its bot, with the id in meta, follows that bot's reply (by id).
+  const msgs = [you('u1', 'show me', at('11:00')), newShare('n2', bots[0], 'screenshot.jpg', at('11:00', 5)), reply('r1', FRONTEND, 'Here it is', at('11:00', 9))];
+  assert.deepEqual(m.arrangeSharedFiles(msgs, bots).messages.map((x) => x.id), ['u1', 'r1', 'n2']);
+});
+
+test('ChatView: a new-shape share shows its bot, and an automatic one says "Shared automatically"', async () => {
+  const msgs = [
+    you('u1', 'Show me the page', at('11:10')),
+    reply('r1', 'Growth', 'Here is the page I opened.', at('11:10', 20)),
+    newShare('n1', bots[1], 'screenshot-booktun.ing.jpg', at('11:10', 21), true),
+    you('u2', 'and the other', at('11:11')),
+    newShare('n2', bots[1], 'screenshot.jpg', at('11:11', 5)),
+    reply('r2', 'Growth', 'Shared above.', at('11:11', 9)),
+  ];
+  const v = mount(msgs);
+  await settle();
+  const log = v.host.querySelector('[role="log"]');
+  assert.deepEqual(rowIds(v.host), ['u1', 'r1', 'n1', 'u2', 'r2', 'n2']);
+  const n1 = log.querySelector('[data-message-id="n1"]');
+  assert.equal(n1.hasAttribute('data-shared-under'), true);
+  assert.match(n1.textContent, /Shared by Growth/);
+  assert.ok(n1.querySelector('[data-shared-auto]'), 'auto share has the hint');
+  assert.match(n1.querySelector('[data-shared-auto]').textContent, /^Shared automatically$/);
+  assert.equal(log.querySelector('[data-message-id="n2"] [data-shared-auto]'), null, 'a share the bot made itself has no hint');
+  v.unmount();
+});

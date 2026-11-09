@@ -52,7 +52,7 @@ import {
   uploadSlotsLeft,
 } from '../attachments';
 import { EarlierCopies, FileTiles, UploadChip } from './Attachments';
-import { arrangeSharedFiles, botDisplayName, botOf } from '../sharedFiles';
+import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
 import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
@@ -1416,6 +1416,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
           )}
           {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
+          {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (
+            // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared
+            <p data-shared-auto="" className="mt-1 text-[11px] text-zinc-500">
+              Shared automatically
+            </p>
+          )}
           {olderCopies && olderCopies.length > 0 && (
             <EarlierCopies
               idBase={`earlier-${msg.id}`}

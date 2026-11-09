@@ -1,8 +1,10 @@
 // Files a bot shares in chat (0.8.0 P4, app half): who sent them, where they sit, and repeats.
-// share_file rows store the bot's internal id as sender_id while replies store its name
-// (src/server/waiting.rs), so a row is resolved by id or name against the chat's bots. It never
-// falls back to the chat title: in a space that title is the space ("@booktun.ing"), not the bot.
+// Shared-file rows store the bot's name as sender_id, like its replies, with the id in meta.kwant_id
+// (vega-080-share-screens). Rows saved before that, and live events from an older server, carry the
+// bot's id instead, so a row is resolved by meta.kwant_id, then id or name, against the chat's bots.
+// It never falls back to the chat title: in a space that title is the space ("@booktun.ing").
 import { isSharedFileMessage, parseAttachments } from './attachments';
+import { parseMetaObject } from './questions';
 
 /** What a row shows when its bot can't be found (deleted, or the list hasn't loaded yet). */
 export const UNKNOWN_BOT_LABEL = 'A bot';
@@ -39,6 +41,23 @@ export function botDisplayName(senderId: string | undefined | null, bots: Readon
   if (!senderId || looksLikeId(senderId)) return UNKNOWN_BOT_LABEL;
   return senderId;
 }
+
+export interface ShareInfo {
+  /** The bot's id from meta, when the server sent it. */
+  kwantId: string | null;
+  /** True when kwnt shared the turn's last screenshot itself, because the reply claimed a picture. */
+  auto: boolean;
+}
+
+/** What a shared-file row's meta says about who shared it and how. */
+export function shareInfo(meta: string | null | undefined): ShareInfo {
+  const o = parseMetaObject(meta) ?? {};
+  const id = typeof o.kwant_id === 'string' && o.kwant_id ? o.kwant_id : null;
+  return { kwantId: id, auto: o.auto === true };
+}
+
+/** Who a message is from, for matching: a share's meta.kwant_id when present, else its sender_id. */
+const senderOf = (m: Msg) => (isBotFileShare(m) ? shareInfo(m.meta).kwantId : null) ?? m.sender_id;
 
 /** True for a bot's shared-file row (meta kind "file" with at least one file). */
 export function isBotFileShare(m: Msg): boolean {
@@ -92,7 +111,7 @@ export function arrangeSharedFiles<M extends Msg>(input: ReadonlyArray<M>, bots:
     for (let k = 0; k < turn.length; k += 1) {
       const m = turn[k];
       if (isBotFileShare(m)) {
-        const replyLater = turn.slice(k + 1).some((r) => r.sender_role === 'kwant' && !isBotFileShare(r) && sameBot(r.sender_id, m.sender_id, bots));
+        const replyLater = turn.slice(k + 1).some((r) => r.sender_role === 'kwant' && !isBotFileShare(r) && sameBot(r.sender_id, senderOf(m), bots));
         if (replyLater) {
           waiting.push(m);
           continue;
@@ -102,7 +121,7 @@ export function arrangeSharedFiles<M extends Msg>(input: ReadonlyArray<M>, bots:
       }
       placed.push(m);
       if (m.sender_role === 'kwant') {
-        const mine = waiting.filter((w) => sameBot(w.sender_id, m.sender_id, bots));
+        const mine = waiting.filter((w) => sameBot(senderOf(w), m.sender_id, bots));
         for (const w of mine) {
           placed.push(w);
           attached.add(w.id);
@@ -118,9 +137,9 @@ export function arrangeSharedFiles<M extends Msg>(input: ReadonlyArray<M>, bots:
     const m = placed[k];
     if (!isBotFileShare(m) || attached.has(m.id)) continue;
     let p = k - 1;
-    while (p >= 0 && isBotFileShare(placed[p]) && sameBot(placed[p].sender_id, m.sender_id, bots)) p -= 1;
+    while (p >= 0 && isBotFileShare(placed[p]) && sameBot(senderOf(placed[p]), senderOf(m), bots)) p -= 1;
     const prev = placed[p];
-    if (prev && prev.sender_role === 'kwant' && !isBotFileShare(prev) && sameBot(prev.sender_id, m.sender_id, bots)) attached.add(m.id);
+    if (prev && prev.sender_role === 'kwant' && !isBotFileShare(prev) && sameBot(prev.sender_id, senderOf(m), bots)) attached.add(m.id);
   }
 
   // Repeats: inside a run of consecutive shares by one bot, group by file name.
@@ -134,7 +153,7 @@ export function arrangeSharedFiles<M extends Msg>(input: ReadonlyArray<M>, bots:
       continue;
     }
     let e = r + 1;
-    while (e < placed.length && isBotFileShare(placed[e]) && sameBot(placed[e].sender_id, placed[r].sender_id, bots)) e += 1;
+    while (e < placed.length && isBotFileShare(placed[e]) && sameBot(senderOf(placed[e]), senderOf(placed[r]), bots)) e += 1;
     const run = placed.slice(r, e);
     const folded = new Set<string>();
     // Newest first: each copy joins the newest one of its name while it is within the window of the copy after it.
