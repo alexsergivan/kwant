@@ -34,6 +34,8 @@ interface WorkingStripProps {
  * line (0.6.13 spec A3), kept quiet (0.7.5): a plain ~28 px line, no card, 12 px text and a 16 px avatar,
  * with space below it so it never touches the composer. "Answer ↑" is the one thing with emphasis while
  * the bot waits on the person. Its buttons stay 28 px tall but tap like 44 px (kws-hit in modern.css).
+ * On desktop (0.8.0) it is the same kind of quiet line at desktop size, placed inside the composer section
+ * (ChatView renders it there), lined up with the composer box below it.
  */
 export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, writing, onStop, onAnswer, onWatch, phone: forcePhone }) => {
   const mountedAt = useRef(Date.now());
@@ -105,32 +107,39 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
       </div>
     );
   }
+  // Desktop (0.8.0, Oleks 2026-11-09): the composer's status line, inside the composer section right
+  // above its box, in the same max-w-4xl column. No card: one quiet 28 px line like the phone's. Its
+  // edges follow the box below: 21 px in (the box's 1 px border + 8 px padding + the field's 12 px
+  // inset), so the avatar starts where the placeholder text does, and 9 px in on the right, so the
+  // last item ends where the Stop square does. mb-2 keeps 8 px to the box.
   return (
-    <div className="kws-strip px-3 sm:px-6 pt-2" data-working-strip="" data-waiting-on={on ?? undefined}>
-      <div className="mx-auto flex max-w-4xl items-center rounded-xl border border-zinc-700/60 bg-zinc-900/80 shadow-[var(--kws-shadow)] gap-3 px-3 py-1.5">
-        <span className={`shrink-0 inline-flex ${waiting ? '' : 'kw-avatar-working'}`}>
-          <ModernAvatar role={title} name={name} size={24} />
-        </span>
-        <p className="min-w-0 flex-1 truncate text-xs text-zinc-300" role="status" aria-live="polite">
-          <span className="font-semibold text-zinc-100">{name}</span> is {label}
-        </p>
-        {/* Own box, so a long step name never cuts the time off. */}
-        <span className="shrink-0 tabular-nums text-meta text-zinc-400" aria-hidden="true" data-working-elapsed="">
-          {elapsed}
-        </span>
-        {onWatch && <WatchButton name={name} onWatch={onWatch} />}
-        {onStop && (
-          <button
-            type="button"
-            onClick={onStop}
-            title="Stop"
-            className="shrink-0 inline-flex items-center gap-1.5 min-h-8 rounded-lg border border-zinc-600/70 px-2.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 hover:text-zinc-50 active:scale-[0.97] motion-reduce:active:scale-100 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-          >
-            <Square size={12} className="fill-current" aria-hidden="true" />
-            Stop
-          </button>
-        )}
-      </div>
+    <div
+      className="kws-strip kws-strip-line mx-auto mb-2 flex h-7 max-w-4xl items-center gap-2 pl-[21px] pr-[9px]"
+      data-working-strip=""
+      data-waiting-on={on ?? undefined}
+    >
+      <span className={`shrink-0 inline-flex ${waiting ? '' : 'kw-avatar-working'}`}>
+        <ModernAvatar role={title} name={name} size={20} />
+      </span>
+      <p className="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite">
+        <span className="font-medium text-zinc-200">{name}</span> is {label}
+      </p>
+      {/* Own box, so a long step name never cuts the time off. */}
+      <span className="shrink-0 tabular-nums text-xs leading-4 text-zinc-500" aria-hidden="true" data-working-elapsed="">
+        {elapsed}
+      </span>
+      {onWatch && <WatchButton name={name} line onWatch={onWatch} />}
+      {onStop && (
+        <button
+          type="button"
+          onClick={onStop}
+          title="Stop"
+          className="-mr-2 shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+        >
+          <Square size={10} className="fill-current" aria-hidden="true" />
+          Stop
+        </button>
+      )}
     </div>
   );
 };

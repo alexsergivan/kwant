@@ -197,16 +197,38 @@ test('waiting on a question, the strip says so and offers Answer, which goes to 
   assert.match(answer.attrs, /text-xs font-semibold text-amber-200/);
   assert.match(answer.attrs, /data-strip-answer/);
   assert.doesNotMatch(html, /data-working-elapsed/, 'the time hides behind Answer');
-  // Desktop keeps its old strip: no Answer button there.
+  // Desktop: no Answer button there.
   assert.ok(!buttons(m.strip({ active: true, name: 'QA', title: 'QA', awaitingAnswer: true, phone: false, onAnswer: noop })).some((b) => b.label === 'Answer'));
 });
 
-test('desktop strip is unchanged: the bordered card, 24 px avatar, no hit-area classes', () => {
-  const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), onStop: noop, phone: false });
-  assert.match(html, /<div class="kws-strip px-3 sm:px-6 pt-2" data-working-strip="">/);
-  assert.match(html, /rounded-xl border border-zinc-700\/60 bg-zinc-900\/80 shadow-\[var\(--kws-shadow\)\] gap-3 px-3 py-1\.5/);
-  assert.match(html, /style="width:24px;height:24px"/);
-  assert.doesNotMatch(html, /kws-hit|data-compact|kws-strip-phone|-mr-2/);
+test('desktop strip is the composer status line: no card, 28 px, 20 px avatar, edges on the box below (0.8.0)', () => {
+  const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), onWatch: noop, phone: false });
+  const wrap = /<div class="(kws-strip[^"]*)" data-working-strip="">/.exec(html)[1].split(' ');
+  // Same column as the composer box; 21 px = its 1 px border + 8 px padding + the field's 12 px inset,
+  // 9 px = border + padding up to the Stop square; 8 px to the box below.
+  for (const c of ['kws-strip-line', 'mx-auto', 'max-w-4xl', 'h-7', 'gap-2', 'pl-[21px]', 'pr-[9px]', 'mb-2']) assert.ok(wrap.includes(c), c);
+  assert.doesNotMatch(html, /rounded-xl|border-zinc-700|bg-zinc-900|kws-shadow|kws-strip-phone|kws-hit|data-compact/);
+  assert.match(html, /style="width:20px;height:20px"/);
+  assert.match(html, /role="status" aria-live="polite"/);
+  assert.match(html, /<span class="font-medium text-zinc-200">Architect<\/span> is/);
+  assert.match(html, /class="shrink-0 tabular-nums text-xs leading-4 text-zinc-500"[^>]*data-working-elapsed=""/);
+  // Watch is the right-most item: 28 px, and its word ends where the Stop square does.
+  const watch = /<button[^>]*data-watch-button=""[^>]*>/.exec(html)[0];
+  for (const c of ['h-7', ' -mr-2 ', 'text-xs', 'text-[#b8adff]']) assert.ok(watch.includes(c), c);
+  assert.doesNotMatch(watch, /min-h-8/);
+});
+
+test('ChatView puts the desktop strip inside the composer section, right above the box; the phone keeps its place', () => {
+  const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const phoneAt = src.indexOf('{phone && workingStrip}');
+  const sectionAt = src.indexOf('{/* Modern Composer Input Bar */}');
+  const deskAt = src.indexOf('{!phone && workingStrip}');
+  const formAt = src.indexOf('<form', deskAt);
+  assert.ok(phoneAt > 0 && phoneAt < sectionAt, 'phone line above the composer section');
+  assert.ok(deskAt > sectionAt, 'desktop line inside the composer section');
+  assert.ok(src.indexOf('aria-label="Ask a member"', sectionAt) < deskAt, 'below the Ask chips');
+  assert.equal(src.slice(deskAt + '{!phone && workingStrip}'.length, formAt).trim(), '', 'directly above the box');
+  assert.equal(src.match(/<WorkingStrip\b/g).length, 1, 'one element, placed by layout');
 });
 
 test('on a phone the steps panel is one 44 px row, the engine note behind an info button', () => {
