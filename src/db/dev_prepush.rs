@@ -1,7 +1,7 @@
 //! B2 (0.8.0, fresh-eyes-audit.md §4): the pre-push card. Before a bot pushes its own branch in
 //! Dev mode, kwant checks the commit it would push and keeps one card per
 //! `(space, folder, branch, head_sha)`. The push is refused until the card is `clear`, or the
-//! person `overridden` it. Kept outside exports like the other Dev mode tables. Add-only.
+//! person `overridden` it (for one push: then it is `pushed`). Kept outside exports like the other Dev mode tables. Add-only.
 
 use super::{Database, DbError};
 use sqlx::FromRow;
@@ -36,8 +36,11 @@ pub const CHECKING: &str = "checking";
 pub const BLOCKED: &str = "blocked";
 /// Every check passed: the push goes.
 pub const CLEAR: &str = "clear";
-/// The person let the push go anyway.
+/// The person let the push go anyway: one push, used up by the first push it lets go.
 pub const OVERRIDDEN: &str = "overridden";
+/// An `overridden` card whose one push went. Pushing the same commit again makes it `blocked`
+/// again, so the person decides each push (Rigel's QA of #456, finding C).
+pub const PUSHED: &str = "pushed";
 /// kwant couldn't check (no base, git failed): the push waits for the person, as blocked does.
 pub const PREPUSH_FAILED: &str = "failed";
 /// The person asked for the checks to run again: the next push of this commit makes a new card,
@@ -97,7 +100,8 @@ impl Database {
     /// A new card for this push in `status` (`checking`, or `failed` with its card), or `None`
     /// when one is already there (two pushes at once make one card). Its `tries` is 1, or one more
     /// than the branch's newest card when that one is blocked or failed (the bot is still fixing);
-    /// `fresh_start` (after the person asked for a re-check) makes it 1 again.
+    /// `fresh_start` (after the person asked for a re-check) makes it 1 again, and so does a card
+    /// the person overrode that is blocked again only because its one push was used.
     #[allow(clippy::too_many_arguments)]
     pub async fn insert_prepush_card(
         &self,
@@ -113,7 +117,7 @@ impl Database {
         let id = format!("pp_{}", uuid::Uuid::new_v4().simple());
         let now = now_ms();
         let tries = match self.prepush_newest_on(space_id, folder, branch).await? {
-            Some(last) if !fresh_start && (last.status == BLOCKED || last.status == PREPUSH_FAILED) => last.tries + 1,
+            Some(last) if !fresh_start && last.overridden_by.is_none() && (last.status == BLOCKED || last.status == PREPUSH_FAILED) => last.tries + 1,
             _ => 1,
         };
         let done = sqlx::query(
@@ -152,6 +156,19 @@ impl Database {
         .bind(folder)
         .bind(branch)
         .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// The cards on `branch` in a space the person overrode (standing, used or blocked again),
+    /// newest first, at most `limit`: what a PR from that branch says was pushed anyway.
+    pub async fn prepush_overrides_on(&self, space_id: &str, branch: &str, limit: i64) -> Result<Vec<PrepushRow>, DbError> {
+        Ok(sqlx::query_as(&format!(
+            "SELECT {COLS} FROM dev_prepush_cards WHERE space_id = ? AND branch = ? AND overridden_by IS NOT NULL ORDER BY overridden_at DESC, rowid DESC LIMIT ?"
+        ))
+        .bind(space_id)
+        .bind(branch)
+        .bind(limit)
+        .fetch_all(&self.pool)
         .await?)
     }
 
@@ -195,6 +212,31 @@ impl Database {
         .bind(id)
         .execute(&self.pool)
         .await?;
+        if r.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.prepush_card(id).await
+    }
+
+    /// Uses up the override of card `id` for the push it is letting go: `overridden` becomes
+    /// `pushed`, at most once. False when it wasn't `overridden` (another push used it first).
+    pub async fn use_prepush_override(&self, id: &str) -> Result<bool, DbError> {
+        let r = sqlx::query("UPDATE dev_prepush_cards SET status = 'pushed', updated_at = ? WHERE id = ? AND status = 'overridden'")
+            .bind(now_ms())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// A bot pushes the commit of a `pushed` card again: the card is `blocked` again (its
+    /// override history stays). The card, or `None` when it wasn't `pushed`.
+    pub async fn reblock_pushed_prepush_card(&self, id: &str) -> Result<Option<PrepushRow>, DbError> {
+        let r = sqlx::query("UPDATE dev_prepush_cards SET status = 'blocked', updated_at = ? WHERE id = ? AND status = 'pushed'")
+            .bind(now_ms())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         if r.rows_affected() == 0 {
             return Ok(None);
         }

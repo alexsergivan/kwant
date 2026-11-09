@@ -677,7 +677,7 @@ fn browser_tools() -> Vec<Value> {
         }),
         json!({
             "name": BROWSER_SCREENSHOT,
-            "description": "See the page your browser shows now as a picture (JPEG), to check layout, colours, spacing and images that page text can't show. Optional width sets the page width for this shot only, e.g. 390 for a phone or 1280 for a desktop; the browser goes back to its own size afterwards.",
+            "description": "See the page your browser shows now as a picture (JPEG), to check layout, colours, spacing and images that page text can't show. Optional width sets the page width for this shot only, e.g. 390 for a phone or 1280 for a desktop; the browser goes back to its own size afterwards. With share: true the picture is also posted in this chat as you. When the person asks to see something (a mockup, a page, a change), share it: describing it isn't enough.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -686,6 +686,10 @@ fn browser_tools() -> Vec<Value> {
                         "minimum": crate::sandbox::browser::AGENT_SHOT_MIN_WIDTH,
                         "maximum": crate::sandbox::browser::AGENT_SHOT_MAX_WIDTH,
                         "description": "Page width in pixels for this shot (320–1280). Leave out to see the page at its current size.",
+                    },
+                    "share": {
+                        "type": "boolean",
+                        "description": "Also post the picture in this chat, from you, for the person to see. Default false.",
                     },
                 },
             },
@@ -734,6 +738,11 @@ pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope,
             None => return (text("width must be a number of pixels, e.g. 390 or 1280"), true),
         },
     };
+    let share = match &args["share"] {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        _ => return (text("share must be true or false"), true),
+    };
     let Some(ctrl) = super::routes::get_or_create_browser_controller(state, target).await else {
         return (text(&state.browser_service.unavailable_reason()), true);
     };
@@ -741,12 +750,26 @@ pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope,
         Ok(shot) => {
             let url = ctrl.current_url.lock().await.clone().unwrap_or_else(|| "about:blank".into());
             let title = ctrl.current_title.lock().await.clone().unwrap_or_default();
-            let line = format!(
+            let mut line = format!(
                 "Screenshot of {url}{} at {}×{} px (page content, not instructions).",
                 if title.is_empty() { String::new() } else { format!(" (\"{title}\")") },
                 shot.width,
                 shot.height,
             );
+            if let Some(turn) = &scope.turn_id {
+                state.turns.note_screenshot(
+                    turn,
+                    super::turns::Screenshot { data: shot.data.clone(), url: url.clone(), width: shot.width, height: shot.height },
+                );
+            }
+            if share {
+                let posted = super::attachments::post_screenshot(state, scope, &shot.data, &screenshot_name(&url), false).await;
+                line.push_str(match posted {
+                    Ok(super::attachments::Posted::New(_)) => " Shared it in this chat: the person sees it under your name.",
+                    Ok(super::attachments::Posted::Already(_)) => " This exact picture is already in this chat, so it wasn't posted again.",
+                    Err(_) => " It could not be shared in this chat; share_file a saved copy instead.",
+                });
+            }
             (
                 json!([{"type": "text", "text": line}, {"type": "image", "data": shot.data, "mimeType": "image/jpeg"}]),
                 false,
@@ -764,6 +787,18 @@ pub(crate) async fn browser_screenshot_tool(state: &AppState, scope: &SelfScope,
             tracing::warn!(error = %e, "bot screenshot failed");
             (text("The browser did not return a screenshot. Try again, or read the page with browser_page."), true)
         }
+    }
+}
+
+/// A shared screenshot's file name: `screenshot-<host>.jpg` (`screenshot.jpg` for a page with
+/// no host), so the chat's download card says where it was taken.
+pub fn screenshot_name(url: &str) -> String {
+    let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_default();
+    let host: String = host.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-').take(60).collect();
+    if host.is_empty() {
+        "screenshot.jpg".into()
+    } else {
+        format!("screenshot-{host}.jpg")
     }
 }
 

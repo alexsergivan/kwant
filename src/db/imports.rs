@@ -78,6 +78,60 @@ impl TryFrom<ImportRow> for ImportRecord {
     }
 }
 
+/// The removal of [`Database::undo_import`] inside the caller's transaction.
+async fn undo_import_in(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, id: &str, c: &Created, live: &[Kwant]) -> Result<(), UndoError> {
+    for table in ["teams", "channels"] {
+        let list = if table == "teams" { &c.teams } else { &c.channels };
+        for row in list {
+            sqlx::query(&format!("DELETE FROM {table} WHERE id = ?")).bind(row).execute(&mut **tx).await?;
+        }
+    }
+    for skill in &c.skills {
+        sqlx::query("DELETE FROM skills WHERE id = ?").bind(skill).execute(&mut **tx).await?;
+    }
+    for routine in &c.routines {
+        sqlx::query("DELETE FROM routine_runs WHERE routine_id = ?").bind(routine).execute(&mut **tx).await?;
+        sqlx::query("DELETE FROM routines WHERE id = ?").bind(routine).execute(&mut **tx).await?;
+    }
+    for k in live {
+        for sql in [
+            "DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE kwant_id = ?)",
+            "DELETE FROM routines WHERE kwant_id = ?",
+            "DELETE FROM kwant_memories WHERE kwant_id = ?",
+            "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?",
+            "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?",
+            "DELETE FROM kwant_scope WHERE kwant_id = ?",
+        ] {
+            sqlx::query(sql).bind(&k.id).execute(&mut **tx).await?;
+        }
+        for sql in super::truth_ledger::PURGE_BOT_FACTS {
+            sqlx::query(sql).bind(&k.id).execute(&mut **tx).await?;
+        }
+        // Memberships the person added since (another team or channel) go with it.
+        for table in ["channels", "teams"] {
+            let rows: Vec<(String, String)> = sqlx::query_as(&format!("SELECT id, member_kwants FROM {table} WHERE member_kwants LIKE '%' || ? || '%'"))
+                .bind(&k.id)
+                .fetch_all(&mut **tx)
+                .await?;
+            for (row_id, members) in rows {
+                let kept: Vec<String> = serde_json::from_str::<Vec<String>>(&members).unwrap_or_default().into_iter().filter(|m| *m != k.id).collect();
+                sqlx::query(&format!("UPDATE {table} SET member_kwants = ? WHERE id = ?"))
+                    .bind(serde_json::to_string(&kept).map_err(DbError::from)?)
+                    .bind(&row_id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+        }
+        sqlx::query("DELETE FROM kwants WHERE id = ?").bind(&k.id).execute(&mut **tx).await?;
+    }
+    sqlx::query("UPDATE imports SET status = 'undone', undone_at = ? WHERE id = ? AND status = 'applied'")
+        .bind(Utc::now())
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Why an import can't be undone.
 #[derive(Debug)]
 pub enum UndoError {
@@ -93,6 +147,15 @@ pub enum UndoError {
 impl From<DbError> for UndoError {
     fn from(e: DbError) -> Self {
         UndoError::Db(e)
+    }
+}
+
+impl super::bot_actions::SqliteCause for UndoError {
+    fn sqlite_code(&self) -> Option<i32> {
+        match self {
+            UndoError::Db(e) => super::bot_actions::sqlite_code(e),
+            _ => None,
+        }
     }
 }
 
@@ -349,58 +412,26 @@ impl Database {
             return Err(UndoError::Edited(edited));
         }
 
-        let mut tx = self.pool.begin().await?;
-        for table in ["teams", "channels"] {
-            let list = if table == "teams" { &c.teams } else { &c.channels };
-            for row in list {
-                sqlx::query(&format!("DELETE FROM {table} WHERE id = ?")).bind(row).execute(&mut *tx).await?;
-            }
-        }
-        for skill in &c.skills {
-            sqlx::query("DELETE FROM skills WHERE id = ?").bind(skill).execute(&mut *tx).await?;
-        }
-        for routine in &c.routines {
-            sqlx::query("DELETE FROM routine_runs WHERE routine_id = ?").bind(routine).execute(&mut *tx).await?;
-            sqlx::query("DELETE FROM routines WHERE id = ?").bind(routine).execute(&mut *tx).await?;
-        }
-        for k in &live {
-            for sql in [
-                "DELETE FROM routine_runs WHERE routine_id IN (SELECT id FROM routines WHERE kwant_id = ?)",
-                "DELETE FROM routines WHERE kwant_id = ?",
-                "DELETE FROM kwant_memories WHERE kwant_id = ?",
-                "DELETE FROM kwant_mcp_disabled WHERE kwant_id = ?",
-                "DELETE FROM kwant_mcp_servers WHERE kwant_id = ?",
-                "DELETE FROM kwant_scope WHERE kwant_id = ?",
-            ] {
-                sqlx::query(sql).bind(&k.id).execute(&mut *tx).await?;
-            }
-            for sql in super::truth_ledger::PURGE_BOT_FACTS {
-                sqlx::query(sql).bind(&k.id).execute(&mut *tx).await?;
-            }
-            // Memberships the person added since (another team or channel) go with it.
-            for table in ["channels", "teams"] {
-                let rows: Vec<(String, String)> = sqlx::query_as(&format!("SELECT id, member_kwants FROM {table} WHERE member_kwants LIKE '%' || ? || '%'"))
-                    .bind(&k.id)
-                    .fetch_all(&mut *tx)
-                    .await?;
-                for (row_id, members) in rows {
-                    let kept: Vec<String> = serde_json::from_str::<Vec<String>>(&members).unwrap_or_default().into_iter().filter(|m| *m != k.id).collect();
-                    sqlx::query(&format!("UPDATE {table} SET member_kwants = ? WHERE id = ?"))
-                        .bind(serde_json::to_string(&kept).map_err(DbError::from)?)
-                        .bind(&row_id)
-                        .execute(&mut *tx)
-                        .await?;
-                }
-            }
-            sqlx::query("DELETE FROM kwants WHERE id = ?").bind(&k.id).execute(&mut *tx).await?;
-        }
-        sqlx::query("UPDATE imports SET status = 'undone', undone_at = ? WHERE id = ? AND status = 'applied'")
-            .bind(Utc::now())
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
+        // Its bots go with their memories, so an out-of-step search index gets the same repair
+        // and one retry as a bot's delete
+        self.retry_after_index_repair(&format!("undoing import {id}"), || self.undo_import_once(id, c, &live)).await?;
         self.get_import(id).await?.ok_or(UndoError::NotFound)
+    }
+
+    /// One attempt of [`Self::undo_import`]'s removal, in one transaction: rolled back whole
+    /// when any step fails.
+    async fn undo_import_once(&self, id: &str, c: &Created, live: &[Kwant]) -> Result<(), UndoError> {
+        let mut tx = self.pool.begin().await?;
+        match undo_import_in(&mut tx, id, c, live).await {
+            Ok(()) => {
+                tx.commit().await?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                Err(e)
+            }
+        }
     }
 
     /// Why an imported kwant can't be removed by undo: history, or rows the import didn't make.

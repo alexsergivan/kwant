@@ -160,6 +160,40 @@ impl Database {
         self.attach_results(messages).await;
         self.attach_reactions(messages).await;
         self.attach_replies(messages).await;
+        self.attach_sender_names(messages).await;
+    }
+
+    /// Shows a bot's name on its older messages that stored its id as the sender (shared files
+    /// before 0.8.0, which the app showed as the chat's title). Nothing is rewritten in the
+    /// database; a sender that isn't a bot's id stays as it is.
+    pub async fn attach_sender_names(&self, messages: &mut [Message]) {
+        let ids: Vec<&str> = messages
+            .iter()
+            .filter(|m| m.sender_role == "kwant" && m.sender_id.len() == 36 && m.sender_id.bytes().filter(|b| *b == b'-').count() == 4)
+            .map(|m| m.sender_id.as_str())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let ids = serde_json::to_string(&ids).unwrap_or_default();
+        let rows: Vec<(String, String)> =
+            match sqlx::query_as("SELECT id, name FROM kwants WHERE id IN (SELECT value FROM json_each(?))")
+                .bind(ids)
+                .fetch_all(&self.pool)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::warn!("sender names: couldn't read them: {e}");
+                    return;
+                }
+            };
+        let names: HashMap<String, String> = rows.into_iter().filter(|(_, n)| !n.trim().is_empty()).collect();
+        for m in messages.iter_mut().filter(|m| m.sender_role == "kwant") {
+            if let Some(name) = names.get(&m.sender_id) {
+                m.sender_id = name.clone();
+            }
+        }
     }
 
     /// Sets `reaction` on the bot messages in `messages` that have one.
@@ -410,6 +444,39 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_old_shared_file_shows_the_bots_name_not_its_id() {
+        let (_tmp, db) = db().await;
+        let space = crate::db::spaces::SpaceId::new(crate::db::spaces::DEFAULT_SPACE_ID);
+        let bot = db
+            .create_kwant(
+                &space,
+                &crate::db::models::NewKwant {
+                    name: "Vega".into(),
+                    title: String::new(),
+                    persona_prompt: String::new(),
+                    soul: String::new(),
+                    avatar_sprite: String::new(),
+                    driver_type: "api".into(),
+                    preferred_model: "auto".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let old = say(&db, &bot.id, "kwant", &bot.id, "Shared a file: shot.jpg").await;
+        let new = say(&db, &bot.id, "kwant", "Vega", "Done.").await;
+        let person = say(&db, &bot.id, "user", &bot.id, "hi").await;
+        let stranger = say(&db, &bot.id, "kwant", "00000000-0000-0000-0000-000000000000", "gone").await;
+        let mut rows = vec![old, new, person, stranger];
+        db.attach_chat_fields(&mut rows).await;
+        assert_eq!(rows[0].sender_id, "Vega", "a bot's id as sender reads as its name");
+        assert_eq!(rows[1].sender_id, "Vega");
+        assert_eq!(rows[2].sender_id, bot.id, "only bot messages are touched");
+        assert_eq!(rows[3].sender_id, "00000000-0000-0000-0000-000000000000", "an unknown id stays as it is");
+        let stored: Vec<Message> = db.list_messages(&bot.id, 10).await.unwrap();
+        assert!(stored.iter().any(|m| m.sender_id == bot.id && m.sender_role == "kwant"), "nothing is rewritten");
     }
 
     #[test]

@@ -650,9 +650,10 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "share_file",
-            "description": "Give the user a file as a download card in this chat. Either `path` (a file in your workspace) \
+            "description": "Give the user a file as a download card in this chat, posted as you. Either `path` (a file in your workspace) \
                 or `content` (text you write, e.g. a CSV or markdown report). Images, PDFs and text files up to 20 MB; \
-                videos (MP4, MOV, WebM) up to 100 MB.",
+                videos (MP4, MOV, WebM) up to 100 MB. When the person asks to see something (a mockup, a page, a chart), \
+                share it as an image: describing it isn't enough. Sharing the same file again within a few minutes posts nothing new.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -822,9 +823,9 @@ fn pdf_body(name: &str, pages: &[String]) -> String {
 
 /// `share_file`: stores the file and posts a download card in the turn's chat.
 pub async fn tool_share(state: &AppState, scope: &SelfScope, args: &Value) -> (String, bool) {
-    let Some(origin) = &scope.origin else {
+    if scope.origin.is_none() {
         return ("This turn has no chat to share into.".into(), true);
-    };
+    }
     let path_arg = args["path"].as_str().map(str::trim).filter(|s| !s.is_empty());
     let content = args["content"].as_str();
     let raw_name = args["name"].as_str().map(str::trim).filter(|s| !s.is_empty());
@@ -859,10 +860,67 @@ pub async fn tool_share(state: &AppState, scope: &SelfScope, args: &Value) -> (S
         }
         Err(StoreError::Io) => return ("Could not read or store the file.".into(), true),
     };
+    match post_file(state, scope, stored, &name, false).await {
+        Ok(Posted::New(a)) => (format!("Shared {name} with the user as a download (id {}).", a.id), false),
+        Ok(Posted::Already(a)) => (
+            format!("{name} is already in this chat (id {}): you shared these exact bytes a few minutes ago, so it wasn't posted again.", a.id),
+            false,
+        ),
+        Err(why) => (why, true),
+    }
+}
+
+/// How long a file a bot shared counts as fresh in its chat: sharing the same bytes again within
+/// this window posts nothing (see [`post_file`]).
+pub const SHARE_DEDUPE_WINDOW: chrono::Duration = chrono::Duration::minutes(10);
+
+/// What [`post_file`] did.
+#[derive(Debug)]
+pub enum Posted {
+    /// A new file message in the chat.
+    New(Attachment),
+    /// The same bot shared these exact bytes in this chat within [`SHARE_DEDUPE_WINDOW`]: that
+    /// earlier file, nothing posted.
+    Already(Attachment),
+}
+
+/// `m` is a file a bot shared ([`post_file`], `meta.kind == "file"`), not a reply, though it carries
+/// the bot's name the way a reply does.
+pub fn is_file_share(m: &crate::db::models::Message) -> bool {
+    m.meta.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).is_some_and(|v| v["kind"] == "file")
+}
+
+/// Posts a stored file into the turn's chat as a message from the bot: `share_file`,
+/// `browser_screenshot` with `share: true`, and the reply guard's automatic share
+/// ([`super::picture_claims`]) all come here.
+///
+/// The message is `{sender_role: "kwant", sender_id: <bot name>, text: "Shared a file: <name>"}`,
+/// the way a reply names its bot, with meta
+/// `{"kind": "file", "attachments": [card], "kwant_id", "kwant_name", "turn_id", "auto"}`
+/// (`auto`: the reply guard shared it, the bot didn't ask). An image marks the turn as having
+/// shared one, also when it was already there.
+pub async fn post_file(state: &AppState, scope: &SelfScope, stored: Stored, name: &str, auto: bool) -> Result<Posted, String> {
+    let Some(origin) = &scope.origin else {
+        return Err("This turn has no chat to share into.".into());
+    };
     let context = origin.channel_id.clone().or_else(|| origin.thread_id.clone()).or_else(|| origin.direct_kwant_id.clone());
+    let image = stored.mime.starts_with("image/");
+    let mark = |image: bool| {
+        if let (true, Some(turn)) = (image, &scope.turn_id) {
+            state.turns.note_image_shared(turn);
+        }
+    };
+    if let Some(ctx) = &context {
+        let since = chrono::Utc::now() - SHARE_DEDUPE_WINDOW;
+        if let Ok(Some(a)) = state.db.recent_agent_share(ctx, &scope.kwant_id, &stored.sha256, since).await {
+            mark(image);
+            tracing::info!(attachment_id = %a.id, kwant_id = %scope.kwant_id, "same file shared again: not posted twice");
+            return Ok(Posted::Already(a));
+        }
+    }
     let row = NewAttachment {
         sha256: stored.sha256,
-        name: name.clone(),
+        name: name.to_string(),
         mime: stored.mime.into(),
         size: stored.size as i64,
         source: "agent".into(),
@@ -873,39 +931,70 @@ pub async fn tool_share(state: &AppState, scope: &SelfScope, args: &Value) -> (S
         thread_id: origin.thread_id.clone(),
     };
     let Ok(a) = state.db.insert_attachment(&row).await else {
-        return ("Could not store the file.".into(), true);
+        return Err("Could not store the file.".into());
+    };
+    let bot_name = match scope.kwant_name.trim() {
+        "" => state.db.get_kwant(&scope.kwant_id).await.ok().flatten().map_or_else(|| scope.kwant_id.clone(), |k| k.name),
+        n => n.to_string(),
     };
     let msg = NewMessage {
         channel_id: origin.channel_id.clone(),
         direct_kwant_id: origin.direct_kwant_id.clone(),
         sender_role: "kwant".into(),
-        sender_id: scope.kwant_id.clone(),
+        sender_id: bot_name.clone(),
         text: format!("Shared a file: {name}"),
         reasoning_content: None,
         tool_calls: None,
         tokens_used: 0,
     };
-    let meta = json!({"kind": "file", "attachments": cards(std::slice::from_ref(&a))});
+    let meta = json!({
+        "kind": "file",
+        "attachments": cards(std::slice::from_ref(&a)),
+        "kwant_id": scope.kwant_id,
+        "kwant_name": bot_name,
+        "turn_id": scope.turn_id,
+        "auto": auto,
+    });
     let extra = MessageExtra { thread_id: origin.thread_id.clone(), meta: Some(meta) };
-    if let Ok(saved) = state.db.insert_message_with(&msg, &extra).await {
-        let _ = state
-            .db
-            .link_attachments(
-                std::slice::from_ref(&a.id),
-                &saved.id,
-                context.as_deref().unwrap_or(""),
-                origin.channel_id.as_deref(),
-                origin.direct_kwant_id.as_deref(),
-                origin.thread_id.as_deref(),
-            )
-            .await;
-        if let Some(t) = &origin.thread_id {
-            let _ = state.db.touch_thread(t).await;
-        }
-        let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or(Value::Null) });
+    let Ok(saved) = state.db.insert_message_with(&msg, &extra).await else {
+        return Err("Could not post the file in the chat.".into());
+    };
+    let _ = state
+        .db
+        .link_attachments(
+            std::slice::from_ref(&a.id),
+            &saved.id,
+            context.as_deref().unwrap_or(""),
+            origin.channel_id.as_deref(),
+            origin.direct_kwant_id.as_deref(),
+            origin.thread_id.as_deref(),
+        )
+        .await;
+    if let Some(t) = &origin.thread_id {
+        let _ = state.db.touch_thread(t).await;
     }
-    tracing::info!(attachment_id = %a.id, kwant_id = %scope.kwant_id, size = a.size, "agent shared a file");
-    (format!("Shared {name} with the user as a download (id {}).", a.id), false)
+    let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or(Value::Null) });
+    mark(image);
+    tracing::info!(attachment_id = %a.id, kwant_id = %scope.kwant_id, size = a.size, auto, "agent shared a file");
+    Ok(Posted::New(a))
+}
+
+/// Stores a JPEG screenshot (base64, as the browser returned it) and posts it as the bot (see
+/// [`post_file`]). `name` is cleaned like any shared file's.
+pub async fn post_screenshot(state: &AppState, scope: &SelfScope, data_b64: &str, name: &str, auto: bool) -> Result<Posted, String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.trim())
+        .map_err(|_| "The screenshot couldn't be read.".to_string())?;
+    let name = clean_name(name);
+    let stored = match store_bytes(&root(state), &bytes, &name).await {
+        Ok(s) if s.mime.starts_with("image/") => s,
+        Ok(_) | Err(StoreError::Unsupported) => return Err("The screenshot isn't an image.".into()),
+        Err(StoreError::TooLarge(_)) => return Err("The screenshot is larger than 20 MB.".into()),
+        Err(StoreError::Empty) => return Err("The screenshot is empty.".into()),
+        Err(StoreError::Io) => return Err("Could not store the screenshot.".into()),
+    };
+    post_file(state, scope, stored, &name, auto).await
 }
 
 /// `p` (relative to the workspace, or absolute) opened, with its resolved path for the name;

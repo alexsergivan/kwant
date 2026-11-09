@@ -500,11 +500,18 @@ deploy can cost a site.
   code that uses its SDK, doesn't ask unless it goes through a connection marked production.
 - **Tools and providers missing from the lists**, and MCP tools whose names don't say what they
   do. Mark such a connection production to make every one of its tools ask.
-- **Git writes through a connection.** A GitHub MCP server or Composio app that isn't marked
-  production can write to the repo with no card: `push_files`, `create_or_update_file` on `main`,
-  `merge_pull_request`, `delete_branch` and the like reach the watched branch directly. The floor
-  reads git commands and deploy tools, not these tool names. Mark that connection production
-  (Connections → Production) to make every one of its tools ask.
+- **Git writes through a connection.** The floor reads GitHub's own tool names (GitHub's MCP
+  server and Composio's `GITHUB_*` tools, also inside a multi-execute) like `git push`: a file
+  write (`push_files`, `create_or_update_file`, `delete_file`, `GITHUB_COMMIT_MULTIPLE_FILES`, …)
+  to a protected branch asks, every merge tool asks (its base isn't in the call, so it counts as
+  protected), and deleting a protected branch, a tag or a ref the call doesn't name asks. Moving a
+  ref asks too: `GITHUB_UPDATE_A_REFERENCE` on a protected branch, or on a ref the call doesn't
+  name, asks as a push to it (a force-push when `force` is set), and `GITHUB_CREATE_A_REFERENCE` or
+  `GITHUB_UPDATE_A_REFERENCE` with a tag (`tags/…`, `refs/tags/…`) asks as a deploy, like a tag
+  push. A file write to any other branch gets a pre-push card (below). `create_branch` and
+  creating a branch ref (`GITHUB_CREATE_A_REFERENCE` with `refs/heads/…`) don't ask, and other
+  tools that change a repo (a GitLab server, or GitHub tools named otherwise) reach it directly:
+  mark that connection production (Connections → Production) to make every one of its tools ask.
 - **Where a command runs.** The floor can't tell a production database from a local copy unless
   the command says so (a remote URL, `--prod`, `RAILS_ENV=production`, …). So a plain
   `sqlx migrate run` doesn't ask, but `DROP TABLE` does, wherever it runs.
@@ -516,6 +523,49 @@ deploy can cost a site.
   then counts as unknown, and a bare push after it asks. A `cd other-repo && git push` is judged by
   the first repo's branch. A bare `git push` from a
   detached head, or from a folder that isn't a repo, counts as a push to a protected branch.
+
+## The pre-push card (0.8.0)
+
+Before a bot pushes its own branch, kwant checks what the push sends: gitleaks, new packages, test
+tamper, the risk rules and one review by another bot that sees only the diff (fresh eyes). Semgrep
+runs only when it is installed and the repo has its own `.semgrep.yml`. The push waits until the
+card is clear, or until the person overrides it with a reason. A push the production floor already
+asks about (a protected branch, a force-push, a deploy remote) gets the floor card instead.
+
+- **Where it runs:** claude's `Bash` (through kwant's permission prompt), kwant's own
+  `execute_shell` in Local mode, and kwant's own GitHub tools that write files to a branch (above).
+  A GitHub write must name its branch, and one call makes one write; its card checks the files the
+  tool sends as added lines, so semgrep doesn't run on it.
+- **One override, one push.** An override lets exactly one push of that commit go. The next push of
+  the same commit finds the card blocked again (status `pushed` while it waits; the reason is kept),
+  until the person overrides it again or a new commit gets a new check. A push that fails after it
+  was allowed still uses the override.
+- **The pushed commit.** A plain `git push <remote> [<branch>]` (optionally after `cd <folder> &&`)
+  runs as `git push <remote> <checked sha>:refs/heads/<branch>`, so a commit made in the meantime
+  isn't what goes. Only a branch is pinned: the source must be `HEAD`, `@` or a local branch no tag
+  shares a name with, and the destination that branch. A tag (`git push origin checkpoint`), a
+  commit sha or another ref runs as written, gated by the card of the commit it sends. Other shapes
+  (`-u`, other flags, several pushes, no remote) run as written too.
+- **A check that errored** (kwant couldn't read the repo, or the reviewer's turn didn't answer:
+  `review_failed`) runs once more on its own; the card says `auto_retried`. A timeout isn't
+  retried, and neither is the reviewer's own critical or high finding: that is a verdict.
+- **Pushed anyway.** When the person overrode a card on a branch, the review kwant posts for that
+  branch's PR (when the person presses Post) says so, with the person's reason.
+
+### Known limits
+
+The card sees only what kwant runs or is asked about, so these pushes skip it:
+
+- Shells kwant doesn't see: Codex's own shell, and VM mode.
+- Git aliases (`git -c alias.p=push p`, aliases in a git config), `gh`, `git.exe`,
+  `"$(which git)"` and scripts that push.
+- A person's own Claude settings that already allow `git push`: claude doesn't ask kwant then.
+- Tokenless calls from the same computer to person-only routes (such as the override) are allowed,
+  as for every person-only route; set `KWNT_REQUIRE_TOKEN=always` to close that.
+- A command substitution (`$(…)`, backticks) runs before the push it sits in, so its side effects
+  happen even when the push is refused.
+- A bot's MCP servers other than kwant's stay on in fresh-eyes turns; only kwant's own tools are
+  limited to the review's allowlist.
 
 ## Tests
 

@@ -1,5 +1,7 @@
-import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import { queuedText } from '../claudeVm';
+import { QueuedBeside } from './QueuedBeside';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
@@ -51,7 +53,10 @@ import {
   uploadRetryable,
   uploadSlotsLeft,
 } from '../attachments';
-import { FileTiles, UploadChip } from './Attachments';
+import { DropRecipient, FOLDER_NOTE, dragHasFiles, dropAnnouncement, dropCard, modalOpen, previewDrag, splitDrop, windowDragWatch } from '../dragPreview';
+import { DropBot, DropLayer, DropPhase } from './DropLayer';
+import { EarlierCopies, FileTiles, UploadChip } from './Attachments';
+import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
 import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
@@ -116,6 +121,10 @@ export interface QueuedState {
   /** vm_busy only: how many replies run inside the VM at once. */
   slots?: number;
   speaker: string;
+  /** The waiting turn, when known (keys the chips under a running reply). */
+  turnId?: string;
+  /** Under a running reply: the waiting turn is for a different bot than the one replying (a room), so the line leads with `speaker`. */
+  named?: boolean;
 }
 
 /** "Drafter: Write" for a resolved approval row; the card's own words, nothing computed. */
@@ -260,6 +269,8 @@ export interface ChatViewProps {
   titleExtra?: React.ReactNode;
   /** Set while the open chat's turn waits in the queue. */
   queued?: QueuedState | null;
+  /** P6: turns waiting behind the reply that runs in this chat, oldest first. Drawn under that reply. */
+  queuedBeside?: QueuedState[];
   /** Draws a delegation note or result (messages with delegation `meta`). */
   renderDelegation?: (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => React.ReactNode;
   /** Draws a bot's question card (messages with `ask_user` meta). */
@@ -481,6 +492,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   topCard,
   titleExtra,
   queued,
+  queuedBeside,
   renderDelegation,
   renderQuestion,
   switchNotes,
@@ -521,10 +533,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const stacked = composerStacked({ phone, focused: composerFocused, hasContent: inputVal.length > 0 || uploads.length > 0 });
   const [uploadNote, setUploadNote] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const uploadFiles = useRef(new Map<string, { file: File; abort: AbortController }>());
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const dragDepth = useRef(0);
+  // 0.8.0 drag and drop (Mira's design): the window knows a file drag is in it; this chat knows the
+  // pointer is over its column (header, list and composer, not a side pane).
+  const dragWatch = windowDragWatch();
+  const winDrag = useSyncExternalStore(dragWatch.subscribe, dragWatch.get, dragWatch.get);
+  useEffect(() => dragWatch.registerChat(), [dragWatch]);
+  const overDepth = useRef(0);
+  const [overChat, setOverChat] = useState(false);
+  // The window watch renders the armed card at sync priority; the pane's own over/refused change has to
+  // land in that same task, or the browser can paint one frame of "Drop here…" before the real card
+  // (drag events are continuous priority, so a plain setState renders a scheduler task later).
+  const overNow = useRef(false);
+  const markOver = (v: boolean) => {
+    if (overNow.current === v) return;
+    overNow.current = v;
+    flushSync(() => setOverChat(v));
+  };
+  const headerRef = useRef<HTMLDivElement>(null);
+  const columnRef = useRef<HTMLDivElement>(null);
+  const composerWrapRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Chips that came with the drop that just landed, by key, with their place in it (for the stagger).
+  const [freshChips, setFreshChips] = useState<Record<string, number>>({});
+  // The drop card's words for screen readers, and "3 files added for Frontend. Uploading." after a drop;
+  // cleared shortly after so the same line can be read again.
+  const [dropAnnounce, setDropAnnounce] = useState('');
+  useEffect(() => {
+    if (!dropAnnounce) return;
+    const t = setTimeout(() => setDropAnnounce(''), 4000);
+    return () => clearTimeout(t);
+  }, [dropAnnounce]);
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -564,6 +604,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }, [teamsProp]);
 
   const activeKwants = kwantsProp || internalKwants;
+  // Every bot a message here can come from: names and ids resolve against these, never the chat title (P4).
+  const knownBots = useMemo(() => {
+    const all: Array<{ id: string; name: string }> = [...activeKwants, ...(teamMembers ?? [])];
+    if (home?.kind === 'bot' && home.bot) all.push({ id: home.bot.id, name: home.bot.name });
+    return all;
+  }, [activeKwants, teamMembers, home]);
   // Each routed reply's question: the person's latest saved message before it ("Wrong bot?").
   const questionOf = useMemo(() => questionsOfReplies(messages), [messages]);
   const activeTeams = teamsProp || internalTeams;
@@ -816,8 +862,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   /** The chip's name: the bot by id or name, else this chat's title. */
   const replyBotName = (msg: ChatMessage) => {
-    const name = botNameOf(msg.sender_id, activeKwants);
-    return name === 'a bot' ? title : name;
+    return botDisplayName(msg.sender_id, knownBots);
   };
   const cancelReply = () => {
     setReplyTo(null);
@@ -891,10 +936,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   /** Files from the picker, a drop or a paste: checked here, then uploaded right away. */
-  const addFiles = (files: File[]) => {
-    if (!files.length) return;
+  const addFiles = (files: File[], extraNotes: string[] = []): string[] => {
+    if (!files.length) {
+      if (extraNotes.length) setUploadNote(extraNotes.join(' '));
+      return [];
+    }
     const room = uploadSlotsLeft(uploads);
-    const notes: string[] = [];
+    const notes: string[] = [...extraNotes];
     if (files.length > room) notes.push(`Up to ${MAX_ATTACHMENTS} files per message; ${files.length - room === 1 ? 'one was' : `${files.length - room} were`} left out.`);
     const added: PendingUpload[] = [];
     for (const file of files.slice(0, room)) {
@@ -909,6 +957,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
     setUploadNote(notes.length ? notes.join(' ') : null);
     if (added.length) setUploads((list) => [...list, ...added]);
+    return added.map((u) => u.key);
   };
 
   const removeUpload = (key: string) => {
@@ -922,34 +971,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!f) return;
     patchUpload(key, { state: 'uploading', progress: 0, error: undefined });
     startUpload(key, f);
-  };
-
-  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
-  const dropHandlers = {
-    onDragEnter: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth.current += 1;
-      setDragOver(true);
-    },
-    onDragOver: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-    },
-    onDragLeave: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      dragDepth.current = Math.max(0, dragDepth.current - 1);
-      if (dragDepth.current === 0) setDragOver(false);
-    },
-    onDrop: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth.current = 0;
-      setDragOver(false);
-      addFiles(filesFrom(e.dataTransfer.files));
-      textareaRef.current?.focus();
-    },
   };
 
   // `/idea …` goes in the idea jar, not to a bot (spec §2.3): the field dresses violet and blocks a send it can't take.
@@ -1104,9 +1125,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const switchNoteFor = useMemo(
-    () => assignSwitchNotes(switchNotes ?? [], messages, (m) => (m.sender_id && m.sender_id.length > 20 ? title : m.sender_id)),
-    [switchNotes, messages, title],
+    () => assignSwitchNotes(switchNotes ?? [], messages, (m) => botDisplayName(m.sender_id, knownBots)),
+    [switchNotes, messages, knownBots],
   );
+  // P4: each turn's shared files move under their bot's reply, and repeats of one file fold into the newest.
+  // While a bot's live row is on screen, its shares this turn sit under that row from the start (Mira, P4).
+  const liveRowShown = isStreaming && !deciding && routingState?.phase !== 'deciding' && !discussionState?.inProgress;
+  const liveBot = liveRowShown && streamingSpeakerName ? streamingSpeakerName : null;
+  const arranged = useMemo(() => arrangeSharedFiles(messages, knownBots, liveBot), [messages, knownBots, liveBot]);
+  const liveShareIds = useMemo(() => new Set(arranged.live.map((m) => m.id)), [arranged.live]);
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
@@ -1213,7 +1240,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <div key={msg.id} data-message-id={msg.id} className="w-full max-w-5xl">
           <SetupNeededCard
             meta={setup}
-            botName={msg.sender_id || title}
+            botName={botDisplayName(msg.sender_id, knownBots)}
             spaceName={spaceName ?? 'this space'}
             canRun={canRun}
             onOpenAccounts={onOpenAccounts}
@@ -1279,24 +1306,34 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ? emptyTrialReplyLine(parsePick(activeKwants.find((k) => k.id === msg.sender_id || k.name === msg.sender_id)?.preferred_model).family)
         : null;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
-    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
+    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
+    // P4: a share that now sits under its bot's reply reads as part of it, without a second header.
+    const underReply = !isUser && filesOnly && (arranged.attached.has(msg.id) || liveShareIds.has(msg.id));
+    const olderCopies = filesOnly ? arranged.earlier.get(msg.id) : undefined;
     const replyQuote = isUser ? replyRefOf(msg.reply_to) : null;
     // Whose mood the reply header shows (Pixel's AvatarMood, drawn by ModernAvatar given a kwantId):
     // Laya's pick, else this bot chat's bot, else the team member with that name. Unknown: no mood.
     const replyKwantId = isUser
       ? undefined
-      : routed?.kwant_id ?? (home?.kind === 'bot' ? home.bot?.id : undefined) ?? activeKwants.find((k) => k.name === displayName)?.id;
+      : routed?.kwant_id ?? (home?.kind === 'bot' ? home.bot?.id : undefined) ?? botOf(msg.sender_id, knownBots)?.id;
 
     return (
       <div
         key={msg.id}
         data-message-id={msg.id}
         tabIndex={-1}
+        data-shared-under={underReply ? '' : undefined}
+        // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
+        style={underReply ? { marginTop: '0.5rem' } : undefined}
         className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
         {/* Phones show the avatar inside the name line instead, so the bubble gets the full width */}
+        {underReply ? (
+          // Keeps the tiles lined up with the reply bubble above, where the avatar would be
+          <span className="hidden sm:block w-9 shrink-0" aria-hidden="true" />
+        ) : (
         <span className="hidden sm:contents">
           {/* Laya hand-off: a reply she just routed brings the chosen bot's avatar up into the header */}
           <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
@@ -1308,9 +1345,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
           </span>
         </span>
+        )}
 
         <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-[85%] sm:max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
-          {isUser ? (
+          {underReply ? (
+            <span className="sr-only">Shared by {displayName}</span>
+          ) : isUser ? (
             <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
               <span className="text-zinc-200 shrink-0">{displayName}</span>
               {fromTelegram(parseMetaObject(msg.meta)) && <ViaTelegram />}
@@ -1413,7 +1453,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
             )}
           </div>
           )}
-          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
+          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
+          {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (
+            // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared
+            <p data-shared-auto="" className="mt-1 text-[11px] text-zinc-500">
+              Shared automatically
+            </p>
+          )}
+          {olderCopies && olderCopies.length > 0 && (
+            <EarlierCopies
+              idBase={`earlier-${msg.id}`}
+              sharedBy={displayName}
+              copies={olderCopies.map((m) => ({ id: m.id, at: m.created_at ?? null, files: parseAttachments(m.meta) }))}
+            />
+          )}
           {/* A shared-file card has no bubble, so the files block (the table or text preview) is mounted here, after the tiles. */}
           {filesOnly && !isUser && msg.results != null && (
             // The column is `items-start`, so without a width cap a long cell stretches the preview past the message.
@@ -1489,6 +1542,140 @@ export const ChatView: React.FC<ChatViewProps> = ({
     teamName,
     names: activeKwants.map((k) => k.name).concat(activeTeams.map((t) => t.name)),
   });
+
+  // ---------- 0.8.0 drop files into the chat (design.md §2–§6) ----------
+  // Who gets the files: the same answer as the "Answers:" hint, so the two never disagree.
+  const mentioned = target.kind === 'mention' ? target.label.replace(/^@/, '') : '';
+  const mentionedBot = mentioned ? activeKwants.find((k) => k.name.toLowerCase() === mentioned.toLowerCase()) : undefined;
+  const asDropBot = (k: { id: string; name: string; avatar_sprite?: string }): DropBot => ({ id: k.id, name: k.name, avatar: k.avatar_sprite });
+  const roomBots: DropBot[] = (teamMembers?.length ? teamMembers : activeKwants).map(asDropBot);
+  // A team @mention shows that team's bots, like a room (#478 M4); never a made-up face for the team.
+  const mentionedTeamName = mentioned.replace(/ team$/i, '');
+  const mentionedTeam =
+    mentioned && !mentionedBot
+      ? activeTeams.find((t) => t.name.toLowerCase() === mentioned.toLowerCase() || t.name.toLowerCase() === mentionedTeamName.toLowerCase())
+      : undefined;
+  const mentionedTeamBots: DropBot[] = (mentionedTeam?.member_kwants ?? [])
+    .map((id) => activeKwants.find((k) => k.id === id))
+    .filter((k): k is (typeof activeKwants)[number] => !!k)
+    .map(asDropBot);
+  const dropTo: { recipient: DropRecipient; single: boolean; bots: DropBot[]; botId?: string } =
+    target.kind === 'mention'
+      ? mentionedBot
+        ? { recipient: { kind: 'bot', name: mentionedBot.name }, single: true, bots: [asDropBot(mentionedBot)], botId: mentionedBot.id }
+        : { recipient: { kind: 'team', name: mentionedTeam?.name ?? mentionedTeamName }, single: false, bots: mentionedTeamBots }
+      : home?.kind === 'bot'
+        ? {
+            recipient: { kind: 'bot', name: home.bot?.name ?? title },
+            single: true,
+            bots: [{ id: home.bot?.id, name: home.bot?.name ?? title, avatar: home.bot?.avatar_sprite }],
+            botId: home.bot?.id,
+          }
+        : home?.kind === 'general'
+          ? { recipient: { kind: 'general', name: 'General' }, single: false, bots: roomBots }
+          : home?.kind === 'team' || (target.kind === 'team' && teamName)
+            ? { recipient: { kind: 'team', name: teamName ?? title }, single: false, bots: roomBots }
+            : { recipient: { kind: 'channel', name: title }, single: false, bots: roomBots };
+  // A modal open when the drag came in keeps the layer away (the Import dialog has its own drop zone).
+  const modalUp = useMemo(() => winDrag.active && typeof document !== 'undefined' && modalOpen(document), [winDrag.active]);
+  const dragOn = winDrag.active && !modalUp;
+  const dropPreview = previewDrag(winDrag.items, uploads.length);
+  const card = dropCard({ preview: dropPreview, recipient: dropTo.recipient, ideaMode });
+  const livePhase: DropPhase | null = !dragOn ? null : overChat ? (card.state === 'refused' ? 'refused' : 'over') : 'armed';
+  useEffect(() => {
+    if (!winDrag.active) {
+      overDepth.current = 0;
+      overNow.current = false;
+      setOverChat(false);
+    }
+  }, [winDrag.active]);
+  // The layer runs its exit after the drag ends: the landing (160 ms) after a drop, else a fade (100 ms).
+  const lastCard = useRef(card);
+  if (livePhase) lastCard.current = card;
+  const landed = useRef(false);
+  const [exiting, setExiting] = useState<'landing' | 'leaving' | null>(null);
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (livePhase) {
+      // A new drag: a drop that landed after the last one ended must not play this one's exit as a landing.
+      if (!wasLive.current) landed.current = false;
+      wasLive.current = true;
+      setExiting(null);
+      return;
+    }
+    if (!wasLive.current) return;
+    wasLive.current = false;
+    const how = landed.current ? 'landing' : 'leaving';
+    landed.current = false;
+    setExiting(how);
+    const t = setTimeout(() => setExiting(null), how === 'landing' ? 160 : 100);
+    return () => clearTimeout(t);
+  }, [livePhase]);
+  // Spoken on state changes only, never on every dragover.
+  const announceLine = livePhase === 'over' || livePhase === 'refused' ? card.announce : '';
+  useEffect(() => {
+    if (announceLine) setDropAnnounce(announceLine);
+  }, [announceLine]);
+  // Card height room: the composer's height + 24 px; a side pane's width stays out of the layer.
+  const [layerBox, setLayerBox] = useState({ bottomPad: 120, rightGap: 0 });
+  useLayoutEffect(() => {
+    if (!dragOn) return;
+    const root = rootRef.current?.getBoundingClientRect();
+    const col = columnRef.current?.getBoundingClientRect();
+    const bottomPad = (composerWrapRef.current?.offsetHeight ?? 96) + 24;
+    const rightGap = root && col && col.width ? Math.max(0, Math.round(root.right - col.right)) : 0;
+    setLayerBox((b) => (b.bottomPad === bottomPad && b.rightGap === rightGap ? b : { bottomPad, rightGap }));
+  }, [dragOn, uploads.length, vmOpen]);
+  const inColumn = (t: EventTarget | null) => {
+    if (!(t instanceof Node)) return false;
+    if (t instanceof Element && t.closest('[data-drop-layer]')) return true;
+    return !!(headerRef.current?.contains(t) || columnRef.current?.contains(t));
+  };
+  const dropHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return;
+      overDepth.current += 1;
+      markOver(inColumn(e.target));
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      const inside = inColumn(e.target);
+      markOver(inside);
+      e.dataTransfer.dropEffect = inside && dragOn && card.state === 'over' ? 'copy' : 'none';
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return;
+      overDepth.current = Math.max(0, overDepth.current - 1);
+      if (overDepth.current === 0) markOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      overDepth.current = 0;
+      // Not flushed: the drop ends the drag anyway, and the exit must see `landed` first.
+      overNow.current = false;
+      setOverChat(false);
+      if (!inColumn(e.target) || modalUp) return;
+      // What the drop itself holds decides, the same way the card did (an ignored drop does nothing).
+      const items = e.dataTransfer.items as unknown as ArrayLike<DataTransferItem>;
+      const now = dropCard({ preview: previewDrag(items?.length ? items : winDrag.items, uploads.length), recipient: dropTo.recipient, ideaMode });
+      if (now.state === 'refused') return;
+      const dropped = splitDrop(items, e.dataTransfer.files);
+      const keys = addFiles(dropped.files, dropped.folders.length ? [FOLDER_NOTE] : []);
+      landed.current = true;
+      textareaRef.current?.focus();
+      playSfx('blip');
+      if (dropTo.single && dropTo.botId) moodNoticed(dropTo.botId);
+      setDropAnnounce(dropAnnouncement(keys.length, dropTo.recipient));
+      if (keys.length) {
+        setFreshChips((m) => ({ ...m, ...Object.fromEntries(keys.map((k, i) => [k, i])) }));
+        setTimeout(() => setFreshChips((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !keys.includes(k)))), 800);
+      }
+    },
+  };
+  const layerPhase: DropPhase | null = livePhase ?? exiting;
+  const composerLit = livePhase === 'over';
   const toolPhone = 'w-11 h-11 text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06] active:bg-white/[0.06] focus-visible:outline-[#b8adff]';
   // Phone hint row (spec A2): no "@ mention · attach files" on touch, and "Answers:" only where it isn't
   // obvious (channels and team chats, or a direct chat with an @mention typed).
@@ -1509,9 +1696,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-surface-main overflow-hidden" data-keyboard-mode={kbd ? 'on' : undefined}>
+    <div
+      ref={rootRef}
+      className="relative flex-1 flex flex-col h-full bg-surface-main overflow-hidden"
+      data-keyboard-mode={kbd ? 'on' : undefined}
+      data-drop-target="chat"
+      data-drop-active={livePhase && livePhase !== 'armed' ? 'true' : undefined}
+      data-drop-phase={layerPhase ?? undefined}
+      {...dropHandlers}
+    >
       {/* Channel / bot header: 56 px on a phone, 48 px in keyboard mode (instant, no animation) */}
       <div
+        ref={headerRef}
         data-chat-header
         className={`${kbd ? 'h-12' : 'h-14'} shrink-0 border-b border-hairline px-2 sm:px-6 gap-2 flex items-center justify-between bg-surface-main/80 backdrop-blur-md select-none`}
       >
@@ -1695,7 +1891,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Main Split Layout: Messages/Input on Left + Virtual Machine Side Drawer on Right */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+        <div ref={columnRef} className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
           {/* Messages Stream */}
           <div
             ref={scrollRef}
@@ -1712,7 +1908,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
           </div>
         )}
-        {groupDiscussionThreads(messages).map((item) => {
+        {groupDiscussionThreads(arranged.messages).map((item) => {
           if (item.kind === 'message') {
             const trial = trialCards.get(item.message.id);
             if (!trial) return renderMessage(item.message);
@@ -1758,6 +1954,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         {/* A held reply is being decided: the line stands in for the streamed draft and the consults */}
         {deciding && <DecidingLine botName={deciding.botName} consulted={deciding.consulted} />}
+
+        {/* P6: turns waiting behind the held reply stay visible while the team decides (under the line, aligned with its card) */}
+        {(deciding || (isStreaming && routingState?.phase === 'deciding')) && !queued && (queuedBeside?.length ?? 0) > 0 && (
+          <div className="w-full max-w-5xl pl-12" data-queued-beside-deciding="">
+            <div className="max-w-4xl">
+              <QueuedBeside items={queuedBeside} />
+            </div>
+          </div>
+        )}
 
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && !deciding && routingState?.phase !== 'deciding' && (
@@ -1840,9 +2045,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 )}
               </div>
               )}
+
+              {!queued && <QueuedBeside items={queuedBeside} />}
             </div>
           </div>
         )}
+
+        {/* P4: the running bot's shares, already in the place its saved reply will give them */}
+        {liveRowShown && arranged.live.map(renderMessage)}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
         {settledApprovals.map((approval) => (
@@ -1885,6 +2095,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Modern Composer Input Bar */}
       <div
+        ref={composerWrapRef}
         className={`px-3 ${phone ? 'pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]' : 'pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]'} sm:p-4 border-t border-hairline bg-surface-side/60`}
       >
         {teamMembers && teamMembers.length > 0 && (
@@ -1974,25 +2185,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         <form
           onSubmit={handleSubmit}
-          {...dropHandlers}
           aria-label={`Message ${title}`}
           data-composer-form
           data-stacked={phone ? String(stacked) : undefined}
           className={`relative max-w-4xl mx-auto flex flex-wrap items-end ${stacked ? 'gap-x-1.5 gap-y-1' : 'gap-1.5'} border rounded-2xl p-2 transition-colors ${
             phone ? 'bg-[#1a1538]' : 'bg-surface-raised shadow-raised'
-          } ${
-            dragOver
-              ? 'border-sky-500/70 bg-sky-950/30'
-              : phone
-                ? 'border-white/10 focus-within:border-[#6c58e0]/70'
-                : 'border-hairline-strong focus-within:border-sky-400/50'
-          }`}
+          } ${phone ? 'border-white/10 focus-within:border-[#6c58e0]/70' : 'border-hairline-strong focus-within:border-sky-400/50'}${
+            layerPhase ? ' kw-dd-raised' : ''
+          }${composerLit ? ' kw-dd-lit' : ''}`}
+          data-drop-lit={composerLit ? 'true' : undefined}
         >
-          {dragOver && (
-            <div className="absolute inset-0 z-10 rounded-2xl border-2 border-dashed border-sky-400/70 bg-zinc-950/80 flex items-center justify-center gap-2 text-sm font-medium text-sky-200 pointer-events-none">
-              <Paperclip size={15} aria-hidden="true" /> Drop files to attach
-            </div>
-          )}
           {replyTo && (
             <ReplyChip
               key={replyTo.id}
@@ -2007,7 +2209,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {uploads.length > 0 && (
                 <ul className="flex flex-wrap gap-1.5 min-w-0" aria-label="Files to send">
                   {uploads.map((u) => (
-                    <UploadChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} onRetry={() => retryUpload(u.key)} />
+                    <UploadChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} onRetry={() => retryUpload(u.key)} fresh={freshChips[u.key]} />
                   ))}
                 </ul>
               )}
@@ -2149,7 +2351,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <AtSign size={phone ? 18 : 17} aria-hidden="true" />
             {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
             {phone && !isStreaming && (
-              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''}`} />
+              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`} />
             )}
           </button>
           {stacked && <span className="flex-1" aria-hidden="true" />}
@@ -2157,11 +2359,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
               Only the send button follows "@" when it shows: 44px on phones / 36px from sm, plus a 6px gap;
               11px is the form's border + padding. Hidden (not marked as seen) while a reply streams, so it
               never sits on the working strip's edge and comes back after the turn; hidden while the mention
-              picker is open, so it never peeks under it. */}
+              picker is open, so it never peeks under it; hidden (not marked as seen) while the drop layer is up,
+              so it never outshines the drop card (#478 Mira M3). */}
           {!phone && !isStreaming && (
             <NewTag
               id="mention"
-              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''}`}
+              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`}
               style={{ right: 'calc(11px + var(--kw-cbtn-step))' }}
             />
           )}
@@ -2287,6 +2490,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
       showOnceBot={vmShowOnceBot}
     />
   </div>
+      {layerPhase && (
+        <DropLayer
+          phase={layerPhase}
+          card={livePhase ? card : lastCard.current}
+          single={dropTo.single}
+          bots={dropTo.bots}
+          bottomPad={layerBox.bottomPad}
+          rightGap={layerBox.rightGap}
+        />
+      )}
+      {/* The drop card's words, and "3 files added for Frontend. Uploading." after a drop. */}
+      <div role="status" aria-live="polite" className="sr-only" data-drop-announce>
+        {dropAnnounce}
+      </div>
 </div>
   );
 };

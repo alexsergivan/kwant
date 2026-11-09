@@ -1992,9 +1992,13 @@ async fn undo_action(state: &AppState, a: &BotAction) -> Result<Option<String>, 
                 }
                 Err(e @ UndoError::NoKeeper) => return Err(refuse("no_bot_to_keep_chat", e.to_string(), Value::Null)),
                 Err(e @ UndoError::NotFound) => return Err(refuse("not_a_template_team", e.to_string(), Value::Null)),
-                Err(UndoError::Db(e)) => {
+                Err(e @ UndoError::Db(_)) => {
+                    // Plain words for the person (the card says "Couldn't undo the team: <error>"),
+                    // the full sentence in `message`; the SQLite message stays in the log
                     tracing::warn!(error = %e, action_id = %a.id, "undoing a ready-made team");
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                    let why = format!("{}.", crate::db::bot_actions::failure_reason(&e));
+                    let message = crate::db::bot_actions::undo_failure_message("this ready-made team", &e);
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": why, "code": "undo_failed", "message": message }))).into_response());
                 }
             }
         }

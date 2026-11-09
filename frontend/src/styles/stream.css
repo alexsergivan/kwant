@@ -197,3 +197,13 @@
 
 /* Recipe card (0.7.6): a step's badge pops once when it becomes done. Applied with motion-safe only. */
 @keyframes kw-step-done { from { transform: scale(.7); opacity: .4; } to { transform: scale(1); opacity: 1; } }
+
+/* P4 image viewer: a 150 ms fade from 98% scale (Mira); nothing moves under reduced motion. */
+@keyframes kw-viewer-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.kw-viewer-in { animation: kw-viewer-in 150ms ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .kw-viewer-in { animation: none; }
+}

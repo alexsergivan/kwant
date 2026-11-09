@@ -385,6 +385,20 @@ pub trait ToolApprover: Send + Sync {
     async fn tier_gate(&self, _request: &ToolApprovalRequest) -> Option<String> {
         None
     }
+
+    /// The pre-push card (B2) for an MCP call that writes to a GitHub branch: `Ok` with the
+    /// overridden cards it goes on (empty: not such a write, or nothing to use up), else the
+    /// text the bot gets back instead of the call running. Asked before [`decide`](Self::decide).
+    /// Default: no gate.
+    async fn prepush_gate(&self, _request: &ToolApprovalRequest) -> Result<Vec<String>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Uses up the overrides [`prepush_gate`](Self::prepush_gate) found, once the call is
+    /// allowed: `None` lets it run, else the text the bot gets back. Default: nothing to use.
+    async fn prepush_use(&self, _overrides: &[String]) -> Option<String> {
+        None
+    }
 }
 
 /// What became of a call that may have needed a card.
