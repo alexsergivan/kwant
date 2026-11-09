@@ -6148,19 +6148,31 @@ mod tests {
             (prompt, last.filter(|_| history.is_empty()).unwrap())
         };
         // A statement the note would turn into "something to see": nothing to deliver, no expectation
-        let (prompt, current) = current_of("the login button colour is off");
+        let (prompt, current) = current_of("the login is slow");
         assert!(keyword_plan(&prompt, &[]).wants_picture(), "the note's \"image/png\" reads as a picture ask");
         let plan = plan_of(&person_turn(), &current, true).expect("the person's words have a plan");
         assert_eq!(plan.kind, Deliverable::Other, "{plan:?}");
         assert_eq!(Expect::from_plan(&plan), None);
-        // "Fix the login button colour" + an attached image: the expectation is the person's words',
-        // a link to the change; the attachment adds no picture of its own
-        let (prompt, current) = current_of("Fix the login button colour");
+        // A complaint about something visible is a lean visible Change from the person's words (#477)
+        let (_, current) = current_of("the login button colour is off");
+        let plan = plan_of(&person_turn(), &current, true).expect("the person's words have a plan");
+        assert_eq!(plan, keyword_plan("the login button colour is off", &[]));
+        assert!(plan.kind == Deliverable::Change && plan.wants_picture() && !plan.firm, "{plan:?}");
+        // "Fix the login bug" + an attached image: the expectation is the person's words', a link to
+        // the change; the attachment adds no picture of its own
+        let (prompt, current) = current_of("Fix the login bug");
         let plan = plan_of(&person_turn(), &current, true).expect("a change in a git project");
-        assert_eq!(plan, keyword_plan("Fix the login button colour", &[]));
+        assert_eq!(plan, keyword_plan("Fix the login bug", &[]));
         assert_eq!(plan.kind, keyword_plan(&prompt, &[]).kind, "a leading \"Fix\" wins either way");
         let expect = Expect::from_plan(&plan).unwrap();
         assert!(expect.link && !expect.image, "{expect:?}");
+        // "Fix the login button colour" names something visible: its own words ask for before and
+        // after pictures (#477), the same with or without the attachment note
+        let (_, current) = current_of("Fix the login button colour");
+        let plan = plan_of(&person_turn(), &current, true).expect("a change in a git project");
+        assert_eq!(plan, keyword_plan("Fix the login button colour", &[]));
+        let expect = Expect::from_plan(&plan).unwrap();
+        assert!(expect.link && expect.image && expect.firm, "{expect:?}");
 
         // A message a bot sent through the chat API, a connected agent's, a bot's reply, or a turn
         // the person didn't start: no expectation

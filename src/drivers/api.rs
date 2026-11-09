@@ -1989,6 +1989,73 @@ mod tests {
         }
     }
 
+    /// P1 on the API engine itself (Rigel's QA of #470, open item 2): with approvals off, the
+    /// requests the driver really sends, on both request formats, tell the bot to do the work
+    /// instead of offering it, once, and never to wait for a card; the turn's "[What to deliver]"
+    /// line for a visible fix asks for the before and after pictures.
+    #[tokio::test]
+    async fn an_approvals_off_turn_tells_the_api_model_to_do_the_work() {
+        use crate::drivers::DO_DONT_OFFER;
+        let complaint = "the button is not aligned with booktun.ing styling!!!!";
+        for path in ["/v1/messages", "/v1/chat/completions"] {
+            let seen: Seen = Arc::default();
+            let reply = if path == "/v1/messages" {
+                json!({"content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 1, "output_tokens": 1}})
+            } else {
+                json!({"choices": [{"message": {"role": "assistant", "content": "ok"}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+            };
+            let app = Router::new()
+                .route(
+                    path,
+                    post(|State((seen, reply)): State<(Seen, Value)>, headers: HeaderMap, Json(body): Json<Value>| async move {
+                        seen.lock().unwrap().push((headers, body));
+                        Json(reply)
+                    }),
+                )
+                .with_state((seen.clone(), reply));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}{path}", listener.local_addr().unwrap());
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+            let (tx, mut rx) = mpsc::channel(64);
+            tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+            let tmp = tempfile::tempdir().unwrap();
+            let mut input = turn(complaint, vec![]);
+            input.mcp = Some(crate::mcp::McpTurnContext {
+                servers: vec![],
+                approver: Arc::new(crate::mcp::FixedApprover(true)),
+                config_dir: tmp.path().to_path_buf(),
+                permission_url: None,
+                gateway: None,
+                max_tool_iterations: 4,
+                approvals: crate::mcp::Approvals::Off,
+                records: Default::default(),
+            });
+            input.delivery = Some(crate::router::delivery::keyword_plan(complaint, &[]));
+            driver.stream_turn(input, tx).await.unwrap();
+
+            let body = seen.lock().unwrap()[0].1.to_string();
+            let sent: String = serde_json::from_str::<Value>(&body)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(k, _)| *k == "system" || *k == "messages")
+                .map(|(_, v)| v.to_string())
+                .collect();
+            // JSON escapes the quotes and newlines in the prompt text; compare escaped text
+            let escaped = |t: &str| serde_json::to_string(t).unwrap().trim_matches('"').to_string();
+            assert!(sent.contains("[Approvals: off]"), "{path}: {sent}");
+            assert_eq!(sent.matches(&escaped(DO_DONT_OFFER)).count(), 1, "{path}: {sent}");
+            for never in ["approval card first", "wait for their answer", "Ask for what you need"] {
+                assert!(!sent.contains(never), "{path}: {never}");
+            }
+            assert_eq!(sent.matches("[What to deliver] A change to something the person looks at").count(), 1, "{path}");
+            assert!(sent.contains("a before and after screenshot is shared in the chat"), "{path}");
+        }
+    }
+
     /// A store holding `n` messages in conversation "t1", oldest first, ids "m1".."mN".
     async fn conversation(n: usize) -> (tempfile::TempDir, crate::db::Database, Vec<crate::db::models::Message>) {
         let tmp = tempfile::tempdir().unwrap();
