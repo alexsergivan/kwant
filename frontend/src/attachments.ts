@@ -4,6 +4,12 @@ import { parseMetaObject } from './questions';
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 /** Videos (mp4, mov, webm) may be bigger; the server enforces the same caps by the file's bytes. */
 export const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+/** Whole megabytes, as the limits are shown ("20 MB"). */
+const wholeMb = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
+/** The drop card's limits line, built from the caps so it can't drift from them (#478 L2). */
+export const LIMITS_LINE = `Up to ${wholeMb(MAX_ATTACHMENT_BYTES)} each · videos ${wholeMb(MAX_VIDEO_BYTES)}`;
+/** The paperclip's tooltip, from the same caps. */
+export const ATTACH_TITLE = `Attach files (or drop / paste them here). Max ${wholeMb(MAX_ATTACHMENT_BYTES)} each, videos ${wholeMb(MAX_VIDEO_BYTES)}.`;
 export const MAX_ATTACHMENTS = 10;
 
 /** What a message's `meta.attachments` holds. */

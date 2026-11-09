@@ -12,6 +12,7 @@ const m = await loadBundled(`
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { QueuedBeside } from './src/components/QueuedBeside';
   export * from './src/threads';
+  export { queuedText } from './src/claudeVm';
   export const draw = (items) => renderToStaticMarkup(React.createElement(QueuedBeside, { items }));
 `);
 
@@ -34,7 +35,7 @@ test('one running and one queued turn in the same chat: both show, the queued on
   assert.equal(q.alone, null, 'the running reply keeps the live bubble');
   assert.deepEqual(q.beside.map((x) => x.turn_id), ['q1'], 'the waiting turn is not hidden');
   const html = besideHtml(s, 'pixel');
-  assert.match(html, /role="status"/);
+  assert.match(html, /aria-live="polite"/);
   assert.ok(html.includes('#1 in line.'), html);
   assert.ok(html.includes(WAIT), html);
 
@@ -123,8 +124,10 @@ test('M2: in a room, a turn waiting for another bot leads with its name; the rep
   const html = m.draw(items);
   assert.ok(html.includes('Scout · #1 in line.'), html);
   assert.ok(!html.includes('Marketer ·'), 'the replying bot\'s own wait is not named');
-  // Different bots: each row says its own sentence, so "this bot" sits next to the right name.
-  assert.equal(html.split(WAIT).length - 1, 2, html);
+  // Different bots: each row says its own sentence. The named row names its bot (#476 L6); the
+  // replying bot's own row keeps "this bot".
+  assert.ok(html.includes('Scout · #1 in line.</strong> Waiting for Scout’s other replies to finish.'), html);
+  assert.equal(html.split(WAIT).length - 1, 1, html);
 
   // A one-bot chat looks as before: no name.
   const one = runningPlusQueued();
@@ -144,9 +147,33 @@ test('S1: the waiting line also shows while "Team is deciding…" stands in for 
   assert.ok(chat.slice(block, chat.indexOf('</div>', block)).includes('<QueuedBeside items={queuedBeside} />'));
 });
 
-test('S2: one polite live region on the list; the rows stay plain list items', () => {
+test('S2: one polite live region on the list; the list keeps its list role and the rows stay plain list items (#476 L5)', () => {
   const html = besideHtml(runningPlusQueued(), 'pixel');
-  assert.match(html, /^<ul[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(html, /^<ul[^>]*aria-live="polite"/);
+  // A role on the <ul> (status) replaces its list role, and the rows lose their list parent (axe).
+  assert.ok(!/^<ul[^>]*\srole=/.test(html), html);
   assert.match(html, /<li class="[^"]*">/);
   assert.ok(!/<li[^>]*role=/.test(html), html);
+});
+
+test('L6: a named row says whose other replies it waits for; unnamed rows keep "this bot" (#476)', () => {
+  assert.equal(m.queuedText('agent_busy', undefined, 'Scout'), 'Waiting for Scout’s other replies to finish.');
+  assert.equal(m.queuedText('agent_busy'), WAIT);
+  assert.equal(m.queuedText('agent_busy', undefined, '  '), WAIT, 'a blank name is no name');
+  // Two rows for the same named bot: the sentence is said once, with the name.
+  const html = m.draw([
+    { position: 1, reason: 'agent_busy', speaker: 'Scout', named: true, turnId: 'a' },
+    { position: 2, reason: 'agent_busy', speaker: 'Scout', named: true, turnId: 'b' },
+    { position: 3, reason: 'agent_busy', speaker: 'Scout', named: false, turnId: 'c' },
+  ]);
+  assert.equal(html.split('Waiting for Scout’s other replies to finish.').length - 1, 1, html);
+  assert.equal(html.split(WAIT).length - 1, 1, html);
+});
+
+test('L7: under "Team is deciding…" the waiting line sits 8 px below the card, over the list\'s space-y gap (#476)', () => {
+  const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const at = chat.indexOf('data-queued-beside-deciding');
+  const open = chat.lastIndexOf('<div', at);
+  const cls = chat.slice(open, at).match(/className="([^"]*)"/)?.[1] ?? '';
+  assert.ok(cls.split(/\s+/).includes('!mt-2'), cls);
 });

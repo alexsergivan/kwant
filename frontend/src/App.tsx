@@ -3718,6 +3718,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount + prepushWaiting} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
+          dropOff={!!spaceSettingsTab}
           title={chatTitle}
           subtitle={chatSubtitle}
           spaceName={space.name}
