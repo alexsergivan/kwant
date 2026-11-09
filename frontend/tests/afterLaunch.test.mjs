@@ -42,6 +42,7 @@ const m = await loadBundled(`
   export { SpaceApp } from './src/App';
   export { ManageTeamModal } from './src/components/ManageTeamModal';
   export { RestoreSection } from './src/components/MissionBoardView';
+  export { MissionError } from './src/missions';
   export { isTextField } from './src/escape';
 `);
 const { React } = m;
@@ -384,5 +385,47 @@ test('after launch 4: after a restore the checkpoint list loads again, with the 
   await click(q('[data-restore-undo]'));
   assert.deepEqual(calls.at(-1), ['preview', 'cp_before'], 'Undo this restore previews that checkpoint');
   assert.ok(q('[data-restore-preview]'), 'and shows what it would put back');
+  v.unmount();
+});
+
+// 0.8.0 F (Rigel's 0.7.7 final check): a stale restore says why the preview changed, and the
+// message stays while the fresh preview loads under it, until the person acts.
+test('0.8.0 F: "Files changed since this preview" stays up over the fresh preview until the person restores, picks or says Never mind', async () => {
+  const cp = (id) => ({ id, kind: 'before_run', attempt: 1, created_at: '2026-11-01T10:00:00Z', files: 2, effects_after: { external: [] }, restorable: true, error: null });
+  let n = 0;
+  let stale = true;
+  const api = {
+    checkpoints: async () => [cp('cp1'), cp('cp2')],
+    restorePreview: async (id, c) => ({ checkpoint_id: c, preview_sha256: `sha-${c}-${++n}`, changes: [{ path: 'a.txt', action: 'overwrite' }], conflicts: [], skipped: [], external_not_undone: [], not_undone_note: '', effects_known: true, task_state_after: 'ready', refused: null }),
+    restore: async () => {
+      if (stale) {
+        stale = false;
+        throw new m.MissionError('preview is stale', 409, 'stale_preview');
+      }
+      return { before_restore_checkpoint_id: 'cp_b', restored: 1, removed: 0, task: { id: 'tk1', state: 'ready' } };
+    },
+  };
+  const v = await mount(m.RestoreSection, { task: { id: 'tk1', state: 'failed', checkpoint_count: 2 }, api, now: Date.parse('2026-11-01T12:00:00Z'), titleOf: () => undefined });
+  await click(q('[data-restore-open]'));
+  await click(q('[data-checkpoint="cp1"]'));
+  await click(q('[data-restore]'));
+  assert.match(v.host.textContent, /Files changed since this preview\. Look at the new preview, then restore\./);
+  assert.ok(q('[data-restore-preview]'), 'the new preview is shown under it');
+  assert.equal(n, 2, 'the preview was fetched again');
+  await settle();
+  assert.match(v.host.textContent, /Files changed since this preview/, 'still there after the refresh settles');
+  // Never mind is acting: the message goes with the preview, and the list is back.
+  await click(button('Never mind'));
+  assert.doesNotMatch(v.host.textContent, /Files changed since this preview/);
+  assert.ok(q('[data-checkpoint="cp2"]'), 'the checkpoints are listed again');
+  // A second stale restore shows it again, and picking another checkpoint clears it.
+  stale = true;
+  await click(q('[data-checkpoint="cp1"]'));
+  await click(q('[data-restore]'));
+  assert.match(v.host.textContent, /Files changed since this preview/);
+  await click(button('Never mind'));
+  await click(q('[data-checkpoint="cp2"]'));
+  assert.doesNotMatch(v.host.textContent, /Files changed since this preview/);
+  assert.ok(q('[data-restore-preview]'), 'cp2’s preview shows');
   v.unmount();
 });
