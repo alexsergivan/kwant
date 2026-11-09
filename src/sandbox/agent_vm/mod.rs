@@ -1742,7 +1742,7 @@ mod tests {
             permission_url: Some("http://127.0.0.1:8790/api/mcp/permission/perm456".into()),
             gateway: None,
             max_tool_iterations: 4,
-            smart_approvals: false,
+            approvals: crate::mcp::Approvals::Ask,
             records: Default::default(),
         };
         let (path, mut dropped) = turn.write_mcp_config(&ctx).unwrap();

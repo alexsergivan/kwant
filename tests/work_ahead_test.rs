@@ -207,8 +207,9 @@ async fn a_work_ahead_post_keeps_its_choices_as_chips_not_text() {
     assert_eq!(posted.len(), 1);
     assert_eq!(posted[0].text, "I updated the daily overview with a leave-by line.");
     let d = &meta(&posted[0])["decisions"];
-    assert_eq!(d.as_array().map(Vec::len), Some(2), "{d}");
-    assert_eq!((d[0]["picked"].as_str(), d[1]["picked"].as_str()), (Some("10 min"), Some("One-line note")));
+    // P3: at most one "Decided:" card per post
+    assert_eq!(d.as_array().map(Vec::len), Some(1), "{d}");
+    assert_eq!(d[0]["picked"].as_str(), Some("10 min"));
     assert_eq!(meta(&posted[0])["kind"], "work_ahead");
 }
 

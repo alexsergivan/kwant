@@ -12,7 +12,7 @@ use crate::mcp::{
     self,
     client::PROTOCOL_VERSION,
     session::{Caller, GatewayNaming, McpToolSession},
-    ApprovalOutcome, GatewayAccess, McpTurnContext, ToolApprovalRequest, ToolApprover,
+    ApprovalOutcome, Approvals, GatewayAccess, McpTurnContext, ToolApprovalRequest, ToolApprover,
 };
 use async_trait::async_trait;
 use axum::{
@@ -667,7 +667,12 @@ pub async fn prepare_turn_with_opts(
         permission_url: Some(format!("{}/api/mcp/permission/{token}", local_base_url(state))),
         gateway: Some(GatewayAccess { url: format!("{}/api/mcp/gateway", local_base_url(state)), token: token.clone() }),
         max_tool_iterations: max_tool_iterations(setting),
-        smart_approvals: state.db.kwant_approvals(&kwant.id).await.is_ok_and(|m| m.is_smart()),
+        approvals: if opts.always_ask || opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
+            // An audit turn asks whatever the setting says, and a Dev mode brief only reads: never tell either to just go ahead
+            Approvals::Ask
+        } else {
+            state.db.kwant_approvals(&kwant.id).await.map(|m| Approvals::from_mode(&m.effective)).unwrap_or_default()
+        },
         records: Default::default(),
     };
     let session = PermissionSession::new(kwant.id.clone(), kwant.name.clone(), turn_id, ctx.clone(), cwd);
