@@ -228,11 +228,26 @@ const NOT_LOOKS_AFTER: &[&str] = &["at", "into", "for", "like", "up", "through",
 /// Words that say something is wrong with it: with a [`VISIBLE_WORDS`] word, a statement is a
 /// request to fix it ("the button is not aligned with booktun.ing styling!!!!").
 const DEFECT_WORDS: &[&str] = &[
-    "not", "isn't", "isnt", "aren't", "doesn't", "doesnt", "don't", "dont", "no", "wrong", "broken", "misaligned",
-    "unaligned", "off", "ugly", "overlap", "overlaps", "overlapping", "inconsistent", "mismatch", "mismatched",
-    "differences", "different", "weird", "messy", "cropped", "crooked", "blurry", "bad", "too", "missing", "cut",
-    "bug", "buggy", "glitch", "glitchy",
+    "wrong", "broken", "misaligned", "unaligned", "off", "ugly", "overlap", "overlaps", "overlapping",
+    "inconsistent", "mismatch", "mismatched", "differences", "different", "weird", "messy", "cropped", "crooked",
+    "blurry", "bad", "missing", "cut", "bug", "buggy", "glitch", "glitchy",
 ];
+/// Negations that say something is wrong only when they negate how it looks ([`LOOKS_STATES`]):
+/// "is not aligned", "doesn't look right"; not "No, the design is fine" or "don't touch the design".
+const LOOKS_NEGATIONS: &[&str] =
+    &["not", "isn't", "isnt", "aren't", "arent", "doesn't", "doesnt", "don't", "dont", "no"];
+/// Words skipped between a negation and the state it negates: "isn't really aligned".
+const NEGATION_SKIP: &[&str] =
+    &["be", "is", "are", "quite", "really", "very", "properly", "fully", "correctly"];
+/// How something should look, so that negated it is a defect.
+const LOOKS_STATES: &[&str] = &[
+    "aligned", "align", "centered", "centred", "match", "matching", "matches", "consistent", "visible", "showing",
+    "show", "shown", "load", "loading", "loads", "work", "working", "works", "fit", "fits", "responsive", "readable",
+    "right", "correct", "same", "look", "looks", "displayed", "display", "displaying", "render", "rendering",
+];
+/// Words that negate a change verb right after them ("please don't change the footer"); "no need
+/// to" is matched as a pair, and a "to" before the verb is skipped ("not to change").
+const VERB_NEGATIONS: &[&str] = &["don't", "dont", "not", "never"];
 /// Defect words that ask for a fix on their own, in a statement ("differences again!!"), as
 /// "Fix differences!" does with its verb.
 const DEFECT_ASKS: &[&str] = &["differences", "misaligned", "unaligned"];
@@ -377,7 +392,47 @@ fn is_bare_change(text: &str) -> bool {
 /// Whether `words` is a statement that something visible is wrong ("the button is not aligned
 /// with booktun.ing styling!!!!", "the colours are off on mobile"), not a question about it.
 fn complains_about_something_visible(text: &str, words: &[String]) -> bool {
-    any_in(words, DEFECT_WORDS) && names_something_visible(text)
+    has_defect(words) && names_something_visible(text)
+}
+
+/// Whether `words` says something is wrong: an explicit defect word ("broken", "off"), a negated
+/// looks state ("is not aligned", "doesn't match"), or "too" before a word that isn't praise
+/// ("too small"; not "looks good too").
+fn has_defect(words: &[String]) -> bool {
+    words.iter().enumerate().any(|(i, w)| {
+        let w = w.as_str();
+        if DEFECT_WORDS.contains(&w) {
+            return true;
+        }
+        if w == "too" {
+            return words.get(i + 1).is_some_and(|n| !PRAISE.contains(&n.as_str()));
+        }
+        LOOKS_NEGATIONS.contains(&w)
+            && words[i + 1..]
+                .iter()
+                .find(|n| !NEGATION_SKIP.contains(&n.as_str()))
+                .is_some_and(|n| LOOKS_STATES.contains(&n.as_str()))
+    })
+}
+
+/// Whether the word at `i` (a change verb) is negated: "don't change", "do not change", "never
+/// change", "not to change", "no need to change". "don't forget to fix" is not: "forget" stands
+/// between them.
+fn is_negated(words: &[String], i: usize) -> bool {
+    let at = |j: usize| words.get(j).map(String::as_str);
+    let Some(mut j) = i.checked_sub(1) else { return false };
+    if at(j) == Some("to") {
+        let Some(k) = j.checked_sub(1) else { return false };
+        j = k;
+    }
+    at(j).is_some_and(|w| VERB_NEGATIONS.contains(&w))
+        || (at(j) == Some("need") && j.checked_sub(1).is_some_and(|k| at(k) == Some("no")))
+}
+
+/// Whether `words` asks for a change with a verb that isn't negated ("please don't change the
+/// footer" asks for nothing).
+fn has_change_verb(words: &[String]) -> bool {
+    words.iter().enumerate().any(|(i, w)| CHANGE_VERBS.contains(&w.as_str()) && !is_negated(words, i))
 }
 
 /// What a turn knows when it picks its plan (see [`plan_for_turn`]).
@@ -416,13 +471,16 @@ fn classify(text: &str) -> Option<Deliverable> {
         return None;
     }
     let joined = words.join(" ");
-    let mut after_lead_in = words.iter().skip_while(|w| LEAD_IN.contains(&w.as_str()));
+    let lead_in = words.iter().take_while(|w| LEAD_IN.contains(&w.as_str())).count();
+    let mut after_lead_in = words.iter().skip(lead_in);
     let first = after_lead_in.next();
     let is_question_word = |w: &String| QUESTION_WORDS.contains(&w.as_str());
     let opens_with_question = words.first().is_some_and(is_question_word) || first.is_some_and(is_question_word);
     // A leading change verb wins over idea and picture words after it: "Please add the export
     // feature", "Fix the broken image on the home page", "can you add a footer?" ask for the work.
-    if let Some(verb) = first.filter(|w| !opens_with_question && CHANGE_VERBS.contains(&w.as_str())) {
+    if let Some(verb) = first
+        .filter(|w| !opens_with_question && CHANGE_VERBS.contains(&w.as_str()) && !is_negated(&words, lead_in))
+    {
         // ...unless what it makes is the picture itself: "make a mockup", "create me a screenshot"
         let object = after_lead_in.find(|w| !ARTICLES.contains(&w.as_str()));
         if MAKE_VERBS.contains(&verb.as_str()) && object.is_some_and(|w| PICTURE_WORDS.contains(&w.as_str())) {
@@ -455,7 +513,7 @@ fn classify(text: &str) -> Option<Deliverable> {
     if question || any_in(&words, &["explain", "clarify"]) {
         return Some(Deliverable::Explain);
     }
-    if any_in(&words, CHANGE_VERBS) || any_in(&words, DEFECT_ASKS) {
+    if has_change_verb(&words) || any_in(&words, DEFECT_ASKS) {
         return Some(Deliverable::Change);
     }
     None
@@ -608,6 +666,57 @@ mod tests {
         }
         assert_eq!(expected_kind("Thanks, looks great!", &[]), Other);
         assert_eq!(expected_kind("the login is slow", &[]), Other);
+    }
+
+    #[test]
+    fn leave_it_alone_is_not_a_change() {
+        // Ada's review of #477, M1: a "no", "not", "don't" or "too" that doesn't say how something
+        // looks is not a complaint. M2: a negated change verb doesn't ask for the change.
+        for msg in [
+            "No, the design is fine",
+            "don't touch the design",
+            "the button looks good, no changes needed",
+            "the new page looks good too",
+            "the mobile page can wait, not now",
+            "no need to change the header, I'm on it",
+            "please don't change the footer",
+            "do not change the footer",
+            "never change the logo",
+            "it's fine, not to change the header",
+        ] {
+            let plan = keyword_plan(msg, &[]);
+            assert_ne!(plan.kind, Change, "{msg}");
+            assert!(!plan.done_when.iter().any(|d| d == BEFORE_AFTER_DONE), "{msg}");
+            assert!(!plan.hint().contains("before you change it"), "{msg}");
+        }
+        // "looks" leans visual, as on main: something to see, never a change
+        assert_eq!(expected_kind("the new page looks good too", &[]), Visual);
+        assert_eq!(expected_kind("the mobile page can wait, not now", &[]), Other);
+        assert_eq!(expected_kind("please don't change the footer", &[]), Other);
+        // Not even after an earlier visible ask
+        let recent = ["the button is not aligned with booktun.ing styling!!!!"];
+        for msg in ["no need to change the header, I'm on it", "please don't change the footer"] {
+            assert_ne!(expected_kind(msg, &recent), Change, "{msg}");
+        }
+        // Negations of how it looks, and "too" before a non-praise word, still complain
+        for msg in [
+            "the button is too small, make it bigger",
+            "the header is too big",
+            "The header isn't aligned with the logo",
+            "the logo is not really centered",
+            "the footer doesn't look right on mobile",
+            "the cards are not properly aligned",
+            "the font doesn't fit on the screen",
+        ] {
+            assert_eq!(keyword_plan(msg, &[]), DeliveryPlan::visible_change(PlanSource::Keywords), "{msg}");
+        }
+        // A change verb with something else between it and the negation is still asked for
+        assert_eq!(keyword_plan("don't forget to fix the header", &[]), DeliveryPlan::visible_change(PlanSource::Keywords));
+        assert_eq!(expected_kind("don't forget to update the README", &[]), Change);
+        assert!(is_negated(&tokens("no need to change it"), 3));
+        assert!(is_negated(&tokens("do not change it"), 2));
+        assert!(!is_negated(&tokens("change it"), 0));
+        assert!(!is_negated(&tokens("to change it"), 1));
     }
 
     #[test]
