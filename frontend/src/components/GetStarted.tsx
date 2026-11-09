@@ -3,12 +3,13 @@
 // The step logic is in ../gettingStarted.ts and the install in ../gettingStartedInstall.ts; this file
 // only draws them. Text comes from code, never from data as HTML.
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Check, Clock, Copy, ExternalLink, Info, KeyRound, RotateCw, Server, WifiOff } from 'lucide-react';
+import { AlertCircle, Check, Clock, Copy, ExternalLink, HardDrive, Info, KeyRound, RotateCw, Server, WifiOff } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { TemplateGlyph } from './TeamPreviewSheet';
 import { NewKeyAccountForm } from './EngineAccounts';
 import { useReadyTeams } from './ReadyTeams';
-import { ImportDialog } from './ImportDialog';
+import { ImportDialog, useLocalSources } from './ImportDialog';
+import { tickable } from '../importSources';
 import type { WelcomeBot } from './FirstRunWelcome';
 import { useMedia } from '../useMedia';
 import { PHONE_QUERY } from '../layout';
@@ -766,6 +767,10 @@ const TeamStep: React.FC<{
   const [importing, setImporting] = useState(false);
   const imported = useRef(false);
   const importTile = useRef<HTMLButtonElement>(null);
+  // Desktop app only: one look at the usual places, for the "N found" line and the dialog.
+  const localSources = useLocalSources();
+  const [local] = localSources;
+  const found = local.kind === 'ready' ? tickable(local.sources).length : 0;
   const closeImport = () => {
     setImporting(false);
     // An import that went in (even if undone in the dialog) counts; Cancel or Close leaves step 3 as it was.
@@ -821,7 +826,7 @@ const TeamStep: React.FC<{
             type="button"
             data-import-bots
             aria-haspopup="dialog"
-            aria-label="Bring your bots: from Grok Bot, ChatGPT or Claude, or from a file. You check a preview first. Import"
+            aria-label={`Bring your bots: from Grok Bot, ChatGPT or Claude, a file, a folder or a GitHub link. You check a preview first.${found > 0 ? ` ${found} found on this computer.` : ''} Import`}
             onClick={() => {
               imported.current = false;
               setImporting(true);
@@ -829,7 +834,13 @@ const TeamStep: React.FC<{
             className={`${tile} h-full flex flex-col gap-1 border-dashed border-zinc-600 bg-transparent hover:border-zinc-500`}
           >
             <span className="text-sm font-semibold text-zinc-100">Bring your bots</span>
-            <span className="text-[12.5px] leading-[18px] text-zinc-300">From Grok Bot, ChatGPT or Claude, or from a file. You check a preview first.</span>
+            <span className="text-[12.5px] leading-[18px] text-zinc-300">From Grok Bot, ChatGPT or Claude, a file, a folder or a GitHub link. You check a preview first.</span>
+            {found > 0 && (
+              <span className="flex items-center gap-1.5 text-xs text-sky-200" data-found-line>
+                <HardDrive size={13} className="text-sky-300 shrink-0" aria-hidden="true" />
+                <span className="font-semibold">{found} found on this computer</span>
+              </span>
+            )}
             <span className="mt-auto text-right text-xs text-sky-300" aria-hidden="true">
               Import ›
             </span>
@@ -839,6 +850,7 @@ const TeamStep: React.FC<{
       {importing && (
         <ImportDialog
           spaceName={spaceName}
+          localSources={localSources}
           onClose={closeImport}
           onChanged={() => {
             imported.current = true;

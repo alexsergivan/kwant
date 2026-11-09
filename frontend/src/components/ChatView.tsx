@@ -713,6 +713,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
     card.scrollIntoView({ block: 'end', behavior: reduce ? 'auto' : 'smooth' });
     setApprovalOffscreen(false);
   };
+  // The running turn's summary line (WorkingStrip): above the composer section on a phone, inside it on desktop.
+  const workingStrip = (
+    <WorkingStrip
+      active={isStreaming}
+      name={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : streamingSpeakerName || title}
+      title={title}
+      live={liveActivity}
+      queued={!!queued}
+      awaitingAnswer={!!awaitingAnswer}
+      awaitingBrowser={!!awaitingBrowser}
+      writing={!!streamingText}
+      onAnswer={showWaitingCard}
+      onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
+      phone={phone}
+    />
+  );
   // Cards are last in the stream. While the person follows the chat, keep the bottom pinned when a
   // card grows after it appears (its details arrive from the server) or the composer grows and
   // shrinks the stream, so Deny / Allow never sit below the composer.
@@ -1899,18 +1915,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </ScrollRow>
       )}
 
-      <WorkingStrip
-        active={isStreaming}
-        name={discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : streamingSpeakerName || title}
-        title={title}
-        live={liveActivity}
-        queued={!!queued}
-        awaitingAnswer={!!awaitingAnswer}
-        awaitingBrowser={!!awaitingBrowser}
-        writing={!!streamingText}
-        onAnswer={showWaitingCard}
-        onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
-      />
+      {/* Phone: its quiet line sits above the composer section. Desktop: inside it, right above the box. */}
+      {phone && workingStrip}
 
       {/* Modern Composer Input Bar */}
       <div
@@ -1998,6 +2004,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </button>
           </div>
         )}
+
+        {!phone && workingStrip}
 
         <form
           onSubmit={handleSubmit}

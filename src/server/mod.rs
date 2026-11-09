@@ -13,6 +13,7 @@ pub mod engine_login;
 pub mod auth;
 pub mod signin;
 pub mod continuity;
+pub mod fresh_eyes;
 pub mod goals_remediation;
 pub mod model_usage;
 pub mod budget;
@@ -39,6 +40,7 @@ pub mod hires;
 pub mod concierge;
 pub mod rerouting;
 pub mod import_routes;
+pub mod isolated_folders_routes;
 pub mod approval_modes;
 pub mod passwords;
 pub mod loose_ends_owner;
@@ -292,12 +294,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
         .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
         .merge(dev::tickets::routes::router())
+        .route("/api/spaces/:id/dev/prepush", get(dev::prepush::list))
+        .route("/api/dev/prepush/:id", get(dev::prepush::get_one))
+        .route("/api/dev/prepush/:id/override", post(dev::prepush::override_card))
+        .route("/api/dev/prepush/:id/retry", post(dev::prepush::retry_card))
         .route("/api/dev/cards/:id", get(dev::routes::card))
         .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/dev/cards/:id/post", post(dev::post::post))
         .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
+        .route("/api/isolated-folders", get(isolated_folders_routes::list))
+        .route("/api/isolated-folders/forget", post(isolated_folders_routes::forget))
         .route("/api/settings/computer/window", put(computer::put_window))
         .route("/api/settings/computer/browser", post(computer::retry_browser))
         .route("/api/system/directories", get(routes::list_system_directories))

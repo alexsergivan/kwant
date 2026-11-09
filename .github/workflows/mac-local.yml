@@ -1,0 +1,88 @@
+name: mac-local
+
+# 0.8.0 079-mac-local-hardening: Claude on this computer, on a Mac (src/drivers/mac_local.rs).
+# ci.yml's rust job runs on Linux and mac.yml only builds apps/mac, so kwnt's macOS code path
+# (cfg!(target_os = "macos") in drivers/cli.rs) would otherwise never run in CI. This job:
+#   - runs the hardening's unit tests on macOS (exactly 12, so a rename can't skip them), and
+#   - runs scripts/mac_local_probe.sh: the real Claude Code accepts kwnt's settings, Seatbelt
+#     (sandbox-runtime, what Claude's Bash sandbox is built on) enforces the denied places, and
+#     whether the Keychain is reachable through the security service (reported, not enforced).
+# Not in scripts/release_required_checks.txt: it runs only when these paths change.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/drivers/**"
+      - "src/profiles/**"
+      - "scripts/mac_local_probe.sh"
+      - ".github/workflows/mac-local.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-local-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-local-frontend-dist
+          path: frontend/dist
+          retention-days: 1
+
+  mac-local:
+    name: mac-local
+    runs-on: macos-15
+    needs: frontend
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # The binary embeds frontend/dist, so the Rust build needs it
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-local-frontend-dist
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # sandbox-runtime needs node >= 22.12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The hardening's unit tests, on macOS
+        run: |
+          set -o pipefail
+          cargo test --locked --lib -- mac_local:: no_tools::a_mac_claude_turn no_tools::the_hardening_reaches 2>&1 | tee unit.log
+          grep -q "test result: ok. 12 passed; 0 failed; 1 ignored" unit.log || { echo "::error::expected exactly 12 hardening tests to pass"; exit 1; }
+      - name: Probe the real Claude and Seatbelt
+        run: |
+          set -o pipefail
+          # The lib test binary's path from cargo's JSON (the human-readable "Executable" line is
+          # colored by CARGO_TERM_COLOR=always, which broke matching it)
+          bin=$(cargo test --locked --lib --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json,sys; [print(m["executable"]) for m in map(json.loads, sys.stdin) if m.get("reason") == "compiler-artifact" and m["profile"]["test"] and "lib" in m["target"]["kind"] and m.get("executable")]' \
+            | tail -1)
+          echo "lib test binary: ${bin:-<none>}"
+          test -x "$bin" || { echo "::error::no lib test binary"; exit 1; }
+          bash scripts/mac_local_probe.sh "$bin"

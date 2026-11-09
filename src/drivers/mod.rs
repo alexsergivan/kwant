@@ -6,6 +6,7 @@ pub mod custom;
 pub mod engines;
 pub mod events;
 pub mod grok;
+pub mod mac_local;
 #[cfg(windows)]
 pub(crate) mod win_job;
 
@@ -92,6 +93,11 @@ pub struct TurnInput {
     /// refuses it. Never retried without it.
     #[serde(default)]
     pub read_only: bool,
+    /// B1, a reviewer's fresh eyes: the turn sees only its prompt (the brief or spec and the
+    /// result). `history` must be empty, and no driver reads the conversation, its saved summary
+    /// or its cached prefix back from `store`. Set from `TurnOpts::fresh_eyes`.
+    #[serde(default)]
+    pub fresh_eyes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -938,6 +944,7 @@ pub(crate) mod tests {
             mcp: None,
             no_tools: false,
             read_only: false,
+            fresh_eyes: false,
         }
     }
 

@@ -624,7 +624,9 @@ impl AgentVm {
             std::fs::create_dir_all(d).map_err(|e| fail(format!("Couldn't prepare the bot's computer folders: {e}")))?;
             set_private(d);
         }
-        let mounts = Mounts::new(workdir, home, run_dir)?;
+        let ro_hooks = self.bot_dir(bot_id).join(RO_HOOKS);
+        prepare_ro_hooks(&ro_hooks).map_err(|e| fail(format!("Couldn't prepare the bot's computer folders: {e}")))?;
+        let mounts = Mounts::new(workdir, home, run_dir, &ro_hooks)?;
         let args = run_args(&name, &self.root_label(), &mounts, &self.image(), host_ids(), self.limits.memory_mb);
         let out = Command::new("docker")
             .args(&args)
@@ -716,25 +718,87 @@ impl AgentVm {
     }
 }
 
-/// The three bind mounts of a bot's container, as `--mount` values. Docker reads `--mount` as
-/// CSV, so each field is quoted (a `,` or `"` in a folder name can't add an option); a name with
-/// a newline or that isn't UTF-8 is refused instead.
+/// The bind mounts of a bot's container, as `--mount` values: the folder, the bot's home, the
+/// broker's socket folder (read-only) and, in a git repo, kwnt's own empty folder (read-only)
+/// over its `.git/hooks`. Every source but the folder itself is a folder only kwnt writes. Docker
+/// reads `--mount` as CSV, so each field is quoted (a `,` or `"` in a folder name can't add an
+/// option); a name with a newline or that isn't UTF-8 is refused instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Mounts {
     workdir: String,
-    args: [String; 3],
+    args: Vec<String>,
 }
 
 impl Mounts {
-    fn new(workdir: &Path, home: &Path, run_dir: &Path) -> Result<Self, Refusal> {
+    /// `ro_hooks` is [`RO_HOOKS`] in the bot's kwnt folder, made by [`prepare_ro_hooks`].
+    fn new(workdir: &Path, home: &Path, run_dir: &Path, ro_hooks: &Path) -> Result<Self, Refusal> {
         let w = check_mountable(workdir)?;
         let h = check_mountable(home)?;
         let r = check_mountable(run_dir)?;
-        Ok(Self {
-            workdir: w.to_string(),
-            args: [mount_arg(w, w, false), mount_arg(h, CONTAINER_HOME, false), mount_arg(r, CONTAINER_RUN, true)],
-        })
+        let mut args = vec![mount_arg(w, w, false), mount_arg(h, CONTAINER_HOME, false), mount_arg(r, CONTAINER_RUN, true)];
+        if let Some(hooks) = git_hooks_to_protect(workdir) {
+            // #462 review must-fix 1: the source is never a path in the bot's folder. Docker
+            // follows links in `src`, so a bot that swapped `.git/hooks` for a link between the
+            // check and `docker run` would get a host folder mounted. The destination is resolved
+            // inside the container, so a swap there at worst leaves hooks unprotected that time.
+            let src = check_mountable(ro_hooks)?;
+            args.push(mount_arg(src, check_mountable(&hooks)?, true));
+        }
+        Ok(Self { workdir: w.to_string(), args })
     }
+}
+
+/// #446 item 13 (S-14): a hook the bot writes would run on this computer the next time the person
+/// commits there. When the folder is a git repo with a real `.git` folder, kwnt's own empty
+/// read-only folder is bound over its `.git/hooks`, so the bot can't add or change a hook (and the
+/// person's own hooks don't run for commits made inside the container); commits, branches and
+/// everything else in `.git` still work. A missing `hooks` folder is made first (git makes it
+/// too), so the bot can't create one later. Read without following links: a `.git` that is a file
+/// (a worktree or submodule, whose hooks live in a repo outside the folder) or a link, or a
+/// `hooks` that is a link, gets no extra mount. Not covered, and said in docs/agents-in-vm.md:
+/// `core.hooksPath` in `.git/config`, renaming `.git`, and a repo the bot makes during the turn.
+fn git_hooks_to_protect(workdir: &Path) -> Option<PathBuf> {
+    use crate::sandbox::safe_fs::Dir;
+    let git = Dir::open(workdir).ok()?.open_dir(Path::new(".git")).ok()?;
+    match git.make_dirs(Path::new("hooks")) {
+        Ok(_) => Some(workdir.join(".git").join("hooks")),
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                // A `hooks` that is a link or a file is a legitimate setup: not refused, but said
+                tracing::info!(folder = %workdir.display(), error = %e, "no read-only .git/hooks mount for this folder: its .git/hooks isn't a real folder");
+            }
+            None
+        }
+    }
+}
+
+/// The empty folder in the bot's kwnt folder that is mounted over a repo's `.git/hooks`.
+const RO_HOOKS: &str = "ro-hooks";
+
+/// Makes [`RO_HOOKS`]: a real, empty folder, mode 0555. It sits next to the bot's `home` and
+/// `run` in kwnt's data folder, outside every folder a container can write. Anything else there
+/// (a link, a file, a folder with entries) is refused rather than mounted.
+fn prepare_ro_hooks(p: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => return Err(std::io::Error::other(format!("{} isn't a folder", p.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::create_dir(p)?;
+        }
+        Err(e) => return Err(e),
+    }
+    if std::fs::read_dir(p)?.next().is_some() {
+        return Err(std::io::Error::other(format!("{} isn't empty", p.display())));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o555))?;
+    }
+    Ok(())
 }
 
 fn csv_field(f: &str) -> String {
@@ -1187,7 +1251,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_args_isolate_the_container() {
-        let m = Mounts::new(Path::new("/w/proj"), Path::new("/d/h"), Path::new("/d/run")).unwrap();
+        let m = Mounts::new(Path::new("/w/proj"), Path::new("/d/h"), Path::new("/d/run"), Path::new("/d/ro-hooks")).unwrap();
         let a = run_args("kwnt-agent-a-b", "r", &m, "img", Some((1000, 1000)), 1024);
         let s = a.join(" ");
         for want in [
@@ -1207,23 +1271,225 @@ mod tests {
         assert!(!s.contains("docker.sock"));
     }
 
+    /// The `src=` of each `--mount` value (the tests' own folder names have no `"` or `,`).
+    #[cfg(unix)]
+    fn mount_sources(m: &Mounts) -> Vec<PathBuf> {
+        m.args.iter().map(|a| PathBuf::from(a.split("\"src=").nth(1).unwrap().split('"').next().unwrap())).collect()
+    }
+
+    // #446 item 13: kwnt's own empty folder is mounted read-only over a repo's `.git/hooks`, never
+    // anything through a link
+    #[cfg(unix)]
+    #[test]
+    fn a_repos_git_hooks_are_mounted_read_only() {
+        let d = tempfile::tempdir().unwrap();
+        let (home, run) = (d.path().join("h"), d.path().join("run"));
+        let kwnt_ro = d.path().join("kwnt").join(RO_HOOKS);
+        let rh = kwnt_ro.as_path();
+        let ro_hooks = |m: &Mounts, repo: &Path| {
+            let h = repo.join(".git/hooks");
+            let (h, src) = (h.to_str().unwrap(), kwnt_ro.to_str().unwrap());
+            m.args.iter().any(|a| *a == format!(r#"type=bind,"src={src}","dst={h}",readonly"#))
+        };
+        // A repo with hooks: four mounts, the fourth the hooks, read-only and last (so it lies over
+        // the folder's rw mount)
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
+        let m = Mounts::new(&repo, &home, &run, rh).unwrap();
+        assert_eq!(m.args.len(), 4, "{m:?}");
+        assert!(ro_hooks(&m, &repo) && m.args[3].ends_with(",readonly"), "{m:?}");
+        let a = run_args("n", "r", &m, "img", Some((1000, 1000)), 512);
+        assert_eq!(a.iter().filter(|x| *x == "--mount").count(), 4);
+
+        // A repo without a hooks folder gets one first, so the bot can't make it later
+        let bare = d.path().join("nohooks");
+        std::fs::create_dir_all(bare.join(".git")).unwrap();
+        assert!(ro_hooks(&Mounts::new(&bare, &home, &run, rh).unwrap(), &bare));
+        assert!(bare.join(".git/hooks").is_dir());
+
+        // Not a repo: three mounts, and no `.git` is made
+        let plain = d.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        assert_eq!(Mounts::new(&plain, &home, &run, rh).unwrap().args.len(), 3);
+        assert!(!plain.join(".git").exists());
+
+        // A worktree or submodule (`.git` is a file), a linked `.git` and a linked `hooks` get no
+        // extra mount, and nothing is made through a link
+        let wt = d.path().join("worktree");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: /elsewhere/.git/worktrees/x\n").unwrap();
+        assert_eq!(Mounts::new(&wt, &home, &run, rh).unwrap().args.len(), 3);
+        let target = d.path().join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let linked = d.path().join("linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::os::unix::fs::symlink(&target, linked.join(".git")).unwrap();
+        assert_eq!(Mounts::new(&linked, &home, &run, rh).unwrap().args.len(), 3);
+        assert!(!target.join("hooks").exists(), "nothing made through the link");
+        let lh = d.path().join("linkedhooks");
+        std::fs::create_dir_all(lh.join(".git")).unwrap();
+        std::os::unix::fs::symlink(&target, lh.join(".git/hooks")).unwrap();
+        assert_eq!(Mounts::new(&lh, &home, &run, rh).unwrap().args.len(), 3);
+    }
+
+    // #462 review must-fix 1: Docker follows links in a mount's `src`, so no source may be a path
+    // the bot can change. The folder's own mount is the only source under it; the hooks mount's
+    // source is kwnt's folder.
+    #[cfg(unix)]
+    #[test]
+    fn no_mount_source_is_in_the_bots_folder_except_the_folder_itself() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git/hooks")).unwrap();
+        let kwnt = d.path().join("kwnt");
+        let ro = kwnt.join(RO_HOOKS);
+        let m = Mounts::new(&repo, &kwnt.join("home"), &kwnt.join("run"), &ro).unwrap();
+        let srcs = mount_sources(&m);
+        assert_eq!(srcs.len(), 4, "{m:?}");
+        assert_eq!(srcs[0], repo, "the folder's own mount comes first");
+        for s in &srcs[1..] {
+            assert!(!s.starts_with(&repo), "{} is in the bot's folder: {m:?}", s.display());
+            assert!(s.starts_with(&kwnt), "{} isn't kwnt's: {m:?}", s.display());
+        }
+        assert_eq!(srcs[3], ro, "the hooks mount's source is kwnt's empty folder");
+        assert!(m.args[3].contains(&format!("\"dst={}\"", repo.join(".git/hooks").display())) && m.args[3].ends_with(",readonly"));
+        // Still true when the bot's `.git/hooks` is a link into kwnt's folder or anywhere else:
+        // there's no hooks mount at all then
+        std::fs::remove_dir(repo.join(".git/hooks")).unwrap();
+        std::os::unix::fs::symlink(&kwnt, repo.join(".git/hooks")).unwrap();
+        assert_eq!(mount_sources(&Mounts::new(&repo, &kwnt.join("home"), &kwnt.join("run"), &ro).unwrap()).len(), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_ro_hooks_folder_is_made_empty_and_read_only_and_anything_else_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let ro = d.path().join("bot").join(RO_HOOKS);
+        prepare_ro_hooks(&ro).unwrap();
+        let meta = std::fs::symlink_metadata(&ro).unwrap();
+        assert!(meta.is_dir());
+        assert_eq!(meta.permissions().mode() & 0o777, 0o555);
+        prepare_ro_hooks(&ro).unwrap(); // a second turn reuses it
+        // Not empty, a link or a file: refused, never mounted
+        std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(ro.join("pre-commit"), "").unwrap();
+        assert!(prepare_ro_hooks(&ro).is_err());
+        let link = d.path().join("link").join(RO_HOOKS);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(d.path(), &link).unwrap();
+        assert!(prepare_ro_hooks(&link).is_err());
+        let file = d.path().join("file");
+        std::fs::write(&file, "").unwrap();
+        assert!(prepare_ro_hooks(&file).is_err());
+    }
+
+    /// Rigel's S-14 case in a real container started with [`run_args`]: the bot's
+    /// `echo x > .git/hooks/pre-commit` fails, and so do chmod, mv, touch and rmdir on the hooks
+    /// folder; a normal `git commit` inside still works, and nothing reached the hooks folder on
+    /// this computer. Then the #462 review's race, made certain: `.git/hooks` is checked as a real
+    /// folder, then swapped for a link to a "secret" folder before `docker run`, and the secret
+    /// must not be readable inside. Needs Docker and the agent image; skips without them unless
+    /// `KWNT_AGENT_TEST_REQUIRE=1`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn in_a_real_container_a_hook_cant_be_written_but_git_commit_works() {
+        use std::process::Command as Std;
+        if !Std::new("docker").args(["image", "inspect", &image_tag()]).output().is_ok_and(|o| o.status.success()) {
+            assert!(std::env::var("KWNT_AGENT_TEST_REQUIRE").is_err(), "Docker or the agent image {} is missing", image_tag());
+            eprintln!("skipped: needs Docker and the agent image {}", image_tag());
+            return;
+        }
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| assert!(Std::new("git").args(args).current_dir(&repo).output().unwrap().status.success(), "{args:?}");
+        git(&["init", "-q", "."]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let hooks_before = std::fs::read_dir(repo.join(".git/hooks")).unwrap().count();
+        let (home, run) = (d.path().join("h"), d.path().join("run"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&run).unwrap();
+        let name = format!("kwnt-agent-hooks-test-{}", std::process::id());
+        struct Rm(String);
+        impl Drop for Rm {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("docker").args(["rm", "-f", &self.0]).output();
+            }
+        }
+        let _rm = Rm(name.clone());
+        let ro = d.path().join("kwnt").join(RO_HOOKS);
+        prepare_ro_hooks(&ro).unwrap();
+        let m = Mounts::new(&repo, &home, &run, &ro).unwrap();
+        let out = Std::new("docker").args(run_args(&name, "hooks-test", &m, &image_tag(), host_ids(), 512)).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        // Each probe prints its name only if it worked; none may
+        let probe = r#"
+            echo x > .git/hooks/pre-commit 2>/dev/null && echo HOOK_WRITTEN || echo HOOK_REFUSED
+            chmod u+w .git/hooks 2>/dev/null && echo CHMOD_UW
+            chmod 777 .git/hooks 2>/dev/null && echo CHMOD_777
+            touch .git/hooks/x 2>/dev/null && echo TOUCHED
+            mv .git/hooks .git/h2 2>/dev/null && echo MOVED
+            rm -f .git/hooks/*.sample 2>/dev/null; rmdir .git/hooks 2>/dev/null && echo HOOKS_REMOVED
+            [ -d .git/hooks ] && [ -z "$(ls -A .git/hooks)" ] && echo HOOKS_EMPTY
+            echo hi > a.txt && git add a.txt && git -c user.name=b -c user.email=b@b commit -qm a && echo COMMIT_OK
+            git checkout -qb feature && echo BRANCH_OK
+        "#;
+        let out = Std::new("docker").args(["exec", "-e", "HOME=/tmp", &name, "sh", "-c", probe]).output().unwrap();
+        let said = String::from_utf8_lossy(&out.stdout);
+        for want in ["HOOK_REFUSED", "HOOKS_EMPTY", "COMMIT_OK", "BRANCH_OK"] {
+            assert!(said.contains(want), "{want} in {said}");
+        }
+        for never in ["HOOK_WRITTEN", "CHMOD_UW", "CHMOD_777", "TOUCHED", "MOVED", "HOOKS_REMOVED"] {
+            assert!(!said.contains(never), "{never} in {said}");
+        }
+        assert!(!repo.join(".git/h2").exists() && !repo.join(".git/hooks/x").exists());
+        assert!(!repo.join(".git/hooks/pre-commit").exists());
+        assert_eq!(std::fs::read_dir(repo.join(".git/hooks")).unwrap().count(), hooks_before);
+        // The commit the bot made is in the repo on this computer
+        let log = Std::new("git").args(["log", "--format=%s", "-1"]).current_dir(&repo).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "a");
+        // kwnt's empty folder is unchanged too
+        assert_eq!(std::fs::read_dir(&ro).unwrap().count(), 0);
+
+        // The race from the #462 review, made certain: checked as a real folder, then swapped for
+        // a link to a folder outside before the container starts. The source is kwnt's folder, so
+        // the secret is never mounted; the container may start or not, but can't read it.
+        let _ = Std::new("docker").args(["rm", "-f", &name]).output();
+        let secret = d.path().join("secret");
+        std::fs::create_dir_all(&secret).unwrap();
+        std::fs::write(secret.join("id_rsa"), "SECRET-KEY").unwrap();
+        let m = Mounts::new(&repo, &home, &run, &ro).unwrap();
+        assert_eq!(m.args.len(), 4, "checked while still a real folder: {m:?}");
+        std::fs::rename(repo.join(".git/hooks"), repo.join(".git/hooks-real")).unwrap();
+        std::os::unix::fs::symlink(&secret, repo.join(".git/hooks")).unwrap();
+        let started = Std::new("docker").args(run_args(&name, "hooks-test", &m, &image_tag(), host_ids(), 512)).output().unwrap();
+        if started.status.success() {
+            let peek = format!("cat .git/hooks/id_rsa {s}/id_rsa 2>/dev/null; ls -A .git/hooks/ {s}/ 2>/dev/null; echo PEEKED", s = secret.display());
+            let out = Std::new("docker").args(["exec", "-e", "HOME=/tmp", &name, "sh", "-c", &peek]).output().unwrap();
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(said.contains("PEEKED"), "{said}");
+            assert!(!said.contains("SECRET-KEY") && !said.contains("id_rsa"), "the secret was visible: {said}");
+        }
+    }
+
     // Container paths are unix paths (`/w/proj` isn't absolute on Windows); isolation is Linux only
     #[cfg(unix)]
     #[test]
     fn mount_values_cant_add_options_and_odd_names_are_refused() {
         // A comma or quote stays inside the src field (Docker reads --mount as CSV)
-        let m = Mounts::new(Path::new("/w/a,dst=/etc,readonly=false"), Path::new("/d/h"), Path::new("/d/run")).unwrap();
+        let m = Mounts::new(Path::new("/w/a,dst=/etc,readonly=false"), Path::new("/d/h"), Path::new("/d/run"), Path::new("/d/ro-hooks")).unwrap();
         assert_eq!(m.args[0], r#"type=bind,"src=/w/a,dst=/etc,readonly=false","dst=/w/a,dst=/etc,readonly=false""#);
-        let q = Mounts::new(Path::new("/w/say \"hi\": x=1"), Path::new("/d/h"), Path::new("/d/run")).unwrap();
+        let q = Mounts::new(Path::new("/w/say \"hi\": x=1"), Path::new("/d/h"), Path::new("/d/run"), Path::new("/d/ro-hooks")).unwrap();
         assert_eq!(q.args[0], r#"type=bind,"src=/w/say ""hi"": x=1","dst=/w/say ""hi"": x=1""#);
         for bad in ["/w/new\nline", "relative/dir", "/w/tab\there"] {
-            assert_eq!(Mounts::new(Path::new(bad), Path::new("/d/h"), Path::new("/d/run")).unwrap_err().code, codes::FOLDER_NAME_UNSUPPORTED, "{bad:?}");
+            assert_eq!(Mounts::new(Path::new(bad), Path::new("/d/h"), Path::new("/d/run"), Path::new("/d/ro-hooks")).unwrap_err().code, codes::FOLDER_NAME_UNSUPPORTED, "{bad:?}");
         }
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt;
             let p = Path::new(std::ffi::OsStr::from_bytes(b"/w/\xff"));
-            assert_eq!(Mounts::new(p, Path::new("/d/h"), Path::new("/d/run")).unwrap_err().code, codes::FOLDER_NAME_UNSUPPORTED);
+            assert_eq!(Mounts::new(p, Path::new("/d/h"), Path::new("/d/run"), Path::new("/d/ro-hooks")).unwrap_err().code, codes::FOLDER_NAME_UNSUPPORTED);
         }
     }
 

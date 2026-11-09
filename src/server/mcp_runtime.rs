@@ -922,7 +922,17 @@ pub async fn permission_endpoint(
         ),
         "tools/call" if msg["params"]["name"] == PERMISSION_TOOL => {
             let smart = state.db.kwant_approvals(&session.kwant_id).await.is_ok_and(|m| m.is_smart());
-            let decision = decide(&session, &msg["params"]["arguments"], smart).await;
+            let args = &msg["params"]["arguments"];
+            // B2: a bot's own push in a Dev mode space waits for its pre-push card, before any
+            // allow rule (each Bash call starts in the bot's folder)
+            let prepush = match (args["tool_name"].as_str(), args["input"]["command"].as_str(), mcp::builtin_tools::canonical_folder(session.cwd.as_deref())) {
+                (Some("Bash"), Some(command), Some(folder)) => super::dev::prepush::gate(&state, &session.kwant_id, command, &folder).await,
+                _ => None,
+            };
+            let decision = match prepush {
+                Some(why) => json!({"behavior": "deny", "message": why}),
+                None => decide(&session, args, smart).await,
+            };
             rpc_result(id, json!({"content": [{"type": "text", "text": decision.to_string()}]}))
         }
         "tools/call" => rpc_error(id, -32602, "unknown tool"),
