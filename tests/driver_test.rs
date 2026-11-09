@@ -82,6 +82,7 @@ async fn test_mock_driver_streaming() {
     };
 
     let input = TurnInput {
+        fresh_eyes: false,
         continuity: String::new(),
         skills: String::new(),
         person: Default::default(),
@@ -149,6 +150,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
 
     // 1. Without team context
     let input_solo = TurnInput {
+        fresh_eyes: false,
         continuity: String::new(),
         skills: String::new(),
         person: Default::default(),
@@ -199,6 +201,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
 
     // 2. With team context
     let input_team = TurnInput {
+        fresh_eyes: false,
         continuity: String::new(),
         skills: String::new(),
         person: Default::default(),
@@ -234,6 +237,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
 
     // 3. With team context including workspace and repo URL
     let input_workspace = TurnInput {
+        fresh_eyes: false,
         continuity: String::new(),
         skills: String::new(),
         person: Default::default(),

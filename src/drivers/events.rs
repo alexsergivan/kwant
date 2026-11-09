@@ -330,6 +330,10 @@ pub enum RuntimeEvent {
     /// `kind` is `landed`, `review` or `release_notes`; `status` `pending`, `ready`, `failed` or `stale`.
     #[serde(rename = "dev_card", alias = "DevCard")]
     DevCard { space_id: String, id: String, kind: String, status: String },
+    /// B2: a bot's pre-push card was made or changed (fresh-eyes-audit.md §4); refetch
+    /// `GET /api/dev/prepush/:id`. `status` is `checking`, `blocked`, `clear`, `overridden` or `failed`.
+    #[serde(rename = "dev_prepush", alias = "DevPrepush")]
+    DevPrepush { space_id: String, id: String, kwant_id: String, status: String },
     /// Dev mode was turned on or off in a space.
     #[serde(rename = "dev_mode", alias = "DevMode")]
     DevMode { space_id: String, on: bool },

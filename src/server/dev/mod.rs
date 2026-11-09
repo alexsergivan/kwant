@@ -19,6 +19,7 @@ pub mod landed;
 pub mod notes;
 pub mod poller;
 pub mod post;
+pub mod prepush;
 pub mod repo;
 pub mod review;
 pub mod risk;
