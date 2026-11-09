@@ -183,6 +183,27 @@
   });
 })();
 
+// Downloads: lead with the visitor's own platform. The HTML shows Mac (also on phones and without this file);
+// Windows and Linux visitors get their button and first-run hint. Picking another platform's link switches the
+// box to it, so its first-run help is the one on screen.
+(function () {
+  var boxes = document.querySelectorAll("[data-dl]");
+  if (!boxes.length) return;
+  var ua = navigator.userAgent || "";
+  var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+  var os = null;
+  if (!/Android|iPhone|iPad|iPod|CrOS/i.test(ua)) {
+    if (/Win/i.test(plat) || /Windows NT/i.test(ua)) os = "windows";
+    else if (/Linux/i.test(plat) || /X11|Linux/i.test(ua)) os = "linux";
+  }
+  boxes.forEach(function (box) {
+    if (os) box.setAttribute("data-os", os);
+    box.querySelectorAll("a[data-os-link]").forEach(function (a) {
+      a.addEventListener("click", function () { box.setAttribute("data-os", a.getAttribute("data-os-link")); });
+    });
+  });
+})();
+
 // O7a: opening the dmg download also opens the Mac first-open steps, so they're there when macOS asks.
 (function () {
   var d = document.getElementById("mac-first");
