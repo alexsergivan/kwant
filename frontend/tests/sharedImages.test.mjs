@@ -389,7 +389,9 @@ test('ChatView: tap targets and focus ring on shared tiles (Mira 2, 3, 4, 5, 7, 
   const tile = v.host.querySelector('[data-message-id="f2"] figure');
   const dl = tile.querySelector('[data-download]');
   assert.match(dl.className, /w-8 h-8/, 'icon-only 32 px chip on a shared tile');
-  assert.match(dl.className, /before:-inset-1\.5/, '32 + 2 x 6 = 44 px hit area');
+  // 1 px border: ::before insets from the 30 px padding box, so 30 + 2 x 7 = 44 px (Rigel qa-468)
+  assert.match(dl.className, /before:-inset-\[7px\]/, '30 + 2 x 7 = 44 px hit area');
+  assert.doesNotMatch(dl.className, /before:-inset-1\.5/, 'not the 42 px hit area');
   assert.equal(dl.getAttribute('aria-label'), 'Download find-your-book-bar.jpg');
   assert.equal(dl.getAttribute('title'), 'Download');
   assert.match(dl.querySelector('span').className, /sr-only/);
@@ -398,6 +400,11 @@ test('ChatView: tap targets and focus ring on shared tiles (Mira 2, 3, 4, 5, 7, 
   assert.match(thumb.className, /focus-visible:outline-violet-400/);
   assert.match(tile.parentElement.className, /w-full sm:w-auto/, 'full bubble width on phone');
   flushSync(() => toggle.click());
+  const chips = [...v.host.querySelectorAll('[data-earlier-copy] [data-download]')];
+  assert.ok(chips.length > 0, 'earlier copies have Download chips');
+  for (const chip of chips) {
+    assert.match(chip.className, /before:-inset-\[7px\]/, 'earlier-copy chips get the 44 px hit area too');
+  }
   const small = v.host.querySelector('[data-earlier-copy="f1"] figure');
   assert.match(small.querySelector('img').className, /w-full h-24/, 'small copy fills its tile');
   assert.doesNotMatch(small.querySelector('img').className, /max-h-24|sm:w-auto/);

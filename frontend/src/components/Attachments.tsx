@@ -35,7 +35,7 @@ export const FileTile: React.FC<{
       title="Download"
       data-download=""
       className={`inline-flex items-center justify-center gap-1 shrink-0 rounded-lg text-[11px] font-medium text-sky-300 bg-sky-500/10 border border-sky-500/30 hover:bg-sky-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-        iconOnly ? "relative w-8 h-8 before:absolute before:-inset-1.5 before:content-['']" : 'px-2 py-1 max-sm:min-w-11 max-sm:min-h-11'
+        iconOnly ? "relative w-8 h-8 before:absolute before:-inset-[7px] before:content-['']" : 'px-2 py-1 max-sm:min-w-11 max-sm:min-h-11'
       }`}
     >
       <Download size={iconOnly ? 14 : 12} aria-hidden="true" />
