@@ -6081,8 +6081,8 @@ mod tests {
         assert_eq!(plan.kind, Deliverable::Visual);
         assert!(plan.hint().contains("share the image in the chat"), "{}", plan.hint());
         let expect = Expect::from_plan(&plan).unwrap();
-        assert_eq!(expect, Expect { image: plan.wants_picture(), link: false, done_when: plan.done_when.clone() });
-        assert!(expect.image);
+        assert_eq!(expect, Expect { image: plan.wants_picture(), link: false, done_when: plan.done_when.clone(), firm: true });
+        assert!(expect.image && plan.firm);
         // A reply with no image misses it, and continues
         let v = check("Here's how the login page works.", Some(&expect), false, &Seen::default());
         assert!(v.continue_with.is_some(), "{v:?}");

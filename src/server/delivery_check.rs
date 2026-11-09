@@ -7,6 +7,8 @@
 //! - A turn whose plan expected an image or a link and that delivered neither gets one automatic
 //!   continuation naming exactly what is missing (P9, P10). A continuation never continues again.
 //!   If it still shares no image, its reply gets [`NO_PICTURE_LINE`](super::picture_claims::NO_PICTURE_LINE).
+//!   Only a firm plan continues ([`DeliveryPlan::firm`]): a lean one ("@Ann look at this") is
+//!   recorded as a hit or a miss and gets the no-picture line only when the reply claims a picture.
 //! - The result is recorded as a delivery hit or miss ([`record_delivery_note`]).
 //!
 //! What the person expected comes from the turn's one `DeliveryPlan` (`src/router/delivery.rs`),
@@ -19,21 +21,23 @@ use serde_json::Value;
 
 /// What the person expects to see in the chat for one turn: the parts of the turn's
 /// `DeliveryPlan` this check can verify. `image` is `plan.show` containing `Show::Image`, `link`
-/// is `plan.show` containing `Show::Link`, and `done_when` is `plan.done_when`.
+/// is `plan.show` containing `Show::Link`, `done_when` is `plan.done_when` and `firm` is `plan.firm`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Expect {
     pub image: bool,
     pub link: bool,
     pub done_when: Vec<String>,
+    /// The person clearly asked ([`DeliveryPlan::firm`]): only then does a miss continue.
+    pub firm: bool,
 }
 
 impl Expect {
     /// What the turn's plan lets this check verify: `image` from [`DeliveryPlan::wants_picture`],
-    /// `link` from `Show::Link`, and the plan's `done_when`. `None` when it wants neither
+    /// `link` from `Show::Link`, the plan's `done_when` and `firm`. `None` when it wants neither
     /// (Explain and Other plans), so those turns are not continued or recorded.
     pub fn from_plan(plan: &DeliveryPlan) -> Option<Self> {
         let (image, link) = (plan.wants_picture(), plan.show.contains(&Show::Link));
-        (image || link).then(|| Expect { image, link, done_when: plan.done_when.clone() })
+        (image || link).then(|| Expect { image, link, done_when: plan.done_when.clone(), firm: plan.firm })
     }
 }
 
@@ -94,7 +98,8 @@ then reply with the PR or branch link.";
 const MAX_CHECKS: usize = 5;
 const MAX_CHECK_CHARS: usize = 200;
 
-/// Checks one reply. `continued` says the turn is the one continuation already.
+/// Checks one reply. `continued` says the turn is the one continuation already. A lean `expect`
+/// never continues and adds the no-picture line only for a claimed picture.
 pub fn check(reply: &str, expect: Option<&Expect>, continued: bool, seen: &Seen) -> Verdict {
     let claims = claims_picture(reply);
     let wants_image = expect.is_some_and(|e| e.image);
@@ -111,10 +116,13 @@ pub fn check(reply: &str, expect: Option<&Expect>, continued: bool, seen: &Seen)
     if expect.is_some_and(|e| e.link) && !seen.pushed && !has_change_link(reply) {
         v.missing.push(Missing::Link);
     }
+    let firm = expect.is_some_and(|e| e.firm);
     match expect {
-        Some(e) if !v.missing.is_empty() && !continued => v.continue_with = Some(continuation_prompt(&v.missing, &e.done_when)),
+        Some(e) if firm && !v.missing.is_empty() && !continued => {
+            v.continue_with = Some(continuation_prompt(&v.missing, &e.done_when))
+        }
         _ => {
-            v.no_picture_line = !image && (claims || wants_image);
+            v.no_picture_line = !image && (claims || (wants_image && firm));
             v.outcome = expect.map(|_| if v.missing.is_empty() { Outcome::Hit } else { Outcome::Miss });
         }
     }
@@ -215,6 +223,7 @@ pub async fn record_delivery_note(
         context_id,
         image = expect.image,
         link = expect.link,
+        firm = expect.firm,
         ?outcome,
         ?missing,
         "delivery check (delivery note hook: no store yet)"
@@ -249,7 +258,7 @@ pub fn apply(reply: String, v: &Verdict) -> String {
 
 /// The reply's `meta.delivery`, when the check ran (`checked`) and did something or had an
 /// expectation: `{"missing": [...], "auto_shared": bool, "no_picture": bool, "continues": bool,
-/// "outcome": "hit"|"miss"}`. A turn the check skips (see `TurnOpts::delivery_checked`) has none.
+/// "outcome": "hit"|"miss", "lean": bool}` (`lean`: the plan only leaned, so it didn't continue). A turn the check skips (see `TurnOpts::delivery_checked`) has none.
 pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value> {
     if !checked || (*v == Verdict::default() && expect.is_none()) {
         return None;
@@ -260,6 +269,7 @@ pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value
         "no_picture": v.no_picture_line,
         "continues": v.continue_with.is_some(),
         "outcome": v.outcome,
+        "lean": expect.is_some_and(|e| !e.firm),
     }))
 }
 
@@ -271,10 +281,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn ideas() -> Expect {
-        Expect { image: true, link: false, done_when: vec!["one mockup image per idea is shared".into()] }
+        Expect { image: true, link: false, done_when: vec!["one mockup image per idea is shared".into()], firm: true }
     }
     fn change() -> Expect {
-        Expect { image: false, link: true, done_when: vec![] }
+        Expect { image: false, link: true, done_when: vec![], firm: true }
     }
     fn explain() -> Expect {
         Expect::default()
@@ -333,7 +343,7 @@ mod tests {
         assert!(p.contains(IMAGE_PROMPT), "Ada's P9 wording: {p}");
         assert!(p.ends_with("Done when: one mockup image per idea is shared."), "{p}");
         assert!(!p.contains(LINK_PROMPT));
-        let both = Expect { image: true, link: true, done_when: vec!["a\nPR   link".into(), "".into()] };
+        let both = Expect { image: true, link: true, done_when: vec!["a\nPR   link".into(), "".into()], firm: true };
         let p = check("I changed the header.", Some(&both), false, &NOTHING).continue_with.unwrap();
         assert!(p.contains("an image in the chat and a PR or branch link"), "{p}");
         assert!(p.contains(IMAGE_PROMPT) && p.contains(LINK_PROMPT));
@@ -464,6 +474,7 @@ mod tests {
             who: vec![],
             done_when: done_when.iter().map(|s| s.to_string()).collect(),
             source: crate::router::delivery::PlanSource::Analyzer,
+            firm: true,
         }
     }
 
@@ -506,5 +517,61 @@ mod tests {
         assert_eq!(Expect::from_plan(&plan(Deliverable::Explain, &[Show::Text], &["answers the question"])), None);
         assert_eq!(Expect::from_plan(&plan(Deliverable::Other, &[], &[])), None);
         assert_eq!(Expect::from_plan(&plan(Deliverable::Other, &[Show::Text, Show::Table], &[])), None);
+    }
+
+    /// A lean plan ("@Ann look at this", "…propose an architecture refactor") is checked and
+    /// recorded, but never continued: no extra turn, and no "no picture" line unless it claims one.
+    #[tokio::test]
+    async fn a_lean_visual_turn_without_an_image_is_a_miss_that_does_not_continue() {
+        let lean = Expect { firm: false, ..ideas() };
+        let (text, runs, last) = play(Some(lean.clone()), ("Ann had a look: the layout is fine.", NOTHING), ("x", NOTHING)).await;
+        assert_eq!((text.as_str(), runs), ("Ann had a look: the layout is fine.", 0));
+        assert_eq!(last.continue_with, None);
+        assert!(!last.no_picture_line && !last.share_last_shot, "{last:?}");
+        assert_eq!((last.missing, last.outcome), (vec![Missing::Image], Some(Outcome::Miss)));
+        assert_eq!(meta(&check("x", Some(&lean), false, &NOTHING), Some(&lean), true).unwrap()["lean"], true);
+        // The claims rule is unchanged: a claimed picture still gets the line, or the shot
+        let claim = "Here is the mockup at phone width.";
+        let v = check(claim, Some(&lean), false, &NOTHING);
+        assert!(v.no_picture_line && v.continue_with.is_none(), "{v:?}");
+        let v = check(claim, Some(&lean), false, &SHOT);
+        assert!(v.share_last_shot && !v.no_picture_line && v.outcome == Some(Outcome::Hit), "{v:?}");
+        // A lean turn that shared one is a hit
+        assert_eq!(check("Shared it.", Some(&lean), false, &SHARED).outcome, Some(Outcome::Hit));
+    }
+
+    #[tokio::test]
+    async fn a_lean_change_without_a_link_does_not_continue() {
+        let lean = Expect { firm: false, ..change() };
+        let (_, runs, last) = play(Some(lean), ("We'll set this up tomorrow.", NOTHING), ("x", NOTHING)).await;
+        assert_eq!(runs, 0, "no LINK_PROMPT turn that commits and pushes");
+        assert_eq!((last.continue_with, last.no_picture_line), (None, false));
+        assert_eq!((last.missing, last.outcome), (vec![Missing::Link], Some(Outcome::Miss)));
+    }
+
+    /// Oleks's replay case: "What cool feature can we add?" is a firm Ideas ask, so a reply with
+    /// no mockup continues once. The same keyword plan that the hint renders.
+    #[tokio::test]
+    async fn a_firm_ideas_ask_without_an_image_continues() {
+        let plan = crate::router::delivery::keyword_plan("What cool feature can we add?", &[]);
+        assert!(plan.firm && plan.kind == Deliverable::Ideas, "{plan:?}");
+        let e = Expect::from_plan(&plan).unwrap();
+        assert!(e.firm);
+        let (_, runs, last) = play(Some(e), ("Three features: …", NOTHING), ("Shared the mockups.", SHARED)).await;
+        assert_eq!((runs, last.outcome), (1, Some(Outcome::Hit)));
+        // The original wordings plan lean, so they don't continue
+        for msg in ["@Ann look at this MENTION:Bob", "Investigate the root cause of this deadlock and propose an architecture refactor"] {
+            let plan = crate::router::delivery::keyword_plan(msg, &[]);
+            let e = Expect::from_plan(&plan).unwrap_or_else(|| panic!("{msg}: {plan:?}"));
+            assert!(!e.firm, "{msg}: {plan:?}");
+            assert_eq!(check("Done.", Some(&e), false, &NOTHING).continue_with, None, "{msg}");
+        }
+    }
+
+    #[test]
+    fn from_plan_carries_firmness() {
+        let lean = DeliveryPlan { firm: false, ..plan(Deliverable::Visual, &[Show::Image], &[]) };
+        assert!(!Expect::from_plan(&lean).unwrap().firm);
+        assert!(Expect::from_plan(&plan(Deliverable::Visual, &[Show::Image], &[])).unwrap().firm);
     }
 }

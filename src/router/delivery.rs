@@ -75,6 +75,17 @@ pub struct DeliveryPlan {
     #[serde(default)]
     pub done_when: Vec<String>,
     pub source: PlanSource,
+    /// The person clearly asked for it, so a turn that doesn't deliver it gets the one automatic
+    /// continuation. A lean plan (only a weak keyword said so: "@Ann look at this", "propose a
+    /// refactor") keeps its hint and is still recorded as a hit or a miss, but never continues: the
+    /// continuation is a whole extra turn, and for a change it commits and pushes. Carried, analyzer
+    /// and older saved plans are firm.
+    #[serde(default = "firm_by_default")]
+    pub firm: bool,
+}
+
+fn firm_by_default() -> bool {
+    true
 }
 
 impl DeliveryPlan {
@@ -88,7 +99,8 @@ impl DeliveryPlan {
             }
             Deliverable::Explain | Deliverable::Other => (vec![Show::Text], &[]),
         };
-        Self { kind, show, who: Vec::new(), done_when: done_when.iter().map(|s| s.to_string()).collect(), source }
+        let done_when = done_when.iter().map(|s| s.to_string()).collect();
+        Self { kind, show, who: Vec::new(), done_when, source, firm: true }
     }
 
     /// Whether the person should get an image in the chat.
@@ -126,6 +138,9 @@ const IDEA_WORDS: &[&str] = &[
     "idea", "ideas", "suggest", "suggestion", "suggestions", "improve", "improvement", "improvements", "brainstorm",
     "propose", "proposal", "proposals", "inspiration", "roadmap",
 ];
+/// The [`IDEA_WORDS`] that ask firmly; the rest ("propose", "suggest", "improve", "roadmap") only
+/// lean, since they also come in asks for other work ("…and propose an architecture refactor").
+const FIRM_IDEA_WORDS: &[&str] = &["idea", "ideas", "brainstorm"];
 /// "feature" with one of these asks for new ones ("a cool feature we can add", "new features").
 const FEATURE_WORDS: &[&str] = &["feature", "features"];
 const FEATURE_ASK: &[&str] = &["new", "add", "cool", "could", "can", "should", "next", "other", "more", "else"];
@@ -273,8 +288,60 @@ pub fn expected_kind(prompt: &str, recent: &[&str]) -> Deliverable {
 
 /// The fast plan for every turn, from the message's words alone (no model call): its kind, what
 /// to show and the plain checks for it. `who` stays empty; Juno's analyzer fills it for team chats.
+/// It is firm or lean ([`DeliveryPlan::firm`], see [`asks_firmly`]).
 pub fn keyword_plan(prompt: &str, recent: &[&str]) -> DeliveryPlan {
-    DeliveryPlan::for_kind(expected_kind(prompt, recent), PlanSource::Keywords)
+    let kind = expected_kind(prompt, recent);
+    let firm = text_that_gave(kind, prompt, recent).is_some_and(|t| asks_firmly(&t, kind));
+    DeliveryPlan { firm, ..DeliveryPlan::for_kind(kind, PlanSource::Keywords) }
+}
+
+/// The words [`expected_kind`] read `kind` from: the message without its thanks, or for a
+/// follow-up the earlier message it inherited from. `None` when nothing gave it (Other).
+fn text_that_gave(kind: Deliverable, prompt: &str, recent: &[&str]) -> Option<String> {
+    let own = without_acknowledgements(prompt)?;
+    if classify(&own) == Some(kind) {
+        return Some(own);
+    }
+    recent
+        .iter()
+        .rev()
+        .find_map(|m| without_acknowledgements(m).filter(|t| classify(t).is_some()))
+        .filter(|t| classify(t) == Some(kind))
+}
+
+/// Whether `text`, which [`classify`] read as `kind`, asks for it firmly. Worked out beside
+/// `classify` from the same word lists, so `classify` stays as it is.
+/// - Change: a change verb leads the message ("fix it", "please add a footer"), not one found
+///   anywhere in it ("we'll set this up tomorrow").
+/// - Visual: a [`SEE_WORDS`] word, "how it looks" / "what it looks like", or "make a mockup"; not
+///   [`LOOK_WORDS`] alone ("@Ann look at this", "the design").
+/// - Ideas: [`FIRM_IDEA_WORDS`], a feature ask or an [`IDEA_PHRASES`] phrase ("What cool feature
+///   can we add?"); not "propose", "suggest", "improve" and the like alone.
+/// - Explain and Other expect nothing to check, so firmness doesn't matter: firm.
+fn asks_firmly(text: &str, kind: Deliverable) -> bool {
+    let words = tokens(text);
+    let joined = words.join(" ");
+    match kind {
+        // classify's leading-verb branch: a Change, or a Visual for "make a mockup"
+        Deliverable::Change | Deliverable::Visual if leads_with_change_verb(&words) => true,
+        Deliverable::Change => false,
+        Deliverable::Visual => {
+            any_in(&words, SEE_WORDS) || joined.contains("how it looks") || joined.contains("what it looks like")
+        }
+        Deliverable::Ideas => {
+            let feature_ask = any_in(&words, FEATURE_WORDS) && any_in(&words, FEATURE_ASK);
+            any_in(&words, FIRM_IDEA_WORDS) || feature_ask || IDEA_PHRASES.iter().any(|p| joined.contains(p))
+        }
+        Deliverable::Explain | Deliverable::Other => true,
+    }
+}
+
+/// Whether a change verb leads `words` after the lead-in, as in [`classify`]'s first branch.
+fn leads_with_change_verb(words: &[String]) -> bool {
+    let is_question_word = |w: &String| QUESTION_WORDS.contains(&w.as_str());
+    let first = words.iter().find(|w| !LEAD_IN.contains(&w.as_str()));
+    let opens_with_question = words.first().is_some_and(is_question_word) || first.is_some_and(is_question_word);
+    first.is_some_and(|w| !opens_with_question && CHANGE_VERBS.contains(&w.as_str()))
 }
 
 /// What a turn knows when it picks its plan (see [`plan_for_turn`]).
@@ -639,6 +706,7 @@ mod tests {
             who: vec![("b1".into(), "the API".into())],
             done_when: vec!["the branch is pushed".into()],
             source: PlanSource::Analyzer,
+            firm: true,
         };
         let hint = analyzer.hint();
         assert!(hint.contains("Show in the chat: a link (the PR or page), an image. Done when: the branch is pushed."), "{hint}");
@@ -646,5 +714,69 @@ mod tests {
         let json = serde_json::to_string(&analyzer).unwrap();
         assert!(json.contains("\"kind\":\"change\"") && json.contains("\"source\":\"analyzer\""), "{json}");
         assert_eq!(serde_json::from_str::<DeliveryPlan>(&json).unwrap(), analyzer);
+        // A plan saved before `firm` existed, or an analyzer's without it, is firm
+        let older = r#"{"kind":"visual","show":["image"],"source":"analyzer"}"#;
+        assert!(serde_json::from_str::<DeliveryPlan>(older).unwrap().firm);
+        let lean = DeliveryPlan { firm: false, ..analyzer };
+        assert_eq!(serde_json::from_str::<DeliveryPlan>(&serde_json::to_string(&lean).unwrap()).unwrap(), lean);
+    }
+
+    /// #469 round 4 (M1): a keyword plan is firm only when the words that gave its kind ask
+    /// clearly; a weak keyword only leans, and a lean plan never continues.
+    #[test]
+    fn a_keyword_plan_is_firm_or_lean() {
+        let firm = |m: &str, recent: &[&str]| {
+            let p = keyword_plan(m, recent);
+            (p.kind, p.firm)
+        };
+        let rows: &[(&str, &[&str], Deliverable, bool)] = &[
+            // Change: a leading change verb is firm, one found anywhere else only leans
+            ("fix the login button colour", &[], Change, true),
+            ("Please add the export feature", &[], Change, true),
+            ("can you add a footer?", &[], Change, true),
+            ("Fix differences!", &["the button is not aligned with booktun.ing styling!!!!"], Change, true),
+            ("fix it", &["the footer overlaps on mobile"], Change, true),
+            ("we'll set this up tomorrow", &[], Change, false),
+            ("the deploy script should push the new build", &[], Change, false),
+            // Visual: a see word, "how it looks", or make + a picture is firm; look words alone lean
+            ("show me mockup image", &[], Visual, true),
+            ("Screenshot give me!", &[], Visual, true),
+            ("i want to see this ---> the phone bar", &[], Visual, true),
+            ("tell me what it looks like on mobile", &[], Visual, true),
+            ("make me a quick mockup", &[], Visual, true),
+            ("@Ann look at this MENTION:Bob", &[], Visual, false),
+            ("the design", &[], Visual, false),
+            ("visually, the hero", &[], Visual, false),
+            // Ideas: idea/ideas/brainstorm, a feature ask or an idea phrase is firm
+            ("What cool feature can we add?", &[], Ideas, true),
+            ("Hey team! What some cool feature we can add?", &[], Ideas, true),
+            ("Any ideas for the landing page?", &[], Ideas, true),
+            ("let's brainstorm the onboarding", &[], Ideas, true),
+            ("what could we add to the footer", &[], Ideas, true),
+            // …propose, suggest, improve, inspiration, roadmap alone only lean
+            ("Investigate the root cause of this deadlock and propose an architecture refactor", &[], Ideas, false),
+            ("could you suggest a name for the export", &[], Ideas, false),
+            ("how would you improve the onboarding?", &[], Ideas, false),
+            ("I need some inspiration", &[], Ideas, false),
+            ("what's on the roadmap", &[], Ideas, false),
+            // A follow-up is as firm as the earlier ask it inherits from
+            ("more", &["Any ideas for the hero?"], Ideas, true),
+            ("more", &["could you propose a cleanup"], Ideas, false),
+            ("and the other one", &["show me the footer"], Visual, true),
+            ("and the other one", &["the design"], Visual, false),
+        ];
+        for (m, recent, kind, want) in rows {
+            assert_eq!(firm(m, recent), (*kind, *want), "{m:?} after {recent:?}");
+        }
+        // Explain and Other expect nothing to check: firm, with no effect
+        assert_eq!(firm("why does the build fail?", &[]), (Explain, true));
+        assert!(keyword_plan("thanks!", &[]).kind == Other);
+        // A lean plan keeps its hint
+        let lean = keyword_plan("@Ann look at this MENTION:Bob", &[]);
+        assert_eq!(lean.hint(), DeliveryPlan::for_kind(Visual, PlanSource::Keywords).hint());
+        // A carried plan keeps its firmness through plan_for_turn
+        let carried = |p: DeliveryPlan| plan_for_turn(TurnPlanInput { carried: Some(p), ..Default::default() }).unwrap().firm;
+        assert!(!carried(lean.clone()));
+        assert!(carried(DeliveryPlan::for_kind(Visual, PlanSource::Analyzer)));
     }
 }
