@@ -26,7 +26,10 @@ export interface ClaudeVm {
   agents: Partial<Record<AgentEngine, AgentVmState>>;
 }
 
-export const SETTING_NAME = 'Run Claude inside the VM';
+/** The switch label (Mira's release-080/designs/vm-naming.md; called Run Claude inside the VM in 0.7.7). */
+export const SETTING_NAME = 'Protect your keys from tricked Claude bots';
+/** The setting's name inside a sentence: "Turn off key protection". */
+export const SETTING_HANDLE = 'key protection';
 
 const STATES: AgentRunState[] = ['off', 'isolated', 'not_isolated', 'preparing', 'unavailable'];
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : null);
@@ -62,7 +65,7 @@ export const PLATFORM_HINTS: Record<string, string> = {
 };
 
 export const ISOLATION_HINT =
-  'Claude sees only the task folder. Its own tools, web search included, can’t go online, so it browses with kwant’s browser. Your Claude sign-in or key stays on this computer; kwant adds it on the way out.';
+  'If a web page, file or another bot tricks Claude, it can’t read your sign-ins and keys or go online by itself: anything else goes through kwant’s tools and your approval settings. While it’s on, Claude sees only the task folder, browses with kwant’s browser instead of its own web search, and can’t use MCP servers you added, such as Notion.';
 
 /** Whether this host could run Claude in the VM (Linux), whatever Docker is doing. */
 export const hostSupportsIsolation = (vm: ClaudeVm | null | undefined) => !!vm && !(vm.toggle.reason && vm.toggle.reason in PLATFORM_HINTS);
@@ -97,17 +100,17 @@ export function chipFor(engine: AgentEngine, a: AgentVmState | undefined): Chip 
     title,
     ...extra,
   });
-  const later = `${name} still runs on this computer, with its own file and shell tools. Moving it inside the VM comes later.`;
+  const later = `${name} still runs on this computer, with its own file and shell tools. Moving it into a sealed box comes later.`;
   if (engine !== 'claude') return chip('neutral', 'Not isolated yet', later);
   if (!a) return chip('neutral', 'Not isolated');
   switch (a.state) {
     case 'isolated':
-      return chip('isolated', 'Isolated', 'Claude runs inside the VM, in a container of its own with no network.');
+      return chip('isolated', 'Isolated', 'Claude works in a sealed box with no internet.');
     case 'preparing': {
       const n = pct(a.progress);
       return n === null
-        ? chip('preparing', 'Getting ready', 'Getting the VM ready for Claude.', { indeterminate: true })
-        : chip('preparing', `Getting ready · ${n}%`, 'Getting the VM ready for Claude.');
+        ? chip('preparing', 'Getting ready', 'Setting up Claude’s sealed box.', { indeterminate: true })
+        : chip('preparing', `Getting ready · ${n}%`, 'Setting up Claude’s sealed box.');
     }
     case 'unavailable':
       return chip('stopped', 'Stopped', "Claude can't reply until this is fixed. Nothing runs on this computer instead.");
@@ -155,7 +158,7 @@ export function stoppedLine(a: AgentVmState): Extract<RowStatus, { kind: 'stoppe
         action: 'retry',
       };
     case 'download_needed':
-      return { kind: 'stopped', text: 'Claude’s VM isn’t set up yet, so Claude can’t reply. Try again to start the one-time setup.', action: 'retry' };
+      return { kind: 'stopped', text: 'Claude’s sealed box isn’t set up yet, so Claude can’t reply. Try again to start the one-time setup.', action: 'retry' };
     case 'relay_down':
       return { kind: 'stopped', text: 'kwant couldn’t connect Claude to your sign-in. Restart kwant; if it keeps happening, turn this off.', action: null };
     case 'sign_in_expired':
@@ -199,13 +202,13 @@ export function pollInterval(vm: ClaudeVm | null | undefined): number | null {
 export function preparingCopy(progress: AgentVmState['progress']) {
   if (!progress)
     return {
-      line1: 'Getting the VM ready for Claude. This one-time setup downloads about 860 MB and takes a few minutes.',
+      line1: 'Setting up Claude’s sealed box. This one-time setup downloads about 860 MB and takes a few minutes.',
       line2: 'Claude can’t reply until it’s done. Turning this off lets Claude reply on this computer meanwhile; the setup keeps going.',
       figure: null,
     };
   const mb = (b: number) => Math.round(b / 1_000_000);
   return {
-    line1: 'Getting the VM ready for Claude. This one-time download takes a few minutes.',
+    line1: 'Setting up Claude’s sealed box. This one-time download takes a few minutes.',
     line2: 'Claude can’t reply until it’s done.',
     figure: `${mb(progress.done_bytes)} of ${mb(progress.total_bytes)} MB`,
   };
@@ -214,8 +217,8 @@ export function preparingCopy(progress: AgentVmState['progress']) {
 /** One sentence for the live region: only at the start, the end and on a failure, never per tick. */
 export function announcement(prev: AgentVmState | undefined, next: AgentVmState | undefined): string | null {
   if (!next || prev?.state === next.state) return null;
-  if (next.state === 'preparing') return 'Getting the VM ready for Claude.';
-  if (next.state === 'isolated' && prev) return 'Claude now runs inside the VM.';
+  if (next.state === 'preparing') return 'Setting up Claude’s sealed box.';
+  if (next.state === 'isolated' && prev) return 'Key protection is on. Claude now works in its sealed box.';
   if (next.state === 'unavailable' && prev) return `Claude stopped. ${stoppedLine(next).text}`;
   return null;
 }
@@ -243,7 +246,7 @@ export function putErrorText(status: number, data: unknown): string {
 
 /** Lin's #446 contract: a reply waiting for a free spot inside the VM. */
 export const queuedVmText = (slots?: number): string =>
-  `Waiting for a free spot in the VM.${slots ? ` ${slots === 1 ? '1 reply runs' : `${slots} replies run`} at once there.` : ''} This one starts as soon as one finishes.`;
+  `Waiting for a free sealed box.${slots ? ` ${slots === 1 ? '1 Claude reply runs' : `${slots} Claude replies run`} at once.` : ''} This one starts as soon as one finishes.`;
 
 /**
  * The open chat's "in line" sentence. Calm on purpose: a reply can wait about five minutes behind

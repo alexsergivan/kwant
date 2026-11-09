@@ -5047,6 +5047,9 @@ pub async fn interact_sandbox(
     };
     // Returning an old screenshot as success hides failed input from the user.
     let screenshot = shot_res.map_err(|error| {
+        if let crate::sandbox::browser::BrowserError::UnsupportedKey(why) = &error {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": why })));
+        }
         tracing::warn!(team_id = %team_id, "Browser interaction failed: {}", error);
         (StatusCode::BAD_GATEWAY, Json(json!({
             "error": "Could not control the sandbox browser. Refresh the view or restart the browser and try again."
