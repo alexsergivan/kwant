@@ -4,12 +4,19 @@
 //! `~/.claude/settings.json`. This adds one `--settings` layer that:
 //!
 //! - denies Claude's file tools (Read, Grep, Glob, Edit, Write) the sign-in folders and kwnt's
-//!   secrets: `Read(…)` and `Edit(…)` deny rules;
-//! - turns on Claude's own Seatbelt sandbox for Bash with the same paths in
-//!   `sandbox.filesystem.denyRead` and `denyWrite`, so `cat ~/.claude/.credentials.json` or a
-//!   script reading the Keychain *files* fails at the OS level (items reached through macOS's
-//!   security service, as `security find-generic-password` does, are not covered: the Seatbelt
-//!   profile lets that service through; `.github/workflows/mac-local.yml` reports which);
+//!   secrets (`Read(…)` and `Edit(…)` deny rules), and denies them changes to what kwnt loads or
+//!   runs at its next start (`config.toml`, `laya/`, `bin/`: `Edit(…)` only). **Without
+//!   `KWNT_MAC_SEATBELT` that is all**: the rules cover Claude's file tools only, and a shell
+//!   command the person approves can still read these places and Keychain items;
+//! - with `KWNT_MAC_SEATBELT=1`, turns on Claude's own Seatbelt sandbox for Bash with the same
+//!   paths in `sandbox.filesystem.denyRead` and `denyWrite`, so `cat ~/.claude/.credentials.json`
+//!   or a script reading the Keychain *files* fails at the OS level. Keychain items reached
+//!   through macOS's security service (`security find-generic-password`) are not proven safe: on
+//!   CI's Mac runner a sandboxed lookup couldn't read the probe item, but that runner's keychain
+//!   isn't a person's login or iCloud keychain, so it's untested on a real Mac
+//!   (`.github/workflows/mac-local.yml`);
+//! - turns off Claude's auto memory (`autoMemoryEnabled: false`): it writes inside the denied
+//!   `~/.claude` (or the profile's home), so every try would fail or ask;
 //! - keeps kwnt in charge of every command: `autoAllowBashIfSandboxed: false` (a sandboxed
 //!   command still asks kwnt, as today) and `allowUnsandboxedCommands: false` (the bot can't opt
 //!   a command out of the sandbox).
@@ -31,9 +38,40 @@
 
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 /// Turns the Seatbelt sandbox on when `1`, `on`, `true` or `yes`. The deny rules apply either way.
 pub const SEATBELT_ENV: &str = "KWNT_MAC_SEATBELT";
+
+/// The running kwnt's data folder (`config.data_dir`: `--data-dir`, config.toml's `data_dir`,
+/// `KWNT_DATA_DIR` or `~/.kwnt`), set by [`crate::serve::run`]. Replaceable, not a `OnceLock`:
+/// the Mac app can start the server again in the same process.
+static DATA_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Records the data folder the server runs on, so every rule names the folder actually in use.
+pub fn set_data_dir(dir: &Path) {
+    let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    if let Ok(mut d) = DATA_DIR.write() {
+        *d = Some(dir);
+    }
+}
+
+/// The data folder for the rules: the running server's ([`set_data_dir`]) first; without a server
+/// (the CI probe, a test) `KWNT_DATA_DIR`, else `~/.kwnt`, as [`crate::config::Config::load`] does.
+fn data_dir_for(running: Option<PathBuf>, env: Option<std::ffi::OsString>) -> PathBuf {
+    running
+        .or_else(|| env.filter(|d| !d.is_empty()).map(PathBuf::from))
+        .unwrap_or_else(crate::config::default_data_dir)
+}
+
+/// One denied place: an absolute Mac path, a folder (`dir`) or a file, and whether reading it is
+/// denied too (`read`) or only changing it (kwnt's own config and the programs it starts).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Denied {
+    pub path: String,
+    pub dir: bool,
+    pub read: bool,
+}
 
 /// The places a bot's tools never read or write, for one turn.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,53 +83,98 @@ pub struct Places {
 }
 
 impl Places {
-    /// This computer's: `$HOME`, kwnt's data folder (`KWNT_DATA_DIR`, else `~/.kwnt`) and the
+    /// This computer's: `$HOME`, the running kwnt's data folder (see [`data_dir_for`]) and the
     /// profile's home. `None` without a home folder.
     pub fn here(profile_home: Option<PathBuf>) -> Option<Self> {
         let home = dirs::home_dir()?;
-        let data_dir = std::env::var_os("KWNT_DATA_DIR")
-            .filter(|d| !d.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(crate::config::default_data_dir);
+        let running = DATA_DIR.read().ok().and_then(|d| d.clone());
+        let data_dir = data_dir_for(running, std::env::var_os("KWNT_DATA_DIR"));
         Some(Self { home, data_dir, profile_home })
     }
 
-    /// Folders (`true`) and files (`false`) to deny, absolute, without repeats. Mac paths, joined
-    /// with `/` as strings: `Path::join` would use `\` when this is compiled for Windows (CI's
-    /// rust (windows) runs these tests), and the rules are only ever read on a Mac.
-    pub fn denied(&self) -> Vec<(String, bool)> {
+    /// The places to deny, absolute, without repeats. Mac paths, joined with `/` as strings:
+    /// `Path::join` would use `\` when this is compiled for Windows (CI's rust (windows) runs
+    /// these tests), and the rules are only ever read on a Mac. Where a place (or the folder it
+    /// is in) is reached through a link, its resolved spelling is listed too: Seatbelt matches
+    /// real paths, so `/var/…` alone wouldn't cover `/private/var/…`.
+    pub fn denied(&self) -> Vec<Denied> {
         let h = mac_path(&self.home);
         let d = mac_path(&self.data_dir);
-        let mut out: Vec<(String, bool)> = vec![
-            (mac_join(&h, ".claude"), true),
-            (mac_join(&h, ".codex"), true),
-            (mac_join(&h, ".grok"), true),
+        let secret = |path: String, dir: bool| Denied { path, dir, read: true };
+        let no_edit = |path: String, dir: bool| Denied { path, dir, read: false };
+        let mut list: Vec<Denied> = vec![
+            secret(mac_join(&h, ".claude"), true),
+            // Claude's primaryApiKey and MCP servers' env and headers
+            secret(mac_join(&h, ".claude.json"), false),
+            secret(mac_join(&h, ".codex"), true),
+            secret(mac_join(&h, ".grok"), true),
             // The login and other keychains' files. Reaching the Keychain through its service
             // (`security find-generic-password`) is Seatbelt's mach-lookup rule, not this one
-            (mac_join(&h, "Library/Keychains"), true),
-            (mac_join(&d, "profiles"), true),
-            (mac_join(&d, crate::sandbox::credentials::VAULT_DIR), true),
-            (mac_join(&d, crate::sandbox::credentials::KEY_FILE), false),
-            (mac_join(&d, "api-token"), false),
-            (mac_join(&d, "kwnt.db"), false),
-            (mac_join(&d, "kwnt.db-wal"), false),
+            secret(mac_join(&h, "Library/Keychains"), true),
+            secret(mac_join(&d, "profiles"), true),
+            secret(mac_join(&d, crate::sandbox::credentials::VAULT_DIR), true),
+            secret(mac_join(&d, crate::sandbox::credentials::KEY_FILE), false),
+            secret(mac_join(&d, "api-token"), false),
+            secret(mac_join(&d, "kwnt.db"), false),
+            secret(mac_join(&d, "kwnt.db-wal"), false),
+            secret(mac_join(&d, "kwnt.db-shm"), false),
+            // Copies of the database, with its API keys and OAuth tokens (db/spaces.rs)
+            secret(mac_join(&d, "backups"), true),
+            // Each turn's claude-<uuid>.json, with MCP headers and env (mcp/cli_config.rs)
+            secret(mac_join(&d, "mcp"), true),
+            // run/mcp-cwd/<turn token> (server/mcp_runtime.rs)
+            secret(mac_join(&d, "run"), true),
+            // What kwnt loads or runs at its next start: readable, never changed by a bot
+            no_edit(mac_join(&d, "config.toml"), false),
+            no_edit(mac_join(&d, "laya"), true),
+            no_edit(mac_join(&d, "bin"), true),
         ];
         // The CLIs' own homes when moved with their variables (absolute Mac paths only)
         for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"] {
             if let Some(p) = std::env::var_os(var).filter(|v| !v.is_empty()) {
                 let p = mac_path(Path::new(&p));
                 if p.starts_with('/') {
-                    out.push((p, true));
+                    list.push(secret(p, true));
                 }
             }
         }
         if let Some(p) = &self.profile_home {
-            out.push((mac_path(p), true));
+            list.push(secret(mac_path(p), true));
         }
-        let mut seen = std::collections::HashSet::new();
-        out.retain(|(p, _)| seen.insert(p.clone()));
+        // Only a Mac reads these rules; elsewhere a resolved path wouldn't be a Mac path
+        if cfg!(unix) {
+            let resolved: Vec<Denied> = list
+                .iter()
+                .filter_map(|x| resolved(&x.path).map(|path| Denied { path, ..x.clone() }))
+                .collect();
+            list.extend(resolved);
+        }
+        let mut out: Vec<Denied> = Vec::new();
+        for x in list {
+            match out.iter_mut().find(|y| y.path == x.path) {
+                Some(y) => y.read |= x.read,
+                None => out.push(x),
+            }
+        }
         out
     }
+}
+
+/// `p`'s spelling with links resolved, when it differs: the nearest part of it that exists is
+/// resolved and the rest appended (a denied file need not exist yet). `None` when nothing
+/// resolves differently.
+fn resolved(p: &str) -> Option<String> {
+    let mut base = Path::new(p);
+    let mut rest: Vec<String> = Vec::new();
+    let real = loop {
+        if let Ok(r) = std::fs::canonicalize(base) {
+            break mac_path(&r);
+        }
+        rest.push(base.file_name()?.to_str()?.to_string());
+        base = base.parent()?;
+    };
+    let full = rest.iter().rev().fold(real, |acc, c| mac_join(&acc, c));
+    (full.starts_with('/') && full != p).then_some(full)
 }
 
 /// A path as a Mac path string, without a trailing `/` (but `/` itself stays `/`).
@@ -136,15 +219,20 @@ fn rule_path(p: &str, dir: bool) -> String {
 pub fn settings(places: &Places, seatbelt: bool, ssh_auth_sock: Option<&str>) -> Value {
     let denied = places.denied();
     let mut deny = Vec::new();
-    for tool in ["Read", "Edit"] {
-        for (p, dir) in &denied {
-            deny.push(Value::from(format!("{tool}({})", rule_path(p, *dir))));
-        }
+    for x in denied.iter().filter(|x| x.read) {
+        deny.push(Value::from(format!("Read({})", rule_path(&x.path, x.dir))));
+    }
+    for x in &denied {
+        deny.push(Value::from(format!("Edit({})", rule_path(&x.path, x.dir))));
     }
     let mut out = Map::new();
     out.insert("permissions".into(), json!({ "deny": deny }));
+    // Auto memory writes under <claude home>/projects/*/memory, inside the denied ~/.claude (or
+    // the profile's home): every try would fail or ask
+    out.insert("autoMemoryEnabled".into(), Value::Bool(false));
     if seatbelt {
-        let paths: Vec<Value> = denied.iter().map(|(p, _)| Value::from(p.as_str())).collect();
+        let read: Vec<Value> = denied.iter().filter(|x| x.read).map(|x| Value::from(x.path.as_str())).collect();
+        let write: Vec<Value> = denied.iter().map(|x| Value::from(x.path.as_str())).collect();
         out.insert(
             "sandbox".into(),
             json!({
@@ -155,8 +243,8 @@ pub fn settings(places: &Places, seatbelt: bool, ssh_auth_sock: Option<&str>) ->
                 "autoAllowBashIfSandboxed": false,
                 "allowUnsandboxedCommands": false,
                 "filesystem": {
-                    "denyRead": paths,
-                    "denyWrite": paths,
+                    "denyRead": read,
+                    "denyWrite": write,
                     "allowWrite": ["~"],
                 },
                 "network": {
@@ -224,8 +312,16 @@ mod tests {
             "Read(//Users/o/.kwnt/kwnt-vault.key)",
             "Read(//Users/o/.kwnt/api-token)",
             "Read(//Users/o/.kwnt/kwnt.db)",
+            "Read(//Users/o/.kwnt/kwnt.db-wal)",
+            "Read(//Users/o/.kwnt/kwnt.db-shm)",
+            "Read(//Users/o/.claude.json)",
+            "Read(//Users/o/.kwnt/backups/**)",
+            "Read(//Users/o/.kwnt/mcp/**)",
+            "Read(//Users/o/.kwnt/run/**)",
             "Edit(//Users/o/.claude/**)",
+            "Edit(//Users/o/.claude.json)",
             "Edit(//Users/o/.kwnt/api-token)",
+            "Edit(//Users/o/.kwnt/backups/**)",
         ] {
             assert!(deny.contains(&want.to_string()), "{want} missing from {deny:?}");
         }
@@ -237,10 +333,25 @@ mod tests {
         assert_eq!(sb["allowUnsandboxedCommands"], false, "a bot can't take a command out of the sandbox");
         assert_eq!(sb["failIfUnavailable"], false);
         let read = strs(&sb["filesystem"]["denyRead"]);
-        for want in ["/Users/o/.claude", "/Users/o/.codex", "/Users/o/.grok", "/Users/o/Library/Keychains", "/Users/o/.kwnt/kwnt-vault.key"] {
+        for want in [
+            "/Users/o/.claude",
+            "/Users/o/.claude.json",
+            "/Users/o/.codex",
+            "/Users/o/.grok",
+            "/Users/o/Library/Keychains",
+            "/Users/o/.kwnt/kwnt-vault.key",
+            "/Users/o/.kwnt/kwnt.db-shm",
+            "/Users/o/.kwnt/backups",
+            "/Users/o/.kwnt/mcp",
+            "/Users/o/.kwnt/run",
+        ] {
             assert!(read.contains(&want.to_string()), "{want} missing from {read:?}");
         }
-        assert_eq!(sb["filesystem"]["denyWrite"], sb["filesystem"]["denyRead"]);
+        // Everything unreadable is unwritable too
+        let write = strs(&sb["filesystem"]["denyWrite"]);
+        for p in &read {
+            assert!(write.contains(p), "{p} readable-denied but writable: {write:?}");
+        }
         assert_eq!(sb["filesystem"]["allowWrite"], json!(["~"]), "writes stay as broad as today");
         // The bot's own folder and kwnt's other files aren't touched
         assert!(!read.iter().any(|p| p == "/Users/o/.kwnt" || p == "/Users/o"), "{read:?}");
@@ -294,6 +405,79 @@ mod tests {
         for r in all {
             assert!(!r.contains('\\'), "{r}");
         }
+    }
+
+    #[test]
+    fn kwnts_start_files_are_readable_but_never_changed() {
+        let s = settings(&places(), true, None);
+        let deny = strs(&s["permissions"]["deny"]);
+        let read = strs(&s["sandbox"]["filesystem"]["denyRead"]);
+        let write = strs(&s["sandbox"]["filesystem"]["denyWrite"]);
+        for (path, rule) in [
+            ("/Users/o/.kwnt/config.toml", "/Users/o/.kwnt/config.toml"),
+            ("/Users/o/.kwnt/laya", "/Users/o/.kwnt/laya/**"),
+            ("/Users/o/.kwnt/bin", "/Users/o/.kwnt/bin/**"),
+        ] {
+            assert!(deny.contains(&format!("Edit(/{rule})")), "Edit {rule} missing from {deny:?}");
+            assert!(!deny.contains(&format!("Read(/{rule})")), "{rule} must stay readable: {deny:?}");
+            assert!(write.contains(&path.to_string()), "{path} missing from denyWrite {write:?}");
+            assert!(!read.contains(&path.to_string()), "{path} must stay readable in Bash: {read:?}");
+        }
+    }
+
+    #[test]
+    fn auto_memory_is_off_because_its_folder_is_denied() {
+        for seatbelt in [false, true] {
+            assert_eq!(settings(&places(), seatbelt, None)["autoMemoryEnabled"], json!(false), "seatbelt {seatbelt}");
+        }
+    }
+
+    #[test]
+    fn the_rules_name_the_running_servers_data_folder() {
+        // A data folder from config.toml (or --data-dir), not from the environment
+        let config: crate::config::Config = toml::from_str("data_dir = \"/Volumes/ext/kwnt\"").unwrap();
+        let env = Some(std::ffi::OsString::from("/Users/o/.kwnt"));
+        assert_eq!(data_dir_for(Some(config.data_dir.clone()), env.clone()), PathBuf::from("/Volumes/ext/kwnt"));
+        // Without a running server: KWNT_DATA_DIR, else ~/.kwnt
+        assert_eq!(data_dir_for(None, env), PathBuf::from("/Users/o/.kwnt"));
+        assert_eq!(data_dir_for(None, Some("".into())), crate::config::default_data_dir());
+        let p = Places { home: "/Users/o".into(), data_dir: config.data_dir, profile_home: None };
+        let deny = strs(&settings(&p, false, None)["permissions"]["deny"]);
+        for want in ["Read(//Volumes/ext/kwnt/api-token)", "Read(//Volumes/ext/kwnt/kwnt.db)", "Read(//Volumes/ext/kwnt/profiles/**)"] {
+            assert!(deny.contains(&want.to_string()), "{want} missing from {deny:?}");
+        }
+        assert!(!deny.iter().any(|r| r.contains("/Users/o/.kwnt/")), "{deny:?}");
+        // What serve::run records is what a turn's rules use
+        let dir = tempfile::tempdir().unwrap();
+        set_data_dir(dir.path());
+        assert_eq!(Places::here(None).unwrap().data_dir, std::path::absolute(dir.path()).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_folder_is_denied_by_its_resolved_spelling_too() {
+        let t = tempfile::tempdir().unwrap();
+        let real = t.path().join("real-data");
+        std::fs::create_dir_all(real.join("profiles")).unwrap();
+        std::fs::write(real.join("api-token"), "x").unwrap();
+        let link = t.path().join("data-link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let p = Places { home: t.path().join("home"), data_dir: link.clone(), profile_home: None };
+        let denied = p.denied();
+        let real = mac_path(&std::fs::canonicalize(&real).unwrap());
+        let link = mac_path(&link);
+        let find = |path: String| denied.iter().find(|x| x.path == path).cloned();
+        for (name, dir, read) in [("api-token", false, true), ("profiles", true, true), ("kwnt.db-shm", false, true), ("config.toml", false, false)] {
+            let want = Denied { path: format!("{real}/{name}"), dir, read };
+            assert_eq!(find(want.path.clone()), Some(want), "resolved {name}");
+            assert!(find(format!("{link}/{name}")).is_some(), "as written: {name}");
+        }
+        // Nothing listed twice; places not reached through a link aren't doubled
+        let mut paths: Vec<&String> = denied.iter().map(|x| &x.path).collect();
+        paths.sort();
+        paths.dedup();
+        assert_eq!(paths.len(), denied.len());
+        assert_eq!(resolved("/"), None);
     }
 
     /// Not a check: `.github/workflows/mac-local.yml` runs it on the macOS runner to get the exact

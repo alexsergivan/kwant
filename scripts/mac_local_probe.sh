@@ -22,7 +22,9 @@ SRT_VERSION="${SRT_VERSION:-0.0.81}"
 T="${RUNNER_TEMP:-$(mktemp -d)}/mac-local-probe"
 REAL_HOME="$HOME"
 H="$T/home"
-D="$T/data"
+# Inside the home, as ~/.kwnt is: writes outside the home already fail, so only here does the
+# write check on kwnt's start files test their own rule
+D="$H/.kwnt"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
 fails=0
 
@@ -34,8 +36,17 @@ fail() { note "- FAIL: $*"; echo "::error::$*"; fails=$((fails + 1)); }
 note "## Mac local hardening probe (macOS $(sw_vers -productVersion), $(uname -m))"
 
 # A stand-in home and data folder with something to steal in each denied place
-mkdir -p "$H/.claude" "$H/.codex" "$H/.grok" "$H/Library/Keychains" "$H/work" "$D/profiles/p1"
+mkdir -p "$H/.claude" "$H/.codex" "$H/.grok" "$H/Library/Keychains" "$H/work" "$D/profiles/p1" \
+    "$D/backups" "$D/mcp" "$D/run/mcp-cwd/t1" "$D/laya" "$D/bin"
 echo SECRET-claude > "$H/.claude/kwnt-probe-secret.txt"
+echo SECRET-shm > "$D/kwnt.db-shm"
+echo SECRET-backup > "$D/backups/kwnt-1.db"
+echo SECRET-mcp > "$D/mcp/claude-1.json"
+echo SECRET-run > "$D/run/mcp-cwd/t1/x"
+# What kwnt loads or runs at its next start: readable, not writable
+echo start-config > "$D/config.toml"
+echo start-laya > "$D/laya/serve.py"
+echo start-bin > "$D/bin/uv"
 echo SECRET-codex > "$H/.codex/auth.json"
 echo SECRET-grok > "$H/.grok/user-settings.json"
 echo SECRET-keychain-file > "$H/Library/Keychains/probe.keychain-db"
@@ -44,8 +55,8 @@ echo SECRET-db > "$D/kwnt.db"
 echo SECRET-profile > "$D/profiles/p1/.credentials.json"
 echo ok > "$H/work/ok.txt"
 
-settings_for() { # <home> <out>
-    env HOME="$1" KWNT_DATA_DIR="$D" KWNT_MAC_SETTINGS_OUT="$2" \
+settings_for() { # <home> <out> [data folder, default $D]
+    env HOME="$1" KWNT_DATA_DIR="${3:-$D}" KWNT_MAC_SETTINGS_OUT="$2" \
         "$BIN" --ignored --exact drivers::mac_local::tests::write_settings_for_the_mac_ci_probe -q > "$2.log" 2>&1 \
         || { cat "$2.log"; return 1; }
 }
@@ -53,6 +64,11 @@ settings_for "$H" "$T/settings.json" || { fail "couldn't write kwnt's settings";
 note ""
 note "### kwnt's settings for a Mac turn (Seatbelt on)"
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(len(s["permissions"]["deny"]), "deny rules;", "sandbox.denyRead:", s["sandbox"]["filesystem"]["denyRead"])' "$T/settings.json" | tee -a "$SUMMARY"
+if python3 -c 'import json,sys; sys.exit(json.load(open(sys.argv[1])).get("autoMemoryEnabled") is not False)' "$T/settings.json"; then
+    pass "autoMemoryEnabled is false"
+else
+    fail "autoMemoryEnabled isn't false"
+fi
 
 # --- 1. The real Claude Code reads them ------------------------------------------------------
 note ""
@@ -94,17 +110,43 @@ in_sandbox() { # <srt settings> <home> <command...>: runs it, output in $T/out
     (cd "$home" && env HOME="$home" perl -e 'alarm 60; exec @ARGV' "$SRT" --settings "$f" "$@") > "$T/out" 2>&1
 }
 if [ -x "$SRT" ]; then
+    # After step 1, which ran Claude in this home and let it write its own ~/.claude.json
+    echo '{"primaryApiKey": "SECRET-claude-json"}' > "$H/.claude.json"
     srt_settings "$T/settings.json" "$T/srt.json"
     in_sandbox "$T/srt.json" "$H" cat "$H/work/ok.txt"
     if [ $? -eq 0 ] && grep -qx ok "$T/out"; then pass "an ordinary file in the home folder is still readable"; else fail "the sandbox didn't run an allowed read: $(head -5 "$T/out")"; fi
-    for f in "$H/.claude/kwnt-probe-secret.txt" "$H/.codex/auth.json" "$H/.grok/user-settings.json" \
-        "$H/Library/Keychains/probe.keychain-db" "$D/api-token" "$D/kwnt.db" "$D/profiles/p1/.credentials.json"; do
+    for f in "$H/.claude/kwnt-probe-secret.txt" "$H/.claude.json" "$H/.codex/auth.json" "$H/.grok/user-settings.json" \
+        "$H/Library/Keychains/probe.keychain-db" "$D/api-token" "$D/kwnt.db" "$D/kwnt.db-shm" \
+        "$D/profiles/p1/.credentials.json" "$D/backups/kwnt-1.db" "$D/mcp/claude-1.json" "$D/run/mcp-cwd/t1/x"; do
         in_sandbox "$T/srt.json" "$H" cat "$f"
         rc=$?
         if [ $rc -ne 0 ] && ! grep -q SECRET "$T/out"; then pass "read denied: ${f#$T/}"; else fail "read NOT denied: ${f#$T/} (exit $rc)"; fi
     done
     in_sandbox "$T/srt.json" "$H" sh -c "echo planted > '$H/.claude/settings.json'"
     if [ ! -e "$H/.claude/settings.json" ]; then pass "write denied: home/.claude/settings.json"; else fail "write NOT denied: home/.claude/settings.json"; fi
+    for f in "$D/config.toml" "$D/laya/serve.py" "$D/bin/uv"; do
+        in_sandbox "$T/srt.json" "$H" cat "$f"
+        if [ $? -eq 0 ] && grep -q "^start-" "$T/out"; then pass "readable: ${f#$T/}"; else fail "kwnt's start file NOT readable: ${f#$T/}"; fi
+        before=$(cat "$f")
+        in_sandbox "$T/srt.json" "$H" sh -c "echo planted > '$f'"
+        if [ "$(cat "$f")" = "$before" ]; then pass "write denied: ${f#$T/}"; else fail "write NOT denied: ${f#$T/}"; fi
+    done
+    mkdir -p "$D/workspace"
+    in_sandbox "$T/srt.json" "$H" sh -c "echo new > '$D/workspace/new.txt'"
+    if [ -e "$D/workspace/new.txt" ]; then pass "a write elsewhere in the data folder still works"; else fail "a write in data/workspace failed: $(head -5 "$T/out")"; fi
+    in_sandbox "$T/srt.json" "$H" sh -c "echo planted > '$D/bin/new-tool'"
+    if [ ! -e "$D/bin/new-tool" ]; then pass "a new file in data/bin is denied"; else fail "a new file in data/bin was NOT denied"; fi
+    # The data folder named through a link: Seatbelt matches real paths, so the resolved spelling
+    # has to be in the settings too
+    ln -s "$D" "$T/data-link"
+    if settings_for "$H" "$T/settings-link.json" "$T/data-link"; then
+        srt_settings "$T/settings-link.json" "$T/srt-link.json"
+        in_sandbox "$T/srt-link.json" "$H" cat "$D/api-token"
+        rc=$?
+        if [ $rc -ne 0 ] && ! grep -q SECRET "$T/out"; then pass "read denied through a linked data folder: data/api-token"; else fail "read NOT denied through a linked data folder (exit $rc)"; fi
+    else
+        fail "couldn't write kwnt's settings for a linked data folder"
+    fi
     in_sandbox "$T/srt.json" "$H" sh -c "echo new > '$H/work/new.txt'"
     if [ -e "$H/work/new.txt" ]; then pass "a write in the home folder still works"; else fail "a write in the home folder failed: $(head -5 "$T/out")"; fi
     in_sandbox "$T/srt.json" "$H" curl -sS -m 15 -o /dev/null https://example.com
