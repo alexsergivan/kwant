@@ -140,6 +140,21 @@ pub const AGENT_NOTE: &str = "(kwant connected-agent note:";
 /// (attachments, routing note, connected-agent note).
 const KWANT_PROMPT_SUFFIXES: [&str; 3] = ["[Attached files]", ROUTING_NOTE, AGENT_NOTE];
 
+/// The person's own words in a turn's prompt: the text before the first blank line that opens one
+/// of [`KWANT_PROMPT_SUFFIXES`] (attachments, routing note, connected-agent note). The router rates
+/// these, so a file list or a note kwant added doesn't count as the person's words (#467 M1).
+pub fn own_text(prompt: &str) -> &str {
+    let mut from = 0;
+    while let Some(at) = prompt[from..].find("\n\n") {
+        let at = from + at;
+        if KWANT_PROMPT_SUFFIXES.iter().any(|s| prompt[at + 2..].starts_with(s)) {
+            return &prompt[..at];
+        }
+        from = at + 1;
+    }
+    prompt
+}
+
 /// The outside agent (0.7.4 connected agents) that wrote a "user" message, from its meta.
 pub fn from_agent(msg: &crate::db::models::Message) -> Option<String> {
     if msg.sender_role != "user" {
@@ -956,6 +971,17 @@ pub(crate) mod tests {
             reaction: None,
             reply_to: None,
         }
+    }
+
+    #[test]
+    fn own_text_drops_only_the_blocks_kwant_adds() {
+        assert_eq!(own_text("Fix differences!\n\n[Attached files]\nThe user attached these files.\n- a.png"), "Fix differences!");
+        assert_eq!(own_text(&format!("go on\n\n{ROUTING_NOTE} routed here)")), "go on");
+        assert_eq!(own_text(&format!("hello\n\n{AGENT_NOTE} from x)")), "hello");
+        // His own paragraphs stay; the first kwant block ends them
+        assert_eq!(own_text("line one\n\nline two\n\n[Attached files]\n- a.pdf"), "line one\n\nline two");
+        assert_eq!(own_text("just words\n\nmore words"), "just words\n\nmore words");
+        assert_eq!(own_text("quote [Attached files] inline"), "quote [Attached files] inline");
     }
 
     #[test]

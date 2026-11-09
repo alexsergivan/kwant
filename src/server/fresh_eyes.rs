@@ -8,31 +8,40 @@
 //!   saved summary or cached prefix back from the store (`TurnInput::fresh_eyes`);
 //! - gets none of the reviewer's own notes or lessons in its prompt, only the person's pinned team
 //!   and channel instructions;
-//! - is registered here for as long as it runs, and kwant's own tools that read other chats, notes,
-//!   tasks or hand-offs refuse during it ([`BLOCKED_TOOLS`]).
+//! - is registered here for as long as it runs, and of kwant's own tools only [`ALLOWED_TOOLS`]
+//!   are offered and run during it: a tool added later (one that reads chats, notes or facts
+//!   included) is off in a review until it is put on that list.
 
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
 
-/// kwant's own tools a fresh-eyes turn neither sees nor runs: each reads something besides the
-/// brief and the result (chats, the reviewer's notes, other tasks' notes, hand-off results,
-/// attachments of chats, the team's truth ledger; `task_cite_fact` reads a fact onto a card).
-pub const BLOCKED_TOOLS: &[&str] = &[
-    "search_history",
-    "memory_search",
-    "task_list",
-    "delegation_status",
-    "list_attachments",
-    "read_attachment",
-    "fact_search",
-    "fact_get",
-    "task_cite_fact",
+/// The only kwant tools a fresh-eyes turn sees and runs (an allowlist, Rigel's QA of #456,
+/// finding B): the two that record a review's verdict, and the bot browser and page source for a
+/// result that is a web page. Nothing here reads a chat, a note, a memory, a fact, another task or
+/// a hand-off. Any other tool, including one added later, is hidden and refused.
+pub const ALLOWED_TOOLS: &[&str] = &[
+    // A hand-off review's verdict (delegation.rs, lead review)
+    "task_review",
+    // The Swarm Auditor's challenge
+    "audit_challenge",
+    // Looking at a result that is a web page
+    "browser_open",
+    "browser_page",
+    "browser_act",
+    "browser_cite",
+    "browser_screenshot",
+    "page_source",
 ];
+
+/// Whether a fresh-eyes turn may see and run the kwant tool `name`.
+pub fn allowed(name: &str) -> bool {
+    ALLOWED_TOOLS.contains(&name)
+}
 
 /// What a blocked tool answers.
 pub const REFUSED_TEXT: &str = "This is a fresh-eyes review: judge only the brief or spec and the result in your prompt. \
-     Tools that read chats, notes, other tasks or hand-offs are off for this turn.";
+     Only the tools that record your verdict and the browser are on for this turn.";
 
 /// The parts a fresh-eyes reviewer is shown, in the order the label lists them.
 pub const SAW_BRIEF: &str = "brief";
@@ -63,18 +72,18 @@ pub fn is_fresh(turn_id: Option<&str>) -> bool {
     turn_id.is_some_and(|id| FRESH.lock().unwrap_or_else(|e| e.into_inner()).contains(id))
 }
 
-/// Whether a fresh-eyes turn refuses the kwant tool `name`.
+/// Whether a fresh-eyes turn refuses the kwant tool `name`: any tool not in [`ALLOWED_TOOLS`].
 pub fn refuses(turn_id: Option<&str>, name: &str) -> bool {
-    BLOCKED_TOOLS.contains(&name) && is_fresh(turn_id)
+    !allowed(name) && is_fresh(turn_id)
 }
 
-/// Drops the blocked tools from a `tools/list` answer for a fresh-eyes turn.
+/// Keeps only [`ALLOWED_TOOLS`] in a `tools/list` answer for a fresh-eyes turn.
 pub fn filter_tools(turn_id: Option<&str>, tools: &mut Value) {
     if !is_fresh(turn_id) {
         return;
     }
     if let Some(list) = tools.as_array_mut() {
-        list.retain(|t| !t["name"].as_str().is_some_and(|n| BLOCKED_TOOLS.contains(&n)));
+        list.retain(|t| t["name"].as_str().is_some_and(allowed));
     }
 }
 
@@ -107,8 +116,13 @@ mod tests {
             for t in ["fact_search", "fact_get", "task_cite_fact"] {
                 assert!(refuses(Some("fe-turn-1"), t), "{t}");
             }
-            assert!(!refuses(Some("fe-turn-1"), "fact_propose"), "proposing a fact reads nothing back");
+            // An allowlist: anything not on it is off, writes and lookups alike
+            for t in ["fact_propose", "fact_dispute", "memory_add", "delegate", "skill_get", "bot_list", "ask_user", "a_tool_added_next_year"] {
+                assert!(refuses(Some("fe-turn-1"), t), "{t}");
+            }
             assert!(!refuses(Some("fe-turn-1"), "audit_challenge"), "the review's own tools still run");
+            assert!(!refuses(Some("fe-turn-1"), "task_review"));
+            assert!(!refuses(Some("fe-turn-1"), "browser_page"));
             assert!(!refuses(Some("fe-turn-2"), "search_history"), "another turn is untouched");
             assert!(!refuses(None, "search_history"));
         }
@@ -116,13 +130,15 @@ mod tests {
     }
 
     #[test]
-    fn blocked_tools_are_hidden_from_a_fresh_turns_list() {
+    fn only_allowed_tools_are_in_a_fresh_turns_list() {
         let _g = Guard::new("fe-turn-list");
         let mut tools = json!([{"name": "search_history"}, {"name": "task_review"}, {"name": "memory_search"}, {"name": "fact_search"},
-            {"name": "fact_get"}, {"name": "task_cite_fact"}, {"name": "audit_challenge"}]);
+            {"name": "fact_get"}, {"name": "task_cite_fact"}, {"name": "audit_challenge"}, {"name": "fact_propose"},
+            {"name": "chat_reader_added_later"}, {"name": "browser_page"}, {"description": "no name"}]);
         filter_tools(Some("fe-turn-list"), &mut tools);
         let names: Vec<&str> = tools.as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-        assert_eq!(names, ["task_review", "audit_challenge"]);
+        assert_eq!(names, ["task_review", "audit_challenge", "browser_page"], "an unknown tool is absent");
+        assert_eq!(tools.as_array().unwrap().len(), 3, "a tool with no name is dropped too");
         let mut other = json!([{"name": "search_history"}]);
         filter_tools(Some("not-fresh"), &mut other);
         assert_eq!(other.as_array().unwrap().len(), 1);
