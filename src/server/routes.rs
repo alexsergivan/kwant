@@ -972,6 +972,21 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
+        // P10: what the person expects and how best to deliver it, planned once before the bot
+        // starts (the fast model within ~3 s, else the keyword plan), for the turn that answers
+        // the person's message. Read from their saved message, never `prompt` (attachment and
+        // answer notes) or `turn_prompt` (routing, hire, team notes); none for a thanks
+        if let Some((message_id, plan, _why)) = super::delivery_plan::plan_for_message(
+            &scope.state,
+            &target_kwant,
+            &scope.teammates,
+            &scope.context_id(&target_kwant),
+            scope.workspace_dir.as_deref(),
+        )
+        .await
+        {
+            super::delivery_plan::remember(&scope.job_id, &message_id, plan);
+        }
         // A full link in the person's own message may open the bot browser first
         let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
@@ -979,6 +994,7 @@ fn execute_single_turn(
             // Several bots asked the person something: one list of it all (when the chain is over)
             super::asks::consolidate(&scope).await;
         }
+        super::delivery_plan::forget(&scope.job_id);
     });
 }
 
@@ -2021,7 +2037,7 @@ fn person_words(person_turn: bool, current: Option<&Message>) -> Option<&str> {
 /// `m` is the person's own message: a "user" message that neither a connected outside agent nor
 /// a bot (through the chat API, [`SENT_BY_BOT`]) sent. The one filter for the delivery plan's
 /// current and earlier messages.
-fn is_persons(m: &Message) -> bool {
+pub(crate) fn is_persons(m: &Message) -> bool {
     if m.sender_role != "user" || crate::drivers::from_agent(m).is_some() {
         return false;
     }
@@ -2030,17 +2046,23 @@ fn is_persons(m: &Message) -> bool {
 }
 
 /// The turn's one delivery plan (P9/P10): the prompt's "[What to deliver]" hint and the delivery
-/// check after the turn both read it. Carried by a continuation or a decided reply, else read
-/// from the person's own words ([`person_words`]: none for a turn the person didn't start, a bot's
-/// chat-API message or a connected agent's), and never for a no-tools, fresh-eyes or BRIEF turn.
+/// check after the turn both read it. Carried by a continuation or a decided reply, else job
+/// `job_id`'s plan (P10's analyzer, [`super::delivery_plan::plan_for_answer`]) when it was made
+/// from the person's message this turn answers, else read from the person's own words
+/// ([`person_words`]: none for a turn the person didn't start, a bot's chat-API message or a
+/// connected agent's), and never for a no-tools, fresh-eyes or BRIEF turn.
 /// `git_repo`: the turn's working folder is in a git repository; only then can a plan be a
 /// code change (see [`crate::router::delivery::plan_for_turn`]).
-fn turn_plan(opts: &TurnOpts, current: Option<&Message>, recent: &[&str], git_repo: bool) -> Option<crate::router::delivery::DeliveryPlan> {
+fn turn_plan(opts: &TurnOpts, current: Option<&Message>, recent: &[&str], git_repo: bool, job_id: &str) -> Option<crate::router::delivery::DeliveryPlan> {
+    let person = current.filter(|m| opts.nav_prompt.is_some() && is_persons(m));
     crate::router::delivery::plan_for_turn(crate::router::delivery::TurnPlanInput {
         no_tools: opts.no_tools,
         read_only: opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE),
         fresh_eyes: opts.fresh_eyes,
-        carried: opts.delivery.clone(),
+        carried: opts
+            .delivery
+            .clone()
+            .or_else(|| person.and_then(|m| super::delivery_plan::plan_for_answer(job_id, Some(m.id.as_str())))),
         person_message: person_words(opts.nav_prompt.is_some(), current),
         recent,
         git_repo,
@@ -2507,6 +2529,29 @@ async fn run_kwant_turn_inner(
                 }
             }
         }
+        // P10: a turn that should show an image or a link, or make a change, never runs on the fast
+        // tier. Its plan by `delivery::plan_for_turn`'s rules: the carried one, else the job's plan
+        // for the person's message this turn answers, else that message's words. A prompt kwant or a
+        // bot wrote (hand-off, routine, mission, decide round) answers no message: no plan, no floor
+        let read_only = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
+        let newest = if opts.fresh_eyes { Vec::new() } else { db.list_messages(&tag.context_id, 1).await.unwrap_or_default() };
+        let answered = super::delivery_plan::answered_message(newest.last(), &prompt);
+        let job_plan = super::delivery_plan::plan_for_answer(&scope.job_id, answered.map(|m| m.id.as_str()));
+        if opts.routed.is_none() && opts.tier.is_none() {
+            let plan = crate::router::delivery::plan_for_turn(crate::router::delivery::TurnPlanInput {
+                no_tools: opts.no_tools,
+                read_only,
+                fresh_eyes: opts.fresh_eyes,
+                carried: opts.delivery.clone().or_else(|| job_plan.clone()),
+                person_message: answered.map(|m| m.text.as_str()),
+                recent: &[],
+                git_repo: workspace_dir.as_deref().is_some_and(crate::router::delivery::in_git_repo),
+            });
+            if let Some(floor) = plan.and_then(|p| crate::router::analyzer::effort_floor(&p, &route.effort_level)) {
+                route.reasoning = format!("{} · effort raised to {floor}: the person expects to see an image, a link or a change", route.reasoning);
+                route.effort_level = floor.into();
+            }
+        }
         let route = crate::router::apply_preferred_model(route, &target_kwant.preferred_model);
         let route = match opts.tier {
             Some(t) => crate::router::with_tier(route, t),
@@ -2761,19 +2806,37 @@ async fn run_kwant_turn_inner(
         .await;
         let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
         // P9/P10: how the result should reach the person, for the prompt's "[What to deliver]" hint
-        // and the delivery check after the turn. The keyword plan, at once and with no model call,
-        // read from the person's saved message: never from `prompt`, which carries kwant's notes
-        // (routing, team building, hire, attachments). None for a prompt kwant or a bot wrote, a
-        // fresh-eyes reviewer (B1), a no-tools or a BRIEF turn (see delivery::plan_for_turn).
-        let read_only = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
+        // and the delivery check after the turn: one plan per turn ([`turn_plan`]). The carried
+        // plan, else the job's plan (P10's analyzer) for the person's message this turn answers,
+        // else the keyword plan of that saved message: never of `prompt`, which carries kwant's
+        // notes (routing, team building, hire, attachments). None for a prompt kwant or a bot
+        // wrote, a fresh-eyes reviewer (B1), a no-tools or a BRIEF turn (see delivery::plan_for_turn).
         let delivery = {
             let recent: Vec<&str> = person_recent.iter().map(String::as_str).collect();
             let git_repo = workspace_dir.as_deref().is_some_and(crate::router::delivery::in_git_repo);
-            turn_plan(&opts, current_message.as_ref(), &recent, git_repo)
+            turn_plan(&opts, current_message.as_ref(), &recent, git_repo, &scope.job_id)
         };
         // The save step's copy: the delivery check reads this same plan, and a reply held for
         // the decide round keeps it for the decided reply
         let plan = delivery.clone();
+        // P10: the planned turn's "[What the person expects]" block, with this bot's own place in
+        // a team plan (the one that replies, a helper with its part, or neither)
+        let expects = delivery
+            .as_ref()
+            .filter(|p| p.source != crate::router::delivery::PlanSource::Keywords || !p.who.is_empty())
+            .map(|p| {
+                let name_of = |id: &str| {
+                    std::iter::once(target_kwant)
+                        .chain(scope.teammates.iter())
+                        .find(|k| k.id == id)
+                        .map(|k| k.name.clone())
+                        .unwrap_or_else(|| "a teammate".to_string())
+                };
+                crate::router::analyzer::expects_block(p, &target_kwant.id, &name_of)
+            })
+            .unwrap_or_default();
+        // The reply's meta keeps the plan it was made with (`delivery_plan::META_KEY`)
+        let delivery_meta = delivery.clone();
         let turn_input = TurnInput {
             // The bot's own copy of the browser API, naming this chat (thread, channel or DM): a
             // CAPTCHA it meets is asked in the thread whose call met it. The same for every turn
@@ -2804,6 +2867,7 @@ async fn run_kwant_turn_inner(
             read_only,
             delivery,
             fresh_eyes: opts.fresh_eyes,
+            expects,
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -3428,6 +3492,11 @@ async fn run_kwant_turn_inner(
                 if let Some(routing) = &opts.routing {
                     meta.get_or_insert_with(|| serde_json::json!({}))["routing"] = routing.clone();
                 }
+                // P10: the plan this reply was made with, so the person's next message is judged
+                // against it (see `delivery_plan::judge_chat`); `meta.delivery` is the check's verdict
+                if let Some(plan) = delivery_meta.as_ref().filter(|p| p.kind != crate::router::delivery::Deliverable::Other) {
+                    meta.get_or_insert_with(|| serde_json::json!({}))[super::delivery_plan::META_KEY] = serde_json::json!(plan);
+                }
                 if let Some(serde_json::Value::Object(extra)) = &opts.extra_meta {
                     let m = meta.get_or_insert_with(|| serde_json::json!({}));
                     for (k, v) in extra {
@@ -3839,6 +3908,10 @@ pub(crate) async fn send_chat_inner(
     }
     // The person wrote here: the bots waiting on them in this chat don't need to remind them
     super::waiting::person_wrote(&state, payload.channel_id.as_deref(), payload.kwant_id.as_deref(), None).await;
+    // P10: how they took the last reply's delivery ("show me" after a text-only reply is a miss)
+    if let Some(chat) = payload.channel_id.as_deref().or(payload.kwant_id.as_deref()) {
+        super::delivery_plan::note_reaction(&state, &space, chat).await;
+    }
     let note = super::attachments::attach_to_message(
         &state,
         &uploads,
@@ -6130,7 +6203,7 @@ mod tests {
     }
 
     fn plan_of(opts: &TurnOpts, m: &Message, git_repo: bool) -> Option<DeliveryPlan> {
-        turn_plan(opts, Some(m), &[], git_repo)
+        turn_plan(opts, Some(m), &[], git_repo, "")
     }
 
     #[test]
@@ -6225,13 +6298,13 @@ mod tests {
     fn a_continuation_carries_the_first_plan_and_never_continues_again() {
         let first = person_turn();
         assert!(first.continuation_slot().is_some());
-        let ideas = turn_plan(&first, Some(&saved("user", "user", "What cool feature can we add?", None)), &[], true).unwrap();
+        let ideas = turn_plan(&first, Some(&saved("user", "user", "What cool feature can we add?", None)), &[], true, "").unwrap();
         let next = Carried::of(&first).continuation(ideas.clone(), None);
         assert_eq!(next.delivery.as_ref(), Some(&ideas));
         assert!(next.delivery_continued && next.continuation_slot().is_none(), "continued once at most");
         // kwant's continuation prompt can't make a plan of its own
         let prompt = saved("user", "user", "Commit and push your work, then reply with the PR link", None);
-        assert_eq!(turn_plan(&next, Some(&prompt), &[], true), Some(ideas.clone()));
+        assert_eq!(turn_plan(&next, Some(&prompt), &[], true, ""), Some(ideas.clone()));
         let expect = Expect::from_plan(&ideas).unwrap();
         let v = check("Still no picture.", Some(&expect), next.delivery_continued, &Seen::default());
         assert!(v.continue_with.is_none() && v.outcome.is_some(), "{v:?}");

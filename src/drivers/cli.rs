@@ -2384,6 +2384,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             read_only: false,
             delivery: None,
             fresh_eyes: false,
+            expects: String::new(),
         };
 
         let result = build_cli_prompt(&input);
@@ -2438,6 +2439,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             read_only: false,
             delivery: None,
             fresh_eyes: false,
+            expects: String::new(),
         };
 
         let result = build_cli_prompt(&input);
@@ -2488,6 +2490,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 read_only: false,
                 delivery: None,
                 fresh_eyes: false,
+                expects: String::new(),
             }
         }
 

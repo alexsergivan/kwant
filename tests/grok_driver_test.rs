@@ -36,6 +36,7 @@ const AUTH: &str = r#"{"xai::api_key":{"key":"xai-FAKE","auth_mode":"api_key"}}"
 fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
     TurnInput {
         fresh_eyes: false,
+        expects: String::new(),
         continuity: String::new(),
         skills: String::new(),
         person: Default::default(),

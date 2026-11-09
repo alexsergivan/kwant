@@ -207,11 +207,11 @@ fn runs_git_push(command: &str) -> bool {
     words.windows(2).any(|w| w[0] == "git" && w[1] == "push") && !words.iter().any(|w| *w == "--dry-run" || *w == "-n")
 }
 
-/// Records whether a turn delivered what its plan expected: the hook for Juno's delivery-note
-/// helper (P10, next to the decide notes in `src/server/decide.rs`). Until that helper exists it
-/// only logs.
+/// Records whether a turn delivered what its plan expected, as a `check` delivery note (P10,
+/// [`super::delivery_plan::record_check`]), kept apart from the person's own notes so the planner
+/// never learns from it. Errors are logged there, never returned.
 pub async fn record_delivery_note(
-    _state: &super::AppState,
+    state: &super::AppState,
     kwant_id: &str,
     context_id: &str,
     expect: &Expect,
@@ -226,8 +226,32 @@ pub async fn record_delivery_note(
         firm = expect.firm,
         ?outcome,
         ?missing,
-        "delivery check (delivery note hook: no store yet)"
+        "delivery check"
     );
+    record_in(&state.db, kwant_id, context_id, expect, outcome, missing).await;
+}
+
+/// [`record_delivery_note`]'s store step: what was wanted, whether it was all delivered, and what
+/// was missing, as [`Show`]s (an image is `Show::Image`, a link `Show::Link`).
+async fn record_in(db: &crate::db::Database, kwant_id: &str, context_id: &str, expect: &Expect, outcome: Outcome, missing: &[Missing]) {
+    let (wanted, missing) = shows(expect, missing);
+    super::delivery_plan::record_check(db, kwant_id, context_id, &wanted, outcome == Outcome::Hit, &missing).await;
+}
+
+/// What `expect` wanted and what was `missing`, as the delivery note's [`Show`]s.
+fn shows(expect: &Expect, missing: &[Missing]) -> (Vec<Show>, Vec<Show>) {
+    let show = |m: &Missing| match m {
+        Missing::Image => Show::Image,
+        Missing::Link => Show::Link,
+    };
+    let mut wanted = Vec::new();
+    if expect.image {
+        wanted.push(Show::Image);
+    }
+    if expect.link {
+        wanted.push(Show::Link);
+    }
+    (wanted, missing.iter().map(show).collect())
 }
 
 /// Runs `again` (the continuation turn, given its prompt) when the first turn's check asked for
@@ -566,6 +590,39 @@ mod tests {
             assert!(!e.firm, "{msg}: {plan:?}");
             assert_eq!(check("Done.", Some(&e), false, &NOTHING).continue_with, None, "{msg}");
         }
+    }
+
+    /// P10: the check's verdict lands in the store as one `check` delivery note, filed by what the
+    /// plan wanted and naming what was missing, and never among the person's own notes.
+    #[tokio::test]
+    async fn a_failed_check_writes_one_check_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
+        let space = crate::db::spaces::SpaceId::default_space();
+        let input = crate::db::models::NewKwant {
+            name: "Pixel".into(),
+            title: String::new(),
+            persona_prompt: String::new(),
+            soul: String::new(),
+            avatar_sprite: String::new(),
+            driver_type: "api".into(),
+            preferred_model: "auto".into(),
+        };
+        let bot = db.create_kwant(&space, &input).await.unwrap();
+        let v = check("Three features: …", Some(&ideas()), true, &NOTHING);
+        assert_eq!((v.outcome, v.missing.clone()), (Some(Outcome::Miss), vec![Missing::Image]));
+        record_in(&db, &bot.id, "chat-1", &ideas(), v.outcome.unwrap(), &v.missing).await;
+        let rows = db.list_delivery_notes(&space, 10).await.unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let r = &rows[0];
+        assert_eq!((r.source.as_str(), r.context_id.as_deref(), r.kwant_id.as_deref()), ("check", Some("chat-1"), Some(bot.id.as_str())));
+        assert_eq!((r.kind.as_str(), r.outcome.as_str(), r.wanted.as_deref()), ("visual", "miss", Some("image")));
+        assert!(db.list_person_delivery_notes(&space, 10).await.unwrap().is_empty());
+        // A change that was pushed is a hit filed as a change
+        record_in(&db, &bot.id, "chat-1", &change(), Outcome::Hit, &[]).await;
+        let rows = db.list_delivery_notes(&space, 10).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!((rows[0].kind.as_str(), rows[0].outcome.as_str(), rows[0].wanted.as_deref()), ("change", "hit", None));
     }
 
     #[test]

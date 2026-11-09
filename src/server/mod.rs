@@ -1,5 +1,6 @@
 pub mod discussion;
 pub mod routes;
+pub mod delivery_plan;
 pub mod sse;
 pub mod browser_input;
 pub mod browser_stream;

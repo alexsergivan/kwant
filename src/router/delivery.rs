@@ -79,8 +79,9 @@ pub struct DeliveryPlan {
     /// The person clearly asked for it, so a turn that doesn't deliver it gets the one automatic
     /// continuation. A lean plan (only a weak keyword said so: "@Ann look at this", "propose a
     /// refactor") keeps its hint and is still recorded as a hit or a miss, but never continues: the
-    /// continuation is a whole extra turn, and for a change it commits and pushes. Carried, analyzer
-    /// and older saved plans are firm.
+    /// continuation is a whole extra turn, and for a change it commits and pushes. Carried and older
+    /// saved plans are firm. An analyzer plan is firm only when the keyword plan for the same
+    /// message is firm and of the same kind ([`super::analyzer::plan`]).
     #[serde(default = "firm_by_default")]
     pub firm: bool,
 }
@@ -325,7 +326,7 @@ fn is_acknowledgement(clause: &str) -> bool {
 
 /// `text` without its thank-you and acknowledgement clauses ("Looks good to me, merge it" →
 /// " merge it"), or `None` when that is all it says ("Thanks, looks great!").
-fn without_acknowledgements(text: &str) -> Option<String> {
+pub(crate) fn without_acknowledgements(text: &str) -> Option<String> {
     let clauses: Vec<&str> = text.split_inclusive([',', '.', '!', ';', ':', '?', '\n']).collect();
     let kept: Vec<&str> = clauses.iter().copied().filter(|c| !is_acknowledgement(c)).collect();
     if kept.len() == clauses.len() {

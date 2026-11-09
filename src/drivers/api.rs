@@ -1834,6 +1834,7 @@ mod tests {
             read_only: false,
             delivery: None,
             fresh_eyes: false,
+            expects: String::new(),
         }
     }
 
