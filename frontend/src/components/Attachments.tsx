@@ -1,13 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, ChevronDown, ChevronRight, Download, ExternalLink, FileText, Film, Loader2, RotateCw, X } from 'lucide-react';
+import { AlertCircle, Download, ExternalLink, FileText, Film, Loader2, RotateCw, X } from 'lucide-react';
 import { AttachmentRef, PendingUpload, attachKind, attachmentUrl, fileKind, formatBytes, isInlineImage, isVideo, uploadProgressText } from '../attachments';
 
 /**
  * A file on a message: images as a thumbnail (opens full size), everything else as a tile.
  * Both have a Download button; the server sends non-images as downloads only.
  */
-export const FileTile: React.FC<{ file: AttachmentRef; small?: boolean }> = ({ file, small = false }) => {
+export const FileTile: React.FC<{
+  file: AttachmentRef;
+  small?: boolean;
+  /** A bot's shared file: names the bot in the alt text and viewer, and caps the tile at 240 px on desktop. */
+  sharedBy?: string;
+  /** When it was shared, for the viewer's bottom bar. */
+  at?: string | null;
+}> = ({ file, small = false, sharedBy, at = null }) => {
   const [broken, setBroken] = useState(false);
   const [viewing, setViewing] = useState(false);
   const thumbRef = useRef<HTMLAnchorElement>(null);
@@ -37,7 +44,7 @@ export const FileTile: React.FC<{ file: AttachmentRef; small?: boolean }> = ({ f
 
   if (image) {
     return (
-      <figure className={`${small ? 'w-40' : 'w-full sm:w-auto'} max-w-full sm:max-w-xs rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/80`}>
+      <figure className={`${small ? 'w-40' : 'w-full sm:w-auto'} max-w-full ${sharedBy ? 'sm:max-w-[240px]' : 'sm:max-w-xs'} rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/80`}>
         {/* A plain click opens the in-app viewer; Cmd/Ctrl/middle click still opens the original in a new tab */}
         <a
           ref={thumbRef}
@@ -56,16 +63,18 @@ export const FileTile: React.FC<{ file: AttachmentRef; small?: boolean }> = ({ f
         >
           <img
             src={attachmentUrl(file.id)}
-            alt={file.name}
+            alt={sharedBy ? `${file.name}, shared by ${sharedBy}` : file.name}
             loading="lazy"
             decoding="async"
             onError={() => setBroken(true)}
-            className={`block w-full sm:w-auto ${small ? 'max-h-24' : 'max-h-60'} object-contain bg-zinc-950`}
+            className={`block w-full sm:w-auto ${small ? 'max-h-24' : 'max-h-60'} object-contain bg-zinc-900`}
           />
         </a>
         {viewing && (
           <ImageViewer
             file={file}
+            sharedBy={sharedBy}
+            at={at}
             onClose={() => {
               setViewing(false);
               thumbRef.current?.focus();
@@ -112,15 +121,25 @@ export const FileTile: React.FC<{ file: AttachmentRef; small?: boolean }> = ({ f
 };
 
 /**
- * The full-size view of a chat image (P4): a dark scrim over the app, the picture fit to the screen,
- * Close (44 px) and Open original. Esc, Close or a click on the scrim closes it; focus starts on Close
- * and Tab stays inside. Nothing animates.
+ * The full-size view of a chat image (P4, Mira's spec): an always-dark 85% scrim, the picture fit to
+ * the screen (100dvh, so iOS Safari doesn't cut it off), Close top right, and a bottom bar with the
+ * file, bot and time on the left and Open original on the right. Esc, Close or a tap on the scrim
+ * closes it; focus starts on Close, Tab stays inside, the page behind doesn't scroll, and pinch-zoom
+ * is left to the browser. It fades in over 150 ms, with no motion under reduced motion.
  */
-export const ImageViewer: React.FC<{ file: AttachmentRef; onClose: () => void }> = ({ file, onClose }) => {
+export const ImageViewer: React.FC<{ file: AttachmentRef; sharedBy?: string; at?: string | null; onClose: () => void }> = ({
+  file,
+  sharedBy,
+  at = null,
+  onClose,
+}) => {
   const closeRef = useRef<HTMLButtonElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     closeRef.current?.focus();
+    const body = document.body;
+    const prevOverflow = body.style.overflow;
+    body.style.overflow = 'hidden';
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -142,9 +161,16 @@ export const ImageViewer: React.FC<{ file: AttachmentRef; onClose: () => void }>
       }
     };
     document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      body.style.overflow = prevOverflow;
+    };
   }, [onClose]);
   const titleId = `viewer-${file.id}`;
+  const when = timeLabel(at);
+  const closeOnScrim = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  };
   return createPortal(
     <div
       ref={boxRef}
@@ -152,42 +178,51 @@ export const ImageViewer: React.FC<{ file: AttachmentRef; onClose: () => void }>
       aria-modal="true"
       aria-labelledby={titleId}
       data-image-viewer=""
-      className="fixed inset-0 z-[200] flex flex-col bg-black/95"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      className="kw-viewer-in fixed inset-0 z-[200] flex flex-col bg-black/85"
+      style={{ height: '100dvh' }}
+      onClick={closeOnScrim}
     >
-      <div className="flex items-center gap-2 px-3 py-2 sm:px-4 text-zinc-200 bg-black">
-        <h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-medium" title={file.name}>
-          {file.name}
-        </h2>
+      <button
+        ref={closeRef}
+        type="button"
+        onClick={onClose}
+        aria-label="Close"
+        className="absolute right-2 z-10 inline-flex items-center justify-center w-11 h-11 rounded-full bg-zinc-900/80 text-zinc-100 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400"
+        style={{ top: 'calc(env(safe-area-inset-top, 0px) + 0.5rem)' }}
+      >
+        <X size={20} aria-hidden="true" />
+      </button>
+      <div className="flex-1 min-h-0 flex items-center justify-center sm:p-6" style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 3.5rem)' }} onClick={closeOnScrim}>
+        <img
+          src={attachmentUrl(file.id)}
+          alt={sharedBy ? `${file.name}, shared by ${sharedBy}` : file.name}
+          className="block max-w-[100vw] max-h-full object-contain"
+          style={{ touchAction: 'pinch-zoom' }}
+        />
+      </div>
+      <div
+        className="flex items-center gap-3 px-3 sm:px-4 bg-black text-zinc-300"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+      >
+        {/* Phones put the bot and time on a second line so the time is never cut off */}
+        <p id={titleId} className="min-w-0 flex-1 text-xs py-2 sm:py-3 sm:truncate" title={file.name}>
+          <span className="block sm:inline truncate font-medium text-zinc-100">{file.name}</span>
+          {(sharedBy || when) && (
+            <span className="block sm:inline truncate">
+              <span className="hidden sm:inline"> · </span>
+              {[sharedBy, when].filter(Boolean).join(' · ')}
+            </span>
+          )}
+        </p>
         <a
           href={attachmentUrl(file.id)}
           target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-lg text-xs font-medium text-sky-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          rel="noopener"
+          className="inline-flex items-center gap-1.5 shrink-0 min-h-[44px] px-3 rounded-lg text-xs font-medium text-sky-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
         >
           <ExternalLink size={14} aria-hidden="true" />
-          <span className="hidden sm:inline">Open original</span>
-          <span className="sm:hidden">Original</span>
+          Open original
         </a>
-        <button
-          ref={closeRef}
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="inline-flex items-center justify-center w-11 h-11 shrink-0 rounded-lg text-zinc-200 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-        >
-          <X size={20} aria-hidden="true" />
-        </button>
-      </div>
-      <div
-        className="flex-1 min-h-0 flex items-center justify-center px-0 pb-0 sm:px-6 sm:pb-6"
-        onClick={(e) => {
-          if (e.target === e.currentTarget) onClose();
-        }}
-      >
-        <img src={attachmentUrl(file.id)} alt={file.name} className="block max-w-full max-h-full object-contain" />
       </div>
     </div>,
     document.body,
@@ -201,37 +236,41 @@ const timeLabel = (at: string | null) => {
 
 /**
  * Older copies of a file a bot shared again within a few minutes (P4): folded behind the newest as
- * "×3 · Show earlier versions", oldest first when open.
+ * "Shared 3 times · Show 2 earlier" in plain grey text under the tile, oldest first when open.
  */
-export const EarlierCopies: React.FC<{ idBase: string; copies: Array<{ id: string; at: string | null; files: AttachmentRef[] }> }> = ({ idBase, copies }) => {
+export const EarlierCopies: React.FC<{
+  idBase: string;
+  sharedBy?: string;
+  copies: Array<{ id: string; at: string | null; files: AttachmentRef[] }>;
+}> = ({ idBase, sharedBy, copies }) => {
   const [open, setOpen] = useState(false);
-  const total = copies.length + 1;
+  const hidden = copies.length;
   const listId = `${idBase}-list`;
+  const fileName = copies[0]?.files.map((f) => f.name).join(', ') || 'this file';
   return (
-    <div className="mt-1.5 max-w-full" data-earlier-copies={copies.length}>
+    <div className="max-w-full" data-earlier-copies={hidden}>
       <button
         type="button"
         aria-expanded={open}
         aria-controls={listId}
+        aria-label={open ? `Hide earlier copies of ${fileName}` : `Show ${hidden} earlier ${hidden === 1 ? 'copy' : 'copies'} of ${fileName}`}
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1 min-h-[32px] px-2 -ml-2 rounded-lg text-[11px] text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        // 44 px tall hit area on phones from padding; the text stays 12 px
+        className="block text-left py-3 sm:py-1 text-xs text-zinc-400 hover:text-zinc-200 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
       >
-        {open ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
-        <span>
-          ×{total} · {open ? 'Hide earlier versions' : 'Show earlier versions'}
-        </span>
+        {open ? 'Hide earlier' : `Shared ${hidden + 1} times · Show ${hidden} earlier`}
       </button>
       {open && (
-        <ol id={listId} className="mt-1 flex flex-col gap-2" aria-label="Earlier versions, oldest first">
+        <ol id={listId} className="mt-1 flex flex-col gap-2" aria-label="Earlier copies, oldest first">
           {copies.map((c) => {
             const when = timeLabel(c.at);
             return (
               <li key={c.id} data-earlier-copy={c.id} className="max-w-full">
-                {when && <span className="block mb-1 text-[10px] text-zinc-500">{when}</span>}
+                {when && <span className="block mb-1 text-[11px] text-zinc-500">{when}</span>}
                 <ul className="flex flex-wrap gap-2">
                   {c.files.map((f) => (
                     <li key={f.id} className="max-w-full">
-                      <FileTile file={f} small />
+                      <FileTile file={f} small sharedBy={sharedBy} at={c.at} />
                     </li>
                   ))}
                 </ul>
@@ -244,11 +283,16 @@ export const EarlierCopies: React.FC<{ idBase: string; copies: Array<{ id: strin
   );
 };
 
-export const FileTiles: React.FC<{ files: AttachmentRef[]; align?: 'start' | 'end' }> = ({ files, align = 'start' }) => (
+export const FileTiles: React.FC<{ files: AttachmentRef[]; align?: 'start' | 'end'; sharedBy?: string; at?: string | null }> = ({
+  files,
+  align = 'start',
+  sharedBy,
+  at = null,
+}) => (
   <ul className={`mt-2 flex flex-wrap gap-2 w-full ${align === 'end' ? 'justify-end' : ''}`} aria-label={files.length === 1 ? 'Attached file' : `${files.length} attached files`}>
     {files.map((f) => (
       <li key={f.id} className="max-w-full">
-        <FileTile file={f} />
+        <FileTile file={f} sharedBy={sharedBy} at={at} />
       </li>
     ))}
   </ul>

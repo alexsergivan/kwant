@@ -79,6 +79,11 @@ export interface ArrangedFiles<M> {
   attached: Set<string>;
   /** Newest share id -> the older copies folded behind it, oldest first. */
   earlier: Map<string, M[]>;
+  /**
+   * Shares from the bot whose turn is still running, taken out of `messages`: the chat draws them
+   * under that bot's live row, so they are already where its saved reply will put them (no jump).
+   */
+  live: M[];
 }
 
 const timeOf = (m: Msg) => {
@@ -97,7 +102,12 @@ const fileKey = (m: Msg) =>
  * run of consecutive shares by one bot, copies of the same file name within REPEAT_WINDOW_MS fold
  * into the newest, which takes the place of the last copy.
  */
-export function arrangeSharedFiles<M extends Msg>(input: ReadonlyArray<M>, bots: ReadonlyArray<BotRef>): ArrangedFiles<M> {
+export function arrangeSharedFiles<M extends Msg>(
+  input: ReadonlyArray<M>,
+  bots: ReadonlyArray<BotRef>,
+  /** The bot (id or name) whose reply is streaming now, when its live row is on screen. */
+  liveBot: string | null = null,
+): ArrangedFiles<M> {
   const attached = new Set<string>();
   const placed: M[] = [];
   let i = 0;
@@ -180,5 +190,19 @@ export function arrangeSharedFiles<M extends Msg>(input: ReadonlyArray<M>, bots:
     if (run.some((m) => attached.has(m.id))) for (const m of run) if (!folded.has(m.id)) attached.add(m.id);
     r = e;
   }
-  return { messages: out, attached, earlier };
+
+  // The running turn: its loose shares from the live bot (after the person's last message) go to the live row.
+  const live: M[] = [];
+  if (liveBot) {
+    let start = out.length;
+    while (start > 0 && out[start - 1].sender_role !== 'user') start -= 1;
+    for (let k = out.length - 1; k >= start; k -= 1) {
+      const m = out[k];
+      if (isBotFileShare(m) && !attached.has(m.id) && sameBot(senderOf(m), liveBot, bots)) {
+        live.unshift(m);
+        out.splice(k, 1);
+      }
+    }
+  }
+  return { messages: out, attached, earlier, live };
 }

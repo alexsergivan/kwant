@@ -1095,7 +1095,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     [switchNotes, messages, knownBots],
   );
   // P4: each turn's shared files move under their bot's reply, and repeats of one file fold into the newest.
-  const arranged = useMemo(() => arrangeSharedFiles(messages, knownBots), [messages, knownBots]);
+  // While a bot's live row is on screen, its shares this turn sit under that row from the start (Mira, P4).
+  const liveRowShown = isStreaming && !deciding && routingState?.phase !== 'deciding' && !discussionState?.inProgress;
+  const liveBot = liveRowShown && streamingSpeakerName ? streamingSpeakerName : null;
+  const arranged = useMemo(() => arrangeSharedFiles(messages, knownBots, liveBot), [messages, knownBots, liveBot]);
+  const liveShareIds = useMemo(() => new Set(arranged.live.map((m) => m.id)), [arranged.live]);
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
@@ -1270,7 +1274,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
     const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
     // P4: a share that now sits under its bot's reply reads as part of it, without a second header.
-    const underReply = !isUser && filesOnly && arranged.attached.has(msg.id);
+    const underReply = !isUser && filesOnly && (arranged.attached.has(msg.id) || liveShareIds.has(msg.id));
     const olderCopies = filesOnly ? arranged.earlier.get(msg.id) : undefined;
     const replyQuote = isUser ? replyRefOf(msg.reply_to) : null;
     // Whose mood the reply header shows (Pixel's AvatarMood, drawn by ModernAvatar given a kwantId):
@@ -1415,7 +1419,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             )}
           </div>
           )}
-          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
+          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
           {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (
             // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared
             <p data-shared-auto="" className="mt-1 text-[11px] text-zinc-500">
@@ -1425,6 +1429,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {olderCopies && olderCopies.length > 0 && (
             <EarlierCopies
               idBase={`earlier-${msg.id}`}
+              sharedBy={displayName}
               copies={olderCopies.map((m) => ({ id: m.id, at: m.created_at ?? null, files: parseAttachments(m.meta) }))}
             />
           )}
@@ -1857,6 +1862,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </div>
           </div>
         )}
+
+        {/* P4: the running bot's shares, already in the place its saved reply will give them */}
+        {liveRowShown && arranged.live.map(renderMessage)}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
         {settledApprovals.map((approval) => (

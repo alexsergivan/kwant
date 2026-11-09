@@ -170,14 +170,14 @@ test("ChatView: the old uuid rows show the bot's name, never the chat title, and
   const f1 = log.querySelector('[data-message-id="f1"]');
   assert.equal(f1.hasAttribute('data-shared-under'), true);
   assert.match(f1.textContent, /Shared by Frontend/);
-  assert.ok(f1.querySelector('img[alt="find-your-book-bar.jpg"]'), "the image renders with the bot's reply");
+  assert.ok(f1.querySelector('img[alt="find-your-book-bar.jpg, shared by Frontend"]'), "the image names its bot in the alt text");
   const f9 = log.querySelector('[data-message-id="f9"]');
   assert.match(f9.textContent, /A bot/);
   assert.doesNotMatch(log.textContent, /@booktun\.ing/, 'the chat title never names a sender');
   v.unmount();
 });
 
-test('ChatView: three copies show once, with "×3 · Show earlier versions" opening the older two', async () => {
+test('ChatView: three copies show once, with "Shared 3 times · Show 2 earlier" opening the older two', async () => {
   const msgs = [
     you('u1', 'Fix differences!', at('10:29')),
     share('f1', FRONTEND, 'find-your-book-bar.jpg', at('10:29', 10)),
@@ -188,15 +188,16 @@ test('ChatView: three copies show once, with "×3 · Show earlier versions" open
   const v = mount(msgs);
   await settle();
   assert.deepEqual(rowIds(v.host), ['u1', 'r1', 'f3']);
-  assert.equal(v.host.querySelectorAll('[role="log"] img[alt="find-your-book-bar.jpg"]').length, 1);
+  assert.equal(v.host.querySelectorAll('[role="log"] img[alt="find-your-book-bar.jpg, shared by Frontend"]').length, 1);
   const toggle = v.host.querySelector('[data-earlier-copies] button');
-  assert.equal(toggle.textContent, '×3 · Show earlier versions');
+  assert.equal(toggle.textContent, 'Shared 3 times · Show 2 earlier');
+  assert.equal(toggle.getAttribute('aria-label'), 'Show 2 earlier copies of find-your-book-bar.jpg');
   assert.equal(toggle.getAttribute('aria-expanded'), 'false');
   flushSync(() => toggle.click());
   assert.equal(toggle.getAttribute('aria-expanded'), 'true');
-  assert.equal(toggle.textContent, '×3 · Hide earlier versions');
+  assert.equal(toggle.textContent, 'Hide earlier');
   assert.deepEqual([...v.host.querySelectorAll('[data-earlier-copy]')].map((e) => e.getAttribute('data-earlier-copy')), ['f1', 'f2']);
-  assert.equal(v.host.querySelectorAll('[role="log"] img[alt="find-your-book-bar.jpg"]').length, 3);
+  assert.equal(v.host.querySelectorAll('[role="log"] img[alt="find-your-book-bar.jpg, shared by Frontend"]').length, 3);
   v.unmount();
 });
 
@@ -211,12 +212,26 @@ test('ChatView: a click opens the picture full size; Esc closes it and focus ret
   assert.ok(dlg, 'viewer open');
   assert.equal(dlg.getAttribute('role'), 'dialog');
   assert.equal(dlg.getAttribute('aria-modal'), 'true');
-  assert.ok(dlg.querySelector('img[alt="bar.jpg"]'));
+  assert.ok(dlg.querySelector('img[alt="bar.jpg, shared by Frontend"]'));
+  assert.match(dlg.className, /bg-black\/85/, 'scrim is black at 85%');
+  assert.equal(dlg.style.height, '100dvh');
+  assert.equal(dlg.querySelector('img').style.touchAction, 'pinch-zoom', 'pinch-zoom left to the browser');
+  assert.match(dlg.textContent, /bar\.jpg · Frontend · \S/, 'bottom bar: file, bot, time');
+  const orig = [...dlg.querySelectorAll('a')].find((a) => a.textContent.includes('Open original'));
+  assert.equal(orig.getAttribute('target'), '_blank');
+  assert.equal(orig.getAttribute('rel'), 'noopener');
+  assert.equal(document.body.style.overflow, 'hidden', 'page behind does not scroll');
   assert.equal(document.activeElement.getAttribute('aria-label'), 'Close');
   assert.match(document.activeElement.className, /w-11 h-11/, 'Close is 44 px');
   flushSync(() => document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
   assert.equal(document.querySelector('[data-image-viewer]'), null);
+  assert.equal(document.body.style.overflow, '', 'scroll lock released');
   assert.equal(document.activeElement, thumb);
+  // a tap on the scrim closes it too
+  flushSync(() => thumb.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })));
+  const dlg2 = document.querySelector('[data-image-viewer]');
+  flushSync(() => dlg2.dispatchEvent(new window.MouseEvent('click', { bubbles: true })));
+  assert.equal(document.querySelector('[data-image-viewer]'), null);
   // Cmd/Ctrl click keeps the browser's new tab
   const ev = new window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ctrlKey: true });
   thumb.addEventListener('click', (e) => e.preventDefault(), { once: true });
@@ -275,4 +290,40 @@ test('ChatView: a new-shape share shows its bot, and an automatic one says "Shar
   assert.match(n1.querySelector('[data-shared-auto]').textContent, /^Shared automatically$/);
   assert.equal(log.querySelector('[data-message-id="n2"] [data-shared-auto]'), null, 'a share the bot made itself has no hint');
   v.unmount();
+});
+
+// ---- the running turn (Mira: no jump) -----------------------------------------------------------
+
+test("arrange: while a bot's turn runs, its loose shares go to the live row; others' stay", () => {
+  const msgs = [
+    you('u0', 'earlier', at('10:00')),
+    share('old', FRONTEND, 'old.jpg', at('10:00', 5)),
+    you('u1', 'Show it', at('10:25')),
+    share('f1', FRONTEND, 'bar.jpg', at('10:26', 5)),
+    share('g1', GROWTH, 'chart.png', at('10:26', 6)),
+  ];
+  const a = m.arrangeSharedFiles(msgs, bots, 'Frontend');
+  assert.deepEqual(a.live.map((x) => x.id), ['f1']);
+  assert.deepEqual(a.messages.map((x) => x.id), ['u0', 'old', 'u1', 'g1'], 'an earlier turn never moves');
+  assert.deepEqual(m.arrangeSharedFiles(msgs, bots).live, []);
+});
+
+test("ChatView: a share during the turn shows under the bot's live row, then stays put when the reply lands", async () => {
+  const base = [you('u1', 'Show mw screenshot in chat!!', at('10:25')), share('f1', FRONTEND, 'bar.jpg', at('10:26', 5))];
+  const v = mount(base, { isStreaming: true, streamingSpeakerName: 'Frontend', streamingText: 'Taking a screenshot' });
+  await settle();
+  const ids = rowIds(v.host);
+  assert.deepEqual(ids, ['u1', 'f1']);
+  const f1 = v.host.querySelector('[data-message-id="f1"]');
+  assert.equal(f1.hasAttribute('data-shared-under'), true, 'drawn as part of the live row, no second header');
+  // it sits after the live bubble, not before it
+  const live = [...v.host.querySelectorAll('[role="log"] > *')];
+  const liveIdx = live.findIndex((e) => e.textContent.includes('Taking a screenshot'));
+  assert.ok(liveIdx >= 0 && live.indexOf(f1) > liveIdx, 'after the streaming bubble');
+  v.unmount();
+  const done = mount([...base, reply('r1', 'Frontend', 'Shared it', at('10:26', 30))]);
+  await settle();
+  assert.deepEqual(rowIds(done.host), ['u1', 'r1', 'f1']);
+  assert.equal(done.host.querySelector('[data-message-id="f1"]').hasAttribute('data-shared-under'), true);
+  done.unmount();
 });
