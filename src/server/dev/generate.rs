@@ -154,6 +154,13 @@ pub(super) struct TurnModel {
     cap: i64,
 }
 
+impl TurnModel {
+    /// A reviewer turn by `bot` in space `space_id`, taking calls from a daily cap of `cap`.
+    pub(super) fn new(state: AppState, bot: Kwant, space_id: String, cap: i64) -> Self {
+        TurnModel { state, bot, space_id, cap }
+    }
+}
+
 impl Model for TurnModel {
     fn bot(&self) -> &Kwant {
         &self.bot
@@ -198,6 +205,8 @@ impl Model for TurnModel {
 fn card_opts(tier: Option<crate::drivers::engines::Tier>) -> TurnOpts {
     let mut opts = TurnOpts::always_asking("Dev mode card");
     opts.no_tools = true;
+    // B1: the reviewer sees the diff and the brief in its prompt, never a chat (the author's or its own)
+    opts.fresh_eyes = true;
     (opts.unsaved, opts.quiet_failure, opts.quiet_finish, opts.purpose) = (true, true, true, Some(PURPOSE.into()));
     opts.tier = tier;
     opts
@@ -453,6 +462,8 @@ mod tests {
     fn a_card_turn_runs_with_no_tools() {
         let opts = card_opts(None);
         assert!(opts.no_tools, "card turns must set TurnOpts.no_tools");
+        assert!(opts.fresh_eyes, "B1: card turns are fresh-eyes reviews");
+        assert!(opts.no_park(), "a fresh-eyes turn is never parked for a default-options retry");
         assert!(opts.always_ask && opts.unsaved && opts.quiet_failure && opts.quiet_finish);
         assert_eq!(opts.purpose.as_deref(), Some(PURPOSE));
         assert_eq!(opts.label.as_deref(), Some("Dev mode card"));

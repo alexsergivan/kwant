@@ -195,9 +195,16 @@ fn changes_note(old: &Prefix, now: &Prefix) -> Option<String> {
     })
 }
 
+/// Where this turn's conversation is read back from: its store, unless the turn has no
+/// conversation id or runs with a reviewer's fresh eyes (B1). A fresh-eyes turn sees only its
+/// prompt and `input.history` (empty), never the chat, its saved summary or its cached prefix.
+fn conversation_store(input: &TurnInput) -> Option<&crate::db::Database> {
+    input.store.as_ref().filter(|_| !input.thread_id.is_empty() && !input.fresh_eyes)
+}
+
 /// [`keep_prefix`] for this turn's conversation, read from and saved to the turn's store.
 async fn conversation_prefix(input: &TurnInput, now: Prefix) -> (Prefix, Option<String>) {
-    let Some(db) = input.store.as_ref().filter(|_| !input.thread_id.is_empty()) else {
+    let Some(db) = conversation_store(input) else {
         return (now, None);
     };
     let (kwant_id, context_id) = (&input.kwant.id, &input.thread_id);
@@ -996,7 +1003,7 @@ impl ApiDriver {
     /// writing one fails, the turn sends the newest `HISTORY_WINDOW` messages as before.
     async fn conversation_history(&self, request: &ChatRequest<'_>, input: &TurnInput) -> History {
         let fallback = || History { summary: None, messages: input.history.clone() };
-        let Some(db) = input.store.as_ref().filter(|_| !input.thread_id.is_empty()) else {
+        let Some(db) = conversation_store(input) else {
             return fallback();
         };
         let (kwant_id, context_id) = (&input.kwant.id, &input.thread_id);
@@ -1825,6 +1832,7 @@ mod tests {
             mcp: None,
             no_tools: false,
             read_only: false,
+            fresh_eyes: false,
         }
     }
 
@@ -2061,6 +2069,44 @@ mod tests {
         assert_eq!(sent_two[0], sent[0]);
         assert!(sent_two.iter().any(|t| t == "message 18") && sent_two.iter().any(|t| t == "message 26"));
         assert_eq!(bodies[1]["system"], bodies[2]["system"]);
+    }
+
+    /// B1: a reviewer's fresh-eyes turn never receives the conversation it runs in. The store
+    /// holds the author's chat (and a saved summary of it); the turn sends none of it, writes no
+    /// summary, and its prompt is the only message.
+    #[tokio::test]
+    async fn a_fresh_eyes_turn_never_reads_the_conversation_back() {
+        let reply = json!({"content": [{"type": "text", "text": "Looks fine."}], "usage": {"input_tokens": 5, "output_tokens": 2}});
+        let (url, seen) = mock(200, reply).await;
+        let driver = ApiDriver::new(Some("sk-ant-test-key".into()), Some(url));
+        let (tx, mut rx) = mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        let (_tmp, db, all) = conversation(25).await;
+        db.save_api_summary("k1", "t1", &crate::db::api_context::ApiSummary { summary: "AUTHOR SAID secret plan".into(), through_id: all[10].id.clone() })
+            .await
+            .unwrap();
+        let mut input = turn("Review this result against the brief.", vec![]);
+        input.store = Some(db.clone());
+        input.fresh_eyes = true;
+        driver.stream_turn(input, tx).await.unwrap();
+
+        let bodies: Vec<Value> = seen.lock().unwrap().iter().map(|(_, b)| b.clone()).collect();
+        assert_eq!(bodies.len(), 1, "no summary call: the reply only");
+        let sent = texts(&bodies[0]);
+        let all_text = serde_json::to_string(&bodies[0]).unwrap();
+        assert!(!all_text.contains("message 1") && !all_text.contains("message 2"), "no chat message is sent: {sent:?}");
+        assert!(!all_text.contains("AUTHOR SAID"), "the saved summary isn't sent");
+        assert!(sent.iter().any(|t| t == "Review this result against the brief."));
+        // The saved summary is left as it was: the reviewer's turn doesn't fold the author's chat
+        let saved = db.api_summary("k1", "t1").await.unwrap().unwrap();
+        assert_eq!(saved.summary, "AUTHOR SAID secret plan");
+        let history = driver.conversation_history(&request("http://unused", "k"), &{
+            let mut i = turn("x", vec![]);
+            i.store = Some(db.clone());
+            i.fresh_eyes = true;
+            i
+        }).await;
+        assert!(history.summary.is_none() && history.messages.is_empty());
     }
 
     #[tokio::test]

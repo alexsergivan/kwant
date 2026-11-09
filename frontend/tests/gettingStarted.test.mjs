@@ -374,8 +374,11 @@ test('step 3: "Bring your bots" sits next to Keep the starter bots and opens the
     const tile = r.host.querySelector('[data-import-bots]');
     assert.ok(tile, 'the tile is in step 3');
     assert.equal(tile.closest('ul'), r.host.querySelector('[data-keep-starter]').closest('ul'));
-    assert.match(tile.textContent, /^Bring your botsFrom Grok Bot, ChatGPT or Claude, or from a file\. You check a preview first\./);
-    assert.match(tile.getAttribute('aria-label'), /^Bring your bots: /);
+    assert.match(tile.textContent, /^Bring your botsFrom Grok Bot, ChatGPT or Claude, a file, a folder or a GitHub link\. You check a preview first\./);
+    assert.equal(tile.getAttribute('aria-label'), 'Bring your bots: from Grok Bot, ChatGPT or Claude, a file, a folder or a GitHub link. You check a preview first. Import');
+    // The web app never asks what is on this computer.
+    assert.equal(tile.querySelector('[data-found-line]'), null);
+    assert.ok(!r0.calls.some(([, u]) => u === '/api/import/local'));
     assert.equal(tile.getAttribute('aria-haspopup'), 'dialog');
     assert.equal(document.querySelector('[role="dialog"]'), null);
     tile.click();
@@ -388,6 +391,59 @@ test('step 3: "Bring your bots" sits next to Keep the starter bots and opens the
     r.done();
   } finally {
     g.fetch = g.window.fetch = real;
+  }
+});
+
+// 0.8.0 A4: "N found on this computer" under the tile, desktop app only, from one look at the usual places.
+async function step3Found(local, { desktop = true } = {}) {
+  const real = g.fetch;
+  const r0 = importRoutes();
+  const calls = r0.calls;
+  g.fetch = g.window.fetch = async (url, init = {}) => {
+    if (String(url) === '/api/import/local') {
+      calls.push([init.method ?? 'GET', String(url)]);
+      if (local === 'fail') return new Response('{"error":"boom"}', { status: 500, headers: { 'Content-Type': 'application/json' } });
+      if (local === 'hang') return new Promise(() => {});
+      return new Response(JSON.stringify(local), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return r0.fetch(url, init);
+  };
+  if (desktop) g.window.__KWANT_APP__ = 'mac';
+  try {
+    const r = mountStep3('imp-found');
+    await settle();
+    const tile = r.host.querySelector('[data-import-bots]');
+    return { r, tile, calls, line: tile.querySelector('[data-found-line]') };
+  } finally {
+    delete g.window.__KWANT_APP__;
+    g.fetch = g.window.fetch = real;
+  }
+}
+const src = (id, over = {}) => ({ id, kind: id, label: id, path: `~/.${id}`, bots: 1, skills: 0, memories: 0, names: [], too_large: false, ...over });
+
+test('step 3 (desktop): "N found on this computer" counts sources that are not too big', async () => {
+  const { r, tile, line, calls } = await step3Found({ available: true, sources: [src('openclaw'), src('hermes'), src('codex', { too_large: true })] });
+  assert.ok(line, 'the found line shows');
+  assert.equal(line.textContent, '2 found on this computer');
+  assert.match(tile.getAttribute('aria-label'), /You check a preview first\. 2 found on this computer\. Import$/);
+  assert.equal(calls.filter(([, u]) => u === '/api/import/local').length, 1, 'one look');
+  // The dialog reuses that look instead of asking again.
+  g.window.__KWANT_APP__ = 'mac';
+  tile.click();
+  await settle();
+  delete g.window.__KWANT_APP__;
+  assert.match(document.querySelector('[role="dialog"]').textContent, /2 found/);
+  assert.equal(calls.filter(([, u]) => u === '/api/import/local').length, 1, 'still one look');
+  r.done();
+});
+
+test('step 3 (desktop): no found line while looking, on failure, with nothing tickable, or with available:false', async () => {
+  for (const local of ['hang', 'fail', { available: true, sources: [] }, { available: true, sources: [src('codex', { too_large: true })] }, { available: false, reason: 'no home', sources: [] }]) {
+    const { r, line, tile } = await step3Found(local);
+    assert.equal(line, null, JSON.stringify(local));
+    assert.doesNotMatch(tile.getAttribute('aria-label'), /found/);
+    assert.equal(tile.querySelector('.animate-spin'), null, 'never a spinner on the tile');
+    r.done();
   }
 });
 

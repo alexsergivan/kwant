@@ -6,7 +6,8 @@ import { Badge, BadgeKind, Thread, TurnMap, sortThreads, threadBadge } from '../
 const BADGE_STYLE: Record<BadgeKind, string> = {
   working: 'text-sky-300 bg-sky-500/10 border-sky-500/30',
   waiting: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
-  queued: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
+  // Grey like the in-chat "In line" line: waiting its turn isn't waiting on you (0.7.7 final check, F).
+  queued: 'text-zinc-300 bg-zinc-800/60 border-zinc-600',
   done: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30',
   failed: 'text-rose-300 bg-rose-500/10 border-rose-500/30',
   interrupted: 'text-amber-300 bg-amber-500/10 border-amber-500/30',
@@ -184,11 +185,12 @@ export const ThreadBar: React.FC<ThreadBarProps> = ({
   );
 };
 
-/** The status dot on the phone header's second line: violet while working, amber while it waits on you (never holo). */
-export function statusDot(badge: Badge | null): { tone: 'working' | 'waiting'; label: string } | null {
+/** The status dot on the phone header's second line: violet while working, amber while it waits on you, grey while queued (never holo). */
+export function statusDot(badge: Badge | null): { tone: 'working' | 'waiting' | 'queued'; label: string } | null {
   if (!badge) return null;
   if (badge.kind === 'working') return { tone: 'working', label: badge.label };
-  if (badge.kind === 'waiting' || badge.kind === 'queued') return { tone: 'waiting', label: badge.label };
+  if (badge.kind === 'waiting') return { tone: 'waiting', label: badge.label };
+  if (badge.kind === 'queued') return { tone: 'queued', label: badge.label };
   return null;
 }
 
@@ -278,7 +280,7 @@ export const ThreadPicker: React.FC<ThreadBarProps> = ({
           <span
             data-status-dot={dot.tone}
             aria-hidden="true"
-            className={`shrink-0 w-1.5 h-1.5 rounded-full ${dot.tone === 'working' ? 'bg-[#9d8fff]' : 'bg-[#fcd34d]'}`}
+            className={`shrink-0 w-1.5 h-1.5 rounded-full ${dot.tone === 'working' ? 'bg-[#9d8fff]' : dot.tone === 'queued' ? 'bg-zinc-500' : 'bg-[#fcd34d]'}`}
           />
         )}
         <span className="truncate">{label}</span>

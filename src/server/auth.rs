@@ -429,6 +429,10 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "facts", ..] => true,
         ["", "api", "skills", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "bot-actions" | "imports", _, "undo"] => *method == Method::POST,
+        // Import from this computer reads the person's home folder (other apps' bots, memories and
+        // skills), and a GitHub link makes the server fetch from the internet: both the person's
+        // (0.8.0 A2/A3), the list included
+        ["", "api", "import", "local" | "github", ..] => true,
         _ => false,
     }
 }
@@ -1077,6 +1081,10 @@ mod tests {
         assert!(person_only(&del, "/api/teams/t1/"));
         assert!(person_only(&post, "/api/bot-actions/b1/undo"));
         assert!(person_only(&post, "/api/imports/i1/undo"));
+        assert!(person_only(&get, "/api/import/local"));
+        assert!(person_only(&post, "/api/import/local/preview"));
+        assert!(person_only(&post, "/api/import/github/preview"));
+        assert!(!person_only(&get, "/api/import/prompts"));
         assert!(!person_only(&put, "/api/kwants/k1"));
         assert!(!person_only(&get, "/api/teams/t1"));
         assert!(!person_only(&post, "/api/bot-actions/b1/confirm"));

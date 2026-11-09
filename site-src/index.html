@@ -11,12 +11,17 @@ card_art: scene
       <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Open-source, self-hosted AI agents in one binary</p>
       <h1 id="hero-title">Your own self-hosted team of AI agents</h1>
       <p class="lede">They share chats, pass work to each other and get it done on their own, on a schedule or while you're away. It runs on your laptop or a VPS.</p>
+      <div class="dl" data-dl data-os="mac">
       <div class="cta cta-one">
-        <a class="btn btn-violet" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download for Mac</a>
-        <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
+        <a class="btn btn-violet on-mac" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Download for Mac</a>
+        <a class="btn btn-violet on-windows" href="{{windows_exe}}" rel="noopener" data-os-link="windows">Download for Windows <span class="beta">beta</span></a>
+        <a class="btn btn-violet on-linux" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Download for Linux <span class="beta">beta</span></a>
         <p class="cta-alt"><a href="docs/quickstart.html">A VPS or Docker? Get started <span aria-hidden="true">→</span></a></p>
       </div>
-      <details class="mac-first" id="mac-first">
+      <p class="dl-note on-mac">Free, for Apple silicon and Intel. Also for <a href="{{windows_exe}}" rel="noopener" data-os-link="windows">Windows</a> and <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Linux</a>, in beta.</p>
+      <p class="dl-note on-windows">Free, for 64-bit Windows. It isn't signed yet, so Windows warns the first time: click <b>More info</b>, then <b>Run anyway</b>. Also for <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Mac</a> and <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Linux</a>.</p>
+      <p class="dl-note on-linux">Free. A <code>.deb</code> for Ubuntu and Debian on x86_64; other distros, the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>). Also for <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Mac</a> and <a href="{{windows_exe}}" rel="noopener" data-os-link="windows">Windows</a>.</p>
+      <details class="mac-first on-mac" id="mac-first">
         <summary>
           <span class="mf-ico" aria-hidden="true"><svg viewBox="0 0 20 20" fill="currentColor"><path d="M4 4h12v1H4zM3 5h1v8H3zM16 5h1v8h-1zM4 12h12v1H4zM1 14h18v2H1z"/><path d="M5 6h10v6H5z" opacity=".22"/><path d="M8 8h1v2H8zM11 8h1v2h-1z"/></svg></span>
           <span class="mf-sum"><b>First time on a Mac?</b><span>macOS asks once, because kwant isn't notarized by Apple yet.</span></span>
@@ -41,8 +46,7 @@ card_art: scene
           <p class="mf-term" data-term="soon"><span class="soon">Soon</span>A one-line Terminal install that skips this step.</p>
         </div>
       </details>
-      <p class="mac-dl">Free, for Apple silicon and Intel. Linux: a <code>.deb</code> for Ubuntu and Debian on x86_64, or the <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage" rel="noopener">AppImage</a> (<a href="docs/install.html#linux">how to install</a>). Windows (beta): an <a href="https://github.com/alexsergivan/kwant/releases/latest" rel="noopener">installer</a> for 64-bit Windows (<a href="docs/install.html#windows">how to install</a>).</p>
-      {{install:hero}}
+      </div>
       {{releases}}
     </div>
     <figure class="crt hero-crt">
@@ -358,13 +362,18 @@ card_art: scene
         <h2 id="outro-title">Give it a try tonight</h2>
         <p>One command to start. Your bots, your accounts, your machine.</p>
         {{install:end}}
-        <div class="cta">
-          <a class="btn btn-violet" href="docs/quickstart.html">Read the quickstart</a>
-          <a class="btn btn-soft" href="docs/install.html">Run it on a server</a>
-          <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener">Download for Mac</a>
-          <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener">Download for Linux <span class="beta">beta</span></a>
+        <div class="dl" data-dl data-os="mac">
+          <div class="cta">
+            <a class="btn btn-violet" href="docs/quickstart.html">Read the quickstart</a>
+            <a class="btn btn-soft" href="docs/install.html">Run it on a server</a>
+            <a class="btn btn-soft on-mac" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Download for Mac</a>
+            <a class="btn btn-soft on-windows" href="{{windows_exe}}" rel="noopener" data-os-link="windows">Download for Windows <span class="beta">beta</span></a>
+            <a class="btn btn-soft on-linux" href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Download for Linux <span class="beta">beta</span></a>
+          </div>
+          <p class="mac-dl on-mac">The Mac app isn't notarized by Apple yet, so macOS stops it the first time: <a href="docs/install.html#mac">how to open it</a>. Also for <a href="{{windows_exe}}" rel="noopener" data-os-link="windows">Windows</a> and <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Linux</a>, in beta.</p>
+          <p class="mac-dl on-windows">The installer isn't signed yet, so Windows warns the first time: click <b>More info</b>, then <b>Run anyway</b>. Also for <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Mac</a> and <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb" rel="noopener" data-os-link="linux">Linux</a>.</p>
+          <p class="mac-dl on-linux">A <code>.deb</code> for Ubuntu and Debian, or the AppImage for other distros (<a href="docs/install.html#linux">how to install</a>). Also for <a href="https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg" rel="noopener" data-os-link="mac">Mac</a> and <a href="{{windows_exe}}" rel="noopener" data-os-link="windows">Windows</a>.</p>
         </div>
-        <p class="mac-dl">The Mac app isn't notarized by Apple yet, so macOS stops it the first time. <a href="docs/install.html#mac">How to open it</a>.</p>
         <div class="star-ask">
           <p><span class="star-pix" aria-hidden="true">⭐</span> kwant runs on coffee and GitHub stars. Like it? Toss one our way.</p>
           <a class="btn btn-star" href="https://github.com/alexsergivan/kwant" rel="noopener">Star on GitHub</a>

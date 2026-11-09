@@ -202,7 +202,7 @@ pub fn toggle_message(reason: &str) -> &'static str {
         "mac_later" => "Coming to Mac later. For now, Claude runs on this computer in both modes.",
         "not_supported_yet" => "Only on Linux for now. Claude runs on this computer in both modes.",
         codes::DOCKER_UNAVAILABLE => "Start Docker to turn this on.",
-        _ => "Run Claude inside the VM can't be turned on here right now.",
+        _ => "Key protection can't be turned on here right now.",
     }
 }
 

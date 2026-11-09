@@ -410,6 +410,7 @@ pub(super) async fn card_for<M: Model>(facts: &DevFacts, picked: Option<&Picked>
     card.insert("security".into(), security);
     card.insert("findings".into(), Value::Array(findings));
     card.insert("cut".into(), json!(cut));
+    card.insert("fresh_eyes".into(), fresh_eyes_label(facts, picked, reply.is_some(), ticket.is_some()));
     if picked.is_none() {
         card.insert("note".into(), json!(NO_REVIEWER));
     }
@@ -417,6 +418,23 @@ pub(super) async fn card_for<M: Model>(facts: &DevFacts, picked: Option<&Picked>
         card.insert("error".into(), json!(e));
     }
     (status, Value::Object(card))
+}
+
+/// B1, "Checked with fresh eyes" on a review card (fresh-eyes-audit.md §3): `checked` only when a
+/// reviewer other than the author answered. Every card turn runs fresh-eyes (`card_opts`), so the
+/// reviewer saw the diff plus the brief: the ticket's done-when lines (`ticket`), the task
+/// (`brief`), or else only the PR's own title and description (`pr`, the author's claim).
+fn fresh_eyes_label(facts: &DevFacts, picked: Option<&Picked>, answered: bool, ticket: bool) -> Value {
+    use crate::server::fresh_eyes::{label, SAW_BRIEF, SAW_DIFF, SAW_SPEC};
+    let (saw, source): (&[&str], &str) = if ticket {
+        (&[SAW_SPEC, SAW_DIFF], "ticket")
+    } else if facts.task.is_some() {
+        (&[SAW_BRIEF, SAW_DIFF], "brief")
+    } else {
+        (&[SAW_DIFF], "pr")
+    };
+    let reviewer = picked.map(|p| p.bot.id.as_str());
+    label(answered && picked.is_some(), saw, source, reviewer)
 }
 
 /// The verdict of "Matches the ticket": `met` when every done-when line is met, `not_met` when any
@@ -680,6 +698,10 @@ mod tests {
         let mut m = Stub::new(vec![Ok(GOOD.into())]);
         let (status, c) = card(&f, Some(&picked), Some(&mut m)).await;
         assert_eq!(status, READY);
+        // B1: the label says a reviewer other than the author checked it, with fresh eyes
+        assert_eq!(c["fresh_eyes"]["checked"], true);
+        assert_eq!(c["fresh_eyes"]["reviewer_kwant_id"], "kw_demo_rigel");
+        assert_ne!(c["fresh_eyes"]["reviewer_kwant_id"], c["author"]["bot"]["id"]);
         assert_eq!(c["reviewer"]["name"], "Rigel");
         // The landed card compares bot ids, never names
         assert_eq!(c["reviewer"]["id"], "kw_demo_rigel");
@@ -729,6 +751,7 @@ mod tests {
         let (status, c) = card::<Stub>(&f, None, None).await;
         assert_eq!(status, READY);
         assert_eq!(c["reviewer"], Value::Null);
+        assert_eq!(c["fresh_eyes"]["checked"], false, "no reviewer: nobody checked it");
         assert_eq!(c["note"], NO_REVIEWER);
         assert_eq!(c["intent"]["rows"], json!([]));
         assert_eq!(c["risk"]["level"], "low");
