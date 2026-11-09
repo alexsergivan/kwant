@@ -94,6 +94,7 @@ import {
   reloadOnTurnEnd,
   shouldRenderDelta,
   streamTarget,
+  waitsForOtherBot,
   threadBadge,
   threadsApi,
   turnsIn,
@@ -3151,7 +3152,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   });
   const queuedHere: QueuedState | null = chatQueue.alone ? asQueued(chatQueue.alone) : null;
   // P6: a turn waiting behind the reply that runs here shows under it, not hidden until it starts.
-  const queuedBeside: QueuedState[] = chatQueue.beside.map(asQueued);
+  const queuedBeside: QueuedState[] = chatQueue.beside.map((t) => ({ ...asQueued(t), named: waitsForOtherBot(turns, openCtx, t) }));
 
   // The bot's conversations, the open thread's controls, and "working on…" elsewhere.
   const agentThreads = currentKwant ? threadsByKwant[currentKwant.id] : undefined;

@@ -119,6 +119,8 @@ export interface QueuedState {
   speaker: string;
   /** The waiting turn, when known (keys the chips under a running reply). */
   turnId?: string;
+  /** Under a running reply: the waiting turn is for a different bot than the one replying (a room), so the line leads with `speaker`. */
+  named?: boolean;
 }
 
 /** "Drafter: Write" for a resolved approval row; the card's own words, nothing computed. */
@@ -1764,6 +1766,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         {/* A held reply is being decided: the line stands in for the streamed draft and the consults */}
         {deciding && <DecidingLine botName={deciding.botName} consulted={deciding.consulted} />}
+
+        {/* P6: turns waiting behind the held reply stay visible while the team decides (under the line, aligned with its card) */}
+        {(deciding || (isStreaming && routingState?.phase === 'deciding')) && !queued && (queuedBeside?.length ?? 0) > 0 && (
+          <div className="w-full max-w-5xl pl-12" data-queued-beside-deciding="">
+            <div className="max-w-4xl">
+              <QueuedBeside items={queuedBeside} />
+            </div>
+          </div>
+        )}
 
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && !deciding && routingState?.phase !== 'deciding' && (

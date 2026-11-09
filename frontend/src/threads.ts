@@ -225,6 +225,16 @@ export function queuedInChat(turns: TurnMap, contextId: string): { alone: Tracke
   return { alone: null, beside: queued };
 }
 
+/**
+ * A turn waiting beside a running reply belongs to a different bot than any reply running in this
+ * chat (a room: Scout waits behind its own work elsewhere while Marketer answers here). Its line then
+ * names that bot instead of saying "this bot" under someone else's reply.
+ */
+export function waitsForOtherBot(turns: TurnMap, contextId: string, waiting: TrackedTurn): boolean {
+  const running = turnsIn(turns, contextId).filter((t) => t.state === 'running');
+  return running.length > 0 && !running.some((t) => t.kwant_id === waiting.kwant_id);
+}
+
 /** The kwant's turns outside its direct chat (threads, delegations, team channels), oldest first. */
 export const backgroundTurns = (turns: TurnMap, kwantId: string): TrackedTurn[] =>
   Object.values(turns)
