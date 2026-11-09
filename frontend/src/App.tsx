@@ -12,6 +12,7 @@ import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showC
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
 import { ChatView, ChatMessage, DiscussionState, RoutingState, QueuedState, SendOptions } from './components/ChatView';
+import { DropPillHost } from './components/DropLayer';
 import { ReactResult, Reaction, optimisticReplyRef, reactionOf, saveReaction, senderLabel } from './reactReply';
 import { PhoneTabBar, type PhoneTabItem } from './components/PhoneTabBar';
 import { ThreadBar, ThreadHeader, ThreadPicker, type ThreadBarProps } from './components/ThreadBar';
@@ -3984,7 +3985,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 )}
               </div>
             ) : (
-              <div className={`flex-1 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>{mainPane}</div>
+              <div className={`relative flex-1 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+                {mainPane}
+                <DropPillHost />
+              </div>
             )}
             {(showPhoneList || needsSetup) && (
               <PhoneTabBar
@@ -4015,8 +4019,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         ) : (
           <>
             {sidebar('all')}
-            <div className={`flex-1 min-w-0 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+            <div className={`relative flex-1 min-w-0 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
               {mainPane}
+              <DropPillHost />
             </div>
           </>
         )}

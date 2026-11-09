@@ -95,7 +95,11 @@ export const FileTiles: React.FC<{ files: AttachmentRef[]; align?: 'start' | 'en
 );
 
 /** A file in the composer: uploading (with progress), ready, or failed (with the reason and Retry). */
-export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; onRetry?: () => void }> = ({ item, onRemove, onRetry }) => {
+/**
+ * `fresh` is the chip's place in a drop that just landed (0, 1, 2…): it drops into the tray with a
+ * short stagger and a tint that fades (0.8.0 drag and drop). Everything else about the chip is as before.
+ */
+export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; onRetry?: () => void; fresh?: number }> = ({ item, onRemove, onRetry, fresh }) => {
   const pct = Math.round(item.progress * 100);
   const failed = item.state === 'error';
   const video = isVideo(item.mime || item.attachment?.mime) || attachKind({ name: item.name, type: item.mime }) === 'video';
@@ -103,7 +107,9 @@ export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; o
     <li
       className={`relative flex items-center gap-2 max-w-full sm:max-w-[16rem] pl-2 pr-1 py-1 rounded-lg border text-[11px] overflow-hidden ${
         failed ? 'border-rose-500/40 bg-rose-500/10' : 'border-zinc-700/70 bg-zinc-800/70'
-      }`}
+      }${fresh !== undefined ? ' kw-chip-new' : ''}`}
+      data-fresh={fresh !== undefined ? 'true' : undefined}
+      style={fresh !== undefined ? ({ '--kw-chip-delay': `${40 + (fresh === 0 ? 0 : fresh === 1 ? 30 : 60)}ms` } as React.CSSProperties) : undefined}
     >
       {item.state === 'uploading' ? (
         <Loader2 size={12} className="shrink-0 text-sky-300 animate-spin motion-reduce:animate-none" aria-hidden="true" />

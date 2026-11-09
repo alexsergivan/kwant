@@ -1,0 +1,131 @@
+/* 0.8.0 drop files into a chat (Mira, release-080/drag-drop/design.md). Transform and opacity only;
+   reduced motion keeps every state's look and changes only opacity, in 120 ms. */
+.kw-dd {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: kw-dd-in 120ms var(--kw-ease) both;
+}
+.kw-dd-veil { position: absolute; inset: 0; background: rgb(18 14 38 / 0.8); transition: background-color 160ms var(--kw-ease), opacity 140ms cubic-bezier(0.4, 0, 1, 1); }
+.kw-dd-frame {
+  position: absolute;
+  inset: 10px;
+  border-radius: 18px;
+  box-shadow: inset 0 0 0 1.5px rgb(157 143 255 / 0.55), inset 0 0 56px rgb(130 112 245 / 0.16);
+  transition: box-shadow 160ms var(--kw-ease), opacity 140ms cubic-bezier(0.4, 0, 1, 1);
+}
+.kw-dd-corner { position: absolute; fill: #b8adff; transition: fill 160ms var(--kw-ease); }
+.kw-dd-corner.tl { top: 4px; left: 4px; }
+.kw-dd-corner.tr { top: 4px; right: 4px; transform: scaleX(-1); }
+.kw-dd-corner.bl { bottom: 4px; left: 4px; transform: scaleY(-1); }
+.kw-dd-corner.br { bottom: 4px; right: 4px; transform: scale(-1, -1); }
+.kw-dd-place { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; box-sizing: border-box; }
+.kw-dd-card {
+  position: relative;
+  width: min(380px, calc(100% - 48px));
+  padding: 24px 28px 20px;
+  border-radius: 20px;
+  background: #231b4d;
+  border: 1px solid rgb(157 143 255 / 0.35);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.55), 0 0 0 6px rgb(130 112 245 / 0.08);
+  text-align: center;
+  transition: transform 160ms var(--kw-ease), opacity 160ms var(--kw-ease), border-color 160ms var(--kw-ease);
+}
+@media (max-width: 767px) { .kw-dd-card { width: calc(100% - 32px); } }
+.kw-dd-who { position: relative; display: inline-flex; justify-content: center; margin-bottom: 14px; }
+.kw-dd-one { display: inline-flex; border-radius: 16px; box-shadow: 0 0 0 2px #231b4d, 0 0 0 4px rgb(157 143 255 / 0.8), 0 0 22px 4px rgb(130 112 245 / 0.35); transition: box-shadow 160ms var(--kw-ease), opacity 160ms; }
+.kw-dd-many { display: flex; }
+.kw-dd-many > * { margin-left: -10px; border-radius: 999px; box-shadow: 0 0 0 3px #231b4d; }
+.kw-dd-many > *:first-child { margin-left: 0; }
+.kw-dd-more { width: 44px; height: 44px; border-radius: 999px; background: #2c2552; color: #e2dff5; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center; }
+.kw-dd-count {
+  position: absolute; right: -10px; bottom: -6px; min-width: 26px; height: 26px; padding: 0 7px; border-radius: 999px;
+  background: #6c58e0; color: #fff; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 3px #231b4d; font-variant-numeric: tabular-nums; animation: kw-dd-badge 120ms var(--kw-ease) both;
+}
+.kw-dd-heading { font-size: 18px; line-height: 24px; font-weight: 600; color: #f5f4fb; letter-spacing: -0.01em; }
+.kw-dd-what { margin-top: 6px; font-size: 13px; line-height: 18px; color: #c9c5e6; font-variant-numeric: tabular-nums; }
+.kw-dd-kind { display: inline-flex; align-items: center; gap: 4px; color: #e2dff5; }
+.kw-dd-lim { margin-top: 4px; font-size: 11px; line-height: 16px; color: #8d87b8; }
+.kw-dd-wont { margin-top: 14px; text-align: left; border-radius: 10px; border: 1px solid rgb(252 211 77 / 0.28); background: rgb(252 211 77 / 0.08); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+.kw-dd-wont > div { display: flex; gap: 8px; font-size: 12px; line-height: 17px; color: #fde68a; }
+.kw-dd-refuse { margin-top: 8px; display: inline-flex; gap: 6px; font-size: 13px; line-height: 18px; color: #fda4af; text-align: left; }
+.kw-dd-refuse2 { margin-top: 4px; font-size: 12px; line-height: 17px; color: #a39dcc; }
+
+/* A. armed: files are in the window, the pointer isn't over the chat */
+.kw-dd[data-phase='armed'] .kw-dd-veil { background: rgb(18 14 38 / 0.55); }
+.kw-dd[data-phase='armed'] .kw-dd-frame { box-shadow: inset 0 0 0 1.5px rgb(157 143 255 / 0.3); transition-duration: 120ms; }
+.kw-dd[data-phase='armed'] .kw-dd-corner { fill: #6c58e0; }
+.kw-dd[data-phase='armed'] .kw-dd-card { transform: scale(0.96); opacity: 0.82; border-color: rgb(157 143 255 / 0.2); box-shadow: 0 24px 64px rgb(0 0 0 / 0.45); transition-duration: 120ms; }
+.kw-dd[data-phase='armed'] .kw-dd-one { box-shadow: 0 0 0 2px #231b4d, 0 0 0 4px rgb(157 143 255 / 0.35); }
+.kw-dd[data-phase='armed'] .kw-dd-count { animation: none; }
+/* A -> B: the avatar hops and the badge pops */
+.kw-dd[data-phase='over'] .kw-dd-who { animation: kw-dd-hop 160ms var(--kw-ease); }
+.kw-dd[data-phase='over'] .kw-dd-count { animation: kw-dd-pop 160ms var(--kw-ease) both; }
+
+/* D. nothing will go: neutral, never violet */
+.kw-dd[data-refused='true'] .kw-dd-frame { box-shadow: inset 0 0 0 1.5px rgb(141 135 184 / 0.35); }
+.kw-dd[data-refused='true'] .kw-dd-corner { fill: #5a5383; }
+.kw-dd[data-refused='true'] .kw-dd-card { border-color: #3f3868; box-shadow: 0 24px 64px rgb(0 0 0 / 0.55); }
+.kw-dd[data-refused='true'] .kw-dd-one { box-shadow: 0 0 0 2px #231b4d, 0 0 0 4px #3f3868; opacity: 0.6; }
+.kw-dd[data-refused='true'] .kw-dd-heading { color: #ecebf7; }
+
+/* E. landing: the layer fades and the card drops toward the tray */
+.kw-dd[data-phase='landing'] { pointer-events: none; }
+.kw-dd[data-phase='landing'] .kw-dd-veil,
+.kw-dd[data-phase='landing'] .kw-dd-frame { opacity: 0; }
+.kw-dd[data-phase='landing'] .kw-dd-card { transform: translateY(64px) scale(0.6); opacity: 0; transition: transform 160ms cubic-bezier(0.4, 0, 1, 1), opacity 160ms cubic-bezier(0.4, 0, 1, 1); }
+/* leaves the window, Esc or watchdog */
+.kw-dd[data-phase='leaving'] { opacity: 0; pointer-events: none; transition: opacity 100ms cubic-bezier(0.4, 0, 1, 1); }
+
+/* the composer is the landing spot: above the veil, lit while a drop will go */
+.kw-dd-raised { z-index: 40; }
+.kw-dd-lit { border-color: #9d8fff !important; box-shadow: 0 0 0 4px rgb(130 112 245 / 0.22), 0 0 24px 2px rgb(130 112 245 / 0.25) !important; transition: box-shadow 160ms var(--kw-ease), border-color 160ms var(--kw-ease); }
+
+/* new tray chips: drop in, staggered, with a tint that fades from 600 to 800 ms */
+.kw-chip-new { animation: kw-chip-in 160ms var(--kw-ease) both; animation-delay: var(--kw-chip-delay, 40ms); }
+.kw-chip-new::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgb(157 143 255 / 0.55);
+  background: rgb(130 112 245 / 0.14);
+  pointer-events: none;
+  animation: kw-chip-tint 800ms linear both;
+}
+
+/* F. over a page that isn't a chat */
+.kw-dd-pill {
+  position: absolute; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 50;
+  display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px;
+  background: #231b4d; border: 1px solid rgb(255 255 255 / 0.14); box-shadow: 0 12px 32px rgb(0 0 0 / 0.5);
+  font-size: 13px; line-height: 18px; color: #f5f4fb; white-space: nowrap; pointer-events: none;
+  animation: kw-dd-in 120ms var(--kw-ease) both;
+}
+.kw-dd-pill[data-phase='leaving'] { opacity: 0; transition: opacity 100ms linear; }
+
+@keyframes kw-dd-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kw-dd-hop { 0% { transform: translateY(0); } 50% { transform: translateY(-3px); } 100% { transform: translateY(0); } }
+@keyframes kw-dd-pop { from { transform: scale(0.6); } to { transform: scale(1); } }
+@keyframes kw-dd-badge { from { transform: scale(0.85); } to { transform: scale(1); } }
+@keyframes kw-chip-in { from { opacity: 0; transform: translateY(-10px) scale(0.92); } to { opacity: 1; transform: none; } }
+@keyframes kw-chip-tint { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes kw-chip-tint-flat { 0%, 99.9% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes kw-chip-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .kw-dd, .kw-dd-pill { animation: kw-dd-in 120ms linear both; }
+  .kw-dd *, .kw-dd-pill { transition-property: opacity, background-color, border-color, box-shadow, fill !important; transition-duration: 120ms !important; transition-timing-function: linear !important; }
+  .kw-dd[data-phase] .kw-dd-who, .kw-dd[data-phase] .kw-dd-count { animation: none; }
+  .kw-dd[data-phase='landing'] .kw-dd-card { transform: none; }
+  .kw-dd[data-phase='leaving'], .kw-dd[data-phase='landing'] { transition: opacity 120ms linear; }
+  .kw-dd[data-phase='landing'] { opacity: 0; }
+  .kw-chip-new { animation: kw-chip-fade 120ms linear both; animation-delay: 0ms; }
+  .kw-chip-new::after { animation: kw-chip-tint-flat 600ms linear both; }
+}

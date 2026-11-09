@@ -1,7 +1,8 @@
-// 0.8.0 drag and drop into chats (Pixel): the whole open chat takes a file drop (message list, header
-// and composer), not only the composer box; after the drop the files sit in the same tray and the
-// cursor is in the field. Paste, the paperclip, the 10-file limit and /idea mode are unchanged.
-// The pane cases fail on main fd3dfafa, where only the <form> listens.
+// 0.8.0 drag and drop into chats (Pixel, Mira's design release-080/drag-drop/design.md): the whole open
+// chat takes a file drop (header, message list and composer), with a card saying who gets the files
+// and what is coming; after the drop the files sit in the same tray and the cursor is in the field.
+// Paste, the paperclip and the 10-file limit are unchanged. The pane cases fail on main fd3dfafa,
+// where only the <form> listens and there is no drop layer.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -36,6 +37,7 @@ const ui = await loadBundled(`
   import { flushSync } from 'react-dom';
   import { createRoot } from 'react-dom/client';
   import { ChatView } from './src/components/ChatView';
+  import { DropPillHost } from './src/components/DropLayer';
   export const mount = (p) => {
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -43,12 +45,20 @@ const ui = await loadBundled(`
     flushSync(() => root.render(React.createElement(ChatView, p)));
     return { host, unmount: () => { root.unmount(); host.remove(); } };
   };
+  export const mountPill = () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    flushSync(() => root.render(React.createElement(DropPillHost)));
+    return { host, unmount: () => { root.unmount(); host.remove(); } };
+  };
   export const act = (fn) => flushSync(fn);
 `);
 
 const props = (extra = {}) => ({
   title: 'Frontend', subtitle: 'Pixel', messages: [], streamingText: '', streamingThinking: '', isStreaming: false,
-  pendingApprovals: [], onSendMessage: () => {}, onResolveApproval: () => {}, onCancelDiscussion: () => {}, kwants: [], teams: [], ...extra,
+  pendingApprovals: [], onSendMessage: () => {}, onResolveApproval: () => {}, onCancelDiscussion: () => {}, kwants: [], teams: [],
+  home: { kind: 'bot', bot: { id: 'k-front', name: 'Frontend', title: 'Frontend engineer', avatar_sprite: 'Frontend' } }, ...extra,
 });
 
 const mkFile = (name, type = 'image/png', size = 2048) => {
@@ -81,27 +91,74 @@ const parts = (host) => ({
   field: host.querySelector('textarea'),
 });
 const chips = (host) => host.querySelectorAll('ul[aria-label="Files to send"] > li').length;
-const overlayOn = (host) => host.textContent.includes('Drop files to attach') || !!host.querySelector('[data-drop-summary]');
+const layer = (host) => host.querySelector('[data-drop-layer]');
+const phase = (host) => layer(host)?.getAttribute('data-phase') ?? null;
+const heading = (host) => host.querySelector('[data-drop-heading]')?.textContent ?? null;
+const said = (host) => host.querySelector('[data-drop-announce]')?.textContent ?? '';
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// Somewhere in the window that isn't the chat (the sidebar).
+const elsewhere = () => {
+  const el = document.createElement('nav');
+  document.body.appendChild(el);
+  return el;
+};
+// Ends any drag a test left in the air, so the next one starts clean.
+const endDrag = async () => {
+  ui.act(() => window.dispatchEvent(new dom.window.Event('dragend')));
+  await wait(200);
+};
+const typeIn = (field, text) => {
+  const set = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set;
+  ui.act(() => {
+    set.call(field, text);
+    field.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  });
+};
 
-test('a file drag over the header or the message list lights up the chat, not only over the box', async () => {
+test('a file drag over the header or the message list lights up the chat; off the chat it stays armed', async () => {
   const v = ui.mount(props());
+  const side = elsewhere();
   try {
-    const { header, list } = parts(v.host);
+    const { header, list, form } = parts(v.host);
     assert.ok(header && list, 'the chat has a header and a message list');
-    const enter = await fire(header, 'dragenter', dataTransfer([mkFile('a.png')]));
-    assert.equal(enter.defaultPrevented, true, 'the header accepts the drag');
-    assert.ok(overlayOn(v.host), 'the drop overlay shows');
+    const two = () => dataTransfer([mkFile('a.png'), mkFile('b.pdf', 'application/pdf')]);
+    // Into the window over the sidebar first: armed, quieter, the composer not lit.
+    await fire(side, 'dragenter', two());
+    assert.equal(phase(v.host), 'armed');
+    assert.equal(heading(v.host), 'Drop here to give Frontend these files');
+    assert.ok(!form.className.includes('kw-dd-lit'));
+    assert.equal(layer(v.host).style.pointerEvents, 'none', 'armed never takes the drop');
+    // Onto the header: over, lit, the layer is the drop surface.
+    const enter = await fire(header, 'dragenter', two());
+    await fire(side, 'dragleave', two());
+    assert.equal(phase(v.host), 'over');
+    assert.equal(heading(v.host), 'Drop to give Frontend these files');
+    assert.equal(v.host.querySelector('[data-drop-count]')?.textContent, '2');
+    assert.ok(form.className.includes('kw-dd-lit') && form.className.includes('kw-dd-raised'), 'the composer is lit above the veil');
+    assert.equal(layer(v.host).style.pointerEvents, 'auto');
+    assert.equal(layer(v.host).getAttribute('aria-hidden'), 'true');
+    assert.equal(said(v.host), 'Drop to give Frontend 2 files: 1 image, 1 PDF.');
+    void enter;
     // Moving onto a child element: enter the list, then leave the header. No flicker.
-    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
-    await fire(header, 'dragleave', dataTransfer([mkFile('a.png')]));
-    assert.ok(overlayOn(v.host), 'still on while the drag is anywhere in the chat');
-    const over = await fire(list, 'dragover', dataTransfer([mkFile('a.png')]));
+    await fire(list, 'dragenter', two());
+    await fire(header, 'dragleave', two());
+    assert.equal(phase(v.host), 'over', 'still on while the drag is anywhere in the chat');
+    const over = await fire(list, 'dragover', two());
     assert.equal(over.defaultPrevented, true);
     assert.equal(over.dataTransfer.dropEffect, 'copy');
-    await fire(list, 'dragleave', dataTransfer([mkFile('a.png')]));
-    assert.ok(!overlayOn(v.host), 'off once the drag leaves the chat');
+    // Back to the sidebar: armed again, not gone.
+    await fire(side, 'dragenter', two());
+    await fire(list, 'dragleave', two());
+    assert.equal(phase(v.host), 'armed');
+    // Out of the window: the layer fades and goes.
+    await fire(side, 'dragleave', two());
+    assert.equal(phase(v.host), 'leaving');
+    await wait(150);
+    assert.equal(layer(v.host), null);
   } finally {
+    side.remove();
     v.unmount();
+    await endDrag();
   }
 });
 
@@ -112,16 +169,24 @@ test('a drop on the message list lands in the tray, the cursor goes to the field
     const { list, field } = parts(v.host);
     const files = [mkFile('one.png'), mkFile('two.pdf', 'application/pdf'), mkFile('three.md', 'text/markdown')];
     await fire(list, 'dragenter', dataTransfer(files));
-    const drop = await fire(list, 'drop', dataTransfer(files));
+    assert.equal(v.host.querySelector('[data-drop-summary]')?.textContent, '3 files · 1 image, 1 PDF, 1 text file');
+    const drop = await fire(layer(v.host), 'drop', dataTransfer(files));
     assert.equal(drop.defaultPrevented, true, 'the browser does not open the file');
     assert.equal(chips(v.host), 3, 'three files in the tray');
     assert.equal(sent.length, 3, 'all three upload as with the paperclip');
-    assert.ok(!overlayOn(v.host));
     assert.equal(document.activeElement, field, 'the cursor is in the field');
-    const live = [...v.host.querySelectorAll('[aria-live="polite"]')].map((n) => n.textContent);
-    assert.ok(live.includes('3 files added'), `announced: ${JSON.stringify(live)}`);
+    assert.equal(said(v.host), '3 files added for Frontend. Uploading.');
+    assert.equal(phase(v.host), 'landing', 'the card hands the files down');
+    assert.equal(v.host.querySelectorAll('li[data-fresh]').length, 3, 'the new chips come in tinted');
+    const delays = [...v.host.querySelectorAll('li[data-fresh]')].map((li) => li.style.getPropertyValue('--kw-chip-delay'));
+    assert.deepEqual(delays, ['40ms', '70ms', '100ms']);
+    await wait(200);
+    assert.equal(layer(v.host), null, 'gone by 160 ms');
+    await wait(700);
+    assert.equal(v.host.querySelectorAll('li[data-fresh]').length, 0, 'the tint is gone by 800 ms');
   } finally {
     v.unmount();
+    await endDrag();
   }
 });
 
@@ -130,10 +195,13 @@ test('text and links dragged over the chat are left alone', async () => {
   try {
     const { list } = parts(v.host);
     const e = await fire(list, 'dragenter', dataTransfer([], ['text/plain', 'text/uri-list']));
+    const o = await fire(list, 'dragover', dataTransfer([], ['text/plain', 'text/uri-list']));
     assert.equal(e.defaultPrevented, false);
-    assert.ok(!overlayOn(v.host));
+    assert.equal(o.defaultPrevented, false);
+    assert.equal(layer(v.host), null);
   } finally {
     v.unmount();
+    await endDrag();
   }
 });
 
@@ -144,11 +212,14 @@ test('unchanged: the box itself still takes a drop, and eleven files keep ten wi
     const { form } = parts(v.host);
     const eleven = Array.from({ length: 11 }, (_, i) => mkFile(`p${i}.png`));
     await fire(form, 'dragenter', dataTransfer(eleven));
+    assert.match(v.host.querySelector('[data-drop-warning]')?.textContent ?? '', /1 more won't fit: 10 files per message\./);
+    assert.equal(v.host.querySelector('[data-drop-count]')?.textContent, '10', 'the badge counts only what will go');
     await fire(form, 'drop', dataTransfer(eleven));
     assert.equal(chips(v.host), 10);
     assert.match(v.host.textContent, /Up to 10 files per message; one was left out\./);
   } finally {
     v.unmount();
+    await endDrag();
   }
 });
 
@@ -169,42 +240,163 @@ test('unchanged: paste and the paperclip add files to the same tray, with the sa
     await tick();
     assert.equal(chips(v.host), 2, 'the 20 MB file is caught before upload');
     assert.match(v.host.textContent, /big\.pdf is too big/);
+    assert.equal(v.host.querySelectorAll('li[data-fresh]').length, 0, 'only a drop gets the landing tint');
   } finally {
     v.unmount();
   }
 });
 
-test('/idea mode still refuses files: a drop lands, the jar line asks to remove it', async () => {
+test('/idea mode: the card says files can\'t go in the jar, the cursor says no, and the drop is ignored', async () => {
+  sent.length = 0;
   const v = ui.mount(props());
   try {
-    const { list, field } = parts(v.host);
-    const set = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set;
-    ui.act(() => { set.call(field, '/idea a faster search'); field.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+    const { list, field, form } = parts(v.host);
+    typeIn(field, '/idea a faster search');
     await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
-    await fire(list, 'drop', dataTransfer([mkFile('a.png')]));
-    assert.match(v.host.textContent, /Ideas are text only\. Remove the file to drop it in\./);
+    assert.equal(phase(v.host), 'refused');
+    assert.equal(heading(v.host), "Files can't go in the idea jar");
+    assert.match(v.host.querySelector('[data-drop-refusal]').textContent, /Ideas are text only\./);
+    assert.match(v.host.textContent, /Clear \/idea from the field to send them to Frontend\./);
+    assert.ok(!form.className.includes('kw-dd-lit'), 'not lit');
+    assert.equal(v.host.querySelector('[data-drop-count]'), null, 'no badge');
+    assert.equal(said(v.host), "Files can't go in the idea jar. Ideas are text only.");
+    const over = await fire(list, 'dragover', dataTransfer([mkFile('a.png')]));
+    assert.equal(over.dataTransfer.dropEffect, 'none');
+    const drop = await fire(layer(v.host), 'drop', dataTransfer([mkFile('a.png')]));
+    assert.equal(drop.defaultPrevented, true, 'never opens the file either');
+    assert.equal(chips(v.host), 0);
+    assert.equal(sent.length, 0);
   } finally {
     v.unmount();
+    await endDrag();
   }
 });
 
-test('while dragging, the chat says what is coming; a dropped folder is left out with the folder line', async () => {
+test('all refused: a ZIP gets the neutral card and is not added', async () => {
+  sent.length = 0;
   const v = ui.mount(props());
   try {
     const { list } = parts(v.host);
-    const three = [mkFile('a.png'), mkFile('b.jpg', 'image/jpeg'), mkFile('c.pdf', 'application/pdf')];
-    await fire(list, 'dragenter', dataTransfer(three));
-    assert.equal(v.host.querySelector('[data-drop-summary]')?.textContent, '3 files · 2 images, 1 PDF');
-    await fire(list, 'dragleave', dataTransfer(three));
+    const zip = () => dataTransfer([mkFile('site.zip', 'application/zip')]);
+    await fire(list, 'dragenter', zip());
+    assert.equal(phase(v.host), 'refused');
+    assert.equal(layer(v.host).getAttribute('data-refused'), 'true');
+    assert.equal(heading(v.host), "This can't go to Frontend");
+    assert.match(v.host.textContent, /ZIP files can't be attached\./);
+    assert.match(v.host.textContent, /Unzip it and drop the files inside\./);
+    await fire(layer(v.host), 'drop', zip());
+    assert.equal(chips(v.host), 0);
+    assert.equal(sent.length, 0);
+  } finally {
+    v.unmount();
+    await endDrag();
+  }
+});
+
+test('some won\'t go: the won\'t-go rows, and a dropped folder is left out with the folder line', async () => {
+  const v = ui.mount(props());
+  try {
+    const { list } = parts(v.host);
+    const twelve = [...Array.from({ length: 11 }, (_, i) => mkFile(`p${i}.png`)), mkFile('a.zip', 'application/zip')];
+    await fire(list, 'dragenter', dataTransfer(twelve));
+    const rows = [...v.host.querySelectorAll('[data-drop-warning] > div')].map((d) => d.textContent);
+    assert.deepEqual(rows, ["1 more won't fit: 10 files per message.", "1 ZIP can't go. Images, videos, PDFs and text or code files work."]);
+    assert.equal(v.host.querySelector('[data-drop-summary]')?.textContent, '10 files · 10 images');
+    await endDrag();
 
     const png = mkFile('cat.png');
     const dt = dataTransfer([png]);
     dt.items.unshift({ kind: 'file', type: '', getAsFile: () => mkFile('Photos', '', 0), webkitGetAsEntry: () => ({ isDirectory: true, name: 'Photos' }) });
     await fire(list, 'dragenter', dt);
+    assert.equal(v.host.querySelector('[data-drop-summary]')?.textContent, '2 files · 1 image, 1 file', 'a folder looks like a file before the drop');
     await fire(list, 'drop', dt);
     assert.equal(chips(v.host), 1, 'only the file');
-    assert.match(v.host.textContent, /Photos is a folder\. Folders can't go: drop the files inside\./);
+    assert.match(v.host.querySelector('p[role="alert"]').textContent, /Folders can't go: drop the files inside\./);
   } finally {
     v.unmount();
+    await endDrag();
+  }
+});
+
+test('a room shows its bots and shares with the room; an @mention gives one bot the files', async () => {
+  const bots = ['Marketer', 'Scout', 'Quill', 'Echo', 'Orbit'].map((n, i) => ({ id: `k${i}`, name: n, title: n, avatar_sprite: n }));
+  const v = ui.mount(props({ title: 'Booktuning Marketing', home: undefined, teamName: 'Booktuning Marketing', teamMembers: bots, kwants: bots }));
+  try {
+    const { list, field } = parts(v.host);
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(heading(v.host), 'Drop to share with the Booktuning Marketing team');
+    assert.equal(v.host.querySelector('.kw-dd-more')?.textContent, '+1', 'four avatars, then +1');
+    assert.equal(said(v.host), 'Drop to share 1 file with the Booktuning Marketing team: 1 image.');
+    await endDrag();
+    typeIn(field, '@Scout look at this');
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(heading(v.host), 'Drop to give Scout this file');
+    assert.equal(v.host.querySelector('.kw-dd-more'), null);
+  } finally {
+    v.unmount();
+    await endDrag();
+  }
+});
+
+test('the side pane is not a target, a modal keeps the layer away, Esc and the watchdog hide it', async () => {
+  const v = ui.mount(props());
+  try {
+    const { list } = parts(v.host);
+    // A side pane next to the chat: inside the chat's root, outside its column.
+    const pane = document.createElement('aside');
+    list.parentElement.parentElement.appendChild(pane);
+    await fire(pane, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(phase(v.host), 'armed');
+    const o = await fire(pane, 'dragover', dataTransfer([mkFile('a.png')]));
+    assert.equal(o.defaultPrevented, true);
+    assert.equal(o.dataTransfer.dropEffect, 'none');
+    await fire(pane, 'drop', dataTransfer([mkFile('a.png')]));
+    assert.equal(chips(v.host), 0, 'a drop on the side pane does nothing');
+    pane.remove();
+    await endDrag();
+
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(phase(v.host), 'over');
+    ui.act(() => window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' })));
+    await tick();
+    assert.equal(phase(v.host), 'leaving', 'Esc hides it');
+    await endDrag();
+
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(phase(v.host), 'over');
+    await wait(400);
+    assert.equal(layer(v.host), null, 'no dragover for 300 ms: hidden');
+    await endDrag();
+
+    const modal = document.createElement('div');
+    modal.setAttribute('aria-modal', 'true');
+    document.body.appendChild(modal);
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(layer(v.host), null, 'never over a modal');
+    modal.remove();
+  } finally {
+    v.unmount();
+    await endDrag();
+  }
+});
+
+test('no chat open: the "Open a chat" pill shows and is read out; with a chat open it does not', async () => {
+  const p = ui.mountPill();
+  const side = elsewhere();
+  try {
+    await fire(side, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(p.host.querySelector('[data-drop-pill]')?.textContent, 'Open a chat to drop files there');
+    assert.equal(p.host.querySelector('[data-drop-pill-announce]').textContent, 'Open a chat to drop files there.');
+    await endDrag();
+    assert.equal(p.host.querySelector('[data-drop-pill]'), null);
+    const v = ui.mount(props());
+    await fire(side, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(p.host.querySelector('[data-drop-pill]'), null, 'the chat shows its own layer instead');
+    assert.equal(phase(v.host), 'armed');
+    v.unmount();
+  } finally {
+    side.remove();
+    p.unmount();
+    await endDrag();
   }
 });
