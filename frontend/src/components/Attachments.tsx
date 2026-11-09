@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertCircle, Download, ExternalLink, FileText, Film, Loader2, RotateCw, X } from 'lucide-react';
 import { AttachmentRef, PendingUpload, attachKind, attachmentUrl, fileKind, formatBytes, isInlineImage, isVideo, uploadProgressText } from '../attachments';
@@ -18,17 +18,28 @@ export const FileTile: React.FC<{
   const [broken, setBroken] = useState(false);
   const [viewing, setViewing] = useState(false);
   const thumbRef = useRef<HTMLAnchorElement>(null);
+  const closeViewer = useCallback(() => {
+    setViewing(false);
+    thumbRef.current?.focus();
+  }, []);
   const image = isInlineImage(file.mime) && !broken;
   const video = isVideo(file.mime) && !broken;
+  // Shared tiles and small copies get an icon-only 32 px chip, so the name has room; a transparent
+  // ring around it makes the hit area 44 px. Other tiles are 44 px on phones from min size.
+  const iconOnly = small || !!sharedBy;
   const download = (
     <a
       href={attachmentUrl(file.id, true)}
       download={file.name}
       aria-label={`Download ${file.name}`}
-      className="inline-flex items-center gap-1 shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-sky-300 bg-sky-500/10 border border-sky-500/30 hover:bg-sky-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+      title="Download"
+      data-download=""
+      className={`inline-flex items-center justify-center gap-1 shrink-0 rounded-lg text-[11px] font-medium text-sky-300 bg-sky-500/10 border border-sky-500/30 hover:bg-sky-500/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+        iconOnly ? "relative w-8 h-8 before:absolute before:-inset-1.5 before:content-['']" : 'px-2 py-1 max-sm:min-w-11 max-sm:min-h-11'
+      }`}
     >
-      <Download size={12} aria-hidden="true" />
-      <span className="hidden sm:inline">Download</span>
+      <Download size={iconOnly ? 14 : 12} aria-hidden="true" />
+      <span className={iconOnly ? 'sr-only' : 'hidden sm:inline'}>Download</span>
     </a>
   );
   const label = (
@@ -36,7 +47,7 @@ export const FileTile: React.FC<{
       <span className="block truncate text-xs font-medium text-zinc-100" title={file.name}>
         {file.name}
       </span>
-      <span className="block text-[10px] text-zinc-500">
+      <span className={`block text-[10px] text-zinc-500${small ? ' whitespace-nowrap' : ''}`}>
         {fileKind(file.mime, file.name)} · {formatBytes(file.size)}
       </span>
     </span>
@@ -59,7 +70,7 @@ export const FileTile: React.FC<{
             e.preventDefault();
             setViewing(true);
           }}
-          className="block cursor-zoom-in focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          className="block cursor-zoom-in focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-violet-400"
         >
           <img
             src={attachmentUrl(file.id)}
@@ -67,7 +78,7 @@ export const FileTile: React.FC<{
             loading="lazy"
             decoding="async"
             onError={() => setBroken(true)}
-            className={`block w-full sm:w-auto ${small ? 'max-h-24' : 'max-h-60'} object-contain bg-zinc-900`}
+            className={`block ${small ? 'w-full h-24' : 'w-full sm:w-auto max-h-60'} object-contain bg-zinc-900`}
           />
         </a>
         {viewing && (
@@ -75,10 +86,7 @@ export const FileTile: React.FC<{
             file={file}
             sharedBy={sharedBy}
             at={at}
-            onClose={() => {
-              setViewing(false);
-              thumbRef.current?.focus();
-            }}
+            onClose={closeViewer}
           />
         )}
         <figcaption className="flex items-center gap-2 px-2.5 py-1.5">
@@ -135,6 +143,10 @@ export const ImageViewer: React.FC<{ file: AttachmentRef; sharedBy?: string; at?
 }) => {
   const closeRef = useRef<HTMLButtonElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  // The chat re-renders on every streamed token: keep the latest onClose in a ref so the setup below
+  // runs once on open and never pulls focus back to Close while a reply streams.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     closeRef.current?.focus();
     const body = document.body;
@@ -144,7 +156,7 @@ export const ImageViewer: React.FC<{ file: AttachmentRef; sharedBy?: string; at?
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== 'Tab' || !boxRef.current) return;
@@ -165,7 +177,7 @@ export const ImageViewer: React.FC<{ file: AttachmentRef; sharedBy?: string; at?
       document.removeEventListener('keydown', onKey, true);
       body.style.overflow = prevOverflow;
     };
-  }, [onClose]);
+  }, []);
   const titleId = `viewer-${file.id}`;
   const when = timeLabel(at);
   const closeOnScrim = (e: React.MouseEvent) => {
@@ -256,7 +268,7 @@ export const EarlierCopies: React.FC<{
         aria-label={open ? `Hide earlier copies of ${fileName}` : `Show ${hidden} earlier ${hidden === 1 ? 'copy' : 'copies'} of ${fileName}`}
         onClick={() => setOpen((o) => !o)}
         // 44 px tall hit area on phones from padding; the text stays 12 px
-        className="block text-left py-3 sm:py-1 text-xs text-zinc-400 hover:text-zinc-200 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
+        className="block text-left py-3.5 sm:py-1 text-xs text-zinc-400 hover:text-zinc-200 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"
       >
         {open ? 'Hide earlier' : `Shared ${hidden + 1} times · Show ${hidden} earlier`}
       </button>
@@ -291,7 +303,7 @@ export const FileTiles: React.FC<{ files: AttachmentRef[]; align?: 'start' | 'en
 }) => (
   <ul className={`mt-2 flex flex-wrap gap-2 w-full ${align === 'end' ? 'justify-end' : ''}`} aria-label={files.length === 1 ? 'Attached file' : `${files.length} attached files`}>
     {files.map((f) => (
-      <li key={f.id} className="max-w-full">
+      <li key={f.id} className={`max-w-full${sharedBy ? ' w-full sm:w-auto' : ''}`}>
         <FileTile file={f} sharedBy={sharedBy} at={at} />
       </li>
     ))}

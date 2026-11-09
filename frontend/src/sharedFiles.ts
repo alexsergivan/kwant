@@ -90,16 +90,17 @@ const timeOf = (m: Msg) => {
   const t = m.created_at ? Date.parse(m.created_at) : NaN;
   return Number.isNaN(t) ? null : t;
 };
+// Same name and same size: a re-shot screenshot saved under the old name is a new picture, not a repeat.
 const fileKey = (m: Msg) =>
   parseAttachments(m.meta)
-    .map((a) => a.name)
+    .map((a) => `${a.name}\u0000${a.size}`)
     .sort()
     .join('\n');
 
 /**
  * Within one turn (between two of the person's messages), a bot's shared-file rows move to just
  * after that bot's next reply in the turn. Rows with no later reply stay where they are. Then in each
- * run of consecutive shares by one bot, copies of the same file name within REPEAT_WINDOW_MS fold
+ * run of consecutive shares by one bot, copies of the same file (name and size) within REPEAT_WINDOW_MS fold
  * into the newest, which takes the place of the last copy.
  */
 export function arrangeSharedFiles<M extends Msg>(
@@ -152,7 +153,7 @@ export function arrangeSharedFiles<M extends Msg>(
     if (prev && prev.sender_role === 'kwant' && !isBotFileShare(prev) && sameBot(prev.sender_id, senderOf(m), bots)) attached.add(m.id);
   }
 
-  // Repeats: inside a run of consecutive shares by one bot, group by file name.
+  // Repeats: inside a run of consecutive shares by one bot, group by file name and size.
   const earlier = new Map<string, M[]>();
   const out: M[] = [];
   let r = 0;

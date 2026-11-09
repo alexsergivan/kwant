@@ -42,13 +42,15 @@ const fileId = () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
 const at = (hm, s = 0) => `2026-11-09T${hm}:${String(s).padStart(2, '0')}Z`;
 const you = (id, text, when) => ({ id, sender_role: 'user', sender_id: 'Oleks', text, created_at: when });
 const reply = (id, sender, text, when) => ({ id, sender_role: 'kwant', sender_id: sender, text, created_at: when });
-const share = (id, sender, name, when) => ({
+// Real, differing sizes: each name has its own size, so only a true re-share of the same bytes matches.
+const sizeOf = (name) => 40000 + [...name].reduce((t, c, i) => t + c.charCodeAt(0) * (i + 1), 0);
+const share = (id, sender, name, when, size = sizeOf(name)) => ({
   id,
   sender_role: 'kwant',
   sender_id: sender,
   text: `Shared ${name}`,
   created_at: when,
-  meta: JSON.stringify({ kind: 'file', attachments: [{ id: fileId(), name, mime: 'image/jpeg', size: 48213 }] }),
+  meta: JSON.stringify({ kind: 'file', attachments: [{ id: fileId(), name, mime: 'image/jpeg', size }] }),
 });
 
 // ---- names --------------------------------------------------------------------------------------
@@ -111,6 +113,20 @@ test('identical repeats collapse into the newest; a different file in between do
   assert.deepEqual(a.messages.map((x) => x.id), ['u1', 'r1', 'f2', 'f4']);
   assert.deepEqual(a.earlier.get('f4').map((x) => x.id), ['f1', 'f3'], 'oldest first');
   assert.equal(a.attached.has('f2') && a.attached.has('f4'), true);
+});
+
+test('the same bytes fold; the same name with an edited picture does not (Mira 1)', () => {
+  const msgs = [
+    you('u1', 'Fix it and re-shoot', at('10:40')),
+    share('s1', FRONTEND, 'screenshot-example.com.jpg', at('10:40', 5), 51234),
+    share('s2', FRONTEND, 'screenshot-example.com.jpg', at('10:40', 15), 51234),
+    share('s3', FRONTEND, 'screenshot-example.com.jpg', at('10:41', 0), 49870),
+    reply('r1', 'Frontend', 'Fixed, here is before and after', at('10:41', 10)),
+  ];
+  const a = m.arrangeSharedFiles(msgs, bots);
+  assert.deepEqual(a.messages.map((x) => x.id), ['u1', 'r1', 's2', 's3'], 'the edited picture stays its own tile');
+  assert.deepEqual(a.earlier.get('s2').map((x) => x.id), ['s1'], 'the identical copy folds');
+  assert.equal(a.earlier.has('s3'), false);
 });
 
 test('repeats need the same bot, the same name and a few minutes', () => {
@@ -257,7 +273,7 @@ const newShare = (id, bot, name, when, auto = false) => ({
   sender_id: bot.name,
   text: `Shared a file: ${name}`,
   created_at: when,
-  meta: JSON.stringify({ kind: 'file', attachments: [{ id: fileId(), name, mime: 'image/jpeg', size: 48213 }], kwant_id: bot.id, kwant_name: bot.name, turn_id: 't1', auto }),
+  meta: JSON.stringify({ kind: 'file', attachments: [{ id: fileId(), name, mime: 'image/jpeg', size: sizeOf(name) }], kwant_id: bot.id, kwant_name: bot.name, turn_id: 't1', auto }),
 });
 
 test("shareInfo reads kwant_id and auto; a new-shape share follows its bot's reply", () => {
@@ -326,4 +342,89 @@ test("ChatView: a share during the turn shows under the bot's live row, then sta
   assert.deepEqual(rowIds(done.host), ['u1', 'r1', 'f1']);
   assert.equal(done.host.querySelector('[data-message-id="f1"]').hasAttribute('data-shared-under'), true);
   done.unmount();
+});
+
+// ---- rework after review (Ada A, Mira 2-5, 7, 8; two bots) --------------------------------------
+
+test('ChatView: the open viewer keeps focus where the person put it while a reply streams (Ada A)', async () => {
+  const msgs = [you('u1', 'show me', at('10:25')), reply('r1', 'Frontend', 'Here', at('10:26')), share('f1', FRONTEND, 'bar.jpg', at('10:26', 2))];
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const props = (text) => ({
+    title: '@booktun.ing', messages: msgs, streamingText: text, streamingThinking: '', pendingApprovals: [], isStreaming: true,
+    streamingSpeakerName: 'Growth', onSendMessage: () => true, onResolveApproval: () => {}, contextKey: 'space-1', kwants: bots,
+  });
+  flushSync(() => root.render(h(m.ChatView, props('Look'))));
+  await settle();
+  const thumb = host.querySelector('[data-image-thumb]');
+  flushSync(() => thumb.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })));
+  const dlg = document.querySelector('[data-image-viewer]');
+  const orig = [...dlg.querySelectorAll('a')].find((a) => a.textContent.includes('Open original'));
+  orig.focus();
+  assert.equal(document.activeElement, orig);
+  for (const t of ['Looking', 'Looking at', 'Looking at the page']) flushSync(() => root.render(h(m.ChatView, props(t))));
+  await settle();
+  assert.ok(document.querySelector('[data-image-viewer]'), 'still open');
+  assert.equal(document.activeElement, orig, 'new tokens do not pull focus back to Close');
+  flushSync(() => document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  assert.equal(document.querySelector('[data-image-viewer]'), null, 'Esc still closes after re-renders');
+  assert.equal(document.activeElement, host.querySelector('[data-image-thumb]'));
+  flushSync(() => root.unmount());
+  host.remove();
+});
+
+test('ChatView: tap targets and focus ring on shared tiles (Mira 2, 3, 4, 5, 7, 8)', async () => {
+  const msgs = [
+    you('u1', 'go', at('10:29')),
+    share('f1', FRONTEND, 'find-your-book-bar.jpg', at('10:29', 10)),
+    share('f2', FRONTEND, 'find-your-book-bar.jpg', at('10:29', 40)),
+    reply('r1', 'Frontend', 'Done', at('10:30', 20)),
+  ];
+  const v = mount(msgs);
+  await settle();
+  const toggle = v.host.querySelector('[data-earlier-copies] button');
+  assert.match(toggle.className, /(^|\s)py-3\.5(\s|$)/, '44 px tall on phone (16 px line + 2 x 14 px)');
+  assert.match(toggle.className, /sm:py-1/);
+  const tile = v.host.querySelector('[data-message-id="f2"] figure');
+  const dl = tile.querySelector('[data-download]');
+  assert.match(dl.className, /w-8 h-8/, 'icon-only 32 px chip on a shared tile');
+  assert.match(dl.className, /before:-inset-1\.5/, '32 + 2 x 6 = 44 px hit area');
+  assert.equal(dl.getAttribute('aria-label'), 'Download find-your-book-bar.jpg');
+  assert.equal(dl.getAttribute('title'), 'Download');
+  assert.match(dl.querySelector('span').className, /sr-only/);
+  const thumb = tile.querySelector('[data-image-thumb]');
+  assert.match(thumb.className, /focus-visible:outline-offset-\[-2px\]/, 'ring drawn inside the clipped figure');
+  assert.match(thumb.className, /focus-visible:outline-violet-400/);
+  assert.match(tile.parentElement.className, /w-full sm:w-auto/, 'full bubble width on phone');
+  flushSync(() => toggle.click());
+  const small = v.host.querySelector('[data-earlier-copy="f1"] figure');
+  assert.match(small.querySelector('img').className, /w-full h-24/, 'small copy fills its tile');
+  assert.doesNotMatch(small.querySelector('img').className, /max-h-24|sm:w-auto/);
+  assert.match(small.querySelector('figcaption .whitespace-nowrap').textContent, /JPEG|JPG|Image/i);
+  v.unmount();
+  // a person's own upload keeps the labelled button, 44 px on phone
+  const mine = mount([{ ...you('u9', 'here', at('10:31')), meta: JSON.stringify({ attachments: [{ id: fileId(), name: 'me.png', mime: 'image/png', size: 1200 }] }) }]);
+  await settle();
+  const own = mine.host.querySelector('[data-download]');
+  if (own) assert.match(own.className, /max-sm:min-w-11 max-sm:min-h-11/);
+  mine.unmount();
+});
+
+test("ChatView: in a team chat with two bots, each bot's share sits under its own reply", async () => {
+  const msgs = [
+    you('u1', 'Both of you, show me', at('10:50')),
+    share('fa', FRONTEND, 'header.png', at('10:50', 5)),
+    share('ga', GROWTH, 'funnel.png', at('10:50', 6)),
+    reply('gr', 'Growth', 'Funnel is above.', at('10:50', 20)),
+    reply('fr', 'Frontend', 'Header is fixed.', at('10:50', 30)),
+  ];
+  const v = mount(msgs, { title: 'Ship team' });
+  await settle();
+  assert.deepEqual(rowIds(v.host), ['u1', 'gr', 'ga', 'fr', 'fa'], "Frontend's picture does not land under Growth's reply");
+  assert.match(v.host.querySelector('[data-message-id="ga"]').textContent, /Shared by Growth/);
+  assert.match(v.host.querySelector('[data-message-id="fa"]').textContent, /Shared by Frontend/);
+  assert.ok(v.host.querySelector('img[alt="header.png, shared by Frontend"]'));
+  assert.ok(v.host.querySelector('img[alt="funnel.png, shared by Growth"]'));
+  v.unmount();
 });
