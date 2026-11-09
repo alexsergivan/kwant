@@ -4,6 +4,7 @@
 import type { ChatMessage } from './components/ChatView';
 import { AttachmentRef, parseAttachments } from './attachments';
 import { parseMetaObject } from './questions';
+import { isIsolationNotice } from './isolationNotice';
 
 export interface Interruption {
   kind: 'restart' | 'stall';
@@ -58,7 +59,8 @@ export function retryTargets(messages: ChatMessage[]): Map<string, RetryTarget> 
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.sender_role === 'user') return out;
-    if (!parseInterruption(msg)) continue;
+    // Isolation refusals and the request limit end a reply too (agents-in-vm notices 1–7).
+    if (!parseInterruption(msg) && !isIsolationNotice(msg)) continue;
     for (let j = i - 1; j >= 0; j--) {
       const prev = messages[j];
       if (prev.sender_role !== 'user') continue;

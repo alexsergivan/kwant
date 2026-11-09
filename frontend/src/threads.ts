@@ -82,10 +82,17 @@ export const shouldRenderDelta = (
 // ---------------------------------------------------------------------------
 // Turns: running and queued, from turn_queued / turn_started / turn_ended and GET /api/turns
 
+/** Why a reply waits: its bot is busy, the server is full, or every VM spot is taken (#446). */
+export type QueueReason = 'agent_busy' | 'server_busy' | 'vm_busy';
+
+const queueReason = (r: unknown): QueueReason => (r === 'server_busy' || r === 'vm_busy' ? r : 'agent_busy');
+
 export interface TrackedTurn extends ActiveTurn {
   /** Order seen; the queue is FIFO. */
   seq: number;
-  reason?: 'agent_busy' | 'server_busy';
+  reason?: QueueReason;
+  /** vm_busy only: how many replies run inside the VM at once. */
+  slots?: number;
   /** Position reported by the server when it queued; only ever goes down. */
   reported?: number;
 }
@@ -151,7 +158,8 @@ export function applyTurnEvent(turns: TurnMap, ev: { type?: string; data?: any }
           thread_id: d.thread_id ?? null,
           state: 'queued',
           seq: turns[id]?.seq ?? ++seqCounter,
-          reason: d.reason === 'server_busy' ? 'server_busy' : 'agent_busy',
+          reason: queueReason(d.reason),
+          slots: d.reason === 'vm_busy' && typeof d.slots === 'number' && d.slots > 0 ? d.slots : undefined,
           reported: typeof d.position === 'number' ? d.position : undefined,
           since: new Date().toISOString(),
         },
@@ -193,7 +201,7 @@ export function queuePosition(turns: TurnMap, turnId: string): number | null {
   let ahead = 0;
   for (const o of Object.values(turns)) {
     if (o.state !== 'queued' || o.seq >= t.seq) continue;
-    if (t.reason === 'server_busy' || o.kwant_id === t.kwant_id) ahead++;
+    if (t.reason === 'vm_busy' ? o.reason === 'vm_busy' : t.reason === 'server_busy' || o.kwant_id === t.kwant_id) ahead++;
   }
   const computed = ahead + 1;
   return t.reported ? Math.min(t.reported, computed) : computed;

@@ -24,7 +24,9 @@ const ALLOWED = /\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:tok
 const MAESTRO = /\bAgent Maestro\b/g;
 // T/D preview sheet (0.7.7): Mira's review-396-397 must-fix 7 and Ada's deviation-4 ruling keep "kwant"
 // as the subject in these three sentences only.
-const RULED = /\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b/g;
+// Run Claude inside the VM (0.7.7): Mira's ui-check-450 must-fix 2 names kwant, the program on the computer,
+// in these settings and chat-notice sentences ("Restart kwant" is what a person on a phone has to do).
+const RULED = /\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass)\b|\b[Rr]estart kwant\b|\bStart kwant as\b/g;
 
 /** Whether a literal reads like text a person sees (a sentence, or a capitalised word). */
 const looksVisible = (text, node) => {

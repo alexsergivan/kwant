@@ -1,4 +1,5 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import { queuedText } from '../claudeVm';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
@@ -62,6 +63,8 @@ import { chainBudgetApi, parseBudgetPaused, parseHandoffCapped } from '../chainB
 import { parseSpendStopped } from '../spendStop';
 import { SpendStoppedNotice } from './SpendStop';
 import { isSystemNotice, parseInterruption, retryTargets } from '../interruptions';
+import { parseIsolationFailed, parseRequestLimit } from '../isolationNotice';
+import { IsolationNotice, RequestLimitNotice } from './IsolationNotice';
 import { IDEA_MAX, isIdeaCommand } from '../ideas';
 import { ideaBlockedLine, ideaLength } from '../ideaShell';
 import { JarIcon } from './JarIcon';
@@ -109,7 +112,9 @@ export interface SendOptions {
 /** The open chat's turn is waiting for a free slot. */
 export interface QueuedState {
   position: number | null;
-  reason: 'agent_busy' | 'server_busy';
+  reason: 'agent_busy' | 'server_busy' | 'vm_busy';
+  /** vm_busy only: how many replies run inside the VM at once. */
+  slots?: number;
   speaker: string;
 }
 
@@ -277,6 +282,12 @@ export interface ChatViewProps {
   onOpenAccounts?: () => void;
   /** Opens Settings › All spaces › Usage at the daily spending stop. */
   onOpenUsage?: () => void;
+  /** Opens App settings at the Computer card, "Run Claude inside the VM" focused (isolation notices). */
+  onOpenComputerSettings?: () => void;
+  /** Opens Manage Team with its folder input focused (isolation notices 6 and 7). */
+  onChangeTeamFolder?: (teamId: string) => void;
+  /** Opens the named bot's Edit modal on Profile, where its AI is picked (notice 7). */
+  onEditBot?: (botName: string) => void;
   /** Whether anything can run a bot in this space now (null while unknown). */
   canRun?: boolean | null;
   /** The open chat's turn is paused on a question: it is waiting for the person, not working. */
@@ -479,6 +490,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSendToOtherBot,
   onOpenAccounts,
   onOpenUsage,
+  onOpenComputerSettings,
+  onChangeTeamFolder,
+  onEditBot,
   canRun = null,
   awaitingAnswer,
   awaitingBrowser,
@@ -1122,6 +1136,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
           flash={flashId === msg.id}
         />
       );
+    const isolation = parseIsolationFailed(msg);
+    if (isolation)
+      return (
+        <IsolationNotice
+          key={msg.id}
+          messageId={msg.id}
+          meta={isolation}
+          text={msg.text}
+          retry={canRun === false ? null : retries.get(msg.id)}
+          onRetry={retrySend}
+          onOpenComputerSettings={onOpenComputerSettings}
+          onOpenAccounts={onOpenAccounts}
+          onChangeTeamFolder={onChangeTeamFolder}
+          onEditBot={onEditBot}
+          flash={flashId === msg.id}
+        />
+      );
+    const requestLimit = parseRequestLimit(msg);
+    if (requestLimit)
+      return (
+        <RequestLimitNotice
+          key={msg.id}
+          messageId={msg.id}
+          meta={requestLimit}
+          canContinue={canRun !== false && retries.has(msg.id)}
+          onSend={async (text) => {
+            stickRef.current = true;
+            if ((await onSendMessage(text, [])) === false) throw new Error('not sent');
+          }}
+          flash={flashId === msg.id}
+        />
+      );
     const meta = msg.meta && renderDelegation ? parseDelegationMeta(msg.meta) : null;
     if (meta && renderDelegation) return <React.Fragment key={msg.id}>{renderDelegation(msg, meta, flashId === msg.id)}</React.Fragment>;
     const question = msg.meta && renderQuestion ? parseQuestionMeta(msg.meta) : null;
@@ -1718,9 +1764,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                     : streamingSpeakerName || title}
                 </span>
                 {queued ? (
-                  <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
-                    Queued
+                  <span className="inline-flex items-center gap-1 text-zinc-400 text-[10px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" aria-hidden="true" />
+                    In line
                   </span>
                 ) : (awaitingAnswer || bubble === 'approval') && !phone ? (
                   <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
@@ -1751,10 +1797,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <div className="p-4 sm:p-5 min-h-[3.5rem] rounded-2xl rounded-tl-sm bg-zinc-900/60 text-zinc-200 border border-zinc-800/80 text-sm leading-relaxed shadow-sm w-full">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
-                    {queued.position ? <strong className="text-amber-200">#{queued.position} in line.</strong> : <strong className="text-amber-200">In line.</strong>}{' '}
-                    {queued.reason === 'server_busy'
-                      ? 'The server is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
-                      : `${queued.speaker} is busy with other work; this starts as soon as one of those finishes.`}
+                    {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
+                    {queuedText(queued.reason, queued.slots)}
                   </p>
                 ) : streamingText ? (
                   <MarkdownRenderer content={hideStreamingDecisions(stripDiscussionMarkers(streamingText))} isStreaming={true} />

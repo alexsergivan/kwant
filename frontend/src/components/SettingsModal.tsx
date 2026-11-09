@@ -32,6 +32,7 @@ import { useAuth } from './AuthGate';
 import { SignedInDevices } from './DeviceSignIn';
 import { signedInDevicesVisible } from '../deviceSignIn';
 import { ComputerModeControl, useComputerMode } from './ComputerModeSwitch';
+import { ClaudeIsolationRow } from './ClaudeIsolationRow';
 import { LayaStatusRow } from './LayaStatus';
 import { AppUpdateAbout, useAppUpdate } from './AppUpdateBanner';
 import { WhatsNewAbout } from './WhatsNewSheet';
@@ -472,13 +473,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
   useEffect(() => {
     if (!isOpen || !focusRow || !settings) return;
     const raf = requestAnimationFrame(() => {
-      const el = document.querySelector<HTMLElement>(`[data-switch="${focusRow}"]`);
+      // The Claude switch shows only in VM mode; otherwise land on the Computer card it lives in.
+      const el =
+        document.querySelector<HTMLElement>(`[data-switch="${focusRow}"]`) ??
+        (focusRow === 'claude-isolation' ? document.querySelector<HTMLElement>('[data-computer-card]') : null);
       if (!el) return;
       el.scrollIntoView({ block: 'center', behavior: 'auto' });
       el.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(raf);
-  }, [isOpen, focusRow, settings]);
+  }, [isOpen, focusRow, settings, computer.state.settings]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -669,7 +673,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         <StarAskSettingsLink />
 
         {computer.state.settings && (
-          <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3">
+          <div data-computer-card tabIndex={-1} className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3 focus:outline-none">
             <div>
               <p id="computer-mode-label" className="flex items-center gap-2 text-xs font-medium text-zinc-300">
                 <Monitor size={15} className="text-sky-400" aria-hidden="true" />
@@ -678,6 +682,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               <p className="mt-1 text-[11px] text-zinc-500">Switches right away, no need to save.</p>
             </div>
             <ComputerModeControl api={computer} />
+            <ClaudeIsolationRow api={computer} />
           </div>
         )}
 
