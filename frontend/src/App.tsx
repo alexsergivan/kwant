@@ -146,6 +146,8 @@ import { JiraSetupHost } from './components/JiraSetup';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { DEV_TICKET_EVENT, DEV_TICKET_PROGRESS_EVENT } from './components/dev/TicketsTab';
+import { PrepushNeedsYou, PrepushThread, threadCards, usePrepushCards, type PrepushEventDetail } from './components/dev/PrepushThread';
+import { PREPUSH_EVENT, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
@@ -495,6 +497,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Dev mode (0.7): the open space's state, read by the switch, the hats and the grid.
   useEffect(() => devStore.setCurrent(space.id), [space.id]);
   const devOn = useDevModeOn(space.id);
+  // 0.8.0 B3: the space's pre-push cards (Dev mode only): the bot's thread and the Inbox read them.
+  const prepush = usePrepushCards(space.id, devOn);
+  const prepushWaiting = prepushNeedsYou(prepush.cards).length;
+  const kwantNames = useMemo(() => Object.fromEntries(kwants.map((k) => [k.id, k.name])), [kwants]);
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [awayCount, setAwayCount] = useState(0);
@@ -1252,6 +1258,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             }
             break;
           }
+          // 0.8.0 B3: a pre-push card changed; the space's list refetches that card.
+          case 'dev_prepush':
+          case 'DevPrepush': {
+            const d = event.data ?? {};
+            if (typeof d.space_id === 'string' && typeof d.id === 'string') {
+              window.dispatchEvent(
+                new CustomEvent<PrepushEventDetail>(PREPUSH_EVENT, { detail: { space_id: d.space_id, id: d.id, kwant_id: typeof d.kwant_id === 'string' ? d.kwant_id : undefined, status: typeof d.status === 'string' ? d.status : undefined } }),
+              );
+            }
+            break;
+          }
           // 0.7.6 Work from Jira: the Tickets tab refetches on `dev_ticket`; a reading card folds in `dev_ticket_progress`.
           case 'dev_ticket':
           case 'dev_ticket_progress': {
@@ -2003,6 +2020,21 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     const ok = 'channel' in t ? openTarget({ channel_id: t.channel, kwant_id: null }) : openTarget({ channel_id: null, kwant_id: t.direct });
     if (!ok) return pushToast('That chat no longer exists.');
     setPage('chat');
+  };
+
+  /** 0.8.0 B3: a pre-push Inbox item opens the bot's chat at its card. */
+  const openPrepush = (c: PrepushCardData) => {
+    if (!openTarget({ channel_id: null, kwant_id: c.kwant_id })) return pushToast('That bot no longer exists.');
+    setPage('chat');
+    window.setTimeout(() => document.getElementById(`prepush-${c.id}`)?.scrollIntoView?.({ block: 'center' }), 250);
+  };
+  const prepushRetry = async (c: PrepushCardData) => {
+    prepush.put(await prepushApi.retry(c.id));
+    await handleSendMessage(retryMessage(c));
+  };
+  const prepushOverride = async (c: PrepushCardData, reason: string) => {
+    prepush.put(await prepushApi.override(c.id, reason));
+    await handleSendMessage(overrideMessage(c));
   };
 
   const openDirectChat = () => {
@@ -3561,7 +3593,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setIsNewChannelOpen(true);
         playSfx('click');
       }}
-      inboxCount={awayCount}
+      inboxCount={awayCount + prepushWaiting}
       inboxActive={page === 'inbox'}
       onOpenInbox={() => {
         showPage('inbox');
@@ -3600,7 +3632,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const away = (
     <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} onApprovalResolved={dropApproval}
-      top={<SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />}
+      top={
+        <>
+          <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
+          <SpendStopNeedsYou refreshKey={spendStopSeq} onOpenSettings={openUsageSettings} />
+        </>
+      }
     />
   );
   const backToList = isPhone ? () => { setPage('chat'); setPhoneView('list'); } : undefined;
@@ -3656,7 +3693,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       addImap={looseAddImap > 0}
     />
   );
-  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount} onBack={backToList} newPage={away} loosePage={loose} />;
+  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount + prepushWaiting} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
           title={chatTitle}
@@ -3669,6 +3706,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           streamingText={isCurrentContextStreaming ? streamingText : ''}
           streamingThinking={isCurrentContextStreaming ? streamingThinking : ''}
           pendingApprovals={approvalsHere}
+          prepush={
+            devOn && currentKwant && !viewingHistory ? (
+              <PrepushThread cards={threadCards(prepush.cards, currentKwant.id)} bot={currentKwant.name} live={prepush.live} onRetry={prepushRetry} onOverride={prepushOverride} />
+            ) : undefined
+          }
           settledApprovals={approvalsForChat(settledApprovals, openChat)}
           home={chatHome}
           isStreaming={isCurrentContextStreaming}
@@ -3877,7 +3919,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       badgeTone: 'violet',
       badgeNoun: ideaJarCount === 1 ? 'take ready' : 'takes ready',
     },
-    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: awayCount },
+    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: awayCount + prepushWaiting },
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;

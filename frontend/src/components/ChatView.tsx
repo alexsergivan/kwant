@@ -177,6 +177,8 @@ export interface ChatViewProps {
   streamingThinking: string;
   /** Tool approvals waiting in this chat, oldest first. */
   pendingApprovals: PendingApproval[];
+  /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
+  prepush?: React.ReactNode;
   /** Approvals answered in Telegram while this chat was open (G4): kept as a resolved row. */
   settledApprovals?: PendingApproval[];
   isStreaming: boolean;
@@ -425,6 +427,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   streamingText,
   streamingThinking,
   pendingApprovals,
+  prepush,
   settledApprovals = [],
   isStreaming,
   streamingSpeakerName,
@@ -1829,6 +1832,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {settledApprovals.map((approval) => (
           <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
         ))}
+
+        {/* 0.8.0 B3: checks before this bot pushes */}
+        {prepush}
 
         {/* Pending Security Approval Ticket */}
         {pendingApprovals.map((approval) => (
