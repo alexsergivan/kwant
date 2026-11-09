@@ -527,7 +527,7 @@ async fn kwants_own_github_tools_go_through_the_pre_push_card() {
         permission_url: None,
         gateway: None,
         max_tool_iterations: 8,
-        smart_approvals: false,
+        approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
     };
     let session = kwnt::server::mcp_runtime::PermissionSession::new(env.a.clone(), "A".into(), "gh-turn".into(), ctx, None);
