@@ -155,7 +155,7 @@ pub(super) async fn consolidate(scope: &TurnScope) {
     let Some(list) = after
         .iter()
         .rev()
-        .find(|m| m.sender_role == "kwant" && m.sender_id == coordinator.name && !seen.contains(m.id.as_str()))
+        .find(|m| super::routes::is_reply_by(m, &coordinator.name) && !seen.contains(m.id.as_str()))
     else {
         return;
     };
