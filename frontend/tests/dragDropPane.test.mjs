@@ -74,8 +74,15 @@ const dataTransfer = (files, extraTypes = []) => ({
   dropEffect: 'none',
   effectAllowed: 'all',
 });
-// Drag events are continuous-priority in React: their state lands on the next tick.
-const tick = () => new Promise((r) => setTimeout(r, 0));
+// The card itself lands in the event's own task (ChatView flushes it). What effects set afterwards (the
+// live region, the exit phase) runs in React's scheduler, which Node drives with setImmediate; whether
+// that or a setTimeout(0) comes first isn't fixed in Node (it flipped on CI's Node 20), so wait for both.
+const tick = async () => {
+  for (let i = 0; i < 3; i += 1) {
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setTimeout(r, 0));
+  }
+};
 // A dragleave inside the page has a relatedTarget (where the pointer went); pass `out` for one that
 // leaves the window, which has none (#478 M2 ends the drag on it).
 const OUT = Symbol('out of the window');
@@ -438,6 +445,30 @@ test('the composer\'s "New" hint hides while the drop layer is up and comes back
     await endDrag();
     assert.equal(layer(v.host), null);
     assert.equal(shown(), true, 'back after: not marked as seen');
+  } finally {
+    v.unmount();
+    await endDrag();
+  }
+});
+
+test('the over or refused card shows in the dragenter\'s own task, with no armed frame first (#478 round 2)', async () => {
+  const v = ui.mount(props());
+  try {
+    const { list, field } = parts(v.host);
+    // No wait between the event and the read: the window watch's armed render and the pane's own change
+    // land together, so the browser never paints "Drop here to…" first.
+    const enter = (dt) => {
+      const e = new dom.window.Event('dragenter', { bubbles: true, cancelable: true });
+      Object.defineProperty(e, 'dataTransfer', { value: dt });
+      ui.act(() => list.dispatchEvent(e));
+    };
+    enter(dataTransfer([mkFile('a.png')]));
+    assert.equal(phase(v.host), 'over');
+    assert.equal(heading(v.host), 'Drop to give Frontend this file');
+    await endDrag();
+    typeIn(field, '/idea later');
+    enter(dataTransfer([mkFile('a.png')]));
+    assert.equal(phase(v.host), 'refused');
   } finally {
     v.unmount();
     await endDrag();

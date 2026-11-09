@@ -1,4 +1,5 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import { queuedText } from '../claudeVm';
 import { QueuedBeside } from './QueuedBeside';
 import type { SwitchEntry } from '../watchLive';
@@ -541,6 +542,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => dragWatch.registerChat(), [dragWatch]);
   const overDepth = useRef(0);
   const [overChat, setOverChat] = useState(false);
+  // The window watch renders the armed card at sync priority; the pane's own over/refused change has to
+  // land in that same task, or the browser can paint one frame of "Drop here…" before the real card
+  // (drag events are continuous priority, so a plain setState renders a scheduler task later).
+  const overNow = useRef(false);
+  const markOver = (v: boolean) => {
+    if (overNow.current === v) return;
+    overNow.current = v;
+    flushSync(() => setOverChat(v));
+  };
   const headerRef = useRef<HTMLDivElement>(null);
   const columnRef = useRef<HTMLDivElement>(null);
   const composerWrapRef = useRef<HTMLDivElement>(null);
@@ -1575,6 +1585,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     if (!winDrag.active) {
       overDepth.current = 0;
+      overNow.current = false;
       setOverChat(false);
     }
   }, [winDrag.active]);
@@ -1624,24 +1635,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
     onDragEnter: (e: React.DragEvent) => {
       if (!dragHasFiles(e.dataTransfer)) return;
       overDepth.current += 1;
-      setOverChat(inColumn(e.target));
+      markOver(inColumn(e.target));
     },
     onDragOver: (e: React.DragEvent) => {
       if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
       const inside = inColumn(e.target);
-      if (inside !== overChat) setOverChat(inside);
+      markOver(inside);
       e.dataTransfer.dropEffect = inside && dragOn && card.state === 'over' ? 'copy' : 'none';
     },
     onDragLeave: (e: React.DragEvent) => {
       if (!dragHasFiles(e.dataTransfer)) return;
       overDepth.current = Math.max(0, overDepth.current - 1);
-      if (overDepth.current === 0) setOverChat(false);
+      if (overDepth.current === 0) markOver(false);
     },
     onDrop: (e: React.DragEvent) => {
       if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
       overDepth.current = 0;
+      // Not flushed: the drop ends the drag anyway, and the exit must see `landed` first.
+      overNow.current = false;
       setOverChat(false);
       if (!inColumn(e.target) || modalUp) return;
       // What the drop itself holds decides, the same way the card did (an ignored drop does nothing).
