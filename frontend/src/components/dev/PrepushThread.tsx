@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpFromLine } from 'lucide-react';
 import { PrepushCard } from './PrepushCard';
-import { PREPUSH_EVENT, inboxLine, needsYou, prepushApi, upsert, type PrepushCard as Card } from '../../dev/prepush';
+import { PREPUSH_EVENT, inboxLine, mergeList, needsYou, prepushApi, upsert, type PrepushCard as Card } from '../../dev/prepush';
 
 export interface PrepushEventDetail {
   space_id: string;
@@ -20,6 +20,8 @@ export interface PrepushState {
   /** Ids that turned clear while this page was open (P2 shows, then folds). */
   live: ReadonlySet<string>;
   put: (c: Card) => void;
+  /** Fetch one card again (after a 409, so the card shows where it really is). */
+  refresh: (id: string) => Promise<void>;
 }
 
 type Api = Pick<typeof prepushApi, 'list' | 'get'>;
@@ -28,6 +30,10 @@ export function usePrepushCards(spaceId: string, on: boolean, api: Api = prepush
   const [cards, setCards] = useState<Card[]>([]);
   const [live, setLive] = useState<ReadonlySet<string>>(new Set());
   const seen = useRef(new Map<string, string>());
+  // A list or card load that failed: load the list again on the next event or window focus, so a
+  // card waiting for the person doesn't stay hidden until its own next event (Ada Later 1).
+  const stale = useRef(false);
+  const alive = useRef<() => boolean>(() => false);
 
   const put = useCallback((c: Card) => {
     const before = seen.current.get(c.id);
@@ -36,33 +42,75 @@ export function usePrepushCards(spaceId: string, on: boolean, api: Api = prepush
     setCards((list) => upsert(list, c));
   }, []);
 
+  const refresh = useCallback(
+    async (id: string) => {
+      const ok = alive.current;
+      try {
+        const c = await api.get(id);
+        if (ok()) put(c);
+      } catch {
+        stale.current = true;
+      }
+    },
+    [api, put],
+  );
+
   useEffect(() => {
     setCards([]);
     setLive(new Set());
     seen.current = new Map();
-    if (!on || !spaceId) return;
-    let alive = true;
-    api.list(spaceId).then(
-      (list) => {
-        if (!alive) return;
-        for (const c of list) seen.current.set(c.id, c.status);
-        setCards(list);
-      },
-      () => undefined,
-    );
+    stale.current = false;
+    if (!on || !spaceId) {
+      alive.current = () => false;
+      return;
+    }
+    let on_ = true;
+    const isAlive = () => on_;
+    alive.current = isAlive;
+    let loading = false;
+    const load = () => {
+      if (loading) return;
+      loading = true;
+      stale.current = false;
+      api.list(spaceId).then(
+        (list) => {
+          loading = false;
+          if (!on_) return;
+          for (const c of list) if (!seen.current.has(c.id)) seen.current.set(c.id, c.status);
+          setCards((cur) => mergeList(cur, list));
+        },
+        () => {
+          loading = false;
+          stale.current = true;
+        },
+      );
+    };
+    load();
     const onEvent = (e: Event) => {
       const d = (e as CustomEvent<PrepushEventDetail>).detail;
       if (!d || d.space_id !== spaceId || typeof d.id !== 'string') return;
-      api.get(d.id).then((c) => alive && put(c), () => undefined);
+      if (stale.current) load();
+      api.get(d.id).then(
+        (c) => on_ && put(c),
+        () => {
+          stale.current = true;
+        },
+      );
+    };
+    const onFocus = () => {
+      if (stale.current) load();
     };
     window.addEventListener(PREPUSH_EVENT, onEvent);
+    window.addEventListener('focus', onFocus);
     return () => {
-      alive = false;
+      on_ = false;
+      if (alive.current === isAlive) alive.current = () => false;
       window.removeEventListener(PREPUSH_EVENT, onEvent);
+      window.removeEventListener('focus', onFocus);
     };
   }, [spaceId, on, api, put]);
 
-  return { cards, live, put };
+  return { cards, live, put, refresh };
 }
 
 /** How many of a bot's cards the thread shows: the newest few, oldest first like the chat. */

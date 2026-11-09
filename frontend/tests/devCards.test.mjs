@@ -547,14 +547,15 @@ test('Fix it sends the finding and offers Undo for 10 s', async () => {
   assert.deepEqual(actions, [['f1', 'fix'], ['f1', 'undo_fix']]);
 });
 
-test('the review card: sample chip, tamper, security tiles in 0.7.x, no Post button on the sample', () => {
+test('the review card: sample chip, tamper, security tiles not in this version, no Post button on the sample', () => {
   const out = html(m.ReviewCard, { card: review(fx.REVIEW_294), onFinding: async () => review(fx.REVIEW_294), sample: true, forge: 'github', now: NOW });
   assert.match(out, /Sample PR/);
   assert.match(out, /A test was made easier to pass/);
   assert.match(out, /Different engine from the author/);
   assert.match(out, /data-sec="OSV" data-state="later"/);
   assert.match(out, /data-sec="Semgrep" data-state="later"/);
-  assert.equal((out.match(/in 0\.7\.x/g) ?? []).length >= 1, true);
+  assert.doesNotMatch(out, /in 0\.7\.x/, 'Rigel qa-458 2: no "in 0.7.x" on a 0.8.0 build');
+  assert.match(out, /Not checked in this version/);
   assert.match(out, /Runs before a push, not on pull requests/, '0.8.0 B3: semgrep runs before a push, not on PR reviews');
   assert.doesNotMatch(out, /Post to GitHub/, 'S2: no button that can never be pressed');
   assert.match(out, /Nothing is posted until you press it\./);

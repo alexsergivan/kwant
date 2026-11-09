@@ -5,7 +5,7 @@
 // The popover is a flex item of the chip row: it wraps onto its own line, in flow, on phone, and
 // floats under the row from 640 px up. Give the row `relative` so it has something to float under.
 
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Eye, X } from 'lucide-react';
 import { chipState, popoverTitle, sawLines, type FreshEyes } from '../../dev/freshEyes';
 
@@ -20,10 +20,22 @@ export interface FreshEyesChipProps {
 
 export const FreshEyesChip: React.FC<FreshEyesChipProps> = ({ label, reviewer, author, diff = null, specRef = null }) => {
   const [open, setOpen] = useState(false);
+  // From 640 px the popover floats under the row: put it under this chip, not the row's start, and
+  // keep it inside the row (Mira ui-check-458 Later 1). On phone it's in flow, so `left` does nothing.
+  const [left, setLeft] = useState(0);
   const btn = useRef<HTMLButtonElement>(null);
   const pop = useRef<HTMLDivElement>(null);
   const id = useId();
   const state = chipState(label);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const b = btn.current;
+    const row = b?.offsetParent as HTMLElement | null;
+    if (!b || !row) return;
+    const max = Math.max(0, row.clientWidth - 300);
+    setLeft(Math.min(Math.max(0, b.offsetLeft), max));
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -88,7 +100,8 @@ export const FreshEyesChip: React.FC<FreshEyesChipProps> = ({ label, reviewer, a
           tabIndex={-1}
           onBlur={onBlur}
           data-fresh-eyes-pop
-          className="fe-pop kw-card w-full basis-full p-3 text-xs leading-[18px] text-zinc-300 sm:absolute sm:left-0 sm:top-full sm:z-20 sm:mt-2 sm:w-auto sm:max-w-[300px] sm:basis-auto sm:bg-[#231d4b] sm:shadow-lg"
+          style={{ left }}
+          className="fe-pop kw-card w-full basis-full p-3 text-xs leading-[18px] text-zinc-300 sm:absolute sm:top-full sm:z-20 sm:mt-2 sm:w-auto sm:max-w-[300px] sm:basis-auto sm:bg-[#231d4b] sm:shadow-lg"
         >
           <p className="text-zinc-200 [overflow-wrap:anywhere]">{popoverTitle(reviewer)}</p>
           <ul role="list" className="mt-2 space-y-1">

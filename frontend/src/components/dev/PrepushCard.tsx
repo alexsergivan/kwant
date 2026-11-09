@@ -6,20 +6,23 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { ArrowUpFromLine, ChevronDown, ChevronRight, GitBranch } from 'lucide-react';
 import { DiffStat, Led } from './parts';
+import { DevModeError } from '../../devMode';
 import {
   CHECK_NAME,
   STATE_LED,
   STATE_WORD,
   canOverride,
-  clearedLine,
+  clearedParts,
   foldLine,
   foldable,
   footer,
   needsYouLead,
+  openCount,
   overriddenLine,
   passedRows,
   phaseOf,
   reasonOk,
+  rowBlocks,
   rowFindings,
   statusChip,
   toolLine,
@@ -71,7 +74,10 @@ const Row: React.FC<{ k: PrepushCheck; card: Card; hidePhone: boolean }> = ({ k,
   const id = useId();
   const found = k.state === 'hit' ? rowFindings(card, k.key) : [];
   const dim = k.state === 'not_installed';
-  const tone = k.state === 'hit' ? 'text-rose-300' : dim ? 'text-zinc-500' : 'text-zinc-300';
+  // A hit the server doesn't count as a blocker (risk, a low tamper or review finding): the LED stays
+  // "found a problem", the words say it doesn't hold the push (Mira Later 4, contract §4.3).
+  const soft = k.state === 'hit' && card.status !== 'checking' && !rowBlocks(card, k.key);
+  const tone = k.state === 'hit' ? (soft ? 'text-zinc-300' : 'text-rose-300') : dim ? 'text-zinc-500' : 'text-zinc-300';
   const ledClass = k.state === 'running' ? 'dv-led-still mt-[5px]' : k.state === 'not_installed' ? 'dv-led-dashed mt-[5px]' : 'mt-[5px]';
   return (
     <li data-check={k.key} data-state={k.state} className={`border-t border-hairline py-2 first:border-t-0 ${hidePhone ? 'max-sm:hidden' : ''}`}>
@@ -83,7 +89,10 @@ const Row: React.FC<{ k: PrepushCheck; card: Card; hidePhone: boolean }> = ({ k,
             <p className={`text-[13px] leading-[18px] ${dim ? 'text-zinc-500' : 'text-zinc-100'}`}>{CHECK_NAME[k.key]}</p>
             <p className="text-[11px] leading-[15px] text-zinc-500 [overflow-wrap:anywhere]">{toolLine(k.key, card)}</p>
           </div>
-          <p className={`min-w-0 flex-1 text-meta [overflow-wrap:anywhere] ${tone}`}>{k.text}</p>
+          <p className={`min-w-0 flex-1 text-meta [overflow-wrap:anywhere] ${tone}`}>
+            {k.text}
+            {soft && <span data-soft className="text-zinc-400"> · doesn't block</span>}
+          </p>
         </div>
         {found.length > 0 && (
           <button type="button" className={LINK} aria-expanded={show} aria-controls={id} onClick={() => setShow((s) => !s)}>
@@ -104,7 +113,14 @@ const Row: React.FC<{ k: PrepushCheck; card: Card; hidePhone: boolean }> = ({ k,
 };
 
 /** A one-line card (P0, retried, cleared and folded). */
-const Line: React.FC<{ children: React.ReactNode; led?: 'ok' | 'off'; status?: boolean; extra?: React.ReactNode; phase: string }> = ({ children, led = 'off', status, extra, phase }) => (
+const Line: React.FC<{ children: React.ReactNode; led?: 'ok' | 'off'; status?: boolean; extra?: React.ReactNode; phase: string; error?: string }> = ({
+  children,
+  led = 'off',
+  status,
+  extra,
+  phase,
+  error,
+}) => (
   <div
     data-prepush-phase={phase}
     role={status ? 'status' : undefined}
@@ -113,6 +129,12 @@ const Line: React.FC<{ children: React.ReactNode; led?: 'ok' | 'off'; status?: b
     <Led s={led} className="shrink-0" />
     <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{children}</span>
     {extra}
+    {error && (
+      // A retry that applied but whose chat message failed lands here, on the retried line (#475 review 2).
+      <p role="alert" className="w-full text-meta text-bad [overflow-wrap:anywhere]">
+        {error}
+      </p>
+    )}
   </div>
 );
 
@@ -121,11 +143,27 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
   const [form, setForm] = useState(startOverride && canOverride(card));
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState<null | 'retry' | 'override'>(null);
-  const [error, setError] = useState<string | null>(null);
+  // `keep`: how many status changes the error survives. Only a 409 keeps one, for the refetch it
+  // starts; the change after that clears it like any other error (#475 review 1).
+  const [error, setErrorState] = useState<{ text: string; keep: number } | null>(null);
+  const setError = (text: string | null, keep = 0) => setErrorState(text ? { text, keep } : null);
+  const statusNow = useRef(card.status);
+  statusNow.current = card.status;
   const [collapsed, setCollapsed] = useState(phase === 'P2' && !live);
   const [unfold, setUnfold] = useState(startUnfolded);
   const cardRef = useRef<HTMLElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
+  // "Push anyway…" that opened the form gets focus back on Cancel or Esc (Ada Later 3).
+  const opener = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  // role=alert only on the move into P4 while watched, not on mount or after Cancel (Mira Later 5).
+  const [seenPhase, setSeenPhase] = useState(phase);
+  const [announceP4, setAnnounceP4] = useState(false);
+  if (seenPhase !== phase) {
+    // Set during render so the move into P4 renders with role=alert from its first frame.
+    setSeenPhase(phase);
+    setAnnounceP4(phase === 'P4');
+  }
   const hintId = useId();
   const titleId = useId();
 
@@ -144,26 +182,49 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
   // The server moved the card on: drop a form that no longer applies.
   useEffect(() => {
     if (!canOverride(card)) setForm(false);
-    setError(null);
+    setErrorState((e) => (e && e.keep > 0 ? { ...e, keep: e.keep - 1 } : null));
   }, [card.status, card.id]);
 
   useEffect(() => {
-    if (!form) return;
-    area.current?.focus({ preventScroll: true });
-    cardRef.current?.scrollIntoView?.({ block: 'nearest' });
+    if (form) {
+      setAnnounceP4(false);
+      area.current?.focus({ preventScroll: true });
+      cardRef.current?.scrollIntoView?.({ block: 'nearest' });
+      return;
+    }
+    if (refocus.current) {
+      refocus.current = false;
+      opener.current?.focus({ preventScroll: true });
+    }
   }, [form]);
+
+  const openForm = () => {
+    setError(null);
+    setForm(true);
+  };
+  const cancelForm = () => {
+    refocus.current = true;
+    setForm(false);
+  };
 
   if (phase === 'P0') {
     return (
       <Line phase="P0" status>
-        Nothing to check: <code className="dv-sha">{card.branch}</code> has no new commits. Nothing was pushed.
+        Nothing to check: <code className="dv-sha dv-sha-wrap">{card.branch}</code> has no new commits. Nothing was pushed.
+      </Line>
+    );
+  }
+  if (phase === 'UN') {
+    return (
+      <Line phase="UN">
+        Pre-push check of <code className="dv-sha dv-sha-wrap">{card.branch}</code>. This version of the app can't show where it is yet. Update the app to see it.
       </Line>
     );
   }
   if (phase === 'RT') {
     return (
-      <Line phase="RT">
-        You asked for a new check of <code className="dv-sha">{card.branch}</code>. {bot}'s next push of this commit is checked again from try 1.
+      <Line phase="RT" error={error?.text}>
+        You asked for a new check of <code className="dv-sha dv-sha-wrap">{card.branch}</code>. {bot}'s next push of this commit is checked again from try 1.
       </Line>
     );
   }
@@ -178,7 +239,16 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
           </button>
         }
       >
-        {clearedLine(card)}
+        {(() => {
+          const p = clearedParts(card);
+          return (
+            <>
+              {p.before}
+              <code className="dv-sha dv-sha-wrap">{p.branch}</code>
+              {p.after}
+            </>
+          );
+        })()}
       </Line>
     );
   }
@@ -189,6 +259,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
     if (busy) return;
     setBusy(kind);
     setError(null);
+    const from = card.status;
     try {
       if (kind === 'retry') await onRetry?.(card);
       else {
@@ -197,7 +268,10 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
         setReason('');
       }
     } catch (e) {
-      setError(e instanceof Error && e.message ? e.message : 'Something went wrong. Try again.');
+      // message_not_sent: the card already moved before the chat send, so the next change may clear it.
+      // 409: keep it through the refetch, unless the card already moved on its own while we waited.
+      const keep = e instanceof DevModeError && e.status === 409 && statusNow.current === from ? 1 : 0;
+      setError(e instanceof Error && e.message ? e.message : 'Something went wrong. Try again.', keep);
     } finally {
       setBusy(null);
     }
@@ -222,9 +296,9 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
             Before {bot} pushes
           </h3>
           <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta text-zinc-400">
-            <code className="dv-branch max-w-full">
+            <code className="dv-branch dv-branch-wrap max-w-full">
               <GitBranch size={11} className="i" aria-hidden="true" />
-              <span className="h [overflow-wrap:anywhere]">{card.branch}</span>
+              <span className="h">{card.branch}</span>
             </code>
             {card.diffstat && (
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
@@ -239,7 +313,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
         </div>
         {chip && (
           <span data-prepush-chip aria-live="polite" className={`${CHIP[chip.tone]} shrink-0 max-[420px]:order-last max-[420px]:ml-10`}>
-            {chip.led && <Led s={chip.led} className="dv-led-still" />}
+            {chip.led && <Led s={chip.led} className="dv-led-still mx-0.5" />}
             {chip.text}
           </span>
         )}
@@ -285,11 +359,11 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
           <p className="flex min-w-0 flex-1 items-start gap-2 text-meta text-zinc-300">
             <Led s="run" className="dv-led-still mt-[5px] shrink-0" />
             <span className="min-w-0">
-              <strong className="font-semibold text-zinc-100">{bot} is fixing them.</strong> {footer(card, bot)}
+              <strong className="font-semibold text-zinc-100">{bot} is fixing {openCount(card) === 1 ? 'it' : 'them'}.</strong> {footer(card, bot)}
             </span>
           </p>
           {onOverride && (
-            <button type="button" className={PLAIN} onClick={() => setForm(true)}>
+            <button type="button" className={PLAIN} ref={opener} onClick={openForm}>
               Push anyway…
             </button>
           )}
@@ -306,7 +380,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
               </button>
             )}
             {onOverride && (
-              <button type="button" className={PLAIN} onClick={() => setForm(true)}>
+              <button type="button" className={PLAIN} ref={opener} onClick={openForm}>
                 Push anyway…
               </button>
             )}
@@ -315,7 +389,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
       )}
 
       {!form && phase === 'P4' && (
-        <div data-needs-you role="alert" className="mt-3 rounded-xl border border-amber-400/40 bg-amber-400/[.06] p-3">
+        <div data-needs-you role={announceP4 ? 'alert' : undefined} className="mt-3 rounded-xl border border-amber-400/40 bg-amber-400/[.06] p-3">
           <p className="text-meta text-zinc-200">
             <strong className="font-semibold text-amber-200">{needsYouLead(card, bot)}</strong> {footer(card, bot)}
           </p>
@@ -327,7 +401,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
                 </button>
               )}
               {onOverride && (
-                <button type="button" className={AMBER_OUTLINE} disabled={busy !== null} onClick={() => setForm(true)}>
+                <button type="button" className={AMBER_OUTLINE} disabled={busy !== null} ref={opener} onClick={openForm}>
                   Push anyway…
                 </button>
               )}
@@ -363,7 +437,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
             onKeyDown={(e) => {
               if (e.key === 'Escape') {
                 e.stopPropagation();
-                setForm(false);
+                cancelForm();
               }
             }}
             className="mt-1 block w-full resize-y rounded-lg border border-hairline-strong bg-zinc-950/60 px-2.5 py-2 text-base text-zinc-100 placeholder:text-zinc-500 outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:text-sm"
@@ -375,7 +449,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
             <button type="submit" className={AMBER} disabled={!ok || busy !== null}>
               {busy === 'override' ? 'Letting it go…' : 'Push anyway'}
             </button>
-            <button type="button" className={PLAIN} disabled={busy !== null} onClick={() => setForm(false)}>
+            <button type="button" className={PLAIN} disabled={busy !== null} onClick={cancelForm}>
               Cancel
             </button>
           </div>
@@ -396,7 +470,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
 
       {error && (
         <p role="alert" className="mt-2 text-meta text-bad [overflow-wrap:anywhere]">
-          {error}
+          {error.text}
         </p>
       )}
     </article>

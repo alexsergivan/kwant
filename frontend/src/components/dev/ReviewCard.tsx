@@ -686,7 +686,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
         <ul role="list" className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 lg:grid-cols-4">
           <SecTile name="Secrets" tool="Gitleaks" mono="gitleaks" state={sec.secrets.state} text={scanText(sec.secrets, 'secret', 'secrets', 'None found')} />
           <SecTile name="New packages" tool="Registry check" mono="registry" state={sec.packages.state} text={scanText(sec.packages, 'package', 'packages', 'All real')} />
-          <SecTile name="Dependencies" tool="OSV" mono="osv" state="later" text="in 0.7.x" />
+          <SecTile name="Dependencies" tool="OSV" mono="osv" state="later" text="Not checked in this version" />
           <SecTile name="Code patterns" tool="Semgrep" mono="semgrep" {...semgrepTile(sec.semgrep)} />
         </ul>
       </section>

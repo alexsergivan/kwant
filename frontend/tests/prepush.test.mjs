@@ -26,6 +26,7 @@ const m = await loadBundled(`
   export { PrepushCard } from './src/components/dev/PrepushCard';
   export { PrepushNeedsYou, PrepushThread, threadCards, usePrepushCards } from './src/components/dev/PrepushThread';
   export { FreshEyesChip } from './src/components/dev/FreshEyesChip';
+  export { DevModeError } from './src/devMode';
   export { ReviewCard, semgrepTile } from './src/components/dev/ReviewCard';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export { createRoot } from 'react-dom/client';
@@ -88,7 +89,8 @@ test('every fixture parses and maps to Mira\'s phase', () => {
 
 test('the parser refuses cards it cannot show honestly', () => {
   assert.equal(m.parsePrepush(null), null);
-  assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, status: 'pushed' }), null, 'no pushed status on the server');
+  assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, status: 'pushed' }).status, 'unknown', 'a newer status is kept, read-only (Ada Later 2)');
+  assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, status: 7 }), null, 'a status that is not a word is refused');
   assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, branch: '' }), null);
   assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, checks: [...fx.PP_CLEAR.checks, { key: 'osv', state: 'pass', text: 'x' }] }), null, 'an unknown row is never dropped silently');
   assert.equal(m.parsePrepush({ ...fx.PP_CLEAR, checks: [{ key: 'secrets', state: 'queued', text: 'Waiting' }] }), null, 'no queued state in the contract');
@@ -187,7 +189,7 @@ test('P2 clear: a card seen live shows Clear, then folds to P2b after about 2 s;
 test('P3 blocked: rose chip, the bot is fixing, a plain Push anyway, no amber', () => {
   const out = html(m.PrepushCard, { card: card(fx.PP_BLOCKED), bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
   assert.match(out, /kw-chip kw-chip-bad[^"]*"[^>]*>1 to fix/);
-  assert.match(out, /Pixel is fixing them\./);
+  assert.match(out, /Pixel is fixing it\./, 'one blocker reads it (#475 Mira Later 1)');
   assert.match(out, /Try 1 of 2\./);
   assert.match(out, />Push anyway…</);
   assert.doesNotMatch(out, /amber/);
@@ -199,7 +201,7 @@ test('P4 needs you: amber box with role=alert, retry first, amber-outline Push a
   const calls = [];
   const { host } = await mount(m.PrepushCard, { card: card(fx.PP_NEEDS_YOU), bot: 'Pixel', onRetry: async (c) => calls.push(['retry', c.id]), onOverride: async () => {} });
   const box = host.querySelector('[data-needs-you]');
-  assert.equal(box.getAttribute('role'), 'alert');
+  assert.equal(box.getAttribute('role'), null, 'a card that mounts in P4 does not re-announce (Mira Later 5)');
   assert.match(text(box), /Pixel couldn't clear 1 finding after 2 tries\. The push is waiting for you\. It's also in your Inbox\./);
   const btns = [...box.querySelectorAll('button')].map(text);
   assert.deepEqual(btns, ['Ask Pixel to try again', 'Push anyway…']);
@@ -523,4 +525,236 @@ test('semgrep tile: the real run, not installed is optional, and no more "in 0.7
   assert.doesNotMatch(out, /data-sec="Semgrep"[^]*?in 0\.7\.x/);
   const r = m.parseReview({ ...m.dfx.REVIEW_294, security: { ...m.dfx.REVIEW_294.security, semgrep: { state: 'hit', count: 1 } } });
   assert.deepEqual(r.security.semgrep, { state: 'hit', count: 1, reason: null });
+});
+
+// ---------------------------------------------------------------------------------------------
+// #458 follow-ups (Ada review-458 Later 1–9, Mira ui-check-458 Later 1–6, Rigel qa-458 1–2)
+
+test('Mira 5: role=alert only on the move into P4, not on mount or after Cancel', async () => {
+  const { host, rerender } = await mount(m.PrepushCard, { card: card(fx.PP_BLOCKED), bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
+  await rerender({ card: card(fx.PP_NEEDS_YOU), bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
+  assert.equal(host.querySelector('[data-needs-you]').getAttribute('role'), 'alert');
+  await click(button(host, 'Push anyway'));
+  await click(button(host, 'Cancel'));
+  assert.equal(host.querySelector('[data-needs-you]').getAttribute('role'), null);
+});
+
+test('Ada 3: Cancel and Esc put focus back on the Push anyway button that opened the form', async () => {
+  const { host } = await mount(m.PrepushCard, { card: card(fx.PP_NEEDS_YOU), bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
+  await click(button(host, 'Push anyway'));
+  await click(button(host, 'Cancel'));
+  assert.equal(document.activeElement, button(host, 'Push anyway'));
+  await click(button(host, 'Push anyway'));
+  host.querySelector('textarea').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await settle();
+  assert.equal(host.querySelector('[data-override-form]'), null);
+  assert.equal(document.activeElement, button(host, 'Push anyway'));
+});
+
+test('Ada 6: the reason counts characters as the server does, not UTF-16 units', () => {
+  assert.equal(m.reasonLength('🙂🙂🙂🙂🙂'), 5);
+  assert.equal(m.reasonOk('🙂🙂🙂🙂🙂'), false, '5 emoji are 10 UTF-16 units but 5 characters');
+  assert.equal(m.reasonOk('  revoked test key  '), true);
+});
+
+test('Ada 2: an unknown status shows as a read-only grey line, never dropped or actionable', async () => {
+  const c = card({ ...fx.PP_OVERRIDDEN, status: 'pushed' });
+  assert.equal(m.phaseOf(c), 'UN');
+  assert.equal(m.statusChip(c), null);
+  assert.equal(m.canOverride(c), false);
+  assert.equal(c.needs_you, false);
+  assert.equal(m.parsePrepushList({ cards: [{ ...fx.PP_CLEAR, status: 'pushed' }] }).length, 1);
+  const out = html(m.PrepushCard, { card: c, bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
+  assert.match(out, /data-prepush-phase="UN"/);
+  assert.match(out, /can&#x27;t show where it is yet/);
+  assert.doesNotMatch(out, /<button/);
+});
+
+test('Mira 6: P2b renders the branch as code', () => {
+  const out = html(m.PrepushCard, { card: card(fx.PP_CLEAR), bot: 'Pixel' });
+  assert.match(out, /Cleared to push <code class="dv-sha dv-sha-wrap">/);
+  assert.equal(m.clearedLine(card(fx.PP_CLEAR)).startsWith('Cleared to push '), true);
+});
+
+test('Mira 4: a hit the server does not count as a blocker says "doesn\'t block"; a blocker row does not', () => {
+  const raw = {
+    ...fx.PP_BLOCKED,
+    checks: fx.PP_BLOCKED.checks.map((k) => (k.key === 'risk' ? { ...k, state: 'hit', text: 'Touches auth code' } : k)),
+  };
+  const c = card(raw);
+  assert.equal(m.rowBlocks(c, 'risk'), false, 'risk never blocks on its own (contract §4.3)');
+  assert.equal(m.rowBlocks(c, 'semgrep'), false);
+  const out = html(m.PrepushCard, { card: c, bot: 'Pixel' });
+  const risk = out.match(/<li data-check="risk"[\s\S]*?<\/li>/)[0];
+  assert.match(risk, /doesn&#x27;t block/);
+  for (const b of c.blockers) {
+    const key = { gitleaks: 'secrets', packages: 'pkgs', tamper: 'tests', review: 'review' }[b.source];
+    if (!key) continue;
+    assert.equal(m.rowBlocks(c, key), true, `${key} holds the push`);
+    const row = out.match(new RegExp(`<li data-check="${key}"[\\s\\S]*?</li>`))[0];
+    assert.doesNotMatch(row, /doesn&#x27;t block/);
+  }
+});
+
+test('Ada 5: a slow list never replaces a card an event already refreshed', () => {
+  const old = card({ ...fx.PP_BLOCKED, updated_at: 1000 });
+  const fresh = card({ ...fx.PP_BLOCKED, status: 'overridden', updated_at: 2000 });
+  const other = card({ ...fx.PP_CLEAR, id: 'pp-other', updated_at: 5 });
+  const merged = m.mergeList([fresh], [old, other]);
+  assert.equal(merged.find((c) => c.id === fresh.id).status, 'overridden');
+  assert.equal(merged.length, 2);
+  assert.equal(m.mergeList([old], [fresh])[0].status, 'overridden', 'a newer list copy wins');
+});
+
+test('Ada 1: a failed list load is tried again on the next event and on window focus', async () => {
+  let lists = 0;
+  const api = {
+    list: async () => {
+      lists += 1;
+      if (lists === 1) throw new Error('offline');
+      return [card(fx.PP_NEEDS_YOU)];
+    },
+    get: async () => card(fx.PP_NEEDS_YOU),
+  };
+  let state;
+  const Probe = () => {
+    state = m.usePrepushCards('space-1', true, api);
+    return null;
+  };
+  await mount(Probe, {});
+  assert.equal(lists, 1);
+  assert.equal(state.cards.length, 0);
+  window.dispatchEvent(new window.Event('focus'));
+  await settle();
+  assert.equal(lists, 2, 'focus loads the list again after a failure');
+  assert.equal(state.cards.length, 1);
+  window.dispatchEvent(new window.Event('focus'));
+  await settle();
+  assert.equal(lists, 2, 'no reload once the list loaded');
+});
+
+test('Ada 7: when only the chat message failed, the card says the change applied', async () => {
+  const { host } = await mount(m.PrepushCard, {
+    card: card(fx.PP_NEEDS_YOU),
+    bot: 'Pixel',
+    onRetry: async () => {},
+    onOverride: async () => {
+      throw Object.assign(new Error(m.messageNotSent('Pixel')), { status: 0, code: 'message_not_sent' });
+    },
+  });
+  await click(button(host, 'Push anyway'));
+  await type(host.querySelector('textarea'), 'the key is a revoked test key');
+  host.querySelector('form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+  await settle();
+  assert.match(text(host.querySelector('[role="alert"]')), /Done, but the message to Pixel didn't send\./);
+  assert.equal(m.messageNotSent('Pixel'), "Done, but the message to Pixel didn't send. Tell Pixel in the chat.");
+});
+
+test('Mira 1: on desktop the popover sits under its own chip; Mira 2 and 3: chip LED gap, 44 px hit area', async () => {
+  const out = html(m.FreshEyesChip, { label: card(fx.PP_CLEAR).fresh_eyes, reviewer: 'Iris', author: 'Pixel' });
+  assert.match(out, /data-fresh-eyes="R1"/);
+  const src = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/components/dev/FreshEyesChip.tsx', import.meta.url), 'utf8'));
+  assert.doesNotMatch(src, /sm:left-0/);
+  assert.match(src, /style=\{\{ left \}\}/);
+  const css = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/styles/modern.css', import.meta.url), 'utf8'));
+  assert.match(css, /@media \(max-width: 639px\) \{ \.fe-chip::after \{ inset: -10px -6px; \} \}/);
+  assert.match(css, /\.dv-branch\.dv-branch-wrap \.h \{ white-space: normal;/, 'Ada 9: a long branch wraps instead of being cut off');
+  const p1 = html(m.PrepushCard, { card: card(fx.PP_CHECKING), bot: 'Pixel' });
+  assert.match(p1, /data-prepush-chip[^>]*>.*?class="[^"]*dv-led-still mx-0\.5/);
+});
+
+test('Rigel 1: refresh() fetches one card again, so a 409 leaves the card where it really is', async () => {
+  let gets = 0;
+  const api = { list: async () => [card(fx.PP_NEEDS_YOU)], get: async () => (gets++, card({ ...fx.PP_NEEDS_YOU, status: 'overridden', updated_at: 9e12 })) };
+  let state;
+  const Probe = () => {
+    state = m.usePrepushCards('space-1', true, api);
+    return null;
+  };
+  await mount(Probe, {});
+  assert.equal(state.cards[0].status, 'blocked');
+  await state.refresh(state.cards[0].id);
+  await settle();
+  assert.equal(gets, 1);
+  assert.equal(state.cards[0].status, 'overridden');
+});
+
+test('#475 review 1: a 409 line survives the refetch and goes on the next change', async () => {
+  const moved = 'This card moved on in the meantime. It shows where it is now.';
+  const props = (c) => ({
+    card: card(c),
+    bot: 'Pixel',
+    onRetry: async () => {
+      throw new m.DevModeError(moved, 409, 'conflict');
+    },
+    onOverride: async () => {},
+  });
+  const { host, rerender } = await mount(m.PrepushCard, props(fx.PP_NEEDS_YOU));
+  await click(button(host, 'Ask Pixel to try again'));
+  assert.equal(text(host.querySelector('[role="alert"]')), moved);
+  await rerender(props({ ...fx.PP_NEEDS_YOU, status: 'overridden', override: fx.PP_OVERRIDDEN.override }));
+  assert.equal(text(host.querySelector('[role="alert"]')), moved, 'still there after the refetch');
+  await rerender(props({ ...fx.PP_CHECKING, id: fx.PP_NEEDS_YOU.id }));
+  assert.equal(host.querySelector('[role="alert"]'), null, 'gone on the next change (checking)');
+  await rerender(props({ ...fx.PP_CLEAR, id: fx.PP_NEEDS_YOU.id }));
+  assert.doesNotMatch(text(host), /moved on in the meantime/);
+});
+
+test('#475 review 1: a 409 after the card already moved, and message_not_sent, keep nothing', async () => {
+  let r;
+  const { host, rerender } = await mount(m.PrepushCard, {
+    card: card(fx.PP_NEEDS_YOU),
+    bot: 'Pixel',
+    onRetry: async () => {
+      await r(card({ ...fx.PP_NEEDS_YOU, status: 'overridden', override: fx.PP_OVERRIDDEN.override }));
+      throw new m.DevModeError('This card moved on in the meantime. It shows where it is now.', 409, 'conflict');
+    },
+    onOverride: async () => {},
+  });
+  r = (c) => rerender({ card: c, bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
+  await click(button(host, 'Ask Pixel to try again'));
+  await settle(); // onRetry's own rerender settles in parallel with click's; wait for the throw too
+  assert.match(text(host.querySelector('[role="alert"]')), /moved on/);
+  await r(card({ ...fx.PP_CHECKING, id: fx.PP_NEEDS_YOU.id }));
+  assert.equal(host.querySelector('[role="alert"]'), null);
+  const src = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/components/dev/PrepushCard.tsx', import.meta.url), 'utf8'));
+  assert.doesNotMatch(src, /code === 'message_not_sent'/, 'message_not_sent is not kept');
+});
+
+test('#475 review 2: a retry that applied but whose message failed shows the alert on the retried line', async () => {
+  let r;
+  const { host, rerender } = await mount(m.PrepushCard, {
+    card: card(fx.PP_NEEDS_YOU),
+    bot: 'Pixel',
+    onRetry: async () => {
+      await r(card(fx.PP_RETRIED));
+      throw new m.DevModeError(m.messageNotSent('Pixel'), 0, 'message_not_sent');
+    },
+    onOverride: async () => {},
+  });
+  r = (c) => rerender({ card: c, bot: 'Pixel', onRetry: async () => {}, onOverride: async () => {} });
+  await click(button(host, 'Ask Pixel to try again'));
+  await settle(); // onRetry's own rerender settles in parallel with click's; wait for the throw too
+  assert.ok(host.querySelector('[data-prepush-phase="RT"]'), 'the card is the retried line');
+  const alert = host.querySelector('[data-prepush-phase="RT"] [role="alert"]');
+  assert.ok(alert, 'alert under the RT line');
+  assert.equal(text(alert), "Done, but the message to Pixel didn't send. Tell Pixel in the chat.");
+  assert.match(alert.className, /text-bad/);
+  await r(card({ ...fx.PP_CHECKING, id: fx.PP_RETRIED.id }));
+  assert.equal(host.querySelector('[role="alert"]'), null, 'cleared by the next change');
+});
+
+test('#475 Mira must-fix 1: the branch on one-line cards wraps; "fixing it" with one blocker', async () => {
+  const long = 'pixel/inbox-empty-state-for-new-spaces-with-no-bots';
+  for (const c of [fx.PP_NO_CHANGE, fx.PP_RETRIED, { ...fx.PP_CLEAR, status: 'pushed' }, fx.PP_CLEAR]) {
+    const out = html(m.PrepushCard, { card: card({ ...c, branch: long }), bot: 'Pixel' });
+    assert.match(out, new RegExp(`<code class="dv-sha dv-sha-wrap">${long}</code>`), c.id);
+  }
+  const css = await import('node:fs').then((fs) => fs.readFileSync(new URL('../src/styles/modern.css', import.meta.url), 'utf8'));
+  assert.match(css, /\.dv-sha\.dv-sha-wrap \{ display: inline; height: auto; white-space: normal; overflow-wrap: anywhere;/);
+  const one = card({ ...fx.PP_BLOCKED, blockers: fx.PP_BLOCKED.blockers.slice(0, 1) });
+  assert.equal(m.openCount(one), 1);
+  assert.match(html(m.PrepushCard, { card: one, bot: 'Pixel' }), /Pixel is fixing it\./);
+  const many = card(fx.PP_MANY);
+  if (m.openCount(many) > 1) assert.match(html(m.PrepushCard, { card: many, bot: 'Pixel' }), /Pixel is fixing them\./);
 });
