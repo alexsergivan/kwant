@@ -34,6 +34,31 @@ pub fn secret_file(path: &Path) -> bool {
 
 /// `rel` resolved inside `folder` (symlinks followed), or why not.
 pub fn inside(folder: &Path, rel: &str) -> Result<PathBuf, String> {
+    resolve_inside(folder, rel).map(|(_, real)| real)
+}
+
+/// Opens `rel` after [`inside`]'s checks, walking from the folder's descriptor (S-8): in vm mode
+/// the bot can swap the checked file for a symlink to a host file, or a FIFO, before the open;
+/// then the open fails (`NotFound` when it's gone) instead of reading that file or blocking.
+pub fn open_inside(folder: &Path, rel: &str) -> Result<std::io::Result<std::fs::File>, String> {
+    let (root, real) = resolve_inside(folder, rel)?;
+    Ok(crate::sandbox::safe_fs::open_checked(&root, &real))
+}
+
+/// The most a file check or evidence hash reads: the graph scan's limit, so what was attached
+/// can be checked again later.
+pub const HASH_MAX_BYTES: u64 = super::graph::SCAN_MAX_BYTES;
+
+/// The sha256 and size of an open file, refused past [`HASH_MAX_BYTES`]. Blocking: call it off the
+/// async runtime.
+pub fn hash_open(file: std::fs::File) -> std::io::Result<(String, u64)> {
+    let mut hasher = Sha256::new();
+    let n = crate::sandbox::safe_fs::copy_capped(file, &mut hasher, HASH_MAX_BYTES)?;
+    Ok((hex(&hasher.finalize()), n))
+}
+
+/// The resolved folder and the resolved path of `rel` inside it.
+fn resolve_inside(folder: &Path, rel: &str) -> Result<(PathBuf, PathBuf), String> {
     let rel = rel.trim();
     if rel.is_empty() {
         return Err("path is empty".into());
@@ -56,7 +81,7 @@ pub fn inside(folder: &Path, rel: &str) -> Result<PathBuf, String> {
     if secret_file(&real) {
         return Err("checks don't read password, key or env files".into());
     }
-    Ok(real)
+    Ok((root, real))
 }
 
 fn excerpt(s: &str) -> String {
@@ -204,33 +229,60 @@ fn send_error(url: &str, e: &reqwest::Error) -> String {
     format!("GET {url} failed: network error, {why} ({e})")
 }
 
-async fn file(kind: &str, rel: &str, spec: &Value, dir: &Path, seen: &mut Seen) -> Result<(bool, String), String> {
-    let path = inside(dir, rel)?;
-    let meta = tokio::fs::metadata(&path).await;
-    match kind {
-        "file_exists" => Ok((meta.as_ref().is_ok_and(|m| m.is_file()), match &meta {
-            Ok(m) => format!("{rel} exists ({} bytes)", m.len()),
-            Err(_) => format!("{rel} doesn't exist"),
-        })),
-        _ => {
-            let Ok(m) = meta else { return Ok((false, format!("{rel} doesn't exist"))) };
-            if !m.is_file() {
-                return Ok((false, format!("{rel} isn't a file")));
+pub(crate) async fn file(kind: &str, rel: &str, spec: &Value, dir: &Path, seen: &mut Seen) -> Result<(bool, String), String> {
+    let (dir, rel_s, kind_s) = (dir.to_path_buf(), rel.to_string(), kind.to_string());
+    // Opened by walking from the folder and read from that handle only (S-8), off the runtime
+    let read = tokio::task::spawn_blocking(move || -> Result<FileSeen, String> {
+        let file = match open_inside(&dir, &rel_s)? {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(FileSeen::Missing),
+            Err(_) => return Ok(FileSeen::NotAFile),
+        };
+        let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+        Ok(match kind_s.as_str() {
+            "file_exists" => FileSeen::Exists(len),
+            "file_sha256" => match hash_open(file) {
+                Ok((sha, _)) => FileSeen::Hash(sha),
+                Err(e) if crate::sandbox::safe_fs::is_too_large(&e) => FileSeen::TooLarge,
+                Err(e) => return Err(format!("can't read {rel_s}: {e}")),
+            },
+            _ => {
+                let mut head = Vec::new();
+                std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_READ_BYTES as u64), &mut head)
+                    .map_err(|e| format!("can't read {rel_s}: {e}"))?;
+                FileSeen::Head(head)
             }
-            let bytes = tokio::fs::read(&path).await.map_err(|e| format!("can't read {rel}: {e}"))?;
-            if kind == "file_sha256" {
-                let got = hex(&Sha256::digest(&bytes));
-                let want = spec["sha256"].as_str().unwrap_or("").trim().to_ascii_lowercase();
-                seen.sha256 = Some((got.clone(), want.clone()));
-                Ok((got == want, format!("sha256 of {rel} is {got}")))
-            } else {
-                let want = spec["text"].as_str().unwrap_or("");
-                let text = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_READ_BYTES)]);
-                let has = !want.is_empty() && text.contains(want);
-                Ok((has, format!("{rel} {} \"{want}\"", if has { "contains" } else { "does not contain" })))
-            }
+        })
+    })
+    .await
+    .map_err(|_| format!("can't read {rel}"))??;
+    match read {
+        FileSeen::Missing => Ok((false, format!("{rel} doesn't exist"))),
+        FileSeen::NotAFile => Ok((false, format!("{rel} isn't a file"))),
+        FileSeen::Exists(n) => Ok((true, format!("{rel} exists ({n} bytes)"))),
+        FileSeen::TooLarge => Ok((false, format!("{rel} is over {} MB, so it isn't hashed", HASH_MAX_BYTES / (1024 * 1024)))),
+        FileSeen::Hash(got) => {
+            let want = spec["sha256"].as_str().unwrap_or("").trim().to_ascii_lowercase();
+            seen.sha256 = Some((got.clone(), want.clone()));
+            Ok((got == want, format!("sha256 of {rel} is {got}")))
+        }
+        FileSeen::Head(bytes) => {
+            let want = spec["text"].as_str().unwrap_or("");
+            let text = String::from_utf8_lossy(&bytes);
+            let has = !want.is_empty() && text.contains(want);
+            Ok((has, format!("{rel} {} \"{want}\"", if has { "contains" } else { "does not contain" })))
         }
     }
+}
+
+/// What a file check saw through its one open handle.
+enum FileSeen {
+    Missing,
+    NotAFile,
+    Exists(u64),
+    TooLarge,
+    Hash(String),
+    Head(Vec<u8>),
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -252,7 +304,16 @@ pub async fn run_check(state: &AppState, task: &Task, check: &OutcomeCheck) -> O
     // person (check approval and mission approval are person-only routes). An http check the person
     // didn't add or approve is held to public addresses again now, pinned against DNS rebinding.
     let person_ok = check.requested_by == "person" || approved_by_person(state, check).await;
-    let (status, output) = run_spec(&check.kind, &spec, folder.as_deref(), person_ok).await;
+    // D4 (C9b): a command check runs bash on this computer as kwnt; never in a folder an
+    // isolated bot used, where the command (`npm test`) runs whatever that bot left there
+    let refused = match (check.kind.as_str(), folder.as_deref()) {
+        ("command", Some(dir)) => state.db.host_command_refusal(dir).await,
+        _ => None,
+    };
+    let (status, output) = match refused {
+        Some(why) => ("error".to_string(), why),
+        None => run_spec(&check.kind, &spec, folder.as_deref(), person_ok).await,
+    };
     // The excerpt reaches bots and the API: credentials in the output never get stored
     let output = super::autofix::redact(&output);
     let ev = state

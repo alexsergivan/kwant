@@ -1,0 +1,6 @@
+# Spike image: kwnt-executor + socat + the three CLIs as native binaries (no Node needed).
+FROM kwnt-executor:v1
+RUN apt-get update && apt-get install -y --no-install-recommends socat && rm -rf /var/lib/apt/lists/*
+COPY --chmod=755 claude codex grok /usr/local/bin/
+COPY --chmod=755 entry.sh /usr/local/bin/kwnt-entry
+CMD ["/usr/local/bin/kwnt-entry"]

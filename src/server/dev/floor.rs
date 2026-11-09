@@ -9,11 +9,14 @@ use crate::mcp::prod_floor::{self, DevCtx, Floor};
 use crate::mcp::ToolApprovalRequest;
 use crate::server::gitfile::{self, plain_ref};
 use serde_json::{json, Value};
+use crate::sandbox::safe_fs::Dir;
+use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
 /// The Dev mode context of a bot's space, or `None` when Dev mode is off there (no floor).
-/// With Dev mode off in every space it reads nothing.
-pub async fn ctx_for_kwant(db: &Database, kwant_id: &str, cwd: Option<&Path>) -> Option<(String, DevCtx)> {
+/// With Dev mode off in every space it reads nothing. `at` is `(folder, cwd)`: the bot's folder
+/// for the turn and the working folder of the call, which [`head_branch`] keeps inside it.
+pub async fn ctx_for_kwant(db: &Database, kwant_id: &str, at: Option<(&Path, &Path)>) -> Option<(String, DevCtx)> {
     if !db.any_dev_mode_on() {
         return None;
     }
@@ -38,7 +41,7 @@ pub async fn ctx_for_kwant(db: &Database, kwant_id: &str, cwd: Option<&Path>) ->
         protected: branches,
         deploy_hint,
         prod_connections,
-        head_branch: cwd.and_then(head_branch),
+        head_branch: at.and_then(|(folder, cwd)| head_branch(folder, cwd)),
         migration: None,
     };
     Some((kwant.space_id, ctx))
@@ -60,82 +63,140 @@ pub fn prod_names<'a>(marked: &[String], servers: impl Iterator<Item = (&'a str,
         .collect()
 }
 
-/// The branch checked out in `cwd` (walking up to its `.git`), from `HEAD` alone: no git process.
-/// `None` for a detached head or no repo.
+/// The branch checked out in `cwd` (walking up to its `.git`, but never above `folder`), from
+/// `HEAD` alone: no git process. `None` for a detached head, no repo, or anything doubtful (a bare
+/// push then counts as one to a protected branch, so `None` asks).
 ///
-/// `cwd` can be a bot's folder, so its `.git` is untrusted: every file is read through
-/// [`gitfile::read`] (no symlink, FIFO, hard link or big file, so this never blocks), a `.git`
-/// that is a symlink is no repo, a worktree's `gitdir:` is followed only as [`worktree_head`]
-/// allows, and the branch must be a plain ref.
-pub fn head_branch(cwd: &Path) -> Option<String> {
-    let mut dir = Some(cwd);
-    for _ in 0..12 {
-        let d = dir?;
-        let head = match std::fs::symlink_metadata(d.join(".git")) {
-            Err(_) => {
-                dir = d.parent();
+/// `folder` is the bot's folder for the turn, the host's own path; `cwd` and everything under
+/// `folder` are untrusted. The rules (0.7.7, S-8):
+/// - **Q3:** a `cwd` that isn't `folder` or below it (by its text: no `..`) is refused before
+///   any `.git` is read, and no `.git` above `folder` is read.
+/// - Every folder and file is reached by one openat walk from `folder` ([`Dir`]): no symlink is
+///   followed anywhere below `folder` (a planted link makes this `None`), no FIFO blocks it, and
+///   every file goes through [`gitfile::read`] (no hard link, no big file).
+/// - **P1:** a `.git` folder counts as a repo only with `objects/` and `refs/` folders in it, as
+///   git requires. Without them git uses the repo above, and so does this.
+/// - A worktree's `.git` file is followed only as [`worktree_head`] allows (**A4**: never out of
+///   `folder`), and the branch must be a plain ref.
+pub fn head_branch(folder: &Path, cwd: &Path) -> Option<String> {
+    let mut parts = rel_inside(folder, cwd)?;
+    let root = Dir::open(folder).ok()?;
+    loop {
+        let d = root.open_dir(&joined(&parts)).ok()?;
+        let head = match d.open_dir(Path::new(".git")) {
+            Ok(git) => match repo_dirs(&git)? {
+                true => gitfile::read(&git, "HEAD", gitfile::REF_MAX)?,
+                false => {
+                    parts.pop()?;
+                    continue;
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                parts.pop()?;
                 continue;
             }
-            Ok(m) if gitfile::plain_dir(&m) => gitfile::read(&d.join(".git"), "HEAD", gitfile::REF_MAX)?,
-            Ok(m) if gitfile::plain_file(&m) => worktree_head(d)?,
-            Ok(_) => return None,
+            // A file (a worktree's pointer), or a symlink, FIFO or anything else: never followed
+            Err(_) => worktree_head(&root, folder, &parts, &gitfile::read(&d, ".git", gitfile::REF_MAX)?)?,
         };
         let r = head.trim().strip_prefix("ref: ")?.trim();
         return r.strip_prefix("refs/heads/").filter(|_| plain_ref(r)).map(str::to_string);
     }
-    None
 }
 
-/// `HEAD` of the worktree whose `.git` file is in `d`. The file must say
-/// `gitdir: <repo>/.git/worktrees/<name>` (relative to `d` unless absolute). `.` and `..` are
-/// resolved on the text by [`lexical`], so only a path that was checked is opened, and every
-/// folder on it that `d`'s own path doesn't already name (always `.git`, `worktrees` and `<name>`)
-/// must be a real folder, not a symlink. The kernel and git take `link/..` to the parent of the
-/// link's *target*, not to the folder the text names, so a `..` that would climb over a symlink
-/// (in the gitdir or in `d` itself) makes this `None` rather than read a different `HEAD` than
-/// git would (F-3). A common sibling worktree still reads. Folder races between the checks and
-/// the open remain, as in `discover::read_file`; the 0.7.8 openat walk closes them.
-fn worktree_head(d: &Path) -> Option<String> {
-    let text = gitfile::read(d, ".git", gitfile::REF_MAX)?;
-    let gd = text.trim().strip_prefix("gitdir:")?.trim();
-    let here = lexical(d)?;
-    let target = lexical(&d.join(gd))?;
-    let parts: Vec<Component> = target.components().collect();
-    let [.., Component::Normal(g), Component::Normal(w), Component::Normal(_)] = parts[..] else {
-        return None;
-    };
-    if g.to_str() != Some(".git") || w.to_str() != Some("worktrees") {
-        return None;
-    }
-    let shared = parts.iter().zip(here.components()).take_while(|(a, b)| **a == *b).count().min(parts.len() - 3);
-    let mut at: PathBuf = parts[..shared].iter().collect();
-    for c in &parts[shared..] {
-        at.push(c);
-        if !gitfile::plain_dir(&std::fs::symlink_metadata(&at).ok()?) {
-            return None;
+/// P1: whether an open `.git` folder is a repo to git: `Some(true)` with real `objects/` and
+/// `refs/` folders, `Some(false)` when either is missing (git then looks above), `None` when one
+/// is there but not a real folder (a symlink git would follow: doubtful, so no answer).
+fn repo_dirs(git: &Dir) -> Option<bool> {
+    for sub in ["objects", "refs"] {
+        match git.open_dir(Path::new(sub)) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(false),
+            Err(_) => return None,
         }
     }
-    gitfile::read(&target, "HEAD", gitfile::REF_MAX)
+    Some(true)
 }
 
-/// `p` with `.` dropped and each `..` taken off the text, but only where the kernel would land in
-/// the same folder: `a/..` is `.` only when `a` is a real folder, not a symlink (`link/..` is the
-/// link target's parent). A `..` after a symlink, or past the start, is `None`.
-fn lexical(p: &Path) -> Option<PathBuf> {
-    let mut out = PathBuf::new();
-    for c in p.components() {
+/// `folder` canonicalized, to compare with typed paths and git's own `gitdir:` lines. On Windows
+/// `canonicalize` adds a `\\?\` prefix that a plain `C:\...` or `C:/...` path (which git writes)
+/// never starts with, so it is dropped again; on unix this is just `canonicalize`.
+fn canonical_plain(folder: &Path) -> Option<PathBuf> {
+    let c = folder.canonicalize().ok()?;
+    #[cfg(windows)]
+    {
+        use std::path::Prefix;
+        let mut parts = c.components();
+        if let Some(Component::Prefix(pre)) = parts.next() {
+            let plain = match pre.kind() {
+                Prefix::VerbatimDisk(d) => Some(PathBuf::from(format!("{}:\\", d as char))),
+                Prefix::VerbatimUNC(server, share) => Some(PathBuf::from(format!("\\\\{}\\{}\\", server.to_string_lossy(), share.to_string_lossy()))),
+                _ => None,
+            };
+            if let Some(mut out) = plain {
+                for part in parts.filter(|p| !matches!(p, Component::RootDir)) {
+                    out.push(part);
+                }
+                return Some(out);
+            }
+        }
+    }
+    Some(c)
+}
+
+/// Q3: `cwd`'s parts below `folder`, when `cwd` names `folder` (as given, or with the person's
+/// own symlinks resolved) or a folder below it with plain names only.
+fn rel_inside(folder: &Path, cwd: &Path) -> Option<Vec<OsString>> {
+    let canon = canonical_plain(folder);
+    let rest = cwd.strip_prefix(folder).ok().or_else(|| cwd.strip_prefix(canon.as_deref()?).ok())?;
+    rest.components()
+        .filter(|c| !matches!(c, Component::CurDir))
+        .map(|c| match c {
+            Component::Normal(p) => Some(p.to_os_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn joined(parts: &[OsString]) -> PathBuf {
+    parts.iter().collect()
+}
+
+/// `HEAD` of the worktree whose `.git` file (holding `text`) is in `folder/<at>`. The file must
+/// say `gitdir: <repo>/.git/worktrees/<name>`, relative to that folder or absolute.
+///
+/// **A4:** the gitdir must stay inside `folder`: an absolute one must start with `folder`, and
+/// a relative one may not climb above it. It is resolved on the text, but a `..` only takes off
+/// a part that opens as a real folder: the kernel and git take `link/..` to the parent of the
+/// link's *target*, so a `..` over a symlink makes this `None` rather than read a different
+/// `HEAD` than git would (F-3). The result is then opened by the same openat walk from `folder`,
+/// so every part of it, `.git`, `worktrees` and `<name>` included, is a real folder.
+fn worktree_head(root: &Dir, folder: &Path, at: &[OsString], text: &str) -> Option<String> {
+    let gd = Path::new(text.trim().strip_prefix("gitdir:")?.trim());
+    let (mut stack, rest): (Vec<OsString>, &Path) = if gd.is_absolute() {
+        let canon = canonical_plain(folder);
+        (Vec::new(), gd.strip_prefix(folder).ok().or_else(|| gd.strip_prefix(canon.as_deref()?).ok())?)
+    } else {
+        (at.to_vec(), gd)
+    };
+    for c in rest.components() {
         match c {
             Component::CurDir => {}
             Component::ParentDir => {
-                let real_dir = !out.as_os_str().is_empty() && std::fs::symlink_metadata(&out).is_ok_and(|m| gitfile::plain_dir(&m));
-                if !real_dir || !out.pop() {
+                // Above `folder` (A4), or over a part that isn't a real folder (F-3)
+                if stack.is_empty() || root.open_dir(&joined(&stack)).is_err() {
                     return None;
                 }
+                stack.pop();
             }
-            c => out.push(c),
+            Component::Normal(p) => stack.push(p.to_os_string()),
+            _ => return None,
         }
     }
-    Some(out)
+    let [.., g, w, _] = &stack[..] else { return None };
+    if g != ".git" || w != "worktrees" {
+        return None;
+    }
+    gitfile::read(&root.open_dir(&joined(&stack)).ok()?, "HEAD", gitfile::REF_MAX)
 }
 
 /// The card's `prod_floor` object: `{kind, why, blast, needs_backup, space_id, backup}`.
@@ -148,8 +209,10 @@ pub async fn payload(db: &Database, space_id: &str, floor: &Floor, ctx: &DevCtx)
 
 /// The floor for a tool call (an MCP tool, or one of claude's own), with its payload.
 pub async fn for_call(db: &Database, req: &ToolApprovalRequest) -> Option<(Floor, Value)> {
+    // The call's folder is the turn's own folder, set by the host (`PermissionSession::cwd`),
+    // never one the bot names, so it is the bot folder too
     let cwd = req.builtin.as_ref().and_then(|b| b.cwd.as_deref()).map(Path::new);
-    let (space_id, ctx) = ctx_for_kwant(db, &req.kwant_id, cwd).await?;
+    let (space_id, ctx) = ctx_for_kwant(db, &req.kwant_id, cwd.map(|c| (c, c))).await?;
     let floor = prod_floor::reason(req, &ctx)?;
     let p = payload(db, &space_id, &floor, &ctx).await;
     Some((floor, p))
@@ -157,7 +220,8 @@ pub async fn for_call(db: &Database, req: &ToolApprovalRequest) -> Option<(Floor
 
 /// The floor for a command kwant's own shell runs for a bot (`execute_shell`).
 pub async fn for_shell(db: &Database, kwant_id: &str, command: &str, cwd: &Path) -> Option<(Floor, Value)> {
-    let (space_id, ctx) = ctx_for_kwant(db, kwant_id, Some(cwd)).await?;
+    // kwant's shell runs in the bot's own folder (`execute_tool` picks it), so it is both
+    let (space_id, ctx) = ctx_for_kwant(db, kwant_id, Some((cwd, cwd))).await?;
     let floor = prod_floor::shell_reason(command, &ctx)?;
     let p = payload(db, &space_id, &floor, &ctx).await;
     Some((floor, p))
@@ -198,28 +262,36 @@ mod tests {
     #[test]
     fn the_checked_out_branch_is_read_from_head() {
         let root = std::env::temp_dir().join(format!("kwnt-dev-head-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join(".git/objects")).unwrap();
+        std::fs::create_dir_all(root.join(".git/refs")).unwrap();
         std::fs::create_dir_all(root.join("src/deep")).unwrap();
         std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/lin-dev-core\n").unwrap();
-        assert_eq!(head_branch(&root.join("src/deep")).as_deref(), Some("lin-dev-core"));
+        assert_eq!(in_tmp(&root.join("src/deep")).as_deref(), Some("lin-dev-core"));
         std::fs::write(root.join(".git/HEAD"), "3ca2bf7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n").unwrap();
-        assert_eq!(head_branch(&root), None, "a detached head can't be told");
+        assert_eq!(in_tmp(&root), None, "a detached head can't be told");
         // A worktree's `.git` file
         let wt = root.join("wt");
         std::fs::create_dir_all(root.join(".git/worktrees/wt")).unwrap();
         std::fs::create_dir_all(&wt).unwrap();
         std::fs::write(wt.join(".git"), format!("gitdir: {}\n", root.join(".git/worktrees/wt").display())).unwrap();
         std::fs::write(root.join(".git/worktrees/wt/HEAD"), "ref: refs/heads/release/0.7\n").unwrap();
-        assert_eq!(head_branch(&wt).as_deref(), Some("release/0.7"));
+        assert_eq!(in_tmp(&wt).as_deref(), Some("release/0.7"));
         std::fs::remove_dir_all(&root).unwrap();
-        assert_eq!(head_branch(Path::new("/nonexistent/kwnt-dev")), None);
+        assert_eq!(in_tmp(Path::new("/nonexistent/kwnt-dev")), None);
+    }
+
+    /// [`head_branch`] with the whole temp folder as the bot folder, so these cases only test the
+    /// walk inside it (Q3 and A4 have their own tests below).
+    fn in_tmp(cwd: &Path) -> Option<String> {
+        head_branch(&std::env::temp_dir(), cwd)
     }
 
     /// A repo with `.git/HEAD` on `lin-dev-core` in a temp folder.
     fn head_repo() -> (tempfile::TempDir, PathBuf) {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().join("repo");
-        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join(".git/objects")).unwrap();
+        std::fs::create_dir_all(root.join(".git/refs")).unwrap();
         std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/lin-dev-core\n").unwrap();
         (d, root)
     }
@@ -228,7 +300,7 @@ mod tests {
     fn head_within_5s(cwd: &Path) -> Option<String> {
         let (tx, rx) = std::sync::mpsc::channel();
         let cwd = cwd.to_path_buf();
-        std::thread::spawn(move || tx.send(head_branch(&cwd)).unwrap());
+        std::thread::spawn(move || tx.send(in_tmp(&cwd)).unwrap());
         rx.recv_timeout(std::time::Duration::from_secs(5)).expect("head_branch blocked")
     }
 
@@ -319,18 +391,18 @@ mod tests {
         std::fs::write(&host, "ref: refs/heads/LEAKED-FROM-OUTSIDE\n").unwrap();
         std::fs::remove_file(root.join(".git/HEAD")).unwrap();
         symlink(&host, root.join(".git/HEAD")).unwrap();
-        assert_eq!(head_branch(&root), None, "HEAD symlink");
+        assert_eq!(in_tmp(&root), None, "HEAD symlink");
         // `.git` as a symlink to another repo, or to a `gitdir:` file
         let (_d2, other) = head_repo();
         let linked = d.path().join("linked");
         std::fs::create_dir_all(&linked).unwrap();
         symlink(other.join(".git"), linked.join(".git")).unwrap();
-        assert_eq!(head_branch(&linked), None, ".git symlink to a folder");
-        assert_eq!(head_branch(&linked.join("sub")), None, "and not from below it either");
+        assert_eq!(in_tmp(&linked), None, ".git symlink to a folder");
+        assert_eq!(in_tmp(&linked.join("sub")), None, "and not from below it either");
         std::fs::remove_file(linked.join(".git")).unwrap();
         std::fs::write(d.path().join("gitfile"), format!("gitdir: {}\n", other.join(".git").display())).unwrap();
         symlink(d.path().join("gitfile"), linked.join(".git")).unwrap();
-        assert_eq!(head_branch(&linked), None, ".git symlink to a file");
+        assert_eq!(in_tmp(&linked), None, ".git symlink to a file");
         // A worktree whose gitdir goes through a planted folder link
         let wt = d.path().join("wt");
         std::fs::create_dir_all(other.join(".git/worktrees/wt")).unwrap();
@@ -338,7 +410,7 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         symlink(other.parent().unwrap(), wt.join("hop")).unwrap();
         std::fs::write(wt.join(".git"), "gitdir: hop/repo/.git/worktrees/wt\n").unwrap();
-        assert_eq!(head_branch(&wt), None, "gitdir through a symlinked folder");
+        assert_eq!(in_tmp(&wt), None, "gitdir through a symlinked folder");
     }
 
     /// F-3, M1: `link/..` in the gitdir is the link target's parent to the kernel and git, not
@@ -360,11 +432,11 @@ mod tests {
         // What git and the kernel open: the physical copy, on `main`
         let kernel = std::fs::read_to_string(wt.join("link/../decoy/.git/worktrees/x/HEAD")).unwrap();
         assert_eq!(kernel, "ref: refs/heads/main\n");
-        assert_eq!(head_branch(&wt), None, "M1: must not read the text path's `feature`");
+        assert_eq!(in_tmp(&wt), None, "M1: must not read the text path's `feature`");
         // `..` after a real folder still reads
         std::fs::create_dir_all(wt.join("real")).unwrap();
         std::fs::write(wt.join(".git"), "gitdir: real/../decoy/.git/worktrees/x\n").unwrap();
-        assert_eq!(head_branch(&wt).as_deref(), Some("feature"));
+        assert_eq!(in_tmp(&wt).as_deref(), Some("feature"));
     }
 
     /// F-3, M2: the start folder sits under a symlink, and the gitdir's leading `..` climb over it.
@@ -386,7 +458,7 @@ mod tests {
         let start = p.join("lnk/wt");
         let kernel = std::fs::read_to_string(start.join("../../decoy2/.git/worktrees/x/HEAD")).unwrap();
         assert_eq!(kernel, "ref: refs/heads/main\n");
-        assert_eq!(head_branch(&start), None, "M2: must not read the text path's `feature`");
+        assert_eq!(in_tmp(&start), None, "M2: must not read the text path's `feature`");
     }
 
     #[test]
@@ -404,15 +476,15 @@ mod tests {
             std::fs::create_dir_all(root.join(".git/worktrees/x")).unwrap();
             std::fs::write(root.join(".git/worktrees/x/HEAD"), "ref: refs/heads/x\n").unwrap();
             std::fs::write(wt.join(".git"), &bad).unwrap();
-            assert_eq!(head_branch(&wt), None, "{bad}");
+            assert_eq!(in_tmp(&wt), None, "{bad}");
         }
         // A relative gitdir (what `worktree.useRelativePaths` writes) reads
         std::fs::write(wt.join(".git"), "gitdir: ../repo/.git/worktrees/x\n").unwrap();
-        assert_eq!(head_branch(&wt).as_deref(), Some("x"));
+        assert_eq!(in_tmp(&wt).as_deref(), Some("x"));
         // The branch must be a plain ref
         for head in ["ref: refs/heads/../../x", "ref: refs/heads/a b", "ref: refs/tags/v1", "ref: refs/heads/"] {
             std::fs::write(root.join(".git/HEAD"), head).unwrap();
-            assert_eq!(head_branch(&root), None, "{head}");
+            assert_eq!(in_tmp(&root), None, "{head}");
         }
     }
 
@@ -436,10 +508,75 @@ mod tests {
         git(&main, &["commit", "-q", "--allow-empty", "-m", "x"]);
         let wt = d.path().join("main-wt");
         git(&main, &["worktree", "add", "-q", "-b", "juno/side-1", wt.to_str().unwrap()]);
-        assert_eq!(head_branch(&main).as_deref(), Some("main"));
-        assert_eq!(head_branch(&wt).as_deref(), Some("juno/side-1"));
+        assert_eq!(in_tmp(&main).as_deref(), Some("main"));
+        assert_eq!(in_tmp(&wt).as_deref(), Some("juno/side-1"));
         std::fs::create_dir_all(wt.join("src")).unwrap();
-        assert_eq!(head_branch(&wt.join("src")).as_deref(), Some("juno/side-1"));
+        assert_eq!(in_tmp(&wt.join("src")).as_deref(), Some("juno/side-1"));
+    }
+
+    /// P1: a `.git` folder without `objects/` and `refs/` isn't a repo to git, which uses the repo
+    /// above it. A planted `sub/.git/HEAD` must not hide the real branch (old code: "decoy").
+    #[test]
+    fn head_branch_needs_objects_and_refs_like_git() {
+        let (d, root) = head_repo();
+        std::fs::create_dir_all(root.join("sub/.git")).unwrap();
+        std::fs::write(root.join("sub/.git/HEAD"), "ref: refs/heads/decoy\n").unwrap();
+        assert_eq!(head_branch(d.path(), &root.join("sub")).as_deref(), Some("lin-dev-core"), "HEAD only");
+        std::fs::create_dir_all(root.join("sub/.git/objects")).unwrap();
+        assert_eq!(head_branch(d.path(), &root.join("sub")).as_deref(), Some("lin-dev-core"), "no refs/");
+        std::fs::create_dir_all(root.join("sub/.git/refs")).unwrap();
+        assert_eq!(head_branch(d.path(), &root.join("sub")).as_deref(), Some("decoy"), "a real nested repo");
+        // A symlinked `refs` git would follow: no answer rather than the wrong repo's
+        #[cfg(unix)]
+        {
+            std::fs::remove_dir(root.join("sub/.git/refs")).unwrap();
+            std::os::unix::fs::symlink(root.join(".git/refs"), root.join("sub/.git/refs")).unwrap();
+            assert_eq!(head_branch(d.path(), &root.join("sub")), None);
+        }
+    }
+
+    /// A4: a worktree's gitdir may not leave the bot folder, absolute (old code read the other
+    /// repo's branch) or relative.
+    #[test]
+    fn head_branch_keeps_a_worktree_gitdir_in_the_bot_folder() {
+        let (_o, other) = head_repo();
+        std::fs::create_dir_all(other.join(".git/worktrees/x")).unwrap();
+        std::fs::write(other.join(".git/worktrees/x/HEAD"), "ref: refs/heads/theirs\n").unwrap();
+        let d = tempfile::tempdir().unwrap();
+        let bot = d.path().join("bot");
+        std::fs::create_dir_all(&bot).unwrap();
+        std::fs::write(bot.join(".git"), format!("gitdir: {}\n", other.join(".git/worktrees/x").display())).unwrap();
+        assert_eq!(head_branch(&bot, &bot), None, "absolute gitdir into another repo");
+        let rel = format!("gitdir: ../../{}/.git/worktrees/x\n", other.strip_prefix(d.path().parent().unwrap()).unwrap().display());
+        std::fs::write(bot.join(".git"), &rel).unwrap();
+        assert_eq!(head_branch(&bot, &bot), None, "relative gitdir climbing out: {rel}");
+        // The same gitdir reads once the bot folder holds both
+        assert_eq!(head_branch(d.path().parent().unwrap(), &bot).as_deref(), Some("theirs"));
+        // An absolute gitdir inside the bot folder reads
+        std::fs::create_dir_all(bot.join("repo/.git/worktrees/w")).unwrap();
+        std::fs::write(bot.join("repo/.git/worktrees/w/HEAD"), "ref: refs/heads/mine\n").unwrap();
+        std::fs::create_dir_all(bot.join("wt")).unwrap();
+        std::fs::write(bot.join("wt/.git"), format!("gitdir: {}\n", bot.join("repo/.git/worktrees/w").display())).unwrap();
+        assert_eq!(head_branch(&bot, &bot.join("wt")).as_deref(), Some("mine"));
+    }
+
+    /// Q3: a working folder outside the bot folder is refused before any `.git` is read (old
+    /// code read the other repo's branch), and so is one that climbs out with `..`.
+    #[test]
+    fn head_branch_refuses_a_working_folder_outside_the_bot_folder() {
+        let (_o, other) = head_repo();
+        let (_b, bot) = head_repo();
+        assert_eq!(head_branch(&bot, &other), None, "another repo");
+        assert_eq!(head_branch(&bot, &bot.join("..")), None, "`..` out of the folder");
+        assert_eq!(head_branch(&bot, &bot.join("sub/../..")), None);
+        assert_eq!(head_branch(&bot, Path::new("repo")), None, "a relative cwd");
+        // And no `.git` above the bot folder: a bot folder inside a repo gets no answer
+        std::fs::create_dir_all(bot.join("sub")).unwrap();
+        assert_eq!(head_branch(&bot.join("sub"), &bot.join("sub")), None);
+        // Inside, it reads
+        assert_eq!(head_branch(&bot, &bot).as_deref(), Some("lin-dev-core"));
+        assert_eq!(head_branch(&bot, &bot.join("sub")).as_deref(), Some("lin-dev-core"));
+        assert_eq!(head_branch(&bot, &bot.join("./sub")).as_deref(), Some("lin-dev-core"));
     }
 
     fn backup(space: &str, ok: bool, age_s: i64) -> crate::db::dev_mode::DevBackupRow {

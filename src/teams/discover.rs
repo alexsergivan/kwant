@@ -16,7 +16,7 @@
 use super::presets::{self, Preset};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 /// D7: paths counted for file-count signals.
@@ -469,32 +469,45 @@ pub fn parse_tree(out: &[u8]) -> Vec<Entry> {
 /// name at any depth, goes [`MAX_DEPTH`] folders down, lists regular files only, in name order
 /// (D-F10). Unreadable folders are skipped. Stops at [`MAX_LISTED`] files or `deadline`.
 pub fn walk(root: &Path, deadline: Instant) -> Listing {
+    use crate::sandbox::safe_fs::{Dir, Kind};
     let mut out = Listing::default();
-    let mut stack: Vec<(PathBuf, String, usize)> = vec![(root.to_path_buf(), String::new(), 0)];
-    while let Some((dir, rel, depth)) = stack.pop() {
+    // Every folder is reached from its parent's descriptor with `openat(…, O_NOFOLLOW)` (S-8): a
+    // folder the bot swaps for a symlink mid-walk is refused, never listed through. A subfolder
+    // is opened only when its turn comes, so a wide folder doesn't hold a descriptor per sibling.
+    let Ok(top) = Dir::open(root) else { return out };
+    let mut stack: Vec<(std::rc::Rc<Dir>, Option<std::ffi::OsString>, String, usize)> = vec![(std::rc::Rc::new(top), None, String::new(), 0)];
+    while let Some((parent, name, rel, depth)) = stack.pop() {
         if Instant::now() >= deadline {
             out.time = true;
             break;
         }
-        let Ok(list) = std::fs::read_dir(&dir) else { continue };
-        let mut items: Vec<(String, std::fs::DirEntry)> = list.flatten().map(|e| (e.file_name().to_string_lossy().into_owned(), e)).collect();
+        let dir = match name {
+            None => parent,
+            Some(n) => match parent.open_dir(Path::new(&n)) {
+                Ok(d) => std::rc::Rc::new(d),
+                Err(_) => continue,
+            },
+        };
+        let Ok(list) = dir.list() else { continue };
+        let mut items: Vec<(String, crate::sandbox::safe_fs::Entry)> = list.into_iter().map(|e| (e.name.to_string_lossy().into_owned(), e)).collect();
         items.sort_by(|a, b| a.0.cmp(&b.0));
         let mut subdirs = Vec::new();
         for (name, e) in items {
-            // DirEntry::file_type and ::metadata don't follow symlinks
-            let Ok(t) = e.file_type() else { continue };
             let path = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
-            if t.is_dir() {
-                if depth < MAX_DEPTH && !SKIP_DIRS.contains(&name.as_str()) {
-                    subdirs.push((e.path(), path, depth + 1));
+            match e.kind {
+                Kind::Dir => {
+                    if depth < MAX_DEPTH && !SKIP_DIRS.contains(&name.as_str()) {
+                        subdirs.push((dir.clone(), Some(e.name), path, depth + 1));
+                    }
                 }
-            } else if t.is_file() {
-                if out.entries.len() >= MAX_LISTED {
-                    out.cut = true;
-                    return out;
+                Kind::File => {
+                    if out.entries.len() >= MAX_LISTED {
+                        out.cut = true;
+                        return out;
+                    }
+                    out.entries.push(Entry { path, size: e.len, blob: None });
                 }
-                let size = e.metadata().map(|m| m.len()).unwrap_or(u64::MAX);
-                out.entries.push(Entry { path, size, blob: None });
+                Kind::Symlink | Kind::Other => {}
             }
         }
         stack.extend(subdirs.into_iter().rev());
@@ -517,24 +530,10 @@ pub fn read_file(root: &Path, rel: &str, max: u64) -> Result<Vec<u8>, ReadError>
     if !keep_path(rel) {
         return Err(ReadError::Unreadable);
     }
-    let mut at = root.to_path_buf();
-    let parts: Vec<&str> = rel.split('/').collect();
-    for (i, p) in parts.iter().enumerate() {
-        at.push(p);
-        let m = std::fs::symlink_metadata(&at).map_err(|_| ReadError::Unreadable)?;
-        let last = i + 1 == parts.len();
-        if (last && !m.file_type().is_file()) || (!last && !m.file_type().is_dir()) {
-            return Err(ReadError::Unreadable);
-        }
-    }
-    let mut o = std::fs::OpenOptions::new();
-    o.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let f = o.open(&at).map_err(|_| ReadError::Unreadable)?;
+    // Walked from the folder's descriptor with `openat(…, O_NOFOLLOW)` on every part and an
+    // `fstat` regular-file check on the last (S-8): no check-then-open race by path
+    let dir = crate::sandbox::safe_fs::Dir::open(root).map_err(|_| ReadError::Unreadable)?;
+    let f = dir.open_file(Path::new(rel)).map_err(|_| ReadError::Unreadable)?;
     let m = f.metadata().map_err(|_| ReadError::Unreadable)?;
     if !m.file_type().is_file() {
         return Err(ReadError::Unreadable);

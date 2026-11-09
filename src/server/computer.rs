@@ -4,6 +4,7 @@ use super::AppState;
 use crate::broker::{ApprovalDecision, ApprovalRequest};
 use crate::db::models::NewApproval;
 use crate::drivers::events::RuntimeEvent;
+use crate::sandbox::agent_vm;
 use crate::sandbox::computer::{self, ComputerMode};
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
@@ -50,6 +51,17 @@ async fn view(state: &AppState) -> Value {
         crate::doctor::Platform::detect(),
     );
     let window = computer::window_reason();
+    let isolate_claude = isolate_claude_setting(state).await;
+    let (claude_cli, _) = crate::drivers::engines::EngineId::of_family(crate::profiles::Engine::Claude);
+    let (toggle, agents) = state
+        .agent_vm
+        .view(agent_vm::ViewInputs {
+            setting_on: isolate_claude,
+            vm_mode: mode == ComputerMode::Vm,
+            docker,
+            cli_account: state.engines.is_enabled(claude_cli),
+        })
+        .await;
     json!({
         "mode": mode,
         "available": {"local": local.is_none(), "vm": vm.is_none()},
@@ -63,7 +75,17 @@ async fn view(state: &AppState) -> Value {
         // The private browser kwnt downloads when there's no Chrome (O5). The UI shows its
         // `error` line, with "Try again", only while `state` is "failed".
         "browser_setup": state.browser_service.chrome_setup().view(),
+        // Run Claude inside the VM (design/ui.md): the saved switch, whether it can be turned
+        // on now, and where each engine runs right now
+        "isolate_claude": isolate_claude,
+        "isolate_claude_toggle": toggle,
+        "agents": agents,
     })
+}
+
+/// The person's "Run Claude inside the VM" switch (off unless they turned it on).
+pub async fn isolate_claude_setting(state: &AppState) -> bool {
+    state.db.get_setting(agent_vm::SETTING_KEY).await.ok().flatten().is_some_and(|v| v == "true")
 }
 
 /// `POST /api/settings/computer/browser`: "Try again" for the bots' private browser. Starts the
@@ -89,18 +111,43 @@ pub async fn get_computer(State(state): State<AppState>) -> Json<Value> {
 
 #[derive(Deserialize)]
 pub struct ComputerPayload {
-    pub mode: ComputerMode,
+    pub mode: Option<ComputerMode>,
+    pub isolate_claude: Option<bool>,
 }
 
-/// `PUT /api/settings/computer` with `{"mode":"local"|"vm"}`: saves the choice and switches at
-/// once. 400 for an unknown mode or one this computer cannot run (with the reason).
+/// `PUT /api/settings/computer` with `{"mode":"local"|"vm"}` and/or `{"isolate_claude":bool}`:
+/// saves the choice and switches at once. 400 for an unknown mode or one this computer cannot run
+/// (with the reason), and for turning isolation on where the switch is unavailable (its `reason`).
+/// Turning it off always works. Turning it on starts Claude's VM download in the background.
 pub async fn put_computer(
     State(state): State<AppState>,
     payload: Result<Json<ComputerPayload>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let bad = |m: String| (StatusCode::BAD_REQUEST, Json(json!({ "error": m })));
-    let Json(ComputerPayload { mode }) =
-        payload.map_err(|_| bad("mode must be \"local\" or \"vm\"".into()))?;
+    let failed = |e: crate::db::DbError| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
+    let Json(ComputerPayload { mode, isolate_claude }) = payload
+        .map_err(|_| bad("Send mode (\"local\" or \"vm\") and/or isolate_claude (true or false)".into()))?;
+    if mode.is_none() && isolate_claude.is_none() {
+        return Err(bad("Send mode (\"local\" or \"vm\") and/or isolate_claude (true or false)".into()));
+    }
+    if let Some(on) = isolate_claude {
+        if on {
+            let current = view(&state).await;
+            if current["isolate_claude_toggle"]["available"] != json!(true) {
+                // People's words in `error` (the Settings error line prints it); the code apart
+                let reason = current["isolate_claude_toggle"]["reason"].as_str().unwrap_or("unavailable").to_string();
+                let error = agent_vm::toggle_message(&reason);
+                return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": error, "code": reason }))));
+            }
+        }
+        state.db.set_setting(agent_vm::SETTING_KEY, if on { "true" } else { "false" }).await.map_err(failed)?;
+        if on {
+            state.agent_vm.start_setup();
+        }
+    }
+    let Some(mode) = mode else {
+        return Ok(Json(view(&state).await));
+    };
     let current = view(&state).await;
     if current["available"][mode.as_str()] != json!(true) {
         let reason = current["reasons"][mode.as_str()]

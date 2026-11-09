@@ -84,7 +84,8 @@ jobs:
         env:
           # Exactly this many tests must run (Rigel's F-2): a renamed or moved test that no longer
           # matches the filters fails here instead of quietly dropping out. Change it with the filters.
-          EXPECTED_TESTS: 13
+          # 16 since #446: floor.rs gained head_branch_needs_objects_and_refs_like_git, _keeps_a_worktree_gitdir_in_the_bot_folder and _refuses_a_working_folder_outside_the_bot_folder.
+          EXPECTED_TESTS: 16
         run: |
           set -euo pipefail
           cargo test --locked --lib --no-fail-fast -- server::dev::floor:: server::dev::poller::tests::fresh_means server::dev::poller::tests::candidates_go_newest server::dev::poller::tests::the_skipped_count server::dev::git::tests::diff_output_parses server::dev::git::tests::patches_are_matched 2>&1 | tee dev-readers.log

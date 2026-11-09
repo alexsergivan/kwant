@@ -1,0 +1,8 @@
+bench.sh, 2026-11-08, arm64 Ubuntu 24.04 host, mock upstream, one `claude -p` turn (ms)
+host (claude on host, no container): 737 735 703 701 708
+warm (container already up, docker exec): 899 813 782 864 833   (+~110 ms vs host)
+cold (docker rm + run + ready + turn):  1217 1156 1175 1165 1204 (+~460 ms vs host)
+cold breakdown: rm 109, run 171, first exec 51, turn ~870
+idle container memory: 3.4 MiB
+image kwnt-proto-lin-agent:spike = kwnt-executor:v1 (376 MB) + socat + claude/codex/grok native binaries
+  -> 1.46 GB on disk, 421 MB compressed; build 56 s

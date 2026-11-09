@@ -84,6 +84,40 @@ pub struct Config {
     /// Optional private browser service URL (server-side only).
     #[serde(default)]
     pub browser_cdp_url: Option<String>,
+
+    /// Limits for Claude replies that run inside the VM (`[agents_in_vm]`).
+    #[serde(default)]
+    pub agents_in_vm: AgentsInVmConfig,
+}
+
+/// Server limits for isolated Claude replies. Env overrides: `KWNT_AGENT_REQUEST_LIMIT`,
+/// `KWNT_AGENT_MEMORY_MB`, `KWNT_AGENT_MAX_TURNS`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AgentsInVmConfig {
+    /// Requests to Claude one reply may make before the broker answers 429.
+    pub request_limit: u32,
+    /// Memory per bot container, in MB.
+    pub memory_mb: u32,
+    /// Isolated replies that may run at once; the next one waits.
+    pub max_turns: usize,
+}
+
+impl Default for AgentsInVmConfig {
+    fn default() -> Self {
+        Self { request_limit: 200, memory_mb: 1024, max_turns: 2 }
+    }
+}
+
+impl AgentsInVmConfig {
+    /// Clamps values to what still works (a 0 limit would stop every reply).
+    pub fn sane(&self) -> Self {
+        Self {
+            request_limit: self.request_limit.clamp(1, 100_000),
+            memory_mb: self.memory_mb.clamp(256, 65_536),
+            max_turns: self.max_turns.clamp(1, 64),
+        }
+    }
 }
 
 impl Default for Config {
@@ -97,6 +131,7 @@ impl Default for Config {
             laya_models: default_laya_models(),
             default_fallback_model: default_fallback_model(),
             browser_cdp_url: None,
+            agents_in_vm: AgentsInVmConfig::default(),
         }
     }
 }
@@ -179,6 +214,16 @@ impl Config {
             if !models.trim().is_empty() {
                 self.laya_models = models.trim().to_string();
             }
+        }
+        let num = |k: &str| std::env::var(k).ok().and_then(|v| v.trim().parse::<u64>().ok());
+        if let Some(v) = num("KWNT_AGENT_REQUEST_LIMIT") {
+            self.agents_in_vm.request_limit = v.min(u32::MAX as u64) as u32;
+        }
+        if let Some(v) = num("KWNT_AGENT_MEMORY_MB") {
+            self.agents_in_vm.memory_mb = v.min(u32::MAX as u64) as u32;
+        }
+        if let Some(v) = num("KWNT_AGENT_MAX_TURNS") {
+            self.agents_in_vm.max_turns = v.min(1024) as usize;
         }
         if let Ok(model) = std::env::var("KWNT_DEFAULT_FALLBACK_MODEL")
             .or_else(|_| std::env::var("DEFAULT_FALLBACK_MODEL"))

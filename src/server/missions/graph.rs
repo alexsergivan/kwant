@@ -3,7 +3,7 @@
 //! moves a task; only the person's resolution does. Contract: docs/mission-control.md §11.
 #![allow(clippy::result_large_err)]
 
-use super::checks::{hex, inside};
+use super::checks::{hash_open, open_inside};
 use super::routes::{bad, conflict, internal, load_mission, load_task, moved, not_found};
 use super::{emit_mission, emit_task, emit_task_id, name_of, post_line, task_folder, task_json, transition, Actor};
 use crate::db::mission_graph::{FlagClaim, GraphScan, TaskFlag, FLAG_RESOLUTIONS};
@@ -111,24 +111,22 @@ pub struct ScanResult {
     pub skipped: Vec<Value>,
 }
 
-/// The sha256 of `path`, `Ok(None)` when it is gone, or why it was skipped.
-async fn hash_file(path: std::path::PathBuf) -> Result<Option<String>, String> {
+/// The sha256 of `rel` in `folder`, `Ok(None)` when it is gone, or why it was skipped. Opened by
+/// walking from the folder's descriptor and hashed from that handle, capped (S-8): a file swapped
+/// for a symlink or a FIFO after the check is skipped, never hashed through.
+pub(crate) async fn hash_file(folder: std::path::PathBuf, rel: String) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || {
-        let meta = match std::fs::metadata(&path) {
-            Ok(m) => m,
+        let file = match open_inside(&folder, &rel)? {
+            Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => return Err("not a file".into()),
             Err(_) => return Err("can't be read".to_string()),
         };
-        if !meta.is_file() {
-            return Err("not a file".into());
+        match hash_open(file) {
+            Ok((sha, _)) => Ok(Some(sha)),
+            Err(e) if crate::sandbox::safe_fs::is_too_large(&e) => Err("over 50 MB".into()),
+            Err(_) => Err("can't be read".into()),
         }
-        if meta.len() > SCAN_MAX_BYTES {
-            return Err("over 50 MB".into());
-        }
-        let mut file = std::fs::File::open(&path).map_err(|_| "can't be read".to_string())?;
-        let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
-        std::io::copy(&mut file, &mut hasher).map_err(|_| "can't be read".to_string())?;
-        Ok(Some(hex(&sha2::Digest::finalize(hasher))))
     })
     .await
     .unwrap_or_else(|_| Err("can't be read".into()))
@@ -162,14 +160,7 @@ pub async fn scan_mission(state: &AppState, mission: &Mission) -> ScanResult {
                 out.skipped.push(skip("the task has no folder"));
                 continue;
             };
-            let real = match inside(folder, &path) {
-                Ok(p) => p,
-                Err(why) => {
-                    out.skipped.push(skip(&why));
-                    continue;
-                }
-            };
-            let new = match hash_file(real).await {
+            let new = match hash_file(folder.clone(), path.clone()).await {
                 Ok(h) => h,
                 Err(why) => {
                     out.skipped.push(skip(&why));

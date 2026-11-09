@@ -173,8 +173,6 @@ const KEEP_ENV: &[&str] = &[
     "GIT_SSH_COMMAND",
     "GIT_SSH_VARIANT",
     "GIT_CONFIG_GLOBAL",
-    "GIT_CONFIG_SYSTEM",
-    "GIT_CONFIG_NOSYSTEM",
     "GIT_EXEC_PATH",
     "GIT_SSL_CAINFO",
     "GIT_SSL_CAPATH",
@@ -299,8 +297,36 @@ fn with_dot_git(url: &str) -> Option<String> {
     (fetch_url(&next).as_deref() == Some(next.as_str()) && remote_host(&next) == remote_host(url)).then_some(next)
 }
 
+/// The one way kwant starts git on this computer (agents in the VM, D4c; S-13). A folder a bot
+/// wrote can hold a `.git/config` it planted, so every call gets, whatever that config says:
+/// `GIT_CONFIG_NOSYSTEM=1`, `-c core.fsmonitor=false -c core.hooksPath=/dev/null -c
+/// core.pager=cat`, no `GIT_*` from kwant's environment except the person's ssh and global-config
+/// choices ([`KEEP_ENV`]), no prompt and no stdin. kwant only runs git's built-in commands, which
+/// an alias can't replace, so no alias ever runs. A CI test checks that nothing else in `src/`
+/// starts git.
+pub fn host_git_command(bin: &str) -> tokio::process::Command {
+    tokio::process::Command::from(host_git_command_blocking(bin))
+}
+
+/// [`host_git_command`] for code that can't await (Windows' `git_bash` lookup): the same flags,
+/// environment and no stdin, as a blocking [`std::process::Command`]. `host_git_command` is built
+/// from it, so the two can't drift apart.
+pub fn host_git_command_blocking(bin: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat"]);
+    for (k, _) in std::env::vars_os() {
+        if let Some(k) = k.to_str() {
+            if k.starts_with("GIT_") && !KEEP_ENV.contains(&k) {
+                cmd.env_remove(k);
+            }
+        }
+    }
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_TERMINAL_PROMPT", "0").stdin(std::process::Stdio::null());
+    cmd
+}
+
 async fn run_once(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>, head: bool) -> Result<(Vec<u8>, bool), Ran> {
-    let mut cmd = tokio::process::Command::new(bin);
+    let mut cmd = host_git_command(bin);
     if let Some(d) = git_dir {
         cmd.arg("--git-dir").arg(d);
     }
@@ -327,13 +353,6 @@ async fn run_once(bin: &str, git_dir: Option<&Path>, args: &[&str], o: Opts<'_>,
         cmd.arg("-c").arg(c);
     }
     cmd.args(args);
-    for (k, _) in std::env::vars_os() {
-        if let Some(k) = k.to_str() {
-            if k.starts_with("GIT_") && !KEEP_ENV.contains(&k) {
-                cmd.env_remove(k);
-            }
-        }
-    }
     cmd.env_remove("SSH_ASKPASS");
     cmd.env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -1622,6 +1641,21 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    /// D4c on Windows too: `git_bash` runs git through the blocking twin, which must give git
+    /// exactly what the async helper does (same `-c` flags, same environment, no stdin).
+    #[test]
+    fn the_blocking_twin_matches_host_git_command() {
+        let a = host_git_command("git");
+        let a = a.as_std();
+        let b = host_git_command_blocking("git");
+        assert_eq!(a.get_program(), b.get_program());
+        assert_eq!(a.get_args().collect::<Vec<_>>(), b.get_args().collect::<Vec<_>>());
+        assert_eq!(a.get_envs().collect::<Vec<_>>(), b.get_envs().collect::<Vec<_>>());
+        let args: Vec<_> = b.get_args().filter_map(|x| x.to_str()).collect();
+        assert_eq!(args, ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat"]);
+        assert!(b.get_envs().any(|(k, v)| k == "GIT_CONFIG_NOSYSTEM" && v.is_some_and(|v| v == "1")));
+    }
+
     /// Writes an executable script at `path` that is safe to run while other tests start
     /// processes (D-2). Writing it here would hold a write fd on it in this process, and a
     /// thread that forks at that moment hands the fd to its child until that child execs; running
@@ -1972,7 +2006,9 @@ mod tests {
         assert!(env.contains("GIT_CONFIG_KEY_0=http.https://github.com/.extraheader\n"));
         assert!(env.contains(&format!("GIT_CONFIG_VALUE_0=Authorization: Basic {token}\n")));
         assert!(env.contains("GIT_TERMINAL_PROMPT=0\n"));
-        let ours = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS", "GIT_LITERAL_PATHSPECS", "GIT_NO_REPLACE_OBJECTS", "GCM_INTERACTIVE", "SSH_ASKPASS_REQUIRE"];
+        assert!(env.contains("GIT_CONFIG_NOSYSTEM=1\n"), "D4c");
+        assert!(argv.contains("core.pager=cat") && argv.contains("core.hooksPath=/dev/null") && argv.contains("core.fsmonitor=false"), "D4c");
+        let ours = ["GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS", "GIT_LITERAL_PATHSPECS", "GIT_NO_REPLACE_OBJECTS", "GCM_INTERACTIVE", "SSH_ASKPASS_REQUIRE"];
         for name in env.lines().filter_map(|l| l.split('=').next()) {
             assert!(ours.contains(&name) || KEEP_ENV.contains(&name), "only kwant's own or the person's ssh/config choices reach git: {name}");
         }

@@ -279,15 +279,26 @@ pub async fn withdraw_for_delete(state: &AppState, goal_id: &str) {
     }
 }
 
-/// Reads the Investigate report, if the bot wrote one inside the goal's folder.
-async fn read_report(folder: &str, rel: &str) -> Option<String> {
-    let base = std::fs::canonicalize(folder).ok()?;
-    let file = std::fs::canonicalize(base.join(rel)).ok()?;
-    if !file.starts_with(&base) || !file.is_file() {
-        return None;
-    }
-    let bytes = std::fs::read(&file).ok()?;
-    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(REPORT_READ_BYTES)]).to_string();
+/// Reads the Investigate report, if the bot wrote one inside the goal's folder. Off the async
+/// runtime, opened by walking from the folder's descriptor and read only up to
+/// `REPORT_READ_BYTES` (S-8): a report swapped for a symlink to a host file, or a FIFO, after the
+/// check is never read and never blocks.
+pub(crate) async fn read_report(folder: &str, rel: &str) -> Option<String> {
+    let (folder, rel) = (folder.to_string(), rel.to_string());
+    let bytes = tokio::task::spawn_blocking(move || -> Option<Vec<u8>> {
+        let base = std::fs::canonicalize(&folder).ok()?;
+        let file = std::fs::canonicalize(base.join(&rel)).ok()?;
+        if !file.starts_with(&base) {
+            return None;
+        }
+        let f = crate::sandbox::safe_fs::open_checked(&base, &file).ok()?;
+        let mut head = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::Read::take(f, REPORT_READ_BYTES as u64), &mut head).ok()?;
+        Some(head)
+    })
+    .await
+    .ok()??;
+    let text = String::from_utf8_lossy(&bytes).to_string();
     let text = untrusted(text.trim(), REPORT_CHARS);
     (!text.is_empty()).then_some(text)
 }

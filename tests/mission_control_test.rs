@@ -592,3 +592,31 @@ async fn only_a_required_check_waiting_for_approval_needs_the_person() {
     let insights = person(&e, "GET", "/api/missions/insights", None).await;
     assert_eq!(insights["needs_you_now"], 1, "{insights}");
 }
+
+/// Test plan #20 (D4, C9b): a command check runs bash on this computer as kwnt, so in a folder an
+/// isolated Claude turn used it never runs: no process, no marker file, the refusal recorded.
+/// A folder nobody isolated used still runs it.
+#[tokio::test]
+async fn a_command_check_never_runs_in_a_folder_an_isolated_bot_used() {
+    let e = setup().await;
+    let (m, tasks) = mission(&e, 200_000, json!([{"title": "Build", "owner": e.bot.id}])).await;
+    let tid = id(&tasks[0]);
+    let dir = folder(&e, &id(&m)).await;
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    // The record holds the folder's subfolder: the folder that contains it counts too
+    e.state.db.record_isolated_folder(&dir.join("sub").canonicalize().unwrap(), &e.bot.id).await.unwrap();
+    person(&e, "POST", &format!("/api/tasks/{tid}/checks"), Some(json!({"kind": "command", "spec": {"command": "echo hi > ran.txt"}}))).await;
+    let run = person(&e, "POST", &format!("/api/tasks/{tid}/checks/run"), None).await;
+    let c = run["checks"].as_array().unwrap().iter().find(|c| c["kind"] == "command").unwrap().clone();
+    assert_eq!(c["status"], "error", "{run}");
+    assert!(!dir.join("ran.txt").exists(), "nothing ran");
+    let t = task(&e, &tid).await;
+    assert!(t.to_string().contains("folder_used_by_isolated_bot"), "the refusal is recorded: {t}");
+
+    // Once the person clears the record, it runs again
+    assert!(e.state.db.forget_isolated_folder(&dir.join("sub")).await.unwrap());
+    let run = person(&e, "POST", &format!("/api/tasks/{tid}/checks/run"), None).await;
+    let c = run["checks"].as_array().unwrap().iter().find(|c| c["kind"] == "command").unwrap().clone();
+    assert_eq!(c["status"], "passed", "{run}");
+    assert!(dir.join("ran.txt").exists());
+}

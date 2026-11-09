@@ -1,11 +1,16 @@
 //! Reading small files under a `.git` that a bot can write (missions' `git_head`, Dev mode's
 //! `head_branch`). Everything there is untrusted: never follow a symlink, never block on a FIFO,
 //! socket or device, never read a hard link (it may be a host file's other name), and cap sizes.
-//! On Windows the same refusals hold for every reparse point (symlink, junction, mount point,
-//! cloud placeholder), DOS device names (`CON`, `NUL`, `COM1`...) and alternate data streams; a
-//! file that can't be checked that way is `None`, never read some weaker way.
+//! On Mac and Linux every read walks from an open folder with `openat`
+//! ([`crate::sandbox::safe_fs::Dir`], S-8), so a folder the bot swaps for a symlink between two
+//! checks is never followed. On Windows the same refusals hold for every reparse point (symlink,
+//! junction, mount point, cloud placeholder), DOS device names (`CON`, `NUL`, `COM1`...) and
+//! alternate data streams; a file that can't be checked that way is `None`, never read some
+//! weaker way.
 
+use crate::sandbox::safe_fs::Dir;
 use std::io::Read;
+#[cfg(unix)]
 use std::path::Path;
 
 /// HEAD, a loose ref or a `.git` file is tiny; a bigger one isn't git's.
@@ -13,40 +18,11 @@ pub(crate) const REF_MAX: u64 = 4 * 1024;
 /// packed-refs can list many refs, but never this many for a bot's folder.
 pub(crate) const PACKED_MAX: u64 = 1024 * 1024;
 
-/// Reads `<base>/<rel>` (`rel` is `/`-separated and already checked) only when every component
-/// below `base` is a real folder and the last a regular file of at most `max` bytes with one
-/// link. Never follows a symlink and never blocks on a FIFO, socket or device.
-pub(crate) fn read(base: &Path, rel: &str, max: u64) -> Option<String> {
-    let mut at = base.to_path_buf();
-    let parts: Vec<&str> = rel.split('/').collect();
-    for (i, p) in parts.iter().enumerate() {
-        #[cfg(windows)]
-        if !windows_plain_name(p) {
-            return None;
-        }
-        at.push(p);
-        let m = std::fs::symlink_metadata(&at).ok()?;
-        let last = i + 1 == parts.len();
-        if (last && !plain_file(&m)) || (!last && !plain_dir(&m)) {
-            return None;
-        }
-    }
-    let mut o = std::fs::OpenOptions::new();
-    o.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        // A symlink swapped in after the check fails to open; a FIFO opens without waiting
-        o.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // A symlink or junction swapped in after the check opens as itself, not its target, and
-        // the handle check below refuses it
-        o.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let f = o.open(&at).ok()?;
+/// Reads `rel` (`/`-separated plain names) below the open folder `dir`: every component must be a
+/// real folder and the last a regular file of at most `max` bytes with one link. A symlink is
+/// never followed and a FIFO, socket or device never blocks it.
+pub(crate) fn read(dir: &Dir, rel: &str, max: u64) -> Option<String> {
+    let f = open(dir, rel)?;
     let m = f.metadata().ok()?;
     if !m.file_type().is_file() || m.len() > max {
         return None;
@@ -71,14 +47,60 @@ pub(crate) fn read(base: &Path, rel: &str, max: u64) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
+/// Mac and Linux: [`Dir::open_file`] walks with `O_NOFOLLOW|O_DIRECTORY` from `dir`'s descriptor
+/// and opens the last part `O_NOFOLLOW|O_NONBLOCK`, so nothing is resolved twice.
+#[cfg(unix)]
+fn open(dir: &Dir, rel: &str) -> Option<std::fs::File> {
+    dir.open_file(Path::new(rel)).ok()
+}
+
+/// Elsewhere (Windows) [`Dir`] is a checked path: `dir` itself and every part below it must be a
+/// real folder (no reparse point of any kind) and the last a plain file, then it is opened as
+/// itself, never as a link's target, and [`windows_one_plain_file`] checks the handle.
+#[cfg(not(unix))]
+fn open(dir: &Dir, rel: &str) -> Option<std::fs::File> {
+    let mut at = dir.path().to_path_buf();
+    if !plain_dir(&std::fs::symlink_metadata(&at).ok()?) {
+        return None;
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    for (i, p) in parts.iter().enumerate() {
+        #[cfg(windows)]
+        if !windows_plain_name(p) {
+            return None;
+        }
+        if p.is_empty() || *p == "." || *p == ".." {
+            return None;
+        }
+        at.push(p);
+        let m = std::fs::symlink_metadata(&at).ok()?;
+        let last = i + 1 == parts.len();
+        if (last && !plain_file(&m)) || (!last && !plain_dir(&m)) {
+            return None;
+        }
+    }
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // A symlink or junction swapped in after the check opens as itself, not its target, and
+        // the handle check refuses it
+        o.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    o.open(&at).ok()
+}
+
 /// `m` (from `symlink_metadata`) is a real folder: not a symlink and, on Windows, no reparse point
-/// of any kind. On Mac and Linux this is `is_dir()` of the unfollowed type, as before.
-pub(crate) fn plain_dir(m: &std::fs::Metadata) -> bool {
+/// of any kind. Mac and Linux need none of this: [`Dir`] walks with `O_NOFOLLOW`.
+#[cfg(not(unix))]
+fn plain_dir(m: &std::fs::Metadata) -> bool {
     m.file_type().is_dir() && !reparse_point(m)
 }
 
 /// `m` (from `symlink_metadata`) is a regular file, never a link or (on Windows) a reparse point.
-pub(crate) fn plain_file(m: &std::fs::Metadata) -> bool {
+#[cfg(not(unix))]
+fn plain_file(m: &std::fs::Metadata) -> bool {
     m.file_type().is_file() && !reparse_point(m)
 }
 
@@ -90,7 +112,7 @@ fn reparse_point(m: &std::fs::Metadata) -> bool {
     m.file_attributes() & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(unix), not(windows)))]
 fn reparse_point(_: &std::fs::Metadata) -> bool {
     false
 }
@@ -150,6 +172,10 @@ pub(crate) fn plain_ref(r: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn read(base: &Path, rel: &str, max: u64) -> Option<String> {
+        super::read(&Dir::open(base).unwrap(), rel, max)
+    }
+
     #[test]
     fn reads_one_regular_file_and_nothing_else() {
         let d = tempfile::tempdir().unwrap();
@@ -161,6 +187,26 @@ mod tests {
         std::fs::hard_link(d.path().join("a/f"), d.path().join("g")).unwrap();
         assert_eq!(read(d.path(), "a/f", 10), None, "a file with two names");
         assert_eq!(read(d.path(), "g", 10), None);
+    }
+
+    #[test]
+    fn never_follows_a_symlink_or_blocks_on_a_fifo() {
+        use std::os::unix::fs::symlink;
+        let d = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(out.path().join("a")).unwrap();
+        std::fs::write(out.path().join("a/f"), "secret").unwrap();
+        symlink(out.path().join("a"), d.path().join("a")).unwrap();
+        assert_eq!(read(d.path(), "a/f", 10), None, "a symlinked folder on the way");
+        symlink(out.path().join("a/f"), d.path().join("f")).unwrap();
+        assert_eq!(read(d.path(), "f", 10), None, "a symlinked file");
+        assert_eq!(read(d.path(), "../x", 10), None, "`..` is no plain name");
+        let fifo = std::ffi::CString::new(d.path().join("p").as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o644) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let base = d.path().to_path_buf();
+        std::thread::spawn(move || tx.send(read(&base, "p", 10)).unwrap());
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)).expect("blocked on a FIFO"), None);
     }
 }
 
@@ -183,6 +229,10 @@ mod name_tests {
 pub(crate) mod windows_tests {
     use super::*;
     use std::path::Path;
+
+    fn read(base: &Path, rel: &str, max: u64) -> Option<String> {
+        super::read(&Dir::open(base).unwrap(), rel, max)
+    }
 
     /// A junction needs no privilege, unlike a symlink. cmd reads a `/` in
     /// a path as a switch, so both paths go over with backslashes only.

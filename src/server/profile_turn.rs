@@ -5,7 +5,7 @@ use super::AppState;
 use crate::db::models::LlmProfile;
 use crate::db::spaces::SpaceId;
 use crate::drivers::engines::{EngineAccount, EngineId, EngineReport, EngineStatus};
-use crate::drivers::{find_cli_binary, resolve_driver_for_model, ApiDriver, CliDriver, Driver};
+use crate::drivers::{find_cli_binary, ApiDriver, CliDriver, Driver};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use crate::profiles::{
@@ -176,7 +176,7 @@ fn profile_engine_on(state: &AppState, p: &LlmProfile) -> bool {
 }
 
 /// The driver for one attempt, and the engine it runs on when it's the host's own (no profile
-/// or the system profile; see [`resolve_driver_for_model`]). `Err` when that engine can't run.
+/// or the system profile; see [`crate::drivers::resolve_driver_for_model`]). `Err` when that engine can't run.
 pub async fn driver_for(
     state: &AppState,
     profile: Option<&LlmProfile>,
@@ -185,7 +185,9 @@ pub async fn driver_for(
     endpoint: Option<String>,
 ) -> Result<(Box<dyn Driver>, Option<EngineId>), String> {
     let Some(p) = profile.filter(|p| p.kind != "system") else {
-        return resolve_driver_for_model(target_model, configured_key, endpoint, &state.engines)
+        // This computer's Claude sign-in runs isolated too; its API key never does
+        let isolation = isolation_for(state, Engine::Claude, None).await;
+        return crate::drivers::resolve_driver_isolated(target_model, configured_key, endpoint, &state.engines, isolation)
             .map(|(d, e)| (d, Some(e)));
     };
     let engine = Engine::parse(&p.engine).unwrap_or(Engine::Claude);
@@ -207,6 +209,7 @@ pub async fn driver_for(
         return Ok((Box::new(ApiDriver::for_profile(key)), None));
     }
     let home = state.profiles.home_of(p).unwrap_or_default();
+    let isolation = isolation_for(state, engine, Some(home.clone())).await;
     Ok((
         Box::new(
             CliDriver::new(
@@ -214,10 +217,34 @@ pub async fn driver_for(
                 Some(engine.as_str().into()),
             )
             .with_profile_home(engine, home)
-            .with_account(p.name.clone()),
+            .with_account(p.name.clone())
+            .with_isolation(isolation),
         ),
         None,
     ))
+}
+
+/// Set when a Claude sign-in turn runs in the bot's agent container: "Run Claude inside the VM"
+/// is on, the computer is in vm mode and this OS has isolation (D1: outside vm mode the switch
+/// does nothing). API-key and Custom accounts never get here.
+pub async fn isolation_for(
+    state: &AppState,
+    engine: Engine,
+    profile_home: Option<std::path::PathBuf>,
+) -> Option<crate::drivers::cli::Isolation> {
+    if engine != Engine::Claude || crate::sandbox::agent_vm::supported_os().is_err() {
+        return None;
+    }
+    if !super::computer::isolate_claude_setting(state).await
+        || super::computer::current_mode(state).await != crate::sandbox::computer::ComputerMode::Vm
+    {
+        return None;
+    }
+    Some(crate::drivers::cli::Isolation {
+        vm: state.agent_vm.clone(),
+        profile_home,
+        kwnt_origin: super::mcp_runtime::local_base_url(state),
+    })
 }
 
 /// A Custom API account's server and key. `Err` when its server was never saved.

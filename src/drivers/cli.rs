@@ -604,6 +604,26 @@ pub struct CliDriver {
     pub profile_env: Option<crate::profiles::CliEnv>,
     /// The account the turn runs on, named in the turn's reasoning line.
     pub account: Option<String>,
+    /// Set when Claude runs in the bot's agent container ("Run Claude inside the VM").
+    pub isolation: Option<Isolation>,
+}
+
+/// Where and how a Claude turn runs isolated: "Run Claude inside the VM" is on, the computer is
+/// in vm mode and the account is a Claude sign-in (see `profile_turn::isolation_for`). Every
+/// failure is the turn's notice; it never runs on this computer instead (D1).
+#[derive(Clone)]
+pub struct Isolation {
+    pub vm: std::sync::Arc<crate::sandbox::agent_vm::AgentVm>,
+    /// The sign-in profile's home (the broker refreshes its login); `None`: this computer's own.
+    pub profile_home: Option<std::path::PathBuf>,
+    /// kwnt's address on this computer, where the broker sends the bot's kwnt tool calls.
+    pub kwnt_origin: String,
+}
+
+impl std::fmt::Debug for Isolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Isolation").field("profile_home", &self.profile_home).finish_non_exhaustive()
+    }
 }
 
 impl CliDriver {
@@ -616,7 +636,14 @@ impl CliDriver {
             grok_home: None,
             profile_env: None,
             account: None,
+            isolation: None,
         }
+    }
+
+    /// Runs Claude in the bot's agent container (ignored for codex and grok).
+    pub fn with_isolation(mut self, isolation: Option<Isolation>) -> Self {
+        self.isolation = isolation;
+        self
     }
 
     /// Runs the CLI on a profile's own home (its login and settings) instead of the user's.
@@ -1388,8 +1415,34 @@ impl Driver for CliDriver {
             tracing::warn!(cli = %self.tool_kind, "{why}");
             return Err(DriverError::Execution(why));
         }
+        // Isolated Claude: the container, broker turn and folder checks come first; any refusal
+        // is the turn's notice and nothing runs on this computer (D1)
+        let mut isolated = match (&self.isolation, self.tool_kind.as_str()) {
+            (Some(iso), "claude") => match start_isolated(iso, &input, &event_tx).await {
+                Ok(t) => Some(t),
+                Err((text, meta)) => return Ok(TurnOutput::notice(text, meta)),
+            },
+            _ => None,
+        };
+        // D4: a folder an isolated bot used may hold settings it left there. Codex and Grok don't
+        // run in it; Claude on this computer runs without the folder's own settings and servers.
+        let mut in_isolated_folder = false;
+        if isolated.is_none() {
+            if let Some(recorded) = isolated_folder_used(&input).await {
+                if matches!(self.tool_kind.as_str(), "codex" | "grok") {
+                    tracing::warn!(kwant = %input.kwant.id, cli = %self.tool_kind, folder = %recorded.display(), "not running in a folder an isolated bot used");
+                    let dir = input.workspace_dir.clone().filter(|d| d.exists()).unwrap_or(recorded);
+                    let n = crate::sandbox::agent_vm::notice::IsolationFailed::folder_used(&input.kwant.name, &self.tool_kind, folder_info(&input, &dir));
+                    let text = crate::sandbox::agent_vm::notice::folder_used_text(&input.kwant.name, &self.tool_kind);
+                    return Ok(TurnOutput::notice(text, n.to_meta()));
+                }
+                in_isolated_folder = true;
+            }
+        }
         let bin_path = match &self.cli_binary {
             Some(b) => b.clone(),
+            // The container has its own claude; this computer's is never run
+            None if isolated.is_some() => "claude".into(),
             None => {
                 let msg = format!(
                     "⚠️ [{}] Local CLI for `{}` was not found on this system.",
@@ -1614,6 +1667,11 @@ impl Driver for CliDriver {
                 cmd.env("CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR", "1");
                 // Skip starting the user's personal MCP servers on every chat turn
                 cmd.arg("--strict-mcp-config");
+                if in_isolated_folder {
+                    // D4: the folder's .claude/settings*.json (hooks, env) could be a bot's from
+                    // inside the VM; only the user's own settings load
+                    cmd.arg("--setting-sources").arg("user");
+                }
                 // kwnt's routines and teammates, never claude's own scheduler or sessions
                 cmd.args(claude_disallowed_args());
                 if input.no_tools {
@@ -1621,9 +1679,29 @@ impl Driver for CliDriver {
                     cmd.args(CLAUDE_NO_TOOLS_ARGS);
                 }
                 if let Some(ctx) = &input.mcp {
-                    match crate::mcp::cli_config::write_claude_config(ctx) {
-                        Ok(file) => {
-                            cmd.arg("--mcp-config").arg(&file.path);
+                    // Isolated: the config lives where the container sees it, and lists only
+                    // kwnt's own endpoints (through the broker); the bot's other servers stay off
+                    let written = match isolated.as_mut() {
+                        Some(t) => t.write_mcp_config(ctx).map(|(path, dropped)| {
+                            if !dropped.is_empty() {
+                                tracing::info!(kwant = %input.kwant.id, ?dropped, "MCP servers left out of an isolated Claude turn");
+                            }
+                            (std::ffi::OsString::from(path), None, dropped)
+                        }),
+                        None => crate::mcp::cli_config::write_claude_config(ctx)
+                            .map(|file| (file.path.clone().into_os_string(), Some(file), Vec::new())),
+                    };
+                    match written {
+                        Ok((path, file, dropped)) => {
+                            if !dropped.is_empty() {
+                                let _ = event_tx
+                                    .send(RuntimeEvent::ThinkingDelta(format!(
+                                        "Not available inside the VM this turn: {}.",
+                                        dropped.join(", ")
+                                    )))
+                                    .await;
+                            }
+                            cmd.arg("--mcp-config").arg(&path);
                             cmd.arg("--permission-prompt-tool").arg(format!(
                                 "mcp__{}__{}",
                                 crate::mcp::RESERVED_SERVER_NAME,
@@ -1633,8 +1711,12 @@ impl Driver for CliDriver {
                             let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
                             let tool_timeout_ms = (crate::mcp::APPROVAL_TIMEOUT_SECS + 30).max(slowest) * 1000;
                             cmd.env("MCP_TOOL_TIMEOUT", tool_timeout_ms.to_string());
+                            // claude also gives up on a tool call with no progress for 300 s, which
+                            // MCP_TOOL_TIMEOUT doesn't raise: the same limit, so kwnt's own approval
+                            // timeout (300 s) always ends a waiting card first (QA F-2)
+                            cmd.env("CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT", tool_timeout_ms.to_string());
                             cmd.env("MCP_TIMEOUT", "30000");
-                            _mcp_config = Some(file);
+                            _mcp_config = file;
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "could not write MCP config; running without MCP");
@@ -1663,7 +1745,11 @@ impl Driver for CliDriver {
                 cmd.arg("-p").arg(&effective_prompt);
             }
         }
-        if let Some(env) = &self.profile_env {
+        if let Some(t) = &isolated {
+            // The container's claude, its own home and a stand-in credential; the profile's
+            // home and this computer's settings never reach it
+            cmd = t.wrap(&cmd);
+        } else if let Some(env) = &self.profile_env {
             env.apply(&mut cmd);
             // claude -p has no subcommand, so its overrides can follow the other options
             cmd.args(&env.args);
@@ -1725,6 +1811,14 @@ impl Driver for CliDriver {
                     }
                 }
                 let stdout = claude_stream.into_stdout();
+                if let Some(t) = isolated.take() {
+                    if let Some(notice) = isolated_end(&t, &input, &stdout, exit) {
+                        if let Some(u) = ClaudeResult::parse(&stdout).and_then(|r| r.split().map(|u| (r.main_model(), u))) {
+                            record_cli_usage(&input, u.0, &u.1).await;
+                        }
+                        return Ok(notice);
+                    }
+                }
 
                 let mut tokens = None;
                 let mut usage = None;
@@ -1820,6 +1914,137 @@ impl Driver for CliDriver {
             }
         }
     }
+}
+
+/// Prepares an isolated Claude turn: the credential, the folder checks, the container and the
+/// broker's turn. `Err` is the turn's notice (text and `turn_isolation_failed` meta). While it
+/// waits for a free spot in the VM, `events` gets [`RuntimeEvent::WaitingForRoom`], then
+/// [`RuntimeEvent::RoomTaken`], so the wait is shown as queued and isn't taken for a stall.
+async fn start_isolated(
+    iso: &Isolation,
+    input: &TurnInput,
+    events: &mpsc::Sender<RuntimeEvent>,
+) -> Result<crate::sandbox::agent_vm::IsolatedTurn, (String, serde_json::Value)> {
+    use crate::sandbox::agent_vm as vm;
+    let refuse = |r: vm::Refusal| {
+        tracing::warn!(kwant = %input.kwant.id, code = r.code, why = %r.message, "isolated Claude didn't start");
+        isolation_notice(input, &r, "start")
+    };
+    let (credential, credential_home) = vm::resolve_credential(iso.profile_home.as_deref()).map_err(refuse)?;
+    // A folder that isn't there yet: the bot's private folder in its container, never kwnt's own
+    let folder = input.workspace_dir.clone().filter(|d| d.exists());
+    let report = |w: vm::TurnWait| {
+        let events = events.clone();
+        async move {
+            let e = match w {
+                vm::TurnWait::Queued { position, slots } => RuntimeEvent::WaitingForRoom { reason: "vm_busy".into(), position, slots },
+                vm::TurnWait::Started => RuntimeEvent::RoomTaken,
+            };
+            let _ = events.send(e).await;
+        }
+    };
+    iso.vm
+        .prepare_turn_reporting(
+            vm::TurnRequest {
+                bot_id: input.kwant.id.clone(),
+                folder,
+                credential,
+                credential_home,
+                kwnt_origin: Some(iso.kwnt_origin.clone()),
+            },
+            report,
+        )
+        .await
+        .map_err(refuse)
+}
+
+/// The notice for a refused isolated turn (Mira's notices 1–3, 6, 7), with the folder fields
+/// when the folder was the reason.
+fn isolation_notice(
+    input: &TurnInput,
+    r: &crate::sandbox::agent_vm::Refusal,
+    phase: &'static str,
+) -> (String, serde_json::Value) {
+    use crate::sandbox::agent_vm::notice::{self, IsolationFailed};
+    let name = &input.kwant.name;
+    let (mut n, text) = match (r.unsafe_kind, &input.workspace_dir) {
+        (Some(kind), Some(dir)) => {
+            let folder = folder_info(input, dir);
+            // `folder` is canonical, so the home it is shortened by is too
+            let home = dirs::home_dir().map(|h| h.canonicalize().unwrap_or(h));
+            let text = notice::unsafe_folder_text(name, kind, &folder, home.as_deref());
+            (IsolationFailed::unsafe_folder(name, folder, kind), text)
+        }
+        _ => (IsolationFailed::new(name, "claude", r.code), notice::start_text(name, r.code)),
+    };
+    n.phase = phase;
+    let text = if phase == "mid_turn" { notice::mid_turn_text(name) } else { text };
+    (text, n.to_meta())
+}
+
+/// Where a turn's folder came from, for the notice: the team's folder when it is the team's,
+/// else the bot's own (the driver can't tell a space or goal folder apart).
+fn folder_info(input: &TurnInput, dir: &Path) -> crate::sandbox::agent_vm::notice::FolderInfo {
+    use crate::sandbox::agent_vm::notice::{FolderFrom, FolderInfo};
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let folder = canon(dir);
+    match &input.team_context {
+        Some(t) if t.workspace_path.as_deref().is_some_and(|w| canon(Path::new(w)) == folder) => FolderInfo::team(&folder, &t.id, &t.name),
+        _ => FolderInfo::new(&folder, FolderFrom::Bot),
+    }
+}
+
+/// How an isolated turn ended, when that isn't an ordinary reply: the request cap (notice 5,
+/// never the CLI's raw 429 text), or the container or broker going away partway (notice 3).
+fn isolated_end(
+    t: &crate::sandbox::agent_vm::IsolatedTurn,
+    input: &TurnInput,
+    stdout: &str,
+    exit: Option<std::process::ExitStatus>,
+) -> Option<TurnOutput> {
+    use crate::sandbox::agent_vm as vm;
+    let name = &input.kwant.name;
+    if t.cap_reached() {
+        let limit = t.request_cap();
+        tracing::warn!(kwant = %input.kwant.id, limit, "isolated Claude reached its request cap");
+        let text = format!(
+            "{name} paused after {limit} requests to Claude in this reply. That's the most one reply can make, so a bot stuck in a loop can't keep using up your Claude plan. Its work so far is kept."
+        );
+        let meta = serde_json::json!({ "kind": "turn_request_limit", "kwant_name": name, "engine": "claude", "limit": limit });
+        return Some(TurnOutput::notice(text, meta));
+    }
+    let result = ClaudeResult::parse(stdout);
+    let failed = !exit.is_some_and(|s| s.success());
+    // No result line from a failed run (docker exec lost the container), or the CLI's own
+    // "couldn't connect" result (the broker's socket went away)
+    let lost = match &result {
+        None => failed,
+        Some(r) => r.is_error && lost_connection(&r.result),
+    };
+    if lost {
+        tracing::warn!(kwant = %input.kwant.id, container = t.container(), status = ?exit, "isolated Claude stopped partway");
+        let r = vm::Refusal::new(vm::codes::CONTAINER_FAILED, "Claude lost its connection inside the VM");
+        let (text, meta) = isolation_notice(input, &r, "mid_turn");
+        return Some(TurnOutput::notice(text, meta));
+    }
+    None
+}
+
+/// The folder an isolated Claude turn used that this turn's CLI would start in (equal, inside or
+/// holding it, see [`crate::db::Database::isolated_folder_near`]), if any. Fails closed: when
+/// kwnt can't read its record, the folder counts as used.
+async fn isolated_folder_used(input: &TurnInput) -> Option<std::path::PathBuf> {
+    // The server's one TurnInput (`routes.rs`, the chat runner) always sets the store, and the
+    // isolated turns that record folders exist only there. A turn without one is a driver test
+    // (unit or integration) with no record to check; refusing it would refuse every such test
+    let db = input.store.as_ref()?;
+    db.isolated_folder_near(input.workspace_dir.as_deref()).await
+}
+
+/// The CLI's result when it couldn't reach the API at all (here: the broker).
+fn lost_connection(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    ["connection error", "econnrefused", "econnreset", "socket hang up", "unable to connect"].iter().any(|w| t.contains(w))
 }
 
 #[cfg(test)]

@@ -220,6 +220,64 @@ pub fn build_server(input: McpServerInput, existing: Option<&McpServer>) -> Resu
     })
 }
 
+/// Whether stdio `server` would run a file from `folder`, its working folder (D4, C8): a program
+/// or argument that is a relative path (`./x.js`, `bin/serve`, or a bare name that exists in the
+/// folder, like `server.js`), or an absolute path inside the folder, including after `--opt=`.
+/// In a folder an isolated bot used, such a file may be one it rewrote, so the server isn't
+/// started there. A program looked up on `PATH` (`npx`, `uvx`) and paths outside are fine.
+pub fn runs_folder_file(server: &McpServer, folder: &std::path::Path) -> bool {
+    use std::path::Path;
+    if server.transport != "stdio" {
+        return false;
+    }
+    // The folder as given too: on Windows `canonicalize` returns a `\\?\` long-name path that a
+    // typed path (8.3 short names, mixed slashes) never starts with
+    let typed = folder;
+    let folder = crate::db::isolated_folders::canonical(folder);
+    let names_file = |word: &str, program: bool| {
+        let word = word.trim();
+        if word.is_empty() {
+            return false;
+        }
+        let p = Path::new(word);
+        if p.is_absolute() {
+            return crate::db::isolated_folders::canonical(p).starts_with(&folder) || p.starts_with(&folder) || p.starts_with(typed);
+        }
+        // A program with a slash resolves from the folder; a bare one is a PATH lookup. An argument
+        // names a folder file when it starts with `.` or its first part exists there (an npm
+        // scope such as `@modelcontextprotocol/x` doesn't, so it stays a package name)
+        if program {
+            return word.contains('/') || word.starts_with('.');
+        }
+        let first = p.components().next().map(|c| folder.join(c)).unwrap_or_else(|| folder.clone());
+        word.starts_with('.') || std::fs::symlink_metadata(first).is_ok()
+    };
+    let program = server.command.as_deref().unwrap_or("");
+    names_file(program, true)
+        || server.args.iter().any(|a| {
+            // `--config=./x`: the value names a file just the same
+            let value = a.split_once('=').map(|(_, v)| v);
+            names_file(a, false) || value.is_some_and(|v| names_file(v, false))
+        })
+}
+
+/// Makes stdio `server` start from `dir`, whatever folder its starter runs it in (D4, C8):
+/// `/bin/sh -c 'cd -- "$0" && exec "$@"' <dir> <command> <args...>`. Both starters honour it:
+/// kwnt's own client, which sets the folder it's given, and a CLI agent, which starts the servers
+/// in its config from its own folder (that config has no folder field). A program started in a
+/// folder an isolated bot used can load what the bot planted there (`python3 -m x` imports
+/// `./x.py`, `npx x` runs `./node_modules/.bin/x`), so it starts from an empty folder instead.
+pub fn start_in(server: &mut McpServer, dir: &std::path::Path) {
+    if server.transport != "stdio" {
+        return;
+    }
+    let Some(program) = server.command.take() else { return };
+    let mut args = vec!["-c".to_string(), r#"cd -- "$0" && exec "$@""#.to_string(), dir.to_string_lossy().into_owned(), program];
+    args.append(&mut server.args);
+    server.command = Some("/bin/sh".into());
+    server.args = args;
+}
+
 /// Replaces every non-empty secret in `text` with [`SECRET_MASK`].
 pub fn redact(text: &str, secrets: &[String]) -> String {
     let mut out = text.to_string();
@@ -454,6 +512,72 @@ impl std::fmt::Debug for McpTurnContext {
             .field("gateway", &self.gateway)
             .field("max_tool_iterations", &self.max_tool_iterations)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod folder_file_tests {
+    use super::*;
+
+    fn stdio(command: &str, args: &[&str]) -> McpServer {
+        McpServer {
+            id: "m1".into(),
+            name: "x".into(),
+            transport: "stdio".into(),
+            command: Some(command.into()),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            url: None,
+            env: Default::default(),
+            headers: Default::default(),
+            enabled: true,
+            timeout_secs: 30,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn a_server_that_runs_a_file_from_the_folder_is_spotted() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path();
+        std::fs::write(dir.join("server.js"), "").unwrap();
+        std::fs::create_dir(dir.join("tools")).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let abs_out = outside.path().join("srv.js");
+        let abs_in = dir.join("tools/srv.js");
+        for (cmd, args) in [
+            ("node", vec!["server.js"]),
+            ("node", vec!["./missing.js"]),
+            ("./bin/serve", vec![]),
+            ("bin/serve", vec![]),
+            ("python3", vec!["-m", "x", "--config=./cfg.json"]),
+            ("node", vec![abs_in.to_str().unwrap()]),
+            (abs_in.to_str().unwrap(), vec![]),
+            ("node", vec!["tools/srv.js"]),
+        ] {
+            assert!(runs_folder_file(&stdio(cmd, &args), dir), "{cmd} {args:?}");
+        }
+        for (cmd, args) in [("npx", vec!["-y", "@modelcontextprotocol/server-memory"]), ("uvx", vec!["mcp-server-time"]), ("node", vec![abs_out.to_str().unwrap()]), ("server.js", vec![])] {
+            assert!(!runs_folder_file(&stdio(cmd, &args), dir), "{cmd} {args:?}");
+        }
+        let mut http = stdio("node", &["server.js"]);
+        http.transport = "http".into();
+        assert!(!runs_folder_file(&http, dir));
+    }
+
+    // The folder given through a symlink, and a server naming a file there that doesn't exist yet:
+    // canonicalizing that path fails, so the typed folder is what catches it (also Windows' 8.3 names)
+    #[cfg(unix)]
+    #[test]
+    fn a_file_named_through_the_typed_folder_path_is_spotted() {
+        let t = tempfile::tempdir().unwrap();
+        let real = t.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = t.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let later = link.join("tools/not-yet.js");
+        assert!(runs_folder_file(&stdio("node", &[later.to_str().unwrap()]), &link));
+        assert!(runs_folder_file(&stdio(later.to_str().unwrap(), &[]), &link));
+        assert!(!runs_folder_file(&stdio("node", &[t.path().join("elsewhere.js").to_str().unwrap()]), &link));
     }
 }
 

@@ -191,6 +191,14 @@ impl TurnRegistry {
         self.lock().turns.insert(turn.turn_id.clone(), turn);
     }
 
+    /// Marks a known turn "queued" or "running" again (an isolated reply waiting for the VM), keeping
+    /// when it started.
+    pub fn set_turn_state(&self, turn_id: &str, state: &str) {
+        if let Some(t) = self.lock().turns.get_mut(turn_id) {
+            t.state = state.into();
+        }
+    }
+
     pub fn end_turn(&self, turn_id: &str) {
         let mut inner = self.lock();
         inner.turns.remove(turn_id);
@@ -344,11 +352,46 @@ impl TurnRegistry {
             thread_id: tag.thread_id.clone(),
             position: rx.position,
             reason: rx.reason.into(),
+            slots: None,
         });
         tokio::select! {
             slot = rx.rx => slot.ok(),
             _ = cancel.cancelled() => None,
         }
+    }
+}
+
+/// A turn's stall watchdog: silence for longer than the limit stops the turn, except while a
+/// tool runs or while the turn waits for a spot in the VM ([`RuntimeEvent::WaitingForRoom`]),
+/// which isn't the model's silence. Any event restarts the clock.
+#[derive(Debug, Clone)]
+pub struct StallClock {
+    limit: Option<Duration>,
+    last: tokio::time::Instant,
+    tools: usize,
+    waiting: bool,
+}
+
+impl StallClock {
+    /// `limit` `None`: never stops the turn.
+    pub fn new(limit: Option<Duration>, now: tokio::time::Instant) -> Self {
+        Self { limit, last: now, tools: 0, waiting: false }
+    }
+
+    pub fn saw(&mut self, e: &RuntimeEvent, now: tokio::time::Instant) {
+        self.last = now;
+        match e {
+            RuntimeEvent::ToolCallPending { .. } => self.tools += 1,
+            RuntimeEvent::ToolCallCompleted { .. } => self.tools = self.tools.saturating_sub(1),
+            RuntimeEvent::WaitingForRoom { .. } => self.waiting = true,
+            RuntimeEvent::RoomTaken => self.waiting = false,
+            _ => {}
+        }
+    }
+
+    /// When the turn counts as stalled, if nothing else arrives; `None` while it can't stall.
+    pub fn deadline(&self) -> Option<tokio::time::Instant> {
+        self.limit.filter(|_| self.tools == 0 && !self.waiting).map(|d| self.last + d)
     }
 }
 
@@ -503,6 +546,28 @@ impl Limiter {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn waiting_for_a_spot_in_the_vm_is_never_a_stall() {
+        use crate::drivers::events::RuntimeEvent as E;
+        let limit = std::time::Duration::from_secs(120);
+        let t0 = tokio::time::Instant::now();
+        let mut c = super::StallClock::new(Some(limit), t0);
+        assert_eq!(c.deadline(), Some(t0 + limit));
+        // Queued behind two other isolated replies: no deadline however long it waits
+        c.saw(&E::WaitingForRoom { reason: "vm_busy".into(), position: 1, slots: 2 }, t0);
+        assert_eq!(c.deadline(), None);
+        // It gets its spot 10 minutes later: the clock starts from then, not from the queueing
+        let t1 = t0 + std::time::Duration::from_secs(600);
+        c.saw(&E::RoomTaken, t1);
+        assert_eq!(c.deadline(), Some(t1 + limit));
+        // A running tool still holds the clock, and the watchdog off stays off
+        c.saw(&E::ToolCallPending { id: "t".into(), name: "Bash".into(), args: serde_json::json!({}) }, t1);
+        assert_eq!(c.deadline(), None);
+        c.saw(&E::ToolCallCompleted { id: "t".into(), result: serde_json::json!({}) }, t1);
+        assert_eq!(c.deadline(), Some(t1 + limit));
+        assert_eq!(super::StallClock::new(None, t0).deadline(), None);
+    }
+
     #[test]
     fn usage_of_sums_a_bots_running_turns_with_a_purpose() {
         let reg = super::TurnRegistry::default();

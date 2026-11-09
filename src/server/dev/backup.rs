@@ -97,11 +97,18 @@ async fn run_here(state: &AppState, space: &SpaceId, kwant_id: Option<&str>) -> 
     };
     let cwd = folder(state, space, kwant_id);
     let started = SystemTime::now();
-    let out = crate::tools::shell::execute_shell(&cwd, &json!({"command": command, "timeout_secs": TIMEOUT_SECS})).await;
+    // D4 (C9c): the backup command runs bash on this computer as kwnt; never in a folder an
+    // isolated bot used. The refusal is recorded like a failed backup.
+    let refused = state.db.host_command_refusal(&cwd).await;
+    let out = match &refused {
+        Some(_) => None,
+        None => Some(crate::tools::shell::execute_shell(&cwd, &json!({"command": command, "timeout_secs": TIMEOUT_SECS})).await),
+    };
     let taken_at = super::now();
     let (ok, path, bytes, error) = match out {
-        Ok(v) => judge(&v, &cwd, started),
-        Err(e) => (false, None, None, Some(e.to_string())),
+        None => (false, None, None, refused),
+        Some(Ok(v)) => judge(&v, &cwd, started),
+        Some(Err(e)) => (false, None, None, Some(e.to_string())),
     };
     let row = DevBackupRow {
         id: format!("dvb_{}", uuid::Uuid::new_v4().simple()),

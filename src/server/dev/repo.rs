@@ -360,12 +360,10 @@ const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 /// killed after [`GIT_TIMEOUT`]. Its trimmed stdout on success. Its stderr is dropped unread, so
 /// a URL in an error never reaches a log.
 async fn git(dir: &std::path::Path, args: &[&str]) -> Option<String> {
-    let mut cmd = tokio::process::Command::new("git");
-    cmd.arg("-C").arg(dir).args(["-c", "core.fsmonitor=false"]).args(args);
-    for v in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"] {
-        cmd.env_remove(v);
-    }
-    cmd.env("GIT_TERMINAL_PROMPT", "0").env("GIT_OPTIONAL_LOCKS", "0");
+    // The shared host git rules (D4c): no system config, hooks, fsmonitor or pager, no GIT_* env
+    let mut cmd = git::host_git_command("git");
+    cmd.arg("-C").arg(dir).args(args);
+    cmd.env("GIT_OPTIONAL_LOCKS", "0");
     if let Some(parent) = dir.parent() {
         cmd.env("GIT_CEILING_DIRECTORIES", parent);
     }
