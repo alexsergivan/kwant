@@ -466,8 +466,8 @@ pub fn approvals_block(approvals: crate::mcp::Approvals) -> &'static str {
     match approvals {
         Approvals::Off => concat!(
             "\n\n[Approvals: off]\n\
-            The person switched approvals off: they chose not to be asked, and your tools run without a card (only a payment \
-            still asks). ",
+            The person switched approvals off: they chose not to be asked, and your tools run without a card (a payment, or \
+            in Dev mode a step that reaches production, still shows one: make the call and let it ask). ",
             do_dont_offer!(),
             " Unless they asked for that outcome, also ask before a step that reaches other people or can't be undone: \
             deploying to the live site, publishing, sending messages or mail, spending money, or deleting their data."
