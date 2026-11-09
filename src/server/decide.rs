@@ -584,10 +584,11 @@ pub fn with_decisions(meta: Option<Value>, decisions: &[Decision]) -> Option<Val
 
 // The hidden round
 
-/// A turn the person didn't start (a discussion round or one kwnt runs on its own), or one
-/// already inside the gate.
+/// A turn the person didn't start (a discussion round or one kwnt runs on its own), one already
+/// inside the gate, or a fresh-eyes review (B1): its held choice would go to consult and follow-up
+/// turns that see the whole chat, so a review's reply is never held.
 pub(super) fn system_turn(opts: &TurnOpts) -> bool {
-    opts.discussion.is_some() || opts.label.is_some() || opts.always_ask || opts.hook.is_some()
+    opts.discussion.is_some() || opts.label.is_some() || opts.always_ask || opts.hook.is_some() || opts.fresh_eyes
 }
 
 /// Whether a turn may have its reply held: the setting is on, it's a turn the person started
@@ -1045,6 +1046,16 @@ mod tests {
         1. A, B or C?\n\
         2. FM monogram or plain?\n\n\
         I'll hold the build until you answer.";
+
+    /// B1: a fresh-eyes review's held choice would go to consult and follow-up turns that see the
+    /// whole chat, so a fresh-eyes turn never goes through the gate.
+    #[test]
+    fn a_fresh_eyes_turn_is_never_held_for_the_hidden_round() {
+        assert!(!system_turn(&TurnOpts::default()), "a person's own turn may be held");
+        let mut fresh = TurnOpts::default();
+        fresh.fresh_eyes = true;
+        assert!(system_turn(&fresh));
+    }
 
     #[test]
     fn the_screenshot_reply_is_held_with_its_undone_checks() {

@@ -15,6 +15,7 @@ use tempfile::{tempdir, TempDir};
 
 fn turn(store: &Database, engine: &str, folder: &Path) -> TurnInput {
     TurnInput {
+        fresh_eyes: false,
         continuity: String::new(),
         skills: String::new(),
         person: Default::default(),

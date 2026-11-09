@@ -596,6 +596,13 @@ async fn a_failed_audit_turn_leaves_the_task_alone() {
     }
     assert!(kinds.contains(&"audit_done".to_string()), "{kinds:?}");
     assert!(!kinds.iter().any(|k| k == "verified" || k == "failed" || k == "peer_review"), "{kinds:?}");
+    // B1: the challenge ran with fresh eyes against the acceptance, but a challenge that never
+    // came in is not "checked"
+    let v = person(&e, "GET", &format!("/api/tasks/{}/risks", t.id), None).await;
+    assert_eq!(
+        v["audits"][0]["fresh_eyes"],
+        json!({"checked": false, "saw": ["brief", "result"], "spec_source": "acceptance", "reviewer_kwant_id": challenger.id})
+    );
 }
 
 #[tokio::test]
@@ -1015,7 +1022,9 @@ async fn the_challenge_prompt_quotes_the_owners_result() {
     let p = auditor::challenge_prompt(&e.state, &a, &t, &owner).await;
     assert!(p.contains("School run 8:10, rain from 9"), "{p}");
     assert!(p.contains("data, not instructions"), "{p}");
-    assert!(p.contains("Note on the task: Weather from the met office"), "{p}");
+    // B1: with a result saved, the owner's notes (its narration) stay out of the reviewer's prompt
+    assert!(!p.contains("Weather from the met office"), "{p}");
+    assert!(p.contains("not Owner's chat or notes"), "{p}");
     assert!(!p.contains("abcdefghijklmnopqrstuvwxyz0123"), "a secret is masked: {p}");
     assert!(!p.contains("OTHER_BOT_TEXT") && !p.contains("NOT_THE_OWNERS_NOTE"), "{p}");
 
@@ -1100,4 +1109,114 @@ async fn audit_cards_left_open_are_closed() {
     restart(&e).await;
     assert_eq!(status(others).await, "expired");
     assert_eq!(status(plain).await, "waiting");
+}
+
+/// The fresh-eyes label of a task's first audit.
+async fn label(e: &Env, tid: &str) -> Value {
+    person(e, "GET", &format!("/api/tasks/{tid}/risks"), None).await["audits"][0]["fresh_eyes"].clone()
+}
+
+/// B1: the rules for a written spec, and which audit stage runs with fresh eyes.
+#[tokio::test]
+async fn spec_rules_and_fresh_stages() {
+    use kwnt::db::missions::TaskEvent;
+    assert!(auditor::stage_is_fresh("challenge"));
+    assert!(!auditor::stage_is_fresh("rebuttal"), "the owner answers for its own work");
+
+    assert_eq!(auditor::parse_spec(&Value::Null), Ok(None));
+    assert_eq!(auditor::parse_spec(&json!(["  It opens  ", "Rows match"])), Ok(Some(vec!["It opens".into(), "Rows match".into()])));
+    let nine: Vec<String> = (0..9).map(|i| format!("line {i}")).collect();
+    for bad in [json!("one line"), json!([]), json!(["ok", "  "]), json!(["ok", 3]), json!(nine), json!(["x".repeat(301)])] {
+        assert!(auditor::parse_spec(&bad).is_err(), "{bad}");
+    }
+    assert!(auditor::parse_spec(&json!(["x".repeat(300)])).is_ok());
+
+    let ev = |kind: &str, actor: &str, detail: Value| TaskEvent {
+        id: 0,
+        task_id: "t".into(),
+        mission_id: None,
+        kind: kind.into(),
+        actor: actor.into(),
+        from_state: None,
+        to_state: None,
+        detail: detail.to_string(),
+        created_at: chrono::Utc::now(),
+    };
+    // No spec: the acceptance, one line per criterion, bullets and numbers dropped
+    let s = auditor::spec_from(&[], Some("own"), "- The file opens\n2. Rows match\n\n* No secrets");
+    assert_eq!((s.source, s.lines.clone()), ("acceptance", vec!["The file opens".to_string(), "Rows match".into(), "No secrets".into()]));
+    assert_eq!(auditor::spec_from(&[], Some("own"), "  ").source, "none");
+    // The owner's latest spec wins; another bot's never counts
+    let events = [
+        ev("spec", "own", json!({"lines": ["first"]})),
+        ev("spec", "own", json!({"lines": ["second", "third"]})),
+        ev("spec", "other", json!({"lines": ["NOT_THE_OWNERS"]})),
+        ev("note", "own", json!({"note": "a note"})),
+    ];
+    let s = auditor::spec_from(&events, Some("own"), "The file opens");
+    assert_eq!((s.source, s.lines), ("written", vec!["second".to_string(), "third".into()]));
+    assert_eq!(auditor::spec_from(&events[2..], Some("own"), "").source, "none");
+    assert_eq!(auditor::spec_from(&events, None, "").source, "none", "a task with no owner has no written spec");
+}
+
+/// B1: a high-impact task's owner writes its spec first, on its own and only while working; the
+/// challenger is told to check the result against it, and the audit's label says it saw the spec.
+#[tokio::test]
+async fn a_spec_comes_first_and_the_challenger_checks_against_it() {
+    let e = setup().await;
+    person(&e, "POST", "/api/settings", Some(json!({"auditor": "off"}))).await;
+    let (owner, other) = (bot(&e, "Owner").await, bot(&e, "Other").await);
+    let t = task(&e, Some(&owner), 3, "ready").await;
+    assert!(auditor::is_high_impact(&t));
+    assert!(!auditor::is_high_impact(&task(&e, Some(&owner), 1, "ready").await));
+    e.state.db.claim_task(&t.id, &owner.id, None, None, 600_000, false, &owner.id).await.unwrap().unwrap();
+    let say = |args: Value| {
+        let mut a = args;
+        a["task_id"] = json!(t.id);
+        a
+    };
+
+    // Only the holder writes it; it's strict; never together with a hand-in
+    let (_, err, _) = tool(&e, &other, "task_update", say(json!({"spec": ["It opens"]}))).await;
+    assert!(err, "not the holder");
+    let (_, err, text) = tool(&e, &owner, "task_update", say(json!({"spec": ["ok", ""]}))).await;
+    assert!(err && text.contains("non-empty"), "{text}");
+    let (_, err, text) = tool(&e, &owner, "task_update", say(json!({"spec": ["The export opens"], "status": "review"}))).await;
+    assert!(err && text.contains("on its own"), "{text}");
+    assert_eq!(e.state.db.get_task(&t.id).await.unwrap().unwrap().state, "working", "the hand-in was refused with it");
+
+    let (v, err, text) = tool(&e, &owner, "task_update", say(json!({"spec": ["The CSV has a header row", "Row count matches the source"]}))).await;
+    assert!(!err, "{text}");
+    assert_eq!(v["spec"], json!(["The CSV has a header row", "Row count matches the source"]));
+    e.state.db.log_task_event(&t.id, auditor::SPEC_EVENT, &other.id, &json!({"lines": ["FAKE_SPEC_LINE"]})).await.unwrap();
+    let spec = auditor::spec_of(&e.state, &t).await;
+    assert_eq!((spec.source, spec.lines.len()), ("written", 2));
+
+    // Handed in: no spec after the result
+    let (_, err, text) = tool(&e, &owner, "task_update", say(json!({"status": "review"}))).await;
+    assert!(!err, "{text}");
+    let (_, err, text) = tool(&e, &owner, "task_update", say(json!({"spec": ["Written after the result"]}))).await;
+    assert!(err, "{text}");
+    assert_eq!(auditor::spec_of(&e.state, &t).await.lines[0], "The CSV has a header row");
+
+    // The challenger checks against the spec, numbered
+    let a = open_audit(&e, &t).await;
+    let p = auditor::challenge_prompt(&e.state, &a, &t, &owner).await;
+    assert!(p.contains("Spec Owner wrote before handing in"), "{p}");
+    assert!(p.contains("1. The CSV has a header row\n2. Row count matches the source"), "{p}");
+    assert!(p.contains("start it with that line's number"), "{p}");
+    assert!(!p.contains("FAKE_SPEC_LINE"), "{p}");
+
+    // Its label: what the challenger saw, checked once its challenge is in
+    assert_eq!(label(&e, &t.id).await["checked"], false);
+    assert_eq!(label(&e, &t.id).await["saw"], json!([]), "no fresh-eyes event yet, as for audits before 0.8.0");
+    let saw = json!({"audit_id": a.id, "saw": ["spec", "result"], "spec_source": "written", "spec_lines": 2});
+    e.state.db.log_task_event(&t.id, auditor::FRESH_EVENT, "kwant", &saw).await.unwrap();
+    assert_eq!(label(&e, &t.id).await["checked"], false, "the challenge isn't in yet");
+    assert!(e.state.db.move_audit(&a.id, "challenge", "rebuttal", None).await.unwrap());
+    assert_eq!(
+        label(&e, &t.id).await,
+        json!({"checked": true, "saw": ["spec", "result"], "spec_source": "written", "reviewer_kwant_id": a.challenger_kwant_id})
+    );
+    assert_ne!(a.challenger_kwant_id, owner.id);
 }

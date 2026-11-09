@@ -97,6 +97,11 @@ pub struct TurnInput {
     /// "[What to deliver]" hint, and the delivery check reads it after the turn.
     #[serde(default)]
     pub delivery: Option<crate::router::delivery::DeliveryPlan>,
+    /// B1, a reviewer's fresh eyes: the turn sees only its prompt (the brief or spec and the
+    /// result). `history` must be empty, and no driver reads the conversation, its saved summary
+    /// or its cached prefix back from `store`. Set from `TurnOpts::fresh_eyes`.
+    #[serde(default)]
+    pub fresh_eyes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1021,6 +1026,7 @@ pub(crate) mod tests {
             no_tools: false,
             read_only: false,
             delivery: None,
+            fresh_eyes: false,
         }
     }
 

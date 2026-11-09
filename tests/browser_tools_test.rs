@@ -150,6 +150,7 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
 
     // The prompt tells a tools turn to use them, not curl through a shell it doesn't have
     let input = TurnInput {
+        fresh_eyes: false,
         thread_id: "t".into(),
         kwant: bot.clone(),
         prompt: "open the page".into(),
