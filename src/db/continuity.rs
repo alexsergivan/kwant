@@ -54,6 +54,9 @@ pub struct Memory {
     pub updated_at: DateTime<Utc>,
 }
 
+/// The external-content full-text indexes over chat messages and bot memories.
+const SEARCH_INDEXES: [&str; 2] = ["messages_fts", "kwant_memories_fts"];
+
 impl Memory {
     pub fn pinned(&self) -> bool {
         self.pinned_by.is_some()
@@ -306,8 +309,43 @@ impl Database {
             sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')")
                 .execute(&self.pool)
                 .await?;
+        } else {
+            self.repair_search_index_if_out_of_step("messages", "messages_fts").await?;
         }
         self.migrate_memory_pins().await
+    }
+
+    /// Rebuilds both chat search indexes from their tables, in one transaction. Reads every
+    /// message and memory, so it runs only when an index was found out of step.
+    pub(super) async fn rebuild_search_indexes(&self) -> Result<(), DbError> {
+        let mut tx = self.begin_write().await?;
+        for index in SEARCH_INDEXES {
+            if let Err(e) = sqlx::query(&format!("INSERT INTO {index}({index}) VALUES ('rebuild')")).execute(&mut *tx).await {
+                let _ = tx.rollback().await;
+                return Err(e.into());
+            }
+        }
+        tx.commit().await?;
+        tracing::info!("rebuilt the chat search indexes");
+        Ok(())
+    }
+
+    /// A start-up check that costs two counts: an external-content index keeps one size row
+    /// per indexed row, so a different count means rows were written or removed while its
+    /// triggers were missing, and the index is rebuilt. Text changed in place without the
+    /// index hearing about it isn't seen here; a delete that trips over it repairs it then
+    /// (see `delete_kwant_and_history`).
+    async fn repair_search_index_if_out_of_step(&self, table: &str, index: &str) -> Result<(), DbError> {
+        let (rows,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table}")).fetch_one(&self.pool).await?;
+        let Ok((indexed,)) = sqlx::query_as::<_, (i64,)>(&format!("SELECT COUNT(*) FROM {index}_docsize")).fetch_one(&self.pool).await
+        else {
+            return Ok(());
+        };
+        if rows != indexed {
+            tracing::warn!(table, rows, indexed, "a chat search index is out of step with its table; rebuilding it");
+            sqlx::query(&format!("INSERT INTO {index}({index}) VALUES ('rebuild')")).execute(&self.pool).await?;
+        }
+        Ok(())
     }
 
     /// Additive and reversible ([`MEMORY_PINS_DOWN`]): `pinned_by` and `imported` columns and a search index
@@ -348,6 +386,8 @@ impl Database {
             sqlx::query("INSERT INTO kwant_memories_fts(kwant_memories_fts) VALUES ('rebuild')")
                 .execute(&self.pool)
                 .await?;
+        } else {
+            self.repair_search_index_if_out_of_step("kwant_memories", "kwant_memories_fts").await?;
         }
         Ok(())
     }
