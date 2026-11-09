@@ -1836,7 +1836,18 @@ pub(super) struct TurnOpts {
     /// Every driver runs it that way or refuses it, and the turn then fails; it is never run with
     /// tools (see `crate::drivers::TurnInput::no_tools`). Default false.
     pub(super) no_tools: bool,
+    /// What the person expects to see from this turn (see [`super::delivery_check`]); `None`
+    /// reads it from the person's own message (`nav_prompt`), and turns without one have none.
+    pub(super) expect: Option<super::delivery_check::Expect>,
+    /// This turn is the delivery check's one automatic continuation: it never gets another.
+    pub(super) delivery_continued: bool,
+    /// Set by the save step when the reply missed what the person expected: the continuation's
+    /// prompt and expectations, for [`try_kwant_turn`] to run once the turn has ended.
+    delivery_next: Option<DeliveryNext>,
 }
+
+/// See [`TurnOpts::delivery_next`].
+type DeliveryNext = std::sync::Arc<std::sync::Mutex<Option<(String, super::delivery_check::Expect)>>>;
 
 impl TurnOpts {
     /// Options that run the turn on `agent` at `effort` (both needed), skipping Laya.
@@ -1910,6 +1921,38 @@ fn limit_line_failure(text: &str) -> Option<crate::profiles::ProviderFailure> {
 /// A reply that ends by asking the person to choose may be held and decided first (see
 /// [`super::decide`]); then the decided reply's text comes back.
 pub(super) async fn try_kwant_turn(
+    scope: &TurnScope,
+    target_kwant: &Kwant,
+    prompt: String,
+    mut opts: TurnOpts,
+) -> Result<String, String> {
+    // The delivery check's one continuation (see [`super::delivery_check`]): the first turn's save
+    // step leaves its prompt here when the reply missed what the person expected
+    let next = (!opts.delivery_continued).then(DeliveryNext::default);
+    opts.delivery_next = next.clone();
+    let always_ask = opts.always_ask;
+    let delegation_id = opts.delegation_id.clone();
+    let first = try_kwant_turn_once(scope, target_kwant, prompt, opts).await;
+    let Some((prompt, expect)) = next.and_then(|n| n.lock().ok().and_then(|mut n| n.take())) else {
+        return first;
+    };
+    tracing::info!(kwant = %target_kwant.id, "reply missed what the person expected: one automatic continuation");
+    let again = |prompt: String| {
+        let opts = TurnOpts {
+            label: Some("Automatic continuation (once): the reply was missing what the person expected".into()),
+            always_ask,
+            delegation_id,
+            expect: Some(expect),
+            delivery_continued: true,
+            ..Default::default()
+        };
+        try_kwant_turn_once(scope, target_kwant, prompt, opts)
+    };
+    super::delivery_check::after_turn(first, Some(prompt), scope.cancel_token.is_cancelled(), again).await
+}
+
+/// [`try_kwant_turn`] without the delivery check's continuation.
+async fn try_kwant_turn_once(
     scope: &TurnScope,
     target_kwant: &Kwant,
     prompt: String,
@@ -3110,6 +3153,21 @@ async fn run_kwant_turn_inner(
                 // A reply's own choices come off its text into meta.decisions, in channel rounds too
                 // (a discussion's raw reply still goes back to the round, which reads its markers)
                 let (text, decisions) = super::decide::take_decisions(&text);
+                // The delivery check (P4, P9, P10): a claimed picture the turn didn't share, or what
+                // the person expected and didn't get (see [`super::delivery_check`])
+                let pictures = state.turns.take_pictures(&tag.turn_id);
+                let expect = opts.expect.clone().or_else(|| opts.nav_prompt.as_deref().and_then(super::delivery_check::expect_for));
+                let verdict = if opts.discussion.is_none() {
+                    let seen = super::delivery_check::Seen {
+                        image_shared: pictures.shared_image,
+                        has_shot: pictures.last_shot.is_some(),
+                        pushed: super::delivery_check::pushed_in(activity.as_ref()),
+                    };
+                    super::delivery_check::check(&text, expect.as_ref(), opts.delivery_continued, &seen)
+                } else {
+                    super::delivery_check::Verdict::default()
+                };
+                let text = super::delivery_check::apply(text, &verdict);
                 if opts.discussion.is_none() {
                     reply_text = text.clone();
                 }
@@ -3142,6 +3200,9 @@ async fn run_kwant_turn_inner(
                         m[k] = v.clone();
                     }
                 }
+                if let Some(delivery) = super::delivery_check::meta(&verdict, expect.as_ref()) {
+                    meta.get_or_insert_with(|| serde_json::json!({}))["delivery"] = delivery;
+                }
                 let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);
                 let hold = opts.hook.as_ref().and_then(|h| {
@@ -3170,6 +3231,22 @@ async fn run_kwant_turn_inner(
                             h.saved = saved;
                         }
                     }
+                    // A held reply is decided first; only a reply the person sees is continued
+                    if let (Some(prompt), Some(next), Some(e)) = (&verdict.continue_with, &opts.delivery_next, &expect) {
+                        if let Ok(mut next) = next.lock() {
+                            *next = Some((prompt.clone(), e.clone()));
+                        }
+                    }
+                }
+                // The claimed picture goes under the reply, posted as the bot
+                if let (true, Some(shot)) = (verdict.share_last_shot, &pictures.last_shot) {
+                    let name = super::continuity::screenshot_name(&shot.url);
+                    if let Err(why) = super::attachments::post_screenshot(state, &turn_scope, &shot.data, &name, true).await {
+                        tracing::warn!(kwant = %target_kwant.id, %why, "couldn't share the turn's screenshot under its reply");
+                    }
+                }
+                if let (Some(outcome), Some(e)) = (verdict.outcome, &expect) {
+                    super::delivery_check::record_delivery_note(state, &target_kwant.id, &tag.context_id, e, outcome, &verdict.missing).await;
                 }
             }
             return Ok(reply_text);

@@ -118,6 +118,27 @@ impl Database {
         .await?)
     }
 
+    /// The newest file `kwant_id` shared into `context_id` since `since` with these exact bytes
+    /// (`sha256`), already posted as a message: a second share of it is skipped.
+    pub async fn recent_agent_share(
+        &self,
+        context_id: &str,
+        kwant_id: &str,
+        sha256: &str,
+        since: DateTime<Utc>,
+    ) -> Result<Option<Attachment>, DbError> {
+        Ok(sqlx::query_as::<_, Attachment>(
+            "SELECT * FROM attachments WHERE context_id = ? AND source = 'agent' AND kwant_id = ? AND sha256 = ?
+             AND message_id IS NOT NULL AND created_at >= ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(context_id)
+        .bind(kwant_id)
+        .bind(sha256)
+        .bind(since)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
     /// Ties attachments to the message they were sent or shared with, and to its chat. Only rows
     /// not yet tied to a message change; returns how many did.
     pub async fn link_attachments(

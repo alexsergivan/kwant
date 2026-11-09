@@ -59,6 +59,26 @@ struct Inner {
     holds: HashMap<String, Hold>,
     /// [`HOLD_LIMIT`] unless a test shortened it.
     hold_limit: Option<Duration>,
+    /// The pictures of a running turn, by turn id (see [`TurnRegistry::note_screenshot`]).
+    pictures: HashMap<String, TurnPictures>,
+}
+
+/// A bot's last screenshot in a turn, as the browser returned it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Screenshot {
+    /// The JPEG, base64.
+    pub data: String,
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// What a turn did with pictures so far: its last screenshot, and whether it put an image into
+/// the chat (see [`super::picture_claims`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TurnPictures {
+    pub last_shot: Option<Screenshot>,
+    pub shared_image: bool,
 }
 
 /// How long a lead's turn holds its hand-offs' reports at most (see [`TurnRegistry::hold`]):
@@ -203,6 +223,29 @@ impl TurnRegistry {
         let mut inner = self.lock();
         inner.turns.remove(turn_id);
         inner.meters.remove(turn_id);
+        inner.pictures.remove(turn_id);
+    }
+
+    /// Keeps the turn's newest screenshot (one per turn), for the reply guard.
+    /// A turn that already ended keeps nothing.
+    pub fn note_screenshot(&self, turn_id: &str, shot: Screenshot) {
+        let mut inner = self.lock();
+        if inner.turns.contains_key(turn_id) {
+            inner.pictures.entry(turn_id.to_string()).or_default().last_shot = Some(shot);
+        }
+    }
+
+    /// The turn put an image into its chat (shared it, or found it already there).
+    pub fn note_image_shared(&self, turn_id: &str) {
+        let mut inner = self.lock();
+        if inner.turns.contains_key(turn_id) {
+            inner.pictures.entry(turn_id.to_string()).or_default().shared_image = true;
+        }
+    }
+
+    /// The turn's pictures so far, now forgotten.
+    pub fn take_pictures(&self, turn_id: &str) -> TurnPictures {
+        self.lock().pictures.remove(turn_id).unwrap_or_default()
     }
 
     /// Holds the reports of the hand-offs that `turn_id`, a running lead turn, starts until it
@@ -566,6 +609,43 @@ mod tests {
         c.saw(&E::ToolCallCompleted { id: "t".into(), result: serde_json::json!({}) }, t1);
         assert_eq!(c.deadline(), Some(t1 + limit));
         assert_eq!(super::StallClock::new(None, t0).deadline(), None);
+    }
+
+    #[test]
+    fn a_turns_pictures_live_until_it_ends() {
+        let reg = super::TurnRegistry::default();
+        let shot = |url: &str| super::Screenshot { data: "AAAA".into(), url: url.into(), width: 390, height: 844 };
+        // A turn that isn't running keeps nothing (a late call after the turn ended)
+        reg.note_screenshot("t", shot("https://a.test/"));
+        reg.note_image_shared("t");
+        assert_eq!(reg.take_pictures("t"), super::TurnPictures::default());
+        reg.set_turn(super::ActiveTurn {
+            turn_id: "t".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+        });
+        reg.note_screenshot("t", shot("https://a.test/1"));
+        reg.note_screenshot("t", shot("https://a.test/2"));
+        let p = reg.take_pictures("t");
+        assert_eq!(p.last_shot.map(|s| s.url).as_deref(), Some("https://a.test/2"), "the newest screenshot");
+        assert!(!p.shared_image);
+        assert_eq!(reg.take_pictures("t"), super::TurnPictures::default(), "taken once");
+        reg.note_image_shared("t");
+        reg.end_turn("t");
+        reg.set_turn(super::ActiveTurn {
+            turn_id: "t".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+        });
+        assert!(!reg.take_pictures("t").shared_image, "ending the turn forgot them");
     }
 
     #[test]

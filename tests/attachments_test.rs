@@ -438,3 +438,89 @@ async fn a_delegated_task_carries_the_persons_request_and_files() {
     let r = self_call(&env, "tok-lead-thread", "list_attachments", json!({})).await;
     assert!(!text_of(&r).contains("Files in the chat your task came from"), "{r}");
 }
+
+/// 0.8.0 P4: a shared file is posted as the bot (its name, the id in meta), and the same bytes
+/// shared again in the same chat within a few minutes aren't posted twice.
+#[tokio::test]
+async fn shared_files_post_as_the_bot_and_repeats_are_skipped() {
+    let env = setup().await;
+    direct_turn(&env, "tok-p4", &env.a, None).await;
+    let r = self_call(&env, "tok-p4", "share_file", json!({"content": "# Plan\nship it", "name": "plan.md"})).await;
+    assert_eq!(r["isError"], false, "{r}");
+    let cards: Vec<_> = messages(&env, &env.a).await.into_iter().filter(|m| m.text.starts_with("Shared a file")).collect();
+    assert_eq!(cards.len(), 1);
+    assert_eq!((cards[0].sender_role.as_str(), cards[0].sender_id.as_str()), ("kwant", "K"), "the bot's name, never its id");
+    let meta: Value = serde_json::from_str(cards[0].meta.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["kind"], "file");
+    assert_eq!(meta["kwant_id"], env.a.as_str());
+    assert_eq!(meta["kwant_name"], "K");
+    assert_eq!(meta["auto"], false);
+    let first = meta["attachments"][0]["id"].as_str().unwrap().to_string();
+
+    // The same bytes again, even under another name: no second message, and the reply says so
+    let r = self_call(&env, "tok-p4", "share_file", json!({"content": "# Plan\nship it", "name": "plan-again.md"})).await;
+    assert_eq!(r["isError"], false, "{r}");
+    assert!(text_of(&r).contains("already in this chat"), "{r}");
+    assert!(text_of(&r).contains(&first), "{r}");
+    let cards = messages(&env, &env.a).await.into_iter().filter(|m| m.text.starts_with("Shared a file")).count();
+    assert_eq!(cards, 1, "a repeat isn't posted again");
+
+    // Other bytes are a new message
+    let r = self_call(&env, "tok-p4", "share_file", json!({"content": "# Plan\nship it today", "name": "plan.md"})).await;
+    assert_eq!(r["isError"], false, "{r}");
+    assert_eq!(messages(&env, &env.a).await.into_iter().filter(|m| m.text.starts_with("Shared a file")).count(), 2);
+
+    // The same bytes from another bot in its own chat are its own share
+    direct_turn(&env, "tok-p4b", &env.b, None).await;
+    let r = self_call(&env, "tok-p4b", "share_file", json!({"content": "# Plan\nship it", "name": "plan.md"})).await;
+    assert!(!text_of(&r).contains("already in this chat"), "{r}");
+    assert_eq!(messages(&env, &env.b).await.into_iter().filter(|m| m.text.starts_with("Shared a file")).count(), 1);
+}
+
+/// 0.8.0 P4: `browser_screenshot` with `share: true` (and the reply guard's auto-share) posts the
+/// picture into the chat as the bot and marks the turn as having shared an image.
+#[tokio::test]
+async fn a_shared_screenshot_posts_as_the_bot_and_counts_for_the_turn() {
+    use base64::Engine;
+    use kwnt::server::attachments::{post_screenshot, Posted};
+    use kwnt::server::turns::ActiveTurn;
+    let env = setup().await;
+    env.state.turns.set_turn(ActiveTurn {
+        turn_id: "turn-shot".into(),
+        kwant_id: env.a.clone(),
+        context_id: env.a.clone(),
+        thread_id: None,
+        state: "running".into(),
+        since: chrono::Utc::now(),
+        purpose: None,
+    });
+    let scope = SelfScope {
+        kwant_id: env.a.clone(),
+        kwant_name: "K".into(),
+        origin: Some(TurnOrigin { direct_kwant_id: Some(env.a.clone()), ..Default::default() }),
+        turn_id: Some("turn-shot".into()),
+        ..Default::default()
+    };
+    let b64 = base64::engine::general_purpose::STANDARD.encode(PNG);
+    let name = kwnt::server::continuity::screenshot_name("https://kwant.si/pricing");
+    assert_eq!(name, "screenshot-kwant.si.jpg");
+    let posted = post_screenshot(&env.state, &scope, &b64, &name, false).await.unwrap();
+    assert!(matches!(posted, Posted::New(_)));
+    let card = messages(&env, &env.a).await.into_iter().find(|m| m.text.starts_with("Shared a file")).unwrap();
+    assert_eq!(card.sender_id, "K");
+    let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap()).unwrap();
+    assert_eq!(meta["turn_id"], "turn-shot");
+    assert!(meta["attachments"][0]["mime"].as_str().unwrap().starts_with("image/"), "{meta}");
+    assert!(env.state.turns.take_pictures("turn-shot").shared_image, "the turn counts as having shared an image");
+
+    // The guard's auto-share of the same shot right after is skipped, but still counts
+    let again = post_screenshot(&env.state, &scope, &b64, &name, true).await.unwrap();
+    assert!(matches!(again, Posted::Already(_)));
+    assert_eq!(messages(&env, &env.a).await.into_iter().filter(|m| m.text.starts_with("Shared a file")).count(), 1);
+    assert!(env.state.turns.take_pictures("turn-shot").shared_image);
+
+    // Not an image: refused, nothing posted
+    let text = base64::engine::general_purpose::STANDARD.encode(b"plain text");
+    assert!(post_screenshot(&env.state, &scope, &text, "x.jpg", false).await.is_err());
+    assert!(post_screenshot(&env.state, &scope, "%%%not base64", "x.jpg", false).await.is_err());
+}
