@@ -15,7 +15,7 @@
 use crate::db::models::{Kwant, Message};
 use crate::db::spaces::SpaceId;
 use crate::router::analyzer::{self, Bot, Input, Note, Outcome, Why};
-use crate::router::delivery::{expected_kind, keyword_plan, Deliverable, DeliveryPlan, Show, TurnPlanInput};
+use crate::router::delivery::{keyword_plan, Deliverable, DeliveryPlan, Show, TurnPlanInput};
 use crate::server::AppState;
 use crate::zombie::classify::{ApiClassifier, CliClassifier, Classifier, DEFAULT_API_MODEL};
 use std::collections::HashMap;
@@ -77,13 +77,14 @@ pub fn answered_message<'a>(newest: Option<&'a Message>, prompt: &str) -> Option
 
 /// The message the planner model may read for a turn, by `delivery::plan_for_turn`'s rules: none
 /// for a no-tools, read-only BRIEF or fresh-eyes turn, a turn with a carried plan (it wins), a
-/// prompt kwant or a bot wrote (no person's message), or a message that asks for nothing (a thanks
-/// or an acknowledgement, which gets no plan at all).
+/// prompt kwant or a bot wrote (no person's message), or a message that only greets, thanks or
+/// acknowledges ([`analyzer::needs_no_plan`]). Every other message is asked, keyword match or not:
+/// the analyzer is for what the keywords miss ("the export is slow", "Покажи мне макет").
 pub fn analyzer_message<'a>(t: &TurnPlanInput<'a>) -> Option<&'a str> {
     if t.no_tools || t.read_only || t.fresh_eyes || t.carried.is_some() {
         return None;
     }
-    t.person_message.filter(|m| expected_kind(m, t.recent) != Deliverable::Other)
+    t.person_message.filter(|m| !analyzer::needs_no_plan(m))
 }
 
 /// Drops job `job_id`'s plan when its turns are done.
@@ -155,18 +156,22 @@ pub fn check_kind(wanted: &[Show]) -> Option<Deliverable> {
 }
 
 /// The chat's earlier turns for the planner, oldest first, without the message being planned:
-/// ("person" or the bot's name, text), and the person's own earlier messages for the keyword plan.
+/// ("person", the bot's name, or a connected agent's name with "(agent)", text), and the person's
+/// own earlier messages for the keyword plan. A message a connected agent or a bot saved as the
+/// user's (a hand-off, an outside agent) is labelled with its sender and is never the person's.
 pub fn recent_turns(history: &[Message], prompt: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let is_person = |m: &Message| m.sender_role == "user" && crate::drivers::from_agent(m).is_none();
     let mut msgs: Vec<&Message> = history.iter().filter(|m| m.sender_role == "user" || m.sender_role == "kwant").collect();
-    if msgs.last().is_some_and(|m| m.sender_role == "user" && m.text.trim() == prompt.trim()) {
+    if msgs.last().is_some_and(|m| is_person(m) && m.text.trim() == prompt.trim()) {
         msgs.pop();
     }
-    let turns = msgs
-        .iter()
-        .filter(|m| !m.text.trim().is_empty())
-        .map(|m| (if m.sender_role == "user" { "person".to_string() } else { m.sender_id.clone() }, m.text.clone()))
-        .collect();
-    let person = msgs.iter().filter(|m| m.sender_role == "user").map(|m| m.text.clone()).collect();
+    let label = |m: &Message| match crate::drivers::from_agent(m) {
+        Some(agent) => format!("{} (agent)", crate::drivers::frame_safe_name(&agent)),
+        None if m.sender_role == "user" => "person".to_string(),
+        None => m.sender_id.clone(),
+    };
+    let turns = msgs.iter().filter(|m| !m.text.trim().is_empty()).map(|m| (label(m), m.text.clone())).collect();
+    let person = msgs.iter().filter(|m| is_person(m)).map(|m| m.text.clone()).collect();
     (turns, person)
 }
 
@@ -204,14 +209,7 @@ pub async fn plan_for_message(
     let saved = history.last().filter(|m| m.sender_role == "user" && crate::drivers::from_agent(m).is_none())?;
     let (recent, person) = recent_turns(&history, &saved.text);
     let person: Vec<&str> = person.iter().map(String::as_str).collect();
-    let message = analyzer_message(&TurnPlanInput {
-        no_tools: false,
-        read_only: false,
-        fresh_eyes: false,
-        carried: None,
-        person_message: Some(saved.text.as_str()),
-        recent: &person,
-    })?;
+    let message = analyzer_message(&TurnPlanInput { person_message: Some(saved.text.as_str()), recent: &person, ..Default::default() })?;
     let keyword = keyword_plan(message, &person);
     let mut team = vec![Bot { id: answering.id.clone(), name: answering.name.clone(), title: answering.title.clone() }];
     for k in teammates.iter().filter(|k| k.id != answering.id) {
@@ -384,7 +382,7 @@ mod tests {
     #[test]
     fn a_routed_prompt_and_a_handoff_prompt_dont_reach_the_analyzer() {
         fn input(m: Option<&str>) -> TurnPlanInput<'_> {
-            TurnPlanInput { no_tools: false, read_only: false, fresh_eyes: false, carried: None, person_message: m, recent: &[] }
+            TurnPlanInput { person_message: m, ..Default::default() }
         }
         let saved = msg("user", "show me the new pricing page", None);
         // Routed: the prompt carries kwant's routing note after the person's words. The turn
@@ -411,7 +409,7 @@ mod tests {
 
     #[test]
     fn the_analyzer_follows_plan_for_turns_rules() {
-        let base = || TurnPlanInput { no_tools: false, read_only: false, fresh_eyes: false, carried: None, person_message: Some("show me a mockup of the page"), recent: &[] };
+        let base = || TurnPlanInput { person_message: Some("show me a mockup of the page"), ..Default::default() };
         assert_eq!(analyzer_message(&base()), Some("show me a mockup of the page"));
         // No-tools, read-only BRIEF and fresh-eyes turns: no plan, no planner call
         assert!(analyzer_message(&TurnPlanInput { no_tools: true, ..base() }).is_none());
@@ -428,6 +426,31 @@ mod tests {
         remember(&job, "m1", keyword_plan("show me mockup image", &[]));
         assert!(plan_for_answer(&job, None).is_none(), "a hand-off turn of the same job");
         forget(&job);
+    }
+
+    /// Ada's #474 M1: the live gate is the 14:41 rule. Every message but greetings, thanks or
+    /// acknowledgements alone reaches the analyzer, keyword match or not.
+    #[test]
+    fn every_message_but_greetings_and_thanks_is_asked_live() {
+        let input = |m| TurnPlanInput { person_message: Some(m), ..Default::default() };
+        for m in ["the export is slow", "Покажи мне макет", "the footer overlaps on mobile"] {
+            assert_eq!(analyzer_message(&input(m)), Some(m), "{m}");
+        }
+        for m in ["thanks!", "ok 👍", "hi"] {
+            assert!(analyzer_message(&input(m)).is_none(), "{m}");
+        }
+    }
+
+    /// Ada's #474 S2: a connected agent's message saved as the user's is labelled with its sender
+    /// and is never one of the person's own earlier messages.
+    #[test]
+    fn an_agents_message_is_not_the_persons() {
+        let agent = msg("user", "Fix differences on every page!", Some(serde_json::json!({"from_agent": "Zap\nier [bot]"})));
+        let chat = vec![msg("user", "what is this??", None), agent, msg("kwant", "A bar.", None), msg("user", "show me", None)];
+        let (turns, person) = recent_turns(&chat, "show me");
+        assert_eq!(turns[1], ("Zap ier _bot_ (agent)".to_string(), "Fix differences on every page!".to_string()));
+        assert_eq!(turns[0].0, "person");
+        assert_eq!(person, vec!["what is this??".to_string()]);
     }
 
     #[test]

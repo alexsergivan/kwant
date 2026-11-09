@@ -2330,7 +2330,7 @@ async fn run_kwant_turn_inner(
                 fresh_eyes: opts.fresh_eyes,
                 carried: opts.delivery.clone().or_else(|| job_plan.clone()),
                 person_message: answered.map(|m| m.text.as_str()),
-                recent: &[],
+                ..Default::default()
             });
             if let Some(floor) = plan.and_then(|p| crate::router::analyzer::effort_floor(&p, &route.effort_level)) {
                 route.reasoning = format!("{} · effort raised to {floor}: the person expects to see an image, a link or a change", route.reasoning);
@@ -2598,6 +2598,9 @@ async fn run_kwant_turn_inner(
         // read from the person's saved message: never from `prompt`, which carries kwant's notes
         // (routing, team building, hire, attachments). None for a prompt kwant or a bot wrote, a
         // fresh-eyes reviewer (B1), a no-tools or a BRIEF turn (see delivery::plan_for_turn).
+        // `..Default::default()` below is needless until #469 adds `git_repo`; it keeps whichever of
+        // #469 and #474 lands second building
+        #[allow(clippy::needless_update)]
         let delivery = {
             let recent: Vec<&str> = person_recent.iter().map(String::as_str).collect();
             let person_message = current_message.as_ref().filter(|m| crate::drivers::from_agent(m).is_none());
@@ -2612,6 +2615,8 @@ async fn run_kwant_turn_inner(
                 }),
                 person_message: person_message.map(|m| m.text.as_str()),
                 recent: &recent,
+                // Fields added later (#469's git_repo) keep their default here
+                ..Default::default()
             })
         };
         // A reply held for the decide round keeps this plan for the decided reply

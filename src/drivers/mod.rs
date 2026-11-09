@@ -236,7 +236,7 @@ pub(crate) fn neutralise_frame_markers(text: &str) -> String {
 /// Characters that show as nothing, so a model reads text with them as if they weren't there:
 /// Unicode format characters (general category Cf, e.g. zero-width space, soft hyphen, BOM, tag
 /// characters), plus the variation selectors, the combining grapheme joiner and Hangul fillers.
-fn is_format_char(c: char) -> bool {
+pub(crate) fn is_format_char(c: char) -> bool {
     matches!(
         c as u32,
         0x00AD
