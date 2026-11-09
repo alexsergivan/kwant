@@ -173,6 +173,99 @@ pub fn blend_effort(prompt: &str, laya_effort: &str) -> String {
     }
 }
 
+/// Words that say a short message carries on with the work in hand: "show me mockup image",
+/// "Screenshot give me!", "Fix differences!". On 2026-11-09 such follow-ups were rated "low" and
+/// ran on the fast tier (Haiku), which described the mockup twice without attaching it.
+const CONTINUES_WORK: &[&str] = &[
+    "show", "give", "fix", "make", "build", "send", "screenshot", "do", "try", "again", "push", "commit",
+    "deploy", "redo",
+];
+
+/// Greetings and thanks: they stay "low" even right after a turn that used tools.
+const SMALL_TALK: &[&str] = &[
+    "hi", "hello", "hey", "yo", "ping", "thanks", "thank", "thx", "ty", "cheers", "bye", "good morning",
+    "good night", "good evening",
+];
+
+/// Up to this many words a message counts as a short follow-up. Longer ones are rated as they are.
+pub const SHORT_FOLLOW_UP: usize = 12;
+
+/// The bot's previous reply in the same chat, as the router needs it for a short follow-up.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PreviousTurn {
+    /// "low", "medium" or "high": the effort (or the tier, read as one) that reply ran on.
+    pub effort: Option<String>,
+    /// It ran tools (shell, browser, file edits): the person is in the middle of work with it.
+    pub used_tools: bool,
+}
+
+fn effort_rank(effort: &str) -> u8 {
+    match effort {
+        "low" => 0,
+        "high" => 2,
+        _ => 1,
+    }
+}
+
+fn effort_of_rank(rank: u8) -> &'static str {
+    match rank {
+        0 => "low",
+        1 => "medium",
+        _ => "high",
+    }
+}
+
+/// A greeting or thanks with no action word in it ("hi", "thanks!", "thank you so much").
+pub fn is_small_talk(prompt: &str) -> bool {
+    let ws = words(prompt);
+    SMALL_TALK.iter().any(|p| phrase_at(&ws, p).first() == Some(&0)) && !has_any(&ws, CONTINUES_WORK)
+}
+
+/// A short message that carries on with the work: it has an action word, or the bot's previous
+/// reply here used tools and the message isn't a greeting or thanks.
+pub fn continues_work(prompt: &str, previous: Option<&PreviousTurn>) -> bool {
+    if word_count(prompt) > SHORT_FOLLOW_UP {
+        return false;
+    }
+    has_any(&words(prompt), CONTINUES_WORK) || (previous.is_some_and(|p| p.used_tools) && !is_small_talk(prompt))
+}
+
+/// The effort for a short follow-up that continues work: the previous turn's, and never below
+/// "medium" (the balanced tier). `Some` only when that raises `effort`; greetings, thanks and
+/// messages that start something new keep what the router said.
+pub fn follow_up_effort(prompt: &str, effort: &str, previous: Option<&PreviousTurn>) -> Option<&'static str> {
+    if !continues_work(prompt, previous) {
+        return None;
+    }
+    let kept = previous.and_then(|p| p.effort.as_deref()).map_or(0, effort_rank);
+    let floor = kept.max(effort_rank("medium"));
+    (floor > effort_rank(effort)).then(|| effort_of_rank(floor))
+}
+
+/// The tier a reply ran on, from its saved `meta.ran_on`, as an effort ("fast" is "low").
+fn ran_on_effort(meta: &serde_json::Value) -> Option<String> {
+    let ran_on = meta.get("ran_on")?;
+    let from_tier = ran_on.get("tier").and_then(|t| t.as_str()).map(|t| match t {
+        "fast" => "low",
+        "deep" => "high",
+        _ => "medium",
+    });
+    from_tier.or_else(|| ran_on.get("effort").and_then(|e| e.as_str())).map(str::to_string)
+}
+
+/// `kwant`'s last reply in `recent` (the chat's newest messages, oldest first): what it ran on and
+/// whether it used tools. Saved replies carry the bot's name as `sender_id`; its id matches too.
+pub fn previous_turn(recent: &[crate::db::models::Message], kwant_id: &str, kwant_name: &str) -> Option<PreviousTurn> {
+    let m = recent
+        .iter()
+        .rev()
+        .find(|m| m.sender_role == "kwant" && (m.sender_id == kwant_id || m.sender_id == kwant_name))?;
+    let meta = m.meta.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()).unwrap_or_default();
+    let steps = meta.get("activity").and_then(|a| a.get("steps")).and_then(|s| s.as_array()).is_some_and(|s| !s.is_empty());
+    let calls = m.tool_calls.as_deref().is_some_and(|t| !matches!(t.trim(), "" | "null" | "[]"));
+    Some(PreviousTurn { effort: ran_on_effort(&meta), used_tools: steps || calls })
+}
+
 /// Asks to keep the work on this machine. Bare "local" and "private" are not among them: "localhost",
 /// "my local coffee shop", "Safari private mode" and "a private method" aren't about where it runs.
 const PRIVATE: &[&str] = &[
@@ -282,5 +375,130 @@ pub fn heuristic_fallback_with_models(
         tier: None,
         model: None,
         reasoning: format!("Optimal available model '{}' selected with effort={}", selected, effort_level),
+    }
+}
+
+#[cfg(test)]
+mod follow_up_tests {
+    use super::*;
+    use crate::drivers::engines::Tier;
+
+    /// The person's follow-ups from the 2026-11-09 chat, verbatim.
+    const HIS_FOLLOW_UPS: &[&str] = &[
+        "show me mockup image",
+        "Screenshot give me!",
+        "Show mw screenshot in chat!!",
+        "Fix differences!",
+        "show me how it lloks on page",
+    ];
+
+    /// The tier the turn runs on after Laya's (or the keywords') effort and the follow-up floor.
+    fn tier(prompt: &str, laya: &str, previous: Option<&PreviousTurn>) -> Tier {
+        let blended = blend_effort(prompt, laya);
+        let effort = follow_up_effort(prompt, &blended, previous).map_or(blended, str::to_string);
+        Tier::from_effort(&effort)
+    }
+
+    fn after_tools(effort: &str) -> PreviousTurn {
+        PreviousTurn { effort: Some(effort.into()), used_tools: true }
+    }
+
+    #[test]
+    fn his_follow_ups_route_to_at_least_balanced() {
+        let fresh = None;
+        let tools_low = after_tools("low");
+        let tools_medium = after_tools("medium");
+        let words_only = PreviousTurn { effort: Some("medium".into()), used_tools: false };
+        for msg in HIS_FOLLOW_UPS {
+            for laya in ["low", "medium"] {
+                for previous in [fresh, Some(&tools_low), Some(&tools_medium), Some(&words_only)] {
+                    assert_ne!(tier(msg, laya, previous), Tier::Fast, "{msg:?} (Laya {laya}, previous {previous:?}) dropped to the fast tier");
+                }
+                // The keyword fallback (Laya offline) rates them "low" too; the floor lifts them
+                assert_ne!(tier(msg, heuristic_effort(msg, "chat"), fresh), Tier::Fast, "{msg:?} on the keyword fallback");
+            }
+        }
+        // Before this fix they were rated "low" (the bug): the floor is what lifts them
+        assert_eq!(blend_effort("Screenshot give me!", "medium"), "low");
+        assert_eq!(blend_effort("Fix differences!", "medium"), "low");
+    }
+
+    #[test]
+    fn a_follow_up_keeps_the_previous_turns_tier() {
+        let deep = after_tools("high");
+        for msg in HIS_FOLLOW_UPS {
+            assert_eq!(tier(msg, "low", Some(&deep)), Tier::Deep, "{msg:?} after a deep turn");
+            assert_eq!(tier(msg, "medium", Some(&deep)), Tier::Deep);
+        }
+        // Never lowers what the router said
+        assert_eq!(follow_up_effort("Fix differences!", "high", Some(&after_tools("low"))), None);
+        // A Haiku turn before doesn't pull the next one down: the floor is balanced
+        assert_eq!(tier("Fix differences!", "low", Some(&after_tools("low"))), Tier::Balanced);
+    }
+
+    #[test]
+    fn greetings_and_thanks_stay_low() {
+        let tools = after_tools("high");
+        for msg in ["hi", "thanks", "Thanks!", "thank you", "hey", "hello there"] {
+            assert_eq!(tier(msg, "low", None), Tier::Fast, "{msg:?}");
+            assert_eq!(tier(msg, "low", Some(&tools)), Tier::Fast, "{msg:?} right after a turn with tools");
+            assert!(is_small_talk(msg), "{msg:?}");
+        }
+        // Thanks with an action in it carries on the work
+        assert!(!is_small_talk("thanks, now push it"));
+        assert_eq!(tier("thanks, now push it", "low", None), Tier::Balanced);
+    }
+
+    #[test]
+    fn a_short_reply_after_a_turn_with_tools_continues_it() {
+        // No action word, but the bot was working: "and the dark one?" is part of that work
+        assert_eq!(tier("and the dark one?", "low", Some(&after_tools("medium"))), Tier::Balanced);
+        // Without tools before (a plain chat) a tiny message stays where the router put it
+        let chat = PreviousTurn { effort: Some("medium".into()), used_tools: false };
+        assert_eq!(tier("and the dark one?", "low", Some(&chat)), Tier::Fast);
+        assert_eq!(tier("what is 2+2?", "low", None), Tier::Fast);
+        // A long message is rated as it is
+        let long = "please tell me in a few words what the weather is usually like in Lisbon in November and why";
+        assert!(!continues_work(long, Some(&after_tools("medium"))));
+    }
+
+    fn msg(role: &str, sender: &str, meta: Option<serde_json::Value>, tool_calls: Option<&str>) -> crate::db::models::Message {
+        crate::db::models::Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            channel_id: Some("c".into()),
+            direct_kwant_id: None,
+            sender_role: role.into(),
+            sender_id: sender.into(),
+            text: "x".into(),
+            reasoning_content: None,
+            tool_calls: tool_calls.map(str::to_string),
+            tokens_used: 0,
+            created_at: None,
+            thread_id: None,
+            meta: meta.map(|m| m.to_string()),
+            results: None,
+            reply_to_message_id: None,
+            reaction: None,
+            reply_to: None,
+        }
+    }
+
+    #[test]
+    fn previous_turn_reads_the_bots_last_reply() {
+        let worked = serde_json::json!({"ran_on": {"tier": "deep", "effort": "high"}, "activity": {"steps": [{"title": "Running `ls`"}]}});
+        let talked = serde_json::json!({"ran_on": {"tier": "fast", "effort": "low"}});
+        let recent = vec![
+            msg("user", "person", None, None),
+            msg("kwant", "Frontend", Some(worked), None),
+            msg("kwant", "growth-id", Some(talked.clone()), None),
+            msg("user", "person", None, None),
+        ];
+        // Saved replies carry the bot's name as sender; its id works too
+        assert_eq!(previous_turn(&recent, "frontend-id", "Frontend"), Some(PreviousTurn { effort: Some("high".into()), used_tools: true }));
+        assert_eq!(previous_turn(&recent, "growth-id", "Growth"), Some(PreviousTurn { effort: Some("low".into()), used_tools: false }));
+        assert_eq!(previous_turn(&recent, "other", "Other"), None);
+        // MCP tool records count as tools too
+        let mcp = vec![msg("kwant", "Frontend", Some(talked), Some(r#"[{"name":"browser_screenshot"}]"#))];
+        assert!(previous_turn(&mcp, "f", "Frontend").unwrap().used_tools);
     }
 }

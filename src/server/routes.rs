@@ -1075,6 +1075,30 @@ pub(super) fn run_handoffs_boxed<'a>(
     Box::pin(run_handoffs(scope, already_spoken, replies, user_prompt))
 }
 
+/// The prompt of a hand-off turn: `from` mentioned this bot in its reply `from_text` to the
+/// person's `user` message. `from` already took the person's ask, so the teammate builds on what
+/// it did or decided and never reverses it (2026-11-09 10:24: Growth built the mockup the person
+/// asked for while Frontend, handed the same message, answered "build nothing").
+fn handoff_prompt(from: &str, user: &str, from_text: &str) -> String {
+    format!(
+        "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{text}\n\n\
+        {rule}\n\n\
+        Reply to the user now with your own part of this, in character. Don't repeat what {from} already said.",
+        text = crate::drivers::peer_message(from, truncate_chars(from_text, 4000)),
+        rule = taken_ask_rule(from),
+    )
+}
+
+/// Said to a teammate brought into a request `lead` already took: one answer to the person, not two
+/// opposite ones.
+fn taken_ask_rule(lead: &str) -> String {
+    format!(
+        "{lead} has already taken the user's request and acted on it. Build on what {lead} did or decided: \
+        don't undo, reverse or contradict it, and don't tell the user to do the opposite. If you disagree, \
+        say so in one line with the reason, and leave the decision to the user."
+    )
+}
+
 async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(Kwant, String)], user_prompt: &str) {
     let named: Vec<(String, String)> = replies.iter().map(|(k, t)| (k.name.clone(), t.clone())).collect();
     if super::budget::pause_if_over(scope, already_spoken, &named, user_prompt).await {
@@ -1167,13 +1191,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
                 continue;
             }
         };
-        let mut prompt = format!(
-            "{from} handed this conversation to you by mentioning you.\n\nThe user's original request:\n{user}\n\n{text}\n\n\
-            Reply to the user now with your own part of this, in character. Don't repeat what {from} already said.",
-            from = from,
-            user = user_prompt,
-            text = crate::drivers::peer_message(&from, truncate_chars(&from_text, 4000)),
-        );
+        let mut prompt = handoff_prompt(&from, user_prompt, &from_text);
         if let Some((name, result)) = &waited_for {
             prompt.push_str(&format!(
                 "\n\n{from} asked you to wait for {name}'s result. {name} has finished:\n{}",
@@ -1468,9 +1486,10 @@ pub(super) async fn delegate_mentions(
     let user = truncate_chars(user_prompt.trim(), 3000);
     let task = match relay {
         None => format!(
-            "The user asked in the team channel:\n{user}\n\n{lead} mentioned you:\n{text}",
+            "The user asked in the team channel:\n{user}\n\n{lead} mentioned you:\n{text}\n\n{rule}",
             lead = lead.name,
             text = truncate_chars(text.trim(), 4000),
+            rule = taken_ask_rule(&lead.name),
         ),
         Some(r) => format!(
             "The user asked in the team channel:\n{user}\n\n{from} mentioned you in its result for {lead}'s task “{title}”. \
@@ -1966,7 +1985,11 @@ pub(super) async fn turn_once(
         running_row: None,
         quiet: opts.quiet_finish,
     };
-    let Some(_slot) = turns.acquire(&tag, &scope.cancel_token, &scope.state.event_sender).await else {
+    // One reply per bot per chat: a second message to a bot that is still answering here waits
+    // for that reply (queued, "agent_busy") instead of starting a parallel turn (P6, 2026-11-09).
+    // Unsaved views and purpose turns (checks, audits) aren't replies in the chat.
+    let one_per_chat = !opts.unsaved && opts.purpose.is_none();
+    let Some(_slot) = turns.acquire(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender).await else {
         return Err("stopped by the user".into());
     };
     super::spend_stop::gate(scope, target_kwant, quiet_stop, person_turn).await?;
@@ -2282,6 +2305,16 @@ async fn run_kwant_turn_inner(
             if let Some(capped) = crate::router::fallback::cap_effort_for_attachment(&prompt, &route.effort_level) {
                 route.reasoning = format!("{} · effort capped at {capped}: a short message with an attachment", route.reasoning);
                 route.effort_level = capped.into();
+            }
+            // A short follow-up that carries on the work ("Screenshot give me!") keeps the bot's
+            // previous tier here and never drops to the fast one (P5, 2026-11-09)
+            if opts.tier.is_none() {
+                let recent = db.list_messages(&tag.context_id, 20).await.unwrap_or_default();
+                let previous = crate::router::fallback::previous_turn(&recent, &target_kwant.id, &target_kwant.name);
+                if let Some(kept) = crate::router::fallback::follow_up_effort(&prompt, &route.effort_level, previous.as_ref()) {
+                    route.reasoning = format!("{} · effort kept at {kept}: a short follow-up that continues the work", route.reasoning);
+                    route.effort_level = kept.into();
+                }
             }
         }
         let route = crate::router::apply_preferred_model(route, &target_kwant.preferred_model);
@@ -2646,7 +2679,13 @@ async fn run_kwant_turn_inner(
         if let (None, Some(hint)) = (&gave_up, &opts.task) {
             super::missions::lessons::log_attribution(state, hint).await;
         }
-        for (i, profile) in attempts.iter().enumerate() {
+        // A stalled attempt is run once more as it was (P7, 2026-11-09): `Some(secs)` once it was
+        let mut stall_retried: Option<u64> = None;
+        let mut next_attempt = 0;
+        while next_attempt < attempts.len() {
+            let i = next_attempt;
+            next_attempt += 1;
+            let profile = &attempts[i];
             // An account of another engine than the bot's own runs the tier of the bot's model,
             // not its model id (which no other engine knows)
             let attempt_family = profile.as_ref().and_then(|p| crate::profiles::Engine::parse(&p.engine));
@@ -2806,6 +2845,8 @@ async fn run_kwant_turn_inner(
             // or dropped when the turn moves to another profile.
             let mut held_complete = None;
             let mut side_effects = false;
+            // Ran a tool or raised a card: starting it over after a stall could do that twice
+            let mut acted = false;
             loop {
                 let stall_at = stall_clock.deadline();
                 tokio::select! {
@@ -2882,6 +2923,7 @@ async fn run_kwant_turn_inner(
                                     _ => false,
                                 };
                                 side_effects |= visible;
+                                acted |= matches!(event, RuntimeEvent::ToolCallPending { .. } | RuntimeEvent::ApprovalRequired { .. });
                                 event_broadcast.activity.relay(&event);
                             }
                             None => break,
@@ -2894,11 +2936,19 @@ async fn run_kwant_turn_inner(
             }
             if stalled {
                 let secs = stall_limit.map_or(0, |d| d.as_secs());
-                let text = format!(
-                    "⚠️ [{}] The model sent nothing for {secs} s, so this reply was stopped. Send your message again to retry.",
-                    target_kwant.name
-                );
-                tracing::warn!(kwant = %target_kwant.id, secs, "turn stopped by the stall watchdog");
+                // The first stall starts the same attempt again (same message, context and account);
+                // only a second one stops the turn with the line below
+                if super::turns::after_stall(stall_retried.is_some(), acted) == super::turns::StallStep::Retry {
+                    tracing::warn!(kwant = %target_kwant.id, secs, "turn stalled; retrying it once");
+                    let note = super::turns::stall_retry_note(secs);
+                    event_broadcast.send(RuntimeEvent::ThinkingDelta(note.clone()));
+                    notices.push(note);
+                    stall_retried = Some(secs);
+                    next_attempt = i;
+                    continue;
+                }
+                let text = super::turns::stall_stop_line(&target_kwant.name, secs, stall_retried.is_some());
+                tracing::warn!(kwant = %target_kwant.id, secs, retried = stall_retried.is_some(), "turn stopped by the stall watchdog");
                 event_broadcast.send(RuntimeEvent::TextDelta(text.clone()));
                 event_broadcast.send(RuntimeEvent::TurnComplete {
                     tokens: 0,
@@ -2913,6 +2963,7 @@ async fn run_kwant_turn_inner(
                     "kwant_id": target_kwant.id,
                     "kwant_name": target_kwant.name,
                     "stall_secs": secs,
+                    "retried": stall_retried.is_some(),
                 }));
                 break;
             }
@@ -3132,6 +3183,9 @@ async fn run_kwant_turn_inner(
                 }
                 if !switch_meta.is_empty() {
                     meta.get_or_insert_with(|| serde_json::json!({}))["failover"] = serde_json::Value::Array(switch_meta.clone());
+                }
+                if let Some(secs) = stall_retried {
+                    meta.get_or_insert_with(|| serde_json::json!({}))["stall_retried"] = serde_json::json!({ "stall_secs": secs });
                 }
                 if let Some(routing) = &opts.routing {
                     meta.get_or_insert_with(|| serde_json::json!({}))["routing"] = routing.clone();
@@ -5754,6 +5808,20 @@ pub async fn execute_tool(
 mod tests {
     use super::{scrub_urls, turn_failed_text, with_failure_meta};
     use serde_json::json;
+
+    /// 2026-11-09 10:24: Growth took "build the mockup" and built it; Frontend, handed the same
+    /// message, said "build nothing". A hand-off now builds on the decision already taken.
+    #[test]
+    fn a_handoff_builds_on_the_taken_ask_and_never_reverses_it() {
+        let p = super::handoff_prompt("Growth", "Build me a mockup of the pricing page", "Built it: mockup.png. @Frontend can you check the spacing?");
+        assert!(p.contains("Growth has already taken the user's request"), "{p}");
+        assert!(p.contains("don't undo, reverse or contradict it"), "{p}");
+        assert!(p.contains("If you disagree, say so in one line"), "{p}");
+        // The person's message and the teammate's reply are still there, the rule before the ask to reply
+        assert!(p.contains("Build me a mockup of the pricing page"));
+        assert!(p.contains("mockup.png"));
+        assert!(p.find("already taken").unwrap() < p.find("Reply to the user now").unwrap());
+    }
 
     #[test]
     fn a_failure_note_gets_the_callers_meta_but_keeps_its_kind() {
