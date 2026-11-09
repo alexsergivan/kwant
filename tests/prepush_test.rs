@@ -175,7 +175,7 @@ async fn a_switched_off_test_blocks_the_push_until_the_person_overrides() {
 
     // The check alone uses nothing up: a push the person then declines keeps the override
     let pass = prepush::check_command(&env.state, &env.a, push, &folder).await.expect("overridden");
-    assert_eq!(pass.overrides, [row.id.clone()]);
+    assert_eq!(pass.overrides, std::slice::from_ref(&row.id));
     assert_eq!(pass.pinned, None, "`-u` runs as written");
     let racer = prepush::check_command(&env.state, &env.a, push, &folder).await.expect("overridden");
     assert_eq!(env.state.db.prepush_card(&row.id).await.unwrap().unwrap().status, OVERRIDDEN);
@@ -522,7 +522,7 @@ async fn kwants_own_github_tools_go_through_the_pre_push_card() {
         payment: None,
     };
     let overrides = approver.prepush_gate(&req).await.expect("the override lets it go");
-    assert_eq!(overrides, [row.id.clone()]);
+    assert_eq!(overrides, std::slice::from_ref(&row.id));
     assert_eq!(approver.prepush_use(&overrides).await, None);
     assert_eq!(env.state.db.prepush_card(&row.id).await.unwrap().unwrap().status, PUSHED);
     // The same write again waits for the person again, on the permission prompt too
