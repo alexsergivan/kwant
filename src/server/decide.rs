@@ -504,9 +504,17 @@ pub const MAX_DECISIONS_PER_REPLY: usize = 1;
 /// Bot messages looked back over for cards the person has already seen.
 const SEEN_LOOKBACK: i64 = 30;
 
-/// Lowercase content words (3+ letters or any digit), for matching a choice against text.
+/// Words a choice's question can carry without changing which fork it is.
+const FILLER: &[&str] = &["the", "and", "for", "which", "what", "should", "with", "our", "your", "this", "that", "use", "pick"];
+
+/// Lowercase content words (3+ letters or any digit, not [`FILLER`]), for matching a choice
+/// against text.
 fn content_words(text: &str) -> Vec<String> {
-    words(&text.to_lowercase()).into_iter().filter(|w| w.chars().count() >= 3 || w.chars().any(|c| c.is_ascii_digit())).collect()
+    words(&text.to_lowercase())
+        .into_iter()
+        .filter(|w| w.chars().count() >= 3 || w.chars().any(|c| c.is_ascii_digit()))
+        .filter(|w| !FILLER.contains(&w.as_str()))
+        .collect()
 }
 
 /// Whether two choice questions are the same fork: equal once normalised, or the shorter one's
@@ -1003,7 +1011,7 @@ mod tests {
         assert_eq!((kept[0].index, kept[0].question.as_str()), (0, "Monogram"), "re-indexed from 0");
 
         // A card the chat already showed (or a choice they answered) isn't shown again
-        let seen = vec!["hero layout".to_string(), "Monogram: FM or plain?".to_string()];
+        let seen = vec!["hero layout?".to_string(), "Which monogram".to_string()];
         let kept = keep_unsettled(three(), "ok", &seen);
         assert_eq!(kept.len(), 1);
         assert_eq!((kept[0].index, kept[0].question.as_str()), (0, "Arrival buffer"));
