@@ -201,6 +201,11 @@ impl TurnRegistry {
         }
     }
 
+    /// Whether `turn_id` is running or waiting for its slot.
+    pub fn has_turn(&self, turn_id: &str) -> bool {
+        self.lock().turns.contains_key(turn_id)
+    }
+
     pub fn end_turn(&self, turn_id: &str) {
         let mut inner = self.lock();
         inner.turns.remove(turn_id);

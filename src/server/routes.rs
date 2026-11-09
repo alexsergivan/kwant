@@ -1855,6 +1855,11 @@ pub(super) struct TurnOpts {
     /// Every driver runs it that way or refuses it, and the turn then fails; it is never run with
     /// tools (see `crate::drivers::TurnInput::no_tools`). Default false.
     pub(super) no_tools: bool,
+    /// The turn may run beside a turn of the same bot in the same chat, instead of waiting for it
+    /// (P6's one reply per bot per chat). Only for the lead hearing its hand-offs while the turn
+    /// that handed them out still runs past the hold limit (see `delegation::continue_lead`):
+    /// waiting for that turn would hold the results until it ends, which the limit is there to stop.
+    pub(super) beside_running: bool,
 }
 
 impl TurnOpts {
@@ -1988,7 +1993,7 @@ pub(super) async fn turn_once(
     // One reply per bot per chat: a second message to a bot that is still answering here waits
     // for that reply (queued, "agent_busy") instead of starting a parallel turn (P6, 2026-11-09).
     // Unsaved views and purpose turns (checks, audits) aren't replies in the chat.
-    let one_per_chat = !opts.unsaved && opts.purpose.is_none();
+    let one_per_chat = !opts.unsaved && opts.purpose.is_none() && !opts.beside_running;
     let Some(_slot) = turns.acquire(&tag, one_per_chat, &scope.cancel_token, &scope.state.event_sender).await else {
         return Err("stopped by the user".into());
     };

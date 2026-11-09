@@ -1119,7 +1119,10 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     // The follow-up may hand on by @mention, like any lead reply: to the next teammate, or back to
     // one that just reported with a correction (not a mention that only credits it), within the
     // usual limits.
-    let outcome = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await;
+    // Past the hold limit the lead hears the results while the turn that handed them out still
+    // runs in this chat: that turn holds the chat, so this one runs beside it, not after it (P6)
+    let beside_running = batch.iter().chain([d]).filter_map(|b| b.lead_turn_id.as_deref()).any(|t| state.turns.has_turn(t));
+    let outcome = try_kwant_turn(&scope, &lead, prompt, TurnOpts { beside_running, ..TurnOpts::default() }).await;
     // Cards the lead was asked to review and didn't: one reminder for all of them (a failed turn counts too)
     remind_review(state, batch).await;
     if let Ok(reply) = outcome {
