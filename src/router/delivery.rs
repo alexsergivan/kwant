@@ -17,7 +17,8 @@ pub enum Deliverable {
     Ideas,
     /// "Show me", "a mockup", "a screenshot": an image shared in the chat.
     Visual,
-    /// "Fix …", "add …": the change made on a branch, checked, with a PR.
+    /// "Fix …", "add …", "the button is not aligned!!": the change made on a branch, checked, with
+    /// a PR; with a before and after picture when it's something the person looks at.
     Change,
     /// A question: a direct answer grounded in the project.
     Explain,
@@ -91,6 +92,18 @@ impl DeliveryPlan {
         Self { kind, show, who: Vec::new(), done_when: done_when.iter().map(|s| s.to_string()).collect(), source }
     }
 
+    /// The plan for a change to something the person looks at (a button, the styling, a page):
+    /// the PR link and a before and after picture.
+    pub fn visible_change(source: PlanSource) -> Self {
+        Self {
+            kind: Deliverable::Change,
+            show: vec![Show::Link, Show::Image],
+            who: Vec::new(),
+            done_when: vec!["the PR link is in the reply".into(), BEFORE_AFTER_DONE.into()],
+            source,
+        }
+    }
+
     /// Whether the person should get an image in the chat.
     pub fn wants_picture(&self) -> bool {
         self.show.contains(&Show::Image)
@@ -104,6 +117,10 @@ impl DeliveryPlan {
                 would change and a rough effort, and a mockup of each rendered in the browser with the project's real CSS, \
                 screenshotted and shared in the chat. End with one recommendation and one choice card for which to build.",
             Deliverable::Visual => "Something to see: render it and share the image in the chat, every time; describing it isn't enough.",
+            // A change to something they look at, whichever planner said so
+            Deliverable::Change if self.wants_picture() => "A change to something the person looks at: screenshot it before \
+                you change it, make the change on a branch, run the checks, open the PR and screenshot it after. Share both \
+                pictures in the chat, put the PR link in the reply, and say what you did and what you checked.",
             Deliverable::Change => "A change: make it on a branch, run the checks, open the PR and share a screenshot if the UI \
                 changed, then report what you did and what you checked.",
             Deliverable::Explain => "An answer: answer directly, grounded in the project's files or site.",
@@ -120,6 +137,9 @@ impl DeliveryPlan {
         line
     }
 }
+
+/// The check a visible change adds.
+pub const BEFORE_AFTER_DONE: &str = "a before and after screenshot is shared in the chat";
 
 /// Words that ask for ideas on their own.
 const IDEA_WORDS: &[&str] = &[
@@ -191,6 +211,38 @@ const PRAISE: &[&str] = &[
     "good", "great", "fine", "nice", "perfect", "amazing", "awesome", "cool", "beautiful", "excellent", "ok", "okay",
     "right", "wonderful", "brilliant", "fantastic", "gorgeous", "neat", "sweet", "lovely",
 ];
+/// Words that name something the person looks at: a change to it carries a before and after
+/// picture ("fix the button", "the styling is off"), unlike an export feature or a login bug.
+const VISIBLE_WORDS: &[&str] = &[
+    "button", "buttons", "align", "aligned", "aligns", "alignment", "misaligned", "unaligned", "style", "styles",
+    "styling", "styled", "stylesheet", "css", "colour", "colours", "color", "colors", "font", "fonts", "typography",
+    "design", "designs", "layout", "layouts", "spacing", "margin", "margins", "padding", "header", "headers",
+    "footer", "footers", "page", "pages", "mobile", "screen", "screens", "look", "looks", "ui", "logo", "icon",
+    "icons", "theme", "navbar", "banner", "card", "cards",
+];
+/// "style" in these is code style, not looks: "fix the code style", "the lint style".
+const CODE_STYLE_WORDS: &[&str] = &["code", "lint", "linter", "clippy", "rustfmt", "prettier", "eslint", "format", "formatting"];
+const STYLE_WORDS: &[&str] = &["style", "styles", "styling", "styled"];
+/// "look" before these isn't about looks: "look at the logs", "it looks like the export fails".
+const NOT_LOOKS_AFTER: &[&str] = &["at", "into", "for", "like", "up", "through", "over"];
+/// Words that say something is wrong with it: with a [`VISIBLE_WORDS`] word, a statement is a
+/// request to fix it ("the button is not aligned with booktun.ing styling!!!!").
+const DEFECT_WORDS: &[&str] = &[
+    "not", "isn't", "isnt", "aren't", "doesn't", "doesnt", "don't", "dont", "no", "wrong", "broken", "misaligned",
+    "unaligned", "off", "ugly", "overlap", "overlaps", "overlapping", "inconsistent", "mismatch", "mismatched",
+    "differences", "different", "weird", "messy", "cropped", "crooked", "blurry", "bad", "too", "missing", "cut",
+    "bug", "buggy", "glitch", "glitchy",
+];
+/// Defect words that ask for a fix on their own, in a statement ("differences again!!"), as
+/// "Fix differences!" does with its verb.
+const DEFECT_ASKS: &[&str] = &["differences", "misaligned", "unaligned"];
+/// What a bare change ("fix it", "Fix differences!") is made of besides its verb: nothing names
+/// what it is about, so the person's earlier message does.
+const BARE_OBJECTS: &[&str] = &[
+    "it", "this", "that", "these", "those", "them", "differences", "difference", "issue", "issues", "problem",
+    "problems", "everything", "all", "both", "same", "again", "asap", "up", "one", "ones", "thing", "things", "there",
+    "here", "right", "away", "already", "too",
+];
 /// A "no" makes a clause more than thanks: "this is not good".
 const NEGATIONS: &[&str] =
     &["not", "no", "nope", "don't", "dont", "isn't", "doesn't", "never", "can't", "won't", "wrong", "broken"];
@@ -254,27 +306,78 @@ fn without_acknowledgements(text: &str) -> Option<String> {
 /// oldest first: a short follow-up with nothing of its own to go on ("more", "and the other one")
 /// expects what the last of them did. A greeting, a thank-you or an acknowledgement ("lgtm",
 /// "love it") is [`Deliverable::Other`] and inherits nothing; so is a statement nothing matched
-/// ("the button is not aligned!!"): only a question gets [`Deliverable::Explain`].
+/// ("the login is slow"). A complaint about something visible ("the button is not aligned!!") is
+/// a [`Deliverable::Change`]; only a question gets [`Deliverable::Explain`].
 pub fn expected_kind(prompt: &str, recent: &[&str]) -> Deliverable {
-    if super::team::is_small_talk(prompt) {
-        return Deliverable::Other;
-    }
-    let Some(own) = without_acknowledgements(prompt) else { return Deliverable::Other };
-    if super::team::is_small_talk(&own) {
-        return Deliverable::Other;
-    }
-    classify(&own).unwrap_or_else(|| {
-        let inherited = super::team::reads_as_follow_up(&own)
-            .then(|| recent.iter().rev().find_map(|m| without_acknowledgements(m).and_then(|t| classify(&t))))
-            .flatten();
-        inherited.unwrap_or(Deliverable::Other)
-    })
+    plan_kind(prompt, recent).0
 }
 
 /// The fast plan for every turn, from the message's words alone (no model call): its kind, what
-/// to show and the plain checks for it. `who` stays empty; Juno's analyzer fills it for team chats.
+/// to show and the plain checks for it. A change to something the person looks at shows a before
+/// and after picture ([`DeliveryPlan::visible_change`]). `who` stays empty; Juno's analyzer fills
+/// it for team chats.
 pub fn keyword_plan(prompt: &str, recent: &[&str]) -> DeliveryPlan {
-    DeliveryPlan::for_kind(expected_kind(prompt, recent), PlanSource::Keywords)
+    match plan_kind(prompt, recent) {
+        (Deliverable::Change, true) => DeliveryPlan::visible_change(PlanSource::Keywords),
+        (kind, _) => DeliveryPlan::for_kind(kind, PlanSource::Keywords),
+    }
+}
+
+/// The kind `prompt` expects, and for a change whether it's to something the person looks at:
+/// its own words say so, or for a bare "fix it" / "Fix differences!" or a follow-up ("again"),
+/// the person's last earlier message that asked for something.
+fn plan_kind(prompt: &str, recent: &[&str]) -> (Deliverable, bool) {
+    if super::team::is_small_talk(prompt) {
+        return (Deliverable::Other, false);
+    }
+    let Some(own) = without_acknowledgements(prompt) else { return (Deliverable::Other, false) };
+    if super::team::is_small_talk(&own) {
+        return (Deliverable::Other, false);
+    }
+    // The last earlier ask, and its words
+    let earlier = || recent.iter().rev().find_map(|m| without_acknowledgements(m).and_then(|t| classify(&t).map(|k| (k, t))));
+    match classify(&own) {
+        Some(Deliverable::Change) => {
+            let visible = names_something_visible(&own)
+                || (is_bare_change(&own) && earlier().is_some_and(|(_, t)| names_something_visible(&t)));
+            (Deliverable::Change, visible)
+        }
+        Some(kind) => (kind, false),
+        None if super::team::reads_as_follow_up(&own) => match earlier() {
+            Some((kind, t)) => (kind, kind == Deliverable::Change && names_something_visible(&t)),
+            None => (Deliverable::Other, false),
+        },
+        None => (Deliverable::Other, false),
+    }
+}
+
+/// Whether `text` names something the person looks at (see [`VISIBLE_WORDS`]).
+fn names_something_visible(text: &str) -> bool {
+    let words = tokens(text);
+    let code_style = any_in(&words, CODE_STYLE_WORDS);
+    words.iter().enumerate().any(|(i, w)| {
+        let w = w.as_str();
+        if !VISIBLE_WORDS.contains(&w) || (code_style && STYLE_WORDS.contains(&w)) {
+            return false;
+        }
+        // "look at the logs", "it looks like the export fails"
+        let next = words.get(i + 1).map(String::as_str);
+        !(matches!(w, "look" | "looks") && next.is_some_and(|n| NOT_LOOKS_AFTER.contains(&n)))
+    })
+}
+
+/// Whether a change ask names nothing but its verb and a pointer back ("fix it", "Fix differences!").
+fn is_bare_change(text: &str) -> bool {
+    tokens(text).iter().all(|w| {
+        let w = w.as_str();
+        LEAD_IN.contains(&w) || CHANGE_VERBS.contains(&w) || ARTICLES.contains(&w) || BARE_OBJECTS.contains(&w)
+    })
+}
+
+/// Whether `words` is a statement that something visible is wrong ("the button is not aligned
+/// with booktun.ing styling!!!!", "the colours are off on mobile"), not a question about it.
+fn complains_about_something_visible(text: &str, words: &[String]) -> bool {
+    any_in(words, DEFECT_WORDS) && names_something_visible(text)
 }
 
 /// What a turn knows when it picks its plan (see [`plan_for_turn`]).
@@ -331,6 +434,17 @@ fn classify(text: &str) -> Option<Deliverable> {
     if any_in(&words, IDEA_WORDS) || feature_ask || IDEA_PHRASES.iter().any(|p| joined.contains(p)) {
         return Some(Deliverable::Ideas);
     }
+    // A complaint about something visible asks for the fix ("the button is not aligned with
+    // booktun.ing styling!!!!"); a question about it ("why it not aligned…???") asks why, and
+    // "show me the broken footer" asks to see it.
+    let question = text.contains('?') || opens_with_question;
+    let asks_to_see = joined.contains("show me")
+        || joined.contains("show us")
+        || first.is_some_and(|w| SEE_WORDS.contains(&w.as_str()))
+        || any_in(&words, PICTURE_WORDS);
+    if !question && !asks_to_see && complains_about_something_visible(text, &words) {
+        return Some(Deliverable::Change);
+    }
     if any_in(&words, SEE_WORDS) || joined.contains("how it looks") || joined.contains("what it looks like") {
         return Some(Deliverable::Visual);
     }
@@ -338,10 +452,10 @@ fn classify(text: &str) -> Option<Deliverable> {
         return Some(Deliverable::Visual);
     }
     // "no, just explain it"
-    if text.contains('?') || opens_with_question || any_in(&words, &["explain", "clarify"]) {
+    if question || any_in(&words, &["explain", "clarify"]) {
         return Some(Deliverable::Explain);
     }
-    if any_in(&words, CHANGE_VERBS) {
+    if any_in(&words, CHANGE_VERBS) || any_in(&words, DEFECT_ASKS) {
         return Some(Deliverable::Change);
     }
     None
@@ -354,30 +468,146 @@ mod tests {
 
     #[test]
     fn his_messages_map_to_what_they_ask_for() {
-        // Oleks's messages from the 2026-11-09 chat, verbatim (release-080/proactive/conversation-2026-11-09.md)
-        let cases = [
-            ("Hey team! What some cool feature we can add?", Ideas),
-            ("mobile sticky booking CTA -> what is this??", Explain),
-            ("Wtf we need it for booktun.ing???", Explain),
-            ("show me how it lloks on page", Visual),
-            (
-                "i want to see this ---> The phone \"Find your book\" bar stays parked in Growth's backlog until analytics is connected.",
-                Visual,
-            ),
-            ("show me mockup image", Visual),
-            ("Screenshot give me!", Visual),
-            ("Show mw screenshot in chat!!", Visual),
-            ("why it not aligned with booktun.ing styling???", Explain),
-            // A statement nothing matched: no hint rather than "answer directly"
-            ("the button is not aligned with booktun.ing styling!!!!", Other),
-            ("Fix differences!", Change),
+        use Show::{Image, Link, Text};
+        let phone_bar = "i want to see this ---> The phone \"Find your book\" bar stays parked in Growth's backlog until analytics is connected.";
+        // Oleks's messages from the 2026-11-09 chat, verbatim and in order, each planned with the
+        // ones before it as `recent` (release-080/proactive/conversation-2026-11-09.md). He sent
+        // the phone bar message twice.
+        let sends: [(&str, Deliverable, &[Show]); 12] = [
+            ("Hey team! What some cool feature we can add?", Ideas, &[Image, Text]),
+            ("mobile sticky booking CTA -> what is this??", Explain, &[Text]),
+            ("Wtf we need it for booktun.ing???", Explain, &[Text]),
+            ("show me how it lloks on page", Visual, &[Image]),
+            (phone_bar, Visual, &[Image]),
+            (phone_bar, Visual, &[Image]),
+            ("show me mockup image", Visual, &[Image]),
+            ("Screenshot give me!", Visual, &[Image]),
+            ("Show mw screenshot in chat!!", Visual, &[Image]),
+            ("why it not aligned with booktun.ing styling???", Explain, &[Text]),
+            // A complaint about something visible: fix it, with a before and after picture
+            ("the button is not aligned with booktun.ing styling!!!!", Change, &[Link, Image]),
+            // Bare: what it fixes is the button in his message before
+            ("Fix differences!", Change, &[Link, Image]),
         ];
-        for (msg, want) in cases {
-            let plan = keyword_plan(msg, &[]);
-            assert_eq!(plan.kind, want, "{msg}");
+        let msgs: Vec<&str> = sends.iter().map(|s| s.0).collect();
+        for (i, (msg, kind, show)) in sends.iter().enumerate() {
+            let plan = keyword_plan(msg, &msgs[..i]);
+            assert_eq!(plan.kind, *kind, "{msg}");
+            assert_eq!(plan.show, show.to_vec(), "{msg}");
             assert_eq!(plan.source, PlanSource::Keywords);
             assert!(plan.who.is_empty());
+            let before_after = plan.done_when.iter().any(|d| d == BEFORE_AFTER_DONE);
+            assert_eq!(before_after, *kind == Change, "{msg}: {:?}", plan.done_when);
+            if *kind == Change {
+                assert!(plan.wants_picture(), "{msg}");
+                assert!(plan.hint().contains("screenshot it before you change it"), "{msg}: {}", plan.hint());
+            }
         }
+    }
+
+    #[test]
+    fn a_change_to_something_visible_shows_before_and_after() {
+        // Rigel's QA of #470 open item 1: "fix the misaligned button" pushed with no picture
+        for msg in [
+            "fix the misaligned button",
+            "Fix the design of the footer",
+            "the button is too small, make it bigger",
+            "make the header font bigger",
+            "change the CSS so the cards have more padding",
+            "update the colours on the pricing page",
+            "fix the layout on mobile",
+            "the spacing in the footer is off",
+            "the colours are wrong on mobile",
+            "the login page is broken",
+            "it looks bad on my screen",
+            "the margins are inconsistent",
+            "the logo is cropped",
+        ] {
+            let plan = keyword_plan(msg, &[]);
+            assert_eq!(plan.kind, Change, "{msg}");
+            assert_eq!(plan.show, vec![Show::Link, Show::Image], "{msg}");
+            assert_eq!(plan.done_when, vec!["the PR link is in the reply".to_string(), BEFORE_AFTER_DONE.to_string()], "{msg}");
+            assert_eq!(plan, DeliveryPlan::visible_change(PlanSource::Keywords), "{msg}");
+            let hint = plan.hint();
+            assert!(hint.contains("screenshot it before you change it"), "{msg}: {hint}");
+            assert!(hint.contains("screenshot it after. Share both pictures in the chat, put the PR link in the reply"), "{hint}");
+            assert!(hint.contains("Show in the chat: a link (the PR or page), an image."), "{hint}");
+            assert!(hint.contains("Done when: the PR link is in the reply; a before and after screenshot is shared in the chat."), "{hint}");
+        }
+        // Nothing to look at: the PR link, no picture expected
+        for msg in [
+            "Please add the export feature",
+            "fix the login bug",
+            "please update the README",
+            "Add a screenshot to the README",
+            "delete the old dark image",
+            "fix the code style",
+            "Please fix the login bug, see the log below",
+            "fix the crash, look at the logs",
+            "fix it, it looks like the export fails",
+            "refactor the router",
+            "Fix it",
+            "Fix differences!",
+            "differences again!!",
+        ] {
+            let plan = keyword_plan(msg, &[]);
+            assert_eq!(plan.kind, Change, "{msg}");
+            assert_eq!(plan, DeliveryPlan::for_kind(Change, PlanSource::Keywords), "{msg}");
+            assert!(!plan.wants_picture(), "{msg}");
+            assert!(!plan.hint().contains("before you change it"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn a_bare_fix_looks_at_what_was_asked_before() {
+        let visible = DeliveryPlan::visible_change(PlanSource::Keywords);
+        let link = DeliveryPlan::for_kind(Change, PlanSource::Keywords);
+        // The earlier ask names something visible: the bare fix is about it
+        assert_eq!(keyword_plan("Fix differences!", &["why it not aligned with booktun.ing styling???"]), visible);
+        assert_eq!(keyword_plan("fix it", &["the header is cut off on mobile", "thanks!"]), visible);
+        assert_eq!(keyword_plan("Fix it please", &["show me the footer"]), visible);
+        // A follow-up keeps the earlier change and what it was about
+        assert_eq!(keyword_plan("again", &["the button is not aligned with booktun.ing styling!!!!"]), visible);
+        // ...and the earlier ask names nothing visible: no picture
+        assert_eq!(keyword_plan("fix it", &["why does the export fail?"]), link);
+        assert_eq!(keyword_plan("again", &["please update the README"]), link);
+        // A fix that names its own object doesn't borrow the earlier one's
+        assert_eq!(keyword_plan("fix the login bug", &["the button is not aligned!!"]), link);
+        // Only the last ask counts, not one further back
+        assert_eq!(keyword_plan("fix it", &["the header is off", "why does the export fail?"]), link);
+    }
+
+    #[test]
+    fn complaints_questions_and_thanks() {
+        // A complaint about something visible is a request to fix it, with Rigel's QA wordings
+        for msg in [
+            "the button is not aligned with booktun.ing styling!!!!",
+            "the button is not aligned!!",
+            "The header isn't aligned with the logo",
+            "the footer doesn't match the site styling",
+            "the cards are misaligned",
+            "differences in the button styling!!",
+            "the dark theme looks wrong",
+        ] {
+            assert_eq!(keyword_plan(msg, &[]), DeliveryPlan::visible_change(PlanSource::Keywords), "{msg}");
+        }
+        // A question about it asks why
+        for msg in [
+            "why it not aligned with booktun.ing styling???",
+            "why is the button not aligned?",
+            "is the header wrong on mobile?",
+        ] {
+            assert_eq!(expected_kind(msg, &[]), Explain, "{msg}");
+        }
+        // Asking to see it is still something to see
+        assert_eq!(expected_kind("show me the broken footer", &[]), Visual);
+        assert_eq!(expected_kind("screenshot of the misaligned button please", &[]), Visual);
+        // Praise and statements with nothing wrong in them ask for nothing
+        for msg in ["Thanks, looks great!", "the button looks good", "the header is fine now, thanks", "the login is slow"] {
+            assert_ne!(expected_kind(msg, &[]), Change, "{msg}");
+        }
+        assert_eq!(expected_kind("Thanks, looks great!", &[]), Other);
+        assert_eq!(expected_kind("the login is slow", &[]), Other);
     }
 
     #[test]
@@ -396,7 +626,9 @@ mod tests {
             ("why does the build fail?", Explain),
             ("How do I fix this?", Explain),
             ("can you explain the router?", Explain),
-            ("the login page is broken", Other),
+            // A complaint about a page: fix it (with a before and after picture)
+            ("the login page is broken", Change),
+            ("the login is slow", Other),
             ("send the newsletter", Other),
             ("thanks!", Other),
             ("ok, go ahead", Other),
@@ -552,6 +784,12 @@ mod tests {
         assert!(ideas.hint().contains("Done when: one mockup image per idea is shared in the chat."));
         assert!(DeliveryPlan::for_kind(Visual, PlanSource::Keywords).wants_picture());
         assert!(!DeliveryPlan::for_kind(Change, PlanSource::Keywords).wants_picture());
+        let visible = DeliveryPlan::visible_change(PlanSource::Keywords);
+        assert!(visible.wants_picture());
+        assert!(visible.hint().starts_with("\n\n[What to deliver] A change to something the person looks at:"));
+        assert!(!visible.hint().trim().contains('\n'));
+        let plain = DeliveryPlan::for_kind(Change, PlanSource::Keywords).hint();
+        assert!(plain.contains("share a screenshot if the UI changed") && !plain.contains("before you change it"), "{plain}");
         // Another planner's plan renders the same way, with its own show and checks
         let analyzer = DeliveryPlan {
             kind: Change,
@@ -562,6 +800,8 @@ mod tests {
         };
         let hint = analyzer.hint();
         assert!(hint.contains("Show in the chat: a link (the PR or page), an image. Done when: the branch is pushed."), "{hint}");
+        // An analyzer's Change with an image gets the before and after wording too
+        assert!(hint.contains("screenshot it before you change it"), "{hint}");
         // It round-trips as JSON, for the analyzer's output and the turn's record
         let json = serde_json::to_string(&analyzer).unwrap();
         assert!(json.contains("\"kind\":\"change\"") && json.contains("\"source\":\"analyzer\""), "{json}");

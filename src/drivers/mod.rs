@@ -1146,6 +1146,7 @@ pub(crate) mod tests {
             ("Hey team! What some cool feature we can add?", Deliverable::Ideas),
             ("show me mockup image", Deliverable::Visual),
             ("Fix differences!", Deliverable::Change),
+            ("the button is not aligned with booktun.ing styling!!!!", Deliverable::Change),
             ("mobile sticky booking CTA -> what is this??", Deliverable::Explain),
         ];
         for (msg, kind) in messages {
