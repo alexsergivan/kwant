@@ -1,0 +1,94 @@
+# THROWAWAY (0.8.0 section C spike). Never merged: lives only on vega-080-browser-spike.
+# Measures moli vs Chrome for Testing with spike/probe.mjs, one browser at a time.
+name: browser-spike
+
+on:
+  push:
+    branches: [vega-080-browser-spike]
+    paths: ['spike/**', '.github/workflows/browser-spike.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MOLI_VERSION: v1.1.22
+  CFT_VERSION: 157.0.8103.38
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            moli: moli-aarch64-apple-darwin.tar.gz
+            cft: mac-arm64
+            ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
+          - os: windows-latest
+            moli: moli-x86_64-pc-windows-msvc.zip
+            cft: win64
+            ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
+          - os: ubuntu-latest
+            moli: moli-x86_64-unknown-linux-gnu.tar.gz
+            cft: linux64
+            ua: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: spike
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Download both browsers
+        run: |
+          set -euo pipefail
+          mkdir -p dl/moli dl/cft out
+          curl -fsSL -o "dl/${{ matrix.moli }}" "https://github.com/lexmount/moli/releases/download/$MOLI_VERSION/${{ matrix.moli }}"
+          curl -fsSL -o dl/cft.zip "https://storage.googleapis.com/chrome-for-testing-public/$CFT_VERSION/${{ matrix.cft }}/chrome-${{ matrix.cft }}.zip"
+          case "${{ matrix.moli }}" in *.zip) unzip -q "dl/${{ matrix.moli }}" -d dl/moli ;; *) tar xzf "dl/${{ matrix.moli }}" -C dl/moli ;; esac
+          unzip -q dl/cft.zip -d dl/cft
+          {
+            echo "moli_download_bytes $(wc -c < "dl/${{ matrix.moli }}")"
+            echo "cft_download_bytes $(wc -c < dl/cft.zip)"
+            echo "moli_unpacked_kib $(du -sk dl/moli | cut -f1)"
+            echo "cft_unpacked_kib $(du -sk dl/cft | cut -f1)"
+          } | tee out/sizes.txt
+          MOLI=$(find "$PWD/dl/moli" -type f \( -name moli -o -name moli.exe \) | head -1)
+          case "${{ matrix.cft }}" in
+            mac-*) CFT="$PWD/dl/cft/chrome-${{ matrix.cft }}/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" ;;
+            win64) CFT="$PWD/dl/cft/chrome-win64/chrome.exe" ;;
+            *) CFT="$PWD/dl/cft/chrome-linux64/chrome" ;;
+          esac
+          chmod +x "$MOLI" "$CFT" || true
+          OUT="$PWD/out"
+          if command -v cygpath >/dev/null; then MOLI=$(cygpath -w "$MOLI"); CFT=$(cygpath -w "$CFT"); OUT=$(cygpath -w "$OUT"); fi
+          echo "MOLI=$MOLI" >> "$GITHUB_ENV"
+          echo "CFT=$CFT" >> "$GITHUB_ENV"
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          "$MOLI" --version | tee -a out/sizes.txt || true
+      - name: Probe Chrome for Testing
+        continue-on-error: true
+        run: |
+          EXTRA=""
+          [ "$RUNNER_OS" = Linux ] && EXTRA="--no-sandbox"
+          node spike/probe.mjs cft 9411 "$OUT/cft" "$CFT" "--user-data-dir={profile}" "--remote-debugging-port={port}" --remote-debugging-address=127.0.0.1 --no-first-run --no-default-browser-check --headless=new --window-size=1280,800 $EXTRA "--user-agent=${{ matrix.ua }}" about:blank
+      - name: Probe moli
+        continue-on-error: true
+        run: |
+          node spike/probe.mjs moli 9412 "$OUT/moli" "$MOLI" serve --layout --resource --port "{port}" --profile-dir "{profile}" --user-agent "${{ matrix.ua }}"
+      - name: Probe moli with its default user agent (Google sign-in only matters)
+        continue-on-error: true
+        run: |
+          node spike/probe.mjs moli 9413 "$OUT/moli-default-ua" "$MOLI" serve --layout --resource --port "{port}" --profile-dir "{profile}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-${{ matrix.os }}
+          path: out/
+          retention-days: 7
