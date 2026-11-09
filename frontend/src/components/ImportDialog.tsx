@@ -383,7 +383,7 @@ export const PreviewView: React.FC<{
           const off = skip.has(b.ref);
           return (
             <li key={b.ref} className={`${card} p-3 space-y-2 ${off ? 'opacity-50' : ''}`}>
-              <label className="flex items-start gap-2.5 cursor-pointer min-h-11 sm:min-h-0" data-bot-tick>
+              <label className="flex items-start gap-2.5 cursor-pointer max-md:min-h-11" data-bot-tick>
                 <input type="checkbox" checked={!off} onChange={() => onToggle(b.ref)} className="mt-0.5 accent-sky-500" aria-label={`Import ${b.name}`} />
                 <span className="flex-1 min-w-0">
                   <span className="block text-sm font-medium text-zinc-100 break-words">{b.name}</span>
@@ -423,10 +423,12 @@ export const PreviewView: React.FC<{
       )}
       <Notes items={general.warnings} tone="warn" label="Worth a look" />
       <Notes items={[...general.dropped, ...omitted]} tone="drop" label="Not brought over" />
-      <p className="flex gap-2 text-[11px] text-zinc-400 rounded-lg bg-zinc-900/60 p-2.5">
-        <Info size={13} className="shrink-0 mt-px text-sky-400" aria-hidden="true" />
-        <span>To keep you safe, imported bots start with no tools, their skills wait for your OK, and routines start paused. Keys are removed.</span>
-      </p>
+      {(bots.length > 0 || shared.length > 0) && (
+        <p className="flex gap-2 text-[11px] text-zinc-400 rounded-lg bg-zinc-900/60 p-2.5">
+          <Info size={13} className="shrink-0 mt-px text-sky-400" aria-hidden="true" />
+          <span>To keep you safe, imported bots start with no tools, their skills wait for your OK, and routines start paused. Keys are removed.</span>
+        </p>
+      )}
     </div>
   );
 };
@@ -898,7 +900,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
               <ArrowLeft size={17} />
             </button>
           )}
-          <h2 id="import-title" className="flex-1 min-w-0 text-sm font-semibold truncate">{title}</h2>
+          <h2 id="import-title" className={`flex-1 min-w-0 text-sm font-semibold truncate ${phone && (step.kind === 'choose' || step.kind === 'done') ? 'pl-2' : ''}`}>{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className={`${iconBtn} rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800`}>
             <X size={18} />
           </button>

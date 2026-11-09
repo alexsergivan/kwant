@@ -647,8 +647,14 @@ test('item 6: 44 px targets on phone — per-bot tick rows and the Open on GitHu
   const raw = m.renderToStaticMarkup(h(m.PreviewView, { preview: p, github: p.github, skip: new Set(), onToggle() {} }));
   const ticks = raw.match(/<label class="[^"]*"[^>]*data-bot-tick/g) ?? [];
   assert.equal(ticks.length, 3);
-  for (const t of ticks) assert.match(t, /min-h-11 sm:min-h-0/);
-  assert.match(raw, /class="[^"]*min-h-11 -my-3\.5[^"]*sm:min-h-0[^"]*"[^>]*>Open/);
+  // The phone layout runs to 767 px (PHONE_QUERY), so the 44 px targets use max-md:, not an sm: reset at 640 px.
+  for (const t of ticks) {
+    assert.match(t, /max-md:min-h-11/);
+    assert.doesNotMatch(t, /(^|[\s"])(min-h-11|sm:min-h-0)\b/);
+  }
+  const link = raw.match(/<a [^>]*class="([^"]*)"[^>]*>Open/)?.[1] ?? '';
+  for (const c of ['max-md:min-h-11', 'max-md:-my-3.5', 'max-md:px-2', 'max-md:-mr-2']) assert.ok(link.split(/\s+/).includes(c), `${c} in ${link}`);
+  assert.doesNotMatch(link, /\bsm:/);
 });
 
 test('item 7: an empty GitHub preview doesn’t say "Untick any you don’t want"', () => {
@@ -657,9 +663,13 @@ test('item 7: an empty GitHub preview doesn’t say "Untick any you don’t want
   assert.doesNotMatch(out, /Untick/);
   assert.match(out, /Nothing here can be brought in: no bots and no skills\./);
   assert.match(out, /SKILL\.md is over 8,000 characters/);
-  // With bots, the untick line stays.
+  // Nothing to bring, so no "To keep you safe" line (ui-check-471 Later 2).
+  assert.doesNotMatch(out, /To keep you safe/);
+  // With bots, the untick line and the safety line stay.
   const b = demo.githubBotsPreview();
-  assert.match(html(m.PreviewView, { preview: b, github: b.github, skip: new Set(), onToggle() {} }), /3 bots will be created\. Untick any you don’t want\./);
+  const withBots = html(m.PreviewView, { preview: b, github: b.github, skip: new Set(), onToggle() {} });
+  assert.match(withBots, /3 bots will be created\. Untick any you don’t want\./);
+  assert.match(withBots, /To keep you safe, imported bots start with no tools/);
 });
 
 test('item 11: the phone header has one horizontal padding (px-2), desktop keeps px-4', async () => {
@@ -674,6 +684,36 @@ test('item 11: the phone header has one horizontal padding (px-2), desktop keeps
     d = await open();
     const c = header(d);
     assert.ok(c.includes('h-14') && c.includes('px-2') && !c.includes('px-4'), c.join(' '));
+  } finally {
+    g.window.matchMedia = was;
+  }
+});
+
+test('ui-check-471 must-fix: on phone the title gets pl-2 on Choose and Done (no Back), not on other steps', async () => {
+  const cls = (d) => d.dlg().querySelector('#import-title').className.split(/\s+/);
+  // Desktop: never pl-2.
+  let d = await open();
+  assert.ok(!cls(d).includes('pl-2'), cls(d).join(' '));
+  cleanup.forEach((f) => f());
+  cleanup = [];
+  const was = g.window.matchMedia;
+  g.window.matchMedia = (q) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} });
+  try {
+    const p = demo.githubBotsPreview();
+    d = await open({ over: { 'POST /api/import/github/preview': () => json(p), 'POST /api/import/apply': () => json(demo.applied(p)) } });
+    assert.ok(cls(d).includes('pl-2'), `choose: ${cls(d).join(' ')}`);
+    await d.click(/^GitHub link/);
+    assert.ok(!cls(d).includes('pl-2'), `github: ${cls(d).join(' ')}`);
+    typeUrl(d.dlg, 'https://github.com/example-team/ai-team');
+    await settle();
+    primaryOf(d.dlg).click();
+    await settle(12);
+    assert.equal(primaryOf(d.dlg).textContent.trim(), 'Import 3 bots');
+    assert.ok(!cls(d).includes('pl-2'), `preview: ${cls(d).join(' ')}`);
+    primaryOf(d.dlg).click();
+    await settle(12);
+    assert.match(d.dlg().textContent, /Imported 3 bots/);
+    assert.ok(cls(d).includes('pl-2'), `done: ${cls(d).join(' ')}`);
   } finally {
     g.window.matchMedia = was;
   }

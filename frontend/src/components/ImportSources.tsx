@@ -416,7 +416,7 @@ export const GithubSourceBlock: React.FC<{ github: GithubInfo }> = ({ github: g 
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`Open ${g.owner}/${g.repo} on GitHub`}
-          className={`shrink-0 flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 rounded ${ring} min-h-11 -my-3.5 px-2 -mr-2 sm:min-h-0 sm:my-0 sm:px-0 sm:mr-0`}
+          className={`shrink-0 flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 rounded ${ring} max-md:min-h-11 max-md:-my-3.5 max-md:px-2 max-md:-mr-2`}
         >
           Open <ExternalLink size={12} aria-hidden="true" />
         </a>
