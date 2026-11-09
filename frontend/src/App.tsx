@@ -81,6 +81,7 @@ import {
   Delegation,
   DelegationMeta,
   Thread,
+  TrackedTurn,
   TurnMap,
   applyDelegation,
   applyTurnEvent,
@@ -89,9 +90,11 @@ import {
   messageContextId,
   parseDelegationMeta,
   queuePosition,
+  queuedInChat,
   reloadOnTurnEnd,
   shouldRenderDelta,
   streamTarget,
+  waitsForOtherBot,
   threadBadge,
   threadsApi,
   turnsIn,
@@ -3139,10 +3142,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The open chat's running turn's live steps (the newest, when several reply at once).
   const activityHere = Object.values(activity).filter((a) => a.ctx === openCtx && turns[a.turnId]).pop() ?? null;
   const needsYouByKwant = openStepsByKwant(humanSteps);
-  const waiting = openTurns.some((t) => t.state === 'running') ? undefined : openTurns.find((t) => t.state === 'queued');
-  const queuedHere: QueuedState | null = waiting
-    ? { position: queuePosition(turns, waiting.turn_id), reason: waiting.reason ?? 'agent_busy', slots: waiting.slots, speaker: kwantName(waiting.kwant_id) ?? live[openCtx] ?? 'The bot' }
-    : null;
+  const chatQueue = queuedInChat(turns, openCtx);
+  const asQueued = (t: TrackedTurn): QueuedState => ({
+    position: queuePosition(turns, t.turn_id),
+    reason: t.reason ?? 'agent_busy',
+    slots: t.slots,
+    speaker: kwantName(t.kwant_id) ?? live[openCtx] ?? 'The bot',
+    turnId: t.turn_id,
+  });
+  const queuedHere: QueuedState | null = chatQueue.alone ? asQueued(chatQueue.alone) : null;
+  // P6: a turn waiting behind the reply that runs here shows under it, not hidden until it starts.
+  const queuedBeside: QueuedState[] = chatQueue.beside.map((t) => ({ ...asQueued(t), named: waitsForOtherBot(turns, openCtx, t) }));
 
   // The bot's conversations, the open thread's controls, and "working on…" elsewhere.
   const agentThreads = currentKwant ? threadsByKwant[currentKwant.id] : undefined;
@@ -3828,6 +3838,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             ) : null
           }
           queued={queuedHere}
+          queuedBeside={queuedBeside}
           renderDelegation={renderDelegation}
           switchNotes={switchNotes}
           renderQuestion={renderQuestion}

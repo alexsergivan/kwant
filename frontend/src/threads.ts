@@ -212,6 +212,29 @@ export const turnsIn = (turns: TurnMap, contextId: string): TrackedTurn[] =>
     .filter((t) => t.context_id === contextId)
     .sort((a, b) => a.seq - b.seq);
 
+/**
+ * The open chat's waiting turns. `alone`: the first queued turn while nothing runs here, which takes
+ * the live bubble's place ("In line."). `beside`: every turn queued while a reply runs here (P6 #467:
+ * a second message to a bot still answering waits with `agent_busy`), oldest first, drawn under the
+ * running reply so the person sees it was received.
+ */
+export function queuedInChat(turns: TurnMap, contextId: string): { alone: TrackedTurn | null; beside: TrackedTurn[] } {
+  const here = turnsIn(turns, contextId);
+  const queued = here.filter((t) => t.state === 'queued');
+  if (!here.some((t) => t.state === 'running')) return { alone: queued[0] ?? null, beside: [] };
+  return { alone: null, beside: queued };
+}
+
+/**
+ * A turn waiting beside a running reply belongs to a different bot than any reply running in this
+ * chat (a room: Scout waits behind its own work elsewhere while Marketer answers here). Its line then
+ * names that bot instead of saying "this bot" under someone else's reply.
+ */
+export function waitsForOtherBot(turns: TurnMap, contextId: string, waiting: TrackedTurn): boolean {
+  const running = turnsIn(turns, contextId).filter((t) => t.state === 'running');
+  return running.length > 0 && !running.some((t) => t.kwant_id === waiting.kwant_id);
+}
+
 /** The kwant's turns outside its direct chat (threads, delegations, team channels), oldest first. */
 export const backgroundTurns = (turns: TurnMap, kwantId: string): TrackedTurn[] =>
   Object.values(turns)
