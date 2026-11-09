@@ -399,31 +399,45 @@ impl Database {
         Ok(space.map(|s| (s, role)))
     }
 
-    /// Adds a bot to a team and to the team's `team-<name>` channel.
+    /// Adds a bot to a team and to the team's `team-<name>` channel. The member lists are read
+    /// inside the write transaction: read before it, a bot deleted in between came back into
+    /// the list as an id of a bot that no longer exists. Ids of bots that no longer exist are
+    /// dropped, and a `kwant_id` that isn't a bot is not added.
     pub async fn add_team_member(&self, team_id: &str, kwant_id: &str) -> Result<bool, DbError> {
-        let Some(team) = self.get_team(team_id).await? else {
+        let mut tx = self.begin_write().await?;
+        let team: Option<(String, String, String)> = sqlx::query_as("SELECT name, space_id, member_kwants FROM teams WHERE id = ?")
+            .bind(team_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some((name, space_id, raw)) = team else {
+            tx.rollback().await?;
             return Ok(false);
         };
-        let mut members: Vec<String> = serde_json::from_str(&team.member_kwants).unwrap_or_default();
-        if !members.iter().any(|m| m == kwant_id) {
-            members.push(kwant_id.to_string());
-        }
-        let json = serde_json::to_string(&members)?;
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE teams SET member_kwants = ? WHERE id = ?").bind(&json).bind(team_id).execute(&mut *tx).await?;
-        let space = SpaceId::new(team.space_id.clone());
-        let channel: Option<(String, String)> = match super::team_channel_id(&mut *tx, &space, &team.name).await? {
+        let space = SpaceId::new(space_id);
+        let channel: Option<(String, String)> = match super::team_channel_id(&mut *tx, &space, &name).await? {
             Some(cid) => sqlx::query_as("SELECT id, member_kwants FROM channels WHERE id = ?").bind(cid).fetch_optional(&mut *tx).await?,
             None => None,
         };
-        if let Some((cid, raw)) = channel {
-            let mut cm: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
-            if !cm.iter().any(|m| m == kwant_id) {
-                cm.push(kwant_id.to_string());
+        let mut lists = vec![("teams", team_id.to_string(), raw)];
+        lists.extend(channel.map(|(cid, raw)| ("channels", cid, raw)));
+        for (table, row_id, raw) in lists {
+            let mut members: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+            if !members.iter().any(|m| m == kwant_id) {
+                members.push(kwant_id.to_string());
             }
-            sqlx::query("UPDATE channels SET member_kwants = ? WHERE id = ?")
-                .bind(serde_json::to_string(&cm)?)
-                .bind(cid)
+            // Only bots that exist, in the order they were listed
+            let members: Vec<String> = sqlx::query_as::<_, (String,)>(
+                "SELECT value FROM json_each(?) WHERE value IN (SELECT id FROM kwants) ORDER BY key",
+            )
+            .bind(serde_json::to_string(&members)?)
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .map(|(id,)| id)
+            .collect();
+            sqlx::query(&format!("UPDATE {table} SET member_kwants = ? WHERE id = ?"))
+                .bind(serde_json::to_string(&members)?)
+                .bind(&row_id)
                 .execute(&mut *tx)
                 .await?;
         }
