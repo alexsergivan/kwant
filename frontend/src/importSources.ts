@@ -133,20 +133,71 @@ const NOT_BOT_JSON = new Set(['package.json', 'package-lock.json', 'tsconfig.jso
 /** Sign-in and settings files of OpenClaw, Hermes and Codex (Ada's #455 review): never packed. */
 const KEY_STORE_FILES = new Set(['openclaw.json', 'auth.json', 'config.toml', 'config.yaml', 'state.db']);
 const KEY_STORE_DIRS = new Set(['credentials', 'sessions']);
+/**
+ * Key-bearing files that are never sent, at any depth (Ada's #459 review): per-agent auth profiles,
+ * OAuth and token files, Claude and MCP settings (their env blocks hold API keys), Google client secrets.
+ */
+const SECRET_NAME_EXACT = new Set(['settings.json', 'settings.local.json', 'mcp.json', '.credentials.json']);
+const SECRET_JSON_PREFIXES = ['auth-profiles', 'oauth', 'credentials', 'token'];
+const SECRET_NAME_PREFIXES = ['client_secret', 'service-account'];
+/** Any other file whose name says it holds a secret. Notes and pictures (.md, .png) are judged by content, not name. */
+const SECRET_WORDS = /(auth|oauth|credential|secret|token|passw|api[-_]?key|private)/i;
+/** A picked app folder (its own name), packed as an app home. */
+const APP_HOME_NAMES = new Set(['.openclaw', '.hermes', '.codex', '.claude', 'openclaw', 'hermes']);
+
+const isKeyStore = (base: string) =>
+  base.startsWith('.env') || KEY_STORE_FILES.has(base) || base.startsWith('state.db') || base === '.credentials.json';
+
+function isSecretName(base: string, dirs: string[]): boolean {
+  if (SECRET_NAME_EXACT.has(base) || SECRET_NAME_PREFIXES.some((p) => base.startsWith(p))) return true;
+  if (base.endsWith('.json') && SECRET_JSON_PREFIXES.some((p) => base.startsWith(p))) return true;
+  // OpenClaw's agents/<id>/agent/ holds auth-profiles.json and models.json.
+  if (dirs.some((d, i) => d === 'agent' && i >= 2 && dirs[i - 2] === 'agents')) return true;
+  return !base.endsWith('.md') && !base.endsWith('.png') && SECRET_WORDS.test(base);
+}
 
 const isLicence = (base: string) => {
   const stem = base.split('.')[0];
   return ['license', 'licence', 'copying'].includes(stem) && (base === stem || base.endsWith('.md') || base.endsWith('.txt'));
 };
 
-/** Whether some format reads this file (lowercased path below the picked folder). */
-function formatReads(inner: string[]): boolean {
+/**
+ * Whether some format reads this file (lowercased path below the picked folder). Inside an app home
+ * (an OpenClaw, Hermes, Codex or Claude folder) only what `wanted` (src/import/local.rs) reads goes, and
+ * no .json at all; elsewhere any bot .json goes, as `wanted_in_repo` reads character cards,
+ * conversations.json and employee.json.
+ */
+function formatReads(inner: string[], appHome: boolean): boolean {
   const base = inner[inner.length - 1] ?? '';
   const parent = inner[inner.length - 2] ?? '';
+  if (base.endsWith('.json')) return !appHome && !NOT_BOT_JSON.has(base);
   if (READ_NAMES.has(base) || isLicence(base)) return true;
-  if (base.endsWith('.md') && ['agents', 'memories', 'memory'].includes(parent)) return true;
-  return base.endsWith('.json') && !NOT_BOT_JSON.has(base);
+  return base.endsWith('.md') && ['agents', 'memories', 'memory'].includes(parent);
 }
+
+/**
+ * The folders of a pick that are an app's home: the picked folder when it is named like one, and any
+ * folder holding an app's key store (openclaw.json, auth.json, config.toml, config.yaml, .env*, state.db*,
+ * .credentials.json, credentials/, sessions/). Lowercased paths below the picked folder, "" for the pick itself.
+ */
+export function appHomes(paths: ReadonlyArray<string>): string[] {
+  const homes = new Set<string>();
+  for (const path of paths) {
+    const parts = path.split(/[\\/]/).filter(Boolean);
+    if (APP_HOME_NAMES.has((parts[0] ?? '').toLowerCase())) homes.add('');
+    const inner = parts.slice(1).map((p) => p.toLowerCase());
+    const dirs = inner.slice(0, -1);
+    if (isKeyStore(inner[inner.length - 1] ?? '')) homes.add(dirs.join('/'));
+    const k = dirs.findIndex((d) => KEY_STORE_DIRS.has(d));
+    if (k >= 0) homes.add(dirs.slice(0, k).join('/'));
+  }
+  return [...homes];
+}
+
+const inHome = (dirs: string[], homes: ReadonlyArray<string>) => {
+  const at = dirs.join('/');
+  return homes.some((h) => h === '' || at === h || at.startsWith(`${h}/`));
+};
 
 type LeftKind = 'secrets' | 'git' | 'node_modules' | 'keys' | 'hidden' | 'unread' | 'big';
 const LEFT_LABELS: Record<LeftKind, string> = {
@@ -161,7 +212,7 @@ const LEFT_LABELS: Record<LeftKind, string> = {
 const LEFT_ORDER: LeftKind[] = ['secrets', 'keys', 'git', 'node_modules', 'hidden', 'big', 'unread'];
 
 /** Why a file is left out before packing, or null to keep it. */
-export function leftOutKind(path: string, size: number): LeftKind | null {
+export function leftOutKind(path: string, size: number, homes: ReadonlyArray<string> = appHomes([path])): LeftKind | null {
   const parts = path.split(/[\\/]/).filter(Boolean);
   // Below the picked folder, which may itself be hidden (".openclaw").
   const inner = parts.slice(1).map((p) => p.toLowerCase());
@@ -169,11 +220,10 @@ export function leftOutKind(path: string, size: number): LeftKind | null {
   const dirs = inner.slice(0, -1);
   if (dirs.includes('.git')) return 'git';
   if (dirs.includes('node_modules')) return 'node_modules';
-  if (base.startsWith('.env') || KEY_STORE_FILES.has(base) || base.startsWith('state.db') || dirs.some((d) => KEY_STORE_DIRS.has(d)))
-    return 'secrets';
+  if (isKeyStore(base) || dirs.some((d) => KEY_STORE_DIRS.has(d)) || isSecretName(base, dirs)) return 'secrets';
   if (base.endsWith('.pem') || base.endsWith('.key') || base.startsWith('id_rsa')) return 'keys';
   if (dirs.some((d) => d.startsWith('.')) || (base.startsWith('.') && !READ_DOTFILES.has(base))) return 'hidden';
-  if (!formatReads(inner)) return 'unread';
+  if (!formatReads(inner, inHome(dirs, homes))) return 'unread';
   if (size > PICK_LIMITS.fileBytes) return 'big';
   return null;
 }
@@ -211,8 +261,9 @@ export function folderPlan(entries: ReadonlyArray<PickedEntry>): FolderPlan {
   const kept: PickedEntry[] = [];
   const markers: string[] = [];
   const counts = new Map<LeftKind, number>();
+  const homes = appHomes(entries.map((e) => e.path));
   for (const e of entries) {
-    const why = leftOutKind(e.path, e.size);
+    const why = leftOutKind(e.path, e.size, homes);
     if (isCodexMarker(e.path)) markers.push(e.path);
     if (why) counts.set(why, (counts.get(why) ?? 0) + 1);
     else kept.push(e);

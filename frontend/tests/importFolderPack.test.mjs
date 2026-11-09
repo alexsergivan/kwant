@@ -125,3 +125,84 @@ test('key-store names are refused at any depth and in any case', () => {
   for (const p of ['x/OpenClaw.json', 'x/a/AUTH.json', 'x/Credentials/a.md', 'x/a/Sessions/b.md', 'x/.env.local', 'x/a/state.db'])
     assert.notEqual(m.leftOutKind(p, 1), null, p);
 });
+
+// Ada's review of #459, must-fix 1: every key-bearing file her probe saw packed.
+const PROBE = 'sk-ant-PROBE';
+const KEY_FILES = [
+  '.openclaw/openclaw.json',
+  '.openclaw/agents/main/agent/auth-profiles.json',
+  '.openclaw/agents/main/agent/models.json',
+  '.openclaw/identity/device.json',
+  '.openclaw/devices/paired.json',
+  '.openclaw/cron/jobs.json',
+  '.openclaw/.claude/settings.json',
+  '.openclaw/.claude/settings.local.json',
+  '.openclaw/credentials.json',
+  '.openclaw/token.json',
+  '.openclaw/client_secret_123.json',
+  '.openclaw/service-account.json',
+  '.openclaw/mcp.json',
+  '.openclaw/.hermes/gateway_state.json',
+  '.openclaw/workspace/settings.json',
+  '.openclaw/workspace/oauth-cache.json',
+];
+
+test('a picked app folder never packs its key files: only the .md files local import reads', async () => {
+  const plan = m.folderPlan(
+    pick([
+      ...KEY_FILES.map((p) => [p, `{"key":"${PROBE}"}`]),
+      ['.openclaw/workspace/SOUL.md', 'be kind'],
+      ['.openclaw/workspace/skills/x/SKILL.md', '# x'],
+      ['.openclaw/workspace/memory/api-key-rotation.md', 'rotate monthly'],
+      ['.openclaw/workspace/export.json', '{"name":"not read in an app home"}'],
+    ]),
+  );
+  assert.deepEqual(kept(plan), [
+    '.openclaw/workspace/SOUL.md',
+    '.openclaw/workspace/memory/api-key-rotation.md',
+    '.openclaw/workspace/skills/x/SKILL.md',
+  ]);
+  const { names, text } = await zipNames(plan);
+  for (const f of KEY_FILES) assert.ok(!names.includes(f), f);
+  assert.ok(!names.some((n) => n.endsWith('.json')), names.join(', '));
+  assert.ok(!text.includes(PROBE), 'no sk-ant-PROBE bytes in the zip');
+  assert.ok(plan.left.some((l) => /never sent/i.test(l.label)), JSON.stringify(plan.left));
+});
+
+test('a picked .claude never packs settings.json; its agents and skills go', async () => {
+  const plan = m.folderPlan(
+    pick([
+      ['.claude/settings.json', `{"env":{"ANTHROPIC_API_KEY":"${PROBE}"}}`],
+      ['.claude/settings.local.json', `{"env":{"K":"${PROBE}"}}`],
+      ['.claude/.credentials.json', PROBE],
+      ['.claude/agents/reviewer.md', 'r'],
+      ['.claude/skills/oauth-helper/SKILL.md', 's'],
+    ]),
+  );
+  assert.deepEqual(kept(plan), ['.claude/agents/reviewer.md', '.claude/skills/oauth-helper/SKILL.md']);
+  assert.ok(!(await zipNames(plan)).text.includes(PROBE));
+});
+
+test('a generic folder drops named key files but keeps bot .json (employee.json, conversations.json)', async () => {
+  const plan = m.folderPlan(
+    pick([
+      ['team/credentials.json', PROBE],
+      ['team/token.json', PROBE],
+      ['team/client_secret_1.json', PROBE],
+      ['team/service-account-prod.json', PROBE],
+      ['team/my-api_key.txt', PROBE],
+      ['team/private.yaml', PROBE],
+      ['team/employees/ada/employee.json', '{"name":"Ada"}'],
+      ['team/employees/ada/memory/api-key-rotation.md', 'rotate'],
+      ['team/conversations.json', '[]'],
+    ]),
+  );
+  assert.deepEqual(kept(plan), [
+    'team/conversations.json',
+    'team/employees/ada/employee.json',
+    'team/employees/ada/memory/api-key-rotation.md',
+  ]);
+  const { text } = await zipNames(plan);
+  assert.ok(!text.includes(PROBE), 'no sk-ant-PROBE bytes in the zip');
+  assert.equal(plan.left.find((l) => /never sent/i.test(l.label))?.count, 6, JSON.stringify(plan.left));
+});

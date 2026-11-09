@@ -517,7 +517,8 @@ type Step =
   | { kind: 'folder' }
   | { kind: 'github' }
   | { kind: 'preview'; from: From; prompt?: ExportPrompt }
-  | { kind: 'done' };
+  /** `github`: the source of the applied preview, only when it came from a GitHub link (Ada's #459 review). */
+  | { kind: 'done'; github?: GithubInfo };
 
 interface Props {
   spaceName: string;
@@ -646,6 +647,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
   const showPreview = (p: Preview, from: From, prompt?: ExportPrompt) => {
     setPreview(p);
     setSkip(new Set());
+    if (from !== 'github') setGithub(null);
     go({ kind: 'preview', from, prompt });
   };
 
@@ -721,10 +723,11 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
     setBusy(true);
     setError(null);
     try {
+      const fromGithub = step.kind === 'preview' && step.from === 'github' && github ? github : undefined;
       const a = await importApi.apply(preview.bundle, [...skip]);
       setApplied(a);
       setUndo({ kind: 'idle' });
-      go({ kind: 'done' });
+      go({ kind: 'done', github: fromGithub });
       onChanged();
     } catch (err) {
       setError(err);
@@ -749,6 +752,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
   };
 
   const back = () => {
+    if (step.kind === 'github') setGithub(null);
     if (step.kind === 'prompt' || step.kind === 'upload' || step.kind === 'found' || step.kind === 'folder' || step.kind === 'github') go({ kind: 'choose' });
     else if (step.kind === 'preview') go(step.from === 'prompt' && step.prompt ? { kind: 'prompt', prompt: step.prompt } : { kind: step.from === 'prompt' ? 'upload' : step.from });
   };
@@ -960,7 +964,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
             />
           )}
           {step.kind === 'done' && applied && (
-            <DoneView applied={applied} undo={undo} onUndo={doUndo} onKeep={() => setUndo({ kind: 'idle' })} github={github && applied.import.created.kwants.length === 0 ? github : undefined} />
+            <DoneView applied={applied} undo={undo} onUndo={doUndo} onKeep={() => setUndo({ kind: 'idle' })} github={step.github && applied.import.created.kwants.length === 0 ? step.github : undefined} />
           )}
           {error != null && step.kind !== 'github' && <ErrorBox error={error} />}
         </div>

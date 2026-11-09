@@ -431,6 +431,39 @@ test('G5 preview with MIT: source block, chip, skill chips, Import N skills; the
   assert.equal(d.changed.length, 1);
 });
 
+test('GitHub preview, Back, then a skills-only folder: Done has no GitHub line and no licence chip (Ada’s #459 review)', async () => {
+  const skillsOnly = () => {
+    const p = demo.githubPreview();
+    delete p.github;
+    p.bundle.source = { kind: 'skills', label: 'support-skills', exported_at: null };
+    p.bundle.omitted = [];
+    return json(p);
+  };
+  const d = await open({ folders: true, over: { 'POST /api/import/preview': skillsOnly } });
+  await d.click(/^GitHub link/);
+  typeUrl(d.dlg, 'https://github.com/example-team/support-skills');
+  await settle();
+  primaryOf(d.dlg).click();
+  await settle(12);
+  assert.ok(d.dlg().querySelector('[data-github-source]'), 'GitHub preview shown first');
+  const back = async () => (d.dlg().querySelector('button[aria-label="Back"]').click(), settle());
+  await back();
+  await back();
+  await d.click(/^Folder/);
+  pickFolder(d.dlg, [['my-skills/triage/SKILL.md', '---\nname: triage\n---\n'], ['my-skills/seo/SKILL.md', '---\nname: seo\n---\n']]);
+  await settle();
+  primaryOf(d.dlg).click();
+  await settle(12);
+  assert.equal(d.dlg().querySelector('[data-github-source]'), null, 'folder preview has no GitHub block');
+  primaryOf(d.dlg).click();
+  await settle(12);
+  assert.match(d.dlg().textContent, /Imported 12 skills/);
+  assert.doesNotMatch(d.dlg().textContent, /From github\.com/);
+  assert.equal(d.dlg().querySelector('[data-github-done]'), null);
+  assert.equal(d.dlg().querySelector('[data-licence]'), null);
+  assert.doesNotMatch(d.dlg().textContent, /MIT/);
+});
+
 test('G6 no licence: amber chip and the warning in Worth a look, never blocking', () => {
   const p = demo.githubPreview({ licence: null });
   const out = html(m.PreviewView, { preview: p, github: p.github, skip: new Set(), onToggle() {}, spaceName: 'Home' });
