@@ -23,6 +23,7 @@ pub mod approval_modes;
 pub mod parked;
 pub mod waiting;
 pub mod decisions;
+pub mod delivery_notes;
 pub mod ideas;
 pub mod work_ahead;
 pub mod api_context;
@@ -201,6 +202,7 @@ impl Database {
         db.migrate_parked().await?;
         db.migrate_waiting().await?;
         db.migrate_decisions().await?;
+        db.migrate_delivery_notes().await?;
         db.migrate_work_ahead().await?;
         db.migrate_ideas().await?;
         db.migrate_api_context().await?;

@@ -972,6 +972,19 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
+        // P10: what the person expects and how best to deliver it, planned once before the bot
+        // starts (the fast model within ~3 s, else the keyword plan), for this turn and the
+        // teammates it hands parts to
+        let (plan, _why) = super::delivery_plan::plan_for_message(
+            &scope.state,
+            &target_kwant,
+            &scope.teammates,
+            &scope.context_id(&target_kwant),
+            scope.workspace_dir.as_deref(),
+            &prompt,
+        )
+        .await;
+        super::delivery_plan::remember(&scope.job_id, plan);
         // A full link in the person's own message may open the bot browser first
         let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
@@ -979,6 +992,7 @@ fn execute_single_turn(
             // Several bots asked the person something: one list of it all (when the chain is over)
             super::asks::consolidate(&scope).await;
         }
+        super::delivery_plan::forget(&scope.job_id);
     });
 }
 
@@ -2295,6 +2309,17 @@ async fn run_kwant_turn_inner(
                 route.effort_level = capped.into();
             }
         }
+        // P10: a turn that should show an image or a link, or make a change, never runs on the fast
+        // tier. The job's plan when one was made before the bot started, else the message's words.
+        // A fresh-eyes reviewer's prompt is a brief, not the person's ask: no plan, no floor
+        let planned = (!opts.fresh_eyes).then(|| super::delivery_plan::planned(&scope.job_id)).flatten();
+        if opts.routed.is_none() && opts.tier.is_none() && !opts.no_tools && !opts.fresh_eyes {
+            let plan = planned.clone().unwrap_or_else(|| crate::router::delivery::keyword_plan(&prompt, &[]));
+            if let Some(floor) = crate::router::analyzer::effort_floor(&plan, &route.effort_level) {
+                route.reasoning = format!("{} · effort raised to {floor}: the person expects to see an image, a link or a change", route.reasoning);
+                route.effort_level = floor.into();
+            }
+        }
         let route = crate::router::apply_preferred_model(route, &target_kwant.preferred_model);
         let route = match opts.tier {
             Some(t) => crate::router::with_tier(route, t),
@@ -2549,10 +2574,29 @@ async fn run_kwant_turn_inner(
         // None for a fresh-eyes reviewer (B1): its prompt is a brief, not the person's ask.
         let read_only = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
         let delivery = (!opts.no_tools && !read_only && !opts.fresh_eyes).then(|| {
-            let recent: Vec<&str> =
-                history.iter().filter(|m| m.sender_role == "user").map(|m| m.text.as_str()).collect();
-            crate::router::delivery::keyword_plan(&prompt, &recent)
+            planned.clone().unwrap_or_else(|| {
+                let recent: Vec<&str> =
+                    history.iter().filter(|m| m.sender_role == "user").map(|m| m.text.as_str()).collect();
+                crate::router::delivery::keyword_plan(&prompt, &recent)
+            })
         });
+        // P10: the planned turn's "[What the person expects]" block, with this bot's own place in
+        // a team plan (the one that replies, a helper with its part, or neither)
+        let expects = delivery
+            .as_ref()
+            .filter(|p| p.source != crate::router::delivery::PlanSource::Keywords || !p.who.is_empty())
+            .map(|p| {
+                let name_of = |id: &str| {
+                    std::iter::once(target_kwant)
+                        .chain(scope.teammates.iter())
+                        .find(|k| k.id == id)
+                        .map(|k| k.name.clone())
+                        .unwrap_or_else(|| "a teammate".to_string())
+                };
+                crate::router::analyzer::expects_block(p, &target_kwant.id, &name_of)
+            })
+            .unwrap_or_default();
+        let delivery_meta = delivery.clone();
         let turn_input = TurnInput {
             // The bot's own copy of the browser API, naming this chat (thread, channel or DM): a
             // CAPTCHA it meets is asked in the thread whose call met it. The same for every turn
@@ -2583,6 +2627,7 @@ async fn run_kwant_turn_inner(
             read_only,
             delivery,
             fresh_eyes: opts.fresh_eyes,
+            expects,
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -3169,6 +3214,11 @@ async fn run_kwant_turn_inner(
                 if let Some(routing) = &opts.routing {
                     meta.get_or_insert_with(|| serde_json::json!({}))["routing"] = routing.clone();
                 }
+                // P10: the plan this reply was made with, so the person's next message is judged
+                // against it (see `delivery_plan::judge_chat`); `meta.delivery` is the check's verdict
+                if let Some(plan) = delivery_meta.as_ref().filter(|p| p.kind != crate::router::delivery::Deliverable::Other) {
+                    meta.get_or_insert_with(|| serde_json::json!({}))[super::delivery_plan::META_KEY] = serde_json::json!(plan);
+                }
                 if let Some(serde_json::Value::Object(extra)) = &opts.extra_meta {
                     let m = meta.get_or_insert_with(|| serde_json::json!({}));
                     for (k, v) in extra {
@@ -3547,6 +3597,10 @@ pub(crate) async fn send_chat_inner(
     }
     // The person wrote here: the bots waiting on them in this chat don't need to remind them
     super::waiting::person_wrote(&state, payload.channel_id.as_deref(), payload.kwant_id.as_deref(), None).await;
+    // P10: how they took the last reply's delivery ("show me" after a text-only reply is a miss)
+    if let Some(chat) = payload.channel_id.as_deref().or(payload.kwant_id.as_deref()) {
+        super::delivery_plan::note_reaction(&state, &space, chat).await;
+    }
     let note = super::attachments::attach_to_message(
         &state,
         &uploads,

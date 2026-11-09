@@ -102,6 +102,11 @@ pub struct TurnInput {
     /// or its cached prefix back from `store`. Set from `TurnOpts::fresh_eyes`.
     #[serde(default)]
     pub fresh_eyes: bool,
+    /// P10: this bot's "[What the person expects]" block for a planned turn (the analyzer's plan,
+    /// or one the person's notes changed, or a team plan naming who does what); it replaces the
+    /// plan's one-line hint. Empty for the keyword plan alone.
+    #[serde(default)]
+    pub expects: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -527,7 +532,11 @@ impl TurnInput {
     /// The parts that can change every turn: the skills picked for this message and the
     /// "[What to deliver]" hint for what it expects back.
     pub fn turn_notes(&self) -> String {
-        let hint = self.delivery.as_ref().map(crate::router::delivery::DeliveryPlan::hint).unwrap_or_default();
+        let hint = if self.expects.is_empty() {
+            self.delivery.as_ref().map(crate::router::delivery::DeliveryPlan::hint).unwrap_or_default()
+        } else {
+            self.expects.clone()
+        };
         format!("{}{hint}", self.skills)
     }
 
@@ -1027,6 +1036,7 @@ pub(crate) mod tests {
             read_only: false,
             delivery: None,
             fresh_eyes: false,
+            expects: String::new(),
         }
     }
 
@@ -1165,6 +1175,28 @@ pub(crate) mod tests {
         i.delivery = Some(keyword_plan("thanks!", &[]));
         assert!(!i.format_system_prompt().contains("[What to deliver]"), "a thank-you has nothing to deliver");
         assert!(!input().format_system_prompt().contains("[What to deliver]"));
+    }
+
+    /// P10: a planned turn's "[What the person expects]" block, with the bot's own part, replaces
+    /// the one-line hint in every engine's prompt, once.
+    #[test]
+    fn a_planned_turn_gets_the_what_the_person_expects_block_instead_of_the_hint() {
+        use crate::router::analyzer::expects_block;
+        use crate::router::delivery::{keyword_plan, PlanSource};
+        let mut plan = keyword_plan("Hey team! What some cool feature we can add?", &[]);
+        plan.source = PlanSource::Analyzer;
+        plan.who = vec![("lead".into(), "mockups of each idea".into()), ("me".into(), "which idea brings readers".into())];
+        let mut i = with_approvals(crate::mcp::Approvals::Off);
+        i.delivery = Some(plan.clone());
+        i.expects = expects_block(&plan, "me", &|id: &str| if id == "lead" { "Frontend".into() } else { id.into() });
+        for access in ACCESSES {
+            for (engine, prompt) in engine_prompts(&i, access) {
+                assert_eq!(prompt.matches("[What the person expects]").count(), 1, "{engine} {access:?}");
+                assert!(!prompt.contains("[What to deliver]"), "{engine} {access:?}");
+                assert!(prompt.contains("Your part: which idea brings readers. Frontend answers the person"), "{engine} {access:?}");
+            }
+        }
+        assert!(!i.system_prompt_parts(BrowserAccess::Tools).tail.contains("[What the person expects]"));
     }
 
     #[test]

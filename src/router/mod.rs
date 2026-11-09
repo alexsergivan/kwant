@@ -1,3 +1,4 @@
+pub mod analyzer;
 pub mod delivery;
 pub mod depends;
 pub mod fallback;

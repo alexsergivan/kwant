@@ -23,6 +23,7 @@ use tempfile::{tempdir, TempDir};
 fn turn(folder: Option<&Path>) -> TurnInput {
     TurnInput {
         fresh_eyes: false,
+        expects: String::new(),
         continuity: String::new(),
         skills: String::new(),
         person: Default::default(),

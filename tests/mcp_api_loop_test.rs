@@ -98,6 +98,7 @@ fn ctx(approver: Arc<dyn ToolApprover>, timeout_secs: i64, max: usize) -> McpTur
 fn input(mcp: Option<McpTurnContext>) -> TurnInput {
     TurnInput {
         fresh_eyes: false,
+        expects: String::new(),
         continuity: String::new(),
         skills: String::new(),
         person: Default::default(),
