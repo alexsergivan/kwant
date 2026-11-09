@@ -63,7 +63,7 @@ test('A: off by default on Linux — enabled switch, the hint, all three chips n
   assert.match(html, /role="switch"/);
   assert.match(html, /aria-checked="false"/);
   assert.doesNotMatch(html, /aria-disabled/);
-  assert.match(html, /web search included/);
+  assert.match(html, /instead of its own web search/);
   assert.match(html, /aria-label="Where each AI runs right now"/);
   assert.match(html, /Claude: not isolated/);
   assert.match(html, /Codex: not isolated yet/);

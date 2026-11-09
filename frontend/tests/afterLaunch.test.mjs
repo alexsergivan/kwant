@@ -390,7 +390,7 @@ test('after launch 4: after a restore the checkpoint list loads again, with the 
 
 // 0.8.0 F (Rigel's 0.7.7 final check): a stale restore says why the preview changed, and the
 // message stays while the fresh preview loads under it, until the person acts.
-test('0.8.0 F: "Files changed since this preview" stays up over the fresh preview until the next restore or pick', async () => {
+test('0.8.0 F: "Files changed since this preview" stays up over the fresh preview until the person restores, picks or says Never mind', async () => {
   const cp = (id) => ({ id, kind: 'before_run', attempt: 1, created_at: '2026-11-01T10:00:00Z', files: 2, effects_after: { external: [] }, restorable: true, error: null });
   let n = 0;
   let stale = true;
@@ -414,8 +414,18 @@ test('0.8.0 F: "Files changed since this preview" stays up over the fresh previe
   assert.equal(n, 2, 'the preview was fetched again');
   await settle();
   assert.match(v.host.textContent, /Files changed since this preview/, 'still there after the refresh settles');
-  // Picking another checkpoint is acting: the message goes.
+  // Never mind is acting: the message goes with the preview, and the list is back.
+  await click(button('Never mind'));
+  assert.doesNotMatch(v.host.textContent, /Files changed since this preview/);
+  assert.ok(q('[data-checkpoint="cp2"]'), 'the checkpoints are listed again');
+  // A second stale restore shows it again, and picking another checkpoint clears it.
+  stale = true;
+  await click(q('[data-checkpoint="cp1"]'));
+  await click(q('[data-restore]'));
+  assert.match(v.host.textContent, /Files changed since this preview/);
+  await click(button('Never mind'));
   await click(q('[data-checkpoint="cp2"]'));
   assert.doesNotMatch(v.host.textContent, /Files changed since this preview/);
+  assert.ok(q('[data-restore-preview]'), 'cp2’s preview shows');
   v.unmount();
 });

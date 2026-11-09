@@ -1897,6 +1897,7 @@ export const RestoreSection: React.FC<{
             onCancel={() => {
               setPicked(null);
               setPreview(null);
+              setErr(null);
             }}
           />
         ) : (
