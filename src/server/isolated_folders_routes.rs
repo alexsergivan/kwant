@@ -59,7 +59,9 @@ pub struct FolderView {
     pub exists: bool,
     /// Paths inside the folder (relative, `/`-separated) that a CLI, git or the person's shell
     /// started there would load. A bot in the VM could have written them; look before forgetting.
-    /// A symlink is listed with ` -> link` (never followed).
+    /// A symlink is listed with ` -> link` (never followed). A `.git` or `.git/hooks` that isn't a
+    /// real folder is listed too (`.git (file)`, `.git/hooks -> link`, …): git then loads hooks
+    /// from somewhere kwnt doesn't look.
     pub check_first: Vec<String>,
 }
 
@@ -99,6 +101,25 @@ pub fn check_first(folder: &Path) -> (bool, Vec<String>) {
                 out.push(show("", dir, Kind::Symlink));
             }
         }
+    }
+    // #462 review must-fix 2: a `.git` file (`gitdir: .x`, the "rename `.git`" way around the
+    // read-only hooks) or a `hooks` that isn't a real folder sends git to hooks this list can't
+    // see, so say so instead of showing nothing
+    let not_a_folder = |rel: &str, kind: Kind| match kind {
+        Kind::Dir => None,
+        Kind::Symlink => Some(format!("{rel} -> link")),
+        Kind::File => Some(format!("{rel} (file)")),
+        Kind::Other => Some(format!("{rel} (not a folder)")),
+    };
+    match top.iter().find(|(n, _)| n == ".git").map(|(_, k)| *k) {
+        Some(Kind::Dir) => {
+            if let Some((_, kind)) = entries(".git", 10_000).into_iter().find(|(n, _)| n == "hooks") {
+                out.extend(not_a_folder(".git/hooks", kind));
+            }
+        }
+        // A linked `.git` is already listed as `.git -> link` by the loop above
+        Some(Kind::Symlink) | None => {}
+        Some(kind) => out.extend(not_a_folder(".git", kind)),
     }
     let mut hooks: Vec<(String, Kind)> = entries(".git/hooks", 1_000).into_iter().filter(|(n, _)| !n.ends_with(".sample")).collect();
     hooks.sort_by(|a, b| a.0.cmp(&b.0));
@@ -189,6 +210,40 @@ mod tests {
         assert_eq!(got, vec![".mcp.json", ".claude/settings.json", ".codex -> link", ".git/config", ".git/hooks/post-checkout"]);
         // A folder that's gone
         assert_eq!(check_first(&f.join("nope")), (false, vec![]));
+    }
+
+    // #462 review must-fix 2: when git is sent elsewhere, the list says so instead of looking empty
+    #[test]
+    fn check_first_names_a_git_or_hooks_that_isnt_a_real_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        // `.git` is a file (`gitdir: .x`, the renamed-.git bypass)
+        let f = d.path().join("gitfile");
+        std::fs::create_dir_all(f.join(".x/hooks")).unwrap();
+        std::fs::write(f.join(".x/hooks/pre-commit"), "#!/bin/sh").unwrap();
+        std::fs::write(f.join(".git"), "gitdir: .x\n").unwrap();
+        assert_eq!(check_first(&f), (true, vec![".git (file)".to_string()]));
+        // `.git` is a link: named once
+        let f = d.path().join("gitlink");
+        std::fs::create_dir_all(&f).unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), f.join(".git")).unwrap();
+        assert_eq!(check_first(&f).1, vec![".git -> link"]);
+        // `.git/hooks` is a link
+        let f = d.path().join("hookslink");
+        std::fs::create_dir_all(f.join(".git")).unwrap();
+        std::fs::write(f.join(".git/config"), "").unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), f.join(".git/hooks")).unwrap();
+        assert_eq!(check_first(&f).1, vec![".git/config", ".git/hooks -> link"]);
+        // `.git/hooks` is a file
+        let f = d.path().join("hooksfile");
+        std::fs::create_dir_all(f.join(".git")).unwrap();
+        std::fs::write(f.join(".git/hooks"), "").unwrap();
+        assert_eq!(check_first(&f).1, vec![".git/hooks (file)"]);
+        // A real `.git/hooks` with only samples still shows nothing
+        let f = d.path().join("plain");
+        std::fs::create_dir_all(f.join(".git/hooks")).unwrap();
+        std::fs::write(f.join(".git/hooks/pre-commit.sample"), "").unwrap();
+        assert_eq!(check_first(&f).1, Vec::<String>::new());
     }
 
     #[test]

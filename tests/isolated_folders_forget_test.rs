@@ -61,6 +61,20 @@ async fn call(app: &Router, peer: &str, method: &str, uri: &str, body: Option<Va
     (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
 
+/// A POST with a raw body, and a content type only when one is given.
+async fn post_raw(app: &Router, uri: &str, body: &'static str, content_type: Option<&str>) -> (StatusCode, Value) {
+    let mut req = Request::builder().method("POST").uri(uri).header("host", "127.0.0.1:8799");
+    if let Some(ct) = content_type {
+        req = req.header("content-type", ct);
+    }
+    let mut req = req.body(Body::from(body)).unwrap();
+    req.extensions_mut().insert(ConnectInfo(LOCAL.parse::<SocketAddr>().unwrap()));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
 async fn turn_token(state: &AppState, folder: &std::path::Path) -> (String, String) {
     let bot = state.db.list_kwants(&SpaceId::default_space()).await.unwrap().remove(0);
     let scope = SelfScope { kwant_id: bot.id.clone(), kwant_name: bot.name.clone(), ..Default::default() };
@@ -113,6 +127,25 @@ async fn the_person_lists_and_forgets_a_folder_and_a_bot_cant() {
         assert_eq!(s, StatusCode::BAD_REQUEST, "{body}: {v}");
         assert_eq!(v["code"], "invalid");
     }
+    // #462 review must-fix 3: a NUL, a path over 4096 bytes, a body that isn't JSON and one sent
+    // without a JSON content type are 400 too, with the same code; exactly 4096 bytes is allowed
+    // (and isn't recorded, so 404)
+    let long = |n: usize| format!("/{}", "a".repeat(n - 1));
+    for body in [json!({ "path": "/a\u{0000}b" }), json!({ "path": long(4097) })] {
+        let (s, v) = call(&app, LOCAL, "POST", "/api/isolated-folders/forget", Some(body.clone()), None).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{}: {v}", &body.to_string()[..40]);
+        assert_eq!(v["code"], "invalid");
+    }
+    assert_eq!(long(4096).len(), 4096);
+    let (s, v) = call(&app, LOCAL, "POST", "/api/isolated-folders/forget", Some(json!({ "path": long(4096) })), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND, "4096 bytes is a path kwnt looks up: {v}");
+    assert_eq!(v["code"], "not_recorded");
+    for (body, ct) in [("not json", Some("application/json")), (r#"{"path":"/x"}"#, None), (r#"{"path":"/x"}"#, Some("text/plain"))] {
+        let (s, v) = post_raw(&app, "/api/isolated-folders/forget", body, ct).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{body} as {ct:?}: {v}");
+        assert_eq!(v["code"], "invalid", "{body} as {ct:?}");
+    }
+    assert!(state.db.isolated_folder_for(&proj).await.unwrap().is_some(), "still recorded after every refusal");
     // A folder that isn't recorded, even one inside a recorded folder
     let inside = canonical(&proj).join(".claude").to_string_lossy().into_owned();
     let (s, v) = call(&app, LOCAL, "POST", "/api/isolated-folders/forget", Some(json!({ "path": inside })), None).await;

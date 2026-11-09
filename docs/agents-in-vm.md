@@ -42,13 +42,19 @@ text, can't do these things while it runs inside the VM:
     walk stops at 64 folders deep and at an entry limit, and a restore never deletes files the
     walk didn't reach.
 - **Plant a git hook.** When the folder is a git repository (a real `.git` folder, not a link or
-  a `.git` file), its `.git/hooks` is mounted read-only in the container: `git commit`, branches
-  and the rest still work, but no hook can be added or changed.
+  a `.git` file), an empty read-only folder that only kwnt writes is mounted over its
+  `.git/hooks` in the container: `git commit`, branches and the rest still work, but no hook can
+  be added or changed. The mount's source is never a path inside the bot's folder, so a link the
+  bot swaps in can't get a folder from your computer mounted. Your own hooks don't run for
+  commits the bot makes inside the container; they still run for yours. A `.git/hooks` that is a
+  link or a file is left as it is (kwnt's log says so).
 
 **Forgetting a folder.** Only you can take a folder off the record, in Settings (`GET` and
 `POST /api/isolated-folders/forget`; a bot gets 403). The list shows which files a program
 started there would load (`.mcp.json`, `.envrc`, `.claude/settings*.json`, `.codex`, `.grok`,
-`.git/config`, `.git/hooks`), so you can look at them first. Once forgotten, kwnt trusts the
+`.git/config`, `.git/hooks`), so you can look at them first. A `.git` that is a file or a link,
+or a `.git/hooks` that isn't a real folder, is listed too (`.git (file)`, `.git/hooks -> link`):
+git then loads hooks from somewhere the list doesn't show. Once forgotten, kwnt trusts the
 folder as before.
 
 ## What it doesn't protect against
@@ -66,7 +72,7 @@ folder as before.
   and branch tracking), so a bot can point `core.hooksPath` at a folder it writes, or rename
   `.git` and make a new one. kwnt's own git calls never run hooks; your own `git` there would. A
   repository the bot creates during a reply gets read-only hooks only from its next reply. The
-  forget list shows `.git/config` and any hooks so you can check them.
+  forget list shows `.git/config`, any hooks, and a `.git` file or link so you can check them.
 - **Codex, Grok, and Claude API-key or Custom accounts.** They run on this computer as before.
 - **A Docker or kernel escape.** The container drops every capability, runs as your user id with
   a read-only root and no network, but it shares the kernel.
