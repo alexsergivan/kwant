@@ -6,6 +6,7 @@ pub mod custom;
 pub mod engines;
 pub mod events;
 pub mod grok;
+pub mod mac_local;
 #[cfg(windows)]
 pub(crate) mod win_job;
 
