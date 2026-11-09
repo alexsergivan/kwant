@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - **A bot's Enter now submits forms.** When a bot pressed Enter in kwant's browser, the page saw the key but a search box or login form never sent. Enter, Tab, Backspace, Space, the arrows and single characters now go out as a real keyboard sends them. A key kwant can't press, such as `Control+a` or a whole word, is refused with a hint to type text instead. (#457)
 - Every pull request now builds the web part of `docker compose up --build`, so a source build can't break unnoticed again as it did in 0.7.6. (#457)
+- **Deleting a bot no longer fails with "database error".** A team or channel the bot led could list a bot that no longer exists, or the chat search index could be out of step with the chat. Either one stopped the delete. kwant now skips the missing bot when it picks the new lead, and repairs the search index and tries again. If a delete still fails, the dialog says why in plain words. (#465)
 
 ## [Mac 0.7.7] - 2026-11-09
 

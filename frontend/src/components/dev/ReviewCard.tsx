@@ -12,6 +12,7 @@ import {
   X,
   GitBranch,
 } from 'lucide-react';
+import { FreshEyesChip } from './FreshEyesChip';
 import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
   clock,
@@ -125,6 +126,16 @@ const SecTile: React.FC<{ name: string; tool: string; mono: string; state: 'pass
     </li>
   );
 };
+
+/** 0.8.0 B3: the semgrep tile from the real run. Not installed (or no repo rules) is the dashed
+ *  `later` look, "Not installed. Optional."; a PR card that never ran it says so plainly. */
+export function semgrepTile(s: Review['security']['semgrep'] | undefined): { state: 'pass' | 'hit' | 'not_run' | 'later'; text: string } {
+  if (!s) return { state: 'later', text: 'Runs before a push, not on pull requests' };
+  if (s.state === 'pass') return { state: 'pass', text: 'No matches' };
+  if (s.state === 'hit') return { state: 'hit', text: `${s.count} ${s.count === 1 ? 'match' : 'matches'} · see finding` };
+  if (s.reason && /isn't installed|no \.semgrep/.test(s.reason)) return { state: 'later', text: 'Not installed. Optional.' };
+  return { state: 'not_run', text: s.reason ? `Didn't run: ${s.reason}` : "Didn't run" };
+}
 
 const scanText = (s: { state: 'pass' | 'hit' | 'not_run'; count: number }, one: string, many: string, clean: string) =>
   s.state === 'not_run' ? 'Not run' : s.state === 'pass' ? clean : `${s.count} ${s.count === 1 ? one : many} · see finding`;
@@ -476,7 +487,7 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const onRows = matchFindingIds(ticketMatches);
   const listed = onRows.size ? card.findings.filter((f) => !onRows.has(f.id)) : card.findings;
   const summary = findingsSummary(listed);
-  const sec = card.security as Review['security'] & { osv?: unknown; semgrep?: unknown };
+  const sec = card.security as Review['security'] & { osv?: unknown };
   const stamp = lgtm(card) && card.reviewer ? card.reviewer.name : null;
   const repoChip = repoLabel ? repoLabel(card.repo, card.repo_name) : null;
 
@@ -553,8 +564,10 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
               </span>
             )}
           </div>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
+          <div className="relative mt-1.5 flex flex-wrap gap-1.5">
             {card.reviewer && (card.same_engine ? <span className="kw-chip kw-chip-warn">Same engine as the author</span> : <span className="kw-chip kw-chip-accent">Different engine from the author</span>)}
+            {/* 0.8.0 B3: how the review was run, right after the engine chip (Mira b3 §1). */}
+            <FreshEyesChip label={card.fresh_eyes} reviewer={card.reviewer?.name ?? null} author={author?.name ?? null} specRef={ticketMatches?.key ?? null} />
             {!card.reviewer && <span className="kw-chip kw-chip-warn">{card.note ?? 'No reviewer yet'}</span>}
           </div>
         </div>
@@ -673,8 +686,8 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
         <ul role="list" className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 lg:grid-cols-4">
           <SecTile name="Secrets" tool="Gitleaks" mono="gitleaks" state={sec.secrets.state} text={scanText(sec.secrets, 'secret', 'secrets', 'None found')} />
           <SecTile name="New packages" tool="Registry check" mono="registry" state={sec.packages.state} text={scanText(sec.packages, 'package', 'packages', 'All real')} />
-          <SecTile name="Dependencies" tool="OSV" mono="osv" state="later" text="in 0.7.x" />
-          <SecTile name="Code patterns" tool="Semgrep" mono="semgrep" state="later" text="in 0.7.x" />
+          <SecTile name="Dependencies" tool="OSV" mono="osv" state="later" text="Not checked in this version" />
+          <SecTile name="Code patterns" tool="Semgrep" mono="semgrep" {...semgrepTile(sec.semgrep)} />
         </ul>
       </section>
 

@@ -1,3 +1,4 @@
+pub mod delivery;
 pub mod depends;
 pub mod fallback;
 pub mod laya;

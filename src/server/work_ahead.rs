@@ -196,6 +196,7 @@ pub async fn run(state: &AppState, c: Candidate, row: WorkAheadRun) -> Option<Me
     };
     // The post's own choices come off its text into meta.decisions, as in any other reply
     let (reply, decisions) = super::decide::take_decisions(&reply);
+    let decisions = super::decide::settle(state, &c.space, &c.context_id, decisions).await;
     let Some(text) = message_text(&reply) else {
         let _ = state.db.finish_work_ahead_run(&row.id, "nothing", None, tokens).await;
         return None;

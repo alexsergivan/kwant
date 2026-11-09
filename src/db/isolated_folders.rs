@@ -19,6 +19,15 @@ pub fn overlaps(folder: &Path, recorded: &Path) -> bool {
     folder.starts_with(recorded) || recorded.starts_with(folder)
 }
 
+/// One recorded folder.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IsolatedFolder {
+    pub path: PathBuf,
+    pub first_bot_id: String,
+    pub first_used_at: chrono::DateTime<chrono::Utc>,
+    pub last_used_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// The error a refused host command records (its code first, for the API and the UI).
 pub const HOST_COMMAND_REFUSED: &str = "folder_used_by_isolated_bot: a bot that runs Claude inside the VM used this folder, \
 so commands from it don't run on this computer. Nothing ran.";
@@ -104,9 +113,26 @@ impl Database {
         })
     }
 
-    /// Forgets a recorded folder (the person cleared it). Returns whether one was there.
+    /// Every recorded folder with who first used it and when, for the person's list.
+    pub async fn isolated_folder_records(&self) -> Result<Vec<IsolatedFolder>, DbError> {
+        let rows: Vec<(String, String, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+            "SELECT path, first_bot_id, first_used_at, last_used_at FROM isolated_folders ORDER BY path",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(path, first_bot_id, first_used_at, last_used_at)| IsolatedFolder { path: PathBuf::from(path), first_bot_id, first_used_at, last_used_at })
+            .collect())
+    }
+
+    /// Forgets a recorded folder (the person cleared it). Returns whether one was there. Matches
+    /// the path as recorded (a folder that was deleted or moved since can still be forgotten by
+    /// the path the list shows) or its canonical form. Only that one record: a recorded folder
+    /// inside or around it stays.
     pub async fn forget_isolated_folder(&self, folder: &Path) -> Result<bool, DbError> {
-        let done = sqlx::query("DELETE FROM isolated_folders WHERE path = ?")
+        let done = sqlx::query("DELETE FROM isolated_folders WHERE path = ? OR path = ?")
+            .bind(folder.to_string_lossy().as_ref())
             .bind(canonical(folder).to_string_lossy().as_ref())
             .execute(&self.pool)
             .await?;

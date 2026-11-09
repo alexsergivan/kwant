@@ -50,6 +50,7 @@ fn turn(store: &Database, engine: &str, folder: &Path) -> TurnInput {
         mcp: None,
         no_tools: false,
         read_only: false,
+        delivery: None,
     }
 }
 

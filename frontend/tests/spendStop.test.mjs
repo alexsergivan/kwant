@@ -239,7 +239,7 @@ test('with the app open: the worker’s message for a stop opens Needs you; othe
   const app = src('App.tsx');
   assert.match(app, /const place = placeOfNotification\(m\);\s*if \(place === 'spend_stop'\) return openSpendStopRef\.current\(\);[\s\S]*?if \(place === 'home'\) return openHomeRef\.current\(\);\s*if \(!m\.kwant_id\) return;/);
   assert.match(app, /const place = placeOfNotification\(n\);\s*if \(place === 'spend_stop'\) openSpendStop\(\);\s*else if \(place === 'home'\) openHome\(\);/);
-  assert.match(app, /top=\{<SpendStopNeedsYou refreshKey=\{spendStopSeq\}/);
+  assert.match(app, /top=\{\s*<>\s*<PrepushNeedsYou [^\n]*\/>\s*<SpendStopNeedsYou refreshKey=\{spendStopSeq\}/);
 });
 
 test('the stop’s notification is a kind to tick, only where the server has the stop, and shows on this device', () => {

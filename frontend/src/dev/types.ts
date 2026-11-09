@@ -7,6 +7,7 @@
 // row (`CardFallback`). Strings are trimmed to a sane length and never rendered as HTML.
 
 import { parseMatches } from './tickets';
+import { parseFreshEyes, type FreshEyes } from './freshEyes';
 import type { ReviewMatches } from './tickets';
 
 export type CardStatus = 'pending' | 'ready' | 'failed' | 'stale';
@@ -89,7 +90,7 @@ export interface DevFinding {
   line: number | null;
   detail: string | null;
   fix: string | null;
-  source: 'review' | 'gitleaks' | 'packages' | 'tamper';
+  source: 'review' | 'gitleaks' | 'packages' | 'tamper' | 'semgrep';
   state: 'open' | 'sent' | 'dismissed';
   sent_at: string | null;
   /** §3.6 item 4. */
@@ -130,7 +131,11 @@ export interface ReviewCard extends CardBase {
   security: {
     secrets: { state: ScanState; count: number };
     packages: { state: ScanState; count: number };
+    /** 0.8.0 B2/B3: only pre-push cards run it today (fresh-eyes-audit.md §3, q8); absent on forge PR cards. */
+    semgrep: { state: ScanState; count: number; reason: string | null } | null;
   };
+  /** 0.8.0 B3: how the review was run (fresh-eyes-audit.md §3.1). null on cards from before 0.8.0. */
+  fresh_eyes: FreshEyes | null;
   findings: DevFinding[];
   cut: string | null;
   links: DevLinks;
@@ -363,7 +368,7 @@ export function parseLanded(raw: unknown): LandedCard | null {
   };
 }
 
-function finding(v: unknown): DevFinding | null {
+export function finding(v: unknown): DevFinding | null {
   if (!isObj(v)) return null;
   const id = str(v.id, 80);
   const title = str(v.title, 200);
@@ -377,7 +382,7 @@ function finding(v: unknown): DevFinding | null {
     line: num(v.line),
     detail: str(v.detail, 1200),
     fix: str(v.fix, 600),
-    source: oneOf(v.source, ['review', 'gitleaks', 'packages', 'tamper'] as const, 'review'),
+    source: oneOf(v.source, ['review', 'gitleaks', 'packages', 'tamper', 'semgrep'] as const, 'review'),
     state: oneOf(v.state, ['open', 'sent', 'dismissed'] as const, 'open'),
     sent_at: str(v.sent_at, 64),
     sent_to: str(v.sent_to, 80),
@@ -442,7 +447,12 @@ export function parseReview(raw: unknown): ReviewCard | null {
         .map((p) => str(p, 400))
         .filter((p): p is string => !!p),
     },
-    security: { secrets: scan(sec.secrets), packages: scan(sec.packages) },
+    security: {
+      secrets: scan(sec.secrets),
+      packages: scan(sec.packages),
+      semgrep: isObj(sec.semgrep) && ['pass', 'hit', 'not_run'].includes(sec.semgrep.state as string) ? { ...scan(sec.semgrep), reason: str(sec.semgrep.reason, 300) } : null,
+    },
+    fresh_eyes: parseFreshEyes(raw.fresh_eyes),
     findings: arr(raw.findings).map(finding).filter((f): f is DevFinding => !!f),
     cut: str(raw.cut, 120),
     links: links(raw.links),

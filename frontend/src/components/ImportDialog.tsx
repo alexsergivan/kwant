@@ -1,5 +1,5 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, ArrowLeft, Check, ChevronRight, ClipboardCopy, FileUp, Info, Loader2, Undo2, Upload, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check, ChevronRight, ClipboardCopy, FileUp, Folder, Info, Link as LinkIcon, Loader2, Undo2, Upload, X } from 'lucide-react';
 import {
   Applied,
   ExportPrompt,
@@ -21,6 +21,25 @@ import {
 } from '../imports';
 import { useEscapeLayer } from '../escape';
 import { pickProblem, uploadFor } from '../importZip';
+import {
+  type FolderPlan,
+  type GithubInfo,
+  type LocalOrigin,
+  type LocalSource,
+  type PickedEntry,
+  folderPickSupported,
+  folderPlan,
+  folderZip,
+  githubFromLine,
+  githubLinkOk,
+  isAttribution,
+  localErrorText,
+  localOrigin,
+} from '../importSources';
+import { inDesktopApp } from '../externalLinks';
+import { useMedia } from '../useMedia';
+import { PHONE_QUERY } from '../layout';
+import { FolderStep, FoundChooseRow, FoundStep, GithubSourceBlock, GithubStep, type LocalState, foundPrimaryLabel } from './ImportSources';
 
 const btn =
   'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-zinc-300 border border-zinc-700/60 bg-zinc-800/60 hover:bg-zinc-700/70 hover:text-zinc-100 transition-colors disabled:opacity-50';
@@ -57,17 +76,26 @@ export const ErrorBox: React.FC<{ error: unknown; children?: React.ReactNode }> 
   );
 };
 
+const row = `${card} w-full flex items-center gap-3 p-3 min-h-[60px] sm:min-h-0 text-left hover:border-zinc-600 transition-colors`;
+
 export const SourceList: React.FC<{
   prompts: ExportPrompt[] | null;
   error: unknown;
   onPick: (p: ExportPrompt) => void;
   onUpload: () => void;
   onRetry: () => void;
-}> = ({ prompts, error, onPick, onUpload, onRetry }) => (
+  /** Found on this computer: `off` in the web app, where the group isn't drawn at all. */
+  local?: LocalState;
+  onFound?: () => void;
+  /** Null where this browser can't pick a folder (the row is hidden). */
+  onFolder?: (() => void) | null;
+  onGithub?: () => void;
+}> = ({ prompts, error, onPick, onUpload, onRetry, local = { kind: 'off' }, onFound, onFolder = null, onGithub }) => (
   <div className="space-y-3">
     <p className="text-xs text-zinc-400">
       Pick where your bot lives now. Nothing is created until you check a preview and press Import.
     </p>
+    {onFound && <FoundChooseRow state={local} onOpen={onFound} card={card} />}
     <h3 className="text-xs font-semibold text-zinc-300">Bring a bot from…</h3>
     {error ? (
       <ErrorBox error={error}>
@@ -81,7 +109,7 @@ export const SourceList: React.FC<{
       <ul className="space-y-1.5">
         {prompts.map((p) => (
           <li key={p.id}>
-            <button type="button" onClick={() => onPick(p)} className={`${card} w-full flex items-center gap-3 p-3 text-left hover:border-zinc-600 transition-colors`}>
+            <button type="button" onClick={() => onPick(p)} className={row}>
               <span className="flex-1 min-w-0">
                 <span className="block text-sm font-medium text-zinc-100">{p.label}</span>
                 <span className="block text-[11px] text-zinc-500">{SOURCE_HINT[p.id] ?? 'Copy a message, paste the reply'}</span>
@@ -92,14 +120,43 @@ export const SourceList: React.FC<{
         ))}
       </ul>
     )}
-    <button type="button" onClick={onUpload} className={`${card} w-full flex items-center gap-3 p-3 text-left hover:border-zinc-600 transition-colors`}>
-      <FileUp size={18} className="text-zinc-400 shrink-0" aria-hidden="true" />
-      <span className="flex-1 min-w-0">
-        <span className="block text-sm font-medium text-zinc-100">Upload a file</span>
-        <span className="block text-[11px] text-zinc-500">One or several files: Claude Code subagents or SKILL.md, character cards, or Grok Bot, OpenMausBot or .kwant.json exports</span>
-      </span>
-      <ChevronRight size={16} className="text-zinc-500 shrink-0" aria-hidden="true" />
-    </button>
+    <h3 className="text-xs font-semibold text-zinc-300">Or bring files</h3>
+    <ul className="space-y-1.5">
+      <li>
+        <button type="button" onClick={onUpload} className={row}>
+          <FileUp size={18} className="text-zinc-400 shrink-0" aria-hidden="true" />
+          <span className="flex-1 min-w-0">
+            <span className="block text-sm font-medium text-zinc-100">Upload a file</span>
+            <span className="block text-[11px] text-zinc-500">One or several files: Claude Code subagents or SKILL.md, character cards, or Grok Bot, OpenMausBot or .kwant.json exports</span>
+          </span>
+          <ChevronRight size={16} className="text-zinc-500 shrink-0" aria-hidden="true" />
+        </button>
+      </li>
+      {onFolder && (
+        <li>
+          <button type="button" onClick={onFolder} className={row} data-folder-row>
+            <Folder size={18} className="text-zinc-400 shrink-0" aria-hidden="true" />
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-medium text-zinc-100">Folder</span>
+              <span className="block text-[11px] text-zinc-500">A skills folder, or an OpenClaw, Hermes or Codex workspace</span>
+            </span>
+            <ChevronRight size={16} className="text-zinc-500 shrink-0" aria-hidden="true" />
+          </button>
+        </li>
+      )}
+      {onGithub && (
+        <li>
+          <button type="button" onClick={onGithub} className={row} data-github-row>
+            <LinkIcon size={18} className="text-zinc-400 shrink-0" aria-hidden="true" />
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-medium text-zinc-100">GitHub link</span>
+              <span className="block text-[11px] text-zinc-500">A public repo of bots or skills. You see its licence first</span>
+            </span>
+            <ChevronRight size={16} className="text-zinc-500 shrink-0" aria-hidden="true" />
+          </button>
+        </li>
+      )}
+    </ul>
   </div>
 );
 
@@ -265,27 +322,68 @@ export const PreviewView: React.FC<{
   onToggle: (ref: string) => void;
   /** Several picked files went up as one zip: say "from N files", not "from a zip". */
   pickedFiles?: number;
-}> = ({ preview, skip, onToggle, pickedFiles = 0 }) => {
+  /** A picked folder: "from <name>". */
+  folderName?: string;
+  /** Found on this computer: where the bots and shared skills came from, when that's certain. */
+  local?: { ticked: LocalSource[]; origin: LocalOrigin };
+  /** A GitHub link: the source block above everything. */
+  github?: GithubInfo;
+  spaceName?: string;
+}> = ({ preview, skip, onToggle, pickedFiles = 0, folderName, local, github, spaceName = 'this space' }) => {
   const { bots, general } = previewRows(preview);
   const teams = preview.bundle.teams ?? [];
   const shared = preview.bundle.skills ?? [];
   const packed = pickedFiles > 1;
-  const omitted = (preview.bundle.omitted ?? []).map((t) => (packed ? t.replace(/^Files in the zip that weren't read:/, "Files that weren't read:") : t));
+  const omitted = (preview.bundle.omitted ?? [])
+    .filter((t) => !github || !isAttribution(t))
+    .map((t) => (packed || folderName ? t.replace(/^Files in the zip that weren't read:/, "Files that weren't read:") : t));
   const kept = bots.filter((b) => !skip.has(b.ref)).length;
-  const from = packed ? `${pickedFiles} files` : sourceName(preview.bundle.source.kind);
+  const from = folderName
+    ? folderName
+    : packed
+      ? `${pickedFiles} files`
+      : local
+        ? `${plural(local.ticked.length, 'source')} on this computer`
+        : github
+          ? null
+          : sourceName(preview.bundle.source.kind);
+  const botFrom = local?.origin.botSource;
+  const skillFrom = local?.origin.skillSource;
+  const skillsOnly = bots.length === 0 && shared.length > 0;
+  const SHOWN = 8;
   return (
     <div className="space-y-3">
-      <p className="text-xs text-zinc-300">
-        {bots.length > 0 ? `${plural(kept, 'bot')} will be created` : 'No bots in this one'}
-        {from ? ` from ${from}` : ''}. Untick any you don’t want.
-      </p>
+      {github && <GithubSourceBlock github={github} />}
+      {skillsOnly ? (
+        <p className="text-xs text-zinc-300">
+          No bots in this one. <strong className="font-semibold text-zinc-100">{plural(shared.length, 'skill')}</strong> will be added to {spaceName}.
+        </p>
+      ) : bots.length > 0 ? (
+        <p className="text-xs text-zinc-300">
+          {plural(kept, 'bot')} will be created{from ? ` from ${from}` : ''}. Untick any you don’t want.
+        </p>
+      ) : (
+        <p className="text-xs text-zinc-300" data-preview-empty>
+          Nothing here can be brought in: no bots and no skills.
+        </p>
+      )}
+      {skillsOnly && (
+        <div className={`${card} p-3`}>
+          <ul className="flex flex-wrap items-center gap-1.5" aria-label="Skills">
+            {shared.slice(0, SHOWN).map((k, i) => (
+              <li key={`${k.name}-${i}`} className="font-mono text-[11px] text-zinc-300 border border-zinc-700 rounded-full px-2 py-0.5">{k.name}</li>
+            ))}
+            {shared.length > SHOWN && <li className="text-[11px] text-zinc-500">and {shared.length - SHOWN} more</li>}
+          </ul>
+        </div>
+      )}
       <Notes items={general.problems} tone="problem" label="Must be fixed before importing" />
       <ul className="space-y-2">
         {bots.map((b) => {
           const off = skip.has(b.ref);
           return (
             <li key={b.ref} className={`${card} p-3 space-y-2 ${off ? 'opacity-50' : ''}`}>
-              <label className="flex items-start gap-2.5 cursor-pointer">
+              <label className="flex items-start gap-2.5 cursor-pointer max-md:min-h-11" data-bot-tick>
                 <input type="checkbox" checked={!off} onChange={() => onToggle(b.ref)} className="mt-0.5 accent-sky-500" aria-label={`Import ${b.name}`} />
                 <span className="flex-1 min-w-0">
                   <span className="block text-sm font-medium text-zinc-100 break-words">{b.name}</span>
@@ -295,6 +393,11 @@ export const PreviewView: React.FC<{
                     </span>
                   )}
                   {b.title && <span className="block text-[11px] text-zinc-500">{b.title}</span>}
+                  {botFrom && (
+                    <span className="block text-[11px] text-zinc-500 break-all">
+                      From {botFrom.label} · <span className="font-mono">{botFrom.path}</span>
+                    </span>
+                  )}
                 </span>
               </label>
               {b.excerpt && <p className="text-[11px] text-zinc-400 italic break-words">“{b.excerpt}”</p>}
@@ -308,7 +411,11 @@ export const PreviewView: React.FC<{
           );
         })}
       </ul>
-      {(teams.length > 0 || shared.length > 0) && (
+      {!skillsOnly && skillFrom && teams.length === 0 && shared.length > 0 ? (
+        <p className="text-[11px] text-zinc-400">
+          Also: {plural(shared.length, 'shared skill')} from <span className="font-mono">{skillFrom.path}</span>.
+        </p>
+      ) : !skillsOnly && (teams.length > 0 || shared.length > 0) && (
         <p className="text-[11px] text-zinc-400">
           Also: {[teams.length ? plural(teams.length, 'team') : '', shared.length ? plural(shared.length, 'shared skill') : ''].filter(Boolean).join(' and ')}
           {teams.length ? ` (${teams.map((t) => t.name).join(', ')})` : ''}.
@@ -316,10 +423,12 @@ export const PreviewView: React.FC<{
       )}
       <Notes items={general.warnings} tone="warn" label="Worth a look" />
       <Notes items={[...general.dropped, ...omitted]} tone="drop" label="Not brought over" />
-      <p className="flex gap-2 text-[11px] text-zinc-400 rounded-lg bg-zinc-900/60 p-2.5">
-        <Info size={13} className="shrink-0 mt-px text-sky-400" aria-hidden="true" />
-        <span>To keep you safe, imported bots start with no tools, their skills wait for your OK, and routines start paused. Keys are removed.</span>
-      </p>
+      {(bots.length > 0 || shared.length > 0) && (
+        <p className="flex gap-2 text-[11px] text-zinc-400 rounded-lg bg-zinc-900/60 p-2.5">
+          <Info size={13} className="shrink-0 mt-px text-sky-400" aria-hidden="true" />
+          <span>To keep you safe, imported bots start with no tools, their skills wait for your OK, and routines start paused. Keys are removed.</span>
+        </p>
+      )}
     </div>
   );
 };
@@ -333,9 +442,16 @@ export type UndoState =
   | { kind: 'error'; error: unknown };
 
 /** After Import: what was made, and Undo. */
-export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (force: boolean) => void; onKeep: () => void }> = ({ applied, undo, onUndo, onKeep }) => {
+export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (force: boolean) => void; onKeep: () => void; github?: GithubInfo }> = ({
+  applied,
+  undo,
+  onUndo,
+  onKeep,
+  github,
+}) => {
   const c = applied.import.created;
   const names = c.kwants.map((k) => k.name);
+  const skillsOnly = names.length === 0 && c.skills.length > 0;
   if (undo.kind === 'undone') {
     return (
       <div className="space-y-2" role="status">
@@ -348,7 +464,7 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
   }
   const extras = [
     c.teams.length ? plural(c.teams.length, 'team') : '',
-    c.skills.length ? `${plural(c.skills.length, 'skill')} to review` : '',
+    c.skills.length && !skillsOnly ? `${plural(c.skills.length, 'skill')} to review` : '',
     c.routines.length ? `${plural(c.routines.length, 'paused routine')}` : '',
     c.memories ? plural(c.memories, 'memory', 'memories') : '',
   ].filter(Boolean);
@@ -356,14 +472,25 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
     <div className="space-y-3">
       <div role="status" className="space-y-1">
         <p className="flex items-center gap-2 text-sm text-zinc-100">
-          <Check size={16} className="text-emerald-400" /> Imported {plural(names.length, 'bot')}
+          <Check size={16} className="text-emerald-400" /> Imported {skillsOnly ? plural(c.skills.length, 'skill') : plural(names.length, 'bot')}
         </p>
+        {github && (
+          <p className="text-[11px] text-zinc-400 break-words" data-github-done>
+            {githubFromLine(github)}
+            {skillsOnly ? ' They wait for your OK in Settings › This space › Skills.' : ''}
+          </p>
+        )}
         {names.length > 0 && <p className="text-xs text-zinc-300 break-words">{names.join(', ')}</p>}
         {extras.length > 0 && <p className="text-[11px] text-zinc-500">Also {extras.join(', ')}.</p>}
       </div>
       <Notes items={applied.warnings.map((n) => n.message)} tone="warn" label="Worth a look" />
-      <p className="text-[11px] text-zinc-400">Give them an account and tools in Settings › This space when you’re ready. Skills and routines are there to review.</p>
-      <p className="text-[11px] text-zinc-400">Tools you add to this space later will be on for these bots too.</p>
+      {!skillsOnly && (
+        <>
+          <p className="text-[11px] text-zinc-400">Give them an account and tools in Settings › This space when you’re ready. Skills and routines are there to review.</p>
+          <p className="text-[11px] text-zinc-400">Tools you add to this space later will be on for these bots too.</p>
+        </>
+      )}
+      {skillsOnly && !github && <p className="text-[11px] text-zinc-400">They wait for your OK in Settings › This space › Skills.</p>}
       {undo.kind === 'confirm_edited' && (
         <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
           <p className="text-xs text-amber-100">
@@ -387,19 +514,59 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
   );
 };
 
-type Step = { kind: 'choose' } | { kind: 'prompt'; prompt: ExportPrompt } | { kind: 'upload' } | { kind: 'preview'; from: 'prompt' | 'upload'; prompt?: ExportPrompt } | { kind: 'done' };
+type From = 'prompt' | 'upload' | 'found' | 'folder' | 'github';
+type Step =
+  | { kind: 'choose' }
+  | { kind: 'prompt'; prompt: ExportPrompt }
+  | { kind: 'upload' }
+  | { kind: 'found' }
+  | { kind: 'folder' }
+  | { kind: 'github' }
+  | { kind: 'preview'; from: From; prompt?: ExportPrompt }
+  /** `github`: the source of the applied preview, only when it came from a GitHub link (Ada's #459 review). */
+  | { kind: 'done'; github?: GithubInfo };
 
 interface Props {
   spaceName: string;
   onClose: () => void;
   /** After Import or Undo, so the sidebar and lists load again. */
   onChanged: () => void;
+  /** Found on this computer, already asked for by the opener (Get started step 3), so it isn't asked twice. */
+  localSources?: LocalSources;
 }
+
+export type LocalSources = [LocalState, () => Promise<LocalSource[] | null>];
 
 const FOCUSABLE = 'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 
-/** "Import bots": pick a source, paste a reply or upload a file, check the preview, import, undo. */
-export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged }) => {
+/** Found on this computer, as `GET /api/import/local` says (`off` in the web app or with `available: false`). */
+export function useLocalSources(enabled: boolean = inDesktopApp()): LocalSources {
+  const [state, setState] = useState<LocalState>(enabled ? { kind: 'loading' } : { kind: 'off' });
+  const load = async () => {
+    if (!enabled) return null;
+    setState({ kind: 'loading' });
+    try {
+      const l = await importApi.local();
+      if (!l.available) {
+        setState({ kind: 'off' });
+        return null;
+      }
+      setState({ kind: 'ready', sources: l.sources });
+      return l.sources;
+    } catch (err) {
+      setState({ kind: 'error', error: err });
+      return null;
+    }
+  };
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return [state, load];
+}
+
+/** "Import bots": pick a source, paste a reply, upload files, a folder or a GitHub link, check the preview, import, undo. */
+export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, localSources }) => {
   const [step, setStep] = useState<Step>({ kind: 'choose' });
   const [prompts, setPrompts] = useState<ExportPrompt[] | null>(null);
   const [promptsError, setPromptsError] = useState<unknown>(null);
@@ -412,11 +579,27 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
   const [error, setError] = useState<unknown>(null);
   const [applied, setApplied] = useState<Applied | null>(null);
   const [undo, setUndo] = useState<UndoState>({ kind: 'idle' });
+  // Found on this computer.
+  const own = useLocalSources(!localSources && inDesktopApp());
+  const [local, reloadLocal] = localSources ?? own;
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
+  const [localError, setLocalError] = useState<{ title: string; detail: string } | null>(null);
+  const [previewLocal, setPreviewLocal] = useState<{ ticked: LocalSource[]; origin: LocalOrigin } | null>(null);
+  // Folder.
+  const [plan, setPlan] = useState<FolderPlan | null>(null);
+  const [folderUnsupported, setFolderUnsupported] = useState(false);
+  // GitHub link.
+  const [ghUrl, setGhUrl] = useState('');
+  const [ghChecked, setGhChecked] = useState(false);
+  const [github, setGithub] = useState<GithubInfo | null>(null);
+  const phone = useMedia(PHONE_QUERY);
   const fileRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
+  const canFolder = folderPickSupported();
 
   const loadPrompts = () => {
     setPromptsError(null);
@@ -439,14 +622,22 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
     e.preventDefault();
     items[next].focus();
   };
-  // Each step starts at the top, with focus inside the dialog.
+  // Each step starts at the top, with focus inside the dialog. Found runs again once its list arrives, so
+  // focus moves from the "Looking…" line to the first checkbox (or Pick a folder / Try again).
+  const foundPhase = step.kind === 'found' ? local.kind : '';
   useEffect(() => {
-    bodyRef.current?.scrollTo?.(0, 0);
-    bodyRef.current?.querySelector<HTMLElement>('button, textarea, input, [tabindex="0"]')?.focus();
-  }, [step.kind]);
+    const body = bodyRef.current;
+    if (!body) return;
+    if (foundPhase === '' || foundPhase === 'loading') body.scrollTo?.(0, 0);
+    (
+      body.querySelector<HTMLElement>('[data-autofocus]') ??
+      body.querySelector<HTMLElement>('button, textarea, input:not([type="file"]), [tabindex="0"]')
+    )?.focus();
+  }, [step.kind, foundPhase]);
 
   const go = (s: Step) => {
     setError(null);
+    setLocalError(null);
     setStep(s);
   };
 
@@ -463,12 +654,67 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
     }
   };
 
+  const foundList = local.kind === 'ready' ? local.sources : [];
+  const tickedSources = foundList.filter((s) => ticked.has(s.id) && !s.too_large);
+
+  const showPreview = (p: Preview, from: From, prompt?: ExportPrompt) => {
+    setPreview(p);
+    setSkip(new Set());
+    if (from !== 'github') setGithub(null);
+    go({ kind: 'preview', from, prompt });
+  };
+
   const check = async () => {
     setBusy(true);
     setError(null);
     // From the preview ("Check again" after a name was taken), read the same input again.
+    const from: From = step.kind === 'preview' ? step.from : step.kind === 'prompt' ? 'prompt' : step.kind === 'found' ? 'found' : step.kind === 'folder' ? 'folder' : step.kind === 'github' ? 'github' : 'upload';
     const prompt = step.kind === 'prompt' ? step.prompt : step.kind === 'preview' ? step.prompt : undefined;
     try {
+      if (from === 'found') {
+        setLocalError(null);
+        const picked = tickedSources;
+        if (picked.length === 0) return;
+        try {
+          const p = await importApi.localPreview(picked.map((s) => s.id));
+          setPreviewLocal({ ticked: picked, origin: localOrigin(picked) });
+          showPreview(p, 'found');
+        } catch (err) {
+          const text = localErrorText(err, picked);
+          if (step.kind === 'preview') go({ kind: 'found' });
+          setLocalError(text);
+          // A source went away: look again and drop the ticks that vanished.
+          if (err instanceof ImportError && err.code === 'not_found') {
+            const now = await reloadLocal();
+            if (now) setTicked((t) => new Set([...t].filter((id) => now.some((s) => s.id === id && !s.too_large))));
+          }
+        }
+        return;
+      }
+      if (from === 'github') {
+        setGhChecked(true);
+        if (!githubLinkOk(ghUrl)) return;
+        const p = await importApi.githubPreview(ghUrl);
+        setGithub(p.github);
+        showPreview(p, 'github');
+        return;
+      }
+      if (from === 'folder') {
+        if (!plan || plan.problem || plan.kept.length === 0) return;
+        setFolderUnsupported(false);
+        const up = await folderZip(plan);
+        try {
+          showPreview(await importApi.previewFile(up.body, up.filename), 'folder');
+        } catch (err) {
+          if (err instanceof ImportError && err.code === 'unsupported') {
+            if (step.kind === 'preview') go({ kind: 'folder' });
+            setFolderUnsupported(true);
+            return;
+          }
+          throw err;
+        }
+        return;
+      }
       let p = null;
       if (prompt) p = await importApi.previewText(reply);
       else if (files.length > 0 && !pickProblem(files)) {
@@ -477,9 +723,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
         p = await importApi.previewFile(up.body, up.filename);
       }
       if (!p) return;
-      setPreview(p);
-      setSkip(new Set());
-      go({ kind: 'preview', from: prompt ? 'prompt' : 'upload', prompt });
+      showPreview(p, prompt ? 'prompt' : 'upload', prompt);
     } catch (err) {
       setError(err);
     } finally {
@@ -492,10 +736,11 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
     setBusy(true);
     setError(null);
     try {
+      const fromGithub = step.kind === 'preview' && step.from === 'github' && github ? github : undefined;
       const a = await importApi.apply(preview.bundle, [...skip]);
       setApplied(a);
       setUndo({ kind: 'idle' });
-      go({ kind: 'done' });
+      go({ kind: 'done', github: fromGithub });
       onChanged();
     } catch (err) {
       setError(err);
@@ -520,13 +765,38 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
   };
 
   const back = () => {
-    if (step.kind === 'prompt' || step.kind === 'upload') go({ kind: 'choose' });
-    else if (step.kind === 'preview') go(step.from === 'prompt' && step.prompt ? { kind: 'prompt', prompt: step.prompt } : { kind: 'upload' });
+    if (step.kind === 'github') setGithub(null);
+    if (step.kind === 'prompt' || step.kind === 'upload' || step.kind === 'found' || step.kind === 'folder' || step.kind === 'github') go({ kind: 'choose' });
+    else if (step.kind === 'preview') go(step.from === 'prompt' && step.prompt ? { kind: 'prompt', prompt: step.prompt } : { kind: step.from === 'prompt' ? 'upload' : step.from });
   };
 
-  const title =
-    step.kind === 'prompt' ? `Bring a bot from ${step.prompt.label}` : step.kind === 'upload' ? 'Upload a file' : step.kind === 'preview' ? 'Check before importing' : step.kind === 'done' ? 'Import bots' : `Import bots into ${spaceName}`;
+  const pickFolder = () => folderRef.current?.click();
+  const openFolder = () => {
+    go({ kind: 'folder' });
+  };
+  const onFolderPicked = (entries: PickedEntry[]) => {
+    setFolderUnsupported(false);
+    setError(null);
+    setPlan(entries.length ? folderPlan(entries) : null);
+  };
 
+  const TITLES: Partial<Record<Step['kind'], string>> = {
+    upload: 'Upload a file',
+    found: 'Found on this computer',
+    folder: 'Bring a folder',
+    github: 'Bring from a GitHub link',
+    preview: 'Check before importing',
+    done: 'Import bots',
+  };
+  const title = step.kind === 'prompt' ? `Bring a bot from ${step.prompt.label}` : TITLES[step.kind] ?? `Import bots into ${spaceName}`;
+
+  const fb = phone ? 'flex-1 min-h-11 text-sm justify-center' : '';
+  const cancel = (
+    <button type="button" onClick={onClose} className={`${btn} ${fb}`}>
+      Cancel
+    </button>
+  );
+  const spin = <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />;
   let footer: React.ReactNode = null;
   if (step.kind === 'prompt' || step.kind === 'upload') {
     const ready =
@@ -536,35 +806,84 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
           ? !pickProblem(files)
           : files.length === 1 && !fileTooBig(files[0].size);
     footer = (
-      <button type="button" onClick={check} disabled={!ready || busy} className={primary}>
-        {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} {busy ? 'Reading…' : 'Preview'}
+      <>
+        {cancel}
+        <button type="button" onClick={check} disabled={!ready || busy} className={`${primary} ${fb}`}>
+          {busy && spin} {busy ? 'Reading…' : 'Preview'}
+        </button>
+      </>
+    );
+  } else if (step.kind === 'found') {
+    const nothing = local.kind === 'ready' && local.sources.length === 0;
+    footer = nothing ? (
+      <button type="button" onClick={back} className={`${btn} ${fb}`}>
+        Back
       </button>
+    ) : (
+      <>
+        {cancel}
+        <button type="button" onClick={check} disabled={tickedSources.length === 0 || busy || local.kind !== 'ready'} className={`${primary} ${fb}`} data-found-primary>
+          {busy && spin} {foundPrimaryLabel(tickedSources.length, busy)}
+        </button>
+      </>
+    );
+  } else if (step.kind === 'folder') {
+    footer = (
+      <>
+        {plan ? (
+          <button type="button" onClick={pickFolder} className={`${btn} ${fb}`}>
+            Change folder
+          </button>
+        ) : (
+          cancel
+        )}
+        <button type="button" onClick={check} disabled={!plan || !!plan.problem || plan.kept.length === 0 || folderUnsupported || busy} className={`${primary} ${fb}`}>
+          {busy && spin} {busy ? 'Reading…' : 'Preview'}
+        </button>
+      </>
+    );
+  } else if (step.kind === 'github') {
+    const ok = !!githubLinkOk(ghUrl);
+    footer = (
+      <>
+        {cancel}
+        <button type="button" onClick={check} disabled={busy || ghUrl.trim() === '' || (ghChecked && !ok)} className={`${primary} ${fb}`}>
+          {busy && spin} {busy ? 'Fetching…' : error != null ? 'Try again' : 'Preview'}
+        </button>
+      </>
     );
   } else if (step.kind === 'preview' && preview) {
     const n = preview.bundle.bots.filter((b) => !skip.has(b.ref)).length;
+    const k = preview.bundle.skills?.length ?? 0;
     const isNameRace = error instanceof ImportError && error.code === 'name_taken';
-    footer = isNameRace ? (
-      <button type="button" onClick={check} disabled={busy} className={primary}>
-        Check again
-      </button>
-    ) : (
-      <button type="button" onClick={doImport} disabled={!canImport(preview, skip) || busy} className={primary}>
-        {busy && <Loader2 size={13} className="animate-spin motion-reduce:animate-none" />} {busy ? 'Importing…' : n > 0 ? `Import ${plural(n, 'bot')}` : 'Import'}
-      </button>
+    footer = (
+      <>
+        {cancel}
+        {isNameRace ? (
+          <button type="button" onClick={check} disabled={busy} className={`${primary} ${fb}`}>
+            Check again
+          </button>
+        ) : (
+          <button type="button" onClick={doImport} disabled={!canImport(preview, skip) || busy} className={`${primary} ${fb}`}>
+            {busy && spin} {busy ? 'Importing…' : n > 0 ? `Import ${plural(n, 'bot')}` : preview.bundle.bots.length === 0 && k > 0 ? `Import ${plural(k, 'skill')}` : 'Import'}
+          </button>
+        )}
+      </>
     );
   } else if (step.kind === 'done' && applied) {
     footer = (
       <>
         {undo.kind !== 'undone' && undo.kind !== 'confirm_edited' && undo.kind !== 'in_use' && (
-          <button type="button" onClick={() => doUndo(false)} disabled={undo.kind === 'busy'} className={btn}>
-            {undo.kind === 'busy' ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> : <Undo2 size={13} />} Undo import
+          <button type="button" onClick={() => doUndo(false)} disabled={undo.kind === 'busy'} className={`${btn} ${fb}`}>
+            {undo.kind === 'busy' ? spin : <Undo2 size={13} />} Undo import
           </button>
         )}
-        <button type="button" onClick={onClose} className={primary}>Done</button>
+        <button type="button" onClick={onClose} className={`${primary} ${fb}`}>Done</button>
       </>
     );
   }
 
+  const iconBtn = phone ? 'w-11 h-11 flex items-center justify-center' : 'p-1.5';
   return (
     <div className="kw-dialog fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex sm:items-center justify-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
@@ -575,29 +894,83 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
         aria-labelledby="import-title"
         className="kw-dialog-panel bg-zinc-900 sm:border border-zinc-800 sm:rounded-2xl w-full sm:max-w-xl h-full sm:h-auto sm:max-h-[90vh] flex flex-col text-zinc-100 shadow-2xl"
       >
-        <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
+        <div className={`flex items-center gap-2 border-b border-zinc-800 ${phone ? 'h-14 px-2' : 'px-4 py-3'}`}>
           {step.kind !== 'choose' && step.kind !== 'done' && (
-            <button type="button" onClick={back} aria-label="Back" className="p-1.5 -ml-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
+            <button type="button" onClick={back} aria-label="Back" className={`${iconBtn} -ml-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800`}>
               <ArrowLeft size={17} />
             </button>
           )}
-          <h2 id="import-title" className="flex-1 min-w-0 text-sm font-semibold truncate">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800">
+          <h2 id="import-title" className={`flex-1 min-w-0 text-sm font-semibold truncate ${phone && (step.kind === 'choose' || step.kind === 'done') ? 'pl-2' : ''}`}>{title}</h2>
+          <button type="button" onClick={onClose} aria-label="Close" className={`${iconBtn} rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800`}>
             <X size={18} />
           </button>
         </div>
         <div ref={bodyRef} className="flex-1 overflow-y-auto p-4 space-y-3">
           {step.kind === 'choose' && (
-            <SourceList prompts={prompts} error={promptsError} onRetry={loadPrompts} onPick={(p) => go({ kind: 'prompt', prompt: p })} onUpload={() => go({ kind: 'upload' })} />
+            <SourceList
+              prompts={prompts}
+              error={promptsError}
+              onRetry={loadPrompts}
+              onPick={(p) => go({ kind: 'prompt', prompt: p })}
+              onUpload={() => go({ kind: 'upload' })}
+              local={local}
+              onFound={local.kind === 'off' ? undefined : () => go({ kind: 'found' })}
+              onFolder={canFolder ? openFolder : null}
+              onGithub={() => go({ kind: 'github' })}
+            />
           )}
           {step.kind === 'prompt' && (
             <PromptStep prompt={step.prompt} reply={reply} onReply={setReply} copied={copied} onCopy={copy} />
           )}
           {step.kind === 'upload' && <UploadStep files={files} onFiles={setFiles} inputRef={fileRef} />}
+          {step.kind === 'found' && (
+            <FoundStep
+              state={local}
+              ticked={ticked}
+              onToggle={(id) =>
+                setTicked((t) => {
+                  const next = new Set(t);
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  return next;
+                })
+              }
+              reading={busy}
+              previewError={localError}
+              onRetry={() => void reloadLocal()}
+              onFolder={canFolder ? openFolder : null}
+              onUpload={() => go({ kind: 'upload' })}
+            />
+          )}
+          {step.kind === 'folder' && <FolderStep plan={plan} onPicked={onFolderPicked} inputRef={folderRef} unsupported={folderUnsupported} />}
+          {step.kind === 'github' && (
+            <GithubStep
+              url={ghUrl}
+              onUrl={(u) => {
+                setGhUrl(u);
+                setError(null);
+              }}
+              checked={ghChecked}
+              onCheck={() => setGhChecked(true)}
+              fetching={busy}
+              error={error}
+              phone={phone}
+              onSubmit={() => {
+                // Enter keeps Preview's rules: nothing while fetching or empty; a bad link shows its reason.
+                if (busy || ghUrl.trim() === '') return;
+                setGhChecked(true);
+                if (githubLinkOk(ghUrl)) void check();
+              }}
+            />
+          )}
           {step.kind === 'preview' && preview && (
             <PreviewView
               preview={preview}
               pickedFiles={step.from === 'upload' ? files.length : 0}
+              folderName={step.from === 'folder' ? plan?.name : undefined}
+              local={step.from === 'found' && previewLocal ? previewLocal : undefined}
+              github={step.from === 'github' && github ? github : undefined}
+              spaceName={spaceName}
               skip={skip}
               onToggle={(ref) =>
                 setSkip((s) => {
@@ -609,8 +982,10 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged })
               }
             />
           )}
-          {step.kind === 'done' && applied && <DoneView applied={applied} undo={undo} onUndo={doUndo} onKeep={() => setUndo({ kind: 'idle' })} />}
-          {error != null && <ErrorBox error={error} />}
+          {step.kind === 'done' && applied && (
+            <DoneView applied={applied} undo={undo} onUndo={doUndo} onKeep={() => setUndo({ kind: 'idle' })} github={step.github} />
+          )}
+          {error != null && step.kind !== 'github' && <ErrorBox error={error} />}
         </div>
         {footer && <div className="flex flex-wrap justify-end gap-2 border-t border-zinc-800 px-4 py-3">{footer}</div>}
       </div>

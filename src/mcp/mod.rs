@@ -461,6 +461,31 @@ impl ToolApprover for FixedApprover {
     }
 }
 
+/// A bot's effective approvals as its prompt describes them (`db::approval_modes`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Approvals {
+    /// Every tool call that changes things shows the person a card first. Also what anything
+    /// unknown, an audit turn and a read-only turn are told.
+    #[default]
+    Ask,
+    /// "Ask only when risky": ordinary work runs, risky calls show a card.
+    Smart,
+    /// The person switched approvals off: tools run without a card (a payment, a Flight School tier
+    /// gate or the Dev mode production floor still asks).
+    Off,
+}
+
+impl Approvals {
+    /// From an effective mode (`ask`, `smart`, `off`); anything else is [`Approvals::Ask`].
+    pub fn from_mode(mode: &str) -> Self {
+        match mode {
+            crate::db::approval_modes::OFF => Self::Off,
+            crate::db::approval_modes::SMART => Self::Smart,
+            _ => Self::Ask,
+        }
+    }
+}
+
 /// What a driver needs to offer MCP tools on one turn. Only set when the kwant has servers.
 #[derive(Clone)]
 pub struct McpTurnContext {
@@ -474,9 +499,9 @@ pub struct McpTurnContext {
     /// kwnt's MCP gateway for this turn, for agent CLIs that can't route approvals themselves.
     pub gateway: Option<GatewayAccess>,
     pub max_tool_iterations: usize,
-    /// The bot's approvals were "Ask only when risky" when the turn started; only tells the bot
-    /// what to expect (the approver reads the live setting for each call).
-    pub smart_approvals: bool,
+    /// The bot's approvals (ask, smart or off) when the turn started; only tells the bot what to
+    /// expect (the approver reads the live setting for each call).
+    pub approvals: Approvals,
     /// Tool call records for the reply's `tool_calls` field; drivers and the permission endpoint append.
     pub records: Arc<Mutex<Vec<Value>>>,
 }

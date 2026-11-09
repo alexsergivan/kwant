@@ -555,6 +555,17 @@ pub async fn codex_user_mcp_servers(
         .collect()
 }
 
+/// What a claude turn gets as `--append-system-prompt`: the shared prompt and, with kwnt's tools,
+/// the paragraph on claude's own tools, which follow kwnt's policy (see `mcp::builtin_tools`).
+pub(crate) fn claude_system_prompt(system_prompt: &str, input: &TurnInput) -> String {
+    let folder = input.workspace_dir.as_deref().filter(|d| d.exists());
+    let tools_block = match &input.mcp {
+        Some(ctx) => crate::mcp::builtin_tools::prompt_block(folder, ctx.approvals),
+        None => String::new(),
+    };
+    format!("{system_prompt}{tools_block}")
+}
+
 pub fn build_cli_prompt(input: &TurnInput) -> String {
     if input.history.is_empty() {
         return input.prompt.clone();
@@ -674,6 +685,26 @@ impl CliDriver {
     pub fn with_grok_home(mut self, dir: std::path::PathBuf) -> Self {
         self.grok_home = Some(dir);
         self
+    }
+
+    /// Arguments for a turn on this computer (not in the VM): the profile's overrides and, for
+    /// Claude on a Mac, the local hardening ([`super::mac_local`]), as one `--settings` object.
+    fn local_settings_args(&self, is_mac: bool) -> Vec<String> {
+        let mut args = self.profile_env.as_ref().map(|e| e.args.clone()).unwrap_or_default();
+        if !super::mac_local::applies(is_mac, &self.tool_kind, false) {
+            return args;
+        }
+        let profile_home = self.profile_env.as_ref().and_then(|e| {
+            e.set.iter().find(|(k, _)| k == "CLAUDE_CONFIG_DIR").map(|(_, v)| std::path::PathBuf::from(v))
+        });
+        let Some(places) = super::mac_local::Places::here(profile_home) else {
+            tracing::warn!("no home folder: Claude runs without the Mac hardening");
+            return args;
+        };
+        let seatbelt = super::mac_local::seatbelt_on(std::env::var(super::mac_local::SEATBELT_ENV).ok().as_deref());
+        let sock = std::env::var("SSH_AUTH_SOCK").ok();
+        super::mac_local::merge_settings_arg(&mut args, super::mac_local::settings(&places, seatbelt, sock.as_deref()));
+        args
     }
 }
 
@@ -1731,14 +1762,7 @@ impl Driver for CliDriver {
                         }
                     }
                 }
-                // claude's own tools follow kwnt's policy (see mcp::builtin_tools); tell the bot
-                let folder = input.workspace_dir.as_deref().filter(|d| d.exists());
-                let tools_block = if let Some(ctx) = &input.mcp {
-                    crate::mcp::builtin_tools::prompt_block(folder, ctx.smart_approvals)
-                } else {
-                    String::new()
-                };
-                cmd.arg("--append-system-prompt").arg(format!("{system_prompt}{tools_block}"));
+                cmd.arg("--append-system-prompt").arg(claude_system_prompt(&system_prompt, &input));
                 // JSON lines as claude works, ending in one result that tells a usage limit or
                 // sign-out apart from a reply; partial messages keep a long answer from looking stalled
                 cmd.arg("--output-format").arg("stream-json").arg("--verbose").arg("--include-partial-messages");
@@ -1749,10 +1773,12 @@ impl Driver for CliDriver {
             // The container's claude, its own home and a stand-in credential; the profile's
             // home and this computer's settings never reach it
             cmd = t.wrap(&cmd);
-        } else if let Some(env) = &self.profile_env {
-            env.apply(&mut cmd);
+        } else {
+            if let Some(env) = &self.profile_env {
+                env.apply(&mut cmd);
+            }
             // claude -p has no subcommand, so its overrides can follow the other options
-            cmd.args(&env.args);
+            cmd.args(self.local_settings_args(cfg!(target_os = "macos")));
         }
 
         // codex's reply comes from its -o file; its stdout carries the `--json` steps
@@ -2356,6 +2382,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             mcp: None,
             no_tools: false,
             read_only: false,
+            delivery: None,
             fresh_eyes: false,
         };
 
@@ -2409,6 +2436,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             mcp: None,
             no_tools: false,
             read_only: false,
+            delivery: None,
             fresh_eyes: false,
         };
 
@@ -2458,6 +2486,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 mcp: None,
                 no_tools,
                 read_only: false,
+                delivery: None,
                 fresh_eyes: false,
             }
         }
@@ -2470,7 +2499,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 permission_url: None,
                 gateway: None,
                 max_tool_iterations: 4,
-                smart_approvals: false,
+                approvals: crate::mcp::Approvals::Ask,
                 records: Default::default(),
             }
         }
@@ -2545,6 +2574,58 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 Err(DriverError::Execution(why)) => why,
                 Err(other) => panic!("wrong error: {other}"),
                 Ok(out) => panic!("ran with tools: {:?}", out.text),
+            }
+        }
+
+        /// 079-mac-local-hardening: on a Mac, a Claude turn on this computer gets the deny rules
+        /// in the same `--settings` as its profile's overrides; Codex, Grok and Linux get nothing new
+        #[test]
+        fn a_mac_claude_turn_gets_one_settings_with_the_hardening() {
+            let profile = tempfile::tempdir().unwrap();
+            let one = |kind: &str, with_profile: bool, mac: bool| {
+                let mut d = CliDriver::new(Some("/bin/true".into()), Some(kind.into()));
+                if with_profile {
+                    d = d.with_profile_home(crate::profiles::Engine::Claude, profile.path().to_path_buf());
+                }
+                d.local_settings_args(mac)
+            };
+            let settings_of = |args: &[String]| -> serde_json::Value {
+                assert_eq!(args.iter().filter(|a| *a == "--settings").count(), 1, "{args:?}");
+                let i = args.iter().position(|a| a == "--settings").unwrap();
+                serde_json::from_str(&args[i + 1]).unwrap()
+            };
+            let v = settings_of(&one("claude", true, true));
+            assert!(v["env"].is_object(), "the profile's overrides stay: {v}");
+            let deny: Vec<String> = serde_json::from_value(v["permissions"]["deny"].clone()).unwrap();
+            let home = dirs::home_dir().unwrap();
+            let want = format!("Read(/{}/**)", home.join(".claude").display());
+            assert!(deny.contains(&want), "{want} not in {deny:?}");
+            let want = format!("Read(/{}/**)", profile.path().display());
+            assert!(deny.contains(&want), "the profile's home: {want} not in {deny:?}");
+            // Without a profile: the hardening alone
+            let v = settings_of(&one("claude", false, true));
+            assert!(v.get("env").is_none() && v["permissions"]["deny"].is_array(), "{v}");
+            // Not a Mac, or not Claude: exactly what was there before
+            assert_eq!(one("claude", false, false), Vec::<String>::new());
+            let before = crate::profiles::CliEnv::for_home(crate::profiles::Engine::Claude, profile.path()).args;
+            assert_eq!(one("claude", true, false), before);
+            assert_eq!(one("codex", false, true), Vec::<String>::new());
+            assert_eq!(one("grok", false, true), Vec::<String>::new());
+        }
+
+        /// The flag reaches the CLI: on macOS the fake claude sees one `--settings` with the deny
+        /// rules; elsewhere it sees none (no profile)
+        #[tokio::test]
+        async fn the_hardening_reaches_claudes_command_line_on_a_mac_only() {
+            let fake = Fake::new("claude", &format!("{RECORD}\necho '{CLAUDE_RESULT}'"));
+            fake.run(turn(false)).await.unwrap();
+            let argv = fake.argv();
+            let settings: Vec<&String> = argv.windows(2).filter(|w| w[0] == "--settings").map(|w| &w[1]).collect();
+            if cfg!(target_os = "macos") {
+                assert_eq!(settings.len(), 1, "{argv:?}");
+                assert!(settings[0].contains("\"deny\"") && settings[0].contains(".claude/**"), "{argv:?}");
+            } else {
+                assert!(settings.is_empty(), "{argv:?}");
             }
         }
 
