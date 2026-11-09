@@ -245,6 +245,8 @@ const LOOKS_STATES: &[&str] = &[
     "show", "shown", "load", "loading", "loads", "work", "working", "works", "fit", "fits", "responsive", "readable",
     "right", "correct", "same", "look", "looks", "displayed", "display", "displaying", "render", "rendering",
 ];
+/// "right" before these is a time or place, not how it looks: "not right now", "not right away".
+const NOT_LOOKS_RIGHT_AFTER: &[&str] = &["now", "away", "here", "there"];
 /// Words that negate a change verb right after them ("please don't change the footer"); "no need
 /// to" is matched as a pair, and a "to" before the verb is skipped ("not to change").
 const VERB_NEGATIONS: &[&str] = &["don't", "dont", "not", "never"];
@@ -389,16 +391,24 @@ fn is_bare_change(text: &str) -> bool {
     })
 }
 
-/// Whether `words` is a statement that something visible is wrong ("the button is not aligned
+/// Whether `text` is a statement that something visible is wrong ("the button is not aligned
 /// with booktun.ing styling!!!!", "the colours are off on mobile"), not a question about it.
-fn complains_about_something_visible(text: &str, words: &[String]) -> bool {
-    has_defect(words) && names_something_visible(text)
+fn complains_about_something_visible(text: &str) -> bool {
+    has_defect(text) && names_something_visible(text)
 }
 
-/// Whether `words` says something is wrong: an explicit defect word ("broken", "off"), a negated
+/// Whether `text` says something is wrong in any clause: an explicit defect word ("broken", "off"), a negated
 /// looks state ("is not aligned", "doesn't match"), or "too" before a word that isn't praise
 /// ("too small"; not "looks good too").
-fn has_defect(words: &[String]) -> bool {
+fn has_defect(text: &str) -> bool {
+    text.split([',', '.', ';', '!', '?', '\n', '\r']).any(|clause| clause_has_defect(&tokens(clause)))
+}
+
+/// [`has_defect`] for one clause. A negation that opens the clause is an instruction, not a
+/// complaint ("don't look at the footer yet", "please do not work on the mobile page"), and "right"
+/// before "now", "away", "here" or "there" is a time or place, not how it looks ("not right now").
+fn clause_has_defect(words: &[String]) -> bool {
+    let opening = opening_negation(words);
     words.iter().enumerate().any(|(i, w)| {
         let w = w.as_str();
         if DEFECT_WORDS.contains(&w) {
@@ -407,12 +417,27 @@ fn has_defect(words: &[String]) -> bool {
         if w == "too" {
             return words.get(i + 1).is_some_and(|n| !PRAISE.contains(&n.as_str()));
         }
-        LOOKS_NEGATIONS.contains(&w)
-            && words[i + 1..]
-                .iter()
-                .find(|n| !NEGATION_SKIP.contains(&n.as_str()))
-                .is_some_and(|n| LOOKS_STATES.contains(&n.as_str()))
+        if !LOOKS_NEGATIONS.contains(&w) || opening == Some(i) {
+            return false;
+        }
+        let Some(j) = (i + 1..words.len()).find(|&j| !NEGATION_SKIP.contains(&words[j].as_str())) else {
+            return false;
+        };
+        let state = words[j].as_str();
+        LOOKS_STATES.contains(&state)
+            && !(state == "right" && words.get(j + 1).is_some_and(|n| NOT_LOOKS_RIGHT_AFTER.contains(&n.as_str())))
     })
+}
+
+/// The index of the negation that opens a clause after its [`LEAD_IN`] words: don't, dont, never,
+/// or the "not" of "do not". "the buttons don't work on mobile" has none: "the buttons" comes first.
+fn opening_negation(words: &[String]) -> Option<usize> {
+    let i = words.iter().position(|w| !LEAD_IN.contains(&w.as_str()))?;
+    match words[i].as_str() {
+        "don't" | "dont" | "never" => Some(i),
+        "do" if words.get(i + 1).is_some_and(|n| n == "not") => Some(i + 1),
+        _ => None,
+    }
 }
 
 /// Whether the word at `i` (a change verb) is negated: "don't change", "do not change", "never
@@ -500,7 +525,7 @@ fn classify(text: &str) -> Option<Deliverable> {
         || joined.contains("show us")
         || first.is_some_and(|w| SEE_WORDS.contains(&w.as_str()))
         || any_in(&words, PICTURE_WORDS);
-    if !question && !asks_to_see && complains_about_something_visible(text, &words) {
+    if !question && !asks_to_see && complains_about_something_visible(text) {
         return Some(Deliverable::Change);
     }
     if any_in(&words, SEE_WORDS) || joined.contains("how it looks") || joined.contains("what it looks like") {
@@ -683,6 +708,13 @@ mod tests {
             "do not change the footer",
             "never change the logo",
             "it's fine, not to change the header",
+            // M3: "right now" is a time, and a clause that opens with a negation is an instruction
+            "the mobile page can wait, not right now",
+            "not right now, the header is fine",
+            "the header can wait, not right away",
+            "don't look at the footer yet",
+            "don't work on the mobile page yet",
+            "ok, do not look at the header yet",
         ] {
             let plan = keyword_plan(msg, &[]);
             assert_ne!(plan.kind, Change, "{msg}");
@@ -707,12 +739,22 @@ mod tests {
             "the footer doesn't look right on mobile",
             "the cards are not properly aligned",
             "the font doesn't fit on the screen",
+            "the header is not right",
+            "the buttons don't work on mobile",
+            "the page is not loading",
+            "the colours don't match the brand",
+            "too many buttons on the page",
+            "the header is fine. the footer doesn't look right on mobile",
         ] {
             assert_eq!(keyword_plan(msg, &[]), DeliveryPlan::visible_change(PlanSource::Keywords), "{msg}");
         }
         // A change verb with something else between it and the negation is still asked for
         assert_eq!(keyword_plan("don't forget to fix the header", &[]), DeliveryPlan::visible_change(PlanSource::Keywords));
         assert_eq!(expected_kind("don't forget to update the README", &[]), Change);
+        // Accepted in review: an opening "don't" reads as an instruction, so hiding is not a Change
+        assert_ne!(expected_kind("please don't show the banner on mobile", &[]), Change);
+        assert_eq!(opening_negation(&tokens("please do not look at it")), Some(2));
+        assert_eq!(opening_negation(&tokens("the buttons don't work")), None);
         assert!(is_negated(&tokens("no need to change it"), 3));
         assert!(is_negated(&tokens("do not change it"), 2));
         assert!(!is_negated(&tokens("change it"), 0));
