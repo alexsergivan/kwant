@@ -294,16 +294,44 @@ pub struct TurnPlanInput<'a> {
     pub person_message: Option<&'a str>,
     /// The person's own earlier messages, oldest first, without kwant's reply marks.
     pub recent: &'a [&'a str],
+    /// The turn's working folder is in a git repository ([`in_git_repo`]). Without one there is
+    /// nothing to branch, push or link, so no plan is a [`Deliverable::Change`].
+    pub git_repo: bool,
 }
 
 /// The turn's delivery plan: none for a no-tools, read-only or fresh-eyes turn; else the carried
 /// plan; else the keyword plan of the person's own message; else none. A plan only ever comes from
 /// the person's words, so kwant's notes can't make a routed message Visual or a hire Ideas.
+///
+/// A [`Deliverable::Change`] plan needs a git project (`git_repo`): "write a short email to Anna"
+/// or "set a reminder for 9" in a bot with no repo is no plan at all (no hint, no delivery check),
+/// not a change to push and link. This is the one place that gate lives; classify freely above it.
+/// Known gap (0.8.0): a bot whose working folder isn't a repo but which `cd`s into one gets no
+/// Change plan.
 pub fn plan_for_turn(t: TurnPlanInput<'_>) -> Option<DeliveryPlan> {
     if t.no_tools || t.read_only || t.fresh_eyes {
         return None;
     }
-    t.carried.or_else(|| t.person_message.map(|m| keyword_plan(m, t.recent)))
+    t.carried
+        .or_else(|| t.person_message.map(|m| keyword_plan(m, t.recent)))
+        .filter(|p| p.kind != Deliverable::Change || t.git_repo)
+}
+
+/// How many folders [`in_git_repo`] looks at: `dir` and its parents.
+const GIT_LOOKUP_LEVELS: usize = 8;
+
+/// Whether `dir` is in a git repository: it or one of its parents has a `.git` folder or file (a
+/// worktree's `.git` is a file). Plain file checks, no git subprocess. Stops below the home folder
+/// (a repo there doesn't make every bot folder a project) and after [`GIT_LOOKUP_LEVELS`] folders.
+pub fn in_git_repo(dir: &std::path::Path) -> bool {
+    in_git_repo_below(dir, dirs::home_dir().as_deref())
+}
+
+fn in_git_repo_below(dir: &std::path::Path, home: Option<&std::path::Path>) -> bool {
+    dir.ancestors()
+        .take(GIT_LOOKUP_LEVELS)
+        .take_while(|d| home.is_none_or(|h| *d != h))
+        .any(|d| d.join(".git").exists())
 }
 
 /// The kind `text` names on its own, or `None` when nothing in it says.
@@ -536,6 +564,58 @@ mod tests {
         assert_eq!(plan_for_turn(decided), Some(held.clone()));
         // ...but a fresh-eyes turn never gets one, carried or not
         assert!(plan_for_turn(TurnPlanInput { carried: Some(held), fresh_eyes: true, ..Default::default() }).is_none());
+    }
+
+    #[test]
+    fn a_change_plan_needs_a_git_project() {
+        // Ada's review of #469 round 3, must-fix 3: CHANGE_VERBS has write, set, create, add…
+        let plan = |m: &str, git_repo: bool| {
+            plan_for_turn(TurnPlanInput { person_message: Some(m), git_repo, ..Default::default() }).map(|p| p.kind)
+        };
+        assert_eq!(keyword_plan("write a short email to Anna", &[]).kind, Change, "what the gate is for");
+        assert_eq!(plan("write a short email to Anna", false), None);
+        assert_eq!(plan("set a reminder for 9", false), None);
+        assert_eq!(plan("fix the login button colour", true), Some(Change));
+        // Ideas, Visual and Explain don't need one
+        assert_eq!(plan("Any ideas for the landing page?", false), Some(Ideas));
+        assert_eq!(plan("show me mockup image", false), Some(Visual));
+        assert_eq!(plan("why does the build fail?", false), Some(Explain));
+        // A carried Change plan goes through the same gate
+        let change = DeliveryPlan::for_kind(Change, PlanSource::Keywords);
+        let carried = |git_repo| plan_for_turn(TurnPlanInput { carried: Some(change.clone()), git_repo, ..Default::default() });
+        assert_eq!(carried(true), Some(change.clone()));
+        assert_eq!(carried(false), None);
+    }
+
+    #[test]
+    fn a_git_project_is_a_git_folder_or_file_here_or_above() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let repo = home.join("work/repo");
+        let sub = repo.join("frontend/src");
+        let worktree = home.join("work/tree");
+        let plain = home.join("notes");
+        for d in [&sub, &worktree, &plain] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let below = |d: &std::path::Path| in_git_repo_below(d, Some(home.as_path()));
+        assert!(!below(&repo), "no .git yet");
+        std::fs::create_dir(repo.join(".git")).unwrap();
+        assert!(below(&repo), "a .git folder");
+        assert!(below(&sub), "a subfolder of a repo");
+        // A worktree's .git is a file ("gitdir: …")
+        std::fs::write(worktree.join(".git"), "gitdir: /elsewhere/.git/worktrees/tree\n").unwrap();
+        assert!(below(&worktree), "a .git file");
+        assert!(!below(&plain));
+        // A repo at home doesn't make every folder under it a project…
+        std::fs::create_dir(home.join(".git")).unwrap();
+        assert!(!below(&plain), "stops below home");
+        assert!(in_git_repo_below(&plain, None), "without a home it looks there too");
+        // …and the walk is bounded
+        let deep = (0..GIT_LOOKUP_LEVELS).fold(repo.clone(), |p, i| p.join(format!("d{i}")));
+        std::fs::create_dir_all(&deep).unwrap();
+        assert!(!below(&deep), "more than {GIT_LOOKUP_LEVELS} folders up");
+        assert!(below(deep.parent().unwrap()));
     }
 
     #[test]

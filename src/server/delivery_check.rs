@@ -9,11 +9,12 @@
 //!   If it still shares no image, its reply gets [`NO_PICTURE_LINE`](super::picture_claims::NO_PICTURE_LINE).
 //! - The result is recorded as a delivery hit or miss ([`record_delivery_note`]).
 //!
-//! What the person expected comes from the turn's `DeliveryPlan` (`src/router/delivery.rs`, Lin's
-//! P9 PR; Juno's analyzer fills it in later), read through [`Expect`] so that this check keeps
-//! working with Lin's keyword plan alone.
+//! What the person expected comes from the turn's one `DeliveryPlan` (`src/router/delivery.rs`),
+//! the same plan the prompt's "[What to deliver]" hint renders, read through [`Expect::from_plan`].
+//! The continuation carries that plan; it never makes a new one from kwant's own prompt.
 
 use super::picture_claims::claims_picture;
+use crate::router::delivery::{DeliveryPlan, Show};
 use serde_json::Value;
 
 /// What the person expects to see in the chat for one turn: the parts of the turn's
@@ -26,20 +27,14 @@ pub struct Expect {
     pub done_when: Vec<String>,
 }
 
-/// The turn's expectations from the person's own message. The seam for Lin's
-/// `crate::router::delivery::keyword_plan(prompt)` (and Juno's analyzer plan on top): until
-/// `src/router/delivery.rs` is on main there is no plan, so only the picture-claim guard runs.
-/// Only the person's own message has one; hand-offs, routines and other prompts kwnt or a bot
-/// wrote never do.
-pub fn expect_for(_person_prompt: &str) -> Option<Expect> {
-    // P9/P10 hookup once #470 (lin-080-proactive-prompt) is on main: read the plan the turn
-    // carried (`TurnInput::delivery`), else `keyword_plan(prompt, &[])`, and keep only plans with
-    // something to check, so Explain and Other turns record nothing:
-    //     use crate::router::delivery::{keyword_plan, Show};
-    //     let plan = keyword_plan(person_prompt, &[]);
-    //     let (image, link) = (plan.show.contains(&Show::Image), plan.show.contains(&Show::Link));
-    //     (image || link).then(|| Expect { image, link, done_when: plan.done_when })
-    None
+impl Expect {
+    /// What the turn's plan lets this check verify: `image` from [`DeliveryPlan::wants_picture`],
+    /// `link` from `Show::Link`, and the plan's `done_when`. `None` when it wants neither
+    /// (Explain and Other plans), so those turns are not continued or recorded.
+    pub fn from_plan(plan: &DeliveryPlan) -> Option<Self> {
+        let (image, link) = (plan.wants_picture(), plan.show.contains(&Show::Link));
+        (image || link).then(|| Expect { image, link, done_when: plan.done_when.clone() })
+    }
 }
 
 /// What the turn really did.
