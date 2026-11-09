@@ -179,8 +179,8 @@ impl Runner {
     }
 }
 
-/// Tries every option of `run` in turn, saving after each step. `_guard` is held until the end.
-pub async fn execute(db: Database, harness: Arc<dyn Harness>, mut run: Run, _guard: OwnedMutexGuard<()>) -> Result<Run, DbError> {
+/// Tries every option of `run` in turn, saving after each step. `guard` is held until just before the final save.
+pub async fn execute(db: Database, harness: Arc<dyn Harness>, mut run: Run, guard: OwnedMutexGuard<()>) -> Result<Run, DbError> {
     let scenario = run.scenario.clone();
     for (i, option) in scenario.options.iter().enumerate() {
         run.branches[i].status = BranchStatus::Running;
@@ -220,6 +220,9 @@ pub async fn execute(db: Database, harness: Arc<dyn Harness>, mut run: Run, _gua
     }
     run.status = RunStatus::Finished;
     run.finished_at = Some(Utc::now());
+    // Free the server-wide slot before the run reads as finished: whoever sees "finished" and
+    // starts the next run must not get "busy" (the slot used to drop only after this save).
+    drop(guard);
     db.pu_put_run(&run).await?;
     Ok(run)
 }
