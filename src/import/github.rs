@@ -147,7 +147,7 @@ pub async fn fetch(url: &str) -> Result<Vec<u8>, GithubError> {
     if !status.is_success() {
         return Err(GithubError::FetchFailed(format!("GitHub answered {}. Try again in a moment.", status.as_u16())));
     }
-    let too_large = || GithubError::Import(ImportError::TooLarge("This repository's zip is larger than 20 MB. Link to a folder inside it, or download and zip only the parts you want.".into()));
+    let too_large = || GithubError::Import(ImportError::TooLarge("This repository is larger than 20 MB, so kwant can't fetch it. Download the folder you want, zip it and import the zip instead.".into()));
     if resp.content_length().is_some_and(|n| n > MAX_ZIP_BYTES as u64) {
         return Err(too_large());
     }

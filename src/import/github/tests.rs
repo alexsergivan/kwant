@@ -75,12 +75,18 @@ fn licence_guesses() {
 const SHA: &str = "2cdd34e1f0d7bfa5b9dfadecf3d72b525fbb1577";
 
 fn repo_zip(files: &[(&str, &str)]) -> Vec<u8> {
+    repo_zip_in("skills-main", files)
+}
+
+/// A codeload-shaped zip: every file under `<top>/`.
+fn repo_zip_in(top: &str, files: &[(&str, &str)]) -> Vec<u8> {
     let mut out = std::io::Cursor::new(Vec::new());
     {
         let mut z = zip::ZipWriter::new(&mut out);
         let opts = zip::write::SimpleFileOptions::default();
+        z.add_directory(format!("{top}/"), opts).unwrap();
         for (name, text) in files {
-            z.start_file(format!("skills-main/{name}"), opts).unwrap();
+            z.start_file(format!("{top}/{name}"), opts).unwrap();
             z.write_all(text.as_bytes()).unwrap();
         }
         z.set_comment(SHA.to_string()).unwrap();
@@ -121,6 +127,71 @@ fn reads_a_repo_with_licence_commit_and_path() {
     assert_eq!(b.skills.len(), 1);
 
     assert!(matches!(read(&link("o", "skills", None, Some("nope")), &zip), Err(GithubError::Import(ImportError::Unsupported(_)))));
+}
+
+/// Review #455 item 1: a `/tree/<ref>/<path>` link reads only `<path>`. 501 `.json` files outside
+/// it (over the 500 readable-file cap) are listed by name, never inflated or counted.
+#[test]
+fn a_subpath_link_counts_only_files_inside_it() {
+    let outside: Vec<(String, String)> = (0..501).map(|i| (format!("i18n/{i:03}.json"), "{\"hello\": \"hi\"}".to_string())).collect();
+    let mut files: Vec<(&str, &str)> = outside.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+    let seo = skill("seo");
+    files.push(("skills/seo/SKILL.md", &seo));
+    files.push(("LICENSE", "Permission is hereby granted, free of charge, to any person"));
+    let zip = repo_zip_in("r-main", &files);
+
+    let (b, info) = read(&link("o", "r", Some("main"), Some("skills")), &zip).unwrap();
+    assert_eq!(b.skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["seo"]);
+    assert_eq!(info.licence.and_then(|l| l.spdx).as_deref(), Some("MIT"), "the repo's top licence is still read");
+
+    // At the reader: only the folder (and the top licence) is inflated; the rest is named only.
+    let un = crate::import::archive::read_zip_as(&zip, crate::import::archive::ZipKind::Repo { subpath: Some("skills") }).unwrap();
+    assert_eq!(un.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), ["skills/seo/SKILL.md", "LICENSE"]);
+    assert_eq!(un.skipped.iter().filter(|p| p.starts_with("i18n/")).count(), 501);
+
+    // The whole repo has 501 readable .json files: over the cap.
+    assert!(matches!(read(&link("o", "r", Some("main"), None), &zip), Err(GithubError::Import(ImportError::TooLarge(_)))));
+}
+
+/// Review #455 item 2: the hidden-folder rule runs after `<repo>-<ref>/` is stripped, as for an
+/// upload, so a repo's `.claude/agents` and `.claude/skills` are read; `skills/.system` stays skipped.
+#[test]
+fn a_repos_claude_folder_is_read_and_hidden_subfolders_are_not() {
+    let zip = repo_zip_in(
+        "r-main",
+        &[
+            (".claude/agents/a.md", "---\nname: reviewer\ndescription: Reviews code.\n---\n\nReview the diff.\n"),
+            (".claude/skills/s/SKILL.md", &skill("s")),
+            ("skills/.system/x/SKILL.md", &skill("x")),
+        ],
+    );
+    let un = crate::import::archive::read_zip_as(&zip, crate::import::archive::ZipKind::Repo { subpath: None }).unwrap();
+    assert_eq!(un.entries.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(), [".claude/agents/a.md", ".claude/skills/s/SKILL.md"]);
+    assert!(un.skipped.contains(&"skills/.system/x/SKILL.md".to_string()), "{:?}", un.skipped);
+
+    // One bot and one skill; as for an upload, a skill next to a single agent is that agent's.
+    let (b, _) = read(&link("o", "r", Some("main"), None), &zip).unwrap();
+    assert_eq!(b.bots.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["reviewer"]);
+    assert_eq!(b.bots[0].skills.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["s"]);
+    assert!(b.skills.is_empty(), "{:?}", b.skills);
+}
+
+/// Review #455 item 2: a link straight to `/tree/main/.claude/agents` previews the bot.
+#[tokio::test]
+async fn a_link_to_a_repos_claude_agents_folder_previews_the_bot() {
+    let zip = repo_zip_in(
+        "r-main",
+        &[
+            (".claude/agents/a.md", "---\nname: reviewer\ndescription: Reviews code.\n---\n\nReview the diff.\n"),
+            (".claude/skills/s/SKILL.md", &skill("s")),
+        ],
+    );
+    let (base, seen) = mock(http("200 OK", &format!("Content-Length: {}\r\n", zip.len()), &zip)).await;
+    let (b, info) = preview(&base, "https://github.com/o/r/tree/main/.claude/agents").await.unwrap();
+    assert_eq!(b.bots.iter().map(|x| x.name.as_str()).collect::<Vec<_>>(), ["reviewer"]);
+    assert!(b.skills.is_empty(), "{:?}", b.skills);
+    assert_eq!(info.path.as_deref(), Some(".claude/agents"));
+    assert_eq!(seen.lock().unwrap().as_slice(), ["GET /o/r/zip/main HTTP/1.1"]);
 }
 
 #[test]
@@ -179,12 +250,14 @@ async fn redirects_are_refused_not_followed() {
 #[tokio::test]
 async fn oversize_zips_are_refused() {
     // Refused from the length alone, before the body
+    // Review #455 item 3: no advice to link a folder (codeload always sends the whole repo).
+    const TOO_LARGE: &str = "This repository is larger than 20 MB, so kwant can't fetch it. Download the folder you want, zip it and import the zip instead.";
     let (base, _) = mock(http("200 OK", &format!("Content-Length: {}\r\n", MAX_ZIP_BYTES + 1), b"PK")).await;
-    assert!(matches!(preview(&base, "github.com/o/r").await, Err(GithubError::Import(ImportError::TooLarge(_)))));
+    assert_eq!(preview(&base, "github.com/o/r/tree/main/skills").await.unwrap_err(), GithubError::Import(ImportError::TooLarge(TOO_LARGE.into())));
     // No length: counted while streaming
     let big = vec![b'x'; MAX_ZIP_BYTES + 1024];
     let (base, _) = mock(http("200 OK", "", &big)).await;
-    assert!(matches!(preview(&base, "github.com/o/r").await, Err(GithubError::Import(ImportError::TooLarge(_)))));
+    assert_eq!(preview(&base, "github.com/o/r").await.unwrap_err(), GithubError::Import(ImportError::TooLarge(TOO_LARGE.into())));
 }
 
 #[tokio::test]

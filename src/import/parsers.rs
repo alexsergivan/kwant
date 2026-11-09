@@ -662,17 +662,8 @@ pub fn parse_repo_zip(bytes: &[u8], subpath: Option<&str>) -> Result<(Bundle, Re
     if bytes.len() > MAX_ZIP_BYTES {
         return Err(too_large("A repository", "20 MB"));
     }
-    let mut unzipped = archive::read_zip_as(bytes, archive::ZipKind::Repo)?;
-    let top = |p: &str| p.split_once('/').map(|(t, _)| t.to_string());
-    let first = unzipped.entries.iter().map(|e| e.path.as_str()).chain(unzipped.skipped.iter().map(String::as_str)).next().and_then(top);
-    if let Some(first) = first {
-        let all_under = unzipped.entries.iter().all(|e| top(&e.path).as_deref() == Some(&first)) && unzipped.skipped.iter().all(|p| top(p).as_deref() == Some(&first));
-        if all_under {
-            let cut_at = first.len() + 1;
-            unzipped.entries.iter_mut().for_each(|e| e.path = e.path[cut_at..].to_string());
-            unzipped.skipped.iter_mut().for_each(|p| *p = p[cut_at..].to_string());
-        }
-    }
+    // The reader strips `<repo>-<ref>/` and inflates nothing outside `subpath` but top licences.
+    let mut unzipped = archive::read_zip_as(bytes, archive::ZipKind::Repo { subpath })?;
     let licence_at = |dir: &str| {
         unzipped
             .entries
