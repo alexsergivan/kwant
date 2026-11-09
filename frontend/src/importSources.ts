@@ -142,8 +142,9 @@ const SECRET_JSON_PREFIXES = ['auth-profiles', 'oauth', 'credentials', 'token'];
 const SECRET_NAME_PREFIXES = ['client_secret', 'service-account'];
 /** Any other file whose name says it holds a secret. Notes and pictures (.md, .png) are judged by content, not name. */
 const SECRET_WORDS = /(oauth|credential|secret|token|passw|api[-_]?key|private)/i;
-/** "auth" only as a whole word part (Ada's #459 review item 12): auth.yaml, my_auth.txt, authz.json, not author.json. */
-const AUTH_WORD = /(^|[^a-z])auth(n|z|entication|orization)?($|[^a-z])/i;
+/** "auth" anywhere except author/authors/authority (Ada's #471 review): authkey.json, googleAuth.json and
+ * authorisation.json are secrets; author.json and authors-note.json are not. */
+const AUTH_WORD = /auth(?!or(?!i[sz]))/i;
 /** OpenClaw's device keypair and paired devices: never sent, even from a renamed copy (Ada's #459 review item 10). */
 const DEVICE_KEY_DIRS = new Set(['identity', 'devices']);
 /** A picked app folder (its own name), packed as an app home. */

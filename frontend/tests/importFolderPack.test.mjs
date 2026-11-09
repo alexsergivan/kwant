@@ -263,7 +263,7 @@ test('item 9: the same markers inside an app-named folder, or next to a real key
   assert.deepEqual(m.appHomes(['backup/openclaw/.env', 'backup/hub/auth.json']).sort(), ['hub', 'openclaw']);
 });
 
-test('item 10: "auth" counts only as a whole word part, so authors-note.json and author.json still go', async () => {
+test('item 10: "auth" anywhere is a secret (authkey, googleAuth, authinfo, authorisation); only author.json and authors-note.json go', async () => {
   const plan = m.folderPlan(
     pick([
       ['cards/authors-note.json', '{"note":"by Ada"}'],
@@ -273,9 +273,13 @@ test('item 10: "auth" counts only as a whole word part, so authors-note.json and
       ['cards/github-authz.json', `{"k":"${PROBE}"}`],
       ['cards/AUTH.yaml', `k: ${PROBE}`],
       ['cards/oauthcache.json', `{"k":"${PROBE}"}`],
+      ['cards/authkey.json', `{"k":"${PROBE}"}`],
+      ['cards/googleAuth.json', `{"k":"${PROBE}"}`],
+      ['cards/authinfo.json', `{"k":"${PROBE}"}`],
+      ['cards/authorisation.json', `{"k":"${PROBE}"}`],
     ]),
   );
   assert.deepEqual(kept(plan), ['cards/author.json', 'cards/authors-note.json']);
   assert.ok(!(await zipNames(plan)).text.includes(PROBE), 'no key bytes in the zip');
-  assert.equal(plan.left.find((l) => /never sent/i.test(l.label))?.count, 5, JSON.stringify(plan.left));
+  assert.equal(plan.left.find((l) => /never sent/i.test(l.label))?.count, 9, JSON.stringify(plan.left));
 });
