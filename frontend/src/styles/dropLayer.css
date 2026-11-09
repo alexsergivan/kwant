@@ -51,7 +51,7 @@
 .kw-dd-heading { font-size: 18px; line-height: 24px; font-weight: 600; color: #f5f4fb; letter-spacing: -0.01em; text-wrap: balance; }
 .kw-dd-what { margin-top: 6px; font-size: 13px; line-height: 18px; color: #c9c5e6; font-variant-numeric: tabular-nums; }
 .kw-dd-kind { display: inline-flex; align-items: center; gap: 4px; color: #e2dff5; }
-.kw-dd-lim { margin-top: 4px; font-size: 11px; line-height: 16px; color: #8d87b8; }
+.kw-dd-lim { margin-top: 4px; font-size: 11px; line-height: 16px; color: #8d87b8; text-wrap: balance; }
 .kw-dd-wont { margin-top: 14px; text-align: left; border-radius: 10px; border: 1px solid rgb(252 211 77 / 0.28); background: rgb(252 211 77 / 0.08); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
 .kw-dd-wont > div { display: flex; gap: 8px; font-size: 12px; line-height: 17px; color: #fde68a; }
 .kw-dd-refuse { margin-top: 8px; display: inline-flex; gap: 6px; font-size: 13px; line-height: 18px; color: #fda4af; text-align: left; }
@@ -61,7 +61,7 @@
 .kw-dd[data-phase='armed'] .kw-dd-veil { background: rgb(18 14 38 / 0.55); }
 .kw-dd[data-phase='armed'] .kw-dd-frame { box-shadow: inset 0 0 0 1.5px rgb(157 143 255 / 0.3); transition-duration: 120ms; }
 .kw-dd[data-phase='armed'] .kw-dd-corner { fill: #6c58e0; }
-.kw-dd[data-phase='armed'] .kw-dd-card { transform: scale(0.96); opacity: 0.82; border-color: rgb(157 143 255 / 0.2); box-shadow: 0 24px 64px rgb(0 0 0 / 0.45); transition-duration: 120ms; }
+.kw-dd[data-phase='armed'] .kw-dd-card { transform: scale(0.96); opacity: 0.94; border-color: rgb(157 143 255 / 0.2); box-shadow: 0 24px 64px rgb(0 0 0 / 0.45); transition-duration: 120ms; }
 .kw-dd[data-phase='armed'] .kw-dd-one { box-shadow: 0 0 0 2px #231b4d, 0 0 0 4px rgb(157 143 255 / 0.35); }
 .kw-dd[data-phase='armed'] .kw-dd-count { animation: none; }
 /* A -> B: the avatar hops and the badge pops */

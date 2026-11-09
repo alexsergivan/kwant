@@ -6,7 +6,8 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { AlertTriangle, Ban, File as FileIcon, FileText, Film, Image as ImageIcon, MessageSquare, Users } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import type { DropCardModel, Heading, KindPart } from '../dragPreview';
-import { PILL_TEXT, modalOpen, windowDragWatch } from '../dragPreview';
+import { PILL_TEXT, leaveMs, modalOpen, windowDragWatch } from '../dragPreview';
+import { LIMITS_LINE } from '../attachments';
 
 export type DropPhase = 'armed' | 'over' | 'refused' | 'landing' | 'leaving';
 
@@ -128,7 +129,7 @@ export const DropLayer: React.FC<DropLayerProps> = ({ phase, card, single, bots,
                   ))}
                 </p>
               )}
-              <p className="kw-dd-lim">Up to 20 MB each · videos 100 MB</p>
+              <p className="kw-dd-lim" data-drop-limits>{LIMITS_LINE}</p>
               {card.wont.length > 0 && (
                 <div className="kw-dd-wont" data-drop-warning>
                   {card.wont.map((w) => (
@@ -174,7 +175,7 @@ export const DropPillHost: React.FC = () => {
     if (!was.current) return;
     was.current = false;
     setLeaving(true);
-    const t = setTimeout(() => setLeaving(false), 100);
+    const t = setTimeout(() => setLeaving(false), leaveMs());
     return () => clearTimeout(t);
   }, [want]);
   return (

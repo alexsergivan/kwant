@@ -251,10 +251,11 @@ export const queuedVmText = (slots?: number): string =>
 /**
  * The open chat's "in line" sentence. Calm on purpose: a reply can wait about five minutes behind
  * two replies held on approval cards (qa-446 P-5b), so no timeout, no warning tone, no spinner.
+ * A row that names the bot it waits for says that bot's name instead of "this bot" (#476 L6).
  */
-export const queuedText = (reason: 'agent_busy' | 'server_busy' | 'vm_busy', slots?: number): string =>
+export const queuedText = (reason: 'agent_busy' | 'server_busy' | 'vm_busy', slots?: number, botName?: string): string =>
   reason === 'vm_busy'
     ? queuedVmText(slots)
     : reason === 'server_busy'
       ? 'The server is running as many turns as it allows right now; this one starts as soon as a slot frees up.'
-      : 'Waiting for this bot’s other replies to finish.';
+      : `Waiting for ${botName?.trim() ? `${botName.trim()}’s` : 'this bot’s'} other replies to finish.`;
