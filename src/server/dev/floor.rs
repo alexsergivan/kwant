@@ -117,10 +117,36 @@ fn repo_dirs(git: &Dir) -> Option<bool> {
     Some(true)
 }
 
+/// `folder` canonicalized, to compare with typed paths and git's own `gitdir:` lines. On Windows
+/// `canonicalize` adds a `\\?\` prefix that a plain `C:\...` or `C:/...` path (which git writes)
+/// never starts with, so it is dropped again; on unix this is just `canonicalize`.
+fn canonical_plain(folder: &Path) -> Option<PathBuf> {
+    let c = folder.canonicalize().ok()?;
+    #[cfg(windows)]
+    {
+        use std::path::Prefix;
+        let mut parts = c.components();
+        if let Some(Component::Prefix(pre)) = parts.next() {
+            let plain = match pre.kind() {
+                Prefix::VerbatimDisk(d) => Some(PathBuf::from(format!("{}:\\", d as char))),
+                Prefix::VerbatimUNC(server, share) => Some(PathBuf::from(format!("\\\\{}\\{}\\", server.to_string_lossy(), share.to_string_lossy()))),
+                _ => None,
+            };
+            if let Some(mut out) = plain {
+                for part in parts.filter(|p| !matches!(p, Component::RootDir)) {
+                    out.push(part);
+                }
+                return Some(out);
+            }
+        }
+    }
+    Some(c)
+}
+
 /// Q3: `cwd`'s parts below `folder`, when `cwd` names `folder` (as given, or with the person's
 /// own symlinks resolved) or a folder below it with plain names only.
 fn rel_inside(folder: &Path, cwd: &Path) -> Option<Vec<OsString>> {
-    let canon = folder.canonicalize().ok();
+    let canon = canonical_plain(folder);
     let rest = cwd.strip_prefix(folder).ok().or_else(|| cwd.strip_prefix(canon.as_deref()?).ok())?;
     rest.components()
         .filter(|c| !matches!(c, Component::CurDir))
@@ -147,7 +173,7 @@ fn joined(parts: &[OsString]) -> PathBuf {
 fn worktree_head(root: &Dir, folder: &Path, at: &[OsString], text: &str) -> Option<String> {
     let gd = Path::new(text.trim().strip_prefix("gitdir:")?.trim());
     let (mut stack, rest): (Vec<OsString>, &Path) = if gd.is_absolute() {
-        let canon = folder.canonicalize().ok();
+        let canon = canonical_plain(folder);
         (Vec::new(), gd.strip_prefix(folder).ok().or_else(|| gd.strip_prefix(canon.as_deref()?).ok())?)
     } else {
         (at.to_vec(), gd)

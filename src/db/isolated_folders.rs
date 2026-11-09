@@ -126,6 +126,7 @@ mod tests {
         std::fs::create_dir_all(proj.join("sub")).unwrap();
         let other = d.path().join("other");
         std::fs::create_dir_all(&other).unwrap();
+        #[cfg(unix)]
         let link = d.path().join("link");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&proj, &link).unwrap();

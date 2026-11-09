@@ -1183,6 +1183,8 @@ mod tests {
         }
     }
 
+    // Container paths are unix paths (`/w/proj` isn't absolute on Windows); isolation is Linux only
+    #[cfg(unix)]
     #[test]
     fn run_args_isolate_the_container() {
         let m = Mounts::new(Path::new("/w/proj"), Path::new("/d/h"), Path::new("/d/run")).unwrap();
@@ -1205,6 +1207,8 @@ mod tests {
         assert!(!s.contains("docker.sock"));
     }
 
+    // Container paths are unix paths (`/w/proj` isn't absolute on Windows); isolation is Linux only
+    #[cfg(unix)]
     #[test]
     fn mount_values_cant_add_options_and_odd_names_are_refused() {
         // A comma or quote stays inside the src field (Docker reads --mount as CSV)

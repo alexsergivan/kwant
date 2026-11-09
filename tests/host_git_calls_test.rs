@@ -1,7 +1,8 @@
 //! D4c / S-13 (agents in the VM): kwant starts git on this computer only through
 //! `server::dev::git::host_git_command`, which forces `GIT_CONFIG_NOSYSTEM=1` and turns off
-//! hooks, fsmonitor and the pager. This fails when anything else in `src/` (outside test code)
-//! starts git itself.
+//! hooks, fsmonitor and the pager. It is built from its blocking twin
+//! `host_git_command_blocking` (used by Windows' `git_bash`), the one line that starts git. This
+//! fails when anything else in `src/` (outside test code) starts git itself.
 
 use std::path::Path;
 
@@ -40,7 +41,7 @@ fn only_the_helper_starts_git() {
             }
         }
     }
-    // Exactly one: the line inside `host_git_command`
+    // Exactly one: the line inside `host_git_command_blocking`, which `host_git_command` wraps
     assert_eq!(found.len(), 1, "git started outside host_git_command: {found:?}");
     assert!(found[0].starts_with("server/dev/git.rs:"), "{found:?}");
 }

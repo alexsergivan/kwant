@@ -340,6 +340,21 @@ async fn brief_state(env: &Env, key: &str) -> String {
     b["state"].as_str().unwrap_or_default().to_string()
 }
 
+/// The brief row's state once it has caught up with `want` (up to 30 s). The brief row is written
+/// right after the card (`tickets::store::set_state` moves the card, then `mirror`s it), so a read
+/// in between sees the card one step ahead. Returns the last state seen, to assert on.
+async fn brief_state_reaches(env: &Env, key: &str, want: &str) -> String {
+    let mut last = String::new();
+    for _ in 0..300 {
+        last = brief_state(env, key).await;
+        if last == want {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    last
+}
+
 /// The mission the brief row points at (the brief route's `mission_id`).
 async fn mission_of(env: &Env, key: &str) -> Option<String> {
     let (_, b) = call(&env.app, "GET", &uri(&format!("tickets/{key}/brief")), None).await;
@@ -362,7 +377,7 @@ async fn working_ticket(env: &Env, m: &MockAtlassian) -> (String, String) {
     poll(env).await;
     let st = wait_state(env, &key, &["working", "failed", "needs_answer"]).await;
     assert_eq!(st, "working", "{:?}", events(env, &key).await);
-    assert_eq!(brief_state(env, &key).await, "working", "the brief row mirrors the card");
+    assert_eq!(brief_state_reaches(env, &key, "working").await, "working", "the brief row mirrors the card");
     (key, tag)
 }
 
@@ -383,19 +398,19 @@ async fn rigel_x4_stop_rules_after_the_work_started() {
     let r = ticket(&env, &key).await;
     assert_eq!(r.state, "taken_back");
     assert_eq!(r.taken_back_by.as_deref(), Some("Dana Park"));
-    assert_eq!(brief_state(&env, &key).await, "taken_back", "the brief row stays with its card");
+    assert_eq!(brief_state_reaches(&env, &key, "taken_back").await, "taken_back", "the brief row stays with its card");
 
     m.set_labels(&key, &["kwant"]);
     poll(&env).await;
     let st = wait_state(&env, &key, &["working", "failed", "needs_answer"]).await;
     assert_eq!(st, "working", "handed over again resumes: {:?}", events(&env, &key).await);
-    assert_eq!(brief_state(&env, &key).await, "working");
+    assert_eq!(brief_state_reaches(&env, &key, "working").await, "working");
     assert_eq!(invocations_with(&tag).len(), reads, "resumed from the kept brief, not read again");
 
     m.transition(&key, "Done", "done");
     poll(&env).await;
     assert_eq!(ticket(&env, &key).await.state, "closed");
-    assert_eq!(brief_state(&env, &key).await, "closed");
+    assert_eq!(brief_state_reaches(&env, &key, "closed").await, "closed");
     assert!(m.writes().is_empty());
 }
 
@@ -412,18 +427,19 @@ async fn stop_then_start_resumes_the_work_from_the_kept_brief() {
 
     let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/stop")), None).await;
     assert_eq!((s.as_u16(), v["ticket"]["state"].as_str()), (200, Some("taken_back")), "{v}");
-    assert_eq!(brief_state(&env, &key).await, "taken_back");
+    assert_eq!(brief_state_reaches(&env, &key, "taken_back").await, "taken_back");
     assert_eq!(env.state.db.get_mission(&first).await.unwrap().unwrap().status, "cancelled", "Stop stops the work");
     // A late brief_ready (a turn that was still running) can't move it on
     let late = kwnt::server::dev::tickets::seam::set_state(&env.state, &space(), &key, "brief_ready").await;
     assert!(!late);
-    assert_eq!((ticket(&env, &key).await.state.as_str(), brief_state(&env, &key).await.as_str()), ("taken_back", "taken_back"));
+    assert_eq!(brief_state_reaches(&env, &key, "taken_back").await, "taken_back");
+    assert_eq!(ticket(&env, &key).await.state, "taken_back");
 
     let (s, v) = call(&env.app, "POST", &uri(&format!("tickets/{key}/start")), None).await;
     assert_eq!(s.as_u16(), 200, "{v}");
     let st = wait_state(&env, &key, &["working", "failed", "needs_answer"]).await;
     assert_eq!(st, "working", "{:?}", events(&env, &key).await);
-    assert_eq!(brief_state(&env, &key).await, "working");
+    assert_eq!(brief_state_reaches(&env, &key, "working").await, "working");
     assert_eq!(invocations_with(&tag).len(), reads, "resumed from the kept brief, not read again");
     let second = mission_of(&env, &key).await.unwrap_or_default();
     assert!(!second.is_empty() && second != first, "a new mission: {first} then {second:?}");

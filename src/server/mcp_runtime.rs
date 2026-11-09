@@ -722,6 +722,7 @@ pub(crate) async fn isolate_stdio_servers(state: &AppState, servers: &mut Vec<Mc
     }
     let dir = mcp_cwd(&state.config.data_dir, token);
     let private = || {
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut b = std::fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
