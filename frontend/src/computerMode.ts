@@ -35,7 +35,7 @@ export function vmCopy(isolates: string[], claudeOn = false): { label: string; h
     return {
       label: 'VM (browser, shell and Claude isolated)',
       hint: 'The browser, built-in shell and Claude run in Docker containers, away from your files.',
-      note: 'Codex and Grok still run on this computer, with their own file and shell tools. They won’t run in a folder Claude used inside the VM.',
+      note: 'Codex and Grok still run on this computer, with their own file and shell tools. They won’t run in a folder Claude used in its sealed box.',
     };
   }
   if (isolates.includes('cli_agents')) {

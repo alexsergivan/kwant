@@ -4,7 +4,7 @@
 // Server: src/sandbox/agent_vm/notice.rs (`IsolationFailed::to_meta`, `start_text`) and
 // src/drivers/cli.rs (`isolation_notice`, `isolated_end`).
 import type { ChatMessage } from './components/ChatView';
-import { SETTING_NAME } from './claudeVm';
+import { SETTING_HANDLE } from './claudeVm';
 import { parseMetaObject } from './questions';
 
 export type FolderFrom = 'team' | 'space' | 'goal' | 'bot';
@@ -93,11 +93,11 @@ export interface IsolationCard {
 
 /** The safety lines, split so the setting's name can be bold. */
 export const SAFETY: Record<Exclude<SafetyKind, null>, [string, string, string] | [string]> = {
-  standard: ['While ', SETTING_NAME, ' is on, Claude never runs outside it, so nothing ran on this computer. To run Claude here instead, turn that off in Computer settings.'],
+  standard: ['While ', SETTING_HANDLE, ' is on, Claude never runs outside its sealed box, so nothing ran on this computer. To run Claude here instead, turn off key protection in Computer settings.'],
   nothing_ran: ['Nothing ran.'],
-  unsafe: ['Nothing ran. Turning off ', SETTING_NAME, ' would also work, but then Claude could read this whole folder from this computer.'],
-  unsafe_shared: ['Nothing ran. Turning off ', SETTING_NAME, ' would also work, but then Claude runs on this computer again.'],
-  folder_used: ['Nothing ran. Turning off ', SETTING_NAME, ' doesn’t change this, because the folder may already hold those settings.'],
+  unsafe: ['Nothing ran. Turning off ', SETTING_HANDLE, ' would also work, but then Claude could read this whole folder from this computer.'],
+  unsafe_shared: ['Nothing ran. Turning off ', SETTING_HANDLE, ' would also work, but then Claude runs on this computer again.'],
+  folder_used: ['Nothing ran. Turning off ', SETTING_HANDLE, ' doesn’t change this, because the folder may already hold those settings.'],
 };
 
 const t = (text: string): Seg => ({ text });
@@ -108,20 +108,20 @@ function unsafeSentence(kind: string | null, folder: string | null): Seg[] {
   const withPath = (lead: string | null, rest: string): Seg[] => (f ? [{ text: f, folder: true }, t(rest)] : [t(`${lead ?? 'This folder'}${rest}`)]);
   switch (kind) {
     case 'home':
-      return withPath('This folder', ' is your home folder. Inside the VM, Claude would see all your files and sign-ins.');
+      return withPath('This folder', ' is your home folder. In its sealed box, Claude would see all your files and sign-ins.');
     case 'contains_home':
     case 'root':
-      return withPath('This folder', ' holds your home folder. Inside the VM, Claude would see all your files and sign-ins.');
+      return withPath('This folder', ' holds your home folder. In its sealed box, Claude would see all your files and sign-ins.');
     case 'sign_ins':
-      return withPath('This folder', ' holds sign-ins, like your SSH keys or Claude, Codex or Grok sign-in, so kwant won’t share it with the VM.');
+      return withPath('This folder', ' holds sign-ins, like your SSH keys or Claude, Codex or Grok sign-in, so kwant won’t share it with Claude’s sealed box.');
     case 'kwant_data':
-      return withPath('This folder', ' holds kwant’s own data, including your sign-ins, so kwant won’t share it with the VM.');
+      return withPath('This folder', ' holds kwant’s own data, including your sign-ins, so kwant won’t share it with Claude’s sealed box.');
     case 'docker':
-      return withPath('This folder', ' holds Docker’s control socket, which would let Claude out of the VM.');
+      return withPath('This folder', ' holds Docker’s control socket, which would let Claude out of its sealed box.');
     case 'shared_folder':
-      return [t('This is the folder teams share when they don’t have their own. If Claude used it inside the VM, Codex and Grok bots in every team would be kept out of it.')];
+      return [t('This is the folder teams share when they don’t have their own. If Claude took it into its sealed box, Codex and Grok bots in every team would be kept out of it.')];
     default:
-      return [t('This folder holds your home folder or sign-ins, so kwant won’t share it with the VM.')];
+      return [t('This folder holds your home folder or sign-ins, so kwant won’t share it with Claude’s sealed box.')];
   }
 }
 
@@ -140,7 +140,7 @@ function unsafeFolderCard(m: IsolationFailedMeta): IsolationCard {
   const change = canChangeFolder(m) || (shared && !!m.teamId);
   return {
     row: shared ? 'unsafe_folder:shared_folder' : `unsafe_folder:${m.unsafeKind ?? 'unknown'}`,
-    first: `${m.botName} didn’t reply: Claude can’t use this folder inside the VM.`,
+    first: `${m.botName} didn’t reply: Claude can’t take this folder into its sealed box.`,
     reason: [...s1, t(` ${s2}`)],
     safety: shared ? 'unsafe_shared' : 'unsafe',
     actions: change ? ['change_folder', 'retry'] : ['retry'],
@@ -155,26 +155,26 @@ function folderUsedCard(m: IsolationFailedMeta): IsolationCard {
   let row: string;
   if (m.folderFrom === 'bot') {
     row = 'folder_used_by_isolated_bot:bot';
-    reason = [t(`${bot} used this folder as Claude inside the VM, and it could have left settings there that ${E} would load on this computer. Switch ${bot} back to Claude to keep working here.`)];
+    reason = [t(`${bot} used this folder as Claude in its sealed box, and it could have left settings there that ${E} would load on this computer. Switch ${bot} back to Claude to keep working here.`)];
   } else if (m.folderFrom === 'team') {
     row = 'folder_used_by_isolated_bot:team';
     const other = team(m) ? `pick another folder for ${team(m)}` : 'pick another folder';
-    reason = [t('A bot inside the VM could have left settings in '), f, t(` that ${E} would load on this computer, so kwant keeps ${E} out of it for now. Switch ${bot} to Claude, or ${other}, then Retry.`)];
+    reason = [t('A Claude bot in its sealed box could have left settings in '), f, t(` that ${E} would load on this computer, so kwant keeps ${E} out of it for now. Switch ${bot} to Claude, or ${other}, then Retry.`)];
   } else {
     row = 'folder_used_by_isolated_bot:other';
-    reason = [t('A bot inside the VM could have left settings in '), f, t(` that ${E} would load on this computer, so kwant keeps ${E} out of it for now. Switch ${bot} to Claude, then Retry.`)];
+    reason = [t('A Claude bot in its sealed box could have left settings in '), f, t(` that ${E} would load on this computer, so kwant keeps ${E} out of it for now. Switch ${bot} to Claude, then Retry.`)];
   }
   const second: NoticeAction[] = canChangeFolder(m) ? ['change_folder'] : ['retry'];
   return {
     row,
-    first: `${bot} didn’t reply: ${E} won’t run in a folder Claude used inside the VM.`,
+    first: `${bot} didn’t reply: ${E} won’t run in a folder Claude used in its sealed box.`,
     reason,
     safety: 'folder_used',
     actions: ['edit_bot', ...second],
   };
 }
 
-const GENERIC_FIRST = (bot: string) => `${bot} didn’t reply: Claude couldn’t start inside the VM.`;
+const GENERIC_FIRST = (bot: string) => `${bot} didn’t reply: Claude’s sealed box couldn’t start.`;
 
 /**
  * The reason for a code with no row of its own. The server's own words win (a `detail` in the
@@ -183,7 +183,7 @@ const GENERIC_FIRST = (bot: string) => `${bot} didn’t reply: Claude couldn’t
  */
 export function unknownReason(m: IsolationFailedMeta, savedText: string | null | undefined): string {
   const code = m.code ?? m.reason;
-  const tail = `Retry, or turn off ${SETTING_NAME} to run Claude on this computer.`;
+  const tail = `Retry, or turn off ${SETTING_HANDLE} to run Claude on this computer.`;
   const own = m.detail ?? serverReason(savedText, m.botName);
   if (own) return `${own.replace(/[.\s]+$/, '')}. ${tail}`;
   return `Something went wrong (${code}). ${tail}`;
@@ -203,9 +203,11 @@ export function serverReason(text: string | null | undefined, bot: string): stri
     s = end >= 0 ? s.slice(end + 1) : '';
   }
   s = s
+    // 0.7.7 notices stay in chats with the old name, so both wordings are stripped (vm-naming.md).
     .replace(/While Run Claude inside the VM is on, Claude never runs outside it, so nothing ran on this computer\.(?: To run Claude here instead, turn that off in Computer settings\.)?/g, '')
+    .replace(/While key protection is on, Claude never runs outside its sealed box, so nothing ran on this computer\.(?: To run Claude here instead, turn off key protection in Computer settings\.)?/g, '')
     .replace(/Something went wrong \([^)]*\)\.?/g, '')
-    .replace(/Retry, or turn off Run Claude inside the VM to run Claude on this computer\.?/g, '')
+    .replace(/Retry, or turn off (?:Run Claude inside the VM|key protection) to run Claude on this computer\.?/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   return s ? s.replace(/'/g, '’') : null;
@@ -215,7 +217,7 @@ export function serverReason(text: string | null | undefined, bot: string): stri
 export function isolationCard(m: IsolationFailedMeta, savedText?: string | null): IsolationCard {
   const bot = m.botName;
   const couldnt = GENERIC_FIRST(bot);
-  const notReady = `${bot} didn’t reply: Claude’s VM isn’t ready yet.`;
+  const notReady = `${bot} didn’t reply: Claude’s sealed box isn’t ready yet.`;
   const std = (row: string, first: string, reason: string, actions: NoticeAction[] = ['retry', 'computer'], safety: SafetyKind = 'standard'): IsolationCard => ({
     row,
     first,
@@ -229,7 +231,7 @@ export function isolationCard(m: IsolationFailedMeta, savedText?: string | null)
   if (m.phase === 'mid_turn')
     return std(
       'mid_turn',
-      `${bot}’s reply stopped partway: Claude lost its connection inside the VM.`,
+      `${bot}’s reply stopped partway: Claude’s sealed box lost its connection.`,
       'What it changed before that is in the task folder, and Undo still works. Retry to start the reply again.',
     );
 
@@ -253,23 +255,23 @@ export function isolationCard(m: IsolationFailedMeta, savedText?: string | null)
     case 'no_credential':
       return std('no_credential', `${bot} didn’t reply: there’s no Claude sign-in for it on this computer.`, 'Sign in to Claude in Settings › This space › Accounts, then Retry.', ['retry', 'accounts'], null);
     case 'host_is_root':
-      return std('host_is_root', couldnt, 'kwant is running as root, so Claude can’t run inside the VM as you. Start kwant as your normal user, then Retry.');
+      return std('host_is_root', couldnt, 'kwant is running as root, so Claude’s sealed box can’t run as you. Start kwant as your normal user, then Retry.');
     case 'folder_name_unsupported':
       return std(
         'folder_name_unsupported',
-        `${bot} didn’t reply: Claude can’t use this folder inside the VM.`,
-        'The folder’s name has characters kwant can’t pass to the VM, like a line break. Rename the folder, then Retry.',
+        `${bot} didn’t reply: Claude can’t take this folder into its sealed box.`,
+        'The folder’s name has characters kwant can’t pass to Claude’s sealed box, like a line break. Rename the folder, then Retry.',
         ['retry'],
         'nothing_ran',
       );
     case 'folder_record_failed':
-      return std('folder_record_failed', couldnt, 'kwant couldn’t note that this folder is used inside the VM, so it didn’t start Claude. Retry; if it keeps happening, restart kwant.');
+      return std('folder_record_failed', couldnt, 'kwant couldn’t note that this folder is used by Claude’s sealed box, so it didn’t start Claude. Retry; if it keeps happening, restart kwant.');
     case 'container_failed':
-      return std('container_failed', couldnt, 'The VM couldn’t start Claude. Retry; if it keeps happening, restart Docker.');
+      return std('container_failed', couldnt, 'Docker couldn’t start it. Retry; if it keeps happening, restart Docker.');
     case 'unsupported_os':
     case 'not_supported_yet':
     case 'mac_later':
-      return std(m.reason, couldnt, `Isolation is only on Linux for now. Turn off ${SETTING_NAME} to run Claude on this computer.`, ['computer']);
+      return std(m.reason, couldnt, `Isolation is only on Linux for now. Turn off ${SETTING_HANDLE} to run Claude on this computer.`, ['computer']);
     default:
       return std('unknown', couldnt, unknownReason(m, savedText));
   }

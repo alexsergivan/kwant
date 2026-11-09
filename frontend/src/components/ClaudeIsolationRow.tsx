@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Download, Loader2, RefreshCw, RotateCcw, Shield, ShieldCheck } from 'lucide-react';
-import { AgentVmState, Chip, ChipTone, announcement, chipsFor, preparingCopy, rowModel } from '../claudeVm';
+import { AgentVmState, Chip, ChipTone, SETTING_NAME, announcement, chipsFor, preparingCopy, rowModel } from '../claudeVm';
 import { ComputerModeApi, ComputerModeError } from './ComputerModeSwitch';
 
 const TONE: Record<ChipTone, string> = {
@@ -53,7 +53,7 @@ const PreparingBlock: React.FC<{ progress: AgentVmState['progress'] }> = ({ prog
       {progress ? (
         <div
           role="progressbar"
-          aria-label="Getting the VM ready for Claude"
+          aria-label="Setting up Claude’s sealed box"
           aria-valuemin={0}
           aria-valuemax={progress.total_bytes}
           aria-valuenow={progress.done_bytes}
@@ -118,7 +118,7 @@ export const ClaudeIsolationRow: React.FC<{ api: ComputerModeApi }> = ({ api }) 
         <div className="flex-1 min-w-0">
           <p id="claude-iso-label" className={`flex items-center gap-2 text-xs font-medium ${model.disabled ? 'text-zinc-500' : 'text-zinc-200'}`}>
             <Shield size={15} className={model.disabled ? 'text-zinc-600' : 'text-sky-400'} aria-hidden="true" />
-            Run Claude inside the VM
+            {SETTING_NAME}
           </p>
           <p id="claude-iso-hint" className="mt-1 pl-[23px] text-[11px] leading-[1.45] text-zinc-500">
             {model.hint}
