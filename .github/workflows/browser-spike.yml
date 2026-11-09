@@ -49,8 +49,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dl/moli dl/cft out
-          curl -fsSL -o "dl/${{ matrix.moli }}" "https://github.com/lexmount/moli/releases/download/$MOLI_VERSION/${{ matrix.moli }}"
-          curl -fsSL -o dl/cft.zip "https://storage.googleapis.com/chrome-for-testing-public/$CFT_VERSION/${{ matrix.cft }}/chrome-${{ matrix.cft }}.zip"
+          curl -fsSL --retry 6 --retry-all-errors --retry-delay 10 -o "dl/${{ matrix.moli }}" "https://github.com/lexmount/moli/releases/download/$MOLI_VERSION/${{ matrix.moli }}"
+          curl -fsSL --retry 6 --retry-all-errors --retry-delay 10 -o dl/cft.zip "https://storage.googleapis.com/chrome-for-testing-public/$CFT_VERSION/${{ matrix.cft }}/chrome-${{ matrix.cft }}.zip"
           case "${{ matrix.moli }}" in *.zip) unzip -q "dl/${{ matrix.moli }}" -d dl/moli ;; *) tar xzf "dl/${{ matrix.moli }}" -C dl/moli ;; esac
           unzip -q dl/cft.zip -d dl/cft
           {
