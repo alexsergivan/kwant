@@ -369,6 +369,7 @@ async fn a_review_that_errored_runs_once_more_on_its_own() {
     let card: Value = serde_json::from_str(row.card.as_deref().unwrap()).unwrap();
     assert_eq!(card["auto_retried"], true, "{card}");
     assert!(card["blockers"].as_array().unwrap().iter().any(|b| b["source"] == "review"), "{card}");
+    assert_eq!(card["review_failed"], true, "the retry reads this flag, not the blocker's source: {card}");
     let turns = invocations_with("RETRYMARK").len();
     assert!(turns >= 2, "the reviewer was asked twice: {turns}");
     let (_, v) = call(&env.app, "GET", &format!("/api/dev/prepush/{}", row.id), None).await;
@@ -447,6 +448,42 @@ async fn kwants_own_github_tools_go_through_the_pre_push_card() {
     ]});
     let why = prepush::check_mcp(&env.state, &env.a, "composio", "COMPOSIO_MULTI_EXECUTE_TOOL", &multi).await.unwrap_err();
     assert!(why.contains("makes 2 GitHub writes"), "{why}");
+
+    // Ada's review of #472, must-fix 2: a write to a protected branch, every merge and deleting a
+    // protected branch get the production floor's card (the person decides), not a pre-push card
+    use kwnt::mcp::prod_floor::FloorKind;
+    let floor = |server: &str, tool: &str, a: Value| {
+        let req = kwnt::mcp::ToolApprovalRequest {
+            kwant_id: env.a.clone(),
+            kwant_name: "A".into(),
+            turn_id: "t".into(),
+            tool_name: format!("mcp__{server}__{tool}"),
+            server: server.into(),
+            tool: tool.into(),
+            arguments: a,
+            builtin: None,
+            smart: None,
+            payment: None,
+        };
+        let db = env.state.db.clone();
+        async move { kwnt::server::dev::floor::for_call(&db, &req).await.map(|(f, _)| f.kind) }
+    };
+    for (server, tool, a, want) in [
+        ("github", "create_or_update_file", gh_write(Some("main"), "a.txt", "a"), FloorKind::PushMain),
+        ("github", "push_files", json!({"owner": "demo-org", "repo": "demo-app", "branch": "release/1.0", "message": "m", "files": [{"path": "a", "content": "b"}]}), FloorKind::PushMain),
+        ("composio", "GITHUB_MERGE_A_PULL_REQUEST", json!({"owner": "demo-org", "repo": "demo-app", "pull_number": 7}), FloorKind::PushMain),
+        ("github", "merge_pull_request", json!({"owner": "demo-org", "repo": "demo-app", "pull_number": 7}), FloorKind::PushMain),
+        ("github", "delete_branch", json!({"owner": "demo-org", "repo": "demo-app", "branch": "main"}), FloorKind::DeleteRef),
+    ] {
+        assert_eq!(floor(server, tool, a.clone()).await, Some(want), "{tool}");
+        assert_eq!(prepush::check_mcp(&env.state, &env.a, server, tool, &a).await, Ok(prepush::Pass::default()), "{tool}: the floor's card asks instead");
+    }
+    // A bot's own branch: no floor, and the write gets the pre-push card (below); a delete of it
+    // and creating a branch ask nothing
+    assert_eq!(floor("github", "create_or_update_file", args.clone()).await, None);
+    assert_eq!(floor("github", "delete_branch", json!({"owner": "demo-org", "repo": "demo-app", "branch": "juno-x"})).await, None);
+    assert_eq!(floor("github", "create_branch", json!({"owner": "demo-org", "repo": "demo-app", "branch": "juno-x"})).await, None);
+    assert!(env.state.db.prepush_cards(&space, 50).await.unwrap().is_empty(), "no pre-push card for any of these");
 
     // The write waits for its card, which the switched-off test blocks
     let first = prepush::check_mcp(&env.state, &env.a, "github", "create_or_update_file", &args).await.unwrap_err();
@@ -533,4 +570,65 @@ async fn kwants_own_github_tools_go_through_the_pre_push_card() {
     // The reason goes with the PR's review
     let anyway = prepush::pushed_anyway(&env.state, &space, Some("juno-gh")).await;
     assert_eq!(anyway[0]["reason"], "the test is flaky on CI, fixing next", "{anyway}");
+}
+
+/// Ada's review of #472, must-fix 1: a push of a tag isn't pinned (that would make a branch of
+/// that name); it runs as written, gated by the card of the tag's commit. A branch push still pins.
+#[tokio::test]
+async fn a_tag_push_runs_as_written_and_a_branch_push_is_pinned() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    let folder = repo(&env, "tagged");
+    git(&folder, &["checkout", "-q", "-b", "juno-tag"]);
+    let sha = commit(&folder, "src/widgets.rs", &format!("{}pub fn count() -> u32 {{ 4 }}\n", clean_review("TAGMARK")), "Count widgets");
+    git(&folder, &["tag", "checkpoint"]);
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+
+    // The tag: its commit gets a card, and once clear the push goes as written
+    assert!(prepush::check_command(&env.state, &env.a, "git push origin checkpoint", &folder).await.is_err(), "waits for its card");
+    let row = settled(&env, &space, "checkpoint").await;
+    assert_eq!((row.status.as_str(), row.head_sha.as_str()), (CLEAR, sha.as_str()), "{row:?}");
+    let pass = prepush::check_command(&env.state, &env.a, "git push origin checkpoint", &folder).await.unwrap();
+    assert_eq!(pass.pinned, None, "a tag is never pinned into refs/heads/checkpoint");
+    // The branch with the same commit: pinned to it
+    assert!(prepush::check_command(&env.state, &env.a, "git push origin juno-tag", &folder).await.is_err(), "waits for its card");
+    settled(&env, &space, "juno-tag").await;
+    for cmd in ["git push origin juno-tag", "git push origin HEAD:juno-tag"] {
+        let pass = prepush::check_command(&env.state, &env.a, cmd, &folder).await.unwrap();
+        assert_eq!(pass.pinned, Some(format!("git push origin {sha}:refs/heads/juno-tag")), "{cmd}");
+    }
+    // A branch that shares its name with a tag is ambiguous to git: run as written
+    git(&folder, &["tag", "juno-tag"]);
+    let pass = prepush::check_command(&env.state, &env.a, "git push origin juno-tag", &folder).await.unwrap();
+    assert_eq!(pass.pinned, None);
+}
+
+/// Ada's review of #472, must-fix 3: the reviewer's own high finding is a verdict. It blocks the
+/// push and is never run again on its own (a second roll could let the push go); only a
+/// reviewer turn that didn't answer is.
+#[tokio::test]
+async fn a_real_review_finding_is_never_run_again_on_its_own() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    let folder = repo(&env, "found");
+    git(&folder, &["checkout", "-q", "-b", "juno-found"]);
+    let reply = json!({"intent": {"asked": "Count widgets FOUNDMARK", "rows": [{"state": "ok", "text": "Counts the widgets"}]},
+        "findings": [{"severity": "high", "title": "count() ignores the widgets", "file": "src/widgets.rs", "line": 3,
+                      "detail": "It always returns 4, whatever the list holds.", "fix": "Count the list."}]});
+    let marker = format!("// FOUNDMARK\n// REPLYTEXT:{}\n", base64::engine::general_purpose::STANDARD.encode(reply.to_string()));
+    commit(&folder, "src/widgets.rs", &format!("{marker}pub fn count() -> u32 {{ 4 }}\n"), "Count widgets");
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+
+    assert!(prepush::gate(&env.state, &env.a, "git push origin juno-found", &folder).await.is_some());
+    let row = settled(&env, &space, "juno-found").await;
+    assert_eq!(row.status, BLOCKED, "{row:?}");
+    let card: Value = serde_json::from_str(row.card.as_deref().unwrap()).unwrap();
+    let blockers = card["blockers"].as_array().unwrap();
+    assert_eq!(blockers.len(), 1, "{card}");
+    assert_eq!((blockers[0]["source"].as_str(), blockers[0]["severity"].as_str()), (Some("review"), Some("high")), "Iris's contract keeps the source");
+    assert_ne!(card["review_failed"], true, "{card}");
+    assert_ne!(card["auto_retried"], true, "{card}");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(invocations_with("FOUNDMARK").len(), 1, "one reviewer turn, no second roll");
+    assert!(prepush::gate(&env.state, &env.a, "git push origin juno-found", &folder).await.unwrap().contains("blocked this push"));
 }

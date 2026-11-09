@@ -183,7 +183,10 @@ pub fn reason(req: &ToolApprovalRequest, ctx: &DevCtx) -> Option<Floor> {
     } else if req.server == super::SELF_SERVER_NAME {
         None
     } else {
-        mcp_reason(&req.server, &req.tool, &req.arguments, ctx)
+        match (mcp_reason(&req.server, &req.tool, &req.arguments, ctx), github_reason(&req.server, &req.tool, &req.arguments, ctx, 0)) {
+            (Some(a), Some(b)) => Some(a.merge(b)),
+            (a, b) => a.or(b),
+        }
     };
     // A production connection is checked last: what the call does names the card first
     match (found, prod_key(&req.server, &req.tool, &req.arguments, ctx)) {
@@ -275,6 +278,68 @@ fn mcp_reason(server: &str, tool: &str, args: &Value, ctx: &DevCtx) -> Option<Fl
                 add(f);
             }
         }
+    }
+    best
+}
+
+/// A GitHub tool (GitHub's own MCP server, or Composio's `GITHUB_*` tools, also inside
+/// `COMPOSIO_MULTI_EXECUTE_TOOL`) that writes to a protected branch, merges a pull request, or
+/// deletes a protected branch or a tag (Ada's review of #472, must-fix 2). It matches what
+/// [`git_reason`] asks for a `git push`:
+/// - a content write (`push_files`, `create_or_update_file`, `delete_file`, Composio's
+///   `COMMIT_MULTIPLE_FILES` and the like) to a protected branch: [`FloorKind::PushMain`]. One
+///   that names no branch is refused by the pre-push card instead;
+/// - every merge tool: the base it writes to isn't in its arguments, and unknown counts as
+///   protected, so [`FloorKind::PushMain`];
+/// - deleting a protected branch, a tag, or a ref kwant can't read: [`FloorKind::DeleteRef`].
+///
+/// `create_branch` adds a ref and writes no content, so it doesn't ask.
+fn github_reason(server: &str, tool: &str, args: &Value, ctx: &DevCtx, depth: usize) -> Option<Floor> {
+    if depth > 2 {
+        return None;
+    }
+    let mut best: Option<Floor> = None;
+    let mut add = |f: Floor| best = Some(match best.take() { Some(b) => b.merge(f), None => f });
+    if let Some(list) = args["tools"].as_array() {
+        for t in list.iter().take(20) {
+            if let Some(slug) = t["tool_slug"].as_str().or(t["slug"].as_str()) {
+                if let Some(f) = github_reason(server, slug, &t["arguments"], ctx, depth + 1) {
+                    add(f);
+                }
+            }
+        }
+    }
+    let lower = tool.to_ascii_lowercase();
+    let github = lower.starts_with("github_") || server.to_ascii_lowercase().contains("github");
+    let name = lower.strip_prefix("github_").unwrap_or(&lower);
+    let has_repo = args["owner"].is_string() && args["repo"].is_string();
+    let branch_arg = |keys: &[&str]| keys.iter().find_map(|k| args[*k].as_str()).map(str::trim).filter(|b| !b.is_empty()).map(String::from);
+    let w = words(name);
+    let read = w.first().is_some_and(|f| READ_VERBS.contains(&f.as_str()));
+    match name {
+        "push_files" | "commit_multiple_files" | "create_or_update_file" | "create_or_update_file_contents" | "delete_file" | "delete_a_file" if has_repo => {
+            if let Some(b) = branch_arg(&["branch"]) {
+                if ctx.is_protected(&b) {
+                    let b = b.trim_start_matches("refs/heads/").to_string();
+                    add(Floor::new(FloorKind::PushMain, format!("{tool} writes commits straight to {b} on GitHub")).row("What changes", format!("New commits land on {b}.")));
+                }
+            }
+        }
+        _ if !read && (github || has_repo) && w.iter().any(|x| x == "merge") => {
+            add(Floor::new(FloorKind::PushMain, format!("{tool} writes a pull request's commits to its base branch, which the call doesn't name, so it counts as protected"))
+                .row("What changes", "The pull request's commits land on its base branch."));
+        }
+        _ if !read && (github || has_repo) && w.iter().any(|x| x == "delete") && w.iter().any(|x| matches!(x.as_str(), "branch" | "ref" | "reference")) => {
+            let r = branch_arg(&["branch", "ref", "branch_name", "name"]).unwrap_or_default();
+            let r = r.trim_start_matches("refs/");
+            let tag = r.starts_with("tags/");
+            let b = r.trim_start_matches("heads/");
+            if r.is_empty() || tag || ctx.is_protected(b) || looks_like_version(b) {
+                let shown = if r.is_empty() { "a ref kwant can't read from the call".to_string() } else { b.to_string() };
+                add(Floor::new(FloorKind::DeleteRef, format!("{tool} deletes {shown} on GitHub")).row("What changes", format!("{shown} is deleted on GitHub.")));
+            }
+        }
+        _ => {}
     }
     best
 }
@@ -1326,6 +1391,48 @@ mod tests {
         assert_eq!(k("notion", "publish_page", json!({})), None);
     }
 
+    /// Ada's review of #472, must-fix 2: GitHub tools ask like `git push` does.
+    #[test]
+    fn github_tools_writing_merging_or_deleting_protected_branches_ask() {
+        use FloorKind::*;
+        let c = ctx();
+        let k = |server: &str, tool: &str, args: Value| reason(&req(server, tool, args), &c).map(|f| f.kind);
+        let write = |b: &str| json!({"owner": "o", "repo": "r", "branch": b, "message": "m", "files": [{"path": "a.rs", "content": "x"}]});
+        assert_eq!(k("github", "push_files", write("main")), Some(PushMain));
+        assert_eq!(k("github", "push_files", write("release/1.0")), Some(PushMain));
+        assert_eq!(k("github", "create_or_update_file", json!({"owner": "o", "repo": "r", "branch": "master", "path": "a", "content": "x"})), Some(PushMain));
+        assert_eq!(k("github", "delete_file", json!({"owner": "o", "repo": "r", "branch": "refs/heads/main", "path": "a"})), Some(PushMain));
+        assert_eq!(k("composio", "GITHUB_COMMIT_MULTIPLE_FILES", write("main")), Some(PushMain));
+        assert_eq!(k("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", json!({"tools": [{"tool_slug": "GITHUB_CREATE_OR_UPDATE_FILE_CONTENTS", "arguments": write("main")}]})), Some(PushMain));
+        let extra = DevCtx { protected: vec!["staging".into()], ..ctx() };
+        assert_eq!(reason(&req("github", "push_files", write("staging")), &extra).map(|f| f.kind), Some(PushMain));
+        // A bot's own branch gets the pre-push card only
+        assert_eq!(k("github", "push_files", write("juno-x")), None);
+        assert_eq!(k("composio", "GITHUB_COMMIT_MULTIPLE_FILES", write("juno-x")), None);
+        // Every merge: the base isn't in the call
+        assert_eq!(k("github", "merge_pull_request", json!({"owner": "o", "repo": "r", "pull_number": 7})), Some(PushMain));
+        assert_eq!(k("composio", "GITHUB_MERGE_A_PULL_REQUEST", json!({"owner": "o", "repo": "r", "pull_number": 7})), Some(PushMain));
+        assert_eq!(k("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", json!({"tools": [{"tool_slug": "GITHUB_MERGE_A_PULL_REQUEST", "arguments": {}}]})), Some(PushMain));
+        assert_eq!(k("composio", "GITHUB_MERGE_A_BRANCH", json!({"owner": "o", "repo": "r", "base": "juno-x", "head": "y"})), Some(PushMain));
+        // Deletes: a protected branch, a tag or an unreadable ref asks; a bot's own branch doesn't
+        assert_eq!(k("github", "delete_branch", json!({"owner": "o", "repo": "r", "branch": "main"})), Some(DeleteRef));
+        assert_eq!(k("composio", "GITHUB_DELETE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "heads/main"})), Some(DeleteRef));
+        assert_eq!(k("composio", "GITHUB_DELETE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "refs/heads/release/2.0"})), Some(DeleteRef));
+        assert_eq!(k("composio", "GITHUB_DELETE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "tags/checkpoint"})), Some(DeleteRef));
+        assert_eq!(k("github", "delete_branch", json!({"owner": "o", "repo": "r"})), Some(DeleteRef));
+        assert_eq!(k("github", "delete_branch", json!({"owner": "o", "repo": "r", "branch": "juno-x"})), None);
+        assert_eq!(k("composio", "GITHUB_DELETE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "heads/juno-x"})), None);
+        // Creating a branch, reads and a write that names no branch (refused by the card) don't
+        assert_eq!(k("github", "create_branch", json!({"owner": "o", "repo": "r", "branch": "main", "from_branch": "x"})), None);
+        assert_eq!(k("composio", "GITHUB_CREATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "refs/heads/main", "sha": "abc"})), None);
+        assert_eq!(k("github", "get_pull_request", json!({"owner": "o", "repo": "r", "pull_number": 7})), None);
+        assert_eq!(k("composio", "GITHUB_CHECK_IF_A_PULL_REQUEST_HAS_BEEN_MERGED", json!({"owner": "o", "repo": "r", "pull_number": 7})), None);
+        assert_eq!(k("github", "push_files", json!({"owner": "o", "repo": "r", "files": []})), None);
+        // Other apps' merge or delete tools aren't GitHub's
+        assert_eq!(k("pdf", "merge_pdfs", json!({})), None);
+        assert_eq!(k("slack", "delete_message", json!({})), None);
+    }
+
     #[test]
     fn production_connections_always_ask() {
         let c = DevCtx { prod_connections: vec!["digitalocean-droplets".into(), "stripe".into()], ..ctx() };
@@ -1627,6 +1734,10 @@ mod tests {
             ("digitalocean-droplets", "droplet-delete", json!({}), &c),
             ("supabase", "execute_sql", json!({"query": "DROP TABLE users"}), &c),
             ("stripe", "create_refund", json!({}), &prod),
+            ("github", "push_files", json!({"owner": "o", "repo": "r", "branch": "main", "files": []}), &c),
+            ("github", "merge_pull_request", json!({"owner": "o", "repo": "r", "pull_number": 1}), &c),
+            ("github", "delete_branch", json!({"owner": "o", "repo": "r", "branch": "main"}), &c),
+            ("github", "delete_branch", json!({"owner": "o", "repo": "r"}), &c),
         ] {
             check(&format!("{server} {tool}"), reason(&req(server, tool, args), c));
         }

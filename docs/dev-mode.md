@@ -500,13 +500,14 @@ deploy can cost a site.
   code that uses its SDK, doesn't ask unless it goes through a connection marked production.
 - **Tools and providers missing from the lists**, and MCP tools whose names don't say what they
   do. Mark such a connection production to make every one of its tools ask.
-- **Git writes through a connection.** A GitHub MCP server or Composio app that isn't marked
-  production can write to the repo with no floor card. File writes (`push_files`,
-  `create_or_update_file`, `delete_file` and Composio's `GITHUB_COMMIT_MULTIPLE_FILES`,
-  `GITHUB_CREATE_OR_UPDATE_FILE_CONTENTS`, `GITHUB_DELETE_A_FILE`) get a pre-push card (below),
-  but `merge_pull_request`, `delete_branch`, `create_branch` and the like reach the repo directly.
-  The floor reads git commands and deploy tools, not these tool names. Mark that connection
-  production (Connections → Production) to make every one of its tools ask.
+- **Git writes through a connection.** The floor reads GitHub's own tool names (GitHub's MCP
+  server and Composio's `GITHUB_*` tools, also inside a multi-execute) like `git push`: a file
+  write (`push_files`, `create_or_update_file`, `delete_file`, `GITHUB_COMMIT_MULTIPLE_FILES`, …)
+  to a protected branch asks, every merge tool asks (its base isn't in the call, so it counts as
+  protected), and deleting a protected branch, a tag or a ref the call doesn't name asks. A file
+  write to any other branch gets a pre-push card (below). `create_branch` doesn't ask, and other
+  tools that change a repo (a GitLab server, or GitHub tools named otherwise) reach it directly:
+  mark that connection production (Connections → Production) to make every one of its tools ask.
 - **Where a command runs.** The floor can't tell a production database from a local copy unless
   the command says so (a remote URL, `--prod`, `RAILS_ENV=production`, …). So a plain
   `sqlx migrate run` doesn't ask, but `DROP TABLE` does, wherever it runs.
@@ -537,9 +538,13 @@ asks about (a protected branch, a force-push, a deploy remote) gets the floor ca
   was allowed still uses the override.
 - **The pushed commit.** A plain `git push <remote> [<branch>]` (optionally after `cd <folder> &&`)
   runs as `git push <remote> <checked sha>:refs/heads/<branch>`, so a commit made in the meantime
-  isn't what goes. Other shapes (`-u`, other flags, several pushes, no remote) run as written.
-- **A check that errored** (kwant couldn't read the repo, or the reviewer's turn didn't answer) runs
-  once more on its own; the card says `auto_retried`. A timeout isn't retried.
+  isn't what goes. Only a branch is pinned: the source must be `HEAD`, `@` or a local branch no tag
+  shares a name with, and the destination that branch. A tag (`git push origin checkpoint`), a
+  commit sha or another ref runs as written, gated by the card of the commit it sends. Other shapes
+  (`-u`, other flags, several pushes, no remote) run as written too.
+- **A check that errored** (kwant couldn't read the repo, or the reviewer's turn didn't answer:
+  `review_failed`) runs once more on its own; the card says `auto_retried`. A timeout isn't
+  retried, and neither is the reviewer's own critical or high finding: that is a verdict.
 - **Pushed anyway.** When the person overrode a card on a branch, the review kwant posts for that
   branch's PR (when the person presses Post) says so, with the person's reason.
 

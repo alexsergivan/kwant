@@ -355,12 +355,12 @@ pub async fn check_command(state: &AppState, kwant_id: &str, command: &str, fold
     let one = list.len() == 1;
     let mut pass = Pass::default();
     for push in list {
-        let checked = gate_one(state, kwant_id, &space_id, &ctx.branch, folder, &push).await?;
+        let (checked, local_src) = gate_one(state, kwant_id, &space_id, &ctx.branch, folder, &push).await?;
         if checked.status == OVERRIDDEN {
             pass.overrides.push(checked.id.clone());
         }
         if one {
-            pass.pinned = pin(command, &checked.head_sha, &checked.branch);
+            pass.pinned = pin(command, &checked.head_sha, &checked.branch, local_src);
         }
     }
     Ok(pass)
@@ -396,7 +396,13 @@ pub async fn gate(state: &AppState, kwant_id: &str, command: &str, folder: &Path
 /// with plain words and no flags: `git push <remote> <sha>:refs/heads/<branch>`, so what goes is
 /// the commit kwant checked. `None` for any other shape (flags such as `-u`, quotes, `$`,
 /// several pushes), which runs as written.
-pub fn pin(command: &str, sha: &str, branch: &str) -> Option<String> {
+///
+/// Only a branch push is pinned (Ada's review of #472, must-fix 1): the spec's source must be
+/// `HEAD`, `@` or a local branch (`local_src`: the caller found `refs/heads/<src>`, and no tag
+/// of that name), never a commit sha or another ref, and its destination must be `branch`
+/// (bare or as `refs/heads/<branch>`). A tag or anything else runs as written, still gated by
+/// its card, so a pin never turns it into a new branch.
+pub fn pin(command: &str, sha: &str, branch: &str, local_src: bool) -> Option<String> {
     let plain = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | '+'));
     if !super::git::is_sha(sha) || !super::routes::valid_branch(branch) || command.contains('\n') {
         return None;
@@ -415,8 +421,21 @@ pub fn pin(command: &str, sha: &str, branch: &str) -> Option<String> {
     if w.len() < 3 || w.len() > 4 || w[0] != "git" || w[1] != "push" || w[2].starts_with('-') || !plain(w[2]) || w[2].contains(':') {
         return None;
     }
+    if !local_src {
+        return None;
+    }
     if let Some(spec) = w.get(3) {
         if !plain(spec) || spec.starts_with('-') || spec.starts_with('+') {
+            return None;
+        }
+        let (src, dst) = spec.split_once(':').unwrap_or((spec, spec));
+        let src_ok = matches!(src, "HEAD" | "@") || (!super::git::is_sha(src) && (!src.starts_with("refs/") || src.starts_with("refs/heads/")));
+        let dst_ok = if spec.contains(':') {
+            dst.strip_prefix("refs/heads/").unwrap_or(dst) == branch && !dst.starts_with("refs/tags/")
+        } else {
+            matches!(dst, "HEAD" | "@") || dst.strip_prefix("refs/heads/").unwrap_or(dst) == branch
+        };
+        if !src_ok || !dst_ok {
             return None;
         }
     }
@@ -432,7 +451,8 @@ struct Checked {
     head_sha: String,
 }
 
-async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, folder: &Path, push: &Push) -> Result<Checked, String> {
+/// The card a push goes on, and whether its source is `HEAD` or a local branch (see [`pin`]).
+async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, folder: &Path, push: &Push) -> Result<(Checked, bool), String> {
     let dir = folder.join(&push.dir);
     let repo = Repo::local(&dir, &state.config.data_dir)
         .await
@@ -445,9 +465,27 @@ async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, 
         return Err(format!("kwant checks a push before it goes, and won't pass on the branch name {}.", scan::as_data_up_to(&branch, 80)));
     }
     let sha = resolve(&repo, &push.src).await.map_err(|e| format!("kwant checks a push before it goes, and couldn't find {} ({e}).", scan::as_data_up_to(&push.src, 80)))?;
+    let local_src = local_branch(&repo, &push.src).await;
     drop(repo);
     let key = dir.canonicalize().unwrap_or(dir.clone()).to_string_lossy().into_owned();
-    gate_card(state, kwant_id, space_id, base, &key, &branch, &sha, || Source::Git(dir.clone())).await
+    let checked = gate_card(state, kwant_id, space_id, base, &key, &branch, &sha, || Source::Git(dir.clone())).await?;
+    Ok((checked, local_src))
+}
+
+/// Whether a push's source is `HEAD` or a local branch that no tag shares a name with: only
+/// then does [`pin`] write it as a branch.
+async fn local_branch(repo: &Repo, src: &str) -> bool {
+    if src == "HEAD" {
+        return true;
+    }
+    if super::git::is_sha(src) {
+        return false;
+    }
+    match src.strip_prefix("refs/heads/") {
+        Some(name) => repo.resolve(&format!("refs/heads/{name}")).await.is_ok(),
+        None if src.starts_with("refs/") => false,
+        None => repo.resolve(&format!("refs/heads/{src}")).await.is_ok() && repo.resolve(&format!("refs/tags/{src}")).await.is_err(),
+    }
 }
 
 /// The card for `(space, key, branch, sha)`: made (and its checks started from `src`) when there
@@ -517,7 +555,12 @@ async fn resolve(repo: &Repo, src: &str) -> Result<String, GitError> {
     } else if super::git::is_sha(src) || src.starts_with("refs/") {
         repo.resolve(src).await
     } else {
-        repo.resolve(&format!("refs/heads/{src}")).await
+        match repo.resolve(&format!("refs/heads/{src}")).await {
+            // A bare tag name (`git push origin checkpoint`): its commit gets the card, and the
+            // push runs as written (never pinned, see [`pin`])
+            Err(GitError::NotFound) => repo.resolve(&format!("refs/tags/{src}")).await,
+            r => r,
+        }
     }
 }
 
@@ -604,13 +647,15 @@ async fn attempt(state: &AppState, row: &PrepushRow, src: &Source, base: &str, l
 }
 
 /// Whether a check errored rather than found something: kwant couldn't check (not a timeout),
-/// or the fresh-eyes reviewer's turn didn't answer. A finding, a hit or "no reviewer" is a
-/// verdict, never retried.
+/// or the fresh-eyes reviewer's turn didn't answer (`review_failed`, set by [`judge`]). A
+/// finding, a hit or "no reviewer" is a verdict, never retried: a reviewer's own critical or
+/// high finding also carries `source: "review"`, so the blocker's source can't tell the two
+/// apart (Ada's review of #472, must-fix 3).
 pub fn errored(status: &str, card: &Value) -> bool {
     if status == PREPUSH_FAILED {
         return card["timed_out"] != json!(true);
     }
-    card["blockers"].as_array().is_some_and(|b| b.iter().any(|x| x["source"] == "review"))
+    card["review_failed"] == json!(true)
 }
 
 fn failed_card(row: &PrepushRow, why: &str) -> Value {
@@ -713,6 +758,9 @@ async fn judge(state: &AppState, row: &PrepushRow, base: &str, title: String, fi
     card["head_sha"] = json!(row.head_sha);
     let failed = status == crate::db::dev_mode::FAILED;
     card["blockers"] = Value::Array(blockers(&card, failed));
+    if failed {
+        card["review_failed"] = json!(true);
+    }
     card
 }
 
@@ -1394,8 +1442,12 @@ mod tests {
         let mut slow = failed_card(&row, "the checks took longer than 12 minutes");
         slow["timed_out"] = json!(true);
         assert!(!errored(PREPUSH_FAILED, &slow), "a timeout isn't run again");
-        let review = json!({"blockers": [{"source": "review", "severity": "high", "title": "The fresh-eyes review didn't finish"}]});
+        let review = json!({"review_failed": true, "blockers": [{"source": "review", "severity": "high", "title": "The fresh-eyes review didn't finish"}]});
         assert!(errored(BLOCKED, &review));
+        // Ada's review of #472, must-fix 3: the reviewer's own high finding is a verdict
+        let real = json!({"blockers": [{"source": "review", "severity": "high", "title": "count() returns 4 for any input", "file": "src/widgets.rs", "line": 2}]});
+        assert!(!errored(BLOCKED, &real), "a real finding is never run again");
+        assert!(!errored(BLOCKED, &json!({"review_failed": false, "blockers": real["blockers"]})));
         let found = json!({"blockers": [{"source": "tamper", "severity": "high", "title": "A test was switched off"}]});
         assert!(!errored(BLOCKED, &found), "a finding is a verdict");
         assert!(!errored(CLEAR, &json!({"blockers": []})));
@@ -1414,7 +1466,7 @@ mod tests {
     #[test]
     fn a_plain_push_is_pinned_to_the_checked_commit() {
         let sha = "0123456789abcdef0123456789abcdef01234567";
-        let pinned = |cmd: &str| pin(cmd, sha, "juno-x");
+        let pinned = |cmd: &str| pin(cmd, sha, "juno-x", true);
         let want = format!("git push origin {sha}:refs/heads/juno-x");
         for cmd in ["git push origin", "git push origin juno-x", "git push origin HEAD", "git push origin HEAD:juno-x", "  git   push origin   juno-x "] {
             assert_eq!(pinned(cmd), Some(want.clone()), "{cmd}");
@@ -1443,8 +1495,39 @@ mod tests {
             assert_eq!(pinned(cmd), None, "{cmd}");
         }
         // Never with a commit or a branch kwant can't vouch for
-        assert_eq!(pin("git push origin juno-x", "HEAD", "juno-x"), None);
-        assert_eq!(pin("git push origin juno-x", sha, "bad branch"), None);
+        assert_eq!(pin("git push origin juno-x", "HEAD", "juno-x", true), None);
+        assert_eq!(pin("git push origin juno-x", sha, "bad branch", true), None);
+    }
+
+    /// Ada's review of #472, must-fix 1: only a branch push is pinned. A tag, a commit sha or
+    /// another ref as the source, or a tag or another branch as the destination, runs as
+    /// written (its card still gates it).
+    #[test]
+    fn only_a_branch_push_is_pinned() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let want = |b: &str| Some(format!("git push origin {sha}:refs/heads/{b}"));
+        // The source isn't a local branch (the caller found a tag, or nothing, under that name)
+        assert_eq!(pin("git push origin checkpoint", sha, "checkpoint", false), None);
+        assert_eq!(pin("git push origin", sha, "juno-x", false), None);
+        // Branch pushes still pin
+        assert_eq!(pin("git push origin HEAD:feature", sha, "feature", true), want("feature"));
+        assert_eq!(pin("git push origin @:feature", sha, "feature", true), want("feature"));
+        assert_eq!(pin("git push origin juno-x:refs/heads/juno-x", sha, "juno-x", true), want("juno-x"));
+        assert_eq!(pin("git push origin refs/heads/juno-x", sha, "juno-x", true), want("juno-x"));
+        assert_eq!(pin("git push origin HEAD", sha, "juno-x", true), want("juno-x"));
+        for cmd in [
+            "git push origin HEAD:refs/tags/x",
+            "git push origin juno-x:refs/tags/juno-x",
+            "git push origin refs/tags/x:x",
+            "git push origin refs/remotes/origin/x:x",
+            "git push origin 0123456789abcdef0123456789abcdef01234567",
+            "git push origin 0123456789abcdef0123456789abcdef01234567:x",
+            "git push origin HEAD:other",
+            "git push origin juno-x:refs/notes/x",
+        ] {
+            assert_eq!(pin(cmd, sha, "x", true), None, "{cmd}");
+        }
+        assert_eq!(pin("git push origin juno-x:refs/tags/juno-x", sha, "juno-x", true), None);
     }
 
     /// Ada's review of #456, must-fix 2: the gate reads the commit before the command runs, so a
