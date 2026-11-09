@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
-import { AlertCircle, Download, FileText, Film, Loader2, RotateCw, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AlertCircle, ChevronDown, ChevronRight, Download, ExternalLink, FileText, Film, Loader2, RotateCw, X } from 'lucide-react';
 import { AttachmentRef, PendingUpload, attachKind, attachmentUrl, fileKind, formatBytes, isInlineImage, isVideo, uploadProgressText } from '../attachments';
 
 /**
  * A file on a message: images as a thumbnail (opens full size), everything else as a tile.
  * Both have a Download button; the server sends non-images as downloads only.
  */
-export const FileTile: React.FC<{ file: AttachmentRef }> = ({ file }) => {
+export const FileTile: React.FC<{ file: AttachmentRef; small?: boolean }> = ({ file, small = false }) => {
   const [broken, setBroken] = useState(false);
+  const [viewing, setViewing] = useState(false);
+  const thumbRef = useRef<HTMLAnchorElement>(null);
   const image = isInlineImage(file.mime) && !broken;
   const video = isVideo(file.mime) && !broken;
   const download = (
@@ -34,17 +37,41 @@ export const FileTile: React.FC<{ file: AttachmentRef }> = ({ file }) => {
 
   if (image) {
     return (
-      <figure className="w-full sm:w-auto max-w-full sm:max-w-xs rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/80">
-        <a href={attachmentUrl(file.id)} target="_blank" rel="noopener noreferrer" className="block focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500">
+      <figure className={`${small ? 'w-40' : 'w-full sm:w-auto'} max-w-full sm:max-w-xs rounded-xl overflow-hidden border border-zinc-800 bg-zinc-900/80`}>
+        {/* A plain click opens the in-app viewer; Cmd/Ctrl/middle click still opens the original in a new tab */}
+        <a
+          ref={thumbRef}
+          href={attachmentUrl(file.id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`View ${file.name} full size`}
+          aria-haspopup="dialog"
+          data-image-thumb=""
+          onClick={(e) => {
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            e.preventDefault();
+            setViewing(true);
+          }}
+          className="block cursor-zoom-in focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        >
           <img
             src={attachmentUrl(file.id)}
             alt={file.name}
             loading="lazy"
             decoding="async"
             onError={() => setBroken(true)}
-            className="block w-full sm:w-auto max-h-60 object-contain bg-zinc-950"
+            className={`block w-full sm:w-auto ${small ? 'max-h-24' : 'max-h-60'} object-contain bg-zinc-950`}
           />
         </a>
+        {viewing && (
+          <ImageViewer
+            file={file}
+            onClose={() => {
+              setViewing(false);
+              thumbRef.current?.focus();
+            }}
+          />
+        )}
         <figcaption className="flex items-center gap-2 px-2.5 py-1.5">
           {label}
           {download}
@@ -80,6 +107,139 @@ export const FileTile: React.FC<{ file: AttachmentRef }> = ({ file }) => {
       </span>
       {label}
       {download}
+    </div>
+  );
+};
+
+/**
+ * The full-size view of a chat image (P4): a dark scrim over the app, the picture fit to the screen,
+ * Close (44 px) and Open original. Esc, Close or a click on the scrim closes it; focus starts on Close
+ * and Tab stays inside. Nothing animates.
+ */
+export const ImageViewer: React.FC<{ file: AttachmentRef; onClose: () => void }> = ({ file, onClose }) => {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab' || !boxRef.current) return;
+      const stops = Array.from(boxRef.current.querySelectorAll<HTMLElement>('a[href], button'));
+      if (!stops.length) return;
+      const first = stops[0];
+      const last = stops[stops.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+  const titleId = `viewer-${file.id}`;
+  return createPortal(
+    <div
+      ref={boxRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      data-image-viewer=""
+      className="fixed inset-0 z-[200] flex flex-col bg-black/90"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="flex items-center gap-2 px-3 py-2 sm:px-4 text-zinc-200">
+        <h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-medium" title={file.name}>
+          {file.name}
+        </h2>
+        <a
+          href={attachmentUrl(file.id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-lg text-xs font-medium text-sky-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        >
+          <ExternalLink size={14} aria-hidden="true" />
+          <span className="hidden sm:inline">Open original</span>
+          <span className="sm:hidden">Original</span>
+        </a>
+        <button
+          ref={closeRef}
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="inline-flex items-center justify-center w-11 h-11 shrink-0 rounded-lg text-zinc-200 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        >
+          <X size={20} aria-hidden="true" />
+        </button>
+      </div>
+      <div
+        className="flex-1 min-h-0 flex items-center justify-center px-0 pb-0 sm:px-6 sm:pb-6"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
+      >
+        <img src={attachmentUrl(file.id)} alt={file.name} className="block max-w-full max-h-full object-contain" />
+      </div>
+    </div>,
+    document.body,
+  );
+};
+
+const timeLabel = (at: string | null) => {
+  const t = at ? new Date(at) : null;
+  return t && !Number.isNaN(t.getTime()) ? t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
+};
+
+/**
+ * Older copies of a file a bot shared again within a few minutes (P4): folded behind the newest as
+ * "×3 · Show earlier versions", oldest first when open.
+ */
+export const EarlierCopies: React.FC<{ idBase: string; copies: Array<{ id: string; at: string | null; files: AttachmentRef[] }> }> = ({ idBase, copies }) => {
+  const [open, setOpen] = useState(false);
+  const total = copies.length + 1;
+  const listId = `${idBase}-list`;
+  return (
+    <div className="mt-1.5 max-w-full" data-earlier-copies={copies.length}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-1 min-h-[32px] px-2 -ml-2 rounded-lg text-[11px] text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+      >
+        {open ? <ChevronDown size={12} aria-hidden="true" /> : <ChevronRight size={12} aria-hidden="true" />}
+        <span>
+          ×{total} · {open ? 'Hide earlier versions' : 'Show earlier versions'}
+        </span>
+      </button>
+      {open && (
+        <ol id={listId} className="mt-1 flex flex-col gap-2" aria-label="Earlier versions, oldest first">
+          {copies.map((c) => {
+            const when = timeLabel(c.at);
+            return (
+              <li key={c.id} data-earlier-copy={c.id} className="max-w-full">
+                {when && <span className="block mb-1 text-[10px] text-zinc-500">{when}</span>}
+                <ul className="flex flex-wrap gap-2">
+                  {c.files.map((f) => (
+                    <li key={f.id} className="max-w-full">
+                      <FileTile file={f} small />
+                    </li>
+                  ))}
+                </ul>
+              </li>
+            );
+          })}
+        </ol>
+      )}
     </div>
   );
 };
