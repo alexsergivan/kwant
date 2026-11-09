@@ -2324,6 +2324,7 @@ async fn run_kwant_turn_inner(
             }
             // A short follow-up that carries on the work ("Screenshot give me!") keeps the bot's
             // previous tier here and never drops to the fast one (P5, 2026-11-09)
+            // It runs after the attachment cap on purpose: a kept tier wins over that cap (#467)
             if opts.tier.is_none() {
                 let recent = db.list_messages(&tag.context_id, 20).await.unwrap_or_default();
                 let previous = crate::router::fallback::previous_turn(&recent, &target_kwant.id, &target_kwant.name);
