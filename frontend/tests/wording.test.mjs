@@ -21,12 +21,14 @@ const BAD = /\b(kwants?|kwnt|agents?)\b/i;
 // Agent Maestro, the VS Code extension's own name (a Custom API preset), and "coding agent", what
 // Claude Code, Codex and Cursor are called in Settings → Coding agents (0.7.4).
 const ALLOWED = /\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
-const MAESTRO = /\bAgent Maestro\b/g;
+const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // T/D preview sheet (0.7.7): Mira's review-396-397 must-fix 7 and Ada's deviation-4 ruling keep "kwant"
 // as the subject in these three sentences only.
 // Run Claude inside the VM (0.7.7): Mira's ui-check-450 must-fix 2 names kwant, the program on the computer,
 // in these settings and chat-notice sentences ("Restart kwant" is what a person on a phone has to do).
-const RULED = /\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass)\b|\b[Rr]estart kwant\b|\bStart kwant as\b/g;
+// Import from this computer, a folder or a GitHub link (0.8.0 A4): Mira's a4-import.md names kwant, the program
+// that looks and fetches, in these sentences.
+const RULED = /\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass|can’t fetch)\b|\b[Rr]estart kwant\b|\bStart kwant as\b|\bkwant (?:looked|never follows|downloads it|found nothing|doesn’t fetch)\b|\bNothing kwant can bring\b|\bwhere kwant looked\b|\bsent kwant somewhere\b/g;
 
 /** Whether a literal reads like text a person sees (a sentence, or a capitalised word). */
 const looksVisible = (text, node) => {

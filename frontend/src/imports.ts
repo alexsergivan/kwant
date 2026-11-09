@@ -163,6 +163,10 @@ export const importApi = {
     }),
   apply: (bundle: Bundle, skip: string[]) => call<Applied>('POST', '/api/import/apply', json({ bundle, skip })),
   list: () => call<ImportRecord[]>('GET', '/api/imports'),
+  /** Found on this computer: names and counts only. The desktop app gets `available: true`. */
+  local: () => call<import('./importSources').LocalList>('GET', '/api/import/local'),
+  localPreview: (sources: string[]) => call<Preview>('POST', '/api/import/local/preview', json({ sources })),
+  githubPreview: (url: string) => call<import('./importSources').GithubPreview>('POST', '/api/import/github/preview', json({ url: url.trim() })),
   undo: (id: string, force = false) => call<ImportRecord>('POST', `/api/imports/${enc(id)}/undo`, force ? json({ force: true }) : {}),
 };
 
@@ -264,6 +268,12 @@ const SOURCE_NAMES: Record<string, string> = {
   openmaus: 'OpenMausBot',
   'openmaus-grok': 'OpenMausBot',
   zip: 'a zip',
+  openclaw: 'OpenClaw',
+  hermes: 'Hermes Agent',
+  codex: 'Codex',
+  paperclip: 'a Paperclip company',
+  'ai-employees': 'an ai-employees kit',
+  local: 'this computer',
   'plain-text': 'pasted text',
 };
 

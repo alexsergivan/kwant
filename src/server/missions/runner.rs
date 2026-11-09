@@ -163,6 +163,12 @@ fn mission_context(m: &Mission, bot: &crate::db::models::Kwant) -> String {
     c.or(t).unwrap_or_else(|| bot.id.clone())
 }
 
+/// B1: what a high-impact task's owner is asked first. A teammate checks the result against these
+/// lines with fresh eyes (only the spec and the result, never this chat).
+pub(crate) const SPEC_FIRST: &str = "This task is high impact. Before you start, call task_update with task_id and `spec` \
+     (no status): 1-8 short lines saying what done means and how a reviewer can check each. A teammate checks your \
+     result against those lines with fresh eyes: it sees only the spec and the result, not this chat.\n";
+
 async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
     let checks = state.db.list_checks(&t.id).await.unwrap_or_default();
     let list: Vec<String> = checks
@@ -173,7 +179,7 @@ async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
     let deps = state.db.dependencies_of(&t.id).await.unwrap_or_default();
     format!(
         "[Mission Control] You hold task {id} of the mission \"{mt}\" (goal: {goal}).\n\
-         Task: {title}\nAcceptance: {acc}\nChecks kwant will run when you're done:\n{checks}\n{self_check}{deps}\
+         Task: {title}\nAcceptance: {acc}\nChecks kwant will run when you're done:\n{checks}\n{self_check}{deps}{spec_first}\
          Work on it now. Attach what you produced with task_attach_evidence, then call task_update with \
          task_id {id} and status \"review\": kwant runs the checks and only they (or a teammate's review, \
          or the person) can verify it. If you can't finish, call task_update with status \"blocked\" and a \
@@ -187,6 +193,7 @@ async fn prompt(state: &AppState, m: &Mission, t: &Task) -> String {
         // C0: only a task with an approved check can be checked before hand-in
         self_check = if list.is_empty() { "" } else { SELF_CHECK },
         deps = if deps.is_empty() { String::new() } else { format!("It builds on tasks {} (verified).\n", deps.iter().map(|d| d.0.as_str()).collect::<Vec<_>>().join(", ")) },
+        spec_first = if super::auditor::is_high_impact(t) { SPEC_FIRST } else { "" },
         budget = if t.budget_tokens > super::NO_LIMIT { format!(" Budget: {} tokens.", t.budget_tokens - t.spent_tokens) } else { String::new() },
     )
 }

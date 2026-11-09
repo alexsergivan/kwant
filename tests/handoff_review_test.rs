@@ -35,14 +35,17 @@ case "$1" in
 esac
 for a; do last="$a"; done
 printf '%s' "$last" > "$KWNT_TEST_PROMPTS/$$-$(date +%s%N)"
+out=done
 case "$last" in
+  *"[Decide first]"*) out="I'd pick B." ;;
+  *HOLDMARK*"Review each one now"*) out='The count looks right.\n\nTwo decisions for you:\n1. A, B or C?\n2. FM monogram or plain?' ;;
 esac
 release=$(printf '%s\n' "$last" | sed -n 's/.*LONGTASK:\([^ ]*\).*/\1/p' | head -n 1)
 if [ -n "$release" ]; then
   i=0
   while [ ! -f "$release" ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
 fi
-echo '{"type":"result","is_error":false,"num_turns":1,"result":"done"}'
+printf '%s\n' "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"$out\"}"
 "#;
 
 fn prompts_dir() -> &'static PathBuf {
@@ -205,8 +208,11 @@ async fn the_lead_reviews_a_finished_hand_off_and_a_pass_verifies_it() {
     let ev = result_evidence(&env, &task.id).await;
     assert_eq!(ev.len(), 1, "the result is attached once");
     wait_for("the lead's results turn", || async { !prompts_with(&["finished the task you delegated", "Parser check"]).is_empty() }).await;
-    let lead_prompt = prompts_with(&["finished the task you delegated", "Parser check"]).remove(0);
+    // B1: the review is asked in its own fresh-eyes turn, with the brief and the result
+    wait_for("the lead's review turn", || async { !prompts_with(&[FRESH, "Parser check"]).is_empty() }).await;
+    let lead_prompt = prompts_with(&[FRESH, "Parser check"]).remove(0);
     assert!(lead_prompt.contains(&task.id) && lead_prompt.contains("task_review") && lead_prompt.contains(&ev[0]), "{lead_prompt}");
+    assert!(lead_prompt.contains("Check the parser PASSMARK"), "the brief: {lead_prompt}");
 
     let card_json = missions::task_json(&env.state, &task).await;
     assert_eq!(card_json["reviewer"]["kwant_id"], json!(env.lead), "the card names its reviewer");
@@ -223,6 +229,7 @@ async fn a_failed_review_sends_the_work_back_to_the_teammate_with_the_reason() {
     let env = setup().await;
     let (did, task) = finished(&env, "Write the backend fix FAILMARK", "Backend fix").await;
     let ev = result_evidence(&env, &task.id).await;
+    let first = ev.clone();
     let note = "The retry path has no test NOTEMARK";
     let (out, err) = review(&env, &env.lead, &task.id, "fail", &ev, note).await;
     assert!(!err, "{out}");
@@ -241,7 +248,14 @@ async fn a_failed_review_sends_the_work_back_to_the_teammate_with_the_reason() {
     assert_eq!(status_of(&env, &did).await, "completed");
     let ev = result_evidence(&env, &task.id).await;
     assert_eq!(ev.len(), 2, "the new result is attached too");
-    wait_for("the lead's second results turn", || async { !prompts_with(&["after it was sent back", "Backend fix", "task_review"]).is_empty() }).await;
+    wait_for("the lead's second results turn", || async { !prompts_with(&["after it was sent back", "Backend fix"]).is_empty() }).await;
+    // The fixed result is reviewed in its own fresh-eyes turn, not in the results turn (B1)
+    let fixed = ev.iter().find(|e| !first.contains(e)).unwrap().clone();
+    wait_for("the lead's review of the fix", || async { !prompts_with(&[FRESH, "Backend fix", "task_review", &fixed]).is_empty() }).await;
+    assert!(
+        prompts_with(&["after it was sent back", "Backend fix"]).iter().all(|p| !p.contains("task_review with task_id")),
+        "the results turn, which has the chat, doesn't ask for the review"
+    );
 
     let space = env.state.db.space_of_kwant(&env.lead).await.unwrap().unwrap();
     let cards = env.state.db.list_tasks(&space, None, None, Some("delegation"), 200).await.unwrap();
@@ -263,6 +277,55 @@ async fn only_the_lead_reviews_a_hand_off_card() {
 }
 
 /// Prompts that asked the lead to review card `task_id` (results turn, review turn or reminder).
+/// The opening of a fresh-eyes review's instructions (B1).
+const FRESH: &str = "You see only each brief and its result here";
+
+/// B1: the lead reviews a hand-off in a turn that sees the brief and the result, never the chat
+/// the hand-off came from: the results turn carries the lead's chat, the review turn doesn't.
+#[tokio::test]
+async fn the_lead_reviews_with_fresh_eyes_never_the_chat() {
+    let env = setup().await;
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"kwant_id": env.lead, "sender_id": "user",
+        "prompt": "Our secret plan is LEADCHATMARK, keep it between us"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("the lead's chat turn", || async { !prompts_with(&["LEADCHATMARK"]).is_empty() }).await;
+    let (_, task) = finished(&env, "Count the widgets FRESHBRIEF", "Widget count").await;
+    wait_for("the lead's review turn", || async { !prompts_with(&[FRESH, "Widget count"]).is_empty() }).await;
+    // The fake lead never calls task_review, so the one reminder may follow at any moment; it's a
+    // fresh-eyes turn too, so count it apart from the review turn and check it the same way
+    let fresh = prompts_with(&[FRESH, "Widget count"]);
+    let (reminders, reviews): (Vec<_>, Vec<_>) = fresh.iter().partition(|p| p.contains("Reminder: the result on"));
+    assert_eq!(reviews.len(), 1, "one review turn: {fresh:?}");
+    assert!(reminders.len() <= 1, "at most one reminder: {fresh:?}");
+    let review = reviews[0];
+    assert!(review.contains("Count the widgets FRESHBRIEF"), "the brief: {review}");
+    assert!(review.contains(&task.id) && review.contains("done"), "the card and the result: {review}");
+    for p in &fresh {
+        assert!(!p.contains("LEADCHATMARK"), "a review turn never gets the lead's chat: {p}");
+        assert!(!p.contains("finished the task you delegated"), "nor the results turn: {p}");
+    }
+}
+
+/// B1 through Decide-first (Ada's review of #456, must-fix 1): a review reply that ends by asking
+/// the person to pick is never held, so no consult turn and no follow-up lead turn (which see the
+/// whole chat and every tool) ever runs for it.
+#[tokio::test]
+async fn a_review_that_asks_to_pick_never_goes_to_the_hidden_round() {
+    let env = setup().await;
+    let (s, v) = call(&env.app, "POST", "/api/settings", Some(json!({"decide_first": true}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"kwant_id": env.lead, "sender_id": "user",
+        "prompt": "Keep HOLDCHATMARK between us"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("the lead's chat turn", || async { !prompts_with(&["HOLDCHATMARK"]).is_empty() }).await;
+    finished(&env, "Count the gadgets HOLDMARK", "Gadget count").await;
+    wait_for("the lead's review turn", || async { !prompts_with(&[FRESH, "Gadget count"]).is_empty() }).await;
+    settle().await;
+    // The review did answer with a choice (the fake's reply), and nothing held it
+    let decide = prompts_with(&["[Decide first]", "The count looks right"]);
+    assert!(decide.is_empty(), "no hidden round for a review: {decide:?}");
+}
+
 fn review_asks_for(task_id: &str) -> usize {
     prompts_with(&[&format!("task_id \"{task_id}\"")]).len()
 }

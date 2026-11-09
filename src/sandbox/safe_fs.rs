@@ -267,6 +267,12 @@ mod imp {
         /// This folder's entries (without `.` and `..`), each seen with `fstatat(…,
         /// AT_SYMLINK_NOFOLLOW)` from this descriptor. An entry gone by then is left out.
         pub fn list(&self) -> io::Result<Vec<Entry>> {
+            self.list_at_most(usize::MAX).map(|(l, _)| l)
+        }
+
+        /// [`list`](Self::list), reading at most `max` names: a folder with millions of entries
+        /// costs kwant no more than `max`. The flag is true when entries were left unread.
+        pub fn list_at_most(&self, max: usize) -> io::Result<(Vec<Entry>, bool)> {
             // fdopendir takes the descriptor over: give it a copy
             let dup = self.fd.try_clone()?;
             // SAFETY: a valid descriptor whose ownership passes to the DIR stream
@@ -274,7 +280,13 @@ mod imp {
             if stream.is_null() {
                 return Err(io::Error::last_os_error());
             }
+            // The copy shares the read position with `self.fd`: after an earlier listing (or one
+            // cut short) it sits past the start, and a second listing of the same Dir came back
+            // short or empty. Start from the first entry every time.
+            // SAFETY: `stream` is a valid open DIR
+            unsafe { libc::rewinddir(stream) };
             let mut names = Vec::new();
+            let mut cut = false;
             loop {
                 // SAFETY: `stream` is a valid open DIR until closedir below
                 let ent = unsafe { libc::readdir(stream) };
@@ -284,6 +296,10 @@ mod imp {
                 // SAFETY: readdir returned a valid entry whose name is NUL-terminated
                 let name = unsafe { CStr::from_ptr((*ent).d_name.as_ptr()) }.to_bytes().to_vec();
                 if name != b"." && name != b".." {
+                    if names.len() >= max {
+                        cut = true;
+                        break;
+                    }
                     names.push(OsString::from_vec(name));
                 }
             }
@@ -304,7 +320,7 @@ mod imp {
                 let mode = st.st_mode as u32;
                 out.push(Entry { name, kind: mode_kind(mode), len: st.st_size.max(0) as u64, mode: mode & 0o7777 });
             }
-            Ok(out)
+            Ok((out, cut))
         }
     }
 }
@@ -409,8 +425,15 @@ mod imp {
         }
 
         pub fn list(&self) -> io::Result<Vec<Entry>> {
+            self.list_at_most(usize::MAX).map(|(l, _)| l)
+        }
+
+        pub fn list_at_most(&self, max: usize) -> io::Result<(Vec<Entry>, bool)> {
             let mut out = Vec::new();
             for e in std::fs::read_dir(&self.path)?.flatten() {
+                if out.len() >= max {
+                    return Ok((out, true));
+                }
                 let Ok(m) = std::fs::symlink_metadata(e.path()) else { continue };
                 let ft = m.file_type();
                 let kind = if ft.is_symlink() {
@@ -424,7 +447,7 @@ mod imp {
                 };
                 out.push(Entry { name: e.file_name(), kind, len: m.len(), mode: if m.permissions().readonly() { 0o444 } else { 0o644 } });
             }
-            Ok(out)
+            Ok((out, false))
         }
     }
 }
@@ -644,5 +667,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// #446 should-fix 2: a listing reads at most what it is allowed and says it stopped.
+    #[test]
+    fn a_capped_listing_reads_no_more_than_its_limit() {
+        let d = tempfile::tempdir().unwrap();
+        for i in 0..7 {
+            std::fs::write(d.path().join(format!("f{i}")), "x").unwrap();
+        }
+        let dir = Dir::open(d.path()).unwrap();
+        let (l, cut) = dir.list_at_most(3).unwrap();
+        assert_eq!((l.len(), cut), (3, true));
+        // Listing the same Dir again starts from the first entry (the copied descriptor shares
+        // its read position; before the fix a second listing came back short or empty)
+        let (l, cut) = dir.list_at_most(7).unwrap();
+        assert_eq!((l.len(), cut), (7, false));
+        assert_eq!(dir.list().unwrap().len(), 7);
+        assert_eq!(dir.list().unwrap().len(), 7);
     }
 }

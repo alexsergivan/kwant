@@ -332,11 +332,37 @@ impl Database {
     /// transaction. Channels and teams it led get another lead (`new_lead`, which must be in
     /// the same space). What it wrote in shared channels stays, as the room's history; so does
     /// the space's log of bot actions.
+    ///
+    /// When a chat search index is out of step with what it indexes (SQLite's
+    /// `SQLITE_CORRUPT_VTAB`, which the index's delete trigger raises), the delete is rolled
+    /// back, both search indexes are rebuilt from their tables and the delete runs once more.
     pub async fn delete_kwant_and_history(&self, id: &str, new_lead: &str) -> Result<bool, DbError> {
-        let mut tx = self.pool.begin().await?;
-        let done = purge_kwant(&mut tx, id, new_lead).await?;
-        tx.commit().await?;
-        Ok(done)
+        match self.delete_kwant_once(id, new_lead).await {
+            Err(e) if sqlite_code(&e) == Some(SQLITE_CORRUPT_VTAB) => {
+                tracing::warn!(kwant_id = %id, error = %e, "a chat search index is out of step; rebuilding it and deleting the bot again");
+                if let Err(repair) = self.rebuild_search_indexes().await {
+                    tracing::warn!(kwant_id = %id, error = %repair, "rebuilding the chat search indexes failed");
+                    return Err(e);
+                }
+                self.delete_kwant_once(id, new_lead).await
+            }
+            done => done,
+        }
+    }
+
+    /// One attempt of [`Self::delete_kwant_and_history`], holding the write lock from the start.
+    async fn delete_kwant_once(&self, id: &str, new_lead: &str) -> Result<bool, DbError> {
+        let mut tx = self.begin_write().await?;
+        match purge_kwant(&mut tx, id, new_lead).await {
+            Ok(done) => {
+                tx.commit().await?;
+                Ok(done)
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                Err(e)
+            }
+        }
     }
 
     /// Removes a channel nobody has written in yet; `false` when it has messages or is #general.
@@ -393,9 +419,21 @@ pub(super) async fn purge_kwant(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, id
         .fetch_all(&mut **tx)
         .await?;
         for (row_id, lead, members) in rows {
-            let kept: Vec<String> =
+            // Ids of bots that no longer exist are dropped too: handing the lead to one would
+            // fail the delete on the lead's foreign key.
+            let listed: Vec<String> =
                 serde_json::from_str::<Vec<String>>(&members).unwrap_or_default().into_iter().filter(|m| m != id).collect();
-            let lead = if lead == id { kept.first().cloned().unwrap_or_else(|| new_lead.to_string()) } else { lead };
+            let existing = existing_kwants(tx, &listed, &lead).await?;
+            let listed_len = listed.len();
+            let kept: Vec<String> = listed.into_iter().filter(|m| existing.contains(m)).collect();
+            if kept.len() != listed_len {
+                tracing::info!(table, row = %row_id, dropped = listed_len - kept.len(), "dropped ids of bots that no longer exist from a member list");
+            }
+            let lead = if lead == id || !existing.contains(&lead) {
+                kept.first().cloned().unwrap_or_else(|| new_lead.to_string())
+            } else {
+                lead
+            };
             sqlx::query(&format!("UPDATE {table} SET member_kwants = ?, lead_kwant_id = ? WHERE id = ?"))
                 .bind(serde_json::to_string(&kept)?)
                 .bind(&lead)
@@ -406,4 +444,77 @@ pub(super) async fn purge_kwant(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, id
     }
     let done = sqlx::query("DELETE FROM kwants WHERE id = ?").bind(id).execute(&mut **tx).await?;
     Ok(done.rows_affected() == 1)
+}
+
+/// Which of `members` and `lead` are bots that exist.
+async fn existing_kwants(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    members: &[String],
+    lead: &str,
+) -> Result<std::collections::HashSet<String>, DbError> {
+    let wanted: Vec<&str> = members.iter().map(String::as_str).chain(std::iter::once(lead)).collect();
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT id FROM kwants WHERE id IN (SELECT value FROM json_each(?))")
+        .bind(serde_json::to_string(&wanted)?)
+        .fetch_all(&mut **tx)
+        .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// SQLite's extended result code for "a virtual table is malformed": an external-content
+/// search index that is out of step with its table.
+pub(crate) const SQLITE_CORRUPT_VTAB: i32 = 267;
+
+/// The SQLite extended result code behind a database error, if there is one.
+pub(crate) fn sqlite_code(e: &DbError) -> Option<i32> {
+    match e {
+        DbError::Sqlx(sqlx::Error::Database(d)) => d.code().and_then(|c| c.parse().ok()),
+        _ => None,
+    }
+}
+
+/// What the Delete dialog says when deleting `name` failed: plain words, never SQL. The
+/// full error goes to the log.
+pub fn delete_failure_message(name: &str, e: &DbError) -> String {
+    delete_failure_for_code(name, sqlite_code(e))
+}
+
+fn delete_failure_for_code(name: &str, code: Option<i32>) -> String {
+    // The primary result code is the low byte of the extended one
+    let why = match code {
+        Some(SQLITE_CORRUPT_VTAB) => "its chat search index needed repair and kwant couldn't finish it. Restart kwant and try again",
+        Some(787) => "other saved data still points to it, or to a bot that no longer exists, so nothing was deleted. The details are in kwant's log",
+        Some(c) if c & 0xff == 11 || c & 0xff == 26 => "kwant's database file looks damaged. Quit kwant, back up the kwnt.db file and ask for help before trying again",
+        Some(c) if c & 0xff == 5 || c & 0xff == 6 => "kwant is busy saving something else. Try again in a moment",
+        Some(c) if c & 0xff == 13 => "the disk is full. Free some space and try again",
+        Some(c) if c & 0xff == 8 || c & 0xff == 10 || c & 0xff == 14 => "kwant can't write to its database file. Check the disk and its permissions, then try again",
+        _ => "kwant couldn't save the change, so nothing was deleted. The details are in kwant's log",
+    };
+    format!("Couldn't delete {name}: {why}.")
+}
+
+#[cfg(test)]
+mod delete_failure_tests {
+    use super::delete_failure_for_code;
+
+    #[test]
+    fn each_failure_has_plain_words() {
+        let say = |c| delete_failure_for_code("Architect", c);
+        assert!(say(Some(267)).contains("search index"));
+        assert!(say(Some(787)).contains("no longer exists"));
+        assert!(say(Some(787)).contains("nothing was deleted"));
+        assert!(say(Some(11)).contains("damaged"));
+        assert!(say(Some(5)).contains("busy"));
+        assert!(say(Some(517)).contains("busy"), "SQLITE_BUSY_SNAPSHOT");
+        assert!(say(Some(13)).contains("disk is full"));
+        assert!(say(Some(8)).contains("can't write"));
+        assert!(say(Some(1811)).contains("nothing was deleted"), "a trigger's RAISE");
+        assert!(say(None).contains("nothing was deleted"));
+        for c in [None, Some(1), Some(5), Some(8), Some(11), Some(13), Some(267), Some(787), Some(1811)] {
+            let m = say(c);
+            assert!(m.starts_with("Couldn't delete Architect: "), "{m}");
+            for word in ["database error", "SQL", "constraint", "malformed", "code"] {
+                assert!(!m.contains(word), "{m} has {word}");
+            }
+        }
+    }
 }

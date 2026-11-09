@@ -45,6 +45,7 @@ pub mod routing;
 pub mod smart_results;
 pub mod dev_mode;
 pub mod dev_ticket_briefs;
+pub mod dev_prepush;
 pub mod spend;
 pub mod agent_connections;
 pub mod dev_jira;
@@ -882,6 +883,16 @@ impl Database {
             }
             match rows.as_slice() {
                 [(id, old)] => {
+                    // Only the team's members that are still bots, so the chat never gets an
+                    // id the next bot delete would hand the lead to
+                    let (members,): (String,) = sqlx::query_as(
+                        "SELECT COALESCE(json_group_array(value), '[]') FROM \
+                         (SELECT value FROM json_each(CASE WHEN json_valid(?1) THEN ?1 ELSE '[]' END) \
+                         WHERE value IN (SELECT id FROM kwants) ORDER BY key)",
+                    )
+                    .bind(&members)
+                    .fetch_one(&self.pool)
+                    .await?;
                     sqlx::query("UPDATE channels SET name = ?, lead_kwant_id = ?, member_kwants = ? WHERE id = ?")
                         .bind(&wanted)
                         .bind(&lead)

@@ -1077,10 +1077,8 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
                 clip(&q.question, 200)
             ));
         }
-        if let Some(review) = super::missions::listener::lead_review_note(state, b, &who).await {
-            results.push_str(&review);
-            results.push('\n');
-        }
+        // The board review of the card is not asked here: this turn has the whole chat, so it
+        // runs as its own fresh-eyes turn right after (B1, see `review_turn`)
         if let Some(next) = status_guidance(&b.status) {
             results.push_str(next);
             results.push('\n');
@@ -1121,9 +1119,11 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     // usual limits.
     // Past the hold limit the lead hears the results while the turn that handed them out still
     // runs in this chat: that turn holds the chat, so this one runs beside it, not after it (P6)
-    let beside_running = batch.iter().chain([d]).filter_map(|b| b.lead_turn_id.as_deref()).any(|t| state.turns.has_turn(t));
+    let beside_running = lead_turn_runs(state, batch.iter().chain([d]));
     let outcome = try_kwant_turn(&scope, &lead, prompt, TurnOpts { beside_running, ..TurnOpts::default() }).await;
-    // Cards the lead was asked to review and didn't: one reminder for all of them (a failed turn counts too)
+    // The cards of the batch are reviewed in a turn of their own that sees only each brief and
+    // result (fresh eyes), then the ones still waiting get one reminder (a failed turn counts too)
+    review_turn(state, batch, false).await;
     remind_review(state, batch).await;
     if let Ok(reply) = outcome {
         let mut spoken = vec![lead.id.clone()];
@@ -1194,6 +1194,12 @@ pub fn spawn_review_turn(state: &AppState, d: &Delegation, reminder: bool) {
     });
 }
 
+/// Whether the lead's turn that handed out any of `batch` still runs (it is then past the hold
+/// limit, or the lead would not hear them yet): a turn for that lead in that chat runs beside it.
+fn lead_turn_runs<'a>(state: &AppState, batch: impl Iterator<Item = &'a Delegation>) -> bool {
+    batch.filter_map(|b| b.lead_turn_id.as_deref()).any(|t| state.turns.has_turn(t))
+}
+
 /// A turn for the lead of `batch` (hand-offs of one lead and chat) in the chat they came from,
 /// only to review their cards, all in one prompt: for a card whose lead wasn't resumed with the
 /// result (the card was blocked when the batch reported, or kwnt restarted before the lead's
@@ -1214,7 +1220,12 @@ pub async fn review_turn(state: &AppState, batch: &[Delegation], reminder: bool)
         // Logs the ask, so it counts towards the limit even if the turn below fails
         let Some(note) = super::missions::listener::lead_review_note(state, b, &who).await else { continue };
         let result = clip(&result_of(state, b).await, 3000);
-        cards.push_str(&format!("{who}'s result on “{}”:\n\n{}\n\n{note}\n\n", b.title, crate::drivers::peer_message(&who, &result)));
+        let brief = clip(&b.task, 1500);
+        cards.push_str(&format!(
+            "The brief you gave {who} (“{}”):\n\n{brief}\n\n{who}'s result:\n\n{}\n\n{note}\n\n",
+            b.title,
+            crate::drivers::peer_message(&who, &result)
+        ));
         titles.push(format!("“{}”", b.title));
     }
     if titles.is_empty() {
@@ -1227,13 +1238,23 @@ pub async fn review_turn(state: &AppState, batch: &[Delegation], reminder: bool)
         (false, _) => format!("{} tasks you handed out are finished, and their cards are waiting for your review.", titles.len()),
     };
     let prompt = format!(
-        "{opening}\n\n{cards}Review each one now with task_review. Then reply with one short line for the chat: what you \
-        decided and why. Don't hand anything on by @mention in this reply."
+        "{opening}\n\n{cards}{FRESH_REVIEW}Review each one now with task_review. Then reply with one short line for the \
+        chat: what you decided and why. Don't hand anything on by @mention in this reply."
     );
-    if let Err(e) = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await {
+    // Fresh eyes (B1): the turn gets the brief and the result above and nothing else, not the
+    // chat, the teammate's thread or the lead's own notes
+    let mut opts = TurnOpts::default();
+    opts.fresh_eyes = true;
+    // Like the lead's report turn: past the hold limit it doesn't wait for the turn that handed out
+    opts.beside_running = lead_turn_runs(state, batch.iter());
+    if let Err(e) = try_kwant_turn(&scope, &lead, prompt, opts).await {
         tracing::info!(delegation = %d.id, error = %e, "a lead review turn failed");
     }
 }
+
+/// Tells a fresh-eyes review turn what it has to go on.
+pub const FRESH_REVIEW: &str = "You see only each brief and its result here, not the chat or the teammate's own thread, \
+    and you don't need them: judge whether the result does what the brief asked.\n\n";
 
 /// How a lead hands work on from its results follow-up, so it never announces a handoff that
 /// doesn't happen (Oleks's screenshot, 2026-10-24: "Handing off now: @Social …" and nothing ran).
