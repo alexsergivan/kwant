@@ -230,6 +230,9 @@ pub fn runs_folder_file(server: &McpServer, folder: &std::path::Path) -> bool {
     if server.transport != "stdio" {
         return false;
     }
+    // The folder as given too: on Windows `canonicalize` returns a `\\?\` long-name path that a
+    // typed path (8.3 short names, mixed slashes) never starts with
+    let typed = folder;
     let folder = crate::db::isolated_folders::canonical(folder);
     let names_file = |word: &str, program: bool| {
         let word = word.trim();
@@ -238,7 +241,7 @@ pub fn runs_folder_file(server: &McpServer, folder: &std::path::Path) -> bool {
         }
         let p = Path::new(word);
         if p.is_absolute() {
-            return crate::db::isolated_folders::canonical(p).starts_with(&folder) || p.starts_with(&folder);
+            return crate::db::isolated_folders::canonical(p).starts_with(&folder) || p.starts_with(&folder) || p.starts_with(typed);
         }
         // A program with a slash resolves from the folder; a bare one is a PATH lookup. An argument
         // names a folder file when it starts with `.` or its first part exists there (an npm
@@ -559,6 +562,22 @@ mod folder_file_tests {
         let mut http = stdio("node", &["server.js"]);
         http.transport = "http".into();
         assert!(!runs_folder_file(&http, dir));
+    }
+
+    // The folder given through a symlink, and a server naming a file there that doesn't exist yet:
+    // canonicalizing that path fails, so the typed folder is what catches it (also Windows' 8.3 names)
+    #[cfg(unix)]
+    #[test]
+    fn a_file_named_through_the_typed_folder_path_is_spotted() {
+        let t = tempfile::tempdir().unwrap();
+        let real = t.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = t.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let later = link.join("tools/not-yet.js");
+        assert!(runs_folder_file(&stdio("node", &[later.to_str().unwrap()]), &link));
+        assert!(runs_folder_file(&stdio(later.to_str().unwrap(), &[]), &link));
+        assert!(!runs_folder_file(&stdio("node", &[t.path().join("elsewhere.js").to_str().unwrap()]), &link));
     }
 }
 
