@@ -44,6 +44,7 @@ const DYNAMIC_OK: &[(&str, &str, &str)] = &[
     ("server/video.rs", "bin", "ffmpeg/ffprobe"),
     ("server/engine_login.rs", "&bin", "the AI CLI's own sign-in command"),
     ("server/dev/scan/gitleaks.rs", "bin", "gitleaks (reads files; never runs git)"),
+    ("server/dev/prepush.rs", "bin", "semgrep, found on PATH by which(\"semgrep\"); scans a temp copy of the pushed files, never runs git (0.8.0 B2)"),
     ("sandbox/computer.rs", "chrome", "the local Chrome binary"),
     ("sandbox/computer.rs", "&chrome", "the local Chrome binary"),
     ("sandbox/chrome_download.rs", "bin", "the downloaded Chrome, checked with --version"),
@@ -73,6 +74,11 @@ const CALLS_OK: &[(&str, &str)] = &[
     ("*", "ends_with"),
     // A JSON error's code (`coded(status, "git", message)`)
     ("server/dev/routes.rs", "coded"),
+    // The pre-push gate (0.8.0 B2) reads a bot's shell command to spot `git push`: its cheap
+    // `lower.contains("git")` pre-check and the word test `w.rsplit('/').next() == Some("git")`.
+    // Both only read the command text; the gate never starts git itself.
+    ("server/dev/prepush.rs", "contains"),
+    ("server/dev/prepush.rs", "Some"),
     ("server/dev/git.rs", "run"),
     ("server/dev/git.rs", "run_with"),
     ("server/dev/git.rs", "version"),
