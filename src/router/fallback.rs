@@ -179,6 +179,8 @@ pub fn blend_effort(prompt: &str, laya_effort: &str) -> String {
 const CONTINUES_WORK: &[&str] = &[
     "show", "give", "fix", "make", "build", "send", "screenshot", "do", "try", "again", "push", "commit",
     "deploy", "redo",
+    // A go-ahead for what the bot proposed: it runs the work, never on the fast tier
+    "go ahead", "continue", "proceed", "carry on",
 ];
 
 /// Greetings and thanks: they stay "low" even right after a turn that used tools.
@@ -215,8 +217,10 @@ fn effort_of_rank(rank: u8) -> &'static str {
     }
 }
 
-/// A greeting or thanks with no action word in it ("hi", "thanks!", "thank you so much").
-pub fn is_small_talk(prompt: &str) -> bool {
+/// A greeting or thanks with no action word in it ("hi", "thanks!", "thank you so much"). Narrower
+/// than [`super::team::is_small_talk`], which also counts a go-ahead ("ok, go ahead"): that one
+/// starts the work, so it must not stay on the fast tier.
+pub fn is_greeting_or_thanks(prompt: &str) -> bool {
     let ws = words(prompt);
     SMALL_TALK.iter().any(|p| phrase_at(&ws, p).first() == Some(&0)) && !has_any(&ws, CONTINUES_WORK)
 }
@@ -227,7 +231,7 @@ pub fn continues_work(prompt: &str, previous: Option<&PreviousTurn>) -> bool {
     if word_count(prompt) > SHORT_FOLLOW_UP {
         return false;
     }
-    has_any(&words(prompt), CONTINUES_WORK) || (previous.is_some_and(|p| p.used_tools) && !is_small_talk(prompt))
+    has_any(&words(prompt), CONTINUES_WORK) || (previous.is_some_and(|p| p.used_tools) && !is_greeting_or_thanks(prompt))
 }
 
 /// The effort for a short follow-up that continues work: the previous turn's, and never below
@@ -442,11 +446,21 @@ mod follow_up_tests {
         for msg in ["hi", "thanks", "Thanks!", "thank you", "hey", "hello there"] {
             assert_eq!(tier(msg, "low", None), Tier::Fast, "{msg:?}");
             assert_eq!(tier(msg, "low", Some(&tools)), Tier::Fast, "{msg:?} right after a turn with tools");
-            assert!(is_small_talk(msg), "{msg:?}");
+            assert!(is_greeting_or_thanks(msg), "{msg:?}");
         }
         // Thanks with an action in it carries on the work
-        assert!(!is_small_talk("thanks, now push it"));
+        assert!(!is_greeting_or_thanks("thanks, now push it"));
         assert_eq!(tier("thanks, now push it", "low", None), Tier::Balanced);
+    }
+
+    #[test]
+    fn a_go_ahead_runs_the_work_off_the_fast_tier() {
+        // The bot proposed a plan in words (no tools yet): "ok, go ahead" starts the work
+        let proposed = PreviousTurn { effort: Some("medium".into()), used_tools: false };
+        for msg in ["ok, go ahead", "go ahead", "yes, continue", "proceed"] {
+            assert_eq!(tier(msg, "low", Some(&proposed)), Tier::Balanced, "{msg:?}");
+            assert!(!is_greeting_or_thanks(msg));
+        }
     }
 
     #[test]
