@@ -17,6 +17,7 @@ import {
   foldable,
   footer,
   needsYouLead,
+  openCount,
   overriddenLine,
   passedRows,
   phaseOf,
@@ -112,7 +113,14 @@ const Row: React.FC<{ k: PrepushCheck; card: Card; hidePhone: boolean }> = ({ k,
 };
 
 /** A one-line card (P0, retried, cleared and folded). */
-const Line: React.FC<{ children: React.ReactNode; led?: 'ok' | 'off'; status?: boolean; extra?: React.ReactNode; phase: string }> = ({ children, led = 'off', status, extra, phase }) => (
+const Line: React.FC<{ children: React.ReactNode; led?: 'ok' | 'off'; status?: boolean; extra?: React.ReactNode; phase: string; error?: string }> = ({
+  children,
+  led = 'off',
+  status,
+  extra,
+  phase,
+  error,
+}) => (
   <div
     data-prepush-phase={phase}
     role={status ? 'status' : undefined}
@@ -121,6 +129,12 @@ const Line: React.FC<{ children: React.ReactNode; led?: 'ok' | 'off'; status?: b
     <Led s={led} className="shrink-0" />
     <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{children}</span>
     {extra}
+    {error && (
+      // A retry that applied but whose chat message failed lands here, on the retried line (#475 review 2).
+      <p role="alert" className="w-full text-meta text-bad [overflow-wrap:anywhere]">
+        {error}
+      </p>
+    )}
   </div>
 );
 
@@ -129,10 +143,12 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
   const [form, setForm] = useState(startOverride && canOverride(card));
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState<null | 'retry' | 'override'>(null);
-  // `keep`: an error that explains a change the card shows anyway (409, message not sent), so a
-  // status change doesn't wipe it.
-  const [error, setErrorState] = useState<{ text: string; keep: boolean } | null>(null);
-  const setError = (text: string | null, keep = false) => setErrorState(text ? { text, keep } : null);
+  // `keep`: how many status changes the error survives. Only a 409 keeps one, for the refetch it
+  // starts; the change after that clears it like any other error (#475 review 1).
+  const [error, setErrorState] = useState<{ text: string; keep: number } | null>(null);
+  const setError = (text: string | null, keep = 0) => setErrorState(text ? { text, keep } : null);
+  const statusNow = useRef(card.status);
+  statusNow.current = card.status;
   const [collapsed, setCollapsed] = useState(phase === 'P2' && !live);
   const [unfold, setUnfold] = useState(startUnfolded);
   const cardRef = useRef<HTMLElement>(null);
@@ -166,7 +182,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
   // The server moved the card on: drop a form that no longer applies.
   useEffect(() => {
     if (!canOverride(card)) setForm(false);
-    setErrorState((e) => (e?.keep ? e : null));
+    setErrorState((e) => (e && e.keep > 0 ? { ...e, keep: e.keep - 1 } : null));
   }, [card.status, card.id]);
 
   useEffect(() => {
@@ -194,21 +210,21 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
   if (phase === 'P0') {
     return (
       <Line phase="P0" status>
-        Nothing to check: <code className="dv-sha">{card.branch}</code> has no new commits. Nothing was pushed.
+        Nothing to check: <code className="dv-sha dv-sha-wrap">{card.branch}</code> has no new commits. Nothing was pushed.
       </Line>
     );
   }
   if (phase === 'UN') {
     return (
       <Line phase="UN">
-        Pre-push check of <code className="dv-sha">{card.branch}</code>. This version of the app can't show where it is yet. Update the app to see it.
+        Pre-push check of <code className="dv-sha dv-sha-wrap">{card.branch}</code>. This version of the app can't show where it is yet. Update the app to see it.
       </Line>
     );
   }
   if (phase === 'RT') {
     return (
-      <Line phase="RT">
-        You asked for a new check of <code className="dv-sha">{card.branch}</code>. {bot}'s next push of this commit is checked again from try 1.
+      <Line phase="RT" error={error?.text}>
+        You asked for a new check of <code className="dv-sha dv-sha-wrap">{card.branch}</code>. {bot}'s next push of this commit is checked again from try 1.
       </Line>
     );
   }
@@ -228,7 +244,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
           return (
             <>
               {p.before}
-              <code className="dv-sha">{p.branch}</code>
+              <code className="dv-sha dv-sha-wrap">{p.branch}</code>
               {p.after}
             </>
           );
@@ -243,6 +259,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
     if (busy) return;
     setBusy(kind);
     setError(null);
+    const from = card.status;
     try {
       if (kind === 'retry') await onRetry?.(card);
       else {
@@ -251,7 +268,9 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
         setReason('');
       }
     } catch (e) {
-      const keep = e instanceof DevModeError && (e.status === 409 || e.code === 'message_not_sent');
+      // message_not_sent: the card already moved before the chat send, so the next change may clear it.
+      // 409: keep it through the refetch, unless the card already moved on its own while we waited.
+      const keep = e instanceof DevModeError && e.status === 409 && statusNow.current === from ? 1 : 0;
       setError(e instanceof Error && e.message ? e.message : 'Something went wrong. Try again.', keep);
     } finally {
       setBusy(null);
@@ -340,7 +359,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
           <p className="flex min-w-0 flex-1 items-start gap-2 text-meta text-zinc-300">
             <Led s="run" className="dv-led-still mt-[5px] shrink-0" />
             <span className="min-w-0">
-              <strong className="font-semibold text-zinc-100">{bot} is fixing them.</strong> {footer(card, bot)}
+              <strong className="font-semibold text-zinc-100">{bot} is fixing {openCount(card) === 1 ? 'it' : 'them'}.</strong> {footer(card, bot)}
             </span>
           </p>
           {onOverride && (

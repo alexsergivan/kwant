@@ -889,6 +889,9 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .dv-sha { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--kw-hairline); background: var(--dv-code-bg);
   font: 500 11px/1 'JetBrains Mono', monospace; color: var(--t3); white-space: nowrap; }
 button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); border-color: var(--kw-hairline-strong); }
+/* A branch inside a sentence wraps with the text (pre-push one-line cards, Mira ui-check-475 must-fix 1). */
+.dv-sha.dv-sha-wrap { display: inline; height: auto; white-space: normal; overflow-wrap: anywhere;
+  padding: 1px 5px; line-height: 20px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .dv-branch { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--kw-hairline); background: var(--dv-code-bg);
   font: 500 11px/1 'JetBrains Mono', monospace; color: var(--t3); min-width: 0; }
 .dv-branch .h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--t2); }
