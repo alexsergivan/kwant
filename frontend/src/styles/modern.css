@@ -865,6 +865,17 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .dv-led[data-ping]::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--c); animation: dv-ping 200ms var(--kw-ease) 1 both; }
 @keyframes dv-ping { from { transform: scale(1); opacity: .9; } to { transform: scale(2.4); opacity: 0; } }
 
+/* 0.8.0 B3: the pre-push card's running LED is static (Mira b3 "no spinner, no pulse"), and
+   "not installed" is a dashed hollow LED. */
+.dv-led.dv-led-still::after { animation: none !important; opacity: .5; transform: scale(1.6); }
+.dv-led.dv-led-dashed { box-shadow: none; border: 1.5px dashed var(--c); background: transparent; }
+/* The fresh-eyes chip keeps its size; its hit area grows on touch (b3 §3). */
+.fe-chip { position: relative; }
+.fe-chip::after { content: ''; position: absolute; inset: -6px; }
+.fe-pop { animation: fe-in 150ms var(--kw-ease) both; }
+@keyframes fe-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .fe-pop { animation: none; } }
+
 /* §2.2 Diff stat: mono numbers plus a 32x4 split bar (add | del). Our own shape, not a block meter. */
 .dv-stat { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px/1 'JetBrains Mono', monospace; white-space: nowrap; }
 .dv-stat .a { color: var(--dv-add); } .dv-stat .d { color: var(--dv-del); }

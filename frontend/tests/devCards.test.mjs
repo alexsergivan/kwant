@@ -554,7 +554,8 @@ test('the review card: sample chip, tamper, security tiles in 0.7.x, no Post but
   assert.match(out, /Different engine from the author/);
   assert.match(out, /data-sec="OSV" data-state="later"/);
   assert.match(out, /data-sec="Semgrep" data-state="later"/);
-  assert.equal((out.match(/in 0\.7\.x/g) ?? []).length >= 2, true);
+  assert.equal((out.match(/in 0\.7\.x/g) ?? []).length >= 1, true);
+  assert.match(out, /Runs before a push, not on pull requests/, '0.8.0 B3: semgrep runs before a push, not on PR reviews');
   assert.doesNotMatch(out, /Post to GitHub/, 'S2: no button that can never be pressed');
   assert.match(out, /Nothing is posted until you press it\./);
   assert.match(out, /data-post-state="none"/);
