@@ -40,6 +40,7 @@ pub mod hires;
 pub mod concierge;
 pub mod rerouting;
 pub mod import_routes;
+pub mod isolated_folders_routes;
 pub mod approval_modes;
 pub mod passwords;
 pub mod loose_ends_owner;
@@ -303,6 +304,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
+        .route("/api/isolated-folders", get(isolated_folders_routes::list))
+        .route("/api/isolated-folders/forget", post(isolated_folders_routes::forget))
         .route("/api/settings/computer/window", put(computer::put_window))
         .route("/api/settings/computer/browser", post(computer::retry_browser))
         .route("/api/system/directories", get(routes::list_system_directories))
