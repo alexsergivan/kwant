@@ -1,4 +1,5 @@
-import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
+import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import { queuedText } from '../claudeVm';
 import { QueuedBeside } from './QueuedBeside';
 import type { SwitchEntry } from '../watchLive';
@@ -52,6 +53,8 @@ import {
   uploadRetryable,
   uploadSlotsLeft,
 } from '../attachments';
+import { DropRecipient, FOLDER_NOTE, dragHasFiles, dropAnnouncement, dropCard, modalOpen, previewDrag, splitDrop, windowDragWatch } from '../dragPreview';
+import { DropBot, DropLayer, DropPhase } from './DropLayer';
 import { EarlierCopies, FileTiles, UploadChip } from './Attachments';
 import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
 import { ranOnLabel } from '../engines';
@@ -530,10 +533,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const stacked = composerStacked({ phone, focused: composerFocused, hasContent: inputVal.length > 0 || uploads.length > 0 });
   const [uploadNote, setUploadNote] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const uploadFiles = useRef(new Map<string, { file: File; abort: AbortController }>());
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const dragDepth = useRef(0);
+  // 0.8.0 drag and drop (Mira's design): the window knows a file drag is in it; this chat knows the
+  // pointer is over its column (header, list and composer, not a side pane).
+  const dragWatch = windowDragWatch();
+  const winDrag = useSyncExternalStore(dragWatch.subscribe, dragWatch.get, dragWatch.get);
+  useEffect(() => dragWatch.registerChat(), [dragWatch]);
+  const overDepth = useRef(0);
+  const [overChat, setOverChat] = useState(false);
+  // The window watch renders the armed card at sync priority; the pane's own over/refused change has to
+  // land in that same task, or the browser can paint one frame of "Drop here…" before the real card
+  // (drag events are continuous priority, so a plain setState renders a scheduler task later).
+  const overNow = useRef(false);
+  const markOver = (v: boolean) => {
+    if (overNow.current === v) return;
+    overNow.current = v;
+    flushSync(() => setOverChat(v));
+  };
+  const headerRef = useRef<HTMLDivElement>(null);
+  const columnRef = useRef<HTMLDivElement>(null);
+  const composerWrapRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Chips that came with the drop that just landed, by key, with their place in it (for the stagger).
+  const [freshChips, setFreshChips] = useState<Record<string, number>>({});
+  // The drop card's words for screen readers, and "3 files added for Frontend. Uploading." after a drop;
+  // cleared shortly after so the same line can be read again.
+  const [dropAnnounce, setDropAnnounce] = useState('');
+  useEffect(() => {
+    if (!dropAnnounce) return;
+    const t = setTimeout(() => setDropAnnounce(''), 4000);
+    return () => clearTimeout(t);
+  }, [dropAnnounce]);
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -905,10 +936,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   /** Files from the picker, a drop or a paste: checked here, then uploaded right away. */
-  const addFiles = (files: File[]) => {
-    if (!files.length) return;
+  const addFiles = (files: File[], extraNotes: string[] = []): string[] => {
+    if (!files.length) {
+      if (extraNotes.length) setUploadNote(extraNotes.join(' '));
+      return [];
+    }
     const room = uploadSlotsLeft(uploads);
-    const notes: string[] = [];
+    const notes: string[] = [...extraNotes];
     if (files.length > room) notes.push(`Up to ${MAX_ATTACHMENTS} files per message; ${files.length - room === 1 ? 'one was' : `${files.length - room} were`} left out.`);
     const added: PendingUpload[] = [];
     for (const file of files.slice(0, room)) {
@@ -923,6 +957,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
     setUploadNote(notes.length ? notes.join(' ') : null);
     if (added.length) setUploads((list) => [...list, ...added]);
+    return added.map((u) => u.key);
   };
 
   const removeUpload = (key: string) => {
@@ -936,34 +971,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!f) return;
     patchUpload(key, { state: 'uploading', progress: 0, error: undefined });
     startUpload(key, f);
-  };
-
-  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
-  const dropHandlers = {
-    onDragEnter: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth.current += 1;
-      setDragOver(true);
-    },
-    onDragOver: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-    },
-    onDragLeave: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      dragDepth.current = Math.max(0, dragDepth.current - 1);
-      if (dragDepth.current === 0) setDragOver(false);
-    },
-    onDrop: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth.current = 0;
-      setDragOver(false);
-      addFiles(filesFrom(e.dataTransfer.files));
-      textareaRef.current?.focus();
-    },
   };
 
   // `/idea …` goes in the idea jar, not to a bot (spec §2.3): the field dresses violet and blocks a send it can't take.
@@ -1535,6 +1542,140 @@ export const ChatView: React.FC<ChatViewProps> = ({
     teamName,
     names: activeKwants.map((k) => k.name).concat(activeTeams.map((t) => t.name)),
   });
+
+  // ---------- 0.8.0 drop files into the chat (design.md §2–§6) ----------
+  // Who gets the files: the same answer as the "Answers:" hint, so the two never disagree.
+  const mentioned = target.kind === 'mention' ? target.label.replace(/^@/, '') : '';
+  const mentionedBot = mentioned ? activeKwants.find((k) => k.name.toLowerCase() === mentioned.toLowerCase()) : undefined;
+  const asDropBot = (k: { id: string; name: string; avatar_sprite?: string }): DropBot => ({ id: k.id, name: k.name, avatar: k.avatar_sprite });
+  const roomBots: DropBot[] = (teamMembers?.length ? teamMembers : activeKwants).map(asDropBot);
+  // A team @mention shows that team's bots, like a room (#478 M4); never a made-up face for the team.
+  const mentionedTeamName = mentioned.replace(/ team$/i, '');
+  const mentionedTeam =
+    mentioned && !mentionedBot
+      ? activeTeams.find((t) => t.name.toLowerCase() === mentioned.toLowerCase() || t.name.toLowerCase() === mentionedTeamName.toLowerCase())
+      : undefined;
+  const mentionedTeamBots: DropBot[] = (mentionedTeam?.member_kwants ?? [])
+    .map((id) => activeKwants.find((k) => k.id === id))
+    .filter((k): k is (typeof activeKwants)[number] => !!k)
+    .map(asDropBot);
+  const dropTo: { recipient: DropRecipient; single: boolean; bots: DropBot[]; botId?: string } =
+    target.kind === 'mention'
+      ? mentionedBot
+        ? { recipient: { kind: 'bot', name: mentionedBot.name }, single: true, bots: [asDropBot(mentionedBot)], botId: mentionedBot.id }
+        : { recipient: { kind: 'team', name: mentionedTeam?.name ?? mentionedTeamName }, single: false, bots: mentionedTeamBots }
+      : home?.kind === 'bot'
+        ? {
+            recipient: { kind: 'bot', name: home.bot?.name ?? title },
+            single: true,
+            bots: [{ id: home.bot?.id, name: home.bot?.name ?? title, avatar: home.bot?.avatar_sprite }],
+            botId: home.bot?.id,
+          }
+        : home?.kind === 'general'
+          ? { recipient: { kind: 'general', name: 'General' }, single: false, bots: roomBots }
+          : home?.kind === 'team' || (target.kind === 'team' && teamName)
+            ? { recipient: { kind: 'team', name: teamName ?? title }, single: false, bots: roomBots }
+            : { recipient: { kind: 'channel', name: title }, single: false, bots: roomBots };
+  // A modal open when the drag came in keeps the layer away (the Import dialog has its own drop zone).
+  const modalUp = useMemo(() => winDrag.active && typeof document !== 'undefined' && modalOpen(document), [winDrag.active]);
+  const dragOn = winDrag.active && !modalUp;
+  const dropPreview = previewDrag(winDrag.items, uploads.length);
+  const card = dropCard({ preview: dropPreview, recipient: dropTo.recipient, ideaMode });
+  const livePhase: DropPhase | null = !dragOn ? null : overChat ? (card.state === 'refused' ? 'refused' : 'over') : 'armed';
+  useEffect(() => {
+    if (!winDrag.active) {
+      overDepth.current = 0;
+      overNow.current = false;
+      setOverChat(false);
+    }
+  }, [winDrag.active]);
+  // The layer runs its exit after the drag ends: the landing (160 ms) after a drop, else a fade (100 ms).
+  const lastCard = useRef(card);
+  if (livePhase) lastCard.current = card;
+  const landed = useRef(false);
+  const [exiting, setExiting] = useState<'landing' | 'leaving' | null>(null);
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (livePhase) {
+      // A new drag: a drop that landed after the last one ended must not play this one's exit as a landing.
+      if (!wasLive.current) landed.current = false;
+      wasLive.current = true;
+      setExiting(null);
+      return;
+    }
+    if (!wasLive.current) return;
+    wasLive.current = false;
+    const how = landed.current ? 'landing' : 'leaving';
+    landed.current = false;
+    setExiting(how);
+    const t = setTimeout(() => setExiting(null), how === 'landing' ? 160 : 100);
+    return () => clearTimeout(t);
+  }, [livePhase]);
+  // Spoken on state changes only, never on every dragover.
+  const announceLine = livePhase === 'over' || livePhase === 'refused' ? card.announce : '';
+  useEffect(() => {
+    if (announceLine) setDropAnnounce(announceLine);
+  }, [announceLine]);
+  // Card height room: the composer's height + 24 px; a side pane's width stays out of the layer.
+  const [layerBox, setLayerBox] = useState({ bottomPad: 120, rightGap: 0 });
+  useLayoutEffect(() => {
+    if (!dragOn) return;
+    const root = rootRef.current?.getBoundingClientRect();
+    const col = columnRef.current?.getBoundingClientRect();
+    const bottomPad = (composerWrapRef.current?.offsetHeight ?? 96) + 24;
+    const rightGap = root && col && col.width ? Math.max(0, Math.round(root.right - col.right)) : 0;
+    setLayerBox((b) => (b.bottomPad === bottomPad && b.rightGap === rightGap ? b : { bottomPad, rightGap }));
+  }, [dragOn, uploads.length, vmOpen]);
+  const inColumn = (t: EventTarget | null) => {
+    if (!(t instanceof Node)) return false;
+    if (t instanceof Element && t.closest('[data-drop-layer]')) return true;
+    return !!(headerRef.current?.contains(t) || columnRef.current?.contains(t));
+  };
+  const dropHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return;
+      overDepth.current += 1;
+      markOver(inColumn(e.target));
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      const inside = inColumn(e.target);
+      markOver(inside);
+      e.dataTransfer.dropEffect = inside && dragOn && card.state === 'over' ? 'copy' : 'none';
+    },
+    onDragLeave: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return;
+      overDepth.current = Math.max(0, overDepth.current - 1);
+      if (overDepth.current === 0) markOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      if (!dragHasFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      overDepth.current = 0;
+      // Not flushed: the drop ends the drag anyway, and the exit must see `landed` first.
+      overNow.current = false;
+      setOverChat(false);
+      if (!inColumn(e.target) || modalUp) return;
+      // What the drop itself holds decides, the same way the card did (an ignored drop does nothing).
+      const items = e.dataTransfer.items as unknown as ArrayLike<DataTransferItem>;
+      const now = dropCard({ preview: previewDrag(items?.length ? items : winDrag.items, uploads.length), recipient: dropTo.recipient, ideaMode });
+      if (now.state === 'refused') return;
+      const dropped = splitDrop(items, e.dataTransfer.files);
+      const keys = addFiles(dropped.files, dropped.folders.length ? [FOLDER_NOTE] : []);
+      landed.current = true;
+      textareaRef.current?.focus();
+      playSfx('blip');
+      if (dropTo.single && dropTo.botId) moodNoticed(dropTo.botId);
+      setDropAnnounce(dropAnnouncement(keys.length, dropTo.recipient));
+      if (keys.length) {
+        setFreshChips((m) => ({ ...m, ...Object.fromEntries(keys.map((k, i) => [k, i])) }));
+        setTimeout(() => setFreshChips((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !keys.includes(k)))), 800);
+      }
+    },
+  };
+  const layerPhase: DropPhase | null = livePhase ?? exiting;
+  const composerLit = livePhase === 'over';
   const toolPhone = 'w-11 h-11 text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06] active:bg-white/[0.06] focus-visible:outline-[#b8adff]';
   // Phone hint row (spec A2): no "@ mention · attach files" on touch, and "Answers:" only where it isn't
   // obvious (channels and team chats, or a direct chat with an @mention typed).
@@ -1555,9 +1696,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-surface-main overflow-hidden" data-keyboard-mode={kbd ? 'on' : undefined}>
+    <div
+      ref={rootRef}
+      className="relative flex-1 flex flex-col h-full bg-surface-main overflow-hidden"
+      data-keyboard-mode={kbd ? 'on' : undefined}
+      data-drop-target="chat"
+      data-drop-active={livePhase && livePhase !== 'armed' ? 'true' : undefined}
+      data-drop-phase={layerPhase ?? undefined}
+      {...dropHandlers}
+    >
       {/* Channel / bot header: 56 px on a phone, 48 px in keyboard mode (instant, no animation) */}
       <div
+        ref={headerRef}
         data-chat-header
         className={`${kbd ? 'h-12' : 'h-14'} shrink-0 border-b border-hairline px-2 sm:px-6 gap-2 flex items-center justify-between bg-surface-main/80 backdrop-blur-md select-none`}
       >
@@ -1741,7 +1891,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Main Split Layout: Messages/Input on Left + Virtual Machine Side Drawer on Right */}
       <div className="flex-1 flex overflow-hidden min-h-0">
-        <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+        <div ref={columnRef} className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
           {/* Messages Stream */}
           <div
             ref={scrollRef}
@@ -1945,6 +2095,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
       {/* Modern Composer Input Bar */}
       <div
+        ref={composerWrapRef}
         className={`px-3 ${phone ? 'pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]' : 'pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]'} sm:p-4 border-t border-hairline bg-surface-side/60`}
       >
         {teamMembers && teamMembers.length > 0 && (
@@ -2034,25 +2185,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         <form
           onSubmit={handleSubmit}
-          {...dropHandlers}
           aria-label={`Message ${title}`}
           data-composer-form
           data-stacked={phone ? String(stacked) : undefined}
           className={`relative max-w-4xl mx-auto flex flex-wrap items-end ${stacked ? 'gap-x-1.5 gap-y-1' : 'gap-1.5'} border rounded-2xl p-2 transition-colors ${
             phone ? 'bg-[#1a1538]' : 'bg-surface-raised shadow-raised'
-          } ${
-            dragOver
-              ? 'border-sky-500/70 bg-sky-950/30'
-              : phone
-                ? 'border-white/10 focus-within:border-[#6c58e0]/70'
-                : 'border-hairline-strong focus-within:border-sky-400/50'
-          }`}
+          } ${phone ? 'border-white/10 focus-within:border-[#6c58e0]/70' : 'border-hairline-strong focus-within:border-sky-400/50'}${
+            layerPhase ? ' kw-dd-raised' : ''
+          }${composerLit ? ' kw-dd-lit' : ''}`}
+          data-drop-lit={composerLit ? 'true' : undefined}
         >
-          {dragOver && (
-            <div className="absolute inset-0 z-10 rounded-2xl border-2 border-dashed border-sky-400/70 bg-zinc-950/80 flex items-center justify-center gap-2 text-sm font-medium text-sky-200 pointer-events-none">
-              <Paperclip size={15} aria-hidden="true" /> Drop files to attach
-            </div>
-          )}
           {replyTo && (
             <ReplyChip
               key={replyTo.id}
@@ -2067,7 +2209,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               {uploads.length > 0 && (
                 <ul className="flex flex-wrap gap-1.5 min-w-0" aria-label="Files to send">
                   {uploads.map((u) => (
-                    <UploadChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} onRetry={() => retryUpload(u.key)} />
+                    <UploadChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} onRetry={() => retryUpload(u.key)} fresh={freshChips[u.key]} />
                   ))}
                 </ul>
               )}
@@ -2209,7 +2351,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <AtSign size={phone ? 18 : 17} aria-hidden="true" />
             {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
             {phone && !isStreaming && (
-              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''}`} />
+              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`} />
             )}
           </button>
           {stacked && <span className="flex-1" aria-hidden="true" />}
@@ -2217,11 +2359,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
               Only the send button follows "@" when it shows: 44px on phones / 36px from sm, plus a 6px gap;
               11px is the form's border + padding. Hidden (not marked as seen) while a reply streams, so it
               never sits on the working strip's edge and comes back after the turn; hidden while the mention
-              picker is open, so it never peeks under it. */}
+              picker is open, so it never peeks under it; hidden (not marked as seen) while the drop layer is up,
+              so it never outshines the drop card (#478 Mira M3). */}
           {!phone && !isStreaming && (
             <NewTag
               id="mention"
-              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''}`}
+              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`}
               style={{ right: 'calc(11px + var(--kw-cbtn-step))' }}
             />
           )}
@@ -2347,6 +2490,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
       showOnceBot={vmShowOnceBot}
     />
   </div>
+      {layerPhase && (
+        <DropLayer
+          phase={layerPhase}
+          card={livePhase ? card : lastCard.current}
+          single={dropTo.single}
+          bots={dropTo.bots}
+          bottomPad={layerBox.bottomPad}
+          rightGap={layerBox.rightGap}
+        />
+      )}
+      {/* The drop card's words, and "3 files added for Frontend. Uploading." after a drop. */}
+      <div role="status" aria-live="polite" className="sr-only" data-drop-announce>
+        {dropAnnounce}
+      </div>
 </div>
   );
 };
