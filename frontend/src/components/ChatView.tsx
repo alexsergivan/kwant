@@ -1,5 +1,6 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react';
 import { queuedText } from '../claudeVm';
+import { QueuedBeside } from './QueuedBeside';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
@@ -116,6 +117,8 @@ export interface QueuedState {
   /** vm_busy only: how many replies run inside the VM at once. */
   slots?: number;
   speaker: string;
+  /** The waiting turn, when known (keys the chips under a running reply). */
+  turnId?: string;
 }
 
 /** "Drafter: Write" for a resolved approval row; the card's own words, nothing computed. */
@@ -260,6 +263,8 @@ export interface ChatViewProps {
   titleExtra?: React.ReactNode;
   /** Set while the open chat's turn waits in the queue. */
   queued?: QueuedState | null;
+  /** P6: turns waiting behind the reply that runs in this chat, oldest first. Drawn under that reply. */
+  queuedBeside?: QueuedState[];
   /** Draws a delegation note or result (messages with delegation `meta`). */
   renderDelegation?: (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => React.ReactNode;
   /** Draws a bot's question card (messages with `ask_user` meta). */
@@ -481,6 +486,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   topCard,
   titleExtra,
   queued,
+  queuedBeside,
   renderDelegation,
   renderQuestion,
   switchNotes,
@@ -1840,6 +1846,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 )}
               </div>
               )}
+
+              {!queued && <QueuedBeside items={queuedBeside} />}
             </div>
           </div>
         )}
