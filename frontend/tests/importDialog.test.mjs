@@ -97,6 +97,10 @@ test('every error code gets a plain heading, and the server’s sentence when it
   // A database error never shows its details.
   assert.equal(E('internal', 'sqlite: disk I/O').detail, 'The server couldn’t finish this. Try again in a moment.');
   assert.equal(m.importErrorText(new Error('x')).title, 'Something went wrong');
+  // A failed Undo shows the server's plain sentence
+  const undo = E('undo_failed', 'Couldn\'t undo this import: kwant is busy saving something else. Try again in a moment.');
+  assert.equal(undo.title, 'Not undone');
+  assert.match(undo.detail, /^Couldn't undo this import: kwant is busy/);
   const box = text(html(m.ErrorBox, { error: new m.ImportError('', 'problems', 400, [], [{ message: 'Too many bots.' }]) }));
   assert.match(box, /Fix these first.*Too many bots/);
 });
