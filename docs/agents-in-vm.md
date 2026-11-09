@@ -38,7 +38,18 @@ text, can't do these things while it runs inside the VM:
   - kwnt's own git calls run with `GIT_CONFIG_NOSYSTEM=1 -c core.fsmonitor=false
     -c core.hooksPath=/dev/null -c core.pager=cat`;
   - kwnt reads bot folders (checkpoints, restore, team discovery) without following symlinks,
-    one folder at a time, so a link or a swapped folder can't point a read outside.
+    one folder at a time, so a link or a swapped folder can't point a read outside. A checkpoint
+    walk stops at 64 folders deep and at an entry limit, and a restore never deletes files the
+    walk didn't reach.
+- **Plant a git hook.** When the folder is a git repository (a real `.git` folder, not a link or
+  a `.git` file), its `.git/hooks` is mounted read-only in the container: `git commit`, branches
+  and the rest still work, but no hook can be added or changed.
+
+**Forgetting a folder.** Only you can take a folder off the record, in Settings (`GET` and
+`POST /api/isolated-folders/forget`; a bot gets 403). The list shows which files a program
+started there would load (`.mcp.json`, `.envrc`, `.claude/settings*.json`, `.codex`, `.grok`,
+`.git/config`, `.git/hooks`), so you can look at them first. Once forgotten, kwnt trusts the
+folder as before.
 
 ## What it doesn't protect against
 
@@ -49,8 +60,13 @@ text, can't do these things while it runs inside the VM:
   each bot's approval settings, so a bot that may run commands without asking still can.
 - **kwnt's built-in shell.** `execute_shell` runs in kwnt's own executor container, which keeps
   its network. Isolating Claude doesn't change it.
-- **Files you run later.** A bot can still write `.git/hooks`, `.envrc`, package scripts or editor
-  tasks in its folder. They run if **you** use them on your own computer.
+- **Files you run later.** A bot can still write `.envrc`, package scripts or editor tasks in its
+  folder. They run if **you** use them on your own computer.
+- **Other ways around the read-only hooks.** `.git/config` stays writable (a bot needs `git remote`
+  and branch tracking), so a bot can point `core.hooksPath` at a folder it writes, or rename
+  `.git` and make a new one. kwnt's own git calls never run hooks; your own `git` there would. A
+  repository the bot creates during a reply gets read-only hooks only from its next reply. The
+  forget list shows `.git/config` and any hooks so you can check them.
 - **Codex, Grok, and Claude API-key or Custom accounts.** They run on this computer as before.
 - **A Docker or kernel escape.** The container drops every capability, runs as your user id with
   a read-only root and no network, but it shares the kernel.
@@ -117,5 +133,7 @@ this computer.
   (`folder_rule.rs`) and the chat notices (`notice.rs`).
 - `src/sandbox/safe_fs.rs`: the no-follow folder reader.
 - `src/db/isolated_folders.rs`: the record of folders isolated replies used.
+- `src/server/isolated_folders_routes.rs`: the person's list and Forget
+  (`release-080/forget-folder-contract.md`).
 - `docker/agent.Dockerfile`, `docker/agent-entry.sh`: the image (`kwnt-agent:v1-claude-<version>`).
 - `proto/agents-in-vm/`: the Python spike, `gate0.sh` and the evidence it wrote.

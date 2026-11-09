@@ -333,6 +333,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
     let segs: Vec<&str> = path.trim_end_matches('/').split('/').collect();
     match segs.as_slice() {
         ["", "api", "sandbox", _, "passwords", ..] => true,
+        // Folders isolated bots used (#446 item 6): forgetting one lets host CLIs load its files
+        // again, so only the person reads or changes the list
+        ["", "api", "isolated-folders", ..] => true,
         // Raw clicks by position are the person's live view: a bot clicking by coordinates would
         // skip the payment floor, which reads the element under a label (bots use /act)
         ["", "api", "sandbox", _, "interact"] => true,
@@ -924,6 +927,9 @@ mod tests {
         assert!(person_only(&post, "/api/sandbox/t1/interact"));
         assert!(!person_only(&post, "/api/sandbox/t1/act"));
         assert!(person_only(&get, "/api/passwords/store"));
+        assert!(person_only(&get, "/api/isolated-folders"));
+        assert!(person_only(&post, "/api/isolated-folders/forget"));
+        assert!(person_only(&Method::HEAD, "/api/isolated-folders/"));
         // 0.7.7 ready-made teams: everything but the catalogue
         assert!(person_only(&get, "/api/team-templates/inbox/preview"));
         assert!(person_only(&post, "/api/teams/from-template"));

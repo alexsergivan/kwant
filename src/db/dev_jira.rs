@@ -5,7 +5,8 @@
 //!
 //! `set_dev_ticket_state` is the one writer of `dev_tickets.state` (api.md §1.4): it refuses a
 //! move the table below doesn't allow and logs every move it makes in `dev_ticket_events`.
-//! `tickets::store::set_state` wraps it to send `dev_ticket` on the event stream.
+//! `tickets::store::set_state` wraps it to send `dev_ticket` on the event stream. The ticket's brief
+//! row (`dev_ticket_briefs.state`) is moved in the same transaction.
 
 use super::{Database, DbError};
 use chrono::{DateTime, Utc};
@@ -834,6 +835,10 @@ impl Database {
             .bind(now)
             .execute(&mut *tx)
             .await?;
+        // The brief row's `state` mirrors the card (D2). Same transaction: if the mirror fails the
+        // move is rolled back, so the brief page and Vega's hooks never disagree with the board
+        // (Rigel's #452 note). A ticket without a brief row moves the same.
+        super::dev_ticket_briefs::move_brief(&mut tx, space_id, key, STATES, to).await?;
         tx.commit().await?;
         Ok(Some(current))
     }
@@ -981,6 +986,45 @@ mod tests {
         // A refused move leaves the lock free for the next writer
         assert!(!db.set_dev_ticket_state("s1", "TRAIL-1", PICKED_UP).await.unwrap());
         assert!(db.set_dev_ticket_state("s1", "TRAIL-2", IN_REVIEW).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_move_and_its_brief_mirror_are_one_transaction() {
+        // Rigel's #452 note: the card and its brief row moved in two writes, so a failed mirror
+        // left them disagreeing. Now a refused brief write rolls the move back.
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::init(dir.path()).await.unwrap();
+        for k in ["MIR-1", "MIR-2"] {
+            let f = TicketFacts { key: k.into(), project: "MIR".into(), url: format!("https://acme.atlassian.net/browse/{k}"), ..Default::default() };
+            assert!(db.insert_dev_ticket("s1", "site1", &f, PICKED_UP, Some("team1"), Some("label")).await.unwrap());
+        }
+        db.upsert_ticket_brief("s1", "MIR-1", "site1", "team1", "https://acme.atlassian.net/browse/MIR-1", "one").await.unwrap();
+
+        // Each writer moves the brief row with the card
+        assert!(db.set_dev_ticket_state("s1", "MIR-1", READING).await.unwrap());
+        assert_eq!(db.ticket_brief("s1", "MIR-1").await.unwrap().unwrap().state, READING);
+        assert!(db.fail_dev_ticket("s1", "MIR-1", FAIL_DEFAULT_CODE, Some("x")).await.unwrap());
+        assert_eq!(db.ticket_brief("s1", "MIR-1").await.unwrap().unwrap().state, FAILED);
+        assert!(db.person_move_dev_ticket("s1", "MIR-1", PersonMove::Retry).await.unwrap().is_some());
+        let retried = db.dev_ticket("s1", "MIR-1").await.unwrap().unwrap().state;
+        assert_eq!(db.ticket_brief("s1", "MIR-1").await.unwrap().unwrap().state, retried);
+        // A ticket without a brief row moves as before
+        assert!(db.set_dev_ticket_state("s1", "MIR-2", READING).await.unwrap());
+
+        // The brief write fails: the move is undone, card, event log and brief alike
+        sqlx::query("CREATE TRIGGER refuse_brief BEFORE UPDATE OF state ON dev_ticket_briefs BEGIN SELECT RAISE(ABORT, 'refused'); END")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let events = db.dev_ticket_events("s1", "MIR-1", 50).await.unwrap().len();
+        assert!(db.set_dev_ticket_state("s1", "MIR-1", READING).await.is_err(), "the failed mirror is the move's error");
+        assert_eq!(db.dev_ticket("s1", "MIR-1").await.unwrap().unwrap().state, retried, "the card didn't move");
+        assert_eq!(db.ticket_brief("s1", "MIR-1").await.unwrap().unwrap().state, retried);
+        assert_eq!(db.dev_ticket_events("s1", "MIR-1", 50).await.unwrap().len(), events, "no event for a move that didn't happen");
+        assert!(db.fail_dev_ticket("s1", "MIR-1", FAIL_DEFAULT_CODE, None).await.is_err());
+        assert_eq!(db.dev_ticket("s1", "MIR-1").await.unwrap().unwrap().state, retried);
+        // The trigger only fires for a row that exists: other tickets still move, and the lock is free
+        assert!(db.set_dev_ticket_state("s1", "MIR-2", BRIEF_READY).await.unwrap());
     }
 
     #[test]
