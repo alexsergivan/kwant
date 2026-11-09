@@ -612,8 +612,10 @@ mod tests {
             assert_eq!(p.show, show, "{msg}");
             assert!(!p.done_when.is_empty(), "{msg}");
         }
-        // Names resolve to ids, and the team chat gets one replier first
-        let (p, _) = plan(Some(&stub), &input("Hey team! What some cool feature we can add?"), keyword_plan("x", &[]), WAIT).await;
+        // Names resolve to ids, and the team chat gets one replier first. The keyword plan is the
+        // message's own: since #470 one no keyword matches is `Other`, which never asks the model
+        let team_ask = "Hey team! What some cool feature we can add?";
+        let (p, _) = plan(Some(&stub), &input(team_ask), keyword_plan(team_ask, &[]), WAIT).await;
         assert_eq!(p.who.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["b-front", "b-growth"]);
         // The planner read the message, the team and the project
         let asked = stub.asked.lock().unwrap();
