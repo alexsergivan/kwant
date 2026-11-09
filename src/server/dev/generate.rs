@@ -72,7 +72,12 @@ async fn build(state: &AppState, row: &DevCardRow, cap: i64) -> (&'static str, V
                     let mut model = picked.as_ref().map(|p| model_on(p.bot.clone()));
                     // J12: a PR on a ticket with a brief is checked against its done-when lines
                     let ticket = super::tickets::brief::ticket_check(state, &row.space_id, &facts).await;
-                    let (status, card) = review::card_for(&facts, picked.as_ref(), model.as_mut(), ticket.as_ref()).await;
+                    let (status, mut card) = review::card_for(&facts, picked.as_ref(), model.as_mut(), ticket.as_ref()).await;
+                    // B2: a push from this branch the person let go past its pre-push card
+                    let anyway = super::prepush::pushed_anyway(state, &row.space_id, facts.head_branch.as_deref()).await;
+                    if anyway.as_array().is_some_and(|a| !a.is_empty()) {
+                        card["pushed_anyway"] = anyway;
+                    }
                     if let (Some(t), Some(v)) = (&ticket, review::matches_verdict(&card)) {
                         super::tickets::hooks::reviewed(state, &row.space_id, &t.key, v).await;
                     }
