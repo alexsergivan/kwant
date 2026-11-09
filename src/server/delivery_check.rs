@@ -266,6 +266,7 @@ pub fn meta(v: &Verdict, expect: Option<&Expect>, checked: bool) -> Option<Value
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::router::delivery::Deliverable;
     use crate::server::picture_claims::NO_PICTURE_LINE;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -454,5 +455,56 @@ mod tests {
         assert!(!pushed_in(Some(&step("Bash", "ok", "git status && echo push"))));
         assert!(!pushed_in(Some(&serde_json::json!({"steps": [{"kind": "note", "status": "done", "title": "git push"}]}))));
         assert!(!pushed_in(None));
+    }
+
+    fn plan(kind: Deliverable, show: &[Show], done_when: &[&str]) -> DeliveryPlan {
+        DeliveryPlan {
+            kind,
+            show: show.to_vec(),
+            who: vec![],
+            done_when: done_when.iter().map(|s| s.to_string()).collect(),
+            source: crate::router::delivery::PlanSource::Analyzer,
+        }
+    }
+
+    /// Oleks's scenario 4 (Lin's visible-change rule): "fix the button" was pushed with no
+    /// before/after picture. A Change plan that shows [Link, Image] expects both, and a reply with
+    /// only the PR link is missing the image.
+    #[test]
+    fn a_visible_change_plan_expects_the_link_and_the_picture() {
+        let p = plan(
+            Deliverable::Change,
+            &[Show::Link, Show::Image],
+            &["the PR is linked", "a before/after screenshot of the button is shared"],
+        );
+        let e = Expect::from_plan(&p).expect("a visible change expects something");
+        assert!(e.image && e.link, "{e:?}");
+        assert_eq!(e.done_when, p.done_when);
+        let v = check("Fixed and pushed: https://github.com/alexsergivan/kwant/pull/470", Some(&e), false, &NOTHING);
+        assert_eq!(v.missing, vec![Missing::Image], "{v:?}");
+        assert_eq!(v.continue_with.as_deref().map(|c| c.contains("before/after screenshot")), Some(true), "{v:?}");
+        let pushed = Seen { pushed: true, ..NOTHING };
+        assert_eq!(check("Fixed the button.", Some(&e), false, &pushed).missing, vec![Missing::Image]);
+        assert_eq!(check("Fixed: https://github.com/o/r/pull/1", Some(&e), false, &SHARED).missing, vec![]);
+    }
+
+    #[test]
+    fn an_ideas_plan_expects_a_picture_and_a_change_plan_a_link() {
+        let p = plan(Deliverable::Ideas, &[Show::Image, Show::Text], &["one mockup image per idea is shared"]);
+        let e = Expect::from_plan(&p).expect("Ideas expects a picture");
+        assert!(e.image && !e.link, "{e:?}");
+        assert_eq!(e.done_when, p.done_when);
+        let p = plan(Deliverable::Change, &[Show::Link], &[]);
+        let e = Expect::from_plan(&p).expect("a Change expects a link");
+        assert!(e.link && !e.image, "{e:?}");
+        assert_eq!(check("Done: https://github.com/o/r/pull/1", Some(&e), false, &NOTHING).missing, vec![]);
+        assert_eq!(check("Done, it works now.", Some(&e), false, &NOTHING).missing, vec![Missing::Link]);
+    }
+
+    #[test]
+    fn explain_and_other_plans_expect_nothing() {
+        assert_eq!(Expect::from_plan(&plan(Deliverable::Explain, &[Show::Text], &["answers the question"])), None);
+        assert_eq!(Expect::from_plan(&plan(Deliverable::Other, &[], &[])), None);
+        assert_eq!(Expect::from_plan(&plan(Deliverable::Other, &[Show::Text, Show::Table], &[])), None);
     }
 }

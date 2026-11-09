@@ -6045,10 +6045,12 @@ mod tests {
             assert!(history.is_empty(), "the prompt is the saved message plus kwnt's attachment note");
             (prompt, last.filter(|_| history.is_empty()).unwrap())
         };
-        // A statement the note would turn into "something to see": no plan, no expectation
+        // A statement the note would turn into "something to see": nothing to deliver, no expectation
         let (prompt, current) = current_of("the login button colour is off");
         assert!(keyword_plan(&prompt, &[]).wants_picture(), "the note's \"image/png\" reads as a picture ask");
-        assert_eq!(plan_of(&person_turn(), &current, true), None);
+        let plan = plan_of(&person_turn(), &current, true).expect("the person's words have a plan");
+        assert_eq!(plan.kind, Deliverable::Other, "{plan:?}");
+        assert_eq!(Expect::from_plan(&plan), None);
         // "Fix the login button colour" + an attached image: the expectation is the person's words',
         // a link to the change; the attachment adds no picture of its own
         let (prompt, current) = current_of("Fix the login button colour");

@@ -193,7 +193,7 @@ async fn a_chain_over_its_budget_pauses_hand_offs_until_the_person_says_continue
     ok(&env.app, "POST", "/api/settings", Some(json!({"chain_token_budget": FRESH_PER_TURN - 1}))).await;
     assert_eq!(ok(&env.app, "GET", "/api/settings", None).await["chain_token_budget"].as_u64(), Some(FRESH_PER_TURN - 1));
 
-    env.say("@Ann look at this MENTION:Bob").await;
+    env.say("@Ann handle this MENTION:Bob").await;
     env.wait_for("the notice", || async { !env.notices().await.is_empty() }).await;
     env.settle().await;
     assert_eq!(env.replies_from("Ann").await, 1);
@@ -219,7 +219,7 @@ async fn a_chain_over_its_budget_pauses_hand_offs_until_the_person_says_continue
 async fn the_continue_button_carries_a_paused_chain_on() {
     let env = setup().await;
     ok(&env.app, "POST", "/api/settings", Some(json!({"chain_token_budget": 1}))).await;
-    env.say("@Ann look at this MENTION:Bob").await;
+    env.say("@Ann handle this MENTION:Bob").await;
     env.wait_for("the notice", || async { !env.notices().await.is_empty() }).await;
     let notice = env.notices().await.remove(0);
     ok(&env.app, "POST", &format!("/api/chains/{}/continue", notice.id), None).await;
@@ -235,7 +235,7 @@ async fn the_continue_button_carries_a_paused_chain_on() {
 async fn a_budget_of_zero_never_pauses() {
     let env = setup().await;
     ok(&env.app, "POST", "/api/settings", Some(json!({"chain_token_budget": 0}))).await;
-    env.say("@Ann look at this MENTION:Bob").await;
+    env.say("@Ann handle this MENTION:Bob").await;
     env.wait_for("Bob's turn", || async { env.replies_from("Bob").await == 1 }).await;
     env.settle().await;
     assert!(env.notices().await.is_empty());
@@ -247,7 +247,7 @@ async fn a_fresh_install_has_no_token_limit_on_hand_offs() {
     assert_eq!(kwnt::server::budget::DEFAULT, 0);
     assert_eq!(ok(&env.app, "GET", "/api/settings", None).await["chain_token_budget"].as_u64(), Some(0));
     assert_eq!(kwnt::server::budget::limit(&env.state).await, 0);
-    env.say("@Ann look at this MENTION:Bob").await;
+    env.say("@Ann handle this MENTION:Bob").await;
     env.wait_for("Bob's turn", || async { env.replies_from("Bob").await == 1 }).await;
     env.settle().await;
     assert!(env.notices().await.is_empty(), "nothing pauses without a limit");

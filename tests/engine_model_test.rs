@@ -244,7 +244,7 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
     );
     assert!(r["model_label"].is_string() && r["engine_name"].is_string(), "{r}");
 
-    turn(&app, &state, &kid, "Investigate the root cause of this deadlock and propose an architecture refactor").await;
+    turn(&app, &state, &kid, "Investigate the root cause of this deadlock and plan an architecture refactor").await;
     assert!(last_argv(tmp.path(), "claude").contains("--model opus"), "{}", last_argv(tmp.path(), "claude"));
     let r = ran_on(&state, &kid).await;
     assert_eq!((r["model"].clone(), r["tier"].clone()), (json!("opus"), json!("deep")), "{r}");
