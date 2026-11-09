@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- **Deleting a bot no longer fails with "database error".** A team or channel the bot led could list a bot that no longer exists, or the chat search index could be out of step with the chat. Either one stopped the delete. kwant now skips the missing bot when it picks the new lead, and repairs the search index and tries again. If a delete still fails, the dialog says why in plain words. (#465)
+
 ## [Mac 0.7.7] - 2026-11-09
 
 ### Added
