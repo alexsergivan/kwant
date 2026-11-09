@@ -2560,11 +2560,12 @@ async fn run_kwant_turn_inner(
         // read from the person's saved message: never from `prompt`, which carries kwant's notes
         // (routing, team building, hire, attachments). None for a prompt kwant or a bot wrote, a
         // fresh-eyes reviewer (B1), a no-tools or a BRIEF turn (see delivery::plan_for_turn).
+        let read_only = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
         let delivery = {
             let recent: Vec<&str> = person_recent.iter().map(String::as_str).collect();
             crate::router::delivery::plan_for_turn(crate::router::delivery::TurnPlanInput {
                 no_tools: opts.no_tools,
-                read_only: opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE),
+                read_only,
                 fresh_eyes: opts.fresh_eyes,
                 carried: opts.delivery.clone(),
                 person_message: current_message
