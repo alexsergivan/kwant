@@ -34,6 +34,12 @@ class ReleaseLine(unittest.TestCase):
         self.assertIn("3 releases since Oct 25", line)
         self.assertIn("AGPL-3.0", line)
 
+    def test_windows_installer_is_the_latest_versioned_exe(self):
+        self.assertEqual(
+            site.windows_installer(LOG),
+            "https://github.com/alexsergivan/kwant/releases/download/mac-v0.10.0/kwant_0.10.0_windows_x64_beta_setup.exe",
+        )
+
     def test_single_release(self):
         self.assertIn("First release", site.release_line("## [Mac 1.0.0] - 2027-01-05\n"))
 

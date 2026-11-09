@@ -58,6 +58,21 @@ jobs:
       - name: Script tests
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 
+  # 077-ci-web-stage: the Dockerfile's web stage, as `docker compose up --build` runs it from source. It copies only
+  # what it names, so a file the frontend build reads but the stage doesn't copy breaks source builds while the
+  # frontend job (a full checkout) stays green. 0.7.6 shipped like that: vite.config.ts read ../CHANGELOG.md, the stage
+  # had no CHANGELOG.md, and only the test server's build showed it.
+  web-stage:
+    name: web-stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build --target web
+        env:
+          DOCKER_BUILDKIT: 1
+        run: docker build -f docker/kwnt.Dockerfile --target web --progress plain .
+
   # O9, the new-computer test on every release: kwnt starts as a brand-new user (empty HOME, `env -i`, a bare PATH
   # with no AI tools), and the job checks that the Get started card shows, that the one-click Claude Code install
   # starts and finishes against a stand-in download (the real one is never fetched: the fake curl refuses every

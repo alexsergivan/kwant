@@ -923,3 +923,95 @@ async fn covers_and_avoids_survive_create_export_and_import() {
     let scope = e.state.db.get_scope(copy).await.unwrap();
     assert_eq!((scope.covers.len(), scope.avoids.clone()), (20, vec!["legal advice".to_string()]));
 }
+
+// ── 0.8.0 A2/A3: from this computer and from a GitHub link ──────────────────
+
+/// A bot's turn token in #general of the default space.
+async fn bot_token(e: &Env) -> String {
+    use kwnt::server::{
+        continuity::{SelfScope, TurnOrigin},
+        mcp_runtime,
+    };
+    let space = SpaceId::default_space();
+    let new = NewKwant { name: "Ana".into(), title: "Reporter".into(), persona_prompt: String::new(), soul: String::new(), avatar_sprite: "s".into(), driver_type: "cli".into(), preferred_model: "codex".into() };
+    let bot = e.state.db.create_kwant(&space, &new).await.unwrap();
+    let general = e.state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap();
+    let scope = SelfScope {
+        kwant_id: bot.id.clone(),
+        kwant_name: bot.name.clone(),
+        origin: Some(TurnOrigin { channel_id: Some(general.id.clone()), ..Default::default() }),
+        turn_id: Some("t-import".into()),
+        ..Default::default()
+    };
+    mcp_runtime::prepare_turn_with_self(&e.state, &bot, Some("t-import".into()), None, Some(scope)).await.unwrap().1
+}
+
+async fn call_as(e: &Env, method: &str, uri: &str, bearer: &str, extra: &[(&str, &str)], body: Option<Value>) -> (StatusCode, Value) {
+    let mut req = Request::builder().method(method).uri(uri).header("authorization", format!("Bearer {bearer}"));
+    for (k, v) in extra {
+        req = req.header(*k, *v);
+    }
+    let req = match body {
+        Some(b) => req.header("content-type", "application/json").body(Body::from(b.to_string())),
+        None => req.body(Body::empty()),
+    }
+    .unwrap();
+    let resp = e.app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn bots_cannot_look_on_this_computer_or_fetch_github() {
+    let e = setup().await;
+    let token = bot_token(&e).await;
+    let space = dflt();
+    for (method, uri, body) in [
+        ("GET", "/api/import/local".to_string(), None),
+        ("POST", format!("/api/import/local/preview?space={space}"), Some(json!({"sources": ["codex"]}))),
+        ("POST", format!("/api/import/github/preview?space={space}"), Some(json!({"url": "https://github.com/o/r"}))),
+    ] {
+        let (s, v) = call_as(&e, method, &uri, &token, &[], body).await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{uri}: {v}");
+        assert_eq!(v["code"], "person_only", "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn this_computer_is_only_for_the_app_on_it() {
+    let e = setup().await;
+    let token = e.state.api_token.reveal().to_string();
+    let space = dflt();
+    // Through a proxy (or from another machine): nothing is listed and nothing is read
+    let remote = [("x-forwarded-for", "203.0.113.9")];
+    let (s, v) = call_as(&e, "GET", "/api/import/local", &token, &remote, None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v, json!({"available": false, "reason": "Only the kwant app on this computer can look for bots here.", "sources": []}));
+    let (s, v) = call_as(&e, "POST", &format!("/api/import/local/preview?space={space}"), &token, &remote, Some(json!({"sources": ["codex"]}))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::FORBIDDEN, Some("local_only")));
+
+    // On this computer: bad picks are refused before anything is read
+    let uri = format!("/api/import/local/preview?space={space}");
+    for body in [json!({"sources": []}), json!({"sources": ["codex", "codex"]}), json!({"sources": (0..11).map(|i| format!("s{i}")).collect::<Vec<_>>()}), json!({"paths": ["/etc"]})] {
+        let (s, v) = call_as(&e, "POST", &uri, &token, &[], Some(body.clone())).await;
+        assert_eq!((s, v["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")), "{body}");
+    }
+    let (s, v) = call_as(&e, "POST", &uri, &token, &[], Some(json!({"sources": ["../../etc"]}))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::NOT_FOUND, Some("not_found")), "{v}");
+    let (s, v) = call_as(&e, "GET", "/api/import/local", &token, &[], None).await;
+    assert_eq!((s, v["available"].as_bool()), (StatusCode::OK, Some(true)), "{v}");
+}
+
+#[tokio::test]
+async fn github_links_are_checked_before_any_fetch() {
+    let e = setup().await;
+    let token = e.state.api_token.reveal().to_string();
+    let uri = format!("/api/import/github/preview?space={}", dflt());
+    for url in ["https://gitlab.com/o/r", "http://github.com/o/r", "https://github.com:444/o/r", "https://x@github.com/o/r", "https://raw.githubusercontent.com/o/r/main/SKILL.md"] {
+        let (s, v) = call_as(&e, "POST", &uri, &token, &[], Some(json!({ "url": url }))).await;
+        assert_eq!((s, v["code"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("not_github")), "{url}: {v}");
+    }
+    let (s, v) = call_as(&e, "POST", &uri, &token, &[], Some(json!({ "link": "https://github.com/o/r" }))).await;
+    assert_eq!((s, v["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_request")));
+}

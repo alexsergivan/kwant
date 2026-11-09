@@ -447,7 +447,12 @@ pub(super) async fn remove_bot(state: &AppState, id: &str) -> Response {
     match state.db.delete_kwant_and_history(&id, &fallback.id).await {
         Ok(true) => {}
         Ok(false) => return api_error(StatusCode::NOT_FOUND, "bot not found"),
-        Err(e) => return db_error(&e, ""),
+        Err(e) => {
+            // The dialog gets plain words; the SQLite message stays in the log
+            tracing::warn!(kwant_id = %id, name = %bot.name, error = %e, "deleting a bot failed");
+            let message = crate::db::bot_actions::delete_failure_message(&bot.name, &e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "delete_failed", "message": message}))).into_response();
+        }
     }
     state.broker.forget_kwant(&id).await;
     super::passwords::forget_deleted_owners(&state, &[&id]).await;
@@ -1836,6 +1841,12 @@ pub(super) struct TurnOpts {
     /// Every driver runs it that way or refuses it, and the turn then fails; it is never run with
     /// tools (see `crate::drivers::TurnInput::no_tools`). Default false.
     pub(super) no_tools: bool,
+    /// B1, a reviewer's fresh eyes: the turn sees only its prompt (the brief or spec and the
+    /// result). No chat history, nothing read back from the conversation by the driver, none of
+    /// the bot's own notes or lessons, and kwant's tools that read chats, notes, tasks or
+    /// hand-offs refuse (see [`super::fresh_eyes`]). Never parked: a parked retry runs with
+    /// default options. Default false.
+    pub(super) fresh_eyes: bool,
 }
 
 impl TurnOpts {
@@ -1856,7 +1867,7 @@ impl TurnOpts {
     /// and its retry runs with default options, so a no-tools turn would come back with tools over
     /// the same untrusted text. Its caller gets the "out until" failure and retries itself.
     pub(super) fn no_park(&self) -> bool {
-        self.retried || self.discussion.is_some() || self.no_tools || self.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE)
+        self.retried || self.discussion.is_some() || self.no_tools || self.fresh_eyes || self.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE)
     }
 
     /// The link to open in the bot browser before the turn: only a full link in the person's own
@@ -2312,7 +2323,9 @@ async fn run_kwant_turn_inner(
 
         let context_id = tag.context_id.clone();
 
-        let mut history = db.list_messages(&context_id, 20).await.unwrap_or_default();
+        // B1: a fresh-eyes review gets no history at all, the author's or its own
+        let mut history = if opts.fresh_eyes { Vec::new() } else { db.list_messages(&context_id, 20).await.unwrap_or_default() };
+        let _fresh_eyes = opts.fresh_eyes.then(|| super::fresh_eyes::Guard::new(&tag.turn_id));
         let last_before_drop = history.last().cloned();
         let had = history.len();
         crate::drivers::drop_current_message(&mut history, &prompt);
@@ -2514,12 +2527,12 @@ async fn run_kwant_turn_inner(
             .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME));
         // C5: chat, routine and hand-off turns get the bot's lessons; a task turn has them in its
         // brief already (or is held out), and hidden purposes get none
-        let lessons = if opts.task.is_none() && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
+        let lessons = if opts.task.is_none() && !opts.fresh_eyes && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
             super::missions::lessons::for_turn(state, &target_kwant.id).await
         } else {
             String::new()
         };
-        let continuity = super::continuity::prompt_block_full(
+        let continuity = super::continuity::prompt_block_memories(
             state,
             target_kwant,
             scope.team_context.as_ref().map(|t| t.id.as_str()),
@@ -2527,6 +2540,7 @@ async fn run_kwant_turn_inner(
             with_tools,
             browser_sign_in,
             &lessons,
+            !opts.fresh_eyes,
         )
         .await;
         let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
@@ -2558,6 +2572,7 @@ async fn run_kwant_turn_inner(
             store: Some(state.db.clone()),
             no_tools: opts.no_tools,
             read_only: opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE),
+            fresh_eyes: opts.fresh_eyes,
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -5047,6 +5062,9 @@ pub async fn interact_sandbox(
     };
     // Returning an old screenshot as success hides failed input from the user.
     let screenshot = shot_res.map_err(|error| {
+        if let crate::sandbox::browser::BrowserError::UnsupportedKey(why) = &error {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": why })));
+        }
         tracing::warn!(team_id = %team_id, "Browser interaction failed: {}", error);
         (StatusCode::BAD_GATEWAY, Json(json!({
             "error": "Could not control the sandbox browser. Refresh the view or restart the browser and try again."
@@ -5670,6 +5688,10 @@ pub async fn execute_tool(
         tokio::fs::create_dir_all(&workspace).await?;
         let command = args["command"].as_str()
             .ok_or_else(|| crate::tools::ToolError::InvalidArgs("Missing 'command' argument".into()))?;
+        // B2: a bot's own push in a Dev mode space waits for its pre-push card
+        if let Some(why) = super::dev::prepush::gate(state, team_id.unwrap_or("default"), command, &workspace).await {
+            return Err(crate::tools::ToolError::Execution(why));
+        }
         if !super::computer::approve_local_shell(state, team_id.unwrap_or("default"), command, &workspace).await {
             return Err(crate::tools::ToolError::Execution(
                 "The person did not approve this command, so it was not run.".into(),

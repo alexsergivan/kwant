@@ -91,7 +91,7 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "task_update",
-            "description": "Update a task you hold. status \"review\" = done: kwant runs its checks now and verifies it only if they pass. \"ready\" = let go of it. \"blocked\" needs a reason. A note alone renews your lease. You can never mark a task verified.",
+            "description": "Update a task you hold. status \"review\" = done: kwant runs its checks now and verifies it only if they pass. \"ready\" = let go of it. \"blocked\" needs a reason. A note alone renews your lease. `spec` (before you hand in, on its own) records what done means: a teammate checks your result against it with fresh eyes. You can never mark a task verified.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -99,6 +99,8 @@ pub fn tools() -> Vec<Value> {
                     "status": {"type": "string", "enum": ["review", "ready", "blocked"]},
                     "note": {"type": "string"},
                     "reason": {"type": "string"},
+                    "spec": {"type": "array", "items": {"type": "string"}, "maxItems": super::auditor::MAX_SPEC_LINES,
+                             "description": "1-8 short lines: what done means and how a reviewer can check each. Write it before starting a high-impact task; send it without a status."},
                 },
                 "required": ["task_id"],
             },
@@ -338,6 +340,26 @@ async fn update(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
     }
     let note = args["note"].as_str().map(str::trim).filter(|s| !s.is_empty());
     let reason = args["reason"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    // B1: a spec comes first, on its own: written with the hand-in it would be fitted to the result
+    let spec = match super::auditor::parse_spec(&args["spec"]) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    if let Some(lines) = spec {
+        if args["status"].is_string() {
+            return fail("Send the spec on its own, before you hand in: it says what done means, so it can't be written with the result.");
+        }
+        if task.state != "working" {
+            return fail("A spec is written while you work on the task, before you hand it in.");
+        }
+        let _ = state.db.log_task_event(&task.id, super::auditor::SPEC_EVENT, &scope.kwant_id, &json!({"lines": lines})).await;
+        let _ = state.db.renew_claim(&task.id, super::lease_ms(state).await).await;
+        if let Some(n) = note {
+            let _ = state.db.log_task_event(&task.id, "note", &scope.kwant_id, &json!({"note": n.chars().take(2000).collect::<String>()})).await;
+        }
+        super::emit_task_id(state, &task.id).await;
+        return ok(json!({"task": brief(task), "spec": lines, "next": "Spec saved. Work on the task, then hand it in with status \"review\"."}));
+    }
     if let Some(n) = note {
         let _ = state.db.log_task_event(&task.id, "note", &scope.kwant_id, &json!({"note": n.chars().take(2000).collect::<String>()})).await;
     }

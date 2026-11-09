@@ -121,6 +121,7 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         E::TaskUpdated { task: v } | E::MissionUpdated { mission: v } => fields(v, &["space_id"], Owner::Space),
         E::GoalUpdated { space_id, .. } | E::IdeaUpdated { space_id, .. } => vec![Owner::Space(space_id.clone())],
         E::DevCard { space_id, .. }
+        | E::DevPrepush { space_id, .. }
         | E::DevMode { space_id, .. }
         | E::DevTicket { space_id, .. }
         | E::DevTicketProgress { space_id, .. }
@@ -314,6 +315,7 @@ mod tests {
             E::MissionUpdated { mission: json!({"id": "m", "space_id": "spc_x"}) },
             E::GoalUpdated { id: s("g"), status: s("met"), space_id: s("spc_x") },
             E::DevCard { space_id: s("spc_x"), id: s("dvc_1"), kind: s("landed"), status: s("ready") },
+            E::DevPrepush { space_id: s("spc_x"), id: s("pp_1"), kwant_id: s("kw"), status: s("blocked") },
             E::DevMode { space_id: s("spc_x"), on: true },
             E::DevTicket { space_id: s("spc_x"), key: s("TRAIL-101"), state: s("waiting") },
             E::DevTicketProgress { space_id: s("spc_x"), key: s("TRAIL-101"), step: s("comments"), state: s("done"), detail: s("2 comments") },
@@ -385,6 +387,7 @@ mod tests {
                 | E::MissionUpdated { .. }
                 | E::GoalUpdated { .. }
                 | E::DevCard { .. }
+                | E::DevPrepush { .. }
                 | E::DevMode { .. }
                 | E::DevTicket { .. }
                 | E::DevTicketProgress { .. }

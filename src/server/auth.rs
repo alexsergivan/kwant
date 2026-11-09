@@ -333,6 +333,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
     let segs: Vec<&str> = path.trim_end_matches('/').split('/').collect();
     match segs.as_slice() {
         ["", "api", "sandbox", _, "passwords", ..] => true,
+        // Folders isolated bots used (#446 item 6): forgetting one lets host CLIs load its files
+        // again, so only the person reads or changes the list
+        ["", "api", "isolated-folders", ..] => true,
         // Raw clicks by position are the person's live view: a bot clicking by coordinates would
         // skip the payment floor, which reads the element under a label (bots use /act)
         ["", "api", "sandbox", _, "interact"] => true,
@@ -426,6 +429,10 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "facts", ..] => true,
         ["", "api", "skills", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "bot-actions" | "imports", _, "undo"] => *method == Method::POST,
+        // Import from this computer reads the person's home folder (other apps' bots, memories and
+        // skills), and a GitHub link makes the server fetch from the internet: both the person's
+        // (0.8.0 A2/A3), the list included
+        ["", "api", "import", "local" | "github", ..] => true,
         _ => false,
     }
 }
@@ -924,6 +931,9 @@ mod tests {
         assert!(person_only(&post, "/api/sandbox/t1/interact"));
         assert!(!person_only(&post, "/api/sandbox/t1/act"));
         assert!(person_only(&get, "/api/passwords/store"));
+        assert!(person_only(&get, "/api/isolated-folders"));
+        assert!(person_only(&post, "/api/isolated-folders/forget"));
+        assert!(person_only(&Method::HEAD, "/api/isolated-folders/"));
         // 0.7.7 ready-made teams: everything but the catalogue
         assert!(person_only(&get, "/api/team-templates/inbox/preview"));
         assert!(person_only(&post, "/api/teams/from-template"));
@@ -1071,6 +1081,10 @@ mod tests {
         assert!(person_only(&del, "/api/teams/t1/"));
         assert!(person_only(&post, "/api/bot-actions/b1/undo"));
         assert!(person_only(&post, "/api/imports/i1/undo"));
+        assert!(person_only(&get, "/api/import/local"));
+        assert!(person_only(&post, "/api/import/local/preview"));
+        assert!(person_only(&post, "/api/import/github/preview"));
+        assert!(!person_only(&get, "/api/import/prompts"));
         assert!(!person_only(&put, "/api/kwants/k1"));
         assert!(!person_only(&get, "/api/teams/t1"));
         assert!(!person_only(&post, "/api/bot-actions/b1/confirm"));

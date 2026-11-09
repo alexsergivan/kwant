@@ -372,6 +372,97 @@ pub enum BrowserError {
     /// The driving bot's site rules refused the page (see [`super::site_guard`]).
     #[error("{}", .0.message)]
     SiteRule(super::site_guard::Refusal),
+    /// A key press kwnt can't describe to Chrome as a real key (see [`key_press_params`]).
+    #[error("{0}")]
+    UnsupportedKey(String),
+}
+
+/// The `KeyboardEvent.code` (and whether Shift is held, on a US layout) for a key a bot or the
+/// v1 live view names without one: named keys, single letters, digits, space and punctuation.
+fn code_for_key(key: &str) -> Option<(String, bool)> {
+    use crate::server::browser_input::virtual_key_code;
+    let named = match key {
+        "Shift" => Some("ShiftLeft"),
+        "Control" => Some("ControlLeft"),
+        "Alt" => Some("AltLeft"),
+        "Meta" => Some("MetaLeft"),
+        _ => None,
+    };
+    if let Some(code) = named {
+        return Some((code.into(), false));
+    }
+    let mut chars = key.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        // Enter, Tab, Escape, Backspace, arrows, Home, F5...: the key is its own code
+        return virtual_key_code(key).map(|_| (key.to_string(), false));
+    };
+    let shifted = "~!@#$%^&*()_+{}|:\"<>?";
+    let code = match c {
+        'a'..='z' | 'A'..='Z' => format!("Key{}", c.to_ascii_uppercase()),
+        '0'..='9' => format!("Digit{c}"),
+        ' ' => "Space".into(),
+        '`' | '~' => "Backquote".into(),
+        '!' => "Digit1".into(),
+        '@' => "Digit2".into(),
+        '#' => "Digit3".into(),
+        '$' => "Digit4".into(),
+        '%' => "Digit5".into(),
+        '^' => "Digit6".into(),
+        '&' => "Digit7".into(),
+        '*' => "Digit8".into(),
+        '(' => "Digit9".into(),
+        ')' => "Digit0".into(),
+        '-' | '_' => "Minus".into(),
+        '=' | '+' => "Equal".into(),
+        '[' | '{' => "BracketLeft".into(),
+        ']' | '}' => "BracketRight".into(),
+        '\\' | '|' => "Backslash".into(),
+        ';' | ':' => "Semicolon".into(),
+        '\'' | '"' => "Quote".into(),
+        ',' | '<' => "Comma".into(),
+        '.' | '>' => "Period".into(),
+        '/' | '?' => "Slash".into(),
+        _ => return None,
+    };
+    Some((code, c.is_ascii_uppercase() || shifted.contains(c)))
+}
+
+/// One key press (down, then up) as `Input.dispatchKeyEvent` params: the same event the person's
+/// live view sends ([`crate::server::browser_input::key_params`]), with the Windows key code and,
+/// for a key that types, `keyDown` with its text. Enter carries `\r`, which is what makes Chrome
+/// submit a form; a bare `rawKeyDown` with only `key` and `code` fired keydown and nothing else.
+/// `code` is worked out from `key` when the caller leaves it out. "Space"/"Spacebar" mean the
+/// space bar, "Return" Enter and "Esc" Escape.
+pub fn key_press_params(key: &str, code: Option<&str>) -> Result<[Value; 2], BrowserError> {
+    use crate::server::browser_input::{key_params, KeyEvent, KeyKind, SHIFT};
+    let key = match key {
+        "Space" | "Spacebar" => " ",
+        "Return" => "Enter",
+        "Esc" => "Escape",
+        k => k,
+    };
+    let unsupported = || {
+        let shown: String = key.chars().take(32).collect();
+        BrowserError::UnsupportedKey(format!(
+            "Can't press \"{shown}\": press one key, such as Enter, Tab, Escape, Backspace, an arrow key or a single character. To enter text, type it."
+        ))
+    };
+    let (code, shift) = match code.filter(|c| !c.is_empty()) {
+        Some(c) => (c.to_string(), false),
+        None => code_for_key(key).ok_or_else(unsupported)?,
+    };
+    let event = |kind| KeyEvent {
+        kind,
+        key,
+        code: &code,
+        text: None,
+        modifiers: if shift { SHIFT } else { 0 },
+        location: None,
+        auto_repeat: false,
+    };
+    let down = key_params(&event(KeyKind::Down)).map_err(|_| unsupported())?;
+    let up = key_params(&event(KeyKind::Up)).map_err(|_| unsupported())?;
+    Ok([down, up])
 }
 
 /// A live view's control of the browser ([`BrowserController::take_control`]): the write lock,
@@ -2063,23 +2154,9 @@ impl BrowserController {
     }
 
     pub async fn interact_key(&self, key: &str, code: Option<&str>) -> Result<String, BrowserError> {
-        let mut down_params = json!({
-            "type": "rawKeyDown",
-            "key": key
-        });
-        if let Some(c) = code {
-            down_params["code"] = json!(c);
-        }
-        self.send_cdp_command("Input.dispatchKeyEvent", down_params).await?;
-
-        let mut up_params = json!({
-            "type": "keyUp",
-            "key": key
-        });
-        if let Some(c) = code {
-            up_params["code"] = json!(c);
-        }
-        self.send_cdp_command("Input.dispatchKeyEvent", up_params).await?;
+        let [down, up] = key_press_params(key, code)?;
+        self.send_cdp_command("Input.dispatchKeyEvent", down).await?;
+        self.send_cdp_command("Input.dispatchKeyEvent", up).await?;
 
         tokio::time::sleep(Duration::from_millis(150)).await;
         let _ = self.collect_captured_credentials().await;
@@ -2106,6 +2183,79 @@ impl BrowserController {
     }
 }
 
+
+#[cfg(test)]
+mod key_tests {
+    use super::{key_press_params, BrowserError};
+
+    fn down(key: &str, code: Option<&str>) -> serde_json::Value {
+        key_press_params(key, code).unwrap()[0].clone()
+    }
+
+    /// F-1 (0.8.0): a bot's Enter went out as a bare rawKeyDown with only key and code, so Chrome
+    /// fired keydown and never submitted the form. It's now the live view's event: keyDown with
+    /// "\r" and key code 13, then keyUp.
+    #[test]
+    fn enter_is_a_key_down_with_text_and_key_code() {
+        for code in [None, Some("Enter")] {
+            let [d, u] = key_press_params("Enter", code).unwrap();
+            assert_eq!(d["type"], "keyDown", "{d}");
+            assert_eq!(d["text"], "\r");
+            assert_eq!(d["unmodifiedText"], "\r");
+            assert_eq!(d["windowsVirtualKeyCode"], 13);
+            assert_eq!(d["code"], "Enter");
+            assert_eq!(u["type"], "keyUp");
+            assert_eq!(u["windowsVirtualKeyCode"], 13);
+            assert!(u.get("text").is_none(), "{u}");
+        }
+        assert_eq!(down("Return", None)["text"], "\r");
+    }
+
+    #[test]
+    fn keys_without_text_are_raw_with_their_key_code() {
+        for (key, vk) in [("Tab", 9), ("Escape", 27), ("Esc", 27), ("Backspace", 8), ("Delete", 46), ("ArrowLeft", 37), ("ArrowDown", 40), ("Home", 36), ("End", 35), ("PageDown", 34), ("F5", 116)] {
+            let d = down(key, None);
+            assert_eq!((d["type"].as_str(), d["windowsVirtualKeyCode"].as_u64()), (Some("rawKeyDown"), Some(vk)), "{key}: {d}");
+            assert!(d.get("text").is_none(), "{key}: {d}");
+        }
+        assert_eq!(down("Shift", None)["code"], "ShiftLeft");
+    }
+
+    #[test]
+    fn single_characters_type_with_their_code() {
+        for (key, code, vk, shift) in [
+            ("a", "KeyA", 65, false),
+            ("Z", "KeyZ", 90, true),
+            ("7", "Digit7", 55, false),
+            ("!", "Digit1", 49, true),
+            ("/", "Slash", 191, false),
+            ("?", "Slash", 191, true),
+            (" ", "Space", 32, false),
+            ("Space", "Space", 32, false),
+            ("Spacebar", "Space", 32, false),
+        ] {
+            let d = down(key, None);
+            let text = if key.len() == 1 { key } else { " " };
+            assert_eq!(d["type"], "keyDown", "{key}: {d}");
+            assert_eq!(d["text"], text, "{key}: {d}");
+            assert_eq!(d["code"], code, "{key}");
+            assert_eq!(d["windowsVirtualKeyCode"], vk, "{key}");
+            assert_eq!(d["modifiers"], if shift { 8 } else { 0 }, "{key}");
+        }
+    }
+
+    #[test]
+    fn a_key_kwnt_cant_describe_is_refused_with_a_hint() {
+        for key in ["", "Control+a", "hello", "é", "Unidentified", "\u{7}"] {
+            match key_press_params(key, None) {
+                Err(e @ BrowserError::UnsupportedKey(_)) => assert!(e.to_string().contains("type it"), "{key}: {e}"),
+                other => panic!("{key:?}: {other:?}"),
+            }
+        }
+        // a code Chrome has no key number for is refused too, as in the live view
+        assert!(matches!(key_press_params("x", Some("NotAKey")), Err(BrowserError::UnsupportedKey(_))));
+    }
+}
 
 #[cfg(test)]
 mod tests {
