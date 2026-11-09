@@ -57,6 +57,7 @@ fn turn(folder: Option<&Path>) -> TurnInput {
         mcp: None,
         no_tools: false,
         read_only: false,
+        delivery: None,
     }
 }
 

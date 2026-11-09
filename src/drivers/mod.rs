@@ -93,6 +93,11 @@ pub struct TurnInput {
     /// refuses it. Never retried without it.
     #[serde(default)]
     pub read_only: bool,
+    /// How this turn should deliver its result (see [`crate::router::delivery`]); `None` when the
+    /// turn can't act on an ask (no tools, read-only). The prompt carries its one-line
+    /// "[What to deliver]" hint, and the delivery check reads it after the turn.
+    #[serde(default)]
+    pub delivery: Option<crate::router::delivery::DeliveryPlan>,
     /// B1, a reviewer's fresh eyes: the turn sees only its prompt (the brief or spec and the
     /// result). `history` must be empty, and no driver reads the conversation, its saved summary
     /// or its cached prefix back from `store`. Set from `TurnOpts::fresh_eyes`.
@@ -417,6 +422,70 @@ pub const NO_APP_TOOLS_NOTE: &str = "\n\n[Your app tools]\n\
     files, ask the person through a card or change any settings right now. Don't say you did any of these. If the person \
     asks for one, tell them plainly it didn't work this time and that they can try again in a moment.";
 
+/// Browser control only: the bot shouldn't study kwant to learn the browser. Other work looks
+/// first (see [`LOOK_FIRST`]); this used to be a "[Speed]" rule every bot read as "don't look".
+pub const BROWSER_SPEED: &str = "\n[Browser speed]\n\
+    For the bot browser, act on the page state you already have and use the fewest browser calls: don't explore the \
+    filesystem or read kwant's source code to figure out how the browser works.";
+
+/// Every turn that can read something: look before proposing, retry before giving up, check
+/// before saying done.
+pub const LOOK_FIRST: &str = "\n\n[Look first, then finish]\n\
+    - Before you propose or build anything for a project, read what is there: its README, the live site, its design tokens, \
+    CSS and components. Reuse its styles and words; never guess what a product does from its name.\n\
+    - When a step fails, try at least two other ways before you report it (grep without the glob; for dark mode, emulate \
+    prefers-color-scheme or set the theme class). Never delete a good result because a retry failed.\n\
+    - Before you say it's done, check the result yourself: run it, render it or take a screenshot.\n\
+    - Keep the reply short: what you did, what you checked, what is left.";
+
+/// What every bot is told about the person's view of the chat, whatever its tools (P3, P8).
+pub const PERSON_SEES: &str = "\n\n[What the person sees]\n\
+    - The person sees only your replies: not your tool output, a teammate's consult or another chat. Restate any list or \
+    item you refer to instead of naming it by number. Never say what a teammate is doing unless that teammate's own reply \
+    in this chat says so.\n\
+    - What the person asks in their latest message beats any plan, prediction or teammate's view: do it. Never re-decide \
+    what they just asked for, and don't restate a decision they've already seen.";
+
+/// The "do, don't offer" rule for steps that run without a card (a macro so `concat!` can use it).
+macro_rules! do_dont_offer {
+    () => {
+        "Do the work instead of offering it: read, edit, run commands and tests, commit on a branch, push, \
+    open the PR, post the connection card, take and share the screenshot. Then say what you did and what you checked. \
+    Don't end with \"if you want, I can…\", \"say the word\", \"until you approve\" or a question about a step you can take \
+    yourself. Ask only for what only the person can give: a sign-in, a password or key, a payment, or a matter of taste with \
+    no sensible default."
+    };
+}
+
+/// [`do_dont_offer!`] as a value, for tests.
+pub const DO_DONT_OFFER: &str = do_dont_offer!();
+
+/// How the turn's approvals work and what that means for the bot, for every engine (claude,
+/// codex, grok and the API). Off must never read as "ask first".
+pub fn approvals_block(approvals: crate::mcp::Approvals) -> &'static str {
+    use crate::mcp::Approvals;
+    match approvals {
+        Approvals::Off => concat!(
+            "\n\n[Approvals: off]\n\
+            The person switched approvals off: they chose not to be asked, and your tools run without a card (a payment, or \
+            in Dev mode a step that reaches production, still shows one: make the call and let it ask). ",
+            do_dont_offer!(),
+            " Unless they asked for that outcome, also ask before a step that reaches other people or can't be undone: \
+            deploying to the live site, publishing, sending messages or mail, spending money, or deleting their data."
+        ),
+        Approvals::Smart => concat!(
+            "\n\n[Approvals: ask only when risky]\n\
+            Ordinary work runs without a card; a risky step shows the person an approval card first. For everything that \
+            runs without a card: ",
+            do_dont_offer!(),
+            " For a risky step, make the call and let the card ask: don't ask in words first, and wait for their answer."
+        ),
+        Approvals::Ask => "\n\n[Approvals: on]\n\
+            The person approves your steps: a tool call that changes things shows them an approval card first. Make the call \
+            and let the card ask instead of asking in words first, and wait for their answer instead of giving up.",
+    }
+}
+
 impl TurnInput {
     /// For a turn whose kwnt tools server failed to start: drop it from the turn and swap the
     /// prompt's tool instructions for a plain note that they are unavailable.
@@ -453,7 +522,14 @@ impl TurnInput {
 
     pub fn format_system_prompt_with(&self, browser: BrowserAccess) -> String {
         let p = self.system_prompt_parts(browser);
-        format!("{}{}{}{}{}{}", p.head, p.date, p.team, self.continuity, self.skills, p.tail)
+        format!("{}{}{}{}{}{}", p.head, p.date, p.team, self.continuity, self.turn_notes(), p.tail)
+    }
+
+    /// The parts that can change every turn: the skills picked for this message and the
+    /// "[What to deliver]" hint for what it expects back.
+    pub fn turn_notes(&self) -> String {
+        let hint = self.delivery.as_ref().map(crate::router::delivery::DeliveryPlan::hint).unwrap_or_default();
+        format!("{}{hint}", self.skills)
     }
 
     /// The system prompt split by how often each part changes, for callers that cache it: `head`,
@@ -544,12 +620,18 @@ impl TurnInput {
                 If anything you read was stopped by a CAPTCHA or another human check, never try to solve or bypass it: tell the person which page asked for the check, so they can solve it themselves."
                 .to_string(),
         };
-        let sandbox_rules = format!(
-            "{browser_block}\n\n\
-            [Speed]\n\
-            The user is waiting in a live chat. Respond as fast as possible: answer directly when you can, use the fewest tool calls (usually one), \
-            do not explore the filesystem, read source code or plan multi-step investigations to figure out how the browser works, and keep replies short.",
-        );
+        let browser_speed = match browser {
+            BrowserAccess::Unavailable => "",
+            BrowserAccess::Tools | BrowserAccess::Shell => BROWSER_SPEED,
+        };
+        // Look first: any turn that can read something (a shell, kwnt's tools or another tool server)
+        let can_look = !self.no_tools && (browser != BrowserAccess::Unavailable || self.mcp.is_some());
+        let look_first = if can_look { LOOK_FIRST } else { "" };
+        let approvals = match &self.mcp {
+            Some(ctx) if !self.no_tools && !self.read_only => approvals_block(ctx.approvals),
+            _ => "",
+        };
+        let sandbox_rules = format!("{browser_block}{browser_speed}{look_first}{approvals}{PERSON_SEES}");
 
         let teammates_block = if self.teammates.is_empty() {
             String::new()
@@ -944,8 +1026,146 @@ pub(crate) mod tests {
             mcp: None,
             no_tools: false,
             read_only: false,
+            delivery: None,
             fresh_eyes: false,
         }
+    }
+
+    fn with_approvals(approvals: crate::mcp::Approvals) -> TurnInput {
+        let mut i = input();
+        i.mcp = Some(crate::mcp::McpTurnContext {
+            servers: vec![],
+            approver: std::sync::Arc::new(crate::mcp::FixedApprover(true)),
+            config_dir: std::env::temp_dir(),
+            permission_url: None,
+            gateway: None,
+            max_tool_iterations: 4,
+            approvals,
+            records: Default::default(),
+        });
+        i
+    }
+
+    const ACCESSES: [BrowserAccess; 3] = [BrowserAccess::Tools, BrowserAccess::Shell, BrowserAccess::Unavailable];
+
+    /// The system prompt each engine gets: codex (`[System Context: …]`), grok (`--rules`) and the
+    /// API drivers use the shared prompt; claude adds its built-in tools block to it.
+    fn engine_prompts(i: &TurnInput, access: BrowserAccess) -> [(&'static str, String); 3] {
+        let shared = i.format_system_prompt_with(access);
+        let api = {
+            let p = i.system_prompt_parts(access);
+            format!("{}{}{}{}{}{}", p.head, p.team, p.tail, i.continuity, i.turn_notes(), p.date)
+        };
+        [("codex/grok", shared.clone()), ("api", api), ("claude", super::cli::claude_system_prompt(&shared, i))]
+    }
+
+    /// P1: with approvals off the bot does the work instead of offering it, on every engine; it is
+    /// never told a card comes first or to wait for an answer.
+    #[test]
+    fn approvals_off_tells_every_engine_to_do_the_work() {
+        let off = with_approvals(crate::mcp::Approvals::Off);
+        for access in ACCESSES {
+            for (engine, prompt) in engine_prompts(&off, access) {
+                assert!(prompt.contains("[Approvals: off]"), "{engine} {access:?}");
+                assert!(prompt.contains(DO_DONT_OFFER), "{engine} {access:?}: {prompt}");
+                assert_eq!(prompt.matches(DO_DONT_OFFER).count(), 1, "{engine} {access:?}");
+                for never in ["approval card first", "wait for their answer", "needs the person's OK", "Ask for what you need"] {
+                    assert!(!prompt.contains(never), "{engine} {access:?}: {never}\n{prompt}");
+                }
+            }
+        }
+    }
+
+    /// Smart keeps its card text and adds the same do-don't-offer rule; ask keeps its card text.
+    #[test]
+    fn smart_and_ask_keep_their_card_text() {
+        let smart = with_approvals(crate::mcp::Approvals::Smart);
+        let ask = with_approvals(crate::mcp::Approvals::Ask);
+        for access in ACCESSES {
+            for (engine, prompt) in engine_prompts(&smart, access) {
+                assert!(prompt.contains("[Approvals: ask only when risky]"), "{engine} {access:?}");
+                assert!(prompt.contains("a risky step shows the person an approval card first"), "{engine} {access:?}");
+                assert!(prompt.contains("let the card ask"), "{engine} {access:?}");
+                assert!(prompt.contains(DO_DONT_OFFER), "{engine} {access:?}");
+            }
+            for (engine, prompt) in engine_prompts(&ask, access) {
+                assert!(prompt.contains("[Approvals: on]"), "{engine} {access:?}");
+                assert!(prompt.contains("shows them an approval card first"), "{engine} {access:?}");
+                assert!(prompt.contains("wait for their answer instead of giving up"), "{engine} {access:?}");
+                assert!(!prompt.contains(DO_DONT_OFFER), "{engine} {access:?}");
+            }
+        }
+        // claude's built-in tools block names the card too, for smart and ask only
+        let folder = tempfile::tempdir().unwrap();
+        for (mode, card) in [(crate::mcp::Approvals::Smart, true), (crate::mcp::Approvals::Ask, true), (crate::mcp::Approvals::Off, false)] {
+            let mut i = with_approvals(mode);
+            i.workspace_dir = Some(folder.path().to_path_buf());
+            let prompt = super::cli::claude_system_prompt(&i.format_system_prompt(), &i);
+            assert_eq!(prompt.contains("approval card first"), card, "{mode:?}: {prompt}");
+        }
+    }
+
+    /// A turn without tools, or a read-only one, has no approvals to describe.
+    #[test]
+    fn no_approvals_block_without_tools() {
+        let mut i = with_approvals(crate::mcp::Approvals::Off);
+        i.no_tools = true;
+        assert!(!i.format_system_prompt().contains("[Approvals"));
+        let mut i = with_approvals(crate::mcp::Approvals::Off);
+        i.read_only = true;
+        assert!(!i.format_system_prompt().contains("[Approvals"));
+        assert!(!input().format_system_prompt().contains("[Approvals"), "no tools server, no approvals");
+    }
+
+    /// P2: "act fast, don't explore" is for the bot browser only; every turn that can look is told
+    /// to read the project first, try other ways and check its own result.
+    #[test]
+    fn speed_is_for_the_browser_and_every_turn_looks_first() {
+        for access in ACCESSES {
+            let prompt = with_approvals(crate::mcp::Approvals::Ask).format_system_prompt_with(access);
+            assert!(!prompt.contains("[Speed]"), "{access:?}");
+            assert_eq!(prompt.contains("[Browser speed]"), access != BrowserAccess::Unavailable, "{access:?}");
+            assert_eq!(prompt.matches(LOOK_FIRST).count(), 1, "{access:?}");
+            assert!(prompt.contains("try at least two other ways"), "{access:?}");
+            assert_eq!(prompt.matches(PERSON_SEES).count(), 1, "{access:?}");
+        }
+        let mut i = input();
+        i.no_tools = true;
+        let prompt = i.format_system_prompt();
+        assert!(!prompt.contains("[Browser speed]") && !prompt.contains(LOOK_FIRST), "{prompt}");
+        assert!(prompt.contains(PERSON_SEES), "the person only sees replies, with or without tools");
+        // In the part that stays the same between turns
+        assert!(input().system_prompt_parts(BrowserAccess::Tools).tail.contains(LOOK_FIRST));
+    }
+
+    /// P9: the "[What to deliver]" line for the turn's plan reaches every engine, once.
+    #[test]
+    fn every_engine_gets_the_what_to_deliver_line() {
+        use crate::router::delivery::{keyword_plan, Deliverable};
+        let messages = [
+            ("Hey team! What some cool feature we can add?", Deliverable::Ideas),
+            ("show me mockup image", Deliverable::Visual),
+            ("Fix differences!", Deliverable::Change),
+            ("mobile sticky booking CTA -> what is this??", Deliverable::Explain),
+        ];
+        for (msg, kind) in messages {
+            let mut i = with_approvals(crate::mcp::Approvals::Off);
+            i.delivery = Some(keyword_plan(msg, &[]));
+            assert_eq!(i.delivery.as_ref().unwrap().kind, kind);
+            let hint = i.delivery.as_ref().unwrap().hint();
+            for access in ACCESSES {
+                for (engine, prompt) in engine_prompts(&i, access) {
+                    assert_eq!(prompt.matches(&hint).count(), 1, "{engine} {access:?} {msg}");
+                    assert_eq!(prompt.matches("[What to deliver]").count(), 1, "{engine} {access:?} {msg}");
+                }
+            }
+            // Per turn, so it never breaks the cached tail
+            assert!(!i.system_prompt_parts(BrowserAccess::Tools).tail.contains("[What to deliver]"));
+        }
+        let mut i = input();
+        i.delivery = Some(keyword_plan("thanks!", &[]));
+        assert!(!i.format_system_prompt().contains("[What to deliver]"), "a thank-you has nothing to deliver");
+        assert!(!input().format_system_prompt().contains("[What to deliver]"));
     }
 
     #[test]

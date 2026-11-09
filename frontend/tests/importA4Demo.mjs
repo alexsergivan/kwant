@@ -112,3 +112,21 @@ export const folderFiles = (name = 'molty-workspace') => [
   [`${name}/.git/HEAD`, 'ref: refs/heads/main'],
   [`${name}/openclaw.json`, '{"apiKey":"sk-demo-not-real"}'],
 ];
+
+/** A GitHub repo of bots (ai-employees style): Done credits the repo for bots too (ui-check-459 Decision 3). */
+export const githubBotsPreview = (over = {}) => {
+  const p = githubPreview({ repo: 'ai-team', ...over });
+  p.bundle.bots = [bot('ada', 'Ada', 'Ads lead'), bot('ben', 'Ben', 'SEO writer'), bot('cy', 'Cy', 'Support')];
+  p.bundle.skills = [];
+  p.bundle.source.label = `${p.github.owner}/${p.github.repo}`;
+  return p;
+};
+
+/** A GitHub folder with nothing kwant can bring (qa-459 minor note 3). */
+export const githubEmptyPreview = (over = {}) => {
+  const p = githubPreview({ path: 'skills/doc-coauthoring', ref: 'main', ...over });
+  p.bundle.skills = [];
+  p.bundle.omitted = [...p.bundle.omitted, 'doc-coauthoring: SKILL.md is over 8,000 characters'];
+  p.can_apply = false;
+  return p;
+};

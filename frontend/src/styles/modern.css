@@ -865,6 +865,19 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .dv-led[data-ping]::after { content: ''; position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid var(--c); animation: dv-ping 200ms var(--kw-ease) 1 both; }
 @keyframes dv-ping { from { transform: scale(1); opacity: .9; } to { transform: scale(2.4); opacity: 0; } }
 
+/* 0.8.0 B3: the pre-push card's running LED is static (Mira b3 "no spinner, no pulse"), and
+   "not installed" is a dashed hollow LED. */
+.dv-led.dv-led-still::after { animation: none !important; opacity: .5; transform: scale(1.6); }
+.dv-led.dv-led-dashed { box-shadow: none; border: 1.5px dashed var(--c); background: transparent; }
+/* The fresh-eyes chip keeps its size; its hit area grows on touch (b3 §3). */
+.fe-chip { position: relative; }
+.fe-chip::after { content: ''; position: absolute; inset: -6px; }
+/* 24 px chip + 2 x 10 px = 44 px tall on phone (Mira ui-check-458 Later 3). */
+@media (max-width: 639px) { .fe-chip::after { inset: -10px -6px; } }
+.fe-pop { animation: fe-in 150ms var(--kw-ease) both; }
+@keyframes fe-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .fe-pop { animation: none; } }
+
 /* §2.2 Diff stat: mono numbers plus a 32x4 split bar (add | del). Our own shape, not a block meter. */
 .dv-stat { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px/1 'JetBrains Mono', monospace; white-space: nowrap; }
 .dv-stat .a { color: var(--dv-add); } .dv-stat .d { color: var(--dv-del); }
@@ -876,9 +889,16 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .dv-sha { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--kw-hairline); background: var(--dv-code-bg);
   font: 500 11px/1 'JetBrains Mono', monospace; color: var(--t3); white-space: nowrap; }
 button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); border-color: var(--kw-hairline-strong); }
+/* A branch inside a sentence wraps with the text (pre-push one-line cards, Mira ui-check-475 must-fix 1). */
+.dv-sha.dv-sha-wrap { display: inline; height: auto; white-space: normal; overflow-wrap: anywhere;
+  padding: 1px 5px; line-height: 20px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .dv-branch { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--kw-hairline); background: var(--dv-code-bg);
   font: 500 11px/1 'JetBrains Mono', monospace; color: var(--t3); min-width: 0; }
 .dv-branch .h { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--t2); }
+/* A long branch wraps instead of being cut off (pre-push card at 390 px, Ada review-458 Later 9). */
+.dv-branch.dv-branch-wrap { height: auto; min-height: 22px; padding-top: 4px; padding-bottom: 4px; align-items: flex-start; line-height: 14px; }
+.dv-branch.dv-branch-wrap svg.i { flex-shrink: 0; margin-top: 1.5px; }
+.dv-branch.dv-branch-wrap .h { white-space: normal; overflow-wrap: anywhere; overflow: visible; min-width: 0; }
 .dv-branch .arr { color: var(--t5); }
 .dv-branch svg.i { width: 11px; height: 11px; color: var(--accent); }
 .dv-code { font: 500 0.92em/1 'JetBrains Mono', monospace; color: var(--accent); }

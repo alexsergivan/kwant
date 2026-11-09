@@ -17,6 +17,8 @@ import {
   unresolved,
 } from '../auditor';
 import { formatTokens } from '../missions';
+import { chipState, parseFreshEyes } from '../dev/freshEyes';
+import { FreshEyesChip } from './dev/FreshEyesChip';
 
 const TONE: Record<string, string> = {
   amber: 'bg-amber-500/15 text-amber-200 border-amber-500/30',
@@ -91,6 +93,7 @@ const AuditBlock: React.FC<{
   const challenger = names[a.challenger_kwant_id] || 'A bot';
   const owner = names[a.owner_kwant_id] || 'The owner';
   const tokens = auditTokens(a);
+  const fresh = parseFreshEyes(a.fresh_eyes);
   return (
     <li className="space-y-2" data-audit={a.id} data-audit-status={a.status}>
       <div className="text-[11px] text-zinc-400 break-words">
@@ -101,6 +104,11 @@ const AuditBlock: React.FC<{
           {auditStatusText(a, names)}
         </span>
       </div>
+      {chipState(fresh) !== 'R3' && (
+        <div className="relative flex flex-wrap gap-1.5">
+          <FreshEyesChip label={fresh} reviewer={(fresh?.reviewer_kwant_id && names[fresh.reviewer_kwant_id]) || challenger} author={names[a.owner_kwant_id] || null} />
+        </div>
+      )}
       {a.risks.length > 0 && (
         <ul className="space-y-1.5">
           {a.risks.map((r) => (

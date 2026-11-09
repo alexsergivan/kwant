@@ -53,7 +53,7 @@ fn ctx(dir: &std::path::Path, approver: Arc<dyn ToolApprover>) -> McpTurnContext
         permission_url: Some("http://127.0.0.1:1/api/mcp/permission/tok".into()),
         gateway: Some(GatewayAccess { url: "http://127.0.0.1:1/api/mcp/gateway".into(), token: "gw-secret-token".into() }),
         max_tool_iterations: 8,
-        smart_approvals: false,
+        approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
     }
 }
@@ -313,6 +313,7 @@ fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
         mcp,
         no_tools: false,
         read_only: false,
+        delivery: None,
     }
 }
 

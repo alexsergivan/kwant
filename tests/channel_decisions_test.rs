@@ -146,13 +146,13 @@ async fn a_team_discussion_reply_keeps_its_choices_as_chips_not_text() {
     assert_eq!(d.as_array().map(Vec::len), Some(1), "{d}");
     assert_eq!((d[0]["question"].as_str(), d[0]["picked"].as_str()), (Some("Cutover style?"), Some("Blue-green")));
 
-    // The garbled block: both run-together choices come through and nothing of it is shown
+    // The garbled block: the run-together choices parse and nothing of it is shown; the reply
+    // keeps one card (P3: at most one "Decided:" card per reply)
     let reply = replies.iter().find(|m| m.text.starts_with("Agreed")).expect("Bob's reply");
     assert_eq!(reply.text, "Agreed, with a buffer.");
     let d = &meta(reply)["decisions"];
-    assert_eq!(d.as_array().map(Vec::len), Some(2), "{d}");
+    assert_eq!(d.as_array().map(Vec::len), Some(1), "{d}");
     assert_eq!((d[0]["question"].as_str(), d[0]["picked"].as_str(), d[0]["why"].as_str()), (Some("Arrival buffer"), Some("10 min"), Some("time to park")));
-    assert_eq!((d[1]["question"].as_str(), d[1]["picked"].as_str()), (Some("Traffic on days off"), Some("One-line note")));
 
     // The chips' Change works on a channel message and names the bot that decided
     let (s, v) = call(&app, "POST", &format!("/api/messages/{}/decisions/0/change", reply.id), Some(json!({"picked": "15 min"}))).await;
