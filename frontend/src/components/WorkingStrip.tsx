@@ -18,8 +18,8 @@ interface WorkingStripProps {
   writing?: boolean;
   onStop?: () => void;
   /**
-   * Phone only: brings the card the bot waits on (its question, or an approval) into view. With it,
-   * a waiting strip shows "Answer ↑", which stands in for the separate "Approval waiting" pill.
+   * Brings the card the bot waits on into view. With it, a waiting strip shows "Answer ↑": on a phone for a
+   * question or an approval (standing in for the "Approval waiting" pill), on desktop for a question only.
    */
   onAnswer?: (on: 'question' | 'approval') => void;
   /** W1: this chat's browser is active and the panel is closed: "Watch" opens it. */
@@ -56,7 +56,8 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
   const elapsed = formatElapsed(now - turnStart(live, mountedAt.current));
   const on = waitingOn(state);
   const waiting = !!queued || !!awaitingAnswer || on !== null;
-  const answer = phone && on && onAnswer ? on : null;
+  // Desktop shows Answer only for a question: approvals already have the "Approval waiting" pill there.
+  const answer = on && onAnswer && (phone || on === 'question') ? on : null;
   if (phone) {
     return (
       <div className="kws-strip kws-strip-phone px-3 pt-1 pb-1.5" data-working-strip="" data-waiting-on={on ?? undefined}>
@@ -124,11 +125,24 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
       <p className="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite">
         <span className="font-medium text-zinc-200">{name}</span> is {label}
       </p>
-      {/* Own box, so a long step name never cuts the time off. */}
-      <span className="shrink-0 tabular-nums text-xs leading-4 text-zinc-500" aria-hidden="true" data-working-elapsed="">
-        {elapsed}
-      </span>
-      {onWatch && <WatchButton name={name} line onWatch={onWatch} />}
+      {/* Own box, so a long step name never cuts the time off. Hidden behind Answer, as on the phone. */}
+      {!answer && (
+        <span className="shrink-0 tabular-nums text-xs leading-4 text-zinc-500" aria-hidden="true" data-working-elapsed="">
+          {elapsed}
+        </span>
+      )}
+      {onWatch && !answer && <WatchButton name={name} line onWatch={onWatch} />}
+      {answer && (
+        <button
+          type="button"
+          onClick={() => onAnswer?.(answer)}
+          data-strip-answer=""
+          className="-mr-2 shrink-0 inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 active:bg-amber-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff]"
+        >
+          Answer
+          <ArrowUp size={12} aria-hidden="true" />
+        </button>
+      )}
       {onStop && (
         <button
           type="button"

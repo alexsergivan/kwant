@@ -197,8 +197,14 @@ test('waiting on a question, the strip says so and offers Answer, which goes to 
   assert.match(answer.attrs, /text-xs font-semibold text-amber-200/);
   assert.match(answer.attrs, /data-strip-answer/);
   assert.doesNotMatch(html, /data-working-elapsed/, 'the time hides behind Answer');
-  // Desktop: no Answer button there.
-  assert.ok(!buttons(m.strip({ active: true, name: 'QA', title: 'QA', awaitingAnswer: true, phone: false, onAnswer: noop })).some((b) => b.label === 'Answer'));
+  // Desktop (Mira, 0.8.0): Answer for a question only, in place of the time; no kws-hit there.
+  const desk = m.strip({ active: true, name: 'QA', title: 'QA', awaitingAnswer: true, phone: false, onAnswer: noop });
+  const dAnswer = buttons(desk).find((b) => b.label === 'Answer');
+  assert.ok(dAnswer, 'desktop Answer for a question');
+  for (const c of ['-mr-2', 'h-7', 'font-semibold', 'text-amber-200', 'outline-[#b8adff]']) assert.ok(dAnswer.attrs.includes(c), c);
+  assert.doesNotMatch(desk, /kws-hit|data-working-elapsed/);
+  const approval = m.strip({ active: true, name: 'QA', title: 'QA', live: live([step({ kind: 'approval', status: 'waiting', title: 'Approve' })]), phone: false, onAnswer: noop });
+  assert.ok(!buttons(approval).some((b) => b.label === 'Answer'), 'approvals keep the pill on desktop');
 });
 
 test('desktop strip is the composer status line: no card, 28 px, 20 px avatar, edges on the box below (0.8.0)', () => {
