@@ -103,6 +103,44 @@ memory_mb = 1024      # per bot container (env KWNT_AGENT_MEMORY_MB)
 max_turns = 2         # isolated replies at once; the next one waits, and the chat says so (env KWNT_AGENT_MAX_TURNS)
 ```
 
+## Claude on this computer, on a Mac (0.8.0)
+
+Without the VM, a Claude turn on a Mac runs on the Mac itself. A bot talked into it by a web
+page, a file or another bot could read a sign-in with its file tools or a shell command. kwnt
+now passes Claude one more `--settings` layer for those turns (`src/drivers/mac_local.rs`):
+
+- **Always on.** Claude's Read, Grep, Glob, Edit and Write tools are denied `~/.claude`,
+  `~/.codex`, `~/.grok`, `~/Library/Keychains`, the profile's own sign-in home, kwnt's
+  `profiles/` and `kwnt-vault/` folders, and its `kwnt-vault.key`, `api-token` and `kwnt.db`
+  (plus `$CLAUDE_CONFIG_DIR`, `$CODEX_HOME` and `$GROK_HOME` when set). They're
+  `Read(…)`/`Edit(…)` deny rules, which outrank anything the folder's or your own settings allow.
+- **Opt-in: Seatbelt for Bash** (`KWNT_MAC_SEATBELT=1` in kwnt's environment). Claude runs each
+  shell command in macOS's sandbox with the same paths unreadable and unwritable. kwnt still
+  approves every command as before (`autoAllowBashIfSandboxed: false`), and a bot can't ask to
+  run a command outside the sandbox (`allowUnsandboxedCommands: false`). It's off by default
+  until it has been tried on a real Mac, because with it on:
+  - the shell's network goes through Claude's proxy, which asks before each new domain, and kwnt
+    shows that as an approval card (`localhost` and `127.0.0.1` are allowed);
+  - Unix sockets are blocked except `$SSH_AUTH_SOCK`, so Docker from a bot's shell fails;
+  - writes outside your home folder fail.
+
+What it doesn't do: the `claude` process itself still reads its own sign-in and the Keychain, as
+it has to in order to run. This stops a tricked bot's tools, not the CLI. `~/.ssh` isn't denied,
+so git over ssh keeps working. Only the VM keeps sign-ins off the machine the bot runs on.
+
+**The Keychain is only half covered.** Denying `~/Library/Keychains` stops reading the keychain
+files. Claude keeps its sign-in in the Keychain itself ("Claude Code-credentials"), and a shell
+command reaches items through macOS's security service, not the files. The Seatbelt profile lets
+that service through, so a sandboxed `security find-generic-password` may still return a secret.
+Seatbelt can't close that without breaking git and other tools that use the Keychain.
+
+**Checked on CI's Mac** (`.github/workflows/mac-local.yml`, `scripts/mac_local_probe.sh`): the unit
+tests run on macOS; the real Claude Code reads kwnt's settings (its debug log reports the deny
+rules); sandbox-runtime, which Claude's Bash sandbox is built on, gets the same sections and has
+to block reads and writes of the denied places, still allow an ordinary home file, and block an
+unlisted domain; and the job reports whether a sandboxed `security find-generic-password` reads a
+test Keychain item. No Claude sign-in exists on CI, so no real turn runs there.
+
 ## Who refreshes a sign-in
 
 While the setting is on, the broker is the only thing that refreshes a bot's own Claude sign-in
@@ -117,5 +155,7 @@ this computer.
   (`folder_rule.rs`) and the chat notices (`notice.rs`).
 - `src/sandbox/safe_fs.rs`: the no-follow folder reader.
 - `src/db/isolated_folders.rs`: the record of folders isolated replies used.
+- `src/drivers/mac_local.rs`: the Mac hardening for Claude turns on this computer; its CI check is
+  `.github/workflows/mac-local.yml` with `scripts/mac_local_probe.sh`.
 - `docker/agent.Dockerfile`, `docker/agent-entry.sh`: the image (`kwnt-agent:v1-claude-<version>`).
 - `proto/agents-in-vm/`: the Python spike, `gate0.sh` and the evidence it wrote.
