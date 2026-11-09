@@ -85,6 +85,21 @@ pub struct TicketQuestion {
     pub created_at: i64,
 }
 
+/// [`Database::move_ticket_brief`] on a connection the caller holds, so `dev_jira`'s state writer
+/// moves the brief row inside its own transaction.
+pub(super) async fn move_brief(conn: &mut sqlx::SqliteConnection, space_id: &str, key: &str, from: &[&str], to: &str) -> Result<bool, sqlx::Error> {
+    if from.is_empty() {
+        return Ok(false);
+    }
+    let marks = vec!["?"; from.len()].join(", ");
+    let sql = format!("UPDATE dev_ticket_briefs SET state = ?, updated_at = ? WHERE space_id = ? AND key = ? AND state IN ({marks})");
+    let mut q = sqlx::query(&sql).bind(to).bind(now_ms()).bind(space_id).bind(key);
+    for f in from {
+        q = q.bind(*f);
+    }
+    Ok(q.execute(conn).await?.rows_affected() == 1)
+}
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -144,16 +159,7 @@ impl Database {
 
     /// Moves the row from `from` (any of them) to `to`; false when it wasn't in one of them.
     pub async fn move_ticket_brief(&self, space_id: &str, key: &str, from: &[&str], to: &str) -> Result<bool, DbError> {
-        if from.is_empty() {
-            return Ok(false);
-        }
-        let marks = vec!["?"; from.len()].join(", ");
-        let sql = format!("UPDATE dev_ticket_briefs SET state = ?, updated_at = ? WHERE space_id = ? AND key = ? AND state IN ({marks})");
-        let mut q = sqlx::query(&sql).bind(to).bind(now_ms()).bind(space_id).bind(key);
-        for f in from {
-            q = q.bind(*f);
-        }
-        Ok(q.execute(&self.pool).await?.rows_affected() == 1)
+        Ok(move_brief(&mut *self.pool.acquire().await?, space_id, key, from, to).await?)
     }
 
     /// Sets the named optional column (`thread_id`, `task_id`, `mission_id`, `brief`,

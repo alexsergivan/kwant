@@ -38,6 +38,14 @@ pub const FILE_MAX_BYTES: u64 = 20 * 1024 * 1024;
 pub const TOTAL_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Files per checkpoint.
 pub const MAX_FILES: usize = 20_000;
+/// Folders below the task folder a snapshot goes into; deeper ones are skipped. Each folder on
+/// the way down stays open while it's walked, so this also bounds the descriptors one walk holds.
+pub const MAX_DEPTH: usize = 64;
+/// Entries (files, folders, anything) a snapshot looks at before it stops walking: a folder with
+/// millions of entries costs kwant this much listing and memory, not more.
+pub const MAX_ENTRIES: usize = MAX_FILES * 4;
+/// How a manifest's skip says the walk stopped early (after the number).
+const WALK_STOPPED: &str = "entry limit";
 /// Folders never snapshotted (and never restored).
 pub const SKIP_DIRS: [&str; 4] = [".git", "node_modules", "target", ".venv"];
 /// What restore says about external side effects, always.
@@ -318,6 +326,11 @@ fn snapshot(blobs: &FsPath, folder: &FsPath, max_bytes: u64) -> Result<Taken, St
 /// [`snapshot`] of a folder already open: a restore snapshots and writes through the same
 /// descriptor, so a folder swapped in between is never the one written (QA F-3).
 fn snapshot_in(blobs: &FsPath, top: crate::sandbox::safe_fs::Dir, max_bytes: u64) -> Result<Taken, String> {
+    snapshot_within(blobs, top, max_bytes, MAX_DEPTH, MAX_ENTRIES)
+}
+
+/// [`snapshot_in`] with its walk limits given (tests use small ones).
+fn snapshot_within(blobs: &FsPath, top: crate::sandbox::safe_fs::Dir, max_bytes: u64, max_depth: usize, max_entries: usize) -> Result<Taken, String> {
     private_dir(blobs).map_err(|e| format!("the checkpoint store can't be written: {e}"))?;
     let mut m = Manifest::default();
     // Every folder is reached from its parent's descriptor and every file opened from the
@@ -326,16 +339,21 @@ fn snapshot_in(blobs: &FsPath, top: crate::sandbox::safe_fs::Dir, max_bytes: u64
     use crate::sandbox::safe_fs::{Dir, Kind};
     let top = std::rc::Rc::new(top);
     let mut candidates: Vec<(String, PathBuf, u64, u32)> = Vec::new();
-    let mut stack: Vec<(std::rc::Rc<Dir>, Option<std::ffi::OsString>, String, PathBuf)> =
-        vec![(top.clone(), None, String::new(), PathBuf::new())];
+    // Each stack item: the parent's descriptor, the folder's name in it, its relative path and its
+    // depth (the task folder is 0). Depth-first, so at most MAX_DEPTH folders are open at once.
+    type Pending = (std::rc::Rc<Dir>, Option<std::ffi::OsString>, String, PathBuf, usize);
+    let mut stack: Vec<Pending> = vec![(top.clone(), None, String::new(), PathBuf::new(), 0)];
     let mut first = true;
-    while let Some((parent, name, prefix, at)) = stack.pop() {
+    let mut looked_at: usize = 0;
+    while let Some((parent, name, prefix, at, depth)) = stack.pop() {
+        // One more than what's left, so a folder that fills the budget exactly isn't called cut
+        let room = max_entries - looked_at;
         let listed = match name {
             None => Ok(parent),
             Some(n) => parent.open_dir(FsPath::new(&n)).map(std::rc::Rc::new),
         }
-        .and_then(|d| d.list().map(|l| (d, l)));
-        let (dir, entries) = match listed {
+        .and_then(|d| d.list_at_most(room.saturating_add(1)).map(|l| (d, l)));
+        let (dir, (mut entries, mut cut)) = match listed {
             Ok(x) => x,
             Err(e) if first => return Err(format!("the folder can't be read: {e}")),
             Err(_) => {
@@ -344,6 +362,11 @@ fn snapshot_in(blobs: &FsPath, top: crate::sandbox::safe_fs::Dir, max_bytes: u64
             }
         };
         first = false;
+        if entries.len() > room {
+            entries.truncate(room);
+            cut = true;
+        }
+        looked_at += entries.len();
         for entry in entries {
             let name = entry.name.to_string_lossy().into_owned();
             let rel = format!("{prefix}{name}");
@@ -352,11 +375,20 @@ fn snapshot_in(blobs: &FsPath, top: crate::sandbox::safe_fs::Dir, max_bytes: u64
                 Kind::Dir if SKIP_DIRS.contains(&name.as_str()) => {
                     m.skipped.push(Skip { path: format!("{rel}/"), why: "not snapshotted".into() })
                 }
-                Kind::Dir => stack.push((dir.clone(), Some(entry.name.clone()), format!("{rel}/"), at.join(&entry.name))),
+                Kind::Dir if depth >= max_depth => {
+                    m.skipped.push(Skip { path: format!("{rel}/"), why: format!("deeper than {max_depth} folders") })
+                }
+                Kind::Dir => stack.push((dir.clone(), Some(entry.name.clone()), format!("{rel}/"), at.join(&entry.name), depth + 1)),
                 Kind::Other => m.skipped.push(Skip { path: rel, why: "not a regular file".into() }),
                 Kind::File if entry.len > FILE_MAX_BYTES => m.skipped.push(Skip { path: rel, why: "over 20 MB".into() }),
                 Kind::File => candidates.push((rel, at.join(&entry.name), entry.len, entry.mode & 0o777)),
             }
+        }
+        if cut || looked_at >= max_entries && !stack.is_empty() {
+            // One skip names where the walk stopped; folders not reached yet aren't listed
+            let path = if prefix.is_empty() { "./".to_string() } else { prefix.clone() };
+            m.skipped.push(Skip { path, why: format!("walk stopped at the {max_entries}-{WALK_STOPPED}") });
+            break;
         }
     }
     candidates.sort_by(|a, b| a.0.cmp(&b.0));
@@ -488,6 +520,22 @@ fn changed(before: &Manifest, after: &Manifest) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+/// Why the checkpoint can't say what `rel` was when it was taken, or None when it can (the file
+/// is in it, or the walk reached where it would be and it wasn't there). A restore never creates,
+/// overwrites or deletes a path the checkpoint can't vouch for: a file under a folder the walk
+/// skipped (too deep, unreadable, never snapshotted), or anywhere at all once the walk stopped at
+/// [`MAX_ENTRIES`], since folders not reached yet aren't listed.
+/// The caller has already checked that `rel` isn't one of the checkpoint's files.
+fn not_vouched(m: &Manifest, rel: &str) -> Option<String> {
+    if let Some(s) = m.skipped.iter().find(|s| s.path == rel) {
+        return Some(s.why.clone());
+    }
+    if let Some(s) = m.skipped.iter().find(|s| s.path.ends_with('/') && s.path != "./" && rel.starts_with(&s.path)) {
+        return Some(s.why.clone());
+    }
+    m.skipped.iter().find(|s| s.why.ends_with(WALK_STOPPED)).map(|s| s.why.clone())
 }
 
 fn read_runs(dir: &FsPath) -> Vec<Run> {
@@ -923,14 +971,13 @@ pub async fn plan(state: &AppState, task: &Task, c: &Checkpoint) -> Result<Plan,
             entries.insert(e.path.clone(), e.clone());
         }
     }
-    let skipped_in: BTreeMap<&str, &str> = manifest.skipped.iter().map(|s| (s.path.as_str(), s.why.as_str())).collect();
     let mut changes = Vec::new();
     let mut conflicts = Vec::new();
     let mut forced = BTreeMap::new();
     let mut hashes = Vec::new();
     let check = {
         let (folder, owned, entries, blobs) = (folder.clone(), owned.clone(), entries.clone(), blobs.clone());
-        let skipped_in: BTreeMap<String, String> = skipped_in.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let manifest = manifest.clone();
         tokio::task::spawn_blocking(move || {
             owned
                 .into_iter()
@@ -938,7 +985,7 @@ pub async fn plan(state: &AppState, task: &Task, c: &Checkpoint) -> Result<Plan,
                     if !safe_rel(&p) {
                         return (p, Err("unsafe path".to_string()));
                     }
-                    if let Some(why) = skipped_in.get(&p) {
+                    if let Some(why) = (!entries.contains_key(&p)).then(|| not_vouched(&manifest, &p)).flatten() {
                         return (p, Err(format!("{why}, not in the checkpoint")));
                     }
                     let now = match current(&folder, &p) {
@@ -1765,5 +1812,89 @@ mod tests {
         // The task folder itself a symlink is never resolved, and stays refused as on main
         assert_eq!(resolve_above(&home.join("Projects")), home.canonicalize().unwrap().join("Projects"));
         assert!(snapshot(&blobs, &resolve_above(&home.join("Projects")), 1 << 30).is_err());
+    }
+
+    /// #446 should-fix 2: the walk goes MAX_DEPTH folders down and no further. Each folder deeper
+    /// is one skip naming it, and a file at the limit is still snapshotted.
+    #[test]
+    fn a_snapshot_goes_64_folders_deep_and_skips_what_is_deeper() {
+        let d = tempfile::tempdir().unwrap();
+        let (folder, blobs) = (d.path().join("proj"), d.path().join("blobs"));
+        // One-letter names keep the deepest path under Windows' 260 characters
+        let mut at_limit = folder.clone();
+        for _ in 0..MAX_DEPTH {
+            at_limit = at_limit.join("d");
+        }
+        let too_deep = at_limit.join("deeper");
+        std::fs::create_dir_all(&too_deep).unwrap();
+        std::fs::write(at_limit.join("at-the-limit.txt"), "kept").unwrap();
+        std::fs::write(too_deep.join("lost.txt"), "skipped").unwrap();
+        let t = snapshot(&blobs, &folder, 1 << 30).unwrap();
+        let rel_limit = "d/".repeat(MAX_DEPTH);
+        let files: Vec<&str> = t.manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(files, vec![format!("{rel_limit}at-the-limit.txt")]);
+        let skip = t.manifest.skipped.iter().find(|s| s.path == format!("{rel_limit}deeper/")).expect("the deeper folder is named");
+        assert_eq!(skip.why, "deeper than 64 folders");
+        // A restore never acts on a path under it
+        assert_eq!(not_vouched(&t.manifest, &format!("{rel_limit}deeper/lost.txt")).as_deref(), Some("deeper than 64 folders"));
+    }
+
+    /// #446 should-fix 2: the walk looks at no more than its entry budget, records one skip where
+    /// it stopped, and a folder that fills the budget exactly isn't called cut.
+    #[test]
+    fn a_snapshot_stops_at_its_entry_limit_with_one_skip() {
+        let d = tempfile::tempdir().unwrap();
+        let (folder, blobs) = (d.path().join("proj"), d.path().join("blobs"));
+        for sub in ["a", "b"] {
+            std::fs::create_dir_all(folder.join(sub)).unwrap();
+            for i in 0..10 {
+                std::fs::write(folder.join(format!("{sub}/f{i}")), format!("{sub}{i}")).unwrap();
+            }
+        }
+        let open = || crate::sandbox::safe_fs::Dir::open_strict(&folder).unwrap();
+        // 2 folders + 20 files = 22 entries; a budget of 12 reaches the top and one folder
+        let t = snapshot_within(&blobs, open(), 1 << 30, MAX_DEPTH, 12).unwrap();
+        assert_eq!(t.manifest.files.len(), 10, "{:?}", t.manifest.files);
+        let stops: Vec<&Skip> = t.manifest.skipped.iter().filter(|s| s.why.ends_with(WALK_STOPPED)).collect();
+        assert_eq!(stops.len(), 1, "{:?}", t.manifest.skipped);
+        assert_eq!(stops[0].why, "walk stopped at the 12-entry limit");
+        // Inside one wide folder: cut while listing it
+        let t = snapshot_within(&blobs, open(), 1 << 30, MAX_DEPTH, 5).unwrap();
+        assert!(t.manifest.files.len() <= 5);
+        assert_eq!(t.manifest.skipped.iter().filter(|s| s.why.ends_with(WALK_STOPPED)).count(), 1, "{:?}", t.manifest.skipped);
+        // Exactly the budget: everything, no stop
+        let t = snapshot_within(&blobs, open(), 1 << 30, MAX_DEPTH, 22).unwrap();
+        assert_eq!(t.manifest.files.len(), 20);
+        assert!(t.manifest.skipped.is_empty(), "{:?}", t.manifest.skipped);
+        assert_eq!(MAX_ENTRIES, 4 * MAX_FILES);
+    }
+
+    /// A walk that stopped early can't say a file it never reached was absent: when the run's
+    /// before_run stopped short and its after_run didn't, the files the after_run newly saw look
+    /// created by the run, and a restore must skip them, never delete them.
+    #[test]
+    fn a_restore_never_deletes_a_file_a_stopped_walk_did_not_reach() {
+        let d = tempfile::tempdir().unwrap();
+        let (folder, blobs) = (d.path().join("proj"), d.path().join("blobs"));
+        for sub in ["a", "b"] {
+            std::fs::create_dir_all(folder.join(sub)).unwrap();
+            for i in 0..10 {
+                std::fs::write(folder.join(format!("{sub}/f{i}")), format!("{sub}{i}")).unwrap();
+            }
+        }
+        let open = || crate::sandbox::safe_fs::Dir::open_strict(&folder).unwrap();
+        let before = snapshot_within(&blobs, open(), 1 << 30, MAX_DEPTH, 12).unwrap().manifest;
+        let after = snapshot_within(&blobs, open(), 1 << 30, MAX_DEPTH, 22).unwrap().manifest;
+        let unseen: Vec<String> = changed(&before, &after);
+        assert_eq!(unseen.len(), 10, "{unseen:?}");
+        for p in &unseen {
+            assert_eq!(not_vouched(&before, p).as_deref(), Some("walk stopped at the 12-entry limit"), "{p}");
+        }
+        // A complete walk vouches for an absent path, so a real delete is still planned
+        assert_eq!(not_vouched(&after, "a/new-file"), None);
+        // An unreadable or never-snapshotted folder covers what is under it
+        let m = Manifest { files: vec![], skipped: vec![Skip { path: "x/".into(), why: "folder can't be read".into() }] };
+        assert_eq!(not_vouched(&m, "x/y/z").as_deref(), Some("folder can't be read"));
+        assert_eq!(not_vouched(&m, "xy"), None);
     }
 }

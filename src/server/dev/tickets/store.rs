@@ -66,7 +66,6 @@ fn all_keys(s: &str) -> Vec<String> {
 pub async fn set_state(state: &AppState, space_id: &str, key: &str, to: &str, detail: Option<&str>) -> Result<bool, DbError> {
     let moved = state.db.set_dev_ticket_state_with(space_id, key, to, detail).await?;
     if moved {
-        mirror(state, space_id, key, to).await;
         notify(state, space_id, key, to);
         if to == dev_jira::WORKING {
             progress(state, space_id, key, Progress::Work).await;
@@ -136,7 +135,6 @@ pub fn error_json(row: &TicketRow) -> serde_json::Value {
 pub async fn fail(state: &AppState, space_id: &str, key: &str, code: FailCode, detail: Option<&str>) -> Result<bool, DbError> {
     let moved = state.db.fail_dev_ticket(space_id, key, code.code(), detail).await?;
     if moved {
-        mirror(state, space_id, key, dev_jira::FAILED).await;
         notify(state, space_id, key, dev_jira::FAILED);
     }
     Ok(moved)
@@ -147,7 +145,6 @@ pub async fn fail(state: &AppState, space_id: &str, key: &str, code: FailCode, d
 pub async fn person_move(state: &AppState, space_id: &str, key: &str, mv: dev_jira::PersonMove) -> Result<Option<String>, DbError> {
     let from = state.db.person_move_dev_ticket(space_id, key, mv).await?;
     if from.is_some() {
-        mirror(state, space_id, key, mv.to()).await;
         notify(state, space_id, key, mv.to());
     }
     Ok(from)
@@ -155,7 +152,9 @@ pub async fn person_move(state: &AppState, space_id: &str, key: &str, mv: dev_ji
 
 /// Copies the card's new state onto the ticket's brief row, if it has one. The card row
 /// (`dev_tickets.state`) is the one truth (D2); the brief row's `state` only mirrors it, so the
-/// brief page and Vega's hooks never disagree with the board. Called after every card move here.
+/// brief page and Vega's hooks never disagree with the board. A card move (`set_state`, `fail`,
+/// `person_move`) already moves the brief row in its own transaction; this is for the hooks that
+/// copy the card's state onto a brief row written after it.
 pub async fn mirror(state: &AppState, space_id: &str, key: &str, to: &str) {
     if let Err(e) = state.db.move_ticket_brief(space_id, key, dev_jira::STATES, to).await {
         tracing::warn!(%key, %to, "dev: couldn't mirror the ticket state onto its brief: {e}");
