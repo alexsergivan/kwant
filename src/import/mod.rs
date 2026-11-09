@@ -6,6 +6,8 @@
 //! stored. See `IMPORT-API.md` in the onboarding notes for the HTTP side.
 
 pub mod archive;
+pub mod github;
+pub mod local;
 pub mod parsers;
 pub mod prompts;
 pub mod scrub;

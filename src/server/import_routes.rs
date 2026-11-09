@@ -7,6 +7,10 @@
 //! - `GET /api/imports?space=`, `GET /api/imports/:id?space=`, `POST /api/imports/:id/undo?space=`.
 //! - `GET /api/kwants/:id/export`, `GET /api/export?space=`: `kwant.bundle/1`, keys scrubbed.
 //! - `GET /api/import/prompts`: the export prompt to send a bot in Grok, ChatGPT, Claude, ….
+//! - `GET /api/import/local`, `POST /api/import/local/preview?space=`: bots and skills other agent
+//!   apps keep in this computer's home folder (the app on this computer only; see `import::local`).
+//! - `POST /api/import/github/preview?space=`: `{ "url": … }`, a public repository on github.com,
+//!   fetched from codeload only (see `import::github`).
 
 use super::spaces::Scope;
 use super::AppState;
@@ -15,7 +19,7 @@ use crate::db::spaces::SpaceId;
 use crate::import::{self, parsers, Bundle, Checked, ImportError, BUNDLE_FORMAT, MAX_ZIP_BYTES};
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -24,6 +28,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashSet;
+use std::net::SocketAddr;
 
 /// An apply body: a bundle with up to 50 bots of 2 × 16k characters, plus skills.
 const MAX_APPLY_BYTES: usize = 8 * 1024 * 1024;
@@ -108,13 +113,118 @@ pub async fn preview(State(state): State<AppState>, Scope(space): Scope, Query(q
         Ok(b) => b,
         Err(e) => return import_error(e),
     };
-    let names = match names_in(&state, &space).await {
-        Ok(n) => n,
-        Err(r) => return r,
-    };
+    match checked_preview(&state, &space, bundle).await {
+        Ok(p) => Json(p).into_response(),
+        Err(r) => r,
+    }
+}
+
+/// The checks every preview runs against the space's names.
+#[allow(clippy::result_large_err)]
+async fn checked_preview(state: &AppState, space: &SpaceId, bundle: Bundle) -> Result<Preview, Response> {
+    let names = names_in(state, space).await?;
     let checked = import::normalize(bundle, &names);
     let can_apply = checked.problems.is_empty() && !(checked.bundle.bots.is_empty() && checked.bundle.skills.is_empty());
-    Json(Preview { checked, can_apply }).into_response()
+    Ok(Preview { checked, can_apply })
+}
+
+const NOT_LOCAL: &str = "Only the kwant app on this computer can look for bots here.";
+
+fn is_local(headers: &HeaderMap, peer: &Option<ConnectInfo<SocketAddr>>) -> bool {
+    super::auth::is_local(headers, peer.as_ref().map(|c| c.0.ip()))
+}
+
+/// `GET /api/import/local`: what other agent apps keep on this computer, names and counts only.
+/// Anywhere but the app on this computer, `available: false` and nothing listed.
+pub async fn local_list(peer: Option<ConnectInfo<SocketAddr>>, headers: HeaderMap) -> Response {
+    if !is_local(&headers, &peer) {
+        return Json(json!({ "available": false, "reason": NOT_LOCAL, "sources": [] })).into_response();
+    }
+    let Some((home, codex)) = import::local::home() else {
+        return Json(json!({ "available": false, "reason": "kwant couldn't find your home folder.", "sources": [] })).into_response();
+    };
+    let found = tokio::task::spawn_blocking(move || import::local::scan(&home, codex.as_deref())).await.unwrap_or_default();
+    Json(json!({ "available": true, "sources": found })).into_response()
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalPick {
+    sources: Vec<String>,
+}
+
+/// `POST /api/import/local/preview`: `{ "sources": [ids] }` from the list, read into one preview.
+pub async fn local_preview(State(state): State<AppState>, Scope(space): Scope, peer: Option<ConnectInfo<SocketAddr>>, headers: HeaderMap, body: Body) -> Response {
+    if !is_local(&headers, &peer) {
+        return error(StatusCode::FORBIDDEN, "local_only", NOT_LOCAL);
+    }
+    let bytes = match read_body(&headers, body, 64 * 1024, "A list of sources").await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let bad = |m: &str| error(StatusCode::BAD_REQUEST, "bad_request", m);
+    let Ok(pick) = serde_json::from_slice::<LocalPick>(&bytes) else { return bad("Send {\"sources\": [ids]} from the list.") };
+    if pick.sources.is_empty() || pick.sources.len() > import::local::MAX_PICKED {
+        return bad("Tick between 1 and 10 sources.");
+    }
+    if pick.sources.iter().collect::<HashSet<_>>().len() != pick.sources.len() {
+        return bad("A source is ticked twice.");
+    }
+    let Some((home, codex)) = import::local::home() else { return error(StatusCode::NOT_FOUND, "not_found", "kwant couldn't find your home folder.") };
+    let read = tokio::task::spawn_blocking(move || import::local::read(&home, codex.as_deref(), &pick.sources)).await;
+    let bundle = match read {
+        Ok(Ok(b)) => b,
+        Ok(Err(import::local::ReadError::NotFound(id))) => return error(StatusCode::NOT_FOUND, "not_found", format!("{id} isn't on this computer any more. Refresh the list.")),
+        Ok(Err(import::local::ReadError::Import(e))) => return import_error(e),
+        Err(e) => return internal(e),
+    };
+    match checked_preview(&state, &space, bundle).await {
+        Ok(p) => Json(p).into_response(),
+        Err(r) => r,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GithubLink {
+    url: String,
+}
+
+#[derive(Serialize)]
+struct GithubPreview {
+    #[serde(flatten)]
+    preview: Preview,
+    github: import::github::GithubInfo,
+}
+
+/// `POST /api/import/github/preview`: `{ "url": … }`, a public repository on github.com.
+pub async fn github_preview(State(state): State<AppState>, Scope(space): Scope, headers: HeaderMap, body: Body) -> Response {
+    let bytes = match read_body(&headers, body, 16 * 1024, "A link").await {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    let Ok(link) = serde_json::from_slice::<GithubLink>(&bytes) else {
+        return error(StatusCode::BAD_REQUEST, "bad_request", "Send {\"url\": \"https://github.com/…\"}.");
+    };
+    use import::github::{self, GithubError};
+    let (bundle, info) = match github::preview(github::CODELOAD, &link.url).await {
+        Ok(r) => r,
+        Err(GithubError::NotGithub(m)) => return error(StatusCode::UNPROCESSABLE_ENTITY, "not_github", m),
+        Err(GithubError::Redirect) => {
+            return error(StatusCode::UNPROCESSABLE_ENTITY, "redirect", "GitHub answered with a redirect, which kwant doesn't follow. Check the link (a renamed repository needs its new name).")
+        }
+        Err(GithubError::NotFound) => return error(StatusCode::NOT_FOUND, "not_found", "There's no public repository or branch at this link. Private repositories can't be imported from a link."),
+        Err(GithubError::FetchFailed(m)) => return error(StatusCode::BAD_GATEWAY, "fetch_failed", m),
+        Err(GithubError::Import(e)) => return import_error(e),
+    };
+    let mut preview = match checked_preview(&state, &space, bundle).await {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    if info.licence.is_none() {
+        preview.checked.warnings.push(import::Notice { bot: None, message: github::NO_LICENCE.into() });
+    }
+    Json(GithubPreview { preview, github: info }).into_response()
 }
 
 #[derive(Deserialize)]

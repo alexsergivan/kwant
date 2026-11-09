@@ -17,6 +17,8 @@ pub struct Entry {
 pub struct Unzipped {
     pub entries: Vec<Entry>,
     pub skipped: Vec<String>,
+    /// The archive comment (codeload writes the commit id there).
+    pub comment: Option<String>,
 }
 
 const READ_EXTENSIONS: [&str; 4] = [".json", ".md", ".png", ".txt"];
@@ -40,15 +42,74 @@ fn safe_path(name: &str) -> Option<String> {
     Some(name.trim_start_matches("./").to_string())
 }
 
-/// Reads the bot-relevant files of a zip. Rejects the whole zip for unsafe paths, nested
-/// archives, encryption, too many entries, or more than [`MAX_UNZIPPED_BYTES`] once inflated.
+/// Dotfiles kwant reads even though they're hidden: Paperclip's `.paperclip.yaml` (only its
+/// `routines`) and Hermes' `skills/.bundled_manifest` (which skills Hermes seeded itself).
+pub const READ_DOTFILES: [&str; 2] = [".paperclip.yaml", ".bundled_manifest"];
+/// Repository archives (GitHub links) may hold this many entries; kwant still reads at most
+/// [`MAX_ZIP_ENTRIES`] files out of them.
+pub const MAX_REPO_ZIP_ENTRIES: usize = 5_000;
+
+/// How a zip is read: an upload, or a repository archive fetched from a GitHub link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ZipKind {
+    #[default]
+    Upload,
+    /// Up to [`MAX_REPO_ZIP_ENTRIES`] entries; only files a format can use are inflated (see
+    /// [`wanted_in_repo`]), at most [`MAX_ZIP_ENTRIES`] of them; nested archives are skipped, not
+    /// refused, since they are never opened.
+    Repo,
+}
+
+/// A path part (after the first) that starts with `.`: `skills/.system/…`, `skills/.hub/…`. The
+/// first may be hidden so a picked `.openclaw` or `.hermes` folder still reads.
+fn in_hidden_folder(lower: &str) -> bool {
+    let parts: Vec<&str> = lower.split('/').collect();
+    parts.len() > 2 && parts[1..parts.len() - 1].iter().any(|p| p.starts_with('.'))
+}
+
+/// A licence file at any level: `LICENSE`, `LICENSE.md`, `LICENCE.txt`, `COPYING`, ….
+pub fn is_licence_file(lower_base: &str) -> bool {
+    let stem = lower_base.split('.').next().unwrap_or(lower_base);
+    matches!(stem, "license" | "licence" | "copying") && (lower_base == stem || lower_base.ends_with(".md") || lower_base.ends_with(".txt"))
+}
+
+/// Files of a repository archive that some import format reads. Everything else in a repo
+/// (code, docs, a skill's reference notes) is skipped without being inflated.
+pub fn wanted_in_repo(lower: &str) -> bool {
+    let base = lower.rsplit('/').next().unwrap_or(lower);
+    const NAMES: [&str; 14] = [
+        "skill.md", "agents.md", "agents.override.md", "soul.md", "identity.md", "user.md", "memory.md", "company.md",
+        "team.md", "task.md", "employee.json", "schedule.md", ".paperclip.yaml", ".bundled_manifest",
+    ];
+    if NAMES.contains(&base) || is_licence_file(base) {
+        return true;
+    }
+    let parent = lower.rsplit('/').nth(1).unwrap_or("");
+    // Claude Code agents (`agents/*.md`), Hermes memories, kwant bundles and other JSON exports
+    (parent == "agents" && base.ends_with(".md")) || (parent == "memories" && base.ends_with(".md")) || (base.ends_with(".json") && !lower.contains("node_modules/") && base != "package.json" && base != "package-lock.json" && base != "tsconfig.json")
+}
+
+/// Reads the bot-relevant files of an uploaded zip. See [`read_zip_as`].
 pub fn read_zip(bytes: &[u8]) -> Result<Unzipped, ImportError> {
+    read_zip_as(bytes, ZipKind::Upload)
+}
+
+/// Reads the bot-relevant files of a zip. Rejects the whole zip for unsafe paths, nested
+/// archives (uploads), encryption, too many entries, or more than [`MAX_UNZIPPED_BYTES`] once
+/// inflated.
+pub fn read_zip_as(bytes: &[u8], kind: ZipKind) -> Result<Unzipped, ImportError> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|_| invalid("This zip can't be read."))?;
-    if zip.len() > MAX_ZIP_ENTRIES {
-        return Err(invalid(&format!("This zip has more than {MAX_ZIP_ENTRIES} files.")));
+    let max_entries = if kind == ZipKind::Repo { MAX_REPO_ZIP_ENTRIES } else { MAX_ZIP_ENTRIES };
+    if zip.len() > max_entries {
+        return Err(if kind == ZipKind::Repo {
+            ImportError::TooLarge(format!("This repository has more than {max_entries} files."))
+        } else {
+            invalid(&format!("This zip has more than {max_entries} files."))
+        });
     }
     let mut out = Unzipped::default();
     let mut total: u64 = 0;
+    let mut read = 0usize;
     for i in 0..zip.len() {
         let mut file = zip.by_index(i).map_err(|_| invalid("A file in this zip can't be read (it may be encrypted)."))?;
         let raw_name = file.name().map_err(|_| invalid("A file name in this zip can't be read."))?.to_string();
@@ -57,13 +118,29 @@ pub fn read_zip(bytes: &[u8]) -> Result<Unzipped, ImportError> {
             continue;
         }
         let lower = path.to_lowercase();
+        let base = lower.rsplit('/').next().unwrap_or(&lower);
         if ARCHIVE_EXTENSIONS.iter().any(|e| lower.ends_with(e)) {
+            if kind == ZipKind::Repo {
+                out.skipped.push(path);
+                continue;
+            }
             return Err(invalid("This zip contains another archive. Unpack it and import the inner file instead."));
         }
-        let base = lower.rsplit('/').next().unwrap_or(&lower);
-        if base.starts_with('.') || lower.starts_with("__macosx/") || CHAT_FILES.contains(&base) || !READ_EXTENSIONS.iter().any(|e| lower.ends_with(e)) {
+        let readable = READ_EXTENSIONS.iter().any(|e| lower.ends_with(e)) || READ_DOTFILES.contains(&base) || is_licence_file(base);
+        let hidden = base.starts_with('.') && !READ_DOTFILES.contains(&base);
+        if hidden
+            || in_hidden_folder(&lower)
+            || lower.starts_with("__macosx/")
+            || CHAT_FILES.contains(&base)
+            || !readable
+            || (kind == ZipKind::Repo && !wanted_in_repo(&lower))
+        {
             out.skipped.push(path);
             continue;
+        }
+        read += 1;
+        if read > MAX_ZIP_ENTRIES {
+            return Err(ImportError::TooLarge(format!("This has more than {MAX_ZIP_ENTRIES} files kwant would read.")));
         }
         // The size header can lie, so count what actually comes out.
         let mut buf = Vec::new();
@@ -80,6 +157,7 @@ pub fn read_zip(bytes: &[u8]) -> Result<Unzipped, ImportError> {
         }
         out.entries.push(Entry { path, bytes: buf });
     }
+    out.comment = std::str::from_utf8(zip.comment()).ok().map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
     Ok(out)
 }
 
