@@ -102,6 +102,22 @@ pub async fn prompt_block_full(
     browser_sign_in: bool,
     lessons: &str,
 ) -> String {
+    prompt_block_memories(state, kwant, team_id, channel_id, with_tools, browser_sign_in, lessons, true).await
+}
+
+/// [`prompt_block_full`], with `memories` false for a fresh-eyes review (B1): the person's pinned
+/// instructions and the tool notes, but none of the reviewer's own notes.
+#[allow(clippy::too_many_arguments)]
+pub async fn prompt_block_memories(
+    state: &AppState,
+    kwant: &Kwant,
+    team_id: Option<&str>,
+    channel_id: Option<&str>,
+    with_tools: bool,
+    browser_sign_in: bool,
+    lessons: &str,
+    memories: bool,
+) -> String {
     let db = &state.db;
     let mut out = String::new();
     if let Some(text) = match team_id {
@@ -122,10 +138,12 @@ pub async fn prompt_block_full(
             text.trim()
         ));
     }
-    let memories = db.list_memories(&kwant.id).await.unwrap_or_default();
-    match super::missions::truth_ledger::memory_prompt(state, kwant, &memories, with_tools).await {
-        Some(block) => out.push_str(&block),
-        None => out.push_str(&memory_block(&memories, with_tools)),
+    if memories {
+        let memories = db.list_memories(&kwant.id).await.unwrap_or_default();
+        match super::missions::truth_ledger::memory_prompt(state, kwant, &memories, with_tools).await {
+            Some(block) => out.push_str(&block),
+            None => out.push_str(&memory_block(&memories, with_tools)),
+        }
     }
     out.push_str(lessons);
     if with_tools {
@@ -1083,10 +1101,18 @@ pub async fn self_endpoint(
             }),
         ),
         "ping" => rpc_result(id, json!({})),
-        "tools/list" => rpc_result(id, json!({ "tools": offered_tools(&state, &scope).await })),
+        "tools/list" => {
+            let mut tools = offered_tools(&state, &scope).await;
+            super::fresh_eyes::filter_tools(scope.turn_id.as_deref(), &mut tools);
+            rpc_result(id, json!({ "tools": tools }))
+        }
         "tools/call" => {
             let args = &msg["params"]["arguments"];
             let name = msg["params"]["name"].as_str().unwrap_or("");
+            // B1: a fresh-eyes review reads nothing besides its prompt
+            if super::fresh_eyes::refuses(scope.turn_id.as_deref(), name) {
+                return tool_text(id, super::fresh_eyes::REFUSED_TEXT, true);
+            }
             // A Dev mode brief turn: its four tools run, nothing else does (J7)
             if let Some(thread) = super::dev::tickets::tools::brief_thread(&state, &scope) {
                 let (text, is_error) = if super::dev::tickets::tools::TOOLS.contains(&name) {

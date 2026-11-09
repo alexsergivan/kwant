@@ -13,6 +13,7 @@ pub mod engine_login;
 pub mod auth;
 pub mod signin;
 pub mod continuity;
+pub mod fresh_eyes;
 pub mod goals_remediation;
 pub mod model_usage;
 pub mod budget;
@@ -294,6 +295,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
         .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
         .merge(dev::tickets::routes::router())
+        .route("/api/spaces/:id/dev/prepush", get(dev::prepush::list))
+        .route("/api/dev/prepush/:id", get(dev::prepush::get_one))
+        .route("/api/dev/prepush/:id/override", post(dev::prepush::override_card))
+        .route("/api/dev/prepush/:id/retry", post(dev::prepush::retry_card))
         .route("/api/dev/cards/:id", get(dev::routes::card))
         .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/dev/cards/:id/post", post(dev::post::post))

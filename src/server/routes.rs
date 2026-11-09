@@ -1844,6 +1844,12 @@ pub(super) struct TurnOpts {
     /// Set by the save step when the reply missed what the person expected: the continuation's
     /// prompt and expectations, for [`try_kwant_turn`] to run once the turn has ended.
     delivery_next: Option<DeliveryNext>,
+    /// B1, a reviewer's fresh eyes: the turn sees only its prompt (the brief or spec and the
+    /// result). No chat history, nothing read back from the conversation by the driver, none of
+    /// the bot's own notes or lessons, and kwant's tools that read chats, notes, tasks or
+    /// hand-offs refuse (see [`super::fresh_eyes`]). Never parked: a parked retry runs with
+    /// default options. Default false.
+    pub(super) fresh_eyes: bool,
 }
 
 /// See [`TurnOpts::delivery_next`].
@@ -1862,12 +1868,20 @@ impl TurnOpts {
         TurnOpts { label: Some(label.to_string()), always_ask: true, ..Default::default() }
     }
 
+    /// The delivery check (see [`super::delivery_check`]) looks at this turn's reply: not a
+    /// discussion round, a reviewer's fresh eyes or a no-tools turn. Its continuation runs with
+    /// default options, so it would see the chat a fresh-eyes turn must not, or get the tools a
+    /// no-tools turn must not have.
+    pub(super) fn delivery_checked(&self) -> bool {
+        self.discussion.is_none() && !self.fresh_eyes && !self.no_tools
+    }
+
     /// The turn is never parked for a retry after a usage limit (see [`super::parked::park`]): a
     /// retry already, a discussion round, or a no-tools turn. The parked row keeps only the prompt
     /// and its retry runs with default options, so a no-tools turn would come back with tools over
     /// the same untrusted text. Its caller gets the "out until" failure and retries itself.
     pub(super) fn no_park(&self) -> bool {
-        self.retried || self.discussion.is_some() || self.no_tools || self.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE)
+        self.retried || self.discussion.is_some() || self.no_tools || self.fresh_eyes || self.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE)
     }
 
     /// The link to open in the bot browser before the turn: only a full link in the person's own
@@ -1928,7 +1942,7 @@ pub(super) async fn try_kwant_turn(
 ) -> Result<String, String> {
     // The delivery check's one continuation (see [`super::delivery_check`]): the first turn's save
     // step leaves its prompt here when the reply missed what the person expected
-    let next = (!opts.delivery_continued).then(DeliveryNext::default);
+    let next = (!opts.delivery_continued && opts.delivery_checked()).then(DeliveryNext::default);
     opts.delivery_next = next.clone();
     let always_ask = opts.always_ask;
     let delegation_id = opts.delegation_id.clone();
@@ -2355,7 +2369,9 @@ async fn run_kwant_turn_inner(
 
         let context_id = tag.context_id.clone();
 
-        let mut history = db.list_messages(&context_id, 20).await.unwrap_or_default();
+        // B1: a fresh-eyes review gets no history at all, the author's or its own
+        let mut history = if opts.fresh_eyes { Vec::new() } else { db.list_messages(&context_id, 20).await.unwrap_or_default() };
+        let _fresh_eyes = opts.fresh_eyes.then(|| super::fresh_eyes::Guard::new(&tag.turn_id));
         let last_before_drop = history.last().cloned();
         let had = history.len();
         crate::drivers::drop_current_message(&mut history, &prompt);
@@ -2557,12 +2573,12 @@ async fn run_kwant_turn_inner(
             .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME));
         // C5: chat, routine and hand-off turns get the bot's lessons; a task turn has them in its
         // brief already (or is held out), and hidden purposes get none
-        let lessons = if opts.task.is_none() && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
+        let lessons = if opts.task.is_none() && !opts.fresh_eyes && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
             super::missions::lessons::for_turn(state, &target_kwant.id).await
         } else {
             String::new()
         };
-        let continuity = super::continuity::prompt_block_full(
+        let continuity = super::continuity::prompt_block_memories(
             state,
             target_kwant,
             scope.team_context.as_ref().map(|t| t.id.as_str()),
@@ -2570,6 +2586,7 @@ async fn run_kwant_turn_inner(
             with_tools,
             browser_sign_in,
             &lessons,
+            !opts.fresh_eyes,
         )
         .await;
         let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
@@ -2601,6 +2618,7 @@ async fn run_kwant_turn_inner(
             store: Some(state.db.clone()),
             no_tools: opts.no_tools,
             read_only: opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE),
+            fresh_eyes: opts.fresh_eyes,
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -3157,7 +3175,7 @@ async fn run_kwant_turn_inner(
                 // the person expected and didn't get (see [`super::delivery_check`])
                 let pictures = state.turns.take_pictures(&tag.turn_id);
                 let expect = opts.expect.clone().or_else(|| opts.nav_prompt.as_deref().and_then(super::delivery_check::expect_for));
-                let verdict = if opts.discussion.is_none() {
+                let verdict = if opts.delivery_checked() {
                     let seen = super::delivery_check::Seen {
                         image_shared: pictures.shared_image,
                         has_shot: pictures.last_shot.is_some(),
@@ -5750,6 +5768,10 @@ pub async fn execute_tool(
         tokio::fs::create_dir_all(&workspace).await?;
         let command = args["command"].as_str()
             .ok_or_else(|| crate::tools::ToolError::InvalidArgs("Missing 'command' argument".into()))?;
+        // B2: a bot's own push in a Dev mode space waits for its pre-push card
+        if let Some(why) = super::dev::prepush::gate(state, team_id.unwrap_or("default"), command, &workspace).await {
+            return Err(crate::tools::ToolError::Execution(why));
+        }
         if !super::computer::approve_local_shell(state, team_id.unwrap_or("default"), command, &workspace).await {
             return Err(crate::tools::ToolError::Execution(
                 "The person did not approve this command, so it was not run.".into(),
@@ -5829,8 +5851,15 @@ pub async fn execute_tool(
 
 #[cfg(test)]
 mod tests {
-    use super::{scrub_urls, turn_failed_text, with_failure_meta};
+    use super::{scrub_urls, turn_failed_text, with_failure_meta, TurnOpts};
     use serde_json::json;
+
+    #[test]
+    fn fresh_eyes_and_no_tools_turns_skip_the_delivery_check() {
+        assert!(TurnOpts::default().delivery_checked());
+        assert!(!TurnOpts { fresh_eyes: true, ..Default::default() }.delivery_checked());
+        assert!(!TurnOpts { no_tools: true, ..Default::default() }.delivery_checked());
+    }
 
     #[test]
     fn a_failure_note_gets_the_callers_meta_but_keeps_its_kind() {
