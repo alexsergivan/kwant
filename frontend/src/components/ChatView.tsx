@@ -52,8 +52,9 @@ import {
   uploadWithRetry,
   uploadRetryable,
   uploadSlotsLeft,
+  ATTACH_TITLE,
 } from '../attachments';
-import { DropRecipient, FOLDER_NOTE, dragHasFiles, dropAnnouncement, dropCard, modalOpen, previewDrag, splitDrop, windowDragWatch } from '../dragPreview';
+import { DropRecipient, FOLDER_NOTE, dragHasFiles, dropAnnouncement, dropCard, leaveMs, modalOpen, previewDrag, splitDrop, windowDragWatch } from '../dragPreview';
 import { DropBot, DropLayer, DropPhase } from './DropLayer';
 import { EarlierCopies, FileTiles, UploadChip } from './Attachments';
 import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
@@ -175,6 +176,11 @@ export interface RoutingState {
 }
 
 export interface ChatViewProps {
+  /**
+   * The chat is mounted but covered by a page (Settings): it isn't a drop target, so a file drag
+   * shows the "Open a chat" pill instead of a layer nobody can see (#478 L4).
+   */
+  dropOff?: boolean;
   title: string;
   subtitle: string;
   /** The open space, for "Message #general in Work" and Laya's lines. */
@@ -430,6 +436,7 @@ const useNarrow = () => {
 };
 
 export const ChatView: React.FC<ChatViewProps> = ({
+  dropOff = false,
   title,
   subtitle,
   spaceName,
@@ -539,7 +546,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // pointer is over its column (header, list and composer, not a side pane).
   const dragWatch = windowDragWatch();
   const winDrag = useSyncExternalStore(dragWatch.subscribe, dragWatch.get, dragWatch.get);
-  useEffect(() => dragWatch.registerChat(), [dragWatch]);
+  useEffect(() => (dropOff ? undefined : dragWatch.registerChat()), [dragWatch, dropOff]);
   const overDepth = useRef(0);
   const [overChat, setOverChat] = useState(false);
   // The window watch renders the armed card at sync priority; the pane's own over/refused change has to
@@ -1578,7 +1585,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             : { recipient: { kind: 'channel', name: title }, single: false, bots: roomBots };
   // A modal open when the drag came in keeps the layer away (the Import dialog has its own drop zone).
   const modalUp = useMemo(() => winDrag.active && typeof document !== 'undefined' && modalOpen(document), [winDrag.active]);
-  const dragOn = winDrag.active && !modalUp;
+  const dragOn = winDrag.active && !modalUp && !dropOff;
   const dropPreview = previewDrag(winDrag.items, uploads.length);
   const card = dropCard({ preview: dropPreview, recipient: dropTo.recipient, ideaMode });
   const livePhase: DropPhase | null = !dragOn ? null : overChat ? (card.state === 'refused' ? 'refused' : 'over') : 'armed';
@@ -1589,7 +1596,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       setOverChat(false);
     }
   }, [winDrag.active]);
-  // The layer runs its exit after the drag ends: the landing (160 ms) after a drop, else a fade (100 ms).
+  // The layer runs its exit after the drag ends: the landing (160 ms) after a drop, else a fade (100 ms;
+  // 120 ms with reduced motion, which is how long that fade runs there, #478 L7).
   const lastCard = useRef(card);
   if (livePhase) lastCard.current = card;
   const landed = useRef(false);
@@ -1608,7 +1616,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const how = landed.current ? 'landing' : 'leaving';
     landed.current = false;
     setExiting(how);
-    const t = setTimeout(() => setExiting(null), how === 'landing' ? 160 : 100);
+    const t = setTimeout(() => setExiting(null), how === 'landing' ? 160 : leaveMs());
     return () => clearTimeout(t);
   }, [livePhase]);
   // Spoken on state changes only, never on every dragover.
@@ -1656,7 +1664,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       // Not flushed: the drop ends the drag anyway, and the exit must see `landed` first.
       overNow.current = false;
       setOverChat(false);
-      if (!inColumn(e.target) || modalUp) return;
+      if (!inColumn(e.target) || modalUp || dropOff) return;
       // What the drop itself holds decides, the same way the card did (an ignored drop does nothing).
       const items = e.dataTransfer.items as unknown as ArrayLike<DataTransferItem>;
       const now = dropCard({ preview: previewDrag(items?.length ? items : winDrag.items, uploads.length), recipient: dropTo.recipient, ideaMode });
@@ -1955,9 +1963,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* A held reply is being decided: the line stands in for the streamed draft and the consults */}
         {deciding && <DecidingLine botName={deciding.botName} consulted={deciding.consulted} />}
 
-        {/* P6: turns waiting behind the held reply stay visible while the team decides (under the line, aligned with its card) */}
+        {/* P6: turns waiting behind the held reply stay visible while the team decides (under the line, aligned with its card).
+            !mt-2 beats the list's space-y-5/6, so the line sits 8 px under the card as it does under a reply (#476 L7). */}
         {(deciding || (isStreaming && routingState?.phase === 'deciding')) && !queued && (queuedBeside?.length ?? 0) > 0 && (
-          <div className="w-full max-w-5xl pl-12" data-queued-beside-deciding="">
+          <div className="w-full max-w-5xl pl-12 !mt-2" data-queued-beside-deciding="">
             <div className="max-w-4xl">
               <QueuedBeside items={queuedBeside} />
             </div>
@@ -2332,7 +2341,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploadSlotsLeft(uploads) === 0}
-            title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : 'Attach files (or drop / paste them here). Max 20 MB each, videos 100 MB.'}
+            title={uploadSlotsLeft(uploads) === 0 ? `Up to ${MAX_ATTACHMENTS} files per message` : ATTACH_TITLE}
             aria-label="Attach files"
             className={`${phone ? toolPhone : 'w-11 h-11 sm:w-9 sm:h-9 text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.08] focus-visible:outline-sky-400'} rounded-xl flex items-center justify-center flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed transition-colors focus-visible:outline focus-visible:outline-2`}
           >

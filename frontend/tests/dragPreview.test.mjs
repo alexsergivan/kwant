@@ -304,3 +304,54 @@ test('the Mac and Windows place window hands drops to the page', () => {
   assert.match(body, /\.disable_drag_drop_handler\(\)/);
   assert.equal(rs.match(/disable_drag_drop_handler/g).length, 1, 'only the place window; connect and nudge keep Tauri\'s');
 });
+
+// #478 polish (Mira's ui-check-478 round 2 and Rigel's qa-478).
+const css = readFileSync(new URL('../src/styles/dropLayer.css', import.meta.url), 'utf8');
+const rule = (sel, from = css) => {
+  const at = from.indexOf(sel + ' {');
+  assert.ok(at >= 0, sel);
+  return from.slice(at, from.indexOf('}', at));
+};
+
+test('the armed card is .94 opaque, so chat text does not show through (#478 L5)', () => {
+  assert.match(rule(".kw-dd[data-phase='armed'] .kw-dd-card"), /opacity: 0\.94;/);
+});
+
+test('the limits line balances its wrap, so "100 MB" never sits alone (#478 L6)', () => {
+  assert.match(rule('.kw-dd-lim'), /text-wrap: balance;/);
+});
+
+test('reduced motion: the leave timeout matches the 120 ms fade; elsewhere it stays 100 ms (#478 L7)', () => {
+  const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
+  const fade = Number(rule(".kw-dd[data-phase='leaving'], .kw-dd[data-phase='landing']", reduced).match(/opacity (\d+)ms/)[1]);
+  const pillFade = Number(rule('.kw-dd *, .kw-dd-pill', reduced).match(/transition-duration: (\d+)ms/)[1]);
+  assert.equal(d.leaveMs(true), fade);
+  assert.equal(d.leaveMs(true), pillFade);
+  assert.equal(d.leaveMs(false), Number(rule(".kw-dd[data-phase='leaving']").match(/opacity (\d+)ms/)[1]));
+  const was = globalThis.window;
+  globalThis.window = { matchMedia: (q) => ({ matches: q === '(prefers-reduced-motion: reduce)' }) };
+  try {
+    assert.equal(d.leaveMs(), 120, 'reads the setting by default');
+  } finally {
+    globalThis.window = was;
+  }
+  // Both exits use it: the chat's layer fade and the "Open a chat" pill.
+  const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const layer = readFileSync(new URL('../src/components/DropLayer.tsx', import.meta.url), 'utf8');
+  assert.match(chat, /setTimeout\(\(\) => setExiting\(null\), how === 'landing' \? 160 : leaveMs\(\)\)/);
+  assert.match(layer, /setTimeout\(\(\) => setLeaving\(false\), leaveMs\(\)\)/);
+});
+
+test('the phone\'s Settings page is not a dialog that keeps the pill away; other modals still are (#478 L4)', () => {
+  const doc = (html) => ({ querySelector: (sel) => (sel.split(/,\s*/).some((s) => matches(html, s)) ? {} : null) });
+  // A tiny stand-in for querySelector over one element.
+  const matches = (attrs, s) => {
+    if (s === '[aria-modal="true"]:not([data-space-settings])') return attrs.modal && !attrs.settings;
+    if (s === '[aria-modal="true"]') return !!attrs.modal;
+    if (s === '[role="alertdialog"]') return attrs.role === 'alertdialog';
+    return false;
+  };
+  assert.equal(d.modalOpen(doc({ modal: true, settings: true })), false);
+  assert.equal(d.modalOpen(doc({ modal: true })), true);
+  assert.equal(d.modalOpen(doc({ role: 'alertdialog' })), true);
+});

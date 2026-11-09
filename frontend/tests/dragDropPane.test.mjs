@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
+import { readFileSync } from 'node:fs';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
 for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLButtonElement', 'HTMLInputElement', 'HTMLTextAreaElement', 'Element', 'Node', 'Event', 'KeyboardEvent', 'FocusEvent', 'MutationObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'getComputedStyle', 'CSS', 'DOMException']) {
@@ -493,5 +494,67 @@ test('no chat open: the "Open a chat" pill shows and is read out; with a chat op
     side.remove();
     p.unmount();
     await endDrag();
+  }
+});
+
+test('Settings open over the chat: the drag shows the "Open a chat" pill, not a hidden layer, and a drop adds nothing (#478 L4)', async () => {
+  const p = ui.mountPill();
+  // Settings covers the chat but the chat stays mounted under it (App passes dropOff).
+  const v = ui.mount(props({ dropOff: true }));
+  const side = elsewhere();
+  try {
+    const { list } = parts(v.host);
+    await fire(side, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(!!layer(v.host), false, 'no layer under Settings');
+    assert.equal(p.host.querySelector('[data-drop-pill]')?.textContent, 'Open a chat to drop files there');
+    assert.equal(p.host.querySelector('[data-drop-pill-announce]').textContent, 'Open a chat to drop files there.');
+    // Even a drop that reaches the covered chat is not taken.
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(!!layer(v.host), false);
+    await fire(list, 'drop', dataTransfer([mkFile('a.png')]));
+    assert.equal(chips(v.host), 0, 'nothing added');
+    await endDrag();
+
+    // The phone's Settings is a full-screen modal page: it still gets the pill. A real dialog does not.
+    const settings = document.createElement('div');
+    settings.setAttribute('role', 'dialog');
+    settings.setAttribute('aria-modal', 'true');
+    settings.setAttribute('data-space-settings', '');
+    document.body.appendChild(settings);
+    await fire(side, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(!!p.host.querySelector('[data-drop-pill]'), true, 'pill over the phone Settings page');
+    await endDrag();
+    const dialog = document.createElement('div');
+    dialog.setAttribute('aria-modal', 'true');
+    settings.appendChild(dialog);
+    await fire(side, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(!!p.host.querySelector('[data-drop-pill]'), false, 'a dialog opened from Settings keeps it away');
+    settings.remove();
+  } finally {
+    side.remove();
+    v.unmount();
+    p.unmount();
+    await endDrag();
+  }
+  // The app turns the chat's drop target off while Settings is open.
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const at = app.indexOf('<ChatView');
+  assert.ok(app.slice(at, app.indexOf('/>', at)).includes('dropOff={!!spaceSettingsTab}'), 'App passes dropOff');
+});
+
+test('the limits line is built from the caps, in the same words (#478 L2)', async () => {
+  const v = ui.mount(props());
+  try {
+    await fire(parts(v.host).list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(v.host.querySelector('[data-drop-limits]')?.textContent, 'Up to 20 MB each · videos 100 MB');
+    const clip = v.host.querySelector('button[aria-label="Attach files"]');
+    assert.equal(clip.getAttribute('title'), 'Attach files (or drop / paste them here). Max 20 MB each, videos 100 MB.');
+  } finally {
+    v.unmount();
+    await endDrag();
+  }
+  for (const f of ['../src/components/DropLayer.tsx', '../src/components/ChatView.tsx']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.ok(!/\b(20|100) MB\b/.test(src.replace(/\/\/.*$|\/\*[\s\S]*?\*\//gm, '')), `${f} types no size limit`);
   }
 });

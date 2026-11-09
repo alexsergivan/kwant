@@ -472,5 +472,17 @@ export const windowDragWatch = (): DragWatch =>
         { addEventListener() {}, removeEventListener() {}, setTimeout: (f: () => void, ms?: number) => setTimeout(f, ms) as unknown as number, clearTimeout: (t?: number) => clearTimeout(t) },
   ));
 
-/** True when a modal dialog is open: the chat's drop layer never shows over one (design §1). */
-export const modalOpen = (doc: Document = document) => !!doc.querySelector('[aria-modal="true"], [role="alertdialog"], dialog[open]');
+/**
+ * True when a modal dialog is open: the chat's drop layer never shows over one (design §1). The
+ * phone's full-screen Settings is a modal too, but it's a page, not a dialog with its own drop zone:
+ * it gets the "Open a chat" pill like any page without a chat (#478 L4).
+ */
+export const modalOpen = (doc: Document = document) =>
+  !!doc.querySelector('[aria-modal="true"]:not([data-space-settings]), [role="alertdialog"], dialog[open]');
+
+/**
+ * How long a drop layer or pill stays mounted for its leave fade: 100 ms, or 120 ms with reduced
+ * motion, where dropLayer.css fades it in 120 ms (#478 L7).
+ */
+export const leaveMs = (reduce: boolean = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) =>
+  reduce ? 120 : 100;

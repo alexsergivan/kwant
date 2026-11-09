@@ -10,7 +10,9 @@ import type { QueuedState } from './ChatView';
  * The reason sentence is said once: a row repeats it only when its reason, slots or named bot differ
  * from the row above ("#2 in line." alone otherwise). In a room, a turn waiting for a different bot
  * than the one replying leads with that bot's name, so "this bot" never points at the wrong one.
- * The list is one polite live region; its rows stay plain list items.
+ * The list is one polite live region (aria-live only: a status role would replace its list role and
+ * leave the rows without a list, #476 L5); its rows stay plain list items. A named row says whose
+ * other replies it waits for (#476 L6).
  */
 export function QueuedBeside({ items }: { items?: QueuedState[] }) {
   if (!items || items.length === 0) return null;
@@ -18,7 +20,6 @@ export function QueuedBeside({ items }: { items?: QueuedState[] }) {
     <ul
       className="mt-2 flex flex-col gap-1 w-full"
       data-queued-beside=""
-      role="status"
       aria-live="polite"
       aria-label="Waiting to start"
     >
@@ -32,7 +33,7 @@ export function QueuedBeside({ items }: { items?: QueuedState[] }) {
             <span className="mt-[5px] w-1.5 h-1.5 rounded-full bg-zinc-500 shrink-0" aria-hidden="true" />
             <span className="min-w-0">
               <strong className="font-medium text-zinc-200">{q.named ? `${q.speaker} · ${place}` : place}</strong>
-              {!sameAsAbove && <> {queuedText(q.reason, q.slots)}</>}
+              {!sameAsAbove && <> {queuedText(q.reason, q.slots, q.named ? q.speaker : undefined)}</>}
             </span>
           </li>
         );
