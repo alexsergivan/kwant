@@ -1805,10 +1805,11 @@ export const RestoreSection: React.FC<{
       onError?.(e);
     }
   };
-  const pick = async (c: Checkpoint) => {
+  /** `keep`: leave the current message up (a stale restore says why the preview changed). */
+  const pick = async (c: Checkpoint, keep = false) => {
     setPicked(c);
     setPreview(null);
-    setErr(null);
+    if (!keep) setErr(null);
     try {
       setPreview(await api.restorePreview(task.id, c.id));
     } catch (e) {
@@ -1834,7 +1835,8 @@ export const RestoreSection: React.FC<{
       onRestored?.(r, opts.rerun);
     } catch (e) {
       setErr(restoreErrorText(e));
-      if (e instanceof MissionError && e.code === 'stale_preview') void pick(picked);
+      // The fresh preview loads under the message, which stays until the person acts (0.7.7 final check, F).
+      if (e instanceof MissionError && e.code === 'stale_preview') void pick(picked, true);
       onError?.(e);
     } finally {
       inFlight.current = false;

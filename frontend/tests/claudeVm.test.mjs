@@ -208,9 +208,9 @@ test('saveIsolateClaude PUTs the flag and maps a 400', async () => {
 
 test('the live region speaks at the start, the end and a failure only', () => {
   const s = (state, reason = null) => ({ state, reason, detail: null, progress: null });
-  assert.equal(m.announcement(s('off'), s('preparing')), 'Getting the VM ready for Claude.');
+  assert.equal(m.announcement(s('off'), s('preparing')), 'Setting up Claude’s sealed box.');
   assert.equal(m.announcement(s('preparing'), s('preparing')), null);
-  assert.equal(m.announcement(s('preparing'), s('isolated')), 'Claude now runs inside the VM.');
+  assert.equal(m.announcement(s('preparing'), s('isolated')), 'Key protection is on. Claude now works in its sealed box.');
   assert.match(m.announcement(s('isolated'), s('unavailable', 'docker_unavailable')), /^Claude stopped\. Docker isn’t running/);
   assert.equal(m.announcement(undefined, s('isolated')), null);
 });
@@ -218,14 +218,14 @@ test('the live region speaks at the start, the end and a failure only', () => {
 test('VM card copy: setting on names Claude and warns about Codex and Grok', () => {
   const on = m.vmCopy(['browser', 'kwnt_shell'], true);
   assert.equal(on.label, 'VM (browser, shell and Claude isolated)');
-  assert.match(on.note, /They won’t run in a folder Claude used inside the VM\./);
+  assert.match(on.note, /They won’t run in a folder Claude used in its sealed box\./);
   assert.equal(m.vmCopy(['browser', 'kwnt_shell'], false).label, 'VM (browser and built-in shell isolated)');
 });
 
 test('queued for a VM spot: Lin’s wording, with or without slots', () => {
-  assert.equal(m.queuedVmText(2), 'Waiting for a free spot in the VM. 2 replies run at once there. This one starts as soon as one finishes.');
-  assert.equal(m.queuedVmText(1), 'Waiting for a free spot in the VM. 1 reply runs at once there. This one starts as soon as one finishes.');
-  assert.equal(m.queuedVmText(), 'Waiting for a free spot in the VM. This one starts as soon as one finishes.');
+  assert.equal(m.queuedVmText(2), 'Waiting for a free sealed box. 2 Claude replies run at once. This one starts as soon as one finishes.');
+  assert.equal(m.queuedVmText(1), 'Waiting for a free sealed box. 1 Claude reply runs at once. This one starts as soon as one finishes.');
+  assert.equal(m.queuedVmText(), 'Waiting for a free sealed box. This one starts as soon as one finishes.');
 });
 
 test('the in-line sentence reads as calm waiting (qa-446: up to ~5 min behind approval cards)', () => {
@@ -233,4 +233,17 @@ test('the in-line sentence reads as calm waiting (qa-446: up to ~5 min behind ap
   assert.equal(m.queuedText('vm_busy', 2), m.queuedVmText(2));
   assert.match(m.queuedText('server_busy'), /starts as soon as a slot frees up/);
   for (const r of ['agent_busy', 'server_busy', 'vm_busy']) assert.doesNotMatch(m.queuedText(r, 2), /timeout|timed out|error|stuck|minutes/i);
+});
+
+// 0.8.0 F: Mira's key protection wording (release-080/designs/vm-naming.md).
+test('key protection: the label, the hint without the sign-in-or-key promise, the chip title', () => {
+  assert.equal(m.SETTING_NAME, 'Protect your keys from tricked Claude bots');
+  assert.equal(m.SETTING_HANDLE, 'key protection');
+  assert.equal(
+    m.ISOLATION_HINT,
+    'If a web page, file or another bot tricks Claude, it can’t read your sign-ins and keys or go online by itself: anything else goes through kwant’s tools and your approval settings. While it’s on, Claude sees only the task folder, browses with kwant’s browser instead of its own web search, and can’t use MCP servers you added, such as Notion.',
+  );
+  // API-key accounts run on the computer, so the hint must not say a key stays out of Claude's reach.
+  assert.doesNotMatch(m.ISOLATION_HINT, /sign-in or key stays|adds it on the way out/);
+  for (const never of [/can’t send your files/, /can’t leak/, /fully isolated/]) assert.doesNotMatch(m.ISOLATION_HINT, never);
 });

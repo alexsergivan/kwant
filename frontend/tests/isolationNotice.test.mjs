@@ -51,18 +51,18 @@ test('parses the meta and ignores other messages', () => {
 
 // The table: every code the server sends, with first line, reason, safety and buttons.
 const ROWS = [
-  ['docker_unavailable', /couldn’t start inside the VM\.$/, /^Docker isn’t running on this computer\. Start Docker, then Retry\.$/, 'standard', ['retry', 'computer']],
+  ['docker_unavailable', /Claude’s sealed box couldn’t start\.$/, /^Docker isn’t running on this computer\. Start Docker, then Retry\.$/, 'standard', ['retry', 'computer']],
   ['preparing', /VM isn’t ready yet\.$/, /^The one-time setup is still running\. Retry when it’s done\.$/, 'standard', ['retry', 'computer']],
   ['download_failed', /VM isn’t ready yet\.$/, /^The one-time setup didn’t finish\. Try it again in Computer settings, then Retry\.$/, 'standard', ['retry', 'computer']],
   ['download_needed', /VM isn’t ready yet\.$/, /^The one-time setup didn’t finish\./, 'standard', ['retry', 'computer']],
-  ['relay_down', /couldn’t start inside the VM\.$/, /^kwant couldn’t connect Claude to your sign-in\. Restart kwant, then Retry\.$/, 'standard', ['retry', 'computer']],
+  ['relay_down', /Claude’s sealed box couldn’t start\.$/, /^kwant couldn’t connect Claude to your sign-in\. Restart kwant, then Retry\.$/, 'standard', ['retry', 'computer']],
   ['sign_in_expired', /your Claude sign-in has expired\.$/, /^Sign in again in Settings › This space › Accounts, then Retry\.$/, null, ['retry', 'accounts']],
   ['no_credential', /there’s no Claude sign-in for it on this computer\.$/, /^Sign in to Claude in Settings › This space › Accounts, then Retry\.$/, null, ['retry', 'accounts']],
-  ['host_is_root', /couldn’t start inside the VM\.$/, /^kwant is running as root, so Claude can’t run inside the VM as you\./, 'standard', ['retry', 'computer']],
-  ['folder_name_unsupported', /Claude can’t use this folder inside the VM\.$/, /^The folder’s name has characters kwant can’t pass to the VM, like a line break\. Rename the folder, then Retry\.$/, 'nothing_ran', ['retry']],
-  ['folder_record_failed', /couldn’t start inside the VM\.$/, /^kwant couldn’t note that this folder is used inside the VM, so it didn’t start Claude\./, 'standard', ['retry', 'computer']],
-  ['container_failed', /couldn’t start inside the VM\.$/, /^The VM couldn’t start Claude\. Retry; if it keeps happening, restart Docker\.$/, 'standard', ['retry', 'computer']],
-  ['unsupported_os', /couldn’t start inside the VM\.$/, /^Isolation is only on Linux for now\. Turn off Run Claude inside the VM to run Claude on this computer\.$/, 'standard', ['computer']],
+  ['host_is_root', /Claude’s sealed box couldn’t start\.$/, /^kwant is running as root, so Claude’s sealed box can’t run as you\./, 'standard', ['retry', 'computer']],
+  ['folder_name_unsupported', /Claude can’t take this folder into its sealed box\.$/, /^The folder’s name has characters kwant can’t pass to Claude’s sealed box, like a line break\. Rename the folder, then Retry\.$/, 'nothing_ran', ['retry']],
+  ['folder_record_failed', /Claude’s sealed box couldn’t start\.$/, /^kwant couldn’t note that this folder is used by Claude’s sealed box, so it didn’t start Claude\./, 'standard', ['retry', 'computer']],
+  ['container_failed', /Claude’s sealed box couldn’t start\.$/, /^Docker couldn’t start it\. Retry; if it keeps happening, restart Docker\.$/, 'standard', ['retry', 'computer']],
+  ['unsupported_os', /Claude’s sealed box couldn’t start\.$/, /^Isolation is only on Linux for now\. Turn off key protection to run Claude on this computer\.$/, 'standard', ['computer']],
 ];
 
 for (const [reason, first, why, safety, actions] of ROWS) {
@@ -89,26 +89,31 @@ test('preparing uses the percent when the server sends it', () => {
 
 test('the standard safety line bolds the setting name', () => {
   const html = render(notice('n', 'docker_unavailable'));
-  assert.match(html, /While <span class="font-medium text-zinc-300">Run Claude inside the VM<\/span> is on/);
+  assert.match(html, /While <span class="font-medium text-zinc-300">key protection<\/span> is on, Claude never runs outside its sealed box, so nothing ran on this computer\. To run Claude here instead, turn off key protection in Computer settings\./);
 });
 
 test('mid-turn (notice 3): any reason, its own first line', () => {
   const c = card('container_failed', { phase: 'mid_turn' });
   assert.equal(c.row, 'mid_turn');
-  assert.equal(c.first, 'Ada’s reply stopped partway: Claude lost its connection inside the VM.');
+  assert.equal(c.first, 'Ada’s reply stopped partway: Claude’s sealed box lost its connection.');
   assert.match(plain(c), /Undo still works/);
   assert.equal(c.safety, 'standard');
 });
 
 test('unknown code: the server’s own words win over "Something went wrong"', () => {
   // A detail in the meta
-  assert.match(plain(card('new_code', { detail: 'The VM ran out of disk.' })), /^The VM ran out of disk\. Retry, or turn off Run Claude inside the VM/);
+  assert.match(plain(card('new_code', { detail: 'The VM ran out of disk.' })), /^The VM ran out of disk\. Retry, or turn off key protection to run Claude on this computer\.$/);
   // Human text the server saved beyond its template
   const saved = "Ada didn't reply: Claude couldn't start inside the VM. The image is from a newer kwant. While Run Claude inside the VM is on, Claude never runs outside it, so nothing ran on this computer.";
   assert.match(plain(card('new_code', {}, saved)), /^The image is from a newer kwant\. Retry/);
   // Only the template: the code, as a last resort
   const tpl = "Ada didn't reply: Claude couldn't start inside the VM. Something went wrong (new_code). Retry, or turn off Run Claude inside the VM to run Claude on this computer. While Run Claude inside the VM is on, Claude never runs outside it, so nothing ran on this computer.";
   assert.equal(m.serverReason(tpl, 'Ada'), null);
+  // 0.8.0's server words (key protection, vm-naming.md) are stripped as well as 0.7.7's
+  const tpl080 = "Ada didn't reply: Claude's sealed box couldn't start. Something went wrong (new_code). Retry, or turn off key protection to run Claude on this computer. While key protection is on, Claude never runs outside its sealed box, so nothing ran on this computer.";
+  assert.equal(m.serverReason(tpl080, 'Ada'), null);
+  const saved080 = "Ada didn't reply: Claude's sealed box couldn't start. The image is from a newer kwant. While key protection is on, Claude never runs outside its sealed box, so nothing ran on this computer.";
+  assert.equal(m.serverReason(saved080, 'Ada'), 'The image is from a newer kwant.');
   assert.match(plain(card('new_code', {}, tpl)), /^Something went wrong \(new_code\)\./);
   assert.equal(card('new_code').row, 'unknown');
   assert.deepEqual(card('new_code').actions, ['retry', 'computer']);
@@ -116,7 +121,7 @@ test('unknown code: the server’s own words win over "Something went wrong"', (
 
 test('notice 6: unsafe folder, by kind, with ~ and Change folder for a team', () => {
   const c = card('unsafe_folder', { folder: '/home/oleks', folder_from: 'team', team_id: 't1', team_name: 'Checkout', unsafe_kind: 'home' });
-  assert.equal(c.first, 'Ada didn’t reply: Claude can’t use this folder inside the VM.');
+  assert.equal(c.first, 'Ada didn’t reply: Claude can’t take this folder into its sealed box.');
   assert.equal(plain(c), '~ is your home folder. Inside the VM, Claude would see all your files and sign-ins. Pick a project folder for @Checkout instead, then Retry.');
   assert.equal(c.reason[0].folder, true);
   assert.equal(c.safety, 'unsafe');
@@ -158,14 +163,14 @@ test('notice 6b: the shared folder has no path and asks for the team’s own fol
 
 test('notice 7: Codex or Grok in a folder Claude used', () => {
   const team = card('folder_used_by_isolated_bot', { engine: 'codex', folder: '/home/oleks/shop', folder_from: 'team', team_id: 't1', team_name: 'Checkout' });
-  assert.equal(team.first, 'Ada didn’t reply: Codex won’t run in a folder Claude used inside the VM.');
+  assert.equal(team.first, 'Ada didn’t reply: Codex won’t run in a folder Claude used in its sealed box.');
   assert.match(plain(team), /left settings in ~\/shop that Codex would load/);
   assert.match(plain(team), /Switch Ada to Claude, or pick another folder for @Checkout, then Retry\.$/);
   assert.deepEqual(team.actions, ['edit_bot', 'change_folder']);
   assert.equal(team.safety, 'folder_used');
 
   const bot = card('folder_used_by_isolated_bot', { engine: 'grok', folder: '/x', folder_from: 'bot' });
-  assert.match(plain(bot), /^Ada used this folder as Claude inside the VM.*Grok would load.*Switch Ada back to Claude to keep working here\.$/);
+  assert.match(plain(bot), /^Ada used this folder as Claude in its sealed box.*Grok would load.*Switch Ada back to Claude to keep working here\.$/);
   assert.deepEqual(bot.actions, ['edit_bot', 'retry']);
 
   const other = card('folder_used_by_isolated_bot', { engine: 'codex', folder_from: 'goal' });
