@@ -447,7 +447,12 @@ pub(super) async fn remove_bot(state: &AppState, id: &str) -> Response {
     match state.db.delete_kwant_and_history(&id, &fallback.id).await {
         Ok(true) => {}
         Ok(false) => return api_error(StatusCode::NOT_FOUND, "bot not found"),
-        Err(e) => return db_error(&e, ""),
+        Err(e) => {
+            // The dialog gets plain words; the SQLite message stays in the log
+            tracing::warn!(kwant_id = %id, name = %bot.name, error = %e, "deleting a bot failed");
+            let message = crate::db::bot_actions::delete_failure_message(&bot.name, &e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "delete_failed", "message": message}))).into_response();
+        }
     }
     state.broker.forget_kwant(&id).await;
     super::passwords::forget_deleted_owners(&state, &[&id]).await;
