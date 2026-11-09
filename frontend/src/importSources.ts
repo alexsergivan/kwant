@@ -141,19 +141,30 @@ const SECRET_NAME_EXACT = new Set(['settings.json', 'settings.local.json', 'mcp.
 const SECRET_JSON_PREFIXES = ['auth-profiles', 'oauth', 'credentials', 'token'];
 const SECRET_NAME_PREFIXES = ['client_secret', 'service-account'];
 /** Any other file whose name says it holds a secret. Notes and pictures (.md, .png) are judged by content, not name. */
-const SECRET_WORDS = /(auth|oauth|credential|secret|token|passw|api[-_]?key|private)/i;
+const SECRET_WORDS = /(oauth|credential|secret|token|passw|api[-_]?key|private)/i;
+/** "auth" only as a whole word part (Ada's #459 review item 12): auth.yaml, my_auth.txt, authz.json, not author.json. */
+const AUTH_WORD = /(^|[^a-z])auth(n|z|entication|orization)?($|[^a-z])/i;
+/** OpenClaw's device keypair and paired devices: never sent, even from a renamed copy (Ada's #459 review item 10). */
+const DEVICE_KEY_DIRS = new Set(['identity', 'devices']);
 /** A picked app folder (its own name), packed as an app home. */
 const APP_HOME_NAMES = new Set(['.openclaw', '.hermes', '.codex', '.claude', 'openclaw', 'hermes']);
 
 const isKeyStore = (base: string) =>
   base.startsWith('.env') || KEY_STORE_FILES.has(base) || base.startsWith('state.db') || base === '.credentials.json';
+/**
+ * Settings files that many kits and repos have too (a `.env.example`, a `config.yaml`). They are never
+ * sent, but they mark an app home only inside a folder named like an app (Ada's #459 review item 11);
+ * openclaw.json, auth.json, .credentials.json, state.db*, credentials/ and sessions/ always do.
+ */
+const isWeakMarker = (base: string) => base.startsWith('.env') || base === 'config.yaml' || base === 'config.toml';
 
 function isSecretName(base: string, dirs: string[]): boolean {
   if (SECRET_NAME_EXACT.has(base) || SECRET_NAME_PREFIXES.some((p) => base.startsWith(p))) return true;
   if (base.endsWith('.json') && SECRET_JSON_PREFIXES.some((p) => base.startsWith(p))) return true;
+  if (base.endsWith('.json') && dirs.some((d) => DEVICE_KEY_DIRS.has(d))) return true;
   // OpenClaw's agents/<id>/agent/ holds auth-profiles.json and models.json.
   if (dirs.some((d, i) => d === 'agent' && i >= 2 && dirs[i - 2] === 'agents')) return true;
-  return !base.endsWith('.md') && !base.endsWith('.png') && SECRET_WORDS.test(base);
+  return !base.endsWith('.md') && !base.endsWith('.png') && (SECRET_WORDS.test(base) || AUTH_WORD.test(base));
 }
 
 const isLicence = (base: string) => {
@@ -177,8 +188,9 @@ function formatReads(inner: string[], appHome: boolean): boolean {
 
 /**
  * The folders of a pick that are an app's home: the picked folder when it is named like one, and any
- * folder holding an app's key store (openclaw.json, auth.json, config.toml, config.yaml, .env*, state.db*,
- * .credentials.json, credentials/, sessions/). Lowercased paths below the picked folder, "" for the pick itself.
+ * folder holding an app's key store (openclaw.json, auth.json, state.db*, .credentials.json, credentials/,
+ * sessions/). `.env*`, config.toml and config.yaml count only inside a folder named like an app
+ * (`isWeakMarker`). Lowercased paths below the picked folder, "" for the pick itself.
  */
 export function appHomes(paths: ReadonlyArray<string>): string[] {
   const homes = new Set<string>();
@@ -187,7 +199,8 @@ export function appHomes(paths: ReadonlyArray<string>): string[] {
     if (APP_HOME_NAMES.has((parts[0] ?? '').toLowerCase())) homes.add('');
     const inner = parts.slice(1).map((p) => p.toLowerCase());
     const dirs = inner.slice(0, -1);
-    if (isKeyStore(inner[inner.length - 1] ?? '')) homes.add(dirs.join('/'));
+    const base = inner[inner.length - 1] ?? '';
+    if (isWeakMarker(base) ? dirs.some((d) => APP_HOME_NAMES.has(d)) : isKeyStore(base)) homes.add(dirs.join('/'));
     const k = dirs.findIndex((d) => KEY_STORE_DIRS.has(d));
     if (k >= 0) homes.add(dirs.slice(0, k).join('/'));
   }
@@ -317,32 +330,54 @@ const SEG = /^[A-Za-z0-9._-]{1,100}$/;
  * scheme), no user or port, and one of the three shapes. Null when it looks fine; the server checks again.
  */
 export function githubLinkOk(raw: string): { owner: string; repo: string } | null {
+  const r = githubLinkCheck(raw);
+  return 'owner' in r ? r : null;
+}
+
+/** Why a GitHub link fails the client's check (Mira's ui-check-459 Decision 2), each with its own line. */
+export type GithubLinkProblem = 'empty' | 'http' | 'shape' | 'other_site';
+
+/** The client's check of a GitHub link, with the reason when it fails. */
+export function githubLinkCheck(raw: string): { owner: string; repo: string } | { problem: GithubLinkProblem } {
   const s = raw.trim();
-  if (!s) return null;
+  if (!s) return { problem: 'empty' };
   let u: URL;
   try {
     u = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`);
   } catch {
-    return null;
+    return { problem: 'other_site' };
   }
-  if (u.protocol !== 'https:' || u.username || u.password || u.port) return null;
-  if (!['github.com', 'www.github.com'].includes(u.hostname.toLowerCase())) return null;
-  if (/%2e|%2f|%5c|\\/i.test(s)) return null;
+  const github = ['github.com', 'www.github.com'].includes(u.hostname.toLowerCase());
+  // A user or a port is "another site", whatever the host says (Decision 2).
+  if (!github || u.username || u.password || u.port) return { problem: 'other_site' };
+  if (u.protocol === 'http:') return { problem: 'http' };
+  if (u.protocol !== 'https:') return { problem: 'other_site' };
+  const shape = { problem: 'shape' as const };
+  if (/%2e|%2f|%5c|\\/i.test(s)) return shape;
   const parts = u.pathname.replace(/\/+$/, '').split('/').slice(1);
-  if (parts.length < 2 || parts.some((p) => p === '' || p === '.' || p === '..')) return null;
+  if (parts.length < 2 || parts.some((p) => p === '' || p === '.' || p === '..')) return shape;
   const [owner, rawRepo, kind, ref, ...rest] = parts;
   const repo = rawRepo.replace(/\.git$/, '');
-  if (!SEG.test(owner) || !SEG.test(repo)) return null;
+  if (!SEG.test(owner) || !SEG.test(repo)) return shape;
   if (parts.length === 2) return { owner, repo };
   if (kind === 'tree' && ref && SEG.test(ref)) return { owner, repo };
   if (kind === 'blob' && ref && SEG.test(ref) && rest.length > 0) return { owner, repo };
-  return null;
+  return shape;
 }
 
-/** The server's 20 MB line (src/import/github.rs), in the app's typography. */
-export const GITHUB_OVER_20MB = 'This repository is larger than 20 MB, so kwant can’t fetch it. Download the folder you want, zip it and import the zip instead.';
+/**
+ * The server's 20 MB answer (src/import/github.rs, "larger than 20 MB"), in Mira's smoother words
+ * (ui-check-459 Later 4): it names the repo, as the title does, and points to the Folder row.
+ */
+export const GITHUB_OVER_20MB =
+  'This repo is over 20 MB, so kwant can’t download it. Download it from GitHub yourself, then bring just the part you need with Folder, or zip that part and upload it.';
 
 export const NOT_GITHUB = 'Only github.com links work here. kwant doesn’t fetch from other sites.';
+export const GITHUB_HTTP = 'Use the https:// link. kwant only downloads from github.com over https.';
+export const GITHUB_SHAPE = 'Link to a repo, a branch or a folder in it, like github.com/owner/repo.';
+
+/** The rose line under the GitHub field for a link that fails the client's check. */
+export const githubLinkProblemText = (p: GithubLinkProblem): string => (p === 'http' ? GITHUB_HTTP : p === 'shape' ? GITHUB_SHAPE : NOT_GITHUB);
 
 /** The ErrorBox copy for `POST /api/import/github/preview` (G4), from its code. */
 export function githubErrorText(err: unknown): { title: string; detail: string } {
@@ -352,7 +387,7 @@ export function githubErrorText(err: unknown): { title: string; detail: string }
       return { title: 'No public repo at that link', detail: 'It may be private, or the branch or link may be wrong. Only public repos work for now.' };
     case 'too_large':
       // The whole download was over 20 MB (#455 11efe7d2): a folder link wouldn't help, a zip does.
-      if (err instanceof ImportError && /larger than 20 MB/.test(err.message))
+      if (err instanceof ImportError && /(larger than|over) 20 MB/.test(err.message))
         return { title: 'That repo is too big', detail: GITHUB_OVER_20MB };
       return { title: 'That repo is too big', detail: 'Link to the folder you need instead, like …/tree/main/skills. (20 MB, or over 500 readable files.)' };
     case 'unsupported':
