@@ -217,7 +217,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-zinc-800 text-zinc-300" aria-hidden="true">
           <ArrowUpFromLine size={15} />
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 max-[420px]:min-w-[150px]">
           <h3 id={titleId} className="text-sm font-semibold text-zinc-100 [overflow-wrap:anywhere]">
             Before {bot} pushes
           </h3>
@@ -227,7 +227,7 @@ export const PrepushCard: React.FC<PrepushCardProps> = ({ card, bot, onRetry, on
               <span className="h [overflow-wrap:anywhere]">{card.branch}</span>
             </code>
             {card.diffstat && (
-              <span className="inline-flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <span>
                   {card.diffstat.files} {card.diffstat.files === 1 ? 'file' : 'files'}
                 </span>
