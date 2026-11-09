@@ -153,6 +153,7 @@ test('E: download failed — the server detail and Try again (fix 7)', () => {
 
 test('download needed, relay down, sign-in expired and an unknown reason each get a line', () => {
   const line = (reason, detail = null) => m.stoppedLine({ state: 'unavailable', reason, detail, progress: null });
+  assert.equal(line('download_needed').text, 'Claude’s sealed box isn’t set up yet, so Claude can’t reply. Try again to start the one-time setup.');
   assert.equal(line('download_needed').action, 'retry');
   assert.match(line('relay_down').text, /couldn’t connect Claude to your sign-in/);
   assert.equal(line('relay_down').action, null);

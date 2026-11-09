@@ -158,7 +158,7 @@ export function stoppedLine(a: AgentVmState): Extract<RowStatus, { kind: 'stoppe
         action: 'retry',
       };
     case 'download_needed':
-      return { kind: 'stopped', text: 'Claude’s VM isn’t set up yet, so Claude can’t reply. Try again to start the one-time setup.', action: 'retry' };
+      return { kind: 'stopped', text: 'Claude’s sealed box isn’t set up yet, so Claude can’t reply. Try again to start the one-time setup.', action: 'retry' };
     case 'relay_down':
       return { kind: 'stopped', text: 'kwant couldn’t connect Claude to your sign-in. Restart kwant; if it keeps happening, turn this off.', action: null };
     case 'sign_in_expired':
