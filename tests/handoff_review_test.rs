@@ -288,13 +288,19 @@ async fn the_lead_reviews_with_fresh_eyes_never_the_chat() {
     wait_for("the lead's chat turn", || async { !prompts_with(&["LEADCHATMARK"]).is_empty() }).await;
     let (_, task) = finished(&env, "Count the widgets FRESHBRIEF", "Widget count").await;
     wait_for("the lead's review turn", || async { !prompts_with(&[FRESH, "Widget count"]).is_empty() }).await;
-    let reviews = prompts_with(&[FRESH, "Widget count"]);
-    assert_eq!(reviews.len(), 1, "one review turn");
-    let review = &reviews[0];
+    // The fake lead never calls task_review, so the one reminder may follow at any moment; it's a
+    // fresh-eyes turn too, so count it apart from the review turn and check it the same way
+    let fresh = prompts_with(&[FRESH, "Widget count"]);
+    let (reminders, reviews): (Vec<_>, Vec<_>) = fresh.iter().partition(|p| p.contains("Reminder: the result on"));
+    assert_eq!(reviews.len(), 1, "one review turn: {fresh:?}");
+    assert!(reminders.len() <= 1, "at most one reminder: {fresh:?}");
+    let review = reviews[0];
     assert!(review.contains("Count the widgets FRESHBRIEF"), "the brief: {review}");
     assert!(review.contains(&task.id) && review.contains("done"), "the card and the result: {review}");
-    assert!(!review.contains("LEADCHATMARK"), "the review turn never gets the lead's chat: {review}");
-    assert!(!review.contains("finished the task you delegated"), "nor the results turn: {review}");
+    for p in &fresh {
+        assert!(!p.contains("LEADCHATMARK"), "a review turn never gets the lead's chat: {p}");
+        assert!(!p.contains("finished the task you delegated"), "nor the results turn: {p}");
+    }
 }
 
 fn review_asks_for(task_id: &str) -> usize {
