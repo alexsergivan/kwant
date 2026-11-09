@@ -337,7 +337,8 @@ pub fn parse_plan(answer: &str, input: &Input) -> Result<DeliveryPlan, Refused> 
     if done_when.is_empty() {
         done_when = defaults.done_when;
     }
-    // A plan the model made is firm: the person asked, and the model read what for (#469)
+    // `firm` is a placeholder: [`plan`] overrides it, because the person's words decide whether a
+    // miss continues (the keyword plan's firmness), not the model
     Ok(DeliveryPlan { kind: raw.kind, show, who, done_when, source: PlanSource::Analyzer, firm: true })
 }
 
@@ -406,6 +407,12 @@ pub fn needs_no_plan(message: &str) -> bool {
 /// The plan for `input`: the model's, asked once with `wait` to answer, or `keyword` when there is
 /// nothing to plan ([`needs_no_plan`]), no model, no answer in time, or an answer [`parse_plan`]
 /// refuses. The person's notes are applied either way ([`learn`]).
+///
+/// The model decides what to deliver (kind, show, who, done-when); the person's words decide
+/// whether a miss continues ([`DeliveryPlan::firm`]). The model's plan is firm only when the
+/// keyword plan is firm and of the same kind: a complaint ("the login button colour is off") or
+/// "@Ann look at this" stays lean even when the model plans a change or a visual, and a kind the
+/// keywords didn't see is lean, so a model's guess never starts the continuation (#469, #477).
 pub async fn plan(
     model: Option<&dyn crate::zombie::classify::Classifier>,
     input: &Input,
@@ -421,7 +428,10 @@ pub async fn plan(
         Err(_) => (keyword, Why::Timeout),
         Ok(Err(_)) => (keyword, Why::Failed),
         Ok(Ok(answer)) => match parse_plan(&answer, input) {
-            Ok(p) => (p, Why::Analyzer),
+            Ok(p) => {
+                let firm = keyword.firm && keyword.kind == p.kind;
+                (DeliveryPlan { firm, ..p }, Why::Analyzer)
+            }
             Err(_) => (keyword, Why::Failed),
         },
     };
@@ -765,6 +775,43 @@ mod tests {
         assert!(never.asked.lock().unwrap().is_empty());
     }
 
+    /// #474 round 4 (F1): the model decides what to deliver, the person's words decide whether a
+    /// miss continues. A model plan is firm only when the keyword plan is firm and of its kind.
+    #[tokio::test]
+    async fn the_persons_words_decide_whether_a_model_plan_is_firm() {
+        let change = r#"{"kind":"change","show":["link","image"],"done_when":["the PR link is in the reply"]}"#;
+        let visual = r#"{"kind":"visual","show":["image"],"done_when":["it is shown as an image"]}"#;
+        let stub = Stub::new(vec![
+            ("colour is off", change.into()),
+            ("Fix the login", change.into()),
+            ("look at this", visual.into()),
+            ("mockup image", change.into()),
+            ("export is slow", change.into()),
+            ("show me the footer", visual.into()),
+        ]);
+        let cases: [(&str, Deliverable, Deliverable, bool); 6] = [
+            // A visible complaint is a lean Change (#477): the model's change stays lean
+            ("the login button colour is off", Deliverable::Change, Deliverable::Change, false),
+            // A leading change verb is firm, and so is the model's change
+            ("Fix the login button colour", Deliverable::Change, Deliverable::Change, true),
+            // A look word alone is a lean Visual (#469): the model's visual stays lean
+            ("@Ann look at this", Deliverable::Visual, Deliverable::Visual, false),
+            // A firm ask of another kind than the model's: lean
+            ("show me mockup image", Deliverable::Visual, Deliverable::Change, false),
+            ("the export is slow", Deliverable::Other, Deliverable::Change, false),
+            // A firm ask of the model's kind: firm
+            ("show me the footer", Deliverable::Visual, Deliverable::Visual, true),
+        ];
+        for (msg, keyword_kind, kind, firm) in cases {
+            let keyword = keyword_plan(msg, &[]);
+            assert_eq!(keyword.kind, keyword_kind, "{msg}: the keyword plan");
+            let (p, why) = plan(Some(&stub), &input(msg), keyword, WAIT).await;
+            assert_eq!(why, Why::Analyzer, "{msg}");
+            assert_eq!((p.source, p.kind, p.firm), (PlanSource::Analyzer, kind, firm), "{msg}");
+        }
+        assert_eq!(stub.asked.lock().unwrap().len(), cases.len());
+    }
+
     #[test]
     fn the_model_cannot_name_bots_off_the_team_or_drop_a_kinds_must_haves() {
         let i = input("ideas?");
@@ -778,8 +825,6 @@ mod tests {
         assert_eq!(p.done_when, DeliveryPlan::for_kind(Deliverable::Ideas, PlanSource::Analyzer).done_when);
         let c = parse_plan(r#"{"kind":"change","show":["text"]}"#, &i).unwrap();
         assert!(c.show.contains(&Show::Link), "a change always shows a link");
-        // A plan the model made is firm, so a miss continues (#469's DeliveryPlan::firm)
-        assert!(p.firm && c.firm);
         // Outside a team chat, who stays empty
         let solo = Input { team: team()[..1].to_vec(), ..input("ideas?") };
         let p = parse_plan(r#"{"kind":"ideas","show":["image"],"who":[{"bot":"b-front","part":"a"}]}"#, &solo).unwrap();
