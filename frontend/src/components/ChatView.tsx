@@ -53,7 +53,8 @@ import {
 } from '../attachments';
 import { DropRecipient, FOLDER_NOTE, dragHasFiles, dropAnnouncement, dropCard, modalOpen, previewDrag, splitDrop, windowDragWatch } from '../dragPreview';
 import { DropBot, DropLayer, DropPhase } from './DropLayer';
-import { FileTiles, UploadChip } from './Attachments';
+import { EarlierCopies, FileTiles, UploadChip } from './Attachments';
+import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
 import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
@@ -585,6 +586,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }, [teamsProp]);
 
   const activeKwants = kwantsProp || internalKwants;
+  // Every bot a message here can come from: names and ids resolve against these, never the chat title (P4).
+  const knownBots = useMemo(() => {
+    const all: Array<{ id: string; name: string }> = [...activeKwants, ...(teamMembers ?? [])];
+    if (home?.kind === 'bot' && home.bot) all.push({ id: home.bot.id, name: home.bot.name });
+    return all;
+  }, [activeKwants, teamMembers, home]);
   // Each routed reply's question: the person's latest saved message before it ("Wrong bot?").
   const questionOf = useMemo(() => questionsOfReplies(messages), [messages]);
   const activeTeams = teamsProp || internalTeams;
@@ -837,8 +844,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   /** The chip's name: the bot by id or name, else this chat's title. */
   const replyBotName = (msg: ChatMessage) => {
-    const name = botNameOf(msg.sender_id, activeKwants);
-    return name === 'a bot' ? title : name;
+    return botDisplayName(msg.sender_id, knownBots);
   };
   const cancelReply = () => {
     setReplyTo(null);
@@ -1101,9 +1107,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const switchNoteFor = useMemo(
-    () => assignSwitchNotes(switchNotes ?? [], messages, (m) => (m.sender_id && m.sender_id.length > 20 ? title : m.sender_id)),
-    [switchNotes, messages, title],
+    () => assignSwitchNotes(switchNotes ?? [], messages, (m) => botDisplayName(m.sender_id, knownBots)),
+    [switchNotes, messages, knownBots],
   );
+  // P4: each turn's shared files move under their bot's reply, and repeats of one file fold into the newest.
+  // While a bot's live row is on screen, its shares this turn sit under that row from the start (Mira, P4).
+  const liveRowShown = isStreaming && !deciding && routingState?.phase !== 'deciding' && !discussionState?.inProgress;
+  const liveBot = liveRowShown && streamingSpeakerName ? streamingSpeakerName : null;
+  const arranged = useMemo(() => arrangeSharedFiles(messages, knownBots, liveBot), [messages, knownBots, liveBot]);
+  const liveShareIds = useMemo(() => new Set(arranged.live.map((m) => m.id)), [arranged.live]);
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
@@ -1210,7 +1222,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         <div key={msg.id} data-message-id={msg.id} className="w-full max-w-5xl">
           <SetupNeededCard
             meta={setup}
-            botName={msg.sender_id || title}
+            botName={botDisplayName(msg.sender_id, knownBots)}
             spaceName={spaceName ?? 'this space'}
             canRun={canRun}
             onOpenAccounts={onOpenAccounts}
@@ -1276,24 +1288,34 @@ export const ChatView: React.FC<ChatViewProps> = ({
         ? emptyTrialReplyLine(parsePick(activeKwants.find((k) => k.id === msg.sender_id || k.name === msg.sender_id)?.preferred_model).family)
         : null;
     const workAhead = isUser ? null : parseWorkAhead(msg.meta);
-    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : (msg.sender_id && msg.sender_id.length > 20 ? title : msg.sender_id);
+    const displayName = isUser ? agentSenderLabel(msg.meta) ?? 'You' : botDisplayName(msg.sender_id, knownBots);
+    // P4: a share that now sits under its bot's reply reads as part of it, without a second header.
+    const underReply = !isUser && filesOnly && (arranged.attached.has(msg.id) || liveShareIds.has(msg.id));
+    const olderCopies = filesOnly ? arranged.earlier.get(msg.id) : undefined;
     const replyQuote = isUser ? replyRefOf(msg.reply_to) : null;
     // Whose mood the reply header shows (Pixel's AvatarMood, drawn by ModernAvatar given a kwantId):
     // Laya's pick, else this bot chat's bot, else the team member with that name. Unknown: no mood.
     const replyKwantId = isUser
       ? undefined
-      : routed?.kwant_id ?? (home?.kind === 'bot' ? home.bot?.id : undefined) ?? activeKwants.find((k) => k.name === displayName)?.id;
+      : routed?.kwant_id ?? (home?.kind === 'bot' ? home.bot?.id : undefined) ?? botOf(msg.sender_id, knownBots)?.id;
 
     return (
       <div
         key={msg.id}
         data-message-id={msg.id}
         tabIndex={-1}
+        data-shared-under={underReply ? '' : undefined}
+        // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
+        style={underReply ? { marginTop: '0.5rem' } : undefined}
         className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >
         {/* Phones show the avatar inside the name line instead, so the bubble gets the full width */}
+        {underReply ? (
+          // Keeps the tiles lined up with the reply bubble above, where the avatar would be
+          <span className="hidden sm:block w-9 shrink-0" aria-hidden="true" />
+        ) : (
         <span className="hidden sm:contents">
           {/* Laya hand-off: a reply she just routed brings the chosen bot's avatar up into the header */}
           <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'contents'}>
@@ -1305,9 +1327,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
           </span>
         </span>
+        )}
 
         <div className={`flex flex-col min-w-0 ${isUser ? 'max-w-[85%] sm:max-w-2xl items-end' : 'flex-1 max-w-4xl items-start'}`}>
-          {isUser ? (
+          {underReply ? (
+            <span className="sr-only">Shared by {displayName}</span>
+          ) : isUser ? (
             <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap">
               <span className="text-zinc-200 shrink-0">{displayName}</span>
               {fromTelegram(parseMetaObject(msg.meta)) && <ViaTelegram />}
@@ -1410,7 +1435,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
             )}
           </div>
           )}
-          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} />}
+          {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
+          {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (
+            // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared
+            <p data-shared-auto="" className="mt-1 text-[11px] text-zinc-500">
+              Shared automatically
+            </p>
+          )}
+          {olderCopies && olderCopies.length > 0 && (
+            <EarlierCopies
+              idBase={`earlier-${msg.id}`}
+              sharedBy={displayName}
+              copies={olderCopies.map((m) => ({ id: m.id, at: m.created_at ?? null, files: parseAttachments(m.meta) }))}
+            />
+          )}
           {/* A shared-file card has no bubble, so the files block (the table or text preview) is mounted here, after the tiles. */}
           {filesOnly && !isUser && msg.results != null && (
             // The column is `items-start`, so without a width cap a long cell stretches the preview past the message.
@@ -1839,7 +1877,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <BotHome home={home} spaceName={spaceName} team={activeKwants} prompts={suggestions} canRun={canRun} onPick={handlePromptSuggestion} />
           </div>
         )}
-        {groupDiscussionThreads(messages).map((item) => {
+        {groupDiscussionThreads(arranged.messages).map((item) => {
           if (item.kind === 'message') {
             const trial = trialCards.get(item.message.id);
             if (!trial) return renderMessage(item.message);
@@ -1970,6 +2008,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </div>
           </div>
         )}
+
+        {/* P4: the running bot's shares, already in the place its saved reply will give them */}
+        {liveRowShown && arranged.live.map(renderMessage)}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload */}
         {settledApprovals.map((approval) => (

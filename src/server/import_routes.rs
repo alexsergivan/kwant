@@ -373,7 +373,11 @@ pub async fn undo(State(state): State<AppState>, Scope(space): Scope, Path(id): 
             })),
         )
             .into_response(),
-        Err(UndoError::Db(e)) => internal(e),
+        Err(e @ UndoError::Db(_)) => {
+            // Plain words for the person; the SQLite message stays in the log
+            tracing::warn!(import_id = %id, error = ?e, "undoing an import failed");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "undo_failed", crate::db::bot_actions::undo_failure_message("this import", &e))
+        }
     }
 }
 
