@@ -592,6 +592,40 @@ impl ToolApprover for RehearseApprover {
     }
 }
 
+/// Puts the pre-push card (B2) in front of `inner` for MCP calls that write to a GitHub branch
+/// (Ada's review of #456, Later 6a); everything else is `inner`'s.
+pub struct PrepushApprover {
+    pub inner: Arc<dyn ToolApprover>,
+    pub state: AppState,
+}
+
+#[async_trait]
+impl ToolApprover for PrepushApprover {
+    async fn approve(&self, req: ToolApprovalRequest) -> bool {
+        self.inner.approve(req).await
+    }
+
+    async fn decide(&self, req: ToolApprovalRequest) -> ApprovalOutcome {
+        self.inner.decide(req).await
+    }
+
+    async fn note(&self, req: &ToolApprovalRequest, decision: &'static str, approval_id: Option<&str>) {
+        self.inner.note(req, decision, approval_id).await
+    }
+
+    async fn tier_gate(&self, req: &ToolApprovalRequest) -> Option<String> {
+        self.inner.tier_gate(req).await
+    }
+
+    async fn prepush_gate(&self, req: &ToolApprovalRequest) -> Result<Vec<String>, String> {
+        Box::pin(super::dev::prepush::check_mcp(&self.state, &req.kwant_id, &req.server, &req.tool, &req.arguments)).await.map(|p| p.overrides)
+    }
+
+    async fn prepush_use(&self, overrides: &[String]) -> Option<String> {
+        super::dev::prepush::use_up(&self.state, &super::dev::prepush::Pass { overrides: overrides.to_vec(), pinned: None }).await
+    }
+}
+
 /// [`prepare_turn_with_self`] with [`TurnApprovalOpts`].
 pub async fn prepare_turn_with_opts(
     state: &AppState,
@@ -651,18 +685,22 @@ pub async fn prepare_turn_with_opts(
         always_ask: opts.always_ask,
         data_dir: state.config.data_dir.clone(),
     });
+    let approver: Arc<dyn ToolApprover> = if let Some(log) = opts.rehearse.clone() {
+        Arc::new(RehearseApprover { log })
+    } else if opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
+        // A Dev mode brief only reads, whatever the ticket says (J7)
+        Arc::new(super::dev::tickets::tools::BriefApprover { inner: broker_approver })
+    } else if self_tools {
+        Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver, always_ask: opts.always_ask, browser })
+    } else {
+        broker_approver
+    };
+    // A dry run writes nothing, so it needs no pre-push card
+    let approver: Arc<dyn ToolApprover> =
+        if opts.rehearse.is_some() { approver } else { Arc::new(PrepushApprover { inner: approver, state: state.clone() }) };
     let ctx = McpTurnContext {
         servers,
-        approver: if let Some(log) = opts.rehearse.clone() {
-            Arc::new(RehearseApprover { log })
-        } else if opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE) {
-            // A Dev mode brief only reads, whatever the ticket says (J7)
-            Arc::new(super::dev::tickets::tools::BriefApprover { inner: broker_approver })
-        } else if self_tools {
-            Arc::new(super::continuity::SelfToolsApprover { inner: broker_approver, always_ask: opts.always_ask, browser })
-        } else {
-            broker_approver
-        },
+        approver,
         config_dir: state.config.data_dir.join("mcp"),
         permission_url: Some(format!("{}/api/mcp/permission/{token}", local_base_url(state))),
         gateway: Some(GatewayAccess { url: format!("{}/api/mcp/gateway", local_base_url(state)), token: token.clone() }),
@@ -930,13 +968,30 @@ pub async fn permission_endpoint(
             let args = &msg["params"]["arguments"];
             // B2: a bot's own push in a Dev mode space waits for its pre-push card, before any
             // allow rule (each Bash call starts in the bot's folder)
-            let prepush = match (args["tool_name"].as_str(), args["input"]["command"].as_str(), mcp::builtin_tools::canonical_folder(session.cwd.as_deref())) {
-                (Some("Bash"), Some(command), Some(folder)) => super::dev::prepush::gate(&state, &session.kwant_id, command, &folder).await,
-                _ => None,
+            let tool_name = args["tool_name"].as_str().unwrap_or("");
+            let prepush = match (tool_name, args["input"]["command"].as_str(), mcp::builtin_tools::canonical_folder(session.cwd.as_deref())) {
+                ("Bash", Some(command), Some(folder)) => super::dev::prepush::check_command(&state, &session.kwant_id, command, &folder).await,
+                // claude calls the bot's MCP servers itself: a write to a GitHub branch asks here (6a)
+                _ => match mcp::split_tool_name(tool_name).filter(|(server, _)| session.ctx.servers.iter().any(|s| s.name == *server)) {
+                    Some((server, tool)) => Box::pin(super::dev::prepush::check_mcp(&state, &session.kwant_id, server, tool, &args["input"])).await,
+                    None => Ok(Default::default()),
+                },
             };
             let decision = match prepush {
-                Some(why) => json!({"behavior": "deny", "message": why}),
-                None => decide(&session, args, smart).await,
+                Err(why) => json!({"behavior": "deny", "message": why}),
+                Ok(pass) => {
+                    let mut decision = decide(&session, args, smart).await;
+                    if decision["behavior"] == "allow" {
+                        // The override goes with the push that runs, never one the person declined
+                        if let Some(why) = super::dev::prepush::use_up(&state, &pass).await {
+                            decision = json!({"behavior": "deny", "message": why});
+                        } else if let (Some(pinned), Some(input)) = (pass.pinned, decision.get_mut("updatedInput").and_then(Value::as_object_mut)) {
+                            // What goes is the commit kwant checked, even if a parallel call commits
+                            input.insert("command".into(), Value::String(pinned));
+                        }
+                    }
+                    decision
+                }
             };
             rpc_result(id, json!({"content": [{"type": "text", "text": decision.to_string()}]}))
         }

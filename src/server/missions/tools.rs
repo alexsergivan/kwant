@@ -524,6 +524,17 @@ async fn request_check(state: &AppState, scope: &SelfScope, task: &Task, args: &
     ok(v)
 }
 
+/// The fresh-eyes label of a `task_review` (fresh-eyes-audit.md §3): `checked` only in a
+/// fresh-eyes turn, which saw the brief and the result.
+fn review_label(scope: &SelfScope) -> Value {
+    use crate::server::fresh_eyes::{is_fresh, label, SAW_BRIEF, SAW_RESULT};
+    if is_fresh(scope.turn_id.as_deref()) {
+        label(true, &[SAW_BRIEF, SAW_RESULT], "brief", Some(&scope.kwant_id))
+    } else {
+        label(false, &[], "none", Some(&scope.kwant_id))
+    }
+}
+
 async fn review(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) -> ToolResult {
     if task.owner_kwant_id.as_deref() == Some(scope.kwant_id.as_str()) {
         return fail("You can't review your own task; a teammate or the person does.");
@@ -555,10 +566,13 @@ async fn review(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
     if verdict == "pass" && ids.is_empty() {
         return fail("A pass must cite at least one evidence id on this task.");
     }
+    // "Checked with fresh eyes" (Ada's review of #456, Later 6): a lead's hand-off review runs
+    // fresh-eyes with only the brief and the result; any other review says it wasn't
+    let fresh_eyes = review_label(scope);
     let c = NewCheck {
         task_id: task.id.clone(),
         kind: "peer_review".into(),
-        spec: json!({"note": note.chars().take(2000).collect::<String>(), "evidence_ids": ids}),
+        spec: json!({"note": note.chars().take(2000).collect::<String>(), "evidence_ids": ids, "fresh_eyes": fresh_eyes}),
         required: true,
         approved: true,
         requested_by: scope.kwant_id.clone(),
@@ -572,7 +586,7 @@ async fn review(state: &AppState, scope: &SelfScope, task: &Task, args: &Value) 
     if let Err(e) = state.db.finish_check(&check.id, status, Some(note), &scope.kwant_id, None).await {
         return fail(format!("Could not record the review: {e}"));
     }
-    let _ = state.db.log_task_event(&task.id, "review", &scope.kwant_id, &json!({"verdict": verdict, "check_id": check.id})).await;
+    let _ = state.db.log_task_event(&task.id, "review", &scope.kwant_id, &json!({"verdict": verdict, "check_id": check.id, "fresh_eyes": fresh_eyes})).await;
     let after = evaluate(state, &task.id).await;
     if let Some(t) = &after {
         super::emit_task(state, t).await;
