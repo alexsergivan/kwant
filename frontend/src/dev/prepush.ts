@@ -242,7 +242,7 @@ export function toolLine(key: CheckKey, c: PrepushCard): string {
     case 'tests':
       return 'tamper check';
     case 'risk':
-      return 'kwant rules';
+      return 'built-in rules';
     case 'review':
       return c.reviewer ? (c.reviewer.engine ? `${c.reviewer.name} on ${c.reviewer.engine}` : c.reviewer.name) : 'another bot';
     case 'semgrep':
@@ -370,7 +370,7 @@ export function inboxLine(c: PrepushCard, bot: string): string {
 
 /** What "Ask {bot} to try again" sends through the normal chat send after /retry. */
 export const retryMessage = (c: PrepushCard): string =>
-  `I asked kwant to check your push of ${c.branch} again. Fix what the pre-push card found, commit, and run the same push again.`;
+  `I asked for a new check of your push of ${c.branch}. Fix what the pre-push card found, commit, and run the same push again.`;
 
 export const overrideMessage = (c: PrepushCard): string =>
   `I let your push of ${c.branch} go anyway, for this commit only. Run the same push again.`;
@@ -421,7 +421,7 @@ async function call(url: string, method = 'GET', body?: unknown): Promise<unknow
 
 function one(data: unknown): PrepushCard {
   const c = parsePrepush(data);
-  if (!c) throw new DevModeError('The server sent a card kwant can’t read.', 200, 'bad_card');
+  if (!c) throw new DevModeError('The server sent a card this page can’t read.', 200, 'bad_card');
   return c;
 }
 

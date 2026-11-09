@@ -104,8 +104,8 @@ const why = 'Didn\'t run: the checks took longer than 12 minutes';
 export const PP_FAILED = {
   ...base, id: 'pp_failed', status: 'failed', diffstat: null,
   checks: ['secrets', 'pkgs', 'tests', 'risk', 'review', 'semgrep'].map((k) => row(k, 'error', why)),
-  blockers: [{ source: 'kwant', severity: 'high', title: "kwant couldn't check this push: the checks took longer than 12 minutes", file: null, line: null }],
-  card: { kind: 'prepush', error: 'the checks took longer than 12 minutes', blockers: [{ source: 'kwant', severity: 'high', title: "kwant couldn't check this push: the checks took longer than 12 minutes", file: null, line: null }] },
+  blockers: [{ source: 'kwant', severity: 'high', title: "kwant couldn’t check this push: the checks took longer than 12 minutes", file: null, line: null }],
+  card: { kind: 'prepush', error: 'the checks took longer than 12 minutes', blockers: [{ source: 'kwant', severity: 'high', title: "kwant couldn’t check this push: the checks took longer than 12 minutes", file: null, line: null }] },
 };
 
 /** The reviewer's turn didn't finish: one error row, the rest passed (a check that couldn't run never passes). */
