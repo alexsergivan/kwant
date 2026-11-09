@@ -1285,7 +1285,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         data-message-id={msg.id}
         tabIndex={-1}
         data-shared-under={underReply ? '' : undefined}
-        className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${underReply ? '-mt-3 sm:-mt-4' : ''} ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
+        // The log's space-y gap would win over a margin class; inline style pulls the tiles up to the reply's actions
+        style={underReply ? { marginTop: '0.5rem' } : undefined}
+        className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl focus:outline-none ${isUser ? 'ml-auto flex-row-reverse justify-start' : ''} ${
           flashId === msg.id ? (flashKind === 'quote' ? 'kw-flash-quote' : 'kw-flash') : ''
         } ${freshTrack.current.fresh.has(msg.id) ? 'kws-in' : ''}`}
       >

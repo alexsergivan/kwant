@@ -152,12 +152,12 @@ export const ImageViewer: React.FC<{ file: AttachmentRef; onClose: () => void }>
       aria-modal="true"
       aria-labelledby={titleId}
       data-image-viewer=""
-      className="fixed inset-0 z-[200] flex flex-col bg-black/90"
+      className="fixed inset-0 z-[200] flex flex-col bg-black/95"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex items-center gap-2 px-3 py-2 sm:px-4 text-zinc-200">
+      <div className="flex items-center gap-2 px-3 py-2 sm:px-4 text-zinc-200 bg-black">
         <h2 id={titleId} className="min-w-0 flex-1 truncate text-sm font-medium" title={file.name}>
           {file.name}
         </h2>
