@@ -1529,15 +1529,23 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Who gets the files: the same answer as the "Answers:" hint, so the two never disagree.
   const mentioned = target.kind === 'mention' ? target.label.replace(/^@/, '') : '';
   const mentionedBot = mentioned ? activeKwants.find((k) => k.name.toLowerCase() === mentioned.toLowerCase()) : undefined;
-  const roomBots: DropBot[] = (teamMembers?.length ? teamMembers : activeKwants).map((k) => ({ id: k.id, name: k.name, avatar: k.avatar_sprite }));
+  const asDropBot = (k: { id: string; name: string; avatar_sprite?: string }): DropBot => ({ id: k.id, name: k.name, avatar: k.avatar_sprite });
+  const roomBots: DropBot[] = (teamMembers?.length ? teamMembers : activeKwants).map(asDropBot);
+  // A team @mention shows that team's bots, like a room (#478 M4); never a made-up face for the team.
+  const mentionedTeamName = mentioned.replace(/ team$/i, '');
+  const mentionedTeam =
+    mentioned && !mentionedBot
+      ? activeTeams.find((t) => t.name.toLowerCase() === mentioned.toLowerCase() || t.name.toLowerCase() === mentionedTeamName.toLowerCase())
+      : undefined;
+  const mentionedTeamBots: DropBot[] = (mentionedTeam?.member_kwants ?? [])
+    .map((id) => activeKwants.find((k) => k.id === id))
+    .filter((k): k is (typeof activeKwants)[number] => !!k)
+    .map(asDropBot);
   const dropTo: { recipient: DropRecipient; single: boolean; bots: DropBot[]; botId?: string } =
     target.kind === 'mention'
-      ? {
-          recipient: { kind: mentionedBot ? 'bot' : 'team', name: mentionedBot?.name ?? mentioned.replace(/ team$/i, '') },
-          single: true,
-          bots: [{ id: mentionedBot?.id, name: mentionedBot?.name ?? mentioned, avatar: mentionedBot?.avatar_sprite }],
-          botId: mentionedBot?.id,
-        }
+      ? mentionedBot
+        ? { recipient: { kind: 'bot', name: mentionedBot.name }, single: true, bots: [asDropBot(mentionedBot)], botId: mentionedBot.id }
+        : { recipient: { kind: 'team', name: mentionedTeam?.name ?? mentionedTeamName }, single: false, bots: mentionedTeamBots }
       : home?.kind === 'bot'
         ? {
             recipient: { kind: 'bot', name: home.bot?.name ?? title },
@@ -1570,6 +1578,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const wasLive = useRef(false);
   useEffect(() => {
     if (livePhase) {
+      // A new drag: a drop that landed after the last one ended must not play this one's exit as a landing.
+      if (!wasLive.current) landed.current = false;
       wasLive.current = true;
       setExiting(null);
       return;
@@ -2309,7 +2319,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <AtSign size={phone ? 18 : 17} aria-hidden="true" />
             {/* Phone (spec A5): "New" anchors to the @ button's own box, never on the field's border or an Ask chip */}
             {phone && !isStreaming && (
-              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''}`} />
+              <NewTag id="mention" className={`absolute -top-1.5 -right-1 ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`} />
             )}
           </button>
           {stacked && <span className="flex-1" aria-hidden="true" />}
@@ -2317,11 +2327,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
               Only the send button follows "@" when it shows: 44px on phones / 36px from sm, plus a 6px gap;
               11px is the form's border + padding. Hidden (not marked as seen) while a reply streams, so it
               never sits on the working strip's edge and comes back after the turn; hidden while the mention
-              picker is open, so it never peeks under it. */}
+              picker is open, so it never peeks under it; hidden (not marked as seen) while the drop layer is up,
+              so it never outshines the drop card (#478 Mira M3). */}
           {!phone && !isStreaming && (
             <NewTag
               id="mention"
-              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''}`}
+              className={`absolute bottom-full mb-1.5 [--kw-cbtn-step:50px] sm:[--kw-cbtn-step:42px] ${isMentionOpen ? 'hidden' : ''} ${layerPhase ? 'hidden' : ''}`}
               style={{ right: 'calc(11px + var(--kw-cbtn-step))' }}
             />
           )}

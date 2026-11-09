@@ -153,17 +153,22 @@ const fakeWin = () => {
     clearTimeout: (t) => timers.delete(t),
     fire: (t, e) => (on[t] ?? []).forEach((f) => f(e)),
     runTimers: () => [...timers.entries()].forEach(([k, { f }]) => (timers.delete(k), f())),
+    // Ends the current task: runs the 0 ms timers only (the "a dragenter came in this task" flag).
+    nextTask: () => [...timers.entries()].filter(([, t]) => t.ms === 0).forEach(([k, { f }]) => (timers.delete(k), f())),
+    waitingMs: () => [...timers.values()].map((t) => t.ms).filter((ms) => ms > 0),
   };
 };
-const dragE = (types = ['Files'], items = [file('image/png')]) => ({ dataTransfer: { types, items } });
+const dragE = (types = ['Files'], items = [file('image/png')], relatedTarget = {}) => ({ dataTransfer: { types, items }, relatedTarget });
+// A dragleave out of the window: no relatedTarget.
+const leaveWindow = () => ({ dataTransfer: { types: ['Files'], items: [file('image/png')] }, relatedTarget: null });
 
-test('the window watch: depth for enter and leave, the 300 ms watchdog, Esc, a late dragover, open chats', () => {
+test('the window watch: depth for enter and leave, the 1500 ms fallback, Esc, a late dragover, open chats', () => {
   const w = fakeWin();
   const watch = d.createDragWatch(w);
   assert.equal(Object.keys(w.on).length, 0, 'nothing on the window until someone listens');
   let seen = 0;
   const off = watch.subscribe(() => seen++);
-  assert.deepEqual(Object.keys(w.on).sort(), ['dragend', 'dragenter', 'dragleave', 'dragover', 'drop', 'keydown']);
+  assert.deepEqual(Object.keys(w.on).sort(), ['dragend', 'dragenter', 'dragleave', 'dragover', 'drop', 'keydown', 'mousemove', 'pointermove']);
   w.fire('dragenter', dragE(['text/plain'], []));
   assert.equal(watch.get().active, false, 'text drags are not watched');
   w.fire('dragenter', dragE());
@@ -173,13 +178,14 @@ test('the window watch: depth for enter and leave, the 300 ms watchdog, Esc, a l
   w.fire('dragleave', dragE());
   assert.equal(watch.get().active, true, 'moving onto a child keeps it on');
   w.fire('dragleave', dragE());
-  assert.equal(watch.get().active, false, 'left the window');
-  // The watchdog: armed at 300 ms on every dragover; firing it ends the drag.
+  assert.equal(watch.get().active, false, 'depth 0: left the window');
+  // The fallback: armed at 1500 ms on every dragover; firing it ends the drag.
   w.fire('dragenter', dragE());
+  w.nextTask();
   w.fire('dragover', dragE());
-  assert.deepEqual([...w.timers.values()].map((t) => t.ms), [300], 'one timer, re-armed');
+  assert.deepEqual(w.waitingMs(), [1500], 'one fallback timer, re-armed');
   w.runTimers();
-  assert.equal(watch.get().active, false, 'no dragover for 300 ms: over');
+  assert.equal(watch.get().active, false, 'no dragover for 1500 ms: over');
   w.fire('dragover', dragE());
   assert.equal(watch.get().active, true, 'a later dragover starts it again');
   w.fire('keydown', { key: 'a' });
@@ -198,6 +204,58 @@ test('the window watch: depth for enter and leave, the 300 ms watchdog, Esc, a l
   assert.ok(seen > 0);
   off();
   assert.equal(Object.values(w.on).flat().length, 0, 'the last one out takes the listeners off');
+});
+
+// #478 M2: WebKit (and the Mac app's WKWebView) sends dragover mostly when the pointer moves.
+test('a hand held still keeps the drag: no dragover for 1 s with depth > 0 stays active', () => {
+  const w = fakeWin();
+  const watch = d.createDragWatch(w);
+  const off = watch.subscribe(() => {});
+  w.fire('dragenter', dragE());
+  w.nextTask();
+  w.fire('dragover', dragE());
+  // 1 s of nothing: only timers shorter than 1 s may fire.
+  [...w.timers.entries()].filter(([, t]) => t.ms <= 1000).forEach(([k, { f }]) => (w.timers.delete(k), f()));
+  assert.equal(watch.get().active, true, 'still over the chat after 1 s with no dragover');
+  assert.deepEqual(w.waitingMs(), [1500], 'only the 1500 ms fallback is waiting');
+  off();
+});
+
+test('the first mousemove or pointermove ends the drag', () => {
+  for (const type of ['mousemove', 'pointermove']) {
+    const w = fakeWin();
+    const watch = d.createDragWatch(w);
+    const off = watch.subscribe(() => {});
+    w.fire(type, {});
+    assert.equal(watch.get().active, false, 'nothing to end');
+    w.fire('dragenter', dragE());
+    w.fire('dragenter', dragE());
+    assert.equal(watch.get().active, true);
+    w.fire(type, {});
+    assert.equal(watch.get().active, false, `${type}: the OS drag is over`);
+    w.fire('dragover', dragE());
+    w.fire('dragleave', dragE());
+    assert.equal(watch.get().active, false, 'the depth started again from 0, not from the old 2');
+    off();
+  }
+});
+
+test('a dragleave with no relatedTarget ends the drag; a crossing in the same task does not', () => {
+  const w = fakeWin();
+  const watch = d.createDragWatch(w);
+  const off = watch.subscribe(() => {});
+  w.fire('dragenter', dragE());
+  w.fire('dragenter', dragE());
+  w.fire('dragenter', dragE());
+  w.nextTask();
+  // WebKit crossing from one element to the next: the new dragenter, then the old dragleave with no relatedTarget.
+  w.fire('dragenter', dragE());
+  w.fire('dragleave', leaveWindow());
+  assert.equal(watch.get().active, true, 'a crossing, not an exit');
+  w.nextTask();
+  w.fire('dragleave', leaveWindow());
+  assert.equal(watch.get().active, false, 'left the window with depth still 2');
+  off();
 });
 
 const ev = (type, types, prevented = false) => {

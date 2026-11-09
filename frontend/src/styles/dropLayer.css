@@ -48,7 +48,7 @@
   background: #6c58e0; color: #fff; font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
   box-shadow: 0 0 0 3px #231b4d; font-variant-numeric: tabular-nums; animation: kw-dd-badge 120ms var(--kw-ease) both;
 }
-.kw-dd-heading { font-size: 18px; line-height: 24px; font-weight: 600; color: #f5f4fb; letter-spacing: -0.01em; }
+.kw-dd-heading { font-size: 18px; line-height: 24px; font-weight: 600; color: #f5f4fb; letter-spacing: -0.01em; text-wrap: balance; }
 .kw-dd-what { margin-top: 6px; font-size: 13px; line-height: 18px; color: #c9c5e6; font-variant-numeric: tabular-nums; }
 .kw-dd-kind { display: inline-flex; align-items: center; gap: 4px; color: #e2dff5; }
 .kw-dd-lim { margin-top: 4px; font-size: 11px; line-height: 16px; color: #8d87b8; }

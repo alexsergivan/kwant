@@ -3,7 +3,7 @@
 // they are. DropPill is the one line shown over a page that isn't a chat. Both are aria-hidden: the
 // chat's own live region speaks for them.
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, Ban, File as FileIcon, FileText, Film, Image as ImageIcon, MessageSquare } from 'lucide-react';
+import { AlertTriangle, Ban, File as FileIcon, FileText, Film, Image as ImageIcon, MessageSquare, Users } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import type { DropCardModel, Heading, KindPart } from '../dragPreview';
 import { PILL_TEXT, modalOpen, windowDragWatch } from '../dragPreview';
@@ -89,6 +89,12 @@ export const DropLayer: React.FC<DropLayerProps> = ({ phase, card, single, bots,
                   <ModernAvatar key={b.id ?? b.name} role={b.avatar || b.name} name={b.name} size={44} kwantId={b.id} className="rounded-full" />
                 ))}
                 {more > 0 && <span className="kw-dd-more">+{more}</span>}
+                {/* A team whose bots aren't loaded: a plain group circle, never a made-up bot face (#478 M4). */}
+                {!bots.length && (
+                  <span className="kw-dd-more" data-drop-team-icon>
+                    <Users size={18} className="text-zinc-300" aria-hidden="true" />
+                  </span>
+                )}
               </span>
             )}
             {card.count !== null && !refused && (

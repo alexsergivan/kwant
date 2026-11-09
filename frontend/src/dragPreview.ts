@@ -348,15 +348,25 @@ export interface WindowDrag {
 type Win = Pick<Window, 'addEventListener' | 'removeEventListener' | 'setTimeout' | 'clearTimeout'>;
 
 /**
- * Watches a window for file drags (design §6.1–6.2): a depth counter for enter and leave, plus a
- * watchdog that ends the drag when no dragover has come for `watchdogMs` (WebKit can miss the last
- * dragleave when the pointer leaves the window fast). A dragover after the watchdog fired starts it
- * again. Esc, dragend and drop end it too.
+ * Watches a window for file drags (design §6.1–6.2, Ada's #478 M2). It ends the drag when:
+ * - the enter/leave depth counter falls to 0;
+ * - a dragleave has no relatedTarget (the pointer left the window), unless a dragenter came in the
+ *   same task (WebKit gives no relatedTarget when crossing from one element to the next, and fires
+ *   the new element's dragenter just before the old one's dragleave);
+ * - the first mousemove or pointermove arrives: mouse events don't fire during an OS drag, so one
+ *   arriving means the drag is over (this catches a dragleave WebKit missed on a fast exit);
+ * - Esc, dragend or drop;
+ * - and, as a last fallback, no dragover for `watchdogMs` (1500 ms). WebKit, the Mac app's
+ *   WKWebView included, sends dragover mostly when the pointer moves, so a hand held still must
+ *   not end it; a shorter watchdog made the layer vanish and blink back.
+ * A dragover after the drag ended starts it again.
  */
-export function createDragWatch(win: Win, watchdogMs = 300) {
+export function createDragWatch(win: Win, watchdogMs = 1500) {
   let state: WindowDrag = { active: false, items: [], chats: 0 };
   let depth = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  // A dragenter came in this task: a null-relatedTarget dragleave right after it is a crossing, not an exit.
+  let justEntered = false;
   const subs = new Set<() => void>();
   const set = (next: Partial<WindowDrag>) => {
     state = { ...state, ...next };
@@ -381,6 +391,10 @@ export function createDragWatch(win: Win, watchdogMs = 300) {
     const d = e as DragEvent;
     if (!dragHasFiles(d.dataTransfer)) return;
     depth += 1;
+    justEntered = true;
+    win.setTimeout(() => {
+      justEntered = false;
+    }, 0);
     take(d);
     arm();
   };
@@ -392,9 +406,14 @@ export function createDragWatch(win: Win, watchdogMs = 300) {
     arm();
   };
   const onLeave = (e: Event) => {
-    if (!dragHasFiles((e as DragEvent).dataTransfer)) return;
+    const d = e as DragEvent;
+    if (!dragHasFiles(d.dataTransfer)) return;
     depth = Math.max(0, depth - 1);
-    if (depth === 0) end();
+    if (depth === 0 || (d.relatedTarget == null && !justEntered)) end();
+  };
+  // No mouse events during an OS drag: one arriving means the drag is over.
+  const onMove = () => {
+    if (state.active) end();
   };
   const onKey = (e: Event) => {
     if ((e as KeyboardEvent).key === 'Escape' && state.active) end();
@@ -406,6 +425,8 @@ export function createDragWatch(win: Win, watchdogMs = 300) {
     ['drop', end],
     ['dragend', end],
     ['keydown', onKey],
+    ['mousemove', onMove],
+    ['pointermove', onMove],
   ];
   let installed = false;
   const install = () => {

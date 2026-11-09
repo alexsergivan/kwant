@@ -76,9 +76,13 @@ const dataTransfer = (files, extraTypes = []) => ({
 });
 // Drag events are continuous-priority in React: their state lands on the next tick.
 const tick = () => new Promise((r) => setTimeout(r, 0));
-const fire = async (el, type, dt) => {
+// A dragleave inside the page has a relatedTarget (where the pointer went); pass `out` for one that
+// leaves the window, which has none (#478 M2 ends the drag on it).
+const OUT = Symbol('out of the window');
+const fire = async (el, type, dt, to) => {
   const e = new dom.window.Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(e, 'dataTransfer', { value: dt });
+  if (type === 'dragleave') Object.defineProperty(e, 'relatedTarget', { value: to === OUT ? null : (to ?? document.body) });
   ui.act(() => el.dispatchEvent(e));
   await tick();
   return e;
@@ -151,7 +155,7 @@ test('a file drag over the header or the message list lights up the chat; off th
     await fire(list, 'dragleave', two());
     assert.equal(phase(v.host), 'armed');
     // Out of the window: the layer fades and goes.
-    await fire(side, 'dragleave', two());
+    await fire(side, 'dragleave', two(), OUT);
     assert.equal(phase(v.host), 'leaving');
     await wait(150);
     assert.equal(layer(v.host), null);
@@ -338,7 +342,7 @@ test('a room shows its bots and shares with the room; an @mention gives one bot 
   }
 });
 
-test('the side pane is not a target, a modal keeps the layer away, Esc and the watchdog hide it', async () => {
+test('the side pane is not a target, a modal keeps the layer away; Esc, a mouse move or leaving the window hide it, a still hand does not', async () => {
   const v = ui.mount(props());
   try {
     const { list } = parts(v.host);
@@ -362,10 +366,20 @@ test('the side pane is not a target, a modal keeps the layer away, Esc and the w
     assert.equal(phase(v.host), 'leaving', 'Esc hides it');
     await endDrag();
 
+    // #478 M2: a hand held still (WebKit sends no dragover then) keeps the layer; the first mouse
+    // move means the OS drag is over; a dragleave out of the window ends it too.
     await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
     assert.equal(phase(v.host), 'over');
-    await wait(400);
-    assert.equal(layer(v.host), null, 'no dragover for 300 ms: hidden');
+    await wait(1000);
+    assert.equal(phase(v.host), 'over', 'no dragover for 1 s: still over');
+    ui.act(() => window.dispatchEvent(new dom.window.Event('mousemove')));
+    await tick();
+    assert.equal(phase(v.host), 'leaving', 'a mousemove ends it');
+    await endDrag();
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    await fire(list, 'dragleave', dataTransfer([mkFile('a.png')]), OUT);
+    assert.equal(phase(v.host), 'leaving', 'a dragleave with no relatedTarget ends it, depth or not');
     await endDrag();
 
     const modal = document.createElement('div');
@@ -374,6 +388,56 @@ test('the side pane is not a target, a modal keeps the layer away, Esc and the w
     await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
     assert.equal(layer(v.host), null, 'never over a modal');
     modal.remove();
+  } finally {
+    v.unmount();
+    await endDrag();
+  }
+});
+
+test('a team @mention shows that team\'s bots, not a made-up face, and gives the files to the team (#478 M4)', async () => {
+  const bots = ['Chef', 'Sous', 'Baker'].map((n, i) => ({ id: `kk${i}`, name: n, title: n, avatar_sprite: n }));
+  const teams = [{ id: 't-kitchen', name: 'Kitchen', member_kwants: ['kk0', 'kk2'] }, { id: 't-empty', name: 'Garden', member_kwants: ['gone'] }];
+  const v = ui.mount(props({ kwants: [{ id: 'k-front', name: 'Frontend', title: 'Frontend', avatar_sprite: 'Frontend' }, ...bots], teams }));
+  try {
+    const { list, field } = parts(v.host);
+    typeIn(field, '@Kitchen look at these');
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(heading(v.host), 'Drop to share with the Kitchen team');
+    const many = v.host.querySelector('.kw-dd-many');
+    assert.ok(many, 'the room stack, not one big avatar');
+    assert.ok(!v.host.querySelector('.kw-dd-one'), 'no single big avatar');
+    assert.deepEqual([...many.children].map((c) => c.getAttribute('aria-label') ?? c.textContent).length, 2, "Kitchen's two members");
+    assert.ok(!v.host.querySelector('[data-drop-team-icon]'), 'members found: no group circle');
+    await fire(list, 'drop', dataTransfer([mkFile('a.png')]));
+    assert.equal(said(v.host), '1 file added for the Kitchen team. Uploading.');
+    await endDrag();
+    // A team whose bots aren't loaded: a plain group circle.
+    typeIn(field, '@Garden here');
+    await fire(list, 'dragenter', dataTransfer([mkFile('b.png')]));
+    assert.equal(heading(v.host), 'Drop to share with the Garden team');
+    assert.ok(v.host.querySelector('.kw-dd-many [data-drop-team-icon]'), 'the Users circle');
+    assert.equal(v.host.querySelector('.kw-dd-many')?.children.length, 1, 'no bot faces');
+  } finally {
+    v.unmount();
+    await endDrag();
+  }
+});
+
+test('the composer\'s "New" hint hides while the drop layer is up and comes back after, unseen (#478 M3)', async () => {
+  const v = ui.mount(props());
+  try {
+    const { list } = parts(v.host);
+    const shown = () => {
+      const el = v.host.querySelector('[data-new-tag="mention"]');
+      return !!el && !el.classList.contains('hidden');
+    };
+    assert.equal(shown(), true, 'the hint shows before the drag');
+    await fire(list, 'dragenter', dataTransfer([mkFile('a.png')]));
+    assert.equal(phase(v.host), 'over');
+    assert.equal(shown(), false, 'hidden during the drag');
+    await endDrag();
+    assert.equal(layer(v.host), null);
+    assert.equal(shown(), true, 'back after: not marked as seen');
   } finally {
     v.unmount();
     await endDrag();
