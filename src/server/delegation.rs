@@ -1120,7 +1120,9 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     // Past the hold limit the lead hears the results while the turn that handed them out still
     // runs in this chat: that turn holds the chat, so this one runs beside it, not after it (P6)
     let beside_running = lead_turn_runs(state, batch.iter().chain([d]));
-    let outcome = try_kwant_turn(&scope, &lead, prompt, TurnOpts { beside_running, ..TurnOpts::default() }).await;
+    let mut opts = TurnOpts::default();
+    opts.beside_running = beside_running;
+    let outcome = try_kwant_turn(&scope, &lead, prompt, opts).await;
     // The cards of the batch are reviewed in a turn of their own that sees only each brief and
     // result (fresh eyes), then the ones still waiting get one reminder (a failed turn counts too)
     review_turn(state, batch, false).await;
