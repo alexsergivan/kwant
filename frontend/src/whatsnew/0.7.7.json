@@ -1,0 +1,42 @@
+{
+  "version": "0.7.7",
+  "date": "2026-11-09",
+  "highlights": [
+    {
+      "id": "claude-in-vm",
+      "title": "Run Claude inside the VM",
+      "text": "On Linux, in VM mode, each bot's Claude replies can run in a box of their own with no network. Your key stays outside. Off by default; turn it on under the VM card.",
+      "image": null,
+      "open": "settings/app"
+    },
+    {
+      "id": "windows",
+      "title": "kwant for Windows (beta)",
+      "text": "Each release now has a Windows installer for 64-bit Windows. It installs for your user only, so it needs no admin rights.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "fresh-reviews",
+      "title": "Dev mode reviews only fresh work",
+      "text": "Only branches and PRs that moved in the last 7 days get a review card. The newest go first, and Dev mode says how many old ones it skipped.",
+      "image": null,
+      "open": "dev"
+    },
+    {
+      "id": "bring-your-bots",
+      "title": "Bring your bots",
+      "text": "Get started can now import your bots from Grok Bot, ChatGPT, Claude or a file. Pick several files at once and check one preview first.",
+      "image": null,
+      "open": "settings/import"
+    }
+  ],
+  "fixes": [
+    "A checkpoint's git commit now comes only from the task's own git files.",
+    "Dev mode reads the checked-out branch safely and stays inside the bot's folder.",
+    "A type change in a branch no longer leaves every file in it unread.",
+    "Every release is now tested on a brand-new computer before it ships.",
+    "A flaky test is steady again.",
+    "Known issue: undo points saved by 0.7.6 or earlier under a linked parent folder can't be restored. kwant refuses safely."
+  ]
+}

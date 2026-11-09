@@ -54,7 +54,7 @@ make run   <span class="c"># builds the web app, then runs `cargo run -- serve`<
       <li><strong>API key:</strong> paste an Anthropic, OpenAI or xAI key. Keys are write-only: the app never shows them again.</li>
     </ul>
   </li>
-  <li><strong>Pick a team:</strong> each ready-made team has a lead, helpers and skills for one job. Or choose <strong>Keep the starter bots</strong>: Architect, TechLead and DevOps, in #general. You can add more teams later.</li>
+  <li><strong>Pick a team:</strong> each ready-made team has a lead, helpers and skills for one job. Or choose <strong>Keep the starter bots</strong>: Architect, TechLead and DevOps, in #general. Or choose <strong>Bring your bots</strong> (new in 0.7.7): it opens the importer, so you can bring bots from Grok Bot, ChatGPT, Claude or a file and check a preview first. A finished import completes this step. You can add more teams later.</li>
 </ol>
 <figure>
   <div class="phone">{{shot:phone-v076-get-started|The Get started card on a phone, under Welcome to kwant bots, with its three steps one under the other: Choose your AI with tiles for Claude, ChatGPT, Grok and an API key, then Sign in and Pick a team.|300px}}</div>
@@ -63,6 +63,15 @@ make run   <span class="c"># builds the web app, then runs `cargo run -- serve`<
 <figure>
   <div class="frame">{{shot:v076-device-sign-in-card|The Sign in step of the Get started card after choosing ChatGPT. It says to open auth.openai.com/codex/device and enter the code TRLH-4821, with a Copy button, an Open auth.openai.com/codex/device button and a note that kwant is waiting for you to finish there.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>Signing in to ChatGPT with a short code. The code here is made up.</figcaption>
+</figure>
+<figure>
+  <div class="frame">{{shot:v077-bring-your-bots|kwant's Get started screen at step 3, Pick a team: the Inbox, Sales and Coding teams, Keep the starter bots, and a new Bring your bots tile for importing bots from Grok Bot, ChatGPT, Claude or a file.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Bring your bots opens the importer from Get started.</figcaption>
+</figure>
+<p>The importer's <strong>Upload a file</strong> takes several files in one pick or drop, for example every Grok Bot export you have. kwant packs them into one zip in your browser and shows one preview with every bot, plus the names of any files it couldn't read. A pick is limited to 500 files and 20 MB in all, and a zip can only be imported on its own.</p>
+<figure>
+  <div class="frame">{{shot:v077-import-several-card|The Check before importing preview: 3 bots will be created from 3 files, untick any you don't want. Gear-Scout and Trail-Guide are ticked, each with its description, what it brings (such as 1 memory, 1 skill, 1 routine) and a Worth a look note that bot names can't have spaces or @, so Gear Scout becomes Gear-Scout.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>Three files, one preview. Nothing is created until you press Import.</figcaption>
 </figure>
 <p>The short-code sign-in for ChatGPT and Grok is in the Get started card. <strong>Settings → This space → Accounts</strong> still asks you to sign the <code>codex</code> or <code>grok</code> CLI in on this machine (<code>codex login</code>, <code>grok login</code>), and that's also where you add API keys. You can add several accounts per engine, such as a work and a personal one. See <a href="accounts.html">Accounts &amp; profiles</a>.</p>
 

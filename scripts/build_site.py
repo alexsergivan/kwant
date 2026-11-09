@@ -77,6 +77,7 @@ DOC_GROUPS = [
         ("accounts", "Accounts & profiles"),
         ("models", "Models & routing"),
         ("approvals", "Approvals & passwords"),
+        ("agents-in-vm", "Run Claude in the VM"),
         ("flight-school", "Flight School"),
         ("smart-results", "Smart Results"),
         ("dev-mode", "Dev mode"),
@@ -189,7 +190,9 @@ CLOSEUPS = {"v69-signin-card", "v69-working-card", "v611-reply-close", "v611-hum
             "v071-post-github-card", "v071-dev-on-card", "v071-dev-off-armed-card", "v071-lgtm-card",
             "v072-dev-repos-card", "v072-dev-explainer-card", "v072-dev-repo-chips-card", "v072-switch-on-card",
             "v07-dev-review-card", "v076-get-started-card", "v076-device-sign-in-card",
-            "v076-linux-install-card", "v076-whats-new-card"}
+            "v076-linux-install-card", "v076-whats-new-card",
+            "v077-claude-vm-card", "v077-isolation-notice-card", "v077-bring-your-bots-card",
+            "v077-dev-fresh-card", "v077-import-several-card", "v077-whats-new-card"}
 
 
 def shot(root, name, alt, sizes):
@@ -999,6 +1002,8 @@ Key facts:
 - kwant has no token (no coin, no crypto). The official X account is @kwantbot (https://x.com/kwantbot).
 - Mac app: https://github.com/alexsergivan/kwant/releases/latest/download/kwant_universal.dmg
 - Linux app (beta, x86_64): https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb (Ubuntu 22.04+, Debian 12+) or https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage
+- Windows app (beta, 64-bit): the kwant_X.Y.Z_windows_x64_beta_setup.exe installer on https://github.com/alexsergivan/kwant/releases/latest (per-user install, no admin rights).
+- Run Claude inside the VM (Linux, off by default): each bot's Claude replies run in a container with no network, and the real key stays outside. https://kwant.si/docs/agents-in-vm
 - The program you install and run is called `kwnt` (`kwnt serve`).
 - No telemetry: kwant sends nothing to its developers. The kwant.si website sets no cookies and counts page views with
   Cloudflare's cookie-free Web Analytics.

@@ -46,7 +46,7 @@ caption: As each project describes itself, checked November 1, 2026
 ## Pick OpenClaw if…
 
 - You want to message your agent from WhatsApp, iMessage, Telegram or Slack. kwant's interface is its own web and Mac apps, so it isn't the pick for that.
-- You want native apps on macOS, iOS, Android, Windows and Linux. kwant's desktop app is Mac only today.
+- You want native apps on macOS, iOS, Android, Windows and Linux. kwant's desktop app is for Mac and Linux, with a Windows beta since 0.7.7.
 - You want a very large community around the project. By GitHub stars, OpenClaw is far larger than kwant (393,569 against 16), and that is a real advantage for help, plugins and examples.
 
 Check the [OpenClaw security guide](https://docs.openclaw.ai/gateway/security) before you connect other people: the README notes that tools run on the host for the main session unless you configure sandboxing.
@@ -56,7 +56,7 @@ Check the [OpenClaw security guide](https://docs.openclaw.ai/gateway/security) b
 - You want an agent that learns: skills created from experience, searchable past sessions, a model of you across sessions.
 - You want to run it somewhere other than your own box, such as a Docker container, over SSH, or on Modal, Daytona or Vercel Sandbox.
 - You want a built-in scheduler that delivers results to a chat platform.
-- You're on Windows. Hermes Agent installs natively there; kwant doesn't have a Windows app yet.
+- You're on Windows. Hermes Agent installs natively there; kwant's Windows app is a beta since 0.7.7.
 
 kwant also has memory and skills: bots remember what matters, and a skill a bot proposes is only used once you approve it ([memory and skills](https://kwant.si/docs/memory-skills)). Learning is the centre of Hermes Agent's design, though, and we don't claim kwant matches it.
 

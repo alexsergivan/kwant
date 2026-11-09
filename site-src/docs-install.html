@@ -47,6 +47,15 @@ card_art: avatar:devops
 <p>Updates arrive in the app, which checks each one's signature before installing it. With the <code>.deb</code>, your system asks for your password to install the update. To remove the <code>.deb</code>, run <code>sudo apt remove kwant</code>; your data in <code>~/.kwnt</code> stays.</p>
 <p class="note warn"><strong>The Linux app is a beta.</strong> We've tested it in clean installs of Ubuntu 22.04, Ubuntu 24.04 and Debian 12, but not yet on real desktops, so the tray icon, Wayland and HiDPI screens may behave differently on yours. It's x86_64 only for now: no ARM builds. Something wrong? <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Open an issue</a>.</p>
 
+<h2 id="windows">The Windows app <span class="beta">beta</span></h2>
+<p>On 64-bit Windows there's an app too. It runs kwant on your PC with the same data folder as <code>kwnt serve</code>: <code>.kwnt</code> in your user folder.</p>
+<ol>
+  <li>Open the <a href="https://github.com/alexsergivan/kwant/releases/latest" rel="noopener">latest release</a> and download <code>kwant_X.Y.Z_windows_x64_beta_setup.exe</code>. Its SHA-256 is next to it, in the <code>.sha256</code> file and in the release notes.</li>
+  <li>Run it. It installs for your user only, so it needs no admin rights, and adds kwant to the Start menu.</li>
+  <li>The installer isn't code-signed yet, so the first time Windows SmartScreen warns about an unrecognized app. Click <b>More info</b>, then <b>Run anyway</b>.</li>
+</ol>
+<p class="note warn"><strong>The Windows app is a beta.</strong> It doesn't update itself yet: a new version is a new installer. Grok, the VM (bots work on your own computer instead) and looking inside videos aren't on Windows yet. Dev mode works, but in a folder OneDrive syncs with Files On-Demand, kwant can't safely read the repo's git files, so it asks you before every push from that folder. Something wrong? <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Open an issue</a>.</p>
+
 <h2 id="side-by-side">This Mac and your servers, side by side</h2>
 <p>The Mac and Linux app can open This Mac and every server you use at the same time, each in its own window. Nothing restarts when you go from one to another.</p>
 <figure>
@@ -66,8 +75,8 @@ card_art: avatar:devops
 <h2 id="whats-new">After an update: What's new</h2>
 <p>New in 0.7.6. After kwant updates, a <strong>What's new</strong> sheet shows the version's highlights, smaller changes and fixes. Each device shows it once, and <strong>Got it</strong> closes it. The web app shows it when its server updates. <strong>See what's new</strong> on the <strong>Updated</strong> banner opens it again, and <strong>Settings › About</strong> keeps every version's notes.</p>
 <figure>
-  <div class="frame">{{shot:v076-whats-new|kwant's What's new sheet for version 0.7.6 over a chat, updated from 0.7.5, with four highlights: signing in to ChatGPT and Grok from Get started, recipe cards, setting up a Linux server in one line, and Get started in three steps. Smaller changes and fixes are listed below, with a Got it button.|(max-width: 860px) 100vw, 760px}}</div>
-  <figcaption>What's new in 0.7.6, as the app shows it after the update.</figcaption>
+  <div class="frame">{{shot:v077-whats-new|kwant's What's new dialog for 0.7.7 over the app, updated from 0.7.6: Run Claude inside the VM, kwant for Windows (beta), Dev mode reviews only fresh work and Bring your bots, then Smaller changes and fixes: 6, and a Got it button.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>What's new in 0.7.7, as the app shows it after the update.</figcaption>
 </figure>
 
 <h2 id="app">Install the web app</h2>
@@ -143,7 +152,7 @@ KWNT_CLIS=claude,codex docker compose up -d --build   <span class="c"># any of c
 docker compose exec kwnt kwnt doctor                  <span class="c"># what works, and the fix for what doesn't</span>
 docker compose exec kwnt claude auth login            <span class="c"># or codex login --device-auth, grok login --device-auth</span>
 docker compose exec kwnt kwnt token --raw             <span class="c"># the token to paste on the sign-in screen</span></code></pre>
-<p><strong>The released image.</strong> Since 0.7.6, <code>docker compose up -d</code> without <code>--build</code> pulls the released kwnt image, <code>ghcr.io/alexsergivan/kwnt</code>, instead of building it here. It has no AI CLIs inside, so add an API key in the app, or build with <code>KWNT_CLIS</code> as above. To pin a version, set <code>KWNT_VERSION=0.7.6</code> in <code>.env</code>. To update: <code>docker compose pull kwnt &amp;&amp; docker compose up -d</code>.</p>
+<p><strong>The released image.</strong> Since 0.7.6, <code>docker compose up -d</code> without <code>--build</code> pulls the released kwnt image, <code>ghcr.io/alexsergivan/kwnt</code>, instead of building it here. It has no AI CLIs inside, so add an API key in the app, or build with <code>KWNT_CLIS</code> as above. To pin a version, set <code>KWNT_VERSION=0.7.7</code> in <code>.env</code>. To update: <code>docker compose pull kwnt &amp;&amp; docker compose up -d</code>.</p>
 <p>Instead of CLIs you can add an API key in the app under <strong>Settings → This space → Accounts</strong>. CLI sign-ins persist in the <code>kwnt-home</code> volume and data in <code>kwnt-data</code>. The UI is published on <code>127.0.0.1:8799</code> only: put HTTPS in front (below) and set <code>KWNT_ALLOWED_ORIGINS=https://your.domain</code> in <code>.env</code>. With Caddy that's a two-line <code>Caddyfile</code>: <code>your.domain { reverse_proxy 127.0.0.1:8799 }</code>.</p>
 <p>Requests through Docker's published port count as remote, so sign in with a one-time link: <code>docker compose exec kwnt kwnt signin-link</code> prints a new one (and a QR code), or paste the token from <code>docker compose exec kwnt kwnt token --raw</code>. kwant's own <code>execute_shell</code> tool isn't available in this stack, because it would need the host's Docker socket; the CLIs' shell tools work. Upgrading from an older image, where kwnt ran as root? If it says <code>/data isn't writable</code>, run once: <code>docker compose run --rm -u root kwnt chown -R 10001:10001 /data</code>.</p>
 

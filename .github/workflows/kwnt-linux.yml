@@ -152,6 +152,10 @@ jobs:
     needs: binary
     runs-on: ubuntu-22.04
     timeout-minutes: 30
+    env:
+      # mac.yml's release job downloads every artifact of the tag run, and download-artifact@v4 can't fetch
+      # build-push-action's .dockerbuild build records: that broke the mac-v0.7.6 publish (Nov 8, 12:20).
+      DOCKER_BUILD_RECORD_UPLOAD: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

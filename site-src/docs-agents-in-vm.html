@@ -1,0 +1,89 @@
+title: Run Claude inside the VM: each bot's Claude in a box with no network
+description: On Linux, in VM mode, kwant can run each bot's Claude replies in a container of its own with no network. Your real key or sign-in stays outside. What it protects, what it doesn't, and what changes for the bot.
+card_title: Run Claude in the VM
+path: docs/agents-in-vm.html
+nav: agents-in-vm
+card: Run each bot's Claude replies in a box of their own with no network, while your key stays outside. Linux, off by default.
+card_art: avatar:devops
+---
+<p class="kicker">Docs</p>
+<h1>Run Claude inside the VM</h1>
+<p class="intro">When kwant's computer is in VM mode and <strong>Run Claude inside the VM</strong> is on, each bot's Claude replies run in a container of their own, with no network. The container never holds your real key or sign-in. Its only way out is kwant itself, which passes on Claude's model calls and refuses everything else. It's off by default, and it works on Linux in 0.7.7.</p>
+<figure>
+  <div class="frame">{{shot:v077-claude-vm-card|The card Computer for browsing and commands with VM (browser, shell and Claude isolated) selected. Under it, Run Claude inside the VM is switched on, and Right now shows Claude Isolated, Codex Not isolated yet and Grok Not isolated yet.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>The switch sits under the VM card. The chips under Right now say where Claude, Codex and Grok replies run.</figcaption>
+</figure>
+
+<h2 id="turn-on">Turn it on</h2>
+<ol>
+  <li>Open <strong>Settings → All spaces</strong> and find the card <strong>Computer for browsing and commands</strong>.</li>
+  <li>Pick <strong>VM</strong>. Docker has to be running.</li>
+  <li>Turn on <strong>Run Claude inside the VM</strong>. It switches right away, with nothing to save.</li>
+</ol>
+<p>Turning it on the first time sets up Claude's VM once: the Claude chip says <strong>Getting ready</strong> while kwant downloads about 860 MB, which takes a few minutes. A reply sent meanwhile says so and asks you to try again, and nothing runs on your computer instead. Turning the setting off lets Claude reply on your computer while the setup keeps going.</p>
+<ul>
+  <li><strong>Linux only in 0.7.7.</strong> On a Mac the switch is greyed out with "Coming to Mac later".</li>
+  <li><strong>Claude only.</strong> Codex and Grok still run on your computer, and their chips say "Not isolated yet".</li>
+  <li><strong>Claude sign-ins only.</strong> A Claude API-key or Custom account still runs on your computer. Its chip says "Not isolated".</li>
+  <li><strong>Local mode:</strong> the setting is kept but does nothing, and the chip says "Not isolated".</li>
+  <li><strong>Docker stopped:</strong> the switch is greyed out with "Start Docker to turn this on". If it was already on, you can still turn it off.</li>
+</ul>
+
+<h2 id="protects">What it protects</h2>
+<p>A Claude bot that has been talked into misbehaving, by a web page, a file or another bot's text, can't do these things while it runs inside the VM:</p>
+<ul>
+  <li><strong>Read your sign-ins or keys.</strong> Your <code>~/.claude</code>, <code>~/.codex</code>, <code>~/.grok</code> and <code>~/.ssh</code> folders, kwant's data folder and the sign-in homes are never mounted. The container gets a stand-in key, and the real one stays with kwant. A bot folder that is, holds or sits inside one of these is refused before the container starts.</li>
+  <li><strong>Send your key or files anywhere.</strong> The container has no network. kwant passes on only Claude's model call and refuses everything else, including Anthropic's server-side tools.</li>
+  <li><strong>Run up an unbounded bill in one reply.</strong> Each reply may make 200 model requests. The next one is refused, and the chat says the reply hit its limit.</li>
+  <li><strong>Leave a trap for kwant on your computer.</strong> kwant notes every folder an isolated reply used. In such a folder, Claude on your computer starts without the folder's own hooks and MCP servers, Codex and Grok don't start at all, and command checks that point into the folder are refused. kwant reads these folders without following links, so a swapped folder can't point a read somewhere else.</li>
+</ul>
+
+<h2 id="not-protected">What it doesn't protect against</h2>
+<ul>
+  <li><strong>Spending your credits.</strong> The bot uses your real Claude account through kwant. The request limit bounds one reply, not a day of replies.</li>
+  <li><strong>Actions through kwant's own tools.</strong> kwant's browser, shell, files, teammates and approvals still work for the bot, as they do without isolation. They follow each bot's approval settings, so a bot that may run commands without asking still can.</li>
+  <li><strong>kwant's built-in shell.</strong> It runs in kwant's own VM container, which keeps its network.</li>
+  <li><strong>Files you run later.</strong> A bot can still write git hooks, <code>.envrc</code>, package scripts or editor tasks in its folder. They run if <em>you</em> use them on your own computer.</li>
+  <li><strong>Codex, Grok, and Claude API-key or Custom accounts.</strong> They run on your computer as before.</li>
+  <li><strong>A Docker or kernel escape.</strong> The container drops every capability and runs as your user with a read-only root and no network, but it shares the kernel.</li>
+</ul>
+
+<h2 id="changes">What changes for the bot</h2>
+<ul>
+  <li><strong>No WebSearch or WebFetch.</strong> Those reach the network from Anthropic's side, so they're off. Bots use kwant's browser tools instead.</li>
+  <li><strong>Only kwant's own MCP servers.</strong> Outside servers, such as Notion, are left out of isolated replies because the container can't reach them. They still work with the setting off.</li>
+  <li><strong>A new session.</strong> The first isolated reply starts a fresh Claude session. Later replies carry on from it.</li>
+  <li><strong>Two at once.</strong> Two isolated replies run at a time. The next one waits its turn, and the chat says it's in line.</li>
+</ul>
+
+<h2 id="cant-run">When it can't run</h2>
+<p>With the setting on, any problem stops the reply with a card in the chat, and nothing runs on your computer instead. The card says what happened and what you can do. Turning the setting off is always up to you.</p>
+<figure>
+  <div class="frame">{{shot:v077-isolation-notice-card|A notice in a kwant chat after a message to Ann: Ann didn't reply: Claude couldn't start inside the VM. Docker isn't running on this computer. Start Docker, then Retry. It adds that while Run Claude inside the VM is on, nothing ran on this computer, and has Retry and Computer settings buttons.|(max-width: 860px) 100vw, 760px}}</div>
+  <figcaption>A reply that can't run isolated stops with a card. It never falls back to your computer.</figcaption>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>The card says</th><th>What to do</th></tr></thead>
+  <tbody>
+    <tr><td>Claude's VM is still setting up, or its download failed</td><td>Wait and try again. The next reply retries the download.</td></tr>
+    <tr><td>Docker isn't running</td><td>Start Docker, or turn the setting off.</td></tr>
+    <tr><td>The bot's container didn't start, or stopped partway</td><td>Try again. If it keeps failing, turn the setting off and check Docker.</td></tr>
+    <tr><td>No Claude sign-in, or it expired</td><td>Sign in to Claude again.</td></tr>
+    <tr><td>The folder is private</td><td>Give the bot a folder that isn't your home, a sign-in folder, kwant's data or Docker's folder.</td></tr>
+    <tr><td>Codex or Grok was asked to work in a folder an isolated Claude used</td><td>Use another folder for Codex or Grok.</td></tr>
+    <tr><td>kwant runs as root</td><td>Run kwant as a normal user. The container never runs as root.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="settings">Server settings</h2>
+<p>In <code>&lt;data&gt;/config.toml</code>:</p>
+<pre><code>[agents_in_vm]
+request_limit = 200   # model requests per reply (env KWNT_AGENT_REQUEST_LIMIT)
+memory_mb = 1024      # per bot container (env KWNT_AGENT_MEMORY_MB)
+max_turns = 2         # isolated replies at once (env KWNT_AGENT_MAX_TURNS)</code></pre>
+
+<h2 id="sign-in">Who refreshes a sign-in</h2>
+<p>While the setting is on, kwant is the only thing that refreshes a bot's own Claude sign-in. It never refreshes your computer's own Claude sign-in: when that has expired, the reply stops and asks you to sign in again on your computer.</p>
+
+<h2 id="known-issue">Known issue in 0.7.7</h2>
+<p>Undo points saved by kwant 0.7.6 or earlier in a folder reached through a linked (symlinked) parent folder can't be restored in 0.7.7. kwant refuses safely and changes nothing. New undo points work.</p>

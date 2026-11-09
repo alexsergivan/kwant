@@ -71,6 +71,7 @@ card_art: avatar:devops
 
 <h2 id="reviews">Reviews</h2>
 <p>The <strong>Reviews</strong> tab has one card per open pull request, written by a bot that didn't write the code, on a different engine when the space has one. A new push to the pull request gets a new review.</p>
+<p>Since 0.7.7, Dev mode reviews only fresh work: a branch or pull request gets a review card only if it moved in the last 7 days, so old branches don't fill the desk or spend model calls. Cards on branches that went quiet go stale, and a new push brings a branch back. The newest are reviewed first, and Dev mode's status says how many old ones it skipped.</p>
 <figure>
   <div class="frame">{{shot:v07-dev-review|Review card #24, Speed up cart totals, from ben-cart-speed into main, written by Ben on Claude Sonnet and reviewed by Cody on Codex: a Medium risk badge because a test was loosened, two tests flagged as made easier to pass with their lines, a light for each security check, and the start of the findings, 1 high and 1 medium.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>A second bot's review. Nothing goes to GitHub until you press it.</figcaption>

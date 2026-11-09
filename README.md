@@ -32,7 +32,7 @@
 
 <p align="center"><b>kwant has no token.</b> Official X account is <a href="https://x.com/kwantbot">@kwantbot</a>.</p>
 
-kwant gives you a team of bots that share chats, hand work to each other with an @mention and get it done on their own, on a schedule or while you're away. Each message goes to the bot that fits, and the reply says why. Work shows up as cards on a Mission board, and a task turns **Verified** only when kwant runs the check itself, never on a bot's word. Keep separate spaces for work and home, each with its own bots and accounts. Run it as an app on your Mac or Linux, or on a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
+kwant gives you a team of bots that share chats, hand work to each other with an @mention and get it done on their own, on a schedule or while you're away. Each message goes to the bot that fits, and the reply says why. Work shows up as cards on a Mission board, and a task turns **Verified** only when kwant runs the check itself, never on a bot's word. Keep separate spaces for work and home, each with its own bots and accounts. Run it as an app on your Mac, Linux or Windows (beta) PC, or on a server, with the Claude, Codex or Grok CLI you already use, or your own API keys.
 
 It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the binary.
 
@@ -42,6 +42,9 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 
 ## New in 0.7
 
+- **Run Claude inside the VM** (0.7.7). On Linux, in VM mode, a new switch under the VM card runs each bot's Claude replies in a container of its own with no network (off by default). Your real key or sign-in stays outside: kwant passes on only the model calls Claude needs and refuses the rest, with 200 model requests per reply. Codex, Grok and Claude API-key accounts still run on your computer, and chips under the switch show where each one runs. If isolation can't start, the reply stops with a card that says why, and nothing runs unprotected. [Guide](https://kwant.si/docs/agents-in-vm)
+- **kwant for Windows (beta)** (0.7.7). Each release has an installer for 64-bit Windows, `kwant_X.Y.Z_windows_x64_beta_setup.exe`, with its SHA-256. It installs for your user only, with no admin rights. It isn't code-signed yet, so SmartScreen warns the first time: **More info**, then **Run anyway**. In the beta it doesn't update itself, and Grok, the VM and looking inside videos aren't on Windows yet. [Guide](https://kwant.si/docs/install#windows)
+- **Bring your bots, and fresh-only reviews** (0.7.7). Get started's Pick a team step has a **Bring your bots** tile that imports bots from Grok Bot, ChatGPT, Claude or several files at once, with one preview. Dev mode reviews only branches and PRs that moved in the last 7 days, newest first, and says how many old ones it skipped. Every release is now tested on a brand-new computer before it ships. Known issue: undo points saved by 0.7.6 or earlier under a linked (symlinked) parent folder can't be restored; kwant refuses safely. [Guide](https://kwant.si/docs/quickstart#get-started)
 - **Recipes you can cook from** (0.7.6). When a reply holds one recipe, with an ingredients list and the method, it shows as a recipe card. Change the servings (1 to 24) and every amount kwant can read rescales, in kitchen fractions such as ¼, ⅓ and ½, with each changed amount highlighted and a **Back to N** button. Oven temperatures, and anything it can't read, stay as written, and **Show as text** gives the reply back word for word. [Guide](https://kwant.si/docs/smart-results#recipes)
 - **Get started** (0.7.6). A new person's #general starts with one card in three steps: **Choose your AI** (Claude, ChatGPT, Grok or an API key), **Sign in**, and **Pick a team**. Choosing an AI installs it when it's missing. ChatGPT (Codex) and Grok sign in there with a short code you approve in your browser, with no Terminal; Claude signs in through claude.ai, as before. [Guide](https://kwant.si/docs/quickstart#get-started)
 - **A Linux server in one line** (0.7.6). `curl -fsSL https://kwant.si/install.sh | sh` installs kwant on Ubuntu 22.04+ or Debian 12+ (x86_64 or arm64), never with sudo. It checks the download's SHA-256 first, runs kwant as a user service or in the background, and ends with your sign-in link. Run it again to update; your data stays. Docker Compose now pulls the released image, `ghcr.io/alexsergivan/kwnt`. [Guide](https://kwant.si/docs/install#one-line)
@@ -124,7 +127,7 @@ Screenshots come from a demo space with sample data.
 
 ## Quickstart
 
-The quickest way is the app for Mac or Linux: download it, add an AI account you already have and ask your first question. There's nothing to build. On a server, see [Self-hosting on a VPS](#self-hosting-on-a-vps).
+The quickest way is the app for Mac, Linux or Windows (beta): download it, add an AI account you already have and ask your first question. There's nothing to build. On a server, see [Self-hosting on a VPS](#self-hosting-on-a-vps).
 
 ### What you need
 
@@ -150,7 +153,11 @@ The Linux app is for x86_64. Like the Mac app, it runs its own kwant, uses the s
 - **Ubuntu 22.04 or newer, Debian 12 or newer:** download [`kwant_amd64.deb`](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_amd64.deb), then run `sudo apt install ./kwant_amd64.deb`.
 - **Other distributions:** download [`kwant_x86_64.AppImage`](https://github.com/alexsergivan/kwant/releases/latest/download/kwant_x86_64.AppImage), then `chmod +x kwant_x86_64.AppImage` and run it. It needs a normal GTK desktop and FUSE.
 
-Updates arrive in the app, which checks each one's signature before it installs it; with the `.deb`, your system asks for your password. `sudo apt remove kwant` removes the `.deb`, and your data in `~/.kwnt` stays. It's a beta: tested in containers on Ubuntu 22.04, Ubuntu 24.04 and Debian 12, not yet on real desktops, so the tray icon, Wayland and HiDPI may vary. There's no ARM Linux or Windows app yet.
+Updates arrive in the app, which checks each one's signature before it installs it; with the `.deb`, your system asks for your password. `sudo apt remove kwant` removes the `.deb`, and your data in `~/.kwnt` stays. It's a beta: tested in containers on Ubuntu 22.04, Ubuntu 24.04 and Debian 12, not yet on real desktops, so the tray icon, Wayland and HiDPI may vary. There's no ARM Linux app yet.
+
+### On Windows: the app (beta)
+
+Download `kwant_X.Y.Z_windows_x64_beta_setup.exe` from the [latest release](https://github.com/alexsergivan/kwant/releases/latest) (its SHA-256 is next to it) and run it. It's for 64-bit Windows, installs for your user only with no admin rights, and runs kwant on your PC with the same `.kwnt` data folder in your user folder as `kwnt serve`. The installer isn't code-signed yet, so the first time Windows SmartScreen warns about an unrecognized app: click **More info**, then **Run anyway**. In the beta, the app doesn't update itself (a new version is a new installer), and Grok, the VM and looking inside videos aren't available on Windows yet. In a folder OneDrive syncs with Files On-Demand, Dev mode asks before every push.
 
 ### Run from a fresh clone
 
@@ -302,7 +309,7 @@ The first start needs `huggingface.co`. Behind a proxy that blocks it, start kwa
 
 **Do I need an account with you?** No. There's no sign-up: you run kwant yourself and sign in only to the AI accounts you add.
 
-**Which computers can run it?** A Mac (Apple silicon or Intel), a Linux desktop (x86_64, beta) or a Linux server, with the binary or Docker Compose. There's no Windows app yet.
+**Which computers can run it?** A Mac (Apple silicon or Intel), a Linux desktop (x86_64, beta), a Windows PC (64-bit, beta) or a Linux server, with the binary or Docker Compose.
 
 **Can I run it on a free server?** Yes. [This guide](https://kwant.si/blog/self-host-grok-bot-alternative-free-oracle-cloud) sets kwant up on Oracle Cloud's free tier, step by step.
 

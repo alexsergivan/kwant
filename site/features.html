@@ -59,6 +59,7 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-077">New in 0.7.7</a></li>
         <li><a href="#new-076">New in 0.7.6</a></li>
         <li><a href="#new-075">New in 0.7.5</a></li>
         <li><a href="#new-074">New in 0.7.4</a></li>
@@ -92,7 +93,49 @@
   </div>
 </nav>
 
-<section id="new-076" class="fgroup">
+<section id="new-077" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.7.7</p>
+      <h2>Claude in a box of its own, and kwant on Windows</h2>
+      <p>On Linux, each bot's Claude replies can run in a container with no network, while your key stays outside. kwant now has a Windows installer (beta). Get started can bring your bots from other apps, and Dev mode reviews only fresh work.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="claude-vm">Run Claude inside the VM</h3>
+        <p>In VM mode, a new switch under the VM card, <strong>Run Claude inside the VM</strong>, runs each bot's Claude replies in a container of their own with no network. The container never holds your real key or sign-in: kwant passes on only the model calls Claude needs and refuses everything else, and each reply may make 200 model requests. Codex, Grok and Claude API-key accounts still run on your computer, and the chips under the switch say where each one runs. It's off by default and works on Linux. <a href="/docs/agents-in-vm">What it protects, and what it doesn't</a></p>
+      </div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v077-claude-vm-poster.webp?v=e32f1110e9" width="1280" height="800" aria-label="Demo: in Settings, All spaces, the computer is set to VM. Run Claude inside the VM is switched on, and the Claude chip under Right now goes from Not isolated to Getting ready, with a note that the one-time setup downloads about 860 MB, and then to Isolated. Codex and Grok stay Not isolated yet."><source src="assets/media/clip-v077-claude-vm.mp4?v=0904f21726" type="video/mp4"></video></div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="isolation-notice">
+        <span class="shot"><a class="zoom" href="assets/media/v077-isolation-notice-card-2880.webp?v=491d5a1c67" data-caption="Close-up of a notice in a kwant chat after a message to Ann: Ann didn&#x27;t reply: Claude couldn&#x27;t start inside the VM. Docker isn&#x27;t running on this computer. Start Docker, then Retry. It adds that nothing ran on this computer, and has Retry and Computer settings buttons."><img src="assets/media/v077-isolation-notice-card-1440.webp?v=ef86b47895" srcset="assets/media/v077-isolation-notice-card-1440.webp?v=ef86b47895 1440w, assets/media/v077-isolation-notice-card-2880.webp?v=491d5a1c67 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Close-up of a notice in a kwant chat after a message to Ann: Ann didn&#x27;t reply: Claude couldn&#x27;t start inside the VM. Docker isn&#x27;t running on this computer. Start Docker, then Retry. It adds that nothing ran on this computer, and has Retry and Computer settings buttons."></a></span>
+        <div class="card-body"><h3>Nothing runs unprotected</h3><p>With the setting on, a reply that can't run isolated stops with a card that says why, such as Docker not running or Claude's VM still setting up, and links to the setting. It never falls back to your computer. When Docker is down the switch is greyed out, but a switch that's already on can still be turned off. <a href="/docs/agents-in-vm#cant-run">When it can't run</a></p></div>
+      </article>
+      <article class="card" id="bring-your-bots">
+        <span class="shot"><a class="zoom" href="assets/media/v077-bring-your-bots-card-2880.webp?v=2dd736041b" data-caption="Close-up of the Pick a team step in Get started: the Coding team, Keep the starter bots, and a Bring your bots tile that imports bots from Grok Bot, ChatGPT or Claude, or from a file, after you check a preview."><img src="assets/media/v077-bring-your-bots-card-1440.webp?v=8cdce1bedb" srcset="assets/media/v077-bring-your-bots-card-1440.webp?v=8cdce1bedb 1440w, assets/media/v077-bring-your-bots-card-2880.webp?v=2dd736041b 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Close-up of the Pick a team step in Get started: the Coding team, Keep the starter bots, and a Bring your bots tile that imports bots from Grok Bot, ChatGPT or Claude, or from a file, after you check a preview."></a></span>
+        <div class="card-body"><h3>Bring your bots</h3><p>Step 3 of Get started, Pick a team, has a <strong>Bring your bots</strong> tile next to Keep the starter bots. It opens the importer, so you can bring bots from Grok Bot, ChatGPT, Claude or a file and check a preview first. Upload a file now takes several files at once, up to 500 files and 20 MB, and shows one preview with every bot. <a href="/docs/quickstart#get-started">Your first start</a></p></div>
+      </article>
+      <article class="card" id="dev-fresh">
+        <span class="shot"><a class="zoom" href="assets/media/v077-dev-fresh-card-2880.webp?v=3fc1847c0e" data-caption="Close-up of the Dev desk reviews. A line reads Reviewing pull requests updated in the last 7 days. 12 older ones skipped. Below it is the review card for pull request 27, Add a coupon field to checkout, marked LGTM."><img src="assets/media/v077-dev-fresh-card-1440.webp?v=c26b11ddc2" srcset="assets/media/v077-dev-fresh-card-1440.webp?v=c26b11ddc2 1440w, assets/media/v077-dev-fresh-card-2880.webp?v=3fc1847c0e 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Close-up of the Dev desk reviews. A line reads Reviewing pull requests updated in the last 7 days. 12 older ones skipped. Below it is the review card for pull request 27, Add a coupon field to checkout, marked LGTM."></a></span>
+        <div class="card-body"><h3>Dev mode reviews only fresh work</h3><p>A branch or pull request gets a review card only if it moved in the last 7 days, so old branches no longer fill the desk or spend model calls. The newest go first, a new push brings a quiet branch back, and Dev mode's status says how many old ones it skipped. <a href="/docs/dev-mode#reviews">Reviews</a></p></div>
+      </article>
+      <article class="card" id="whats-new-077">
+        <span class="shot"><a class="zoom" href="assets/media/v077-whats-new-card-2880.webp?v=9228a9067d" data-caption="Close-up of kwant&#x27;s What&#x27;s new sheet for 0.7.7, updated from 0.7.6: Run Claude inside the VM, kwant for Windows (beta), Dev mode reviews only fresh work and Bring your bots, each with a Show me link."><img src="assets/media/v077-whats-new-card-1440.webp?v=6d5fdace96" srcset="assets/media/v077-whats-new-card-1440.webp?v=6d5fdace96 1440w, assets/media/v077-whats-new-card-2880.webp?v=9228a9067d 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Close-up of kwant&#x27;s What&#x27;s new sheet for 0.7.7, updated from 0.7.6: Run Claude inside the VM, kwant for Windows (beta), Dev mode reviews only fresh work and Bring your bots, each with a Show me link."></a></span>
+        <div class="card-body"><h3>What's new in 0.7.7</h3><p>After the update, the What's new sheet lists these changes once on each device, with a button that opens each one. <strong>Settings › About</strong> keeps every version's notes. <a href="/docs/install#whats-new">After an update</a></p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="windows" class="span2"><h3>kwant for Windows (beta)</h3><p>Each release now has an installer for 64-bit Windows, with its SHA-256. It installs for your user only, so it needs no admin rights. It isn't code-signed yet, so SmartScreen warns the first time: choose More info, then Run anyway. In the beta the app doesn't update itself, and Grok, the VM and looking inside videos aren't on Windows yet. <a href="/docs/install#windows">Install on Windows</a></p></li>
+      <li id="fresh-machine"><h3>Tested on a brand-new computer</h3><p>Before a release ships, CI starts kwant as a new user on an empty machine: Get started shows, Claude installs in one click, and its sign-in starts.</p></li>
+      <li id="in-line"><h3>A grey "In line" line</h3><p>A chat waiting for a bot's other replies to finish says so in grey, with its place in line.</p></li>
+      <li id="safer-reads" class="span2"><h3>Safer reads of git files</h3><p>A checkpoint's commit now comes only from the task's own git files, and restoring a checkpoint refuses a folder that was swapped for a link. Dev mode reads the checked-out branch only inside the bot's folder, never through a link.</p></li>
+      <li id="fixes-077" class="span3"><h3>Smaller fixes and one known issue</h3><p>A symlink that turned into a file in a branch no longer marks every file in the change as unread. A flaky test is steady again. Known issue: undo points saved by kwant 0.7.6 or earlier in a folder reached through a linked (symlinked) parent folder can't be restored in 0.7.7. kwant refuses safely and changes nothing. New undo points work.</p></li>
+    </ul>
+  </div>
+</section>
+
+<section id="new-076" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.6</p>
@@ -134,7 +177,7 @@
   </div>
 </section>
 
-<section id="new-075" class="fgroup alt">
+<section id="new-075" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.5</p>
@@ -185,7 +228,7 @@
   </div>
 </section>
 
-<section id="new-074" class="fgroup">
+<section id="new-074" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.4</p>
@@ -242,7 +285,7 @@
   </div>
 </section>
 
-<section id="new-073" class="fgroup alt">
+<section id="new-073" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.3</p>
@@ -282,7 +325,7 @@
   </div>
 </section>
 
-<section id="new-072" class="fgroup">
+<section id="new-072" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.2</p>
@@ -322,7 +365,7 @@
   </div>
 </section>
 
-<section id="new-071" class="fgroup alt">
+<section id="new-071" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.1</p>
@@ -362,7 +405,7 @@
   </div>
 </section>
 
-<section id="new-07" class="fgroup" data-covers="0.6.12 0.6.13">
+<section id="new-07" class="fgroup alt" data-covers="0.6.12 0.6.13">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7</p>
@@ -402,7 +445,7 @@
   </div>
 </section>
 
-<section id="new-0611" class="fgroup alt">
+<section id="new-0611" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.11</p>
@@ -437,7 +480,7 @@
   </div>
 </section>
 
-<section id="new-069" class="fgroup">
+<section id="new-069" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.9</p>
@@ -484,7 +527,7 @@
   </div>
 </section>
 
-<section id="new-065" class="fgroup alt">
+<section id="new-065" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.5</p>
@@ -520,7 +563,7 @@
   </div>
 </section>
 
-<section id="new-064" class="fgroup">
+<section id="new-064" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6.4 · Who answers</p>
@@ -554,7 +597,7 @@
   </div>
 </section>
 
-<section id="new-06" class="fgroup alt">
+<section id="new-06" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.6 · Mission Control</p>
@@ -583,7 +626,7 @@
   </div>
 </section>
 
-<section id="new-05" class="fgroup">
+<section id="new-05" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.5 · Browser &amp; status</p>
@@ -602,7 +645,7 @@
   </div>
 </section>
 
-<section id="discovery" class="fgroup alt">
+<section id="discovery" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.5 · Automation Discovery</p>
@@ -620,7 +663,7 @@
   </div>
 </section>
 
-<section id="new-teams" class="fgroup">
+<section id="new-teams" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Hand-offs &amp; review</p>
@@ -639,7 +682,7 @@
   </div>
 </section>
 
-<section id="performance" class="fgroup alt">
+<section id="performance" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Performance &amp; audits</p>
@@ -666,7 +709,7 @@
   </div>
 </section>
 
-<section id="mission-board" class="fgroup">
+<section id="mission-board" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Mission board</p>
@@ -711,7 +754,7 @@
   </div>
 </section>
 
-<section id="flight-school" class="fgroup alt">
+<section id="flight-school" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Flight School</p>
@@ -754,7 +797,7 @@
   </div>
 </section>
 
-<section id="connect" class="fgroup">
+<section id="connect" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Connect apps</p>
@@ -782,7 +825,7 @@
   </div>
 </section>
 
-<section id="teams" class="fgroup alt">
+<section id="teams" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Teams & chat</p>
@@ -811,7 +854,7 @@
   </div>
 </section>
 
-<section id="spaces" class="fgroup">
+<section id="spaces" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Spaces & accounts</p>
@@ -842,7 +885,7 @@
   </div>
 </section>
 
-<section id="own" class="fgroup alt">
+<section id="own" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Works on its own</p>
@@ -870,7 +913,7 @@
   </div>
 </section>
 
-<section id="safety" class="fgroup">
+<section id="safety" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Safety & control</p>
@@ -901,7 +944,7 @@
   </div>
 </section>
 
-<section id="knowledge" class="fgroup alt">
+<section id="knowledge" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Your bots and knowledge</p>
@@ -928,7 +971,7 @@
   </div>
 </section>
 
-<section id="more" class="fgroup" aria-labelledby="more-title">
+<section id="more" class="fgroup alt" aria-labelledby="more-title">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">And more</p>
@@ -945,7 +988,7 @@
         <h3>Search every chat</h3><p><kbd>⌘K</kbd> or <kbd>Ctrl K</kbd> searches every channel in a space.</p>
       </article>
       <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/v2-import-2880.webp?v=f478cf56b8" data-caption="The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file."><img class="app" src="assets/media/v2-import-1440.webp?v=5da3a2c815" srcset="assets/media/v2-import-1440.webp?v=5da3a2c815 1440w, assets/media/v2-import-2880.webp?v=f478cf56b8 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The import dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file."></a></div>
+        <div class="frame"><a class="zoom" href="assets/media/v2-import-2880.webp?v=952b4d7b24" data-caption="The Import bots into Trailhead Outfitters dialog: bring a bot from Grok, ChatGPT, Claude or another app, or upload one or several files."><img class="app" src="assets/media/v2-import-1440.webp?v=8a9445fec1" srcset="assets/media/v2-import-1440.webp?v=8a9445fec1 1440w, assets/media/v2-import-2880.webp?v=952b4d7b24 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The Import bots into Trailhead Outfitters dialog: bring a bot from Grok, ChatGPT, Claude or another app, or upload one or several files."></a></div>
         <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude or a file, with no tools or keys. <a href="/alternatives/grok-bot">Coming from Grok Bot?</a></p>
       </article>
       <article class="gcard">
@@ -960,7 +1003,7 @@
   </div>
 </section>
 
-<section id="phone" class="fgroup alt phone-sec" aria-labelledby="phone-title">
+<section id="phone" class="fgroup phone-sec" aria-labelledby="phone-title">
   <div class="wrap phone-grid">
     <div class="row-copy">
       <p class="kicker">Anywhere</p>
@@ -974,7 +1017,7 @@
   </div>
 </section>
 
-<section id="running" class="fgroup">
+<section id="running" class="fgroup alt">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">Running it</p>
@@ -987,11 +1030,11 @@
       <div><dt>Tools</dt><dd>Any MCP server</dd></div>
       <div><dt>Optional</dt><dd><a href="/docs/mcp">Composio</a> for Gmail, Slack, Notion</dd></div>
       <div><dt>Where</dt><dd>Your laptop or a VPS (<a href="/self-hosted-ai-agents">what is a self-hosted AI agent team?</a>)</dd></div>
-      <div><dt>OS</dt><dd>macOS (<a href="https://github.com/alexsergivan/kwant/releases/latest" rel="noopener">app</a> or CLI), Linux, Docker</dd></div>
+      <div><dt>OS</dt><dd>macOS (<a href="https://github.com/alexsergivan/kwant/releases/latest" rel="noopener">app</a> or CLI), Linux, Windows (beta), Docker</dd></div>
     </dl>
     <div class="grid two">
       <article class="card">
-        <span class="shot"><a class="zoom" href="assets/media/v2-computer-mode-2880.webp?v=5504338e12" data-caption="Settings, All spaces: the Laya router status and the choice of computer for browsing and commands, Local computer or VM."><img class="app" src="assets/media/v2-computer-mode-1440.webp?v=5abadea21a" srcset="assets/media/v2-computer-mode-1440.webp?v=5abadea21a 1440w, assets/media/v2-computer-mode-2880.webp?v=5504338e12 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, All spaces: the Laya router status and the choice of computer for browsing and commands, Local computer or VM."></a></span>
+        <span class="shot"><a class="zoom" href="assets/media/v2-computer-mode-2880.webp?v=4731694eed" data-caption="Settings, All spaces: the card Computer for browsing and commands with Local computer and VM, and under it the Run Claude inside the VM switch, turned off, with Claude Not isolated and Codex and Grok Not isolated yet."><img class="app" src="assets/media/v2-computer-mode-1440.webp?v=7f41bd4ab6" srcset="assets/media/v2-computer-mode-1440.webp?v=7f41bd4ab6 1440w, assets/media/v2-computer-mode-2880.webp?v=4731694eed 2880w" sizes="(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings, All spaces: the card Computer for browsing and commands with Local computer and VM, and under it the Run Claude inside the VM switch, turned off, with Claude Not isolated and Codex and Grok Not isolated yet."></a></span>
         <div class="card-body"><h3>Local or VM</h3><p>Bots browse and run commands on your computer, or in Docker containers kept away from your files.</p></div>
       </article>
       <article class="card">
@@ -1012,7 +1055,7 @@
   </div>
 </section>
 
-<section id="parallel" class="fgroup alt" aria-labelledby="parallel-title">
+<section id="parallel" class="fgroup" aria-labelledby="parallel-title">
   <div class="wrap">
     <div class="row">
       <div class="row-copy">
@@ -1092,7 +1135,7 @@
 </footer>
 <script src="assets/js/site.js?v=9846e390c8" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-08","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-09","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

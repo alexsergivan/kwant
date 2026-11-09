@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run Claude inside the VM: each bot&#x27;s Claude in a box with no network · kwant</title>
+<meta name="description" content="On Linux, in VM mode, kwant can run each bot&#x27;s Claude replies in a container of its own with no network. Your real key or sign-in stays outside. What it protects, what it doesn&#x27;t, and what changes for the bot.">
+<meta name="theme-color" content="#f4f1ff">
+<meta name="color-scheme" content="light">
+<link rel="canonical" href="https://kwant.si/docs/agents-in-vm">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="kwant">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Run Claude inside the VM: each bot&#x27;s Claude in a box with no network · kwant">
+<meta property="og:description" content="On Linux, in VM mode, kwant can run each bot&#x27;s Claude replies in a container of its own with no network. Your real key or sign-in stays outside. What it protects, what it doesn&#x27;t, and what changes for the bot.">
+<meta property="og:url" content="https://kwant.si/docs/agents-in-vm">
+<meta property="og:image" content="https://kwant.si/assets/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Run Claude in the VM: Run each bot&#x27;s Claude replies in a box of their own with no network, while your key stays outside. Linux, off by default.">
+<meta property="article:published_time" content="2026-11-09">
+<meta property="article:modified_time" content="2026-11-09">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@kwantbot">
+<meta name="twitter:title" content="Run Claude inside the VM: each bot&#x27;s Claude in a box with no network · kwant">
+<meta name="twitter:description" content="On Linux, in VM mode, kwant can run each bot&#x27;s Claude replies in a container of its own with no network. Your real key or sign-in stays outside. What it protects, what it doesn&#x27;t, and what changes for the bot.">
+<meta name="twitter:image" content="https://kwant.si/assets/og.png">
+<meta name="twitter:image:alt" content="Run Claude in the VM: Run each bot&#x27;s Claude replies in a box of their own with no network, while your key stays outside. Linux, off by default.">
+<link rel="icon" href="../favicon.svg?v=0abbeedab4" type="image/svg+xml">
+<link rel="icon" href="../favicon-32.png?v=ac1a1e97c4" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
+<link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="../assets/css/site.css?v=06a87a1c17">
+</head>
+<body class="page-docs">
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+    <nav class="nav" aria-label="Main">
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart" aria-current="page">Docs</a>
+      <a href="/blog/">Blog</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span>GitHub</span></a>
+    </nav>
+  </div>
+</header>
+<main id="main">
+<div class="wrap docs">
+  <nav class="docs-nav" aria-label="Docs">
+    <h2>Docs</h2>
+    <div class="docs-group"><h3>Get started</h3><ul><li><a href="/docs/quickstart">Quickstart</a></li><li><a href="/docs/install">Install &amp; run</a></li></ul></div>
+    <div class="docs-group"><h3>Using kwant</h3><ul><li><a href="/docs/spaces">Spaces</a></li><li><a href="/docs/bots-and-teams">Bots &amp; teams</a></li><li><a href="/docs/accounts">Accounts &amp; profiles</a></li><li><a href="/docs/models">Models &amp; routing</a></li><li><a href="/docs/approvals">Approvals &amp; passwords</a></li><li><a href="/docs/agents-in-vm" aria-current="page">Run Claude in the VM</a></li><li><a href="/docs/flight-school">Flight School</a></li><li><a href="/docs/smart-results">Smart Results</a></li><li><a href="/docs/dev-mode">Dev mode</a></li></ul></div>
+    <div class="docs-group"><h3>Works on its own</h3><ul><li><a href="/docs/mission-board">Mission board</a></li><li><a href="/docs/goals">Goals</a></li><li><a href="/docs/idea-jar">Idea jar</a></li><li><a href="/docs/routines">Routines &amp; bot actions</a></li><li><a href="/docs/memory-skills">Memory, skills &amp; search</a></li><li><a href="/docs/lessons">Lessons</a></li><li><a href="/docs/truth-ledger">Truth Ledger</a></li><li><a href="/docs/loose-ends">Loose ends &amp; letters</a></li><li><a href="/docs/parallel-universe">Parallel Universe</a></li></ul></div>
+    <div class="docs-group"><h3>Connect</h3><ul><li><a href="/docs/mcp">MCP tools</a></li><li><a href="/docs/agents-connect">Coding agents</a></li><li><a href="/docs/telegram">Telegram</a></li><li><a href="/docs/browser">Browser</a></li></ul></div>
+  </nav>
+  <article class="prose">
+<p class="kicker">Docs</p>
+<h1>Run Claude inside the VM</h1>
+<p class="intro">When kwant's computer is in VM mode and <strong>Run Claude inside the VM</strong> is on, each bot's Claude replies run in a container of their own, with no network. The container never holds your real key or sign-in. Its only way out is kwant itself, which passes on Claude's model calls and refuses everything else. It's off by default, and it works on Linux in 0.7.7.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v077-claude-vm-card-2880.webp?v=fa11ae7f15" data-caption="The card Computer for browsing and commands with VM (browser, shell and Claude isolated) selected. Under it, Run Claude inside the VM is switched on, and Right now shows Claude Isolated, Codex Not isolated yet and Grok Not isolated yet."><img src="../assets/media/v077-claude-vm-card-1440.webp?v=f742210e41" srcset="../assets/media/v077-claude-vm-card-1440.webp?v=f742210e41 1440w, ../assets/media/v077-claude-vm-card-2880.webp?v=fa11ae7f15 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="The card Computer for browsing and commands with VM (browser, shell and Claude isolated) selected. Under it, Run Claude inside the VM is switched on, and Right now shows Claude Isolated, Codex Not isolated yet and Grok Not isolated yet."></a></div>
+  <figcaption>The switch sits under the VM card. The chips under Right now say where Claude, Codex and Grok replies run.</figcaption>
+</figure>
+
+<h2 id="turn-on">Turn it on</h2>
+<ol>
+  <li>Open <strong>Settings → All spaces</strong> and find the card <strong>Computer for browsing and commands</strong>.</li>
+  <li>Pick <strong>VM</strong>. Docker has to be running.</li>
+  <li>Turn on <strong>Run Claude inside the VM</strong>. It switches right away, with nothing to save.</li>
+</ol>
+<p>Turning it on the first time sets up Claude's VM once: the Claude chip says <strong>Getting ready</strong> while kwant downloads about 860 MB, which takes a few minutes. A reply sent meanwhile says so and asks you to try again, and nothing runs on your computer instead. Turning the setting off lets Claude reply on your computer while the setup keeps going.</p>
+<ul>
+  <li><strong>Linux only in 0.7.7.</strong> On a Mac the switch is greyed out with "Coming to Mac later".</li>
+  <li><strong>Claude only.</strong> Codex and Grok still run on your computer, and their chips say "Not isolated yet".</li>
+  <li><strong>Claude sign-ins only.</strong> A Claude API-key or Custom account still runs on your computer. Its chip says "Not isolated".</li>
+  <li><strong>Local mode:</strong> the setting is kept but does nothing, and the chip says "Not isolated".</li>
+  <li><strong>Docker stopped:</strong> the switch is greyed out with "Start Docker to turn this on". If it was already on, you can still turn it off.</li>
+</ul>
+
+<h2 id="protects">What it protects</h2>
+<p>A Claude bot that has been talked into misbehaving, by a web page, a file or another bot's text, can't do these things while it runs inside the VM:</p>
+<ul>
+  <li><strong>Read your sign-ins or keys.</strong> Your <code>~/.claude</code>, <code>~/.codex</code>, <code>~/.grok</code> and <code>~/.ssh</code> folders, kwant's data folder and the sign-in homes are never mounted. The container gets a stand-in key, and the real one stays with kwant. A bot folder that is, holds or sits inside one of these is refused before the container starts.</li>
+  <li><strong>Send your key or files anywhere.</strong> The container has no network. kwant passes on only Claude's model call and refuses everything else, including Anthropic's server-side tools.</li>
+  <li><strong>Run up an unbounded bill in one reply.</strong> Each reply may make 200 model requests. The next one is refused, and the chat says the reply hit its limit.</li>
+  <li><strong>Leave a trap for kwant on your computer.</strong> kwant notes every folder an isolated reply used. In such a folder, Claude on your computer starts without the folder's own hooks and MCP servers, Codex and Grok don't start at all, and command checks that point into the folder are refused. kwant reads these folders without following links, so a swapped folder can't point a read somewhere else.</li>
+</ul>
+
+<h2 id="not-protected">What it doesn't protect against</h2>
+<ul>
+  <li><strong>Spending your credits.</strong> The bot uses your real Claude account through kwant. The request limit bounds one reply, not a day of replies.</li>
+  <li><strong>Actions through kwant's own tools.</strong> kwant's browser, shell, files, teammates and approvals still work for the bot, as they do without isolation. They follow each bot's approval settings, so a bot that may run commands without asking still can.</li>
+  <li><strong>kwant's built-in shell.</strong> It runs in kwant's own VM container, which keeps its network.</li>
+  <li><strong>Files you run later.</strong> A bot can still write git hooks, <code>.envrc</code>, package scripts or editor tasks in its folder. They run if <em>you</em> use them on your own computer.</li>
+  <li><strong>Codex, Grok, and Claude API-key or Custom accounts.</strong> They run on your computer as before.</li>
+  <li><strong>A Docker or kernel escape.</strong> The container drops every capability and runs as your user with a read-only root and no network, but it shares the kernel.</li>
+</ul>
+
+<h2 id="changes">What changes for the bot</h2>
+<ul>
+  <li><strong>No WebSearch or WebFetch.</strong> Those reach the network from Anthropic's side, so they're off. Bots use kwant's browser tools instead.</li>
+  <li><strong>Only kwant's own MCP servers.</strong> Outside servers, such as Notion, are left out of isolated replies because the container can't reach them. They still work with the setting off.</li>
+  <li><strong>A new session.</strong> The first isolated reply starts a fresh Claude session. Later replies carry on from it.</li>
+  <li><strong>Two at once.</strong> Two isolated replies run at a time. The next one waits its turn, and the chat says it's in line.</li>
+</ul>
+
+<h2 id="cant-run">When it can't run</h2>
+<p>With the setting on, any problem stops the reply with a card in the chat, and nothing runs on your computer instead. The card says what happened and what you can do. Turning the setting off is always up to you.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v077-isolation-notice-card-2880.webp?v=491d5a1c67" data-caption="A notice in a kwant chat after a message to Ann: Ann didn&#x27;t reply: Claude couldn&#x27;t start inside the VM. Docker isn&#x27;t running on this computer. Start Docker, then Retry. It adds that while Run Claude inside the VM is on, nothing ran on this computer, and has Retry and Computer settings buttons."><img src="../assets/media/v077-isolation-notice-card-1440.webp?v=ef86b47895" srcset="../assets/media/v077-isolation-notice-card-1440.webp?v=ef86b47895 1440w, ../assets/media/v077-isolation-notice-card-2880.webp?v=491d5a1c67 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A notice in a kwant chat after a message to Ann: Ann didn&#x27;t reply: Claude couldn&#x27;t start inside the VM. Docker isn&#x27;t running on this computer. Start Docker, then Retry. It adds that while Run Claude inside the VM is on, nothing ran on this computer, and has Retry and Computer settings buttons."></a></div>
+  <figcaption>A reply that can't run isolated stops with a card. It never falls back to your computer.</figcaption>
+</figure>
+<div class="table-wrap"><table>
+  <thead><tr><th>The card says</th><th>What to do</th></tr></thead>
+  <tbody>
+    <tr><td>Claude's VM is still setting up, or its download failed</td><td>Wait and try again. The next reply retries the download.</td></tr>
+    <tr><td>Docker isn't running</td><td>Start Docker, or turn the setting off.</td></tr>
+    <tr><td>The bot's container didn't start, or stopped partway</td><td>Try again. If it keeps failing, turn the setting off and check Docker.</td></tr>
+    <tr><td>No Claude sign-in, or it expired</td><td>Sign in to Claude again.</td></tr>
+    <tr><td>The folder is private</td><td>Give the bot a folder that isn't your home, a sign-in folder, kwant's data or Docker's folder.</td></tr>
+    <tr><td>Codex or Grok was asked to work in a folder an isolated Claude used</td><td>Use another folder for Codex or Grok.</td></tr>
+    <tr><td>kwant runs as root</td><td>Run kwant as a normal user. The container never runs as root.</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="settings">Server settings</h2>
+<p>In <code>&lt;data&gt;/config.toml</code>:</p>
+<pre><code>[agents_in_vm]
+request_limit = 200   # model requests per reply (env KWNT_AGENT_REQUEST_LIMIT)
+memory_mb = 1024      # per bot container (env KWNT_AGENT_MEMORY_MB)
+max_turns = 2         # isolated replies at once (env KWNT_AGENT_MAX_TURNS)</code></pre>
+
+<h2 id="sign-in">Who refreshes a sign-in</h2>
+<p>While the setting is on, kwant is the only thing that refreshes a bot's own Claude sign-in. It never refreshes your computer's own Claude sign-in: when that has expired, the reply stops and asks you to sign in again on your computer.</p>
+
+<h2 id="known-issue">Known issue in 0.7.7</h2>
+<p>Undo points saved by kwant 0.7.6 or earlier in a folder reached through a linked (symlinked) parent folder can't be restored in 0.7.7. kwant refuses safely and changes nothing. New undo points work.</p>
+
+    <nav class="pager" aria-label="Docs pages"><a class="prev" href="/docs/approvals"><small>Previous</small>Approvals &amp; passwords</a><a class="next" href="/docs/flight-school"><small>Next</small>Flight School</a></nav>
+  </article>
+</div>
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="foot-brand">
+      <a class="brand" href="../" aria-label="kwant home"><svg viewBox="0 0 16 17" width="38" height="38" shape-rendering="crispEdges" aria-hidden="true"><rect x="10" y="4" width="1" height="1" fill="#1d1147"/><rect x="10" y="1" width="2" height="2" fill="#ddd5ff"/><rect x="4" y="5" width="8" height="1" fill="#fff"/><rect x="3" y="6" width="10" height="1" fill="#fff"/><rect x="2" y="7" width="12" height="7" fill="#fff"/><rect x="3" y="14" width="10" height="1" fill="#fff"/><rect x="4" y="15" width="8" height="1" fill="#ddd5ff"/><rect x="13" y="7" width="1" height="7" fill="#ddd5ff"/><rect x="5" y="8" width="2" height="3" fill="#1d1147"/><rect x="9" y="8" width="2" height="3" fill="#1d1147"/><rect x="3" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="11" y="11" width="2" height="1" fill="#b8a9fb"/><rect x="6" y="12" width="1" height="1" fill="#1d1147"/><rect x="9" y="12" width="1" height="1" fill="#1d1147"/><rect x="7" y="13" width="2" height="1" fill="#1d1147"/><rect x="4" y="16" width="2" height="1" fill="#ddd5ff"/><rect x="10" y="16" width="2" height="1" fill="#ddd5ff"/></svg><span>kwant</span></a>
+      <p>A self-hosted team of AI bots in one binary. Free and open source under AGPL-3.0.</p>
+      <p class="foot-star">kwant runs on coffee and GitHub stars. <a href="https://github.com/alexsergivan/kwant" rel="noopener">Toss one our way <span aria-hidden="true">⭐</span></a></p>
+    </div>
+    <nav aria-label="Product">
+      <h2>Product</h2>
+      <a href="/features">Features</a>
+      <a href="/docs/quickstart">Quickstart</a>
+      <a href="/docs/install">Install &amp; run</a>
+      <a href="/self-hosted-ai-agents">Self-hosted AI agents</a>
+      <a href="/blog/">Blog</a>
+      <a href="/docs/mcp">MCP tools</a>
+    </nav>
+    <nav aria-label="Using kwant">
+      <h2>Using kwant</h2>
+      <a href="/docs/spaces">Spaces</a>
+      <a href="/docs/accounts">Accounts</a>
+      <a href="/docs/approvals">Approvals</a>
+      <a href="/docs/routines">Routines</a>
+    </nav>
+    <nav aria-label="Project">
+      <h2>Project</h2>
+      <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>
+      <a href="https://github.com/alexsergivan/kwant/issues" rel="noopener">Issues</a>
+      <a href="https://github.com/alexsergivan/kwant/blob/main/SECURITY.md" rel="noopener">Security</a>
+      <a href="/contact">Contact</a>
+      <a href="https://x.com/kwantbot" rel="noopener">X (@kwantbot)</a>
+    </nav>
+    <nav aria-label="Legal">
+      <h2>Legal</h2>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms of use</a>
+      <a href="/terms#license">License</a>
+    </nav>
+    <p class="foot-legal">kwant is not affiliated with or endorsed by Anthropic, OpenAI, xAI, Google or Apple. Their names and products are trademarks of their owners.</p>
+    <p class="foot-notice"><strong>kwant has no token.</strong> Official X account is <a href="https://x.com/kwantbot" rel="noopener">@kwantbot</a>.</p>
+    <p class="foot-made">Made in Germany with <span aria-hidden="true">❤️</span><span class="sr-only">love</span></p>
+  </div>
+</footer>
+<script src="../assets/js/site.js?v=9846e390c8" defer></script>
+<script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/agents-in-vm#article","headline":"Run Claude inside the VM: each bot's Claude in a box with no network","description":"On Linux, in VM mode, kwant can run each bot's Claude replies in a container of its own with no network. Your real key or sign-in stays outside. What it protects, what it doesn't, and what changes for the bot.","url":"https://kwant.si/docs/agents-in-vm","mainEntityOfPage":"https://kwant.si/docs/agents-in-vm","image":"https://kwant.si/assets/og.png","inLanguage":"en","datePublished":"2026-11-09","dateModified":"2026-11-09","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Run Claude in the VM","item":"https://kwant.si/docs/agents-in-vm"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
+</body>
+</html>
