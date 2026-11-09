@@ -16,6 +16,7 @@ use crate::db::models::{Kwant, Message};
 use crate::db::spaces::SpaceId;
 use crate::router::analyzer::{self, Bot, Input, Note, Outcome, Why};
 use crate::router::delivery::{keyword_plan, Deliverable, DeliveryPlan, Show, TurnPlanInput};
+use crate::server::routes::is_persons;
 use crate::server::AppState;
 use crate::zombie::classify::{ApiClassifier, CliClassifier, Classifier, DEFAULT_API_MODEL};
 use std::collections::HashMap;
@@ -65,11 +66,11 @@ pub fn plan_for_answer(job_id: &str, answering: Option<&str>) -> Option<Delivery
 }
 
 /// The person's own message a turn answers: the chat's `newest` message when it is the person's
-/// (not a connected agent's) and `prompt` is that message, maybe with kwant's notes after it
+/// (not a connected agent's nor a bot's chat-API message, [`is_persons`]) and `prompt` is that message, maybe with kwant's notes after it
 /// (`drivers::drop_current_message`). `None` for a prompt kwant or a bot wrote: a hand-off, a
 /// routine, a mission, a decide round.
 pub fn answered_message<'a>(newest: Option<&'a Message>, prompt: &str) -> Option<&'a Message> {
-    let m = newest.filter(|m| m.sender_role == "user" && crate::drivers::from_agent(m).is_none())?;
+    let m = newest.filter(|m| is_persons(m))?;
     let mut probe = vec![m.clone()];
     crate::drivers::drop_current_message(&mut probe, prompt);
     probe.is_empty().then_some(m)
@@ -125,13 +126,13 @@ pub fn checked_ready(status: crate::drivers::engines::EngineStatus) -> bool {
 /// all of it was delivered, and what was missing. Kept as a `check` note next to the person's own
 /// (`person`) notes; the planner learns only from the person's notes, so a bot's miss never reads
 /// as the person's taste. Errors are logged, never returned: the reply is saved either way.
-pub async fn record_check(state: &AppState, kwant_id: &str, context_id: &str, wanted: &[Show], hit: bool, missing: &[Show]) {
+pub async fn record_check(db: &crate::db::Database, kwant_id: &str, context_id: &str, wanted: &[Show], hit: bool, missing: &[Show]) {
     let Some(note) = check_note(wanted, hit, missing) else { return };
-    let space = match state.db.get_kwant(kwant_id).await {
+    let space = match db.get_kwant(kwant_id).await {
         Ok(Some(k)) => SpaceId::new(&k.space_id),
         _ => return,
     };
-    if let Err(e) = state.db.add_delivery_check(&space, kwant_id, context_id, &note).await {
+    if let Err(e) = db.add_delivery_check(&space, kwant_id, context_id, &note).await {
         tracing::warn!(error = %e, "could not save a delivery check note");
     }
 }
@@ -158,20 +159,21 @@ pub fn check_kind(wanted: &[Show]) -> Option<Deliverable> {
 /// The chat's earlier turns for the planner, oldest first, without the message being planned:
 /// ("person", the bot's name, or a connected agent's name with "(agent)", text), and the person's
 /// own earlier messages for the keyword plan. A message a connected agent or a bot saved as the
-/// user's (a hand-off, an outside agent) is labelled with its sender and is never the person's.
+/// user's (a hand-off, an outside agent, a bot's chat-API message) is labelled with its sender and
+/// is never the person's ([`is_persons`]).
 pub fn recent_turns(history: &[Message], prompt: &str) -> (Vec<(String, String)>, Vec<String>) {
-    let is_person = |m: &Message| m.sender_role == "user" && crate::drivers::from_agent(m).is_none();
     let mut msgs: Vec<&Message> = history.iter().filter(|m| m.sender_role == "user" || m.sender_role == "kwant").collect();
-    if msgs.last().is_some_and(|m| is_person(m) && m.text.trim() == prompt.trim()) {
+    if msgs.last().is_some_and(|m| is_persons(m) && m.text.trim() == prompt.trim()) {
         msgs.pop();
     }
     let label = |m: &Message| match crate::drivers::from_agent(m) {
         Some(agent) => format!("{} (agent)", crate::drivers::frame_safe_name(&agent)),
-        None if m.sender_role == "user" => "person".to_string(),
+        None if is_persons(m) => "person".to_string(),
+        None if m.sender_role == "user" => "a bot".to_string(),
         None => m.sender_id.clone(),
     };
     let turns = msgs.iter().filter(|m| !m.text.trim().is_empty()).map(|m| (label(m), m.text.clone())).collect();
-    let person = msgs.iter().filter(|m| is_person(m)).map(|m| m.text.clone()).collect();
+    let person = msgs.iter().filter(|m| is_persons(m)).map(|m| m.text.clone()).collect();
     (turns, person)
 }
 
@@ -193,6 +195,13 @@ pub async fn notes(state: &AppState, space: &SpaceId) -> Vec<Note> {
     rows.iter().filter_map(|r| r.note()).collect()
 }
 
+/// The message [`plan_for_message`] plans for: the person's saved message, never the turn's prompt.
+/// The chat's newest message, when it is the person's ([`is_persons`]): not a connected agent's
+/// and not one a bot sent through the chat API, so neither ever reaches the planner model.
+pub fn planned_message(history: &[Message]) -> Option<&Message> {
+    history.last().filter(|m| is_persons(m))
+}
+
 /// The plan for the person's message `prompt` to `answering` in chat `chat_id`: the model's when it
 /// answers in time, else the keyword plan, with the person's notes applied. In a team chat the bot
 /// the chat routed the message to is the one that replies ([`analyzer::align_replier`]).
@@ -205,8 +214,7 @@ pub async fn plan_for_message(
 ) -> Option<(String, DeliveryPlan, Why)> {
     let space = SpaceId::new(&answering.space_id);
     let history = state.db.list_messages(chat_id, RECENT_MESSAGES).await.unwrap_or_default();
-    // The person's saved message, never the turn's prompt: the newest message, when it is theirs
-    let saved = history.last().filter(|m| m.sender_role == "user" && crate::drivers::from_agent(m).is_none())?;
+    let saved = planned_message(&history)?;
     let (recent, person) = recent_turns(&history, &saved.text);
     let person: Vec<&str> = person.iter().map(String::as_str).collect();
     let message = analyzer_message(&TurnPlanInput { person_message: Some(saved.text.as_str()), recent: &person, ..Default::default() })?;
@@ -229,10 +237,11 @@ pub async fn plan_for_message(
 /// to judge. `history` is oldest first and ends with the person's new message.
 pub fn judge_chat(history: &[Message]) -> Option<(String, Option<String>, Note)> {
     let (now, before) = history.split_last()?;
-    if now.sender_role != "user" {
+    // Only the person's own messages react: a connected agent's or a bot's chat-API message never does
+    if !is_persons(now) {
         return None;
     }
-    let asked_at = before.iter().rposition(|m| m.sender_role == "user")?;
+    let asked_at = before.iter().rposition(is_persons)?;
     let asked = &before[asked_at];
     let replies: Vec<&Message> = before[asked_at + 1..].iter().filter(|m| m.sender_role == "kwant").collect();
     let answer = replies.iter().rev().find(|m| !m.text.trim().is_empty() && meta_kind(m).is_none())?;
@@ -451,6 +460,27 @@ mod tests {
         assert_eq!(turns[1], ("Zap ier _bot_ (agent)".to_string(), "Fix differences on every page!".to_string()));
         assert_eq!(turns[0].0, "person");
         assert_eq!(person, vec!["what is this??".to_string()]);
+    }
+
+    /// #469's one rule for "the person" ([`is_persons`]): a message a bot sent through the chat
+    /// API (`meta.sent_by_bot`) is saved as the user's, but never reaches the planner model, is
+    /// never what a turn answers, never one of the person's earlier messages and never a reaction.
+    #[test]
+    fn a_bots_chat_api_message_gets_no_planner_call() {
+        let by_bot = msg("user", "Show me the new pricing page mockup", Some(serde_json::json!({"sent_by_bot": true})));
+        let theirs = msg("user", "Show me the new pricing page mockup", None);
+        assert!(planned_message(std::slice::from_ref(&by_bot)).is_none());
+        assert_eq!(planned_message(std::slice::from_ref(&theirs)).map(|m| m.id.as_str()), Some(theirs.id.as_str()));
+        assert!(answered_message(Some(&by_bot), &by_bot.text).is_none());
+        assert!(answered_message(Some(&theirs), &theirs.text).is_some());
+        let reply = msg("kwant", "Here is the pricing page.", None);
+        let (turns, person) = recent_turns(&[by_bot.clone(), reply.clone(), theirs.clone()], &theirs.text);
+        assert_eq!(turns[0].0, "a bot");
+        assert!(person.is_empty(), "{person:?}");
+        // A bot's message after a reply is no reaction to it
+        let again = msg("user", "show me", Some(serde_json::json!({"sent_by_bot": true})));
+        assert!(judge_chat(&[theirs.clone(), reply.clone(), again]).is_none());
+        assert!(judge_chat(&[theirs, reply, msg("user", "show me", None)]).is_some());
     }
 
     #[test]

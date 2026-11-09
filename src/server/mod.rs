@@ -24,6 +24,8 @@ pub mod turns;
 pub mod delegation;
 pub mod parked;
 pub mod attachments;
+pub mod picture_claims;
+pub mod delivery_check;
 pub mod video;
 pub mod questions;
 pub mod activity;

@@ -145,6 +145,21 @@ pub const AGENT_NOTE: &str = "(kwant connected-agent note:";
 /// (attachments, routing note, connected-agent note).
 const KWANT_PROMPT_SUFFIXES: [&str; 3] = ["[Attached files]", ROUTING_NOTE, AGENT_NOTE];
 
+/// The person's own words in a turn's prompt: the text before the first blank line that opens one
+/// of [`KWANT_PROMPT_SUFFIXES`] (attachments, routing note, connected-agent note). The router rates
+/// these, so a file list or a note kwant added doesn't count as the person's words (#467 M1).
+pub fn own_text(prompt: &str) -> &str {
+    let mut from = 0;
+    while let Some(at) = prompt[from..].find("\n\n") {
+        let at = from + at;
+        if KWANT_PROMPT_SUFFIXES.iter().any(|s| prompt[at + 2..].starts_with(s)) {
+            return &prompt[..at];
+        }
+        from = at + 1;
+    }
+    prompt
+}
+
 /// The outside agent (0.7.4 connected agents) that wrote a "user" message, from its meta.
 pub fn from_agent(msg: &crate::db::models::Message) -> Option<String> {
     if msg.sender_role != "user" {
@@ -599,7 +614,7 @@ impl TurnInput {
                 - `browser_open` (url): open a page.\n\
                 - `browser_page` (optional find): read the page (url, title, text, clickable controls numbered like [3] button \"Add to cart\"; *[12] marks one that just appeared, e.g. an opened menu's options). It says \"unchanged\" if nothing changed since you last saw it; on a page with many controls, find (words for what you look for) lists the matching ones first.\n\
                 - `browser_act` (action click + ref, type + text (+ ref), key + key, scroll + delta_y): click a control by its number from the clickable list, type into that field (or the focused one), press a key, scroll. If a ref is gone or covered, nothing is clicked and you get a fresh list.\n\
-                - `browser_screenshot` (optional width, e.g. 390 phone / 1280 desktop): see the page as a picture, for layout, colours and spacing.\n\
+                - `browser_screenshot` (optional width, e.g. 390 phone / 1280 desktop; share: true also posts it in the chat as you): see the page as a picture, for layout, colours and spacing. When the person asks to see something (a mockup, a page, a change), share the picture: describing it isn't enough.\n\
                 - `browser_cite` (text: the exact words from the page, or block: an id from `browser_page` with blocks): checks the quote is on the page word for word and once, and returns {{quote, url, link}}; the link opens the page with the quote highlighted. When you answer facts you read on the web, back each with its cite link. If a quote is refused, quote the page exactly or quote more; never quote from memory.\n\
                 Every call returns the updated page and what changed, so you rarely need a separate read. If it says nothing changed or tells you to stop, don't repeat the action: try something else. \
                 The current page state and its clickable list are usually already in the request; act on them directly.\n\
@@ -965,6 +980,17 @@ pub(crate) mod tests {
             reaction: None,
             reply_to: None,
         }
+    }
+
+    #[test]
+    fn own_text_drops_only_the_blocks_kwant_adds() {
+        assert_eq!(own_text("Fix differences!\n\n[Attached files]\nThe user attached these files.\n- a.png"), "Fix differences!");
+        assert_eq!(own_text(&format!("go on\n\n{ROUTING_NOTE} routed here)")), "go on");
+        assert_eq!(own_text(&format!("hello\n\n{AGENT_NOTE} from x)")), "hello");
+        // His own paragraphs stay; the first kwant block ends them
+        assert_eq!(own_text("line one\n\nline two\n\n[Attached files]\n- a.pdf"), "line one\n\nline two");
+        assert_eq!(own_text("just words\n\nmore words"), "just words\n\nmore words");
+        assert_eq!(own_text("quote [Attached files] inline"), "quote [Attached files] inline");
     }
 
     #[test]

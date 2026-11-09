@@ -1117,7 +1117,12 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     // The follow-up may hand on by @mention, like any lead reply: to the next teammate, or back to
     // one that just reported with a correction (not a mention that only credits it), within the
     // usual limits.
-    let outcome = try_kwant_turn(&scope, &lead, prompt, TurnOpts::default()).await;
+    // Past the hold limit the lead hears the results while the turn that handed them out still
+    // runs in this chat: that turn holds the chat, so this one runs beside it, not after it (P6)
+    let beside_running = lead_turn_runs(state, batch.iter().chain([d]));
+    let mut opts = TurnOpts::default();
+    opts.beside_running = beside_running;
+    let outcome = try_kwant_turn(&scope, &lead, prompt, opts).await;
     // The cards of the batch are reviewed in a turn of their own that sees only each brief and
     // result (fresh eyes), then the ones still waiting get one reminder (a failed turn counts too)
     review_turn(state, batch, false).await;
@@ -1191,6 +1196,12 @@ pub fn spawn_review_turn(state: &AppState, d: &Delegation, reminder: bool) {
     });
 }
 
+/// Whether the lead's turn that handed out any of `batch` still runs (it is then past the hold
+/// limit, or the lead would not hear them yet): a turn for that lead in that chat runs beside it.
+fn lead_turn_runs<'a>(state: &AppState, batch: impl Iterator<Item = &'a Delegation>) -> bool {
+    batch.filter_map(|b| b.lead_turn_id.as_deref()).any(|t| state.turns.has_turn(t))
+}
+
 /// A turn for the lead of `batch` (hand-offs of one lead and chat) in the chat they came from,
 /// only to review their cards, all in one prompt: for a card whose lead wasn't resumed with the
 /// result (the card was blocked when the batch reported, or kwnt restarted before the lead's
@@ -1236,6 +1247,8 @@ pub async fn review_turn(state: &AppState, batch: &[Delegation], reminder: bool)
     // chat, the teammate's thread or the lead's own notes
     let mut opts = TurnOpts::default();
     opts.fresh_eyes = true;
+    // Like the lead's report turn: past the hold limit it doesn't wait for the turn that handed out
+    opts.beside_running = lead_turn_runs(state, batch.iter());
     if let Err(e) = try_kwant_turn(&scope, &lead, prompt, opts).await {
         tracing::info!(delegation = %d.id, error = %e, "a lead review turn failed");
     }

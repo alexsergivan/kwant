@@ -237,29 +237,34 @@ impl McpToolSession {
             Some(_) if !arguments.is_object() => ("error", "Tool arguments must be a JSON object.".to_string()),
             Some(t) => {
                 let (server, client) = &self.clients[t.server_index];
-                let outcome = self
-                    .ctx
-                    .approver
-                    .decide(ToolApprovalRequest {
-                        kwant_id: caller.kwant_id.clone(),
-                        kwant_name: caller.kwant_name.clone(),
-                        turn_id: caller.turn_id.clone(),
-                        tool_name: name.to_string(),
-                        server: server.clone(),
-                        tool: t.tool.name.clone(),
-                        arguments: arguments.clone(),
-                        builtin: None,
-                        smart: Some(read_only_verdict(t.tool.read_only)),
-                        payment: None,
-                    })
-                    .await;
-                if !outcome.allowed() {
-                    (outcome.record_status(), outcome.refusal_text().to_string())
-                } else {
-                    match client.call_tool(&t.tool.name, arguments.clone()).await {
-                        Ok(r) if r.is_error => ("error", r.text),
-                        Ok(r) => ("ok", r.text),
-                        Err(e) => ("error", format!("Tool call failed: {e}")),
+                let req = ToolApprovalRequest {
+                    kwant_id: caller.kwant_id.clone(),
+                    kwant_name: caller.kwant_name.clone(),
+                    turn_id: caller.turn_id.clone(),
+                    tool_name: name.to_string(),
+                    server: server.clone(),
+                    tool: t.tool.name.clone(),
+                    arguments: arguments.clone(),
+                    builtin: None,
+                    smart: Some(read_only_verdict(t.tool.read_only)),
+                    payment: None,
+                };
+                // B2: a write to a GitHub branch waits for its pre-push card before any card or rule
+                match self.ctx.approver.prepush_gate(&req).await {
+                    Err(why) => ("denied", why),
+                    Ok(overrides) => {
+                        let outcome = self.ctx.approver.decide(req).await;
+                        if !outcome.allowed() {
+                            (outcome.record_status(), outcome.refusal_text().to_string())
+                        } else if let Some(why) = self.ctx.approver.prepush_use(&overrides).await {
+                            ("denied", why)
+                        } else {
+                            match client.call_tool(&t.tool.name, arguments.clone()).await {
+                                Ok(r) if r.is_error => ("error", r.text),
+                                Ok(r) => ("ok", r.text),
+                                Err(e) => ("error", format!("Tool call failed: {e}")),
+                            }
+                        }
                     }
                 }
             }

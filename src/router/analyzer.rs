@@ -337,7 +337,8 @@ pub fn parse_plan(answer: &str, input: &Input) -> Result<DeliveryPlan, Refused> 
     if done_when.is_empty() {
         done_when = defaults.done_when;
     }
-    Ok(DeliveryPlan { kind: raw.kind, show, who, done_when, source: PlanSource::Analyzer })
+    // A plan the model made is firm: the person asked, and the model read what for (#469)
+    Ok(DeliveryPlan { kind: raw.kind, show, who, done_when, source: PlanSource::Analyzer, firm: true })
 }
 
 /// The person's notes applied to `plan`: when the newest note about this kind of result is a miss
@@ -777,6 +778,8 @@ mod tests {
         assert_eq!(p.done_when, DeliveryPlan::for_kind(Deliverable::Ideas, PlanSource::Analyzer).done_when);
         let c = parse_plan(r#"{"kind":"change","show":["text"]}"#, &i).unwrap();
         assert!(c.show.contains(&Show::Link), "a change always shows a link");
+        // A plan the model made is firm, so a miss continues (#469's DeliveryPlan::firm)
+        assert!(p.firm && c.firm);
         // Outside a team chat, who stays empty
         let solo = Input { team: team()[..1].to_vec(), ..input("ideas?") };
         let p = parse_plan(r#"{"kind":"ideas","show":["image"],"who":[{"bot":"b-front","part":"a"}]}"#, &solo).unwrap();

@@ -75,6 +75,17 @@ pub struct DeliveryPlan {
     #[serde(default)]
     pub done_when: Vec<String>,
     pub source: PlanSource,
+    /// The person clearly asked for it, so a turn that doesn't deliver it gets the one automatic
+    /// continuation. A lean plan (only a weak keyword said so: "@Ann look at this", "propose a
+    /// refactor") keeps its hint and is still recorded as a hit or a miss, but never continues: the
+    /// continuation is a whole extra turn, and for a change it commits and pushes. Carried, analyzer
+    /// and older saved plans are firm.
+    #[serde(default = "firm_by_default")]
+    pub firm: bool,
+}
+
+fn firm_by_default() -> bool {
+    true
 }
 
 impl DeliveryPlan {
@@ -88,7 +99,8 @@ impl DeliveryPlan {
             }
             Deliverable::Explain | Deliverable::Other => (vec![Show::Text], &[]),
         };
-        Self { kind, show, who: Vec::new(), done_when: done_when.iter().map(|s| s.to_string()).collect(), source }
+        let done_when = done_when.iter().map(|s| s.to_string()).collect();
+        Self { kind, show, who: Vec::new(), done_when, source, firm: true }
     }
 
     /// Whether the person should get an image in the chat.
@@ -126,6 +138,9 @@ const IDEA_WORDS: &[&str] = &[
     "idea", "ideas", "suggest", "suggestion", "suggestions", "improve", "improvement", "improvements", "brainstorm",
     "propose", "proposal", "proposals", "inspiration", "roadmap",
 ];
+/// The [`IDEA_WORDS`] that ask firmly; the rest ("propose", "suggest", "improve", "roadmap") only
+/// lean, since they also come in asks for other work ("…and propose an architecture refactor").
+const FIRM_IDEA_WORDS: &[&str] = &["idea", "ideas", "brainstorm"];
 /// "feature" with one of these asks for new ones ("a cool feature we can add", "new features").
 const FEATURE_WORDS: &[&str] = &["feature", "features"];
 const FEATURE_ASK: &[&str] = &["new", "add", "cool", "could", "can", "should", "next", "other", "more", "else"];
@@ -273,8 +288,60 @@ pub fn expected_kind(prompt: &str, recent: &[&str]) -> Deliverable {
 
 /// The fast plan for every turn, from the message's words alone (no model call): its kind, what
 /// to show and the plain checks for it. `who` stays empty; Juno's analyzer fills it for team chats.
+/// It is firm or lean ([`DeliveryPlan::firm`], see [`asks_firmly`]).
 pub fn keyword_plan(prompt: &str, recent: &[&str]) -> DeliveryPlan {
-    DeliveryPlan::for_kind(expected_kind(prompt, recent), PlanSource::Keywords)
+    let kind = expected_kind(prompt, recent);
+    let firm = text_that_gave(kind, prompt, recent).is_some_and(|t| asks_firmly(&t, kind));
+    DeliveryPlan { firm, ..DeliveryPlan::for_kind(kind, PlanSource::Keywords) }
+}
+
+/// The words [`expected_kind`] read `kind` from: the message without its thanks, or for a
+/// follow-up the earlier message it inherited from. `None` when nothing gave it (Other).
+fn text_that_gave(kind: Deliverable, prompt: &str, recent: &[&str]) -> Option<String> {
+    let own = without_acknowledgements(prompt)?;
+    if classify(&own) == Some(kind) {
+        return Some(own);
+    }
+    recent
+        .iter()
+        .rev()
+        .find_map(|m| without_acknowledgements(m).filter(|t| classify(t).is_some()))
+        .filter(|t| classify(t) == Some(kind))
+}
+
+/// Whether `text`, which [`classify`] read as `kind`, asks for it firmly. Worked out beside
+/// `classify` from the same word lists, so `classify` stays as it is.
+/// - Change: a change verb leads the message ("fix it", "please add a footer"), not one found
+///   anywhere in it ("we'll set this up tomorrow").
+/// - Visual: a [`SEE_WORDS`] word, "how it looks" / "what it looks like", or "make a mockup"; not
+///   [`LOOK_WORDS`] alone ("@Ann look at this", "the design").
+/// - Ideas: [`FIRM_IDEA_WORDS`], a feature ask or an [`IDEA_PHRASES`] phrase ("What cool feature
+///   can we add?"); not "propose", "suggest", "improve" and the like alone.
+/// - Explain and Other expect nothing to check, so firmness doesn't matter: firm.
+fn asks_firmly(text: &str, kind: Deliverable) -> bool {
+    let words = tokens(text);
+    let joined = words.join(" ");
+    match kind {
+        // classify's leading-verb branch: a Change, or a Visual for "make a mockup"
+        Deliverable::Change | Deliverable::Visual if leads_with_change_verb(&words) => true,
+        Deliverable::Change => false,
+        Deliverable::Visual => {
+            any_in(&words, SEE_WORDS) || joined.contains("how it looks") || joined.contains("what it looks like")
+        }
+        Deliverable::Ideas => {
+            let feature_ask = any_in(&words, FEATURE_WORDS) && any_in(&words, FEATURE_ASK);
+            any_in(&words, FIRM_IDEA_WORDS) || feature_ask || IDEA_PHRASES.iter().any(|p| joined.contains(p))
+        }
+        Deliverable::Explain | Deliverable::Other => true,
+    }
+}
+
+/// Whether a change verb leads `words` after the lead-in, as in [`classify`]'s first branch.
+fn leads_with_change_verb(words: &[String]) -> bool {
+    let is_question_word = |w: &String| QUESTION_WORDS.contains(&w.as_str());
+    let first = words.iter().find(|w| !LEAD_IN.contains(&w.as_str()));
+    let opens_with_question = words.first().is_some_and(is_question_word) || first.is_some_and(is_question_word);
+    first.is_some_and(|w| !opens_with_question && CHANGE_VERBS.contains(&w.as_str()))
 }
 
 /// What a turn knows when it picks its plan (see [`plan_for_turn`]).
@@ -294,16 +361,44 @@ pub struct TurnPlanInput<'a> {
     pub person_message: Option<&'a str>,
     /// The person's own earlier messages, oldest first, without kwant's reply marks.
     pub recent: &'a [&'a str],
+    /// The turn's working folder is in a git repository ([`in_git_repo`]). Without one there is
+    /// nothing to branch, push or link, so no plan is a [`Deliverable::Change`].
+    pub git_repo: bool,
 }
 
 /// The turn's delivery plan: none for a no-tools, read-only or fresh-eyes turn; else the carried
 /// plan; else the keyword plan of the person's own message; else none. A plan only ever comes from
 /// the person's words, so kwant's notes can't make a routed message Visual or a hire Ideas.
+///
+/// A [`Deliverable::Change`] plan needs a git project (`git_repo`): "write a short email to Anna"
+/// or "set a reminder for 9" in a bot with no repo is no plan at all (no hint, no delivery check),
+/// not a change to push and link. This is the one place that gate lives; classify freely above it.
+/// Known gap (0.8.0): a bot whose working folder isn't a repo but which `cd`s into one gets no
+/// Change plan.
 pub fn plan_for_turn(t: TurnPlanInput<'_>) -> Option<DeliveryPlan> {
     if t.no_tools || t.read_only || t.fresh_eyes {
         return None;
     }
-    t.carried.or_else(|| t.person_message.map(|m| keyword_plan(m, t.recent)))
+    t.carried
+        .or_else(|| t.person_message.map(|m| keyword_plan(m, t.recent)))
+        .filter(|p| p.kind != Deliverable::Change || t.git_repo)
+}
+
+/// How many folders [`in_git_repo`] looks at: `dir` and its parents.
+const GIT_LOOKUP_LEVELS: usize = 8;
+
+/// Whether `dir` is in a git repository: it or one of its parents has a `.git` folder or file (a
+/// worktree's `.git` is a file). Plain file checks, no git subprocess. Stops below the home folder
+/// (a repo there doesn't make every bot folder a project) and after [`GIT_LOOKUP_LEVELS`] folders.
+pub fn in_git_repo(dir: &std::path::Path) -> bool {
+    in_git_repo_below(dir, dirs::home_dir().as_deref())
+}
+
+fn in_git_repo_below(dir: &std::path::Path, home: Option<&std::path::Path>) -> bool {
+    dir.ancestors()
+        .take(GIT_LOOKUP_LEVELS)
+        .take_while(|d| home.is_none_or(|h| *d != h))
+        .any(|d| d.join(".git").exists())
 }
 
 /// The kind `text` names on its own, or `None` when nothing in it says.
@@ -539,6 +634,58 @@ mod tests {
     }
 
     #[test]
+    fn a_change_plan_needs_a_git_project() {
+        // Ada's review of #469 round 3, must-fix 3: CHANGE_VERBS has write, set, create, add…
+        let plan = |m: &str, git_repo: bool| {
+            plan_for_turn(TurnPlanInput { person_message: Some(m), git_repo, ..Default::default() }).map(|p| p.kind)
+        };
+        assert_eq!(keyword_plan("write a short email to Anna", &[]).kind, Change, "what the gate is for");
+        assert_eq!(plan("write a short email to Anna", false), None);
+        assert_eq!(plan("set a reminder for 9", false), None);
+        assert_eq!(plan("fix the login button colour", true), Some(Change));
+        // Ideas, Visual and Explain don't need one
+        assert_eq!(plan("Any ideas for the landing page?", false), Some(Ideas));
+        assert_eq!(plan("show me mockup image", false), Some(Visual));
+        assert_eq!(plan("why does the build fail?", false), Some(Explain));
+        // A carried Change plan goes through the same gate
+        let change = DeliveryPlan::for_kind(Change, PlanSource::Keywords);
+        let carried = |git_repo| plan_for_turn(TurnPlanInput { carried: Some(change.clone()), git_repo, ..Default::default() });
+        assert_eq!(carried(true), Some(change.clone()));
+        assert_eq!(carried(false), None);
+    }
+
+    #[test]
+    fn a_git_project_is_a_git_folder_or_file_here_or_above() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let repo = home.join("work/repo");
+        let sub = repo.join("frontend/src");
+        let worktree = home.join("work/tree");
+        let plain = home.join("notes");
+        for d in [&sub, &worktree, &plain] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let below = |d: &std::path::Path| in_git_repo_below(d, Some(home.as_path()));
+        assert!(!below(&repo), "no .git yet");
+        std::fs::create_dir(repo.join(".git")).unwrap();
+        assert!(below(&repo), "a .git folder");
+        assert!(below(&sub), "a subfolder of a repo");
+        // A worktree's .git is a file ("gitdir: …")
+        std::fs::write(worktree.join(".git"), "gitdir: /elsewhere/.git/worktrees/tree\n").unwrap();
+        assert!(below(&worktree), "a .git file");
+        assert!(!below(&plain));
+        // A repo at home doesn't make every folder under it a project…
+        std::fs::create_dir(home.join(".git")).unwrap();
+        assert!(!below(&plain), "stops below home");
+        assert!(in_git_repo_below(&plain, None), "without a home it looks there too");
+        // …and the walk is bounded
+        let deep = (0..GIT_LOOKUP_LEVELS).fold(repo.clone(), |p, i| p.join(format!("d{i}")));
+        std::fs::create_dir_all(&deep).unwrap();
+        assert!(!below(&deep), "more than {GIT_LOOKUP_LEVELS} folders up");
+        assert!(below(deep.parent().unwrap()));
+    }
+
+    #[test]
     fn the_hint_renders_from_the_plan() {
         for kind in [Ideas, Visual, Change, Explain] {
             let hint = DeliveryPlan::for_kind(kind, PlanSource::Keywords).hint();
@@ -559,6 +706,7 @@ mod tests {
             who: vec![("b1".into(), "the API".into())],
             done_when: vec!["the branch is pushed".into()],
             source: PlanSource::Analyzer,
+            firm: true,
         };
         let hint = analyzer.hint();
         assert!(hint.contains("Show in the chat: a link (the PR or page), an image. Done when: the branch is pushed."), "{hint}");
@@ -566,5 +714,69 @@ mod tests {
         let json = serde_json::to_string(&analyzer).unwrap();
         assert!(json.contains("\"kind\":\"change\"") && json.contains("\"source\":\"analyzer\""), "{json}");
         assert_eq!(serde_json::from_str::<DeliveryPlan>(&json).unwrap(), analyzer);
+        // A plan saved before `firm` existed, or an analyzer's without it, is firm
+        let older = r#"{"kind":"visual","show":["image"],"source":"analyzer"}"#;
+        assert!(serde_json::from_str::<DeliveryPlan>(older).unwrap().firm);
+        let lean = DeliveryPlan { firm: false, ..analyzer };
+        assert_eq!(serde_json::from_str::<DeliveryPlan>(&serde_json::to_string(&lean).unwrap()).unwrap(), lean);
+    }
+
+    /// #469 round 4 (M1): a keyword plan is firm only when the words that gave its kind ask
+    /// clearly; a weak keyword only leans, and a lean plan never continues.
+    #[test]
+    fn a_keyword_plan_is_firm_or_lean() {
+        let firm = |m: &str, recent: &[&str]| {
+            let p = keyword_plan(m, recent);
+            (p.kind, p.firm)
+        };
+        let rows: &[(&str, &[&str], Deliverable, bool)] = &[
+            // Change: a leading change verb is firm, one found anywhere else only leans
+            ("fix the login button colour", &[], Change, true),
+            ("Please add the export feature", &[], Change, true),
+            ("can you add a footer?", &[], Change, true),
+            ("Fix differences!", &["the button is not aligned with booktun.ing styling!!!!"], Change, true),
+            ("fix it", &["the footer overlaps on mobile"], Change, true),
+            ("we'll set this up tomorrow", &[], Change, false),
+            ("the deploy script should push the new build", &[], Change, false),
+            // Visual: a see word, "how it looks", or make + a picture is firm; look words alone lean
+            ("show me mockup image", &[], Visual, true),
+            ("Screenshot give me!", &[], Visual, true),
+            ("i want to see this ---> the phone bar", &[], Visual, true),
+            ("tell me what it looks like on mobile", &[], Visual, true),
+            ("make me a quick mockup", &[], Visual, true),
+            ("@Ann look at this MENTION:Bob", &[], Visual, false),
+            ("the design", &[], Visual, false),
+            ("visually, the hero", &[], Visual, false),
+            // Ideas: idea/ideas/brainstorm, a feature ask or an idea phrase is firm
+            ("What cool feature can we add?", &[], Ideas, true),
+            ("Hey team! What some cool feature we can add?", &[], Ideas, true),
+            ("Any ideas for the landing page?", &[], Ideas, true),
+            ("let's brainstorm the onboarding", &[], Ideas, true),
+            ("what could we add to the footer", &[], Ideas, true),
+            // …propose, suggest, improve, inspiration, roadmap alone only lean
+            ("Investigate the root cause of this deadlock and propose an architecture refactor", &[], Ideas, false),
+            ("could you suggest a name for the export", &[], Ideas, false),
+            ("how would you improve the onboarding?", &[], Ideas, false),
+            ("I need some inspiration", &[], Ideas, false),
+            ("what's on the roadmap", &[], Ideas, false),
+            // A follow-up is as firm as the earlier ask it inherits from
+            ("more", &["Any ideas for the hero?"], Ideas, true),
+            ("more", &["could you propose a cleanup"], Ideas, false),
+            ("and the other one", &["show me the footer"], Visual, true),
+            ("and the other one", &["the design"], Visual, false),
+        ];
+        for (m, recent, kind, want) in rows {
+            assert_eq!(firm(m, recent), (*kind, *want), "{m:?} after {recent:?}");
+        }
+        // Explain and Other expect nothing to check: firm, with no effect
+        assert_eq!(firm("why does the build fail?", &[]), (Explain, true));
+        assert!(keyword_plan("thanks!", &[]).kind == Other);
+        // A lean plan keeps its hint
+        let lean = keyword_plan("@Ann look at this MENTION:Bob", &[]);
+        assert_eq!(lean.hint(), DeliveryPlan::for_kind(Visual, PlanSource::Keywords).hint());
+        // A carried plan keeps its firmness through plan_for_turn
+        let carried = |p: DeliveryPlan| plan_for_turn(TurnPlanInput { carried: Some(p), ..Default::default() }).unwrap().firm;
+        assert!(!carried(lean.clone()));
+        assert!(carried(DeliveryPlan::for_kind(Visual, PlanSource::Analyzer)));
     }
 }

@@ -6,11 +6,13 @@
 //! holds it, and a finished job removes only itself, so concurrent turns never clobber each other.
 //!
 //! Every turn takes a slot from the [`Limiter`]: at most `per_agent` turns per kwant and `global`
-//! overall. A turn that doesn't fit waits in FIFO order; it is never turned away.
+//! overall. A turn that doesn't fit waits in FIFO order; it is never turned away. A turn that
+//! answers the person also holds its chat: a second message to the same bot in the same chat waits
+//! until the first reply ends, so two turns never answer side by side (2026-11-09).
 
 use crate::drivers::events::RuntimeEvent;
 use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, oneshot};
@@ -59,6 +61,26 @@ struct Inner {
     holds: HashMap<String, Hold>,
     /// [`HOLD_LIMIT`] unless a test shortened it.
     hold_limit: Option<Duration>,
+    /// The pictures of a running turn, by turn id (see [`TurnRegistry::note_screenshot`]).
+    pictures: HashMap<String, TurnPictures>,
+}
+
+/// A bot's last screenshot in a turn, as the browser returned it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Screenshot {
+    /// The JPEG, base64.
+    pub data: String,
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// What a turn did with pictures so far: its last screenshot, and whether it put an image into
+/// the chat (see [`super::picture_claims`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TurnPictures {
+    pub last_shot: Option<Screenshot>,
+    pub shared_image: bool,
 }
 
 /// How long a lead's turn holds its hand-offs' reports at most (see [`TurnRegistry::hold`]):
@@ -199,10 +221,38 @@ impl TurnRegistry {
         }
     }
 
+    /// Whether `turn_id` is running or waiting for its slot.
+    pub fn has_turn(&self, turn_id: &str) -> bool {
+        self.lock().turns.contains_key(turn_id)
+    }
+
     pub fn end_turn(&self, turn_id: &str) {
         let mut inner = self.lock();
         inner.turns.remove(turn_id);
         inner.meters.remove(turn_id);
+        inner.pictures.remove(turn_id);
+    }
+
+    /// Keeps the turn's newest screenshot (one per turn), for the reply guard.
+    /// A turn that already ended keeps nothing.
+    pub fn note_screenshot(&self, turn_id: &str, shot: Screenshot) {
+        let mut inner = self.lock();
+        if inner.turns.contains_key(turn_id) {
+            inner.pictures.entry(turn_id.to_string()).or_default().last_shot = Some(shot);
+        }
+    }
+
+    /// The turn put an image into its chat (shared it, or found it already there).
+    pub fn note_image_shared(&self, turn_id: &str) {
+        let mut inner = self.lock();
+        if inner.turns.contains_key(turn_id) {
+            inner.pictures.entry(turn_id.to_string()).or_default().shared_image = true;
+        }
+    }
+
+    /// The turn's pictures so far, now forgotten.
+    pub fn take_pictures(&self, turn_id: &str) -> TurnPictures {
+        self.lock().pictures.remove(turn_id).unwrap_or_default()
     }
 
     /// Holds the reports of the hand-offs that `turn_id`, a running lead turn, starts until it
@@ -325,14 +375,17 @@ impl TurnRegistry {
     }
 
     /// Takes a slot for one turn of `kwant_id`, waiting in line if none is free. While it waits,
-    /// `turn_queued` is sent once. `None` if `cancel` fired first.
+    /// `turn_queued` is sent once. `None` if `cancel` fired first. `one_per_chat`: the turn also
+    /// holds its chat (`tag.context_id`) for this bot, so a second message there waits for it.
     pub async fn acquire(
         &self,
         tag: &crate::drivers::events::TurnTag,
+        one_per_chat: bool,
         cancel: &CancellationToken,
         events: &broadcast::Sender<RuntimeEvent>,
     ) -> Option<Slot> {
-        let rx = match self.limiter.try_acquire(&tag.kwant_id) {
+        let chat = one_per_chat.then_some(tag.context_id.as_str());
+        let rx = match self.limiter.try_acquire_in(&tag.kwant_id, chat) {
             Ok(slot) => return Some(slot),
             Err(wait) => wait,
         };
@@ -395,16 +448,64 @@ impl StallClock {
     }
 }
 
+/// What a turn does when its model goes silent past the stall limit (see [`StallClock`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StallStep {
+    /// Start the same attempt again, with the same message and context.
+    Retry,
+    /// Stop the turn with the stall line.
+    Stop,
+}
+
+/// A stalled turn is retried once, on its own: only a second stall stops it with the stall line.
+/// `retried`: this attempt already is the retry. `acted`: the stalled attempt already ran a tool or
+/// raised an approval card, so starting over could do that again; it stops as before.
+pub fn after_stall(retried: bool, acted: bool) -> StallStep {
+    if retried || acted {
+        StallStep::Stop
+    } else {
+        StallStep::Retry
+    }
+}
+
+/// The Details line of a turn that was started again after a stall.
+pub fn stall_retry_note(secs: u64) -> String {
+    format!("Retried after a stall: the model sent nothing for {secs} s, so the reply was started again.")
+}
+
+/// The line a stopped turn leaves in the chat.
+pub fn stall_stop_line(kwant_name: &str, secs: u64, retried: bool) -> String {
+    if retried {
+        format!("⚠️ [{kwant_name}] The model sent nothing for {secs} s, twice (it was retried once), so this reply was stopped. Send your message again to retry.")
+    } else {
+        format!("⚠️ [{kwant_name}] The model sent nothing for {secs} s, so this reply was stopped. Send your message again to retry.")
+    }
+}
+
 /// One turn's place under the caps; frees it on drop.
 pub struct Slot {
     limiter: Limiter,
     kwant_id: String,
+    /// The bot-and-chat key it holds, if any (see [`chat_key`]).
+    chat: Option<String>,
+}
+
+impl Slot {
+    /// The slot also holds its bot's chat (a turn taken with `one_per_chat`).
+    pub fn holds_chat(&self) -> bool {
+        self.chat.is_some()
+    }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        self.limiter.release(&self.kwant_id);
+        self.limiter.release(&self.kwant_id, self.chat.as_deref());
     }
+}
+
+/// One bot in one chat: at most one turn holds it.
+fn chat_key(kwant_id: &str, chat: &str) -> String {
+    format!("{kwant_id}|{chat}")
 }
 
 /// Waiting for a slot.
@@ -417,6 +518,8 @@ pub struct Wait {
 
 struct Waiter {
     kwant_id: String,
+    /// [`chat_key`] of the chat it will hold.
+    chat: Option<String>,
     tx: oneshot::Sender<Slot>,
 }
 
@@ -426,19 +529,29 @@ struct LimiterState {
     running: HashMap<String, usize>,
     total: usize,
     waiting: VecDeque<Waiter>,
+    /// [`chat_key`]s held by running turns.
+    busy_chats: HashSet<String>,
 }
 
 impl LimiterState {
-    fn fits(&self, kwant_id: &str) -> bool {
-        self.total < self.global && self.running.get(kwant_id).copied().unwrap_or(0) < self.per_agent
+    fn fits(&self, kwant_id: &str, chat: Option<&str>) -> bool {
+        self.total < self.global
+            && self.running.get(kwant_id).copied().unwrap_or(0) < self.per_agent
+            && chat.is_none_or(|c| !self.busy_chats.contains(c))
     }
 
-    fn take(&mut self, kwant_id: &str) {
+    fn take(&mut self, kwant_id: &str, chat: Option<&str>) {
         self.total += 1;
         *self.running.entry(kwant_id.to_string()).or_default() += 1;
+        if let Some(c) = chat {
+            self.busy_chats.insert(c.to_string());
+        }
     }
 
-    fn put_back(&mut self, kwant_id: &str) {
+    fn put_back(&mut self, kwant_id: &str, chat: Option<&str>) {
+        if let Some(c) = chat {
+            self.busy_chats.remove(c);
+        }
         self.total = self.total.saturating_sub(1);
         if let Some(n) = self.running.get_mut(kwant_id) {
             *n = n.saturating_sub(1);
@@ -465,6 +578,7 @@ impl Limiter {
                 running: HashMap::new(),
                 total: 0,
                 waiting: VecDeque::new(),
+                busy_chats: HashSet::new(),
             })),
         }
     }
@@ -497,23 +611,42 @@ impl Limiter {
 
     /// A slot now, or a place in line. Nobody jumps the line for the same agent.
     pub fn try_acquire(&self, kwant_id: &str) -> Result<Slot, Wait> {
-        let mut s = self.lock();
-        let ahead_same = s.waiting.iter().any(|w| w.kwant_id == kwant_id && !w.tx.is_closed());
-        if !ahead_same && s.fits(kwant_id) {
-            s.take(kwant_id);
-            return Ok(Slot { limiter: self.clone(), kwant_id: kwant_id.to_string() });
-        }
-        let agent_full = s.running.get(kwant_id).copied().unwrap_or(0) >= s.per_agent;
-        let (tx, rx) = oneshot::channel();
-        s.waiting.push_back(Waiter { kwant_id: kwant_id.to_string(), tx });
-        let position = s.waiting.iter().filter(|w| !w.tx.is_closed()).count();
-        Err(Wait { rx, position, reason: if agent_full || ahead_same { "agent_busy" } else { "server_busy" } })
+        self.try_acquire_in(kwant_id, None)
     }
 
-    fn release(&self, kwant_id: &str) {
+    /// [`Self::try_acquire`] for a turn that also holds `chat` for this agent: while one turn of
+    /// the agent runs in that chat, the next one there waits (in line, "agent_busy") even if the
+    /// agent has room. Turns of the agent in other chats, and other agents, aren't held up.
+    pub fn try_acquire_in(&self, kwant_id: &str, chat: Option<&str>) -> Result<Slot, Wait> {
+        let chat = chat.map(|c| chat_key(kwant_id, c));
+        let (tx, mut rx) = oneshot::channel();
+        let (result, returned) = {
+            let mut s = self.lock();
+            let ahead_same = s.waiting.iter().any(|w| w.kwant_id == kwant_id && !w.tx.is_closed());
+            let agent_full = s.running.get(kwant_id).copied().unwrap_or(0) >= s.per_agent;
+            let chat_busy = chat.as_ref().is_some_and(|c| s.busy_chats.contains(c));
+            // Into the line, then hand out what fits in line order: a waiter ahead for the same
+            // agent goes first, one held only by its chat doesn't hold up this one
+            s.waiting.push_back(Waiter { kwant_id: kwant_id.to_string(), chat, tx });
+            let returned = self.dispatch(&mut s);
+            let result = match rx.try_recv() {
+                Ok(slot) => Ok(slot),
+                Err(_) => {
+                    let position = s.waiting.iter().filter(|w| !w.tx.is_closed()).count();
+                    let reason = if agent_full || ahead_same || chat_busy { "agent_busy" } else { "server_busy" };
+                    Err((position, reason))
+                }
+            };
+            (result, returned)
+        };
+        drop(returned);
+        result.map_err(|(position, reason)| Wait { rx, position, reason })
+    }
+
+    fn release(&self, kwant_id: &str, chat: Option<&str>) {
         let returned = {
             let mut s = self.lock();
-            s.put_back(kwant_id);
+            s.put_back(kwant_id, chat);
             self.dispatch(&mut s)
         };
         // Slots a waiter gave up on are dropped here, outside the lock (their drop releases again)
@@ -530,13 +663,13 @@ impl Limiter {
                 continue;
             }
             let kwant_id = s.waiting[i].kwant_id.clone();
-            if !s.fits(&kwant_id) {
+            if !s.fits(&kwant_id, s.waiting[i].chat.as_deref()) {
                 i += 1;
                 continue;
             }
             let Some(w) = s.waiting.remove(i) else { break };
-            s.take(&kwant_id);
-            if let Err(slot) = w.tx.send(Slot { limiter: self.clone(), kwant_id }) {
+            s.take(&kwant_id, w.chat.as_deref());
+            if let Err(slot) = w.tx.send(Slot { limiter: self.clone(), kwant_id, chat: w.chat }) {
                 unclaimed.push(slot);
             }
         }
@@ -566,6 +699,43 @@ mod tests {
         c.saw(&E::ToolCallCompleted { id: "t".into(), result: serde_json::json!({}) }, t1);
         assert_eq!(c.deadline(), Some(t1 + limit));
         assert_eq!(super::StallClock::new(None, t0).deadline(), None);
+    }
+
+    #[test]
+    fn a_turns_pictures_live_until_it_ends() {
+        let reg = super::TurnRegistry::default();
+        let shot = |url: &str| super::Screenshot { data: "AAAA".into(), url: url.into(), width: 390, height: 844 };
+        // A turn that isn't running keeps nothing (a late call after the turn ended)
+        reg.note_screenshot("t", shot("https://a.test/"));
+        reg.note_image_shared("t");
+        assert_eq!(reg.take_pictures("t"), super::TurnPictures::default());
+        reg.set_turn(super::ActiveTurn {
+            turn_id: "t".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+        });
+        reg.note_screenshot("t", shot("https://a.test/1"));
+        reg.note_screenshot("t", shot("https://a.test/2"));
+        let p = reg.take_pictures("t");
+        assert_eq!(p.last_shot.map(|s| s.url).as_deref(), Some("https://a.test/2"), "the newest screenshot");
+        assert!(!p.shared_image);
+        assert_eq!(reg.take_pictures("t"), super::TurnPictures::default(), "taken once");
+        reg.note_image_shared("t");
+        reg.end_turn("t");
+        reg.set_turn(super::ActiveTurn {
+            turn_id: "t".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: "running".into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+        });
+        assert!(!reg.take_pictures("t").shared_image, "ending the turn forgot them");
     }
 
     #[test]
@@ -708,5 +878,114 @@ mod tests {
         l.set_limits(2, 6);
         let _s2 = w.rx.await.unwrap();
         assert_eq!(l.load("a").0, 2);
+    }
+
+    #[tokio::test]
+    async fn one_turn_per_bot_per_chat() {
+        let l = Limiter::new(3, 10);
+        let first = l.try_acquire_in("frontend", Some("chat-1")).ok().unwrap();
+        // The person's second message while the first reply runs: it waits, though the bot has room
+        let second = l.try_acquire_in("frontend", Some("chat-1")).err().unwrap();
+        assert_eq!(second.reason, "agent_busy");
+        assert_eq!(second.position, 1);
+        // The same bot in another chat, another bot in this chat, and an unchatted turn (a goal
+        // check, a routine) all go ahead
+        let _other_chat = l.try_acquire_in("frontend", Some("chat-2")).ok().unwrap();
+        let _other_bot = l.try_acquire_in("growth", Some("chat-1")).ok().unwrap();
+        let _background = l.try_acquire("frontend").ok().unwrap();
+        assert_eq!(l.load("frontend"), (3, 4, 1));
+        // A third message queues behind the second, in order
+        let third = l.try_acquire_in("frontend", Some("chat-1")).err().unwrap();
+        assert_eq!(third.position, 2);
+        drop(first);
+        let second = second.rx.await.unwrap();
+        // Only one of them runs: the third still waits for the second
+        assert_eq!(l.load("frontend"), (3, 4, 1));
+        drop(second);
+        let _third = third.rx.await.unwrap();
+        assert_eq!(l.load("frontend"), (3, 4, 0));
+    }
+
+    #[tokio::test]
+    async fn a_chat_waiter_does_not_hold_up_the_bot_elsewhere() {
+        let l = Limiter::new(3, 10);
+        let _first = l.try_acquire_in("a", Some("c1")).ok().unwrap();
+        let _waiting = l.try_acquire_in("a", Some("c1")).err().unwrap();
+        // Same bot, other chat: not stuck behind the one waiting for its chat
+        assert!(l.try_acquire_in("a", Some("c2")).is_ok());
+        // An abandoned waiter (its turn was stopped) frees the chat's line
+        let l = Limiter::new(3, 10);
+        let first = l.try_acquire_in("a", Some("c1")).ok().unwrap();
+        let gave_up = l.try_acquire_in("a", Some("c1")).err().unwrap();
+        let next = l.try_acquire_in("a", Some("c1")).err().unwrap();
+        drop(gave_up);
+        drop(first);
+        let _next = next.rx.await.unwrap();
+        assert_eq!(l.load("a"), (1, 1, 0));
+    }
+
+    /// The bug from 2026-11-09: two messages to one bot in one chat while its first turn ran. The
+    /// second now queues (visibly: `turn_queued`, "agent_busy") and starts when the first ends.
+    #[tokio::test]
+    async fn second_message_to_a_busy_bot_queues_visibly() {
+        let reg = TurnRegistry::new(3, 6);
+        let (tx, mut events) = broadcast::channel(16);
+        let tag = |turn: &str| crate::drivers::events::TurnTag {
+            turn_id: turn.into(),
+            kwant_id: "frontend".into(),
+            context_id: "chat-1".into(),
+            thread_id: None,
+        };
+        let cancel = CancellationToken::new();
+        let first = reg.acquire(&tag("t1"), true, &cancel, &tx).await.unwrap();
+        let reg2 = std::sync::Arc::new(reg);
+        let r = reg2.clone();
+        let (tx2, cancel2) = (tx.clone(), cancel.clone());
+        let second = tokio::spawn(async move { r.acquire(&tag("t2"), true, &cancel2, &tx2).await.map(|_| ()) });
+        match events.recv().await.unwrap() {
+            RuntimeEvent::TurnQueued { turn_id, reason, position, context_id, .. } => {
+                assert_eq!((turn_id.as_str(), reason.as_str(), position), ("t2", "agent_busy", 1));
+                assert_eq!(context_id.as_deref(), Some("chat-1"));
+            }
+            e => panic!("expected turn_queued, got {e:?}"),
+        }
+        assert!(reg2.active_turns().iter().any(|t| t.turn_id == "t2" && t.state == "queued"));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!second.is_finished(), "the second turn started while the first ran");
+        drop(first);
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), second).await.unwrap().unwrap(), Some(()));
+        // Without one_per_chat (a discussion round, a check) the old behaviour stays: up to the cap
+        let a = reg2.acquire(&tag("t3"), false, &cancel, &tx).await;
+        let b = reg2.acquire(&tag("t4"), false, &cancel, &tx).await;
+        assert!(a.is_some() && b.is_some());
+    }
+
+    /// P7 (2026-11-09): a stalled turn retries exactly once, and the stop line comes only after
+    /// the second stall. Walks the attempts loop's decisions for one account.
+    #[test]
+    fn a_stall_retries_once_and_stops_only_after_a_second_stall() {
+        let run = |stalls: usize| {
+            let (mut retried, mut steps) = (false, Vec::new());
+            for _ in 0..stalls {
+                let step = after_stall(retried, false);
+                steps.push(step);
+                match step {
+                    StallStep::Retry => retried = true,
+                    StallStep::Stop => break,
+                }
+            }
+            steps
+        };
+        // One stall: retried, no stop line
+        assert_eq!(run(1), vec![StallStep::Retry]);
+        // Two stalls: one retry, then the stop
+        assert_eq!(run(2), vec![StallStep::Retry, StallStep::Stop]);
+        // However many stalls follow, it retries exactly once
+        assert_eq!(run(5), vec![StallStep::Retry, StallStep::Stop]);
+        // A stall after a tool ran or a card was raised isn't started over (it could act twice)
+        assert_eq!(after_stall(false, true), StallStep::Stop);
+        assert!(stall_retry_note(120).starts_with("Retried after a stall"));
+        assert!(stall_stop_line("Frontend", 120, true).contains("twice"));
+        assert!(!stall_stop_line("Frontend", 120, false).contains("twice"));
     }
 }

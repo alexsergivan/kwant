@@ -138,6 +138,33 @@ export function attachKind(f: { name: string; type?: string }): AttachKind | nul
   return 'text';
 }
 
+/** MIMEs refused before the drop on top of `BINARY_MIMES` and the prefixes below (0.8.0 drag preview). */
+const PREVIEW_REFUSED_EXACT = new Set(
+  (
+    'image/heic image/heif image/avif image/tiff image/bmp image/vnd.adobe.photoshop ' +
+    'video/x-matroska video/x-msvideo video/x-ms-wmv video/x-flv video/mpeg video/3gpp'
+  ).split(' '),
+);
+const PREVIEW_REFUSED_PREFIXES = ['audio/', 'font/', 'application/vnd.ms-', 'application/vnd.openxmlformats-officedocument.', 'application/vnd.oasis.opendocument.'];
+
+/**
+ * True when a file dragged over a chat surely can't go, from its MIME alone (no name yet). Narrower
+ * than `attachKind`, which checks the extension first: the preview must never refuse a file the drop
+ * would take, so `video/mp2t` (a `.ts` file), `image/svg+xml`, an empty or octet-stream type and any
+ * MIME not listed here are never refused.
+ */
+export function previewRefusesMime(type: string): boolean {
+  const mime = (type || '').toLowerCase().split(';')[0].trim();
+  if (!mime) return false;
+  return BINARY_MIMES.has(mime) || PREVIEW_REFUSED_EXACT.has(mime) || PREVIEW_REFUSED_PREFIXES.some((p) => mime.startsWith(p));
+}
+
+/** True for archive MIMEs (zip, tar, 7z and the like): the refusal adds "Unzip it". */
+export function isArchiveMime(type: string): boolean {
+  const mime = (type || '').toLowerCase().split(';')[0].trim();
+  return /zip|x-tar|x-7z|rar|bzip2|x-xz|gzip/.test(mime);
+}
+
 /** The one line shown when a file's type can't be attached. */
 export const SUPPORTED_TYPES_TEXT = 'Images, videos (MP4, MOV, WebM), PDFs and text or code files work.';
 

@@ -166,7 +166,8 @@ pub async fn tool_call(state: &AppState, scope: &SelfScope, args: &Value) -> (St
         channel_id: origin.channel_id.clone(),
         direct_kwant_id: origin.direct_kwant_id.clone(),
         sender_role: "kwant".into(),
-        sender_id: scope.kwant_id.clone(),
+        // The bot's name, as its replies have it; the id is in meta.kwant_id
+        sender_id: if scope.kwant_name.trim().is_empty() { scope.kwant_id.clone() } else { scope.kwant_name.clone() },
         text: card_text(&name, &reason, ready),
         reasoning_content: None,
         tool_calls: None,

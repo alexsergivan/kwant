@@ -217,9 +217,36 @@ async fn the_lead_reviews_a_finished_hand_off_and_a_pass_verifies_it() {
     let card_json = missions::task_json(&env.state, &task).await;
     assert_eq!(card_json["reviewer"]["kwant_id"], json!(env.lead), "the card names its reviewer");
 
-    let (out, err) = review(&env, &env.lead, &task.id, "pass", &ev, "Parser handles the new format").await;
+    // The review is made in the fresh-eyes turn (the fake CLI can't call tools, so the test
+    // makes the call as that turn): it is labelled "Checked with fresh eyes"
+    let bot = env.state.db.get_kwant(&env.lead).await.unwrap().unwrap();
+    let scope = SelfScope { kwant_id: bot.id.clone(), kwant_name: bot.name.clone(), turn_id: Some("fe-review-turn".into()), ..Default::default() };
+    let args = json!({"task_id": task.id, "verdict": "pass", "evidence_ids": ev, "note": "Parser handles the new format"});
+    let (out, err) = {
+        let _fresh = kwnt::server::fresh_eyes::Guard::new("fe-review-turn");
+        missions::tools::call(&env.state, &scope, "task_review", &args).await
+    };
     assert!(!err, "{out}");
     assert_eq!(card_state(&env, &did).await, "verified");
+    let checks = env.state.db.list_checks(&task.id).await.unwrap();
+    let peer = checks.iter().find(|c| c.kind == "peer_review").expect("the review is a check");
+    let label = &peer.spec_value()["fresh_eyes"];
+    assert_eq!(label["checked"], true, "{label}");
+    assert_eq!(label["saw"], json!(["brief", "result"]));
+    assert_eq!((label["spec_source"].as_str(), label["reviewer_kwant_id"].as_str()), (Some("brief"), Some(env.lead.as_str())));
+}
+
+/// A review made outside a fresh-eyes turn (a teammate on the board) never says it was.
+#[tokio::test]
+async fn a_review_outside_a_fresh_eyes_turn_is_not_labelled_fresh() {
+    let env = setup().await;
+    let (_, task) = finished(&env, "Check the lexer NOTFRESHMARK", "Lexer check").await;
+    let ev = result_evidence(&env, &task.id).await;
+    let (out, err) = review(&env, &env.lead, &task.id, "pass", &ev, "Lexer handles the new format").await;
+    assert!(!err, "{out}");
+    let checks = env.state.db.list_checks(&task.id).await.unwrap();
+    let label = checks.iter().find(|c| c.kind == "peer_review").unwrap().spec_value()["fresh_eyes"].clone();
+    assert_eq!((label["checked"].as_bool(), label["spec_source"].as_str()), (Some(false), Some("none")), "{label}");
 }
 
 /// A fail goes back to Ready with the lead's note and on to the teammate in the hand-off's own
