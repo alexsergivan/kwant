@@ -140,14 +140,14 @@ import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
-import { devApi, devStore, devTeamRefs } from './devMode';
+import { DevModeError, devApi, devStore, devTeamRefs } from './devMode';
 import { GitHubConnectHost, connectedToast, openGitHubConnect } from './components/GitHubConnect';
 import { JiraSetupHost } from './components/JiraSetup';
 import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { DEV_TICKET_EVENT, DEV_TICKET_PROGRESS_EVENT } from './components/dev/TicketsTab';
 import { PrepushNeedsYou, PrepushThread, threadCards, usePrepushCards, type PrepushEventDetail } from './components/dev/PrepushThread';
-import { PREPUSH_EVENT, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
+import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 
@@ -2028,14 +2028,25 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setPage('chat');
     window.setTimeout(() => document.getElementById(`prepush-${c.id}`)?.scrollIntoView?.({ block: 'center' }), 250);
   };
-  const prepushRetry = async (c: PrepushCardData) => {
-    prepush.put(await prepushApi.retry(c.id));
-    await handleSendMessage(retryMessage(c));
+  // The card call first; a 409 means the card moved on, so fetch it again (Rigel QA 1). Then the
+  // chat message: if only that fails, say the change applied (Ada Later 7).
+  const prepushAct = async (c: PrepushCardData, act: () => Promise<PrepushCardData>, message: string) => {
+    try {
+      prepush.put(await act());
+    } catch (e) {
+      if (e instanceof DevModeError && e.status === 409) void prepush.refresh(c.id);
+      throw e;
+    }
+    let sent: boolean | string = false;
+    try {
+      sent = await handleSendMessage(message);
+    } catch {
+      sent = false;
+    }
+    if (sent !== true) throw new DevModeError(prepushMessageNotSent(kwantNames[c.kwant_id] || 'the bot'), 0, 'message_not_sent');
   };
-  const prepushOverride = async (c: PrepushCardData, reason: string) => {
-    prepush.put(await prepushApi.override(c.id, reason));
-    await handleSendMessage(overrideMessage(c));
-  };
+  const prepushRetry = (c: PrepushCardData) => prepushAct(c, () => prepushApi.retry(c.id), retryMessage(c));
+  const prepushOverride = (c: PrepushCardData, reason: string) => prepushAct(c, () => prepushApi.override(c.id, reason), overrideMessage(c));
 
   const openDirectChat = () => {
     if (!openThreadId) return;

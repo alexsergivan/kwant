@@ -20,7 +20,9 @@ export const MAX_REASON = 2000;
 export const NEEDS_YOU_TRIES = 2;
 
 export const PREPUSH_STATUSES = ['checking', 'clear', 'blocked', 'failed', 'overridden', 'retried'] as const;
-export type PrepushStatus = (typeof PREPUSH_STATUSES)[number];
+/** `unknown`: a status this build can't read yet (e.g. §4.4b `pushed`). Shown as a read-only grey line,
+ * never dropped, so a card doesn't vanish from the thread when the server learns a new state. */
+export type PrepushStatus = (typeof PREPUSH_STATUSES)[number] | 'unknown';
 export const CHECK_KEYS = ['secrets', 'pkgs', 'tests', 'risk', 'review', 'semgrep'] as const;
 export type CheckKey = (typeof CHECK_KEYS)[number];
 export const CHECK_STATES = ['running', 'pass', 'hit', 'error', 'not_installed'] as const;
@@ -110,7 +112,9 @@ export function parsePrepush(raw: unknown): PrepushCard | null {
   const id = str(raw.id, 120);
   const kwant = str(raw.kwant_id, 120);
   const branch = str(raw.branch, 200);
-  const status = PREPUSH_STATUSES.find((s) => s === raw.status);
+  const known = PREPUSH_STATUSES.find((s) => s === raw.status);
+  // A status string we don't know yet still names a real card: keep it, read-only (Ada Later 2).
+  const status: PrepushStatus | null = known ?? (str(raw.status, 40) ? 'unknown' : null);
   if (!id || !kwant || !branch || !status) return null;
   const rawChecks = arr(raw.checks);
   const checks = rawChecks.map(check).filter((c): c is PrepushCheck => !!c);
@@ -159,7 +163,8 @@ export type Phase =
   | 'P4' // needs you
   | 'P6' // pushed anyway (overridden)
   | 'P7' // a check couldn't run (failed, before needs_you)
-  | 'RT'; // the person asked for a re-check (retried)
+  | 'RT' // the person asked for a re-check (retried)
+  | 'UN'; // a status this build can't read yet: a read-only line
 
 export function phaseOf(c: PrepushCard): Phase {
   switch (c.status) {
@@ -175,6 +180,8 @@ export function phaseOf(c: PrepushCard): Phase {
       return 'P6';
     case 'retried':
       return 'RT';
+    case 'unknown':
+      return 'UN';
   }
 }
 
@@ -217,6 +224,8 @@ export function statusChip(c: PrepushCard): StatusChip | null {
       return { tone: 'plain', text: "Couldn't check", led: null };
     case 'RT':
       return { tone: 'plain', text: 'Checking again', led: null };
+    case 'UN':
+      return null;
   }
 }
 
@@ -286,6 +295,17 @@ const ROW_SOURCES: Record<CheckKey, FindingSource[]> = {
   semgrep: ['semgrep'],
 };
 
+/**
+ * Whether a row that found something holds the push. The server's `blockers` list decides (contract
+ * §4.3 "blocks?"): risk never blocks on its own, semgrep never blocks, and a tamper or review hit
+ * blocks only when a high or critical finding behind it is in `blockers`.
+ */
+export function rowBlocks(c: PrepushCard, key: CheckKey): boolean {
+  const src = ROW_SOURCES[key];
+  if (src.length === 0 || key === 'semgrep') return false;
+  return c.blockers.some((b) => src.includes(b.source));
+}
+
 /** What "Show" opens on a row that found something: the open findings behind it, from the card. */
 export function rowFindings(c: PrepushCard, key: CheckKey): PrepushFinding[] {
   const src = ROW_SOURCES[key];
@@ -341,6 +361,8 @@ export function footer(c: PrepushCard, bot: string): string {
       return "A check couldn't run, so this push can't count as checked. Run the checks again, or push anyway with a reason.";
     case 'RT':
       return `You asked for a new check. ${bot}'s next push of this commit is checked again from try 1.`;
+    case 'UN':
+      return `This version of the app can't show where the check of ${c.branch} is yet. Update the app to see it.`;
   }
 }
 
@@ -351,9 +373,15 @@ export function needsYouLead(c: PrepushCard, bot: string): string {
   return `${bot} couldn't clear ${plural(Math.max(n, 1), 'finding')} after ${plural(c.tries, 'try', 'tries')}.`;
 }
 
-export function clearedLine(c: PrepushCard): string {
+/** P2b's line around the branch, which the card renders as code (Mira Later 6). */
+export function clearedParts(c: PrepushCard): { before: string; branch: string; after: string } {
   const at = hhmm(c.updated_at);
-  return `Cleared to push ${c.branch} after ${plural(requiredPassed(c), 'check')} passed${at ? ` · ${at}` : ''}`;
+  return { before: 'Cleared to push ', branch: c.branch, after: ` after ${plural(requiredPassed(c), 'check')} passed${at ? ` · ${at}` : ''}` };
+}
+
+export function clearedLine(c: PrepushCard): string {
+  const p = clearedParts(c);
+  return `${p.before}${p.branch}${p.after}`;
 }
 
 export function overriddenLine(c: PrepushCard): string {
@@ -375,7 +403,12 @@ export const retryMessage = (c: PrepushCard): string =>
 export const overrideMessage = (c: PrepushCard): string =>
   `I let your push of ${c.branch} go anyway, for this commit only. Run the same push again.`;
 
-export const reasonOk = (s: string): boolean => s.trim().length >= MIN_REASON && s.trim().length <= MAX_REASON;
+/** Characters as the server counts them (code points, not UTF-16 units: Ada Later 6). */
+export const reasonLength = (s: string): number => [...s.trim()].length;
+export const reasonOk = (s: string): boolean => reasonLength(s) >= MIN_REASON && reasonLength(s) <= MAX_REASON;
+
+/** The card changed but the chat message to the bot didn't go (Ada Later 7). */
+export const messageNotSent = (bot: string): string => `Done, but the message to ${bot} didn't send. Tell ${bot} in the chat.`;
 
 // ---------------------------------------------------------------------------------------------
 // Needs you (Inbox)
@@ -383,6 +416,22 @@ export const reasonOk = (s: string): boolean => s.trim().length >= MIN_REASON &&
 /** One Inbox item per card that needs the person, newest first. Derived from the cards only. */
 export function needsYou(cards: PrepushCard[]): PrepushCard[] {
   return cards.filter((c) => c.needs_you).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+}
+
+/**
+ * Merge a list response into what the page already holds (Ada Later 5): a card an event refreshed
+ * after the list was read keeps its newer copy, by the server's `updated_at`.
+ */
+export function mergeList(current: PrepushCard[], list: PrepushCard[]): PrepushCard[] {
+  const have = new Map(current.map((c) => [c.id, c]));
+  const merged = list.map((c) => {
+    const h = have.get(c.id);
+    return h && (h.updated_at ?? 0) > (c.updated_at ?? 0) ? h : c;
+  });
+  const ids = new Set(merged.map((c) => c.id));
+  // A card an event brought in that the (older) list didn't have yet stays too.
+  for (const c of current) if (!ids.has(c.id)) merged.push(c);
+  return merged.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
 }
 
 /** Merge a fetched card into a list (newest first), replacing the same id. */
