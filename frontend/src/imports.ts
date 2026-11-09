@@ -196,6 +196,9 @@ export function importErrorText(err: unknown): { title: string; detail: string }
       return { title: 'No connection', detail };
     case 'person_cancelled':
       return { title: 'Not undone', detail };
+    case 'undo_failed':
+      // The server's plain sentence (what went wrong and what to do), never SQL
+      return { title: 'Not undone', detail: detail || 'The server couldn’t finish this. Try again in a moment.' };
     default:
       return { title: 'Something went wrong', detail: 'The server couldn’t finish this. Try again in a moment.' };
   }

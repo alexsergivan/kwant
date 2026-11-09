@@ -222,6 +222,15 @@ impl From<serde_json::Error> for UndoError {
     }
 }
 
+impl super::bot_actions::SqliteCause for UndoError {
+    fn sqlite_code(&self) -> Option<i32> {
+        match self {
+            UndoError::Db(e) => super::bot_actions::sqlite_code(e),
+            _ => None,
+        }
+    }
+}
+
 impl From<sqlx::Error> for UndoError {
     fn from(e: sqlx::Error) -> Self {
         UndoError::Db(e.into())
@@ -541,14 +550,22 @@ impl Database {
         if now() > c.undo_until() {
             return Err(UndoError::Expired);
         }
+        // Its bots go with their messages and memories, so an out-of-step search index gets
+        // the same repair and one retry as a bot's delete
+        self.retry_after_index_repair(&format!("undoing ready-made team {}", c.team_id), || self.undo_team_creation_once(&c)).await?;
+        Ok(c.created)
+    }
+
+    /// One attempt of [`Self::undo_team_creation`], in one write transaction.
+    async fn undo_team_creation_once(&self, c: &Creation) -> Result<(), UndoError> {
         let mut tx = self.begin_write().await?;
-        match undo_in(&mut tx, &c).await {
+        match undo_in(&mut tx, c).await {
             Ok(()) => {
                 tx.commit().await?;
-                Ok(c.created)
+                Ok(())
             }
             Err(e) => {
-                tx.rollback().await?;
+                let _ = tx.rollback().await;
                 Err(e)
             }
         }
