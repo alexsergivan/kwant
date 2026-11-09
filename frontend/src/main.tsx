@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { App } from './Shell';
 import { SandboxViewer } from './components/SandboxViewer';
 import { AuthGate } from './components/AuthGate';
+import { installFileDropGuard } from './dragPreview';
 import { captureInstallPrompt, registerServiceWorker, trackAppHeight } from './pwa';
 import './styles/fonts.css';
 import './styles/modern.css';
@@ -19,6 +20,8 @@ import './styles/gettingStarted.css';
 registerServiceWorker();
 captureInstallPrompt();
 trackAppHeight();
+// A file dropped outside a chat never opens in place of kwant (browser, Mac and Windows apps).
+installFileDropGuard(window);
 
 const sandboxMatch = window.location.pathname.match(/^\/sandbox\/([^/]+)\/?$/);
 

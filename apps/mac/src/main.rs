@@ -711,6 +711,11 @@ fn make_window<R: Runtime>(app: &AppHandle<R>, place: &Place, goto: Goto, visibl
         .inner_size(1280.0, 820.0)
         .min_inner_size(900.0, 600.0)
         .initialization_script(APP_MARK)
+        // Files dropped from Finder or Explorer go to the page, which attaches them to the open
+        // chat. Tauri's own drop handler is on by default and takes every drop (wry never hands
+        // it to WKWebView or WebView2), so the page would see no drag events at all. Nothing in
+        // the app listens for Tauri's drag-drop events. The connect and nudge windows keep it.
+        .disable_drag_drop_handler()
         // The window only shows its place; another place opens in its own window, every other
         // page in the default browser
         .on_navigation(move |url| route(&nav_app, &nav_place, url, false))

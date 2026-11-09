@@ -51,6 +51,7 @@ import {
   uploadRetryable,
   uploadSlotsLeft,
 } from '../attachments';
+import { DragPreview, dragHasFiles, dragSummary, dragWarning, dropAnnouncement, folderNote, previewDrag, splitDrop } from '../dragPreview';
 import { FileTiles, UploadChip } from './Attachments';
 import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
@@ -525,6 +526,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const uploadFiles = useRef(new Map<string, { file: File; abort: AbortController }>());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragDepth = useRef(0);
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+  // Read out after a drop ("3 files added"); cleared shortly after so the same line can be read again.
+  const [dropAnnounce, setDropAnnounce] = useState('');
+  useEffect(() => {
+    if (!dropAnnounce) return;
+    const t = setTimeout(() => setDropAnnounce(''), 4000);
+    return () => clearTimeout(t);
+  }, [dropAnnounce]);
   const [openThoughts, setOpenThoughts] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -891,10 +900,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   /** Files from the picker, a drop or a paste: checked here, then uploaded right away. */
-  const addFiles = (files: File[]) => {
-    if (!files.length) return;
+  const addFiles = (files: File[], extraNotes: string[] = []): number => {
+    if (!files.length) {
+      if (extraNotes.length) setUploadNote(extraNotes.join(' '));
+      return 0;
+    }
     const room = uploadSlotsLeft(uploads);
-    const notes: string[] = [];
+    const notes: string[] = [...extraNotes];
     if (files.length > room) notes.push(`Up to ${MAX_ATTACHMENTS} files per message; ${files.length - room === 1 ? 'one was' : `${files.length - room} were`} left out.`);
     const added: PendingUpload[] = [];
     for (const file of files.slice(0, room)) {
@@ -909,6 +921,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
     setUploadNote(notes.length ? notes.join(' ') : null);
     if (added.length) setUploads((list) => [...list, ...added]);
+    return added.length;
   };
 
   const removeUpload = (key: string) => {
@@ -924,30 +937,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
     startUpload(key, f);
   };
 
-  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files');
+  // 0.8.0: the whole open chat takes a file drop (message list, header and composer), not only the
+  // composer box. The depth count keeps child elements from flickering the overlay.
   const dropHandlers = {
     onDragEnter: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
       dragDepth.current += 1;
+      if (dragDepth.current === 1) setDragPreview(previewDrag(e.dataTransfer.items, uploads.length));
       setDragOver(true);
     },
     onDragOver: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
     },
     onDragLeave: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (!dragHasFiles(e.dataTransfer)) return;
       dragDepth.current = Math.max(0, dragDepth.current - 1);
-      if (dragDepth.current === 0) setDragOver(false);
+      if (dragDepth.current === 0) {
+        setDragOver(false);
+        setDragPreview(null);
+      }
     },
     onDrop: (e: React.DragEvent) => {
-      if (!hasFiles(e)) return;
+      if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
       dragDepth.current = 0;
       setDragOver(false);
-      addFiles(filesFrom(e.dataTransfer.files));
+      setDragPreview(null);
+      const dropped = splitDrop(e.dataTransfer.items as unknown as ArrayLike<DataTransferItem>, e.dataTransfer.files);
+      const added = addFiles(dropped.files, dropped.folders.length ? [folderNote(dropped.folders)] : []);
+      setDropAnnounce(dropAnnouncement(added));
       textareaRef.current?.focus();
     },
   };
@@ -1509,7 +1530,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-surface-main overflow-hidden" data-keyboard-mode={kbd ? 'on' : undefined}>
+    <div
+      className="flex-1 flex flex-col h-full bg-surface-main overflow-hidden"
+      data-keyboard-mode={kbd ? 'on' : undefined}
+      data-drop-target="chat"
+      data-drop-active={dragOver ? 'true' : undefined}
+      {...dropHandlers}
+    >
       {/* Channel / bot header: 56 px on a phone, 48 px in keyboard mode (instant, no animation) */}
       <div
         data-chat-header
@@ -1974,7 +2001,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
         <form
           onSubmit={handleSubmit}
-          {...dropHandlers}
           aria-label={`Message ${title}`}
           data-composer-form
           data-stacked={phone ? String(stacked) : undefined}
@@ -1990,7 +2016,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         >
           {dragOver && (
             <div className="absolute inset-0 z-10 rounded-2xl border-2 border-dashed border-sky-400/70 bg-zinc-950/80 flex items-center justify-center gap-2 text-sm font-medium text-sky-200 pointer-events-none">
-              <Paperclip size={15} aria-hidden="true" /> Drop files to attach
+              <Paperclip size={15} aria-hidden="true" />
+              <span data-drop-summary>{dragPreview ? dragSummary(dragPreview) : 'Drop files to attach'}</span>
+              {dragPreview && dragWarning(dragPreview) && <span className="text-amber-200" data-drop-warning>{dragWarning(dragPreview)}</span>}
             </div>
           )}
           {replyTo && (
@@ -2287,6 +2315,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
       showOnceBot={vmShowOnceBot}
     />
   </div>
+      {/* After a drop: "3 files added" for screen readers. */}
+      <div role="status" aria-live="polite" className="sr-only" data-drop-announce>
+        {dropAnnounce}
+      </div>
 </div>
   );
 };
