@@ -249,6 +249,13 @@ pub fn build(card: &Value, facts: &DevFacts, inline: bool) -> Built {
         b.push_str(&format!("- {r}\n"));
     }
 
+    // B2: what the person let go past kwant's pre-push check, in their own words
+    for p in card["pushed_anyway"].as_array().into_iter().flatten() {
+        let sha: String = p["head_sha"].as_str().unwrap_or("").chars().take(7).collect();
+        let reason: String = p["reason"].as_str().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ").chars().take(300).collect();
+        b.push_str(&format!("- Pushed anyway: the person overrode kwant's pre-push check on commit `{sha}`: \u{201c}{}\u{201d}\n", reason.replace('`', "'")));
+    }
+
     b.push_str("\n**Intent check**");
     let intent = &card["intent"];
     match intent["source"].as_str() {
@@ -643,6 +650,22 @@ mod tests {
         }
         assert!(!b.body.contains("SECRET-WORDS") && !b.body.contains("atlassian.net"), "{}", b.body);
         assert!(!build(&card(vec![]), &facts(), true).body.contains("Matches the ticket"));
+    }
+
+    /// Ada's review of #456, Later 6: a push the person let go past the pre-push card says so,
+    /// with their reason, in the review kwant posts.
+    #[test]
+    fn a_push_let_go_anyway_is_in_the_body_with_the_persons_reason() {
+        let mut c = card(vec![]);
+        c["pushed_anyway"] = json!([{"card_id": "pp1", "head_sha": "0123456789abcdef0123456789abcdef01234567", "by": "person",
+            "reason": "the slow test is flaky,\n tracked in `#12`", "at": 1}]);
+        let b = build(&c, &facts(), true);
+        assert!(
+            b.body.contains("- Pushed anyway: the person overrode kwant's pre-push check on commit `0123456`: \u{201c}the slow test is flaky, tracked in '#12'\u{201d}"),
+            "{}",
+            b.body
+        );
+        assert!(!build(&card(vec![]), &facts(), true).body.contains("Pushed anyway"));
     }
 
     #[test]

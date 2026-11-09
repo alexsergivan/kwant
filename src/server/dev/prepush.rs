@@ -26,7 +26,7 @@
 use super::facts::{Author, CiState, DevFacts, FileDiff, Kind, KwantRef, Links};
 use super::git::{GitError, Repo};
 use super::scan::{self, Finding, State, Tile};
-use crate::db::dev_prepush::{PrepushRow, BLOCKED, CHECKING, CLEAR, NEEDS_YOU_TRIES, OVERRIDDEN, PREPUSH_FAILED, RETRIED};
+use crate::db::dev_prepush::{PrepushRow, BLOCKED, CHECKING, CLEAR, NEEDS_YOU_TRIES, OVERRIDDEN, PREPUSH_FAILED, PUSHED, RETRIED};
 use crate::drivers::events::RuntimeEvent;
 use crate::mcp::prod_floor;
 use crate::server::AppState;
@@ -75,7 +75,9 @@ pub enum Parsed {
 const SEGMENT_SPLIT: [char; 7] = [';', '&', '|', '\n', '(', ')', '`'];
 
 /// What a bot is told when something runs before its push in the same command.
-pub const RUN_ALONE: &str = "kwant checks the commit a push sends before the command runs, so nothing else may run before      `git push` in the same command (a commit, an amend, a pull or a merge would change what is sent). Run them first,      then run `git push` as its own command (`cd <repo> && git push` is fine).";
+pub const RUN_ALONE: &str = "kwant checks the commit a push sends before the command runs, so nothing else may run before \
+     `git push` in the same command (a commit, an amend, a pull or a merge would change what is sent). Run them first, \
+     then run `git push` as its own command (`cd <repo> && git push` is fine).";
 
 /// The `git push`es in `command`, in order. Finds `git` anywhere in a segment, so `env X=1 git
 /// push`, `sudo git push`, `nice git push` and `bash -c 'git push'` all count; `cd <dir>` before it
@@ -259,6 +261,15 @@ pub fn blockers(card: &Value, review_failed: bool) -> Vec<Value> {
 
 /// What the bot is told while its push waits.
 pub fn deny_text(row: &PrepushRow) -> String {
+    let text = deny_text_for(row);
+    if row.folder.starts_with("mcp:") {
+        // A GitHub tool's write has no commit of its own: its files and arguments are the check
+        return format!("{text}\n(This was a GitHub tool's write, so \"push\" means that call: changing what it sends gets a new check, and the same call again gets this card.)");
+    }
+    text
+}
+
+fn deny_text_for(row: &PrepushRow) -> String {
     let id = &row.id;
     let branch = &row.branch;
     match row.status.as_str() {
@@ -299,44 +310,129 @@ pub fn deny_text(row: &PrepushRow) -> String {
 // ---------------------------------------------------------------------------------------------
 // The gate
 
-/// Whether `command` may run now: `None` lets it run (no push, Dev mode off, the production
-/// floor asks instead, or every push it makes has a `clear` or `overridden` card), else the text
-/// the bot gets back instead of running it. `folder` is the bot's folder for the turn (set by the
-/// host, never named by the bot).
-pub async fn gate(state: &AppState, kwant_id: &str, command: &str, folder: &Path) -> Option<String> {
+/// What [`check_command`] found for a command that may run.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Pass {
+    /// The `overridden` cards its pushes go on: [`use_up`] turns each into `pushed` once the
+    /// command is allowed, so an override lets exactly one push go.
+    pub overrides: Vec<String>,
+    /// The command to run instead, pinned to the commit kwant checked (`git push <remote>
+    /// <sha>:refs/heads/<branch>`), so a commit made by a parallel call in the same turn isn't
+    /// what goes. `None` for a shape kwant doesn't rewrite ([`pin`]).
+    pub pinned: Option<String>,
+}
+
+/// Whether `command` may run now (`Ok`: no push, Dev mode off, the production floor asks
+/// instead, or every push it makes has a `clear` or `overridden` card), else the text the bot
+/// gets back instead of running it. `folder` is the bot's folder for the turn (set by the host,
+/// never named by the bot). Call [`use_up`] once the command is allowed to run.
+pub async fn check_command(state: &AppState, kwant_id: &str, command: &str, folder: &Path) -> Result<Pass, String> {
     let lower = command.to_ascii_lowercase();
     if !(lower.contains("git") && lower.contains("push")) {
-        return None;
+        return Ok(Pass::default());
     }
     let parsed = pushes(command);
     if parsed == Parsed::NoPush {
-        return None;
+        return Ok(Pass::default());
     }
     // The floor reads the checked-out branch where the (first) push runs
     let cwd = match &parsed {
         Parsed::Pushes(list) => folder.join(&list[0].dir),
         _ => folder.to_path_buf(),
     };
-    let (space_id, ctx) = super::floor::ctx_for_kwant(&state.db, kwant_id, Some((folder, &cwd))).await?;
+    let Some((space_id, ctx)) = super::floor::ctx_for_kwant(&state.db, kwant_id, Some((folder, &cwd))).await else {
+        return Ok(Pass::default());
+    };
     // The production floor's card asks the person about this command already
     if prod_floor::shell_reason(command, &ctx).is_some() {
-        return None;
+        return Ok(Pass::default());
     }
     let list = match parsed {
-        Parsed::NoPush => return None,
-        Parsed::Refused(why) => return Some(why),
+        Parsed::NoPush => return Ok(Pass::default()),
+        Parsed::Refused(why) => return Err(why),
         Parsed::Pushes(list) => list,
     };
+    let one = list.len() == 1;
+    let mut pass = Pass::default();
     for push in list {
-        match gate_one(state, kwant_id, &space_id, &ctx.branch, folder, &push).await {
-            Ok(()) => {}
-            Err(text) => return Some(text),
+        let checked = gate_one(state, kwant_id, &space_id, &ctx.branch, folder, &push).await?;
+        if checked.status == OVERRIDDEN {
+            pass.overrides.push(checked.id.clone());
+        }
+        if one {
+            pass.pinned = pin(command, &checked.head_sha, &checked.branch);
+        }
+    }
+    Ok(pass)
+}
+
+/// Uses up the overrides `pass` goes on, once its command is allowed to run: `None` when it may
+/// run, else the text the bot gets back (another push used an override first).
+pub async fn use_up(state: &AppState, pass: &Pass) -> Option<String> {
+    for id in &pass.overrides {
+        match state.db.use_prepush_override(id).await {
+            Ok(true) => {
+                if let Ok(Some(r)) = state.db.prepush_card(id).await {
+                    notify(state, &r);
+                }
+            }
+            Ok(false) => return Some(format!("The person's override on pre-push card {id} was for one push, and another push used it. Nothing was pushed.")),
+            Err(e) => return Some(format!("kwant couldn't use the override on pre-push card {id} ({e}). Nothing was pushed.")),
         }
     }
     None
 }
 
-async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, folder: &Path, push: &Push) -> Result<(), String> {
+/// [`check_command`] then [`use_up`] in one step, for a command that runs as soon as it may:
+/// `None` lets it run, else the text the bot gets back.
+pub async fn gate(state: &AppState, kwant_id: &str, command: &str, folder: &Path) -> Option<String> {
+    match check_command(state, kwant_id, command, folder).await {
+        Err(why) => Some(why),
+        Ok(pass) => use_up(state, &pass).await,
+    }
+}
+
+/// `command` pinned to `sha` when it is exactly `[cd <dir> && ...] git push <remote> [<spec>]`
+/// with plain words and no flags: `git push <remote> <sha>:refs/heads/<branch>`, so what goes is
+/// the commit kwant checked. `None` for any other shape (flags such as `-u`, quotes, `$`,
+/// several pushes), which runs as written.
+pub fn pin(command: &str, sha: &str, branch: &str) -> Option<String> {
+    let plain = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | '+'));
+    if !super::git::is_sha(sha) || !super::routes::valid_branch(branch) || command.contains('\n') {
+        return None;
+    }
+    let segments: Vec<&str> = command.split("&&").map(str::trim).collect();
+    let (last, cds) = segments.split_last()?;
+    let mut kept = Vec::new();
+    for seg in cds {
+        let w: Vec<&str> = seg.split_whitespace().collect();
+        if w.len() != 2 || w[0] != "cd" || !plain(w[1]) || w[1].contains(':') || w[1].starts_with('/') || w[1].split('/').any(|p| p == "..") {
+            return None;
+        }
+        kept.push(format!("cd {}", w[1]));
+    }
+    let w: Vec<&str> = last.split_whitespace().collect();
+    if w.len() < 3 || w.len() > 4 || w[0] != "git" || w[1] != "push" || w[2].starts_with('-') || !plain(w[2]) || w[2].contains(':') {
+        return None;
+    }
+    if let Some(spec) = w.get(3) {
+        if !plain(spec) || spec.starts_with('-') || spec.starts_with('+') {
+            return None;
+        }
+    }
+    kept.push(format!("git push {} {sha}:refs/heads/{branch}", w[2]));
+    Some(kept.join(" && "))
+}
+
+/// The card a push goes on: its id, status, branch and commit.
+struct Checked {
+    id: String,
+    status: String,
+    branch: String,
+    head_sha: String,
+}
+
+async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, folder: &Path, push: &Push) -> Result<Checked, String> {
     let dir = folder.join(&push.dir);
     let repo = Repo::local(&dir, &state.config.data_dir)
         .await
@@ -351,6 +447,23 @@ async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, 
     let sha = resolve(&repo, &push.src).await.map_err(|e| format!("kwant checks a push before it goes, and couldn't find {} ({e}).", scan::as_data_up_to(&push.src, 80)))?;
     drop(repo);
     let key = dir.canonicalize().unwrap_or(dir.clone()).to_string_lossy().into_owned();
+    gate_card(state, kwant_id, space_id, base, &key, &branch, &sha, || Source::Git(dir.clone())).await
+}
+
+/// The card for `(space, key, branch, sha)`: made (and its checks started from `src`) when there
+/// is none, else what it says now.
+#[allow(clippy::too_many_arguments)]
+async fn gate_card(
+    state: &AppState,
+    kwant_id: &str,
+    space_id: &str,
+    base: &str,
+    key: &str,
+    branch: &str,
+    sha: &str,
+    src: impl FnOnce() -> Source,
+) -> Result<Checked, String> {
+    let (key, branch, sha) = (key.to_string(), branch.to_string(), sha.to_string());
     let mut row = state.db.prepush_card_of(space_id, &key, &branch, &sha).await.map_err(|e| format!("kwant couldn't read its pre-push card: {e}"))?;
     let mut fresh_start = false;
     if let Some(r) = &row {
@@ -360,6 +473,17 @@ async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, 
             // The person asked for the checks again: a new card, back at try 1
             row = None;
             fresh_start = true;
+        } else if r.status == PUSHED {
+            // The override let one push go: this one waits for the person again
+            let again = state.db.reblock_pushed_prepush_card(&r.id).await.ok().flatten();
+            if let Some(again) = &again {
+                notify(state, again);
+            }
+            return Err(format!(
+                "The person's override on pre-push card {} was for one push of {branch}, and that push went. Nothing was pushed: \
+                 the card is blocked again until the person overrides it again (or a new commit gets a new check).",
+                r.id
+            ));
         }
     }
     let row = match row {
@@ -373,7 +497,7 @@ async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, 
             match made {
                 Some(r) => {
                     notify(state, &r);
-                    tokio::spawn(check(state.clone(), r.clone(), dir.clone(), base.to_string()));
+                    tokio::spawn(check(state.clone(), r.clone(), src(), base.to_string()));
                     r
                 }
                 // Another push of the same commit made it first
@@ -382,7 +506,7 @@ async fn gate_one(state: &AppState, kwant_id: &str, space_id: &str, base: &str, 
         }
     };
     match row.status.as_str() {
-        CLEAR | OVERRIDDEN => Ok(()),
+        CLEAR | OVERRIDDEN => Ok(Checked { id: row.id, status: row.status, branch, head_sha: sha }),
         _ => Err(deny_text(&row)),
     }
 }
@@ -395,6 +519,19 @@ async fn resolve(repo: &Repo, src: &str) -> Result<String, GitError> {
     } else {
         repo.resolve(&format!("refs/heads/{src}")).await
     }
+}
+
+/// The pushes the person let go anyway on `branch` (Ada's review of #456, Later 6; design
+/// b3-fresh-eyes.md): `[{card_id, head_sha, by, reason, at}]`, newest first, at most three, for
+/// the PR's review card and the review kwant posts. Empty when there were none.
+pub async fn pushed_anyway(state: &AppState, space_id: &str, branch: Option<&str>) -> Value {
+    let Some(branch) = branch.filter(|b| super::routes::valid_branch(b)) else { return json!([]) };
+    let rows = state.db.prepush_overrides_on(space_id, branch, 3).await.unwrap_or_default();
+    Value::Array(
+        rows.iter()
+            .map(|r| json!({"card_id": r.id, "head_sha": r.head_sha, "by": r.overridden_by, "reason": r.override_reason, "at": r.overridden_at}))
+            .collect(),
+    )
 }
 
 /// Sends `dev_prepush {space_id, id, kwant_id, status}` on the event stream.
@@ -410,21 +547,70 @@ pub fn notify(state: &AppState, row: &PrepushRow) {
 // ---------------------------------------------------------------------------------------------
 // The checks
 
-/// Runs the checks for card `row` and stores the verdict.
-pub async fn check(state: AppState, row: PrepushRow, dir: PathBuf, base: String) {
-    let (status, card) = match tokio::time::timeout(CHECK_TIMEOUT, build(&state, &row, &dir, &base)).await {
-        Ok(Ok(card)) => {
-            let status = if card["blockers"].as_array().is_some_and(|b| !b.is_empty()) { BLOCKED } else { CLEAR };
-            (status, card)
-        }
-        Ok(Err(why)) => (PREPUSH_FAILED, failed_card(&row, &why)),
-        Err(_) => (PREPUSH_FAILED, failed_card(&row, "the checks took longer than 12 minutes")),
-    };
+/// How long the one automatic retry waits after a check that errored.
+const RETRY_PAUSE: Duration = Duration::from_secs(5);
+
+/// Runs the checks for card `row` and stores the verdict. A check that errored (kwant couldn't
+/// read the repo, or the reviewer's turn didn't answer) runs once more on its own before the
+/// card waits for the person (Ada's review of #456, Later 6): at most one more reviewer turn,
+/// within the same [`CHECK_TIMEOUT`]; a timeout is never retried.
+pub async fn check(state: AppState, row: PrepushRow, src: Source, base: String) {
+    let started = std::time::Instant::now();
+    let mut outcome = attempt(&state, &row, &src, &base, CHECK_TIMEOUT).await;
+    let mut retried = false;
+    if errored(outcome.0, &outcome.1) && started.elapsed() < CHECK_TIMEOUT / 2 {
+        tokio::time::sleep(RETRY_PAUSE).await;
+        let left = CHECK_TIMEOUT.saturating_sub(started.elapsed());
+        outcome = attempt(&state, &row, &src, &base, left).await;
+        retried = true;
+    }
+    let (status, mut card) = outcome;
+    if retried {
+        card["auto_retried"] = json!(true);
+    }
     match state.db.finish_prepush_card(&row.id, status, &card.to_string()).await {
         Ok(Some(r)) => notify(&state, &r),
         Ok(None) => {}
         Err(e) => tracing::warn!(card = %row.id, "dev: could not save a pre-push card: {e}"),
     }
+}
+
+/// What a card checks: the commits in a repo kwant can read, or the files a GitHub tool sends.
+#[derive(Debug, Clone)]
+pub enum Source {
+    Git(PathBuf),
+    Mcp(McpWrite),
+}
+
+async fn attempt(state: &AppState, row: &PrepushRow, src: &Source, base: &str, limit: Duration) -> (&'static str, Value) {
+    let built = async {
+        match src {
+            Source::Git(dir) => build(state, row, dir, base).await,
+            Source::Mcp(write) => build_mcp(state, row, write, base).await,
+        }
+    };
+    match tokio::time::timeout(limit, built).await {
+        Ok(Ok(card)) => {
+            let status = if card["blockers"].as_array().is_some_and(|b| !b.is_empty()) { BLOCKED } else { CLEAR };
+            (status, card)
+        }
+        Ok(Err(why)) => (PREPUSH_FAILED, failed_card(row, &why)),
+        Err(_) => {
+            let mut card = failed_card(row, "the checks took longer than 12 minutes");
+            card["timed_out"] = json!(true);
+            (PREPUSH_FAILED, card)
+        }
+    }
+}
+
+/// Whether a check errored rather than found something: kwant couldn't check (not a timeout),
+/// or the fresh-eyes reviewer's turn didn't answer. A finding, a hit or "no reviewer" is a
+/// verdict, never retried.
+pub fn errored(status: &str, card: &Value) -> bool {
+    if status == PREPUSH_FAILED {
+        return card["timed_out"] != json!(true);
+    }
+    card["blockers"].as_array().is_some_and(|b| b.iter().any(|x| x["source"] == "review"))
 }
 
 fn failed_card(row: &PrepushRow, why: &str) -> Value {
@@ -475,7 +661,16 @@ async fn build(state: &AppState, row: &PrepushRow, dir: &Path, base: &str) -> Re
     let semgrep = semgrep(&repo, &row.head_sha, &files).await;
     security.findings.extend(semgrep.1.iter().cloned());
     drop(repo);
+    let mut card = judge(state, row, base, title, files, security).await;
+    card["base_sha"] = json!(merge_base);
+    card["diffstat"] = diffstat;
+    card["security"]["semgrep"] = serde_json::to_value(&semgrep.0).unwrap_or(Value::Null);
+    Ok(card)
+}
 
+/// The checks every card gets once its files are read: the review card's rules over `files`
+/// and `security`, then one reviewer turn by another bot that sees only the diff.
+async fn judge(state: &AppState, row: &PrepushRow, base: &str, title: String, files: Vec<FileDiff>, security: scan::Security) -> Value {
     let kwant = state.db.get_kwant(&row.kwant_id).await.ok().flatten();
     let author = Author {
         login: None,
@@ -516,11 +711,197 @@ async fn build(state: &AppState, row: &PrepushRow, dir: &Path, base: &str) -> Re
     let (status, mut card) = super::review::card_for(&facts, picked.as_ref(), model.as_mut(), None).await;
     card["kind"] = json!("prepush");
     card["head_sha"] = json!(row.head_sha);
-    card["base_sha"] = json!(merge_base);
-    card["diffstat"] = diffstat;
-    card["security"]["semgrep"] = serde_json::to_value(&semgrep.0).unwrap_or(Value::Null);
     let failed = status == crate::db::dev_mode::FAILED;
     card["blockers"] = Value::Array(blockers(&card, failed));
+    card
+}
+
+// ---------------------------------------------------------------------------------------------
+// kwant's own GitHub tools (Ada's review of #456, Later 6a)
+
+/// A write a GitHub MCP tool (GitHub's own server, or Composio's GitHub tools) makes to a branch:
+/// it commits on GitHub without a local push, so it gets the same card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpWrite {
+    pub owner: String,
+    pub repo: String,
+    /// `None`: the tool names no branch (GitHub then writes to the default branch).
+    pub branch: Option<String>,
+    pub message: String,
+    /// Each file it writes, with its new text; `None` deletes the file.
+    pub files: Vec<(String, Option<String>)>,
+}
+
+/// How many files of one write are read; a write with more is refused.
+const MCP_FILES: usize = 100;
+
+/// The GitHub writes an MCP call makes: GitHub's server (`push_files`, `create_or_update_file`,
+/// `delete_file`), Composio's slugs (`GITHUB_COMMIT_MULTIPLE_FILES`,
+/// `GITHUB_CREATE_OR_UPDATE_FILE_CONTENTS`, `GITHUB_DELETE_A_FILE`), and those inside a
+/// Composio multi-execute call. A call names a repo (`owner` and `repo`), or it isn't one.
+pub fn mcp_writes(tool: &str, args: &Value) -> Vec<McpWrite> {
+    let mut out = Vec::new();
+    collect_writes(tool, args, &mut out, 0);
+    out
+}
+
+fn collect_writes(tool: &str, args: &Value, out: &mut Vec<McpWrite>, depth: usize) {
+    if depth > 2 || out.len() > 20 {
+        return;
+    }
+    // Composio's multi-execute: `tools: [{tool_slug, arguments}]`
+    if let Some(list) = args["tools"].as_array() {
+        for t in list {
+            if let Some(slug) = t["tool_slug"].as_str().or(t["slug"].as_str()) {
+                collect_writes(slug, &t["arguments"], out, depth + 1);
+            }
+        }
+    }
+    let name = tool.to_ascii_lowercase();
+    let name = name.strip_prefix("github_").unwrap_or(&name);
+    let kind = match name {
+        "push_files" | "commit_multiple_files" => 'm',
+        "create_or_update_file" | "create_or_update_file_contents" => 'w',
+        "delete_file" | "delete_a_file" => 'd',
+        _ => return,
+    };
+    let (Some(owner), Some(repo)) = (args["owner"].as_str(), args["repo"].as_str()) else { return };
+    let text = |f: &Value| -> Option<String> {
+        let content = f["content"].as_str()?;
+        if f["encoding"].as_str().is_some_and(|e| e.eq_ignore_ascii_case("base64")) {
+            use base64::Engine as _;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(content.split_whitespace().collect::<String>()).ok()?;
+            return Some(String::from_utf8_lossy(&bytes).into_owned());
+        }
+        Some(content.to_string())
+    };
+    let mut files = Vec::new();
+    match kind {
+        'w' => files.push((args["path"].as_str().unwrap_or("").to_string(), Some(text(args).unwrap_or_default()))),
+        'd' => files.push((args["path"].as_str().unwrap_or("").to_string(), None)),
+        _ => {
+            for key in ["files", "upserts", "additions"] {
+                for f in args[key].as_array().into_iter().flatten() {
+                    files.push((f["path"].as_str().unwrap_or("").to_string(), Some(text(f).unwrap_or_default())));
+                }
+            }
+            for key in ["deletes", "deletions"] {
+                for f in args[key].as_array().into_iter().flatten() {
+                    let path = f.as_str().or(f["path"].as_str()).unwrap_or("");
+                    files.push((path.to_string(), None));
+                }
+            }
+        }
+    }
+    out.push(McpWrite {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        branch: args["branch"].as_str().map(str::trim).filter(|b| !b.is_empty()).map(String::from),
+        message: args["message"].as_str().unwrap_or("").to_string(),
+        files,
+    });
+}
+
+/// A stand-in commit id for a write that has none yet: the first 40 hex digits of the SHA-256 of
+/// the tool and its arguments (keys sorted), so the same call again is the same card.
+pub fn write_id(tool: &str, args: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(tool.as_bytes());
+    h.update([0u8]);
+    h.update(args.to_string().as_bytes());
+    let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    hex[..40].to_string()
+}
+
+/// [`check_command`] for an MCP call: `Ok` when it writes to no GitHub branch, Dev mode is off,
+/// or the production floor asks instead; else its card must be `clear` or `overridden`. Call
+/// [`use_up`] once the call is allowed. The card's folder is `mcp:<server>/<owner>/<repo>`.
+pub async fn check_mcp(state: &AppState, kwant_id: &str, server: &str, tool: &str, args: &Value) -> Result<Pass, String> {
+    if server == crate::mcp::SELF_SERVER_NAME {
+        return Ok(Pass::default());
+    }
+    let writes = mcp_writes(tool, args);
+    if writes.is_empty() {
+        return Ok(Pass::default());
+    }
+    let Some((space_id, ctx)) = super::floor::ctx_for_kwant(&state.db, kwant_id, None).await else {
+        return Ok(Pass::default());
+    };
+    let req = crate::mcp::ToolApprovalRequest {
+        kwant_id: kwant_id.to_string(),
+        kwant_name: String::new(),
+        turn_id: String::new(),
+        tool_name: format!("mcp__{server}__{tool}"),
+        server: server.to_string(),
+        tool: tool.to_string(),
+        arguments: args.clone(),
+        builtin: None,
+        smart: None,
+        payment: None,
+    };
+    if prod_floor::reason(&req, &ctx).is_some() {
+        return Ok(Pass::default());
+    }
+    if writes.len() > 1 {
+        return Err(format!("{RUN_ALONE_MCP} This call makes {} GitHub writes: make each one its own call.", writes.len()));
+    }
+    let write = writes.into_iter().next().unwrap_or_else(|| unreachable!());
+    let Some(branch) = write.branch.clone() else {
+        return Err(format!("{RUN_ALONE_MCP} This call names no branch, so GitHub would write to the repo's default branch: name your own branch."));
+    };
+    if !super::routes::valid_branch(&branch) {
+        return Err(format!("kwant checks a GitHub write before it goes, and won't pass on the branch name {}.", scan::as_data_up_to(&branch, 80)));
+    }
+    if write.files.is_empty() || write.files.len() > MCP_FILES || write.files.iter().any(|(p, _)| p.trim().is_empty()) {
+        return Err(format!("{RUN_ALONE_MCP} kwant reads up to {MCP_FILES} files a write sends, each with a path."));
+    }
+    let key = format!("mcp:{server}/{}/{}", write.owner, write.repo);
+    let sha = write_id(tool, args);
+    let checked = gate_card(state, kwant_id, &space_id, &ctx.branch, &key, &branch, &sha, || Source::Mcp(write.clone())).await?;
+    let mut pass = Pass::default();
+    if checked.status == OVERRIDDEN {
+        pass.overrides.push(checked.id);
+    }
+    Ok(pass)
+}
+
+/// What the bot is told about a GitHub write kwant won't check as it stands.
+const RUN_ALONE_MCP: &str = "kwant checks what a GitHub tool commits before it goes, the same way it checks a push.";
+
+/// The card for a GitHub write: the files it sends, as added (or removed) lines. Semgrep needs a
+/// checkout, so it doesn't run.
+async fn build_mcp(state: &AppState, row: &PrepushRow, write: &McpWrite, base: &str) -> Result<Value, String> {
+    let mut files = Vec::new();
+    let mut contents = BTreeMap::new();
+    for (path, text) in &write.files {
+        match text {
+            Some(text) => {
+                let lines = text.lines().count() as u64;
+                let mut patch = format!("@@ -0,0 +1,{lines} @@\n");
+                for l in text.lines() {
+                    if patch.len() > super::facts::DIFF_CHARS {
+                        break;
+                    }
+                    patch.push('+');
+                    patch.push_str(l);
+                    patch.push('\n');
+                }
+                files.push(FileDiff { path: path.clone(), status: "added".into(), additions: lines, deletions: 0, patch: Some(patch), previous_path: None });
+                if contents.len() < 20 {
+                    contents.insert(path.clone(), text.clone());
+                }
+            }
+            None => files.push(FileDiff { path: path.clone(), status: "removed".into(), additions: 0, deletions: 0, patch: None, previous_path: None }),
+        }
+    }
+    let diffstat = json!({"files": files.len(), "add": files.iter().map(|f| f.additions).sum::<u64>(), "del": 0});
+    let security = scan::scan_and_hide(&scan::Config::new(&state.config.data_dir), &mut files, contents, None).await;
+    let title = Some(write.message.lines().next().unwrap_or("").trim().to_string()).filter(|t| !t.is_empty()).unwrap_or_else(|| format!("GitHub write to {}", row.branch));
+    let mut card = judge(state, row, base, title, files, security).await;
+    card["diffstat"] = diffstat;
+    card["mcp"] = json!({"owner": write.owner, "repo": write.repo});
+    card["security"]["semgrep"] = serde_json::to_value(Tile::not_run("a GitHub tool's write has no checkout to run semgrep in")).unwrap_or(Value::Null);
     Ok(card)
 }
 
@@ -681,7 +1062,13 @@ pub fn card_json(row: &PrepushRow) -> Value {
         "diffstat": card.as_ref().map(|c| c["diffstat"].clone()).filter(|d| !d.is_null()),
         "checks": checks(&row.status, card.as_ref()),
         "blockers": card.as_ref().and_then(|c| c["blockers"].as_array().cloned()).unwrap_or_default(),
-        "override": row.overridden_by.as_ref().map(|by| json!({"by": by, "reason": row.override_reason, "at": row.overridden_at})),
+        // The person's override, while it stands (`overridden`) or once its one push went
+        // (`pushed`). A card blocked again after that keeps it in `last_override`.
+        "override": row.overridden_by.as_ref().filter(|_| row.status == OVERRIDDEN || row.status == PUSHED).map(|by| json!({"by": by, "reason": row.override_reason, "at": row.overridden_at})),
+        "override_used": row.status == PUSHED,
+        // The checks ran a second time on their own after the first try errored
+        "auto_retried": card.as_ref().is_some_and(|c| c["auto_retried"] == json!(true)),
+        "last_override": row.overridden_by.as_ref().filter(|_| row.status != OVERRIDDEN && row.status != PUSHED).map(|by| json!({"by": by, "reason": row.override_reason, "at": row.overridden_at})),
         "card": card,
         "overridden_by": row.overridden_by,
         "overridden_at": row.overridden_at,
@@ -873,6 +1260,46 @@ pub async fn retry_card(
 mod tests {
     use super::*;
 
+    #[test]
+    fn github_writes_are_read_from_each_tool_shape() {
+        let w = |branch: &str| json!({"owner": "o", "repo": "r", "branch": branch, "message": "Add a\nmore"});
+        let mut a = w("juno-x");
+        a["files"] = json!([{"path": "src/a.rs", "content": "fn a() {}"}, {"path": "b.md", "content": "hi"}]);
+        assert_eq!(
+            mcp_writes("push_files", &a),
+            [McpWrite { owner: "o".into(), repo: "r".into(), branch: Some("juno-x".into()), message: "Add a\nmore".into(),
+                        files: vec![("src/a.rs".into(), Some("fn a() {}".into())), ("b.md".into(), Some("hi".into()))] }]
+        );
+        let mut c = w("juno-x");
+        c["upserts"] = json!([{"path": "x.txt", "content": "aGVsbG8=", "encoding": "base64"}]);
+        c["deletes"] = json!(["old.txt", {"path": "older.txt"}]);
+        assert_eq!(
+            mcp_writes("GITHUB_COMMIT_MULTIPLE_FILES", &c)[0].files,
+            [("x.txt".to_string(), Some("hello".to_string())), ("old.txt".into(), None), ("older.txt".into(), None)]
+        );
+        let mut d = w("");
+        d["path"] = json!("gone.rs");
+        let del = mcp_writes("GITHUB_DELETE_A_FILE", &d);
+        assert_eq!((del[0].branch.as_deref(), del[0].files.clone()), (None, vec![("gone.rs".to_string(), None)]));
+        let multi = json!({"tools": [{"tool_slug": "GITHUB_CREATE_OR_UPDATE_FILE_CONTENTS", "arguments": {"owner": "o", "repo": "r", "branch": "b", "path": "p", "content": "t"}}]});
+        assert_eq!(mcp_writes("COMPOSIO_MULTI_EXECUTE_TOOL", &multi).len(), 1);
+        // Not writes: reads, other tools, and a "delete_file" that names no repo (a file server's)
+        for (tool, args) in [("get_file_contents", w("b")), ("create_issue", w("b")), ("delete_file", json!({"path": "x"}))] {
+            assert!(mcp_writes(tool, &args).is_empty(), "{tool}");
+        }
+    }
+
+    #[test]
+    fn the_same_github_write_is_the_same_card() {
+        let a = json!({"owner": "o", "repo": "r", "branch": "b", "path": "p", "content": "t"});
+        let b = json!({"content": "t", "path": "p", "branch": "b", "repo": "r", "owner": "o"});
+        let id = write_id("create_or_update_file", &a);
+        assert!(super::super::git::is_sha(&id), "{id}");
+        assert_eq!(id, write_id("create_or_update_file", &b), "key order doesn't matter");
+        assert_ne!(id, write_id("create_or_update_file", &json!({"owner": "o", "repo": "r", "branch": "b", "path": "p", "content": "u"})));
+        assert_ne!(id, write_id("push_files", &a));
+    }
+
     fn one(src: &str, dst: Option<&str>) -> Push {
         Push { dir: PathBuf::new(), src: src.into(), dst: dst.map(str::to_string) }
     }
@@ -954,6 +1381,70 @@ mod tests {
         ] {
             assert_eq!(pushes(cmd), Parsed::Pushes(vec![one("juno-x", Some("juno-x"))]), "{cmd}");
         }
+    }
+
+    /// Ada's review of #456, Later 6: only a check that errored runs again on its own.
+    #[test]
+    fn only_an_errored_check_runs_again_on_its_own() {
+        let row = PrepushRow {
+            id: "pp".into(), space_id: "s".into(), kwant_id: "k".into(), folder: "/f".into(), branch: "juno-x".into(), head_sha: "a".repeat(40),
+            status: CHECKING.into(), card: None, overridden_by: None, overridden_at: None, override_reason: None, tries: 1, created_at: 0, updated_at: 0,
+        };
+        assert!(errored(PREPUSH_FAILED, &failed_card(&row, "the repo's git couldn't be read")));
+        let mut slow = failed_card(&row, "the checks took longer than 12 minutes");
+        slow["timed_out"] = json!(true);
+        assert!(!errored(PREPUSH_FAILED, &slow), "a timeout isn't run again");
+        let review = json!({"blockers": [{"source": "review", "severity": "high", "title": "The fresh-eyes review didn't finish"}]});
+        assert!(errored(BLOCKED, &review));
+        let found = json!({"blockers": [{"source": "tamper", "severity": "high", "title": "A test was switched off"}]});
+        assert!(!errored(BLOCKED, &found), "a finding is a verdict");
+        assert!(!errored(CLEAR, &json!({"blockers": []})));
+    }
+
+    /// Ada's review of #456, Later 13: the text reads as one sentence, with no runs of spaces.
+    #[test]
+    fn the_run_alone_text_has_single_spaces() {
+        assert!(!RUN_ALONE.contains("  "), "{RUN_ALONE}");
+        assert!(RUN_ALONE.contains("run before `git push` in the same command") && RUN_ALONE.contains("first, then run"), "{RUN_ALONE}");
+    }
+
+    /// Ada's review of #456, Later 8: a plain push goes pinned to the checked commit, so a
+    /// commit made by a parallel call in the same turn isn't what goes; any other shape runs as
+    /// written.
+    #[test]
+    fn a_plain_push_is_pinned_to_the_checked_commit() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let pinned = |cmd: &str| pin(cmd, sha, "juno-x");
+        let want = format!("git push origin {sha}:refs/heads/juno-x");
+        for cmd in ["git push origin", "git push origin juno-x", "git push origin HEAD", "git push origin HEAD:juno-x", "  git   push origin   juno-x "] {
+            assert_eq!(pinned(cmd), Some(want.clone()), "{cmd}");
+        }
+        assert_eq!(pinned("cd kwant && cd sub && git push origin juno-x"), Some(format!("cd kwant && cd sub && {want}")));
+        assert_eq!(pinned("git push upstream juno-x"), Some(format!("git push upstream {sha}:refs/heads/juno-x")));
+        for cmd in [
+            "git push",
+            "git push -u origin juno-x",
+            "git push origin juno-x --force",
+            "git push origin +juno-x",
+            "git push origin a b",
+            "git push origin juno-x && git log -1",
+            "git push origin juno-x; git log -1",
+            "git push origin $(git commit -qam x; echo juno-x)",
+            "git push origin `echo juno-x`",
+            "git push 'origin' juno-x",
+            "git push origin juno-x > /tmp/out",
+            "git push origin juno-x\ngit push origin y",
+            "env X=1 git push origin juno-x",
+            "cd /tmp && git push origin juno-x",
+            "cd ../x && git push origin juno-x",
+            "cd a b && git push origin juno-x",
+            "git push origin juno-x || true",
+        ] {
+            assert_eq!(pinned(cmd), None, "{cmd}");
+        }
+        // Never with a commit or a branch kwant can't vouch for
+        assert_eq!(pin("git push origin juno-x", "HEAD", "juno-x"), None);
+        assert_eq!(pin("git push origin juno-x", sha, "bad branch"), None);
     }
 
     /// Ada's review of #456, must-fix 2: the gate reads the commit before the command runs, so a

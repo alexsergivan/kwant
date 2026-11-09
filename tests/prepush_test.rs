@@ -10,7 +10,7 @@ mod common;
 
 use base64::Engine;
 use common::*;
-use kwnt::db::dev_prepush::{BLOCKED, CHECKING, CLEAR, OVERRIDDEN};
+use kwnt::db::dev_prepush::{BLOCKED, CHECKING, CLEAR, OVERRIDDEN, PUSHED};
 use kwnt::drivers::events::RuntimeEvent;
 use kwnt::server::dev::prepush;
 use serde_json::{json, Value};
@@ -165,11 +165,41 @@ async fn a_switched_off_test_blocks_the_push_until_the_person_overrides() {
     assert_eq!(v["overridden_by"], "person");
     assert_eq!(v["override"]["reason"], "the slow test is flaky, tracked in #12");
     assert_eq!(v["needs_you"], false);
+    // A PR from the branch says it was pushed anyway, with the person's reason
+    let anyway = prepush::pushed_anyway(&env.state, &space, Some("juno-skip")).await;
+    assert_eq!(anyway[0]["reason"], "the slow test is flaky, tracked in #12", "{anyway}");
+    assert_eq!((anyway[0]["head_sha"].as_str(), anyway[0]["by"].as_str()), (Some(sha.as_str()), Some("person")));
+    assert_eq!(prepush::pushed_anyway(&env.state, &space, Some("juno-other")).await, json!([]));
     let (s, _) = call(&env.app, "POST", &url, Some(json!({"reason": "the slow test is flaky, tracked in #12"}))).await;
     assert_eq!(s.as_u16(), 409, "an overridden card can't be overridden again");
 
-    // Now the push goes
+    // The check alone uses nothing up: a push the person then declines keeps the override
+    let pass = prepush::check_command(&env.state, &env.a, push, &folder).await.expect("overridden");
+    assert_eq!(pass.overrides, [row.id.clone()]);
+    assert_eq!(pass.pinned, None, "`-u` runs as written");
+    let racer = prepush::check_command(&env.state, &env.a, push, &folder).await.expect("overridden");
+    assert_eq!(env.state.db.prepush_card(&row.id).await.unwrap().unwrap().status, OVERRIDDEN);
+
+    // Now the push goes, once: two parallel calls checked it, and only the first one runs
+    assert_eq!(prepush::use_up(&env.state, &pass).await, None);
+    let lost = prepush::use_up(&env.state, &racer).await.expect("the override is used up");
+    assert!(lost.contains("was for one push") && lost.contains("Nothing was pushed"), "{lost}");
+    let (_, v) = call(&env.app, "GET", &format!("/api/dev/prepush/{}", row.id), None).await;
+    assert_eq!((v["status"].as_str(), v["override_used"].as_bool()), (Some(PUSHED), Some(true)), "{v}");
+    assert_eq!(v["override"]["reason"], "the slow test is flaky, tracked in #12");
+
+    // A second push of the same commit gets a blocked card again, until the person overrides again
+    let again = prepush::gate(&env.state, &env.a, push, &folder).await.expect("a second push waits for the person");
+    assert!(again.contains("was for one push of juno-skip") && again.contains("Nothing was pushed"), "{again}");
+    let (_, v) = call(&env.app, "GET", &format!("/api/dev/prepush/{}", row.id), None).await;
+    assert_eq!((v["id"].as_str(), v["status"].as_str()), (Some(row.id.as_str()), Some(BLOCKED)), "the same card: {v}");
+    assert_eq!((v["override"].clone(), v["override_used"].as_bool()), (Value::Null, Some(false)), "{v}");
+    assert_eq!(v["last_override"]["reason"], "the slow test is flaky, tracked in #12");
+    assert!(prepush::gate(&env.state, &env.a, push, &folder).await.is_some(), "still blocked");
+    let (s, v) = call(&env.app, "POST", &url, Some(json!({"reason": "one more push for the demo build"}))).await;
+    assert_eq!((s.as_u16(), v["status"].as_str()), (200, Some(OVERRIDDEN)), "{v}");
     assert_eq!(prepush::gate(&env.state, &env.a, push, &folder).await, None);
+    assert!(prepush::gate(&env.state, &env.a, push, &folder).await.is_some(), "and that override is one push too");
 
     // A new commit on the branch is a new check
     let more = commit(&folder, "src/more.rs", "pub fn more() {}\n", "More");
@@ -218,6 +248,11 @@ async fn a_clean_push_goes_once_its_card_is_clear_and_the_reviewer_never_sees_th
     assert_eq!(card["blockers"], json!([]), "{card}");
     assert_eq!(card["fresh_eyes"]["checked"], true, "{card}");
     assert_eq!(prepush::gate(&env.state, &env.a, push, &folder).await, None, "a clear card lets the push go");
+    assert_eq!(prepush::gate(&env.state, &env.a, push, &folder).await, None, "every time");
+    // A push with a remote goes pinned to the commit kwant checked
+    let pass = prepush::check_command(&env.state, &env.a, "cd . && git push origin juno-clean", &folder).await.unwrap();
+    assert_eq!(pass.pinned, Some(format!("cd . && git push origin {sha}:refs/heads/juno-clean")));
+    assert!(pass.overrides.is_empty());
 
     // The reviewer turn saw the diff and nothing of the author's chat
     let reviews = invocations_with("CLEANMARK");
@@ -315,4 +350,187 @@ async fn the_card_store_keeps_one_card_per_commit_and_its_rules() {
     assert!(db.drop_stuck_prepush_card(&stuck.id, -1).await.unwrap(), "a check older than the cutoff is dropped");
     assert_eq!(db.prepush_card(&stuck.id).await.unwrap(), None);
     assert_eq!(db.prepush_cards("spc_x", 50).await.unwrap().len(), 4);
+}
+
+/// Ada's review of #456, Later 6: a reviewer turn that didn't answer runs once more on its own;
+/// when that fails too, the card waits for the person, saying it was tried again.
+#[tokio::test]
+async fn a_review_that_errored_runs_once_more_on_its_own() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    let folder = repo(&env, "errored");
+    git(&folder, &["checkout", "-q", "-b", "juno-err"]);
+    commit(&folder, "src/widgets.rs", "// FAILTURN RETRYMARK\npub fn count() -> u32 { 4 }\n", "Count widgets");
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+
+    assert!(prepush::gate(&env.state, &env.a, "git push origin juno-err", &folder).await.is_some());
+    let row = settled(&env, &space, "juno-err").await;
+    assert_eq!(row.status, BLOCKED, "{row:?}");
+    let card: Value = serde_json::from_str(row.card.as_deref().unwrap()).unwrap();
+    assert_eq!(card["auto_retried"], true, "{card}");
+    assert!(card["blockers"].as_array().unwrap().iter().any(|b| b["source"] == "review"), "{card}");
+    let turns = invocations_with("RETRYMARK").len();
+    assert!(turns >= 2, "the reviewer was asked twice: {turns}");
+    let (_, v) = call(&env.app, "GET", &format!("/api/dev/prepush/{}", row.id), None).await;
+    assert_eq!(v["auto_retried"], true, "{v}");
+    // Not a third time on its own: the next push of the same commit waits for the person
+    assert!(prepush::gate(&env.state, &env.a, "git push origin juno-err", &folder).await.is_some());
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(invocations_with("RETRYMARK").len(), turns, "no more reviewer turns");
+}
+
+/// Rigel's QA of #456, finding C: an override is one push, used up once, never twice.
+#[tokio::test]
+async fn an_override_is_used_up_by_one_push_in_the_store() {
+    let env = setup().await;
+    let db = &env.state.db;
+    let sha = "b".repeat(40);
+    let row = db.insert_prepush_card("spc_o", &env.a, "/f", "juno-o", &sha, CHECKING, None, false).await.unwrap().unwrap();
+    assert!(!db.use_prepush_override(&row.id).await.unwrap(), "nothing to use while checking");
+    db.finish_prepush_card(&row.id, BLOCKED, "{}").await.unwrap();
+    assert!(!db.use_prepush_override(&row.id).await.unwrap(), "nor while blocked");
+    assert_eq!(db.reblock_pushed_prepush_card(&row.id).await.unwrap(), None, "only a pushed card is blocked again");
+    db.override_prepush_card(&row.id, "person", "a good reason here").await.unwrap().unwrap();
+    assert!(db.use_prepush_override(&row.id).await.unwrap());
+    assert!(!db.use_prepush_override(&row.id).await.unwrap(), "once");
+    assert_eq!(db.prepush_card(&row.id).await.unwrap().unwrap().status, PUSHED);
+    assert_eq!(db.override_prepush_card(&row.id, "person", "another good reason").await.unwrap(), None, "a used override isn't overridden again until blocked");
+    let again = db.reblock_pushed_prepush_card(&row.id).await.unwrap().unwrap();
+    assert_eq!((again.status.as_str(), again.override_reason.as_deref()), (BLOCKED, Some("a good reason here")), "the history stays");
+    assert_eq!(db.prepush_overrides_on("spc_o", "juno-o", 3).await.unwrap().len(), 1);
+    assert!(db.prepush_overrides_on("spc_o", "juno-p", 3).await.unwrap().is_empty());
+    // Blocked again only because its one push went: the next commit's count starts again
+    let next = db.insert_prepush_card("spc_o", &env.a, "/f", "juno-o", &"c".repeat(40), CHECKING, None, false).await.unwrap().unwrap();
+    assert_eq!(next.tries, 1);
+    db.finish_prepush_card(&next.id, BLOCKED, "{}").await.unwrap();
+    let after = db.insert_prepush_card("spc_o", &env.a, "/f", "juno-o", &"d".repeat(40), CHECKING, None, false).await.unwrap().unwrap();
+    assert_eq!(after.tries, 2, "a blocked card nobody overrode still counts");
+}
+
+/// A GitHub tool's write (`create_or_update_file`) to `branch`, with `files` as `(path, text)`.
+fn gh_write(branch: Option<&str>, path: &str, text: &str) -> Value {
+    let mut v = json!({"owner": "demo-org", "repo": "demo-app", "path": path, "content": text, "message": "Count widgets"});
+    if let Some(b) = branch {
+        v["branch"] = json!(b);
+    }
+    v
+}
+
+#[tokio::test]
+async fn kwants_own_github_tools_go_through_the_pre_push_card() {
+    let env = setup().await;
+    let space = space_of_a(&env).await;
+    let tampered = format!("{}{}", clean_review("GHWRITEMARK"), TEST_BODY.replace("#[test]\n", "#[test]\n#[ignore]\n"));
+    let args = gh_write(Some("juno-gh"), TEST_FILE, &tampered);
+
+    // Dev mode off: the write isn't held and no card is made
+    assert_eq!(prepush::check_mcp(&env.state, &env.a, "github", "create_or_update_file", &args).await, Ok(prepush::Pass::default()));
+    assert!(env.state.db.prepush_cards(&space, 50).await.unwrap().is_empty());
+    env.state.db.put_dev_mode(&space, true, "demo-org/demo-app", "main", None, None).await.unwrap();
+
+    // Reads, kwant's own tools and tools that name no repo aren't writes
+    for (server, tool, a) in [
+        ("github", "get_file_contents", json!({"owner": "demo-org", "repo": "demo-app", "path": "README.md"})),
+        ("kwnt_tools", "create_or_update_file", args.clone()),
+        ("files", "delete_file", json!({"path": "notes.txt"})),
+    ] {
+        assert_eq!(prepush::check_mcp(&env.state, &env.a, server, tool, &a).await, Ok(prepush::Pass::default()), "{tool}");
+    }
+    assert!(env.state.db.prepush_cards(&space, 50).await.unwrap().is_empty());
+    // A write that names no branch would land on the default branch: refused without a card
+    let why = prepush::check_mcp(&env.state, &env.a, "github", "create_or_update_file", &gh_write(None, "a.txt", "hi")).await.unwrap_err();
+    assert!(why.contains("names no branch"), "{why}");
+    // Composio's multi-execute with two writes: one call each
+    let multi = json!({"tools": [
+        {"tool_slug": "GITHUB_CREATE_OR_UPDATE_FILE_CONTENTS", "arguments": gh_write(Some("juno-gh"), "a.txt", "a")},
+        {"tool_slug": "GITHUB_DELETE_A_FILE", "arguments": gh_write(Some("juno-gh"), "b.txt", "")},
+    ]});
+    let why = prepush::check_mcp(&env.state, &env.a, "composio", "COMPOSIO_MULTI_EXECUTE_TOOL", &multi).await.unwrap_err();
+    assert!(why.contains("makes 2 GitHub writes"), "{why}");
+
+    // The write waits for its card, which the switched-off test blocks
+    let first = prepush::check_mcp(&env.state, &env.a, "github", "create_or_update_file", &args).await.unwrap_err();
+    assert!(first.contains("is checking this push of juno-gh") && first.contains("GitHub tool's write"), "{first}");
+    let row = settled(&env, &space, "juno-gh").await;
+    assert_eq!(row.status, BLOCKED, "{row:?}");
+    assert_eq!(row.folder, "mcp:github/demo-org/demo-app");
+    assert_eq!(row.head_sha, prepush::write_id("create_or_update_file", &args));
+    let card: Value = serde_json::from_str(row.card.as_deref().unwrap()).unwrap();
+    assert_eq!(card["mcp"], json!({"owner": "demo-org", "repo": "demo-app"}), "{card}");
+    assert_eq!(card["blockers"].as_array().unwrap().iter().map(|b| b["source"].as_str().unwrap()).collect::<Vec<_>>(), ["tamper"], "{card}");
+    assert_eq!(card["fresh_eyes"]["checked"], true, "{card}");
+    assert_eq!(card["security"]["semgrep"]["state"], "not_run", "{card}");
+    let reviews = invocations_with("GHWRITEMARK");
+    assert_eq!(reviews.len(), 1, "one reviewer turn");
+    assert!(reviews[0].contains("counts_widgets"), "the reviewer sees what the tool sends");
+    // Still blocked, and the same card
+    assert!(prepush::check_mcp(&env.state, &env.a, "github", "create_or_update_file", &args).await.unwrap_err().contains("blocked this push"));
+    // A different write is a different card
+    assert_eq!(env.state.db.prepush_cards(&space, 50).await.unwrap().len(), 1);
+
+    // claude asks kwant's permission prompt before calling the GitHub server itself: denied there
+    let mut github = kwnt::db::models::McpServer {
+        id: "id-github".into(),
+        name: "github".into(),
+        transport: "stdio".into(),
+        command: Some("/usr/bin/true".into()),
+        args: vec![],
+        url: None,
+        env: Default::default(),
+        headers: Default::default(),
+        enabled: true,
+        timeout_secs: 10,
+        created_at: None,
+    };
+    github.enabled = true;
+    let ctx = kwnt::mcp::McpTurnContext {
+        servers: vec![github],
+        approver: std::sync::Arc::new(kwnt::mcp::FixedApprover(true)),
+        config_dir: env.tmp.path().join("mcp-gh"),
+        permission_url: None,
+        gateway: None,
+        max_tool_iterations: 8,
+        smart_approvals: false,
+        records: Default::default(),
+    };
+    let session = kwnt::server::mcp_runtime::PermissionSession::new(env.a.clone(), "A".into(), "gh-turn".into(), ctx, None);
+    env.state.mcp_sessions.lock().await.insert("gh-tok".into(), session);
+    let ask = |input: &Value| json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "approve", "arguments": {"tool_name": "mcp__github__create_or_update_file", "input": input, "tool_use_id": "tu_gh"}}});
+    let decision = |v: &Value| -> Value { serde_json::from_str(v["result"]["content"][0]["text"].as_str().unwrap()).unwrap() };
+    let (s, v) = call(&env.app, "POST", "/api/mcp/permission/gh-tok", Some(ask(&args))).await;
+    assert_eq!(s.as_u16(), 200, "{v}");
+    let d = decision(&v);
+    assert_eq!(d["behavior"], "deny", "{d}");
+    assert!(d["message"].as_str().unwrap().contains("blocked this push"), "{d}");
+
+    // The person overrides: exactly one call goes, through the turn's approver
+    let (s, v) = call(&env.app, "POST", &format!("/api/dev/prepush/{}/override", row.id), Some(json!({"reason": "the test is flaky on CI, fixing next"}))).await;
+    assert_eq!((s.as_u16(), v["status"].as_str()), (200, Some(OVERRIDDEN)), "{v}");
+    let approver = kwnt::server::mcp_runtime::PrepushApprover { inner: std::sync::Arc::new(kwnt::mcp::FixedApprover(true)), state: env.state.clone() };
+    use kwnt::mcp::ToolApprover;
+    let req = kwnt::mcp::ToolApprovalRequest {
+        kwant_id: env.a.clone(),
+        kwant_name: "A".into(),
+        turn_id: "gh-turn".into(),
+        tool_name: "mcp__github__create_or_update_file".into(),
+        server: "github".into(),
+        tool: "create_or_update_file".into(),
+        arguments: args.clone(),
+        builtin: None,
+        smart: None,
+        payment: None,
+    };
+    let overrides = approver.prepush_gate(&req).await.expect("the override lets it go");
+    assert_eq!(overrides, [row.id.clone()]);
+    assert_eq!(approver.prepush_use(&overrides).await, None);
+    assert_eq!(env.state.db.prepush_card(&row.id).await.unwrap().unwrap().status, PUSHED);
+    // The same write again waits for the person again, on the permission prompt too
+    let d = decision(&call(&env.app, "POST", "/api/mcp/permission/gh-tok", Some(ask(&args))).await.1);
+    assert_eq!(d["behavior"], "deny", "{d}");
+    assert!(d["message"].as_str().unwrap().contains("was for one push"), "{d}");
+    assert_eq!(env.state.db.prepush_card(&row.id).await.unwrap().unwrap().status, BLOCKED);
+    // The reason goes with the PR's review
+    let anyway = prepush::pushed_anyway(&env.state, &space, Some("juno-gh")).await;
+    assert_eq!(anyway[0]["reason"], "the test is flaky on CI, fixing next", "{anyway}");
 }

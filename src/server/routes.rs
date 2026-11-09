@@ -5684,15 +5684,23 @@ pub async fn execute_tool(
         let command = args["command"].as_str()
             .ok_or_else(|| crate::tools::ToolError::InvalidArgs("Missing 'command' argument".into()))?;
         // B2: a bot's own push in a Dev mode space waits for its pre-push card
-        if let Some(why) = super::dev::prepush::gate(state, team_id.unwrap_or("default"), command, &workspace).await {
-            return Err(crate::tools::ToolError::Execution(why));
-        }
-        if !super::computer::approve_local_shell(state, team_id.unwrap_or("default"), command, &workspace).await {
+        let pass = super::dev::prepush::check_command(state, team_id.unwrap_or("default"), command, &workspace)
+            .await
+            .map_err(crate::tools::ToolError::Execution)?;
+        // What runs (and what the person approves) is the push pinned to the checked commit
+        let command = pass.pinned.clone().unwrap_or_else(|| command.to_string());
+        if !super::computer::approve_local_shell(state, team_id.unwrap_or("default"), &command, &workspace).await {
             return Err(crate::tools::ToolError::Execution(
                 "The person did not approve this command, so it was not run.".into(),
             ));
         }
-        return crate::tools::shell::execute_shell(&workspace, args).await;
+        // The override goes with the push that runs, never one the person declined
+        if let Some(why) = super::dev::prepush::use_up(state, &pass).await {
+            return Err(crate::tools::ToolError::Execution(why));
+        }
+        let mut args = args.clone();
+        args["command"] = serde_json::Value::String(command);
+        return crate::tools::shell::execute_shell(&workspace, &args).await;
     }
     if tool_name == "execute_shell" {
         // VM mode: commands only ever run inside the bot's or team's sandbox. With no known
@@ -5786,6 +5794,8 @@ mod tests {
         assert!(TurnOpts { discussion: Some(None), ..TurnOpts::default() }.no_park());
         // Its retry would run with default options, tools included
         assert!(TurnOpts { no_tools: true, ..TurnOpts::default() }.no_park());
+        // A fresh-eyes turn's retry would lose its Guard and run with every tool and the history
+        assert!(TurnOpts { fresh_eyes: true, ..TurnOpts::default() }.no_park());
     }
 
     #[test]
