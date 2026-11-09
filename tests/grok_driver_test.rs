@@ -69,6 +69,7 @@ fn turn(mcp: Option<McpTurnContext>) -> TurnInput {
         mcp,
         no_tools: false,
         read_only: false,
+        delivery: None,
     }
 }
 
@@ -327,7 +328,7 @@ fn mcp_ctx(dir: &Path) -> McpTurnContext {
             token: "gw-secret-token".into(),
         }),
         max_tool_iterations: 8,
-        smart_approvals: false,
+        approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
     }
 }

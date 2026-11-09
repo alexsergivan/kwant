@@ -2530,6 +2530,14 @@ async fn run_kwant_turn_inner(
         )
         .await;
         let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
+        // P9/P10: how the result should reach the person, for the prompt's "[What to deliver]" hint
+        // and the delivery check after the turn. The keyword plan, at once and with no model call.
+        let read_only = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
+        let delivery = (!opts.no_tools && !read_only).then(|| {
+            let recent: Vec<&str> =
+                history.iter().filter(|m| m.sender_role == "user").map(|m| m.text.as_str()).collect();
+            crate::router::delivery::keyword_plan(&prompt, &recent)
+        });
         let turn_input = TurnInput {
             // The bot's own copy of the browser API, naming this chat (thread, channel or DM): a
             // CAPTCHA it meets is asked in the thread whose call met it. The same for every turn
@@ -2557,7 +2565,8 @@ async fn run_kwant_turn_inner(
             person: super::bot_actions::person_place(&state.db).await,
             store: Some(state.db.clone()),
             no_tools: opts.no_tools,
-            read_only: opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE),
+            read_only,
+            delivery,
         };
 
         let had_state = state.db.list_profile_states().await.unwrap_or_default();
@@ -3110,6 +3119,14 @@ async fn run_kwant_turn_inner(
                 // A reply's own choices come off its text into meta.decisions, in channel rounds too
                 // (a discussion's raw reply still goes back to the round, which reads its markers)
                 let (text, decisions) = super::decide::take_decisions(&text);
+                // At most one card, and only for a fork the person hasn't settled (P3)
+                let decisions = super::decide::settle(
+                    &scope.state,
+                    &crate::db::spaces::SpaceId::new(&target_kwant.space_id),
+                    &scope.context_id(target_kwant),
+                    decisions,
+                )
+                .await;
                 if opts.discussion.is_none() {
                     reply_text = text.clone();
                 }

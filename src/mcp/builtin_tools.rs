@@ -505,27 +505,34 @@ fn resolve(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The paragraph a claude CLI bot reads about its own tools; `smart` when its approvals ask only
-/// for risky calls.
-pub fn prompt_block(folder: Option<&Path>, smart: bool) -> String {
-    let place = match folder {
-        Some(f) => format!("Your working folder is {}. You can create, edit and delete files there without asking.", f.display()),
-        None => "You have no working folder this turn, so every file write needs the person's OK.".to_string(),
+/// The paragraph a claude CLI bot reads about its own tools under `approvals`. What to do about
+/// a step (do it, or let the card ask) is in the "[Approvals]" block every engine gets
+/// (`drivers::approvals_block`); this one only says which calls show a card.
+pub fn prompt_block(folder: Option<&Path>, approvals: super::Approvals) -> String {
+    use super::Approvals;
+    let place = match (folder, approvals) {
+        (Some(f), Approvals::Off) => format!("Your working folder is {}.", f.display()),
+        (Some(f), _) => format!("Your working folder is {}. You can create, edit and delete files there without asking.", f.display()),
+        (None, Approvals::Off) => "You have no working folder this turn.".to_string(),
+        (None, _) => "You have no working folder this turn, so every file write needs the person's OK.".to_string(),
     };
-    let cards = if smart {
-        "Shell commands (Bash) that stay in that folder run without asking. Anything risky shows the person an approval card first: \
+    let cards = match approvals {
+        Approvals::Off => "Approvals are off, so file reads and writes and shell commands (Bash) run without a card; only a payment still asks.",
+        Approvals::Smart => "Shell commands (Bash) that stay in that folder run without asking. Anything risky shows the person an approval card first: \
          the network (except local dev servers; requests to kwnt itself always ask), other users, git clone, fetch, pull and push, publishing, containers, mail, paths outside the folder, and \
          commands kwnt can't read for sure ($(…), backticks, bash -c). Prefer plain commands and relative paths. \
-         Writing files outside the folder, and reading passwords or keys, also needs a card."
-    } else {
-        "Writing or reading files outside it, and every shell command (Bash), shows the person an approval card first."
+         Writing files outside the folder, and reading passwords or keys, also needs a card.",
+        Approvals::Ask => "Writing or reading files outside it, and every shell command (Bash), shows the person an approval card first.",
+    };
+    let wait = match approvals {
+        Approvals::Off => "",
+        _ => " Make the call and let the card ask; wait for their answer instead of giving up. If they deny it, say what you would have done.",
     };
     format!(
         "\n\n[Your tools]\nYou can search the web (WebSearch) and read web pages (WebFetch) whenever it helps; cite the pages you used. \
          WebFetch returns a summary of a page's text, not its HTML: for tags and attributes (meta description, canonical, \
          alt text, structured data) use kwnt's `page_source` tool when you have it, else curl in Bash. \
-         {place} {cards} \
-         Ask for what you need and wait for their answer instead of giving up. If they deny it, say what you would have done."
+         {place} {cards}{wait}"
     )
 }
 

@@ -497,6 +497,73 @@ pub fn take_decisions(text: &str) -> (String, Vec<Decision>) {
     (format!("{before}{sep}{after}").trim().to_string(), decisions)
 }
 
+/// "Decided:" cards one reply may show (P3: Oleks got 1–3 per reply, most of them for things he
+/// had asked for or already seen).
+pub const MAX_DECISIONS_PER_REPLY: usize = 1;
+
+/// Bot messages looked back over for cards the person has already seen.
+const SEEN_LOOKBACK: i64 = 30;
+
+/// Lowercase content words (3+ letters or any digit), for matching a choice against text.
+fn content_words(text: &str) -> Vec<String> {
+    words(&text.to_lowercase()).into_iter().filter(|w| w.chars().count() >= 3 || w.chars().any(|c| c.is_ascii_digit())).collect()
+}
+
+/// Whether two choice questions are the same fork: equal once normalised, or the shorter one's
+/// content words (at least two) are nearly all in the longer one.
+fn same_question(a: &str, b: &str) -> bool {
+    let (wa, wb) = (content_words(a), content_words(b));
+    if wa.is_empty() || wb.is_empty() {
+        return false;
+    }
+    if wa == wb {
+        return true;
+    }
+    let (short, long) = if wa.len() <= wb.len() { (&wa, &wb) } else { (&wb, &wa) };
+    if short.len() < 2 {
+        return false;
+    }
+    let shared = short.iter().filter(|w| long.contains(w)).count();
+    shared * 10 >= short.len() * 8
+}
+
+/// Whether `option` (as content words, at least one) appears in `text` as a run of words.
+fn names_option(text_words: &[String], option: &str) -> bool {
+    let ow = content_words(option);
+    !ow.is_empty() && text_words.windows(ow.len()).any(|w| w == ow.as_slice())
+}
+
+/// The cards a reply keeps (P3): only forks the person hasn't settled, at most
+/// [`MAX_DECISIONS_PER_REPLY`]. A choice is settled when `person_latest` (their latest message)
+/// already names one of its options, or it is the same question as one in `seen` (cards the chat
+/// already showed, and choices the person answered or changed). Kept cards are re-indexed from 0.
+pub fn keep_unsettled(decisions: Vec<Decision>, person_latest: &str, seen: &[String]) -> Vec<Decision> {
+    let person = content_words(person_latest);
+    decisions
+        .into_iter()
+        .filter(|d| !d.options.iter().any(|o| names_option(&person, o)))
+        .filter(|d| !seen.iter().any(|q| same_question(q, &d.question)))
+        .take(MAX_DECISIONS_PER_REPLY)
+        .enumerate()
+        .map(|(index, d)| Decision { index, ..d })
+        .collect()
+}
+
+/// [`keep_unsettled`] for a reply in `context` (a thread or channel) of `space`: reads the
+/// person's latest message and the cards and answered choices they've already seen.
+pub(super) async fn settle(state: &AppState, space: &SpaceId, context: &str, decisions: Vec<Decision>) -> Vec<Decision> {
+    if decisions.is_empty() {
+        return decisions;
+    }
+    let recent = state.db.list_messages(context, SEEN_LOOKBACK).await.unwrap_or_default();
+    let person = recent.iter().rev().find(|m| m.sender_role == "user").map(|m| m.text.clone()).unwrap_or_default();
+    let mut seen: Vec<String> =
+        recent.iter().flat_map(|m| decisions_of(&meta_of(m))).map(|d| d.question).collect();
+    let notes = state.db.list_decision_notes(space, &["answered", "changed"], NOTES_SHOWN).await.unwrap_or_default();
+    seen.extend(notes.into_iter().map(|n| n.question));
+    keep_unsettled(decisions, &person, &seen)
+}
+
 /// `meta` with `decisions` set (when there are any).
 pub fn with_decisions(meta: Option<Value>, decisions: &[Decision]) -> Option<Value> {
     if decisions.is_empty() {
@@ -636,7 +703,8 @@ pub fn decide_prompt(held: &str, gate: &Gate, views: &[(String, String)]) -> Str
          someone outside, needs a password or sign-in, or nothing you can find answers it): ask it once, with ask_user, \
          saying why only they can answer and what you checked, and do everything that doesn't wait on the answer first \
          (a draft with a placeholder, for example). Don't add optional questions or offers.\n\
-         End with one line per choice you made:\n\
+         If one choice was a real fork the person hasn't settled, end with one line for it (at most one; none for a choice \
+         they asked for or already saw):\n\
          [DECISIONS]\n\
          question: <the choice> | options: <option 1>; <option 2>; <option 3> | picked: <the exact option> | why: <one line>\n\
          [/DECISIONS]",
@@ -871,8 +939,9 @@ pub fn block_from(person: &str, notes: &[DecisionNote], kept: (i64, i64)) -> Opt
         return None;
     }
     let mut out = format!(
-        "\n\n[How {person} usually decides]\nPredict their choice from these and act on it; say \"predicted from your earlier choices\" \
-         and that they can change it, instead of asking.\n"
+        "\n\n[How {person} usually decides]\nWhat they ask in their latest message beats these notes and any plan or teammate's view: \
+         do it, and never re-decide what they just asked for. For a choice they haven't settled, predict their pick from these \
+         and act on it; say \"predicted from your earlier choices\" and that they can change it, instead of asking.\n"
     );
     if kept.1 > 0 {
         out.push_str(&format!("They kept {} of the bots' last {} own choices.\n", kept.0, kept.1));
@@ -901,6 +970,61 @@ pub async fn prompt_block(state: &AppState, space: &SpaceId) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn card(index: usize, question: &str, options: &[&str], picked: &str) -> Decision {
+        Decision {
+            index,
+            question: question.into(),
+            options: options.iter().map(|o| o.to_string()).collect(),
+            picked: picked.into(),
+            why: "predicted".into(),
+            status: "decided".into(),
+            changed_to: None,
+        }
+    }
+
+    /// P3: at most one "Decided:" card per reply, and only for a fork the person hasn't settled.
+    #[test]
+    fn a_reply_keeps_at_most_one_unsettled_card() {
+        let three = || {
+            vec![
+                card(0, "Hero layout", &["Classic", "Wax seal", "Green desk"], "Wax seal"),
+                card(1, "Monogram", &["FM monogram", "Plain"], "Plain"),
+                card(2, "Arrival buffer", &["5 min", "10 min"], "10 min"),
+            ]
+        };
+        let kept = keep_unsettled(three(), "build the landing page", &[]);
+        assert_eq!(kept.len(), MAX_DECISIONS_PER_REPLY);
+        assert_eq!(MAX_DECISIONS_PER_REPLY, 1);
+        assert_eq!((kept[0].index, kept[0].question.as_str()), (0, "Hero layout"));
+
+        // A choice the person's latest message already makes is theirs, not a card
+        let kept = keep_unsettled(three(), "Go with the wax seal hero please", &[]);
+        assert_eq!((kept[0].index, kept[0].question.as_str()), (0, "Monogram"), "re-indexed from 0");
+
+        // A card the chat already showed (or a choice they answered) isn't shown again
+        let seen = vec!["hero layout".to_string(), "Monogram: FM or plain?".to_string()];
+        let kept = keep_unsettled(three(), "ok", &seen);
+        assert_eq!(kept.len(), 1);
+        assert_eq!((kept[0].index, kept[0].question.as_str()), (0, "Arrival buffer"));
+
+        // Everything settled: no card at all
+        let seen = vec!["Hero layout".into(), "Monogram".into(), "Arrival buffer".into()];
+        assert!(keep_unsettled(three(), "", &seen).is_empty());
+        assert!(keep_unsettled(vec![], "anything", &[]).is_empty());
+    }
+
+    #[test]
+    fn matching_a_question_needs_most_of_its_words() {
+        assert!(same_question("Arrival buffer", "arrival buffer?"));
+        assert!(same_question("Which hero layout", "Hero layout for the landing page"));
+        assert!(!same_question("Hero layout", "Footer layout"));
+        assert!(!same_question("Layout", "Hero layout"), "one shared word isn't the same fork");
+        let person = content_words("make it 10 min please");
+        assert!(names_option(&person, "10 min"));
+        assert!(!names_option(&person, "5 min"));
+        assert!(!names_option(&content_words("the plain truth is"), "FM monogram"));
+    }
 
     /// Oleks's screenshot: the lead's reply that asked him to pick.
     const SCREENSHOT: &str = "Here's where the three directions stand.\n\n\

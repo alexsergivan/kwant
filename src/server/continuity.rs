@@ -199,8 +199,8 @@ pub async fn prompt_block_full(
             it instead. Never redo what the person undid or declined (\"Undone:\" means the person reversed it; your \
             claim wasn't wrong): do the work yourself and offer to redo it.\n\n\
             [Choices you made]\n\
-            When you chose between options for the person, end your reply with one line per choice in a block the person \
-            sees as chips with Change: [DECISIONS] then `question: … | options: A; B; C | picked: B | why: …` then [/DECISIONS]."
+            Only for a real fork the person hasn't settled (never one they asked for or already saw), end your reply with \
+            one line for the option you picked, at most one per reply, in a block the person sees as a chip with Change: [DECISIONS] then `question: … | options: A; B; C | picked: B | why: …` then [/DECISIONS]."
         ));
         out.push_str(&super::hires::prompt_block(state, &crate::db::spaces::SpaceId::new(&kwant.space_id)).await);
     }

@@ -90,7 +90,7 @@ fn ctx(approver: Arc<dyn ToolApprover>, timeout_secs: i64, max: usize) -> McpTur
         permission_url: None,
         gateway: None,
         max_tool_iterations: max,
-        smart_approvals: false,
+        approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
     }
 }
@@ -131,6 +131,7 @@ fn input(mcp: Option<McpTurnContext>) -> TurnInput {
         mcp,
         no_tools: false,
         read_only: false,
+        delivery: None,
     }
 }
 

@@ -1344,7 +1344,7 @@ impl Driver for ApiDriver {
                 if let Some(changes) = changes {
                     messages.push(volatile("user", &changes));
                 }
-                messages.push(volatile("user", input.skills.trim()));
+                messages.push(volatile("user", input.turn_notes().trim()));
                 messages.push(volatile("user", &input.prompt));
                 messages.push(volatile("user", parts.date.trim()));
                 messages
@@ -1825,6 +1825,7 @@ mod tests {
             mcp: None,
             no_tools: false,
             read_only: false,
+            delivery: None,
         }
     }
 
@@ -1855,7 +1856,7 @@ mod tests {
             permission_url: None,
             gateway: None,
             max_tool_iterations: 4,
-            smart_approvals: false,
+            approvals: crate::mcp::Approvals::Ask,
             records: Default::default(),
         });
         match driver.stream_turn(input, tx).await {

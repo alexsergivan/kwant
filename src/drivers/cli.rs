@@ -555,6 +555,17 @@ pub async fn codex_user_mcp_servers(
         .collect()
 }
 
+/// What a claude turn gets as `--append-system-prompt`: the shared prompt and, with kwnt's tools,
+/// the paragraph on claude's own tools, which follow kwnt's policy (see `mcp::builtin_tools`).
+pub(crate) fn claude_system_prompt(system_prompt: &str, input: &TurnInput) -> String {
+    let folder = input.workspace_dir.as_deref().filter(|d| d.exists());
+    let tools_block = match &input.mcp {
+        Some(ctx) => crate::mcp::builtin_tools::prompt_block(folder, ctx.approvals),
+        None => String::new(),
+    };
+    format!("{system_prompt}{tools_block}")
+}
+
 pub fn build_cli_prompt(input: &TurnInput) -> String {
     if input.history.is_empty() {
         return input.prompt.clone();
@@ -1731,14 +1742,7 @@ impl Driver for CliDriver {
                         }
                     }
                 }
-                // claude's own tools follow kwnt's policy (see mcp::builtin_tools); tell the bot
-                let folder = input.workspace_dir.as_deref().filter(|d| d.exists());
-                let tools_block = if let Some(ctx) = &input.mcp {
-                    crate::mcp::builtin_tools::prompt_block(folder, ctx.smart_approvals)
-                } else {
-                    String::new()
-                };
-                cmd.arg("--append-system-prompt").arg(format!("{system_prompt}{tools_block}"));
+                cmd.arg("--append-system-prompt").arg(claude_system_prompt(&system_prompt, &input));
                 // JSON lines as claude works, ending in one result that tells a usage limit or
                 // sign-out apart from a reply; partial messages keep a long answer from looking stalled
                 cmd.arg("--output-format").arg("stream-json").arg("--verbose").arg("--include-partial-messages");
@@ -2356,6 +2360,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             mcp: None,
             no_tools: false,
             read_only: false,
+            delivery: None,
         };
 
         let result = build_cli_prompt(&input);
@@ -2408,6 +2413,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             mcp: None,
             no_tools: false,
             read_only: false,
+            delivery: None,
         };
 
         let result = build_cli_prompt(&input);
@@ -2456,6 +2462,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 mcp: None,
                 no_tools,
                 read_only: false,
+                delivery: None,
             }
         }
 
@@ -2467,7 +2474,7 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 permission_url: None,
                 gateway: None,
                 max_tool_iterations: 4,
-                smart_approvals: false,
+                approvals: crate::mcp::Approvals::Ask,
                 records: Default::default(),
             }
         }

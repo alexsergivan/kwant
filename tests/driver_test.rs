@@ -101,6 +101,7 @@ async fn test_mock_driver_streaming() {
         mcp: None,
         no_tools: false,
         read_only: false,
+        delivery: None,
     };
 
     let handle = tokio::spawn(async move {
@@ -168,6 +169,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         mcp: None,
         no_tools: false,
         read_only: false,
+        delivery: None,
     };
 
     let solo_prompt = input_solo.format_system_prompt();
@@ -224,6 +226,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         mcp: None,
         no_tools: false,
         read_only: false,
+        delivery: None,
     };
 
     let team_prompt = input_team.format_system_prompt();
@@ -259,6 +262,7 @@ fn test_turn_input_format_system_prompt_with_and_without_team_context() {
         mcp: None,
         no_tools: false,
         read_only: false,
+        delivery: None,
     };
 
     let ws_prompt = input_workspace.format_system_prompt();

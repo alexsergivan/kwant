@@ -169,6 +169,7 @@ async fn claude_turn_gets_browser_tools_that_drive_its_own_panel() {
         mcp: Some(ctx.clone()),
         no_tools: false,
         read_only: false,
+        delivery: None,
     };
     let prompt = input.format_system_prompt();
     assert!(prompt.contains("browser_open") && !prompt.contains("curl -sS"), "{prompt}");

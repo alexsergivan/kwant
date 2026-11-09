@@ -482,7 +482,7 @@ async fn approval_turn(name: &str, answer: bool) -> (Vec<String>, bool, usize, S
         permission_url: Some(format!("{base}/api/mcp/permission/{token}")),
         gateway: None,
         max_tool_iterations: 8,
-        smart_approvals: false,
+        approvals: kwnt::mcp::Approvals::Ask,
         records: Default::default(),
     };
     state
