@@ -52,9 +52,9 @@ test('parses the meta and ignores other messages', () => {
 // The table: every code the server sends, with first line, reason, safety and buttons.
 const ROWS = [
   ['docker_unavailable', /Claude’s sealed box couldn’t start\.$/, /^Docker isn’t running on this computer\. Start Docker, then Retry\.$/, 'standard', ['retry', 'computer']],
-  ['preparing', /VM isn’t ready yet\.$/, /^The one-time setup is still running\. Retry when it’s done\.$/, 'standard', ['retry', 'computer']],
-  ['download_failed', /VM isn’t ready yet\.$/, /^The one-time setup didn’t finish\. Try it again in Computer settings, then Retry\.$/, 'standard', ['retry', 'computer']],
-  ['download_needed', /VM isn’t ready yet\.$/, /^The one-time setup didn’t finish\./, 'standard', ['retry', 'computer']],
+  ['preparing', /sealed box isn’t ready yet\.$/, /^The one-time setup is still running\. Retry when it’s done\.$/, 'standard', ['retry', 'computer']],
+  ['download_failed', /sealed box isn’t ready yet\.$/, /^The one-time setup didn’t finish\. Try it again in Computer settings, then Retry\.$/, 'standard', ['retry', 'computer']],
+  ['download_needed', /sealed box isn’t ready yet\.$/, /^The one-time setup didn’t finish\./, 'standard', ['retry', 'computer']],
   ['relay_down', /Claude’s sealed box couldn’t start\.$/, /^kwant couldn’t connect Claude to your sign-in\. Restart kwant, then Retry\.$/, 'standard', ['retry', 'computer']],
   ['sign_in_expired', /your Claude sign-in has expired\.$/, /^Sign in again in Settings › This space › Accounts, then Retry\.$/, null, ['retry', 'accounts']],
   ['no_credential', /there’s no Claude sign-in for it on this computer\.$/, /^Sign in to Claude in Settings › This space › Accounts, then Retry\.$/, null, ['retry', 'accounts']],
@@ -122,7 +122,7 @@ test('unknown code: the server’s own words win over "Something went wrong"', (
 test('notice 6: unsafe folder, by kind, with ~ and Change folder for a team', () => {
   const c = card('unsafe_folder', { folder: '/home/oleks', folder_from: 'team', team_id: 't1', team_name: 'Checkout', unsafe_kind: 'home' });
   assert.equal(c.first, 'Ada didn’t reply: Claude can’t take this folder into its sealed box.');
-  assert.equal(plain(c), '~ is your home folder. Inside the VM, Claude would see all your files and sign-ins. Pick a project folder for @Checkout instead, then Retry.');
+  assert.equal(plain(c), '~ is your home folder. In its sealed box, Claude would see all your files and sign-ins. Pick a project folder for @Checkout instead, then Retry.');
   assert.equal(c.reason[0].folder, true);
   assert.equal(c.safety, 'unsafe');
   assert.deepEqual(c.actions, ['change_folder', 'retry']);
