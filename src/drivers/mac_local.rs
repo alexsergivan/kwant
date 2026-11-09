@@ -56,39 +56,58 @@ impl Places {
         Some(Self { home, data_dir, profile_home })
     }
 
-    /// Folders (`true`) and files (`false`) to deny, absolute, without repeats.
-    pub fn denied(&self) -> Vec<(PathBuf, bool)> {
-        let h = &self.home;
-        let d = &self.data_dir;
-        let mut out: Vec<(PathBuf, bool)> = vec![
-            (h.join(".claude"), true),
-            (h.join(".codex"), true),
-            (h.join(".grok"), true),
+    /// Folders (`true`) and files (`false`) to deny, absolute, without repeats. Mac paths, joined
+    /// with `/` as strings: `Path::join` would use `\` when this is compiled for Windows (CI's
+    /// rust (windows) runs these tests), and the rules are only ever read on a Mac.
+    pub fn denied(&self) -> Vec<(String, bool)> {
+        let h = mac_path(&self.home);
+        let d = mac_path(&self.data_dir);
+        let mut out: Vec<(String, bool)> = vec![
+            (mac_join(&h, ".claude"), true),
+            (mac_join(&h, ".codex"), true),
+            (mac_join(&h, ".grok"), true),
             // The login and other keychains' files. Reaching the Keychain through its service
             // (`security find-generic-password`) is Seatbelt's mach-lookup rule, not this one
-            (h.join("Library/Keychains"), true),
-            (d.join("profiles"), true),
-            (d.join(crate::sandbox::credentials::VAULT_DIR), true),
-            (d.join(crate::sandbox::credentials::KEY_FILE), false),
-            (d.join("api-token"), false),
-            (d.join("kwnt.db"), false),
-            (d.join("kwnt.db-wal"), false),
+            (mac_join(&h, "Library/Keychains"), true),
+            (mac_join(&d, "profiles"), true),
+            (mac_join(&d, crate::sandbox::credentials::VAULT_DIR), true),
+            (mac_join(&d, crate::sandbox::credentials::KEY_FILE), false),
+            (mac_join(&d, "api-token"), false),
+            (mac_join(&d, "kwnt.db"), false),
+            (mac_join(&d, "kwnt.db-wal"), false),
         ];
-        // The CLIs' own homes when moved with their variables
+        // The CLIs' own homes when moved with their variables (absolute Mac paths only)
         for var in ["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GROK_HOME"] {
-            if let Some(p) = std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from) {
-                if p.is_absolute() {
+            if let Some(p) = std::env::var_os(var).filter(|v| !v.is_empty()) {
+                let p = mac_path(Path::new(&p));
+                if p.starts_with('/') {
                     out.push((p, true));
                 }
             }
         }
         if let Some(p) = &self.profile_home {
-            out.push((p.clone(), true));
+            out.push((mac_path(p), true));
         }
         let mut seen = std::collections::HashSet::new();
         out.retain(|(p, _)| seen.insert(p.clone()));
         out
     }
+}
+
+/// A path as a Mac path string, without a trailing `/` (but `/` itself stays `/`).
+fn mac_path(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    let t = s.trim_end_matches('/');
+    if t.is_empty() && s.starts_with('/') {
+        "/".into()
+    } else {
+        t.into()
+    }
+}
+
+/// `base/rel` with `/`, whatever OS this is compiled for.
+fn mac_join(base: &str, rel: &str) -> String {
+    format!("{}/{rel}", base.trim_end_matches('/'))
 }
 
 /// Whether a turn gets [`settings`]: Claude, on a Mac, on this computer (not in the VM).
@@ -103,9 +122,8 @@ pub fn seatbelt_on(env: Option<&str>) -> bool {
 
 /// A permission-rule path: `//abs/path` is absolute in Claude's rule syntax (a single `/` would be
 /// relative to the settings file).
-fn rule_path(p: &Path, dir: bool) -> String {
-    let s = p.to_string_lossy();
-    let s = s.trim_end_matches('/');
+fn rule_path(p: &str, dir: bool) -> String {
+    let s = p.trim_end_matches('/');
     if dir {
         format!("/{s}/**")
     } else {
@@ -126,7 +144,7 @@ pub fn settings(places: &Places, seatbelt: bool, ssh_auth_sock: Option<&str>) ->
     let mut out = Map::new();
     out.insert("permissions".into(), json!({ "deny": deny }));
     if seatbelt {
-        let paths: Vec<Value> = denied.iter().map(|(p, _)| Value::from(p.to_string_lossy().into_owned())).collect();
+        let paths: Vec<Value> = denied.iter().map(|(p, _)| Value::from(p.as_str())).collect();
         out.insert(
             "sandbox".into(),
             json!({
@@ -261,8 +279,21 @@ mod tests {
 
     #[test]
     fn paths_become_absolute_rules() {
-        assert_eq!(rule_path(Path::new("/Users/o/.claude/"), true), "//Users/o/.claude/**");
-        assert_eq!(rule_path(Path::new("/Users/o/.kwnt/api-token"), false), "//Users/o/.kwnt/api-token");
+        assert_eq!(rule_path("/Users/o/.claude/", true), "//Users/o/.claude/**");
+        assert_eq!(rule_path("/Users/o/.kwnt/api-token", false), "//Users/o/.kwnt/api-token");
+    }
+
+    #[test]
+    fn the_rules_use_mac_slashes_whatever_os_builds_them() {
+        assert_eq!(mac_join("/Users/o/", ".claude"), "/Users/o/.claude");
+        assert_eq!(mac_join("/", "x"), "/x");
+        assert_eq!(mac_path(Path::new("/Users/o/.kwnt/")), "/Users/o/.kwnt");
+        assert_eq!(mac_path(Path::new("/")), "/");
+        let s = settings(&places(), true, None);
+        let all = strs(&s["permissions"]["deny"]).into_iter().chain(strs(&s["sandbox"]["filesystem"]["denyRead"]));
+        for r in all {
+            assert!(!r.contains('\\'), "{r}");
+        }
     }
 
     /// Not a check: `.github/workflows/mac-local.yml` runs it on the macOS runner to get the exact

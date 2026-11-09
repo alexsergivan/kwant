@@ -3,7 +3,7 @@ name: mac-local
 # 0.8.0 079-mac-local-hardening: Claude on this computer, on a Mac (src/drivers/mac_local.rs).
 # ci.yml's rust job runs on Linux and mac.yml only builds apps/mac, so kwnt's macOS code path
 # (cfg!(target_os = "macos") in drivers/cli.rs) would otherwise never run in CI. This job:
-#   - runs the hardening's unit tests on macOS (exactly 7, so a rename can't skip them), and
+#   - runs the hardening's unit tests on macOS (exactly 8, so a rename can't skip them), and
 #   - runs scripts/mac_local_probe.sh: the real Claude Code accepts kwnt's settings, Seatbelt
 #     (sandbox-runtime, what Claude's Bash sandbox is built on) enforces the denied places, and
 #     whether the Keychain is reachable through the security service (reported, not enforced).
@@ -74,10 +74,15 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked --lib -- mac_local:: no_tools::a_mac_claude_turn no_tools::the_hardening_reaches 2>&1 | tee unit.log
-          grep -q "test result: ok. 7 passed; 0 failed; 1 ignored" unit.log || { echo "::error::expected exactly 7 hardening tests to pass"; exit 1; }
+          grep -q "test result: ok. 8 passed; 0 failed; 1 ignored" unit.log || { echo "::error::expected exactly 8 hardening tests to pass"; exit 1; }
       - name: Probe the real Claude and Seatbelt
         run: |
           set -o pipefail
-          bin=$(cargo test --locked --lib --no-run 2>&1 | sed -n 's/.*Executable unittests src\/lib.rs (\(.*\))/\1/p' | tail -1)
+          # The lib test binary's path from cargo's JSON (the human-readable "Executable" line is
+          # colored by CARGO_TERM_COLOR=always, which broke matching it)
+          bin=$(cargo test --locked --lib --no-run --message-format=json 2>/dev/null \
+            | python3 -c 'import json,sys; [print(m["executable"]) for m in map(json.loads, sys.stdin) if m.get("reason") == "compiler-artifact" and m["profile"]["test"] and "lib" in m["target"]["kind"] and m.get("executable")]' \
+            | tail -1)
+          echo "lib test binary: ${bin:-<none>}"
           test -x "$bin" || { echo "::error::no lib test binary"; exit 1; }
           bash scripts/mac_local_probe.sh "$bin"
