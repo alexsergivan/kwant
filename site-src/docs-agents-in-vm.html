@@ -1,16 +1,16 @@
-title: Run Claude inside the VM: each bot's Claude in a box with no network
-description: On Linux, in VM mode, kwant can run each bot's Claude replies in a container of its own with no network. Your real key or sign-in stays outside. What it protects, what it doesn't, and what changes for the bot.
-card_title: Run Claude in the VM
+title: Protect your keys from tricked Claude bots
+description: If a web page, file or bot tricks Claude, it can't read your sign-ins or keys or go online by itself. On Linux, in VM mode, kwant runs each bot's Claude in a sealed box with no internet. What it protects, what it doesn't, and what the bot gives up.
+card_title: Protect your keys
 path: docs/agents-in-vm.html
 nav: agents-in-vm
-card: Run each bot's Claude replies in a box of their own with no network, while your key stays outside. Linux, off by default.
+card: A tricked Claude bot can't read your sign-ins or keys: Claude works in a sealed box with no internet. Linux, off by default.
 card_art: avatar:devops
 ---
 <p class="kicker">Docs</p>
-<h1>Run Claude inside the VM</h1>
-<p class="intro">When kwant's computer is in VM mode and <strong>Run Claude inside the VM</strong> is on, each bot's Claude replies run in a container of their own, with no network. The container never holds your real key or sign-in. Its only way out is kwant itself, which passes on Claude's model calls and refuses everything else. It's off by default, and it works on Linux in 0.7.7.</p>
+<h1>Protect your keys from tricked Claude bots</h1>
+<p class="intro">If a web page, a file or another bot talks Claude into misbehaving, it still can't read your sign-ins or keys, because it works in a sealed box with no internet that sees only the task folder. It can't go online by itself either: anything it does outside the box goes through kwant's own tools, under the bot's approval settings. Your real sign-in stays outside, and kwant passes on only Claude's model calls. In the app the switch is under the VM card in <strong>Settings › All spaces › Computer</strong> (it was called Run Claude inside the VM in 0.7.7). It's off by default and works on Linux.</p>
 <figure>
-  <div class="frame">{{shot:v077-claude-vm-card|The card Computer for browsing and commands with VM (browser, shell and Claude isolated) selected. Under it, Run Claude inside the VM is switched on, and Right now shows Claude Isolated, Codex Not isolated yet and Grok Not isolated yet.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v077-claude-vm-card|The card Computer for browsing and commands with VM mode chosen and Protect your keys from tricked Claude bots switched on; Claude is Isolated.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>The switch sits under the VM card. The chips under Right now say where Claude, Codex and Grok replies run.</figcaption>
 </figure>
 
@@ -18,7 +18,7 @@ card_art: avatar:devops
 <ol>
   <li>Open <strong>Settings → All spaces</strong> and find the card <strong>Computer for browsing and commands</strong>.</li>
   <li>Pick <strong>VM</strong>. Docker has to be running.</li>
-  <li>Turn on <strong>Run Claude inside the VM</strong>. It switches right away, with nothing to save.</li>
+  <li>Turn on <strong>Protect your keys from tricked Claude bots</strong>. It switches right away, with nothing to save.</li>
 </ol>
 <p>Turning it on the first time sets up Claude's VM once: the Claude chip says <strong>Getting ready</strong> while kwant downloads about 860 MB, which takes a few minutes. A reply sent meanwhile says so and asks you to try again, and nothing runs on your computer instead. Turning the setting off lets Claude reply on your computer while the setup keeps going.</p>
 <ul>
@@ -59,7 +59,7 @@ card_art: avatar:devops
 <h2 id="cant-run">When it can't run</h2>
 <p>With the setting on, any problem stops the reply with a card in the chat, and nothing runs on your computer instead. The card says what happened and what you can do. Turning the setting off is always up to you.</p>
 <figure>
-  <div class="frame">{{shot:v077-isolation-notice-card|A notice in a kwant chat after a message to Ann: Ann didn't reply: Claude couldn't start inside the VM. Docker isn't running on this computer. Start Docker, then Retry. It adds that while Run Claude inside the VM is on, nothing ran on this computer, and has Retry and Computer settings buttons.|(max-width: 860px) 100vw, 760px}}</div>
+  <div class="frame">{{shot:v077-isolation-notice-card|A notice in a kwant chat: Ann didn't reply because Claude's sealed box couldn't start, since Docker isn't running. While key protection is on, Claude never runs outside its sealed box. Retry and Computer settings buttons.|(max-width: 860px) 100vw, 760px}}</div>
   <figcaption>A reply that can't run isolated stops with a card. It never falls back to your computer.</figcaption>
 </figure>
 <div class="table-wrap"><table>

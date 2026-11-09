@@ -1,0 +1,58 @@
+{
+  "version": "0.8.0",
+  "date": "2026-11-10",
+  "highlights": [
+    {
+      "id": "bots-show-their-work",
+      "title": "Bots show what they did",
+      "text": "Ask to see something and the bot shares the picture in the chat, under its reply. A change you can see gets a before and an after picture.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "bots-just-do-it",
+      "title": "With approvals off, bots just do it",
+      "text": "Your approvals setting now reaches every engine. With it off, bots do the work instead of offering it, look before they ask, and ask one thing at a time.",
+      "image": null,
+      "open": "settings/general"
+    },
+    {
+      "id": "drop-files",
+      "title": "Drag files onto any chat",
+      "text": "Drop files anywhere on a chat, in the web app or the desktop apps. Before you let go it says which bot gets them and what can't be sent.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "import-more",
+      "title": "Bring your bots from more places",
+      "text": "Import OpenClaw, Hermes Agent, Codex, Paperclip and ai-employees setups, from a folder, a public GitHub repo or what kwant finds on this computer.",
+      "image": null,
+      "open": "settings/import"
+    },
+    {
+      "id": "fresh-eyes",
+      "title": "Checked with fresh eyes",
+      "text": "Dev mode reviews now start with no chat history, and a pre-push card checks a bot's push for secrets, new packages and weakened tests first.",
+      "image": null,
+      "open": "dev"
+    },
+    {
+      "id": "key-protection-name",
+      "title": "Protect your keys from tricked Claude bots",
+      "text": "Run Claude inside the VM has a clearer name. With it on, a page, file or bot that tricks Claude can't make it read your sign-ins or keys. Linux, VM mode, off by default.",
+      "image": null,
+      "open": "settings/app"
+    }
+  ],
+  "fixes": [
+    "A second message to a busy bot now waits its turn, with a line under the running reply.",
+    "A short follow-up like \"show me\" keeps the effort of the work it continues. A stalled reply is retried once.",
+    "The working line now sits just above the message box.",
+    "On a Mac, Claude can't read your sign-in folders or kwant's secrets.",
+    "A bot's Enter key now submits forms and search boxes.",
+    "kwant's own browser now works on Windows and Linux ARM too.",
+    "Deleting a bot no longer fails with \"database error\".",
+    "Undo of a ready-made team or an import works again when search is out of step."
+  ]
+}

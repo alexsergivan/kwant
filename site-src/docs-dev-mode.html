@@ -89,6 +89,21 @@ card_art: avatar:devops
   <figcaption>Nothing to fix: the card says so with a stamp.</figcaption>
 </figure>
 
+<h2 id="fresh-eyes">Checked with fresh eyes</h2>
+<p>Since 0.8.0, Dev mode reviews and the Swarm Auditor run in a fresh turn with no chat history and no reviewer memories. The reviewer sees the change, the task and the checks, not the conversation that produced them, so it judges the work on its own. Each review shows a <strong>Checked with fresh eyes</strong> chip.</p>
+
+<h2 id="pre-push">The pre-push card</h2>
+<p>Before a bot's <code>git push</code>, or a GitHub tool that writes files to a branch, kwant shows a pre-push card and runs the checks: a found secret, a new package the project doesn't list, and a weakened test. The push goes ahead only when they're clear.</p>
+<figure>
+  <div class="frame">{{shot:v080-prepush-card|In Ann's chat, a Before Ann pushes card for branch fix/fitting-button (2 files, +9 −6) with every check green: secrets, new packages, tests, risk rules, a fresh-eyes review by Cody on Codex and code patterns. All clear, Ann can push now.|(max-width: 640px) 100vw, 720px}}</div>
+  <figcaption>The pre-push card waits in the chat and in Needs you.</figcaption>
+</figure>
+<ul>
+  <li><strong>Run the checks again</strong> re-runs them after the bot fixes what they found.</li>
+  <li><strong>Push anyway</strong> needs your reason (at least 10 characters). It covers that one push only, and the reason is saved on the card.</li>
+  <li>A GitHub file write must name its branch, so the card always says where the change goes.</li>
+</ul>
+
 <h2 id="post">Post to GitHub</h2>
 <p><strong>Post to GitHub</strong> puts a review card on its pull request as one GitHub review comment, posted as you and pinned to the commit that was reviewed. Findings you didn't dismiss go on their lines when the lines are in the diff; the rest go in the review's text.</p>
 <figure>

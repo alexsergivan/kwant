@@ -131,6 +131,20 @@ card_art: avatar:tech_lead
   <li><strong>Suggest members from the code</strong> reads a team's repo or project folder and suggests 2 to 6 bots, each with a reason and the paths it looked at. When it can't read the code, or can't tell, it says so plainly instead of guessing.</li>
 </ul>
 
+<h2 id="import">Import bots</h2>
+<p><strong>Settings › Import</strong> brings bots, skills and routines in from other tools. It reads Grok Bot, ChatGPT and Claude exports, and since 0.8.0 OpenClaw and Hermes Agent workspaces, Codex's <code>AGENTS.md</code>, Paperclip companies and ai-employees. Every import shows a preview first, and nothing is created until you press Import.</p>
+<figure>
+  <div class="frame">{{shot:v080-import-preview|kwant's Check before importing preview for the GitHub repo demo-org/shop-bots: an MIT licence, two bots to create (Gear Scout and Returns Helper, each with a memory, skills and a routine), a Not brought over list, and an Import 2 bots button.|(max-width: 640px) 100vw, 720px}}</div>
+  <figcaption>A GitHub link preview. The <strong>Not brought over</strong> list says what kwant left out and why.</figcaption>
+</figure>
+<ul>
+  <li><strong>Found on this computer</strong> (Mac, Linux and Windows apps) lists the agents, skills and workspaces in the usual folders, such as <code>~/.openclaw</code>, <code>~/.hermes</code>, <code>~/.claude/agents</code> and <code>~/.codex</code>, by name and count only. It reads nothing until you pick one, and never follows a link out of these folders.</li>
+  <li><strong>Folder</strong> packs only the files an import reads. Sign-in and key files are never packed.</li>
+  <li><strong>GitHub link</strong> imports from a public GitHub repo, up to 20 MB, and shows its licence in the preview.</li>
+  <li><strong>Upload a file</strong> takes one or several files at once, up to 500 files and 20 MB.</li>
+  <li>Imported routines arrive <strong>paused</strong>, secrets are never imported, and one Undo removes the whole import.</li>
+</ul>
+
 <h2 id="handoffs">Handoffs</h2>
 <p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. With the <a href="mission-board.html#lead-review">Mission board</a> on, each hand-off gets a card, and the bot that handed it out reviews the result.</p>
 <ul>

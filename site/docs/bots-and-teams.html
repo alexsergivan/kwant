@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Bots &amp; teams: Persona presets, souls, teams with a lead, and handoffs between bots.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-11-07">
+<meta property="article:modified_time" content="2026-11-09">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@kwantbot">
 <meta name="twitter:title" content="AI agent teams: bots, leads &amp; handoffs · kwant">
@@ -32,7 +32,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=24b89b6342">
+<link rel="stylesheet" href="../assets/css/site.css?v=f5c1c666c5">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -182,6 +182,20 @@
   <li><strong>Suggest members from the code</strong> reads a team's repo or project folder and suggests 2 to 6 bots, each with a reason and the paths it looked at. When it can't read the code, or can't tell, it says so plainly instead of guessing.</li>
 </ul>
 
+<h2 id="import">Import bots</h2>
+<p><strong>Settings › Import</strong> brings bots, skills and routines in from other tools. It reads Grok Bot, ChatGPT and Claude exports, and since 0.8.0 OpenClaw and Hermes Agent workspaces, Codex's <code>AGENTS.md</code>, Paperclip companies and ai-employees. Every import shows a preview first, and nothing is created until you press Import.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v080-import-preview-2880.webp?v=e99d5ad2c4" data-caption="kwant&#x27;s Check before importing preview for the GitHub repo demo-org/shop-bots: an MIT licence, two bots to create (Gear Scout and Returns Helper, each with a memory, skills and a routine), a Not brought over list, and an Import 2 bots button."><img class="app" src="../assets/media/v080-import-preview-1440.webp?v=d301d2d47d" srcset="../assets/media/v080-import-preview-1440.webp?v=d301d2d47d 1440w, ../assets/media/v080-import-preview-2880.webp?v=e99d5ad2c4 2880w" sizes="(max-width: 640px) 100vw, 720px" width="1440" height="900" loading="lazy" decoding="async" alt="kwant&#x27;s Check before importing preview for the GitHub repo demo-org/shop-bots: an MIT licence, two bots to create (Gear Scout and Returns Helper, each with a memory, skills and a routine), a Not brought over list, and an Import 2 bots button."></a></div>
+  <figcaption>A GitHub link preview. The <strong>Not brought over</strong> list says what kwant left out and why.</figcaption>
+</figure>
+<ul>
+  <li><strong>Found on this computer</strong> (Mac, Linux and Windows apps) lists the agents, skills and workspaces in the usual folders, such as <code>~/.openclaw</code>, <code>~/.hermes</code>, <code>~/.claude/agents</code> and <code>~/.codex</code>, by name and count only. It reads nothing until you pick one, and never follows a link out of these folders.</li>
+  <li><strong>Folder</strong> packs only the files an import reads. Sign-in and key files are never packed.</li>
+  <li><strong>GitHub link</strong> imports from a public GitHub repo, up to 20 MB, and shows its licence in the preview.</li>
+  <li><strong>Upload a file</strong> takes one or several files at once, up to 500 files and 20 MB.</li>
+  <li>Imported routines arrive <strong>paused</strong>, secrets are never imported, and one Undo removes the whole import.</li>
+</ul>
+
 <h2 id="handoffs">Handoffs</h2>
 <p>Every bot knows its teammates in the current channel or team. When a reply @mentions a teammate, or <code>@everyone</code>, that teammate answers right after in the same chat. With the <a href="/docs/mission-board#lead-review">Mission board</a> on, each hand-off gets a card, and the bot that handed it out reviews the result.</p>
 <ul>
@@ -261,7 +275,7 @@
 </footer>
 <script src="../assets/js/site.js?v=6d3de1ef56" defer></script>
 <script src="../assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/bots-and-teams#article","headline":"AI agent teams: bots, leads & handoffs","description":"Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.","url":"https://kwant.si/docs/bots-and-teams","mainEntityOfPage":"https://kwant.si/docs/bots-and-teams","image":"https://kwant.si/assets/og/docs-bots-and-teams.png?v=b027504528","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-07","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Bots & teams","item":"https://kwant.si/docs/bots-and-teams"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/bots-and-teams#article","headline":"AI agent teams: bots, leads & handoffs","description":"Create bots from persona presets, give each a soul and a model, group them into teams with a lead, and let them hand work to each other with @mentions.","url":"https://kwant.si/docs/bots-and-teams","mainEntityOfPage":"https://kwant.si/docs/bots-and-teams","image":"https://kwant.si/assets/og/docs-bots-and-teams.png?v=b027504528","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-09","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Bots & teams","item":"https://kwant.si/docs/bots-and-teams"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

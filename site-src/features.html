@@ -18,6 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
+        <li><a href="#new-08">New in 0.8.0</a></li>
         <li><a href="#new-077">New in 0.7.7</a></li>
         <li><a href="#new-076">New in 0.7.6</a></li>
         <li><a href="#new-075">New in 0.7.5</a></li>
@@ -52,27 +53,79 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-08" class="fgroup" data-covers="0.8.0">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.8.0</p>
+      <h2>Bots that do the work, and show it</h2>
+      <p>With approvals off, bots now get on with it instead of offering to. When you ask to see something, the picture lands in the chat, and a change you can see comes with a before and an after. Drop files anywhere on a chat, bring your bots from more places, and let a fresh pair of eyes check code before it's pushed.</p>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="before-after">Bots show what they did</h3>
+        <p>Ask a bot to show you something and it shares the screenshot in the chat as its own picture, under its reply, once. When you point out something you can see, such as "the button isn't aligned", the fix comes back with a <strong>before</strong> and an <strong>after</strong> picture, so you can check it without opening anything.</p>
+        <p>In a team chat, kwant works out what you expect back before a bot starts (a picture, a link, a file or an answer) and checks the reply delivered it. A reply that says "here's a screenshot" but shared none gets the turn's last screenshot, or says plainly that it has none. When your words asked for something and it didn't come, the bot picks it up once on its own.</p>
+      </div>
+      <div class="frame">{{shot:v080-before-after|In a kwant team chat, Ann replies that the Book a fitting button now matches the shop's outlined style, with two pictures under the reply: the product page before, with a red button sitting low, and after, with an aligned outlined button.|(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px}}</div>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="drop-files">Drag files onto any chat</h3>
+        <p>Drag files from Finder, Explorer or your desktop and drop them anywhere on a chat: the whole chat is the drop target. Before you let go, it says which bot gets them and which files can't be sent. It works in the web app and in the Mac, Linux and Windows apps.</p>
+        <p>Images, videos, PDFs and text or code files work.</p>
+      </div>
+      <div class="frame">{{video:clip-v080-drop-files|Demo: a PDF named trail-map.pdf is dragged onto Ann's chat, the whole chat lights up as the drop target, and after the drop the file is attached in the message box.}}</div>
+    </div>
+    <div class="grid two">
+      <article class="card" id="just-do-it">
+        <span class="shot">{{shot:v080-queued-under-running-card|Close-up of a chat with Ann: her first reply is still being written, a grey #1 in line note sits under it for the next message, and the Ann is getting started strip is just above the message box.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>With approvals off, bots just do it</h3><p>Your approvals setting now reaches every engine: Claude, Codex, Grok and API keys. With approvals off, bots do the work instead of offering it, look first instead of asking you what they can find, and ask one decision at a time. A short "show me" keeps the effort of the work it follows, a second message waits its turn under the running reply, and a stalled reply is retried once. <a href="docs/approvals.html#modes">Approval modes</a></p></div>
+      </article>
+      <article class="card" id="import-more">
+        <span class="shot">{{shot:v080-import-card|Close-up of kwant's Import bots dialog: Found on this computer with 3 found, Grok, ChatGPT, Claude, Another app, Upload a file, Folder and GitHub link.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Bring your bots from more places</h3><p>Import now reads OpenClaw and Hermes Agent workspaces, Codex's AGENTS.md, Paperclip companies and ai-employees. <strong>Found on this computer</strong> lists what's in the usual folders by name and count only, <strong>Folder</strong> packs only the files an import reads, and <strong>GitHub link</strong> imports a public repo and shows its licence first. Imported routines arrive paused, and secrets are never imported. <a href="docs/bots-and-teams.html#import">Import bots</a></p></div>
+      </article>
+      <article class="card" id="prepush">
+        <span class="shot">{{shot:v080-prepush-card-card|Close-up of the Before Ann pushes card: six passing checks (secrets, new packages, tests, risk rules, a fresh-eyes review by Cody on Codex, code patterns) and a Clear badge.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>A check before every push</h3><p>Before a bot's <code>git push</code> or a GitHub file write, a pre-push card runs the checks for secrets, new packages and weakened tests, and lets the push go only when they're clear. <strong>Push anyway</strong> needs your reason, covers that one push, and is saved on the card. <a href="docs/dev-mode.html#pre-push">Pre-push card</a></p></div>
+      </article>
+      <article class="card" id="fresh-eyes">
+        <span class="shot">{{shot:v080-fresh-eyes-chip-card|Close-up of a Dev desk review of pull request #27 with the Checked with fresh eyes popover open: Cody saw only the pull request's title, description and diff, not Ann's conversation or reasoning.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <div class="card-body"><h3>Checked with fresh eyes</h3><p>Dev mode reviews and the Swarm Auditor now start with no chat history and no reviewer memories, so the reviewer judges the work, not the conversation that made it. Each review says so with a <strong>Checked with fresh eyes</strong> chip. <a href="docs/dev-mode.html#fresh-eyes">Fresh eyes</a></p></div>
+      </article>
+    </div>
+    <ul class="flist">
+      <li id="mac-secrets" class="span2"><h3>Claude kept away from your secrets on a Mac</h3><p>When Claude runs on the Mac itself, its tools are denied the Claude, Codex and Grok sign-in folders, the Keychain folder and kwant's own vault, token and database. <code>KWNT_MAC_SEATBELT=1</code> turns on a stricter sandbox.</p></li>
+      <li id="composer-line"><h3>The working line sits in the composer</h3><p>"Getting started · 0:04" is one quiet line just above the message box.</p></li>
+      <li id="keys-name"><h3>Protect your keys from tricked Claude bots</h3><p>The key protection setting has a clearer name, and a bot it covers gets read-only git hooks.</p></li>
+      <li id="browser-windows"><h3>kwant's browser on Windows and Linux ARM</h3><p>When no Chrome is found, kwant downloads Chrome for Testing there too, and a bot's Enter now submits forms.</p></li>
+      <li id="fixes-080" class="span3"><h3>Smaller fixes</h3><p>Deleting a bot no longer fails with "database error", and Undo of a ready-made team or an import works when the chat search index is out of step. Every pull request now builds the web part of a source build.</p></li>
+    </ul>
+  </div>
+</section>
+
 <section id="new-077" class="fgroup">
   <div class="wrap">
     <div class="section-head">
       <p class="kicker">New in 0.7.7</p>
-      <h2>Claude in a box of its own, and kwant on Windows</h2>
-      <p>On Linux, each bot's Claude replies can run in a container with no network, while your key stays outside. kwant now has a Windows installer (beta). Get started can bring your bots from other apps, and Dev mode reviews only fresh work.</p>
+      <h2>Keys safe from tricked Claude bots, and kwant on Windows</h2>
+      <p>On Linux, a web page, file or bot that tricks Claude can't make it read your sign-ins or keys: Claude works in a sealed box with no internet. kwant now has a Windows installer (beta). Get started can bring your bots from other apps, and Dev mode reviews only fresh work.</p>
     </div>
     <div class="row">
       <div class="row-copy">
-        <h3 id="claude-vm">Run Claude inside the VM</h3>
-        <p>In VM mode, a new switch under the VM card, <strong>Run Claude inside the VM</strong>, runs each bot's Claude replies in a container of their own with no network. The container never holds your real key or sign-in: kwant passes on only the model calls Claude needs and refuses everything else, and each reply may make 200 model requests. Codex, Grok and Claude API-key accounts still run on your computer, and the chips under the switch say where each one runs. It's off by default and works on Linux. <a href="docs/agents-in-vm.html">What it protects, and what it doesn't</a></p>
+        <h3 id="claude-vm">Protect your keys from tricked Claude bots</h3>
+        <p>If a web page, a file or another bot talks Claude into misbehaving, it still can't read your sign-ins or keys, or go online by itself: anything it does outside goes through kwant's own tools, under the bot's approval settings. In VM mode, the switch <strong>Protect your keys from tricked Claude bots</strong> (called Run Claude inside the VM in 0.7.7) runs each bot's Claude replies in a sealed box with no internet that sees only the task folder. Your real sign-in stays outside: kwant passes on only the model calls Claude needs, up to 200 per reply, and refuses everything else.</p>
+        <p>The tradeoff: while it's on, Claude can't use its own web search or web fetch (bots browse with kwant's browser tools), and outside MCP servers such as Notion are left out until you turn it off. Codex, Grok and Claude API-key accounts still run on your computer, and the chips under the switch say where each one runs. Linux, off by default. <a href="docs/agents-in-vm.html">What it protects, and what it doesn't</a></p>
       </div>
-      <div class="frame">{{video:clip-v077-claude-vm|Demo: in Settings, All spaces, the computer is set to VM. Run Claude inside the VM is switched on, and the Claude chip under Right now goes from Not isolated to Getting ready, with a note that the one-time setup downloads about 860 MB, and then to Isolated. Codex and Grok stay Not isolated yet.}}</div>
+      <div class="frame">{{video:clip-v077-claude-vm|Demo: turning on Protect your keys from tricked Claude bots in Settings; Claude's chip goes from Not isolated to Getting ready to Isolated.}}</div>
     </div>
     <div class="grid two">
       <article class="card" id="isolation-notice">
-        <span class="shot">{{shot:v077-isolation-notice-card|Close-up of a notice in a kwant chat after a message to Ann: Ann didn't reply: Claude couldn't start inside the VM. Docker isn't running on this computer. Start Docker, then Retry. It adds that nothing ran on this computer, and has Retry and Computer settings buttons.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v077-isolation-notice-card|Close-up of a notice in a kwant chat: Ann didn't reply because Claude's sealed box couldn't start, and nothing ran on this computer while key protection is on. Retry and Computer settings buttons.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Nothing runs unprotected</h3><p>With the setting on, a reply that can't run isolated stops with a card that says why, such as Docker not running or Claude's VM still setting up, and links to the setting. It never falls back to your computer. When Docker is down the switch is greyed out, but a switch that's already on can still be turned off. <a href="docs/agents-in-vm.html#cant-run">When it can't run</a></p></div>
       </article>
       <article class="card" id="bring-your-bots">
-        <span class="shot">{{shot:v077-bring-your-bots-card|Close-up of the Pick a team step in Get started: the Coding team, Keep the starter bots, and a Bring your bots tile that imports bots from Grok Bot, ChatGPT or Claude, or from a file, after you check a preview.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v077-bring-your-bots-card|Close-up of the Pick a team step in Get started, with a Bring your bots card that imports from Grok Bot, ChatGPT or Claude, a file, a folder or a GitHub link.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Bring your bots</h3><p>Step 3 of Get started, Pick a team, has a <strong>Bring your bots</strong> tile next to Keep the starter bots. It opens the importer, so you can bring bots from Grok Bot, ChatGPT, Claude or a file and check a preview first. Upload a file now takes several files at once, up to 500 files and 20 MB, and shows one preview with every bot. <a href="docs/quickstart.html#get-started">Your first start</a></p></div>
       </article>
       <article class="card" id="dev-fresh">
@@ -993,7 +1046,7 @@ card_art: team
     </dl>
     <div class="grid two">
       <article class="card">
-        <span class="shot">{{shot:v2-computer-mode|Settings, All spaces: the card Computer for browsing and commands with Local computer and VM, and under it the Run Claude inside the VM switch, turned off, with Claude Not isolated and Codex and Grok Not isolated yet.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
+        <span class="shot">{{shot:v2-computer-mode|Settings: the card Computer for browsing and commands with the VM option, and the Protect your keys from tricked Claude bots switch turned off.|(max-width: 720px) 100vw, (max-width: 1024px) 50vw, 570px}}</span>
         <div class="card-body"><h3>Local or VM</h3><p>Bots browse and run commands on your computer, or in Docker containers kept away from your files.</p></div>
       </article>
       <article class="card">

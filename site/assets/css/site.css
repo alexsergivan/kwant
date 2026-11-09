@@ -547,6 +547,7 @@ td code { white-space: nowrap; }
 .prose figure .phone { width: 300px; margin: 0 auto; }
 .prose figure .phone + figcaption { text-align: center; }
 @media (max-width: 640px) { .prose figure .phone { width: 240px; } }
+@media (max-width: 640px) { .table-wrap table { min-width: 0; } }
 @media (prefers-reduced-motion: no-preference) {
   html:has(.jump-bar) { scroll-behavior: smooth; }
 }

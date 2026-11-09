@@ -32,7 +32,7 @@
 <link rel="apple-touch-icon" href="../apple-touch-icon.png?v=1bc2442f39">
 <link rel="preload" href="../assets/fonts/pixelify-sans.woff2?v=66e897e155" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="../assets/fonts/inter-var.woff2?v=3100e775e8" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="../assets/css/site.css?v=24b89b6342">
+<link rel="stylesheet" href="../assets/css/site.css?v=f5c1c666c5">
 </head>
 <body class="page-docs">
 <a class="skip" href="#main">Skip to content</a>
@@ -139,6 +139,21 @@
   <div class="frame"><a class="zoom" href="../assets/media/v071-lgtm-2880.webp?v=92a4a1fc4f" data-caption="A review card with no findings: the two security checks that run, Secrets and New packages, are green, two more are marked for later, and an LGTM stamp sits in its top right corner: Looks good to me, the reviewer found nothing to fix."><img class="app" src="../assets/media/v071-lgtm-1440.webp?v=78b6abbeb4" srcset="../assets/media/v071-lgtm-1440.webp?v=78b6abbeb4 1440w, ../assets/media/v071-lgtm-2880.webp?v=92a4a1fc4f 2880w" sizes="(max-width: 860px) 100vw, 760px" width="1440" height="900" loading="lazy" decoding="async" alt="A review card with no findings: the two security checks that run, Secrets and New packages, are green, two more are marked for later, and an LGTM stamp sits in its top right corner: Looks good to me, the reviewer found nothing to fix."></a></div>
   <figcaption>Nothing to fix: the card says so with a stamp.</figcaption>
 </figure>
+
+<h2 id="fresh-eyes">Checked with fresh eyes</h2>
+<p>Since 0.8.0, Dev mode reviews and the Swarm Auditor run in a fresh turn with no chat history and no reviewer memories. The reviewer sees the change, the task and the checks, not the conversation that produced them, so it judges the work on its own. Each review shows a <strong>Checked with fresh eyes</strong> chip.</p>
+
+<h2 id="pre-push">The pre-push card</h2>
+<p>Before a bot's <code>git push</code>, or a GitHub tool that writes files to a branch, kwant shows a pre-push card and runs the checks: a found secret, a new package the project doesn't list, and a weakened test. The push goes ahead only when they're clear.</p>
+<figure>
+  <div class="frame"><a class="zoom" href="../assets/media/v080-prepush-card-2880.webp?v=86d702f4f9" data-caption="In Ann&#x27;s chat, a Before Ann pushes card for branch fix/fitting-button (2 files, +9 −6) with every check green: secrets, new packages, tests, risk rules, a fresh-eyes review by Cody on Codex and code patterns. All clear, Ann can push now."><img class="app" src="../assets/media/v080-prepush-card-1440.webp?v=cedef4a30f" srcset="../assets/media/v080-prepush-card-1440.webp?v=cedef4a30f 1440w, ../assets/media/v080-prepush-card-2880.webp?v=86d702f4f9 2880w" sizes="(max-width: 640px) 100vw, 720px" width="1440" height="900" loading="lazy" decoding="async" alt="In Ann&#x27;s chat, a Before Ann pushes card for branch fix/fitting-button (2 files, +9 −6) with every check green: secrets, new packages, tests, risk rules, a fresh-eyes review by Cody on Codex and code patterns. All clear, Ann can push now."></a></div>
+  <figcaption>The pre-push card waits in the chat and in Needs you.</figcaption>
+</figure>
+<ul>
+  <li><strong>Run the checks again</strong> re-runs them after the bot fixes what they found.</li>
+  <li><strong>Push anyway</strong> needs your reason (at least 10 characters). It covers that one push only, and the reason is saved on the card.</li>
+  <li>A GitHub file write must name its branch, so the card always says where the change goes.</li>
+</ul>
 
 <h2 id="post">Post to GitHub</h2>
 <p><strong>Post to GitHub</strong> puts a review card on its pull request as one GitHub review comment, posted as you and pinned to the commit that was reviewed. Findings you didn't dismiss go on their lines when the lines are in the diff; the rest go in the review's text.</p>
