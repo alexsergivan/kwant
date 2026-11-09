@@ -27,6 +27,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         let _ = std::fs::create_dir_all(&config.data_dir);
         crate::fsx::restrict_to_user(&config.data_dir);
     }
+    // Claude turns on a Mac deny this folder's secrets to the bot's tools: name the one in use
+    crate::drivers::mac_local::set_data_dir(&config.data_dir);
     let db = Database::init(&config.data_dir).await?;
     restrict_data_dir(&config.data_dir);
     let tools = ToolRunner::new(config.data_dir.join("workspace"));

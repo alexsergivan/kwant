@@ -517,7 +517,7 @@ pub fn prompt_block(folder: Option<&Path>, approvals: super::Approvals) -> Strin
         (None, _) => "You have no working folder this turn, so every file write needs the person's OK.".to_string(),
     };
     let cards = match approvals {
-        Approvals::Off => "Approvals are off, so file reads and writes and shell commands (Bash) run without a card; only a payment still asks.",
+        Approvals::Off => "Approvals are off, so file reads and writes and shell commands (Bash) run without a card; a payment, or in Dev mode a step that reaches production, still shows one (make the call and let it ask).",
         Approvals::Smart => "Shell commands (Bash) that stay in that folder run without asking. Anything risky shows the person an approval card first: \
          the network (except local dev servers; requests to kwnt itself always ask), other users, git clone, fetch, pull and push, publishing, containers, mail, paths outside the folder, and \
          commands kwnt can't read for sure ($(…), backticks, bash -c). Prefer plain commands and relative paths. \

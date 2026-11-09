@@ -82,6 +82,8 @@ pub struct Held {
     pub text: String,
     pub msg: NewMessage,
     pub meta: Option<Value>,
+    /// The held turn's delivery plan (P9), carried to the decided reply.
+    pub delivery: Option<crate::router::delivery::DeliveryPlan>,
 }
 
 /// Shared with a turn's save step (see [`TurnOpts`]): whether to hold a reply with open choices,
@@ -768,6 +770,8 @@ pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, mut held: Held) -> 
     let hook = HookSlot::default();
     let mut opts = TurnOpts::default();
     (opts.quiet_failure, opts.purpose, opts.hook) = (true, Some(PURPOSE.into()), Some(hook.clone()));
+    // The decided reply is the one the person sees: it delivers what their message asked for
+    opts.delivery = held.delivery.clone();
     let mut extra = json!({"decide_first": {"consulted": consulted, "held_turn_id": held.turn_id, "kwant_id": kwant.id}});
     // The decided reply answers the same routed message: it keeps the routing line and "Wrong bot?"
     if let Some(routing) = held.meta.as_ref().map(|m| &m["routing"]).filter(|r| !r.is_null()) {

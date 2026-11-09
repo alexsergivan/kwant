@@ -1020,7 +1020,7 @@ const GENERIC_WORDS: &[&str] = &[
 ];
 
 /// Words that greet, thank or agree: a message of only these (and everyday words) names no one's work.
-const SMALL_TALK: &[&str] = &[
+pub(crate) const SMALL_TALK: &[&str] = &[
     "hi", "hello", "hey", "hiya", "yo", "morning", "evening", "afternoon", "night", "thanks", "thank", "thx", "ok",
     "okay", "yes", "yeah", "yep", "no", "nope", "sure", "great", "cool", "nice", "perfect", "ahead", "go", "do",
     "it", "please", "good", "fine", "agreed", "continue", "proceed", "there", "all", "you", "everyone",
@@ -1344,7 +1344,7 @@ fn has_strong_discussion_word(prompt: &str) -> bool {
     tokens(prompt).iter().any(|w| COMPLEX.contains(&w.as_str()))
 }
 
-const STOP_WORDS: &[&str] = &[
+pub(crate) const STOP_WORDS: &[&str] = &[
     "the", "and", "for", "you", "your", "are", "with", "this", "that", "what", "how", "can", "please",
     "from", "into", "about", "have", "has", "was", "were", "will", "would", "should", "could", "our",
     "who", "why", "when", "where", "which", "they", "them", "then", "than", "there", "here", "all",

@@ -456,7 +456,8 @@ pub enum Approvals {
     Ask,
     /// "Ask only when risky": ordinary work runs, risky calls show a card.
     Smart,
-    /// The person switched approvals off: tools run without a card (a payment still asks).
+    /// The person switched approvals off: tools run without a card (a payment, a Flight School tier
+    /// gate or the Dev mode production floor still asks).
     Off,
 }
 

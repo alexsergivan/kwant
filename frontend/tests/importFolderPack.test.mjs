@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadBundled } from './bundle.mjs';
 
-const m = await loadBundled(`export { folderPlan, folderZip, leftOutKind } from './src/importSources';`);
+const m = await loadBundled(`export { folderPlan, folderZip, leftOutKind, appHomes } from './src/importSources';`);
 
 const pick = (files) => files.map(([path, body = 'x']) => ({ path, size: body.length, file: new Blob([body]) }));
 const kept = (plan) => plan.kept.map((e) => e.path).sort();
@@ -205,4 +205,81 @@ test('a generic folder drops named key files but keeps bot .json (employee.json,
   const { text } = await zipNames(plan);
   assert.ok(!text.includes(PROBE), 'no sk-ant-PROBE bytes in the zip');
   assert.equal(plan.left.find((l) => /never sent/i.test(l.label))?.count, 6, JSON.stringify(plan.left));
+});
+
+// ------------------------------------------------------------------ A4 follow-ups 8–10 (Ada's #459 review items 10–12)
+
+test('item 8: a renamed OpenClaw copy (no openclaw.json, not hidden) never sends .json under identity/ or devices/', async () => {
+  const plan = m.folderPlan(
+    pick([
+      ['claw-backup/identity/device.json', `{"privateKey":"${PROBE}"}`],
+      ['claw-backup/Identity/keys.json', `{"k":"${PROBE}"}`],
+      ['claw-backup/devices/paired.json', `{"token":"${PROBE}"}`],
+      ['claw-backup/devices/pending/phone.json', `{"k":"${PROBE}"}`],
+      ['claw-backup/workspace/SOUL.md', 'be kind'],
+      ['claw-backup/workspace/skills/x/SKILL.md', '# x'],
+      ['claw-backup/team/employee.json', '{"name":"Ada"}'],
+    ]),
+  );
+  assert.deepEqual(kept(plan), ['claw-backup/team/employee.json', 'claw-backup/workspace/SOUL.md', 'claw-backup/workspace/skills/x/SKILL.md']);
+  const { names, text } = await zipNames(plan);
+  assert.ok(!names.some((n) => /identity\/|devices\//i.test(n)), names.join(', '));
+  assert.ok(!text.includes(PROBE), 'no key bytes in the zip');
+  assert.equal(plan.left.find((l) => /never sent/i.test(l.label))?.count, 4, JSON.stringify(plan.left));
+});
+
+test('item 9: .env.example, config.yaml and config.toml alone don’t make a kit an app home; its bot .json still goes', async () => {
+  const plan = m.folderPlan(
+    pick([
+      ['kit/.env.example', `OPENAI_API_KEY=${PROBE}`],
+      ['kit/config.yaml', `api_key: ${PROBE}`],
+      ['kit/cards/config.toml', `key = "${PROBE}"`],
+      ['kit/employees/ada/employee.json', '{"name":"Ada"}'],
+      ['kit/cards/molty.json', '{"spec":"chara_card_v2"}'],
+      ['kit/skills/seo/SKILL.md', '# seo'],
+    ]),
+  );
+  assert.deepEqual(kept(plan), ['kit/cards/molty.json', 'kit/employees/ada/employee.json', 'kit/skills/seo/SKILL.md']);
+  const { names, text } = await zipNames(plan);
+  assert.ok(!names.some((n) => /\.env|config\.yaml/.test(n)), names.join(', '));
+  assert.ok(!text.includes(PROBE), 'the marker files themselves are never sent');
+  assert.deepEqual(m.appHomes(plan.kept.map((e) => e.path).concat(['kit/.env.example', 'kit/config.yaml', 'kit/cards/config.toml'])), []);
+});
+
+test('item 9: the same markers inside an app-named folder, or next to a real key store, still mark an app home', async () => {
+  const plan = m.folderPlan(
+    pick([
+      ['backup/openclaw/.env', `K=${PROBE}`],
+      ['backup/openclaw/export.json', `{"k":"${PROBE}"}`],
+      ['backup/openclaw/SOUL.md', 'be kind'],
+      ['backup/hub/auth.json', `{"k":"${PROBE}"}`],
+      ['backup/hub/config.yaml', `k: ${PROBE}`],
+      ['backup/hub/models.json', `{"k":"${PROBE}"}`],
+      ['backup/hub/AGENTS.md', 'work'],
+    ]),
+  );
+  assert.deepEqual(kept(plan), ['backup/hub/AGENTS.md', 'backup/openclaw/SOUL.md']);
+  assert.ok(!(await zipNames(plan)).text.includes(PROBE));
+  assert.deepEqual(m.appHomes(['backup/openclaw/.env', 'backup/hub/auth.json']).sort(), ['hub', 'openclaw']);
+});
+
+test('item 10: "auth" anywhere is a secret (authkey, googleAuth, authinfo, authorisation); only author.json and authors-note.json go', async () => {
+  const plan = m.folderPlan(
+    pick([
+      ['cards/authors-note.json', '{"note":"by Ada"}'],
+      ['cards/author.json', '{"name":"Ada"}'],
+      ['cards/my-auth.json', `{"k":"${PROBE}"}`],
+      ['cards/auth_cache.json', `{"k":"${PROBE}"}`],
+      ['cards/github-authz.json', `{"k":"${PROBE}"}`],
+      ['cards/AUTH.yaml', `k: ${PROBE}`],
+      ['cards/oauthcache.json', `{"k":"${PROBE}"}`],
+      ['cards/authkey.json', `{"k":"${PROBE}"}`],
+      ['cards/googleAuth.json', `{"k":"${PROBE}"}`],
+      ['cards/authinfo.json', `{"k":"${PROBE}"}`],
+      ['cards/authorisation.json', `{"k":"${PROBE}"}`],
+    ]),
+  );
+  assert.deepEqual(kept(plan), ['cards/author.json', 'cards/authors-note.json']);
+  assert.ok(!(await zipNames(plan)).text.includes(PROBE), 'no key bytes in the zip');
+  assert.equal(plan.left.find((l) => /never sent/i.test(l.label))?.count, 9, JSON.stringify(plan.left));
 });

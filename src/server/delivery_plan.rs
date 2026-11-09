@@ -1,7 +1,12 @@
 //! The delivery planner's server side (P10): asks the fast-tier model for a turn's plan before the
-//! bot starts ([`plan_for_message`]), keeps it for the turns of that job (the answering bot and the
-//! teammates it hands parts to, [`remember`] / [`planned`]), and learns from what the person says
-//! next ([`note_reaction`]).
+//! bot starts ([`plan_for_message`]), keeps it for the turn that answers the person's message
+//! ([`remember`] / [`plan_for_answer`]), and learns from what the person says next
+//! ([`note_reaction`]).
+//!
+//! The planner follows `delivery::plan_for_turn`'s rules (#470): it reads only the person's own
+//! saved message and their earlier ones, never a turn's prompt (which carries kwant's routing,
+//! hire and attachment notes); a prompt kwant or a bot wrote (a hand-off, routine, mission, decide
+//! round) or a thanks-only message gets no plan and no planner call.
 //!
 //! Which model plans: the Claude API key when the space has one (fast, well under the 3 s limit);
 //! the Claude CLI only when the `delivery_planner` setting is `cli` (a CLI start alone can take
@@ -10,7 +15,7 @@
 use crate::db::models::{Kwant, Message};
 use crate::db::spaces::SpaceId;
 use crate::router::analyzer::{self, Bot, Input, Note, Outcome, Why};
-use crate::router::delivery::{keyword_plan, Deliverable, DeliveryPlan, Show};
+use crate::router::delivery::{expected_kind, keyword_plan, Deliverable, DeliveryPlan, Show, TurnPlanInput};
 use crate::server::AppState;
 use crate::zombie::classify::{ApiClassifier, CliClassifier, Classifier, DEFAULT_API_MODEL};
 use std::collections::HashMap;
@@ -31,26 +36,54 @@ const RECENT_MESSAGES: i64 = 12;
 /// README bytes read for the project's kind.
 const README_BYTES: usize = 4096;
 
-fn plans() -> &'static Mutex<HashMap<String, (Instant, DeliveryPlan)>> {
-    static PLANS: OnceLock<Mutex<HashMap<String, (Instant, DeliveryPlan)>>> = OnceLock::new();
+/// A job's plan: when it was made, the id of the person's message it was made from, the plan.
+type Kept = (Instant, String, DeliveryPlan);
+
+fn plans() -> &'static Mutex<HashMap<String, Kept>> {
+    static PLANS: OnceLock<Mutex<HashMap<String, Kept>>> = OnceLock::new();
     PLANS.get_or_init(Default::default)
 }
 
-/// Keeps `plan` for the turns of job `job_id`.
-pub fn remember(job_id: &str, plan: DeliveryPlan) {
+/// Keeps `plan`, made from the person's message `message_id`, for job `job_id`.
+pub fn remember(job_id: &str, message_id: &str, plan: DeliveryPlan) {
     let Ok(mut map) = plans().lock() else { return };
-    map.retain(|_, (at, _)| at.elapsed() < PLAN_TTL);
+    map.retain(|_, (at, _, _)| at.elapsed() < PLAN_TTL);
     while map.len() >= MAX_PLANS {
-        let Some(oldest) = map.iter().min_by_key(|(_, (at, _))| *at).map(|(k, _)| k.clone()) else { break };
+        let Some(oldest) = map.iter().min_by_key(|(_, (at, _, _))| *at).map(|(k, _)| k.clone()) else { break };
         map.remove(&oldest);
     }
-    map.insert(job_id.to_string(), (Instant::now(), plan));
+    map.insert(job_id.to_string(), (Instant::now(), message_id.to_string(), plan));
 }
 
-/// The plan kept for job `job_id`, if any.
-pub fn planned(job_id: &str) -> Option<DeliveryPlan> {
+/// Job `job_id`'s plan for a turn that answers the person's message `answering` (its id): only
+/// the message the plan was made from. A hand-off, routine or decide-round turn of the same job
+/// answers no saved message of the person and gets none.
+pub fn plan_for_answer(job_id: &str, answering: Option<&str>) -> Option<DeliveryPlan> {
+    let answering = answering?;
     let map = plans().lock().ok()?;
-    map.get(job_id).filter(|(at, _)| at.elapsed() < PLAN_TTL).map(|(_, p)| p.clone())
+    map.get(job_id).filter(|(at, id, _)| at.elapsed() < PLAN_TTL && id == answering).map(|(_, _, p)| p.clone())
+}
+
+/// The person's own message a turn answers: the chat's `newest` message when it is the person's
+/// (not a connected agent's) and `prompt` is that message, maybe with kwant's notes after it
+/// (`drivers::drop_current_message`). `None` for a prompt kwant or a bot wrote: a hand-off, a
+/// routine, a mission, a decide round.
+pub fn answered_message<'a>(newest: Option<&'a Message>, prompt: &str) -> Option<&'a Message> {
+    let m = newest.filter(|m| m.sender_role == "user" && crate::drivers::from_agent(m).is_none())?;
+    let mut probe = vec![m.clone()];
+    crate::drivers::drop_current_message(&mut probe, prompt);
+    probe.is_empty().then_some(m)
+}
+
+/// The message the planner model may read for a turn, by `delivery::plan_for_turn`'s rules: none
+/// for a no-tools, read-only BRIEF or fresh-eyes turn, a turn with a carried plan (it wins), a
+/// prompt kwant or a bot wrote (no person's message), or a message that asks for nothing (a thanks
+/// or an acknowledgement, which gets no plan at all).
+pub fn analyzer_message<'a>(t: &TurnPlanInput<'a>) -> Option<&'a str> {
+    if t.no_tools || t.read_only || t.fresh_eyes || t.carried.is_some() {
+        return None;
+    }
+    t.person_message.filter(|m| expected_kind(m, t.recent) != Deliverable::Other)
 }
 
 /// Drops job `job_id`'s plan when its turns are done.
@@ -164,23 +197,32 @@ pub async fn plan_for_message(
     teammates: &[Kwant],
     chat_id: &str,
     workspace: Option<&std::path::Path>,
-    prompt: &str,
-) -> (DeliveryPlan, Why) {
+) -> Option<(String, DeliveryPlan, Why)> {
     let space = SpaceId::new(&answering.space_id);
     let history = state.db.list_messages(chat_id, RECENT_MESSAGES).await.unwrap_or_default();
-    let (recent, person) = recent_turns(&history, prompt);
+    // The person's saved message, never the turn's prompt: the newest message, when it is theirs
+    let saved = history.last().filter(|m| m.sender_role == "user" && crate::drivers::from_agent(m).is_none())?;
+    let (recent, person) = recent_turns(&history, &saved.text);
     let person: Vec<&str> = person.iter().map(String::as_str).collect();
-    let keyword = keyword_plan(prompt, &person);
+    let message = analyzer_message(&TurnPlanInput {
+        no_tools: false,
+        read_only: false,
+        fresh_eyes: false,
+        carried: None,
+        person_message: Some(saved.text.as_str()),
+        recent: &person,
+    })?;
+    let keyword = keyword_plan(message, &person);
     let mut team = vec![Bot { id: answering.id.clone(), name: answering.name.clone(), title: answering.title.clone() }];
     for k in teammates.iter().filter(|k| k.id != answering.id) {
         team.push(Bot { id: k.id.clone(), name: k.name.clone(), title: k.title.clone() });
     }
-    let input = Input { message: prompt.to_string(), recent, team, project: project_of(workspace), notes: notes(state, &space).await };
-    let model = if keyword.kind == crate::router::delivery::Deliverable::Other { None } else { planner_model(state).await };
+    let input = Input { message: message.to_string(), recent, team, project: project_of(workspace), notes: notes(state, &space).await };
+    let model = planner_model(state).await;
     let (mut plan, why) = analyzer::plan(model.as_deref(), &input, keyword, analyzer::timeout()).await;
     analyzer::align_replier(&mut plan, &answering.id);
     tracing::info!(kwant = %answering.id, kind = ?plan.kind, source = ?plan.source, why = why.as_str(), "delivery plan");
-    (plan, why)
+    Some((saved.id.clone(), plan, why))
 }
 
 /// The reply the person's newest message reacts to, and the note it earns: the bots' messages
@@ -337,13 +379,67 @@ mod tests {
         assert!(check_note(&[Show::Text], true, &[]).is_none(), "nothing to check, nothing noted");
     }
 
+    /// Ada's #470 must-fixes, for the planner too: a routed prompt and a hand-off prompt never
+    /// reach the analyzer; only the person's saved message does.
+    #[test]
+    fn a_routed_prompt_and_a_handoff_prompt_dont_reach_the_analyzer() {
+        fn input(m: Option<&str>) -> TurnPlanInput<'_> {
+            TurnPlanInput { no_tools: false, read_only: false, fresh_eyes: false, carried: None, person_message: m, recent: &[] }
+        }
+        let saved = msg("user", "show me the new pricing page", None);
+        // Routed: the prompt carries kwant's routing note after the person's words. The turn
+        // answers the saved message, and the analyzer reads that, never the note
+        let routed = format!("{}\n\n{} Frontend was picked for the words \"pricing page\".)", saved.text, crate::drivers::ROUTING_NOTE);
+        let answered = answered_message(Some(&saved), &routed).expect("the routed turn answers the person's message");
+        assert_eq!(answered.id, saved.id);
+        let t = input(Some(answered.text.as_str()));
+        let read = analyzer_message(&t).unwrap();
+        assert_eq!(read, "show me the new pricing page");
+        assert!(!read.contains(crate::drivers::ROUTING_NOTE));
+        // Hand-off: a prompt kwant wrote for a teammate, with the person's words quoted inside it.
+        // The chat's newest message is the lead's reply, so the turn answers no message of the person
+        let handoff = format!("Growth handed this conversation to you by mentioning you.\n\nThe user's original request:\n{}", saved.text);
+        let lead_reply = msg("kwant", "Built it: mockup.png. @Frontend can you check the spacing?", None);
+        assert!(answered_message(Some(&lead_reply), &handoff).is_none());
+        // ...and even right after the person's message, a prompt that isn't that message is no answer to it
+        assert!(answered_message(Some(&saved), &handoff).is_none());
+        assert!(analyzer_message(&input(None)).is_none());
+        // A connected agent's message isn't the person's
+        let agent = msg("user", "show me the new pricing page", Some(serde_json::json!({"from_agent": "Zapier"})));
+        assert!(answered_message(Some(&agent), &agent.text).is_none());
+    }
+
+    #[test]
+    fn the_analyzer_follows_plan_for_turns_rules() {
+        let base = || TurnPlanInput { no_tools: false, read_only: false, fresh_eyes: false, carried: None, person_message: Some("show me a mockup of the page"), recent: &[] };
+        assert_eq!(analyzer_message(&base()), Some("show me a mockup of the page"));
+        // No-tools, read-only BRIEF and fresh-eyes turns: no plan, no planner call
+        assert!(analyzer_message(&TurnPlanInput { no_tools: true, ..base() }).is_none());
+        assert!(analyzer_message(&TurnPlanInput { read_only: true, ..base() }).is_none());
+        assert!(analyzer_message(&TurnPlanInput { fresh_eyes: true, ..base() }).is_none());
+        // A carried plan (the decided reply's) wins
+        assert!(analyzer_message(&TurnPlanInput { carried: Some(keyword_plan("explain it", &[])), ..base() }).is_none());
+        // Thanks and acknowledgements ask for nothing: no plan
+        for ack in ["thanks!", "lgtm", "I see, thanks", "awesome, thanks"] {
+            assert!(analyzer_message(&TurnPlanInput { person_message: Some(ack), ..base() }).is_none(), "{ack}");
+        }
+        // The job's plan reaches only the turn answering the message it was made from
+        let job = format!("job-{}", uuid::Uuid::new_v4());
+        remember(&job, "m1", keyword_plan("show me mockup image", &[]));
+        assert!(plan_for_answer(&job, None).is_none(), "a hand-off turn of the same job");
+        forget(&job);
+    }
+
     #[test]
     fn a_jobs_plan_is_kept_for_its_turns_and_dropped_after() {
         let job = format!("job-{}", uuid::Uuid::new_v4());
-        assert!(planned(&job).is_none());
-        remember(&job, keyword_plan("show me mockup image", &[]));
-        assert_eq!(planned(&job).unwrap().kind, Deliverable::Visual);
+        assert!(plan_for_answer(&job, Some("m1")).is_none());
+        remember(&job, "m1", keyword_plan("show me mockup image", &[]));
+        assert_eq!(plan_for_answer(&job, Some("m1")).unwrap().kind, Deliverable::Visual);
+        // Only the turn that answers the message it was made from: a hand-off turn answers none
+        assert!(plan_for_answer(&job, None).is_none());
+        assert!(plan_for_answer(&job, Some("m2")).is_none());
         forget(&job);
-        assert!(planned(&job).is_none());
+        assert!(plan_for_answer(&job, Some("m1")).is_none());
     }
 }

@@ -41,6 +41,8 @@ export interface Audit {
   created_at: string;
   finished_at: string | null;
   risks: Risk[];
+  /** 0.8.0 B3: the raw fresh-eyes label (fresh-eyes-audit.md §3.2); read with parseFreshEyes. */
+  fresh_eyes?: unknown;
 }
 
 export interface TaskRisks {

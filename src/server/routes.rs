@@ -973,18 +973,20 @@ fn execute_single_turn(
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
         // P10: what the person expects and how best to deliver it, planned once before the bot
-        // starts (the fast model within ~3 s, else the keyword plan), for this turn and the
-        // teammates it hands parts to
-        let (plan, _why) = super::delivery_plan::plan_for_message(
+        // starts (the fast model within ~3 s, else the keyword plan), for the turn that answers
+        // the person's message. Read from their saved message, never `prompt` (attachment and
+        // answer notes) or `turn_prompt` (routing, hire, team notes); none for a thanks
+        if let Some((message_id, plan, _why)) = super::delivery_plan::plan_for_message(
             &scope.state,
             &target_kwant,
             &scope.teammates,
             &scope.context_id(&target_kwant),
             scope.workspace_dir.as_deref(),
-            &prompt,
         )
-        .await;
-        super::delivery_plan::remember(&scope.job_id, plan);
+        .await
+        {
+            super::delivery_plan::remember(&scope.job_id, &message_id, plan);
+        }
         // A full link in the person's own message may open the bot browser first
         let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
@@ -1861,6 +1863,10 @@ pub(super) struct TurnOpts {
     /// hand-offs refuse (see [`super::fresh_eyes`]). Never parked: a parked retry runs with
     /// default options. Default false.
     pub(super) fresh_eyes: bool,
+    /// P9: the delivery plan of the turn this one finishes (the decided reply keeps the held
+    /// reply's plan, though its prompt is kwant's). `None`: the plan comes from the person's own
+    /// message, or there is none (see [`crate::router::delivery::plan_for_turn`]).
+    pub(super) delivery: Option<crate::router::delivery::DeliveryPlan>,
 }
 
 impl TurnOpts {
@@ -2310,12 +2316,23 @@ async fn run_kwant_turn_inner(
             }
         }
         // P10: a turn that should show an image or a link, or make a change, never runs on the fast
-        // tier. The job's plan when one was made before the bot started, else the message's words.
-        // A fresh-eyes reviewer's prompt is a brief, not the person's ask: no plan, no floor
-        let planned = (!opts.fresh_eyes).then(|| super::delivery_plan::planned(&scope.job_id)).flatten();
-        if opts.routed.is_none() && opts.tier.is_none() && !opts.no_tools && !opts.fresh_eyes {
-            let plan = planned.clone().unwrap_or_else(|| crate::router::delivery::keyword_plan(&prompt, &[]));
-            if let Some(floor) = crate::router::analyzer::effort_floor(&plan, &route.effort_level) {
+        // tier. Its plan by `delivery::plan_for_turn`'s rules: the carried one, else the job's plan
+        // for the person's message this turn answers, else that message's words. A prompt kwant or a
+        // bot wrote (hand-off, routine, mission, decide round) answers no message: no plan, no floor
+        let read_only = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
+        let newest = if opts.fresh_eyes { Vec::new() } else { db.list_messages(&tag.context_id, 1).await.unwrap_or_default() };
+        let answered = super::delivery_plan::answered_message(newest.last(), &prompt);
+        let job_plan = super::delivery_plan::plan_for_answer(&scope.job_id, answered.map(|m| m.id.as_str()));
+        if opts.routed.is_none() && opts.tier.is_none() {
+            let plan = crate::router::delivery::plan_for_turn(crate::router::delivery::TurnPlanInput {
+                no_tools: opts.no_tools,
+                read_only,
+                fresh_eyes: opts.fresh_eyes,
+                carried: opts.delivery.clone().or_else(|| job_plan.clone()),
+                person_message: answered.map(|m| m.text.as_str()),
+                recent: &[],
+            });
+            if let Some(floor) = plan.and_then(|p| crate::router::analyzer::effort_floor(&p, &route.effort_level)) {
                 route.reasoning = format!("{} · effort raised to {floor}: the person expects to see an image, a link or a change", route.reasoning);
                 route.effort_level = floor.into();
             }
@@ -2356,6 +2373,13 @@ async fn run_kwant_turn_inner(
         crate::drivers::drop_current_message(&mut history, &prompt);
         // The person's message this turn answers, when the prompt is that message
         let current_message = last_before_drop.filter(|_| history.len() < had);
+        // P9: the person's own earlier words for the delivery plan, before the reply marks below
+        // quote the bot's text in front of them (a connected agent's asks aren't the person's)
+        let person_recent: Vec<String> = history
+            .iter()
+            .filter(|m| m.sender_role == "user" && crate::drivers::from_agent(m).is_none())
+            .map(|m| m.text.clone())
+            .collect();
         // Replies and reactions show in the history the bot reads
         db.mark_history(&mut history).await;
 
@@ -2570,16 +2594,28 @@ async fn run_kwant_turn_inner(
         .await;
         let skills = super::skills::prompt_block(state, &target_kwant.id, &prompt, with_tools).await;
         // P9/P10: how the result should reach the person, for the prompt's "[What to deliver]" hint
-        // and the delivery check after the turn. The keyword plan, at once and with no model call.
-        // None for a fresh-eyes reviewer (B1): its prompt is a brief, not the person's ask.
-        let read_only = opts.purpose.as_deref() == Some(super::dev::tickets::BRIEF_PURPOSE);
-        let delivery = (!opts.no_tools && !read_only && !opts.fresh_eyes).then(|| {
-            planned.clone().unwrap_or_else(|| {
-                let recent: Vec<&str> =
-                    history.iter().filter(|m| m.sender_role == "user").map(|m| m.text.as_str()).collect();
-                crate::router::delivery::keyword_plan(&prompt, &recent)
+        // and the delivery check after the turn. The keyword plan, at once and with no model call,
+        // read from the person's saved message: never from `prompt`, which carries kwant's notes
+        // (routing, team building, hire, attachments). None for a prompt kwant or a bot wrote, a
+        // fresh-eyes reviewer (B1), a no-tools or a BRIEF turn (see delivery::plan_for_turn).
+        let delivery = {
+            let recent: Vec<&str> = person_recent.iter().map(String::as_str).collect();
+            let person_message = current_message.as_ref().filter(|m| crate::drivers::from_agent(m).is_none());
+            crate::router::delivery::plan_for_turn(crate::router::delivery::TurnPlanInput {
+                no_tools: opts.no_tools,
+                read_only,
+                fresh_eyes: opts.fresh_eyes,
+                // The decided reply's plan wins; else the job's plan (P10's analyzer), made from
+                // the person's message this turn answers and only for it
+                carried: opts.delivery.clone().or_else(|| {
+                    person_message.and_then(|m| super::delivery_plan::plan_for_answer(&scope.job_id, Some(m.id.as_str())))
+                }),
+                person_message: person_message.map(|m| m.text.as_str()),
+                recent: &recent,
             })
-        });
+        };
+        // A reply held for the decide round keeps this plan for the decided reply
+        let held_delivery = delivery.clone();
         // P10: the planned turn's "[What the person expects]" block, with this bot's own place in
         // a team plan (the one that replies, a helper with its part, or neither)
         let expects = delivery
@@ -3240,7 +3276,14 @@ async fn run_kwant_turn_inner(
                     if let Some(h) = &opts.hook {
                         if let Ok(mut h) = h.lock() {
                             let text = asst_msg.text.clone();
-                            h.held = Some(super::decide::Held { turn_id: tag.turn_id.clone(), gate, text, msg: asst_msg, meta });
+                            h.held = Some(super::decide::Held {
+                                turn_id: tag.turn_id.clone(),
+                                gate,
+                                text,
+                                msg: asst_msg,
+                                meta,
+                                delivery: held_delivery.clone(),
+                            });
                         }
                     }
                 } else {

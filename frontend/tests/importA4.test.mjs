@@ -390,10 +390,13 @@ test('every GitHub error code gets Mira’s words', () => {
   for (const [code, title] of Object.entries(want)) assert.equal(m.githubErrorText(new m.ImportError('raw', code, 422)).title, title, code);
 });
 
-test('GitHub too_large: over 20 MB says to zip the folder; the 500-file case keeps the folder-link advice', () => {
+test('GitHub too_large: over 20 MB gets Mira’s smoother line (Later 4); the 500-file case keeps the folder-link advice', () => {
+  const want = 'This repo is over 20 MB, so kwant can’t download it. Download it from GitHub yourself, then bring just the part you need with Folder, or zip that part and upload it.';
   const big = m.githubErrorText(new m.ImportError("This repository is larger than 20 MB, so kwant can't fetch it. Download the folder you want, zip it and import the zip instead.", 'too_large', 413));
   assert.equal(big.title, 'That repo is too big');
-  assert.equal(big.detail, 'This repository is larger than 20 MB, so kwant can’t fetch it. Download the folder you want, zip it and import the zip instead.');
+  assert.equal(big.detail, want);
+  // Still matched if the server line is reworded the same way later.
+  assert.equal(m.githubErrorText(new m.ImportError('This repo is over 20 MB.', 'too_large', 413)).detail, want);
   const many = m.githubErrorText(new m.ImportError('too many files', 'too_large', 413));
   assert.match(many.detail, /Link to the folder you need instead/);
 });
@@ -512,4 +515,206 @@ test('folder picking is off on iPhone and iPad, even where the property exists',
   assert.equal(m.folderPickSupported(proto, { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' }), false);
   assert.equal(m.folderPickSupported(proto, { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', maxTouchPoints: 5 }), false);
   assert.equal(m.folderPickSupported({}, { userAgent: 'x' }), false);
+});
+
+// ------------------------------------------------------------------ A4 follow-ups (release-080/a4-followups.md, Pixel 1–11)
+
+test('item 1, F1 focus: opening Found while it looks keeps focus in the dialog, then moves to the first checkbox', async () => {
+  let release;
+  const d = await open({ desktop: true, over: { 'GET /api/import/local': () => new Promise((r) => (release = () => r(json(demo.localList())))) } });
+  await d.click(/^Found on this computer/);
+  const status = d.dlg().querySelector('[data-found-state="loading"] [role="status"]');
+  assert.equal(document.activeElement, status, 'the Looking… line holds focus');
+  assert.equal(status.getAttribute('tabindex'), '-1');
+  assert.ok(d.dlg().contains(document.activeElement));
+  release();
+  await settle(12);
+  const first = d.dlg().querySelector('input[type="checkbox"]');
+  assert.ok(first, 'list arrived');
+  assert.equal(document.activeElement, first, 'focus moves to the first checkbox');
+});
+
+test('item 1, F1 focus: a failed look moves focus to Try again', async () => {
+  let release;
+  const d = await open({ desktop: true, over: { 'GET /api/import/local': () => new Promise((r) => (release = () => r(fail(500, 'internal')))) } });
+  await d.click(/^Found on this computer/);
+  release();
+  await settle(12);
+  assert.match(document.activeElement.textContent, /Try again/);
+});
+
+test('item 2: Enter on the GitHub field runs Preview, with Preview’s rules', async () => {
+  const d = await open();
+  await d.click(/^GitHub link/);
+  const form = d.dlg().querySelector('input[type="url"]').closest('form');
+  assert.ok(form, 'the field is in a form');
+  form.requestSubmit();
+  await settle();
+  assert.equal(d.s.count('POST /api/import/github/preview'), 0, 'empty: nothing sent');
+  typeUrl(d.dlg, 'https://gitlab.com/a/b');
+  await settle();
+  form.requestSubmit();
+  await settle();
+  assert.equal(d.s.count('POST /api/import/github/preview'), 0, 'bad link: nothing sent');
+  assert.match(d.dlg().querySelector('[role="alert"]').textContent, /Only github\.com links/);
+  typeUrl(d.dlg, 'github.com/example-team/support-skills');
+  await settle();
+  d.dlg().querySelector('input[type="url"]').closest('form').requestSubmit();
+  await settle(12);
+  assert.equal(d.s.count('POST /api/import/github/preview'), 1);
+  assert.equal(d.dlg().querySelector('h2').textContent, 'Check before importing');
+});
+
+test('item 3, D4: after a 415 Preview stays off until another folder is picked', async () => {
+  const d = await open({ folders: true, over: { 'POST /api/import/preview': (_i, n) => (n === 1 ? fail(415, 'unsupported', 'raw') : json(demo.folderPreview())) } });
+  await d.click(/^Folder/);
+  pickFolder(d.dlg, [['notes/agents/readme.md', 'hi']]);
+  await settle();
+  primaryOf(d.dlg).click();
+  await settle(12);
+  assert.match(d.dlg().textContent, /Nothing kwant can bring in this folder/);
+  assert.equal(primaryOf(d.dlg).disabled, true, 'Preview off for the same folder');
+  assert.ok(btn(footer(d.dlg), /^Change folder$/));
+  pickFolder(d.dlg, demo.folderFiles());
+  await settle();
+  assert.equal(primaryOf(d.dlg).disabled, false, 'a new folder clears it');
+});
+
+test('item 4: the not-GitHub line says why — http://, a github.com link of the wrong shape, or another site', async () => {
+  const cases = [
+    ['http://github.com/a/b', 'http', 'Use the https:// link. kwant only downloads from github.com over https.'],
+    ['http://www.github.com/a/b', 'http', 'Use the https:// link. kwant only downloads from github.com over https.'],
+    ['https://github.com/owner', 'shape', 'Link to a repo, a branch or a folder in it, like github.com/owner/repo.'],
+    ['github.com/a/b/issues/1', 'shape', 'Link to a repo, a branch or a folder in it, like github.com/owner/repo.'],
+    ['https://github.com/a/b/pull/2', 'shape', 'Link to a repo, a branch or a folder in it, like github.com/owner/repo.'],
+    ['https://gist.github.com/a/b', 'other_site', 'Only github.com links work here. kwant doesn’t fetch from other sites.'],
+    ['https://gitlab.com/a/b', 'other_site', 'Only github.com links work here. kwant doesn’t fetch from other sites.'],
+    ['https://user@github.com/a/b', 'other_site', 'Only github.com links work here. kwant doesn’t fetch from other sites.'],
+    ['https://github.com:8443/a/b', 'other_site', 'Only github.com links work here. kwant doesn’t fetch from other sites.'],
+  ];
+  for (const [url, problem, line] of cases) {
+    assert.deepEqual(m.githubLinkCheck(url), { problem }, url);
+    assert.equal(m.githubLinkProblemText(problem), line, url);
+  }
+  assert.deepEqual(m.githubLinkCheck('github.com/a/b'), { owner: 'a', repo: 'b' });
+  const d = await open();
+  await d.click(/^GitHub link/);
+  for (const [url, problem, line] of cases.slice(0, 3).concat([cases[6]])) {
+    typeUrl(d.dlg, url);
+    await settle();
+    primaryOf(d.dlg).click();
+    await settle();
+    const alert = d.dlg().querySelector('[role="alert"]');
+    assert.equal(alert.dataset.githubProblem, problem, url);
+    assert.equal(alert.textContent, line, url);
+  }
+  assert.equal(d.s.count('POST /api/import/github/preview'), 0);
+});
+
+test('item 4: the server’s 422 not_github keeps the plain other-sites line', async () => {
+  const d = await open({ over: { 'POST /api/import/github/preview': () => fail(422, 'not_github', 'raw') } });
+  await d.click(/^GitHub link/);
+  typeUrl(d.dlg, 'github.com/a/b');
+  await settle();
+  primaryOf(d.dlg).click();
+  await settle(12);
+  assert.equal(d.dlg().querySelector('[role="alert"]').textContent, 'Only github.com links work here. kwant doesn’t fetch from other sites.');
+});
+
+test('item 5, Decision 3: GitHub preview with bots → Import → Done shows "From github.com/" and the licence', async () => {
+  const p = demo.githubBotsPreview();
+  const d = await open({ over: { 'POST /api/import/github/preview': () => json(p), 'POST /api/import/apply': () => json(demo.applied(p)) } });
+  await d.click(/^GitHub link/);
+  typeUrl(d.dlg, 'https://github.com/example-team/ai-team');
+  await settle();
+  primaryOf(d.dlg).click();
+  await settle(12);
+  assert.equal(primaryOf(d.dlg).textContent.trim(), 'Import 3 bots');
+  primaryOf(d.dlg).click();
+  await settle(12);
+  assert.match(d.dlg().textContent, /Imported 3 bots/);
+  const line = d.dlg().querySelector('[data-github-done]');
+  assert.ok(line, 'GitHub credit on Done with bots');
+  assert.equal(line.textContent, 'From github.com/example-team/ai-team (MIT).');
+  assert.match(line.className, /text-\[11px\] text-zinc-400/);
+  assert.match(d.dlg().textContent, /Give them an account and tools in Settings › This space/);
+  // Order: title, the From line, then the names.
+  assert.match(d.dlg().textContent, /Imported 3 bots.*From github\.com\/example-team\/ai-team \(MIT\)\..*Ada, Ben, Cy/);
+});
+
+test('item 6: 44 px targets on phone — per-bot tick rows and the Open on GitHub link', () => {
+  const p = demo.githubBotsPreview();
+  const raw = m.renderToStaticMarkup(h(m.PreviewView, { preview: p, github: p.github, skip: new Set(), onToggle() {} }));
+  const ticks = raw.match(/<label class="[^"]*"[^>]*data-bot-tick/g) ?? [];
+  assert.equal(ticks.length, 3);
+  // The phone layout runs to 767 px (PHONE_QUERY), so the 44 px targets use max-md:, not an sm: reset at 640 px.
+  for (const t of ticks) {
+    assert.match(t, /max-md:min-h-11/);
+    assert.doesNotMatch(t, /(^|[\s"])(min-h-11|sm:min-h-0)\b/);
+  }
+  const link = raw.match(/<a [^>]*class="([^"]*)"[^>]*>Open/)?.[1] ?? '';
+  for (const c of ['max-md:min-h-11', 'max-md:-my-3.5', 'max-md:px-2', 'max-md:-mr-2']) assert.ok(link.split(/\s+/).includes(c), `${c} in ${link}`);
+  assert.doesNotMatch(link, /\bsm:/);
+});
+
+test('item 7: an empty GitHub preview doesn’t say "Untick any you don’t want"', () => {
+  const p = demo.githubEmptyPreview();
+  const out = html(m.PreviewView, { preview: p, github: p.github, skip: new Set(), onToggle() {} });
+  assert.doesNotMatch(out, /Untick/);
+  assert.match(out, /Nothing here can be brought in: no bots and no skills\./);
+  assert.match(out, /SKILL\.md is over 8,000 characters/);
+  // Nothing to bring, so no "To keep you safe" line (ui-check-471 Later 2).
+  assert.doesNotMatch(out, /To keep you safe/);
+  // With bots, the untick line and the safety line stay.
+  const b = demo.githubBotsPreview();
+  const withBots = html(m.PreviewView, { preview: b, github: b.github, skip: new Set(), onToggle() {} });
+  assert.match(withBots, /3 bots will be created\. Untick any you don’t want\./);
+  assert.match(withBots, /To keep you safe, imported bots start with no tools/);
+});
+
+test('item 11: the phone header has one horizontal padding (px-2), desktop keeps px-4', async () => {
+  const header = (d) => d.dlg().querySelector('#import-title').parentElement.className.split(/\s+/);
+  let d = await open();
+  assert.ok(header(d).includes('px-4') && !header(d).includes('px-2'), header(d).join(' '));
+  cleanup.forEach((f) => f());
+  cleanup = [];
+  const was = g.window.matchMedia;
+  g.window.matchMedia = (q) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} });
+  try {
+    d = await open();
+    const c = header(d);
+    assert.ok(c.includes('h-14') && c.includes('px-2') && !c.includes('px-4'), c.join(' '));
+  } finally {
+    g.window.matchMedia = was;
+  }
+});
+
+test('ui-check-471 must-fix: on phone the title gets pl-2 on Choose and Done (no Back), not on other steps', async () => {
+  const cls = (d) => d.dlg().querySelector('#import-title').className.split(/\s+/);
+  // Desktop: never pl-2.
+  let d = await open();
+  assert.ok(!cls(d).includes('pl-2'), cls(d).join(' '));
+  cleanup.forEach((f) => f());
+  cleanup = [];
+  const was = g.window.matchMedia;
+  g.window.matchMedia = (q) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} });
+  try {
+    const p = demo.githubBotsPreview();
+    d = await open({ over: { 'POST /api/import/github/preview': () => json(p), 'POST /api/import/apply': () => json(demo.applied(p)) } });
+    assert.ok(cls(d).includes('pl-2'), `choose: ${cls(d).join(' ')}`);
+    await d.click(/^GitHub link/);
+    assert.ok(!cls(d).includes('pl-2'), `github: ${cls(d).join(' ')}`);
+    typeUrl(d.dlg, 'https://github.com/example-team/ai-team');
+    await settle();
+    primaryOf(d.dlg).click();
+    await settle(12);
+    assert.equal(primaryOf(d.dlg).textContent.trim(), 'Import 3 bots');
+    assert.ok(!cls(d).includes('pl-2'), `preview: ${cls(d).join(' ')}`);
+    primaryOf(d.dlg).click();
+    await settle(12);
+    assert.match(d.dlg().textContent, /Imported 3 bots/);
+    assert.ok(cls(d).includes('pl-2'), `done: ${cls(d).join(' ')}`);
+  } finally {
+    g.window.matchMedia = was;
+  }
 });
