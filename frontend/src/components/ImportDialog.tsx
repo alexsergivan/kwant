@@ -358,10 +358,13 @@ export const PreviewView: React.FC<{
         <p className="text-xs text-zinc-300">
           No bots in this one. <strong className="font-semibold text-zinc-100">{plural(shared.length, 'skill')}</strong> will be added to {spaceName}.
         </p>
-      ) : (
+      ) : bots.length > 0 ? (
         <p className="text-xs text-zinc-300">
-          {bots.length > 0 ? `${plural(kept, 'bot')} will be created` : 'No bots in this one'}
-          {from ? ` from ${from}` : ''}. Untick any you don’t want.
+          {plural(kept, 'bot')} will be created{from ? ` from ${from}` : ''}. Untick any you don’t want.
+        </p>
+      ) : (
+        <p className="text-xs text-zinc-300" data-preview-empty>
+          Nothing here can be brought in: no bots and no skills.
         </p>
       )}
       {skillsOnly && (
@@ -380,7 +383,7 @@ export const PreviewView: React.FC<{
           const off = skip.has(b.ref);
           return (
             <li key={b.ref} className={`${card} p-3 space-y-2 ${off ? 'opacity-50' : ''}`}>
-              <label className="flex items-start gap-2.5 cursor-pointer">
+              <label className="flex items-start gap-2.5 cursor-pointer max-md:min-h-11" data-bot-tick>
                 <input type="checkbox" checked={!off} onChange={() => onToggle(b.ref)} className="mt-0.5 accent-sky-500" aria-label={`Import ${b.name}`} />
                 <span className="flex-1 min-w-0">
                   <span className="block text-sm font-medium text-zinc-100 break-words">{b.name}</span>
@@ -420,10 +423,12 @@ export const PreviewView: React.FC<{
       )}
       <Notes items={general.warnings} tone="warn" label="Worth a look" />
       <Notes items={[...general.dropped, ...omitted]} tone="drop" label="Not brought over" />
-      <p className="flex gap-2 text-[11px] text-zinc-400 rounded-lg bg-zinc-900/60 p-2.5">
-        <Info size={13} className="shrink-0 mt-px text-sky-400" aria-hidden="true" />
-        <span>To keep you safe, imported bots start with no tools, their skills wait for your OK, and routines start paused. Keys are removed.</span>
-      </p>
+      {(bots.length > 0 || shared.length > 0) && (
+        <p className="flex gap-2 text-[11px] text-zinc-400 rounded-lg bg-zinc-900/60 p-2.5">
+          <Info size={13} className="shrink-0 mt-px text-sky-400" aria-hidden="true" />
+          <span>To keep you safe, imported bots start with no tools, their skills wait for your OK, and routines start paused. Keys are removed.</span>
+        </p>
+      )}
     </div>
   );
 };
@@ -471,7 +476,8 @@ export const DoneView: React.FC<{ applied: Applied; undo: UndoState; onUndo: (fo
         </p>
         {github && (
           <p className="text-[11px] text-zinc-400 break-words" data-github-done>
-            {githubFromLine(github)} They wait for your OK in Settings › This space › Skills.
+            {githubFromLine(github)}
+            {skillsOnly ? ' They wait for your OK in Settings › This space › Skills.' : ''}
           </p>
         )}
         {names.length > 0 && <p className="text-xs text-zinc-300 break-words">{names.join(', ')}</p>}
@@ -616,11 +622,18 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
     e.preventDefault();
     items[next].focus();
   };
-  // Each step starts at the top, with focus inside the dialog.
+  // Each step starts at the top, with focus inside the dialog. Found runs again once its list arrives, so
+  // focus moves from the "Looking…" line to the first checkbox (or Pick a folder / Try again).
+  const foundPhase = step.kind === 'found' ? local.kind : '';
   useEffect(() => {
-    bodyRef.current?.scrollTo?.(0, 0);
-    bodyRef.current?.querySelector<HTMLElement>('button, textarea, input:not([type="file"]), [tabindex="0"]')?.focus();
-  }, [step.kind]);
+    const body = bodyRef.current;
+    if (!body) return;
+    if (foundPhase === '' || foundPhase === 'loading') body.scrollTo?.(0, 0);
+    (
+      body.querySelector<HTMLElement>('[data-autofocus]') ??
+      body.querySelector<HTMLElement>('button, textarea, input:not([type="file"]), [tabindex="0"]')
+    )?.focus();
+  }, [step.kind, foundPhase]);
 
   const go = (s: Step) => {
     setError(null);
@@ -824,7 +837,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
         ) : (
           cancel
         )}
-        <button type="button" onClick={check} disabled={!plan || !!plan.problem || plan.kept.length === 0 || busy} className={`${primary} ${fb}`}>
+        <button type="button" onClick={check} disabled={!plan || !!plan.problem || plan.kept.length === 0 || folderUnsupported || busy} className={`${primary} ${fb}`}>
           {busy && spin} {busy ? 'Reading…' : 'Preview'}
         </button>
       </>
@@ -881,13 +894,13 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
         aria-labelledby="import-title"
         className="kw-dialog-panel bg-zinc-900 sm:border border-zinc-800 sm:rounded-2xl w-full sm:max-w-xl h-full sm:h-auto sm:max-h-[90vh] flex flex-col text-zinc-100 shadow-2xl"
       >
-        <div className={`flex items-center gap-2 border-b border-zinc-800 px-4 ${phone ? 'h-14 px-2' : 'py-3'}`}>
+        <div className={`flex items-center gap-2 border-b border-zinc-800 ${phone ? 'h-14 px-2' : 'px-4 py-3'}`}>
           {step.kind !== 'choose' && step.kind !== 'done' && (
             <button type="button" onClick={back} aria-label="Back" className={`${iconBtn} -ml-1 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800`}>
               <ArrowLeft size={17} />
             </button>
           )}
-          <h2 id="import-title" className="flex-1 min-w-0 text-sm font-semibold truncate">{title}</h2>
+          <h2 id="import-title" className={`flex-1 min-w-0 text-sm font-semibold truncate ${phone && (step.kind === 'choose' || step.kind === 'done') ? 'pl-2' : ''}`}>{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className={`${iconBtn} rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800`}>
             <X size={18} />
           </button>
@@ -942,6 +955,12 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
               fetching={busy}
               error={error}
               phone={phone}
+              onSubmit={() => {
+                // Enter keeps Preview's rules: nothing while fetching or empty; a bad link shows its reason.
+                if (busy || ghUrl.trim() === '') return;
+                setGhChecked(true);
+                if (githubLinkOk(ghUrl)) void check();
+              }}
             />
           )}
           {step.kind === 'preview' && preview && (
@@ -964,7 +983,7 @@ export const ImportDialog: React.FC<Props> = ({ spaceName, onClose, onChanged, l
             />
           )}
           {step.kind === 'done' && applied && (
-            <DoneView applied={applied} undo={undo} onUndo={doUndo} onKeep={() => setUndo({ kind: 'idle' })} github={step.github && applied.import.created.kwants.length === 0 ? step.github : undefined} />
+            <DoneView applied={applied} undo={undo} onUndo={doUndo} onKeep={() => setUndo({ kind: 'idle' })} github={step.github} />
           )}
           {error != null && step.kind !== 'github' && <ErrorBox error={error} />}
         </div>

@@ -15,7 +15,8 @@ import {
   formatBytes,
   githubErrorText,
   githubLicenceUrl,
-  githubLinkOk,
+  githubLinkCheck,
+  githubLinkProblemText,
   githubRefLine,
   githubRepoUrl,
   licenceLine,
@@ -116,7 +117,8 @@ export const FoundStep: React.FC<{
   if (state.kind === 'loading' || state.kind === 'off') {
     return (
       <div className="space-y-3" data-found-state="loading">
-        <p role="status" className="flex items-center gap-2 text-xs text-zinc-400">
+        {/* Focus waits here while the look runs (F1), so it never drops to the page behind the dialog. */}
+        <p role="status" tabIndex={-1} data-autofocus className="flex items-center gap-2 text-xs text-zinc-400 focus:outline-none">
           <Loader2 size={13} className={spin} aria-hidden="true" /> {LOOKING}
         </p>
         <ul className="space-y-2" aria-hidden="true">
@@ -340,14 +342,25 @@ export const GithubStep: React.FC<{
   fetching: boolean;
   error: unknown;
   phone: boolean;
-}> = ({ url, onUrl, checked, onCheck, fetching, error, phone }) => {
+  /** Enter in the field: the same as pressing Preview. */
+  onSubmit: () => void;
+}> = ({ url, onUrl, checked, onCheck, fetching, error, phone, onSubmit }) => {
   const id = useId();
-  const bad = checked && url.trim() !== '' && !githubLinkOk(url);
-  const notGithub = bad || (error as { code?: string } | null)?.code === 'not_github';
+  const check = githubLinkCheck(url);
+  const problem = checked && url.trim() !== '' && 'problem' in check ? check.problem : null;
+  // The server's 422 not_github keeps the plain "other sites" line (Decision 2).
+  const serverNotGithub = (error as { code?: string } | null)?.code === 'not_github';
+  const notGithub = problem !== null || serverNotGithub;
   const text = error && !notGithub ? githubErrorText(error) : null;
   return (
     <div className="space-y-3">
-      <div>
+      <form
+        noValidate
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+      >
         <label htmlFor={id} className="block text-xs font-medium text-zinc-300 mb-1">Link to a public GitHub repo</label>
         <input
           id={id}
@@ -366,8 +379,8 @@ export const GithubStep: React.FC<{
           className={`w-full bg-zinc-950 border rounded-lg px-3 py-2 font-mono ${phone ? 'text-base' : 'text-xs'} text-zinc-100 focus:outline-none ${notGithub ? 'border-rose-500/70 focus:border-rose-400' : 'border-zinc-800 focus:border-sky-500'}`}
         />
         {notGithub && (
-          <p className="mt-1 text-[11px] text-rose-300" role="alert">
-            {NOT_GITHUB}
+          <p className="mt-1 text-[11px] text-rose-300" role="alert" data-github-problem={problem ?? 'not_github'}>
+            {problem ? githubLinkProblemText(problem) : NOT_GITHUB}
           </p>
         )}
         <p id={`${id}-help`} className="mt-1.5 text-[11px] text-zinc-500">
@@ -376,7 +389,7 @@ export const GithubStep: React.FC<{
         <p className="mt-0.5 text-[11px] text-zinc-500">
           Example: <span className="font-mono">github.com/owner/repo/tree/main/skills</span>
         </p>
-      </div>
+      </form>
       {fetching && (
         <p role="status" className="flex items-center gap-2 text-xs text-zinc-400">
           <Loader2 size={13} className={spin} aria-hidden="true" /> Downloading from github.com…
@@ -403,7 +416,7 @@ export const GithubSourceBlock: React.FC<{ github: GithubInfo }> = ({ github: g 
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`Open ${g.owner}/${g.repo} on GitHub`}
-          className={`shrink-0 flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 rounded ${ring}`}
+          className={`shrink-0 flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 rounded ${ring} max-md:min-h-11 max-md:-my-3.5 max-md:px-2 max-md:-mr-2`}
         >
           Open <ExternalLink size={12} aria-hidden="true" />
         </a>
