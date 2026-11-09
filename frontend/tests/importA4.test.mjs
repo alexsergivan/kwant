@@ -390,6 +390,14 @@ test('every GitHub error code gets Mira’s words', () => {
   for (const [code, title] of Object.entries(want)) assert.equal(m.githubErrorText(new m.ImportError('raw', code, 422)).title, title, code);
 });
 
+test('GitHub too_large: over 20 MB says to zip the folder; the 500-file case keeps the folder-link advice', () => {
+  const big = m.githubErrorText(new m.ImportError("This repository is larger than 20 MB, so kwant can't fetch it. Download the folder you want, zip it and import the zip instead.", 'too_large', 413));
+  assert.equal(big.title, 'That repo is too big');
+  assert.equal(big.detail, 'This repository is larger than 20 MB, so kwant can’t fetch it. Download the folder you want, zip it and import the zip instead.');
+  const many = m.githubErrorText(new m.ImportError('too many files', 'too_large', 413));
+  assert.match(many.detail, /Link to the folder you need instead/);
+});
+
 test('G5 preview with MIT: source block, chip, skill chips, Import N skills; the attribution isn’t repeated', async () => {
   const d = await open();
   await d.click(/^GitHub link/);

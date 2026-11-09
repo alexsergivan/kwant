@@ -288,6 +288,9 @@ export function githubLinkOk(raw: string): { owner: string; repo: string } | nul
   return null;
 }
 
+/** The server's 20 MB line (src/import/github.rs), in the app's typography. */
+export const GITHUB_OVER_20MB = 'This repository is larger than 20 MB, so kwant can’t fetch it. Download the folder you want, zip it and import the zip instead.';
+
 export const NOT_GITHUB = 'Only github.com links work here. kwant doesn’t fetch from other sites.';
 
 /** The ErrorBox copy for `POST /api/import/github/preview` (G4), from its code. */
@@ -297,6 +300,9 @@ export function githubErrorText(err: unknown): { title: string; detail: string }
     case 'not_found':
       return { title: 'No public repo at that link', detail: 'It may be private, or the branch or link may be wrong. Only public repos work for now.' };
     case 'too_large':
+      // The whole download was over 20 MB (#455 11efe7d2): a folder link wouldn't help, a zip does.
+      if (err instanceof ImportError && /larger than 20 MB/.test(err.message))
+        return { title: 'That repo is too big', detail: GITHUB_OVER_20MB };
       return { title: 'That repo is too big', detail: 'Link to the folder you need instead, like …/tree/main/skills. (20 MB, or over 500 readable files.)' };
     case 'unsupported':
       return { title: 'Nothing kwant can bring here', detail: 'No SKILL.md, AGENTS.md or bot files at that link.' };
