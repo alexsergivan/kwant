@@ -407,6 +407,12 @@ pub fn pin(command: &str, sha: &str, branch: &str, local_src: bool) -> Option<St
     if !super::git::is_sha(sha) || !super::routes::valid_branch(branch) || command.contains('\n') {
         return None;
     }
+    // The caller passes the push's destination as `branch`: `refs/notes/x`, `refs/remotes/…` or
+    // `refs/pull/…` there isn't a branch, and pinning it would make a branch of that name (Ada's
+    // review of #472, round 2, must-fix 1)
+    if branch.starts_with("refs/") {
+        return None;
+    }
     let segments: Vec<&str> = command.split("&&").map(str::trim).collect();
     let (last, cds) = segments.split_last()?;
     let mut kept = Vec::new();
@@ -429,6 +435,9 @@ pub fn pin(command: &str, sha: &str, branch: &str, local_src: bool) -> Option<St
             return None;
         }
         let (src, dst) = spec.split_once(':').unwrap_or((spec, spec));
+        if dst.strip_prefix("refs/heads/").unwrap_or(dst).starts_with("refs/") {
+            return None;
+        }
         let src_ok = matches!(src, "HEAD" | "@") || (!super::git::is_sha(src) && (!src.starts_with("refs/") || src.starts_with("refs/heads/")));
         let dst_ok = if spec.contains(':') {
             dst.strip_prefix("refs/heads/").unwrap_or(dst) == branch && !dst.starts_with("refs/tags/")
@@ -1528,6 +1537,34 @@ mod tests {
             assert_eq!(pin(cmd, sha, "x", true), None, "{cmd}");
         }
         assert_eq!(pin("git push origin juno-x:refs/tags/juno-x", sha, "juno-x", true), None);
+    }
+
+    /// Ada's review of #472, round 2, must-fix 1: `pin` driven the way [`gate_one`] drives it,
+    /// with `branch` taken from the parsed push's destination. A destination under `refs/` other
+    /// than `refs/heads/` runs as written instead of becoming a branch of that name.
+    #[test]
+    fn a_push_to_another_ref_is_not_pinned_as_the_caller_drives_it() {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let pinned = |cmd: &str| {
+            let Parsed::Pushes(p) = pushes(cmd) else { panic!("{cmd} isn't a push") };
+            assert_eq!(p.len(), 1, "{cmd}");
+            // As gate_one: the destination, or the checked-out branch for a bare HEAD
+            let branch = p[0].dst.clone().unwrap_or_else(|| "juno-x".to_string());
+            // gate_one passes it on: valid_branch accepts `refs/notes/x` too
+            assert!(crate::server::dev::routes::valid_branch(&branch), "{cmd}: {branch}");
+            pin(cmd, sha, &branch, true)
+        };
+        for cmd in [
+            "git push origin juno-x:refs/notes/x",
+            "git push origin HEAD:refs/remotes/origin/x",
+            "git push origin HEAD:refs/pull/1/head",
+            "git push origin juno-x:refs/heads/refs/notes/x",
+        ] {
+            assert_eq!(pinned(cmd), None, "{cmd}");
+        }
+        assert_eq!(pinned("git push origin HEAD:refs/heads/feature"), Some(format!("git push origin {sha}:refs/heads/feature")));
+        assert_eq!(pinned("git push origin juno-x"), Some(format!("git push origin {sha}:refs/heads/juno-x")));
+        assert_eq!(pinned("git push origin HEAD"), Some(format!("git push origin {sha}:refs/heads/juno-x")));
     }
 
     /// Ada's review of #456, must-fix 2: the gate reads the commit before the command runs, so a

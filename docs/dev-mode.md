@@ -504,8 +504,12 @@ deploy can cost a site.
   server and Composio's `GITHUB_*` tools, also inside a multi-execute) like `git push`: a file
   write (`push_files`, `create_or_update_file`, `delete_file`, `GITHUB_COMMIT_MULTIPLE_FILES`, …)
   to a protected branch asks, every merge tool asks (its base isn't in the call, so it counts as
-  protected), and deleting a protected branch, a tag or a ref the call doesn't name asks. A file
-  write to any other branch gets a pre-push card (below). `create_branch` doesn't ask, and other
+  protected), and deleting a protected branch, a tag or a ref the call doesn't name asks. Moving a
+  ref asks too: `GITHUB_UPDATE_A_REFERENCE` on a protected branch, or on a ref the call doesn't
+  name, asks as a push to it (a force-push when `force` is set), and `GITHUB_CREATE_A_REFERENCE` or
+  `GITHUB_UPDATE_A_REFERENCE` with a tag (`tags/…`, `refs/tags/…`) asks as a deploy, like a tag
+  push. A file write to any other branch gets a pre-push card (below). `create_branch` and
+  creating a branch ref (`GITHUB_CREATE_A_REFERENCE` with `refs/heads/…`) don't ask, and other
   tools that change a repo (a GitLab server, or GitHub tools named otherwise) reach it directly:
   mark that connection production (Connections → Production) to make every one of its tools ask.
 - **Where a command runs.** The floor can't tell a production database from a local copy unless

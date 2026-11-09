@@ -293,7 +293,13 @@ fn mcp_reason(server: &str, tool: &str, args: &Value, ctx: &DevCtx) -> Option<Fl
 ///   protected, so [`FloorKind::PushMain`];
 /// - deleting a protected branch, a tag, or a ref kwant can't read: [`FloorKind::DeleteRef`].
 ///
-/// `create_branch` adds a ref and writes no content, so it doesn't ask.
+/// - creating or updating a tag ref (`GITHUB_CREATE_A_REFERENCE`, `GITHUB_UPDATE_A_REFERENCE`
+///   with `tags/…` or `refs/tags/…`): a deploy, as a tag push is;
+/// - updating a protected branch's ref, or a ref the call doesn't name:
+///   [`FloorKind::ForcePush`] with `force`, else [`FloorKind::PushMain`]. Creating a ref the
+///   call doesn't name could make a tag, so it asks as a deploy.
+///
+/// `create_branch` and creating a branch ref add a ref and write no content, so they don't ask.
 fn github_reason(server: &str, tool: &str, args: &Value, ctx: &DevCtx, depth: usize) -> Option<Floor> {
     if depth > 2 {
         return None;
@@ -337,6 +343,42 @@ fn github_reason(server: &str, tool: &str, args: &Value, ctx: &DevCtx, depth: us
             if r.is_empty() || tag || ctx.is_protected(b) || looks_like_version(b) {
                 let shown = if r.is_empty() { "a ref kwant can't read from the call".to_string() } else { b.to_string() };
                 add(Floor::new(FloorKind::DeleteRef, format!("{tool} deletes {shown} on GitHub")).row("What changes", format!("{shown} is deleted on GitHub.")));
+            }
+        }
+        _ if !read
+            && (github || has_repo)
+            && w.iter().any(|x| matches!(x.as_str(), "update" | "create"))
+            && w.iter().any(|x| matches!(x.as_str(), "ref" | "reference")) =>
+        {
+            // Ada's review of #472, round 2, must-fix 2: moving a ref is a push. A tag can start a
+            // release; updating a protected branch (or one the call doesn't name) is a push to
+            // it, forced when `force` is set. Creating a branch ref writes no content.
+            let create = w.iter().any(|x| x == "create") && !w.iter().any(|x| x == "update");
+            let force = args["force"].as_bool().unwrap_or(false) || args["force"].as_str().is_some_and(|f| f.eq_ignore_ascii_case("true"));
+            let raw = branch_arg(&["ref", "branch", "name"]).unwrap_or_default();
+            let r = raw.trim_start_matches("refs/");
+            let named_branch = r.starts_with("heads/");
+            let b = r.strip_prefix("heads/").unwrap_or(r);
+            let tag = r.starts_with("tags/") || (!named_branch && looks_like_version(b));
+            if tag {
+                let t = r.trim_start_matches("tags/");
+                add(ctx.deploy(format!("{tool} sends the tag {t} to GitHub, which can start a release")));
+            } else if r.is_empty() {
+                let what = "a ref kwant can't read from the call";
+                if create {
+                    // It could be a tag
+                    add(ctx.deploy(format!("{tool} creates {what}, which could be a tag that starts a release")));
+                } else if force {
+                    add(Floor::new(FloorKind::ForcePush, format!("{tool} force-moves {what}, so it counts as protected")).row("What changes", "The ref is rewritten; commits others have can be lost."));
+                } else {
+                    add(Floor::new(FloorKind::PushMain, format!("{tool} moves {what}, so it counts as protected")).row("What changes", "The ref moves to a new commit."));
+                }
+            } else if !create && ctx.is_protected(b) {
+                if force {
+                    add(Floor::new(FloorKind::ForcePush, format!("{tool} force-moves {b} on GitHub")).row("What changes", format!("{b} is rewritten; commits others have can be lost.")));
+                } else {
+                    add(Floor::new(FloorKind::PushMain, format!("{tool} moves {b} to a new commit on GitHub")).row("What changes", format!("New commits land on {b}.")));
+                }
             }
         }
         _ => {}
@@ -1431,6 +1473,45 @@ mod tests {
         // Other apps' merge or delete tools aren't GitHub's
         assert_eq!(k("pdf", "merge_pdfs", json!({})), None);
         assert_eq!(k("slack", "delete_message", json!({})), None);
+    }
+
+    /// Ada's review of #472, round 2, must-fix 2: moving a ref through GitHub's API asks like
+    /// the `git push` it stands for.
+    #[test]
+    fn github_ref_writes_ask_like_a_push() {
+        use FloorKind::*;
+        let c = ctx();
+        let k = |server: &str, tool: &str, args: Value| reason(&req(server, tool, args), &c).map(|f| f.kind);
+        let upd = |r: &str, force: bool| json!({"owner": "o", "repo": "r", "ref": r, "sha": "0123456789abcdef0123456789abcdef01234567", "force": force});
+        let deploy = |x: Option<FloorKind>| matches!(x, Some(Deploy | DeployMigration));
+        // Updating a protected branch: a force-push with force, else a push to it
+        assert_eq!(k("composio", "GITHUB_UPDATE_A_REFERENCE", upd("heads/main", true)), Some(ForcePush));
+        assert_eq!(k("composio", "GITHUB_UPDATE_A_REFERENCE", upd("heads/main", false)), Some(PushMain));
+        assert_eq!(k("composio", "GITHUB_UPDATE_A_REFERENCE", upd("refs/heads/release/1.0", false)), Some(PushMain));
+        assert_eq!(k("composio", "GITHUB_UPDATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "heads/main", "sha": "abc", "force": "true"})), Some(ForcePush));
+        assert_eq!(k("github", "update_ref", json!({"owner": "o", "repo": "r", "ref": "heads/main", "sha": "abc"})), Some(PushMain));
+        // A bot's own branch doesn't ask
+        assert_eq!(k("composio", "GITHUB_UPDATE_A_REFERENCE", upd("heads/juno-x", true)), None);
+        assert_eq!(k("composio", "GITHUB_UPDATE_A_REFERENCE", upd("heads/juno-x", false)), None);
+        // No ref: it counts as protected
+        assert_eq!(k("composio", "GITHUB_UPDATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "sha": "abc"})), Some(PushMain));
+        assert_eq!(k("composio", "GITHUB_UPDATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "sha": "abc", "force": true})), Some(ForcePush));
+        assert!(deploy(k("composio", "GITHUB_CREATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "sha": "abc"}))));
+        // A tag, created or updated, can start a release
+        assert!(deploy(k("composio", "GITHUB_CREATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "refs/tags/v0.8.0", "sha": "abc"}))));
+        assert!(deploy(k("composio", "GITHUB_CREATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "refs/tags/mac-v0.8.0", "sha": "abc"}))));
+        assert!(deploy(k("composio", "GITHUB_UPDATE_A_REFERENCE", upd("tags/checkpoint", true))));
+        // Creating a branch ref writes no content
+        assert_eq!(k("composio", "GITHUB_CREATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "refs/heads/juno-y", "sha": "abc"})), None);
+        assert_eq!(k("composio", "GITHUB_CREATE_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "refs/heads/main", "sha": "abc"})), None);
+        // Inside COMPOSIO_MULTI_EXECUTE_TOOL
+        let multi = |slug: &str, args: Value| json!({"tools": [{"tool_slug": "GITHUB_LIST_BRANCHES", "arguments": {}}, {"tool_slug": slug, "arguments": args}]});
+        assert_eq!(k("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", multi("GITHUB_UPDATE_A_REFERENCE", upd("heads/main", true))), Some(ForcePush));
+        assert!(deploy(k("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", multi("GITHUB_CREATE_A_REFERENCE", json!({"ref": "refs/tags/v0.8.0", "sha": "abc"})))));
+        assert_eq!(k("composio", "COMPOSIO_MULTI_EXECUTE_TOOL", multi("GITHUB_CREATE_A_REFERENCE", json!({"ref": "refs/heads/juno-y", "sha": "abc"}))), None);
+        // Reads stay reads
+        assert_eq!(k("composio", "GITHUB_GET_A_REFERENCE", json!({"owner": "o", "repo": "r", "ref": "heads/main"})), None);
+        assert_eq!(k("composio", "GITHUB_LIST_MATCHING_REFERENCES", json!({"owner": "o", "repo": "r", "ref": "tags/v"})), None);
     }
 
     #[test]
