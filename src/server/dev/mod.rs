@@ -16,6 +16,7 @@ pub mod forge;
 pub mod git;
 pub mod generate;
 pub mod landed;
+pub mod line_notes;
 pub mod notes;
 pub mod poller;
 pub mod post;
