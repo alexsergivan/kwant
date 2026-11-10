@@ -67,6 +67,9 @@ pub struct ReviewComment {
     pub body: String,
     /// The forge account that wrote it.
     pub author: Option<String>,
+    /// The author's tie to the repo as the forge says it (GitHub: OWNER, MEMBER, COLLABORATOR,
+    /// CONTRIBUTOR, NONE, …); none when the forge doesn't say.
+    pub author_association: Option<String>,
     /// The commit the comment was made on.
     pub commit: Option<String>,
     pub url: Option<String>,
@@ -94,6 +97,7 @@ impl From<GhReviewComment> for ReviewComment {
             start_line: c.start_line.or(c.original_start_line),
             body: c.body,
             author: c.user.map(|u| u.login),
+            author_association: c.author_association,
             commit: c.commit_id,
             url: c.html_url,
             created_at: c.created_at,

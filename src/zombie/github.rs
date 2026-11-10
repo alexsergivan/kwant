@@ -413,6 +413,9 @@ pub struct GhReviewComment {
     pub body: String,
     #[serde(default)]
     pub user: Option<GhUser>,
+    /// The author's tie to the repo: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ….
+    #[serde(default)]
+    pub author_association: Option<String>,
     #[serde(default)]
     pub commit_id: Option<String>,
     #[serde(default)]

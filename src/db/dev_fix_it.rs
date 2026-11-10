@@ -45,6 +45,9 @@ pub const VERDICT: &str = "verdict";
 pub const TURN_STARTED: &str = "started";
 /// Today's Fix-it turns for this PR were used up: the item waits in the thread and in Needs you.
 pub const TURN_HELD: &str = "held";
+/// Today's spending stop held the item's turn: it waits in the thread and in Needs you, and the
+/// first poll after the stop lifts (Continue, or the day's end) starts it.
+pub const TURN_SPEND_HELD: &str = "spend_held";
 /// The person archived the PR's Fix-it chat: nothing is sent to that bot for this PR any more.
 pub const TURN_STOPPED: &str = "stopped";
 /// No turn for this item (a verdict is for the person).
@@ -64,7 +67,7 @@ pub struct FixItemRow {
     pub kind: String,
     /// The item as JSON (what the chat line's `meta.item` carries).
     pub item: String,
-    /// [`TURN_STARTED`], [`TURN_HELD`], [`TURN_STOPPED`] or [`TURN_NONE`].
+    /// [`TURN_STARTED`], [`TURN_HELD`], [`TURN_SPEND_HELD`], [`TURN_STOPPED`] or [`TURN_NONE`].
     pub turn: String,
     pub created_at: i64,
 }
@@ -114,6 +117,29 @@ impl Database {
         Ok(won)
     }
 
+    /// Gives back `keys` claimed by item `item_id` (a verdict the spending stop held), so a later
+    /// poll claims them again. A key another item holds is left alone.
+    pub async fn release_fix_keys(&self, space_id: &str, repo_key: &str, pr: i64, keys: &[String], item_id: &str) -> Result<(), DbError> {
+        for k in keys {
+            sqlx::query("DELETE FROM dev_fix_seen WHERE space_id = ? AND repo_key = ? AND pr = ? AND key = ? AND item_id = ?")
+                .bind(space_id)
+                .bind(repo_key)
+                .bind(pr)
+                .bind(k)
+                .bind(item_id)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Moves item `id` from turn `from` to `to`; false when it wasn't at `from` (another poll
+    /// moved it first), so only one caller starts its turn.
+    pub async fn set_fix_item_turn(&self, id: &str, from: &str, to: &str) -> Result<bool, DbError> {
+        let r = sqlx::query("UPDATE dev_fix_items SET turn = ? WHERE id = ? AND turn = ?").bind(to).bind(id).bind(from).execute(&self.pool).await?;
+        Ok(r.rows_affected() == 1)
+    }
+
     pub async fn insert_fix_item(&self, row: &FixItemRow) -> Result<(), DbError> {
         sqlx::query(&format!("INSERT INTO dev_fix_items ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"))
             .bind(&row.id)
@@ -142,17 +168,17 @@ impl Database {
             .await?)
     }
 
-    /// The items of a space made since `since_ms` with turn `turn`, newest first, at most `limit`.
-    pub async fn fix_items_with_turn(&self, space_id: Option<&str>, turn: &str, since_ms: i64, limit: i64) -> Result<Vec<FixItemRow>, DbError> {
-        Ok(sqlx::query_as(&format!(
-            "SELECT {COLS} FROM dev_fix_items WHERE (? IS NULL OR space_id = ?) AND turn = ? AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT ?"
-        ))
-        .bind(space_id)
-        .bind(space_id)
-        .bind(turn)
-        .bind(since_ms)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?)
+    /// The items of a space made since `since_ms` with one of `turns`, newest first, at most `limit`.
+    pub async fn fix_items_with_turn(&self, space_id: Option<&str>, turns: &[&str], since_ms: i64, limit: i64) -> Result<Vec<FixItemRow>, DbError> {
+        let marks = vec!["?"; turns.len().max(1)].join(", ");
+        let sql = format!("SELECT {COLS} FROM dev_fix_items WHERE (? IS NULL OR space_id = ?) AND turn IN ({marks}) AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT ?");
+        let mut q = sqlx::query_as::<_, FixItemRow>(&sql).bind(space_id).bind(space_id);
+        if turns.is_empty() {
+            q = q.bind("");
+        }
+        for t in turns {
+            q = q.bind(*t);
+        }
+        Ok(q.bind(since_ms).bind(limit).fetch_all(&self.pool).await?)
     }
 }
