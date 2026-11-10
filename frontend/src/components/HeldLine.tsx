@@ -23,8 +23,10 @@ export const HeldLine: React.FC<HeldLineProps> = ({ text, onTryAgain }) => {
   };
   return (
     <div data-held-line="" className="mt-1.5 flex max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1 text-right text-[12.5px] text-zinc-300">
-      <Clock size={13} className="shrink-0 text-zinc-400" aria-hidden="true" />
-      <span className="min-w-0" role="status">{text}</span>
+      <span className="min-w-0" role="status">
+        <Clock size={13} className="mr-1.5 inline-block -mt-0.5 align-middle text-zinc-400" aria-hidden="true" />
+        {text}
+      </span>
       {onTryAgain && (
         <button
           type="button"
