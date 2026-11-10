@@ -487,8 +487,8 @@ pub struct CleanCopy {
     pub files: usize,
     /// The paths the run changed (from its `before_run` to its `after_run`).
     pub changed: Vec<String>,
-    /// What the copy is missing, in plain words (skipped by the snapshot, blob gone).
-    pub missing: Vec<String>,
+    /// What the copy is missing, as (path, why) in plain words (skipped by the snapshot, blob gone).
+    pub missing: Vec<(String, String)>,
     pub after_run_id: String,
     /// The run's window: its `before_run` (or `after_run` when there is none) and its `after_run`.
     pub from: chrono::DateTime<chrono::Utc>,
@@ -532,15 +532,15 @@ pub async fn materialize_run(state: &AppState, task_id: &str, dest: &FsPath) -> 
         if let Some(b) = &before_m {
             skipped.extend(b.skipped.iter().map(|s| s.path.clone()));
         }
-        let mut missing: Vec<String> = skipped.iter().take(MAX_MISSING_LISTED).map(|p| format!("{p} (not in the snapshot)")).collect();
+        let mut missing: Vec<(String, String)> = skipped.iter().take(MAX_MISSING_LISTED).map(|p| (p.clone(), "not in the snapshot (too large or unreadable)".to_string())).collect();
         if skipped.len() > MAX_MISSING_LISTED {
-            missing.push(format!("{} more paths not in the snapshot", skipped.len() - MAX_MISSING_LISTED));
+            missing.push((format!("{} more paths", skipped.len() - MAX_MISSING_LISTED), "not in the snapshot".to_string()));
         }
         private_dir(&dest).map_err(|e| e.to_string())?;
         let mut n = 0;
         for e in files.values() {
             if !safe_rel(&e.path) {
-                missing.push(format!("{} (unsafe path, left out)", e.path));
+                missing.push((e.path.clone(), "an unsafe path, left out of the copy".to_string()));
                 continue;
             }
             let to = dest.join(&e.path);
@@ -551,7 +551,7 @@ pub async fn materialize_run(state: &AppState, task_id: &str, dest: &FsPath) -> 
                 let _ = crate::fsx::set_mode(&to, (e.mode & 0o700) | 0o600);
                 n += 1;
             } else {
-                missing.push(format!("{} (its stored copy is gone)", e.path));
+                missing.push((e.path.clone(), "its stored copy is gone".to_string()));
             }
         }
         let from = before.as_ref().map_or(after.created_at, |b| b.created_at);

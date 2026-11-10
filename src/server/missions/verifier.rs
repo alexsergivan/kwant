@@ -52,7 +52,20 @@ const MUTATE_MAX_BYTES: u64 = 512 * 1024;
 pub const STEPS: [&str; 6] = ["contract", "reproduce", "mutation", "attack", "scope", "open_issues"];
 /// Tools a bot can't use on a task while it verifies that task.
 pub const HELD_TOOLS: [&str; 6] = ["task_claim", "task_update", "task_attach_evidence", "task_request_check", "task_review", "task_contract"];
-pub const NOT_RUN: &str = "model steps not run";
+pub const NOT_RUN: &str = "model steps";
+/// The `why` for a plain string the model put in `couldnt_verify` (contract §9.2).
+pub const MODEL_SAID: &str = "the verifier said it couldn't check this";
+
+/// One thing the verifier didn't check, and why (contract §9.2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Unverified {
+    pub what: String,
+    pub why: String,
+}
+
+pub fn nv(what: impl Into<String>, why: impl Into<String>) -> Unverified {
+    Unverified { what: what.into(), why: why.into() }
+}
 
 /// One verification runs at a time, server-wide.
 static ONE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
@@ -402,7 +415,7 @@ pub fn parse_report(args: &Value) -> Result<Report, String> {
 
 /// Applies a bot's report to the steps and findings (steps 4 and 6). An edge case that failed is a
 /// medium finding (a repro is required, so the person can run it); a high model finding fails.
-pub fn apply_report(r: &Report, open_issue_ids: &[String], steps: &mut Vec<Step>, findings: &mut Vec<Finding>, couldnt: &mut Vec<String>) {
+pub fn apply_report(r: &Report, open_issue_ids: &[String], steps: &mut Vec<Step>, findings: &mut Vec<Finding>, couldnt: &mut Vec<Unverified>) {
     let failed = r.edge_cases.iter().filter(|e| e.1 == "failed").count();
     let cr = r.edge_cases.iter().filter(|e| e.1 == "couldnt_run").count();
     for (text, _, repro) in r.edge_cases.iter().filter(|e| e.1 == "failed") {
@@ -430,7 +443,7 @@ pub fn apply_report(r: &Report, open_issue_ids: &[String], steps: &mut Vec<Step>
                     find(findings, "open_issues", "medium", format!("Open issue {id} judged {j}: {why}"), format!("contract open_issues {id}"));
                 }
             }
-            None => couldnt.push(format!("open issue {id} not judged")),
+            None => couldnt.push(nv(format!("open issue {id}"), "the verifier didn't judge it")),
         }
     }
     let status = if open_issue_ids.is_empty() {
@@ -444,9 +457,9 @@ pub fn apply_report(r: &Report, open_issue_ids: &[String], steps: &mut Vec<Step>
     };
     steps.push(step("open_issues", status, format!("{judged} of {} judged, {bad} risky or blocking", open_issue_ids.len())));
     if r.dropped > 0 {
-        couldnt.push(format!("{} reported item(s) dropped: no repro or a bad value", r.dropped));
+        couldnt.push(nv(format!("{} reported item(s)", r.dropped), "dropped: no repro or a bad value"));
     }
-    couldnt.extend(r.couldnt_verify.iter().map(|c| format!("verifier: {c}")));
+    couldnt.extend(r.couldnt_verify.iter().map(|c| nv(c.clone(), MODEL_SAID)));
 }
 
 /// Whether a check is a verifier hold.
@@ -635,7 +648,7 @@ pub async fn resume_after_restart(state: &AppState) {
             risk_reasons: json!([]),
             steps: json!([]),
             findings: json!([]),
-            couldnt_verify: json!(["kwnt restarted while the verifier ran"]),
+            couldnt_verify: json!([nv("the whole verification", "kwnt restarted while the verifier ran")]),
             difference: "none".into(),
             check_id: Some(check_id.clone()),
             next: "held_for_you".into(),
@@ -643,7 +656,7 @@ pub async fn resume_after_restart(state: &AppState) {
             ..Default::default()
         };
         if let Ok(saved) = state.db.add_verdict(&v).await {
-            event(state, &task_id, "verifier_done", json!({"verdict_id": saved.id, "verdict": "needs_you", "next": "held_for_you", "findings": 0, "couldnt_verify": 1})).await;
+            event(state, &task_id, "verifier_done", json!({"verdict_id": saved.id, "verdict": "needs_you", "next": "held_for_you", "findings": 0, "couldnt_verify": saved.couldnt_verify})).await;
         }
     }
 }
@@ -686,17 +699,22 @@ async fn drive(state: &AppState, task: &Task, check_id: &str) {
 }
 
 /// A verification's result before it is saved.
+#[derive(Default)]
 struct Outcome {
     verdict: &'static str,
     tier: &'static str,
     reasons: Vec<String>,
     steps: Vec<Step>,
     findings: Vec<Finding>,
-    couldnt: Vec<String>,
+    couldnt: Vec<Unverified>,
     model: Option<String>,
     author_model: Option<String>,
     difference: &'static str,
     bot: Option<String>,
+    /// §9.4 columns: criteria and scope status at verdict time, and the after_run checkpoint judged.
+    criteria: Value,
+    scope: Value,
+    after_run: Option<String>,
 }
 
 async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::Path) -> Option<Outcome> {
@@ -708,6 +726,8 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
     let mut steps = Vec::new();
     let mut findings = Vec::new();
     let mut couldnt = Vec::new();
+    let criteria = stored.as_ref().map_or(json!([]), |c| contract::criteria_status(c, &ev));
+    let mnc = stored.as_ref().map(|c| c.must_not_change.clone()).unwrap_or_default();
     event(state, &task.id, "verifier_started", json!({"check_id": check_id, "round": round, "risk_tier": tier})).await;
 
     // 1 Contract
@@ -723,7 +743,8 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
                 steps.push(step("contract", "failed", missing.join("; ")));
                 find(&mut findings, "contract", "high", format!("The contract isn't complete: {}", missing.join("; ")), format!("GET /api/tasks/{} contract.missing", task.id));
                 // An incomplete contract bounces at once
-                return Some(Outcome { verdict: "fail", tier, reasons, steps, findings, couldnt, model: None, author_model: None, difference: "none", bot: None });
+                let scope = contract::scope_status(&mnc, None);
+                return Some(Outcome { verdict: "fail", tier, reasons, steps, findings, couldnt, difference: "none", criteria, scope, ..Default::default() });
             }
         }
         None => steps.push(step("contract", "skipped", "no stored contract")),
@@ -733,12 +754,14 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
     let copy = match super::checkpoints::materialize_run(state, &task.id, dir).await {
         Ok(c) => c,
         Err(e) => {
-            couldnt.push(format!("clean copy: {e}"));
+            couldnt.push(nv("a clean copy of the run", e));
             None
         }
     };
+    let after_run = copy.as_ref().map(|c| c.after_run_id.clone());
+    let scope = contract::scope_status(&mnc, copy.as_ref().map(|c| c.changed.as_slice()));
     if let Some(c) = &copy {
-        couldnt.extend(c.missing.iter().cloned());
+        couldnt.extend(c.missing.iter().map(|(what, why)| nv(what.clone(), why.clone())));
     }
     let folder = super::task_folder(state, task).await;
     let refused = match folder.as_deref() {
@@ -755,13 +778,13 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
             for c in &checks {
                 if let Err(why) = reproducible(task, c) {
                     if c.required && KWANT_CHECK_KINDS.contains(&c.kind.as_str()) && why != "doesn't count" {
-                        couldnt.push(format!("{} check {}: {why}", c.kind, c.id));
+                        couldnt.push(nv(format!("{} check {}", c.kind, c.id), why));
                     }
                     continue;
                 }
                 if c.kind == "command" {
                     if let Some(why) = &refused {
-                        couldnt.push(format!("command check {}: {why}", c.id));
+                        couldnt.push(nv(format!("command check {}", c.id), why.clone()));
                         continue;
                     }
                     commands.push(c.clone());
@@ -792,7 +815,7 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
     }
     if tier == "low" {
         let verdict = decide(tier, &steps, &findings, reproduced_pass);
-        return Some(Outcome { verdict, tier, reasons, steps, findings, couldnt, model: None, author_model: None, difference: "none", bot: None });
+        return Some(Outcome { verdict, tier, reasons, steps, findings, couldnt, difference: "none", criteria, scope, after_run, ..Default::default() });
     }
 
     // 3 Mutation probe
@@ -800,7 +823,7 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
     if plan.contains(&"mutation") {
         if commands.is_empty() || copy.is_none() {
             steps.push(step("mutation", "couldnt_run", "no approved command check to run against mutants"));
-            couldnt.push("mutation probe: no approved command check".into());
+            couldnt.push(nv("the mutation probe", "no approved command check to run against mutants"));
         } else {
             match tokio::time::timeout(PROBE_BUDGET, probe(dir, &changed, &commands)).await {
                 Ok((tried, survived)) if tried > 0 => {
@@ -811,18 +834,17 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
                 }
                 Ok(_) => {
                     steps.push(step("mutation", "couldnt_run", "no line in the changed files to mutate"));
-                    couldnt.push("mutation probe: nothing to mutate".into());
+                    couldnt.push(nv("the mutation probe", "no line in the changed files to mutate"));
                 }
                 Err(_) => {
                     steps.push(step("mutation", "couldnt_run", "stopped after 15 minutes"));
-                    couldnt.push("mutation probe: stopped after 15 minutes".into());
+                    couldnt.push(nv("the mutation probe", "stopped after 15 minutes"));
                 }
             }
         }
     }
 
     // 5 Scope (kwant's part: path entries)
-    let mnc = stored.as_ref().map(|c| c.must_not_change.clone()).unwrap_or_default();
     if mnc.iter().any(|m| contract::path_like(m)) && copy.is_some() {
         let hits = contract::scope_violations(&mnc, &changed);
         for (entry, path) in &hits {
@@ -845,15 +867,15 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
         Err((why, author_model, difference)) => {
             steps.push(step("attack", "couldnt_run", why.clone()));
             steps.push(step("open_issues", if issues.is_empty() { "skipped" } else { "couldnt_run" }, why.clone()));
-            couldnt.push(format!("{NOT_RUN}: {why}"));
+            couldnt.push(nv(NOT_RUN, why.clone()));
             (None, author_model, difference, None)
         }
     };
     if difference == "none" {
-        couldnt.push("same model as the author".into());
+        couldnt.push(nv("a second model's view", "the verifier ran on the author's model"));
     }
     let verdict = decide(tier, &steps, &findings, reproduced_pass);
-    Some(Outcome { verdict, tier, reasons, steps, findings, couldnt, model, author_model, difference, bot })
+    Some(Outcome { verdict, tier, reasons, steps, findings, couldnt, model, author_model, difference, bot, criteria, scope, after_run })
 }
 
 fn first_line(s: &str) -> String {
@@ -1038,6 +1060,9 @@ async fn settle(state: &AppState, task: &Task, check_id: &str, o: Outcome) {
         check_id: Some(check_id.into()),
         next: next.into(),
         summary: summary.clone(),
+        criteria_status: o.criteria,
+        after_run_checkpoint_id: o.after_run,
+        scope_status: o.scope,
     };
     let saved = match state.db.add_verdict(&v).await {
         Ok(s) => s,
@@ -1046,7 +1071,7 @@ async fn settle(state: &AppState, task: &Task, check_id: &str, o: Outcome) {
             return;
         }
     };
-    event(state, &task.id, "verifier_done", json!({"verdict_id": saved.id, "verdict": o.verdict, "next": next, "findings": o.findings.len(), "couldnt_verify": o.couldnt.len()})).await;
+    event(state, &task.id, "verifier_done", json!({"verdict_id": saved.id, "verdict": o.verdict, "next": next, "findings": o.findings.len(), "couldnt_verify": o.couldnt})).await;
     match next {
         "counted" => {
             let by = o.bot.as_deref().unwrap_or("kwant");
@@ -1066,7 +1091,7 @@ async fn settle(state: &AppState, task: &Task, check_id: &str, o: Outcome) {
 }
 
 /// The one-line verdict, with its findings for the owner on a send-back.
-pub fn summary(verdict: &str, findings: &[Finding], couldnt: &[String], difference: &str) -> String {
+pub fn summary(verdict: &str, findings: &[Finding], couldnt: &[Unverified], difference: &str) -> String {
     let head = match verdict {
         "pass" => "Verifier: pass.".to_string(),
         "fail" => "Verifier: fail.".to_string(),
@@ -1077,7 +1102,7 @@ pub fn summary(verdict: &str, findings: &[Finding], couldnt: &[String], differen
         out.push(format!("- {} ({}, {}): {} Repro: {}", f.id, f.severity, f.step, f.text, f.repro));
     }
     if !couldnt.is_empty() {
-        out.push(format!("Couldn't verify: {}", couldnt.iter().take(5).cloned().collect::<Vec<_>>().join("; ")));
+        out.push(format!("Couldn't verify: {}", couldnt.iter().take(5).map(|u| format!("{} ({})", u.what, u.why)).collect::<Vec<_>>().join("; ")));
     }
     if difference == "tier" {
         out.push("Ran on a different tier of the author's engine, not another model.".into());
@@ -1304,19 +1329,20 @@ mod tests {
         apply_report(&r, &["o1".into(), "o2".into()], &mut steps, &mut findings, &mut couldnt);
         assert_eq!(steps.iter().map(|s| (s.step.as_str(), s.status.as_str())).collect::<Vec<_>>(), [("attack", "needs_you"), ("open_issues", "needs_you")]);
         assert_eq!(findings.iter().map(|f| f.severity.as_str()).collect::<Vec<_>>(), ["medium", "high", "medium"]);
-        assert!(couldnt.iter().any(|c| c == "open issue o2 not judged"));
-        assert!(couldnt.iter().any(|c| c.contains("3 reported item(s) dropped")));
-        assert!(couldnt.iter().any(|c| c == "verifier: the phone layout"));
+        assert!(couldnt.contains(&nv("open issue o2", "the verifier didn't judge it")));
+        assert!(couldnt.contains(&nv("3 reported item(s)", "dropped: no repro or a bad value")));
+        assert!(couldnt.contains(&nv("the phone layout", MODEL_SAID)));
+        assert_eq!(serde_json::to_value(&couldnt[0]).unwrap(), json!({"what": "open issue o2", "why": "the verifier didn't judge it"}));
         assert_eq!(decide("high", &steps, &findings, true), "fail");
     }
 
     #[test]
     fn the_summary_lists_findings_with_repros() {
-        let s = summary("fail", &[f("high"), f("low")], &["x".into()], "tier");
+        let s = summary("fail", &[f("high"), f("low")], &[nv("x", "y")], "tier");
         assert!(s.starts_with("Verifier: fail."));
         assert!(s.contains("f1 (high, reproduce): t Repro: r"));
         assert_eq!(s.matches("Repro").count(), 1, "low findings stay out of the note");
-        assert!(s.contains("Couldn't verify: x"));
+        assert!(s.contains("Couldn't verify: x (y)"));
         assert!(s.contains("different tier"));
     }
 }

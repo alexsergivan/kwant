@@ -45,6 +45,9 @@ struct VerdictRow {
     overturned_at: Option<DateTime<Utc>>,
     overturned_to: Option<String>,
     overturned_note: Option<String>,
+    criteria_status: String,
+    after_run_checkpoint_id: Option<String>,
+    scope_status: String,
 }
 
 /// One verdict, as the API and the inbox read it (contract §2.1): JSON columns are parsed.
@@ -73,6 +76,21 @@ pub struct TaskVerdict {
     pub overturned_at: Option<DateTime<Utc>>,
     pub overturned_to: Option<String>,
     pub overturned_note: Option<String>,
+    /// `[{id, status, claim}]` for every criterion at verdict time; `[]` without a contract (§9.4).
+    pub criteria_status: Value,
+    /// The `after_run` checkpoint the verdict judged, if there was one (§9.4).
+    pub after_run_checkpoint_id: Option<String>,
+    /// `[{entry, status}]` for each must_not_change entry (§9.10).
+    pub scope_status: Value,
+}
+
+/// A JSON column's text; `Value::Null` (a `Default` NewVerdict) is stored as `[]`.
+fn json_or_empty(v: &Value) -> String {
+    if v.is_null() {
+        "[]".into()
+    } else {
+        v.to_string()
+    }
 }
 
 fn parsed(s: &str) -> Value {
@@ -86,6 +104,9 @@ impl From<VerdictRow> for TaskVerdict {
             steps: parsed(&r.steps),
             findings: parsed(&r.findings),
             couldnt_verify: parsed(&r.couldnt_verify),
+            criteria_status: parsed(&r.criteria_status),
+            scope_status: parsed(&r.scope_status),
+            after_run_checkpoint_id: r.after_run_checkpoint_id,
             id: r.id,
             task_id: r.task_id,
             attempt: r.attempt,
@@ -130,6 +151,9 @@ pub struct NewVerdict {
     pub check_id: Option<String>,
     pub next: String,
     pub summary: String,
+    pub criteria_status: Value,
+    pub after_run_checkpoint_id: Option<String>,
+    pub scope_status: Value,
 }
 
 /// How often the person overturned the verifier (contract §6).
@@ -178,7 +202,10 @@ impl Database {
                 created_at TIMESTAMP NOT NULL,
                 overturned_at TIMESTAMP,
                 overturned_to TEXT CHECK (overturned_to IS NULL OR overturned_to IN ('verified', 'sent_back', 'rolled_back')),
-                overturned_note TEXT
+                overturned_note TEXT,
+                criteria_status TEXT NOT NULL DEFAULT '[]',
+                after_run_checkpoint_id TEXT,
+                scope_status TEXT NOT NULL DEFAULT '[]'
             )",
             "CREATE INDEX IF NOT EXISTS task_verdicts_task ON task_verdicts (task_id, created_at)",
             "CREATE INDEX IF NOT EXISTS task_verdicts_created ON task_verdicts (created_at)",
@@ -190,6 +217,17 @@ impl Database {
              BEGIN SELECT RAISE(ABORT, 'verdicts are append-only'); END",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
+        }
+        // §9.4: added after the table first shipped to test builds, so add them where missing
+        for (col, ddl) in [
+            ("criteria_status", "ALTER TABLE task_verdicts ADD COLUMN criteria_status TEXT NOT NULL DEFAULT '[]'"),
+            ("after_run_checkpoint_id", "ALTER TABLE task_verdicts ADD COLUMN after_run_checkpoint_id TEXT"),
+            ("scope_status", "ALTER TABLE task_verdicts ADD COLUMN scope_status TEXT NOT NULL DEFAULT '[]'"),
+        ] {
+            let has: Option<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('task_verdicts') WHERE name = ?").bind(col).fetch_optional(&self.pool).await?;
+            if has.is_none() {
+                sqlx::query(ddl).execute(&self.pool).await?;
+            }
         }
         Ok(())
     }
@@ -230,8 +268,9 @@ impl Database {
     pub async fn add_verdict(&self, v: &NewVerdict) -> Result<TaskVerdict, DbError> {
         let row = sqlx::query_as::<_, VerdictRow>(
             "INSERT INTO task_verdicts (id, task_id, attempt, round, verdict, confidence, risk_tier, risk_reasons, steps, findings, \
-             couldnt_verify, model, author_model, model_differs, difference, verifier_kwant_id, check_id, next, summary, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+             couldnt_verify, model, author_model, model_differs, difference, verifier_kwant_id, check_id, next, summary, created_at, \
+             criteria_status, after_run_checkpoint_id, scope_status) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(&v.task_id)
@@ -253,6 +292,9 @@ impl Database {
         .bind(&v.next)
         .bind(&v.summary)
         .bind(Utc::now())
+        .bind(json_or_empty(&v.criteria_status))
+        .bind(&v.after_run_checkpoint_id)
+        .bind(json_or_empty(&v.scope_status))
         .fetch_one(&self.pool)
         .await?;
         Ok(row.into())
@@ -509,5 +551,29 @@ mod tests {
         assert_eq!((c.updated_by.as_str(), c.body.contains("c1")), ("k1", true));
         let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM task_events WHERE task_id = ? AND kind = 'contract_updated'").bind(&t).fetch_one(&db.pool).await.unwrap();
         assert_eq!(n, 2);
+    }
+
+    #[tokio::test]
+    async fn verdicts_keep_criteria_scope_and_the_judged_checkpoint() {
+        let (_tmp, db) = db().await;
+        let t = a_task(&db).await;
+        let plain = db.add_verdict(&NewVerdict { criteria_status: Value::Null, scope_status: Value::Null, ..new(&t, "pass") }).await.unwrap();
+        assert_eq!((plain.criteria_status.clone(), plain.scope_status.clone(), plain.after_run_checkpoint_id.clone()), (json!([]), json!([]), None));
+        let v = NewVerdict {
+            criteria_status: json!([{"id": "c1", "status": "met", "claim": true}]),
+            scope_status: json!([{"entry": "docs/", "status": "met"}]),
+            after_run_checkpoint_id: Some("cp1".into()),
+            ..new(&t, "fail")
+        };
+        let saved = db.add_verdict(&v).await.unwrap();
+        let back = db.latest_verdict(&t).await.unwrap().unwrap();
+        assert_eq!(back, saved);
+        assert_eq!(back.criteria_status[0]["claim"], true);
+        assert_eq!(back.scope_status[0]["entry"], "docs/");
+        assert_eq!(back.after_run_checkpoint_id.as_deref(), Some("cp1"));
+        let j = serde_json::to_value(&back).unwrap();
+        assert!(j.get("criteria_status").is_some() && j.get("after_run_checkpoint_id").is_some() && j.get("scope_status").is_some());
+        // Migrating again is a no-op
+        db.migrate_verifier().await.unwrap();
     }
 }

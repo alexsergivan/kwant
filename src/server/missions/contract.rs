@@ -28,6 +28,14 @@ pub struct Criterion {
     pub evidence: Vec<String>,
     /// `lead`, `owner`, `person` or `acceptance`.
     pub by: String,
+    /// 1 plus the number of verdicts on the task when it was added; set once, by kwant (§9.3).
+    /// Criteria stored before this field read as round 1.
+    #[serde(default = "round_one")]
+    pub round_added: i64,
+}
+
+fn round_one() -> i64 {
+    1
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -82,7 +90,7 @@ pub fn from_acceptance(acceptance: &str) -> Vec<Criterion> {
         .filter(|l| !l.is_empty())
         .take(MAX_FROM_ACCEPTANCE)
         .enumerate()
-        .map(|(i, l)| Criterion { id: format!("c{}", i + 1), text: clip(l), status: "not_checked".into(), evidence: Vec::new(), by: "acceptance".into() })
+        .map(|(i, l)| Criterion { id: format!("c{}", i + 1), text: clip(l), status: "not_checked".into(), evidence: Vec::new(), by: "acceptance".into(), round_added: 1 })
         .collect()
 }
 
@@ -118,7 +126,13 @@ fn strings(v: &Value, what: &str, max: usize, max_chars: usize) -> Result<Option
 /// Applies a write (the tool's or the route's body) as `role`. `evidence_on_task` are the task's
 /// evidence ids. The owner may add, and set status and evidence; anything else it tries is
 /// refused with the item it was about, and nothing changes.
-pub fn apply(mut c: Contract, body: &Value, role: Role, evidence_on_task: &[String]) -> Result<(Contract, Vec<&'static str>), String> {
+pub fn apply(c: Contract, body: &Value, role: Role, evidence_on_task: &[String]) -> Result<(Contract, Vec<&'static str>), String> {
+    apply_in_round(c, body, role, evidence_on_task, 1)
+}
+
+/// [`apply`] when the task is in verifier round `round` (1 + its verdicts): new criteria get it as
+/// `round_added`, and nothing in the body can change it.
+pub fn apply_in_round(mut c: Contract, body: &Value, role: Role, evidence_on_task: &[String], round: i64) -> Result<(Contract, Vec<&'static str>), String> {
     let mut fields = Vec::new();
     let owner = role == Role::Owner;
     if let Some(list) = strings(&body["must_not_change"], "must_not_change", MAX_ITEMS, MAX_TEXT)? {
@@ -143,7 +157,7 @@ pub fn apply(mut c: Contract, body: &Value, role: Role, evidence_on_task: &[Stri
     if !body["criteria"].is_null() {
         let items = body["criteria"].as_array().ok_or("criteria must be a list")?;
         for it in items {
-            criterion(&mut c, it, role, evidence_on_task)?;
+            criterion(&mut c, it, role, evidence_on_task, round)?;
         }
         if c.criteria.len() > MAX_ITEMS {
             return Err(format!("at most {MAX_ITEMS} criteria"));
@@ -166,7 +180,7 @@ pub fn apply(mut c: Contract, body: &Value, role: Role, evidence_on_task: &[Stri
     Ok((c, fields))
 }
 
-fn criterion(c: &mut Contract, it: &Value, role: Role, evidence_on_task: &[String]) -> Result<(), String> {
+fn criterion(c: &mut Contract, it: &Value, role: Role, evidence_on_task: &[String], round: i64) -> Result<(), String> {
     let id = it["id"].as_str().map(str::trim).filter(|s| !s.is_empty());
     let text = it["text"].as_str().map(clip).filter(|s| !s.is_empty());
     let status = it["status"].as_str().map(str::trim);
@@ -210,7 +224,7 @@ fn criterion(c: &mut Contract, it: &Value, role: Role, evidence_on_task: &[Strin
             let Some(text) = text else { return Err("A new criterion needs text.".into()) };
             let used: Vec<&str> = c.criteria.iter().map(|x| x.id.as_str()).collect();
             let id = next_id('c', &used);
-            c.criteria.push(Criterion { id, text, status: status.unwrap_or("not_checked").into(), evidence: evidence.unwrap_or_default(), by: role.as_str().into() });
+            c.criteria.push(Criterion { id, text, status: status.unwrap_or("not_checked").into(), evidence: evidence.unwrap_or_default(), by: role.as_str().into(), round_added: round.max(1) });
         }
     }
     Ok(())
@@ -280,7 +294,7 @@ pub fn view(c: &Contract, evidence_on_task: &[String], updated_by: &str, updated
     let criteria: Vec<Value> = c
         .criteria
         .iter()
-        .map(|k| json!({"id": k.id, "text": k.text, "status": k.status, "evidence": k.evidence, "by": k.by, "claim": is_claim(k, evidence_on_task)}))
+        .map(|k| json!({"id": k.id, "text": k.text, "status": k.status, "evidence": k.evidence, "by": k.by, "round_added": k.round_added, "claim": is_claim(k, evidence_on_task)}))
         .collect();
     json!({
         "must_not_change": c.must_not_change,
@@ -351,6 +365,35 @@ pub fn scope_violations(must_not_change: &[String], changed: &[String]) -> Vec<(
     out
 }
 
+/// `[{id, status, claim}]` for every criterion, as a verdict stores it (contract §9.4).
+pub fn criteria_status(c: &Contract, evidence_on_task: &[String]) -> Value {
+    Value::Array(c.criteria.iter().map(|k| json!({"id": k.id, "status": k.status, "claim": is_claim(k, evidence_on_task)})).collect())
+}
+
+/// `[{entry, status}]` for each must_not_change entry (contract §9.10): a path entry is `met` or
+/// `not_met` against the run's changed paths when there are some to compare (`changed` is
+/// `Some`); everything else is `not_checked`, since only the person can judge behaviour.
+pub fn scope_status(must_not_change: &[String], changed: Option<&[String]>) -> Value {
+    Value::Array(
+        must_not_change
+            .iter()
+            .map(|m| {
+                let status = match changed {
+                    Some(ch) if path_like(m) => {
+                        if scope_violations(std::slice::from_ref(m), ch).is_empty() {
+                            "met"
+                        } else {
+                            "not_met"
+                        }
+                    }
+                    _ => "not_checked",
+                };
+                json!({"entry": m, "status": status})
+            })
+            .collect(),
+    )
+}
+
 // Loading and saving
 
 /// The task's stored contract, if any.
@@ -391,7 +434,8 @@ pub async fn write(state: &AppState, task: &Task, body: &Value, role: Role, by: 
         Some((c, _, _)) => c,
         None => Contract { criteria: from_acceptance(&task.acceptance), ..Default::default() },
     };
-    let (next, fields) = apply(current, body, role, &ev)?;
+    let round = state.db.verdicts_of(&task.id).await.map(|v| v.len() as i64).unwrap_or(0) + 1;
+    let (next, fields) = apply_in_round(current, body, role, &ev, round)?;
     let event = json!({"by": role.as_str(), "fields": fields, "criteria": next.criteria.len(), "must_not_change": next.must_not_change.len()});
     let body = serde_json::to_value(&next).map_err(|e| e.to_string())?;
     let row = state.db.put_contract(&task.id, &body, by, &event).await.map_err(|e| e.to_string())?;
@@ -552,5 +596,29 @@ mod tests {
         let changed = vec!["src/db/missions.rs".to_string(), "docs/a.md".into(), "src/db/missions.rs.bak".into(), "src/x.rs".into()];
         let v = scope_violations(&mnc, &changed);
         assert_eq!(v, [("src/db/missions.rs".to_string(), "src/db/missions.rs".to_string()), ("docs/".into(), "docs/a.md".into())]);
+    }
+
+    #[test]
+    fn round_added_is_set_once_by_kwant() {
+        let c = lead_contract();
+        assert!(c.criteria.iter().all(|k| k.round_added == 1));
+        let (c, _) = apply_in_round(c, &json!({"criteria": [{"text": "the send-back note"}, {"id": "c1", "status": "met", "evidence": ["e1"], "round_added": 7}]}), Role::Person, &ev(), 2).unwrap();
+        assert_eq!(c.criteria.iter().map(|k| k.round_added).collect::<Vec<_>>(), [1, 1, 2], "a write can't change it; new ones get the round");
+        let old: Criterion = serde_json::from_value(json!({"id": "c1", "text": "t", "status": "met", "by": "lead"})).unwrap();
+        assert_eq!(old.round_added, 1, "criteria stored before the field read as round 1");
+        assert_eq!(view(&c, &ev(), "lead", chrono::Utc::now())["criteria"][2]["round_added"], 2);
+    }
+
+    #[test]
+    fn verdicts_record_criteria_and_scope_status() {
+        let (c, _) = apply(lead_contract(), &json!({"criteria": [{"id": "c1", "status": "met"}, {"id": "c2", "status": "met", "evidence": ["e2"]}]}), Role::Owner, &ev()).unwrap();
+        assert_eq!(criteria_status(&c, &ev()), json!([{"id": "c1", "status": "met", "claim": true}, {"id": "c2", "status": "met", "claim": false}]));
+        let mnc = vec!["src/db/missions.rs".to_string(), "docs/".to_string(), "the login flow".to_string()];
+        let changed = vec!["docs/a.md".to_string(), "src/x.rs".to_string()];
+        assert_eq!(
+            scope_status(&mnc, Some(&changed)),
+            json!([{"entry": "src/db/missions.rs", "status": "met"}, {"entry": "docs/", "status": "not_met"}, {"entry": "the login flow", "status": "not_checked"}])
+        );
+        assert!(scope_status(&mnc, None).as_array().unwrap().iter().all(|e| e["status"] == "not_checked"));
     }
 }
