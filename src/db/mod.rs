@@ -455,6 +455,23 @@ impl Database {
                 .execute(&mut *tx)
                 .await?;
         }
+        if existing.preferred_model != input.preferred_model {
+            // 0.9.0 (contract §5.2): a new model starts a new scorecard window; the old tasks stay
+            let (tier,): (String,) = sqlx::query_as(
+                "SELECT COALESCE((SELECT tier FROM capability_policies WHERE kwant_id = ? AND task_class = '*' AND revoked_at IS NULL LIMIT 1), 'act')",
+            )
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await?;
+            let detail = serde_json::json!({"from_model": existing.preferred_model, "to_model": input.preferred_model});
+            sqlx::query("INSERT INTO capability_events (kwant_id, task_class, kind, tier, actor, detail, created_at) VALUES (?, '*', 'scorecard_reset', ?, 'person', ?, ?)")
+                .bind(id)
+                .bind(&tier)
+                .bind(detail.to_string())
+                .bind(chrono::Utc::now().to_rfc3339())
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         self.get_kwant(id).await
     }

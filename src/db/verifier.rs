@@ -477,7 +477,7 @@ mod tests {
             state: "backlog".into(),
             priority: 1,
             max_attempts: 3,
-            source_kind: "manual".into(),
+            source_kind: "person".into(),
             created_by: "person".into(),
             ..Default::default()
         };
@@ -499,6 +499,40 @@ mod tests {
             next: "counted".into(),
             ..Default::default()
         }
+    }
+
+    /// Contract §5.2: a model change writes one `scorecard_reset` (tier `act` with no policy row,
+    /// the live `*` tier with one); saving the same model writes none.
+    #[tokio::test]
+    async fn a_model_change_resets_the_scorecard_once() {
+        let (_t, db) = db().await;
+        let bot = db.list_kwants(&crate::db::spaces::SpaceId::default_space()).await.unwrap()[0].clone();
+        let edit = |model: &str| crate::db::models::UpdateKwant {
+            name: bot.name.clone(),
+            title: bot.title.clone(),
+            persona_prompt: bot.persona_prompt.clone(),
+            soul: bot.soul.clone(),
+            avatar_sprite: bot.avatar_sprite.clone(),
+            preferred_model: model.into(),
+        };
+        assert_eq!(db.last_scorecard_reset(&bot.id).await.unwrap(), None);
+        db.update_kwant(&bot.id, &edit(&bot.preferred_model)).await.unwrap();
+        assert_eq!(db.last_scorecard_reset(&bot.id).await.unwrap(), None, "same model: no reset");
+        db.update_kwant(&bot.id, &edit("claude:opus")).await.unwrap();
+        assert!(db.last_scorecard_reset(&bot.id).await.unwrap().is_some());
+        db.set_policy(&bot.id, "*", "sandbox", "granted", None).await.unwrap();
+        db.update_kwant(&bot.id, &edit("codex")).await.unwrap();
+        let rows: Vec<(String, String, String, String)> =
+            sqlx::query_as("SELECT task_class, tier, actor, detail FROM capability_events WHERE kwant_id = ? AND kind = 'scorecard_reset' ORDER BY id")
+                .bind(&bot.id)
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!((rows[0].0.as_str(), rows[0].1.as_str(), rows[0].2.as_str()), ("*", "act", "person"));
+        assert_eq!(rows[1].1, "sandbox");
+        let d: Value = serde_json::from_str(&rows[1].3).unwrap();
+        assert_eq!((d["from_model"].as_str(), d["to_model"].as_str()), (Some("claude:opus"), Some("codex")));
     }
 
     #[tokio::test]
