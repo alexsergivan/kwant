@@ -987,3 +987,11 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
 [data-whats-new-all] ul > li:not([hidden]) + li:not([hidden]) { margin-top: 8px; }
 [data-whats-new-all] li::marker { color: #5a5383; }
 [data-whats-new-all] strong { color: #ecebfa; }
+
+/* 0.8.1 F3: the card a team chat's pointer line lands on gets a 1.2 s ring (opacity only), so the eye finds it. */
+.kw-prepush-flash::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; display: none; }
+@keyframes kw-prepush-flash { 0% { opacity: 0; } 13.3% { opacity: 1; } 86.7% { opacity: 1; } 100% { opacity: 0; } }
+/* Off by default; on only when motion is allowed, so reduced motion never sees it. */
+@media (prefers-reduced-motion: no-preference) {
+  .kw-prepush-flash::after { display: block; box-shadow: 0 0 0 2px rgb(167 139 250 / 0.6); opacity: 0; animation: kw-prepush-flash 1.2s linear 1 both; }
+}

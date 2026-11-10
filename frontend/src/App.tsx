@@ -152,6 +152,8 @@ import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { DEV_TICKET_EVENT, DEV_TICKET_PROGRESS_EVENT } from './components/dev/TicketsTab';
 import { PrepushNeedsYou, PrepushThread, threadCards, usePrepushCards, type PrepushEventDetail } from './components/dev/PrepushThread';
+import { PrepushPointers } from './components/dev/PrepushPointers';
+import { ModernAvatar } from './components/ModernAvatar';
 import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
@@ -1887,7 +1889,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     playSfx('click');
   };
 
+  // 0.8.1 F3: where phone Back returns after a team chat's pointer line opened a 1:1. Any other
+  // chat open clears it (openPrepushFromTeam sets it after its own open), so it never goes stale.
+  const prepushReturnRef = useRef<{ channel: string; kwant: string } | null>(null);
+
   const handleSelectChannel = (channel: Channel) => {
+    prepushReturnRef.current = null;
     setOpenThreadId(null);
     setPage('chat');
     setPhoneView('chat');
@@ -1902,6 +1909,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   const handleSelectKwant = (kwant: Kwant) => {
+    prepushReturnRef.current = null;
     setOpenThreadId(null);
     setPage('chat');
     setPhoneView('chat');
@@ -2048,7 +2056,29 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openPrepush = (c: PrepushCardData) => {
     if (!openTarget({ channel_id: null, kwant_id: c.kwant_id })) return pushToast('That bot no longer exists.');
     setPage('chat');
-    window.setTimeout(() => document.getElementById(`prepush-${c.id}`)?.scrollIntoView?.({ block: 'center' }), 250);
+    window.setTimeout(() => {
+      const el = document.getElementById(`prepush-${c.id}`);
+      el?.scrollIntoView?.({ block: 'center' });
+      // 0.8.1 F3: a short ring so the eye finds the card it landed on (none under reduced motion, in CSS).
+      if (el) {
+        el.classList.remove('kw-prepush-flash');
+        void el.offsetWidth;
+        el.classList.add('kw-prepush-flash');
+        window.setTimeout(() => el.classList.remove('kw-prepush-flash'), 1300);
+      }
+    }, 250);
+  };
+  // 0.8.1 F3: a team chat's pointer line opens the bot's 1:1; on a phone, back returns to that team chat.
+  const openPrepushFromTeam = (c: PrepushCardData) => {
+    const from = isChannelRef.current ? selectedIdRef.current : null;
+    openPrepush(c);
+    prepushReturnRef.current = from ? { channel: from, kwant: c.kwant_id } : null;
+  };
+  const phoneBackFromChat = () => {
+    const r = prepushReturnRef.current;
+    prepushReturnRef.current = null;
+    if (r && !isChannelRef.current && selectedIdRef.current === r.kwant && !openThreadId && openTarget({ channel_id: r.channel, kwant_id: null })) return;
+    setPhoneView('list');
   };
   // The card call first; a 409 means the card moved on, so fetch it again (Rigel QA 1). Then the
   // chat message: if only that fails, say the change applied (Ada Later 7).
@@ -2953,6 +2983,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const currentTeamMembers = currentTeam
     ? kwants.filter((k) => currentTeamMemberIds.includes(k.id))
     : [];
+  // 0.8.1 F3: whose pre-push lines a team chat or channel shows (membership, like approvalsForChat).
+  const pointerMemberIds: string[] = currentTeam ? currentTeamMemberIds : openChat?.kind === 'channel' ? openChat.memberIds.filter((id): id is string => !!id) : [];
 
   const chatTitle = !isChannel
     ? currentKwant?.name || 'Bot'
@@ -3740,7 +3772,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           title={chatTitle}
           subtitle={chatSubtitle}
           spaceName={space.name}
-          onBack={isPhone ? () => setPhoneView('list') : undefined}
+          onBack={isPhone ? phoneBackFromChat : undefined}
           messages={viewingHistory ? historyWindow.messages : messages}
           viewingHistory={viewingHistory}
           onJumpToLatest={() => setHistoryWindow(null)}
@@ -3750,6 +3782,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           prepush={
             devOn && currentKwant && !viewingHistory ? (
               <PrepushThread cards={threadCards(prepush.cards, currentKwant.id)} bot={currentKwant.name} live={prepush.live} onRetry={prepushRetry} onOverride={prepushOverride} />
+            ) : devOn && isChannel && !viewingHistory && pointerMemberIds.length > 0 ? (
+              // 0.8.1 F3: team chats and channels get one pointer line per member bot; the card stays in the 1:1.
+              <PrepushPointers
+                cards={prepush.cards}
+                memberIds={pointerMemberIds}
+                names={kwantNames}
+                onOpen={openPrepushFromTeam}
+                onOpenInbox={() => showPage('inbox')}
+                avatar={(id, name) => <ModernAvatar role={name} name={name} size={20} kwantId={id} />}
+              />
             ) : undefined
           }
           settledApprovals={approvalsForChat(settledApprovals, openChat)}
