@@ -1,0 +1,33 @@
+{
+  "version": "0.8.1",
+  "date": "2026-11-10",
+  "highlights": [
+    {
+      "id": "notify-opens-chat",
+      "title": "Notifications open the right chat",
+      "text": "When a bot needs you, its notification now opens the team chat, channel, thread or direct chat where it asked. An approval scrolls to its card.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "prepush-in-team",
+      "title": "Pre-push checks in team chats",
+      "text": "A team chat now shows one line for each bot's newest pre-push check, the ones that need you first. Open takes you to the card in that bot's chat.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "one-look",
+      "title": "One look per bot",
+      "text": "Each bot now has the same avatar everywhere: in the sidebar, its replies, the working line, the cards and the Ask chips.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A follow-up turn no longer asks again for a picture the change already shared.",
+    "\"Try again\" picks a change up again, even after you cancelled it. \"Stop\" and \"no\" don't.",
+    "The working line names the bot when you open a chat while it's replying.",
+    "On a phone, the working line sits in the message box, as on the desktop."
+  ]
+}

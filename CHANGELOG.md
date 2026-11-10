@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.8.1] - 2026-11-10
+
+kwant 0.8.1: fixes from the 0.8.0 checks. A "needs you" notification opens the chat it came from, a team chat points to the pre-push checks its bots are waiting on, and each bot looks the same everywhere.
+
+### Changed
+- **Pre-push checks show in team chats.** In a team chat or channel, each member bot's newest pre-push card from the last 24 hours shows as one line: the ones that need you first, at most 3, then "+n more in the Inbox". Open goes to the card in the bot's own chat, where its buttons stay. (#483)
+
+### Fixed
+- **A "needs you" notification opens the chat it came from.** Clicking a notification that a bot needs you (an approval, a question or a step only you can do) now opens the team chat, channel, thread or direct chat where it asked, and an approval scrolls to its card. This works for the web app's notifications, a phone's and the Mac menu-bar pill's. If that chat is gone, it opens the bot's direct chat and says so. (#485)
+- **One look per bot.** A bot now has the same avatar in the sidebar, its replies, the working line, the cards and the Ask chips. Before, a bot whose name suggested another look could look different in its replies, as TechLead did in teams made from the coding template, which saves it with the Architect look. (#492)
+- **A follow-up no longer asks again for a picture already shared.** When a change takes more than one turn, kwant counts the pictures any of them shared, so a continuation doesn't end with "No picture was attached". (#482)
+- **"Try again" after a change picks the work up again**, even after you cancelled it. So do "again", "retry" and "do it". "Stop", "never mind", "cancel" and "no" don't. (#484)
+- **The working line names the bot** ("Ann is getting started") when you open a chat while it's replying, instead of the chat's name, and on a phone it sits in the message box as on the desktop. A queued message's last word no longer sits alone on its own line. (#481)
+
 ## [Mac 0.8.0] - 2026-11-10
 
 kwant 0.8.0: bots that do the work and show it, bring your bots from more places, a second pair of eyes before code is pushed, and drag and drop into any chat.
