@@ -261,6 +261,9 @@ async fn announce_pause(state: &AppState, kwant: &Kwant, b: &Budget) {
         kwant_id: kwant.id.clone(),
         kwant_name: kwant.name.clone(),
         channel_id: None,
+        // The stop notice is in the bot's direct chat, so a tap opens that (0.8.1 F6 fields)
+        thread_id: None,
+        card_id: None,
         title: format!("{} stopped at its monthly budget", kwant.name),
         body: format!("Used {}. Open to raise the budget or continue this month.", used_of(b)),
     };
