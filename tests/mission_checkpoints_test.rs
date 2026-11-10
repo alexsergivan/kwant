@@ -1053,3 +1053,45 @@ async fn a_verified_task_rolls_back_by_a_held_fork_and_steps_its_owner_down() {
     let (s, _, _) = send(&e.app, "POST", &uri, None, Some("k-no-reason"), Some(json!({}))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
+
+// V2: the verifier is on unless the person saved "off", and a handed-in task waits in review on
+// its hold until a pass verdict or the person's Verify. Every other test here turns it off in
+// setup, because they are about checkpoints, not the verifier.
+#[tokio::test]
+async fn the_verifier_is_on_unless_saved_off_and_holds_a_handed_in_task() {
+    let e = setup().await;
+    assert_eq!(person(&e, "GET", "/api/settings", None).await["verifier"], "off");
+    e.state.db.set_setting("verifier", "").await.unwrap();
+    assert_eq!(person(&e, "GET", "/api/settings", None).await["verifier"], "on", "anything but off is on");
+    let plan = json!([{"title": "A", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "a.txt"}}]}]);
+    let (mid, ids) = mission(&e, &e.bot.id, plan).await;
+    let tid = ids[0].clone();
+    run(&e, &mid, &tid, &[("a.txt", Some("v1"))]).await;
+
+    // The hold is added during the hand-in itself, so it is there by the time the call returns
+    let holds: Vec<_> = e.state.db.list_checks(&tid).await.unwrap().into_iter().filter(|c| c.kind == "peer_review" && c.requested_by == "verifier").collect();
+    assert_eq!(holds.len(), 1, "{holds:?}");
+    assert!(holds[0].required && holds[0].approved, "{holds:?}");
+
+    // While the hold is pending the task stays in review; the person's Verify finishes it
+    for _ in 0..300 {
+        let state = state_of(&e, &tid).await;
+        let pending = !e.state.db.pending_verifier_holds(&tid).await.unwrap().is_empty();
+        if state == "verified" {
+            assert!(!pending, "verified with the hold still pending");
+            break;
+        }
+        assert_eq!(state, "review");
+        if pending {
+            // The verifier can pass it between these two reads: then the Verify is a 409
+            let (s, v) = call(&e.app, "POST", &format!("/api/tasks/{tid}/verify"), None, Some(json!({}))).await;
+            assert!(s.is_success() || s == StatusCode::CONFLICT, "{s} {v}");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(state_of(&e, &tid).await, "verified");
+    let hold = e.state.db.list_checks(&tid).await.unwrap().into_iter().find(|c| c.id == holds[0].id).unwrap();
+    assert_eq!(hold.status, "passed", "{hold:?}");
+    let by_verdict = e.state.db.verdicts_of(&tid).await.unwrap().iter().any(|v| v.verdict == "pass");
+    assert!(by_verdict || hold.checked_by.as_deref() == Some("person"), "a pass verdict or the person finished the hold: {hold:?}");
+}
