@@ -609,7 +609,7 @@ export const MissionSummary: React.FC<{
         </div>
         <Badge tone={st.tone}>{st.label}</Badge>
         {m.over_budget && <Badge tone="rose">Over its limit</Badge>}
-        {chip}
+        {chip && <div className="basis-full sm:basis-auto min-w-0" data-watch-chip-slot>{chip}</div>}
       </div>
       <div className="space-y-1">
         <div className="flex flex-wrap justify-between gap-x-3 text-[11px] text-zinc-400">
