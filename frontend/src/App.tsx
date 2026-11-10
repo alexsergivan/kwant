@@ -1871,7 +1871,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     playSfx('click');
   };
 
+  // 0.8.1 F3: where phone Back returns after a team chat's pointer line opened a 1:1. Any other
+  // chat open clears it (openPrepushFromTeam sets it after its own open), so it never goes stale.
+  const prepushReturnRef = useRef<{ channel: string; kwant: string } | null>(null);
+
   const handleSelectChannel = (channel: Channel) => {
+    prepushReturnRef.current = null;
     setOpenThreadId(null);
     setPage('chat');
     setPhoneView('chat');
@@ -1886,6 +1891,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   const handleSelectKwant = (kwant: Kwant) => {
+    prepushReturnRef.current = null;
     setOpenThreadId(null);
     setPage('chat');
     setPhoneView('chat');
@@ -2045,7 +2051,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }, 250);
   };
   // 0.8.1 F3: a team chat's pointer line opens the bot's 1:1; on a phone, back returns to that team chat.
-  const prepushReturnRef = useRef<{ channel: string; kwant: string } | null>(null);
   const openPrepushFromTeam = (c: PrepushCardData) => {
     const from = isChannelRef.current ? selectedIdRef.current : null;
     openPrepush(c);

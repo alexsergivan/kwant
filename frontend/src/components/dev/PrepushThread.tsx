@@ -136,7 +136,7 @@ export const PrepushThread: React.FC<{
   return (
     <section aria-label={`Checks before ${bot} pushes`} data-prepush-thread className="space-y-2">
       {cards.map((c) => (
-        <div key={c.id} id={`prepush-${c.id}`} className="relative scroll-mt-4 rounded-xl">
+        <div key={c.id} id={`prepush-${c.id}`} className="relative max-w-[640px] scroll-mt-4 rounded-xl">
           <PrepushCard card={c} bot={bot} live={live.has(c.id)} onRetry={onRetry} onOverride={onOverride} />
         </div>
       ))}
