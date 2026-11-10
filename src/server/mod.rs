@@ -46,6 +46,7 @@ pub mod hires;
 pub mod concierge;
 pub mod rerouting;
 pub mod import_routes;
+pub mod inbox;
 pub mod isolated_folders_routes;
 pub mod approval_modes;
 pub mod passwords;
@@ -568,6 +569,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/skills/:id/reject", post(skills::reject))
         .route("/api/away", get(away::get))
         .route("/api/away/seen", post(away::seen))
+        .route("/api/inbox", get(inbox::get))
         .route("/api/events", get(sse::sse_handler))
         .merge(show_once::routes::router())
         .fallback(crate::embedded::static_handler)

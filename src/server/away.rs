@@ -48,7 +48,7 @@ fn internal() -> Response {
     StatusCode::INTERNAL_SERVER_ERROR.into_response()
 }
 
-fn rfc3339(t: DateTime<Utc>) -> String {
+pub(super) fn rfc3339(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
@@ -76,7 +76,7 @@ pub fn summarize(text: &str) -> String {
 }
 
 /// `text` with free-text credentials and any word that has a key-like part masked.
-fn mask_words(text: &str) -> String {
+pub(super) fn mask_words(text: &str) -> String {
     let line = mask_credentials(text);
     let masked: Vec<&str> = line
         .split_whitespace()
@@ -140,7 +140,7 @@ fn clip_title(text: &str) -> String {
 }
 
 /// An approval's stored details as `name: value` pairs, sensitive argument names masked.
-fn approval_summary(parameters: &str) -> String {
+pub(super) fn approval_summary(parameters: &str) -> String {
     let details: Value = serde_json::from_str(parameters).unwrap_or(Value::Null);
     let mut parts = Vec::new();
     if let Some(args) = details["arguments"].as_object() {
@@ -189,7 +189,7 @@ fn fallback_summary(row: &AwayRow) -> &'static str {
     }
 }
 
-fn item(row: AwayRow) -> Value {
+pub(super) fn item(row: AwayRow) -> Value {
     let (title, summary) = match row.kind.as_str() {
         "approval" => {
             let params = row.body.as_deref().unwrap_or("");
@@ -259,7 +259,7 @@ fn seen_key(space: &SpaceId) -> String {
     }
 }
 
-async fn last_seen(state: &AppState, space: &SpaceId) -> Result<Option<DateTime<Utc>>, crate::db::DbError> {
+pub(super) async fn last_seen(state: &AppState, space: &SpaceId) -> Result<Option<DateTime<Utc>>, crate::db::DbError> {
     Ok(state
         .db
         .get_setting(&seen_key(space))
@@ -279,7 +279,7 @@ pub async fn unread_total(state: &AppState, space: &SpaceId) -> Result<i64, crat
 }
 
 /// The space's approvals the broker still waits on, each linked to the chat its turn runs in.
-async fn waiting_approvals(state: &AppState, space: &SpaceId) -> Result<Vec<AwayRow>, crate::db::DbError> {
+pub(super) async fn waiting_approvals(state: &AppState, space: &SpaceId) -> Result<Vec<AwayRow>, crate::db::DbError> {
     let live = state.broker.pending_ids().await;
     let mut rows = state.db.away_pending_approvals(&live).await?;
     let mut mine = Vec::with_capacity(rows.len());

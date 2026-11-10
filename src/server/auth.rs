@@ -360,6 +360,8 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         ["", "api", "push", ..] => true,
         // What the bots wait on the person for: their questions, across every chat
         ["", "api", "waiting", ..] => true,
+        // The review inbox (0.9 V1): what the person approves, sends back or rolls back, with held actions
+        ["", "api", "inbox", ..] => true,
         // Starting work-ahead runs now spends the person's tokens
         ["", "api", "work-ahead", ..] => true,
         // The idea jar is the person's: what they drop in, Look now, Do it and the shelf
@@ -1061,6 +1063,8 @@ mod tests {
         assert!(person_only(&post, "/api/push/unsubscribe"));
         assert!(person_only(&get, "/api/waiting"));
         assert!(person_only(&get, "/api/waiting/"));
+        assert!(person_only(&get, "/api/inbox"));
+        assert!(!person_only(&get, "/api/away"));
         assert!(person_only(&post, "/api/connections/composio"));
         assert!(person_only(&get, "/api/parallel/prices"));
         assert!(person_only(&post, "/api/parallel/scenarios"));
