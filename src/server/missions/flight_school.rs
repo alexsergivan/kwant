@@ -450,9 +450,56 @@ pub fn card_of(tasks: &[ScoreTask], tier: &str) -> (Value, Option<&'static str>,
     (card, next, missing)
 }
 
+/// The tier one step below `tier` (`act` → `sandbox` → `observe`), or `None` at `observe`.
+pub fn one_down(tier: &str) -> Option<&'static str> {
+    rank(tier).checked_sub(1).map(|r| TIERS[r])
+}
+
+/// Whether the person approved `task`: it is verified, or it has a passed `person` check
+/// (contract §5.1). Read before a rollback moves it.
+pub async fn approved(db: &Database, task: &Task) -> bool {
+    task.state == "verified" || db.list_checks(&task.id).await.unwrap_or_default().iter().any(|c| c.kind == "person" && c.status == "passed")
+}
+
+/// A rollback of an approved task (a restore, or a fork from a checkpoint): the owner drops one
+/// tier on the task's class, as a person-made policy (the rollback is theirs), and a pass verdict
+/// is recorded as overturned. Returns `{kwant_id, class, from, to}`, or null when nothing dropped.
+/// Never lifted on its own: the person grants the tier back.
+pub async fn step_down_after_rollback(state: &AppState, task: &Task, was_approved: bool, checkpoint_id: &str) -> Value {
+    if !was_approved {
+        return Value::Null;
+    }
+    let note = json!({"reason": "rollback_after_approval", "task_id": task.id, "checkpoint_id": checkpoint_id});
+    super::verifier::person_rolled_back(state, &task.id, &note.to_string()).await;
+    let Some(owner) = task.owner_kwant_id.as_deref() else { return Value::Null };
+    let class = state.db.task_class(&task.id).await.unwrap_or_else(|_| DEFAULT_CLASS.into());
+    let (from, _) = tier_of(&state.db, owner, &class).await;
+    let Some(to) = one_down(from) else { return Value::Null };
+    let mut detail = note;
+    detail["from_tier"] = json!(from);
+    detail["to_tier"] = json!(to);
+    match state.db.set_policy(owner, &class, to, "stepped_down", Some(&detail.to_string())).await {
+        Ok(_) => {
+            let _ = state.db.log_task_event(&task.id, "tier_stepped_down", "person", &detail).await;
+            json!({"kwant_id": owner, "class": class, "from": from, "to": to})
+        }
+        Err(e) => {
+            tracing::warn!(task_id = %task.id, error = %e, "the tier step-down after a rollback wasn't saved");
+            Value::Null
+        }
+    }
+}
+
+/// Where the scorecard window starts: 30 days ago, or the last model change if later (§5.2).
+pub fn window_start(now: chrono::DateTime<chrono::Utc>, reset_at: Option<chrono::DateTime<chrono::Utc>>) -> chrono::DateTime<chrono::Utc> {
+    let base = now - chrono::Duration::days(WINDOW_DAYS);
+    reset_at.filter(|r| *r > base).unwrap_or(base)
+}
+
 /// `GET /api/capabilities/:kwant_id/scorecard?class=` and the snapshot a proposal keeps.
 pub async fn scorecard(db: &Database, kwant_id: &str, class: &str) -> Result<Value, crate::db::DbError> {
-    let since = chrono::Utc::now() - chrono::Duration::days(WINDOW_DAYS);
+    let reset_at = db.last_scorecard_reset(kwant_id).await.ok().flatten();
+    let since = window_start(chrono::Utc::now(), reset_at);
     let tasks = db.score_tasks(kwant_id, class, since).await?;
     let (tier, from) = tier_of(db, kwant_id, class).await;
     let (mut card, next, missing) = card_of(&tasks, tier);
@@ -461,6 +508,7 @@ pub async fn scorecard(db: &Database, kwant_id: &str, class: &str) -> Result<Val
         o.insert("task_class".into(), json!(class));
         o.insert("window_days".into(), json!(WINDOW_DAYS));
         o.insert("since".into(), json!(since.to_rfc3339()));
+        o.insert("reset_at".into(), json!(reset_at.map(|r| r.to_rfc3339())));
         o.insert("tier".into(), json!(tier));
         o.insert("tier_from".into(), json!(from));
         o.insert("next_tier".into(), json!(next));

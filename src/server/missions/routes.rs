@@ -776,6 +776,8 @@ pub async fn verify_task(State(state): State<AppState>, RawQuery(q): RawQuery, P
     if let Err(e) = state.db.finish_check(&check.id, "passed", Some(&note), "person", None).await {
         return internal(e);
     }
+    // The person decides over the verifier: its hold passes, and a fail or needs-you is recorded as overturned
+    super::verifier::person_verified(&state, &t).await;
     // Runs the approved kwant checks that haven't passed yet; evaluates
     let pending: Vec<_> = state.db.list_checks(&id).await.unwrap_or_default().into_iter().filter(|c| c.approved && c.status == "pending").collect();
     for c in &pending {
@@ -794,13 +796,19 @@ pub async fn verify_task(State(state): State<AppState>, RawQuery(q): RawQuery, P
 }
 
 pub async fn reject_task(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>, b: Option<Json<Note>>) -> Response {
-    if let Err(r) = load_task(&state, q.as_deref(), &id).await {
-        return r;
-    }
+    let t = match load_task(&state, q.as_deref(), &id).await {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
     let b = body(b);
     let Some(reason) = b.reason.or(b.note).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
         return bad("reason is required");
     };
+    if t.state == "review" {
+        // V2: a pass the person sends back is overturned; V3: the note becomes a criterion
+        super::verifier::person_sent_back(&state, &t, &reason).await;
+        super::contract::add_send_back(&state, &t, &reason).await;
+    }
     let change = TaskChange { reason: Some(reason), attempt: true, ..Default::default() };
     match moved(transition(&state, &id, "review", "ready", Actor::Person, "person", change).await) {
         Ok(t) => task_out(&state, &t).await,

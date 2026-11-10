@@ -16,6 +16,7 @@ pub mod auditor;
 pub mod autofix;
 pub mod checkpoints;
 pub mod checks;
+pub mod contract;
 pub mod discovery;
 pub mod flight_school;
 pub mod foundry;
@@ -27,6 +28,7 @@ pub mod routes;
 pub mod runner;
 pub mod tools;
 pub mod truth_ledger;
+pub mod verifier;
 
 use super::AppState;
 use crate::db::missions::{Mission, NewCheck, NewTask, OutcomeCheck, Task, TaskChange};
@@ -249,6 +251,10 @@ async fn after_move(state: &AppState, task: &Task, to: &str) {
     // The Swarm Auditor challenges a high-impact or low-confidence task in review (on unless the person saved it off; capped per day)
     if to == "review" {
         auditor::on_review(state, task);
+        // The Verifier (V2) holds the task until its verdict; awaited, so the hold exists before evaluate
+        verifier::on_review(state, task).await;
+    } else {
+        verifier::on_leave(state, task, to).await;
     }
     autofix::settle(state, task, to).await;
     // A task parked for AutoFix isn't done failing: no "failed" line until it is
@@ -345,7 +351,8 @@ fn fresh(c: &OutcomeCheck, since: Option<chrono::DateTime<chrono::Utc>>) -> bool
     match (since, c.finished_at) {
         (Some(s), Some(f)) => f >= s,
         (None, _) => true,
-        (Some(_), None) => false,
+        // The verifier's hold (V2) gates from the moment it is added at the move to review
+        (Some(s), None) => verifier::is_hold(c) && c.created_at >= s,
     }
 }
 
@@ -639,6 +646,9 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
         obj.insert("owner_tier".into(), flight_school::owner_tier(state, task).await);
         obj.insert("reviewer".into(), reviewer(state, task).await);
         obj.insert("closed_note".into(), closed_note(state, task).await);
+        // V3 hand-off contract and V2 verdict (null contract when none is stored)
+        obj.insert("contract".into(), contract::json_of(state, &task.id).await);
+        obj.insert("verifier".into(), verifier::json_of(state, task).await);
     }
     v
 }

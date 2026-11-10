@@ -1,0 +1,556 @@
+//! V3, the task contract (0.9.0 wave 3): what must not change, the criteria with their status and
+//! evidence, open issues and assumptions, and risk flags, on a task or a hand-off card. The lead
+//! and the person write it; the owner can only add to it and mark criteria with evidence. A `met`
+//! without evidence is a claim, never shown as met. Contract:
+//! `/home/maus/shared/ship-software-safely/release-090/v2-v3-contract.md` §1, docs §24.
+
+use crate::db::missions::Task;
+use crate::server::AppState;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+pub const STATUSES: [&str; 3] = ["met", "not_met", "not_checked"];
+pub const ISSUE_KINDS: [&str; 2] = ["open_issue", "assumption"];
+pub const MAX_ITEMS: usize = 20;
+pub const MAX_FLAGS: usize = 8;
+pub const MAX_TEXT: usize = 300;
+pub const MAX_FLAG_CHARS: usize = 40;
+/// Criteria derived from the acceptance, one per line.
+pub const MAX_FROM_ACCEPTANCE: usize = 8;
+pub const TOOL: &str = "task_contract";
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Criterion {
+    pub id: String,
+    pub text: String,
+    pub status: String,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    /// `lead`, `owner`, `person` or `acceptance`.
+    pub by: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Issue {
+    pub id: String,
+    pub kind: String,
+    pub text: String,
+    #[serde(default)]
+    pub by: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Contract {
+    #[serde(default)]
+    pub must_not_change: Vec<String>,
+    #[serde(default)]
+    pub criteria: Vec<Criterion>,
+    #[serde(default)]
+    pub open_issues: Vec<Issue>,
+    #[serde(default)]
+    pub risk_flags: Vec<String>,
+}
+
+/// Who writes: the person, the lead (who handed it out or leads its mission), or the owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Person,
+    Lead,
+    Owner,
+}
+
+impl Role {
+    fn as_str(self) -> &'static str {
+        match self {
+            Role::Person => "person",
+            Role::Lead => "lead",
+            Role::Owner => "owner",
+        }
+    }
+}
+
+fn clip(s: &str) -> String {
+    s.trim().chars().take(MAX_TEXT).collect()
+}
+
+/// One criterion per non-empty line of the acceptance (bullets trimmed), at most
+/// [`MAX_FROM_ACCEPTANCE`], all `not_checked`.
+pub fn from_acceptance(acceptance: &str) -> Vec<Criterion> {
+    acceptance
+        .lines()
+        .map(|l| l.trim().trim_start_matches(['-', '*', '•']).trim())
+        .filter(|l| !l.is_empty())
+        .take(MAX_FROM_ACCEPTANCE)
+        .enumerate()
+        .map(|(i, l)| Criterion { id: format!("c{}", i + 1), text: clip(l), status: "not_checked".into(), evidence: Vec::new(), by: "acceptance".into() })
+        .collect()
+}
+
+fn next_id(prefix: char, used: &[&str]) -> String {
+    let n = used.iter().filter_map(|id| id.strip_prefix(prefix).and_then(|n| n.parse::<usize>().ok())).max().unwrap_or(0);
+    format!("{prefix}{}", n + 1)
+}
+
+fn strings(v: &Value, what: &str, max: usize, max_chars: usize) -> Result<Option<Vec<String>>, String> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    let arr = v.as_array().ok_or(format!("{what} must be a list of strings"))?;
+    let mut out = Vec::new();
+    for x in arr {
+        let s = x.as_str().ok_or(format!("{what} must be a list of strings"))?.trim();
+        if s.is_empty() {
+            continue;
+        }
+        if s.chars().count() > max_chars {
+            return Err(format!("each {what} entry is at most {max_chars} characters"));
+        }
+        if !out.iter().any(|o: &String| o == s) {
+            out.push(s.to_string());
+        }
+    }
+    if out.len() > max {
+        return Err(format!("at most {max} {what} entries"));
+    }
+    Ok(Some(out))
+}
+
+/// Applies a write (the tool's or the route's body) as `role`. `evidence_on_task` are the task's
+/// evidence ids. The owner may add, and set status and evidence; anything else it tries is
+/// refused with the item it was about, and nothing changes.
+pub fn apply(mut c: Contract, body: &Value, role: Role, evidence_on_task: &[String]) -> Result<(Contract, Vec<&'static str>), String> {
+    let mut fields = Vec::new();
+    let owner = role == Role::Owner;
+    if let Some(list) = strings(&body["must_not_change"], "must_not_change", MAX_ITEMS, MAX_TEXT)? {
+        if owner {
+            if let Some(gone) = c.must_not_change.iter().find(|m| !list.contains(m)) {
+                return Err(format!("You can't remove or reword \"{gone}\" from must_not_change; only the lead or the person can."));
+            }
+        }
+        c.must_not_change = list;
+        fields.push("must_not_change");
+    }
+    if let Some(list) = strings(&body["risk_flags"], "risk_flags", MAX_FLAGS, MAX_FLAG_CHARS)? {
+        let list: Vec<String> = list.into_iter().map(|f| f.to_lowercase()).collect();
+        if owner {
+            if let Some(gone) = c.risk_flags.iter().find(|f| !list.contains(f)) {
+                return Err(format!("You can't remove the risk flag \"{gone}\"; only the lead or the person can."));
+            }
+        }
+        c.risk_flags = list;
+        fields.push("risk_flags");
+    }
+    if !body["criteria"].is_null() {
+        let items = body["criteria"].as_array().ok_or("criteria must be a list")?;
+        for it in items {
+            criterion(&mut c, it, role, evidence_on_task)?;
+        }
+        if c.criteria.len() > MAX_ITEMS {
+            return Err(format!("at most {MAX_ITEMS} criteria"));
+        }
+        fields.push("criteria");
+    }
+    if !body["open_issues"].is_null() {
+        let items = body["open_issues"].as_array().ok_or("open_issues must be a list")?;
+        for it in items {
+            issue(&mut c, it, role)?;
+        }
+        if c.open_issues.len() > MAX_ITEMS {
+            return Err(format!("at most {MAX_ITEMS} open issues"));
+        }
+        fields.push("open_issues");
+    }
+    if fields.is_empty() {
+        return Err("Nothing to change: give must_not_change, criteria, open_issues or risk_flags.".into());
+    }
+    Ok((c, fields))
+}
+
+fn criterion(c: &mut Contract, it: &Value, role: Role, evidence_on_task: &[String]) -> Result<(), String> {
+    let id = it["id"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let text = it["text"].as_str().map(clip).filter(|s| !s.is_empty());
+    let status = it["status"].as_str().map(str::trim);
+    if let Some(s) = status.filter(|s| !STATUSES.contains(s)) {
+        return Err(format!("status must be met, not_met or not_checked (got {s})"));
+    }
+    let evidence: Option<Vec<String>> = it.get("evidence").filter(|v| !v.is_null()).map(|v| {
+        v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).filter(|s| !s.is_empty()).collect()).unwrap_or_default()
+    });
+    if let Some(bad) = evidence.iter().flatten().find(|e| !evidence_on_task.contains(e)) {
+        return Err(format!("Evidence {bad} isn't attached to this task."));
+    }
+    let remove = it["remove"].as_bool() == Some(true);
+    match id.and_then(|id| c.criteria.iter().position(|x| x.id == id)) {
+        Some(i) => {
+            if remove {
+                if role == Role::Owner {
+                    return Err(format!("You can't remove criterion {}; only the lead or the person can.", c.criteria[i].id));
+                }
+                c.criteria.remove(i);
+                return Ok(());
+            }
+            let cur = &mut c.criteria[i];
+            if let Some(t) = text.filter(|t| *t != cur.text) {
+                if role == Role::Owner && cur.by != "owner" {
+                    return Err(format!("You can't reword criterion {} (the {} wrote it); set its status and evidence instead.", cur.id, cur.by));
+                }
+                cur.text = t;
+            }
+            if let Some(s) = status {
+                cur.status = s.to_string();
+            }
+            if let Some(e) = evidence {
+                cur.evidence = e;
+            }
+        }
+        None => {
+            if let Some(id) = id.filter(|_| text.is_none()) {
+                return Err(format!("No criterion {id}; give text to add a new one."));
+            }
+            let Some(text) = text else { return Err("A new criterion needs text.".into()) };
+            let used: Vec<&str> = c.criteria.iter().map(|x| x.id.as_str()).collect();
+            let id = next_id('c', &used);
+            c.criteria.push(Criterion { id, text, status: status.unwrap_or("not_checked").into(), evidence: evidence.unwrap_or_default(), by: role.as_str().into() });
+        }
+    }
+    Ok(())
+}
+
+fn issue(c: &mut Contract, it: &Value, role: Role) -> Result<(), String> {
+    let id = it["id"].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let text = it["text"].as_str().map(clip).filter(|s| !s.is_empty());
+    let kind = it["kind"].as_str().map(str::trim).unwrap_or("open_issue");
+    if !ISSUE_KINDS.contains(&kind) {
+        return Err(format!("kind must be open_issue or assumption (got {kind})"));
+    }
+    let remove = it["remove"].as_bool() == Some(true);
+    match id.and_then(|id| c.open_issues.iter().position(|x| x.id == id)) {
+        Some(i) => {
+            if role == Role::Owner && c.open_issues[i].by != "owner" {
+                return Err(format!("You can't change open issue {} (the {} wrote it).", c.open_issues[i].id, c.open_issues[i].by));
+            }
+            if remove {
+                c.open_issues.remove(i);
+            } else {
+                let cur = &mut c.open_issues[i];
+                if let Some(t) = text {
+                    cur.text = t;
+                }
+                cur.kind = kind.into();
+            }
+        }
+        None => {
+            let Some(text) = text else { return Err("A new open issue needs text.".into()) };
+            let used: Vec<&str> = c.open_issues.iter().map(|x| x.id.as_str()).collect();
+            c.open_issues.push(Issue { id: next_id('o', &used), kind: kind.into(), text, by: role.as_str().into() });
+        }
+    }
+    Ok(())
+}
+
+/// Whether `c` is complete (contract §1.3) and, if not, why, in plain words. Evidence counts
+/// only when it is still attached to the task.
+pub fn completeness(c: &Contract, evidence_on_task: &[String]) -> (bool, Vec<String>) {
+    let mut missing = Vec::new();
+    if c.criteria.is_empty() {
+        missing.push("no criteria".to_string());
+    }
+    for k in &c.criteria {
+        match k.status.as_str() {
+            "not_checked" => missing.push(format!("{} not checked", k.id)),
+            "met" if !has_evidence(k, evidence_on_task) => missing.push(format!("{} met without evidence (a claim)", k.id)),
+            _ => {}
+        }
+    }
+    (missing.is_empty(), missing)
+}
+
+fn has_evidence(k: &Criterion, evidence_on_task: &[String]) -> bool {
+    k.evidence.iter().any(|e| evidence_on_task.contains(e))
+}
+
+/// Whether `k` is a claim: `met` with no evidence on the task.
+pub fn is_claim(k: &Criterion, evidence_on_task: &[String]) -> bool {
+    k.status == "met" && !has_evidence(k, evidence_on_task)
+}
+
+/// The contract as the API shows it: each criterion with `claim`, plus `complete` and `missing`.
+pub fn view(c: &Contract, evidence_on_task: &[String], updated_by: &str, updated_at: chrono::DateTime<chrono::Utc>) -> Value {
+    let (complete, missing) = completeness(c, evidence_on_task);
+    let criteria: Vec<Value> = c
+        .criteria
+        .iter()
+        .map(|k| json!({"id": k.id, "text": k.text, "status": k.status, "evidence": k.evidence, "by": k.by, "claim": is_claim(k, evidence_on_task)}))
+        .collect();
+    json!({
+        "must_not_change": c.must_not_change,
+        "criteria": criteria,
+        "open_issues": c.open_issues,
+        "risk_flags": c.risk_flags,
+        "complete": complete,
+        "missing": missing,
+        "updated_by": updated_by,
+        "updated_at": updated_at,
+    })
+}
+
+/// Why a reviewer may not pass a task with this contract: a criterion not met, or met without
+/// evidence (contract §1.4). `None` when it may.
+pub fn pass_blocker(c: &Contract, evidence_on_task: &[String]) -> Option<String> {
+    if let Some(k) = c.criteria.iter().find(|k| k.status == "not_met") {
+        return Some(format!("Criterion {} is not met: \"{}\". Send it back (fail) with what is missing.", k.id, k.text));
+    }
+    c.criteria
+        .iter()
+        .find(|k| is_claim(k, evidence_on_task))
+        .map(|k| format!("Criterion {} has no evidence: it is a claim. Send it back (fail) with what is missing.", k.id))
+}
+
+/// The criteria for the lead's review prompt, one line each; a met without evidence reads
+/// `CLAIM, no evidence`.
+pub fn lead_lines(c: &Contract, evidence_on_task: &[String]) -> String {
+    let mut out = Vec::new();
+    for k in &c.criteria {
+        let status = if is_claim(k, evidence_on_task) {
+            "CLAIM, no evidence".to_string()
+        } else if k.status == "met" {
+            format!("met, evidence {}", k.evidence.join(", "))
+        } else {
+            k.status.replace('_', " ")
+        };
+        out.push(format!("- {} {}: {status}", k.id, k.text));
+    }
+    if !c.must_not_change.is_empty() {
+        out.push(format!("Must not change: {}", c.must_not_change.join("; ")));
+    }
+    for i in &c.open_issues {
+        out.push(format!("Open {} {}: {}", i.kind.replace('_', " "), i.id, i.text));
+    }
+    out.join("\n")
+}
+
+/// Whether a must_not_change entry names a path (contract §3.2, scope): no spaces, and a `/` or `.`.
+pub fn path_like(entry: &str) -> bool {
+    let e = entry.trim();
+    !e.is_empty() && !e.contains(char::is_whitespace) && (e.contains('/') || e.contains('.'))
+}
+
+/// Each (entry, changed path) where a path-like must_not_change entry matches a changed path:
+/// the same path, or the path under an entry ending in `/`.
+pub fn scope_violations(must_not_change: &[String], changed: &[String]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for m in must_not_change.iter().filter(|m| path_like(m)) {
+        let m = m.trim().trim_start_matches("./");
+        for p in changed {
+            let p2 = p.trim_start_matches("./");
+            if p2 == m || (m.ends_with('/') && p2.starts_with(m)) {
+                out.push((m.to_string(), p.clone()));
+            }
+        }
+    }
+    out
+}
+
+// Loading and saving
+
+/// The task's stored contract, if any.
+pub async fn load(state: &AppState, task_id: &str) -> Option<(Contract, String, chrono::DateTime<chrono::Utc>)> {
+    let row = state.db.get_contract(task_id).await.ok().flatten()?;
+    let c = serde_json::from_str::<Contract>(&row.body).ok()?;
+    Some((c, row.updated_by, row.updated_at))
+}
+
+pub async fn evidence_ids(state: &AppState, task_id: &str) -> Vec<String> {
+    state.db.list_evidence(task_id).await.unwrap_or_default().into_iter().map(|e| e.id).collect()
+}
+
+/// The `contract` key of the task's JSON, or null.
+pub async fn json_of(state: &AppState, task_id: &str) -> Value {
+    match load(state, task_id).await {
+        Some((c, by, at)) => view(&c, &evidence_ids(state, task_id).await, &by, at),
+        None => Value::Null,
+    }
+}
+
+/// The bot that leads `task`: the lead of its hand-off, else of its mission.
+pub async fn lead_of(state: &AppState, task: &Task) -> Option<String> {
+    if task.source_kind == "delegation" {
+        if let Some(id) = task.source_id.as_deref() {
+            return state.db.get_delegation(id).await.ok().flatten().map(|d| d.lead_kwant_id);
+        }
+    }
+    let mid = task.mission_id.as_deref()?;
+    state.db.get_mission(mid).await.ok().flatten().map(|m| m.lead_kwant_id)
+}
+
+/// Writes `body` to `task`'s contract as `role` (logged as `by`). A task with no stored contract
+/// starts from its acceptance lines.
+pub async fn write(state: &AppState, task: &Task, body: &Value, role: Role, by: &str) -> Result<Value, String> {
+    let ev = evidence_ids(state, &task.id).await;
+    let current = match load(state, &task.id).await {
+        Some((c, _, _)) => c,
+        None => Contract { criteria: from_acceptance(&task.acceptance), ..Default::default() },
+    };
+    let (next, fields) = apply(current, body, role, &ev)?;
+    let event = json!({"by": role.as_str(), "fields": fields, "criteria": next.criteria.len(), "must_not_change": next.must_not_change.len()});
+    let body = serde_json::to_value(&next).map_err(|e| e.to_string())?;
+    let row = state.db.put_contract(&task.id, &body, by, &event).await.map_err(|e| e.to_string())?;
+    super::emit_task_id(state, &task.id).await;
+    Ok(view(&next, &ev, &row.updated_by, row.updated_at))
+}
+
+/// The person's send-back: its reason becomes a criterion (V1, "the note becomes a criterion").
+pub async fn add_send_back(state: &AppState, task: &Task, reason: &str) {
+    let body = json!({"criteria": [{"text": reason, "status": "not_checked"}]});
+    if let Err(e) = write(state, task, &body, Role::Person, "person").await {
+        tracing::info!(task_id = %task.id, error = %e, "the send-back note didn't become a criterion");
+    }
+}
+
+pub fn tool() -> Value {
+    json!({
+        "name": TOOL,
+        "description": "Write a task's contract: what must not change, its criteria (each met / not_met / not_checked, with evidence ids attached to the task), open issues or assumptions, and risk flags. The task's owner can add items and mark criteria with evidence, but can't remove or reword what the lead wrote; the lead of the hand-off or mission can set anything. A criterion marked met without evidence counts as a claim, not as met.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "must_not_change": {"type": "array", "items": {"type": "string"}, "description": "The whole list: paths (src/db/x.rs, docs/) or behaviour that must stay as it is."},
+                "criteria": {"type": "array", "items": {"type": "object", "properties": {
+                    "id": {"type": "string", "description": "An existing criterion's id (c1, c2…); leave out to add one."},
+                    "text": {"type": "string"},
+                    "status": {"type": "string", "enum": STATUSES},
+                    "evidence": {"type": "array", "items": {"type": "string"}, "description": "Evidence ids attached to this task."},
+                    "remove": {"type": "boolean"}
+                }}},
+                "open_issues": {"type": "array", "items": {"type": "object", "properties": {
+                    "id": {"type": "string"}, "kind": {"type": "string", "enum": ISSUE_KINDS}, "text": {"type": "string"}, "remove": {"type": "boolean"}
+                }}},
+                "risk_flags": {"type": "array", "items": {"type": "string"}, "description": "The whole list: short tags like migration, auth, payments."}
+            },
+            "required": ["task_id"]
+        }
+    })
+}
+
+/// `task_contract` for `kwant_id` on `task` (already checked to be in its space).
+pub async fn call(state: &AppState, kwant_id: &str, task: &Task, args: &Value) -> (String, bool) {
+    let role = if lead_of(state, task).await.as_deref() == Some(kwant_id) {
+        Role::Lead
+    } else if task.owner_kwant_id.as_deref() == Some(kwant_id) {
+        Role::Owner
+    } else {
+        return ("Only the task's owner or the bot that leads it can write its contract.".into(), true);
+    };
+    if matches!(task.state.as_str(), "verified" | "cancelled") {
+        return (format!("The task is {}; its contract is closed.", task.state), true);
+    }
+    match write(state, task, args, role, kwant_id).await {
+        Ok(v) => (serde_json::to_string_pretty(&json!({"contract": v})).unwrap_or_default(), false),
+        Err(e) => (e, true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ev() -> Vec<String> {
+        vec!["e1".into(), "e2".into()]
+    }
+
+    fn lead_contract() -> Contract {
+        let body = json!({"must_not_change": ["src/db/missions.rs"], "risk_flags": ["Migration"], "criteria": [{"text": "inbox lists review tasks"}, {"text": "phone layout"}]});
+        apply(Contract::default(), &body, Role::Lead, &ev()).unwrap().0
+    }
+
+    #[test]
+    fn acceptance_lines_become_criteria() {
+        let c = from_acceptance("- one\n\n* two\n  three  \n");
+        assert_eq!(c.iter().map(|k| (k.id.as_str(), k.text.as_str())).collect::<Vec<_>>(), [("c1", "one"), ("c2", "two"), ("c3", "three")]);
+        assert!(c.iter().all(|k| k.status == "not_checked" && k.by == "acceptance"));
+        assert_eq!(from_acceptance(&"x\n".repeat(30)).len(), MAX_FROM_ACCEPTANCE);
+    }
+
+    #[test]
+    fn the_lead_sets_anything_and_flags_are_lowercase() {
+        let c = lead_contract();
+        assert_eq!(c.risk_flags, ["migration"]);
+        assert_eq!(c.criteria[1].id, "c2");
+        assert_eq!(c.criteria[0].by, "lead");
+        let (c, _) = apply(c, &json!({"must_not_change": [], "criteria": [{"id": "c2", "remove": true}]}), Role::Lead, &ev()).unwrap();
+        assert!(c.must_not_change.is_empty() && c.criteria.len() == 1);
+    }
+
+    #[test]
+    fn the_owner_can_only_add_and_mark() {
+        let c = lead_contract();
+        let e = apply(c.clone(), &json!({"must_not_change": []}), Role::Owner, &ev()).unwrap_err();
+        assert!(e.contains("src/db/missions.rs"), "{e}");
+        assert!(apply(c.clone(), &json!({"risk_flags": []}), Role::Owner, &ev()).unwrap_err().contains("migration"));
+        assert!(apply(c.clone(), &json!({"criteria": [{"id": "c1", "text": "something easier"}]}), Role::Owner, &ev()).unwrap_err().contains("reword"));
+        assert!(apply(c.clone(), &json!({"criteria": [{"id": "c1", "remove": true}]}), Role::Owner, &ev()).unwrap_err().contains("remove"));
+        let (c, fields) = apply(
+            c,
+            &json!({"must_not_change": ["src/db/missions.rs", "docs/"], "criteria": [{"id": "c1", "status": "met", "evidence": ["e1"]}, {"text": "my own"}], "open_issues": [{"text": "assumes one inbox", "kind": "assumption"}]}),
+            Role::Owner,
+            &ev(),
+        )
+        .unwrap();
+        assert_eq!(fields, ["must_not_change", "criteria", "open_issues"]);
+        assert_eq!((c.criteria[0].status.as_str(), c.criteria[2].by.as_str(), c.criteria[2].id.as_str()), ("met", "owner", "c3"));
+        assert_eq!(c.open_issues[0].id, "o1");
+        // Its own criterion it may reword
+        let (c, _) = apply(c, &json!({"criteria": [{"id": "c3", "text": "my own, clearer"}]}), Role::Owner, &ev()).unwrap();
+        assert_eq!(c.criteria[2].text, "my own, clearer");
+    }
+
+    #[test]
+    fn evidence_must_be_on_the_task_and_values_are_checked() {
+        let c = lead_contract();
+        assert!(apply(c.clone(), &json!({"criteria": [{"id": "c1", "status": "met", "evidence": ["nope"]}]}), Role::Owner, &ev()).unwrap_err().contains("nope"));
+        assert!(apply(c.clone(), &json!({"criteria": [{"id": "c1", "status": "done"}]}), Role::Owner, &ev()).is_err());
+        assert!(apply(c.clone(), &json!({"criteria": [{"id": "c9", "status": "met"}]}), Role::Owner, &ev()).unwrap_err().contains("c9"));
+        assert!(apply(c.clone(), &json!({}), Role::Lead, &ev()).is_err(), "nothing to change");
+        let many: Vec<String> = (0..9).map(|i| format!("f{i}")).collect();
+        assert!(apply(c, &json!({"risk_flags": many}), Role::Lead, &ev()).is_err());
+    }
+
+    #[test]
+    fn a_met_without_evidence_is_a_claim() {
+        let (c, _) = apply(lead_contract(), &json!({"criteria": [{"id": "c1", "status": "met"}, {"id": "c2", "status": "met", "evidence": ["e2"]}]}), Role::Owner, &ev()).unwrap();
+        let (complete, missing) = completeness(&c, &ev());
+        assert!(!complete);
+        assert_eq!(missing, ["c1 met without evidence (a claim)"]);
+        assert!(is_claim(&c.criteria[0], &ev()) && !is_claim(&c.criteria[1], &ev()));
+        // Evidence that was removed from the task no longer counts
+        assert!(is_claim(&c.criteria[1], &["e1".to_string()]));
+        let v = view(&c, &ev(), "k", chrono::Utc::now());
+        assert_eq!((v["criteria"][0]["claim"].as_bool(), v["complete"].as_bool()), (Some(true), Some(false)));
+        assert!(pass_blocker(&c, &ev()).unwrap().contains("c1 has no evidence"));
+        let lines = lead_lines(&c, &ev());
+        assert!(lines.contains("c1 inbox lists review tasks: CLAIM, no evidence"), "{lines}");
+        assert!(lines.contains("c2 phone layout: met, evidence e2"));
+        assert!(lines.contains("Must not change: src/db/missions.rs"));
+    }
+
+    #[test]
+    fn complete_needs_every_criterion_checked() {
+        assert_eq!(completeness(&Contract::default(), &ev()).1, ["no criteria"]);
+        let c = lead_contract();
+        assert_eq!(completeness(&c, &ev()).1, ["c1 not checked", "c2 not checked"]);
+        let (c, _) = apply(c, &json!({"criteria": [{"id": "c1", "status": "met", "evidence": ["e1"]}, {"id": "c2", "status": "not_met"}]}), Role::Owner, &ev()).unwrap();
+        assert!(completeness(&c, &ev()).0);
+        assert!(pass_blocker(&c, &ev()).unwrap().contains("c2 is not met"));
+    }
+
+    #[test]
+    fn scope_matches_paths_and_folders_only() {
+        assert!(path_like("src/db/missions.rs") && path_like("docs/") && path_like("Cargo.toml"));
+        assert!(!path_like("the public API") && !path_like("auth") && !path_like(""));
+        let mnc = vec!["src/db/missions.rs".to_string(), "docs/".into(), "the public API".into()];
+        let changed = vec!["src/db/missions.rs".to_string(), "docs/a.md".into(), "src/db/missions.rs.bak".into(), "src/x.rs".into()];
+        let v = scope_violations(&mnc, &changed);
+        assert_eq!(v, [("src/db/missions.rs".to_string(), "src/db/missions.rs".to_string()), ("docs/".into(), "docs/a.md".into())]);
+    }
+}

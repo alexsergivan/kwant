@@ -57,6 +57,7 @@ pub mod dev_jira;
 pub mod telegram;
 pub mod show_once;
 pub mod isolated_folders;
+pub mod verifier;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -270,6 +271,8 @@ impl Database {
         db.migrate_show_once().await?;
         // Agents in the VM: folders an isolated turn used (add-only)
         db.migrate_isolated_folders().await?;
+        // 0.9.0 wave 3: task contracts and verifier verdicts (add-only)
+        db.migrate_verifier().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal

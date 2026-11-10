@@ -480,6 +480,92 @@ pub async fn materialize_first(state: &AppState, task_id: &str, dest: &FsPath) -
     .map_err(|e| e.to_string())?
 }
 
+/// A clean copy of a task's last run for the verifier (0.9.0 V2): what [`materialize_run`] wrote.
+#[derive(Debug, Clone, Default)]
+pub struct CleanCopy {
+    /// Files written into the copy.
+    pub files: usize,
+    /// The paths the run changed (from its `before_run` to its `after_run`).
+    pub changed: Vec<String>,
+    /// What the copy is missing, in plain words (skipped by the snapshot, blob gone).
+    pub missing: Vec<String>,
+    pub after_run_id: String,
+    /// The run's window: its `before_run` (or `after_run` when there is none) and its `after_run`.
+    pub from: chrono::DateTime<chrono::Utc>,
+    pub to: chrono::DateTime<chrono::Utc>,
+}
+
+/// How many skipped paths [`materialize_run`] lists by name before it counts the rest.
+const MAX_MISSING_LISTED: usize = 8;
+
+/// Writes `task_id`'s last run into `dest`, an empty scratch folder: the run's `before_run`
+/// snapshot with the paths the run changed taken from its `after_run` (a path the run deleted is
+/// left out). `Ok(None)` when the task has no usable `after_run`. Never touches the task's folder.
+pub async fn materialize_run(state: &AppState, task_id: &str, dest: &FsPath) -> Result<Option<CleanCopy>, String> {
+    let all = state.db.checkpoints_of(task_id).await.map_err(|e| e.to_string())?;
+    let Some(after) = all.iter().rev().find(|c| c.kind == "after_run" && !c.failed()).cloned() else { return Ok(None) };
+    let before = all.iter().rev().find(|c| c.kind == "before_run" && c.claim_id.is_some() && c.claim_id == after.claim_id && !c.failed() && c.folder == after.folder).cloned();
+    let _store = STORE.lock().await;
+    let (blobs, dest, runs_dir) = (root(state).join("blobs"), dest.to_path_buf(), root(state).join(task_id));
+    tokio::task::spawn_blocking(move || {
+        let after_m = read_manifest(&after).ok_or("the after_run checkpoint's manifest is gone")?;
+        let before_m = before.as_ref().and_then(read_manifest);
+        let recorded = read_runs(&runs_dir).into_iter().rev().find(|r| r.after_run_id == after.id).map(|r| r.paths);
+        let changed = match (&before_m, recorded) {
+            (_, Some(paths)) => paths,
+            (Some(b), None) => changed(b, &after_m),
+            (None, None) => after_m.files.iter().map(|f| f.path.clone()).collect(),
+        };
+        let mut files: BTreeMap<String, Entry> = before_m.as_ref().map(|m| m.files.iter().map(|e| (e.path.clone(), e.clone())).collect()).unwrap_or_default();
+        let after_files: BTreeMap<&str, &Entry> = after_m.files.iter().map(|e| (e.path.as_str(), e)).collect();
+        for p in &changed {
+            match after_files.get(p.as_str()) {
+                Some(e) => {
+                    files.insert(p.clone(), (*e).clone());
+                }
+                None => {
+                    files.remove(p);
+                }
+            }
+        }
+        let mut skipped: BTreeSet<String> = after_m.skipped.iter().map(|s| s.path.clone()).collect();
+        if let Some(b) = &before_m {
+            skipped.extend(b.skipped.iter().map(|s| s.path.clone()));
+        }
+        let mut missing: Vec<String> = skipped.iter().take(MAX_MISSING_LISTED).map(|p| format!("{p} (not in the snapshot)")).collect();
+        if skipped.len() > MAX_MISSING_LISTED {
+            missing.push(format!("{} more paths not in the snapshot", skipped.len() - MAX_MISSING_LISTED));
+        }
+        private_dir(&dest).map_err(|e| e.to_string())?;
+        let mut n = 0;
+        for e in files.values() {
+            if !safe_rel(&e.path) {
+                missing.push(format!("{} (unsafe path, left out)", e.path));
+                continue;
+            }
+            let to = dest.join(&e.path);
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            if std::fs::copy(blobs.join(&e.sha256), &to).is_ok() {
+                let _ = crate::fsx::set_mode(&to, (e.mode & 0o700) | 0o600);
+                n += 1;
+            } else {
+                missing.push(format!("{} (its stored copy is gone)", e.path));
+            }
+        }
+        let from = before.as_ref().map_or(after.created_at, |b| b.created_at);
+        Ok(Some(CleanCopy { files: n, changed, missing, after_run_id: after.id.clone(), from, to: after.created_at }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Whether `task_id` has an `after_run` checkpoint a clean copy can be made from.
+pub async fn has_run(state: &AppState, task_id: &str) -> bool {
+    state.db.checkpoints_of(task_id).await.unwrap_or_default().iter().any(|c| c.kind == "after_run" && !c.failed())
+}
+
 /// The manifest of `c`, if it is still on disk.
 pub fn read_manifest(c: &Checkpoint) -> Option<Manifest> {
     if c.failed() || c.manifest_path.is_empty() {
@@ -1285,7 +1371,9 @@ pub async fn restore(
             let msg = format!("force_paths names a path the preview doesn't list: {}", unknown.join(", "));
             return Err(coded(StatusCode::UNPROCESSABLE_ENTITY, "unknown_force_path", &msg));
         }
+        let was_approved = super::flight_school::approved(&state.db, &task).await;
         let mut out = write_back(&state, &task, &c, &p, b.force_paths.into_iter().collect()).await?;
+        out["stepped_down"] = super::flight_school::step_down_after_rollback(&state, &task, was_approved, &c.id).await;
         // Held before the move, so the runner never sees it ready and unheld (D10)
         let runnable = matches!(p.state_after.unwrap_or(task.state.as_str()), "ready" | "backlog");
         let changed = state.db.set_task_hold(&task.id, runnable && !b.rerun).await.map_err(internal)?;
