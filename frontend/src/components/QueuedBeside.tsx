@@ -31,7 +31,8 @@ export function QueuedBeside({ items }: { items?: QueuedState[] }) {
         return (
           <li key={q.turnId ?? i} className="flex items-start gap-1.5 text-[11px] leading-snug text-zinc-400">
             <span className="mt-[5px] w-1.5 h-1.5 rounded-full bg-zinc-500 shrink-0" aria-hidden="true" />
-            <span className="min-w-0">
+            {/* text-wrap: pretty so a last word ("finish.") never sits alone on line 2 at 390 px (#479, Mira). */}
+            <span className="min-w-0 [text-wrap:pretty]">
               <strong className="font-medium text-zinc-200">{q.named ? `${q.speaker} · ${place}` : place}</strong>
               {!sameAsAbove && <> {queuedText(q.reason, q.slots, q.named ? q.speaker : undefined)}</>}
             </span>

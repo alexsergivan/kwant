@@ -105,3 +105,14 @@ test('a reload or link reopens the bot or channel in the address, and a gone one
   assert.equal(m.pickInitialChat({ botId: 'gone' }, bots, [], 'ch1')?.bot.id, 'k1');
   assert.equal(m.pickInitialChat({ botId: 'gone' }, [], [], 'ch1'), null);
 });
+
+// 0.8.1 F6: a notification about one of a bot's conversations opens that conversation
+test('a bot’s conversation has its own address, and reads back', () => {
+  assert.equal(m.spacePath('spc_b', { botId: 'k1', threadId: 't 1' }), '/s/spc_b/b/k1/t/t%201');
+  assert.deepEqual(m.parseSpacePath('/s/spc_b/b/k1/t/t%201'), { spaceId: 'spc_b', botId: 'k1', threadId: 't 1' });
+  // A channel wins; a thread without a bot is no address
+  assert.equal(m.spacePath('spc_b', { channelId: 'c1', botId: 'k1', threadId: 't1' }), '/s/spc_b/c/c1');
+  assert.equal(m.spacePath('spc_b', { threadId: 't1' }), '/s/spc_b');
+  // The old addresses are unchanged
+  assert.deepEqual(m.parseSpacePath('/s/spc_b/b/k1'), { spaceId: 'spc_b', botId: 'k1' });
+});

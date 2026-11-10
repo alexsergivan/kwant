@@ -24,6 +24,7 @@ import { HumanStepCard } from './components/HumanStepCard';
 import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
+import { liveNamingOrder, namesToFill } from './workingStrip';
 import {
   HumanStep,
   HumanStepMeta,
@@ -49,7 +50,7 @@ import { AwayPage } from './components/AwayView';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { MissionBoardPage } from './components/MissionBoardView';
 import { MISSION_BOARD_SETTING_EVENT, emitMission, parseMissionBoardSetting, sourceChat } from './missions';
-import { type ChatTarget, planOpenTarget } from './chatTarget';
+import { type ChatTarget, type NotifiedChat, notifiedPlace, planOpenTarget } from './chatTarget';
 import { ParallelPage } from './components/ParallelUniverseView';
 import { ConnectionsPage } from './components/ConnectionsView';
 import { IdeaJarView, deleteIdea, dropIdea, emitIdeaUpdated, isIdeaCommand, onIdeaUpdated, useIdeaJarBadge } from './components/ideas';
@@ -70,6 +71,7 @@ import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
+import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
 import { recentWork, type ChatHome } from './botHome';
@@ -151,6 +153,8 @@ import { useDevModeOn } from './components/DevModeSwitch';
 import { DEV_CARD_EVENT, DevDeskView, type DevCardEvent } from './components/DevDesk';
 import { DEV_TICKET_EVENT, DEV_TICKET_PROGRESS_EVENT } from './components/dev/TicketsTab';
 import { PrepushNeedsYou, PrepushThread, threadCards, usePrepushCards, type PrepushEventDetail } from './components/dev/PrepushThread';
+import { PrepushPointers } from './components/dev/PrepushPointers';
+import { ModernAvatar } from './components/ModernAvatar';
 import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
 import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
@@ -172,6 +176,10 @@ export interface SpaceTarget {
   botId?: string;
   /** W2: the chat's `/live` address, with the browser panel open. */
   live?: boolean;
+  /** 0.8.1 F6: one of the bot's conversations (`/b/<bot>/t/<thread>`). */
+  threadId?: string;
+  /** 0.8.1 F6: the card to show there (`?card=`), an approval's id. */
+  cardId?: string;
 }
 
 export interface SpaceAppProps {
@@ -556,17 +564,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Opens the chat of a bot's newest open browser step; false when it has none.
   const openHumanStepRef = useRef<(kwantId: string) => boolean>(() => false);
   const openTargetRef = useRef<(t: ChatTarget) => boolean>(() => false);
+  // 0.8.1 F6: opens the chat a notification names (thread, channel or team chat, 1:1) at its card.
+  const openPlaceRef = useRef<(n: NotifiedChat) => boolean>(() => false);
   // A tier request or a fact dispute is decided on the board's Needs-you list.
   const openBoardForTier = () => showPage('board');
   const showNotification = (n: NotifyEvent) => {
     // Another space's news is the shell's to show, with a way to switch there.
     if (n.space_id && n.space_id !== space.id) return;
     if (n.kind === 'automation_suggested') emitContinuity({ type: 'automation_suggested', data: n });
-    const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
     // Failed routines and finished or slow delegations show in the app; the OS notification is for a hidden tab.
     // A question or browser step gets the "needs you" pill instead of a toast (approvals get it from the away list too).
     if (!document.hidden && nudgesOnRef.current && (n.kind === 'question_asked' || n.kind === 'human_step')) {
-      if (pageRef.current === 'chat' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
+      if (pageRef.current === 'chat' && openCtxRef.current === (n.channel_id ?? (n.thread_id || n.kwant_id))) return;
       if (n.kind === 'human_step') {
         const nudge = arrivalsRef.current.fromHumanStep(n);
         if (nudge) offerNudges([nudge]);
@@ -575,7 +584,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return;
     }
     if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
-      if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && n.kind !== 'automation_suggested' && n.kind !== 'tier_proposed' && n.kind !== 'fact_disputed' && openCtxRef.current === (n.channel_id ?? n.kwant_id)) return;
+      if (n.kind !== 'routine_failed' && n.kind !== 'skill_proposed' && n.kind !== 'automation_suggested' && n.kind !== 'tier_proposed' && n.kind !== 'fact_disputed' && openCtxRef.current === (n.channel_id ?? (n.thread_id || n.kwant_id))) return;
       const id = ++toastIdRef.current;
       const action =
         n.kind === 'routine_failed'
@@ -589,10 +598,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               : n.kind === 'fact_disputed'
               ? { label: 'Settle', onClick: openBoardForTier }
               : n.kind === 'question_asked'
-              ? { label: 'Answer', onClick: () => openQuestionRef.current(n.kwant_id) || openTargetRef.current(target) }
+              ? { label: 'Answer', onClick: () => openQuestionRef.current(n.kwant_id) || openPlaceRef.current(n) }
               : n.kind === 'human_step'
-                ? { label: 'Open', onClick: () => openHumanStepRef.current(n.kwant_id) || openTargetRef.current(target) }
-                : { label: 'Open', onClick: () => openTargetRef.current(target) };
+                ? { label: 'Open', onClick: () => openHumanStepRef.current(n.kwant_id) || openPlaceRef.current(n) }
+                : { label: 'Open', onClick: () => openPlaceRef.current(n) };
       setToasts((prev) => [...prev.slice(-2), { id, title: n.title, detail: n.body, action }]);
       if (n.kind !== 'routine_failed') playSfx('alert');
       return;
@@ -602,9 +611,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   // A tap on a notification: the bot's skill, question or browser step, else its chat. One about no
   // bot opens its place: today's spending stop opens Needs you on it, with Continue today; any other
-  // kind (an app update, a loose-end reminder) opens home.
-  const openNotified = (n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id'>) => {
-    const target = { channel_id: n.channel_id, kwant_id: n.kwant_id };
+  // kind (an app update, a loose-end reminder) opens home. 0.8.1 F6: an approval, and anything else
+  // about a chat, opens the exact chat it came from (a thread, a channel or team chat, the 1:1) at
+  // its card; when that chat is gone, the bot's direct chat.
+  const openNotified = (n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id' | 'thread_id' | 'card_id'>) => {
     const place = placeOfNotification(n);
     if (place === 'spend_stop') openSpendStop();
     else if (place === 'home') openHome();
@@ -618,7 +628,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       // A CAPTCHA lands straight in the solve view
       if (latestOpenStep(humanStepsRef.current, n.kwant_id)?.kind === 'captcha') setSolveRequest((v) => v + 1);
     }
-    else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openTargetRef.current(target);
+    else if (!(n.kind === 'question_asked' && openQuestionRef.current(n.kwant_id))) openPlaceRef.current(n);
   };
   const openNotifiedRef = useRef(openNotified);
   const openSpendStopRef = useRef(openSpendStop);
@@ -639,8 +649,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       if (place === 'spend_stop') return openSpendStopRef.current();
       if (m.space_id && m.space_id !== space.id) return;
       if (place === 'home') return openHomeRef.current();
-      if (!m.kwant_id) return;
-      openNotifiedRef.current({ kind: m.kind as NotifyKind, kwant_id: m.kwant_id, channel_id: m.channel_id });
+      // 0.8.1 F6: a tap about a channel or team chat alone (no bot) opens it too
+      openNotifiedRef.current({
+        kind: m.kind as NotifyKind,
+        kwant_id: m.kwant_id ?? '',
+        channel_id: m.channel_id,
+        thread_id: m.thread_id ?? null,
+        card_id: m.card_id ?? null,
+      });
     };
     sw.addEventListener('message', onMessage);
     return () => sw.removeEventListener('message', onMessage);
@@ -720,7 +736,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setLive(liveRef.current);
   };
   const clearLive = (ctx: string | null | undefined) => {
-    if (ctx) delete streamsRef.current[ctx];
+    if (ctx) {
+      delete streamsRef.current[ctx];
+      delete liveKwantRef.current[ctx];
+    }
     if (ctx === openCtxRef.current) {
       setStreamingText('');
       setStreamingThinking('');
@@ -732,6 +751,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setLive(next);
   };
   const kwantName = (id: unknown) => (typeof id === 'string' ? kwantsRef.current.find((k) => k.id === id)?.name : undefined);
+  // 0.8.1 F4: which bot runs in each live chat, so a name that wasn't known yet can be filled in. A page
+  // opened mid-turn reads the running turns before the bot list arrives; without this the strip kept the
+  // chat's own title ("@QATeam is getting started") for the whole turn.
+  const liveKwantRef = useRef<Record<string, string>>({});
+  const markLiveKwant = (ctx: string | null | undefined, kwantId: unknown) => {
+    if (ctx && typeof kwantId === 'string' && kwantId) liveKwantRef.current[ctx] = kwantId;
+    markLive(ctx, kwantName(kwantId));
+  };
+  // Once the bot list arrives (or changes), name the live chats still waiting for one.
+  useEffect(() => {
+    for (const [ctx, name] of namesToFill(liveRef.current, liveKwantRef.current, kwantName)) markLive(ctx, name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kwants]);
 
   const chatLoadsRef = useRef(new ChatLoads());
   /** Loads a chat's latest messages into the cache, and on screen if it's open. */
@@ -822,7 +854,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       for (const ctx of Object.keys(liveRef.current)) {
         if (!busy.has(ctx) && !discussionInProgressRef.current) clearLive(ctx);
       }
-      for (const t of Object.values(map)) markLive(t.context_id, kwantName(t.kwant_id));
+      // The strip names the bot that is replying: queued turns first, so a running one in the same chat wins.
+      for (const t of liveNamingOrder(Object.values(map))) markLiveKwant(t.context_id, t.kwant_id);
       // Titles for the "working on" badges
       for (const t of Object.values(map)) {
         if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
@@ -919,6 +952,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           setIsChannel(false);
           isChannelRef.current = false;
           setSelectedTeamId(null);
+          // 0.8.1 F6: a notification about one of the bot's conversations opens that one
+          if (initialTarget?.threadId && initialTarget.botId === first.bot.id) openThreadChecked(first.bot.id, initialTarget.threadId);
         } else if (first?.kind === 'channel') {
           const init = first.channel;
           setSelectedId(init.id);
@@ -928,6 +963,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           const matchedTeam = teamOfChannel(normalizedTeams, init);
           setSelectedTeamId(matchedTeam ? matchedTeam.id : null);
         }
+        // 0.8.1 F6: and shows the approval's card it names, when that chat opened
+        const landed = first?.kind === 'bot' ? initialTarget?.botId === first.bot.id : first?.kind === 'channel' && initialTarget?.channelId === first.channel.id;
+        if (landed && initialTarget?.cardId) setHighlightMessageId(initialTarget.cardId);
       } catch (err) {
         console.error('Failed to load initial data:', err);
       } finally {
@@ -1071,7 +1109,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 turnStarted(d.kwant_id, key);
                 moodTurnStarted(d.kwant_id);
               }
-              if (!discussionInProgressRef.current || ctx !== streamingContextIdRef.current) markLive(ctx, kwantName(d.kwant_id));
+              if (!discussionInProgressRef.current || ctx !== streamingContextIdRef.current) markLiveKwant(ctx, d.kwant_id);
             }
             break;
           }
@@ -1315,7 +1353,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             }
             if (event.type === 'TextDelta') buf.text += event.data;
             else buf.thinking = event.data;
-            if (!(ctx in liveRef.current)) markLive(ctx, kwantName(event.kwant_id));
+            if (!(ctx in liveRef.current)) markLiveKwant(ctx, event.kwant_id);
             if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) {
               if (event.type === 'TextDelta') {
                 setStreamingText(buf.text);
@@ -1333,7 +1371,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (!step || !ctx || !turnId) break;
             const cur = activityRef.current[turnId];
             setActivityMap({ ...activityRef.current, [turnId]: { ...applyActivity(cur, turnId, step), ctx } });
-            if (!(ctx in liveRef.current)) markLive(ctx, kwantName(event.kwant_id));
+            if (!(ctx in liveRef.current)) markLiveKwant(ctx, event.kwant_id);
             break;
           }
           case 'human_step_updated':
@@ -1869,7 +1907,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     playSfx('click');
   };
 
+  // 0.8.1 F3: where phone Back returns after a team chat's pointer line opened a 1:1. Any other
+  // chat open clears it (openPrepushFromTeam sets it after its own open), so it never goes stale.
+  const prepushReturnRef = useRef<{ channel: string; kwant: string } | null>(null);
+
   const handleSelectChannel = (channel: Channel) => {
+    prepushReturnRef.current = null;
     setOpenThreadId(null);
     setPage('chat');
     setPhoneView('chat');
@@ -1884,6 +1927,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   const handleSelectKwant = (kwant: Kwant) => {
+    prepushReturnRef.current = null;
     setOpenThreadId(null);
     setPage('chat');
     setPhoneView('chat');
@@ -2017,20 +2061,92 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     if (threadsByKwantRef.current[kwantId] === undefined) loadThreads(kwantId);
   };
 
+  /**
+   * 0.8.1 F6: shows one of a bot's conversations a link or notification names. When kwant doesn't
+   * know it yet, asks the server (archived ones included); if it is gone, the bot's direct chat
+   * shows instead, with a line saying so, never an empty pane.
+   */
+  function openThreadChecked(kwantId: string, threadId: string) {
+    const known = knownThreadsRef.current.has(threadId);
+    knownThreadsRef.current.add(threadId);
+    setOpenThreadId(threadId);
+    if (known) return;
+    threadsApi.list(kwantId, true).then((list) => {
+      rememberThreads(list);
+      if (list.some((t) => t.id === threadId)) return;
+      knownThreadsRef.current.delete(threadId);
+      setOpenThreadId((cur) => (cur === threadId ? null : cur));
+      pushToast('That conversation no longer exists, so here is the direct chat.');
+    }, () => undefined);
+  }
+
+  /** 0.8.1 F6: opens the chat a notification names, at its card; false when neither it nor the bot exists. */
+  const openPlace = (n: NotifiedChat): boolean => {
+    const place = notifiedPlace(n, {
+      channel: (id) => channels.some((c) => c.id === id),
+      kwant: (id) => kwants.some((k) => k.id === id),
+    });
+    if (place.kind === 'gone') {
+      pushToast('That chat no longer exists.');
+      return false;
+    }
+    if (place.kind === 'thread') {
+      const kwant = kwants.find((k) => k.id === place.kwant_id)!;
+      setPage('chat');
+      setPhoneView('chat');
+      if (selectedIdRef.current !== kwant.id || isChannelRef.current) handleSelectKwant(kwant);
+      openThreadChecked(place.kwant_id, place.thread_id);
+    } else {
+      // A gone channel lands in the bot's direct chat: say so
+      if (n.channel_id && !place.target.channel_id) pushToast('That chat no longer exists, so here is the direct chat.');
+      openTarget(place.target);
+      setPage('chat');
+    }
+    if (n.card_id) setHighlightMessageId(n.card_id);
+    return true;
+  };
+  openPlaceRef.current = openPlace;
+
   /** Opens the thread, channel or direct chat an away item links to. */
   const openAwayItem = (item: AwayItem) => {
     const t = awayTarget(item);
-    if ('thread' in t) return openThread(t.kwant, t.thread);
-    const ok = 'channel' in t ? openTarget({ channel_id: t.channel, kwant_id: null }) : openTarget({ channel_id: null, kwant_id: t.direct });
-    if (!ok) return pushToast('That chat no longer exists.');
-    setPage('chat');
+    // 0.8.1 F6: the same opener as a notification's tap, so a gone chat lands in the bot's 1:1 and
+    // an approval row shows its card
+    openPlace({
+      channel_id: 'channel' in t ? t.channel : null,
+      kwant_id: 'thread' in t ? t.kwant : 'direct' in t ? t.direct : item.kwant_id,
+      thread_id: 'thread' in t ? t.thread : null,
+      card_id: item.kind === 'approval' ? item.id : null,
+    });
   };
 
   /** 0.8.0 B3: a pre-push Inbox item opens the bot's chat at its card. */
   const openPrepush = (c: PrepushCardData) => {
     if (!openTarget({ channel_id: null, kwant_id: c.kwant_id })) return pushToast('That bot no longer exists.');
     setPage('chat');
-    window.setTimeout(() => document.getElementById(`prepush-${c.id}`)?.scrollIntoView?.({ block: 'center' }), 250);
+    window.setTimeout(() => {
+      const el = document.getElementById(`prepush-${c.id}`);
+      el?.scrollIntoView?.({ block: 'center' });
+      // 0.8.1 F3: a short ring so the eye finds the card it landed on (none under reduced motion, in CSS).
+      if (el) {
+        el.classList.remove('kw-prepush-flash');
+        void el.offsetWidth;
+        el.classList.add('kw-prepush-flash');
+        window.setTimeout(() => el.classList.remove('kw-prepush-flash'), 1300);
+      }
+    }, 250);
+  };
+  // 0.8.1 F3: a team chat's pointer line opens the bot's 1:1; on a phone, back returns to that team chat.
+  const openPrepushFromTeam = (c: PrepushCardData) => {
+    const from = isChannelRef.current ? selectedIdRef.current : null;
+    openPrepush(c);
+    prepushReturnRef.current = from ? { channel: from, kwant: c.kwant_id } : null;
+  };
+  const phoneBackFromChat = () => {
+    const r = prepushReturnRef.current;
+    prepushReturnRef.current = null;
+    if (r && !isChannelRef.current && selectedIdRef.current === r.kwant && !openThreadId && openTarget({ channel_id: r.channel, kwant_id: null })) return;
+    setPhoneView('list');
   };
   // The card call first; a 409 means the card moved on, so fetch it again (Rigel QA 1). Then the
   // chat message: if only that fails, say the change applied (Ada Later 7).
@@ -2935,6 +3051,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const currentTeamMembers = currentTeam
     ? kwants.filter((k) => currentTeamMemberIds.includes(k.id))
     : [];
+  // 0.8.1 F3: whose pre-push lines a team chat or channel shows (membership, like approvalsForChat).
+  const pointerMemberIds: string[] = currentTeam ? currentTeamMemberIds : openChat?.kind === 'channel' ? openChat.memberIds.filter((id): id is string => !!id) : [];
 
   const chatTitle = !isChannel
     ? currentKwant?.name || 'Bot'
@@ -3332,6 +3450,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     openNotified({ kind: 'human_step', kwant_id: n.kwantId, channel_id: n.channelId ?? null });
   };
   const spriteOf = useCallback((id: string) => kwants.find((k) => k.id === id)?.avatar_sprite, [kwants]);
+  // Avatars that only know a bot's title or name look its saved style up here.
+  useEffect(() => setKnownBots(kwants), [kwants]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
@@ -3722,7 +3842,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           title={chatTitle}
           subtitle={chatSubtitle}
           spaceName={space.name}
-          onBack={isPhone ? () => setPhoneView('list') : undefined}
+          onBack={isPhone ? phoneBackFromChat : undefined}
           messages={viewingHistory ? historyWindow.messages : messages}
           viewingHistory={viewingHistory}
           onJumpToLatest={() => setHistoryWindow(null)}
@@ -3732,6 +3852,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           prepush={
             devOn && currentKwant && !viewingHistory ? (
               <PrepushThread cards={threadCards(prepush.cards, currentKwant.id)} bot={currentKwant.name} live={prepush.live} onRetry={prepushRetry} onOverride={prepushOverride} />
+            ) : devOn && isChannel && !viewingHistory && pointerMemberIds.length > 0 ? (
+              // 0.8.1 F3: team chats and channels get one pointer line per member bot; the card stays in the 1:1.
+              <PrepushPointers
+                cards={prepush.cards}
+                memberIds={pointerMemberIds}
+                names={kwantNames}
+                onOpen={openPrepushFromTeam}
+                onOpenInbox={() => showPage('inbox')}
+                avatar={(id, name) => <ModernAvatar role={name} name={name} size={20} kwantId={id} />}
+              />
             ) : undefined
           }
           settledApprovals={approvalsForChat(settledApprovals, openChat)}

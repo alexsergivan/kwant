@@ -148,12 +148,14 @@ test('inline code wraps anywhere and keeps its box on every line', () => {
 const live = (steps) => ({ turnId: 't1', thinking: {}, steps });
 const step = (over = {}) => ({ id: 's1', kind: 'tool', status: 'running', title: 'Using `web_search`', started_at: '2026-11-05T10:00:00Z', ...over });
 
-test('on a phone the strip is one quiet line: no card, 28 px, 12 px text, 16 px avatar, space above the composer', () => {
+test('on a phone the strip is one quiet line: no card, 28 px, 12 px text, 16 px avatar, 8 px above the box', () => {
   const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), phone: true });
   const wrap = /<div class="(kws-strip[^"]*)"/.exec(html)[1];
-  // Bottom spacing so it never sits on the composer's border; the composer's own 12 px side padding.
-  for (const c of ['kws-strip-phone', 'px-3', 'pt-1', 'pb-1.5']) assert.ok(wrap.split(' ').includes(c), c);
-  const line = /data-working-strip=""><div class="([^"]*)"/.exec(html)[1];
+  // 0.8.1 F4: inside the composer section like desktop, so the same column and edges as the box below:
+  // 21 px in (the avatar starts where the placeholder does), 9 px on the right, 8 px to the box.
+  for (const c of ['kws-strip-phone', 'mx-auto', 'max-w-4xl', 'mb-2', 'pl-[21px]', 'pr-[9px]']) assert.ok(wrap.split(' ').includes(c), c);
+  assert.ok(!wrap.split(' ').includes('px-3'), 'no second 12 px inset: the section already has it');
+  const line = /data-working-strip=""[^>]*><div class="([^"]*)"/.exec(html)[1];
   assert.ok(line.split(' ').includes('h-7'), 'about 28 px tall');
   // No card: no border, background, shadow or rounding on the phone.
   assert.doesNotMatch(wrap + ' ' + line, /\bborder\b|\bbg-|shadow|rounded|min-h-\[44px\]/);
@@ -224,17 +226,17 @@ test('desktop strip is the composer status line: no card, 28 px, 20 px avatar, e
   assert.doesNotMatch(watch, /min-h-8/);
 });
 
-test('ChatView puts the desktop strip inside the composer section, right above the box; the phone keeps its place', () => {
+test('ChatView puts the strip inside the composer section, right above the box, on a phone and on desktop (0.8.1 F4)', () => {
   const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
-  const phoneAt = src.indexOf('{phone && workingStrip}');
   const sectionAt = src.indexOf('{/* Modern Composer Input Bar */}');
-  const deskAt = src.indexOf('{!phone && workingStrip}');
-  const formAt = src.indexOf('<form', deskAt);
-  assert.ok(phoneAt > 0 && phoneAt < sectionAt, 'phone line above the composer section');
-  assert.ok(deskAt > sectionAt, 'desktop line inside the composer section');
-  assert.ok(src.indexOf('aria-label="Ask a member"', sectionAt) < deskAt, 'below the Ask chips');
-  assert.equal(src.slice(deskAt + '{!phone && workingStrip}'.length, formAt).trim(), '', 'directly above the box');
-  assert.equal(src.match(/<WorkingStrip\b/g).length, 1, 'one element, placed by layout');
+  const at = src.indexOf('{workingStrip}');
+  const formAt = src.indexOf('<form', at);
+  assert.ok(sectionAt > 0 && at > sectionAt, 'inside the composer section');
+  assert.ok(src.indexOf('aria-label="Ask a member"', sectionAt) < at, 'below the Ask chips');
+  assert.equal(src.slice(at + '{workingStrip}'.length, formAt).trim(), '', 'directly above the box');
+  assert.doesNotMatch(src, /\{!?phone && workingStrip\}/, 'no layout-specific place (Rigel: 390 sat outside the section)');
+  assert.equal(src.split('{workingStrip}').length - 1, 1, 'rendered once');
+  assert.equal(src.match(/<WorkingStrip\b/g).length, 1, 'one element');
 });
 
 test('on a phone the steps panel is one 44 px row, the engine note behind an info button', () => {

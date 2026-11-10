@@ -18,7 +18,7 @@ card_art: team
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
-        <li><a href="#new-08">New in 0.8.0</a></li>
+        <li><a href="#new-08">New in 0.8.2</a></li>
         <li><a href="#new-077">New in 0.7.7</a></li>
         <li><a href="#new-076">New in 0.7.6</a></li>
         <li><a href="#new-075">New in 0.7.5</a></li>
@@ -53,10 +53,10 @@ card_art: team
   </div>
 </nav>
 
-<section id="new-08" class="fgroup" data-covers="0.8.0">
+<section id="new-08" class="fgroup" data-covers="0.8.0 0.8.1 0.8.2">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.8.0</p>
+      <p class="kicker">New in 0.8.0 to 0.8.2</p>
       <h2>Bots that do the work, and show it</h2>
       <p>With approvals off, bots now get on with it instead of offering to. When you ask to see something, the picture lands in the chat, and a change you can see comes with a before and an after. Drop files anywhere on a chat, bring your bots from more places, and let a fresh pair of eyes check code before it's pushed.</p>
     </div>
@@ -99,6 +99,8 @@ card_art: team
       <li id="composer-line"><h3>The working line sits in the composer</h3><p>"Getting started · 0:04" is one quiet line just above the message box.</p></li>
       <li id="keys-name"><h3>Protect your keys from tricked Claude bots</h3><p>The key protection setting has a clearer name, and a bot it covers gets read-only git hooks.</p></li>
       <li id="browser-windows"><h3>kwant's browser on Windows and Linux ARM</h3><p>When no Chrome is found, kwant downloads Chrome for Testing there too, and a bot's Enter now submits forms.</p></li>
+      <li id="fixes-082" class="span3"><h3>Fixed in 0.8.2</h3><p>Dropping files on a chat works again. In 0.8.0 and 0.8.1, files dragged in from Finder, Explorer or your desktop showed the drop card, but letting go did nothing. Now they land in a bot's chat, a team chat, #general and a message to an @mention.</p></li>
+      <li id="fixes-081" class="span3"><h3>Fixed in 0.8.1</h3><p>When a bot needs you, its notification opens the team chat, channel, thread or direct chat where it asked, and an approval scrolls to its card. A team chat shows one line for each bot's newest pre-push check, with the ones that need you first. Each bot has the same avatar everywhere. After you stop a change, "try again" picks up the same plan while "never mind" doesn't, a bot that carries on no longer asks for a picture it already shared, and the working line names the bot.</p></li>
       <li id="fixes-080" class="span3"><h3>Smaller fixes</h3><p>Deleting a bot no longer fails with "database error", and Undo of a ready-made team or an import works when the chat search index is out of step. Every pull request now builds the web part of a source build.</p></li>
     </ul>
   </div>
@@ -485,9 +487,9 @@ card_art: team
     <div class="row">
       <div class="row-copy">
         <h3>Yes, go ahead, and the bot carries on</h3>
-        <p>Lead asks whether to publish the release notes. One tap answers it, and the reply comes back with nothing typed.</p>
+        <p>The bot asks whether to publish the release notes. One tap answers it, and the reply comes back with nothing typed.</p>
       </div>
-      <div class="frame">{{video:clip-v611-react|Demo: Lead's release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and Lead replies that the notes are published, with nothing typed.}}</div>
+      <div class="frame">{{video:clip-v611-react|Demo: release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and TechLead replies that the notes are published, with nothing typed.}}</div>
     </div>
   </div>
 </section>
@@ -752,7 +754,7 @@ card_art: team
         <p>A load-test report misses its p95 latency, so the check fails. AutoFix runs it again with what the check said, and the task ends Verified.</p>
         <a class="more-link" href="docs/mission-board.html#autofix">How AutoFix works →</a>
       </div>
-      <div class="frame">{{video:clip-autofix|Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why and AutoFix's plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified.}}</div>
+      <div class="frame">{{video:clip-autofix|Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why it failed and AutoFix's plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified.}}</div>
     </div>
     <ul class="flist">
       <li><h3>Missions</h3><p>Group tasks toward one goal, with a token limit if you want one. Tasks wait for the ones they build on.</p></li>
@@ -822,7 +824,7 @@ card_art: team
         <p>Asked about search clicks, TechLead reads the site itself, then offers Google Search Console. Press Connect, sign in on the app's own page, and the card says Connected.</p>
         <a class="more-link" href="docs/mcp.html">MCP tools &amp; Composio →</a>
       </div>
-      <div class="frame">{{video:clip-connect|Demo: asked why organic clicks dropped, TechLead reads kwant.si's page source, says the page looks healthy and offers a Google Search Console connection card. The user presses Connect, the card waits for the sign-in, then shows Connected.}}</div>
+      <div class="frame">{{video:clip-connect|Demo: asked why organic clicks dropped, TechLead reads the site's page source, says the page looks healthy and offers a Google Search Console connection card. The user presses Connect, the card waits for the sign-in, then shows Connected.}}</div>
     </div>
     <div class="grid two">
       <article class="card" id="way-round">
