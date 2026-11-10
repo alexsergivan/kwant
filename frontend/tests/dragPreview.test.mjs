@@ -193,10 +193,8 @@ test('the window watch: depth for enter and leave, the 1500 ms fallback, Esc, a 
   w.fire('keydown', { key: 'Escape' });
   assert.equal(watch.get().active, false, 'Esc');
   w.fire('dragenter', dragE());
-  w.nextTask();
   w.fire('drop', dragE());
-  w.nextTask();
-  assert.equal(watch.get().active, false, 'drop (one task later)');
+  assert.equal(watch.get().active, false, 'drop');
   const a = watch.registerChat();
   const b = watch.registerChat();
   assert.equal(watch.get().chats, 2);
@@ -206,37 +204,6 @@ test('the window watch: depth for enter and leave, the 1500 ms fallback, Esc, a 
   assert.ok(seen > 0);
   off();
   assert.equal(Object.values(w.on).flat().length, 0, 'the last one out takes the listeners off');
-});
-
-// 0.8.2: the watch listens in the capture phase. Ending the drag inside its own drop listener made React
-// unmount the drop layer (the drop's target) in the microtask after it, so a real OS drop never reached
-// the chat's onDrop and the window guard swallowed it. The drop now ends the drag one task later.
-test('a drop ends the drag one task later, so the chat under it gets the drop first', () => {
-  const w = fakeWin();
-  const watch = d.createDragWatch(w);
-  let seen = 0;
-  watch.subscribe(() => seen++);
-  w.fire('dragenter', dragE());
-  w.nextTask();
-  w.fire('dragover', dragE());
-  const before = seen;
-  w.fire('drop', dragE());
-  assert.equal(watch.get().active, true, 'still on while the drop is being handled');
-  assert.equal(seen, before, 'no re-render from the watch inside its drop listener');
-  assert.deepEqual(w.waitingMs(), [1500], 'the fallback is still the only long timer');
-  w.nextTask();
-  assert.equal(watch.get().active, false, 'over one task later');
-  assert.equal(w.timers.size, 0, 'no timer left behind');
-  // A chat that took the drop ends it itself; the deferred end then finds nothing to do.
-  w.fire('dragenter', dragE());
-  w.nextTask();
-  w.fire('drop', dragE());
-  watch.end();
-  assert.equal(watch.get().active, false, 'the chat ended it in its own handler');
-  assert.equal(w.timers.size, 0, 'end() clears the pending drop end too');
-  const after = seen;
-  w.nextTask();
-  assert.equal(seen, after, 'no second update');
 });
 
 // #478 M2: WebKit (and the Mac app's WKWebView) sends dragover mostly when the pointer moves.

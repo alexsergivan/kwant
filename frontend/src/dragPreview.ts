@@ -355,11 +355,7 @@ type Win = Pick<Window, 'addEventListener' | 'removeEventListener' | 'setTimeout
  *   the new element's dragenter just before the old one's dragleave);
  * - the first mousemove or pointermove arrives: mouse events don't fire during an OS drag, so one
  *   arriving means the drag is over (this catches a dragleave WebKit missed on a fast exit);
- * - Esc or dragend;
- * - drop, one task later: the watch listens in the capture phase, and ending at once re-renders the
- *   chat in the microtask checkpoint that follows this listener, which unmounts the drop layer under
- *   the pointer before the drop reaches it (0.8.2: a real OS drop then never reached the chat). A drop
- *   target that takes the drop calls `end()` itself;
+ * - Esc, dragend or drop;
  * - and, as a last fallback, no dragover for `watchdogMs` (1500 ms). WebKit, the Mac app's
  *   WKWebView included, sends dragover mostly when the pointer moves, so a hand held still must
  *   not end it; a shorter watchdog made the layer vanish and blink back.
@@ -369,7 +365,6 @@ export function createDragWatch(win: Win, watchdogMs = 1500) {
   let state: WindowDrag = { active: false, items: [], chats: 0 };
   let depth = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let dropTimer: ReturnType<typeof setTimeout> | null = null;
   // A dragenter came in this task: a null-relatedTarget dragleave right after it is a crossing, not an exit.
   let justEntered = false;
   const subs = new Set<() => void>();
@@ -385,8 +380,6 @@ export function createDragWatch(win: Win, watchdogMs = 1500) {
     depth = 0;
     if (timer) win.clearTimeout(timer);
     timer = null;
-    if (dropTimer) win.clearTimeout(dropTimer);
-    dropTimer = null;
     if (state.active) set({ active: false, items: [] });
   }
   const take = (e: DragEvent) => {
@@ -422,11 +415,6 @@ export function createDragWatch(win: Win, watchdogMs = 1500) {
   const onMove = () => {
     if (state.active) end();
   };
-  // Drop targets get the drop first (see above); the watch ends the drag one task later.
-  const onDrop = () => {
-    if (dropTimer) win.clearTimeout(dropTimer);
-    dropTimer = win.setTimeout(end, 0);
-  };
   const onKey = (e: Event) => {
     if ((e as KeyboardEvent).key === 'Escape' && state.active) end();
   };
@@ -434,7 +422,7 @@ export function createDragWatch(win: Win, watchdogMs = 1500) {
     ['dragenter', onEnter],
     ['dragover', onOver],
     ['dragleave', onLeave],
-    ['drop', onDrop],
+    ['drop', end],
     ['dragend', end],
     ['keydown', onKey],
     ['mousemove', onMove],
