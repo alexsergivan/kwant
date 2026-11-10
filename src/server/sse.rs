@@ -107,7 +107,9 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
             out.extend(fields(v, &["kwant_id", "channel_id", "direct_kwant_id", "thread_id"], Owner::Context));
             out
         }
-        E::ProfileSwitched { kwant_id, .. } | E::MemoryChanged { kwant_id } => contexts([&Some(kwant_id.clone())]),
+        E::ProfileSwitched { kwant_id, .. } | E::MemoryChanged { kwant_id } | E::BotStatus { kwant_id, .. } => {
+            contexts([&Some(kwant_id.clone())])
+        }
         E::DiscussionStarted { team_id, .. }
         | E::BrowserNavigated { team_id, .. }
         | E::BrowserScreenshot { team_id, .. }
@@ -310,6 +312,7 @@ mod tests {
             },
             E::Error { code: s("x"), message: s("x"), kwant_id: Some(s("k")) },
             E::MemoryChanged { kwant_id: s("k") },
+            E::BotStatus { kwant_id: s("k"), status: json!({}) },
             E::RoutineRun { routine_id: s("r"), run_id: s("x"), status: s("ok") },
             E::TaskUpdated { task: json!({"id": "t", "space_id": "spc_x"}) },
             E::MissionUpdated { mission: json!({"id": "m", "space_id": "spc_x"}) },
@@ -382,6 +385,7 @@ mod tests {
                 | E::DecideUpdated { .. }
                 | E::Error { .. }
                 | E::MemoryChanged { .. }
+                | E::BotStatus { .. }
                 | E::RoutineRun { .. }
                 | E::TaskUpdated { .. }
                 | E::MissionUpdated { .. }

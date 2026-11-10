@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 17] = [
+pub const NOTIFY_KINDS: [&str; 18] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -52,6 +52,7 @@ pub const NOTIFY_KINDS: [&str; 17] = [
     "goal_alert",
     "idea_ready",
     "spend_stopped",
+    "turn_quiet",
 ];
 const MASK: &str = "••••••••";
 
@@ -1955,6 +1956,20 @@ pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<
         kwant_id: kwant_id.to_string(),
         title: format!("{name} replied"),
         body: format!("{name} finished replying in {where_}."),
+        kwant_name: name,
+        channel_id,
+    }
+}
+
+/// "<bot> is quiet": a live turn of `kwant_id` in `context_id` had no step for 15 min (H4/P4).
+pub async fn turn_quiet(state: &AppState, kwant_id: &str, context_id: Option<&str>) -> Notification {
+    let name = kwant_name(state, kwant_id).await;
+    let (channel_id, where_) = place(state, context_id).await;
+    Notification {
+        kind: "turn_quiet",
+        kwant_id: kwant_id.to_string(),
+        title: format!("{name} is quiet"),
+        body: format!("{name} has been quiet for {} min in {where_}.", super::bot_status::QUIET_LONG_MIN),
         kwant_name: name,
         channel_id,
     }
