@@ -337,6 +337,7 @@ export const sha7 = (s: string | null) => (s ? s.trim().slice(0, 7) : '');
 
 export const filesWord = (n: number) => plural(n, 'file');
 export const notesWord = (n: number) => plural(n, 'note');
+export const draftsWord = (n: number) => plural(n, 'draft');
 export const addAria = (l: DiffLine) => (l.kind === 'del' ? `Add a note on removed line ${l.old}` : `Add a note on line ${l.new}`);
 export const sendLabel = (n: number, bot: string) => (n === 1 ? `Send note to ${bot}` : `Send ${n} notes to ${bot}`);
 export const sendShort = (n: number) => `Send ${n}`;

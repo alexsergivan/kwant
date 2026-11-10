@@ -282,6 +282,8 @@ test('positionIn: a note sits where at_head says, even across a removed and an a
 test('copy: Mira’s words, singular for 1, short shas, no emoji', () => {
   assert.equal(m.sendLabel(1, 'Vega'), 'Send note to Vega');
   assert.equal(m.sendLabel(3, 'Vega'), 'Send 3 notes to Vega');
+  assert.equal(m.draftsWord(1), '1 draft');
+  assert.equal(m.draftsWord(2), '2 drafts');
   assert.equal(m.sendShort(3), 'Send 3');
   assert.equal(m.sentLine(3, 'Vega', '09:30'), 'Sent 3 notes to Vega · 09:30');
   assert.equal(m.discardAsk(1), 'Discard 1 draft?');
@@ -356,7 +358,7 @@ test('collapsed: the card’s own counts, no fetch; Show loads the diff and Hide
   const head = $('h4').textContent;
   assert.match(head, /Changes/);
   assert.match(head, /3 files/);
-  assert.match(head, /2 notes/);
+  assert.match(head, /· 2 drafts/);
   assert.equal(calls.length, 0, 'nothing is fetched until it opens');
   const toggle = byText('Show the changes');
   assert.equal(toggle.getAttribute('aria-expanded'), 'false');
