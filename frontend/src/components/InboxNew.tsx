@@ -22,7 +22,8 @@ import {
 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
 import { ModernApprovalCard } from './ModernApprovalCard';
-import { ReviewDone, ReviewItemSlot, VERDICT_STYLE } from './ReviewItemStub';
+import { ReviewDone, VERDICT_STYLE } from './ReviewItemStub';
+import { ReviewItemView } from './ReviewItemView';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, windowLabel } from '../away';
 import { INBOX_GROUPS, InboxGroup, InboxItem, ReviewItem, VERDICT_WORD, groupItems, isReview } from '../api/inbox';
@@ -761,7 +762,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
     selectedId === 'batch' && selValid ? (
       <BatchPane wide={wide} onOpenItem={openFromBatch} />
     ) : selItem && isReview(selItem) ? (
-      <ReviewItemSlot item={selItem} entry={crumb ?? 'inbox'} onDone={onDone} onApprove={(i) => void approveOne(i)} busy={busy === selItem.id} />
+      <ReviewItemView item={selItem} entry={crumb ?? 'inbox'} onDone={onDone} />
     ) : empty ? (
       <div className="h-full grid place-items-center text-center" data-pane-empty>
         <div className="space-y-1.5">
