@@ -619,6 +619,8 @@ pub fn card_json_in(row: &DevCardRow, teams: &HashMap<String, String>) -> Value 
                 out.insert("branch".into(), json!(f.head_branch));
                 out.insert("base".into(), json!(f.base_branch));
                 out.insert("draft".into(), json!(f.draft));
+                // G1: the diff stat the Show button needs before `/changes` is fetched
+                out.insert("changes".into(), super::line_notes::changes_stat(&f.files));
             }
         }
     }
@@ -645,6 +647,8 @@ pub fn card_json_in(row: &DevCardRow, teams: &HashMap<String, String>) -> Value 
         }
         out.insert("posted".into(), stored(&row.posted));
         out.insert("post_error".into(), stored(&row.post_error));
+        // G1: the head the card is about, refetched by the diff view when it moves
+        out.insert("head_sha".into(), json!(row.head_sha));
     }
     Value::Object(out)
 }
@@ -821,7 +825,11 @@ pub async fn reviews(State(state): State<AppState>, headers: HeaderMap, Path(id)
     let only = repo_filter(q.repo.as_deref());
     let teams = team_names(&state, &space).await;
     match open_reviews(&state, &space, only.as_deref()).await {
-        Ok(rows) => Json(json!({"cards": rows.iter().map(|r| card_json_in(r, &teams)).collect::<Vec<_>>()})).into_response(),
+        Ok(rows) => {
+            let mut cards: Vec<Value> = rows.iter().map(|r| card_json_in(r, &teams)).collect();
+            super::line_notes::add_counts(&state, space.as_str(), &rows, &mut cards).await;
+            Json(json!({"cards": cards})).into_response()
+        }
         Err(e) => internal(e),
     }
 }
@@ -843,7 +851,10 @@ pub async fn card(State(state): State<AppState>, headers: HeaderMap, Path(card_i
         Err(r) => return r,
     };
     let teams = team_names(&state, &space).await;
-    Json(card_json_in(&row, &teams)).into_response()
+    let mut card = [card_json_in(&row, &teams)];
+    super::line_notes::add_counts(&state, space.as_str(), std::slice::from_ref(&row), &mut card).await;
+    let [card] = card;
+    Json(card).into_response()
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -710,6 +710,10 @@ pub struct SendChatPayload {
     /// `meta.source`. Set only by the server, never read from a request.
     #[serde(skip)]
     pub source: Option<String>,
+    /// Keys merged into the message's `meta` (line notes' `{kind: "pr_notes", …}`). Set only by
+    /// the server, never read from a request.
+    #[serde(skip)]
+    pub meta: Option<serde_json::Value>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -3703,6 +3707,17 @@ async fn idea_from_chat(
     }
 }
 
+/// Adds the server-set `extra` keys to a message's meta.
+fn merge_meta(meta: &mut Option<serde_json::Value>, extra: Option<&serde_json::Value>) {
+    let Some(serde_json::Value::Object(extra)) = extra else { return };
+    let m = meta.get_or_insert_with(|| json!({}));
+    if let Some(m) = m.as_object_mut() {
+        for (k, v) in extra {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+}
+
 pub(crate) async fn send_chat_inner(
     state: AppState,
     mut payload: SendChatPayload,
@@ -3924,6 +3939,7 @@ pub(crate) async fn send_chat_inner(
     if let Some(source) = &payload.source {
         user_meta.get_or_insert_with(|| json!({}))["source"] = json!(source);
     }
+    merge_meta(&mut user_meta, payload.meta.as_ref());
     if !from_person {
         user_meta.get_or_insert_with(|| json!({}))[SENT_BY_BOT] = json!(true);
     }
@@ -4357,6 +4373,7 @@ async fn send_to_thread(
         tokens_used: payload.prompt.len() as i64 / 4,
     };
     let mut meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
+    merge_meta(&mut meta, payload.meta.as_ref());
     if !from_person {
         meta.get_or_insert_with(|| json!({}))[SENT_BY_BOT] = json!(true);
     }
