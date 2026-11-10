@@ -1672,27 +1672,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
     onDrop: (e: React.DragEvent) => {
       if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
-      overDepth.current = 0;
-      // Not flushed: the drop ends the drag anyway, and the exit must see `landed` first.
-      overNow.current = false;
-      setOverChat(false);
-      if (!inColumn(e.target) || modalUp || dropOff) return;
-      // What the drop itself holds decides, the same way the card did (an ignored drop does nothing).
-      const items = e.dataTransfer.items as unknown as ArrayLike<DataTransferItem>;
-      const now = dropCard({ preview: previewDrag(items?.length ? items : winDrag.items, uploads.length), recipient: dropTo.recipient, ideaMode });
-      if (now.state === 'refused') return;
-      const dropped = splitDrop(items, e.dataTransfer.files);
-      const keys = addFiles(dropped.files, dropped.folders.length ? [FOLDER_NOTE] : []);
-      landed.current = true;
-      textareaRef.current?.focus();
-      playSfx('blip');
-      if (dropTo.single && dropTo.botId) moodNoticed(dropTo.botId);
-      setDropAnnounce(dropAnnouncement(keys.length, dropTo.recipient));
-      if (keys.length) {
-        setFreshChips((m) => ({ ...m, ...Object.fromEntries(keys.map((k, i) => [k, i])) }));
-        setTimeout(() => setFreshChips((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !keys.includes(k)))), 800);
+      // The window watch ends a drag one task after the drop so this handler gets it (the layer it
+      // landed on is still mounted). End it here instead, in this same render, so no "Drop here…"
+      // frame shows between the drop and the landing; `landed` is set before React renders.
+      try {
+        takeDrop(e);
+      } finally {
+        dragWatch.end();
       }
     },
+  };
+  // What a drop on this chat does (from onDrop above).
+  const takeDrop = (e: React.DragEvent) => {
+    overDepth.current = 0;
+    // Not flushed: the drop ends the drag anyway, and the exit must see `landed` first.
+    overNow.current = false;
+    setOverChat(false);
+    if (!inColumn(e.target) || modalUp || dropOff) return;
+    // What the drop itself holds decides, the same way the card did (an ignored drop does nothing).
+    const items = e.dataTransfer.items as unknown as ArrayLike<DataTransferItem>;
+    const now = dropCard({ preview: previewDrag(items?.length ? items : winDrag.items, uploads.length), recipient: dropTo.recipient, ideaMode });
+    if (now.state === 'refused') return;
+    const dropped = splitDrop(items, e.dataTransfer.files);
+    const keys = addFiles(dropped.files, dropped.folders.length ? [FOLDER_NOTE] : []);
+    landed.current = true;
+    textareaRef.current?.focus();
+    playSfx('blip');
+    if (dropTo.single && dropTo.botId) moodNoticed(dropTo.botId);
+    setDropAnnounce(dropAnnouncement(keys.length, dropTo.recipient));
+    if (keys.length) {
+      setFreshChips((m) => ({ ...m, ...Object.fromEntries(keys.map((k, i) => [k, i])) }));
+      setTimeout(() => setFreshChips((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !keys.includes(k)))), 800);
+    }
   };
   const layerPhase: DropPhase | null = livePhase ?? exiting;
   const composerLit = livePhase === 'over';
