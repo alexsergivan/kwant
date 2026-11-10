@@ -30,6 +30,7 @@ pub mod scan;
 pub mod source;
 pub mod tamper;
 pub mod tickets;
+pub mod worktrees;
 
 pub use generate::generate;
 
