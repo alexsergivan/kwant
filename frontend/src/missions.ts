@@ -266,6 +266,12 @@ export interface RestorePreview {
   effects_known: boolean;
   task_state_after: 'ready' | 'backlog' | null;
   refused: RestoreRefusal | null;
+  /** 0.9 D2: a verified task is rolled back by a copy from the checkpoint (`POST fork`), not a restore. */
+  via?: 'restore' | 'fork';
+  /** 0.9 D2: the one-tier Flight School step-down a roll back after approval makes, or null. */
+  step_down?: { kwant_id: string; class: string; from: string; to: string } | null;
+  /** When the task was approved, when the server sends it (roll back after approval). */
+  verified_at?: string | null;
 }
 
 /** `POST /api/tasks/:id/checkpoints/:cid/restore` (person-only; `Idempotency-Key` header required). */
@@ -1824,6 +1830,17 @@ export const missionsApi = {
     call<ResolveFlagResult>(`/api/tasks/${enc(taskId)}/flags/${enc(flagId)}/resolve`, 'POST', note ? { resolution, note } : { resolution }, { 'Idempotency-Key': key }),
   /** Copy a task to redo it; the same key returns the same copy. */
   fork: (taskId: string, reason: string, key: string) => call<Task>(`/api/tasks/${enc(taskId)}/fork`, 'POST', { reason }, { 'Idempotency-Key': key }),
+  /**
+   * 0.9 D2: roll back after approval. A copy of the task from `from_checkpoint`, with the original's
+   * task-owned paths put back first; it waits on hold until Run. 409 `stale_preview` on a changed preview.
+   */
+  forkFromCheckpoint: (taskId: string, body: { reason: string; from_checkpoint: string; preview_sha256: string }, key: string) =>
+    call<Task & { restore?: RestoreResult | null; stepped_down?: { kwant_id: string; class: string; from: string; to: string } | null }>(
+      `/api/tasks/${enc(taskId)}/fork`,
+      'POST',
+      body,
+      { 'Idempotency-Key': key },
+    ),
   /** Let a task a restore held run again (person only). */
   /** Take a held task off hold. The same key replays the first 200, so a double press is a success. */
   runHeld: (id: string, key: string) => call<{ task: Task }>(`/api/tasks/${enc(id)}/run`, 'POST', {}, { 'Idempotency-Key': key }).then((r) => r.task),
