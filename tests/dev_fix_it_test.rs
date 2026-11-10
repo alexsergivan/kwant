@@ -58,6 +58,9 @@ fn commit_on(dir: &Path, who: &str, branch: &str, file: &str, text: &str) -> Str
     } else {
         git_as(dir, who, &["checkout", "-q", branch]);
     }
+    if let Some(parent) = dir.join(file).parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
     std::fs::write(dir.join(file), text).unwrap();
     git_as(dir, who, &["add", "--", file]);
     git_as(dir, who, &["commit", "-q", "-m", &format!("Change {file}")]);
