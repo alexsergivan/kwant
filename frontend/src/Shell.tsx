@@ -24,7 +24,7 @@ import {
   spacesApi,
 } from './spaces';
 import { NotifyEvent, TOAST_KINDS, browserNotifyEnabled, notificationPermission, shouldShowOsNotification } from './continuity';
-import { isNotificationOpen, placeOfQuery, resyncPushOnLoad, showDeviceNotification, targetFromQuery } from './push';
+import { cardFromQuery, isNotificationOpen, placeOfQuery, resyncPushOnLoad, showDeviceNotification, spaceTargetOfNotification, targetFromQuery } from './push';
 import { requestSpendStopFocus } from './spendStop';
 
 const INBOX_NEW: SpaceView = { kind: 'inbox', tab: 'new' };
@@ -105,13 +105,28 @@ export const App: React.FC = () => {
       // The chat's own address with `?live=1` opens its live panel too, as `/live` does (W-L11)
       const routed = parseSpacePath(window.location.pathname);
       const liveFlag = (routed.channelId || routed.botId) && new URLSearchParams(window.location.search).get('live') === '1';
-      const route = q ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined, live: q.live } : liveFlag ? { ...routed, live: true } : routed;
+      const route = q
+        ? { spaceId: q.spaceId, channelId: q.channelId ?? undefined, botId: q.botId ?? undefined, live: q.live, threadId: q.threadId ?? undefined }
+        : liveFlag ? { ...routed, live: true } : routed;
       const s = pickSpace(list, route.spaceId, lastSpace());
       if (!s) return;
       const here = route.spaceId === s.id;
-      const fromUrl = here && (route.channelId || route.botId || route.live) ? { channelId: route.channelId, botId: route.botId, ...(route.live ? { live: true } : {}) } : null;
+      // 0.8.1 F6: a notification's link names one of the bot's conversations and the card to show
+      const cardId = (q ? q.cardId : cardFromQuery(window.location.search)) || undefined;
+      const fromUrl =
+        here && (route.channelId || route.botId || route.live)
+          ? {
+              channelId: route.channelId,
+              botId: route.botId,
+              ...(route.live ? { live: true } : {}),
+              ...(route.botId && route.threadId ? { threadId: route.threadId } : {}),
+              ...(cardId ? { cardId } : {}),
+            }
+          : null;
       // An old address (/away, /loose-ends, /connections…) opens its new place, rewritten in place.
       open(s.id, fromUrl, true, here && 'view' in route ? route.view ?? null : null);
+      // The card is shown once: a reload doesn't flash it again
+      if (cardId && window.location.search) window.history.replaceState(null, '', window.location.pathname);
     });
   }, [reload, open]);
 
@@ -123,7 +138,7 @@ export const App: React.FC = () => {
       const view = route.view ?? null;
       if (route.spaceId !== currentRef.current) {
         setCurrentSpace(route.spaceId);
-        setTarget({ channelId: route.channelId, botId: route.botId, live: route.live });
+        setTarget({ channelId: route.channelId, botId: route.botId, live: route.live, ...(route.threadId ? { threadId: route.threadId } : {}) });
         setStartView(view);
         setViewRequest(null);
         viewRef.current = view;
@@ -191,7 +206,7 @@ export const App: React.FC = () => {
         const sid = n.space_id ?? event.space_id;
         if (!sid || sid === currentRef.current) return;
         const name = n.space_name ?? 'another space';
-        const go = () => switchTo(sid, n.channel_id ? { channelId: n.channel_id } : n.kwant_id ? { botId: n.kwant_id } : null);
+        const go = () => switchTo(sid, spaceTargetOfNotification(n));
         reload();
         if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
           const id = ++toastIdRef.current;
@@ -216,7 +231,7 @@ export const App: React.FC = () => {
       const m = e.data;
       if (!isNotificationOpen(m) || !m.space_id || m.space_id === currentRef.current) return;
       if (!spaces?.some((s) => s.id === m.space_id)) return;
-      switchTo(m.space_id, m.channel_id ? { channelId: m.channel_id } : m.kwant_id ? { botId: m.kwant_id } : null);
+      switchTo(m.space_id, spaceTargetOfNotification(m));
     };
     sw.addEventListener('message', onMessage);
     return () => sw.removeEventListener('message', onMessage);

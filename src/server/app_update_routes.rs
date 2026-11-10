@@ -73,6 +73,8 @@ pub async fn notify_once(state: &AppState, version: &str) -> bool {
             channel_id: None,
             title: format!("kwant bots {version} is ready"),
             body: "Open kwant bots to update and restart.".into(),
+            thread_id: None,
+            card_id: None,
         },
     )
     .await;

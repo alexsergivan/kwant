@@ -42,3 +42,37 @@ test("App's openTarget closes the board and Inbox when the chat is already selec
   assert.ok(open, 'openTarget exists');
   assert.match(open[1], /if \(plan === 'reveal'\) revealChat\(\);/);
 });
+
+// ---------------------------------------------------------------------------
+// 0.8.1 F6: a needs-you notification opens the exact chat it came from, else the bot's 1:1
+
+const { notifiedPlace } = await loadBundled(`export * from './src/chatTarget';`);
+
+test('an approval asked in a team chat or channel opens that chat', () => {
+  // A team chat is a channel ("team-core")
+  assert.deepEqual(notifiedPlace({ channel_id: 'c1', kwant_id: 'shelly', card_id: 'ap1' }, exists), {
+    kind: 'chat',
+    target: { channel_id: 'c1', kwant_id: null },
+  });
+});
+
+test('an approval asked in one of the bot’s conversations opens that conversation', () => {
+  assert.deepEqual(notifiedPlace({ channel_id: null, kwant_id: 'shelly', thread_id: 't1' }, exists), { kind: 'thread', kwant_id: 'shelly', thread_id: 't1' });
+});
+
+test('an approval asked in the 1:1, or an old notification without a thread, opens the 1:1', () => {
+  assert.deepEqual(notifiedPlace({ channel_id: null, kwant_id: 'shelly' }, exists), { kind: 'chat', target: { channel_id: null, kwant_id: 'shelly' } });
+});
+
+test('a gone channel or conversation lands in the bot’s 1:1, never a dead tap', () => {
+  const direct = { kind: 'chat', target: { channel_id: null, kwant_id: 'shelly' } };
+  assert.deepEqual(notifiedPlace({ channel_id: 'c-gone', kwant_id: 'shelly' }, exists), direct);
+  assert.deepEqual(notifiedPlace({ channel_id: null, kwant_id: 'shelly', thread_id: 't-gone' }, { ...exists, thread: () => false }), direct);
+});
+
+test('with the bot gone too there is nowhere to go; a channel alone still opens', () => {
+  assert.deepEqual(notifiedPlace({ channel_id: 'c-gone', kwant_id: 'ghost' }, exists), { kind: 'gone' });
+  assert.deepEqual(notifiedPlace({ channel_id: null, kwant_id: 'ghost', thread_id: 't1' }, exists), { kind: 'gone' });
+  // A tap about a channel with no bot named (the page used to drop these)
+  assert.deepEqual(notifiedPlace({ channel_id: 'c2', kwant_id: null }, exists), { kind: 'chat', target: { channel_id: 'c2', kwant_id: null } });
+});

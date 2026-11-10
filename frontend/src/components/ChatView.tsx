@@ -830,7 +830,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
   const [flashKind, setFlashKind] = useState<'search' | 'quote'>('search');
   useEffect(() => {
-    if (!highlightMessageId || !messages.some((m) => m.id === highlightMessageId)) return;
+    if (!highlightMessageId) return;
+    // 0.8.1 F6: an approval's card (a notification names it), not a message
+    if (pendingApprovals.some((a) => a.id === highlightMessageId)) {
+      const card = scrollRef.current?.querySelector<HTMLElement>(`[data-approval-card="${CSS.escape(highlightMessageId)}"]`);
+      if (!card) return;
+      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+      setFlashKind('search');
+      setFlashId(highlightMessageId);
+      onHighlightDone?.();
+      return;
+    }
+    if (!messages.some((m) => m.id === highlightMessageId)) return;
     const thread = groupDiscussionThreads(messages).find(
       (item) => item.kind === 'thread' && item.turns.some((t) => t.id === highlightMessageId),
     );
@@ -845,7 +857,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setFlashKind('search');
     setFlashId(highlightMessageId);
     onHighlightDone?.();
-  }, [highlightMessageId, messages, openThoughts, onHighlightDone]);
+  }, [highlightMessageId, messages, openThoughts, onHighlightDone, pendingApprovals]);
   useEffect(() => {
     if (!flashId) return;
     const t = setTimeout(() => setFlashId(null), flashKind === 'quote' ? 1600 : 2400);
@@ -2072,9 +2084,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {prepush}
 
         {/* Pending Security Approval Ticket */}
-        {pendingApprovals.map((approval) => (
-          <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
-        ))}
+        {pendingApprovals.map((approval) =>
+          // 0.8.1 F6: a notification's tap lands on this card and flashes it
+          flashId === approval.id ? (
+            <div key={approval.id} className="rounded-xl kw-flash">
+              <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
+            </div>
+          ) : (
+            <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
+          ),
+        )}
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}

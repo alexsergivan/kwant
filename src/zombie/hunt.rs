@@ -562,6 +562,8 @@ pub async fn review(state: &AppState, trigger: &str) -> Result<Vec<String>, Scan
                         channel_id: None,
                         title: format!("Loose ends review: {n} thing{} to pick back up", if n == 1 { "" } else { "s" }),
                         body: review_body(&picked, total),
+                        thread_id: None,
+                        card_id: None,
                     },
                 )
                 .await;

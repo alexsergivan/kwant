@@ -67,9 +67,16 @@ pub struct Payload {
     pub space_id: Option<String>,
     pub channel_id: Option<String>,
     pub kwant_id: String,
-    /// Relative: `/?space=<id>&channel=<id>`, or `&kwant=<id>` without a channel.
+    /// Relative: `/?space=<id>&channel=<id>`, or `&kwant=<id>` without a channel, plus
+    /// `&thread=<id>` and `&card=<id>` when [`Payload::at`] names them.
     pub url: String,
     pub tag: String,
+    /// The bot's conversation it is about (0.8.1 F6); old service workers ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    /// The card to show there: an approval's id (0.8.1 F6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_id: Option<String>,
 }
 
 impl Payload {
@@ -106,7 +113,30 @@ impl Payload {
             kwant_id,
             url: format!("/?{}", query.join("&")),
             tag,
+            thread_id: None,
+            card_id: None,
         }
+    }
+
+    /// The same notification about one of the bot's conversations (`thread`, kept with `kwant=`
+    /// so an older page still opens the bot) and the card to show there. The tag names the
+    /// thread, so one conversation's notification doesn't replace another's.
+    pub fn at(mut self, thread_id: Option<String>, card_id: Option<String>) -> Self {
+        let enc = |s: &str| percent_encoding::utf8_percent_encode(s, QUERY_VALUE).to_string();
+        if self.channel_id.is_none() && !self.kwant_id.is_empty() {
+            if let Some(t) = thread_id.as_deref().filter(|t| !t.is_empty()) {
+                self.url.push_str(&format!("&thread={}", enc(t)));
+                self.tag = format!("kwnt-{}-{}-{t}", self.space_id.as_deref().unwrap_or("none"), self.kind);
+                self.thread_id = Some(t.to_string());
+            }
+        }
+        if !self.url.contains("notify=") {
+            if let Some(c) = card_id.as_deref().filter(|c| !c.is_empty()) {
+                self.url.push_str(&format!("&card={}", enc(c)));
+                self.card_id = Some(c.to_string());
+            }
+        }
+        self
     }
 
     /// The person is waiting on these: kept a day and sent at high urgency (a spending stop that
@@ -882,5 +912,28 @@ mod tests {
         let huge = Payload { title: "t".repeat(5000), ..p };
         assert!(huge.to_bytes().len() <= MAX_PAYLOAD_BYTES);
         assert_eq!(topic("kwnt-x").len(), 32);
+    }
+
+    /// 0.8.1 F6: a notification about a conversation opens it, and an approval names its card.
+    #[test]
+    fn payload_names_the_thread_and_the_card() {
+        let p = Payload::new("approval_needed", "Ada needs approval", "b", Some("s1".into()), None, "k1".into()).at(Some("t 1".into()), Some("ap1".into()));
+        assert_eq!(p.url, "/?space=s1&kwant=k1&thread=t%201&card=ap1", "kwant= stays for older pages");
+        assert_eq!(p.tag, "kwnt-s1-approval_needed-t 1");
+        assert_eq!((p.thread_id.as_deref(), p.card_id.as_deref()), (Some("t 1"), Some("ap1")));
+        let json: serde_json::Value = serde_json::from_slice(&p.to_bytes()).unwrap();
+        assert_eq!((json["thread_id"].as_str(), json["card_id"].as_str()), (Some("t 1"), Some("ap1")));
+        // A channel (or team chat) wins over a thread: its card is in the channel
+        let p = Payload::new("approval_needed", "t", "b", Some("s1".into()), Some("c1".into()), "k1".into()).at(Some("t1".into()), Some("ap1".into()));
+        assert_eq!((p.url.as_str(), p.tag.as_str(), p.thread_id), ("/?space=s1&channel=c1&card=ap1", "kwnt-s1-approval_needed-c1", None));
+        // Nothing to add: unchanged, and the JSON has no new keys (old service workers)
+        let plain = Payload::new("turn_finished", "t", "b", None, None, "k1".into());
+        let p = plain.clone().at(None, None);
+        assert_eq!(p, plain);
+        let json: serde_json::Value = serde_json::from_slice(&p.to_bytes()).unwrap();
+        assert!(json.get("thread_id").is_none() && json.get("card_id").is_none());
+        // About no bot: no thread or card to open
+        let p = Payload::new("spend_stopped", "t", "b", None, None, String::new()).at(Some("t1".into()), Some("x".into()));
+        assert_eq!(p.url, "/?notify=spend_stopped");
     }
 }
