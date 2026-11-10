@@ -233,9 +233,29 @@ async fn close_cards(state: &AppState, kwant_id: &str, since: chrono::DateTime<c
     }
 }
 
+/// What an [`ask_json_as`] call is for, as its errors name it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Job {
+    /// "… couldn't {what} twice in a row".
+    pub what: &'static str,
+    /// "… can't run a {turn} turn with no tools".
+    pub turn: &'static str,
+    /// A turn the daily spending stop held ends the call at once with that error (it starts with
+    /// `spend_stop::REASON`), so the caller can try again after Continue.
+    pub stop_on_spend: bool,
+}
+
+/// A review card's text.
+pub(super) const CARD: Job = Job { what: "write the card's text", turn: "card", stop_on_spend: false };
+
 /// Asks `model` for `prompt`'s JSON and reads it with `parse`; a reply that doesn't read (or a
 /// failed turn) is asked for once more, saying what was wrong. The error is the card's reason.
 pub(super) async fn ask_json<M: Model, T>(model: &mut M, prompt: &str, parse: impl Fn(&str) -> Result<T, String>) -> Result<T, String> {
+    ask_json_as(model, prompt, parse, CARD).await
+}
+
+/// [`ask_json`] for `job`.
+pub(super) async fn ask_json_as<M: Model, T>(model: &mut M, prompt: &str, parse: impl Fn(&str) -> Result<T, String>, job: Job) -> Result<T, String> {
     let mut last = String::new();
     for attempt in 0..2 {
         if !model.take_call().await {
@@ -253,14 +273,17 @@ pub(super) async fn ask_json<M: Model, T>(model: &mut M, prompt: &str, parse: im
             },
             Err(e) => {
                 let first = e.lines().next().unwrap_or(&e).chars().take(300).collect::<String>();
+                if job.stop_on_spend && crate::server::spend_stop::is_stop_error(&e) {
+                    return Err(first);
+                }
                 if refused_no_tools(&e) {
-                    return Err(format!("{}'s engine can't run a card turn with no tools, so it wasn't run ({first}).", model.bot().name));
+                    return Err(format!("{}'s engine can't run a {} turn with no tools, so it wasn't run ({first}).", model.bot().name, job.turn));
                 }
                 last = format!("the turn failed: {first}");
             }
         }
     }
-    Err(format!("{} couldn't write the card's text twice in a row ({last}).", model.bot().name))
+    Err(format!("{} couldn't {} twice in a row ({last}).", model.bot().name, job.what))
 }
 
 /// The one JSON object in a reply: the whole reply, or inside a ```json fence. Anything else

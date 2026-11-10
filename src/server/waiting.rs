@@ -243,6 +243,8 @@ pub async fn list(State(state): State<AppState>, super::spaces::Scope(space): su
             "reminded_at": null,
         })));
     }
+    // Fix-it items past their PR's daily turn cap (dev::fix_it)
+    items.extend(super::dev::fix_it::needs_you(&state, space.as_str(), &kwants).await);
     items.sort_by_key(|(at, _)| *at);
     let mut items: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
     // Today's spending stop holds routines, goals, missions and AutoFix: one item, first, while it

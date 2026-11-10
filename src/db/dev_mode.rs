@@ -325,6 +325,8 @@ impl Database {
         self.migrate_ticket_briefs().await?;
         // 0.8.0: pre-push cards (B2, dev_prepush.rs)
         self.migrate_prepush().await?;
+        // 0.9.0: CI and review comments back to the author bot (dev_fix_it.rs)
+        self.migrate_fix_it().await?;
         Ok(())
     }
 
@@ -648,7 +650,7 @@ impl Database {
     async fn delete_dev_rows(&self, space_id: &str) -> Result<(), DbError> {
         let mut tx = self.pool.begin().await?;
         let tables = ["dev_mode_spaces", "dev_repos", "dev_cards", "dev_backups", "dev_model_calls", "dev_prod_connections"];
-        for t in tables.into_iter().chain(super::dev_ticket_briefs::BRIEF_TABLES).chain(super::dev_prepush::PREPUSH_TABLES) {
+        for t in tables.into_iter().chain(super::dev_ticket_briefs::BRIEF_TABLES).chain(super::dev_prepush::PREPUSH_TABLES).chain(super::dev_fix_it::FIX_TABLES) {
             sqlx::query(&format!("DELETE FROM {t} WHERE space_id = ?")).bind(space_id).execute(&mut *tx).await?;
         }
         tx.commit().await?;
