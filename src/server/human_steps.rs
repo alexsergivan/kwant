@@ -542,6 +542,8 @@ async fn raise_step(
                 channel_id: origin.channel_id.clone(),
                 title: format!("{} needs you in the browser", scope.kwant_name),
                 body: format!("{}. Open the chat, do it in the browser panel, then press Done.", kind_label(&step.kind)),
+                thread_id: step.thread_id.clone(),
+                card_id: None,
             },
         )
         .await;

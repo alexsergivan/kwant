@@ -164,6 +164,8 @@ async fn remind(state: &AppState, w: &WaitingItem) -> bool {
             channel_id: w.channel_id.clone(),
             title: format!("{} is still waiting on you", kwant.name),
             body: "Open the chat to answer.".into(),
+            thread_id: w.thread_id.clone(),
+            card_id: None,
         },
     )
     .await;

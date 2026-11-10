@@ -227,6 +227,8 @@ async fn tripped(state: &AppState, s: &Status, space: Option<&SpaceId>, held_mes
         channel_id: None,
         title: "Today's spending limit is reached".into(),
         body: format!("Used {}, so bots won't start new work until tomorrow. Open to continue today.", used_of(s)),
+        thread_id: None,
+        card_id: None,
     };
     super::continuity::notify_held(state, n, space, held_message).await;
 }

@@ -301,6 +301,8 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
             channel_id: origin.channel_id.clone(),
             title: format!("{} has a question", scope.kwant_name),
             body: "Open the chat to answer.".into(),
+            thread_id: q.thread_id.clone(),
+            card_id: None,
         },
     )
     .await;
@@ -565,6 +567,8 @@ pub async fn ask_without_waiter(state: &AppState, place: &QuestionPlace, kwant_n
             channel_id: q.channel_id.clone(),
             title: format!("{kwant_name} has a question"),
             body: "Open the chat to answer.".into(),
+            thread_id: q.thread_id.clone(),
+            card_id: None,
         },
     )
     .await;
@@ -692,6 +696,8 @@ pub async fn record_native(state: &AppState, place: &QuestionPlace, kwant_name: 
                 channel_id: q.channel_id.clone(),
                 title: format!("{kwant_name} has a question"),
                 body: "Open the chat to answer.".into(),
+                thread_id: q.thread_id.clone(),
+                card_id: None,
             },
         )
         .await;

@@ -170,6 +170,8 @@ export interface SpaceRoute {
   spaceId: string | null;
   channelId?: string;
   botId?: string;
+  /** `/b/<bot>/t/<thread>` (0.8.1 F6): one of the bot's conversations. */
+  threadId?: string;
   /** `/live` on a chat address (W2): open it with the browser panel showing. */
   live?: boolean;
   /** Inbox, Mission board, Parallel Universe or Settings (see nav.ts). */
@@ -183,6 +185,9 @@ export function parseSpacePath(path: string): SpaceRoute {
   if (!m) return { spaceId: null };
   const spaceId = decodeURIComponent(m[1]);
   const rest = m[2] ?? '';
+  // A bot's conversation (0.8.1 F6): what a notification about a thread opens
+  const thread = rest.match(/^b\/([^/]+)\/t\/([^/]+)$/);
+  if (thread) return { spaceId, botId: decodeURIComponent(thread[1]), threadId: decodeURIComponent(thread[2]) };
   const chat = rest.match(/^(c|b)\/([^/]+)(\/live)?$/);
   const live = chat?.[3] ? { live: true } : {};
   if (chat?.[1] === 'c') return { spaceId, channelId: decodeURIComponent(chat[2]), ...live };
@@ -197,13 +202,14 @@ export function parseSpacePath(path: string): SpaceRoute {
 
 export function spacePath(
   spaceId: string,
-  target?: { channelId?: string | null; botId?: string | null; live?: boolean | null } | null,
+  target?: { channelId?: string | null; botId?: string | null; threadId?: string | null; live?: boolean | null } | null,
   view?: SpaceView | null,
 ): string {
   const base = `/s/${encodeURIComponent(spaceId)}`;
   if (view) return `${base}/${viewSegment(view)}`;
   const live = target?.live ? '/live' : '';
   if (target?.channelId) return `${base}/c/${encodeURIComponent(target.channelId)}${live}`;
+  if (target?.botId && target.threadId) return `${base}/b/${encodeURIComponent(target.botId)}/t/${encodeURIComponent(target.threadId)}`;
   if (target?.botId) return `${base}/b/${encodeURIComponent(target.botId)}${live}`;
   return base;
 }

@@ -254,6 +254,8 @@ async fn announce(state: &AppState, o: &Offer) {
             title: format!("Suggested routine: {}", o.name),
             kwant_name,
             channel_id: None,
+            thread_id: None,
+            card_id: None,
         },
     )
     .await;

@@ -4,8 +4,10 @@ import { isKwantWorking, subscribeKwant } from '../kwantActivity';
 import { AvatarMood, useKwantMood, useKwantNotices } from './AvatarMood';
 import { moodLabel, restingUntilOf } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
+import { avatarStyleFor, botLooksRev, subscribeBotLooks } from '../botLooks';
 
 interface ModernAvatarProps {
+  /** The bot's avatar style, or a title or name hint; a known bot's saved style wins over a hint. */
   role?: string;
   name?: string;
   size?: number; // pixel diameter
@@ -125,6 +127,9 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   builder: ['steel', 'hardhat'],
   zen: ['blossom', 'flower'],
 };
+
+/** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
+const isStyleId = (role: string) => role === 'default' || Object.prototype.hasOwnProperty.call(ROLE_CREATURES, role);
 
 const hash = (s: string) => {
   let h = 0;
@@ -329,7 +334,7 @@ function renderCreature(c: Creature) {
 }
 
 export const ModernAvatar: React.FC<ModernAvatarProps> = ({
-  role = 'default',
+  role,
   name = '',
   size = 36,
   status,
@@ -344,7 +349,9 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   const notices = useKwantNotices(kwantId);
   const moodText = moodLabel(mood, name, restingUntilOf(kwantId));
   const label = moodText ?? (shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined);
-  const creature = pickCreature(role, name);
+  // Same bot, same look in every place: re-reads when the app's bot list changes.
+  useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
+  const creature = pickCreature(avatarStyleFor(role, kwantId, name, isStyleId) ?? 'default', name);
   // Dev mode: every bot avatar of 28 px and up wears the hard hat (top-left, clear of the status dot).
   const devOn = useDevModeOn();
   const hat = devOn && !!kwantId && size >= 28;

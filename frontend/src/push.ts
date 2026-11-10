@@ -6,15 +6,27 @@ import { BROWSER_NOTIFY_KEY, NotifyEvent, notificationPermission } from './conti
 import { isIos, isStandalone } from './pwa';
 import { spacePath } from './spaces';
 
-/** Same as the server's push tag: `kwnt-<space|none>-<kind>-<channel|bot>`. */
-export function notificationTag(n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id'> & { space_id?: string | null }): string {
-  return `kwnt-${n.space_id || 'none'}-${n.kind}-${n.channel_id ?? n.kwant_id}`;
+/** Same as the server's push tag: `kwnt-<space|none>-<kind>-<channel|thread|bot>`. */
+export function notificationTag(n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id' | 'thread_id'> & { space_id?: string | null }): string {
+  const thread = !n.channel_id && n.kwant_id && n.thread_id ? n.thread_id : null;
+  return `kwnt-${n.space_id || 'none'}-${n.kind}-${n.channel_id ?? thread ?? n.kwant_id}`;
 }
 
-/** Where a tap on the notification goes: the chat's own address, or the app's start. */
-export function notificationPath(n: { space_id?: string | null; channel_id?: string | null; kwant_id?: string | null }): string {
+/**
+ * Where a tap on the notification goes: the chat's own address (a channel or team chat, the bot's
+ * conversation, else its direct chat), with `?card=` for the card to show there; or the app's start.
+ */
+export function notificationPath(n: {
+  space_id?: string | null;
+  channel_id?: string | null;
+  kwant_id?: string | null;
+  thread_id?: string | null;
+  card_id?: string | null;
+}): string {
   if (!n.space_id) return '/';
-  return spacePath(n.space_id, { channelId: n.channel_id, botId: n.channel_id ? null : n.kwant_id });
+  const botId = n.channel_id ? null : n.kwant_id;
+  const path = spacePath(n.space_id, { channelId: n.channel_id, botId, threadId: botId ? n.thread_id : null });
+  return n.card_id && (n.channel_id || botId) ? `${path}?card=${encodeURIComponent(n.card_id)}` : path;
 }
 
 /** What a tap on a notification asks the open app to show (sw.js posts it; App and Shell act on it). */
@@ -24,6 +36,9 @@ export interface NotificationOpen {
   space_id: string | null;
   channel_id: string | null;
   kwant_id: string | null;
+  /** 0.8.1 F6; absent from a service worker that predates it. */
+  thread_id?: string | null;
+  card_id?: string | null;
 }
 
 export function isNotificationOpen(m: unknown): m is NotificationOpen {
@@ -38,6 +53,10 @@ export interface QueryTarget {
   live?: boolean;
   /** `?notify=<kind>`: a notification about no bot or chat (spend_stopped, app_update, loose ends…). */
   notify?: string;
+  /** `&thread=<id>` (0.8.1 F6): the bot's conversation. */
+  threadId?: string | null;
+  /** `&card=<id>` (0.8.1 F6): the card to show, an approval's id. */
+  cardId?: string | null;
 }
 
 /**
@@ -52,8 +71,16 @@ export function targetFromQuery(search: string): QueryTarget | null {
   const channelId = q.get('channel');
   const botId = channelId ? null : q.get('kwant');
   if (!spaceId && !channelId && !botId) return null;
-  return q.get('live') === '1' && (channelId || botId) ? { spaceId, channelId, botId, live: true } : { spaceId, channelId, botId };
+  const base: QueryTarget = q.get('live') === '1' && (channelId || botId) ? { spaceId, channelId, botId, live: true } : { spaceId, channelId, botId };
+  const threadId = botId ? q.get('thread') : null;
+  const cardId = channelId || botId ? q.get('card') : null;
+  if (threadId) base.threadId = threadId;
+  if (cardId) base.cardId = cardId;
+  return base;
 }
+
+/** `?card=<id>` on a chat's own address (a notification's path, the Mac pill): the card to show. */
+export const cardFromQuery = (search: string): string | null => new URLSearchParams(search).get('card') || null;
 
 /** A tap on a notification that opens today's spending stop (it names no bot or chat). */
 export const opensSpendStop = (n: { kind?: unknown } | null | undefined): boolean => !!n && n.kind === 'spend_stopped';
@@ -268,6 +295,9 @@ export async function showDeviceNotification(
         space_id: n.space_id ?? null,
         channel_id: n.channel_id ?? null,
         kwant_id: n.kwant_id ?? null,
+        // 0.8.1 F6: only when named, so a notification without them looks as before
+        ...(n.thread_id ? { thread_id: n.thread_id } : {}),
+        ...(n.card_id ? { card_id: n.card_id } : {}),
       },
     });
     return;
@@ -278,4 +308,24 @@ export async function showDeviceNotification(
     onClick();
     note.close();
   };
+}
+
+/**
+ * 0.8.1 F6: where in its space a notification opens: its channel or team chat, else one of the
+ * bot's conversations or its direct chat, with the card to show. A channel's bot rides along so a
+ * gone channel still lands in that bot's direct chat.
+ */
+export function spaceTargetOfNotification(n: {
+  channel_id?: string | null;
+  kwant_id?: string | null;
+  thread_id?: string | null;
+  card_id?: string | null;
+}): { channelId?: string; botId?: string; threadId?: string; cardId?: string } | null {
+  const t: { channelId?: string; botId?: string; threadId?: string; cardId?: string } = {};
+  if (n.channel_id) t.channelId = n.channel_id;
+  if (n.kwant_id) t.botId = n.kwant_id;
+  if (n.kwant_id && !n.channel_id && n.thread_id) t.threadId = n.thread_id;
+  if (!t.channelId && !t.botId) return null;
+  if (n.card_id) t.cardId = n.card_id;
+  return t;
 }
