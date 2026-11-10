@@ -1,4 +1,5 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
+import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
 import { queuedText } from '../claudeVm';
 import { QueuedBeside } from './QueuedBeside';
@@ -290,6 +291,8 @@ export interface ChatViewProps {
   renderConnectionSuggestion?: (msg: ChatMessage, meta: ConnectionSuggestionMeta, flash: boolean) => React.ReactNode;
   /** A change a bot made in the app (message meta kind "bot_action"). */
   renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
+  /** A mission watcher's check report (message meta kind "watch"). */
+  renderWatchReport?: (msg: ChatMessage, meta: WatchMeta, flash: boolean) => React.ReactNode;
   /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */
   renderHire?: (msg: ChatMessage, meta: HireMeta, flash: boolean) => React.ReactNode;
   /** Laya's "Who should answer this?" card (message meta kind "route_choice"); `question` is the
@@ -509,6 +512,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderMcpSuggestion,
   renderConnectionSuggestion,
   renderBotAction,
+  renderWatchReport,
   renderHire,
   renderRouteChoice,
   rerouteTargets = [],
@@ -1285,6 +1289,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const connection = msg.meta && renderConnectionSuggestion ? parseConnectionMeta(msg.meta) : null;
     if (connection && renderConnectionSuggestion)
       return <React.Fragment key={msg.id}>{renderConnectionSuggestion(msg, connection, flashId === msg.id)}</React.Fragment>;
+    const watch = msg.meta && renderWatchReport ? parseWatchMeta(msg.meta) : null;
+    if (watch && renderWatchReport) return <React.Fragment key={msg.id}>{renderWatchReport(msg, watch, flashId === msg.id)}</React.Fragment>;
     const botAction = msg.meta && renderBotAction ? parseBotActionMeta(msg.meta) : null;
     if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
     const hire = msg.meta && renderHire ? parseHireMeta(msg.meta) : null;
