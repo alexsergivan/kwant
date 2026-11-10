@@ -87,6 +87,8 @@ pub struct Held {
     /// The held turn's slot for the delivery check's one continuation: the decided reply, checked
     /// against [`Held::delivery`], fills it when it misses what the person expected.
     pub delivery_next: Option<super::routes::DeliveryNext>,
+    /// What the held turn's delivery did so far (an image it shared counts for the decided reply).
+    pub delivery_seen: Option<super::routes::DeliverySeen>,
 }
 
 /// Shared with a turn's save step (see [`TurnOpts`]): whether to hold a reply with open choices,
@@ -776,6 +778,7 @@ pub(super) async fn decide(scope: &TurnScope, kwant: &Kwant, mut held: Held) -> 
     // The decided reply is the one the person sees: it delivers what their message asked for
     opts.delivery = held.delivery.clone();
     opts.delivery_next = held.delivery_next.clone();
+    opts.delivery_seen = held.delivery_seen.clone();
     let mut extra = json!({"decide_first": {"consulted": consulted, "held_turn_id": held.turn_id, "kwant_id": kwant.id}});
     // The decided reply answers the same routed message: it keeps the routing line and "Wrong bot?"
     if let Some(routing) = held.meta.as_ref().map(|m| &m["routing"]).filter(|r| !r.is_null()) {

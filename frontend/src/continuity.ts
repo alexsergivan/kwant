@@ -200,6 +200,10 @@ export interface NotifyEvent {
   /** The space it happened in (servers with spaces). */
   space_id?: string;
   space_name?: string;
+  /** One of the bot's conversations, when it happened there (0.8.1 F6; absent from older servers). */
+  thread_id?: string | null;
+  /** The card to show there: an approval's id (0.8.1 F6). */
+  card_id?: string | null;
 }
 
 // ---------------------------------------------------------------------------

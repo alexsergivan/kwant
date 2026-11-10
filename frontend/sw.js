@@ -65,12 +65,18 @@ self.addEventListener('fetch', (event) => {
 // (src/server/push.rs) to each device that turned on "Notify me on this device"; the open page
 // shows its own through showNotification with the same tag and data (src/push.ts).
 
-/** The chat's address in the app: /s/<space>/c/<channel> or /s/<space>/b/<bot>. */
+/**
+ * The chat's address in the app: /s/<space>/c/<channel>, /s/<space>/b/<bot>/t/<thread> (one of
+ * the bot's conversations) or /s/<space>/b/<bot>, with ?card=<id> for an approval's card
+ * (0.8.1 F6). Same as notificationPath in src/push.ts.
+ */
 function notificationPath(p) {
   if (!p.space_id) return typeof p.url === 'string' && p.url.startsWith('/') && !p.url.startsWith('//') ? p.url : '/';
   const base = `/s/${encodeURIComponent(p.space_id)}`;
-  if (p.channel_id) return `${base}/c/${encodeURIComponent(p.channel_id)}`;
-  if (p.kwant_id) return `${base}/b/${encodeURIComponent(p.kwant_id)}`;
+  const card = p.card_id && (p.channel_id || p.kwant_id) ? `?card=${encodeURIComponent(p.card_id)}` : '';
+  if (p.channel_id) return `${base}/c/${encodeURIComponent(p.channel_id)}${card}`;
+  if (p.kwant_id && p.thread_id) return `${base}/b/${encodeURIComponent(p.kwant_id)}/t/${encodeURIComponent(p.thread_id)}${card}`;
+  if (p.kwant_id) return `${base}/b/${encodeURIComponent(p.kwant_id)}${card}`;
   return base;
 }
 
@@ -100,6 +106,9 @@ self.addEventListener('push', (event) => {
     space_id: p.space_id || null,
     channel_id: p.channel_id || null,
     kwant_id: p.kwant_id || null,
+    // 0.8.1 F6: only when the server named them, so older payloads stay as they were
+    ...(p.thread_id ? { thread_id: p.thread_id } : {}),
+    ...(p.card_id ? { card_id: p.card_id } : {}),
   };
   event.waitUntil(
     windows().then((list) => {
@@ -140,6 +149,9 @@ self.addEventListener('notificationclick', (event) => {
         space_id: d.space_id || null,
         channel_id: d.channel_id || null,
         kwant_id: d.kwant_id || null,
+        // 0.8.1 F6: only when the server named them, so older payloads stay as they were
+        ...(d.thread_id ? { thread_id: d.thread_id } : {}),
+        ...(d.card_id ? { card_id: d.card_id } : {}),
       });
       return client.focus().catch(() => self.clients.openWindow(path));
     }),

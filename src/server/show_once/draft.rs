@@ -474,6 +474,8 @@ where
             channel_id: None,
             title: format!("{bot_name} wrote the skill you showed"),
             body: format!("{bot_name} wrote {} from what you showed. Review it before it's used.", skill.name),
+            thread_id: None,
+            card_id: None,
         },
     )
     .await;

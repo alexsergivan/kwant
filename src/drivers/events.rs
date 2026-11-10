@@ -379,6 +379,13 @@ pub enum RuntimeEvent {
         /// a mission or a Jira task, so Telegram may tell them to send it again.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         held_message: bool,
+        /// The bot's conversation (thread) the notification is about, when it is one: a tap
+        /// opens it instead of the bot's direct chat (0.8.1 F6). Absent on older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+        /// The card to show in that chat: an approval's id (0.8.1 F6).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card_id: Option<String>,
     },
 }
 

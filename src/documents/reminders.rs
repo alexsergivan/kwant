@@ -142,6 +142,8 @@ pub async fn run_once(state: &crate::server::AppState, now: DateTime<Utc>) -> Fi
                 channel_id: None,
                 title: fired.title(),
                 body: fired.body(),
+                thread_id: None,
+                card_id: None,
             },
         )
         .await;

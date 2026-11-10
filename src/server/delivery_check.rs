@@ -52,6 +52,17 @@ pub struct Seen {
     pub pushed: bool,
 }
 
+impl Seen {
+    /// This turn's `self` counted with what its delivery's earlier turns did (`so_far`, which it
+    /// then joins): an image shared or a push made by any turn of the delivery counts (0.8.1 F1).
+    /// `has_shot` stays this turn's own: only its own screenshot can be shared under its reply.
+    pub fn with_earlier(self, so_far: &mut Seen) -> Seen {
+        so_far.image_shared |= self.image_shared;
+        so_far.pushed |= self.pushed;
+        Seen { image_shared: so_far.image_shared, has_shot: self.has_shot, pushed: so_far.pushed }
+    }
+}
+
 /// Something the person expected that the turn didn't deliver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -630,5 +641,55 @@ mod tests {
         let lean = DeliveryPlan { firm: false, ..plan(Deliverable::Visual, &[Show::Image], &[]) };
         assert!(!Expect::from_plan(&lean).unwrap().firm);
         assert!(Expect::from_plan(&plan(Deliverable::Visual, &[Show::Image], &[])).unwrap().firm);
+    }
+
+    /// 0.8.1 F1 (Rigel's 0.8.0 final QA): a visible change whose first turn shared the screenshot
+    /// but gave no PR link. Its continuation only adds the link; counted per turn it asked for the
+    /// picture again and ended with the no-picture line. Counted per delivery it doesn't.
+    #[test]
+    fn a_continuation_counts_the_picture_its_first_turn_shared() {
+        let visible = Expect { image: true, link: true, done_when: vec![], firm: true };
+        let mut delivery = Seen::default();
+        let first = SHARED.with_earlier(&mut delivery);
+        let v1 = check("I changed the footer; here is the screenshot.", Some(&visible), false, &first);
+        assert_eq!(v1.missing, vec![Missing::Link], "{v1:?}");
+        let prompt = v1.continue_with.clone().expect("a missing link continues");
+        assert!(prompt.contains("a PR or branch link") && !prompt.contains("an image"), "{prompt}");
+
+        // The continuation shares nothing new and adds the link
+        let reply = "Pushed: https://github.com/o/r/pull/12";
+        let then = NOTHING.with_earlier(&mut delivery);
+        let v2 = check(reply, Some(&visible), true, &then);
+        assert!(v2.missing.is_empty() && !v2.no_picture_line && !v2.share_last_shot, "{v2:?}");
+        assert_eq!(v2.outcome, Some(Outcome::Hit));
+        assert!(!apply(reply.into(), &v2).contains(NO_PICTURE_LINE));
+
+        // What the bug did: the continuation's own pictures only
+        let per_turn = check(reply, Some(&visible), true, &NOTHING);
+        assert_eq!(per_turn.missing, vec![Missing::Image], "{per_turn:?}");
+        assert!(per_turn.no_picture_line);
+    }
+
+    /// F1: a new ask starts a new delivery, so it never inherits an earlier ask's picture; and a
+    /// push one turn made counts for the next, while a screenshot stays the turn's own.
+    #[test]
+    fn a_new_ask_never_inherits_an_earlier_delivery() {
+        let visible = Expect { image: true, link: true, done_when: vec![], firm: true };
+        let mut earlier = Seen::default();
+        let _ = SHARED.with_earlier(&mut earlier);
+        assert!(earlier.image_shared);
+        // The next ask: a fresh delivery
+        let mut fresh = Seen::default();
+        let v = check("I changed the header.", Some(&visible), false, &NOTHING.with_earlier(&mut fresh));
+        assert_eq!(v.missing, vec![Missing::Image, Missing::Link], "{v:?}");
+        let prompt = v.continue_with.expect("it still asks");
+        assert!(prompt.contains("an image in the chat and a PR or branch link"), "{prompt}");
+
+        let mut delivery = Seen::default();
+        let pushed = Seen { pushed: true, ..SHOT }.with_earlier(&mut delivery);
+        assert_eq!(pushed, Seen { image_shared: false, has_shot: true, pushed: true });
+        let next = NOTHING.with_earlier(&mut delivery);
+        assert_eq!(next, Seen { image_shared: false, has_shot: false, pushed: true }, "the shot stays the first turn's");
+        assert!(!check("Done, no link here.", Some(&change()), true, &next).missing.contains(&Missing::Link));
     }
 }

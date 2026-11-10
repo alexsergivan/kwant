@@ -46,6 +46,7 @@ pub mod routing;
 pub mod smart_results;
 pub mod dev_mode;
 pub mod dev_ticket_briefs;
+pub mod dev_fix_it;
 pub mod dev_prepush;
 pub mod dev_line_notes;
 pub mod spend;

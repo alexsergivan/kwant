@@ -500,6 +500,8 @@ pub async fn tool_propose(state: &AppState, scope: &SelfScope, args: &Value) -> 
                     channel_id: None,
                     title: format!("{} proposed a skill", scope.kwant_name),
                     body: format!("{} proposed the skill {} for your review.", scope.kwant_name, skill.name),
+                    thread_id: None,
+                    card_id: None,
                 },
             )
             .await;

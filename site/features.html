@@ -59,7 +59,7 @@
     <div class="jump-scroll">
       <p class="jump-label" id="jump-label">On this page</p>
       <ul class="jump">
-        <li><a href="#new-08">New in 0.8.0</a></li>
+        <li><a href="#new-08">New in 0.8.2</a></li>
         <li><a href="#new-077">New in 0.7.7</a></li>
         <li><a href="#new-076">New in 0.7.6</a></li>
         <li><a href="#new-075">New in 0.7.5</a></li>
@@ -94,10 +94,10 @@
   </div>
 </nav>
 
-<section id="new-08" class="fgroup" data-covers="0.8.0">
+<section id="new-08" class="fgroup" data-covers="0.8.0 0.8.1 0.8.2">
   <div class="wrap">
     <div class="section-head">
-      <p class="kicker">New in 0.8.0</p>
+      <p class="kicker">New in 0.8.0 to 0.8.2</p>
       <h2>Bots that do the work, and show it</h2>
       <p>With approvals off, bots now get on with it instead of offering to. When you ask to see something, the picture lands in the chat, and a change you can see comes with a before and an after. Drop files anywhere on a chat, bring your bots from more places, and let a fresh pair of eyes check code before it's pushed.</p>
     </div>
@@ -140,6 +140,8 @@
       <li id="composer-line"><h3>The working line sits in the composer</h3><p>"Getting started · 0:04" is one quiet line just above the message box.</p></li>
       <li id="keys-name"><h3>Protect your keys from tricked Claude bots</h3><p>The key protection setting has a clearer name, and a bot it covers gets read-only git hooks.</p></li>
       <li id="browser-windows"><h3>kwant's browser on Windows and Linux ARM</h3><p>When no Chrome is found, kwant downloads Chrome for Testing there too, and a bot's Enter now submits forms.</p></li>
+      <li id="fixes-082" class="span3"><h3>Fixed in 0.8.2</h3><p>Dropping files on a chat works again. In 0.8.0 and 0.8.1, files dragged in from Finder, Explorer or your desktop showed the drop card, but letting go did nothing. Now they land in a bot's chat, a team chat, #general and a message to an @mention.</p></li>
+      <li id="fixes-081" class="span3"><h3>Fixed in 0.8.1</h3><p>When a bot needs you, its notification opens the team chat, channel, thread or direct chat where it asked, and an approval scrolls to its card. A team chat shows one line for each bot's newest pre-push check, with the ones that need you first. Each bot has the same avatar everywhere. After you stop a change, "try again" picks up the same plan while "never mind" doesn't, a bot that carries on no longer asks for a picture it already shared, and the working line names the bot.</p></li>
       <li id="fixes-080" class="span3"><h3>Smaller fixes</h3><p>Deleting a bot no longer fails with "database error", and Undo of a ready-made team or an import works when the chat search index is out of step. Every pull request now builds the web part of a source build.</p></li>
     </ul>
   </div>
@@ -158,7 +160,7 @@
         <p>If a web page, a file or another bot talks Claude into misbehaving, it still can't read your sign-ins or keys, or go online by itself: anything it does outside goes through kwant's own tools, under the bot's approval settings. In VM mode, the switch <strong>Protect your keys from tricked Claude bots</strong> (called Run Claude inside the VM in 0.7.7) runs each bot's Claude replies in a sealed box with no internet that sees only the task folder. Your real sign-in stays outside: kwant passes on only the model calls Claude needs, up to 200 per reply, and refuses everything else.</p>
         <p>The tradeoff: while it's on, Claude can't use its own web search or web fetch (bots browse with kwant's browser tools), and outside MCP servers such as Notion are left out until you turn it off. Codex, Grok and Claude API-key accounts still run on your computer, and the chips under the switch say where each one runs. Linux, off by default. <a href="/docs/agents-in-vm">What it protects, and what it doesn't</a></p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v077-claude-vm-poster.webp?v=fbb4cefe67" width="1280" height="800" aria-label="Demo: turning on Protect your keys from tricked Claude bots in Settings; Claude&#x27;s chip goes from Not isolated to Getting ready to Isolated."><source src="assets/media/clip-v077-claude-vm.mp4?v=f89a2bbc5c" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v077-claude-vm-poster.webp?v=4b54c32881" width="1280" height="800" aria-label="Demo: turning on Protect your keys from tricked Claude bots in Settings; Claude&#x27;s chip goes from Not isolated to Getting ready to Isolated."><source src="assets/media/clip-v077-claude-vm.mp4?v=6d17e27103" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="isolation-notice">
@@ -526,9 +528,9 @@
     <div class="row">
       <div class="row-copy">
         <h3>Yes, go ahead, and the bot carries on</h3>
-        <p>Lead asks whether to publish the release notes. One tap answers it, and the reply comes back with nothing typed.</p>
+        <p>The bot asks whether to publish the release notes. One tap answers it, and the reply comes back with nothing typed.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v611-react-poster.webp?v=2189c00472" width="1280" height="800" aria-label="Demo: Lead&#x27;s release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and Lead replies that the notes are published, with nothing typed."><source src="assets/media/clip-v611-react.mp4?v=705a8f731e" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v611-react-poster.webp?v=ca5f17b10b" width="1280" height="800" aria-label="Demo: release notes for Trailhead 2.4 end with Shall I publish them now? Clicking the thumbs-up, which means Yes, go ahead, answers it: the working line appears and TechLead replies that the notes are published, with nothing typed."><source src="assets/media/clip-v611-react.mp4?v=cdde9cdbe2" type="video/mp4"></video></div>
     </div>
   </div>
 </section>
@@ -563,7 +565,7 @@
         <h3>A pill, then one click to the approval</h3>
         <p>You're reading one channel when TechLead needs your OK in another. The pill shows who and what for a few seconds.</p>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v69-pill-poster.webp?v=2cc4cbfe09" width="1280" height="800" aria-label="Demo: you&#x27;re reading #design-review when TechLead, in another chat, needs your OK. A Needs you pill slides in at the top; clicking it opens TechLead&#x27;s chat at the approval card."><source src="assets/media/clip-v69-pill.mp4?v=53627168dc" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-v69-pill-poster.webp?v=dc3c9d54cc" width="1280" height="800" aria-label="Demo: you&#x27;re reading #design-review when TechLead, in another chat, needs your OK. A Needs you pill slides in at the top; clicking it opens TechLead&#x27;s chat at the approval card."><source src="assets/media/clip-v69-pill.mp4?v=4e864d538e" type="video/mp4"></video></div>
     </div>
     <div class="row">
       <div class="row-copy">
@@ -793,7 +795,7 @@
         <p>A load-test report misses its p95 latency, so the check fails. AutoFix runs it again with what the check said, and the task ends Verified.</p>
         <a class="more-link" href="/docs/mission-board#autofix">How AutoFix works →</a>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-autofix-poster.webp?v=6e74e1438a" width="1280" height="800" aria-label="Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why and AutoFix&#x27;s plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified."><source src="assets/media/clip-autofix.mp4?v=b6c14a0dcd" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-autofix-poster.webp?v=0ed847e244" width="1280" height="800" aria-label="Demo: a load-test report fails its check because it has no p95 latency. The task panel shows why it failed and AutoFix&#x27;s plan, Retry now is pressed, the bot adds the missing figures and the task ends Verified."><source src="assets/media/clip-autofix.mp4?v=dc97a6694b" type="video/mp4"></video></div>
     </div>
     <ul class="flist">
       <li><h3>Missions</h3><p>Group tasks toward one goal, with a token limit if you want one. Tasks wait for the ones they build on.</p></li>
@@ -820,7 +822,7 @@
         <p>QA works at Sandbox on releases. It may change files in its task folder, but a build command asks, and the card says why. You allow it once, and the task ends Verified.</p>
         <a class="more-link" href="/docs/flight-school#sandbox">What Sandbox asks about →</a>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-sandbox-poster.webp?v=fc26cfcdc1" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified."><source src="assets/media/clip-sandbox.mp4?v=c6a857f2db" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-sandbox-poster.webp?v=28a4a80e5f" width="1280" height="800" aria-label="Demo: a bot at Sandbox wants to run npm run build for a release task. An approval card says &quot;Sandbox: commands that can change things ask&quot;, the user clicks Allow Once, the bot finishes and the task ends Verified."><source src="assets/media/clip-sandbox.mp4?v=9195606fc7" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="tiers">
@@ -863,7 +865,7 @@
         <p>Asked about search clicks, TechLead reads the site itself, then offers Google Search Console. Press Connect, sign in on the app's own page, and the card says Connected.</p>
         <a class="more-link" href="/docs/mcp">MCP tools &amp; Composio →</a>
       </div>
-      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-connect-poster.webp?v=daff1c6fae" width="1280" height="800" aria-label="Demo: asked why organic clicks dropped, TechLead reads kwant.si&#x27;s page source, says the page looks healthy and offers a Google Search Console connection card. The user presses Connect, the card waits for the sign-in, then shows Connected."><source src="assets/media/clip-connect.mp4?v=7912d23a83" type="video/mp4"></video></div>
+      <div class="frame"><video class="app" data-autoplay controls muted playsinline loop preload="none" poster="assets/media/clip-connect-poster.webp?v=f43bbdb217" width="1280" height="800" aria-label="Demo: asked why organic clicks dropped, TechLead reads the site&#x27;s page source, says the page looks healthy and offers a Google Search Console connection card. The user presses Connect, the card waits for the sign-in, then shows Connected."><source src="assets/media/clip-connect.mp4?v=f566f90447" type="video/mp4"></video></div>
     </div>
     <div class="grid two">
       <article class="card" id="way-round">
@@ -1045,11 +1047,11 @@
         <h3>Bring your bots</h3><p>Import from Grok, ChatGPT, Claude or a file, with no tools or keys. <a href="/alternatives/grok-bot">Coming from Grok Bot?</a></p>
       </article>
       <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/desktop-handoff-2880.webp?v=0ca251831e" data-caption="The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen."><img class="app" src="assets/media/desktop-handoff-1440.webp?v=0d160e8c86" srcset="assets/media/desktop-handoff-1440.webp?v=0d160e8c86 1440w, assets/media/desktop-handoff-2880.webp?v=0ca251831e 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen."></a></div>
+        <div class="frame"><a class="zoom" href="assets/media/desktop-handoff-2880.webp?v=a7d000ff21" data-caption="The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen."><img class="app" src="assets/media/desktop-handoff-1440.webp?v=0c3a66efc9" srcset="assets/media/desktop-handoff-1440.webp?v=0c3a66efc9 1440w, assets/media/desktop-handoff-2880.webp?v=a7d000ff21 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The design-review channel. Designer answers a question about empty states, then @mentions QA, and QA checks it on a 360 pixel screen."></a></div>
         <h3>Handoffs with an @mention</h3><p>Mention a teammate, or <code>@everyone</code>, and they pick it up right after.</p>
       </article>
       <article class="gcard">
-        <div class="frame"><a class="zoom" href="assets/media/desktop-reasoning-2880.webp?v=ad49d026e1" data-caption="The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used."><img class="app" src="assets/media/desktop-reasoning-1440.webp?v=ff416e8cb6" srcset="assets/media/desktop-reasoning-1440.webp?v=ff416e8cb6 1440w, assets/media/desktop-reasoning-2880.webp?v=ad49d026e1 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used."></a></div>
+        <div class="frame"><a class="zoom" href="assets/media/desktop-reasoning-2880.webp?v=eba3a79ee7" data-caption="The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used."><img class="app" src="assets/media/desktop-reasoning-1440.webp?v=e832775d90" srcset="assets/media/desktop-reasoning-1440.webp?v=e832775d90 1440w, assets/media/desktop-reasoning-2880.webp?v=eba3a79ee7 2880w" sizes="(max-width: 640px) 100vw, (max-width: 1000px) 50vw, 370px" width="1440" height="900" loading="lazy" decoding="async" alt="The general channel. kwant routes a Postgres or queue question to Architect and shows why, plus the model and effort it used."></a></div>
         <h3>The right bot and model</h3><p>kwant picks who answers and shows why, with the model and effort it used.</p>
       </article>
     </div>
@@ -1065,7 +1067,7 @@
     </div>
     <div class="phones">
       <div class="phone"><a class="zoom" href="assets/media/phone-team-chat-780.webp?v=0c902b875f" data-caption="The Product team summary on a phone screen."><img src="assets/media/phone-team-chat-390.webp?v=34ffe0000c" srcset="assets/media/phone-team-chat-390.webp?v=34ffe0000c 390w, assets/media/phone-team-chat-780.webp?v=0c902b875f 780w" sizes="240px" width="390" height="844" loading="lazy" decoding="async" alt="The Product team summary on a phone screen."></a></div>
-      <div class="phone"><a class="zoom" href="assets/media/phone-approval-780.webp?v=230734c149" data-caption="The approval card for a GitHub pull request on a phone screen."><img src="assets/media/phone-approval-390.webp?v=aba8d433e6" srcset="assets/media/phone-approval-390.webp?v=aba8d433e6 390w, assets/media/phone-approval-780.webp?v=230734c149 780w" sizes="240px" width="390" height="844" loading="lazy" decoding="async" alt="The approval card for a GitHub pull request on a phone screen."></a></div>
+      <div class="phone"><a class="zoom" href="assets/media/phone-approval-780.webp?v=214db89acd" data-caption="The approval card for a GitHub pull request on a phone screen."><img src="assets/media/phone-approval-390.webp?v=56b058ca26" srcset="assets/media/phone-approval-390.webp?v=56b058ca26 390w, assets/media/phone-approval-780.webp?v=214db89acd 780w" sizes="240px" width="390" height="844" loading="lazy" decoding="async" alt="The approval card for a GitHub pull request on a phone screen."></a></div>
     </div>
   </div>
 </section>
@@ -1188,7 +1190,7 @@
 </footer>
 <script src="assets/js/site.js?v=6d3de1ef56" defer></script>
 <script src="assets/js/pixel.js?v=ce88473d7b" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-09","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-10","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "7f6ed395033a43eea3885ad0943890c2"}'></script><!-- End Cloudflare Web Analytics -->
 </body>
 </html>

@@ -326,6 +326,9 @@ pub async fn read(state: &AppState, mode: &DevRepoRow, h: &History<'_>, forge: O
 
     // CI that was still running
     recheck_ci(state, forge, mode).await;
+
+    // Failed CI and review comments back to the bot that opened the PR; a fresh-eyes verdict on green
+    super::fix_it::run(state, h, forge, mode, &kwants, &pulls, cache).await;
     Ok(())
 }
 

@@ -159,6 +159,18 @@ impl Database {
         .await?)
     }
 
+    /// The bot that pushed `branch` in a space last (its newest card, from any folder): who a PR
+    /// from that branch goes back to (0.9.0, `dev::fix_it`).
+    pub async fn prepush_pusher_of(&self, space_id: &str, branch: &str) -> Result<Option<String>, DbError> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT kwant_id FROM dev_prepush_cards WHERE space_id = ? AND branch = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+                .bind(space_id)
+                .bind(branch)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|(k,)| k))
+    }
+
     /// The cards on `branch` in a space the person overrode (standing, used or blocked again),
     /// newest first, at most `limit`: what a PR from that branch says was pushed anyway.
     pub async fn prepush_overrides_on(&self, space_id: &str, branch: &str, limit: i64) -> Result<Vec<PrepushRow>, DbError> {
