@@ -517,7 +517,12 @@ type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStre
 
 /// A kwant server on a mock browser with one live view open on it.
 async fn open_stream(mock: &Mock, tmp: &std::path::Path) -> (Client, kwnt::sandbox::BrowserController, tokio::task::JoinHandle<()>) {
-    let config = Config {data_dir:tmp.into(),browser_cdp_url:Some(format!("http://127.0.0.1:{}",mock.port)),..Config::default()};
+    open_stream_at(format!("http://127.0.0.1:{}", mock.port), tmp).await
+}
+
+/// A kwant server on the browser at `cdp` with one live view open on it.
+async fn open_stream_at(cdp: String, tmp: &std::path::Path) -> (Client, kwnt::sandbox::BrowserController, tokio::task::JoinHandle<()>) {
+    let config = Config {data_dir:tmp.into(),browser_cdp_url:Some(cdp),..Config::default()};
     let db = Database::init(tmp).await.unwrap();
     let id=db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
     let state=AppState::new(config.clone(),db,ToolRunner::new(tmp.join("workspace")),PermissionBroker::new(),LayaRouter::new(config.laya_url));
@@ -1324,4 +1329,135 @@ async fn only_the_newest_waiting_hover_is_answered() {
     );
     app_task.abort();
     cdp_task.abort();
+}
+
+/// A headless Chrome of the machine's own, killed when dropped.
+struct LocalChrome(std::process::Child);
+
+impl Drop for LocalChrome {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts `KWNT_TEST_CHROME`, or Chrome or Chromium from PATH, and returns its DevTools address.
+/// `None` when there is none, except on Linux CI, which has Chrome and must run these checks.
+fn local_chrome(profile: &std::path::Path) -> Option<(LocalChrome, String)> {
+    let found = std::env::var("KWNT_TEST_CHROME").ok().or_else(|| {
+        ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
+            .into_iter()
+            .find_map(|name| std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file()))
+            .map(|p| p.to_string_lossy().into_owned())
+    });
+    let Some(bin) = found else {
+        assert!(
+            !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
+            "Linux CI has Chrome: set KWNT_TEST_CHROME or put it on PATH"
+        );
+        eprintln!("skipped: no Chrome or Chromium (set KWNT_TEST_CHROME)");
+        return None;
+    };
+    let child = std::process::Command::new(&bin)
+        .args(["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run",
+               "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--remote-allow-origins=*",
+               "--window-size=1280,800"])
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg("about:blank")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap_or_else(|e| panic!("starting {bin}: {e}"));
+    let chrome = LocalChrome(child);
+    let file = profile.join("DevToolsActivePort");
+    for _ in 0..300 {
+        if let Some(port) = std::fs::read_to_string(&file).ok().and_then(|s| s.lines().next().map(str::to_owned)).filter(|p| !p.is_empty()) {
+            return Some((chrome, format!("http://127.0.0.1:{port}")));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("{bin} never opened DevTools");
+}
+
+/// `point_at` at (x, y), asked again while the page is still loading.
+async fn point_at_loaded(ws: &mut Client, id: &str, x: f64, y: f64) -> Value {
+    for attempt in 0..50 {
+        let r = point(ws, json!({"action":"point_at","id":format!("{id}-{attempt}"),"x":x,"y":y})).await;
+        if r["code"] != "loading" {
+            return r;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the page never finished loading");
+}
+
+/// G3 QA D1 and D2, in a real Chromium: an emoji cut in two at any of Point's three cuts used to
+/// make the page's answer unreadable, and a password field's value reached the ack and the pick.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn point_survives_an_emoji_at_every_cut_and_never_reads_a_password() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some((_chrome, cdp)) = local_chrome(&tmp.path().join("chrome")) else { return };
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let (mut ws, ctrl, app_task) = open_stream_at(cdp, &data).await;
+
+    let x = |n: usize, c: &str| c.repeat(n);
+    let html = format!(
+        "<style>body{{margin:0}}.r{{position:absolute;left:20px;width:600px;height:40px;margin:0;overflow:hidden;white-space:nowrap;font:14px monospace}}</style>\
+         <p class=r id=cut-text style=top:20px>{}😀 tail</p>\
+         <p class=r id=cut-title style=top:80px title=\"{}😀 tail\">short</p>\
+         <p class=r id=cut-label style=top:140px aria-label=\"{}😀 tail\">short</p>\
+         <label for=typed>Card</label><input class=r id=typed type=password style=top:200px>\
+         <input class=r id=preset name=card type=PASSWORD value=\"hunter2-secret\" style=top:260px>\
+         <form class=r id=wrap style=top:320px><input type=password value=\"hunter2-secret\"> wrap</form>",
+        x(79, "x"), x(199, "y"), x(159, "z")
+    );
+    let encoded: String = html.bytes().map(|b| format!("%{b:02X}")).collect();
+    ctrl.navigate(&format!("data:text/html;charset=utf-8,{encoded}")).await.unwrap();
+    ctrl.send_cdp_command("Runtime.evaluate", json!({"expression":"document.getElementById('typed').value = 'typed-secret-123'"})).await.unwrap();
+
+    let state_db = kwnt::db::Database::init(&data).await.unwrap();
+    let mut seen = Vec::new();
+    for (n, (name, y)) in [
+        ("text node: 79 units + emoji at the 80 cut", 35.0),
+        ("title: 199 units + emoji at the 200 cut", 95.0),
+        ("aria-label: 159 units + emoji at the 160 cut", 155.0),
+        ("typed password", 215.0),
+        ("password with a value attribute", 275.0),
+        ("form around a password with a value attribute", 335.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let hover = point_at_loaded(&mut ws, &format!("h{n}"), 300.0, y).await;
+        assert_eq!(hover["type"], "ack", "{name}: point_at {hover}");
+        let handle = hover["el"]["handle"].as_str().unwrap().to_string();
+        let pick = point(&mut ws, json!({"action":"point_pick","id":format!("p{n}"),"handle":handle,"n":1})).await;
+        assert_eq!(pick["type"], "ack", "{name}: point_pick {pick}");
+        let row = state_db.get_attachment(pick["pick"]["attachment_id"].as_str().unwrap()).await.unwrap().unwrap();
+        let stored = row.point.unwrap();
+        assert!(!stored.contains('\u{FFFD}'), "{name}: {stored}");
+        seen.push((name, hover, pick, stored));
+    }
+
+    let stored: Value = serde_json::from_str(&seen[0].3).unwrap();
+    assert!(stored["html"].as_str().unwrap().contains(&format!("{}…", x(79, "x"))), "{stored}");
+    let stored: Value = serde_json::from_str(&seen[1].3).unwrap();
+    assert!(stored["html"].as_str().unwrap().contains(&format!("title=\"{}…\"", x(199, "y"))), "{stored}");
+    assert_eq!(seen[2].1["el"]["text"], format!("{}…", x(80, "z")), "the label is read, though its cut fell inside an emoji");
+
+    // the typed value is the person's: it is in neither the ack, the pick nor what the bot reads
+    for (name, hover, pick, stored) in &seen[3..] {
+        let all = format!("{hover}{pick}{stored}");
+        assert!(!all.contains("typed-secret") && !all.contains("hunter2"), "{name}: {all}");
+    }
+    assert_eq!(seen[3].1["el"]["text"], "Card", "a field is named by its label");
+    assert_eq!(seen[4].1["el"]["text"], "card", "or by its name");
+    let stored: Value = serde_json::from_str(&seen[4].3).unwrap();
+    assert_eq!(stored["html"], "<input class=\"r\" id=\"preset\" name=\"card\" type=\"PASSWORD\" style=\"top:260px\">");
+    let typed = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression":"document.getElementById('typed').value","returnByValue":true})).await.unwrap();
+    assert_eq!(typed["result"]["value"], "typed-secret-123", "Point never changes the page");
+
+    ws.close(None).await.ok();
+    app_task.abort();
 }
