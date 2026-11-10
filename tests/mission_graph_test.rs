@@ -47,7 +47,7 @@ async fn setup() -> Env {
     let kwants = state.db.list_kwants(&space).await.unwrap();
     let general = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap().id;
     let e = Env { app: create_router(state.clone()), bot: kwants[0].clone(), other: kwants[1].clone(), general, state, _tmp: tmp };
-    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"mission_board": true}))).await;
+    let (status, v) = call(&e.app, "POST", "/api/settings", None, Some(json!({"mission_board": true, "verifier": "off"}))).await;
     assert_eq!(status, StatusCode::OK, "{v}");
     e
 }

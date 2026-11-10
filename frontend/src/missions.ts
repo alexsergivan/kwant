@@ -266,6 +266,11 @@ export interface RestorePreview {
   effects_known: boolean;
   task_state_after: 'ready' | 'backlog' | null;
   refused: RestoreRefusal | null;
+  /** 0.9.0 (contract §9.6): a verified task rolls back by a fork from this checkpoint. The server
+   *  sends `refused: null` with `via: "fork"`; the client keeps `refused: "fork_instead"` for it. */
+  via?: 'fork' | 'restore';
+  /** What the roll back would do to the owner's tier, or null (nothing written by the preview). */
+  step_down?: { kwant_id: string; class: string; from: string; to: string } | null;
 }
 
 /** `POST /api/tasks/:id/checkpoints/:cid/restore` (person-only; `Idempotency-Key` header required). */
@@ -1828,7 +1833,11 @@ export const missionsApi = {
   /** Take a held task off hold. The same key replays the first 200, so a double press is a success. */
   runHeld: (id: string, key: string) => call<{ task: Task }>(`/api/tasks/${enc(id)}/run`, 'POST', {}, { 'Idempotency-Key': key }).then((r) => r.task),
   checkpoints: (id: string) => call<Checkpoint[]>(`/api/tasks/${enc(id)}/checkpoints`),
-  restorePreview: (id: string, cid: string) => call<RestorePreview>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore-preview`),
+  restorePreview: (id: string, cid: string) =>
+    call<RestorePreview>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore-preview`).then((p) => ({
+      ...p,
+      refused: p.refused ?? (p.via === 'fork' ? 'fork_instead' : null),
+    })),
   restore: (id: string, cid: string, body: { preview_sha256: string; force_paths?: string[]; rerun?: boolean }, key: string) =>
     call<RestoreResult>(`/api/tasks/${enc(id)}/checkpoints/${enc(cid)}/restore`, 'POST', body, { 'Idempotency-Key': key }),
   failures: (id: string) => call<TaskFailure[]>(`/api/tasks/${enc(id)}/failures`),

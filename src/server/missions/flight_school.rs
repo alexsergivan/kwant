@@ -461,6 +461,28 @@ pub async fn approved(db: &Database, task: &Task) -> bool {
     task.state == "verified" || db.list_checks(&task.id).await.unwrap_or_default().iter().any(|c| c.kind == "person" && c.status == "passed")
 }
 
+/// The owner, class and tiers a rollback of `task` would drop between, if it drops at all.
+async fn step_down_plan(db: &Database, task: &Task) -> Option<(String, String, &'static str, &'static str)> {
+    let owner = task.owner_kwant_id.as_deref()?;
+    let class = db.task_class(&task.id).await.unwrap_or_else(|_| DEFAULT_CLASS.into());
+    let (from, _) = tier_of(db, owner, &class).await;
+    let to = one_down(from)?;
+    Some((owner.to_string(), class, from, to))
+}
+
+/// What a rollback of `task` would do to its owner's tier, computed without writing (contract
+/// §9.6 restore-preview): `{kwant_id, class, from, to}`, or null when it wasn't approved or
+/// nothing would drop.
+pub async fn step_down_preview(db: &Database, task: &Task) -> Value {
+    if !approved(db, task).await {
+        return Value::Null;
+    }
+    match step_down_plan(db, task).await {
+        Some((owner, class, from, to)) => json!({"kwant_id": owner, "class": class, "from": from, "to": to}),
+        None => Value::Null,
+    }
+}
+
 /// A rollback of an approved task (a restore, or a fork from a checkpoint): the owner drops one
 /// tier on the task's class, as a person-made policy (the rollback is theirs), and a pass verdict
 /// is recorded as overturned. Returns `{kwant_id, class, from, to}`, or null when nothing dropped.
@@ -471,10 +493,8 @@ pub async fn step_down_after_rollback(state: &AppState, task: &Task, was_approve
     }
     let note = json!({"reason": "rollback_after_approval", "task_id": task.id, "checkpoint_id": checkpoint_id});
     super::verifier::person_rolled_back(state, &task.id, &note.to_string()).await;
-    let Some(owner) = task.owner_kwant_id.as_deref() else { return Value::Null };
-    let class = state.db.task_class(&task.id).await.unwrap_or_else(|_| DEFAULT_CLASS.into());
-    let (from, _) = tier_of(&state.db, owner, &class).await;
-    let Some(to) = one_down(from) else { return Value::Null };
+    let Some((owner, class, from, to)) = step_down_plan(&state.db, task).await else { return Value::Null };
+    let owner = owner.as_str();
     let mut detail = note;
     detail["from_tier"] = json!(from);
     detail["to_tier"] = json!(to);

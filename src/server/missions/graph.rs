@@ -215,7 +215,9 @@ pub async fn scan_if_due(state: &AppState, mission: &Mission) {
 /// (`upstream_forked`); they keep depending on the original until the person decides.
 /// With `claim`, the flag is resolved in the fork's own transaction: a flag that is already
 /// resolved is a 409 and makes no fork, so racing redos make one copy.
-pub async fn fork(state: &AppState, orig: &Task, reason: &str, claim: Option<&FlagClaim<'_>>) -> Result<Task, Response> {
+/// With `hold`, the fork is created on hold (`held` event) before anything could promote it, so
+/// it never starts by itself: the person presses Run (§9.6, D10).
+pub async fn fork(state: &AppState, orig: &Task, reason: &str, claim: Option<&FlagClaim<'_>>, hold: bool) -> Result<Task, Response> {
     if let Some(mid) = &orig.mission_id {
         let m = match state.db.get_mission(mid).await {
             Ok(Some(m)) => m,
@@ -235,6 +237,9 @@ pub async fn fork(state: &AppState, orig: &Task, reason: &str, claim: Option<&Fl
         Ok(None) => return Err(conflict("this flag is already resolved")),
         Err(e) => return Err(internal(e)),
     };
+    if hold && state.db.set_task_hold(&f.id, true).await.map_err(internal)? {
+        state.db.task_event(&f.id, f.mission_id.as_deref(), "held", "person", &json!({"forked_from": orig.id})).await.map_err(internal)?;
+    }
     if orig.state == "verified" {
         let detail = json!({"fork_id": f.id, "reason": reason});
         for dep in state.db.started_dependents(&orig.id).await.unwrap_or_default() {
@@ -298,11 +303,20 @@ pub struct ForkBody {
     #[serde(default)]
     reason: String,
     from_checkpoint: Option<String>,
+    /// With `from_checkpoint`: the restore-preview's hash; a changed plan is 409 `stale_preview`.
+    preview_sha256: Option<String>,
 }
+
+/// The fork reason when a roll back from a checkpoint gives none (§9.6).
+const ROLLED_BACK: &str = "Rolled back after approval";
 
 /// `POST /api/tasks/:id/fork` (person-only; `Idempotency-Key` optional).
 pub async fn fork_task(State(state): State<AppState>, RawQuery(q): RawQuery, headers: HeaderMap, Path(id): Path<String>, Json(p): Json<ForkBody>) -> Response {
-    let reason = p.reason.trim().to_string();
+    let from_checkpoint = p.from_checkpoint.as_deref().map(str::trim).filter(|c| !c.is_empty());
+    let mut reason = p.reason.trim().to_string();
+    if reason.is_empty() && from_checkpoint.is_some() {
+        reason = ROLLED_BACK.into();
+    }
     if reason.is_empty() || reason.chars().count() > 500 {
         return bad("reason is required (at most 500 characters)");
     }
@@ -311,8 +325,8 @@ pub async fn fork_task(State(state): State<AppState>, RawQuery(q): RawQuery, hea
         let orig = load_task(&state, q.as_deref(), &id).await?;
         // The fork starts from the checkpoint: the original's task-owned paths go back first
         let was_approved = super::flight_school::approved(&state.db, &orig).await;
-        let restore = match p.from_checkpoint.as_deref().map(str::trim) {
-            Some(cid) => Some(super::checkpoints::restore_for_fork(&state, &orig, cid).await?),
+        let restore = match from_checkpoint {
+            Some(cid) => Some(super::checkpoints::restore_for_fork(&state, &orig, cid, p.preview_sha256.as_deref()).await?),
             None => None,
         };
         // A rollback of an approved task drops its owner one tier (0.9.0, contract §5.1)
@@ -320,7 +334,8 @@ pub async fn fork_task(State(state): State<AppState>, RawQuery(q): RawQuery, hea
             Some(r) => super::flight_school::step_down_after_rollback(&state, &orig, was_approved, r["checkpoint_id"].as_str().unwrap_or("")).await,
             None => Value::Null,
         };
-        let f = fork(&state, &orig, &reason, None).await?;
+        // A fork from a checkpoint is held: it never starts by itself (§9.6)
+        let f = fork(&state, &orig, &reason, None, restore.is_some()).await?;
         let mut out = task_json(&state, &f).await;
         if let Some(r) = restore {
             out["restore"] = r;
@@ -372,7 +387,7 @@ pub async fn resolve_flag(
                 let reason = note.clone().unwrap_or_else(|| "redo: it may no longer hold".into());
                 // The fork claims the flag first, in its own transaction
                 let claim = FlagClaim { id: &flag.id, resolution: &p.resolution, note: note.as_deref() };
-                fork_out = Some(fork(&state, &t, &reason, Some(&claim)).await?);
+                fork_out = Some(fork(&state, &t, &reason, Some(&claim), false).await?);
             }
             // The move claims the flag first, in its own transaction (D12): of two racing
             // resolves one moves the task and the other gets a 409

@@ -561,6 +561,73 @@ pub async fn materialize_run(state: &AppState, task_id: &str, dest: &FsPath) -> 
     .map_err(|e| e.to_string())?
 }
 
+/// How many paths a `stale` answer lists (contract §9.5).
+pub const MAX_STALE_PATHS: usize = 50;
+
+/// Whether the work a verdict judged is still what's in the task's folder (contract §9.5).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Freshness {
+    /// Nothing changed since the judged `after_run`.
+    Fresh,
+    /// Something changed: the paths (sorted, at most [`MAX_STALE_PATHS`]) and why, in plain words.
+    Stale(Vec<String>, &'static str),
+}
+
+/// The task-owned paths whose state now differs from what `judged` recorded: another sha256,
+/// gone, newly there, or unreadable now (it can't be vouched for). A path the snapshot skipped
+/// can't be compared and is left out. `now(path)` is what the folder holds at `path`.
+fn drifted(judged: &Manifest, owned: &BTreeSet<String>, now: impl Fn(&str) -> Result<Option<String>, String>) -> Vec<String> {
+    let then = index(judged);
+    let mut out: Vec<String> = owned
+        .iter()
+        .filter(|p| {
+            let was = then.get(*p).cloned().unwrap_or(At::Absent);
+            match (was, now(p)) {
+                (At::Skipped(_), _) => false,
+                (_, Err(_)) => true,
+                (At::File(a), Ok(Some(b))) => a != b,
+                (At::File(_), Ok(None)) | (At::Absent, Ok(Some(_))) => true,
+                (At::Absent, Ok(None)) => false,
+            }
+        })
+        .cloned()
+        .collect();
+    out.sort();
+    out.truncate(MAX_STALE_PATHS);
+    out
+}
+
+/// Contract §9.5: is the `after_run` checkpoint `judged_id` still the task's newest run, and
+/// does the task's folder still hold what it recorded on every path the task's runs changed?
+/// A newer run, a judged checkpoint that is gone, or a drifted path makes it stale.
+pub async fn freshness(state: &AppState, task_id: &str, judged_id: &str) -> Result<Freshness, String> {
+    let all = state.db.checkpoints_of(task_id).await.map_err(|e| e.to_string())?;
+    let Some(pos) = all.iter().position(|c| c.id == judged_id) else {
+        return Ok(Freshness::Stale(vec![], "the checkpoint the verdict judged is gone"));
+    };
+    let judged = all[pos].clone();
+    let _store = STORE.lock().await;
+    let runs_dir = root(state).join(task_id);
+    let newer = all[pos + 1..].iter().rev().find(|c| c.kind == "after_run" && !c.failed()).cloned();
+    tokio::task::spawn_blocking(move || {
+        let Some(judged_m) = read_manifest(&judged) else {
+            return Ok(Freshness::Stale(vec![], "the checkpoint the verdict judged is gone"));
+        };
+        if let Some(n) = newer {
+            let mut paths = read_manifest(&n).map(|m| changed(&judged_m, &m)).unwrap_or_default();
+            paths.sort();
+            paths.truncate(MAX_STALE_PATHS);
+            return Ok(Freshness::Stale(paths, "the task ran again after this verdict"));
+        }
+        let owned: BTreeSet<String> = read_runs(&runs_dir).into_iter().filter(|r| r.folder == judged.folder).flat_map(|r| r.paths).collect();
+        let folder = PathBuf::from(&judged.folder);
+        let paths = drifted(&judged_m, &owned, |p| if safe_rel(p) { current(&folder, p) } else { Err("unsafe path".into()) });
+        Ok(if paths.is_empty() { Freshness::Fresh } else { Freshness::Stale(paths, "files changed after this verdict") })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Whether `task_id` has an `after_run` checkpoint a clean copy can be made from.
 pub async fn has_run(state: &AppState, task_id: &str) -> bool {
     state.db.checkpoints_of(task_id).await.unwrap_or_default().iter().any(|c| c.kind == "after_run" && !c.failed())
@@ -1317,7 +1384,17 @@ pub async fn preview(State(state): State<AppState>, RawQuery(q): RawQuery, Path(
         Err(r) => return r,
     };
     match plan(&state, &task, &c).await {
-        Ok(p) => Json(plan_json(&c, &p)).into_response(),
+        Ok(p) => {
+            // A verified task is rolled back by a fork from this checkpoint (§9.6, D2)
+            let via = if p.refused == Some("fork_instead") { "fork" } else { "restore" };
+            let mut out = plan_json(&c, &p);
+            if via == "fork" {
+                out["refused"] = Value::Null;
+            }
+            out["via"] = json!(via);
+            out["step_down"] = super::flight_school::step_down_preview(&state.db, &task).await;
+            Json(out).into_response()
+        }
         Err(e) => plan_err(e),
     }
 }
@@ -1417,11 +1494,16 @@ pub async fn run_held(State(state): State<AppState>, RawQuery(q): RawQuery, head
 /// Fork `from_checkpoint` (B1 `POST /api/tasks/:id/fork`): writes the original's task-owned
 /// paths back to the checkpoint (after a `before_restore`), skipping other tasks' changes.
 #[allow(clippy::result_large_err)]
-pub async fn restore_for_fork(state: &AppState, orig: &Task, cid: &str) -> Result<Value, Response> {
+/// With `preview_sha256`, a plan that changed since the preview is 409 `stale_preview` and
+/// nothing is written (§9.6).
+pub async fn restore_for_fork(state: &AppState, orig: &Task, cid: &str, preview_sha256: Option<&str>) -> Result<Value, Response> {
     let c = load_checkpoint(state, orig, cid).await?;
     let p = plan(state, orig, &c).await.map_err(plan_err)?;
     if p.refused == Some("running") {
         return Err(coded(StatusCode::CONFLICT, "running", "the task is running; fork it once the run ends"));
+    }
+    if preview_sha256.is_some_and(|s| s.trim() != p.sha) {
+        return Err(coded(StatusCode::CONFLICT, "stale_preview", "the folder or the task changed since the preview; look at it again"));
     }
     let mut out = write_back(state, orig, &c, &p, BTreeSet::new()).await?;
     out["checkpoint_id"] = json!(c.id);
@@ -1729,6 +1811,32 @@ mod tests {
         let before = m(&[("same", "1"), ("edited", "1"), ("gone", "1")], &["big", "node_modules/"]);
         let after = m(&[("same", "1"), ("edited", "2"), ("new", "1")], &["big", "node_modules/", "huge"]);
         assert_eq!(changed(&before, &after), vec!["edited", "gone", "huge", "new"]);
+    }
+
+    /// Contract §9.5: a verdict goes stale when a task-owned path now differs from what the judged
+    /// `after_run` recorded; skipped paths and paths of no run aren't compared.
+    #[test]
+    fn freshness_lists_the_owned_paths_that_drifted_sorted_and_capped() {
+        let judged = m(&[("same", "1"), ("edited", "1"), ("gone", "1"), ("unreadable", "1")], &["big"]);
+        let owned: BTreeSet<String> = ["same", "edited", "gone", "appeared", "unreadable", "big", "still_absent"].iter().map(|s| s.to_string()).collect();
+        let now = |p: &str| -> Result<Option<String>, String> {
+            match p {
+                "same" => Ok(Some("1".into())),
+                "edited" => Ok(Some("2".into())),
+                "appeared" | "big" => Ok(Some("9".into())),
+                "unreadable" => Err("symlink, not followed".into()),
+                _ => Ok(None),
+            }
+        };
+        assert_eq!(drifted(&judged, &owned, now), vec!["appeared", "edited", "gone", "unreadable"]);
+        // Unchanged: fresh
+        let all_same = |p: &str| -> Result<Option<String>, String> { Ok(["same", "edited", "gone", "unreadable"].contains(&p).then(|| "1".to_string())) };
+        assert!(drifted(&judged, &owned, all_same).is_empty());
+        // Capped at MAX_STALE_PATHS, sorted
+        let many: BTreeSet<String> = (0..80).map(|i| format!("p{i:02}")).collect();
+        let got = drifted(&m(&[], &[]), &many, |_| Ok(Some("x".into())));
+        assert_eq!(got.len(), MAX_STALE_PATHS);
+        assert_eq!(got.first().map(String::as_str), Some("p00"));
     }
 
     // QA F-3 (Rigel's probes in 446-probes/checkpoints-nested-probes.diff): a task folder nested in
