@@ -178,6 +178,11 @@ const KEEP_ENV: &[&str] = &[
     "GIT_SSL_CAPATH",
 ];
 
+/// [`SAFE_CONFIG`], for Dev mode's other git callers (H1 worktrees).
+pub(super) fn safe_config() -> &'static [&'static str] {
+    SAFE_CONFIG
+}
+
 /// Settings every call gets, whatever the repo's own config says.
 const SAFE_CONFIG: &[&str] = &[
     "core.fsmonitor=false",
@@ -901,7 +906,7 @@ pub fn own_git_dir(folder: &Path) -> Result<PathBuf, GitError> {
 }
 
 /// [`own_git_dir`] and the main repo's git dir (the same dir unless `folder` is a worktree).
-fn own_git_dirs(folder: &Path) -> Result<(PathBuf, PathBuf), GitError> {
+pub(super) fn own_git_dirs(folder: &Path) -> Result<(PathBuf, PathBuf), GitError> {
     let folder = std::fs::canonicalize(folder).map_err(|_| GitError::NotFound)?;
     let dot_git = folder.join(".git");
     let meta = std::fs::symlink_metadata(&dot_git).map_err(|_| GitError::NotFound)?;

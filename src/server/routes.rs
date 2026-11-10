@@ -883,6 +883,14 @@ pub(super) async fn scope_for(
         ),
         None => None,
     };
+    // H1: a thread with a live worktree runs its turns there, not in the team folder
+    let workspace_dir = match &thread_id {
+        Some(t) => match super::dev::worktrees::folder_for_thread(state, t).await {
+            Some(wt) => Some(wt),
+            None => workspace_dir,
+        },
+        None => workspace_dir,
+    };
     Ok(TurnScope {
         state: state.clone(),
         kwant_id: if channel_id.is_none() && thread_id.is_none() { Some(kwant.id.clone()) } else { None },
