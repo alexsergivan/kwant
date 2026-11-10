@@ -42,8 +42,8 @@ fn point_answer(mock: &Mock, expression: &str) -> Value {
     let el = json!({"handle":"t1.7","label":"button.pay","selector":"main > form#checkout > button.pay",
         "box":{"x":15,"y":303,"width":328,"height":36},"viewport":{"width":1280,"height":720},"text":"Pay €42.00","frame":null});
     let call = expression.split(" ? ").nth(1).unwrap_or_default();
-    if call.starts_with("globalThis.__kp.at(") {
-        let x: f64 = call["globalThis.__kp.at(".len()..]
+    if let Some(rest) = call.strip_prefix("globalThis.__kp.at(") {
+        let x: f64 = rest
             .split(',')
             .next()
             .unwrap()
