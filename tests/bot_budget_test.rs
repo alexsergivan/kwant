@@ -44,12 +44,34 @@ echo "{\"type\":\"result\",\"is_error\":false,\"num_turns\":1,\"result\":\"answe
 
 const FRESH: u64 = 12 + 8_211 + 487;
 
+/// Codex reports no usage: kwant books the daily stop's estimate (reply length / 4) as an
+/// unreported turn. The reply is 400 characters, so each turn books 100 tokens.
+const FAKE_CODEX: &str = r#"#!/bin/sh
+case "$1 $2" in
+  "--version "*) echo "codex-cli 0.162.1"; exit 0 ;;
+  "login status") echo "Logged in using ChatGPT"; exit 0 ;;
+  "debug models") echo '{"models":[{"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","visibility":"list","priority":1}]}'; exit 0 ;;
+  "mcp list") echo '[]'; exit 0 ;;
+esac
+out=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+[ -n "$out" ] && printf '%0400d' 0 > "$out"
+exit 0
+"#;
+
+const CODEX_TURN: u64 = 100;
+
 fn fake_cli() {
     static DONE: OnceLock<PathBuf> = OnceLock::new();
     DONE.get_or_init(|| {
         let bin = tempfile::tempdir().unwrap().keep().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         exe::write_executable(bin.join("claude"), FAKE_CLAUDE);
+        exe::write_executable(bin.join("codex"), FAKE_CODEX);
         std::env::set_var("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()));
         bin
     });
@@ -475,4 +497,67 @@ async fn validates_limits_and_turns_off() {
     assert_eq!(s, StatusCode::CONFLICT, "nothing to continue");
     let (s, _) = call(&env.app, "GET", "/api/kwants/nobody/budget", None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+/// Replies in `chat` from the bot named `who` (messages carry the bot's name).
+async fn replies_in(env: &Env, chat: &str, who: &str) -> usize {
+    env.state.db.list_messages(chat, 200).await.unwrap().iter().filter(|m| m.sender_role == "kwant" && m.sender_id == who).count()
+}
+
+/// A Codex bot reports no usage, but its budget is never hidden while it can still park the bot:
+/// the budget and the month's spend come back with `estimated: true`, and the estimate pauses it.
+#[tokio::test]
+async fn a_codex_bots_budget_is_shown_as_estimated_and_still_holds_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = setup(tmp.path()).await;
+    let bot = json!({"name": "Cody", "title": "Cody the tester", "persona_prompt": "Test persona",
+        "avatar_sprite": "s", "driver_type": "cli", "preferred_model": "codex"});
+    let cody = ok(&env.app, "POST", "/api/kwants", Some(bot)).await["id"].as_str().unwrap().to_string();
+    // The engine list is probed at start-up; the fake codex was put on PATH after that
+    ok(&env.app, "POST", "/api/engines/recheck", None).await;
+    // Cody's direct chat, where its stop notice also goes
+    let desk = cody.clone();
+    let say = |text: &str| ok(&env.app, "POST", "/api/chat/send", Some(json!({"kwant_id": cody, "prompt": text, "sender_id": "user"})));
+
+    let b = env.set_budget(&cody, json!({"budget_tokens": 2 * CODEX_TURN, "budget_usd": 5.0})).await;
+    assert_eq!((b["engine"].as_str(), b["estimated"].as_bool(), b["usage_reported"].clone()), (Some("codex"), Some(false), Value::Null), "{b}");
+
+    for (n, text) in [(1, "one"), (2, "two")] {
+        say(text).await;
+        for _ in 0..200 {
+            if replies_in(&env, &desk, "Cody").await >= n {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(replies_in(&env, &desk, "Cody").await, n, "Cody answered {text}");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    // Not hidden: the set budget and the month's estimated spend, flagged as estimated
+    let b = env.budget(&cody).await;
+    assert_eq!((b["budget_tokens"].as_u64(), b["budget_usd"].as_f64()), (Some(2 * CODEX_TURN), Some(5.0)), "{b}");
+    assert_eq!(b["used_tokens"].as_u64(), Some(2 * CODEX_TURN), "the daily stop's estimate: {b}");
+    assert_eq!(b["used_usd"].as_f64(), Some(0.0), "no dollars are reported: {b}");
+    assert_eq!((b["usage_reported"].as_bool(), b["cost_reported"].as_bool(), b["estimated"].as_bool()), (Some(false), Some(false), Some(true)), "{b}");
+    assert_eq!((b["state"].as_str(), b["over"].as_str()), (Some("paused"), Some("tokens")), "the estimate parks the bot: {b}");
+    let all = ok(&env.app, "GET", "/api/usage/budgets", None).await;
+    let row = all["bots"].as_array().unwrap().iter().find(|r| r["kwant_id"] == cody.as_str()).cloned().unwrap();
+    assert_eq!((row["estimated"].as_bool(), row["budget_tokens"].as_u64()), (Some(true), Some(2 * CODEX_TURN)), "{row}");
+
+    // The stop notice says it is an estimate
+    let stop: Vec<Message> = env.state.db.list_messages(&cody, 200).await.unwrap().into_iter().filter(|m| meta(m)["kind"] == bot_budget::STOPPED_KIND).collect();
+    assert_eq!(stop.len(), 1, "one stop notice");
+    assert_eq!(meta(&stop[0])["estimated"], true);
+    assert!(meta(&stop[0])["detail"].as_str().unwrap().starts_with("about 200 of 200 fresh tokens"), "{}", meta(&stop[0]));
+
+    // Held: the next message is parked, not run
+    say("three").await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(replies_in(&env, &desk, "Cody").await, 2, "no turn while paused");
+    let parks = env.state.db.list_parked().await.unwrap().into_iter().filter(|p| p.reason == "bot_budget" && p.status == "pending" && p.kwant_id == cody).count();
+    assert_eq!(parks, 1, "held for when Cody resumes");
+    // Ann, on Claude, reports usage: not estimated
+    env.turn("hi").await;
+    assert_eq!(env.budget(&env.ann).await["estimated"], false);
 }

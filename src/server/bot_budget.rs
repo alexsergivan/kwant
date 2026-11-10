@@ -64,6 +64,11 @@ pub struct Budget {
     pub some_unreported: bool,
     /// null before the first booked turn this month; else whether any turn reported a cost.
     pub cost_reported: Option<bool>,
+    /// Some turn booked this month didn't report usage (Codex, or a turn that ended without it):
+    /// `used_tokens` holds the daily stop's estimate for those turns, and `used_usd` has no
+    /// dollars for them. The budget and the spend are still returned and still park the bot; the
+    /// UI shows them as "about …" instead of hiding them.
+    pub estimated: bool,
     pub engine: String,
 }
 
@@ -148,6 +153,7 @@ pub async fn status(state: &AppState, kwant: &Kwant) -> Budget {
         usage_reported: (turns > 0).then_some(used.reported_turns > 0),
         some_unreported: used.reported_turns > 0 && used.unreported_turns > 0,
         cost_reported: (turns > 0).then_some(used.cost_turns > 0),
+        estimated: used.unreported_turns > 0,
         engine: kwant.preferred_model.clone(),
     }
 }
@@ -174,10 +180,11 @@ pub fn used_of(b: &Budget) -> String {
     let pt = if b.budget_tokens > 0 { b.used_tokens as f64 / b.budget_tokens as f64 } else { -1.0 };
     let pu = if b.budget_usd > 0.0 { b.used_usd / b.budget_usd } else { -1.0 };
     let usd = b.over == Some("usd") || (b.over.is_none() && pu > pt);
+    let about = if b.estimated { "about " } else { "" };
     if usd {
-        format!("${:.2} of ${:.2} in {}", b.used_usd, b.budget_usd, month_name(&b.month))
+        format!("{about}${:.2} of ${:.2} in {}", b.used_usd, b.budget_usd, month_name(&b.month))
     } else {
-        format!("{} of {} fresh tokens in {}", short(b.used_tokens), short(b.budget_tokens), month_name(&b.month))
+        format!("{about}{} of {} fresh tokens in {}", short(b.used_tokens), short(b.budget_tokens), month_name(&b.month))
     }
 }
 
@@ -207,6 +214,7 @@ fn meta(kind: &str, b: &Budget) -> Value {
         "budget_usd": b.budget_usd,
         "resets_at": b.resets_at,
         "paused_since": b.paused_since,
+        "estimated": b.estimated,
         "detail": used_of(b),
     })
 }
