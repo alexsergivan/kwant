@@ -751,7 +751,7 @@ mod tests {
         let long: Vec<ToolNoteRow> = (0..10).map(|i| note(&format!("l{i}"), None, "tip", "open", &"y".repeat(280))).collect();
         let refs: Vec<&ToolNoteRow> = long.iter().collect();
         let lines = block(&refs).matches("\n- [").count();
-        assert!(lines < 10 && lines >= 7, "about 600 tokens: {lines}");
+        assert!((7..10).contains(&lines), "about 600 tokens: {lines}");
     }
 
     #[test]
