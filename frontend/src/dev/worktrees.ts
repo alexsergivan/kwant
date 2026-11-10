@@ -33,6 +33,8 @@ export interface Worktree {
   task_id: string | null;
   kwant_id: string | null;
   task_title: string | null;
+  /** The chat the worktree is bound to (contract v3); null without a thread. */
+  thread_title: string | null;
   created_at: string | null;
   done_at: string | null;
   clean_at: string | null;
@@ -70,7 +72,8 @@ export interface WorktreeList {
   build_dirs: string[];
 }
 
-/** The create dialog's branch pickers (asked of Lin; optional until the route exists). */
+/** The create dialog's branch pickers (Lin, contract v3; optional until the route exists).
+ *  A remote name carries its remote: `origin/foo`. */
 export interface BranchInfo {
   name: string;
   remote: boolean;
@@ -118,6 +121,7 @@ export function parseWorktree(v: unknown): Worktree | null {
     task_id: str(o.task_id),
     kwant_id: str(o.kwant_id),
     task_title: str(o.task_title),
+    thread_title: str(o.thread_title),
     created_at: str(o.created_at),
     done_at: str(o.done_at),
     clean_at: str(o.clean_at),
@@ -218,7 +222,7 @@ export const worktreeApi = {
     if (!l) throw new WorktreeError('The server sent worktrees in a shape this app doesn’t know.', 500);
     return l;
   },
-  /** Not in contract v2: asked of Lin. A 404 means "type the branch name". */
+  /** Contract v3 (Lin, coming to #486). A 404 means "type the branch name". */
   branches: async (space: string, team: string): Promise<BranchInfo[]> => {
     const o = rec(await call(`/api/spaces/${enc(space)}/dev/worktrees/branches?team_id=${enc(team)}`));
     return arr(o?.branches).flatMap((b) => {
@@ -236,6 +240,25 @@ export const worktreeApi = {
   keep: async (id: string, keep: boolean) => parseWorktree(await call(`/api/dev/worktrees/${enc(id)}/keep`, 'POST', { keep })),
   clean: async (id: string) => parseWorktree(await call(`/api/dev/worktrees/${enc(id)}/clean`, 'POST', {})),
 };
+
+/** A remote-only `origin/foo` has no "existing branch" form in create: it goes in as a new local
+ *  branch `foo` made from `origin/foo` (Lin, #486). Returns the local name. */
+export const localNameOf = (remote: string): string => remote.replace(/^[^/]+\//, '');
+
+/** The Existing picker: local branches, plus remote ones with no local branch of the same name. */
+export function pickableBranches(all: BranchInfo[]): BranchInfo[] {
+  const local = new Set(all.filter((b) => !b.remote).map((b) => b.name));
+  return all.filter((b) => !b.remote || !local.has(localNameOf(b.name)));
+}
+
+/** The create request for what the dialog holds. */
+export function createBodyFor(o: { team: string; mode: 'new' | 'existing'; name: string; base: string; pickedRemote: string | null; bot: string; thread: string | null }): CreateBody {
+  const b: CreateBody =
+    o.mode === 'new' ? { team_id: o.team, branch: o.name, base: o.base } : o.pickedRemote ? { team_id: o.team, branch: o.name, base: o.pickedRemote } : { team_id: o.team, branch: o.name };
+  if (o.bot) b.kwant_id = o.bot;
+  if (o.thread) b.thread_id = o.thread;
+  return b;
+}
 
 // ---------------------------------------------------------------------------
 // One cache per space; the tab count and the tab read it.
@@ -350,6 +373,7 @@ export function rowTime(w: Worktree, now: number): string | null {
 /** Line 2: the task, or how it was made. */
 export function rowTask(w: Worktree, now: number): string {
   if (w.task_title) return w.task_title;
+  if (w.thread_title) return `Chat: ${w.thread_title}`;
   if (!w.created_at) return 'No task.';
   const c = dayLabel(w.created_at, now);
   return `No task. Made from the Dev desk ${c.today ? c.time : `${c.day} ${c.time}`}`;
@@ -465,7 +489,7 @@ export function createErrorCopy(e: { code: string | null; message: string }, ctx
       return { field: true, text: `There’s no branch called ${ctx.branch}.` };
     case 'bad_base':
     case 'unknown_base':
-      return { field: true, text: 'kwant can’t find that base branch.' };
+      return { field: true, text: 'That base branch doesn’t exist here.' };
     case 'thread_has_worktree':
       return { field: false, text: 'Couldn’t create it: that chat already has a worktree. Nothing was changed.' };
     case 'git_failed':
@@ -482,7 +506,7 @@ export function removeErrorCopy(e: { code: string | null; message: string }, bot
     case 'working':
       return `${bot ?? 'A bot'} is working here. Stop ${bot ?? 'it'} first.`;
     case 'not_ours':
-      return 'Couldn’t remove it: the folder isn’t a worktree kwant made. Nothing was deleted.';
+      return 'Couldn’t remove it: the folder isn’t a worktree made here. Nothing was deleted.';
     case 'git_failed':
       return 'Couldn’t remove it: Git refused. Nothing was deleted.';
     default:

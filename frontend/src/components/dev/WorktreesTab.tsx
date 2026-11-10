@@ -21,6 +21,9 @@ import {
   removeErrorCopy,
   rowStatus,
   rowTask,
+  localNameOf,
+  pickableBranches,
+  createBodyFor,
   rowTime,
   shortPath,
   suggestBranch,
@@ -29,6 +32,7 @@ import {
   worktreeStore,
 } from '../../dev/worktrees';
 import { ModernAvatar } from '../ModernAvatar';
+import { threadsApi } from '../../threads';
 import { trapFocusTarget } from '../../imports';
 
 const ring = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300';
@@ -60,8 +64,6 @@ export interface WorktreesPanelProps {
   bots: WtBot[];
   /** "Last bot you chatted with in Dev mode": the create dialog's default. */
   defaultBotId?: string | null;
-  /** The bot's 1:1 chat thread, sent as `thread_id` so its turns run in the new folder. */
-  threadFor?: (botId: string) => string | null;
   onOpenChat?: (botId: string, threadId: string | null) => void;
   /** Phone layout (below 768 px): ⋯ menus and bottom sheets. */
   phone?: boolean;
@@ -69,7 +71,7 @@ export interface WorktreesPanelProps {
   home?: string | null;
 }
 
-export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bots, defaultBotId, threadFor, onOpenChat, phone = false, now: nowProp, home = null }) => {
+export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bots, defaultBotId, onOpenChat, phone = false, now: nowProp, home = null }) => {
   const now = nowProp ?? Date.now();
   const botName = useCallback((id: string | null) => (id ? bots.find((b) => b.id === id)?.name ?? null : null), [bots]);
   const [creating, setCreating] = useState<WorktreeRepo | null>(null);
@@ -115,7 +117,7 @@ export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bot
         .then((n) => n && worktreeStore.patch(space, n))
         .catch((e: unknown) => {
           const code = e instanceof WorktreeError ? e.code : null;
-          const reason = code === 'working' ? `${botName(w.kwant_id) ?? 'a bot'} is working here` : code === 'missing' ? 'the folder is gone' : code === 'not_ours' ? 'the folder isn’t one kwant made' : e instanceof Error ? e.message.replace(/\.$/, '') : 'it failed';
+          const reason = code === 'working' ? `${botName(w.kwant_id) ?? 'a bot'} is working here` : code === 'missing' ? 'the folder is gone' : code === 'not_ours' ? 'the folder wasn’t made here' : e instanceof Error ? e.message.replace(/\.$/, '') : 'it failed';
           setFailed((f) => ({ ...f, [w.id]: reason }));
         })
         .finally(() => setBusy((b) => ({ ...b, [w.id]: undefined })));
@@ -210,7 +212,6 @@ export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bot
           repo={creating}
           bots={bots}
           defaultBotId={defaultBotId ?? null}
-          threadFor={threadFor}
           home={home}
           phone={phone}
           existing={creating.worktrees}
@@ -641,13 +642,12 @@ const CreateDialog: React.FC<{
   repo: WorktreeRepo;
   bots: WtBot[];
   defaultBotId: string | null;
-  threadFor?: (botId: string) => string | null;
   home: string | null;
   phone: boolean;
   existing: Worktree[];
   onClose: () => void;
   onCreated: (w: Worktree) => void;
-}> = ({ space, repo, bots, defaultBotId, threadFor, home, phone, existing, onClose, onCreated }) => {
+}> = ({ space, repo, bots, defaultBotId, home, phone, existing, onClose, onCreated }) => {
   const ids = { title: useId(), sub: useId(), branch: useId(), hint: useId(), err: useId(), base: useId(), pick: useId() };
   const forRef = useRef<HTMLSelectElement>(null);
   const [bot, setBot] = useState<string>(() => (defaultBotId && bots.some((b) => b.id === defaultBotId) ? defaultBotId : bots[0]?.id ?? ''));
@@ -678,7 +678,8 @@ const CreateDialog: React.FC<{
     if (!touched) setBranch(suggestBranch(botName, null));
   }, [botName, touched]);
 
-  const name = (mode === 'new' ? branch : pick).trim();
+  const pickedRemote = mode === 'existing' && branches?.find((b) => b.remote && b.name === pick) ? pick : null;
+  const name = (mode === 'new' ? branch : pickedRemote ? localNameOf(pick) : pick).trim();
   const taken = useMemo(() => {
     const w = existing.find((x) => x.branch === name && x.state !== 'removed');
     if (w) return w.path;
@@ -709,13 +710,17 @@ const CreateDialog: React.FC<{
     if (!ok || !repo.team_id) return;
     setSaving(true);
     setServerErr(null);
-    const thread = bot ? threadFor?.(bot) ?? null : null;
-    worktreeApi
-      .create(space, { team_id: repo.team_id, branch: name, ...(mode === 'new' ? { base: base.trim() } : {}), ...(bot ? { kwant_id: bot } : {}), ...(thread ? { thread_id: thread } : {}) })
-      .then(onCreated, (e: unknown) => {
-        setSaving(false);
+    // A bot's main 1:1 has no thread id and v1 keeps it in the team folder, so the worktree gets its own
+    // chat on that bot, titled with the branch (Lin, #486). Until `new_thread: true` lands there, make the
+    // thread first; if create then fails, the empty thread stays (harmless).
+    const fail = (e: unknown) => {
+      setSaving(false);
         setServerErr(createErrorCopy({ code: e instanceof WorktreeError ? e.code : null, message: e instanceof Error ? e.message : 'it failed' }, { branch: name, path: folderPath, checkedOutAt: taken }));
-      });
+    };
+    const team = repo.team_id;
+    (bot ? threadsApi.create(bot, name).then((t) => t.id) : Promise.resolve(null))
+      .then((thread) => worktreeApi.create(space, createBodyFor({ team, mode, name, base: base.trim(), pickedRemote, bot, thread })))
+      .then(onCreated, fail);
   };
 
   const field = 'w-full h-10 rounded-lg border bg-black/30 px-3 text-[13.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300';
@@ -816,9 +821,10 @@ const CreateDialog: React.FC<{
             {branches && branches.length ? (
               <select id={ids.pick} value={pick} onChange={(e) => (setPick(e.target.value), setServerErr(null))} aria-invalid={!!fieldErr || undefined} aria-describedby={fieldErr ? ids.err : undefined} className={`${field} font-mono border-hairline-strong`} data-wt-pick>
                 <option value="">Pick a branch</option>
-                {branches.map((b) => (
+                {pickableBranches(branches).map((b) => (
                   <option key={`${b.remote}-${b.name}`} value={b.name} disabled={!!b.checked_out_at}>
                     {b.name}
+                    {b.remote ? ' — new local branch' : ''}
                     {b.checked_out_at ? ` — checked out at ${shortPath(b.checked_out_at, home)}` : ''}
                   </option>
                 ))}
@@ -839,7 +845,7 @@ const CreateDialog: React.FC<{
               <span className="text-zinc-500">folder</span> {folderPath}
             </div>
             <div>
-              <span className="text-zinc-500">branch</span> {name} {mode === 'new' ? `(new, from ${base.trim() || '…'})` : '(existing)'}
+              <span className="text-zinc-500">branch</span> {name} {mode === 'new' ? `(new, from ${base.trim() || '…'})` : pickedRemote ? `(new, from ${pickedRemote})` : '(existing)'}
             </div>
           </div>
         )}

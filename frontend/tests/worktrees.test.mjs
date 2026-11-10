@@ -38,6 +38,7 @@ beforeEach(() => {
   routes = {
     'GET /api/spaces/sp1/dev/worktrees': () => json(200, fx.LIST),
     'GET /api/spaces/sp1/dev/worktrees/branches': () => json(200, fx.BRANCHES),
+    ...Object.fromEntries(fx.BOTS.map((b) => [`POST /api/kwants/${b.id}/threads`, (_u, init) => json(201, { id: `th-${b.id}`, kwant_id: b.id, title: JSON.parse(init.body).title })])),
   };
   g.fetch = async (url, init = {}) => {
     const method = init.method ?? 'GET';
@@ -127,6 +128,7 @@ test('row status and time copy', () => {
   assert.equal(m.rowStatus(W(fx.MISSING), fx.NOW).kind, 'missing');
   assert.equal(m.rowTime(W(fx.WORKING), fx.NOW), 'active now');
   assert.equal(m.rowTask(W(fx.MINE), fx.NOW), 'No task. Made from the Dev desk 09:12');
+  assert.equal(m.rowTask(W({ ...fx.MINE, thread_title: 'lin/search-index' }), fx.NOW), 'Chat: lin/search-index', 'thread_title (contract v3) when there is no task');
   assert.equal(m.changesLabel(0), 'No uncommitted changes');
   assert.equal(m.changesLabel(1), '1 uncommitted file');
   assert.equal(m.changesLabel(3), '3 uncommitted files');
@@ -270,7 +272,7 @@ test('create a new branch: default bot, suggested name, preview, request body, t
   let created = null;
   routes['POST /api/spaces/sp1/dev/worktrees'] = (_u, init) => json(201, (created = fx.wt('w9', JSON.parse(init.body).branch, { kwant_id: 'k-lin', thread_id: 'th-lin', base: 'main' })));
   const opened = [];
-  const host = await mount({ defaultBotId: 'k-lin', threadFor: (id) => `th-${id}`, onOpenChat: (b, t) => opened.push([b, t]) });
+  const host = await mount({ defaultBotId: 'k-lin', onOpenChat: (b, t) => opened.push([b, t]) });
   const newBtn = host.querySelector('[data-wt-repo="shop"] [data-wt-new]');
   await click(newBtn);
   const dlg = document.querySelector('[data-wt-dialog="create"]');
@@ -287,8 +289,10 @@ test('create a new branch: default bot, suggested name, preview, request body, t
   await setValue(base, 'release/0.9');
   dlg.querySelector('form').dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
   await settle();
-  const post = calls.find((c) => c.method === 'POST');
-  assert.deepEqual(post.body, { team_id: 't-shop', branch: 'lin/search-index', base: 'release/0.9', kwant_id: 'k-lin', thread_id: 'th-k-lin' });
+  const posts = calls.filter((c) => c.method === 'POST');
+  assert.deepEqual(posts.map((c) => c.url.replace(/\?.*/, '')), ['/api/kwants/k-lin/threads', '/api/spaces/sp1/dev/worktrees'], 'the bot gets its own chat first: its main 1:1 has no thread id');
+  assert.deepEqual(posts[0].body, { title: 'lin/search-index' });
+  assert.deepEqual(posts[1].body, { team_id: 't-shop', branch: 'lin/search-index', base: 'release/0.9', kwant_id: 'k-lin', thread_id: 'th-k-lin' });
   assert.ok(created);
   assert.equal(document.querySelector('[data-wt-dialog]'), null);
   assert.equal(document.activeElement, newBtn, 'focus returns to New worktree');
@@ -336,11 +340,28 @@ test('create from an existing branch: checked-out branches are disabled, no base
   assert.equal(opt('main').disabled, true);
   assert.match(opt('main').textContent, /checked out at ~\/code\/shop/);
   assert.equal(dlg.querySelector('[data-wt-create]').disabled, true);
-  await setValue(pick, 'feature/search');
-  assert.match(text(dlg.querySelector('[data-wt-preview]')), /branch feature\/search \(existing\)/);
+  assert.equal(opt('origin/main'), undefined, 'a remote with a local branch of the same name shows only the local one');
+  await setValue(pick, 'release/0.9');
+  assert.match(text(dlg.querySelector('[data-wt-preview]')), /branch release\/0\.9 \(existing\)/);
   await click(dlg.querySelector('[data-wt-create]'));
-  assert.deepEqual(calls.find((c) => c.method === 'POST').body, { team_id: 't-shop', branch: 'feature/search' });
+  assert.deepEqual(calls.find((c) => c.method === 'POST').body, { team_id: 't-shop', branch: 'release/0.9' });
+  assert.equal(calls.some((c) => c.url.includes('/threads')), false, 'Nobody: no chat is made');
   assert.match(text(host.querySelector('[data-wt-toast]')), /^Worktree ready$/);
+});
+
+test('create from a remote-only branch: it goes in as a new local branch made from the remote', async () => {
+  routes['POST /api/spaces/sp1/dev/worktrees'] = (_u, init) => json(201, fx.wt('w7', JSON.parse(init.body).branch));
+  const host = await mount();
+  await click(host.querySelector('[data-wt-repo="shop"] [data-wt-new]'));
+  const dlg = document.querySelector('[data-wt-dialog="create"]');
+  await setValue(dlg.querySelector('[data-wt-for]'), '');
+  await click(dlg.querySelector('[data-wt-mode="existing"]'));
+  const pick = dlg.querySelector('[data-wt-pick]');
+  assert.match([...pick.options].find((o) => o.value === 'origin/feature/search').textContent, /new local branch/);
+  await setValue(pick, 'origin/feature/search');
+  assert.match(text(dlg.querySelector('[data-wt-preview]')), /branch feature\/search \(new, from origin\/feature\/search\)/);
+  await click(dlg.querySelector('[data-wt-create]'));
+  assert.deepEqual(calls.find((c) => c.method === 'POST').body, { team_id: 't-shop', branch: 'feature/search', base: 'origin/feature/search' });
 });
 
 test('create without the branch route: the base and branch become text fields', async () => {

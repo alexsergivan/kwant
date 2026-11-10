@@ -216,10 +216,9 @@ export interface DevDeskViewProps {
   /** 0.9.0 H1: the Worktrees tab's "Open chat" and the create dialog's default bot and thread. */
   onOpenChat?: (botId: string, threadId: string | null) => void;
   defaultBotId?: string | null;
-  threadFor?: (botId: string) => string | null;
 }
 
-export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots, onOpenChat, defaultBotId, threadFor }) => {
+export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots, onOpenChat, defaultBotId }) => {
   const dev = useDevMode(spaceId);
   const connect = (anchor?: HTMLElement) => (onOpenLooseEnds ? onOpenLooseEnds(anchor) : openGitHubConnect({ space: spaceId, anchor }));
   // 0.7.2: with several repos, both lists filter by one (All · app · site) through `?repo=`.
@@ -535,7 +534,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
 
           <div ref={panelRef} role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${tab}`} className="space-y-3">
             {tab === 'worktrees' && worktreesOn ? (
-              <WorktreesPanel space={spaceId} data={wt} bots={bots ?? []} defaultBotId={defaultBotId} threadFor={threadFor} onOpenChat={onOpenChat} phone={phone} now={now} />
+              <WorktreesPanel space={spaceId} data={wt} bots={bots ?? []} defaultBotId={defaultBotId} onOpenChat={onOpenChat} phone={phone} now={now} />
             ) : tab === 'tickets' && ticketsOn ? (
               <TicketsPanel space={spaceId} data={jira} names={ticketNames} />
             ) : tab === 'landed' && polling ? (

@@ -3970,7 +3970,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
     />
   );
-  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.role }))} defaultBotId={!isChannel ? selectedId : null} onOpenChat={(id, thread) => (thread ? openThread(id, thread) : void openTarget({ channel_id: null, kwant_id: id }))} />;
+  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title }))} defaultBotId={!isChannel ? selectedId : null} onOpenChat={(id, thread) => (thread ? openThread(id, thread) : void openTarget({ channel_id: null, kwant_id: id }))} />;
   const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…

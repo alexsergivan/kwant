@@ -106,8 +106,9 @@ export const LIST = {
 export const BRANCHES = {
   branches: [
     { name: 'main', remote: false, checked_out_at: '/home/ann/code/shop' },
+    { name: 'origin/main', remote: true, checked_out_at: null },
     { name: 'release/0.9', remote: false, checked_out_at: null },
     { name: 'pixel/inbox-empty-state', remote: false, checked_out_at: `${ROOT}/shop/pixel-inbox-empty-state` },
-    { name: 'feature/search', remote: true, checked_out_at: null },
+    { name: 'origin/feature/search', remote: true, checked_out_at: null },
   ],
 };
