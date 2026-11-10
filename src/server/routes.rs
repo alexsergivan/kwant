@@ -1882,6 +1882,13 @@ pub(super) struct TurnOpts {
     /// prompt and the plan it is checked against, for [`try_kwant_turn`] to run once the turn has
     /// ended. A held reply passes it on to the decided reply (see [`super::decide::Held`]).
     pub(super) delivery_next: Option<DeliveryNext>,
+    /// What the turns of one delivery did so far: the person's ask, the decided reply of a held
+    /// one and the delivery check's one continuation share it, so an image one of them shared (or
+    /// a push one of them made) counts for the others. Before 0.8.1 F1 a continuation that only
+    /// had to add the PR link asked for the picture the first turn had already shared, and ended
+    /// with "No picture was attached". Each [`try_kwant_turn`] starts a new one, so a later ask
+    /// never inherits it. `None`: only the turn's own pictures and pushes count.
+    pub(super) delivery_seen: Option<DeliverySeen>,
     /// The chat slot passed from a turn to its delivery continuation: the first turn leaves its
     /// slot here when it holds the chat and the save step asked for a continuation, and the
     /// continuation starts on it instead of queueing. So a message that arrived meanwhile (and
@@ -1908,6 +1915,9 @@ pub(super) struct TurnOpts {
 
 /// See [`TurnOpts::chat_handover`].
 pub(super) type ChatHandover = std::sync::Arc<std::sync::Mutex<Option<super::turns::Slot>>>;
+
+/// See [`TurnOpts::delivery_seen`].
+pub(super) type DeliverySeen = std::sync::Arc<std::sync::Mutex<super::delivery_check::Seen>>;
 
 /// See [`TurnOpts::delivery_next`].
 pub(super) type DeliveryNext = std::sync::Arc<std::sync::Mutex<Option<(String, crate::router::delivery::DeliveryPlan)>>>;
@@ -2011,6 +2021,8 @@ pub(super) async fn try_kwant_turn(
     // behind a message that waits for the chat (P6's one turn per bot per chat)
     let handover = next.as_ref().map(|_| ChatHandover::default());
     opts.chat_handover = handover.clone();
+    // A new delivery: what this ask's turns share (see [`TurnOpts::delivery_seen`])
+    opts.delivery_seen = Some(DeliverySeen::default());
     let carried = Carried::of(&opts);
     let first = try_kwant_turn_once(scope, target_kwant, prompt, opts).await;
     let Some((prompt, plan)) = next.and_then(|n| n.lock().ok().and_then(|mut n| n.take())) else {
@@ -2088,6 +2100,8 @@ struct Carried {
     /// A turn that ran beside its bot's running turn in the chat (a lead hearing its hand-offs)
     /// is continued beside it too: it never waits for that turn.
     beside_running: bool,
+    /// The delivery it belongs to: the continuation counts what the first turn already did.
+    delivery_seen: Option<DeliverySeen>,
 }
 
 impl Carried {
@@ -2101,23 +2115,27 @@ impl Carried {
             purpose: o.purpose.clone(),
             task: o.task.clone(),
             beside_running: o.beside_running,
+            delivery_seen: o.delivery_seen.clone(),
         }
     }
 
     fn into_opts(self) -> TurnOpts {
-        let Carried { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running } = self;
+        let Carried { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _ } = self;
         TurnOpts { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, ..Default::default() }
     }
 
     /// The delivery check's continuation of the turn: checked against the first turn's `plan`
     /// (kwant's continuation prompt never makes a new one), and never continued again. It starts
-    /// on the first turn's chat slot when `handover` holds it (see [`TurnOpts::chat_handover`]).
+    /// on the first turn's chat slot when `handover` holds it (see [`TurnOpts::chat_handover`]),
+    /// and counts what the delivery's earlier turns did (see [`TurnOpts::delivery_seen`]).
     fn continuation(self, plan: crate::router::delivery::DeliveryPlan, handover: Option<ChatHandover>) -> TurnOpts {
+        let delivery_seen = self.delivery_seen.clone();
         TurnOpts {
             label: Some("Automatic continuation (once): the reply was missing what the person expected".into()),
             delivery: Some(plan),
             delivery_continued: true,
             chat_handover: handover,
+            delivery_seen,
             ..self.into_opts()
         }
     }
@@ -3453,10 +3471,15 @@ async fn run_kwant_turn_inner(
                 let expect = plan.as_ref().and_then(super::delivery_check::Expect::from_plan);
                 let checked = opts.delivery_checked();
                 let verdict = if checked {
-                    let seen = super::delivery_check::Seen {
+                    let own = super::delivery_check::Seen {
                         image_shared: pictures.shared_image,
                         has_shot: pictures.last_shot.is_some(),
                         pushed: super::delivery_check::pushed_in(activity.as_ref()),
+                    };
+                    // ...counting what the delivery's earlier turns did (F1)
+                    let seen = match opts.delivery_seen.as_ref().map(|d| d.lock()) {
+                        Some(Ok(mut so_far)) => own.with_earlier(&mut so_far),
+                        _ => own,
                     };
                     super::delivery_check::check(&text, expect.as_ref(), opts.delivery_continued, &seen)
                 } else {
@@ -3512,8 +3535,14 @@ async fn run_kwant_turn_inner(
                 // so "the bot's latest message" is still its reply (the app shows the two together)
                 if let (true, Some(shot)) = (verdict.share_last_shot, &pictures.last_shot) {
                     let name = super::continuity::screenshot_name(&shot.url);
-                    if let Err(why) = super::attachments::post_screenshot(state, &turn_scope, &shot.data, &name, true).await {
-                        tracing::warn!(kwant = %target_kwant.id, %why, "couldn't share the turn's screenshot with its reply");
+                    match super::attachments::post_screenshot(state, &turn_scope, &shot.data, &name, true).await {
+                        // The delivery's later turns count it too
+                        Ok(_) => {
+                            if let Some(Ok(mut so_far)) = opts.delivery_seen.as_ref().map(|d| d.lock()) {
+                                so_far.image_shared = true;
+                            }
+                        }
+                        Err(why) => tracing::warn!(kwant = %target_kwant.id, %why, "couldn't share the turn's screenshot with its reply"),
                     }
                 }
                 let hold = opts.hook.as_ref().and_then(|h| {
@@ -3537,6 +3566,7 @@ async fn run_kwant_turn_inner(
                                 meta,
                                 delivery: plan.clone(),
                                 delivery_next: opts.delivery_next.clone(),
+                                delivery_seen: opts.delivery_seen.clone(),
                             });
                         }
                     }
