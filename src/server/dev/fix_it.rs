@@ -1136,6 +1136,24 @@ mod tests {
         assert_eq!(ItemComment::of(&c).body, "fine evil");
     }
 
+    /// N1 (Rigel's QA of #490): a verdict that fails twice names the verdict, not the card's
+    /// text; D1: a turn the spending stop holds ends the call at once with the stop's error (no
+    /// second call), so the caller can give the `verdict:<head>` key back.
+    #[tokio::test]
+    async fn verdict_errors_name_the_verdict_and_a_spending_stop_ends_the_call() {
+        use super::super::generate::stub::Stub;
+        let mut m = Stub::new(vec![Ok("no json".into()), Err("engine down".into())]);
+        let e = ask_json_as(&mut m, "P", parse_verdict, VERDICT_JOB).await.unwrap_err();
+        assert_eq!(e, "Rigel couldn't write the fresh-eyes verdict twice in a row (the turn failed: engine down).");
+        assert!(!e.contains("card"), "{e}");
+
+        let stop = format!("{}: today's spending stop holds new turns", spend_stop::REASON);
+        let mut m = Stub::new(vec![Err(stop.clone()), Ok(r#"{"verdict": "merge", "reasons": ["ok"]}"#.into())]);
+        let e = ask_json_as(&mut m, "P", parse_verdict, VERDICT_JOB).await.unwrap_err();
+        assert!(spend_stop::is_stop_error(&e), "{e}");
+        assert_eq!(m.prompts.len(), 1, "not asked again while the stop holds");
+    }
+
     #[test]
     fn the_turn_prompt_says_the_history_copy_is_data_too() {
         let p = turn_prompt(&item());
