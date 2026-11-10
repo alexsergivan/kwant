@@ -628,6 +628,16 @@ pub async fn clean(wt: &Path, common: &Path) -> Result<Cleaned, WtError> {
     for rel in found {
         let text = rel.to_string_lossy().replace('\\', "/");
         let Some(r) = rel.to_str() else { continue };
+        // Tracked first: check-ignore answers 1 for a folder that holds a tracked file, which
+        // would give the wrong reason
+        let tracked = g.run(&["ls-files", "-z", "--", r], READ_TIMEOUT, true).await?;
+        if !tracked.ok {
+            return Err(WtError::Failed);
+        }
+        if !tracked.stdout.is_empty() {
+            done.kept.push(Kept { dir: text, why: "tracked" });
+            continue;
+        }
         // Ignored: check-ignore exits 0 for an ignored path, 1 for one that isn't. It takes no
         // pathspec magic (so no GIT_LITERAL_PATHSPECS) and doesn't expand globs; the `./` keeps a
         // folder named `:(…)` from reading as magic.
@@ -638,14 +648,6 @@ pub async fn clean(wt: &Path, common: &Path) -> Result<Cleaned, WtError> {
                 return Err(WtError::Failed);
             }
             done.kept.push(Kept { dir: text, why: "not_ignored" });
-            continue;
-        }
-        let tracked = g.run(&["ls-files", "-z", "--", r], READ_TIMEOUT, true).await?;
-        if !tracked.ok {
-            return Err(WtError::Failed);
-        }
-        if !tracked.stdout.is_empty() {
-            done.kept.push(Kept { dir: text, why: "tracked" });
             continue;
         }
         let abs = wt.join(&rel);
