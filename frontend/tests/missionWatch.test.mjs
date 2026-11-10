@@ -174,7 +174,7 @@ test('the report: a real table with headers, rows in order, nothing rendered as 
   assert.ok(t.indexOf('Write the tests') < t.indexOf('Deploy the site'));
   assert.match(t, /Show 1 that hold/);
   assert.match(t, /What Rigel did/);
-  assert.match(t, /Rigel tried to approve the deploy\. Only you can approve, so kwant left it for you\./);
+  assert.match(t, /Rigel tried to approve the deploy\. Only you can approve, so it was left for you\./);
 });
 
 test('the chat message falls back to the message text when the report is invalid', () => {

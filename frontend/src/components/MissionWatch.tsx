@@ -445,7 +445,7 @@ const ActionLine: React.FC<{ r: WatchReport; a: WatchAction; timeZone?: string; 
         <li className="flex gap-2" data-action="refused">
           <ShieldCheck size={13} aria-hidden="true" className={`${icon} text-rose-300`} />
           <span>
-            {r.kwant_name} tried to {noDot(a.what)}. {a.why ? noDot(a.why) : 'Watchers can’t do that'}, so kwant left it for you.
+            {r.kwant_name} tried to {noDot(a.what)}. {a.why ? noDot(a.why) : 'Watchers can’t do that'}, so it was left for you.
           </span>
         </li>
       );
