@@ -425,6 +425,8 @@ where
                 channel_id: None,
                 title: format!("{} peeked at your idea", bot.name),
                 body: "Open the idea jar to see the take.".into(),
+                thread_id: None,
+                card_id: None,
             },
         )
         .await;

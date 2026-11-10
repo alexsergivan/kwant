@@ -293,21 +293,26 @@ pub fn inbox_path(space_id: Option<&str>) -> String {
     format!("{}/inbox", space_base(space_id))
 }
 
-/// Where an item opens in the kwant window: its channel, else its bot's chat. A thread has no
-/// address of its own in the page, so a thread item opens the Inbox, where it is one click away.
+/// Where an item opens in the kwant window: its channel (a team chat is one), its bot's
+/// conversation (`/b/<bot>/t/<thread>`, 0.8.1 F6), else its bot's chat. An approval adds
+/// `?card=<id>` so the page shows that card. With no bot to open, the Inbox.
 pub fn target_path(item: &Item) -> String {
     let base = space_base(item.space_id.as_deref());
+    let card = match item.kind {
+        Kind::Approval if !item.id.is_empty() => format!("?card={}", encode(&item.id)),
+        _ => String::new(),
+    };
     if let Some(c) = &item.channel_id {
-        return format!("{base}/c/{}", encode(c));
+        return format!("{base}/c/{}{card}", encode(c));
     }
-    if item.thread_id.is_some() {
-        return format!("{base}/inbox");
-    }
-    let bot = item.direct_kwant_id.as_deref().unwrap_or(&item.kwant_id);
+    let bot = item.direct_kwant_id.as_deref().filter(|b| !b.is_empty()).unwrap_or(&item.kwant_id);
     if bot.is_empty() {
         return format!("{base}/inbox");
     }
-    format!("{base}/b/{}", encode(bot))
+    if let Some(t) = item.thread_id.as_deref().filter(|t| !t.is_empty()) {
+        return format!("{base}/b/{}/t/{}{card}", encode(bot), encode(t));
+    }
+    format!("{base}/b/{}{card}", encode(bot))
 }
 
 /// Percent-encodes everything but RFC 3986 unreserved characters (a path segment or query value).
@@ -551,7 +556,7 @@ mod tests {
         let p = pill(&remote.items).unwrap();
         assert_eq!(p.detail, "kwant.jumpin.games · title a");
         assert_eq!(p.place, server);
-        assert_eq!(p.target, "/s/spc_default/b/k-a");
+        assert_eq!(p.target, "/s/spc_default/b/k-a?card=a");
 
         let three = waiting(vec![item(Kind::Question, "q", "Juno"), item(Kind::Approval, "b", "Mira"), item(Kind::Approval, "c", "Iris")])
             .in_place(server, "kwant.jumpin.games");
@@ -643,7 +648,7 @@ mod tests {
         assert_eq!(p.headline, "juno needs your OK");
         assert_eq!(p.detail, "title a");
         assert_eq!(p.initial, "J");
-        assert_eq!(p.target, "/s/spc_default/c/ch%2F1");
+        assert_eq!(p.target, "/s/spc_default/c/ch%2F1?card=a");
         let q = item(Kind::Question, "q", "Mira");
         let p = pill(&[q]).unwrap();
         assert_eq!(p.headline, "Mira asked you something");
@@ -674,7 +679,22 @@ mod tests {
         i.direct_kwant_id = Some("k9".into());
         assert_eq!(target_path(&i), "/s/my%20space/b/k9");
         i.thread_id = Some("t1".into());
-        assert_eq!(target_path(&i), "/s/my%20space/inbox", "a thread opens the Inbox");
+        assert_eq!(target_path(&i), "/s/my%20space/b/k9/t/t1", "a thread opens itself (0.8.1 F6)");
+        let mut in_thread = item(Kind::Question, "q", "J");
+        in_thread.space_id = Some("s".into());
+        in_thread.kwant_id = "k 1".into();
+        in_thread.thread_id = Some("t/2".into());
+        assert_eq!(target_path(&in_thread), "/s/s/b/k%201/t/t%2F2", "a thread item without a direct link names its bot");
+        let mut approval = item(Kind::Approval, "ap 1", "J");
+        approval.space_id = Some("s".into());
+        approval.kwant_id = "k1".into();
+        approval.thread_id = Some("t1".into());
+        assert_eq!(target_path(&approval), "/s/s/b/k1/t/t1?card=ap%201", "an approval names its card");
+        approval.thread_id = None;
+        approval.channel_id = Some("team-c".into());
+        assert_eq!(target_path(&approval), "/s/s/c/team-c?card=ap%201", "a team chat approval opens the team chat");
+        approval.channel_id = None;
+        assert_eq!(target_path(&approval), "/s/s/b/k1?card=ap%201");
         i.channel_id = Some("c1".into());
         assert_eq!(target_path(&i), "/s/my%20space/c/c1");
         let mut none = item(Kind::Question, "q", "J");

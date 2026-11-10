@@ -445,7 +445,7 @@ pub async fn notice(state: &AppState, g: &Goal, kind: &str, title: String, body:
         return false;
     };
     let _ = state.db.add_goal_event(&g.id, "notified", "kwant", &json!({ "kind": kind })).await;
-    notify(state, Notification { kind: "goal_alert", kwant_id: bot.id, kwant_name: bot.name, channel_id: None, title, body }).await;
+    notify(state, Notification { kind: "goal_alert", kwant_id: bot.id, kwant_name: bot.name, channel_id: None, title, body, thread_id: None, card_id: None }).await;
     true
 }
 

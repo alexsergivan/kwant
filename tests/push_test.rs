@@ -129,6 +129,8 @@ fn note(kind: &'static str) -> Notification {
         channel_id: Some("ch-1".into()),
         title: "Ada needs your approval".into(),
         body: "Run `cargo test`?".into(),
+        thread_id: None,
+        card_id: None,
     }
 }
 
