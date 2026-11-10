@@ -29,7 +29,9 @@ const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // Import from this computer, a folder or a GitHub link (0.8.0 A4): Mira's a4-import.md names kwant, the program
 // that looks and fetches, in these sentences. A4 follow-ups: Mira's ui-check-459 Later 4 ("kwant can’t download it") and
 // the https-only reason ("kwant only downloads from github.com").
-const RULED = /\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass|can’t fetch|can’t download|only downloads)\b|\b[Rr]estart kwant\b|\bStart kwant as\b|\bkwant (?:looked|never follows|downloads it|found nothing|doesn’t fetch)\b|\bNothing kwant can bring\b|\bwhere kwant looked\b|\bsent kwant somewhere\b/g;
+// Worktrees tab (0.9.0 H1): Mira's h1-worktrees.md names kwant, the program that makes and cleans the folders, in its
+// status and inline-error copy.
+const RULED = /\bkwant (?:can remove it|won’t delete it|won’t write into it|suggests one from the task|cleans build output)\b|\bmade outside kwant\b|\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass|can’t fetch|can’t download|only downloads)\b|\b[Rr]estart kwant\b|\bStart kwant as\b|\bkwant (?:looked|never follows|downloads it|found nothing|doesn’t fetch)\b|\bNothing kwant can bring\b|\bwhere kwant looked\b|\bsent kwant somewhere\b/g;
 
 /** Whether a literal reads like text a person sees (a sentence, or a capitalised word). */
 const looksVisible = (text, node) => {
