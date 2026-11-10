@@ -1001,7 +1001,6 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
   from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: none; }
 }
-.kw-pin-enter { animation: kw-pin-enter 160ms ease-out; }
-@media (prefers-reduced-motion: reduce) {
-  .kw-pin-enter { animation: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .kw-pin-enter { animation: kw-pin-enter 160ms ease-out; }
 }
