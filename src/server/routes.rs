@@ -3740,6 +3740,10 @@ pub async fn send_chat(
     if let Some(text) = super::idea_jar::slash_idea(&payload.prompt) {
         return idea_from_chat(&state, &headers, &payload, text, from_person).await;
     }
+    // G3: a 6th picked part of a page gets a code the composer can name
+    if let Some(r) = super::attachments::too_many_points(&state, &payload.attachment_ids).await {
+        return r;
+    }
     match send_chat_inner(state, payload, from_person).await {
         Ok(json) => json.into_response(),
         Err(status) => status.into_response(),
