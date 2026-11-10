@@ -338,6 +338,8 @@ mod tests {
                 space_id: Some(s("spc_x")),
                 space_name: None,
                 held_message: false,
+                thread_id: None,
+                card_id: None,
             },
         ];
         for e in &all {

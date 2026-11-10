@@ -591,6 +591,8 @@ pub async fn call_propose(state: &AppState, scope: &crate::server::continuity::S
                     channel_id: None,
                     title: format!("{} asks for {to} on {class}", bot.name),
                     body: format!("{} asks to move from {tier} to {to} on {class} tasks, with {verified} verified in the last {WINDOW_DAYS} days.", bot.name),
+                    thread_id: None,
+                    card_id: None,
                 },
             )
             .await;

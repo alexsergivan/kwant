@@ -1771,7 +1771,7 @@ fn clip(text: &str, max: usize) -> String {
 }
 
 /// A notification: what the SSE event carries and the webhook posts.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Notification {
     pub kind: &'static str,
     pub kwant_id: String,
@@ -1779,6 +1779,11 @@ pub struct Notification {
     pub channel_id: Option<String>,
     pub title: String,
     pub body: String,
+    /// The bot's conversation it is about, when it is one (a question, a browser step or an
+    /// approval asked there): a tap opens that thread, not the bot's direct chat (0.8.1 F6).
+    pub thread_id: Option<String>,
+    /// The card to show once there: an approval's id (0.8.1 F6).
+    pub card_id: Option<String>,
 }
 
 /// Sends `n` to the UI, the webhook and push subscriptions, if the user wants this kind. The body never holds chat
@@ -1815,7 +1820,8 @@ pub async fn notify_held(state: &AppState, n: Notification, space: Option<&crate
         None => (None, None),
     };
     if !state.push.subscriptions().is_empty() {
-        let payload = super::push::Payload::new(n.kind, &title, &body, space_id.clone(), n.channel_id.clone(), n.kwant_id.clone());
+        let payload = super::push::Payload::new(n.kind, &title, &body, space_id.clone(), n.channel_id.clone(), n.kwant_id.clone())
+            .at(n.thread_id.clone(), n.card_id.clone());
         let push = state.push.clone();
         tokio::spawn(async move { push.send_all(&payload).await });
     }
@@ -1829,6 +1835,8 @@ pub async fn notify_held(state: &AppState, n: Notification, space: Option<&crate
         space_id,
         space_name,
         held_message,
+        thread_id: n.thread_id,
+        card_id: n.card_id,
     });
     let Some(url) = state
         .db
@@ -1951,6 +1959,11 @@ async fn place(state: &AppState, context_id: Option<&str>) -> (Option<String>, S
 pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<&str>) -> Notification {
     let name = kwant_name(state, kwant_id).await;
     let (channel_id, where_) = place(state, context_id).await;
+    // A turn in one of the bot's conversations opens that conversation (0.8.1 F6)
+    let thread_id = match (&channel_id, context_id) {
+        (None, Some(id)) if id != kwant_id && state.db.get_thread(id).await.ok().flatten().is_some() => Some(id.to_string()),
+        _ => None,
+    };
     Notification {
         kind: "turn_finished",
         kwant_id: kwant_id.to_string(),
@@ -1958,6 +1971,8 @@ pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<
         body: format!("{name} finished replying in {where_}."),
         kwant_name: name,
         channel_id,
+        thread_id,
+        card_id: None,
     }
 }
 
@@ -1994,13 +2009,16 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
             Some(turn_finished(state, kwant_id, context_id.as_deref()).await)
         }
         RuntimeEvent::ApprovalRequired {
-            tool_name, details, ..
+            id, tool_name, details,
         } => {
             let kwant_id = details["kwant_id"].as_str().unwrap_or("").to_string();
             let name = match details["kwant_name"].as_str() {
                 Some(n) => n.to_string(),
                 None => kwant_name(state, &kwant_id).await,
             };
+            // The chat the card is in (stored with the ticket before the event is sent): a tap
+            // opens that channel, team chat or conversation, else the bot's direct chat (0.8.1 F6)
+            let (channel_id, thread_id) = approval_place(state, id).await;
             Some(Notification {
                 kind: "approval_needed",
                 kwant_id,
@@ -2010,16 +2028,44 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
                     clip(tool_name, 80)
                 ),
                 kwant_name: name,
-                channel_id: None,
+                channel_id,
+                thread_id,
+                card_id: Some(id.clone()),
             })
         }
         _ => None,
     }
 }
 
+/// Where approval `id`'s card is: `(channel, thread)` from the chat stored with the ticket, both
+/// `None` for the bot's direct chat (or a ticket stored without one, as before 0.8.1).
+async fn approval_place(state: &AppState, id: &str) -> (Option<String>, Option<String>) {
+    let chat = state.db.approval_chat(id).await.ok().flatten();
+    place_of_chat(chat.as_ref())
+}
+
+/// `{"channel_id"|"thread_id"|"direct_kwant_id": …}` (the approvals `resume` column) as `(channel, thread)`.
+fn place_of_chat(chat: Option<&serde_json::Value>) -> (Option<String>, Option<String>) {
+    let field = |k: &str| chat.and_then(|c| c[k].as_str()).filter(|s| !s.is_empty()).map(str::to_string);
+    match field("thread_id") {
+        Some(t) => (None, Some(t)),
+        None => (field("channel_id"), None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn approval_chat_names_the_place() {
+        use serde_json::json;
+        assert_eq!(place_of_chat(Some(&json!({"channel_id": "c1"}))), (Some("c1".into()), None));
+        assert_eq!(place_of_chat(Some(&json!({"thread_id": "t1"}))), (None, Some("t1".into())));
+        assert_eq!(place_of_chat(Some(&json!({"direct_kwant_id": "k1"}))), (None, None));
+        assert_eq!(place_of_chat(Some(&json!({"channel_id": ""}))), (None, None));
+        assert_eq!(place_of_chat(None), (None, None));
+    }
 
     fn memory(id: &str, text: &str) -> Memory {
         let now = chrono::Utc::now();

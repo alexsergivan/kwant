@@ -221,6 +221,8 @@ pub async fn run(state: &AppState, c: Candidate, row: WorkAheadRun) -> Option<Me
             channel_id: c.channel_id.clone(),
             title: format!("{} worked ahead while you were away", c.lead.name),
             body: "Open the chat to see what's ready.".into(),
+            thread_id: None,
+            card_id: None,
         },
     )
     .await;

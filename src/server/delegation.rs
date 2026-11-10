@@ -738,6 +738,8 @@ async fn finish(state: &AppState, d: &Delegation, specialist: &Kwant, outcome: R
             channel_id: done.origin_channel_id.clone(),
             title: format!("{} finished a task for {lead_name}", specialist.name),
             body: format!("“{}”: {status}.", clip(&done.title, 80)),
+            thread_id: None,
+            card_id: None,
         },
     )
     .await;
@@ -1350,6 +1352,8 @@ pub async fn follow_ups(state: &AppState, now: chrono::DateTime<Utc>) -> usize {
                 channel_id: d.origin_channel_id.clone(),
                 title: format!("{specialist} is still on a delegated task"),
                 body: format!("“{}”: {minutes} min so far.", clip(&d.title, 80)),
+                thread_id: None,
+                card_id: None,
             },
         )
         .await;

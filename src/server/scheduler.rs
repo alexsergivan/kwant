@@ -581,6 +581,8 @@ pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> 
                         "The routine \"{}\" did not finish. Open kwant bots to see its run history.",
                         routine.name
                     ),
+                    thread_id: None,
+                    card_id: None,
                 },
             )
             .await;

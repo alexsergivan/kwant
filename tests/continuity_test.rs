@@ -1788,6 +1788,8 @@ async fn notifications_are_filtered_and_content_free() {
             channel_id: None,
             title: "t".into(),
             body: "b".into(),
+            thread_id: None,
+            card_id: None,
         },
     )
     .await;
@@ -1800,6 +1802,8 @@ async fn notifications_are_filtered_and_content_free() {
             channel_id: None,
             title: "t".into(),
             body: "word ".repeat(100),
+            thread_id: None,
+            card_id: None,
         },
     )
     .await;
@@ -1842,4 +1846,109 @@ async fn prompt_sends_website_logins_to_a_browser_sign_in_only_with_the_browser(
         assert!(block.contains("Never ask for a password or one-time code in chat."));
         assert!(!block.contains("Never handle keys, passwords or sign-ins"));
     }
+}
+
+/// 0.8.1 F6: an approval's notification names the chat its card is in (a team chat, a channel,
+/// one of the bot's conversations, or its direct chat) and the card, so a tap lands there.
+#[tokio::test]
+async fn approval_notification_opens_the_chat_it_was_asked_in() {
+    let (_app, state, _tmp) = setup().await;
+    let space = kwnt::db::spaces::SpaceId::default_space();
+    let kwants = state.db.list_kwants(&space).await.unwrap();
+    let k = &kwants[0];
+    let general = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap();
+    state
+        .db
+        .create_team(&space, &NewTeam {
+            name: "core".into(),
+            description: None,
+            icon: None,
+            lead_kwant_id: k.id.clone(),
+            member_kwants: vec![k.id.clone()],
+            workspace_path: None,
+            repo_url: None,
+        })
+        .await
+        .unwrap();
+    let team_chat = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "team-core").unwrap();
+    let thread = state.db.create_thread(&k.id, "Launch plan", "chat", None, "user").await.unwrap();
+    state.db.set_setting("notify_on", r#"["approval_needed"]"#).await.unwrap();
+
+    let cases: Vec<(&str, Value, Option<String>, Option<String>)> = vec![
+        ("team chat", json!({"channel_id": team_chat.id}), Some(team_chat.id.clone()), None),
+        ("channel", json!({"channel_id": general.id}), Some(general.id.clone()), None),
+        ("thread", json!({"thread_id": thread.id}), None, Some(thread.id.clone())),
+        ("1:1", json!({"direct_kwant_id": k.id}), None, None),
+    ];
+    let handle = continuity::spawn_notifier(state.clone());
+    for (label, chat, want_channel, want_thread) in cases {
+        let ticket = state
+            .db
+            .save_approval(&kwnt::db::models::NewApproval {
+                turn_id: format!("turn-{label}"),
+                kwant_id: k.id.clone(),
+                tool_name: "mcp__github__create_issue".into(),
+                parameters: json!({}),
+            })
+            .await
+            .unwrap()
+            .id;
+        state.db.set_approval_chat(&ticket, &chat).await.unwrap();
+        let mut rx = state.event_sender.subscribe();
+        let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
+            id: ticket.clone(),
+            tool_name: "mcp__github__create_issue".into(),
+            details: json!({"kwant_id": k.id, "kwant_name": k.name}),
+        });
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut got = None;
+        while got.is_none() && tokio::time::Instant::now() < deadline {
+            if let Ok(Ok(RuntimeEvent::Notify { kind, kwant_id, channel_id, thread_id, card_id, .. })) =
+                tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+            {
+                if kind == "approval_needed" && card_id.as_deref() == Some(ticket.as_str()) {
+                    got = Some((kwant_id, channel_id, thread_id));
+                }
+            }
+        }
+        let (kwant_id, channel_id, thread_id) = got.unwrap_or_else(|| panic!("{label}: no notification"));
+        assert_eq!(kwant_id, k.id, "{label}");
+        assert_eq!(channel_id, want_channel, "{label}");
+        assert_eq!(thread_id, want_thread, "{label}");
+    }
+
+    // A ticket stored without a chat (older servers, the computer's shell card) opens the bot as before
+    let mut rx = state.event_sender.subscribe();
+    let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
+        id: "no-such-ticket".into(),
+        tool_name: "execute_shell".into(),
+        details: json!({"kwant_id": k.id, "kwant_name": k.name}),
+    });
+    let mut got = None;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while got.is_none() && tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(RuntimeEvent::Notify { kind, channel_id, thread_id, card_id, .. })) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+        {
+            if kind == "approval_needed" {
+                got = Some((channel_id, thread_id, card_id));
+            }
+        }
+    }
+    handle.abort();
+    assert_eq!(got, Some((None, None, Some("no-such-ticket".to_string()))));
+}
+
+/// 0.8.1 F6: a reply finished in one of the bot's conversations notifies with that thread.
+#[tokio::test]
+async fn a_turn_in_a_thread_notifies_with_the_thread() {
+    let (_app, state, _tmp) = setup().await;
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let k = &kwants[0];
+    let thread = state.db.create_thread(&k.id, "Launch plan", "chat", None, "user").await.unwrap();
+    let n = continuity::turn_finished(&state, &k.id, Some(&thread.id)).await;
+    assert_eq!(n.thread_id.as_deref(), Some(thread.id.as_str()));
+    assert_eq!(n.channel_id, None);
+    let n = continuity::turn_finished(&state, &k.id, Some(&k.id)).await;
+    assert_eq!(n.thread_id, None, "the direct chat is no thread");
 }
