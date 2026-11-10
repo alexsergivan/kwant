@@ -387,6 +387,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // Carrying on a chain that went over its token budget is the person's call
         ["", "api", "chains", _, "continue"] => *method == Method::POST,
         // Lifting today's spending stop spends the person's money: only they press Continue
+        // A bot's monthly budget (G2): only the person sets, raises, continues or pauses it again;
+        // a bot (Chief included) never changes its own budget or another bot's
+        ["", "api", "kwants", _, "budget", ..] => *method != Method::GET && *method != Method::HEAD,
         ["", "api", "usage", "today", "continue"] => *method != Method::GET && *method != Method::HEAD,
         // Changing a choice a bot made is the person's call
         ["", "api", "messages", _, "decisions", ..] => *method != Method::GET && *method != Method::HEAD,
@@ -963,6 +966,12 @@ mod tests {
         assert!(person_only(&post, "/api/usage/today/continue"));
         assert!(person_only(&put, "/api/usage/today/continue/"));
         assert!(!person_only(&get, "/api/usage/today"));
+        // G2: a bot's monthly budget
+        assert!(person_only(&post, "/api/kwants/k1/budget"));
+        assert!(person_only(&post, "/api/kwants/k1/budget/continue"));
+        assert!(person_only(&Method::DELETE, "/api/kwants/k1/budget/continue"));
+        assert!(!person_only(&get, "/api/kwants/k1/budget"));
+        assert!(!person_only(&get, "/api/usage/budgets"));
         // 0.7.4: connected coding agents are made and revoked by the person only; the agent
         // endpoint itself checks its own token instead
         assert!(person_only(&get, "/api/agent-connections"));
