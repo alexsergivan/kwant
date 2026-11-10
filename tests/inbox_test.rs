@@ -59,9 +59,14 @@ async fn get(app: &Router, uri: &str) -> Value {
 async fn away_bytes(app: &Router) -> String {
     let (s, body) = raw(app, "GET", "/api/away").await;
     assert_eq!(s, StatusCode::OK, "{body}");
-    let start = body.find("\"now\":\"").expect("now") + 7;
-    let end = start + body[start..].find('"').unwrap();
-    format!("{}{}", &body[..start], &body[end..])
+    // `now` and `since` (now minus the lookback) move with the clock; everything else must match
+    let mut body = body;
+    for key in ["\"now\":\"", "\"since\":\""] {
+        let start = body.find(key).unwrap_or_else(|| panic!("{key} in {body}")) + key.len();
+        let end = start + body[start..].find('"').unwrap();
+        body.replace_range(start..end, "");
+    }
+    body
 }
 
 async fn delegation(state: &AppState, lead: &str, spec: &str, title: &str, status: &str, text: &str) -> String {
@@ -116,10 +121,10 @@ async fn review_task(state: &AppState, owner: &str, title: &str, acceptance: &st
         .create_task(&SpaceId::default_space(), &NewTask {
             title: title.into(),
             acceptance: acceptance.into(),
-            state: "working".into(),
+            state: "ready".into(),
             owner_kwant_id: Some(owner.into()),
             max_attempts: 10,
-            source_kind: "manual".into(),
+            source_kind: "person".into(),
             channel_id: Some(channel.into()),
             created_by: "person".into(),
             ..Default::default()
@@ -127,10 +132,12 @@ async fn review_task(state: &AppState, owner: &str, title: &str, acceptance: &st
         .await
         .unwrap();
     let db = &state.db;
+    // `working` needs a live lease, so each round starts with a claim
+    db.claim_task(&t.id, owner, None, None, 600_000, false, owner).await.unwrap().unwrap();
     for n in 0..backs {
         assert!(db.move_task(&t.id, "working", "review", owner, &change(Some(&format!("done, round {}", n + 1)))).await.unwrap());
         assert!(db.move_task(&t.id, "review", "ready", "person", &change(Some(&format!("Also handle case {}", n + 1)))).await.unwrap());
-        assert!(db.move_task(&t.id, "ready", "working", owner, &change(None)).await.unwrap());
+        db.claim_task(&t.id, owner, None, None, 600_000, false, owner).await.unwrap().unwrap();
     }
     assert!(db.move_task(&t.id, "working", "review", owner, &change(Some("Handled the empty input too"))).await.unwrap());
     t.id
@@ -209,9 +216,10 @@ async fn inbox_joins_away_and_review_tasks_with_fallbacks() {
     let t3 = review_task(&state, &spec.id, "Legend under the plot", "", &chan.id, 3).await;
     let working = state
         .db
-        .create_task(&space, &NewTask { title: "Still going".into(), state: "working".into(), source_kind: "manual".into(), created_by: "person".into(), ..Default::default() })
+        .create_task(&space, &NewTask { title: "Still going".into(), state: "ready".into(), owner_kwant_id: Some(lead.id.clone()), source_kind: "person".into(), created_by: "person".into(), ..Default::default() })
         .await
         .unwrap();
+    state.db.claim_task(&working.id, &lead.id, None, None, 600_000, false, &lead.id).await.unwrap().unwrap();
 
     let v = get(&app, "/api/inbox").await;
     let items = v["items"].as_array().unwrap();
