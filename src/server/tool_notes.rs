@@ -500,24 +500,24 @@ pub async fn list(State(state): State<AppState>, Scope(space): Scope, Query(q): 
 }
 
 /// The person's text: 1–[`MAX_TEXT`] characters after cleaning.
-fn person_text(raw: &Value) -> Result<String, Response> {
+fn person_text(raw: &Value) -> Result<String, String> {
     let Some(raw) = raw.as_str() else {
-        return Err(err(StatusCode::BAD_REQUEST, "text must be a string"));
+        return Err("text must be a string".into());
     };
     let t = clean(raw, true);
     if t.is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "text is required"));
+        return Err("text is required".into());
     }
     if t.chars().count() > MAX_TEXT {
-        return Err(err(StatusCode::BAD_REQUEST, format!("text is {MAX_TEXT} characters at most")));
+        return Err(format!("text is {MAX_TEXT} characters at most"));
     }
     Ok(t)
 }
 
-fn kind_of(raw: &Value) -> Result<String, Response> {
+fn kind_of(raw: &Value) -> Result<String, String> {
     match raw.as_str() {
         Some(k) if KINDS.contains(&k) => Ok(k.to_string()),
-        _ => Err(err(StatusCode::BAD_REQUEST, "kind must be broke, tip or missing")),
+        _ => Err("kind must be broke, tip or missing".into()),
     }
 }
 
@@ -535,11 +535,11 @@ pub async fn create(State(state): State<AppState>, Scope(space): Scope, body: Re
     }
     let kind = match kind_of(&body["kind"]) {
         Ok(k) => k,
-        Err(r) => return r,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
     let text = match person_text(&body["text"]) {
         Ok(t) => t,
-        Err(r) => return r,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
     let live = live_servers(&state, &space).await;
     let names: Vec<String> = live.iter().cloned().collect();
@@ -557,12 +557,13 @@ pub async fn create(State(state): State<AppState>, Scope(space): Scope, body: Re
     }
 }
 
-/// The note `id` when it is in `space`, else a 404.
-async fn note_in(state: &AppState, space: &str, id: &str) -> Result<ToolNoteRow, Response> {
+/// Whether the note `id` is in `space`: `None` when it is, else the error to answer with (a
+/// note of another space is a 404 like a missing one).
+async fn note_in(state: &AppState, space: &str, id: &str) -> Option<Response> {
     match state.db.tool_note(id).await {
-        Ok(Some(n)) if n.space_id == space => Ok(n),
-        Ok(_) => Err(err(StatusCode::NOT_FOUND, "no such note")),
-        Err(_) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, "Couldn't load the note.")),
+        Ok(Some(n)) if n.space_id == space => None,
+        Ok(_) => Some(err(StatusCode::NOT_FOUND, "no such note")),
+        Err(_) => Some(err(StatusCode::INTERNAL_SERVER_ERROR, "Couldn't load the note.")),
     }
 }
 
@@ -620,7 +621,7 @@ pub async fn edit(
         Ok(c) => c,
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
-    if let Err(r) = note_in(&state, space.as_str(), &id).await {
+    if let Some(r) = note_in(&state, space.as_str(), &id).await {
         return r;
     }
     let live = live_servers(&state, &space).await;
@@ -636,7 +637,7 @@ pub async fn edit(
 
 /// `DELETE /api/tool-notes/:id?space=` (person only): gone at once.
 pub async fn delete(State(state): State<AppState>, Scope(space): Scope, Path(id): Path<String>) -> Response {
-    if let Err(r) = note_in(&state, space.as_str(), &id).await {
+    if let Some(r) = note_in(&state, space.as_str(), &id).await {
         return r;
     }
     match state.db.delete_tool_note(&id).await {
