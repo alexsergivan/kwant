@@ -71,6 +71,7 @@ import { playSfx } from './audio/chiptune';
 import { haptic, messageHaptic } from './haptics';
 import { Toasts, Toast } from './components/Toasts';
 import { clearAllTurns, resetTurns, turnEnded, turnStarted } from './kwantActivity';
+import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
 import { recentWork, type ChatHome } from './botHome';
@@ -3382,6 +3383,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     openNotified({ kind: 'human_step', kwant_id: n.kwantId, channel_id: n.channelId ?? null });
   };
   const spriteOf = useCallback((id: string) => kwants.find((k) => k.id === id)?.avatar_sprite, [kwants]);
+  // Avatars that only know a bot's title or name look its saved style up here.
+  useEffect(() => setKnownBots(kwants), [kwants]);
 
   // What the empty chat shows: a bot's home, #general's, or nothing special for a team or other channel.
   const chatHome: ChatHome = currentKwant
