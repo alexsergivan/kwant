@@ -11,7 +11,7 @@
 //! needs-you leaves it pending for the person, whose Verify finishes it.
 
 use super::contract::{self, Contract};
-use super::routes::{internal, load_task, not_found};
+use super::routes::{internal, load_task};
 use crate::db::missions::{NewCheck, OutcomeCheck, Task, KWANT_CHECK_KINDS};
 use crate::db::models::Kwant;
 use crate::db::verifier::{NewVerdict, TaskVerdict};
@@ -555,11 +555,17 @@ pub async fn on_review(state: &AppState, task: &Task) {
     };
     live_set(&check.id, Some(Live { task_id: task.id.clone(), ..Default::default() }));
     let (s, t, id) = (state.clone(), task.clone(), check.id.clone());
-    tokio::spawn(async move {
+    tokio::spawn(drive_boxed(s, t, id));
+}
+
+/// `drive` behind a `Send` box: settling re-evaluates the task, which can move it to review again
+/// and reach [`on_review`], so the future type is recursive and the box breaks the cycle.
+fn drive_boxed(s: AppState, t: Task, id: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(async move {
         drive(&s, &t, &id).await;
         live_set(&id, None);
         super::emit_task_id(&s, &t.id).await;
-    });
+    })
 }
 
 /// After any other move: a hold still pending on a task that left review never gates again.
@@ -1204,9 +1210,6 @@ pub async fn put_contract(State(state): State<AppState>, RawQuery(q): RawQuery, 
         Err(e) => super::routes::bad(e),
     }
 }
-
-#[allow(dead_code)]
-fn unused(_: &axum::http::StatusCode) {}
 
 #[cfg(test)]
 mod tests {
