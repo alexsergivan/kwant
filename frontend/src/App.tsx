@@ -46,7 +46,9 @@ import { HireCard, type HireDecision } from './components/HireCard';
 import { RouteChoiceCard } from './components/RouteChoiceCard';
 import { RouteChoiceMeta, applyRouteChoice, correctRoute, isAskingReply, rerouteTargetsFor, resolveRouteChoice } from './routeChoice';
 import type { RoutineFocus } from './components/RoutinesPanel';
-import { AwayPage } from './components/AwayView';
+import { InboxNew } from './components/InboxNew';
+import { inboxBadge, isReview, type InboxItem } from './api/inbox';
+import { batchItems, inboxNav, loadInbox, openItem, useInbox } from './inboxStore';
 import { LooseEndsPage } from './components/LooseEndsView';
 import { MissionBoardPage } from './components/MissionBoardView';
 import { MISSION_BOARD_SETTING_EVENT, emitMission, parseMissionBoardSetting, sourceChat } from './missions';
@@ -516,6 +518,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // A task to open on the board once it shows (from a lesson on a bot's Memory tab).
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [awayCount, setAwayCount] = useState(0);
+  // 0.9.0 V1: the Inbox store (GET /api/inbox, or /api/away before the server has it).
+  const inboxState = useInbox();
+  const inboxCount = inboxBadge(inboxState.data, { unseen: { total: awayCount } }, prepushWaiting);
+  const reviewItems: InboxItem[] = inboxState.data ? [...inboxState.data.items, ...batchItems(inboxState.data)].filter(isReview) : [];
   // "Needs you" nudges (attention.ts): what waits on the person, the pill, and the "Show nudges" setting.
   const [awayWaiting, setAwayWaiting] = useState(0);
   /** What waits on you right now (approvals, questions), for the phone Chats tab's Needs you. */
@@ -545,11 +551,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setOpenedAt((prev) => ({ ...prev, [readChat]: Date.now() }));
     return () => setOpenedAt((prev) => ({ ...prev, [readChat]: Date.now() }));
   }, [readChat]);
-  const awaySinceRef = useRef<string | null>(null);
   const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const refreshAwayCount = (delay = 0) => {
     clearTimeout(awayTimerRef.current);
     awayTimerRef.current = setTimeout(() => {
+      void loadInbox();
       awayApi.get().then((r) => {
         setAwayCount(r.unseen.total);
         setAwayWaiting(r.unseen.waiting);
@@ -3695,6 +3701,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         finished: awayDone.finished,
         busy: busyKwants,
         status: botStatus,
+        reviews: reviewItems,
         openedAt: page === 'chat' && !isChannel && selectedId ? { ...openedAt, [selectedId]: Date.now() } : openedAt,
       })
     : undefined;
@@ -3762,7 +3769,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setIsNewChannelOpen(true);
         playSfx('click');
       }}
-      inboxCount={awayCount + prepushWaiting}
+      inboxCount={inboxCount}
+      onOpenReview={(i: InboxItem) => {
+        openItem(i.id, null);
+        showPage('inbox', 'new');
+      }}
       inboxActive={page === 'inbox'}
       onOpenInbox={() => {
         showPage('inbox');
@@ -3800,7 +3811,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   );
 
   const away = (
-    <AwayPage since={awaySinceRef.current} onSince={(t) => (awaySinceRef.current = t)} onOpen={openAwayItem} onCounts={setAwayCount} onApprovalResolved={dropApproval}
+    <InboxNew
+      onOpen={openAwayItem}
+      onCounts={setAwayCount}
+      onApprovalResolved={dropApproval}
+      onCrumb={(c) => showPage(c === 'board' ? 'board' : 'dev')}
       top={
         <>
           <PrepushNeedsYou cards={prepush.cards} names={kwantNames} onOpen={openPrepush} />
@@ -3809,6 +3824,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }
     />
   );
+  // The board card, drawer and Dev desk open review items here (crumb set by the caller).
+  inboxNav.go = () => showPage('inbox', 'new');
   const backToList = isPhone ? () => { setPage('chat'); setPhoneView('list'); } : undefined;
   const parallel = <ParallelPage onBack={backToList} />;
   const connectionsPage = (
@@ -3862,7 +3879,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       addImap={looseAddImap > 0}
     />
   );
-  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={awayCount + prepushWaiting} onBack={backToList} newPage={away} loosePage={loose} />;
+  const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={inboxCount} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
           dropOff={!!spaceSettingsTab}
@@ -4100,7 +4117,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       badgeTone: 'violet',
       badgeNoun: ideaJarCount === 1 ? 'take ready' : 'takes ready',
     },
-    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: awayCount + prepushWaiting },
+    { id: 'inbox', label: 'Inbox', icon: <Inbox size={20} aria-hidden="true" />, badge: inboxCount },
     { id: 'space', label: 'Space', icon: <Settings size={20} aria-hidden="true" /> },
   ];
   const showPhoneList = isPhone && phoneView === 'list' && !needsSetup;

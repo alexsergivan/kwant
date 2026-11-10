@@ -4,7 +4,7 @@
 // the rest. Nothing here decides what is safe to approve: `one_tap` and `batchable` come from the server.
 
 import { PersonCancelledError, personFetch } from '../auth';
-import type { AwayItem, AwayKind, AwayResponse } from '../away';
+import type { AwayItem, AwayKind } from '../away';
 
 export type InboxKind = AwayKind | 'review';
 export type InboxGroup = 'waiting_on_you' | 'failed_or_stuck' | 'to_review' | 'finished';
@@ -180,7 +180,7 @@ export function groupItems(r: Pick<InboxResponse, 'items'>): Record<InboxGroup, 
  * The one Inbox badge: `counts.badge` when the server sends it, else today's sum
  * (`unseen.total + prepushWaiting`).
  */
-export function inboxBadge(inbox: Pick<InboxResponse, 'counts'> | null | undefined, away: Pick<AwayResponse, 'unseen'> | null | undefined, prepushWaiting = 0): number {
+export function inboxBadge(inbox: Pick<InboxResponse, 'counts'> | null | undefined, away: { unseen: { total: number } } | null | undefined, prepushWaiting = 0): number {
   const b = inbox?.counts?.badge;
   if (typeof b === 'number' && Number.isFinite(b)) return Math.max(0, b);
   return (away?.unseen.total ?? 0) + prepushWaiting;

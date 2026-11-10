@@ -46,6 +46,8 @@ import { isFactNeedsYou } from '../truthLedger';
 import { RisksSection } from './RisksSection';
 import { AuditWaiting, Risk, RiskResolution, TaskRisks, auditCardPlace, auditLive, auditWaiting, openRiskCounts, riskBadgeText, riskResolvedText } from '../auditor';
 import { awayApi } from '../away';
+import { verdictShort } from '../api/inbox';
+import { inboxNav, openReview, reviewForTask, useInbox } from '../inboxStore';
 import { playSfx } from '../audio/chiptune';
 import {
   ACTION_DONE,
@@ -185,6 +187,7 @@ const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-1
 const subtleBtn = `${actionBtn} -ml-3 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 underline underline-offset-2 decoration-zinc-600`;
 const mainBtn = `${actionBtn} bg-sky-600 text-white hover:bg-sky-500`;
 const goodBtn = `${actionBtn} bg-emerald-600 text-white hover:bg-emerald-500`;
+const reviewBtn = `${actionBtn} bg-violet-500/80 text-white hover:bg-violet-500`;
 const dangerBtn = `${actionBtn} border border-rose-500/30 text-rose-200 hover:bg-rose-500/10`;
 const card = 'rounded-xl border border-zinc-800 bg-zinc-900/40';
 // Card-sized buttons: compact on desktop, a full 40px tap target on the phone.
@@ -665,7 +668,11 @@ export const TaskCard: React.FC<{
   const flags = openFlags(t);
   const dimmed = t.state === 'backlog' && !flags.length && !t.held_at;
   const autofixLive = !!autofixCardText(t, now);
-  const quick = onQuick && columnOfTask(t) === 'review' ? quickActionsFor(t) : [];
+  // 0.9.0 V1: in Review the card's one button is Review (the item in the Inbox); Dismiss and Try again stay.
+  useInbox();
+  const reviewHere = !!inboxNav.go && t.state === 'review';
+  const verdict = reviewHere ? verdictShort(reviewForTask(t.id)?.verdict) : null;
+  const quick = onQuick && columnOfTask(t) === 'review' ? quickActionsFor(t).filter((a) => !reviewHere || (a !== 'verify' && a !== 'reject')) : [];
   const [sending, setSending] = useState(false);
   const [burst, setBurst] = useState(0);
   const [note, setNote] = useState('');
@@ -731,6 +738,11 @@ export const TaskCard: React.FC<{
             </span>
           )}
         </span>
+        {verdict && (
+          <span className="block text-[11px] text-zinc-300" data-card-verdict>
+            {verdict}
+          </span>
+        )}
         {status && (
           <span className={`block text-[11px] break-words line-clamp-2 ${t.state === 'needs_you' || t.held_at || (t.state === 'review' && approvalHolds(t.checks_summary)) ? 'text-amber-200' : autofixLive ? 'text-violet-200' : t.state === 'blocked' || t.state === 'failed' ? 'text-rose-300' : 'text-zinc-400'}`}>
             {status}
@@ -774,8 +786,19 @@ export const TaskCard: React.FC<{
           Remove limit and continue
         </button>
       )}
-      {quick.length > 0 && !sending && (
+      {(quick.length > 0 || reviewHere) && !sending && (
         <div className="mt-1.5 flex flex-wrap gap-1.5" data-card-actions>
+          {reviewHere && (
+            <button
+              type="button"
+              onClick={() => openReview(t.id, 'board')}
+              className={`${cardBtn} border border-violet-400/40 bg-violet-500/15 text-violet-100 hover:bg-violet-500/25`}
+              data-card-review
+            >
+              <ShieldCheck size={12} aria-hidden="true" />
+              Review
+            </button>
+          )}
           {quick.map((a) => (
             <button
               key={a}
@@ -2085,7 +2108,11 @@ export const TaskDetailBody: React.FC<{
   const owner = (t.owner_kwant_id && names[t.owner_kwant_id]) || t.owner_name;
   const st = taskStateLabel(t);
   // Unblocking without a new limit would stop it again at once.
-  const actions = actionsFor(t).filter((a) => !(limitHit && a === 'unblock'));
+  // 0.9.0 V1: a task in Review is decided in the Inbox; the drawer keeps Cancel and shows the verdict.
+  useInbox();
+  const reviewHere = !!inboxNav.go && t.state === 'review';
+  const reviewItem = reviewHere ? reviewForTask(t.id) : null;
+  const actions = actionsFor(t).filter((a) => !(limitHit && a === 'unblock') && !(reviewHere && (a === 'verify' || a === 'reject' || a === 'run_checks')));
   const chat = sourceChat(t);
   const [showAll, setShowAll] = useState(false);
   const shownEvents = detail.events.filter((e) => !isQuietEvent(e));
@@ -2177,7 +2204,17 @@ export const TaskDetailBody: React.FC<{
             </div>
           </form>
         )}
-        {t.state === 'review' && <p className="text-[11px] text-zinc-500">“Mark verified” records that you checked it yourself.</p>}
+        {reviewHere && (
+          <div className="flex flex-wrap items-center gap-2" data-drawer-review>
+            <p className="text-xs text-zinc-300 min-w-0" data-drawer-verdict>
+              {reviewItem ? (verdictShort(reviewItem.verdict) ?? 'Not checked yet') : 'Waiting for the reviewer'}
+              {reviewItem?.verdict.line && <span className="text-zinc-400"> · {reviewItem.verdict.line}</span>}
+            </p>
+            <button type="button" onClick={() => openReview(t.id, 'board')} className={reviewBtn} data-drawer-review-open>
+              <ShieldCheck size={13} aria-hidden="true" /> Review in Inbox
+            </button>
+          </div>
+        )}
         {t.state === 'verified' && onFork && !forking && (
           <button type="button" disabled={busy} onClick={() => setForking(true)} className={quietBtn} data-fork>
             <Copy size={13} aria-hidden="true" /> Redo as a copy
