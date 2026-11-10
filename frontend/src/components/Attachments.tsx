@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertCircle, Download, ExternalLink, FileText, Film, Image as ImageIcon, Loader2, RotateCw, X } from 'lucide-react';
-import { POINT_COPY, chipLine, pickName, removeText, rowLine } from '../point';
+import { POINT_COPY, chipLine, pickName, pickTitle, removeText, rowLine } from '../point';
 import { AttachmentRef, PendingUpload, attachKind, attachmentUrl, fileKind, formatBytes, isInlineImage, isVideo, uploadProgressText } from '../attachments';
 
 /**
@@ -302,10 +302,16 @@ export const FileTiles: React.FC<{ files: AttachmentRef[]; align?: 'start' | 'en
   sharedBy,
   at = null,
 }) => (
-  <ul className={`mt-2 flex flex-wrap gap-2 w-full ${align === 'end' ? 'justify-end' : ''}`} aria-label={files.length === 1 ? 'Attached file' : `${files.length} attached files`}>
+  // S5: picks stack one row each (flex-col), other attachments keep wrapping as before.
+  <ul
+    className={`mt-2 flex gap-2 w-full ${
+      files.some((f) => f.point) ? `flex-col ${align === 'end' ? 'items-end' : 'items-start'} gap-1.5` : `flex-wrap ${align === 'end' ? 'justify-end' : ''}`
+    }`}
+    aria-label={files.length === 1 ? 'Attached file' : `${files.length} attached files`}
+  >
     {files.map((f) =>
       f.point ? (
-        <li key={f.id} className="w-full sm:w-auto max-w-full">
+        <li key={f.id} className="w-full sm:w-auto max-w-full sm:max-w-[420px]">
           <PointRow file={f} sharedBy={sharedBy} at={at} />
         </li>
       ) : (
@@ -394,6 +400,7 @@ export const PointRow: React.FC<{ file: AttachmentRef; sharedBy?: string; at?: s
   const [broken, setBroken] = useState(false);
   const p = file.point!;
   const name = pickName(p);
+  const fullName = pickTitle(p);
   const picture = p.picture && isInlineImage(file.mime) && !broken;
   return (
     <div data-point-row="" className="flex items-center gap-2.5 max-w-full sm:max-w-[420px] p-1.5 pr-3 rounded-[10px] border border-violet-400/30 bg-violet-500/[0.08]">
@@ -412,7 +419,7 @@ export const PointRow: React.FC<{ file: AttachmentRef; sharedBy?: string; at?: s
         </span>
       )}
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-mono text-[12px] text-zinc-100" title={name}>
+        <span className="block truncate font-mono text-[12px] text-zinc-100" title={fullName}>
           {name}
         </span>
         <span className="block truncate text-[11px] text-zinc-400" title={p.url || undefined}>
@@ -429,6 +436,7 @@ export const PointChip: React.FC<{ item: PendingUpload; onRemove: () => void }> 
   const pick = item.point?.pick;
   const capturing = item.state === 'uploading' || !pick;
   const name = pick ? pickName(pick) : item.point?.label || item.name;
+  const fullName = pick ? pickTitle(pick) : name;
   const thumb = pick?.picture && pick.thumb_url && !pick.frame?.cross_site ? pick.thumb_url : null;
   const warn = !!pick && !pick.picture && !pick.frame?.cross_site;
   return (
@@ -448,7 +456,7 @@ export const PointChip: React.FC<{ item: PendingUpload; onRemove: () => void }> 
         </span>
       )}
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-mono text-[11.5px] leading-4 text-zinc-100" title={name}>
+        <span className="block truncate font-mono text-[11.5px] leading-4 text-zinc-100" title={fullName}>
           {name}
         </span>
         <span className={`block truncate text-[11px] leading-4 ${warn ? 'text-amber-200' : 'text-zinc-400'}`} role={capturing ? 'status' : undefined}>

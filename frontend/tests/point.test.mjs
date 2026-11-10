@@ -181,6 +181,8 @@ test('layer: keyboard walks from the centre, Enter picks, Esc stops; announced i
   req.calls[0].resolve({ type: 'ack', el: el() });
   await settle();
   assert.equal(host.querySelector('[data-point-tag]').textContent, 'button.pay 328 × 36');
+  assert.match(host.querySelector('[data-point-tag]').className, /\bbg-violet-600\b/, 'tag is violet-600 for AA (M1)');
+  assert.match(view.className, /focus-visible:ring-\[3px\] focus-visible:ring-sky-300/, 'view focus ring (S4)');
   assert.equal(host.querySelector('[data-point-live]').textContent, 'button.pay, 328 by 36, Pay €42.00');
 
   key(view, 'ArrowUp');
@@ -220,6 +222,7 @@ test('layer: a 6th pick is refused before asking the server; a failed pick takes
   await settle();
   assert.equal(req.calls.length, 1, 'no point_pick sent');
   assert.equal(host.querySelector('[data-point-bar="limit"]').textContent, 'Up to 5 parts per message');
+  assert.doesNotMatch(host.querySelector('[data-point-bar="limit"]').className, /amber/, 'the limit bar is neutral (C2)');
 
   const one = fakeSink(1);
   m.flushSync(() => root.render(h(m.PointLayer, { request: req.fn, page: { width: 1280, height: 800 }, frameId: 1, phone: false, sink: one.sink, onExit() {} })));
@@ -254,6 +257,15 @@ test('layer: a hover answer that is no longer the newest is not drawn', async ()
   host.remove();
 });
 
+test('sheet line 2 and the short pick name (S2, S3)', () => {
+  assert.equal(m.sheetLine('Pay €42.00'), '"Pay €42.00" · tap another part to change it');
+  assert.equal(m.sheetLine(''), 'Tap another part to change it');
+  assert.equal(m.sheetLine(null), 'Tap another part to change it');
+  assert.equal(m.pickName({ label: 'button.pay', selector: 'main > button.pay' }), 'button.pay');
+  assert.equal(m.pickTitle({ label: 'button.pay', selector: 'main > button.pay' }), 'main > button.pay');
+  assert.equal(m.pickName({ label: '', selector: 'main > button.pay' }), 'main > button.pay');
+});
+
 test('chip and row: capturing, ready, no picture, embedded page; remove names the part; crop opens the viewer', async () => {
   const host = document.createElement('div');
   document.body.appendChild(host);
@@ -269,7 +281,10 @@ test('chip and row: capturing, ready, no picture, embedded page; remove names th
   c = chip({ ...base, state: 'done', point: { label: 'button.pay', pick: m.parsePointPick(pickWire()) } });
   assert.equal(c.dataset.pointChip, 'ready');
   assert.match(c.textContent, /shop\.example\.com\/checkout/);
-  assert.equal(c.querySelector('button').getAttribute('aria-label'), 'Remove main > form#checkout > button.pay');
+  assert.equal(c.querySelector('button').getAttribute('aria-label'), 'Remove button.pay');
+  assert.equal(c.querySelector('.font-mono').textContent, 'button.pay', 'line 1 shows the short label (S2)');
+  assert.equal(c.querySelector('.font-mono').getAttribute('title'), 'main > form#checkout > button.pay', 'the full selector is the title');
+  assert.equal(c.querySelector('img').getAttribute('src'), `/api/attachments/${UUID}/content`, "the chip uses its own pick's thumbnail (C5)");
   c = chip({ ...base, state: 'done', point: { label: 'x', pick: m.parsePointPick(pickWire({ picture: false, thumb_url: null })) } });
   assert.equal(c.dataset.pointChip, 'no-picture');
   c = chip({ ...base, state: 'done', point: { label: 'x', pick: m.parsePointPick(pickWire({ frame: { host: 'pay.example.net', cross_site: true } })) } });
@@ -279,7 +294,10 @@ test('chip and row: capturing, ready, no picture, embedded page; remove names th
   const ref = { id: UUID, name: 'pointed-1.png', mime: 'image/png', size: 10, point: m.pointMetaOf(m.parsePointPick(pickWire()), 1, 1) };
   m.flushSync(() => root.render(h(m.PointRow, { file: ref })));
   const open = host.querySelector('[data-point-row] button');
-  assert.equal(open.getAttribute('aria-label'), 'Open the picture of main > form#checkout > button.pay');
+  assert.equal(open.getAttribute('aria-label'), 'Open the picture of button.pay');
+  const rowName = host.querySelector('[data-point-row] .font-mono');
+  assert.equal(rowName.textContent, 'button.pay');
+  assert.equal(rowName.getAttribute('title'), 'main > form#checkout > button.pay');
   m.flushSync(() => open.click());
   await settle();
   assert.ok(document.querySelector('[role="dialog"]'), 'the image viewer opened');

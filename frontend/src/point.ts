@@ -99,6 +99,8 @@ export const POINT_COPY = {
 
 export const footerText = (n: number) => `Pointing · ${n} picked · Esc to stop`;
 export const addedText = (label: string) => `Added ${label}`;
+/** S3: the phone sheet's second line. */
+export const sheetLine = (text: string | null | undefined) => (text ? `"${text}" · tap another part to change it` : 'Tap another part to change it');
 export const embeddedText = (host: string) => `Embedded page from ${host}`;
 export const removeText = (name: string) => `Remove ${name}`;
 export const pickedCountText = (n: number) =>
@@ -243,7 +245,9 @@ export function spokenText(el: Pick<PointEl, 'label' | 'box' | 'text' | 'frame'>
 }
 
 /** The chip's and the row's first line: the selector, or the label when nothing unique was built. */
-export const pickName = (p: { selector: string | null; label: string }) => p.selector || p.label;
+/** S2: the short label (as the tag says it) for display and names; the full selector goes in the title. */
+export const pickName = (p: { selector: string | null; label: string }) => p.label || p.selector || '';
+export const pickTitle = (p: { selector: string | null; label: string }) => p.selector || p.label || '';
 
 /** The chip's second line. */
 export function chipLine(p: { picture: boolean; host: string; path: string; frame_host?: string | null; frame?: PointFrame | null }): string {

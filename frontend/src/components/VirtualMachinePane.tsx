@@ -412,7 +412,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                 playSfx('click');
                 setPointing((p) => !p);
               }}
-              className={`${narrow ? 'h-11' : 'h-[30px]'} px-2.5 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 border ${
+              className={`${narrow ? 'h-11' : 'h-[30px]'} px-2.5 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 border ${
                 pointOn ? 'bg-violet-600 border-violet-400 text-white ring-[3px] ring-violet-500/25' : 'border-[#3f3868] text-zinc-200 hover:bg-[#2c2552]'
               }`}
             >
@@ -913,7 +913,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           <span>{browserFooterLabel(computer.state.settings, browserReady)}</span>
         </div>
         {pointOn && point ? (
-          <span data-point-footer="" className="text-violet-200 font-semibold truncate">{footerText(point.picks)}</span>
+          <span data-point-footer="" className="text-[11px] font-mono text-zinc-400 truncate">{footerText(point.picks)}</span>
         ) : point && takeover && !isWindow ? (
           <span data-point-footer="" className="text-zinc-400 truncate">{POINT_COPY.handBack}</span>
         ) : null}

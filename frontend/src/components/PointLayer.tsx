@@ -2,7 +2,7 @@
 // phone) outlines the element under the pointer, arrows walk the tree, a click / Enter / Add to
 // message picks it. A pick becomes an unsent upload in the composer (through `sink`).
 // Design: release-090/designs/g3-point.md. Wire: release-090/g3-contract.md rev 2.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ARROW_DIRS,
   FAIL_BAR_MS,
@@ -14,7 +14,7 @@ import {
   PointError,
   PointPick,
   SELF_REFRESH_MS,
-  addedText,
+  addedText, sheetLine,
   containFit,
   parsePointEl,
   parsePointPick,
@@ -337,6 +337,14 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
 
   const teal = !!sel && picked === sel.handle;
   const tag = sel ? tagText(sel) : '';
+  const tagLabel = teal ? addedText(sel!.label) : tag;
+  // S1: clamp the tag by its real width, so a wide tag never runs past the right edge.
+  const tagRef = useRef<HTMLSpanElement | null>(null);
+  const [tagW, setTagW] = useState(160);
+  useLayoutEffect(() => {
+    const w = tagRef.current?.offsetWidth;
+    if (w && w !== tagW) setTagW(w);
+  });
   const place = outline ? tagPlacement(outline, size.height) : 'above';
   const topText = !page ? POINT_COPY.waiting : phone ? POINT_COPY.barPhone : POINT_COPY.barDesktop;
 
@@ -355,7 +363,7 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
       }}
       onClick={onClick}
       onKeyDown={onKeyDown}
-      className="absolute inset-0 z-10 cursor-crosshair rounded-xl ring-2 ring-inset ring-violet-500/70 focus:outline-none focus-visible:ring-violet-300"
+      className="absolute inset-0 z-10 cursor-crosshair rounded-xl ring-2 ring-inset ring-violet-500/70 focus:outline-none focus-visible:ring-[3px] focus-visible:ring-sky-300"
     >
       <div className="absolute top-0 inset-x-0 h-7 px-2.5 flex items-center justify-between gap-2 bg-[rgb(14_10_33/0.88)] text-[11.5px] text-zinc-100 pointer-events-none rounded-t-xl">
         <span className="truncate font-semibold">{bar?.kind === 'waiting' ? bar.text : topText}</span>
@@ -372,16 +380,17 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
             style={{ left: outline.x, top: outline.y, width: outline.width, height: outline.height }}
           />
           <span
+            ref={tagRef}
             data-point-tag=""
             className={`absolute pointer-events-none max-w-[calc(100%-8px)] truncate h-[18px] px-1.5 leading-[18px] rounded font-mono text-[11px] ${
-              teal ? 'bg-teal-300 text-teal-950' : 'bg-violet-500 text-white'
+              teal ? 'bg-teal-300 text-teal-950' : 'bg-violet-600 text-white'
             }`}
             style={{
-              left: Math.max(4, Math.min(outline.x, size.width - 4 - 160)),
+              left: Math.max(4, Math.min(outline.x, size.width - 4 - tagW)),
               top: place === 'above' ? outline.y - 20 : place === 'below' ? outline.y + outline.height + 2 : outline.y + 2,
             }}
           >
-            {teal ? addedText(sel!.label) : tag}
+            {tagLabel}
           </span>
         </>
       )}
@@ -391,7 +400,7 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
           role="alert"
           data-point-bar={bar.kind}
           className={`absolute bottom-2 inset-x-2 px-2.5 py-1.5 rounded-lg text-xs pointer-events-none ${
-            bar.kind === 'fail' ? 'border border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border border-amber-400/40 bg-[#2a1f08]/90 text-amber-200'
+            bar.kind === 'fail' ? 'border border-rose-500/40 bg-rose-950/90 text-rose-200' : 'border border-white/15 bg-[rgb(14_10_33/0.92)] text-zinc-200'
           }`}
         >
           {bar.text}
@@ -413,7 +422,7 @@ export const PointLayer: React.FC<PointLayerProps> = ({ request, page, frameId, 
           {sheet === 'select' && sel ? (
             <>
               <p className="font-mono text-[12px] text-zinc-100 truncate">{tag}</p>
-              {sel.text && <p className="mt-0.5 text-[12px] text-zinc-400 truncate">{sel.text}</p>}
+              <p className="mt-0.5 text-[12px] text-zinc-400 truncate">{sheetLine(sel.text)}</p>
               <div className="mt-3 flex gap-2">
                 <button
                   type="button"
