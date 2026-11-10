@@ -1,0 +1,21 @@
+{
+  "version": "0.8.2",
+  "date": "2026-11-10",
+  "highlights": [
+    {
+      "id": "drop-works",
+      "title": "Drag and drop works again",
+      "text": "Files dragged in from Finder, Explorer or your desktop land in the chat again. In 0.8.0 and 0.8.1 the drop card showed, but letting go did nothing.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "drop-every-chat",
+      "title": "Drop onto any chat",
+      "text": "A bot's chat, a team chat, #general or a message to an @mention. Before you let go, the card still says who gets them.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}

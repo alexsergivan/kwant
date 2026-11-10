@@ -2707,7 +2707,7 @@ dependencies = [
 
 [[package]]
 name = "kwant"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "dirs 5.0.1",
  "kwnt",
@@ -2727,7 +2727,7 @@ dependencies = [
 
 [[package]]
 name = "kwnt"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "aes",
  "argon2",
