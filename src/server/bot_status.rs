@@ -178,11 +178,14 @@ pub struct HeldItem {
     pub context_id: String,
 }
 
-/// A client message id seen in a chat: when, and the message it saved (none while in flight).
+/// A client message id seen in a chat: when, and the id of the message it saves. The id is
+/// reserved with the send, so a duplicate racing it gets the id too; `saved` is false while
+/// the first send is still in flight.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sent {
     pub at: DateTime<Utc>,
-    pub message_id: Option<String>,
+    pub message_id: String,
+    pub saved: bool,
 }
 
 #[derive(Debug, Default)]
@@ -204,27 +207,29 @@ impl Board {
         std::mem::take(&mut self.nudged)
     }
 
-    /// Reserves `key` (chat + client message id) for one send. `Err` with the first send when
-    /// it was seen within [`DEDUPE_MIN`].
-    pub fn reserve_send(&mut self, key: &str, now: DateTime<Utc>) -> Result<(), Sent> {
+    /// Reserves `key` (chat + client message id) for one send, whose message will be saved as
+    /// `message_id`. `Err` with the first send when it was seen within [`DEDUPE_MIN`].
+    pub fn reserve_send(&mut self, key: &str, now: DateTime<Utc>, message_id: &str) -> Result<(), Sent> {
         let window = Span::minutes(DEDUPE_MIN);
         self.sent.retain(|_, s| now - s.at < window);
         if let Some(s) = self.sent.get(key) {
             return Err(s.clone());
         }
-        self.sent.insert(key.to_string(), Sent { at: now, message_id: None });
+        self.sent.insert(key.to_string(), Sent { at: now, message_id: message_id.to_string(), saved: false });
         Ok(())
     }
 
+    /// The send saved its message as `message_id`: the key stays taken for the window.
     pub fn send_saved(&mut self, key: &str, message_id: &str) {
         if let Some(s) = self.sent.get_mut(key) {
-            s.message_id = Some(message_id.to_string());
+            s.message_id = message_id.to_string();
+            s.saved = true;
         }
     }
 
     /// The send failed before it was saved: the id may be sent again.
     pub fn release_send(&mut self, key: &str) {
-        if self.sent.get(key).is_some_and(|s| s.message_id.is_none()) {
+        if self.sent.get(key).is_some_and(|s| !s.saved) {
             self.sent.remove(key);
         }
     }
@@ -1216,24 +1221,38 @@ mod tests {
     #[test]
     fn the_same_client_id_in_a_chat_goes_once_within_10_minutes() {
         let mut b = Board::default();
-        assert!(b.reserve_send("c1|m1", at(0)).is_ok());
+        assert!(b.reserve_send("c1|m1", at(0), "msg1").is_ok());
         b.send_saved("c1|m1", "msg1");
-        let first = b.reserve_send("c1|m1", at(9)).unwrap_err();
-        assert_eq!((first.at, first.message_id.as_deref()), (at(0), Some("msg1")));
-        assert!(b.reserve_send("c2|m1", at(9)).is_ok(), "another chat is another send");
-        assert!(b.reserve_send("c1|m1", at(10)).is_ok(), "the window is 10 minutes");
+        let first = b.reserve_send("c1|m1", at(9), "msg2").unwrap_err();
+        assert_eq!(first, Sent { at: at(0), message_id: "msg1".into(), saved: true });
+        assert!(b.reserve_send("c2|m1", at(9), "msg3").is_ok(), "another chat is another send");
+        assert!(b.reserve_send("c1|m1", at(10), "msg4").is_ok(), "the window is 10 minutes");
+    }
+
+    /// S1 (Rigel, #499): a duplicate racing the first send gets the first's reserved message id,
+    /// marked as not saved yet, instead of none.
+    #[test]
+    fn a_racing_duplicate_gets_the_first_sends_reserved_id() {
+        let mut b = Board::default();
+        assert!(b.reserve_send("c1|m1", at(0), "msg1").is_ok());
+        for other in ["msg2", "msg3", "msg4", "msg5", "msg6"] {
+            assert_eq!(b.reserve_send("c1|m1", at(0), other), Err(Sent { at: at(0), message_id: "msg1".into(), saved: false }), "in flight");
+        }
+        b.send_saved("c1|m1", "msg1");
+        assert_eq!(b.reserve_send("c1|m1", at(1), "msg7"), Err(Sent { at: at(0), message_id: "msg1".into(), saved: true }));
     }
 
     #[test]
     fn a_send_that_failed_before_saving_may_go_again() {
         let mut b = Board::default();
-        assert!(b.reserve_send("c1|m1", at(0)).is_ok());
-        assert!(b.reserve_send("c1|m1", at(0)).is_err(), "in flight");
+        assert!(b.reserve_send("c1|m1", at(0), "msg1").is_ok());
+        assert!(b.reserve_send("c1|m1", at(0), "msg2").is_err(), "in flight");
         b.release_send("c1|m1");
-        assert!(b.reserve_send("c1|m1", at(0)).is_ok());
-        b.send_saved("c1|m1", "msg1");
+        // N1: the duplicate that was told `pending` sends again and goes through, with its own id
+        assert!(b.reserve_send("c1|m1", at(0), "msg2").is_ok());
+        b.send_saved("c1|m1", "msg2");
         b.release_send("c1|m1");
-        assert!(b.reserve_send("c1|m1", at(1)).is_err(), "a saved send is never released");
+        assert!(b.reserve_send("c1|m1", at(1), "msg3").is_err(), "a saved send is never released");
     }
 
     #[test]

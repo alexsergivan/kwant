@@ -718,6 +718,10 @@ pub struct SendChatPayload {
     /// the same chat within 10 min is sent once (H3, `release-090/h4-contract.md` §7b).
     #[serde(default)]
     pub client_message_id: Option<String>,
+    /// The id the person's message is saved under: reserved by [`send_chat_inner`] with the
+    /// `client_message_id`, so a racing duplicate can answer with it. Set only by the server.
+    #[serde(skip)]
+    pub message_id: Option<String>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -3795,7 +3799,7 @@ fn merge_meta(meta: &mut Option<serde_json::Value>, extra: Option<&serde_json::V
 
 pub(crate) async fn send_chat_inner(
     state: AppState,
-    payload: SendChatPayload,
+    mut payload: SendChatPayload,
     from_person: bool,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let Some(client_id) = payload.client_message_id.clone() else {
@@ -3809,16 +3813,26 @@ pub(crate) async fn send_chat_inner(
         .find_map(|c| c.clone())
         .unwrap_or_default();
     let key = format!("{chat}|{client_id}");
-    if let Err(first) = state.turns.board(|b| b.reserve_send(&key, chrono::Utc::now())) {
+    // S1: the message's id is reserved with the client id, so a duplicate racing the first send
+    // (a double tap, two tabs) answers with it even before the first has finished saving
+    let reserved = uuid::Uuid::new_v4().to_string();
+    if let Err(first) = state.turns.board(|b| b.reserve_send(&key, chrono::Utc::now(), &reserved)) {
         return Ok(Json(json!({
             "status": "already_delivered",
             "deduped": true,
             "already_delivered_at": first.at,
             "user_message_id": first.message_id,
+            "pending": !first.saved,
         })));
     }
+    payload.message_id = Some(reserved.clone());
     let sent = send_chat_routed(state.clone(), payload, from_person).await;
-    state.turns.board(|b| match sent.as_ref().ok().and_then(|j| j.0["user_message_id"].as_str()) {
+    let saved = match sent.as_ref().ok().and_then(|j| j.0["user_message_id"].as_str()) {
+        Some(id) => Some(id.to_string()),
+        // A send that failed after saving the message still delivered it: keep the id taken
+        None => state.db.get_message(&reserved).await.ok().flatten().map(|m| m.id),
+    };
+    state.turns.board(|b| match &saved {
         Some(id) => b.send_saved(&key, id),
         None => b.release_send(&key),
     });
@@ -4053,7 +4067,7 @@ async fn send_chat_routed(
     let user_extra = MessageExtra { thread_id: None, meta: user_meta };
     let saved_user_msg = state
         .db
-        .insert_message_with(&user_msg, &user_extra)
+        .insert_message_as(payload.message_id.as_deref(), &user_msg, &user_extra)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if let Some(target) = &payload.reply_to_message_id {
@@ -4495,7 +4509,7 @@ async fn send_to_thread(
         meta.get_or_insert_with(|| json!({}))[SENT_BY_BOT] = json!(true);
     }
     let extra = MessageExtra { thread_id: Some(thread.id.clone()), meta };
-    let saved = state.db.insert_message_with(&user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let saved = state.db.insert_message_as(payload.message_id.as_deref(), &user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if let Some(target) = &payload.reply_to_message_id {
         state.db.set_reply_to(&saved.id, target).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
