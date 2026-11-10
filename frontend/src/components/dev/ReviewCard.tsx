@@ -13,6 +13,7 @@ import {
   GitBranch,
 } from 'lucide-react';
 import { FreshEyesChip } from './FreshEyesChip';
+import { ChangesSection } from './LineNotes';
 import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
   clock,
@@ -414,7 +415,7 @@ const Stamp: React.FC<{ id: string; reviewer: string }> = ({ id, reviewer }) => 
 };
 
 /** One PR in review: risk, intent, tests, security and findings (design §5, parts 1–7). */
-export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel, jiraOrigins = [] }) => {
+export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, sample = false, now: fixedNow, onPost, forge = null, forgeLogin = null, repoLabel, jiraOrigins = [], lineNotes, onOpenChat }) => {
   const [card, setCard] = useState<Review>(given);
   const [busy, setBusy] = useState<string | null>(null);
   const [tick, setTick] = useState(() => Date.now());
@@ -572,6 +573,19 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
           </div>
         </div>
       </header>
+
+      {/* 0.9.0 G1: the diff, with line notes for the author bot (g1-line-notes.md §1). */}
+      {lineNotes && card.changes && (
+        <ChangesSection
+          cardId={card.id}
+          api={lineNotes}
+          stat={card.changes}
+          notesCount={card.line_notes}
+          headSha={card.head_sha}
+          prUrl={card.links.pr ?? null}
+          onOpenChat={onOpenChat}
+        />
+      )}
 
       {card.status === 'pending' && (
         <div data-reading>
