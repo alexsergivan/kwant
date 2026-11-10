@@ -3,7 +3,7 @@
 // watcher's chat message and the amber Inbox row. All copy is from the design; all numbers are the
 // report's own rows. Data that doesn't parse never reaches here (missionWatch.ts drops it).
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Eye, Hand, HelpCircle, Info, Loader2, MessageSquare, RotateCcw, ShieldCheck, XCircle } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Eye, Hand, HelpCircle, Info, Loader2, MessageSquare, RotateCcw, ShieldCheck, XCircle, type LucideIcon } from 'lucide-react';
 import {
   CHIP_TONES,
   REPORT_SUB,
@@ -47,8 +47,6 @@ const ring = 'focus-visible:outline focus-visible:outline-2 focus-visible:outlin
 const ghostBtn = `inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 rounded-lg border border-white/10 bg-white/[.03] text-[12.5px] font-medium text-zinc-100 hover:bg-white/[.07] disabled:opacity-50 ${ring}`;
 const primaryBtn = `inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3.5 rounded-lg bg-[#6f5ce6] text-[12.5px] font-semibold text-white hover:bg-[#7d6bf0] disabled:opacity-50 ${ring}`;
 const linkBtn = `text-[12.5px] font-medium text-[#b9adff] hover:text-[#d3ccff] underline-offset-2 hover:underline rounded ${ring}`;
-
-const prefersReducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 /** "Ran `npm test`" with the code in code spans; text nodes only. */
 const CodeText: React.FC<{ text: string }> = ({ text }) => (
@@ -321,7 +319,7 @@ export const WatchSetup: React.FC<{
 
 // ---------- Report ----------
 
-const VERDICT_LOOK: Record<Verdict, { icon: React.FC<{ size?: number; 'aria-hidden'?: boolean | 'true'; className?: string }>; cls: string }> = {
+const VERDICT_LOOK: Record<Verdict, { icon: LucideIcon; cls: string }> = {
   holds: { icon: CheckCircle2, cls: 'text-teal-300' },
   doesnt_hold: { icon: XCircle, cls: 'text-rose-300' },
   cant_tell: { icon: HelpCircle, cls: 'text-zinc-400' },
