@@ -916,7 +916,7 @@ const Row: React.FC<RowProps> = React.memo(({ x, selected, noted, active, canNot
               if (e.button === 0 && !phone) onDragStart();
             }}
             onClick={(e) => onPress(e.shiftKey)}
-            className={`inline-flex h-[18px] w-5 items-center justify-center rounded-[5px] max-sm:h-full max-sm:w-full max-sm:rounded-none max-sm:opacity-0 ${
+            className={`inline-flex h-[18px] w-5 items-center justify-center rounded-[5px] max-sm:h-full max-sm:w-full max-sm:!min-h-0 max-sm:!min-w-0 max-sm:rounded-none max-sm:opacity-0 ${
               noted ? 'text-violet-300' : 'bg-violet-600 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
             } ${selected && !noted ? 'opacity-100' : ''} ${RING}`}
           >
