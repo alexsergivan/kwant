@@ -30,6 +30,7 @@ pub mod delivery_check;
 pub mod video;
 pub mod questions;
 pub mod activity;
+pub mod bot_status;
 pub mod human_steps;
 pub mod skills;
 pub mod spaces;
@@ -456,6 +457,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/routines/:id/run", post(scheduler::run_now))
         .route("/api/routines/:id/runs", get(scheduler::runs))
         .route("/api/turns", get(delegation::list_turns))
+        .route("/api/turns/:id/quiet", post(bot_status::quiet))
+        .route("/api/bots/status", get(bot_status::list))
+        .route("/api/kwants/:id/status/retry", post(bot_status::retry))
         .route("/api/kwants/:id/threads", get(delegation::list_threads).post(delegation::create_thread))
         .route("/api/threads/:id", get(delegation::get_thread).patch(delegation::patch_thread))
         .route("/api/threads/:id/messages", get(delegation::thread_messages))

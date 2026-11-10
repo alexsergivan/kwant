@@ -851,6 +851,7 @@ pub async fn send(State(state): State<AppState>, headers: HeaderMap, Path(card_i
         reply_to_message_id: None,
         source: None,
         meta: Some(meta),
+        client_message_id: None,
     };
     let sent = match crate::server::routes::send_chat_inner(state.clone(), payload, true).await {
         Ok(Json(v)) => v,

@@ -122,27 +122,28 @@ async fn a_question_is_never_visible_without_its_card_and_waiter() {
 }
 
 #[tokio::test]
-async fn the_agent_keeps_working_elsewhere_while_it_waits() {
+async fn other_bots_keep_working_while_one_waits_and_its_other_chats_are_held() {
     let env = setup().await;
     send_direct(&env, &env.a, &format!("{} REPLYTAG:w1", ask_marker("Pick a colour", &["red", "blue"])), json!({})).await;
     let q = open_question(&env, &env.a).await;
 
-    // A thread of the same agent, and the other agent, both answer meanwhile
+    // The other agent answers meanwhile; a thread of the waiting agent is held until the answer (H3)
     let (s, thread) = call(&env.app, "POST", &format!("/api/kwants/{}/threads", env.a), Some(json!({"title": "side"}))).await;
     assert_eq!(s, StatusCode::CREATED);
     let tid = thread["id"].as_str().unwrap();
-    let (s, _) = call(&env.app, "POST", "/api/chat/send", Some(json!({"prompt": "quick one REPLYTAG:w2", "sender_id": "user", "thread_id": tid}))).await;
-    assert_eq!(s, StatusCode::OK);
-    wait_reply(&env, tid, "answer w2").await;
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"prompt": "quick one REPLYTAG:w2", "sender_id": "user", "thread_id": tid}))).await;
+    assert_eq!((s, v["status"].as_str()), (StatusCode::OK, Some("held")), "{v}");
     send_direct(&env, &env.b, "disk space? REPLYTAG:w3", json!({})).await;
     wait_reply(&env, &env.b, "answer w3").await;
     assert_eq!(question(&env, q["id"].as_str().unwrap()).await["question"]["status"], "open", "still waiting");
+    assert!(!messages(&env, tid).await.iter().any(|m| m.sender_role == "kwant"), "the held thread has no reply yet");
 
-    // Free text answer
+    // Free text answer: the question's turn goes on, then the held thread
     let (s, _) = call(&env.app, "POST", &format!("/api/questions/{}/answer", q["id"].as_str().unwrap()), Some(json!({"text": "  green, actually "}))).await;
     assert_eq!(s, StatusCode::OK);
     let reply = wait_reply(&env, &env.a, "answer w1").await;
     assert!(reply.text.contains("The user answered: green, actually]"), "{}", reply.text);
+    wait_reply(&env, tid, "answer w2").await;
 }
 
 #[tokio::test]

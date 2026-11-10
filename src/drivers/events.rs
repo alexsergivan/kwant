@@ -309,6 +309,10 @@ pub enum RuntimeEvent {
     /// A kwant's memory changed (by the user or by the kwant's own tools); refetch it.
     #[serde(rename = "memory_changed", alias = "MemoryChanged")]
     MemoryChanged { kwant_id: String },
+    /// A bot's status, its reason and since when changed (H4); `status` is the whole status
+    /// object of `release-090/h4-contract.md` §1 (see `crate::server::bot_status`).
+    #[serde(rename = "bot_status", alias = "BotStatus")]
+    BotStatus { kwant_id: String, status: Value },
     /// A routine run started or finished. `status` is "running", "ok", "error" or "skipped".
     #[serde(rename = "routine_run", alias = "RoutineRun")]
     RoutineRun {

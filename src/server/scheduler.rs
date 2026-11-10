@@ -681,7 +681,8 @@ async fn execute(state: &AppState, routine: &RoutineRow) -> Result<Option<String
     let prompt = routine.instructions.clone()
         + &follow_up_context(state, routine, &kwant, &saved.id).await
         + &last_run_context(state, routine, &kwant).await;
-    super::routes::run_routine_turn(state, &kwant, routine.channel_id.clone(), routine.thread_id.clone(), prompt).await
+    super::routes::run_routine_turn(state, &kwant, routine.channel_id.clone(), routine.thread_id.clone(), prompt, &routine.name)
+        .await
 }
 
 /// The chat id a routine delivers to: its thread, its channel, or its bot's direct chat.
@@ -871,6 +872,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
 /// Starts the scheduler and the notifier.
 pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::continuity::spawn_notifier(state.clone());
+    super::bot_status::spawn_watcher(state.clone());
     crate::zombie::hunt::spawn(state.clone(), shutdown.clone());
     crate::documents::reminders::spawn(state.clone(), shutdown.clone());
     super::missions::listener::spawn(state.clone(), shutdown.clone());

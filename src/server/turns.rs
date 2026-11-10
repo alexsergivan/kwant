@@ -63,6 +63,8 @@ struct Inner {
     hold_limit: Option<Duration>,
     /// The pictures of a running turn, by turn id (see [`TurnRegistry::note_screenshot`]).
     pictures: HashMap<String, TurnPictures>,
+    /// Why each bot has its status, its held sends and recent client message ids (H4/H3).
+    board: super::bot_status::Board,
 }
 
 /// A bot's last screenshot in a turn, as the browser returned it.
@@ -210,7 +212,15 @@ impl TurnRegistry {
     }
 
     pub fn set_turn(&self, turn: ActiveTurn) {
-        self.lock().turns.insert(turn.turn_id.clone(), turn);
+        let mut inner = self.lock();
+        if turn.state == "running" {
+            // A new turn ends the bot's gave-up Stuck
+            if let Some(m) = inner.board.marks.get_mut(&turn.kwant_id) {
+                m.gave_up = None;
+            }
+        }
+        inner.board.nudge(&turn.kwant_id);
+        inner.turns.insert(turn.turn_id.clone(), turn);
     }
 
     /// Marks a known turn "queued" or "running" again (an isolated reply waiting for the VM), keeping
@@ -228,9 +238,72 @@ impl TurnRegistry {
 
     pub fn end_turn(&self, turn_id: &str) {
         let mut inner = self.lock();
-        inner.turns.remove(turn_id);
+        let ended = inner.turns.remove(turn_id);
         inner.meters.remove(turn_id);
         inner.pictures.remove(turn_id);
+        inner.board.signals.remove(turn_id);
+        if let Some(t) = ended {
+            if t.state == "running" {
+                inner.board.marks.entry(t.kwant_id.clone()).or_default().last_finished_at = Some(chrono::Utc::now());
+            }
+            inner.board.nudge(&t.kwant_id);
+        }
+    }
+
+    /// Reads or changes the status board (see [`super::bot_status`]).
+    pub fn board<R>(&self, f: impl FnOnce(&mut super::bot_status::Board) -> R) -> R {
+        f(&mut self.lock().board)
+    }
+
+    /// A streamed event of a running turn: its last step (and that its engine answered).
+    pub fn saw_step(&self, turn_id: &str, e: &RuntimeEvent) {
+        let mut inner = self.lock();
+        if inner.turns.contains_key(turn_id) {
+            inner.board.signals.entry(turn_id.to_string()).or_default().saw(e, chrono::Utc::now());
+        }
+    }
+
+    /// The driver an attempt of the turn runs on: whether it streams steps, and its engine.
+    pub fn note_driver(&self, turn_id: &str, live: bool, engine: Option<&'static str>) {
+        let mut inner = self.lock();
+        if inner.turns.contains_key(turn_id) {
+            let s = inner.board.signals.entry(turn_id.to_string()).or_default();
+            if s.live_steps != Some(true) {
+                s.live_steps = Some(live);
+            }
+            s.engine = engine.or(s.engine);
+        }
+    }
+
+    /// The stall watchdog fired and the turn retries now.
+    pub fn note_stall(&self, turn_id: &str, kwant_id: &str, secs: u64) {
+        let mut inner = self.lock();
+        if inner.turns.contains_key(turn_id) {
+            inner.board.signals.entry(turn_id.to_string()).or_default().stalled =
+                Some(super::bot_status::Stall { at: chrono::Utc::now(), secs });
+        }
+        inner.board.nudge(kwant_id);
+    }
+
+    /// The turn stopped after the stall watchdog fired: its bot shows Stuck for a while.
+    pub fn note_gave_up(&self, kwant_id: &str, g: super::bot_status::GaveUp) {
+        let mut inner = self.lock();
+        inner.board.marks.entry(kwant_id.to_string()).or_default().gave_up = Some(g);
+        inner.board.nudge(kwant_id);
+    }
+
+    /// Why a queued turn waits ("agent_busy", "server_busy", "vm_busy").
+    pub fn note_queue_reason(&self, turn_id: &str, reason: &str) {
+        let mut inner = self.lock();
+        if inner.turns.contains_key(turn_id) {
+            inner.board.signals.entry(turn_id.to_string()).or_default().queue_reason = Some(reason.to_string());
+        }
+    }
+
+    /// Notes who started a turn (H4 `turn.source`). Called before the turn takes its slot, so a
+    /// queued turn has it too; [`TurnRegistry::end_turn`] clears it with the turn's other signals.
+    pub fn note_source(&self, turn_id: &str, source: super::bot_status::TurnSource) {
+        self.lock().board.signals.entry(turn_id.to_string()).or_default().source = Some(source);
     }
 
     /// Keeps the turn's newest screenshot (one per turn), for the reply guard.
@@ -398,6 +471,7 @@ impl TurnRegistry {
             since: chrono::Utc::now(),
             purpose: None,
         });
+        self.note_queue_reason(&tag.turn_id, rx.reason);
         let _ = events.send(RuntimeEvent::TurnQueued {
             turn_id: tag.turn_id.clone(),
             kwant_id: tag.kwant_id.clone(),
@@ -759,6 +833,28 @@ mod tests {
         assert_eq!(reg.usage_of("k", "foundry"), 70);
         reg.end_turn("a");
         assert_eq!(reg.usage_of("k", "foundry"), 0);
+    }
+
+    #[test]
+    fn a_turns_source_lasts_from_queued_to_running_and_goes_with_the_turn() {
+        use super::super::bot_status::TurnSource;
+        let reg = TurnRegistry::default();
+        let turn = |state: &str| ActiveTurn {
+            turn_id: "t".into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: state.into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+        };
+        reg.note_source("t", TurnSource::bot("Ada"));
+        reg.set_turn(turn("queued"));
+        reg.set_turn(turn("running"));
+        let source = reg.board(|b| b.signals.get("t").and_then(|s| s.source.clone()));
+        assert_eq!(source, Some(TurnSource::bot("Ada")));
+        reg.end_turn("t");
+        assert!(reg.board(|b| !b.signals.contains_key("t")));
     }
 
     #[test]
