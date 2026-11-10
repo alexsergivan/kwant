@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.8.2] - 2026-11-10
+
+kwant 0.8.2: files dragged in from Finder or Explorer land in the chat again.
+
+### Fixed
+- **Dropping files on a chat works again.** In 0.8.0 and 0.8.1, dragging files from Finder, Explorer or your desktop onto a chat showed the drop card, but letting go did nothing: no file chips and no upload. The card closed a moment too early, before the chat got the files. Now the files land in a bot's chat, a team chat, #general and a message to an @mention. A new test drops real files through the browser's own drag path, which the old tests didn't. (#497)
+
 ## [Mac 0.8.1] - 2026-11-10
 
 kwant 0.8.1: fixes from the 0.8.0 checks. A "needs you" notification opens the chat it came from, a team chat points to the pre-push checks its bots are waiting on, and each bot looks the same everywhere.

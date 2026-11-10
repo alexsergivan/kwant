@@ -14,6 +14,14 @@ import { siteOrigins } from '../dev/tickets';
 import { openGitHubConnect } from './GitHubConnect';
 import { JiraHint, useJira } from './JiraSettings';
 import { deskBadge } from '../dev/jiraSetup';
+import { fetchCaller, lineNotesApi } from '../dev/lineNotesApi';
+import { personFetch } from '../auth';
+import { WorktreesPanel, useWorktrees } from './dev/WorktreesTab';
+import { worktreeCount, worktreeStore } from '../dev/worktrees';
+import { usePhoneLayout } from '../usePhoneLayout';
+
+/** 0.9.0 G1: the review cards' line notes, over the person's session. */
+const LINE_NOTES = lineNotesApi(fetchCaller((input, init) => personFetch(input as string, init)));
 
 /** App re-sends the `dev_card` SSE as this window event: detail `{space_id, id, kind, status}`. */
 export const DEV_CARD_EVENT = 'kwant:dev-card';
@@ -193,7 +201,7 @@ export const DevDeskRow: React.FC<{ spaceId: string; active: boolean; onOpen: ()
 // ---------------------------------------------------------------------------
 // The page
 
-type Tab = 'landed' | 'reviews' | 'tickets';
+type Tab = 'landed' | 'reviews' | 'tickets' | 'worktrees';
 
 export interface DevDeskViewProps {
   spaceId: string;
@@ -209,10 +217,15 @@ export interface DevDeskViewProps {
   /** The space's teams, so a team with no repo gets "Link a repo" in the repo list. */
   teams?: DevTeamRef[];
   /** 0.7.6: the space's bots, so a ticket's work reads "Built by Ann and Ben", not ids. */
-  bots?: { id: string; name: string }[];
+  bots?: { id: string; name: string; role?: string | null }[];
+  /** Opens a bot's chat: 0.9.0 G1 "Open {bot}'s chat" after line notes are sent (1:1, no thread), and
+   * 0.9.0 H1 the Worktrees tab's "Open chat" (that thread when the worktree has one). */
+  onOpenChat?: (botId: string, threadId?: string | null) => void;
+  /** 0.9.0 H1: the create dialog's default bot. */
+  defaultBotId?: string | null;
 }
 
-export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots }) => {
+export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots, onOpenChat, defaultBotId }) => {
   const dev = useDevMode(spaceId);
   const connect = (anchor?: HTMLElement) => (onOpenLooseEnds ? onOpenLooseEnds(anchor) : openGitHubConnect({ space: spaceId, anchor }));
   // 0.7.2: with several repos, both lists filter by one (All · app · site) through `?repo=`.
@@ -235,6 +248,13 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   useEffect(() => {
     if (tab === 'tickets' && !ticketsOn && !jira.loading) setTab('landed');
   }, [tab, ticketsOn, jira.loading]);
+  // 0.9.0 H1: Worktrees shows while Dev mode is on and the server has the routes (#486).
+  const wt = useWorktrees(spaceId, !!dev?.on);
+  const worktreesOn = !!dev?.on && !wt.missing;
+  const phone = usePhoneLayout();
+  useEffect(() => {
+    if (tab === 'worktrees' && !worktreesOn) setTab('landed');
+  }, [tab, worktreesOn]);
   // Flow F6: opening the desk clears the row badge on every device. On a deep link to /s/<space>/dev
   // the store is still empty here, so the first state to arrive (fetched before the server saw the
   // desk) is cleared too, and again once the server has it.
@@ -394,6 +414,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
   const tabs: Array<{ key: Tab; label: string; count: number; tone?: 'needs' }> = [
     { key: 'landed', label: 'What landed', count: unseen },
     { key: 'reviews', label: 'Reviews', count: open },
+    ...(worktreesOn ? [{ key: 'worktrees' as Tab, label: 'Worktrees', count: worktreeCount(wt.list) }] : []),
     ...(ticketsOn ? [{ key: 'tickets' as Tab, label: 'Tickets', count: jira.needs, tone: 'needs' as const }] : []),
   ];
   const onTabKey = (e: React.KeyboardEvent, i: number) => {
@@ -435,13 +456,13 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
         )}
         <button
           type="button"
-          onClick={() => void deskStore.load(spaceId, repo)}
-          disabled={desk.loading}
+          onClick={() => void (tab === 'worktrees' ? worktreeStore.load(spaceId) : deskStore.load(spaceId, repo))}
+          disabled={tab === 'worktrees' ? wt.loading : desk.loading}
           aria-label="Refresh"
           data-dev-refresh
           className="kw-btn-ghost shrink-0 max-sm:w-11 max-sm:h-11 max-sm:px-0 disabled:opacity-60"
         >
-          <RefreshCw size={14} className={desk.loading ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden="true" />
+          <RefreshCw size={14} className={(tab === 'worktrees' ? wt.loading : desk.loading) ? 'animate-spin motion-reduce:animate-none' : ''} aria-hidden="true" />
           <span className="hidden sm:inline">Refresh</span>
         </button>
       </div>
@@ -489,7 +510,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
             })}
           </div>
 
-          {filters.length > 1 && (
+          {filters.length > 1 && tab !== 'worktrees' && (
             <div role="group" aria-label="Show cards from" className="kw-dv-filters" data-dev-repo-filters>
               {[{ key: null as string | null, label: 'All', repo: 'All repos' }, ...filters].map((f) => (
                 <button
@@ -507,7 +528,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
             </div>
           )}
 
-          {(desk.error || actionError) && (
+          {(desk.error || actionError) && tab !== 'worktrees' && (
             <div role="alert" className="px-3 py-2 rounded-lg border border-rose-400/30 bg-rose-500/10 flex flex-wrap items-center gap-2 text-xs text-rose-100">
               <span className="min-w-0 flex-1">{actionError ?? desk.error}</span>
               {desk.error && !actionError && (
@@ -519,7 +540,9 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
           )}
 
           <div ref={panelRef} role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${tab}`} className="space-y-3">
-            {tab === 'tickets' && ticketsOn ? (
+            {tab === 'worktrees' && worktreesOn ? (
+              <WorktreesPanel space={spaceId} data={wt} bots={bots ?? []} defaultBotId={defaultBotId} onOpenChat={onOpenChat} phone={phone} now={now} />
+            ) : tab === 'tickets' && ticketsOn ? (
               <TicketsPanel space={spaceId} data={jira} names={ticketNames} />
             ) : tab === 'landed' && polling ? (
               <SkeletonCards />
@@ -572,7 +595,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
             ) : reviews.length ? (
               <>
                 {freshLine && <FreshLine text={freshLine} />}
-                {reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} />)}
+                {reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} lineNotes={LINE_NOTES} onOpenChat={onOpenChat} />)}
               </>
             ) : (
               desk.reviews && (

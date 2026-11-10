@@ -326,6 +326,9 @@ pub async fn read(state: &AppState, mode: &DevRepoRow, h: &History<'_>, forge: O
 
     // CI that was still running
     recheck_ci(state, forge, mode).await;
+
+    // Failed CI and review comments back to the bot that opened the PR; a fresh-eyes verdict on green
+    super::fix_it::run(state, h, forge, mode, &kwants, &pulls, cache).await;
     Ok(())
 }
 
@@ -583,6 +586,10 @@ async fn insert(state: &AppState, mode: &DevRepoRow, kind: &str, ref_: &str, hea
     match state.db.insert_dev_card_in(space_id, &mode.key, kind, ref_, head, &json).await {
         Ok(Some(row)) => {
             super::notify_card(state, &row);
+            // G1: a new head for a PR checks the notes sent on an older one
+            if row.kind == REVIEW {
+                tokio::spawn(super::line_notes::after_push(state.clone(), row.clone()));
+            }
             tokio::spawn(super::generate(state.clone(), row.id));
         }
         Ok(None) => {}

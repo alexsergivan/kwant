@@ -5,6 +5,8 @@ import { ModernApprovalCard } from './ModernApprovalCard';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import {
   AWAY_SECTIONS,
+  AWAY_SORT_HINT,
+  sortAwaySection,
   ApprovalDecision,
   AwayError,
   AwayItem,
@@ -206,9 +208,14 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
                   {SECTION_ICON[key]}
                   {label}
                   <span className="font-mono normal-case text-zinc-600">({data[key].length})</span>
+                  {data[key].length > 1 && (
+                    <span data-away-hint={key} className="hidden md:inline normal-case tracking-normal font-normal text-zinc-500">
+                      · {AWAY_SORT_HINT[key]}
+                    </span>
+                  )}
                 </h3>
                 {data[key].length > 0 ? (
-                  <ul className="space-y-2">{data[key].map(renderItem)}</ul>
+                  <ul className="space-y-2">{sortAwaySection(key, data[key], data.last_seen).map(renderItem)}</ul>
                 ) : (
                   <p className="px-1 text-xs text-zinc-500">{none}</p>
                 )}

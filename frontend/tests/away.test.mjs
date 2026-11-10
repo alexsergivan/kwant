@@ -111,7 +111,7 @@ const view = (over = {}) => ui.render({ data: resp(), loading: false, error: nul
 
 test('three sections with agent, title, summary and time; one-tap actions', () => {
   const html = view();
-  const order = ['Waiting on you', 'Finished', 'Failed or stuck'].map((s) => html.indexOf(s));
+  const order = ['Waiting on you', 'Failed or stuck', 'Finished'].map((s) => html.indexOf(s));
   assert.ok(order.every((i) => i > 0) && order[0] < order[1] && order[1] < order[2]);
   assert.match(html, /Scout/);
   assert.match(html, /Write the brief/);

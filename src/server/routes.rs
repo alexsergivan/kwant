@@ -710,6 +710,10 @@ pub struct SendChatPayload {
     /// `meta.source`. Set only by the server, never read from a request.
     #[serde(skip)]
     pub source: Option<String>,
+    /// Keys merged into the message's `meta` (line notes' `{kind: "pr_notes", …}`). Set only by
+    /// the server, never read from a request.
+    #[serde(skip)]
+    pub meta: Option<serde_json::Value>,
     /// The composer's own id for this message, the same on every retry of it: the same id in
     /// the same chat within 10 min is sent once (H3, `release-090/h4-contract.md` §7b).
     #[serde(default)]
@@ -886,6 +890,14 @@ pub(super) async fn scope_for(
             .await,
         ),
         None => None,
+    };
+    // H1: a thread with a live worktree runs its turns there, not in the team folder
+    let workspace_dir = match &thread_id {
+        Some(t) => match super::dev::worktrees::folder_for_thread(state, t).await {
+            Some(wt) => Some(wt),
+            None => workspace_dir,
+        },
+        None => workspace_dir,
     };
     Ok(TurnScope {
         state: state.clone(),
@@ -2222,6 +2234,11 @@ pub(super) async fn turn_once(
     // tasks never do), so this is how the stop knows it held the person's message
     let person_turn = opts.nav_prompt.is_some();
     super::spend_stop::gate(scope, target_kwant, quiet_stop, person_turn).await?;
+    // Then the bot's own monthly budget (G2): daily stop, mission budget (checked by the mission
+    // runner before it asks for a turn), bot budget; the first one hit holds the turn. A turn that
+    // can wait is parked until the bot can start new work again
+    let budget_parkable = !opts.unsaved && !opts.no_park() && opts.purpose.is_none();
+    super::bot_budget::gate(scope, target_kwant, &prompt, quiet_stop, budget_parkable, opts.delegation_id.clone()).await?;
     let turns = &scope.state.turns;
     turns.add_keys(&scope.job_id, std::slice::from_ref(&tag.turn_id));
     // Sends turn_ended even if this future is dropped, queued or mid-turn
@@ -2253,6 +2270,7 @@ pub(super) async fn turn_once(
         },
     };
     super::spend_stop::gate(scope, target_kwant, quiet_stop, person_turn).await?;
+    super::bot_budget::gate(scope, target_kwant, &prompt, quiet_stop, budget_parkable, opts.delegation_id.clone()).await?;
     turns.set_turn(super::turns::ActiveTurn {
         turn_id: tag.turn_id.clone(),
         kwant_id: tag.kwant_id.clone(),
@@ -3440,7 +3458,8 @@ async fn run_kwant_turn_inner(
         // CLI and the API engines stream it as they go): it counts toward today's spending stop.
         // Engines that report usage only at the end add nothing here.
         if cancelled || gave_up.is_some() || !matches!(driver_result, Some(Ok(Ok(_)))) {
-            super::spend_stop::book(state, state.turns.usage_seen(&tag.turn_id), None).await;
+            // (and toward the bot's monthly budget, G2; usage the engine streamed is reported usage)
+            super::spend_stop::book_turn(state, &target_kwant.id, state.turns.usage_seen(&tag.turn_id), None, true).await;
         }
         let mcp_records = mcp_ctx.map(|c| c.take_records()).filter(|r| !r.is_empty());
         // Ends what still runs; kept on the reply so the steps show after a reload
@@ -3483,7 +3502,9 @@ async fn run_kwant_turn_inner(
             let fresh = output.usage.map_or(output.tokens_used as u64, |u| u.fresh());
             state.turns.add_job_tokens(&scope.job_id, fresh);
             // …and toward today's spending stop: every engine's fresh tokens, dollars where reported
-            super::spend_stop::book(state, fresh, output.usage.and_then(|u| u.cost_usd)).await;
+            // and the bot's monthly budget (G2; one booking, the same numbers). An engine without
+            // usage (Codex) books its estimate, as an unreported turn
+            super::spend_stop::book_turn(state, &target_kwant.id, fresh, output.usage.and_then(|u| u.cost_usd), output.usage.is_some()).await;
             // …and toward the task the bot holds, if any (see `super::missions`)
             let turn_started_ms = chrono::Utc::now().timestamp_millis() - turn_start.elapsed().as_millis() as i64;
             // (less what a task the bot handed in mid-turn already paid for)
@@ -3757,6 +3778,17 @@ async fn idea_from_chat(
     }
 }
 
+/// Adds the server-set `extra` keys to a message's meta.
+fn merge_meta(meta: &mut Option<serde_json::Value>, extra: Option<&serde_json::Value>) {
+    let Some(serde_json::Value::Object(extra)) = extra else { return };
+    let m = meta.get_or_insert_with(|| json!({}));
+    if let Some(m) = m.as_object_mut() {
+        for (k, v) in extra {
+            m.insert(k.clone(), v.clone());
+        }
+    }
+}
+
 pub(crate) async fn send_chat_inner(
     state: AppState,
     payload: SendChatPayload,
@@ -4010,6 +4042,7 @@ async fn send_chat_routed(
     if let Some(source) = &payload.source {
         user_meta.get_or_insert_with(|| json!({}))["source"] = json!(source);
     }
+    merge_meta(&mut user_meta, payload.meta.as_ref());
     if !from_person {
         user_meta.get_or_insert_with(|| json!({}))[SENT_BY_BOT] = json!(true);
     }
@@ -4453,6 +4486,7 @@ async fn send_to_thread(
         tokens_used: payload.prompt.len() as i64 / 4,
     };
     let mut meta = (!uploads.is_empty()).then(|| json!({"attachments": super::attachments::cards(&uploads)}));
+    merge_meta(&mut meta, payload.meta.as_ref());
     if !from_person {
         meta.get_or_insert_with(|| json!({}))[SENT_BY_BOT] = json!(true);
     }

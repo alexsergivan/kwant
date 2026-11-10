@@ -19,6 +19,7 @@ pub mod goals_remediation;
 pub mod model_usage;
 pub mod budget;
 pub mod spend_stop;
+pub mod bot_budget;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
@@ -297,6 +298,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/spaces/:id/dev/reviews", get(dev::routes::reviews))
         .route("/api/spaces/:id/dev/release_notes", post(dev::routes::release_notes))
         .route("/api/spaces/:id/dev/backup", post(dev::routes::take_backup))
+        .route("/api/spaces/:id/dev/worktrees", get(dev::worktrees::list).post(dev::worktrees::create_route))
+        .route("/api/dev/worktrees/:id", delete(dev::worktrees::remove_route))
+        .route("/api/dev/worktrees/:id/done", post(dev::worktrees::done_route))
+        .route("/api/dev/worktrees/:id/keep", post(dev::worktrees::keep_route))
+        .route("/api/dev/worktrees/:id/clean", post(dev::worktrees::clean_route))
         .merge(dev::tickets::routes::router())
         .route("/api/spaces/:id/dev/prepush", get(dev::prepush::list))
         .route("/api/dev/prepush/:id", get(dev::prepush::get_one))
@@ -305,6 +311,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dev/cards/:id", get(dev::routes::card))
         .route("/api/dev/cards/:id/findings/:fid", post(dev::routes::finding))
         .route("/api/dev/cards/:id/post", post(dev::post::post))
+        .route("/api/dev/cards/:id/changes", get(dev::line_notes::changes))
+        .route("/api/dev/cards/:id/notes", get(dev::line_notes::list).post(dev::line_notes::create).delete(dev::line_notes::discard))
+        .route("/api/dev/cards/:id/notes/send", post(dev::line_notes::send))
+        .route("/api/dev/notes/:note_id", patch(dev::line_notes::edit).delete(dev::line_notes::delete))
+        .route("/api/dev/notes/:note_id/restore", post(dev::line_notes::restore))
         .route("/api/kwants/:id/approvals", get(approval_modes::get_kwant).put(approval_modes::put_kwant))
         .route("/api/settings", get(routes::get_settings).post(routes::save_settings))
         .route("/api/settings/computer", get(computer::get_computer).put(computer::put_computer))
@@ -429,6 +440,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/usage/daily", get(model_usage::get_daily))
         .route("/api/usage/today", get(spend_stop::get_today))
         .route("/api/usage/today/continue", post(spend_stop::continue_today))
+        // 0.9.0 G2: per-bot monthly budgets (writes are person-only, see `auth::person_only`)
+        .route("/api/kwants/:id/budget", get(bot_budget::get_budget).post(bot_budget::set_budget))
+        .route("/api/kwants/:id/budget/continue", post(bot_budget::continue_month).delete(bot_budget::pause_again))
+        .route("/api/usage/budgets", get(bot_budget::list_budgets))
         .route("/api/chains/:id/continue", post(budget::continue_chain))
         .route(
             "/api/kwants/:id/memories/:mid",

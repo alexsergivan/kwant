@@ -50,9 +50,28 @@ export interface AwayResponse {
 
 export const AWAY_SECTIONS: { key: AwaySection; label: string; empty: string }[] = [
   { key: 'waiting', label: 'Waiting on you', empty: 'No questions or approvals waiting.' },
-  { key: 'finished', label: 'Finished', empty: 'Nothing finished since you last looked.' },
   { key: 'failed', label: 'Failed or stuck', empty: 'Nothing failed or stuck.' },
+  { key: 'finished', label: 'Finished', empty: 'Nothing finished since you last looked.' },
 ];
+
+/** H5: how each section is sorted, said after its count on desktop. */
+export const AWAY_SORT_HINT: Record<AwaySection, string> = {
+  waiting: 'oldest first',
+  failed: 'oldest first',
+  finished: 'not read first, then newest',
+};
+
+/**
+ * H5 order inside a section: waiting and failed oldest first (the longest wait on top); finished
+ * not read (newer than `lastSeen`) first, then newest first.
+ */
+export function sortAwaySection(key: AwaySection, items: AwayItem[], lastSeen?: string | null): AwayItem[] {
+  const t = (i: AwayItem) => Date.parse(i.timestamp) || 0;
+  if (key !== 'finished') return [...items].sort((a, b) => t(a) - t(b));
+  const seen = lastSeen ? Date.parse(lastSeen) || 0 : 0;
+  const unread = (i: AwayItem) => (t(i) > seen ? 0 : 1);
+  return [...items].sort((a, b) => unread(a) - unread(b) || t(b) - t(a));
+}
 
 /** "just now", "5 min ago", "3 h ago", "yesterday", "4 days ago", else the date. */
 export function relativeTime(ts: string, now: number = Date.now()): string {
