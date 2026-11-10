@@ -69,15 +69,27 @@ export interface InboxPr {
   ci: string;
 }
 
+export type HeldStatus = 'pending' | 'allowed' | 'denied' | 'expired';
+
+/**
+ * One of today's approvals held for this task (D3). Approve never runs it: it has its own Deny /
+ * Allow once, resolved with POST /api/approvals/:approval_id/resolve (`allow_once` or `deny` only).
+ */
 export interface HeldAction {
-  id: string;
+  approval_id: string;
   tool_name: string;
-  verb: string;
   summary: string;
   /** The tool and its arguments as they will run, redacted like the approval card. */
   args_display: string;
   gate: 'merge' | 'payment' | 'approval';
+  status: HeldStatus;
+  resolved_at: string | null;
+  /** After it was resolved: what happened ("Merged #512 into main."), else null. */
+  result_line: string | null;
 }
+
+/** The decisions the item view may send; no `always_allow` from here (D3). */
+export type HeldDecision = 'allow_once' | 'deny';
 
 export interface PreviousRound {
   sent_back_at: string;
@@ -102,14 +114,16 @@ export interface ReviewFields {
   decisions: { total: number; top: InboxDecision[] };
   evidence: { checks: InboxCheck[]; screenshots: { url: string; caption: string }[]; pr: InboxPr | null };
   /**
-   * In 0.9 these are the task's pending approvals, shown exactly as they will run with their own
-   * Allow / Deny; Approve stays disabled until they are resolved (D3).
+   * Today's approvals for this task, shown exactly as they will run with their own Deny / Allow once.
+   * Approve stays disabled while any is `pending` (D3); resolved ones stay listed with their result.
    */
   held_actions: HeldAction[];
   previous_round: PreviousRound | null;
   /** Set when an approve failed its freshness check; the item is then in failed_or_stuck. */
   stale: { paths: string[]; at: string } | null;
+  /** Only server errors on verify; never from held actions (D3). */
   approve_error: { code: string; message: string } | null;
+  /** Both false whenever any held action is pending (server-computed). */
   one_tap: boolean;
   batchable: boolean;
   rollback_ok: boolean;
@@ -172,12 +186,23 @@ export function inboxBadge(inbox: Pick<InboxResponse, 'counts'> | null | undefin
   return (away?.unseen.total ?? 0) + prepushWaiting;
 }
 
+/** The held actions still waiting for Deny / Allow once. */
+export const pendingHeld = (item: Pick<ReviewFields, 'held_actions'>): HeldAction[] => item.held_actions.filter((a) => a.status === 'pending');
+
 /**
- * Approve's label. In 0.9 Approve never runs a held action (D3), so it is always "Approve"; with
- * anything held it is disabled and `blocked` says why.
+ * Approve's label. In 0.9 Approve never runs a held action (D3), so it is always "Approve"; while any
+ * held action is pending it is disabled and `blocked` says why (and `A` focuses Deny instead).
  */
 export function approveState(item: Pick<ReviewFields, 'held_actions'>): { label: string; blocked: string | null } {
-  return item.held_actions.length ? { label: 'Approve', blocked: 'Allow or deny the held action first' } : { label: 'Approve', blocked: null };
+  return { label: 'Approve', blocked: pendingHeld(item).length ? 'Allow or deny the held action first' : null };
+}
+
+/**
+ * Send back and Roll back deny every pending held action first (D3), one at a time. Stops at the
+ * first failure and throws it, so the caller shows the error and does not reject or restore.
+ */
+export async function denyPendingHeld(item: Pick<ReviewFields, 'held_actions'>): Promise<void> {
+  for (const a of pendingHeld(item)) await inboxApi.resolveHeld(a.approval_id, 'deny');
 }
 
 /** The verdict word Mira's spec shows. */
@@ -231,6 +256,9 @@ export const inboxApi = {
   verify: (taskId: string, verdictId?: string | null) =>
     call<unknown>('POST', `/api/tasks/${enc(taskId)}/verify`, verdictId ? { verdict_id: verdictId } : {}),
   reject: (taskId: string, reason: string) => call<unknown>('POST', `/api/tasks/${enc(taskId)}/reject`, { reason }),
+  /** Deny / Allow once on a held action (today's approvals endpoint). */
+  resolveHeld: (approvalId: string, decision: HeldDecision) =>
+    call<unknown>('POST', `/api/approvals/${enc(approvalId)}/resolve`, { decision }),
   /** "Check again" on a stale item. */
   runChecks: (taskId: string) => call<unknown>('POST', `/api/tasks/${enc(taskId)}/checks/run`, {}),
 };
@@ -311,7 +339,7 @@ const needsYou = review({
     screenshots: [{ url: '/api/files/shot-1', caption: 'login-error.png' }],
     pr: { repo: 'shop', number: 512, url: 'https://github.com/example/shop/pull/512', add: 84, del: 12, files: 3, ci: 'passed' },
   },
-  held_actions: [{ id: 'a-merge', tool_name: 'github', verb: 'merge', summary: 'merge pull request', args_display: 'github · merge pull request\nrepo shop · #512 → main · squash', gate: 'merge' }],
+  held_actions: [{ approval_id: 'a-merge', tool_name: 'github', summary: 'merge pull request', args_display: 'github · merge pull request\nrepo shop · #512 → main · squash', gate: 'merge', status: 'pending', resolved_at: null, result_line: null }],
 });
 
 /** Fail at the round limit (round 2 of 2), on a different tier: Waiting on you, with round 2 data. */
@@ -340,11 +368,28 @@ const notChecked = review({
   round: { n: 1, max: 2 },
 });
 
-/** Pass · high, high risk, held refund: To review, not one-tap (held + high risk). */
+/** Pass · high, high risk, held refund still pending: To review, Approve disabled, not one-tap. */
 const passHeld = review({
   id: 'r-refund', kwant_id: 'k-vega', kwant_name: 'Vega', title: 'Refund the double charge', group: 'to_review', sort_key: [3, 0, 1, 'Vega', 'r-refund'],
   risk: { level: 'high', reasons: ['payment'] },
-  held_actions: [{ id: 'a-refund', tool_name: 'stripe', verb: 'refund', summary: 'create refund', args_display: 'stripe · create refund\ncustomer cus_4f2… · 49.00 EUR', gate: 'payment' }],
+  held_actions: [{ approval_id: 'a-refund', tool_name: 'stripe', summary: 'create refund', args_display: 'stripe · create refund\ncustomer cus_4f2… · 49.00 EUR', gate: 'payment', status: 'pending', resolved_at: null, result_line: null }],
+});
+
+/** The same kind of item after Allow once: the held action shows its result and Approve is enabled. */
+const heldAllowed = review({
+  id: 'r-allowed', kwant_id: 'k-vega', kwant_name: 'Vega', title: 'Merge the pricing fix', group: 'to_review', sort_key: [3, 0, 2, 'Vega', 'r-allowed'],
+  risk: { level: 'high', reasons: ['merges to main'] },
+  held_actions: [{ approval_id: 'a-merge-ok', tool_name: 'github', summary: 'merge pull request', args_display: 'github · merge pull request\nrepo shop · #509 → main · squash', gate: 'merge', status: 'allowed', resolved_at: ago(4), result_line: 'Merged #509 into main.' }],
+});
+
+/** After Deny (e.g. by Send back) and an expired one: nothing pending, so Approve is enabled. */
+const heldDenied = review({
+  id: 'r-denied', kwant_id: 'k-juno', kwant_name: 'Juno', title: 'Email the beta list', group: 'to_review', sort_key: [3, 1, 5, 'Juno', 'r-denied'],
+  risk: { level: 'medium', reasons: [] },
+  held_actions: [
+    { approval_id: 'a-mail', tool_name: 'gmail', summary: 'send email', args_display: 'gmail · send email\nto beta@… · “0.9 is out”', gate: 'approval', status: 'denied', resolved_at: ago(6), result_line: 'Denied. Nothing was sent.' },
+    { approval_id: 'a-post', tool_name: 'x', summary: 'post', args_display: 'x · post\n“0.9 is out”', gate: 'approval', status: 'expired', resolved_at: ago(2), result_line: 'Expired before anyone answered. Nothing ran.' },
+  ],
 });
 
 /** Pass · high, medium risk, nothing held: one-tap, but alone (not in the batch). */
@@ -359,10 +404,10 @@ const stale = review({
   stale: { paths: ['README.md'], at: '2026-11-10T15:09:00Z' },
 });
 
-/** Action error notice (states board "Couldn't approve …"). */
+/** Server error on verify (states board "Couldn't approve …"); never from a held action (D3). */
 const approveError = review({
   id: 'r-err', kwant_id: 'k-lin', kwant_name: 'Lin', title: 'Rotate the API key', group: 'failed_or_stuck', sort_key: [2, 0, 2, 'Lin', 'r-err'],
-  approve_error: { code: 'refused', message: 'The merge was refused: main moved on. Nothing was approved.' },
+  approve_error: { code: 'server_error', message: 'The server couldn’t save the approval. Nothing was approved; try again.' },
 });
 
 /** Roll back not possible (verified elsewhere, no checkpoint). */
@@ -394,7 +439,7 @@ const finished: InboxItem = {
 
 /** Every review state, one item each (for ReviewItemView stories and tests). */
 export const FIXTURE_REVIEW_ITEMS: Record<string, ReviewItem> = {
-  needsYou, failRoundLimit, notChecked, passHeld, oneTap, stale, approveError, noRollback, batchFirst: FIXTURE_BATCH[0],
+  needsYou, failRoundLimit, notChecked, passHeld, heldAllowed, heldDenied, oneTap, stale, approveError, noRollback, batchFirst: FIXTURE_BATCH[0],
 };
 
 /** A full GET /api/inbox answer in H5 + V1 order, with the Low-risk card. */
@@ -402,8 +447,8 @@ export const INBOX_FIXTURE: InboxResponse = {
   now: T0,
   since: ago(7 * 24 * 60),
   last_seen: ago(120),
-  counts: { waiting_on_you: 3, failed_or_stuck: 2, to_review: 9, finished: 1, badge: 3 + 2 + 4 + 1 + 1 },
-  items: [question, needsYou, failRoundLimit, stale, approveError, passHeld, notChecked, oneTap, noRollback, finished].sort(cmpSortKey),
+  counts: { waiting_on_you: 3, failed_or_stuck: 2, to_review: 11, finished: 1, badge: 3 + 2 + 6 + 1 + 1 },
+  items: [question, needsYou, failRoundLimit, stale, approveError, passHeld, heldAllowed, heldDenied, notChecked, oneTap, noRollback, finished].sort(cmpSortKey),
   batch: { ids: FIXTURE_BATCH.map((i) => i.id), count: FIXTURE_BATCH.length },
   batch_items: FIXTURE_BATCH,
 };
