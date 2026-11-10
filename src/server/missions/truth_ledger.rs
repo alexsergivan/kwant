@@ -526,6 +526,8 @@ async fn announce(state: &AppState, d: &Dispute, new: bool) {
                 channel_id: None,
                 title: format!("{name}: two facts disagree"),
                 body: "Two saved facts can't both hold. Open Facts to choose which one stands, or mark them as not a conflict.".into(),
+                thread_id: None,
+                card_id: None,
             },
         )
         .await;

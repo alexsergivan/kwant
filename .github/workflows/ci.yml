@@ -108,6 +108,23 @@ jobs:
         env:
           PW_CORE: ${{ runner.temp }}/pw/node_modules/playwright-core/index.mjs
         run: python3 scripts/fresh_machine_test.py --kwnt target/debug/kwnt --browser "$(command -v google-chrome || command -v chromium)"
+      # 0.8.2: files dropped from Finder or Explorer must reach the chat. Real files go in through Chromium's own
+      # drag path (CDP Input.dispatchDragEvent), on the same debug kwnt, which serves the frontend-dist artifact.
+      # A JS dispatchEvent can't catch this bug (0.8.0 shipped with it green). Any failed case fails the job.
+      - name: Native file drop (bot, room, #general, @mention, /idea, side pane, Import)
+        timeout-minutes: 5
+        env:
+          PW_CORE: ${{ runner.temp }}/pw/node_modules/playwright-core/index.mjs
+        run: |
+          export CHROMIUM="$(command -v google-chrome || command -v chromium)"
+          node frontend/e2e/native-drop.mjs target/debug/kwnt 9682 "$RUNNER_TEMP/native-drop"
+      - name: Native file drop results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-drop
+          path: ${{ runner.temp }}/native-drop
+          retention-days: 7
 
   rust:
     name: rust

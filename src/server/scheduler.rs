@@ -581,6 +581,8 @@ pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> 
                         "The routine \"{}\" did not finish. Open kwant bots to see its run history.",
                         routine.name
                     ),
+                    thread_id: None,
+                    card_id: None,
                 },
             )
             .await;
@@ -853,6 +855,7 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::goals::runner::spawn(state.clone(), shutdown.clone());
     super::missions::discovery::spawn(state.clone(), shutdown.clone());
     super::dev::poller::spawn(state.clone(), shutdown.clone());
+    super::dev::worktrees::spawn(state.clone(), shutdown.clone());
     super::dev::tickets::pickup::spawn(state.clone(), shutdown.clone());
     super::telegram::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);

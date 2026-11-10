@@ -239,6 +239,16 @@ impl Database {
         Ok(())
     }
 
+    /// The chat approval `id`'s card is in, as [`Self::set_approval_chat`] stored it; `None` when
+    /// the ticket is unknown or was stored without one.
+    pub async fn approval_chat(&self, id: &str) -> Result<Option<serde_json::Value>, DbError> {
+        let row: Option<(Option<String>,)> = sqlx::query_as("SELECT resume FROM approvals WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.and_then(|(r,)| r).and_then(|r| serde_json::from_str(&r).ok()))
+    }
+
     /// Cards left `pending` by an earlier run of kwant: nothing waits on them any more, so they
     /// become `waiting` (answerable, a late Allow resumes the work). A card stored before its chat
     /// was recorded gets the chat of the turn that asked, else the bot's direct chat. Returns how

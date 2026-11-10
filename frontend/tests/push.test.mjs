@@ -296,3 +296,75 @@ test('a replaced subscription is sent to the server and the old one dropped', as
     { url: '/api/push/unsubscribe', body: { endpoint: 'https://push.example/old' } },
   ]);
 });
+
+// ---------------------------------------------------------------------------
+// 0.8.1 F6: a tap lands in the exact chat the notification came from, at its card
+
+test('a notification about a bot’s conversation names it in its tag and its address', () => {
+  // Same cases as payload_names_the_thread_and_the_card in src/server/push.rs
+  assert.equal(p.notificationTag({ space_id: 's1', kind: 'approval_needed', channel_id: null, kwant_id: 'k1', thread_id: 't 1' }), 'kwnt-s1-approval_needed-t 1');
+  assert.equal(p.notificationTag({ space_id: 's1', kind: 'approval_needed', channel_id: 'c1', kwant_id: 'k1', thread_id: 't1' }), 'kwnt-s1-approval_needed-c1');
+  assert.equal(p.notificationPath({ space_id: 's1', channel_id: null, kwant_id: 'k1', thread_id: 't 1', card_id: 'ap1' }), '/s/s1/b/k1/t/t%201?card=ap1');
+  assert.equal(p.notificationPath({ space_id: 's1', channel_id: 'team-core', kwant_id: 'k1', card_id: 'ap 1' }), '/s/s1/c/team-core?card=ap%201');
+  assert.equal(p.notificationPath({ space_id: 's1', channel_id: null, kwant_id: 'k1', card_id: 'ap1' }), '/s/s1/b/k1?card=ap1');
+  // No space: the app's start, as before
+  assert.equal(p.notificationPath({ space_id: null, kwant_id: 'k1', thread_id: 't1', card_id: 'ap1' }), '/');
+});
+
+test('the push url’s thread and card work as a link too', () => {
+  assert.deepEqual(p.targetFromQuery('?space=s1&kwant=k1&thread=t%201&card=ap1'), { spaceId: 's1', channelId: null, botId: 'k1', threadId: 't 1', cardId: 'ap1' });
+  assert.deepEqual(p.targetFromQuery('?space=s1&channel=c1&card=ap1'), { spaceId: 's1', channelId: 'c1', botId: null, cardId: 'ap1' });
+  // A thread needs its bot
+  assert.deepEqual(p.targetFromQuery('?space=s1&channel=c1&thread=t1'), { spaceId: 's1', channelId: 'c1', botId: null });
+  assert.equal(p.cardFromQuery('?card=ap1'), 'ap1');
+  assert.equal(p.cardFromQuery(''), null);
+});
+
+test('another space opens on the notification’s chat, conversation and card', () => {
+  assert.deepEqual(p.spaceTargetOfNotification({ channel_id: 'team-core', kwant_id: 'k1', card_id: 'ap1' }), { channelId: 'team-core', botId: 'k1', cardId: 'ap1' });
+  assert.deepEqual(p.spaceTargetOfNotification({ channel_id: null, kwant_id: 'k1', thread_id: 't1', card_id: 'ap1' }), { botId: 'k1', threadId: 't1', cardId: 'ap1' });
+  assert.deepEqual(p.spaceTargetOfNotification({ channel_id: 'c1', kwant_id: null }), { channelId: 'c1' });
+  assert.equal(p.spaceTargetOfNotification({ channel_id: null, kwant_id: null, card_id: 'x' }), null);
+});
+
+test('the page’s own notification carries the thread and card to the tap', async () => {
+  const shown = [];
+  const reg = { showNotification: async (title, opts) => shown.push({ title, opts }) };
+  await p.showDeviceNotification(
+    { kind: 'approval_needed', kwant_id: 'k1', kwant_name: 'Ada', channel_id: null, thread_id: 't1', card_id: 'ap1', title: 'Ada needs approval', body: 'Run tests?', space_id: 's1' },
+    () => undefined,
+    { serviceWorker: { getRegistration: async () => reg } },
+  );
+  assert.equal(shown[0].opts.tag, 'kwnt-s1-approval_needed-t1');
+  assert.deepEqual(shown[0].opts.data, {
+    path: '/s/s1/b/k1/t/t1?card=ap1', kind: 'approval_needed', space_id: 's1', channel_id: null, kwant_id: 'k1', thread_id: 't1', card_id: 'ap1',
+  });
+});
+
+test('a push about a conversation opens it at the card, kwant closed or open', async () => {
+  const payload = { ...PAYLOAD, channel_id: null, thread_id: 't1', card_id: 'ap1', url: '/?space=s1&kwant=k1&thread=t1&card=ap1', tag: 'kwnt-s1-approval_needed-t1' };
+  const sw = loadWorker();
+  await sw.push(payload);
+  const data = plain(sw.log.shown[0].data);
+  assert.deepEqual(data, { path: '/s/s1/b/k1/t/t1?card=ap1', kind: 'approval_needed', space_id: 's1', channel_id: null, kwant_id: 'k1', thread_id: 't1', card_id: 'ap1' });
+  // Closed: it opens on that address
+  await sw.click(data);
+  assert.deepEqual(sw.log.opened, ['/s/s1/b/k1/t/t1?card=ap1']);
+  // Open (another space or chat): the app is told the thread and card
+  const open = loadWorker({ clients: [{ url: '/s/s2/c/zz' }] });
+  await open.click(data);
+  assert.deepEqual(plain(open.log.posted.map((x) => x.m)), [
+    { type: 'kwnt-notification-open', kind: 'approval_needed', space_id: 's1', channel_id: null, kwant_id: 'k1', thread_id: 't1', card_id: 'ap1' },
+  ]);
+});
+
+test('a tap about a team chat alone (no bot) is posted to the app, which opens it', async () => {
+  const sw = loadWorker({ clients: [{ url: '/s/s1/c/zz' }] });
+  await sw.click({ path: '/s/s1/c/team-core?card=ap1', kind: 'approval_needed', space_id: 's1', channel_id: 'team-core', kwant_id: null, card_id: 'ap1' });
+  assert.deepEqual(plain(sw.log.posted.map((x) => x.m)), [
+    { type: 'kwnt-notification-open', kind: 'approval_needed', space_id: 's1', channel_id: 'team-core', kwant_id: null, card_id: 'ap1' },
+  ]);
+  // App.tsx no longer drops it for having no bot
+  const app = readFileSync(`${root}/src/App.tsx`, 'utf8');
+  assert.ok(!app.includes('if (!m.kwant_id) return;'));
+});

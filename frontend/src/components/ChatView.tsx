@@ -830,7 +830,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // A search hit glows amber for 2.4 s; the original of a reply quote gets a violet ring for 1.6 s.
   const [flashKind, setFlashKind] = useState<'search' | 'quote'>('search');
   useEffect(() => {
-    if (!highlightMessageId || !messages.some((m) => m.id === highlightMessageId)) return;
+    if (!highlightMessageId) return;
+    // 0.8.1 F6: an approval's card (a notification names it), not a message
+    if (pendingApprovals.some((a) => a.id === highlightMessageId)) {
+      const card = scrollRef.current?.querySelector<HTMLElement>(`[data-approval-card="${CSS.escape(highlightMessageId)}"]`);
+      if (!card) return;
+      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+      setFlashKind('search');
+      setFlashId(highlightMessageId);
+      onHighlightDone?.();
+      return;
+    }
+    if (!messages.some((m) => m.id === highlightMessageId)) return;
     const thread = groupDiscussionThreads(messages).find(
       (item) => item.kind === 'thread' && item.turns.some((t) => t.id === highlightMessageId),
     );
@@ -845,7 +857,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setFlashKind('search');
     setFlashId(highlightMessageId);
     onHighlightDone?.();
-  }, [highlightMessageId, messages, openThoughts, onHighlightDone]);
+  }, [highlightMessageId, messages, openThoughts, onHighlightDone, pendingApprovals]);
   useEffect(() => {
     if (!flashId) return;
     const t = setTimeout(() => setFlashId(null), flashKind === 'quote' ? 1600 : 2400);
@@ -1660,27 +1672,38 @@ export const ChatView: React.FC<ChatViewProps> = ({
     onDrop: (e: React.DragEvent) => {
       if (!dragHasFiles(e.dataTransfer)) return;
       e.preventDefault();
-      overDepth.current = 0;
-      // Not flushed: the drop ends the drag anyway, and the exit must see `landed` first.
-      overNow.current = false;
-      setOverChat(false);
-      if (!inColumn(e.target) || modalUp || dropOff) return;
-      // What the drop itself holds decides, the same way the card did (an ignored drop does nothing).
-      const items = e.dataTransfer.items as unknown as ArrayLike<DataTransferItem>;
-      const now = dropCard({ preview: previewDrag(items?.length ? items : winDrag.items, uploads.length), recipient: dropTo.recipient, ideaMode });
-      if (now.state === 'refused') return;
-      const dropped = splitDrop(items, e.dataTransfer.files);
-      const keys = addFiles(dropped.files, dropped.folders.length ? [FOLDER_NOTE] : []);
-      landed.current = true;
-      textareaRef.current?.focus();
-      playSfx('blip');
-      if (dropTo.single && dropTo.botId) moodNoticed(dropTo.botId);
-      setDropAnnounce(dropAnnouncement(keys.length, dropTo.recipient));
-      if (keys.length) {
-        setFreshChips((m) => ({ ...m, ...Object.fromEntries(keys.map((k, i) => [k, i])) }));
-        setTimeout(() => setFreshChips((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !keys.includes(k)))), 800);
+      // The window watch ends a drag one task after the drop so this handler gets it (the layer it
+      // landed on is still mounted). End it here instead, in this same render, so no "Drop here…"
+      // frame shows between the drop and the landing; `landed` is set before React renders.
+      try {
+        takeDrop(e);
+      } finally {
+        dragWatch.end();
       }
     },
+  };
+  // What a drop on this chat does (from onDrop above).
+  const takeDrop = (e: React.DragEvent) => {
+    overDepth.current = 0;
+    // Not flushed: the drop ends the drag anyway, and the exit must see `landed` first.
+    overNow.current = false;
+    setOverChat(false);
+    if (!inColumn(e.target) || modalUp || dropOff) return;
+    // What the drop itself holds decides, the same way the card did (an ignored drop does nothing).
+    const items = e.dataTransfer.items as unknown as ArrayLike<DataTransferItem>;
+    const now = dropCard({ preview: previewDrag(items?.length ? items : winDrag.items, uploads.length), recipient: dropTo.recipient, ideaMode });
+    if (now.state === 'refused') return;
+    const dropped = splitDrop(items, e.dataTransfer.files);
+    const keys = addFiles(dropped.files, dropped.folders.length ? [FOLDER_NOTE] : []);
+    landed.current = true;
+    textareaRef.current?.focus();
+    playSfx('blip');
+    if (dropTo.single && dropTo.botId) moodNoticed(dropTo.botId);
+    setDropAnnounce(dropAnnouncement(keys.length, dropTo.recipient));
+    if (keys.length) {
+      setFreshChips((m) => ({ ...m, ...Object.fromEntries(keys.map((k, i) => [k, i])) }));
+      setTimeout(() => setFreshChips((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !keys.includes(k)))), 800);
+    }
   };
   const layerPhase: DropPhase | null = livePhase ?? exiting;
   const composerLit = livePhase === 'over';
@@ -2072,9 +2095,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {prepush}
 
         {/* Pending Security Approval Ticket */}
-        {pendingApprovals.map((approval) => (
-          <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
-        ))}
+        {pendingApprovals.map((approval) =>
+          // 0.8.1 F6: a notification's tap lands on this card and flashes it
+          flashId === approval.id ? (
+            <div key={approval.id} className="rounded-xl kw-flash">
+              <ModernApprovalCard approval={approval} onResolve={onResolveApproval} />
+            </div>
+          ) : (
+            <ModernApprovalCard key={approval.id} approval={approval} onResolve={onResolveApproval} />
+          ),
+        )}
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
