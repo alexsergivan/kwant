@@ -1,5 +1,6 @@
 // File attachments in chats: uploads from the composer and files agents share (batch 2 / D).
 import { parseMetaObject } from './questions';
+import { PointMeta, PointPick, parsePointMeta, pointMetaOf } from './point';
 
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 /** Videos (mp4, mov, webm) may be bigger; the server enforces the same caps by the file's bytes. */
@@ -18,6 +19,8 @@ export interface AttachmentRef {
   name: string;
   mime: string;
   size: number;
+  /** G3: a part of the page the person pointed at (the crop and where it came from). */
+  point?: PointMeta;
 }
 
 export interface Attachment extends AttachmentRef {
@@ -72,7 +75,9 @@ export function parseAttachments(meta: unknown): AttachmentRef[] {
   return m.attachments.flatMap((a: unknown) => {
     const x = a as Partial<AttachmentRef> | null;
     if (!x || typeof x.id !== 'string' || !UUID_RE.test(x.id) || typeof x.name !== 'string') return [];
-    return [{ id: x.id, name: x.name, mime: typeof x.mime === 'string' ? x.mime : 'application/octet-stream', size: typeof x.size === 'number' ? x.size : 0 }];
+    const ref: AttachmentRef = { id: x.id, name: x.name, mime: typeof x.mime === 'string' ? x.mime : 'application/octet-stream', size: typeof x.size === 'number' ? x.size : 0 };
+    const point = 'point' in x ? parsePointMeta((x as { point?: unknown }).point) : null;
+    return [point ? { ...ref, point } : ref];
   });
 }
 
@@ -261,7 +266,12 @@ export interface PendingUpload {
   /** False when Retry can't help, e.g. an unsupported file type. */
   retryable?: boolean;
   attachment?: Attachment;
+  /** G3: a part of the page picked with Point; `pick` arrives when the capture is done. */
+  point?: { label: string; pick?: PointPick };
 }
+
+/** Picks in the composer, capturing ones included (at most 5 per message). */
+export const pointPicks = (items: PendingUpload[]) => items.filter((i) => i.point).length;
 
 /** Room for more files: at most 10 per message. */
 export const uploadSlotsLeft = (items: PendingUpload[]) => Math.max(0, MAX_ATTACHMENTS - items.length);
@@ -272,8 +282,17 @@ export function composerReady(text: string, items: PendingUpload[]): boolean {
   return text.trim().length > 0 || items.length > 0;
 }
 
-export const readyAttachments = (items: PendingUpload[]): AttachmentRef[] =>
-  items.flatMap((i) => (i.state === 'done' && i.attachment ? [{ id: i.attachment.id, name: i.attachment.name, mime: i.attachment.mime, size: i.attachment.size }] : []));
+/** What goes in `attachment_ids` (and the sent bubble), in order. Picks get `n of N` by their order, as the server counts them. */
+export function readyAttachments(items: PendingUpload[]): AttachmentRef[] {
+  const ready = items.filter((i) => i.state === 'done' && i.attachment);
+  const of = ready.filter((i) => i.point?.pick).length;
+  let n = 0;
+  return ready.map((i) => {
+    const a = i.attachment!;
+    const ref: AttachmentRef = { id: a.id, name: a.name, mime: a.mime, size: a.size };
+    return i.point?.pick ? { ...ref, point: pointMetaOf(i.point.pick, ++n, of) } : ref;
+  });
+}
 
 /**
  * Uploads one file as the raw request body (`?name=`), reporting progress. XHR because fetch has

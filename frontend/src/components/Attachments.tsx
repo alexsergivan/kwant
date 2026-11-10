@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, Download, ExternalLink, FileText, Film, Loader2, RotateCw, X } from 'lucide-react';
+import { AlertCircle, Download, ExternalLink, FileText, Film, Image as ImageIcon, Loader2, RotateCw, X } from 'lucide-react';
+import { POINT_COPY, chipLine, pickName, pickTitle, removeText, rowLine } from '../point';
 import { AttachmentRef, PendingUpload, attachKind, attachmentUrl, fileKind, formatBytes, isInlineImage, isVideo, uploadProgressText } from '../attachments';
 
 /**
@@ -301,12 +302,24 @@ export const FileTiles: React.FC<{ files: AttachmentRef[]; align?: 'start' | 'en
   sharedBy,
   at = null,
 }) => (
-  <ul className={`mt-2 flex flex-wrap gap-2 w-full ${align === 'end' ? 'justify-end' : ''}`} aria-label={files.length === 1 ? 'Attached file' : `${files.length} attached files`}>
-    {files.map((f) => (
-      <li key={f.id} className={`max-w-full${sharedBy ? ' w-full sm:w-auto' : ''}`}>
-        <FileTile file={f} sharedBy={sharedBy} at={at} />
-      </li>
-    ))}
+  // S5: picks stack one row each (flex-col), other attachments keep wrapping as before.
+  <ul
+    className={`mt-2 flex gap-2 w-full ${
+      files.some((f) => f.point) ? `flex-col ${align === 'end' ? 'items-end' : 'items-start'} gap-1.5` : `flex-wrap ${align === 'end' ? 'justify-end' : ''}`
+    }`}
+    aria-label={files.length === 1 ? 'Attached file' : `${files.length} attached files`}
+  >
+    {files.map((f) =>
+      f.point ? (
+        <li key={f.id} className="w-full sm:w-auto max-w-full sm:max-w-[420px]">
+          <PointRow file={f} sharedBy={sharedBy} at={at} />
+        </li>
+      ) : (
+        <li key={f.id} className={`max-w-full${sharedBy ? ' w-full sm:w-auto' : ''}`}>
+          <FileTile file={f} sharedBy={sharedBy} at={at} />
+        </li>
+      ),
+    )}
   </ul>
 );
 
@@ -374,6 +387,90 @@ export const UploadChip: React.FC<{ item: PendingUpload; onRemove: () => void; o
           aria-valuenow={pct}
         />
       )}
+    </li>
+  );
+};
+
+/**
+ * G3: a part of the page in a sent message. The crop (64 × 42) opens the image viewer; the selector
+ * and where it came from sit beside it. No picture (or an embedded page): an image icon instead.
+ */
+export const PointRow: React.FC<{ file: AttachmentRef; sharedBy?: string; at?: string | null }> = ({ file, sharedBy, at = null }) => {
+  const [open, setOpen] = useState(false);
+  const [broken, setBroken] = useState(false);
+  const p = file.point!;
+  const name = pickName(p);
+  const fullName = pickTitle(p);
+  const picture = p.picture && isInlineImage(file.mime) && !broken;
+  return (
+    <div data-point-row="" className="flex items-center gap-2.5 max-w-full sm:max-w-[420px] p-1.5 pr-3 rounded-[10px] border border-violet-400/30 bg-violet-500/[0.08]">
+      {picture ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label={`Open the picture of ${name}`}
+          className="shrink-0 w-16 h-[42px] rounded-md overflow-hidden border border-white/10 bg-[#0a0719] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"
+        >
+          <img src={attachmentUrl(file.id)} alt="" loading="lazy" onError={() => setBroken(true)} className="w-full h-full object-contain" />
+        </button>
+      ) : (
+        <span className="shrink-0 w-16 h-[42px] rounded-md border border-white/10 bg-[#0a0719] inline-flex items-center justify-center text-zinc-500" aria-hidden="true">
+          <ImageIcon size={16} />
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-mono text-[12px] text-zinc-100" title={fullName}>
+          {name}
+        </span>
+        <span className="block truncate text-[11px] text-zinc-400" title={p.url || undefined}>
+          {rowLine(p)}
+        </span>
+      </span>
+      {open && <ImageViewer file={file} sharedBy={sharedBy} at={at} onClose={() => setOpen(false)} />}
+    </div>
+  );
+};
+
+/** G3: a pick in the composer: capturing, done (crop, selector, host and path), no picture, or an embedded page. */
+export const PointChip: React.FC<{ item: PendingUpload; onRemove: () => void }> = ({ item, onRemove }) => {
+  const pick = item.point?.pick;
+  const capturing = item.state === 'uploading' || !pick;
+  const name = pick ? pickName(pick) : item.point?.label || item.name;
+  const fullName = pick ? pickTitle(pick) : name;
+  const thumb = pick?.picture && pick.thumb_url && !pick.frame?.cross_site ? pick.thumb_url : null;
+  const warn = !!pick && !pick.picture && !pick.frame?.cross_site;
+  return (
+    <li
+      data-point-chip={capturing ? 'capturing' : warn ? 'no-picture' : pick?.frame?.cross_site ? 'frame' : 'ready'}
+      className={`relative inline-flex items-center h-10 gap-2 w-full sm:w-auto sm:max-w-[320px] rounded-[10px] border pl-1 pr-1.5 ${
+        warn ? 'border-amber-400/45 bg-amber-500/10' : 'border-violet-400/35 bg-violet-500/10'
+      }`}
+    >
+      {capturing ? (
+        <span className="shrink-0 w-11 h-[30px] rounded-md bg-violet-400/20 motion-safe:animate-pulse" aria-hidden="true" />
+      ) : thumb ? (
+        <img src={thumb} alt="" className="shrink-0 w-11 h-[30px] rounded-md object-contain bg-[#0a0719] border border-white/10" />
+      ) : (
+        <span className={`shrink-0 w-11 h-[30px] rounded-md border inline-flex items-center justify-center ${warn ? 'border-amber-400/40 text-amber-300' : 'border-white/10 text-zinc-400'}`} aria-hidden="true">
+          <ImageIcon size={14} />
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-mono text-[11.5px] leading-4 text-zinc-100" title={fullName}>
+          {name}
+        </span>
+        <span className={`block truncate text-[11px] leading-4 ${warn ? 'text-amber-200' : 'text-zinc-400'}`} role={capturing ? 'status' : undefined}>
+          {capturing ? POINT_COPY.capturing : chipLine(pick!)}
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={removeText(name)}
+        className="relative shrink-0 w-6 h-6 inline-flex items-center justify-center rounded text-zinc-400 hover:text-white hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 before:absolute before:-inset-[10px] before:content-['']"
+      >
+        <X size={12} aria-hidden="true" />
+      </button>
     </li>
   );
 };

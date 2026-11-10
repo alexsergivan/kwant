@@ -52,11 +52,14 @@ import {
   uploadWithRetry,
   uploadRetryable,
   uploadSlotsLeft,
+  pointPicks,
   ATTACH_TITLE,
 } from '../attachments';
+import type { Attachment } from '../attachments';
+import type { PointSink } from './PointLayer';
 import { DropRecipient, FOLDER_NOTE, dragHasFiles, dropAnnouncement, dropCard, leaveMs, modalOpen, previewDrag, splitDrop, windowDragWatch } from '../dragPreview';
 import { DropBot, DropLayer, DropPhase } from './DropLayer';
-import { EarlierCopies, FileTiles, UploadChip } from './Attachments';
+import { EarlierCopies, FileTiles, PointChip, UploadChip } from './Attachments';
 import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
 import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
@@ -985,6 +988,35 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setUploads((list) => list.filter((u) => u.key !== key));
   };
 
+  // G3 Point at it: a pick from the browser pane is a composer upload with a `point`
+  const pointSink: PointSink = {
+    picks: pointPicks(uploads),
+    filesLeft: uploadSlotsLeft(uploads),
+    start: (label, n, { fromMouse }) => {
+      const key = `point-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      setUploads((list) => [...list, { key, name: `pointed-${n}.png`, size: 0, mime: 'image/png', progress: 0, state: 'uploading', point: { label } }]);
+      // A mouse pick hands over to the composer only when nothing was typed yet
+      if (fromMouse && !inputVal.trim()) textareaRef.current?.focus({ preventScroll: true });
+      return key;
+    },
+    done: (key, pick) =>
+      setUploads((list) =>
+        list.map((u) =>
+          u.key === key
+            ? {
+                ...u,
+                state: 'done',
+                progress: 1,
+                mime: pick.picture ? 'image/png' : 'text/plain',
+                point: { label: u.point?.label ?? pick.label, pick },
+                attachment: { id: pick.attachment_id, name: u.name, mime: pick.picture ? 'image/png' : 'text/plain', size: 0 } as Attachment,
+              }
+            : u,
+        ),
+      ),
+    fail: (key) => setUploads((list) => list.filter((u) => u.key !== key)),
+  };
+
   const retryUpload = (key: string) => {
     const f = uploadFiles.current.get(key)?.file;
     if (!f) return;
@@ -1068,6 +1100,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Backspace in an empty composer takes back the last part of the page that was picked
+    if (e.key === 'Backspace' && !inputVal && !e.repeat) {
+      const lastPick = [...uploads].reverse().find((u) => u.point);
+      if (lastPick) {
+        e.preventDefault();
+        removeUpload(lastPick.key);
+        return;
+      }
+    }
     if (slashOpen && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
       e.preventDefault();
       completeIdea();
@@ -2245,9 +2286,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <div className="basis-full min-w-0 px-1 pt-0.5 space-y-1.5">
               {uploads.length > 0 && (
                 <ul className="flex flex-wrap gap-1.5 min-w-0" aria-label="Files to send">
-                  {uploads.map((u) => (
-                    <UploadChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} onRetry={() => retryUpload(u.key)} fresh={freshChips[u.key]} />
-                  ))}
+                  {uploads.map((u) =>
+                    u.point ? (
+                      <PointChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} />
+                    ) : (
+                      <UploadChip key={u.key} item={u} onRemove={() => removeUpload(u.key)} onRetry={() => retryUpload(u.key)} fresh={freshChips[u.key]} />
+                    ),
+                  )}
                 </ul>
               )}
               {uploadNote && (
@@ -2525,6 +2570,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       onStepDone={onVmStepDone}
       solveRequest={vmSolveRequest}
       showOnceBot={vmShowOnceBot}
+      point={pointSink}
     />
   </div>
       {layerPhase && (

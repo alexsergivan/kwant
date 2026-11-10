@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   Eye,
   Hand,
+  Crosshair,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
 import { BOT_BUSY_TEXT, HELD_BY_PERSON_TEXT, useBrowserStream } from '../useBrowserStream';
@@ -29,6 +30,8 @@ import type { SwitchEntry } from '../watchLive';
 import { BrowserSwitcherMenu, BrowserSwitcherRow } from './WatchLive';
 import { showOnce, showOnceStore, useShowOnce } from '../showOnce';
 import { RecordStepsButton, RecordingStrip } from './ShowOnce';
+import { PointLayer, PointSink } from './PointLayer';
+import { POINT_COPY, footerText } from '../point';
 
 const PHONE_QUERY = '(max-width: 639px)';
 
@@ -98,6 +101,8 @@ export interface VirtualMachinePaneProps {
   onStepDone?: (id: string) => Promise<string | void> | void;
   /** Show it once: the single bot this browser belongs to (not set for teams and channels). */
   showOnceBot?: { id: string; name: string };
+  /** G3 Point at it: where picks go (the composer). Without it there's no Point button. */
+  point?: PointSink;
 }
 
 type PaneTab = 'browser' | 'terminal' | 'vault';
@@ -137,6 +142,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
   solveRequest = 0,
   humanStep = null,
   onStepDone,
+  point,
   switcher,
   showOnceBot,
 }) => {
@@ -344,6 +350,19 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
   const loginsOnThisPage = useMemo(() => passwords.logins.filter((l) => loginMatchesPage(l, pageUrl)).length, [passwords.logins, pageUrl]);
 
+  // G3 Point at it: shown while a page is on screen and the server knows the point actions
+  const [pointing, setPointing] = useState(false);
+  const pointButton = useRef<HTMLButtonElement>(null);
+  const pointShown = !!point && !isWindow && activeTab === 'browser' && !!frameSrc && stream.connected && !stream.unsupported.has('point');
+  const pointOn = pointing && pointShown && !takeover;
+  useEffect(() => {
+    if (pointing && (!pointShown || takeover)) setPointing(false);
+  }, [pointing, pointShown, takeover]);
+  const stopPointing = useCallback(() => {
+    setPointing(false);
+    pointButton.current?.focus();
+  }, []);
+
   if (!isOpen) return null;
   const switching = !!switcher && switcher.entries.length >= 2;
 
@@ -380,8 +399,31 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           <ComputerModeChip api={computer} />
           <OpenWindowButton api={computer} />
 
-          {/* Take over: always there while a browser exists, so keyboard users have a way in */}
-          {!isWindow && (
+          {pointShown || (point && takeover && !isWindow) ? (
+            <button
+              ref={pointButton}
+              type="button"
+              data-point-button=""
+              aria-pressed={pointOn}
+              aria-label={POINT_COPY.buttonName}
+              title={takeover ? POINT_COPY.handBack : POINT_COPY.buttonName}
+              disabled={takeover}
+              onClick={() => {
+                playSfx('click');
+                setPointing((p) => !p);
+              }}
+              className={`${narrow ? 'h-11' : 'h-[30px]'} px-2.5 rounded-[10px] inline-flex items-center gap-1.5 text-[13px] font-semibold whitespace-nowrap cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300 border ${
+                pointOn ? 'bg-violet-600 border-violet-400 text-white ring-[3px] ring-violet-500/25' : 'border-[#3f3868] text-zinc-200 hover:bg-[#2c2552]'
+              }`}
+            >
+              <Crosshair size={14} aria-hidden="true" />
+              {POINT_COPY.button}
+            </button>
+          ) : null}
+
+          {/* Take over: always there while a browser exists, so keyboard users have a way in.
+              On a phone with Point showing, the view's own Take over is the way in (no room for both). */}
+          {!isWindow && !(narrow && pointShown && !isControlMode) && (
             <button
               type="button"
               onClick={() => (isControlMode ? handBack() : takeOver())}
@@ -689,12 +731,27 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
                     draggable={false}
                     className="w-full h-full object-contain"
                   />
-                  {!needsYou && !waitingForBot && !waitBot?.gaveUp && (
+                  {pointOn && point && (
+                    <PointLayer
+                      request={stream.request}
+                      page={stream.frame ? { width: stream.frame.width, height: stream.frame.height } : null}
+                      frameId={stream.frame?.id ?? null}
+                      pageUrl={pageUrl}
+                      phone={narrow}
+                      sink={point}
+                      onExit={stopPointing}
+                      onBackToChat={() => {
+                        setPointing(false);
+                        onClose();
+                      }}
+                    />
+                  )}
+                  {!pointOn && !needsYou && !waitingForBot && !waitBot?.gaveUp && (
                     <span className="absolute top-2 left-2 h-[22px] px-2 inline-flex items-center gap-1 rounded-full bg-[rgb(14_10_33/0.88)] text-[11px] text-zinc-200 pointer-events-none group-hover:opacity-0 group-focus-within:opacity-0 kw-veil-in">
                       <Eye size={12} aria-hidden="true" /> Watching
                     </span>
                   )}
-                  {!isWindow && stream.connected && (
+                  {!pointOn && !isWindow && stream.connected && (
                     /* B / C: one click anywhere on the page takes it over (that click isn't passed on) */
                     <button
                       type="button"
@@ -847,7 +904,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {/* Footer Status */}
       <div className="p-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] text-zinc-400">
-        <div className="flex items-center gap-1.5" data-browser-footer>
+        <div className="flex items-center gap-1.5 shrink-0" data-browser-footer>
           {isLocal ? (
             <Laptop size={12} className={browserReady || isWindow ? 'text-amber-300/80' : 'text-zinc-500'} />
           ) : (
@@ -855,6 +912,22 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           )}
           <span>{browserFooterLabel(computer.state.settings, browserReady)}</span>
         </div>
+        {pointOn && point ? (
+          <span data-point-footer="" className="min-w-0 flex-1 px-2 text-center leading-snug text-zinc-300 [overflow-wrap:anywhere]">
+            {/* Wraps only between "Pointing · n picked" and "· Esc to stop" in a narrow pane */}
+            {(() => {
+              const [state, count, keys] = footerText(point.picks).split(' · ');
+              return (
+                <>
+                  <span className="whitespace-nowrap">{`${state} · ${count}`}</span>{' '}
+                  <span className="whitespace-nowrap">{`· ${keys}`}</span>
+                </>
+              );
+            })()}
+          </span>
+        ) : point && takeover && !isWindow ? (
+          <span data-point-footer="" className="min-w-0 flex-1 px-2 text-center leading-snug text-zinc-400">{POINT_COPY.handBack}</span>
+        ) : null}
         {onRestartVm && !isWindow && (
           <button
             type="button"

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { browserStreamUrl } from './browserViewport';
 import { PageDialog, SelectRequest, Size, parseDialog, parseSelect, streamErrorText } from './browserInput';
 import { onRecordingFrame } from './showOnce';
+import { POINT_TIMEOUT_MS, PointError, pointErrorCode } from './point';
 
 export interface BrowserFrame {
   id: number;
@@ -52,6 +53,15 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
   // Actions the server answered "Invalid browser input" for (an older server): hide their buttons
   const [unsupported, setUnsupported] = useState<ReadonlySet<string>>(new Set());
   const actionsById = useRef(new Map<number, string>());
+  // G3 point requests waiting for their answer, by id: they never touch the panel's banner or busy state
+  const waiters = useRef(new Map<number, { resolve: (m: Record<string, any>) => void; reject: (e: PointError) => void; timer: ReturnType<typeof setTimeout> }>());
+  const failWaiters = () => {
+    for (const w of waiters.current.values()) {
+      clearTimeout(w.timer);
+      w.reject(new PointError('failed'));
+    }
+    waiters.current.clear();
+  };
 
   useEffect(() => {
     if (!id || id === 'default' || !visible) return;
@@ -70,6 +80,18 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
         if (disposed || socket.current !== ws) return;
         let message: Record<string, any>;
         try { message = JSON.parse(event.data); } catch { return; }
+        const waiter = (message.type === 'ack' || message.type === 'error') && typeof message.id === 'number' ? waiters.current.get(message.id) : undefined;
+        if (waiter) {
+          waiters.current.delete(message.id);
+          clearTimeout(waiter.timer);
+          if (message.type === 'ack') waiter.resolve(message);
+          else {
+            const code = pointErrorCode(message);
+            if (code === 'unsupported') setUnsupported((s) => new Set(s).add('point'));
+            waiter.reject(new PointError(code, typeof message.error === 'string' ? message.error : undefined));
+          }
+          return;
+        }
         switch (message.type) {
           case 'ping': ws.send(JSON.stringify({ action: 'pong' })); break;
           case 'frame': {
@@ -129,6 +151,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
         socket.current = null;
         pending.current.clear();
         actionsById.current.clear();
+        failWaiters();
         takingControl.current = false;
         setConnected(false);
         setControlling(false);
@@ -150,6 +173,7 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
       socket.current = null;
       pending.current.clear();
       actionsById.current.clear();
+      failWaiters();
       setConnected(false);
       setControlling(false);
       setBusy(false);
@@ -200,13 +224,31 @@ export function useBrowserStream(id: string | undefined, visible: boolean) {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'restore_viewport', id: ++sequence.current }));
   }, []);
 
+  /**
+   * A G3 point action that waits for its own answer: resolves with the ack, rejects with a PointError
+   * (its `code`, or `failed` after 5 s, on a close or with no socket). Never shows the panel's banner.
+   */
+  const request = useCallback((payload: Record<string, unknown>, timeoutMs = POINT_TIMEOUT_MS): Promise<Record<string, any>> => {
+    const ws = socket.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new PointError('failed'));
+    const id = ++sequence.current;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        waiters.current.delete(id);
+        reject(new PointError('failed'));
+      }, timeoutMs);
+      waiters.current.set(id, { resolve, reject, timer });
+      ws.send(JSON.stringify({ ...payload, id }));
+    });
+  }, []);
+
   const clearSelect = useCallback(() => setSelect(null), []);
   const clearDialog = useCallback(() => setDialog(null), []);
   const clearError = useCallback(() => setError(null), []);
 
   return {
     connected, controlling, busy, error, frame, location, tapFocus, viewport, select, dialog, cursor, unsupported, resizeIgnored,
-    send, acknowledgeFrame, restoreViewport, clearSelect, clearDialog, clearError,
+    send, request, acknowledgeFrame, restoreViewport, clearSelect, clearDialog, clearError,
   };
 }
 
