@@ -378,6 +378,20 @@ struct Shared {
     /// The Show it once recorder is installed on this connection (a recording is live): a pick in
     /// kwnt's drawn option list is handed to it ([`recorder::record_pick`]).
     recording: AtomicBool,
+    /// The size of the newest Point picture and when it was taken: while Chrome takes a clipped
+    /// screenshot it can send one live-view frame at the clip's size, which is not the page's.
+    shot: std::sync::Mutex<Option<(f64, f64, Instant)>>,
+}
+
+/// How long after a Point picture a frame at exactly its size is taken for that picture's.
+const SHOT_FRAME_WINDOW: Duration = Duration::from_secs(3);
+
+/// A frame of `dw` x `dh` CSS px at `now` is the one Chrome drew for the picture `shot`
+/// (within a pixel, as Chrome rounds the clip), not a new page size.
+fn shot_frame(shot: Option<(f64, f64, Instant)>, dw: f64, dh: f64, now: Instant) -> bool {
+    shot.is_some_and(|(w, h, at)| {
+        now.saturating_duration_since(at) <= SHOT_FRAME_WINDOW && (dw - w).abs() < 1.0 && (dh - h).abs() < 1.0
+    })
 }
 
 /// Keeps only the newest value offered and makes sure exactly one runner drains it, so a value
@@ -488,6 +502,14 @@ impl Shared {
     fn view(&self) -> (f64, f64) {
         *self.view.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    fn shooting(&self, width: f64, height: f64) {
+        *self.shot.lock().unwrap_or_else(|e| e.into_inner()) = Some((width, height, Instant::now()));
+    }
+
+    fn is_shot_frame(&self, dw: f64, dh: f64) -> bool {
+        shot_frame(*self.shot.lock().unwrap_or_else(|e| e.into_inner()), dw, dh, Instant::now())
+    }
 }
 
 /// G3 Point at it on this live view (see [`super::point`]): read-only, so it needs no control.
@@ -526,7 +548,7 @@ impl Pointer {
     }
 
     /// Takes one point action from the person's view; the answer goes to the client later.
-    fn handle(self: &Arc<Self>, value: &Value, id: Value, shared: &Shared) {
+    fn handle(self: &Arc<Self>, value: &Value, id: Value, shared: &Arc<Shared>) {
         let bad = |this: &Arc<Self>| this.reply(&id, Err(point::PointError::BadRequest));
         match value["action"].as_str().unwrap_or_default() {
             "point_at" => {
@@ -583,9 +605,9 @@ impl Pointer {
                 let Ok(n) = point::pick_number(&value["n"]) else {
                     return bad(self);
                 };
-                let this = self.clone();
+                let (this, shared) = (self.clone(), shared.clone());
                 tokio::spawn(async move {
-                    let result = this.pick(&handle, n).await;
+                    let result = this.pick(&handle, n, &shared).await;
                     this.reply(&id, result.map(|pick| json!({"pick": pick})));
                 });
             }
@@ -652,13 +674,15 @@ impl Pointer {
 
     /// Reads the element, takes the picture of what of it is in view, and stores both as an
     /// unsent upload. The ack is what the composer chip shows.
-    async fn pick(&self, handle: &str, n: u8) -> Result<Value, point::PointError> {
+    async fn pick(&self, handle: &str, n: u8, shared: &Shared) -> Result<Value, point::PointError> {
         use base64::Engine;
         let capture = point::Capture::from_page(&self.eval(&point::capture_call(handle)).await?)?;
         let png = match capture.clip {
             Some(c) => {
                 let clip =
                     json!({"x": c.x, "y": c.y, "width": c.width, "height": c.height, "scale": 1});
+                // the frame Chrome draws at this size meanwhile must not become the view's size
+                shared.shooting(c.width, c.height);
                 let shot = self
                     .cdp
                     .call(
@@ -1147,6 +1171,7 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
         cursor_at: std::sync::Mutex::new(None),
         location: Latest::new(),
         recording: AtomicBool::new(false),
+        shot: std::sync::Mutex::new(None),
     });
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<Value>();
     let (jobs, jobs_rx) = mpsc::unbounded_channel::<Job>();
@@ -1286,6 +1311,8 @@ async fn stream(
                         "Page.screencastFrame" => {
                             let session = params["sessionId"].as_i64().unwrap_or_default();
                             let (dw, dh) = (params["metadata"]["deviceWidth"].as_f64().unwrap_or(0.0), params["metadata"]["deviceHeight"].as_f64().unwrap_or(0.0));
+                            // a Point picture's frame: not the page's size and not worth showing
+                            if shared.is_shot_frame(dw, dh) { cdp.fire("Page.screencastFrameAck", json!({"sessionId":session})); continue; }
                             if dw >= 1.0 && dh >= 1.0 { shared.set_view(dw, dh); }
                             let (fw, fh) = shared.view();
                             let (now, ack_now) = frames.arrive(session, &params["data"], fw, fh, Instant::now());
@@ -1566,6 +1593,19 @@ async fn send(socket: &mut WebSocket, value: Value) -> Result<(), BrowserError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G3: a clipped Point picture makes Chrome draw one frame at the clip's size; only that
+    /// frame, soon after the picture, is kept from becoming the view's size.
+    #[test]
+    fn only_the_pictures_own_frame_is_not_the_view() {
+        let at = Instant::now();
+        let shot = Some((600.0, 40.4, at));
+        assert!(shot_frame(shot, 600.0, 40.0, at + Duration::from_millis(50)));
+        assert!(!shot_frame(shot, 1280.0, 800.0, at), "the page's own size");
+        assert!(!shot_frame(shot, 600.0, 42.0, at), "another size");
+        assert!(!shot_frame(shot, 600.0, 40.0, at + SHOT_FRAME_WINDOW + Duration::from_millis(1)), "too late");
+        assert!(!shot_frame(None, 600.0, 40.0, at), "no picture");
+    }
 
     #[test]
     fn v1_actions_still_parse() {
