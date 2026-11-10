@@ -8,6 +8,7 @@
 
 import { parseMatches } from './tickets';
 import { parseFreshEyes, type FreshEyes } from './freshEyes';
+import { parseCardChanges, parseCardNotes } from './lineNotes';
 import type { ReviewMatches } from './tickets';
 
 export type CardStatus = 'pending' | 'ready' | 'failed' | 'stale';
@@ -143,6 +144,12 @@ export interface ReviewCard extends CardBase {
   posted: ReviewPosted | null;
   /** Why the last post didn't go through; a successful post clears it. */
   post_error: PostError | null;
+  /** 0.9.0 G1 (g1-api.md ask 1): the PR head the card was built at. null from an older server. */
+  head_sha: string | null;
+  /** 0.9.0 G1: the diff's counts for the collapsed Changes row; null hides the section. */
+  changes: { files: number; additions: number; deletions: number } | null;
+  /** 0.9.0 G1: the person's line notes on this card (drafts are theirs only); the payload's `notes`. */
+  line_notes: { drafts: number; total: number } | null;
 }
 
 export type Forge = 'github' | 'gitlab' | 'gitea' | 'forgejo';
@@ -271,6 +278,10 @@ export interface ReviewCardProps {
   repoLabel?: (repo: string | null, name?: string | null) => string | null;
   /** 0.7.6: the saved Jira site's origins; "Matches the ticket" links to Jira only there (api-decisions 18). */
   jiraOrigins?: readonly string[];
+  /** 0.9.0 G1: the line-notes routes; without it the card has no Changes section. */
+  lineNotes?: import('./lineNotesApi').LineNotesApi;
+  /** 0.9.0 G1: "Open {bot}'s chat" after a send. */
+  onOpenChat?: (botId: string) => void;
 }
 
 export interface ReleaseNotesSheetProps {
@@ -458,6 +469,9 @@ export function parseReview(raw: unknown): ReviewCard | null {
     links: links(raw.links),
     posted: posted(raw.posted),
     post_error: postError(raw.post_error),
+    head_sha: str(raw.head_sha, 64),
+    changes: parseCardChanges(raw.changes),
+    line_notes: parseCardNotes(raw.notes),
   };
 }
 

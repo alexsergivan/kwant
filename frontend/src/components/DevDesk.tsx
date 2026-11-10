@@ -14,6 +14,11 @@ import { siteOrigins } from '../dev/tickets';
 import { openGitHubConnect } from './GitHubConnect';
 import { JiraHint, useJira } from './JiraSettings';
 import { deskBadge } from '../dev/jiraSetup';
+import { fetchCaller, lineNotesApi } from '../dev/lineNotesApi';
+import { personFetch } from '../auth';
+
+/** 0.9.0 G1: the review cards' line notes, over the person's session. */
+const LINE_NOTES = lineNotesApi(fetchCaller((input, init) => personFetch(input as string, init)));
 
 /** App re-sends the `dev_card` SSE as this window event: detail `{space_id, id, kind, status}`. */
 export const DEV_CARD_EVENT = 'kwant:dev-card';
@@ -210,9 +215,11 @@ export interface DevDeskViewProps {
   teams?: DevTeamRef[];
   /** 0.7.6: the space's bots, so a ticket's work reads "Built by Ann and Ben", not ids. */
   bots?: { id: string; name: string }[];
+  /** 0.9.0 G1: "Open {bot}'s chat" after line notes are sent: opens that bot's 1:1. */
+  onOpenChat?: (botId: string) => void;
 }
 
-export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots }) => {
+export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSaveToNotion, initialTab = 'landed', now, onOpenLooseEnds, teams, bots, onOpenChat }) => {
   const dev = useDevMode(spaceId);
   const connect = (anchor?: HTMLElement) => (onOpenLooseEnds ? onOpenLooseEnds(anchor) : openGitHubConnect({ space: spaceId, anchor }));
   // 0.7.2: with several repos, both lists filter by one (All · app · site) through `?repo=`.
@@ -572,7 +579,7 @@ export const DevDeskView: React.FC<DevDeskViewProps> = ({ spaceId, onBack, onSav
             ) : reviews.length ? (
               <>
                 {freshLine && <FreshLine text={freshLine} />}
-                {reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} />)}
+                {reviews.map((c) => <ReviewCard key={c.id} card={c} onFinding={onFinding} onPost={onPost} forge={dev?.forge ?? null} forgeLogin={dev?.forge_login ?? null} gitOnly={gitOnly(typeof c.repo === 'string' ? c.repo : null)} now={now} repoLabel={repoLabel} jiraOrigins={jiraOrigins} lineNotes={LINE_NOTES} onOpenChat={onOpenChat} />)}
               </>
             ) : (
               desk.reviews && (

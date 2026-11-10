@@ -4,18 +4,20 @@
 //! `generate` turns them into cards. The production floor lives in `crate::mcp::prod_floor`.
 //!
 //! Lin owns `facts`, `routes`, `poller`, `post`, `repo`, `backup` and `floor`; Vega owns `generate`, `landed`,
-//! `review`, `risk`, `tamper`, `notes` and `source`; Juno owns `scan`, `forge` and
-//! `atlassian`; `tickets` is split per its api.md §1.1 (Juno: `source`, `pickup`, `store`, `routes`;
+//! `review`, `risk`, `tamper`, `notes` and `source`; Juno owns `scan`, `forge`,
+//! `atlassian` and `fix_it`; `tickets` is split per its api.md §1.1 (Juno: `source`, `pickup`, `store`, `routes`;
 //! Vega: `brief*`, `tools`, `links`, `mission`, `prompt`; `hooks` and `seam` are the join).
 
 pub mod atlassian;
 pub mod backup;
 pub mod facts;
+pub mod fix_it;
 pub mod floor;
 pub mod forge;
 pub mod git;
 pub mod generate;
 pub mod landed;
+pub mod line_notes;
 pub mod notes;
 pub mod poller;
 pub mod post;
