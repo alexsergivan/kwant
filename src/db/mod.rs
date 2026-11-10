@@ -51,6 +51,7 @@ pub mod dev_prepush;
 pub mod dev_line_notes;
 pub mod dev_worktrees;
 pub mod spend;
+pub mod bot_budget;
 pub mod agent_connections;
 pub mod dev_jira;
 pub mod telegram;
@@ -219,6 +220,8 @@ impl Database {
         db.migrate_reactions().await?;
         // 0.7.4: the daily spending stop's books (add-only)
         db.migrate_spend().await?;
+        // 0.9.0 G2: per-bot monthly budgets (add-only; after usage, parked and routines)
+        db.migrate_bot_budget().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;

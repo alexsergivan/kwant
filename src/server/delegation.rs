@@ -567,17 +567,17 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     // limit resets
     if outcome.is_err() {
         if let Ok(Some(p)) = state.db.parked_for_delegation(&d.id).await {
+            let text = if p.reason == "bot_budget" {
+                format!("{} is paused at its monthly budget; the hand-off “{}” runs when it resumes.", specialist.name, d.title)
+            } else {
+                format!("{} hit a usage limit on “{}”. {}", specialist.name, d.title, super::parked::retry_line(p.retry_at, Utc::now()))
+            };
             post_to_origin(
                 &state,
                 &d,
                 "system",
                 "kwnt",
-                format!(
-                    "{} hit a usage limit on “{}”. {}",
-                    specialist.name,
-                    d.title,
-                    super::parked::retry_line(p.retry_at, Utc::now())
-                ),
+                text,
                 meta("delegation_started", &d, &specialist.name),
             )
             .await;
@@ -1407,6 +1407,11 @@ pub async fn interrupt_open(state: &AppState) {
 
 /// The retry of a delegation a usage limit stopped (see [`super::parked`]).
 pub async fn retry_parked(state: &AppState, delegation_id: &str) -> bool {
+    retry_parked_for(state, delegation_id, false).await
+}
+
+/// [`retry_parked`]; `budget`: it was held at the specialist's monthly budget (G2), not a usage limit.
+pub async fn retry_parked_for(state: &AppState, delegation_id: &str, budget: bool) -> bool {
     let Ok(Some(d)) = state.db.get_delegation(delegation_id).await else {
         return false;
     };
@@ -1419,7 +1424,11 @@ pub async fn retry_parked(state: &AppState, delegation_id: &str) -> bool {
         &d,
         "system",
         "kwnt",
-        format!("The usage limit has reset: {specialist} is retrying “{}” once.", d.title),
+        if budget {
+            format!("{specialist} can start new work again: running the hand-off “{}”.", d.title)
+        } else {
+            format!("The usage limit has reset: {specialist} is retrying “{}” once.", d.title)
+        },
         meta("delegation_started", &d, &specialist),
     )
     .await;

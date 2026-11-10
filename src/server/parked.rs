@@ -27,6 +27,20 @@ pub(super) async fn park(
     delegation_id: Option<String>,
     retry_at: Option<DateTime<Utc>>,
 ) -> Option<String> {
+    park_for(scope, kwant, prompt, no_park, delegation_id, retry_at, "usage_limit").await
+}
+
+/// [`park`], with why it waits: "usage_limit" or "bot_budget" (G2, see
+/// [`super::bot_budget`]). Budget holds keep every message in the chat (appended, oldest first).
+pub(super) async fn park_for(
+    scope: &TurnScope,
+    kwant: &Kwant,
+    prompt: &str,
+    no_park: bool,
+    delegation_id: Option<String>,
+    retry_at: Option<DateTime<Utc>>,
+    reason: &'static str,
+) -> Option<String> {
     if no_park {
         return None;
     }
@@ -47,15 +61,33 @@ pub(super) async fn park(
             depth: scope.delegation_depth,
             prompt: prompt.to_string(),
             retry_at: at,
+            reason,
         })
         .await
         .ok()?;
+    let budget = reason == "bot_budget";
     let Some(row) = row else {
-        return Some("⏳ A retry for this chat is already set for when the limit resets.".into());
+        return Some(if budget {
+            "⏳ Held with the earlier message: it runs when the bot can start new work again.".into()
+        } else {
+            "⏳ A retry for this chat is already set for when the limit resets.".into()
+        });
     };
+    if budget {
+        tracing::info!(kwant = %kwant.id, parked = %row.id, "turn held: the bot is paused at its monthly budget");
+        scope.state.scheduler_wake.notify_one();
+        return Some(format!("⏳ Held: it runs when {} can start new work again.", kwant.name));
+    }
     tracing::info!(kwant = %kwant.id, parked = %row.id, retry_at = %at, "turn parked until the usage limit resets");
     scope.state.scheduler_wake.notify_one();
     Some(retry_line(at, Utc::now()))
+}
+
+/// The prompt a held turn gets once its bot can start new work again (G2).
+pub fn budget_retry_prompt(original: &str) -> String {
+    format!(
+        "[kwnt held this while you were paused at your monthly budget; the person has raised or continued it, or a new month started. Answer it now]\n\n{original}"
+    )
 }
 
 /// The prompt a retried turn gets: the original request, marked as a retry.
@@ -94,7 +126,7 @@ pub async fn no_tools_turn_for_tests(state: &AppState, kwant_id: &str, prompt: &
 
 async fn retry(state: &AppState, p: &ParkedTurn) -> bool {
     if let Some(d) = &p.delegation_id {
-        return super::delegation::retry_parked(state, d).await;
+        return super::delegation::retry_parked_for(state, d, p.reason == "bot_budget").await;
     }
     let Ok(Some(kwant)) = state.db.get_kwant(&p.kwant_id).await else {
         return false;
@@ -104,9 +136,15 @@ async fn retry(state: &AppState, p: &ParkedTurn) -> bool {
     let Ok(scope) = scope_for(state, &kwant, p.channel_id.clone(), p.thread_id.clone(), &job, p.depth).await else {
         return false;
     };
-    let note = scope.message("system", "kwnt", format!("The usage limit has reset: retrying {}'s turn once.", kwant.name));
+    let budget = p.reason == "bot_budget";
+    let text = if budget {
+        format!("{} can start new work again: running the message it held.", kwant.name)
+    } else {
+        format!("The usage limit has reset: retrying {}'s turn once.", kwant.name)
+    };
+    let note = scope.message("system", "kwnt", text);
     scope.save(&note, None).await;
-    let prompt = retry_prompt(&p.prompt);
+    let prompt = if budget { budget_retry_prompt(&p.prompt) } else { retry_prompt(&p.prompt) };
     tracing::info!(kwant = %kwant.id, parked = %p.id, "retrying a parked turn");
     tokio::spawn(async move {
         let _job = job;

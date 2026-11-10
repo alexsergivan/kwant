@@ -228,6 +228,9 @@ pub struct RoutineRun {
     pub status: String,
     pub error: Option<String>,
     pub message_id: Option<String>,
+    /// A line for the run's history, e.g. "Ran late: Pixel was paused at its monthly budget." (G2)
+    #[sqlx(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -973,6 +976,7 @@ impl Database {
             status: status.into(),
             error: error.map(Into::into),
             message_id: None,
+            note: None,
         })
     }
 
@@ -1043,7 +1047,7 @@ impl Database {
         limit: i64,
     ) -> Result<Vec<RoutineRun>, DbError> {
         Ok(sqlx::query_as::<_, RoutineRun>(
-            "SELECT id, routine_id, trigger, started_at, ended_at, status, error, message_id FROM routine_runs \
+            "SELECT id, routine_id, trigger, started_at, ended_at, status, error, message_id, note FROM routine_runs \
              WHERE routine_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?",
         )
         .bind(routine_id)
