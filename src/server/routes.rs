@@ -714,6 +714,10 @@ pub struct SendChatPayload {
     /// the server, never read from a request.
     #[serde(skip)]
     pub meta: Option<serde_json::Value>,
+    /// The composer's own id for this message, the same on every retry of it: the same id in
+    /// the same chat within 10 min is sent once (H3, `release-090/h4-contract.md` §7b).
+    #[serde(default)]
+    pub client_message_id: Option<String>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -952,6 +956,8 @@ fn execute_single_turn(
     workspace_dir: Option<std::path::PathBuf>,
     teammates: Vec<Kwant>,
     routing: Option<serde_json::Value>,
+    held: Option<String>,
+    source: super::bot_status::TurnSource,
 ) {
     let scope = TurnScope {
         channel_id: payload.channel_id.clone(),
@@ -984,6 +990,12 @@ fn execute_single_turn(
     tokio::spawn(async move {
         // Ends the job (its cancel keys) when the turn and its handoffs are done
         let _job = job;
+        // H3: a message held for a stuck or waiting bot starts its turn once the bot can take it
+        if let Some(id) = &held {
+            if !super::bot_status::wait_released(&scope.state, id, &scope.cancel_token).await {
+                return;
+            }
+        }
         // P10: what the person expects and how best to deliver it, planned once before the bot
         // starts (the fast model within ~3 s, else the keyword plan), for the turn that answers
         // the person's message. Read from their saved message, never `prompt` (attachment and
@@ -1000,7 +1012,7 @@ fn execute_single_turn(
             super::delivery_plan::remember(&scope.job_id, &message_id, plan);
         }
         // A full link in the person's own message may open the bot browser first
-        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), ..TurnOpts::default() };
+        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
             run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
             // Several bots asked the person something: one list of it all (when the chain is over)
@@ -1020,8 +1032,10 @@ pub(super) async fn run_routine_turn(
     channel_id: Option<String>,
     thread_id: Option<String>,
     prompt: String,
+    routine_name: &str,
 ) -> Result<Option<String>, String> {
-    run_routed_turn(state, kwant, channel_id, thread_id, prompt, None, Vec::new()).await
+    let opts = TurnOpts { source: Some(super::bot_status::TurnSource::routine(routine_name)), ..TurnOpts::default() };
+    run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, Vec::new()).await
 }
 
 /// [`run_routine_turn`] with the routing card for the reply (`meta.routing`) and extra stop keys
@@ -1036,10 +1050,23 @@ pub(super) async fn run_routed_turn(
     routing: Option<serde_json::Value>,
     stop_keys: Vec<String>,
 ) -> Result<Option<String>, String> {
+    run_turn_with(state, kwant, channel_id, thread_id, prompt, TurnOpts { routing, ..TurnOpts::default() }, stop_keys).await
+}
+
+/// [`run_routed_turn`] with any turn options.
+async fn run_turn_with(
+    state: &AppState,
+    kwant: &Kwant,
+    channel_id: Option<String>,
+    thread_id: Option<String>,
+    prompt: String,
+    opts: TurnOpts,
+    stop_keys: Vec<String>,
+) -> Result<Option<String>, String> {
     let context_key = thread_id.clone().or_else(|| channel_id.clone()).unwrap_or_else(|| kwant.id.clone());
     let job = state.turns.start_job(std::iter::once(context_key.clone()).chain(stop_keys));
     let scope = scope_for(state, kwant, channel_id, thread_id, &job, 0).await?;
-    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), TurnOpts { routing, ..TurnOpts::default() }).await;
+    let reply = try_kwant_turn(&scope, kwant, prompt.clone(), opts).await;
     let reply = continue_once_if_capped(&scope, kwant, reply, false).await;
     match reply {
         Ok(text) => {
@@ -1707,7 +1734,8 @@ fn targets_mentioned(targets: &[usize], scope: &TurnScope, id: &str) -> bool {
 
 /// Runs a moderated team discussion: the lead opens (or pauses to ask the user), teammates react to
 /// each other briefly or pass, @mentioned teammates join in, and the lead closes with one summary.
-async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, user_prompt: &str) {
+/// `source`: who sent the message; the opening turn answers it, later rounds have no source.
+async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, user_prompt: &str, source: super::bot_status::TurnSource) {
     use std::collections::{HashMap, VecDeque};
 
     let events = scope.state.event_sender.clone();
@@ -1764,6 +1792,7 @@ async fn run_discussion(scope: &TurnScope, team: &Team, planned: Vec<Kwant>, use
             label: Some(discussion::turn_label(turn, &team.name)),
             // Only the opening turn may navigate the bot browser for a URL in the user's message
             nav_prompt: opening.then(|| user_prompt.to_string()),
+            source: opening.then(|| source.clone()),
             discussion: Some(opening.then(|| discussion::question_label(&kwant.name, &team.name))),
             routing: None,
             on_started: None,
@@ -1907,6 +1936,9 @@ pub(super) struct TurnOpts {
     /// waits for the chat, P6) never gets in between the reply and its continuation. Empty for
     /// every other turn, and for a decided reply (which holds no chat): that continuation queues.
     pub(super) chat_handover: Option<ChatHandover>,
+    /// Who started the turn, for the status's `turn.source` (H4): the sender of a chat message, a
+    /// bot's hand-off or a routine's run. `None`: no source is sent (kwant started the turn).
+    pub(super) source: Option<super::bot_status::TurnSource>,
     /// The turn may run beside a turn of the same bot in the same chat, instead of waiting for it
     /// (P6's one reply per bot per chat). Only for the lead hearing its hand-offs while the turn
     /// that handed them out still runs past the hold limit (see `delegation::continue_lead`):
@@ -2114,6 +2146,8 @@ struct Carried {
     beside_running: bool,
     /// The delivery it belongs to: the continuation counts what the first turn already did.
     delivery_seen: Option<DeliverySeen>,
+    /// Who started the turn: the delivery check's continuation answers the same message.
+    source: Option<super::bot_status::TurnSource>,
 }
 
 impl Carried {
@@ -2128,12 +2162,13 @@ impl Carried {
             task: o.task.clone(),
             beside_running: o.beside_running,
             delivery_seen: o.delivery_seen.clone(),
+            source: o.source.clone(),
         }
     }
 
     fn into_opts(self) -> TurnOpts {
-        let Carried { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _ } = self;
-        TurnOpts { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, ..Default::default() }
+        let Carried { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _, source } = self;
+        TurnOpts { always_ask, delegation_id, routed, routing, tier, purpose, task, beside_running, source, ..Default::default() }
     }
 
     /// The delivery check's continuation of the turn: checked against the first turn's `plan`
@@ -2216,6 +2251,10 @@ pub(super) async fn turn_once(
         running_row: None,
         quiet: opts.quiet_finish,
     };
+    // After the guard, which clears it however the turn ends
+    if let Some(source) = opts.source.clone() {
+        turns.note_source(&tag.turn_id, source);
+    }
     // One reply per bot per chat: a second message to a bot that is still answering here waits
     // for that reply (queued, "agent_busy") instead of starting a parallel turn (P6, 2026-11-09).
     // Unsaved views and purpose turns (checks, audits) aren't replies in the chat.
@@ -3147,6 +3186,7 @@ async fn run_kwant_turn_inner(
                 choice: if unlisted_api { None } else { choice.clone() },
             });
             let stall_limit = if driver.streams_progress() { stall_after } else { None };
+            state.turns.note_driver(&tag.turn_id, driver.streams_progress(), runs_on.map(super::bot_status::engine_label));
             let (driver_tx, mut driver_rx) = mpsc::channel(32);
             let driver_task =
                 tokio::spawn(async move { driver.stream_turn(input, driver_tx).await });
@@ -3181,6 +3221,7 @@ async fn run_kwant_turn_inner(
                     event_opt = driver_rx.recv() => {
                         if let Some(e) = &event_opt {
                             stall_clock.saw(e, tokio::time::Instant::now());
+                            state.turns.saw_step(&tag.turn_id, e);
                         }
                         match event_opt {
                             Some(RuntimeEvent::TurnComplete { tokens, duration_ms, .. }) => {
@@ -3192,6 +3233,7 @@ async fn run_kwant_turn_inner(
                             // stall clock (above) is off until it gets one
                             Some(RuntimeEvent::WaitingForRoom { reason, position, slots }) => {
                                 state.turns.set_turn_state(&tag.turn_id, "queued");
+                                state.turns.note_queue_reason(&tag.turn_id, &reason);
                                 let _ = state.event_sender.send(RuntimeEvent::TurnQueued {
                                     turn_id: tag.turn_id.clone(),
                                     kwant_id: tag.kwant_id.clone(),
@@ -3257,6 +3299,7 @@ async fn run_kwant_turn_inner(
                     event_broadcast.send(RuntimeEvent::ThinkingDelta(note.clone()));
                     notices.push(note);
                     stall_retried = Some(secs);
+                    state.turns.note_stall(&tag.turn_id, &tag.kwant_id, secs);
                     next_attempt = i;
                     continue;
                 }
@@ -3278,6 +3321,17 @@ async fn run_kwant_turn_inner(
                     "stall_secs": secs,
                     "retried": stall_retried.is_some(),
                 }));
+                state.turns.note_gave_up(
+                    &tag.kwant_id,
+                    super::bot_status::GaveUp {
+                        at: chrono::Utc::now(),
+                        tries: if stall_retried.is_some() { 2 } else { 1 },
+                        secs,
+                        turn_id: tag.turn_id.clone(),
+                        context_id: tag.context_id.clone(),
+                        thread_id: tag.thread_id.clone(),
+                    },
+                );
                 break;
             }
             let result = driver_task.await;
@@ -3737,6 +3791,38 @@ fn merge_meta(meta: &mut Option<serde_json::Value>, extra: Option<&serde_json::V
 
 pub(crate) async fn send_chat_inner(
     state: AppState,
+    payload: SendChatPayload,
+    from_person: bool,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let Some(client_id) = payload.client_message_id.clone() else {
+        return send_chat_routed(state, payload, from_person).await;
+    };
+    if !super::bot_status::valid_client_id(&client_id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let chat = [&payload.thread_id, &payload.channel_id, &payload.team_id, &payload.kwant_id]
+        .into_iter()
+        .find_map(|c| c.clone())
+        .unwrap_or_default();
+    let key = format!("{chat}|{client_id}");
+    if let Err(first) = state.turns.board(|b| b.reserve_send(&key, chrono::Utc::now())) {
+        return Ok(Json(json!({
+            "status": "already_delivered",
+            "deduped": true,
+            "already_delivered_at": first.at,
+            "user_message_id": first.message_id,
+        })));
+    }
+    let sent = send_chat_routed(state.clone(), payload, from_person).await;
+    state.turns.board(|b| match sent.as_ref().ok().and_then(|j| j.0["user_message_id"].as_str()) {
+        Some(id) => b.send_saved(&key, id),
+        None => b.release_send(&key),
+    });
+    sent
+}
+
+async fn send_chat_routed(
+    state: AppState,
     mut payload: SendChatPayload,
     from_person: bool,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -4074,6 +4160,7 @@ pub(crate) async fn send_chat_inner(
                     target_kwant.name, target_kwant.title, reason
                 )));
 
+                let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id).await;
                 execute_single_turn(
                     state.clone(),
                     target_kwant.clone(),
@@ -4084,14 +4171,18 @@ pub(crate) async fn send_chat_inner(
                     workspace_dir.clone(),
                     members.clone(),
                     Some(routing),
+                    held.as_ref().map(|_| saved_user_msg.id.clone()),
+                    super::bot_status::TurnSource::sender(from_person),
                 );
 
-                Ok(Json(json!({
+                let mut reply = json!({
                     "status": "dispatched",
                     "user_message_id": saved_user_msg.id,
                     "kwant": target_kwant.name,
                     "team": team.name
-                })))
+                });
+                with_held(&mut reply, held);
+                Ok(Json(reply))
             }
             TeamDecision::Discuss {
                 turns,
@@ -4146,7 +4237,7 @@ pub(crate) async fn send_chat_inner(
 
                 tokio::spawn(async move {
                     let _job = job;
-                    run_discussion(&scope, &team_clone, planned, &prompt).await;
+                    run_discussion(&scope, &team_clone, planned, &prompt, super::bot_status::TurnSource::sender(from_person)).await;
                 });
 
                 Ok(Json(json!({
@@ -4304,6 +4395,7 @@ pub(crate) async fn send_chat_inner(
             return Ok(Json(v));
         }
         let team_keys = active_team.as_ref().map(|t| (t.id.clone(), t.name.clone()));
+        let held = held_send(&state, &target_kwant, &payload, &saved_user_msg.id).await;
         execute_single_turn(
             state.clone(),
             target_kwant.clone(),
@@ -4314,13 +4406,17 @@ pub(crate) async fn send_chat_inner(
             workspace_dir,
             chat_teammates,
             routing,
+            held.as_ref().map(|_| saved_user_msg.id.clone()),
+            super::bot_status::TurnSource::sender(from_person),
         );
 
-        Ok(Json(json!({
+        let mut reply = json!({
             "status": "dispatched",
             "user_message_id": saved_user_msg.id,
             "kwant": target_kwant.name
-        })))
+        });
+        with_held(&mut reply, held);
+        Ok(Json(reply))
     }
 }
 
@@ -4414,19 +4510,47 @@ async fn send_to_thread(
 
     let job = state.turns.start_job([saved.id.clone(), thread.id.clone()]);
     let scope = scope_for(&state, &kwant, None, Some(thread.id.clone()), &job, depth).await.map_err(|_| StatusCode::NOT_FOUND)?;
-    let opts = TurnOpts { nav_prompt: Some(payload.prompt.clone()), ..TurnOpts::default() };
+    let opts = TurnOpts {
+        nav_prompt: Some(payload.prompt.clone()),
+        source: Some(super::bot_status::TurnSource::sender(from_person)),
+        ..TurnOpts::default()
+    };
     let prompt = payload.prompt + &note;
     let target = kwant.clone();
+    // H3: the message is saved and shows; its turn waits while the bot is stuck or waits on the person
+    let held = super::bot_status::hold(&state, &kwant, &thread.id, "message", &saved.id).await;
+    let held_id = held.as_ref().map(|_| saved.id.clone());
     tokio::spawn(async move {
         let _job = job;
+        if let Some(id) = &held_id {
+            if !super::bot_status::wait_released(&scope.state, id, &scope.cancel_token).await {
+                return;
+            }
+        }
         run_kwant_turn(&scope, &target, prompt, opts).await;
     });
-    Ok(Json(json!({
+    let mut reply = json!({
         "status": "dispatched",
         "user_message_id": saved.id,
         "kwant": kwant.name,
         "thread_id": thread.id,
-    })))
+    });
+    with_held(&mut reply, held);
+    Ok(Json(reply))
+}
+
+/// Holds a chat or 1:1 message to `kwant` while it is stuck or waits on the person elsewhere (H3).
+async fn held_send(state: &AppState, kwant: &Kwant, payload: &SendChatPayload, message_id: &str) -> Option<serde_json::Value> {
+    let context = payload.channel_id.clone().or_else(|| payload.kwant_id.clone()).unwrap_or_else(|| kwant.id.clone());
+    super::bot_status::hold(state, kwant, &context, "message", message_id).await
+}
+
+/// A held send answers `status: "held"` with why (`release-090/h4-contract.md` §7a).
+fn with_held(reply: &mut serde_json::Value, held: Option<serde_json::Value>) {
+    if let Some(h) = held {
+        reply["status"] = json!("held");
+        reply["held"] = h;
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -6447,9 +6571,11 @@ mod tests {
             delegation_id: Some("d1".into()),
             nav_prompt: Some("open https://example.org".into()),
             fresh_eyes: false,
+            source: Some(super::super::bot_status::TurnSource::person()),
             ..Default::default()
         };
         let next = Carried::of(&first).into_opts();
+        assert_eq!(next.source, first.source, "the continuation answers the same message");
         assert_eq!(next.routed, first.routed);
         assert_eq!(next.routing, first.routing);
         assert_eq!(next.tier, first.tier);
@@ -6458,6 +6584,14 @@ mod tests {
         assert!(next.always_ask);
         assert_eq!(next.delegation_id.as_deref(), Some("d1"));
         assert!(next.nav_prompt.is_none(), "the continuation's prompt is kwnt's, it never moves the browser");
+    }
+
+    #[test]
+    fn a_bots_own_send_is_never_the_persons_message() {
+        use super::super::bot_status::TurnSource;
+        assert_eq!(TurnSource::sender(true), TurnSource::person());
+        assert_eq!(TurnSource::sender(false).kind, "bot");
+        assert_eq!(TurnSource::sender(false).name, None);
     }
 
     #[test]

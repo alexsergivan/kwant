@@ -509,6 +509,10 @@ pub(super) fn is_parked(d: &Delegation) -> bool {
 async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: Kwant, specialist: Kwant, how: RunAs) {
     let RunAs { retried, after_restart, carry_on, sent_back } = how;
     let carried_on = carry_on.is_some() || sent_back.is_some();
+    // H3: a hand-off held for a stuck or waiting specialist starts once it can take it
+    if !super::bot_status::wait_released(&state, &d.id, &job.token).await {
+        return finish(&state, &d, &specialist, Err("stopped".into()), carried_on).await;
+    }
     let scope = match scope_for(&state, &specialist, None, Some(d.thread_id.clone()), &job, d.depth).await {
         Ok(s) => s,
         Err(why) => return finish(&state, &d, &specialist, Err(why), carried_on).await,
@@ -556,6 +560,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
     opts.on_started = Some(on_started);
     opts.retried = retried;
     opts.delegation_id = Some(d.id.clone());
+    opts.source = Some(super::bot_status::TurnSource::bot(&lead.name));
     let outcome = try_kwant_turn(&scope, &specialist, prompt, opts).await;
     let outcome = continue_once_if_capped(&scope, &specialist, outcome, false).await;
     let outcome = match outcome {
@@ -1782,8 +1787,29 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
         relayed_from: None,
         lead_turn,
     };
-    match start(state, req).await {
-        Ok(d) => (
+    let created = match create(state, req).await {
+        Ok(c) => c,
+        Err((_, m)) => return (m, true),
+    };
+    // H3: a specialist that is stuck or waits on the person gets it later, so it isn't sent twice
+    let held = match &created.next {
+        Next::Run(pair) => {
+            let d = &created.delegation;
+            super::bot_status::hold(state, &pair.1, &d.thread_id, "handoff", &d.id).await.map(|h| (pair.1.name.clone(), h))
+        }
+        Next::Wait(_) => None,
+    };
+    let d = created.start(state).await;
+    match held {
+        Some((name, h)) => (
+            format!(
+                "Delegated as [{}]. {}",
+                d.id,
+                super::bot_status::handoff_held_text(&name, h["reason_code"].as_str().unwrap_or("waits_on_you"))
+            ),
+            false,
+        ),
+        None => (
             format!(
                 "Delegated as [{}]. It runs in the background; its result will be posted to this chat and you'll get a turn to continue. \
                 Tell the user who is working on it, then carry on.",
@@ -1791,7 +1817,6 @@ pub async fn tool_delegate(state: &AppState, scope: &super::continuity::SelfScop
             ),
             false,
         ),
-        Err((_, m)) => (m, true),
     }
 }
 

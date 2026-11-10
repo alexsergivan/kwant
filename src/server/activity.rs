@@ -144,6 +144,31 @@ pub fn turn_view(turn: &super::turns::ActiveTurn) -> Value {
     v
 }
 
+/// What a running turn's steps say it waits on right now (H4).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct TurnWaits {
+    /// The newest step waiting for the person: its kind ("approval" or "human_step") and start.
+    pub waiting: Option<(&'static str, String)>,
+    /// The tool of the newest tool step that still runs.
+    pub running_tool: Option<String>,
+}
+
+pub fn turn_waits(turn_id: &str) -> TurnWaits {
+    let Some(turn) = TurnActivity::find(turn_id) else { return TurnWaits::default() };
+    turn.with_log(|log| waits_of(log.steps()))
+}
+
+fn waits_of(steps: &[Step]) -> TurnWaits {
+    TurnWaits {
+        waiting: steps
+            .iter()
+            .rev()
+            .find(|s| matches!(s.kind, "approval" | "human_step") && s.status == "waiting")
+            .map(|s| (s.kind, s.started_at.clone())),
+        running_tool: steps.iter().rev().find(|s| s.kind == "tool" && s.status == "running").and_then(|s| s.tool.clone()),
+    }
+}
+
 /// Adds `meta.activity` to a reply's meta.
 pub fn with_activity(meta: Option<Value>, activity: Option<Value>) -> Option<Value> {
     let Some(activity) = activity else { return meta };
@@ -158,6 +183,21 @@ pub fn with_activity(meta: Option<Value>, activity: Option<Value>) -> Option<Val
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn turn_waits_reads_the_waiting_step_and_the_running_tool() {
+        let (tx, _rx) = broadcast::channel(16);
+        let tag = TurnTag { turn_id: "turn-waits-test".into(), kwant_id: "k".into(), context_id: "c".into(), thread_id: None };
+        let turn = TurnActivity::start(tx, tag);
+        assert_eq!(turn_waits("turn-waits-test"), TurnWaits::default());
+        turn.observe(&RuntimeEvent::ToolCallPending { id: "1".into(), name: "Bash".into(), args: json!({"command": "ls"}) });
+        assert_eq!(turn_waits("turn-waits-test").running_tool.as_deref(), Some("Bash"));
+        approval_waiting("turn-waits-test", "ap", "Bash");
+        assert_eq!(turn_waits("turn-waits-test").waiting.map(|w| w.0), Some("approval"));
+        approval_settled("turn-waits-test", "ap", "ok");
+        assert_eq!(turn_waits("turn-waits-test").waiting, None);
+        assert_eq!(turn_waits("no-such-turn"), TurnWaits::default());
+    }
 
     #[test]
     fn steps_go_out_scoped_and_approvals_find_their_turn() {

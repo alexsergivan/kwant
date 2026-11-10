@@ -1614,7 +1614,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends", "human_step", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends", "human_step", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "turn_quiet"])
     );
 
     let (status, _) = req(
@@ -1951,4 +1951,21 @@ async fn a_turn_in_a_thread_notifies_with_the_thread() {
     assert_eq!(n.channel_id, None);
     let n = continuity::turn_finished(&state, &k.id, Some(&k.id)).await;
     assert_eq!(n.thread_id, None, "the direct chat is no thread");
+}
+
+/// 0.9 P4: a bot that goes quiet in one of its conversations opens that thread, like F6's reply.
+#[tokio::test]
+async fn a_quiet_turn_in_a_thread_notifies_with_the_thread() {
+    let (_app, state, _tmp) = setup().await;
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let k = &kwants[0];
+    let thread = state.db.create_thread(&k.id, "Launch plan", "chat", None, "user").await.unwrap();
+    let n = continuity::turn_quiet(&state, &k.id, Some(&thread.id)).await;
+    assert_eq!(n.kind, "turn_quiet");
+    assert_eq!(n.thread_id.as_deref(), Some(thread.id.as_str()));
+    assert_eq!((n.channel_id, n.card_id), (None, None));
+    let n = continuity::turn_quiet(&state, &k.id, Some(&k.id)).await;
+    assert_eq!(n.thread_id, None, "the direct chat is no thread");
+    let n = continuity::turn_quiet(&state, &k.id, Some("no-such-thread")).await;
+    assert_eq!(n.thread_id, None, "an unknown id is never sent as a thread");
 }
