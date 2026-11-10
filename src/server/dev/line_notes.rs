@@ -19,6 +19,9 @@
 //! Only the person reads or writes notes (agent tokens are refused), and nothing here writes to the
 //! forge.
 
+// Route helpers return the refusal `Response` itself, as in `continuity.rs`.
+#![allow(clippy::result_large_err)]
+
 use super::facts::{DevFacts, FileDiff};
 use crate::drivers::events::RuntimeEvent;
 use super::routes::REFUSAL;
