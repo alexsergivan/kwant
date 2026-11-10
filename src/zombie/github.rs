@@ -395,6 +395,35 @@ pub struct GhCheck {
     pub html_url: Option<String>,
 }
 
+/// An inline review comment on a PR (`GET /repos/{o}/{r}/pulls/{n}/comments`).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct GhReviewComment {
+    pub id: u64,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub line: Option<u64>,
+    #[serde(default)]
+    pub start_line: Option<u64>,
+    #[serde(default)]
+    pub original_line: Option<u64>,
+    #[serde(default)]
+    pub original_start_line: Option<u64>,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub user: Option<GhUser>,
+    #[serde(default)]
+    pub commit_id: Option<String>,
+    #[serde(default)]
+    pub html_url: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+}
+
+/// Most annotations read for one failed check's excerpt.
+const MAX_ANNOTATIONS: usize = 50;
+
 #[derive(Debug, Deserialize)]
 struct CheckRuns {
     #[serde(default)]
@@ -612,6 +641,45 @@ impl GithubSource {
         }
         let runs: CheckRuns = self.get_as(&format!("/repos/{}/commits/{sha}/check-runs?per_page=100", repo_path(repo)?), Some(cache)).await?;
         Ok(runs.check_runs)
+    }
+
+    /// What check run `name` on `sha` said when it failed: its output title, summary and text,
+    /// then its annotations (`path:line: message`, at most [`MAX_ANNOTATIONS`]). Uncut; the
+    /// caller cuts it. `Ok(None)` when there is no such run or it said nothing. The Actions job log
+    /// isn't read: it is a redirect to another host, and this client follows none.
+    pub async fn dev_check_output(&self, repo: &str, sha: &str, name: &str) -> Result<Option<String>, GhError> {
+        if !seg_ok(sha) {
+            return Err(GhError::Other("bad sha".into()));
+        }
+        let repo = repo_path(repo)?;
+        let v = self.get_dev(&format!("/repos/{repo}/commits/{sha}/check-runs?per_page=100&check_name={}", enc(name)), None).await?;
+        let runs = v["check_runs"].as_array().cloned().unwrap_or_default();
+        let Some(run) = runs.iter().find(|r| r["name"].as_str() == Some(name)) else { return Ok(None) };
+        let mut out: Vec<String> = Vec::new();
+        for k in ["title", "summary", "text"] {
+            if let Some(t) = run["output"][k].as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                out.push(t.to_string());
+            }
+        }
+        let count = run["output"]["annotations_count"].as_u64().unwrap_or(0);
+        if let (Some(id), true) = (run["id"].as_u64(), count > 0) {
+            let notes: serde_json::Value = self.get_dev(&format!("/repos/{repo}/check-runs/{id}/annotations?per_page={MAX_ANNOTATIONS}"), None).await.unwrap_or_default();
+            for a in notes.as_array().into_iter().flatten().take(MAX_ANNOTATIONS) {
+                let path = a["path"].as_str().unwrap_or("");
+                let line = a["start_line"].as_u64().map(|l| format!(":{l}")).unwrap_or_default();
+                let level = a["annotation_level"].as_str().unwrap_or("");
+                let msg = a["message"].as_str().unwrap_or("").trim();
+                if !msg.is_empty() {
+                    out.push(format!("{path}{line}: {level}: {msg}"));
+                }
+            }
+        }
+        Ok((!out.is_empty()).then(|| out.join("\n")))
+    }
+
+    /// The newest inline review comments on PR `number` (up to 100), newest first.
+    pub async fn dev_review_comments(&self, repo: &str, number: u64) -> Result<Vec<GhReviewComment>, GhError> {
+        self.get_as(&format!("/repos/{}/pulls/{number}/comments?sort=created&direction=desc&per_page=100", repo_path(repo)?), None).await
     }
 
     /// Open PRs into `base`, most recently updated first.

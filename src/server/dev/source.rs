@@ -7,7 +7,7 @@
 use super::facts::{Check, FileDiff};
 use super::git::{Auth, GitError, Repo};
 use super::forge::ForgeKind;
-use crate::zombie::github::{EtagCache, GhCheck, GhCommit, GhError, GhFile, GhGitPerson, GhPull, GhReview, GithubSource, PostError, ReviewPost};
+use crate::zombie::github::{EtagCache, GhCheck, GhCommit, GhError, GhFile, GhGitPerson, GhPull, GhReview, GhReviewComment, GithubSource, PostError, ReviewPost};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
@@ -54,6 +54,25 @@ pub struct Change {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
+/// One inline review comment on a change (0.9.0, `dev::fix_it`): a file line and what was said.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReviewComment {
+    pub id: u64,
+    pub path: String,
+    /// The line it's on (the last line of a range), in the file at `commit`; none when it no longer
+    /// maps to a line of the current diff and the forge didn't keep the original.
+    pub line: Option<u64>,
+    /// The first line of a multi-line comment.
+    pub start_line: Option<u64>,
+    pub body: String,
+    /// The forge account that wrote it.
+    pub author: Option<String>,
+    /// The commit the comment was made on.
+    pub commit: Option<String>,
+    pub url: Option<String>,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
 impl From<GhGitPerson> for Person {
     fn from(p: GhGitPerson) -> Self {
         Person { name: p.name, email: p.email, date: p.date }
@@ -63,6 +82,22 @@ impl From<GhGitPerson> for Person {
 impl From<GhFile> for FileDiff {
     fn from(f: GhFile) -> Self {
         FileDiff { path: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch, previous_path: f.previous_filename }
+    }
+}
+
+impl From<GhReviewComment> for ReviewComment {
+    fn from(c: GhReviewComment) -> Self {
+        ReviewComment {
+            id: c.id,
+            path: c.path,
+            line: c.line.or(c.original_line),
+            start_line: c.start_line.or(c.original_start_line),
+            body: c.body,
+            author: c.user.map(|u| u.login),
+            commit: c.commit_id,
+            url: c.html_url,
+            created_at: c.created_at,
+        }
     }
 }
 
@@ -387,6 +422,16 @@ pub trait Forge: Send + Sync {
     async fn login(&self) -> Result<String, GhError>;
     /// Posts a review on change `number`. GitHub only until G7 (Lin): the others say so.
     async fn post_review(&self, number: u64, post: &ReviewPost) -> Result<GhReview, PostError>;
+    /// The newest inline review comments on change `number` (0.9.0 `fix_it`, Juno). A forge with
+    /// no reader for them yet has none.
+    async fn review_comments(&self, _number: u64) -> Result<Vec<ReviewComment>, GhError> {
+        Ok(Vec::new())
+    }
+    /// What failed check `name` on `sha` said (its output and annotations), as the forge has it,
+    /// uncut. None when the forge can't tell; `fix_it` cuts and quotes it as data.
+    async fn check_excerpt(&self, _sha: &str, _name: &str) -> Option<String> {
+        None
+    }
 }
 
 /// [`Forge`] over GitHub's REST API.
@@ -430,6 +475,12 @@ impl Forge for GithubForge<'_> {
     }
     async fn post_review(&self, number: u64, post: &ReviewPost) -> Result<GhReview, PostError> {
         self.client.dev_post_review(self.repo, number, post).await
+    }
+    async fn review_comments(&self, number: u64) -> Result<Vec<ReviewComment>, GhError> {
+        Ok(all(self.client.dev_review_comments(self.repo, number).await?))
+    }
+    async fn check_excerpt(&self, sha: &str, name: &str) -> Option<String> {
+        self.client.dev_check_output(self.repo, sha, name).await.ok().flatten()
     }
 }
 
