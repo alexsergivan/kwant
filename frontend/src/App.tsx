@@ -24,6 +24,7 @@ import { HumanStepCard } from './components/HumanStepCard';
 import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
+import { liveNamingOrder, namesToFill } from './workingStrip';
 import {
   HumanStep,
   HumanStepMeta,
@@ -720,7 +721,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setLive(liveRef.current);
   };
   const clearLive = (ctx: string | null | undefined) => {
-    if (ctx) delete streamsRef.current[ctx];
+    if (ctx) {
+      delete streamsRef.current[ctx];
+      delete liveKwantRef.current[ctx];
+    }
     if (ctx === openCtxRef.current) {
       setStreamingText('');
       setStreamingThinking('');
@@ -732,6 +736,19 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setLive(next);
   };
   const kwantName = (id: unknown) => (typeof id === 'string' ? kwantsRef.current.find((k) => k.id === id)?.name : undefined);
+  // 0.8.1 F4: which bot runs in each live chat, so a name that wasn't known yet can be filled in. A page
+  // opened mid-turn reads the running turns before the bot list arrives; without this the strip kept the
+  // chat's own title ("@QATeam is getting started") for the whole turn.
+  const liveKwantRef = useRef<Record<string, string>>({});
+  const markLiveKwant = (ctx: string | null | undefined, kwantId: unknown) => {
+    if (ctx && typeof kwantId === 'string' && kwantId) liveKwantRef.current[ctx] = kwantId;
+    markLive(ctx, kwantName(kwantId));
+  };
+  // Once the bot list arrives (or changes), name the live chats still waiting for one.
+  useEffect(() => {
+    for (const [ctx, name] of namesToFill(liveRef.current, liveKwantRef.current, kwantName)) markLive(ctx, name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kwants]);
 
   const chatLoadsRef = useRef(new ChatLoads());
   /** Loads a chat's latest messages into the cache, and on screen if it's open. */
@@ -822,7 +839,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       for (const ctx of Object.keys(liveRef.current)) {
         if (!busy.has(ctx) && !discussionInProgressRef.current) clearLive(ctx);
       }
-      for (const t of Object.values(map)) markLive(t.context_id, kwantName(t.kwant_id));
+      // The strip names the bot that is replying: queued turns first, so a running one in the same chat wins.
+      for (const t of liveNamingOrder(Object.values(map))) markLiveKwant(t.context_id, t.kwant_id);
       // Titles for the "working on" badges
       for (const t of Object.values(map)) {
         if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
@@ -1071,7 +1089,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 turnStarted(d.kwant_id, key);
                 moodTurnStarted(d.kwant_id);
               }
-              if (!discussionInProgressRef.current || ctx !== streamingContextIdRef.current) markLive(ctx, kwantName(d.kwant_id));
+              if (!discussionInProgressRef.current || ctx !== streamingContextIdRef.current) markLiveKwant(ctx, d.kwant_id);
             }
             break;
           }
@@ -1315,7 +1333,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             }
             if (event.type === 'TextDelta') buf.text += event.data;
             else buf.thinking = event.data;
-            if (!(ctx in liveRef.current)) markLive(ctx, kwantName(event.kwant_id));
+            if (!(ctx in liveRef.current)) markLiveKwant(ctx, event.kwant_id);
             if (shouldRenderDelta(event, openCtxRef.current, streamingContextIdRef.current)) {
               if (event.type === 'TextDelta') {
                 setStreamingText(buf.text);
@@ -1333,7 +1351,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             if (!step || !ctx || !turnId) break;
             const cur = activityRef.current[turnId];
             setActivityMap({ ...activityRef.current, [turnId]: { ...applyActivity(cur, turnId, step), ctx } });
-            if (!(ctx in liveRef.current)) markLive(ctx, kwantName(event.kwant_id));
+            if (!(ctx in liveRef.current)) markLiveKwant(ctx, event.kwant_id);
             break;
           }
           case 'human_step_updated':

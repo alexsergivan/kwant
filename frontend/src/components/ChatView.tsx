@@ -762,7 +762,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     card.scrollIntoView({ block: 'end', behavior: reduce ? 'auto' : 'smooth' });
     setApprovalOffscreen(false);
   };
-  // The running turn's summary line (WorkingStrip): above the composer section on a phone, inside it on desktop.
+  // The running turn's summary line (WorkingStrip): inside the composer section, right above the box.
   const workingStrip = (
     <WorkingStrip
       active={isStreaming}
@@ -2099,9 +2099,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
         </ScrollRow>
       )}
 
-      {/* Phone: its quiet line sits above the composer section. Desktop: inside it, right above the box. */}
-      {phone && workingStrip}
-
       {/* Modern Composer Input Bar */}
       <div
         ref={composerWrapRef}
@@ -2190,7 +2187,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
 
-        {!phone && workingStrip}
+        {/* Phone and desktop (0.8.1 F4): the quiet line sits inside the composer section, right above the box. */}
+        {workingStrip}
 
         <form
           onSubmit={handleSubmit}

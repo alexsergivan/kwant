@@ -34,8 +34,8 @@ interface WorkingStripProps {
  * line (0.6.13 spec A3), kept quiet (0.7.5): a plain ~28 px line, no card, 12 px text and a 16 px avatar,
  * with space below it so it never touches the composer. "Answer ↑" is the one thing with emphasis while
  * the bot waits on the person. Its buttons stay 28 px tall but tap like 44 px (kws-hit in modern.css).
- * On desktop (0.8.0) it is the same kind of quiet line at desktop size, placed inside the composer section
- * (ChatView renders it there), lined up with the composer box below it.
+ * On desktop (0.8.0) it is the same kind of quiet line at desktop size. Both sit inside the composer
+ * section (ChatView renders them there; on a phone too since 0.8.1 F4), lined up with the box below.
  */
 export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, writing, onStop, onAnswer, onWatch, phone: forcePhone }) => {
   const mountedAt = useRef(Date.now());
@@ -60,8 +60,8 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
   const answer = on && onAnswer && (phone || on === 'question') ? on : null;
   if (phone) {
     return (
-      <div className="kws-strip kws-strip-phone px-3 pt-1 pb-1.5" data-working-strip="" data-waiting-on={on ?? undefined}>
-        <div className="mx-auto flex h-7 max-w-4xl items-center gap-2">
+      <div className="kws-strip kws-strip-phone mx-auto mb-2 max-w-4xl pl-[21px] pr-[9px]" data-working-strip="" data-waiting-on={on ?? undefined}>
+        <div className="flex h-7 items-center gap-2">
           <span className={`shrink-0 inline-flex ${waiting ? '' : 'kw-avatar-working'}`}>
             <ModernAvatar role={title} name={name} size={16} />
           </span>
