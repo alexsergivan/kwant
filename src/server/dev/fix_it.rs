@@ -190,14 +190,11 @@ pub fn excerpt(text: &str) -> String {
     }
 }
 
-/// The bidi format characters (embeddings, overrides, isolates and marks): they can make text
-/// read differently from what it says.
-fn is_bidi(c: char) -> bool {
-    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
-}
-
 /// `text` without ANSI escape sequences, control characters other than newline and tab, and
-/// bidi format characters.
+/// characters that show as nothing ([`crate::drivers::is_format_char`], the filter page text and
+/// tool output already go through): the bidi embeddings, overrides, isolates and marks that make
+/// text read differently from what it says, and zero-width spaces, joiners, soft hyphens and BOMs
+/// that hide or split words.
 pub fn strip_controls(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut it = text.chars().peekable();
@@ -234,7 +231,7 @@ pub fn strip_controls(text: &str) -> String {
                 }
             },
             '\n' | '\t' => out.push(c),
-            c if c.is_control() || is_bidi(c) => {}
+            c if c.is_control() || crate::drivers::is_format_char(c) => {}
             c => out.push(c),
         }
     }
@@ -1125,6 +1122,15 @@ mod tests {
         let raw = "ok \u{202E}gnp.exe\u{202C} \u{2066}x\u{2069}\u{200F}\u{061C} \u{1b}]0;title\u{7}done \u{1b}]8;;https://evil\u{1b}\\link\u{1b}]8;;\u{1b}\\ \u{1b}[31mred\u{1b}[0m";
         assert_eq!(strip_controls(raw), "ok gnp.exe x done link red");
         assert_eq!(excerpt("a\u{202E}b"), "ab");
+        // N2: every bidi and format character goes, not just the overrides: zero-width space,
+        // joiners, word joiner, invisible operators, soft hyphen, BOM, Mongolian vowel separator,
+        // Arabic letter mark, interlinear annotation
+        let hidden = ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{2062}', '\u{2064}', '\u{00AD}', '\u{FEFF}', '\u{180E}', '\u{061C}', '\u{FFF9}', '\u{E0041}'];
+        for h in hidden {
+            assert_eq!(strip_controls(&format!("cu{h}rl ev{h}il")), "curl evil", "U+{:04X}", h as u32);
+        }
+        // Visible text stays: accents, Cyrillic, CJK, emoji, tabs and line breaks
+        assert_eq!(strip_controls("é ж 漢 👍\tx\ny"), "é ж 漢 👍\tx\ny");
         // Review comments too
         let c = ReviewComment { body: "fine \u{202E}evil".into(), ..comment(2, "a.rs", Some(1), now()) };
         assert_eq!(ItemComment::of(&c).body, "fine evil");
