@@ -145,6 +145,17 @@ test('P3 states: due, kept, cleaning, cleaned with kept notes, failed', () => {
   assert.equal(m.p3State(W(fx.WORKING)), null);
   assert.equal(m.p3State(W(fx.MISSING)), null);
   assert.deepEqual(m.p3State(W(fx.FINISHED_DUE), { failed: 'Lin is working here' }), { kind: 'failed', reason: 'Lin is working here' });
+  // D1: Clean now on a kept worktree shows the cleaned result, its kept notes and a toast.
+  const keptClean = { ...fx.FINISHED_DUE, keep_build: true, clean_at: null, cleaned_at: '2026-11-10T15:10:00Z', cleaned: ['node_modules', 'web/dist'], cleaned_bytes: 300_000, kept: [{ dir: 'dist', why: 'tracked' }] };
+  assert.deepEqual(m.p3State(W(keptClean)), { kind: 'cleaned', size: '300 KB', at: '15:10', dirs: ['node_modules', 'dist'] });
+  assert.deepEqual(m.keptNotes(W(keptClean)), ['Kept dist: Git tracks a file in it.']);
+  assert.equal(m.cleanToast(W(keptClean)), 'Cleaned 300 KB of build output. Kept dist: Git tracks a file in it.');
+  // A clean from before this finish doesn't hide "kept".
+  assert.deepEqual(m.p3State(W({ ...keptClean, cleaned_at: '2026-11-10T10:00:00Z' })), { kind: 'kept' });
+  // Nothing left to clean: still kept, and the toast says so.
+  const keptEmpty = { ...keptClean, cleaned: [], cleaned_bytes: 0, kept: [] };
+  assert.deepEqual(m.p3State(W(keptEmpty)), { kind: 'kept' });
+  assert.equal(m.cleanToast(W(keptEmpty)), 'Nothing to clean: no build output left.');
   assert.equal(m.sizeLabel(512), '512 bytes');
   assert.equal(m.sizeLabel(340_000_000), '340 MB');
 });
@@ -220,6 +231,22 @@ test('P3 line: Keep it, then Clean now; a refused clean says why and nothing els
   assert.match(text(p3()), /Couldn’t clean build output: Lin is working here\. Nothing else was touched\. · Try again/);
   const cleaned = row(host, 'w3').querySelector('[data-wt-p3]');
   assert.match(text(cleaned), /Cleaned 1\.2 GB of build output at 18:40 \(\.vite, target\) · Kept dist: Git tracks a file in it\./);
+});
+
+test('D1: Clean now on a kept worktree shows the cleaned line, its kept notes and a toast', async () => {
+  const kept = { ...fx.FINISHED_DUE, keep_build: true, clean_at: null };
+  routes['GET /api/spaces/sp1/dev/worktrees'] = () => json(200, { ...fx.LIST, repos: [{ ...fx.LIST.repos[0], worktrees: [kept] }] });
+  routes['POST /api/dev/worktrees/w2/clean'] = () =>
+    json(200, { ...kept, cleaned_at: '2026-11-10T15:10:00Z', cleaned: ['node_modules', 'web/node_modules'], cleaned_bytes: 300_000, kept: [{ dir: 'dist', why: 'tracked' }] });
+  const host = await mount();
+  const p3 = () => row(host, 'w2').querySelector('[data-wt-p3]');
+  assert.equal(p3().dataset.wtP3, 'kept');
+  assert.match(text(p3()), /Build output kept · Clean now/);
+  await click(p3().querySelector('[data-wt-clean]'));
+  assert.ok(calls.some((c) => c.method === 'POST' && c.url.endsWith('/w2/clean')));
+  assert.equal(p3().dataset.wtP3, 'cleaned');
+  assert.match(text(p3()), /Cleaned 300 KB of build output at 15:10 \(node_modules\) · Kept dist: Git tracks a file in it\./);
+  assert.match(text(host.querySelector('[data-wt-toast]')), /^Cleaned 300 KB of build output\. Kept dist: Git tracks a file in it\.$/);
 });
 
 test('missing folder: Forget it removes the record', async () => {

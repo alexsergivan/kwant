@@ -410,11 +410,21 @@ export function p3State(w: Worktree, opts: { cleaning?: boolean; failed?: string
   if (opts.cleaning) return { kind: 'cleaning' };
   if (opts.failed) return { kind: 'failed', reason: opts.failed };
   if (w.clean_at && !w.keep_build) return { kind: 'due', at: hhmm(new Date(w.clean_at)), dirs: [] };
-  if (w.keep_build && w.done_at) return { kind: 'kept' };
-  if (w.cleaned_at && w.cleaned.length && (w.cleaned_bytes ?? 0) > 0) {
-    return { kind: 'cleaned', size: sizeLabel(w.cleaned_bytes ?? 0), at: hhmm(new Date(w.cleaned_at)), dirs: w.cleaned.map((d) => d.split('/').pop() ?? d).filter((d, i, a) => a.indexOf(d) === i) };
+  const cleaned = !!w.cleaned_at && w.cleaned.length > 0 && (w.cleaned_bytes ?? 0) > 0;
+  // A kept worktree shows "kept" until someone presses Clean now; a clean since this finish wins.
+  const cleanedSinceDone = cleaned && (!w.done_at || Date.parse(w.cleaned_at as string) >= Date.parse(w.done_at));
+  if (w.keep_build && w.done_at && !cleanedSinceDone) return { kind: 'kept' };
+  if (cleaned) {
+    return { kind: 'cleaned', size: sizeLabel(w.cleaned_bytes ?? 0), at: hhmm(new Date(w.cleaned_at as string)), dirs: w.cleaned.map((d) => d.split('/').pop() ?? d).filter((d, i, a) => a.indexOf(d) === i) };
   }
   return null;
+}
+
+/** The toast after a manual Clean now, from the server's answer. */
+export function cleanToast(w: Worktree): string {
+  const bytes = w.cleaned_bytes ?? 0;
+  if (!w.cleaned.length || bytes <= 0) return w.kept.length ? `Nothing cleaned. ${keptNotes(w).join(' ')}` : 'Nothing to clean: no build output left.';
+  return `Cleaned ${sizeLabel(bytes)} of build output.${w.kept.length ? ` ${keptNotes(w).join(' ')}` : ''}`;
 }
 
 /** "· Kept dist: Git tracks a file in it." for each skipped folder, after a clean. */

@@ -16,6 +16,7 @@ import {
   branchSlug,
   changesLabel,
   createErrorCopy,
+  cleanToast,
   keptNotes,
   p3State,
   removeErrorCopy,
@@ -114,7 +115,11 @@ export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bot
       setFailed((f) => ({ ...f, [w.id]: undefined }));
       worktreeApi
         .clean(w.id)
-        .then((n) => n && worktreeStore.patch(space, n))
+        .then((n) => {
+          if (!n) return;
+          worktreeStore.patch(space, n);
+          toast(cleanToast(n));
+        })
         .catch((e: unknown) => {
           const code = e instanceof WorktreeError ? e.code : null;
           const reason = code === 'working' ? `${botName(w.kwant_id) ?? 'a bot'} is working here` : code === 'missing' ? 'the folder is gone' : code === 'not_ours' ? 'the folder wasn’t made here' : e instanceof Error ? e.message.replace(/\.$/, '') : 'it failed';
@@ -122,7 +127,7 @@ export const WorktreesPanel: React.FC<WorktreesPanelProps> = ({ space, data, bot
         })
         .finally(() => setBusy((b) => ({ ...b, [w.id]: undefined })));
     },
-    [space, botName],
+    [space, botName, toast],
   );
 
   const forget = useCallback(
