@@ -237,7 +237,10 @@ test('with the app open: the worker’s message for a stop opens Needs you; othe
   assert.equal(m.placeOfNotification({ ...open, kind: 'app_update', kwant_id: '' }), 'home');
   // The App branches on it before the old kwant_id check, and the page's own notification goes the same way.
   const app = src('App.tsx');
-  assert.match(app, /const place = placeOfNotification\(m\);\s*if \(place === 'spend_stop'\) return openSpendStopRef\.current\(\);[\s\S]*?if \(place === 'home'\) return openHomeRef\.current\(\);\s*if \(!m\.kwant_id\) return;/);
+  // 0.8.1 F6: after those two, the rest opens its chat; a channel or team chat with no bot is no longer dropped.
+  assert.match(app, /const place = placeOfNotification\(m\);\s*if \(place === 'spend_stop'\) return openSpendStopRef\.current\(\);[\s\S]*?if \(place === 'home'\) return openHomeRef\.current\(\);[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*openNotifiedRef\.current\(\{[^}]*channel_id: m\.channel_id,[^}]*thread_id: m\.thread_id \?\? null,[^}]*card_id: m\.card_id \?\? null,[^}]*\}\);/);
+  assert.doesNotMatch(app, /if \(place === 'home'\) return openHomeRef\.current\(\);\s*if \(!m\.kwant_id\) return;/);
+  assert.equal(m.placeOfNotification({ ...open, kind: 'approval_needed', channel_id: 'c1' }), null);
   assert.match(app, /const place = placeOfNotification\(n\);\s*if \(place === 'spend_stop'\) openSpendStop\(\);\s*else if \(place === 'home'\) openHome\(\);/);
   assert.match(app, /top=\{\s*<>\s*<PrepushNeedsYou [^\n]*\/>\s*<SpendStopNeedsYou refreshKey=\{spendStopSeq\}/);
 });
