@@ -1955,15 +1955,20 @@ async fn place(state: &AppState, context_id: Option<&str>) -> (Option<String>, S
     }
 }
 
+/// The bot's conversation a turn ran in, when it ran in one: a tap on its notification opens that
+/// thread (0.8.1 F6). `None` for a channel or the bot's direct chat.
+async fn turn_thread(state: &AppState, kwant_id: &str, channel_id: Option<&str>, context_id: Option<&str>) -> Option<String> {
+    match (channel_id, context_id) {
+        (None, Some(id)) if id != kwant_id && state.db.get_thread(id).await.ok().flatten().is_some() => Some(id.to_string()),
+        _ => None,
+    }
+}
+
 /// "<bot> finished replying in <place>", for a turn of `kwant_id` in `context_id`.
 pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<&str>) -> Notification {
     let name = kwant_name(state, kwant_id).await;
     let (channel_id, where_) = place(state, context_id).await;
-    // A turn in one of the bot's conversations opens that conversation (0.8.1 F6)
-    let thread_id = match (&channel_id, context_id) {
-        (None, Some(id)) if id != kwant_id && state.db.get_thread(id).await.ok().flatten().is_some() => Some(id.to_string()),
-        _ => None,
-    };
+    let thread_id = turn_thread(state, kwant_id, channel_id.as_deref(), context_id).await;
     Notification {
         kind: "turn_finished",
         kwant_id: kwant_id.to_string(),
@@ -1980,6 +1985,7 @@ pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<
 pub async fn turn_quiet(state: &AppState, kwant_id: &str, context_id: Option<&str>) -> Notification {
     let name = kwant_name(state, kwant_id).await;
     let (channel_id, where_) = place(state, context_id).await;
+    let thread_id = turn_thread(state, kwant_id, channel_id.as_deref(), context_id).await;
     Notification {
         kind: "turn_quiet",
         kwant_id: kwant_id.to_string(),
@@ -1987,6 +1993,8 @@ pub async fn turn_quiet(state: &AppState, kwant_id: &str, context_id: Option<&st
         body: format!("{name} has been quiet for {} min in {where_}.", super::bot_status::QUIET_LONG_MIN),
         kwant_name: name,
         channel_id,
+        thread_id,
+        card_id: None,
     }
 }
 
