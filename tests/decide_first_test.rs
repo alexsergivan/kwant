@@ -26,6 +26,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tower::ServiceExt;
 
+/// - kwant's one automatic delivery continuation: a reply with a PR link;
 /// - the hidden round's prompt: a decided reply with a [DECISIONS] block;
 /// - a teammate's view: "I'd pick B";
 /// - CHOICE: the screenshot's ending ("A, B or C?"), naming Bob;
@@ -37,6 +38,7 @@ case "$1" in
 esac
 for a; do last="$a"; done
 case "$last" in
+  *"[kwnt: one automatic continuation."*) out='Pushed the footer change: https://github.com/o/r/pull/7' ;;
   *"[Decide first] Your last reply"*)
     out='I checked contrast on A and C and went with B: Wax seal. Change it any time.\n\n[DECISIONS]\nquestion: Which direction? | options: A: Classic; B: Wax seal; C: Green desk | picked: B: Wax seal | why: reads best\n[/DECISIONS]' ;;
   *"[Decide first]"*) out="I'd pick B: it reads best." ;;
@@ -78,7 +80,8 @@ struct Env {
     app: Router,
     state: AppState,
     channel: String,
-    _tmp: tempfile::TempDir,
+    ann: String,
+    tmp: tempfile::TempDir,
 }
 
 /// Ann and Bob on the fake claude in one channel; Ann leads.
@@ -107,7 +110,7 @@ async fn setup() -> Env {
     let ann = ok(&app, "POST", "/api/kwants", Some(bot("Ann"))).await["id"].as_str().unwrap().to_string();
     let bob = ok(&app, "POST", "/api/kwants", Some(bot("Bob"))).await["id"].as_str().unwrap().to_string();
     let c = ok(&app, "POST", "/api/channels", Some(json!({"name": "desk", "lead_kwant_id": ann, "member_kwants": [bob]}))).await;
-    Env { app, state, channel: c["id"].as_str().unwrap().to_string(), _tmp: tmp }
+    Env { app, state, channel: c["id"].as_str().unwrap().to_string(), ann, tmp }
 }
 
 impl Env {
@@ -284,4 +287,46 @@ async fn the_settings_round_trip_and_are_validated() {
         assert_eq!(s, StatusCode::BAD_REQUEST);
         assert_eq!(v["error"], "work_ahead_daily_cap must be 1–10");
     }
+}
+
+/// #469 round 5 (0.8.1 F1): a firm Change whose reply is held and decided. The decided reply runs
+/// with decide-first's purpose, so it holds no chat slot to hand over; it has no PR link, so the
+/// delivery check continues it once, and that continuation queues for the chat like any turn and
+/// runs. Two replies reach the chat, in order: the decided one, then the continuation.
+#[tokio::test]
+async fn a_decided_change_without_a_link_is_continued_once() {
+    let env = setup().await;
+    // Ann's folder is a git repository, so "Fix the design ..." is a firm visible Change
+    let data = kwnt::db::spaces::space_data_dir(env.tmp.path(), &SpaceId::default_space());
+    std::fs::create_dir_all(kwnt::tools::bot_workspace(&data, &env.ann).join(".git")).unwrap();
+    // Routed to Ann, the lead: a leading "@Ann" makes the keyword plan a lean Visual today
+    env.say("Fix the design of the footer CHOICE").await;
+
+    for _ in 0..300 {
+        if env.replies().await.len() >= 2 && env.state.turns.active_turns().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let replies = env.replies().await;
+    let texts: Vec<(&str, &str, Value)> = replies.iter().map(|m| (m.sender_id.as_str(), m.text.as_str(), meta(m))).collect();
+    assert_eq!(replies.len(), 2, "the decided reply and its one continuation: {texts:#?}");
+
+    // The decided reply: the plan the held turn had, missing the link (and the picture), continues
+    let decided = meta(&replies[0]);
+    assert_eq!(replies[0].text, "I checked contrast on A and C and went with B: Wax seal. Change it any time.");
+    assert!(decided["decide_first"]["held_turn_id"].is_string(), "{decided}");
+    assert_eq!(decided["delivery"]["continues"], true, "{decided}");
+    assert_eq!(decided["delivery"]["missing"], json!(["image", "link"]), "{decided}");
+
+    // The continuation ran (it wasn't stuck behind the decided reply's slot) and is never continued
+    let cont = meta(&replies[1]);
+    assert_eq!(replies[1].sender_id, "Ann");
+    assert!(replies[1].text.starts_with("Pushed the footer change: https://github.com/o/r/pull/7"), "{}", replies[1].text);
+    assert_eq!(cont["delivery"]["continues"], false, "{cont}");
+    assert_eq!(cont["delivery"]["missing"], json!(["image"]), "the link is there now: {cont}");
+    assert!(cont.get("decide_first").is_none(), "the continuation isn't held again: {cont}");
+    assert!(replies[1].text.ends_with("No picture was attached to this reply."), "{}", replies[1].text);
+    assert!(replies[0].created_at <= replies[1].created_at);
 }

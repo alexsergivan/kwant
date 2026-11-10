@@ -5,6 +5,9 @@
 //!
 //! The bot's folder is a git repository (a `.git` folder), so "Fix ..." is a firm Change, and
 //! the fake claude's reply has no link: the check asks for exactly one continuation.
+//!
+//! 0.8.1 F1: the delivery (the ask and its continuation) counts an image any of its turns shared,
+//! and a new ask never inherits it.
 
 mod common;
 
@@ -133,3 +136,68 @@ async fn a_stall_retried_try_that_misses_is_continued_once() {
     assert_eq!(delivery_meta(first)["continues"], true, "{:?}", first.meta);
     assert!(!msgs.iter().any(|m| m.text.contains("sent nothing for")), "no stall stop line after one stall: {msgs:#?}");
 }
+
+/// A real 1x1 PNG.
+const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/// The bot's replies, without the file cards it shared.
+async fn replies_of(env: &Env, kwant: &str) -> Vec<kwnt::db::models::Message> {
+    let msgs = messages(env, kwant).await;
+    msgs.into_iter().filter(|m| m.sender_role == "kwant" && !m.meta.as_deref().is_some_and(|s| s.contains(r#""kind":"file""#))).collect()
+}
+
+/// 0.8.1 F1 (Rigel, 0.8.0 final QA): a visible change whose first turn shares the screenshot but
+/// gives no PR link. The continuation only asks for the link, and its reply doesn't say "No
+/// picture was attached". The next, unrelated ask shares nothing and is still asked for both.
+#[tokio::test]
+async fn a_continuation_counts_the_picture_its_first_turn_shared() {
+    use base64::Engine;
+    let env = setup().await;
+    let a = env.a.clone();
+    in_a_repo(&env, &a);
+    let ws = kwnt::tools::bot_workspace(&env.tmp.path().join("data"), &a);
+    std::fs::write(ws.join("footer-after.png"), base64::engine::general_purpose::STANDARD.decode(PNG_B64).unwrap()).unwrap();
+    let share = call_tool_marker("share_file", serde_json::json!({"path": "footer-after.png", "name": "footer-after.png"}));
+
+    // Turn 1 shares the picture and gives no link: a firm visible Change continues for the link only
+    send_direct(&env, &a, &format!("Fix the design of the footer. {share} REPLYTAG:zqpic"), serde_json::json!({})).await;
+    wait_for("the continuation to run", || async { !started(&runs(&env), CONTINUATION).is_empty() }).await;
+    wait_for("two replies", || async { replies_of(&env, &a).await.len() >= 2 }).await;
+    wait_for("the bot to finish", || async { bot_idle(&env, &a) }).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let msgs = messages(&env, &a).await;
+    assert_eq!(msgs.iter().filter(|m| m.text == "Shared a file: footer-after.png").count(), 1, "turn 1 shared it once: {msgs:#?}");
+    let replies = replies_of(&env, &a).await;
+    assert_eq!(replies.len(), 2, "{replies:#?}");
+    let first = delivery_meta(&replies[0]);
+    assert_eq!((first["missing"].clone(), first["continues"].clone()), (serde_json::json!(["link"]), serde_json::json!(true)), "{first}");
+    let all = runs(&env);
+    let asked: Vec<&String> = all.iter().map(|(_, r)| r).filter(|r| r.contains(CONTINUATION)).collect();
+    assert_eq!(asked.len(), 1, "{all:#?}");
+    assert!(asked[0].contains("Missing from your last reply: a PR or branch link."), "only the link: {}", asked[0]);
+    // The continuation: no picture asked for, none said missing
+    let cont = delivery_meta(&replies[1]);
+    assert_eq!(cont["missing"], serde_json::json!(["link"]), "the fake never links; the picture counts: {cont}");
+    assert_eq!((cont["no_picture"].clone(), cont["continues"].clone()), (serde_json::json!(false), serde_json::json!(false)), "{cont}");
+    assert!(!replies[1].text.contains(NO_PICTURE), "{}", replies[1].text);
+
+    // A new ask: a new delivery, which shares nothing and is asked for the image and the link
+    send_direct(&env, &a, "Fix the design of the header. REPLYTAG:zqnext", serde_json::json!({})).await;
+    wait_for("four replies", || async { replies_of(&env, &a).await.len() >= 4 }).await;
+    wait_for("the bot to finish", || async { bot_idle(&env, &a) }).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let replies = replies_of(&env, &a).await;
+    assert_eq!(replies.len(), 4, "{replies:#?}");
+    let next = delivery_meta(&replies[2]);
+    assert_eq!((next["missing"].clone(), next["continues"].clone()), (serde_json::json!(["image", "link"]), serde_json::json!(true)), "{next}");
+    let all = runs(&env);
+    let asked: Vec<&String> = all.iter().map(|(_, r)| r).filter(|r| r.contains(CONTINUATION)).collect();
+    assert_eq!(asked.len(), 2, "{all:#?}");
+    assert!(asked.iter().any(|r| r.contains("Missing from your last reply: an image in the chat and a PR or branch link.")), "{asked:#?}");
+    let cont = delivery_meta(&replies[3]);
+    assert_eq!((cont["missing"].clone(), cont["no_picture"].clone()), (serde_json::json!(["image", "link"]), serde_json::json!(true)), "{cont}");
+    assert!(replies[3].text.contains(NO_PICTURE), "{}", replies[3].text);
+}
+
+/// `NO_PICTURE_LINE` (src/server/picture_claims.rs).
+const NO_PICTURE: &str = "No picture was attached to this reply.";
