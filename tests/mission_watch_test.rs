@@ -317,3 +317,40 @@ async fn a_turn_without_a_report_fails_the_check_and_moves_nothing() {
     let c2 = e.state.db.get_watch_check(&check2.id).await.unwrap().unwrap();
     assert_eq!((c2.status.as_str(), c2.reason_code.as_deref()), ("failed", Some("restarted")));
 }
+
+#[tokio::test]
+async fn the_tick_finds_the_stop_and_records_a_limit_once_without_a_turn() {
+    let e = setup().await;
+    let (lead, owner, rigel) = (bot(&e, "Ada", "Lead").await, bot(&e, "Pixel", "Frontend").await, bot(&e, "Rigel", "QA").await);
+    let m = mission(&e, &lead).await;
+    let base = format!("/api/missions/{}/watch", m.id);
+    let t = task(&e, &m, &owner, "Export API", "review").await;
+    person(&e, "PUT", &base, Some(json!({"kwant_id": rigel.id}))).await;
+
+    // Changed under a minute ago: not stopped, the tick starts nothing
+    watch::tick(&e.state).await;
+    assert!(e.state.db.latest_watch_check(&m.id).await.unwrap().is_none());
+
+    // Quiet for five minutes, and the mission is at its token limit
+    let old = "strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now', '-5 minutes')";
+    // The event log is append-only; this test's own database lifts that to age it
+    e.state.db.exec_raw_for_test("DROP TRIGGER task_events_append_only_update").await.unwrap();
+    e.state.db.exec_raw_for_test(&format!("UPDATE task_events SET created_at = {old} WHERE task_id = '{}'", t.id)).await.unwrap();
+    e.state.db.exec_raw_for_test(&format!("UPDATE tasks SET updated_at = {old} WHERE id = '{}'", t.id)).await.unwrap();
+    e.state.db.exec_raw_for_test(&format!("UPDATE missions SET budget_tokens = 100, spent_tokens = 100 WHERE id = '{}'", m.id)).await.unwrap();
+    let v = person(&e, "GET", &base, None).await;
+    assert_eq!((v["watch"]["stopped"].as_bool(), v["watch"]["state"].as_str()), (Some(true), Some("over_limit")), "{v}");
+    assert!(v["watch"]["stopped_at"].is_string() && v["watch"]["can_check_now"] == false, "{v}");
+    let (status, v) = call(&e.app, "POST", &format!("{base}/check"), None, None).await;
+    assert_eq!((status, v["code"].as_str()), (StatusCode::CONFLICT, Some("over_limit")), "{v}");
+
+    // The tick records the stop it can't check once, and runs no turn
+    watch::tick(&e.state).await;
+    watch::tick(&e.state).await;
+    let checks = e.state.db.watch_checks(&m.id, 10).await.unwrap();
+    assert_eq!(checks.len(), 1, "recorded once per stop: {checks:?}");
+    assert_eq!((checks[0].status.as_str(), checks[0].reason_code.as_deref(), checks[0].trigger.as_str()), ("over_limit", Some("over_limit"), "stop"));
+    assert!(checks[0].stopped_at.is_some());
+    assert_eq!(e.state.db.get_task(&t.id).await.unwrap().unwrap().state, "review", "nothing moved");
+    assert_eq!(e.state.db.get_mission(&m.id).await.unwrap().unwrap().spent_tokens, 100, "no turn, no tokens");
+}

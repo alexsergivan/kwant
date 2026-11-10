@@ -333,12 +333,31 @@ const REASON_CODES: [&str; 10] = ["removed", "paused_budget", "no_model", "spend
 
 /// `mission.watch` (contract §1). Cheap when no watch is set.
 pub async fn watch_json(state: &AppState, m: &Mission) -> Value {
-    let tasks = tasks_of(state, m).await;
     let watch = state.db.get_watch(&m.id).await.ok().flatten();
-    let last = state.db.latest_watch_check(&m.id).await.ok().flatten();
     let finished = matches!(m.status.as_str(), "done" | "cancelled");
+    // Unwatched or finished: the chip needs only whether there are tasks, not the tasks
+    if watch.is_none() || finished {
+        let has_tasks = state.db.mission_counts(&m.id).await.unwrap_or_default().iter().any(|(_, n)| *n > 0);
+        let last = state.db.latest_watch_check(&m.id).await.ok().flatten();
+        let state_name = if finished { "finished" } else if has_tasks { "off" } else { "no_tasks" };
+        let name = match &watch {
+            Some(w) => super::name_of(state, Some(&w.kwant_id)).await,
+            None => None,
+        };
+        return json!({
+            "state": state_name,
+            "kwant_id": watch.as_ref().map(|w| w.kwant_id.clone()),
+            "kwant_name": name,
+            "set_at": watch.as_ref().map(|w| rfc(w.set_at)),
+            "stopped": false, "stopped_at": null,
+            "last_check": last.as_ref().map(last_check_json),
+            "reason": null, "can_check_now": false,
+        });
+    }
+    let tasks = tasks_of(state, m).await;
+    let last = state.db.latest_watch_check(&m.id).await.ok().flatten();
     let (stop, fp, cant, last_change) = match &watch {
-        Some(w) if !finished && !tasks.is_empty() => {
+        Some(w) if !tasks.is_empty() => {
             let stop = stop_of(state, m, &tasks).await;
             let lc = state.db.mission_last_change(&m.id).await.ok().flatten();
             (stop, Some(fingerprint(&tasks, &w.kwant_id)), cant_run(state, &w.kwant_id, m).await, lc)
@@ -729,7 +748,7 @@ pub async fn start(state: &AppState, m: &Mission, w: &Watch, fp: &str, stopped_a
 
 /// A stop the watcher can't check (it can't run, or the mission is over its limit): recorded
 /// once per fingerprint, with no turn.
-async fn record_skip(state: &AppState, m: &Mission, w: &Watch, last: Option<&WatchCheck>, fp: &str, at: DateTime<Utc>, status: &str, r: &Reason) {
+async fn record_skip(state: &AppState, m: &Mission, w: &Watch, last: Option<&WatchCheck>, fp: &str, at: DateTime<Utc>, (status, r): (&str, &Reason)) {
     if last.is_some_and(|c| c.status == status && c.fingerprint == fp && c.kwant_id == w.kwant_id) {
         return;
     }
@@ -757,11 +776,11 @@ pub async fn tick(state: &AppState) {
             continue;
         }
         if let Some(r) = cant_run(state, &w.kwant_id, &m).await {
-            record_skip(state, &m, &w, last.as_ref(), &fp, at, "cant_run", &r).await;
+            record_skip(state, &m, &w, last.as_ref(), &fp, at, ("cant_run", &r)).await;
             continue;
         }
         if over_limit(&m) {
-            record_skip(state, &m, &w, last.as_ref(), &fp, at, "over_limit", &over_limit_reason()).await;
+            record_skip(state, &m, &w, last.as_ref(), &fp, at, ("over_limit", &over_limit_reason())).await;
             continue;
         }
         if let Err(e) = start(state, &m, &w, &fp, Some(at), "stop").await {
@@ -1264,10 +1283,14 @@ fn coded(status: StatusCode, code: &str, msg: &str, reason: Option<&Reason>) -> 
     (status, Json(body)).into_response()
 }
 
+/// A candidate while sorting: its group (0 no task, 1 lead, 2 has a task), QA-titled, the bot,
+/// its tasks here, and why it can't run.
+type Candidate = (u8, bool, Kwant, Vec<String>, Option<Reason>);
+
 /// The space's bots a person may pick as watcher, in the design's order.
 async fn candidates(state: &AppState, m: &Mission, tasks: &[Task], watch: Option<&Watch>) -> Vec<Value> {
     let bots = state.db.list_kwants(&SpaceId::new(&m.space_id)).await.unwrap_or_default();
-    let mut rows: Vec<(u8, bool, Kwant, Vec<String>, Option<Reason>)> = Vec::new();
+    let mut rows: Vec<Candidate> = Vec::new();
     for k in bots {
         let task_ids: Vec<String> = tasks.iter().filter(|t| t.owner_kwant_id.as_deref() == Some(k.id.as_str())).map(|t| t.id.clone()).collect();
         let group = if k.id == m.lead_kwant_id {
@@ -1489,9 +1512,10 @@ mod tests {
     #[test]
     fn a_mission_is_stopped_only_when_every_task_waits_and_nothing_moved_for_a_minute() {
         let now = Utc::now();
-        let old = Some(now - Duration::seconds(QUIET_SECS + 1));
+        let at = now - Duration::seconds(QUIET_SECS + 1);
+        let old = Some(at);
         let waiting = vec![task("a", "review"), task("b", "blocked"), task("c", "verified"), task("d", "needs_you"), task("e", "failed")];
-        assert_eq!(stop_rule("active", &waiting, false, old, now), Stop::Stopped(old.unwrap()));
+        assert_eq!(stop_rule("active", &waiting, false, old, now), Stop::Stopped(at));
         // Rule 4: a change under a minute ago is a task between two steps
         assert_eq!(stop_rule("active", &waiting, false, Some(now - Duration::seconds(10)), now), Stop::Quiet);
         // Rule 3: something runs
@@ -1684,7 +1708,7 @@ mod tests {
     fn the_inbox_line_names_the_first_thing_and_how_many() {
         let a = json!({"task_title": "Deploy", "what": "your OK to deploy.", "since": "2026-11-10T18:12:00.000Z"});
         let b = json!({"task_id": "t-6", "what": "an answer"});
-        assert_eq!(inbox_line("Rigel", &[a.clone()]), "Rigel: Deploy has waited for your OK to deploy since 18:12.");
+        assert_eq!(inbox_line("Rigel", std::slice::from_ref(&a)), "Rigel: Deploy has waited for your OK to deploy since 18:12.");
         assert_eq!(inbox_line("Rigel", &[a, b.clone()]), "Rigel: 2 things wait for you. Deploy has waited for your OK to deploy since 18:12.");
         assert_eq!(inbox_line("Rigel", &[b]), "Rigel: t-6 waits for an answer.");
     }

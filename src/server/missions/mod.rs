@@ -153,6 +153,10 @@ pub enum Actor {
 /// SQLite triggers.
 pub fn allowed(from: &str, to: &str, actor: Actor) -> bool {
     use Actor::*;
+    // A watcher's report makes only its four send-backs, never a move open to any actor
+    if actor == Watcher {
+        return matches!((from, to), ("review" | "failed" | "needs_you", "ready") | ("blocked", "backlog"));
+    }
     let open = matches!(from, "backlog" | "ready" | "working" | "needs_you" | "review" | "blocked" | "failed");
     match (from, to) {
         ("backlog", "ready") => actor == Kwant,
@@ -162,13 +166,13 @@ pub fn allowed(from: &str, to: &str, actor: Actor) -> bool {
         ("working", "needs_you") | ("needs_you", "working") => actor == Kwant,
         // A hand-off or routine run that failed or stopped
         ("working" | "needs_you", "failed") => actor == Kwant,
-        ("needs_you", "ready") => matches!(actor, Kwant | Watcher),
+        ("needs_you", "ready") => actor == Kwant,
         ("backlog" | "ready" | "working" | "needs_you", "blocked") => true,
-        ("blocked", "backlog") => matches!(actor, Owner | Person | Watcher),
+        ("blocked", "backlog") => matches!(actor, Owner | Person),
         ("review", "verified") => actor == Kwant,
-        ("review", "ready") => matches!(actor, Kwant | Person | Watcher),
+        ("review", "ready") => matches!(actor, Kwant | Person),
         ("review", "failed") => actor == Kwant,
-        ("failed", "ready") => matches!(actor, Person | AutoFix | Watcher),
+        ("failed", "ready") => matches!(actor, Person | AutoFix),
         (_, "cancelled") => open && matches!(actor, Person | Kwant),
         _ => false,
     }
