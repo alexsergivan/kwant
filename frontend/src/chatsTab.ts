@@ -60,3 +60,121 @@ export const workingIds = <K extends { id: string; name: string }>(kwants: K[], 
 /** Direct chats: every other bot, by name (the client can't tell which direct chats have messages yet). */
 export const directIds = <K extends { id: string; name: string }>(kwants: K[], shown: Set<string>): K[] =>
   kwants.filter((k) => !shown.has(k.id)).sort((a, b) => a.name.localeCompare(b.name));
+
+// ---- H5: the one attention order, used by the sidebar block, the phone sections and the Inbox ----
+
+/**
+ * 1 Needs you · 2 Stuck or failed · 3 Finished, not read · 4 Working · 5 Waiting in line · 6 everyone else.
+ * A bot sits in the highest group it qualifies for.
+ */
+export type AttentionRank = 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface AttentionRow<K> {
+  kwant: K;
+  rank: AttentionRank;
+  /** The status line for ranks 1–3 ("Asked you a question", "Stuck: …", "Finished: …"). */
+  line?: string;
+  /** Ranks 1–3: the ask or Inbox item it comes from (none for a browser step). */
+  item?: AwayItem;
+  needs?: NeedsYouRow;
+  /** When it asked, failed or finished, for the order inside the group. */
+  at?: number;
+}
+
+export interface AttentionInput<K> {
+  kwants: K[];
+  /** `needsYouRows()`: already oldest first. */
+  needs: NeedsYouRow[];
+  /** Inbox `failed` items (until H4 ships its `stuck` status, the only source of rank 2). */
+  failed?: AwayItem[];
+  /** Inbox `finished` items not seen yet. */
+  finished?: AwayItem[];
+  /** Live turns per bot (`busyLines`), and each bot's dot status (queued vs working). */
+  busy?: Record<string, string>;
+  status?: Record<string, string>;
+  /** When the person last opened each bot's chat: a finished item older than that has been read. */
+  openedAt?: Record<string, number>;
+  now?: number;
+}
+
+const FAILED_WINDOW_MS = 24 * 3600_000;
+const ts = (i?: AwayItem) => (i ? Date.parse(i.timestamp) || 0 : 0);
+
+/** Rank 2's line: what broke, in the Inbox's words. */
+export const stuckLine = (i: AwayItem): string => {
+  const what = i.status === 'stuck' ? 'Stuck' : i.kind === 'routine_run' ? 'Routine failed' : i.status === 'interrupted' ? 'Interrupted' : 'Failed';
+  return i.title ? `${what}: ${i.title}` : what;
+};
+
+export const finishedLine = (i: AwayItem): string => (i.title ? `Finished: ${i.title}` : 'Finished');
+
+/** One rank for one bot (the rules; `attentionRows` applies them to everyone). */
+export function attentionRank(bot: { needs?: boolean; failed?: boolean; finished?: boolean; working?: boolean; queued?: boolean }): AttentionRank {
+  if (bot.needs) return 1;
+  if (bot.failed) return 2;
+  if (bot.finished) return 3;
+  if (bot.working) return 4;
+  if (bot.queued) return 5;
+  return 6;
+}
+
+/**
+ * The order inside and across groups: rank first; then oldest first for 1 and 2, newest first for 3;
+ * 4 and 5 by name (the sidebar has no turn start times); ties by name A→Z. Rank 6 keeps its input order.
+ */
+export function attentionSort<K extends { name: string }>(rows: AttentionRow<K>[]): AttentionRow<K>[] {
+  const pos = new Map(rows.map((r, i) => [r, i]));
+  return [...rows].sort((a, b) => {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    if (a.rank === 6) return pos.get(a)! - pos.get(b)!;
+    if (a.rank <= 2 && a.at !== b.at) return (a.at ?? 0) - (b.at ?? 0);
+    if (a.rank === 3 && a.at !== b.at) return (b.at ?? 0) - (a.at ?? 0);
+    return a.kwant.name.localeCompare(b.kwant.name);
+  });
+}
+
+/** Every bot with its rank and line, in the one order. */
+export function attentionRows<K extends { id: string; name: string }>(input: AttentionInput<K>): AttentionRow<K>[] {
+  const { kwants, needs, failed = [], finished = [], busy = {}, status = {}, openedAt = {}, now = Date.now() } = input;
+  const needsBy = new Map(needs.map((r, i) => [r.kwant_id, { r, i }]));
+  // Oldest failure per bot from the last 24 h; newest finished item per bot not read since.
+  const failedBy = new Map<string, AwayItem>();
+  for (const i of failed) {
+    const t = ts(i);
+    if (now - t > FAILED_WINDOW_MS) continue;
+    const had = failedBy.get(i.kwant_id);
+    if (!had || t < ts(had)) failedBy.set(i.kwant_id, i);
+  }
+  const finishedBy = new Map<string, AwayItem>();
+  for (const i of finished) {
+    const t = ts(i);
+    if ((openedAt[i.kwant_id] ?? 0) >= t) continue;
+    const had = finishedBy.get(i.kwant_id);
+    if (!had || t > ts(had)) finishedBy.set(i.kwant_id, i);
+  }
+  const rows = kwants.map((k): AttentionRow<K> => {
+    const n = needsBy.get(k.id);
+    const f = failedBy.get(k.id);
+    const d = finishedBy.get(k.id);
+    const queued = status[k.id] === 'queued';
+    const rank = attentionRank({ needs: !!n, failed: !!f, finished: !!d, working: !!busy[k.id] && !queued, queued: !!busy[k.id] && queued });
+    if (rank === 1) return { kwant: k, rank, line: n!.r.line, item: n!.r.item, needs: n!.r, at: n!.r.item ? ts(n!.r.item) : n!.i };
+    if (rank === 2) return { kwant: k, rank, line: stuckLine(f!), item: f, at: ts(f) };
+    if (rank === 3) return { kwant: k, rank, line: finishedLine(d!), item: d, at: ts(d) };
+    return { kwant: k, rank };
+  });
+  // Needs-you rows keep needsYouRows' own order (oldest ask first; a browser step has no time)
+  const sorted = attentionSort(rows);
+  const ones = sorted.filter((r) => r.rank === 1).sort((a, b) => needsBy.get(a.kwant.id)!.i - needsBy.get(b.kwant.id)!.i);
+  return [...ones, ...sorted.filter((r) => r.rank !== 1)];
+}
+
+/** "2 need you, 1 stuck, 1 finished" (zeros left out). */
+export function rollupLabel(counts: { needs: number; stuck: number; finished: number; working?: number }): string {
+  const parts: string[] = [];
+  if (counts.needs) parts.push(`${counts.needs} ${counts.needs === 1 ? 'needs' : 'need'} you`);
+  if (counts.stuck) parts.push(`${counts.stuck} stuck`);
+  if (counts.finished) parts.push(`${counts.finished} finished`);
+  if (!parts.length && counts.working) parts.push(`${counts.working} working`);
+  return parts.join(', ');
+}

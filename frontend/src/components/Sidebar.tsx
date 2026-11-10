@@ -16,7 +16,7 @@ import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
-import { type NeedsYouRow, workingIds, directIds } from '../chatsTab';
+import { type AttentionRow, type NeedsYouRow, workingIds, directIds, rollupLabel } from '../chatsTab';
 import { DevFlipNote, useDevMode } from './DevModeSwitch';
 import { SpaceControls } from './SpaceControls';
 import { DevOnToast } from './DevOnToast';
@@ -116,6 +116,11 @@ export interface SidebarProps {
   onWatchBrowser?: (owner: string) => void;
   /** Owners whose browser holds an open step for the person: their rows show that, not the globe. */
   browserNeedsYou?: ReadonlySet<string>;
+  /**
+   * H5: every bot in the one attention order (`attentionRows`); undefined until the first status
+   * fetch lands. Desktop pins ranks 1–3 above Channels; the phone's Chats tab moves bots into sections.
+   */
+  attention?: AttentionRow<Kwant>[];
   /** Opens a Needs-you row's chat on its card. */
   onOpenNeedsYou?: (row: NeedsYouRow) => void;
   onSelectKwant: (kwant: Kwant) => void;
@@ -268,6 +273,58 @@ const MoreMenu: React.FC<{
   );
 };
 
+/** H5: the most rows the desktop's pinned block shows before "and n more in Inbox". */
+export const PINNED_MAX = 5;
+
+/**
+ * H5 desktop: "Needs attention · n", ranks 1–3 above Channels. Gone when empty. The count is announced
+ * politely, at most once per 10 s, from a live region holding only the heading's words.
+ */
+const NeedsAttention: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<Kwant>) => React.ReactNode; onOpenInbox?: () => void }> = ({ rows, row, onOpenInbox }) => {
+  const n = rows.length;
+  const [said, setSaid] = useState(n);
+  const lastSaid = React.useRef(0);
+  useEffect(() => {
+    if (n === said) return;
+    const wait = Math.max(0, lastSaid.current + 10_000 - Date.now());
+    const t = setTimeout(() => {
+      lastSaid.current = Date.now();
+      setSaid(n);
+    }, wait);
+    return () => clearTimeout(t);
+  }, [n, said]);
+  const more = n - PINNED_MAX;
+  return (
+    <section data-needs-attention aria-labelledby="needs-attention-head" className="rounded-xl border border-hairline bg-white/[0.015] my-1.5 pb-1.5">
+      <h2 id="needs-attention-head" className="px-2 pt-1.5 pb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-amber-300" aria-label={`Needs attention, ${n}`}>
+        <Hand size={12} aria-hidden="true" />
+        <span aria-hidden="true">Needs attention · {n}</span>
+      </h2>
+      <span className="sr-only" aria-live="polite" data-needs-attention-live>
+        {said !== n || lastSaid.current ? `Needs attention, ${said}` : ''}
+      </span>
+      <div className="space-y-0.5 px-0.5">
+        {rows.slice(0, PINNED_MAX).map((a) => (
+          <div key={a.kwant.id} className="kw-pin-enter">
+            {row(a)}
+          </div>
+        ))}
+      </div>
+      {more > 0 && (
+        <button
+          type="button"
+          data-needs-attention-more
+          onClick={onOpenInbox}
+          disabled={!onOpenInbox}
+          className="ml-2 mt-0.5 px-1 rounded text-[12px] text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+        >
+          and {more} more in Inbox
+        </button>
+      )}
+    </section>
+  );
+};
+
 export const Sidebar: React.FC<SidebarProps> = ({
   space,
   spaces,
@@ -292,6 +349,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onWatchBrowser,
   browserNeedsYou,
   needsYouRows = [],
+  attention,
   onOpenNeedsYou,
   onSelectKwant,
   onSelectChannel,
@@ -367,7 +425,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // chats (a new row, with no globe) in the same frame (QA F2 on phone)
   const lingering = useLingeringIds(busyNow.map((k) => k.id));
   const workingBots = chatsTab && lingering.size ? workingIds(kwants, { ...Object.fromEntries([...lingering].map((id) => [id, 'done'])), ...busyKwants }, needsIds) : busyNow;
-  const directBots = chatsTab ? directIds(kwants, new Set([...needsIds, ...workingBots.map((k) => k.id)])) : [];
+  const directBotsOld = chatsTab ? directIds(kwants, new Set([...needsIds, ...workingBots.map((k) => k.id)])) : [];
+  // H5: with the attention order, the Chats tab has a section per rank 1–5 and bots move into them (no
+  // copies); a bot that finished and is read goes back to Direct chats, so no lingering under Working.
+  const attOn = !!attention;
+  const byRank = (r: number) => (chatsTab && attention ? attention.filter((a) => a.rank === r) : []);
+  const phoneSections = chatsTab && attention
+    ? ([
+        { key: 'needs', head: 'Needs you', tone: '!text-[11px] !leading-4 !tracking-[0.06em] !text-warn', rows: byRank(1) },
+        { key: 'stuck', head: 'Stuck', tone: '!text-rose-300', rows: byRank(2) },
+        { key: 'finished', head: 'Finished', tone: '', rows: byRank(3) },
+        { key: 'working', head: 'Working', tone: '', rows: byRank(4) },
+        { key: 'waiting', head: 'Waiting', tone: '', rows: byRank(5) },
+      ] as const)
+    : [];
+  const directBots = chatsTab && attention ? directIds(kwants, new Set(attention.filter((a) => a.rank < 6).map((a) => a.kwant.id))) : directBotsOld;
+  // Desktop: ranks 1–3, pinned above Channels (copies: the team list below keeps every bot in place).
+  const pinned = !phone && attention ? attention.filter((a) => a.rank <= 3) : [];
+  const rankOf = new Map((attention ?? []).map((a) => [a.kwant.id, a.rank]));
 
   const toggleTeam = (id: string) =>
     setCollapsedTeams((prev) => {
@@ -467,10 +542,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // team the lead is marked and others can be removed; on phones those sit in a sheet.
   // On the phone's Chats tab a row is a plain launcher (`chat`): taller, no actions, and a
   // Needs-you row says in amber what the bot is waiting for and opens the chat on that card.
-  const botRow = (k: Kwant, team?: Team, chat?: { needs?: NeedsYouRow }) => {
+  const botRow = (k: Kwant, team?: Team, chat?: { needs?: NeedsYouRow; att?: AttentionRow<Kwant> }, pin?: { att: AttentionRow<Kwant>; alsoIn?: string }) => {
     // Phones never light a row: the list is a launcher, and coming back to it shows no stale selection
     const active = !phone && !isChannel && selectedId === k.id;
-    const asked = chat?.needs;
+    const att = pin?.att ?? chat?.att;
+    const asked = chat?.needs ?? (att?.rank === 1 ? att.needs : undefined);
+    // H5 ranks 2 and 3 say what broke or what finished, in rose or zinc-200
+    const attLine = att && (att.rank === 2 || att.rank === 3) ? att.line : undefined;
     const status = asked ? 'needs_you' : statusOf(k.id, botStatus, canRun);
     const isLead = !!team && k.id === team.lead_kwant_id;
     const canRemove = !!team && !isLead && !!onUpdateTeamMembers;
@@ -484,23 +562,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const warn = needs > 0 || status === 'needs_you';
     const busyLine = asked
       ? asked.line
+      : attLine
+        ? attLine
       : needs > 0 && !busyKwants[k.id]?.startsWith('Needs you in the browser')
         ? 'Needs you in the browser'
         : busyKwants[k.id];
-    const open = asked && onOpenNeedsYou ? () => onOpenNeedsYou(asked) : () => onSelectKwant(k);
+    // A stuck or finished row opens where that happened (its thread or chat), like its Inbox card
+    const open = asked && onOpenNeedsYou
+      ? () => onOpenNeedsYou(asked)
+      : attLine && att?.item && onOpenNeedsYou
+        ? () => onOpenNeedsYou({ kwant_id: k.id, line: attLine, item: att.item })
+        : () => onSelectKwant(k);
     // The globe steps aside while the row says it needs you in the browser (that line leads there), and
     // while the browser it shows holds an open step: one browser per chat, so every row on it hides (Mira 3)
     const botWatch = browsingBots[k.id] ?? browsingOwners[k.id];
     const botBrowsing = onWatchBrowser && !warn && !asked && botWatch && !browserNeedsYou?.has(botWatch.owner) ? botWatch : undefined;
     return (
       <div
-        key={`${chat ? 'chat' : team?.id ?? 'none'}:${k.id}`}
+        key={`${pin ? 'pin' : chat ? 'chat' : team?.id ?? 'none'}:${k.id}`}
         role="button"
         tabIndex={0}
         onClick={open}
         // Only the row's own Enter: Enter on its ✕ or Edit is for that button, not for opening the chat.
         onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && open()}
-        data-bot-row={k.id}
+        // The pinned copy is not the bot's row: focus returns to the one in its team
+        data-bot-row={pin ? undefined : k.id}
+        data-pin-row={pin ? k.id : undefined}
+        data-rank={att?.rank}
+        aria-describedby={pin?.alsoIn ? `pin-also-${k.id}` : undefined}
         data-chat-row={chat ? (asked ? 'needs' : 'bot') : undefined}
         className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
@@ -590,9 +679,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             )}
           </div>
+          {pin?.alsoIn && (
+            <span id={`pin-also-${k.id}`} className="sr-only">
+              Also listed in @{pin.alsoIn}
+            </span>
+          )}
           {busyLine ? (
-            <p className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${warn ? 'text-warn' : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'}`} title={busyLine} data-bot-busy>
-              <span className={`kw-status-dot !h-1.5 !w-1.5 ${warn ? 'kw-status-warn' : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'}`} aria-hidden="true" />
+            <p
+              className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${
+                warn || asked ? 'text-warn' : attLine ? (att!.rank === 2 ? 'text-rose-300' : 'text-zinc-200') : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'
+              }`}
+              title={busyLine}
+              data-bot-busy
+            >
+              <span
+                className={`kw-status-dot !h-1.5 !w-1.5 ${
+                  warn || asked ? 'kw-status-warn' : attLine ? (att!.rank === 2 ? 'bg-rose-400' : 'bg-teal-400') : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'
+                }`}
+                aria-hidden="true"
+              />
               <span className="truncate">{busyLine}</span>
             </p>
           ) : (
@@ -621,6 +726,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         )}
       </div>
+    );
+  };
+
+  // H5: a team header's rollup, one mini dot + count for each of ranks 1–3; else the working count.
+  const teamRollup = (t: Team) => {
+    if (!attention) return null;
+    const c = { needs: 0, stuck: 0, finished: 0, working: 0 };
+    for (const id of new Set(memberIdsOf(t))) {
+      const r = rankOf.get(id);
+      if (r === 1) c.needs++;
+      else if (r === 2) c.stuck++;
+      else if (r === 3) c.finished++;
+      else if (r === 4) c.working++;
+    }
+    const dots: Array<[number, string]> = c.needs || c.stuck || c.finished
+      ? ([[c.needs, 'bg-amber-400'], [c.stuck, 'bg-rose-400'], [c.finished, 'bg-teal-400']] as Array<[number, string]>).filter(([n]) => n > 0)
+      : c.working
+        ? [[c.working, 'bg-[#9d8fff]']]
+        : [];
+    if (!dots.length) return null;
+    return (
+      <span data-team-rollup={t.id} role="img" aria-label={rollupLabel(c)} title={rollupLabel(c)} className="flex items-center gap-2 mr-1">
+        {dots.map(([n, dot]) => (
+          <span key={dot} className="flex items-center gap-1" aria-hidden="true">
+            <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+            <span className="text-[11px] tabular-nums text-zinc-400">{n}</span>
+          </span>
+        ))}
+      </span>
     );
   };
 
@@ -660,6 +794,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span className="truncate">@{t.name}</span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          {withMembers && !phone && teamRollup(t)}
           {(!expanded || !withMembers) && (
             <span className="text-2xs px-1.5 py-0.5 rounded-full tabular-nums bg-white/[0.05] text-zinc-300 border border-hairline" title={`${count} ${count === 1 ? 'member' : 'members'}`}>
               {count}
@@ -750,6 +885,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const groups = botGroups(teams, kwants);
+  const teamOf = (id: string) => groups.find((g) => g.team && g.bots.some((b) => b.id === id))?.team?.name;
   // "+ Team", "+ Bot", "+ Channel": the + says new and the heading says what kind; the full phrase is the label.
   const headButton = (word: string, label: string, title: string, onClick: () => void) =>
     phone ? (
@@ -897,8 +1033,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
         )}
 
+        {/* H5 phone Chats tab: Needs you, Stuck, Finished, Working, Waiting; an empty section is not drawn */}
+        {phoneSections.map(
+          (sec) =>
+            sec.rows.length > 0 && (
+              <section key={sec.key} data-chats-section={sec.key} aria-labelledby={`chats-${sec.key}-head`}>
+                <h2 id={`chats-${sec.key}-head`} className={`${sectionHead} ${sec.tone}`}>
+                  {sec.head} · {sec.rows.length}
+                </h2>
+                <div className="mt-1 space-y-0.5">{sec.rows.map((a) => botRow(a.kwant, undefined, { att: a, needs: a.needs }))}</div>
+              </section>
+            ),
+        )}
         {/* Phones' Chats tab: who needs you, then who is working, above the channels */}
-        {needsRows.length > 0 && (
+        {!attOn && needsRows.length > 0 && (
           <section data-chats-section="needs" aria-labelledby="chats-needs-head">
             <h2 id="chats-needs-head" className={`${sectionHead} !text-[11px] !leading-4 !tracking-[0.06em] !text-warn`}>
               Needs you · {needsRows.length}
@@ -908,7 +1056,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
           </section>
         )}
-        {workingBots.length > 0 && (
+        {!attOn && workingBots.length > 0 && (
           <section data-chats-section="working" aria-labelledby="chats-working-head">
             <h2 id="chats-working-head" className={sectionHead}>Working</h2>
             <div className="mt-1 space-y-0.5">{workingBots.map((k) => botRow(k, undefined, {}))}</div>
@@ -919,6 +1067,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <DevDeskRow spaceId={space.id} active={devDeskActive} onOpen={onOpenDevDesk} className={navRow(devDeskActive)} />
           </div>
         )}
+
+        {pinned.length > 0 && <NeedsAttention rows={pinned} row={(a) => botRow(a.kwant, undefined, undefined, { att: a, alsoIn: teamOf(a.kwant.id) })} onOpenInbox={onOpenInbox} />}
 
         {/* Channels Section */}
         {showChats && (

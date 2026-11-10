@@ -132,7 +132,7 @@ import {
   turnsAwaitingAnswer,
 } from './questions';
 import { AwayItem, affectsAway, awayApi, awayTarget } from './away';
-import { needsYouRows } from './chatsTab';
+import { needsYouRows, attentionRows } from './chatsTab';
 import { Space, eventsUrl, getCurrentSpace, pickInitialChat } from './spaces';
 import { canRunNow } from './engines';
 import { useEngines } from './useEngines';
@@ -520,6 +520,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [awayWaiting, setAwayWaiting] = useState(0);
   /** What waits on you right now (approvals, questions), for the phone Chats tab's Needs you. */
   const [awayItems, setAwayItems] = useState<AwayItem[]>([]);
+  /** H5: unseen failed and finished items (ranks 2 and 3), and whether the first fetch has landed. */
+  const [awayDone, setAwayDone] = useState<{ failed: AwayItem[]; finished: AwayItem[] } | null>(null);
+  /** H5: when the person last opened each bot's chat (a finished item older than that is read). */
+  const [openedAt, setOpenedAt] = useState<Record<string, number>>({});
   const [pill, setPill] = useState<PillState>(EMPTY_PILL);
   const [nudgesOn, setNudgesOn] = useState(nudgesEnabled);
   const nudgesOnRef = useRef(nudgesOn);
@@ -534,6 +538,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setPill((prev) => pillAdd(prev, shown));
     haptic('warning');
   };
+  // H5: the chat open now is read; when it closes, the time it was last seen stays.
+  const readChat = page === 'chat' && !isChannel && selectedId ? selectedId : null;
+  useEffect(() => {
+    if (!readChat) return;
+    setOpenedAt((prev) => ({ ...prev, [readChat]: Date.now() }));
+    return () => setOpenedAt((prev) => ({ ...prev, [readChat]: Date.now() }));
+  }, [readChat]);
   const awaySinceRef = useRef<string | null>(null);
   const awayTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const refreshAwayCount = (delay = 0) => {
@@ -543,6 +554,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         setAwayCount(r.unseen.total);
         setAwayWaiting(r.unseen.waiting);
         setAwayItems(r.waiting);
+        setAwayDone({ failed: r.failed, finished: r.finished });
         const fresh = arrivalsRef.current.fromAway(r.waiting);
         setPill((prev) => pillPrune(prev, new Set(r.waiting.map((i) => `${i.kind}:${i.id}`))));
         offerNudges(fresh);
@@ -3673,6 +3685,20 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     </main>
   );
 
+  // H5: every bot in the one attention order. Not computed until the Inbox's first fetch lands, so the
+  // pinned block never flashes empty-then-full. The open chat counts as read while it is open.
+  const attention = awayDone
+    ? attentionRows({
+        kwants,
+        needs: needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))),
+        failed: awayDone.failed,
+        finished: awayDone.finished,
+        busy: busyKwants,
+        status: botStatus,
+        openedAt: page === 'chat' && !isChannel && selectedId ? { ...openedAt, [selectedId]: Date.now() } : openedAt,
+      })
+    : undefined;
+
   const sidebar = (section: 'all' | 'chats' | 'bots') => (
     <Sidebar
       space={space}
@@ -3702,6 +3728,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       botStatus={botStatus}
       needsYou={needsYouByKwant}
       needsYouRows={isPhone && section === 'chats' ? needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))) : undefined}
+      attention={attention}
       onOpenNeedsYou={(row) => {
         // A question or approval opens its chat (or thread) on the card; a browser step, the bot's chat.
         if (row.item) openAwayItem(row.item);
