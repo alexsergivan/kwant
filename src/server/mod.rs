@@ -40,6 +40,7 @@ pub mod away;
 pub mod computer;
 pub mod mcp_suggest;
 pub mod page_source;
+pub mod tool_notes;
 pub mod connection_suggest;
 pub mod bot_actions;
 pub mod hires;
@@ -567,6 +568,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/skills/:id/approve", post(skills::approve))
         .route("/api/skills/:id/reject", post(skills::reject))
         .route("/api/away", get(away::get))
+        .route("/api/tool-notes", get(tool_notes::list).post(tool_notes::create))
+        .route("/api/tool-notes/:id", axum::routing::patch(tool_notes::edit).delete(tool_notes::delete))
         .route("/api/away/seen", post(away::seen))
         .route("/api/events", get(sse::sse_handler))
         .merge(show_once::routes::router())

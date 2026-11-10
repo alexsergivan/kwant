@@ -171,6 +171,9 @@ pub async fn prompt_block_memories(
             - `page_source` reads a public page's HTML source: the <head> (title, meta description, canonical, robots, \
             hreflang, Open Graph), headings, image alt text, links and structured data, none of which WebFetch or the browser \
             shows. It never needs the user's approval.\n\
+            - When a tool fails in a way the next bot would hit too, or you find the trick that makes it work, or you needed \
+            a tool you don't have, `note_tool` writes it down once (kind broke, tip or missing). Notes are hints for other bots, \
+            checked by the person; never note secrets, and don't note one-off typos.\n\
             {sign_in}\
             - When a request needs an app you can't reach (Google Search Console, Google Analytics, a CRM…), \
             `connection_suggest` posts a one-tap connection card. Post it in the same turn rather than asking whether to: \
@@ -503,6 +506,8 @@ impl ToolApprover for SelfToolsApprover {
         // for one challenge (see `auditor::take_retry`)
         let free = !self.always_ask
             || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())
+            // P5: a note changes nothing outside kwant and the person checks every one
+            || req.tool == super::tool_notes::TOOL
             || super::missions::auditor::take_retry(&req.kwant_id, &req.tool, &req.arguments);
         if req.server == SELF_SERVER_NAME && free {
             // Flight School: a tier below act cards kwant's own tools that change things
@@ -617,6 +622,7 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
         list.extend(super::smart_results::present_result_tools());
         list.extend(super::mcp_suggest::tools());
         list.extend(super::page_source::tools());
+        list.push(super::tool_notes::tool());
         list.extend(super::bot_actions::tools());
         list.extend(super::hires::tools());
         if scope.sandbox_target.is_some() {
@@ -1286,6 +1292,7 @@ async fn call_tool(
         "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
         "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
         super::page_source::TOOL => super::page_source::tool_call(state, scope, args).await,
+        super::tool_notes::TOOL => super::tool_notes::call(state, scope, args).await,
         n if super::missions::truth_ledger::handles(n) => super::missions::truth_ledger::call(state, scope, n, args).await,
         super::connection_suggest::TOOL if scope.origin.is_some() => super::connection_suggest::tool_call(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
