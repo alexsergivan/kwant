@@ -23,6 +23,67 @@ struct Mock {
     /// How the page answers the live view's input check: 0 not at all, 1 a live tab, 2 a tab
     /// behind Chrome's "Open app?" prompt (scripts run, input never arrives).
     input: Arc<std::sync::atomic::AtomicU8>,
+    /// G3: Point's script is installed in the current document's point world.
+    point_installed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// A 1×1 PNG, as `Page.captureScreenshot` returns a crop.
+const PNG_1X1: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/// How the mock page answers Point (G3): a pay button at (15..343, 303..339), nothing at x < 10.
+fn point_answer(mock: &Mock, expression: &str) -> Value {
+    if expression.contains("if (globalThis.__kp) return") {
+        mock.point_installed.store(true, Ordering::SeqCst);
+        return json!("t1");
+    }
+    if !mock.point_installed.load(Ordering::SeqCst) {
+        return json!({"err":"install"});
+    }
+    let el = json!({"handle":"t1.7","label":"button.pay","selector":"main > form#checkout > button.pay",
+        "box":{"x":15,"y":303,"width":328,"height":36},"viewport":{"width":1280,"height":720},"text":"Pay €42.00","frame":null});
+    let call = expression.split(" ? ").nth(1).unwrap_or_default();
+    if let Some(rest) = call.strip_prefix("globalThis.__kp.at(") {
+        let x: f64 = rest
+            .split(',')
+            .next()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        if x < 10.0 {
+            json!({"err":"nothing"})
+        } else {
+            el
+        }
+    } else if call.starts_with("globalThis.__kp.nb(") {
+        if call.contains("\"stale.1\"") {
+            return json!({"err":"stale"});
+        }
+        let mut el = el;
+        if call.contains("\"next\"") {
+            el["edge"] = json!(true);
+        }
+        if call.contains("\"parent\"") {
+            el["handle"] = json!("t1.8");
+            el["label"] = json!("form#checkout");
+            el["selector"] = json!("#checkout");
+        }
+        el
+    } else if call.starts_with("globalThis.__kp.cap(") {
+        let mut el = el;
+        el["url"] = json!("https://shop.example.com/checkout");
+        el["html"] = json!("<button class=\"pay\">Pay €42.00</button>");
+        el["html_full"] = json!(41);
+        el["css"] = json!([["display", "inline-block"]]);
+        el["clip"] = if call.contains("t1.7") {
+            json!({"x":15,"y":303,"width":328,"height":36})
+        } else {
+            Value::Null
+        };
+        el
+    } else {
+        json!({"err":"failed"})
+    }
 }
 
 /// Sends a page event on every open DevTools socket.
@@ -64,7 +125,17 @@ async fn cdp(State(mock): State<Mock>, Path(_id): Path<String>, ws: WebSocketUpg
             for event in replayed { if socket.send(Message::Text(event.to_string())).await.is_err() { gone = true; break; } }
             if gone { break; }
             let probe = cmd["params"]["expression"].as_str().is_some_and(|e| e.contains("kwnt.inputProbe")) && mock.input.load(Ordering::SeqCst) != 0;
+            let expression = cmd["params"]["expression"].as_str().unwrap_or_default();
+            let point = method == "Runtime.evaluate" && expression.contains("__kp");
             let result = match method {
+                "Runtime.evaluate" if point => {
+                    // a page that takes a moment to answer, so hovers can pile up behind it
+                    if expression.contains("__kp.at(") { tokio::time::sleep(Duration::from_millis(30)).await; }
+                    json!({"result":{"value": point_answer(&mock, expression)}})
+                }
+                "Page.getFrameTree" => json!({"frameTree":{"frame":{"id":"main"}}}),
+                "Page.createIsolatedWorld" => json!({"executionContextId": 40 + mock.commands.lock().await.iter().filter(|c| c["method"] == "Page.createIsolatedWorld").count()}),
+                "Page.captureScreenshot" if cmd["params"]["clip"].is_object() => json!({"data": PNG_1X1}),
                 "Runtime.evaluate" if probe => {
                     let stuck = mock.input.load(Ordering::SeqCst) == 2;
                     let arming = cmd["params"]["expression"].as_str().unwrap().contains("elementFromPoint");
@@ -446,7 +517,12 @@ type Client = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStre
 
 /// A kwant server on a mock browser with one live view open on it.
 async fn open_stream(mock: &Mock, tmp: &std::path::Path) -> (Client, kwnt::sandbox::BrowserController, tokio::task::JoinHandle<()>) {
-    let config = Config {data_dir:tmp.into(),browser_cdp_url:Some(format!("http://127.0.0.1:{}",mock.port)),..Config::default()};
+    open_stream_at(format!("http://127.0.0.1:{}", mock.port), tmp).await
+}
+
+/// A kwant server on the browser at `cdp` with one live view open on it.
+async fn open_stream_at(cdp: String, tmp: &std::path::Path) -> (Client, kwnt::sandbox::BrowserController, tokio::task::JoinHandle<()>) {
+    let config = Config {data_dir:tmp.into(),browser_cdp_url:Some(cdp),..Config::default()};
     let db = Database::init(tmp).await.unwrap();
     let id=db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap()[0].id.clone();
     let state=AppState::new(config.clone(),db,ToolRunner::new(tmp.join("workspace")),PermissionBroker::new(),LayaRouter::new(config.laya_url));
@@ -961,4 +1037,429 @@ async fn two_views_last_resize_wins_and_the_bot_size_returns_when_the_last_one_l
     }}).await.unwrap();
     ctrl.release_person_hold();
     app_task.abort(); cdp_task.abort();
+}
+
+/// The ack or error for `id`, skipping everything else.
+async fn reply_to(ws: &mut Client, id: &str) -> Value {
+    until_reply(ws, id).await.pop().unwrap()
+}
+
+async fn point(ws: &mut Client, message: Value) -> Value {
+    let id = message["id"].as_str().unwrap().to_string();
+    ws.send(WsMessage::Text(message.to_string())).await.unwrap();
+    reply_to(ws, &id).await
+}
+
+#[tokio::test]
+async fn point_at_reads_the_page_without_control_and_a_pick_is_an_unsent_upload() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+
+    // watching is enough: no take_control first
+    let hover = point(
+        &mut ws,
+        json!({"action":"point_at","id":"h1","x":312.5,"y":318}),
+    )
+    .await;
+    assert_eq!(hover["type"], "ack", "{hover}");
+    assert_eq!(hover["el"]["handle"], "t1.7");
+    assert_eq!(hover["el"]["selector"], "main > form#checkout > button.pay");
+    assert_eq!(
+        hover["el"]["box"],
+        json!({"x":15.0,"y":303.0,"width":328.0,"height":36.0})
+    );
+    assert!(hover["el"].get("edge").is_none());
+    assert!(
+        ctrl.control.try_write().is_ok(),
+        "Point never takes control"
+    );
+    // the script ran in kwant's own isolated world, installed once
+    let commands = mock.commands.lock().await.clone();
+    let worlds: Vec<_> = commands
+        .iter()
+        .filter(|c| c["method"] == "Page.createIsolatedWorld")
+        .collect();
+    assert_eq!(worlds.len(), 1);
+    assert_eq!(
+        worlds[0]["params"],
+        json!({"frameId":"main","worldName":"kwnt-point"})
+    );
+    let evals: Vec<_> = commands
+        .iter()
+        .filter(|c| {
+            c["params"]["expression"]
+                .as_str()
+                .is_some_and(|e| e.contains("__kp"))
+        })
+        .collect();
+    assert!(
+        evals.iter().all(|c| c["params"]["contextId"] == 41),
+        "never in the page's own world"
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|c| c["method"] == "Input.dispatchMouseEvent"),
+        "Point never clicks"
+    );
+
+    // the empty margin, and outside the view
+    let none = point(&mut ws, json!({"action":"point_at","id":"h2","x":5,"y":5})).await;
+    assert_eq!(
+        (none["type"].as_str(), none["code"].as_str()),
+        (Some("error"), Some("nothing"))
+    );
+    let outside = point(
+        &mut ws,
+        json!({"action":"point_at","id":"h3","x":5000,"y":5}),
+    )
+    .await;
+    assert_eq!(outside["code"], "nothing");
+
+    // arrow keys
+    let up = point(
+        &mut ws,
+        json!({"action":"point_neighbour","id":"k1","handle":"t1.7","dir":"parent"}),
+    )
+    .await;
+    assert_eq!(
+        (up["el"]["handle"].as_str(), up["el"]["label"].as_str()),
+        (Some("t1.8"), Some("form#checkout"))
+    );
+    let edge = point(
+        &mut ws,
+        json!({"action":"point_neighbour","id":"k2","handle":"t1.7","dir":"next"}),
+    )
+    .await;
+    assert_eq!(edge["el"]["edge"], true);
+    let stale = point(
+        &mut ws,
+        json!({"action":"point_neighbour","id":"k3","handle":"stale.1","dir":"prev"}),
+    )
+    .await;
+    assert_eq!(stale["code"], "stale");
+    let centre = point(
+        &mut ws,
+        json!({"action":"point_neighbour","id":"k4","dir":"centre"}),
+    )
+    .await;
+    assert_eq!(centre["type"], "ack");
+    // "self": the selected element read again (after a scroll or a layout shift)
+    let again = point(
+        &mut ws,
+        json!({"action":"point_neighbour","id":"k5","handle":"t1.7","dir":"self"}),
+    )
+    .await;
+    assert_eq!(again["el"]["handle"], "t1.7", "{again}");
+    assert!(again["el"].get("edge").is_none(), "not an edge: {again}");
+    let gone = point(
+        &mut ws,
+        json!({"action":"point_neighbour","id":"k6","handle":"stale.1","dir":"self"}),
+    )
+    .await;
+    assert_eq!(gone["code"], "stale");
+
+    // bad input never reaches the page
+    let before = mock.commands.lock().await.len();
+    for (i, bad) in [
+        json!({"action":"point_at","x":"1","y":2}),
+        json!({"action":"point_neighbour","handle":"t1.7","dir":"up"}),
+        json!({"action":"point_neighbour","handle":"t1.7\"); alert(1); (\"","dir":"parent"}),
+        json!({"action":"point_neighbour","dir":"parent"}),
+        json!({"action":"point_neighbour","dir":"self"}),
+        json!({"action":"point_pick","handle":"t1.7","n":6}),
+        json!({"action":"point_pick"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut bad = bad;
+        bad["id"] = json!(format!("b{i}"));
+        let r = point(&mut ws, bad).await;
+        assert_eq!(r["code"], "bad_request", "{r}");
+        assert_eq!(r["id"], json!(format!("b{i}")), "every point error names its request");
+    }
+    let after: Vec<_> = mock.commands.lock().await[before..]
+        .iter()
+        .filter(|c| {
+            c["params"]["expression"]
+                .as_str()
+                .is_some_and(|e| e.contains("__kp"))
+        })
+        .cloned()
+        .collect();
+    assert!(after.is_empty(), "{after:?}");
+
+    // a pick: the crop of what's in view, stored as an unsent upload with the pick on its row
+    let pick = point(
+        &mut ws,
+        json!({"action":"point_pick","id":"p1","handle":"t1.7","n":2}),
+    )
+    .await;
+    assert_eq!(pick["type"], "ack", "{pick}");
+    let pick = &pick["pick"];
+    assert_eq!(pick["picture"], true);
+    assert_eq!(pick["url"], "https://shop.example.com/checkout");
+    assert_eq!(
+        (pick["host"].as_str(), pick["path"].as_str()),
+        (Some("shop.example.com"), Some("/checkout")),
+        "the chip's line matches the bubble's"
+    );
+    let id = pick["attachment_id"].as_str().unwrap();
+    assert_eq!(pick["thumb_url"], format!("/api/attachments/{id}/content"));
+    let shot = mock
+        .commands
+        .lock()
+        .await
+        .iter()
+        .rev()
+        .find(|c| c["method"] == "Page.captureScreenshot")
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        shot["params"]["clip"],
+        json!({"x":15.0,"y":303.0,"width":328.0,"height":36.0,"scale":1})
+    );
+    assert!(
+        shot["params"].get("captureBeyondViewport").is_none(),
+        "never scrolls or grows the page"
+    );
+    let state_db = kwnt::db::Database::init(tmp.path()).await.unwrap();
+    let row = state_db.get_attachment(id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.name.as_str(), row.mime.as_str(), row.source.as_str()),
+        ("pointed-2.png", "image/png", "user")
+    );
+    assert!(
+        row.message_id.is_none() && row.context_id.is_none(),
+        "unsent: nobody sees it until it is sent"
+    );
+    let stored: Value = serde_json::from_str(row.point.as_deref().unwrap()).unwrap();
+    assert_eq!(stored["selector"], "main > form#checkout > button.pay");
+    assert_eq!(stored["html"], "<button class=\"pay\">Pay €42.00</button>");
+
+    // nothing of it in view: the pick still counts, without a picture
+    let off = point(
+        &mut ws,
+        json!({"action":"point_pick","id":"p2","handle":"t1.8"}),
+    )
+    .await;
+    assert_eq!(
+        (
+            off["pick"]["picture"].clone(),
+            off["pick"]["thumb_url"].clone()
+        ),
+        (json!(false), Value::Null)
+    );
+    let row = state_db
+        .get_attachment(off["pick"]["attachment_id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.name.as_str(), row.mime.as_str()),
+        ("pointed-1.txt", "text/plain")
+    );
+
+    // a new document: the world is made again and the script installed again
+    mock.point_installed.store(false, Ordering::SeqCst);
+    push_event(
+        &mock,
+        "Page.frameNavigated",
+        json!({"frame":{"id":"main","url":"https://example.org/"},"type":"Navigation"}),
+    )
+    .await;
+    location_for(&mut ws, "https://example.org/", Duration::from_secs(2))
+        .await
+        .expect("navigated");
+    let again = point(
+        &mut ws,
+        json!({"action":"point_at","id":"h9","x":100,"y":310}),
+    )
+    .await;
+    assert_eq!(again["type"], "ack");
+    let commands = mock.commands.lock().await.clone();
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|c| c["method"] == "Page.createIsolatedWorld")
+            .count(),
+        2
+    );
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|c| c["params"]["expression"]
+                .as_str()
+                .is_some_and(|e| e.contains("if (globalThis.__kp) return")))
+            .count(),
+        2
+    );
+    app_task.abort();
+    cdp_task.abort();
+}
+
+#[tokio::test]
+async fn only_the_newest_waiting_hover_is_answered() {
+    let (mock, cdp_task) = mock().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut ws, _ctrl, app_task) = open_stream(&mock, tmp.path()).await;
+    for i in 0..20 {
+        ws.send(WsMessage::Text(
+            json!({"action":"point_at","id":format!("h{i}"),"x":100 + i,"y":310}).to_string(),
+        ))
+        .await
+        .unwrap();
+    }
+    let seen = until_reply(&mut ws, "h19").await;
+    let answered: Vec<_> = seen
+        .iter()
+        .filter(|v| v["type"] == "ack")
+        .map(|v| v["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        answered.len() < 20,
+        "older hovers still waiting are dropped: {answered:?}"
+    );
+    assert_eq!(
+        answered.last().map(String::as_str),
+        Some("h19"),
+        "the newest is always answered"
+    );
+    app_task.abort();
+    cdp_task.abort();
+}
+
+/// A headless Chrome of the machine's own, killed when dropped.
+struct LocalChrome(std::process::Child);
+
+impl Drop for LocalChrome {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts `KWNT_TEST_CHROME`, or Chrome or Chromium from PATH, and returns its DevTools address.
+/// `None` when there is none, except on Linux CI, which has Chrome and must run these checks.
+fn local_chrome(profile: &std::path::Path) -> Option<(LocalChrome, String)> {
+    let found = std::env::var("KWNT_TEST_CHROME").ok().or_else(|| {
+        ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"]
+            .into_iter()
+            .find_map(|name| std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|p| p.is_file()))
+            .map(|p| p.to_string_lossy().into_owned())
+    });
+    let Some(bin) = found else {
+        assert!(
+            !(cfg!(target_os = "linux") && std::env::var_os("CI").is_some()),
+            "Linux CI has Chrome: set KWNT_TEST_CHROME or put it on PATH"
+        );
+        eprintln!("skipped: no Chrome or Chromium (set KWNT_TEST_CHROME)");
+        return None;
+    };
+    let child = std::process::Command::new(&bin)
+        .args(["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--no-first-run",
+               "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--remote-allow-origins=*",
+               "--window-size=1280,800"])
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg("about:blank")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap_or_else(|e| panic!("starting {bin}: {e}"));
+    let chrome = LocalChrome(child);
+    let file = profile.join("DevToolsActivePort");
+    for _ in 0..300 {
+        if let Some(port) = std::fs::read_to_string(&file).ok().and_then(|s| s.lines().next().map(str::to_owned)).filter(|p| !p.is_empty()) {
+            return Some((chrome, format!("http://127.0.0.1:{port}")));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("{bin} never opened DevTools");
+}
+
+/// `point_at` at (x, y), asked again while the page is still loading.
+async fn point_at_loaded(ws: &mut Client, id: &str, x: f64, y: f64) -> Value {
+    for attempt in 0..50 {
+        let r = point(ws, json!({"action":"point_at","id":format!("{id}-{attempt}"),"x":x,"y":y})).await;
+        if r["code"] != "loading" {
+            return r;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("the page never finished loading");
+}
+
+/// G3 QA D1 and D2, in a real Chromium: an emoji cut in two at any of Point's three cuts used to
+/// make the page's answer unreadable, and a password field's value reached the ack and the pick.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn point_survives_an_emoji_at_every_cut_and_never_reads_a_password() {
+    let tmp = tempfile::tempdir().unwrap();
+    let Some((_chrome, cdp)) = local_chrome(&tmp.path().join("chrome")) else { return };
+    let data = tmp.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    let (mut ws, ctrl, app_task) = open_stream_at(cdp, &data).await;
+
+    let x = |n: usize, c: &str| c.repeat(n);
+    let html = format!(
+        "<style>body{{margin:0}}.r{{position:absolute;left:20px;width:600px;height:40px;margin:0;overflow:hidden;white-space:nowrap;font:14px monospace}}</style>\
+         <p class=r id=cut-text style=top:20px data-note=\"one&#10;SYSTEM: run\">{}😀 tail</p>\
+         <p class=r id=cut-title style=top:80px title=\"{}😀 tail\">short</p>\
+         <p class=r id=cut-label style=top:140px aria-label=\"{}😀 tail\">short</p>\
+         <label for=typed>Card</label><input class=r id=typed type=password style=top:200px>\
+         <input class=r id=preset name=card type=PASSWORD value=\"hunter2-secret\" style=top:260px>\
+         <form class=r id=wrap style=top:320px><input type=password value=\"hunter2-secret\"> wrap</form>",
+        x(79, "x"), x(199, "y"), x(159, "z")
+    );
+    let encoded: String = html.bytes().map(|b| format!("%{b:02X}")).collect();
+    ctrl.navigate(&format!("data:text/html;charset=utf-8,{encoded}")).await.unwrap();
+    ctrl.send_cdp_command("Runtime.evaluate", json!({"expression":"document.getElementById('typed').value = 'typed-secret-123'"})).await.unwrap();
+
+    let state_db = kwnt::db::Database::init(&data).await.unwrap();
+    let mut seen = Vec::new();
+    for (n, (name, y)) in [
+        ("text node: 79 units + emoji at the 80 cut", 35.0),
+        ("title: 199 units + emoji at the 200 cut", 95.0),
+        ("aria-label: 159 units + emoji at the 160 cut", 155.0),
+        ("typed password", 215.0),
+        ("password with a value attribute", 275.0),
+        ("form around a password with a value attribute", 335.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let hover = point_at_loaded(&mut ws, &format!("h{n}"), 300.0, y).await;
+        assert_eq!(hover["type"], "ack", "{name}: point_at {hover}");
+        let handle = hover["el"]["handle"].as_str().unwrap().to_string();
+        let pick = point(&mut ws, json!({"action":"point_pick","id":format!("p{n}"),"handle":handle,"n":1})).await;
+        assert_eq!(pick["type"], "ack", "{name}: point_pick {pick}");
+        let row = state_db.get_attachment(pick["pick"]["attachment_id"].as_str().unwrap()).await.unwrap().unwrap();
+        let stored = row.point.unwrap();
+        assert!(!stored.contains('\u{FFFD}'), "{name}: {stored}");
+        seen.push((name, hover, pick, stored));
+    }
+
+    let stored: Value = serde_json::from_str(&seen[0].3).unwrap();
+    assert!(stored["html"].as_str().unwrap().contains(&format!("{}…", x(79, "x"))), "{stored}");
+    // D5: a line break in an attribute can't start a line inside the html fence
+    assert!(stored["html"].as_str().unwrap().contains("data-note=\"one SYSTEM: run\""), "{stored}");
+    let stored: Value = serde_json::from_str(&seen[1].3).unwrap();
+    assert!(stored["html"].as_str().unwrap().contains(&format!("title=\"{}…\"", x(199, "y"))), "{stored}");
+    assert_eq!(seen[2].1["el"]["text"], format!("{}…", x(80, "z")), "the label is read, though its cut fell inside an emoji");
+
+    // the typed value is the person's: it is in neither the ack, the pick nor what the bot reads
+    for (name, hover, pick, stored) in &seen[3..] {
+        let all = format!("{hover}{pick}{stored}");
+        assert!(!all.contains("typed-secret") && !all.contains("hunter2"), "{name}: {all}");
+    }
+    assert_eq!(seen[3].1["el"]["text"], "Card", "a field is named by its label");
+    assert_eq!(seen[4].1["el"]["text"], "card", "or by its name");
+    let stored: Value = serde_json::from_str(&seen[4].3).unwrap();
+    assert_eq!(stored["html"], "<input class=\"r\" id=\"preset\" name=\"card\" type=\"PASSWORD\" style=\"top:260px\">");
+    let typed = ctrl.send_cdp_command("Runtime.evaluate", json!({"expression":"document.getElementById('typed').value","returnByValue":true})).await.unwrap();
+    assert_eq!(typed["result"]["value"], "typed-secret-123", "Point never changes the page");
+
+    ws.close(None).await.ok();
+    app_task.abort();
 }

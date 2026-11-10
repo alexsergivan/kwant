@@ -6,6 +6,7 @@
 //! out on the stream's own DevTools socket, in order, so moves are fire-and-forget and never
 //! wait behind a bot's command.
 use super::browser_input::{self as bi, KeyEvent, KeyKind, MouseButton, RateLimit};
+use super::point;
 use super::{routes::get_or_create_browser_controller, AppState};
 use super::show_once::{capture as recorder, stage::{Act, StageRecorder}};
 use crate::sandbox::app_links::{self, AppLinkWatch, Verdict};
@@ -377,6 +378,20 @@ struct Shared {
     /// The Show it once recorder is installed on this connection (a recording is live): a pick in
     /// kwnt's drawn option list is handed to it ([`recorder::record_pick`]).
     recording: AtomicBool,
+    /// The size of the newest Point picture and when it was taken: while Chrome takes a clipped
+    /// screenshot it can send one live-view frame at the clip's size, which is not the page's.
+    shot: std::sync::Mutex<Option<(f64, f64, Instant)>>,
+}
+
+/// How long after a Point picture a frame at exactly its size is taken for that picture's.
+const SHOT_FRAME_WINDOW: Duration = Duration::from_secs(3);
+
+/// A frame of `dw` x `dh` CSS px at `now` is the one Chrome drew for the picture `shot`
+/// (within a pixel, as Chrome rounds the clip), not a new page size.
+fn shot_frame(shot: Option<(f64, f64, Instant)>, dw: f64, dh: f64, now: Instant) -> bool {
+    shot.is_some_and(|(w, h, at)| {
+        now.saturating_duration_since(at) <= SHOT_FRAME_WINDOW && (dw - w).abs() < 1.0 && (dh - h).abs() < 1.0
+    })
 }
 
 /// Keeps only the newest value offered and makes sure exactly one runner drains it, so a value
@@ -486,6 +501,232 @@ impl Shared {
 
     fn view(&self) -> (f64, f64) {
         *self.view.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn shooting(&self, width: f64, height: f64) {
+        *self.shot.lock().unwrap_or_else(|e| e.into_inner()) = Some((width, height, Instant::now()));
+    }
+
+    fn is_shot_frame(&self, dw: f64, dh: f64) -> bool {
+        shot_frame(*self.shot.lock().unwrap_or_else(|e| e.into_inner()), dw, dh, Instant::now())
+    }
+}
+
+/// G3 Point at it on this live view (see [`super::point`]): read-only, so it needs no control.
+/// It runs off the stream loop, on the stream's socket, in its own isolated world.
+struct Pointer {
+    state: AppState,
+    cdp: Cdp,
+    client: mpsc::UnboundedSender<Value>,
+    /// The isolated world's context in the current document, once made.
+    world: std::sync::Mutex<Option<i64>>,
+    /// The newest hover: an older one still waiting is dropped unanswered.
+    hover: Latest<(Value, f64, f64)>,
+}
+
+impl Pointer {
+    fn new(state: AppState, cdp: Cdp, client: mpsc::UnboundedSender<Value>) -> Arc<Self> {
+        Arc::new(Self {
+            state,
+            cdp,
+            client,
+            world: std::sync::Mutex::new(None),
+            hover: Latest::new(),
+        })
+    }
+
+    /// A new top document: its world is made again on the next point.
+    fn forget_world(&self) {
+        *self.world.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    fn reply(&self, id: &Value, result: Result<Value, point::PointError>) {
+        let _ = self.client.send(match result {
+            Ok(extra) => ack(id, extra),
+            Err(e) => json!({"type":"error","id":id,"error":e.message(),"code":e.code()}),
+        });
+    }
+
+    /// Takes one point action from the person's view; the answer goes to the client later.
+    fn handle(self: &Arc<Self>, value: &Value, id: Value, shared: &Arc<Shared>) {
+        let bad = |this: &Arc<Self>| this.reply(&id, Err(point::PointError::BadRequest));
+        match value["action"].as_str().unwrap_or_default() {
+            "point_at" => {
+                let (Some(x), Some(y)) = (value["x"].as_f64(), value["y"].as_f64()) else {
+                    return bad(self);
+                };
+                if !x.is_finite() || !y.is_finite() {
+                    return bad(self);
+                }
+                // outside the view: nothing there
+                let Ok((x, y)) = shared.point(x, y) else {
+                    return self.reply(&id, Err(point::PointError::Nothing));
+                };
+                if !self.hover.offer((id, x, y)) {
+                    return;
+                }
+                let this = self.clone();
+                tokio::spawn(async move {
+                    while let Some((id, x, y)) = this.hover.next() {
+                        let result = this
+                            .eval(&point::at_call(x, y))
+                            .await
+                            .and_then(|v| point::El::from_page(&v));
+                        this.reply(&id, result.map(|el| json!({"el": el})));
+                    }
+                });
+            }
+            "point_neighbour" => {
+                let Some(dir) = value["dir"].as_str().and_then(point::Dir::parse) else {
+                    return bad(self);
+                };
+                let handle = value["handle"].as_str();
+                if dir != point::Dir::Centre && !handle.is_some_and(point::valid_handle) {
+                    return bad(self);
+                }
+                let call = point::neighbour_call(handle, dir);
+                let this = self.clone();
+                tokio::spawn(async move {
+                    let result = this
+                        .eval(&call)
+                        .await
+                        .and_then(|v| point::El::from_page(&v));
+                    this.reply(&id, result.map(|el| json!({"el": el})));
+                });
+            }
+            "point_pick" => {
+                let Some(handle) = value["handle"]
+                    .as_str()
+                    .filter(|h| point::valid_handle(h))
+                    .map(str::to_string)
+                else {
+                    return bad(self);
+                };
+                let Ok(n) = point::pick_number(&value["n"]) else {
+                    return bad(self);
+                };
+                let (this, shared) = (self.clone(), shared.clone());
+                tokio::spawn(async move {
+                    let result = this.pick(&handle, n, &shared).await;
+                    this.reply(&id, result.map(|pick| json!({"pick": pick})));
+                });
+            }
+            _ => bad(self),
+        }
+    }
+
+    /// Runs `call` in the point world of the top document, installing [`point::POINT_JS`] first
+    /// when the document is new. A world that has gone with its document is made once more.
+    async fn eval(&self, call: &str) -> Result<Value, point::PointError> {
+        use point::PointError::Failed;
+        for _ in 0..2 {
+            // copied out: the lock is never held across an await
+            let known = *self.world.lock().unwrap_or_else(|e| e.into_inner());
+            let context = match known {
+                Some(context) => context,
+                None => {
+                    let tree = self
+                        .cdp
+                        .call("Page.getFrameTree", json!({}), PROBE_WAIT)
+                        .await
+                        .map_err(|_| Failed)?;
+                    let frame = tree["frameTree"]["frame"]["id"].as_str().ok_or(Failed)?;
+                    let world = json!({"frameId": frame, "worldName": point::WORLD});
+                    let world = self
+                        .cdp
+                        .call("Page.createIsolatedWorld", world, PROBE_WAIT)
+                        .await
+                        .map_err(|_| Failed)?;
+                    let context = world["executionContextId"].as_i64().ok_or(Failed)?;
+                    *self.world.lock().unwrap_or_else(|e| e.into_inner()) = Some(context);
+                    context
+                }
+            };
+            let expression = format!("globalThis.__kp ? {call} : {{err: 'install'}}");
+            let run = |expression: String| {
+                self.cdp.call(
+                    "Runtime.evaluate",
+                    json!({"expression": expression, "contextId": context, "returnByValue": true}),
+                    PROBE_WAIT,
+                )
+            };
+            let value = match run(expression.clone()).await {
+                Ok(r) if r["result"]["value"]["err"] == "install" => {
+                    let installed = run(point::POINT_JS.to_string()).await.map_err(|_| Failed)?;
+                    if installed.get("exceptionDetails").is_some() {
+                        return Err(Failed);
+                    }
+                    run(expression).await
+                }
+                other => other,
+            };
+            match value {
+                Ok(r) if r.get("exceptionDetails").is_some() => return Err(Failed),
+                Ok(r) => return Ok(r["result"]["value"].clone()),
+                // a dialog or a hung page: trying again can't help
+                Err(BrowserError::Timeout) => return Err(Failed),
+                // the context went with its document: make the world again
+                Err(_) => self.forget_world(),
+            }
+        }
+        Err(Failed)
+    }
+
+    /// Reads the element, takes the picture of what of it is in view, and stores both as an
+    /// unsent upload. The ack is what the composer chip shows.
+    async fn pick(&self, handle: &str, n: u8, shared: &Shared) -> Result<Value, point::PointError> {
+        use base64::Engine;
+        let capture = point::Capture::from_page(&self.eval(&point::capture_call(handle)).await?)?;
+        let png = match capture.clip {
+            Some(c) => {
+                let clip =
+                    json!({"x": c.x, "y": c.y, "width": c.width, "height": c.height, "scale": 1});
+                // the frame Chrome draws at this size meanwhile must not become the view's size
+                shared.shooting(c.width, c.height);
+                let shot = self
+                    .cdp
+                    .call(
+                        "Page.captureScreenshot",
+                        json!({"format": "png", "clip": clip, "fromSurface": true}),
+                        Duration::from_secs(5),
+                    )
+                    .await;
+                shot.ok().and_then(|r| {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(r["data"].as_str()?)
+                        .ok()
+                })
+            }
+            None => None,
+        };
+        let frame = capture.el.frame.clone();
+        let mut pick = point::Pick::new(capture, png.is_some(), chrono::Utc::now());
+        let stored =
+            match super::attachments::store_point(&self.state, &pick, n, png.as_deref()).await {
+                Some(stored) => stored,
+                // a picture that can't be kept: the pick still counts, with its code
+                None if pick.picture => {
+                    pick.picture = false;
+                    super::attachments::store_point(&self.state, &pick, n, None)
+                        .await
+                        .ok_or(point::PointError::Failed)?
+                }
+                None => return Err(point::PointError::Failed),
+            };
+        Ok(json!({
+            "attachment_id": stored.id,
+            "picture": pick.picture,
+            "url": pick.url,
+            "host": pick.host,
+            "path": pick.path,
+            "label": pick.label,
+            "selector": pick.selector,
+            "box": pick.rect,
+            "viewport": pick.viewport,
+            "frame": frame,
+            "captured_at": pick.captured_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "thumb_url": pick.picture.then(|| format!("/api/attachments/{}/content", stored.id)),
+        }))
     }
 }
 
@@ -930,13 +1171,15 @@ async fn serve(mut socket: WebSocket, state: AppState, id: String) -> Result<(),
         cursor_at: std::sync::Mutex::new(None),
         location: Latest::new(),
         recording: AtomicBool::new(false),
+        shot: std::sync::Mutex::new(None),
     });
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<Value>();
     let (jobs, jobs_rx) = mpsc::unbounded_channel::<Job>();
     let worker = Worker { ctrl: ctrl.clone(), cdp: cdp.clone(), shared: shared.clone(), client: client_tx.clone(), swallowed: 0, open_select: None };
     let worker = tokio::spawn(worker.run(jobs_rx));
     let mut rec = StageRecorder::new(state.clone(), id.clone(), shared.socket);
-    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &shared, &client_tx, &mut client_rx, &jobs, &mut rec).await;
+    let pointer = Pointer::new(state.clone(), cdp.clone(), client_tx.clone());
+    let result = stream(&mut socket, &ctrl, &cdp, &mut events, &shared, &client_tx, &mut client_rx, &jobs, &mut rec, &pointer).await;
     // a recording live on this socket stops here (Show it once: `closed`), its steps kept, after
     // the edit still pending in the page, if the page can still be reached
     if rec.is_live() {
@@ -966,6 +1209,7 @@ async fn stream(
     client_rx: &mut mpsc::UnboundedReceiver<Value>,
     jobs: &mpsc::UnboundedSender<Job>,
     rec: &mut StageRecorder,
+    pointer: &Arc<Pointer>,
 ) -> (Result<(), BrowserError>, Option<PersonLease>) {
     let mut lease: Option<PersonLease> = None;
     // the Show it once recorder's script on new documents, while a recording is live
@@ -1040,6 +1284,7 @@ async fn stream(
                     // here: the address follows at once instead of on the next tick
                     // a new document: the old title goes now, the new one follows on DOMContentLoaded
                     if let Some(url) = navigated_to(method, params) {
+                        pointer.forget_world();
                         let _ = client_tx.send(json!({"type":"location","url":url,"title":""}));
                         if rec.is_live() {
                             let acts = rec.on_navigated(&url).await;
@@ -1066,6 +1311,8 @@ async fn stream(
                         "Page.screencastFrame" => {
                             let session = params["sessionId"].as_i64().unwrap_or_default();
                             let (dw, dh) = (params["metadata"]["deviceWidth"].as_f64().unwrap_or(0.0), params["metadata"]["deviceHeight"].as_f64().unwrap_or(0.0));
+                            // a Point picture's frame: not the page's size and not worth showing
+                            if shared.is_shot_frame(dw, dh) { cdp.fire("Page.screencastFrameAck", json!({"sessionId":session})); continue; }
                             if dw >= 1.0 && dh >= 1.0 { shared.set_view(dw, dh); }
                             let (fw, fh) = shared.view();
                             let (now, ack_now) = frames.arrive(session, &params["data"], fw, fh, Instant::now());
@@ -1139,6 +1386,8 @@ async fn stream(
                         // the view closes or goes to the background: only this view's own size
                         // goes, so it needs no control (a human step's view holds none)
                         "restore_viewport" => { let _ = jobs.send(Job::Restore(id)); }
+                        // G3 Point at it: read-only, so watching is enough
+                        "point_at" | "point_neighbour" | "point_pick" => pointer.handle(&value, id, shared),
                         _ => {
                             if lease.is_none() && !ctrl.is_held_for_person() {
                                 send(socket, error(&id, not_in_control(ctrl.control.try_read().is_err()))).await?;
@@ -1344,6 +1593,19 @@ async fn send(socket: &mut WebSocket, value: Value) -> Result<(), BrowserError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// G3: a clipped Point picture makes Chrome draw one frame at the clip's size; only that
+    /// frame, soon after the picture, is kept from becoming the view's size.
+    #[test]
+    fn only_the_pictures_own_frame_is_not_the_view() {
+        let at = Instant::now();
+        let shot = Some((600.0, 40.4, at));
+        assert!(shot_frame(shot, 600.0, 40.0, at + Duration::from_millis(50)));
+        assert!(!shot_frame(shot, 1280.0, 800.0, at), "the page's own size");
+        assert!(!shot_frame(shot, 600.0, 42.0, at), "another size");
+        assert!(!shot_frame(shot, 600.0, 40.0, at + SHOT_FRAME_WINDOW + Duration::from_millis(1)), "too late");
+        assert!(!shot_frame(None, 600.0, 40.0, at), "no picture");
+    }
 
     #[test]
     fn v1_actions_still_parse() {

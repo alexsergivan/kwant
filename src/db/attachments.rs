@@ -28,10 +28,15 @@ pub struct Attachment {
     pub thread_id: Option<String>,
     pub message_id: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// G3 Point at it: the part of a page the person picked in Watch live (JSON, see
+    /// `server::point::Pick`), stored with its crop. Null for every other file.
+    #[sqlx(default)]
+    pub point: Option<String>,
 }
 
 impl Attachment {
-    /// What a message's `meta.attachments` holds: enough for a card, nothing else.
+    /// What a message's `meta.attachments` holds: enough for a card, nothing else. (A picked
+    /// part of a page gets its `point` from `server::attachments::cards`.)
     pub fn card(&self) -> Value {
         json!({"id": self.id, "name": self.name, "mime": self.mime, "size": self.size})
     }
@@ -50,6 +55,8 @@ pub struct NewAttachment {
     pub channel_id: Option<String>,
     pub direct_kwant_id: Option<String>,
     pub thread_id: Option<String>,
+    /// See [`Attachment::point`].
+    pub point: Option<String>,
 }
 
 impl Database {
@@ -74,14 +81,25 @@ impl Database {
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
+        // G3 (0.9.0): a picked part of a page rides on its crop's row
+        let has_point: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM pragma_table_info('attachments') WHERE name = 'point'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        if has_point.is_none() {
+            sqlx::query("ALTER TABLE attachments ADD COLUMN point TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 
     pub async fn insert_attachment(&self, a: &NewAttachment) -> Result<Attachment, DbError> {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO attachments (id, sha256, name, mime, size, source, kwant_id, context_id, channel_id, direct_kwant_id, thread_id, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO attachments (id, sha256, name, mime, size, source, kwant_id, context_id, channel_id, direct_kwant_id, thread_id, created_at, point)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&a.sha256)
@@ -95,6 +113,7 @@ impl Database {
         .bind(&a.direct_kwant_id)
         .bind(&a.thread_id)
         .bind(Utc::now())
+        .bind(&a.point)
         .execute(&self.pool)
         .await?;
         Ok(self.get_attachment(&id).await?.expect("just inserted"))
