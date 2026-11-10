@@ -223,6 +223,12 @@ impl Git {
     }
 
     async fn run(&self, args: &[&str], limit: Duration, read: bool) -> Result<Out, WtError> {
+        self.run_as(args, limit, read, true).await
+    }
+
+    /// [`Git::run`]; `literal` false leaves out `GIT_LITERAL_PATHSPECS`, which `check-ignore`
+    /// refuses (exit 128, "pathspec magic not supported"). Its caller passes `./<path>` instead.
+    async fn run_as(&self, args: &[&str], limit: Duration, read: bool, literal: bool) -> Result<Out, WtError> {
         let mut cmd = git::host_git_command("git");
         cmd.arg("-C").arg(&self.dir).arg("--no-pager");
         for c in git::safe_config() {
@@ -235,7 +241,9 @@ impl Git {
         if read {
             cmd.env("GIT_OPTIONAL_LOCKS", "0");
         }
-        cmd.env("GIT_LITERAL_PATHSPECS", "1");
+        if literal {
+            cmd.env("GIT_LITERAL_PATHSPECS", "1");
+        }
         cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
         let out = match tokio::time::timeout(limit, cmd.output()).await {
             Err(_) => {
@@ -620,8 +628,11 @@ pub async fn clean(wt: &Path, common: &Path) -> Result<Cleaned, WtError> {
     for rel in found {
         let text = rel.to_string_lossy().replace('\\', "/");
         let Some(r) = rel.to_str() else { continue };
-        // Ignored: check-ignore exits 0 for an ignored path, 1 for one that isn't
-        let ignored = g.run(&["check-ignore", "--quiet", "--", r], READ_TIMEOUT, true).await?;
+        // Ignored: check-ignore exits 0 for an ignored path, 1 for one that isn't. It takes no
+        // pathspec magic (so no GIT_LITERAL_PATHSPECS) and doesn't expand globs; the `./` keeps a
+        // folder named `:(…)` from reading as magic.
+        let dotted = format!("./{r}");
+        let ignored = g.run_as(&["check-ignore", "--quiet", "--", &dotted], READ_TIMEOUT, true, false).await?;
         if !ignored.ok {
             if ignored.code != Some(1) {
                 return Err(WtError::Failed);
@@ -1370,10 +1381,18 @@ mod tests {
             std::fs::create_dir_all(wt.join("pkg")).unwrap();
             std::os::unix::fs::symlink(&outside, wt.join("pkg/target")).unwrap();
             write(&wt, ".gitignore", "node_modules/\ndist/\ntarget\n.next/\n");
+            // A folder name that would be pathspec magic is still just a path
+            write(&wt, ":(exclude)odd/dist/a.js", "x");
         }
         let c = clean(&wt, &common).await.unwrap();
-        assert_eq!(c.removed, ["node_modules", "web/dist"]);
-        assert_eq!(c.bytes, 15);
+        let plain: Vec<_> = c.removed.iter().filter(|d| !d.starts_with(':')).collect();
+        assert_eq!(plain, ["node_modules", "web/dist"]);
+        #[cfg(unix)]
+        {
+            assert_eq!(c.removed[0], ":(exclude)odd/dist");
+            assert!(!wt.join(":(exclude)odd/dist").exists() && wt.join(":(exclude)odd").exists());
+        }
+        assert_eq!(c.bytes, if cfg!(unix) { 16 } else { 15 });
         assert!(c.kept.contains(&Kept { dir: "vendor/dist".into(), why: "tracked" }), "{:?}", c.kept);
         assert!(c.kept.contains(&Kept { dir: ".turbo".into(), why: "not_ignored" }), "{:?}", c.kept);
         assert!(wt.join("vendor/dist/keep.js").exists() && wt.join("vendor/dist/extra.js").exists());
