@@ -67,3 +67,31 @@ export function turnStart(live: LiveActivity | null | undefined, mountedAt: numb
   }
   return start;
 }
+
+/**
+ * 0.8.1 F4: live chats whose running bot has no name yet but can be named now: [chat, name] pairs.
+ * `live` maps a chat to the name its strip shows ('' when the bot list hadn't loaded), `kwantIds` maps
+ * a chat to its running bot's id. A chat that already shows a name keeps it.
+ */
+export function namesToFill(
+  live: Record<string, string>,
+  kwantIds: Record<string, string>,
+  nameOf: (id: string) => string | undefined,
+): [string, string][] {
+  const out: [string, string][] = [];
+  for (const [ctx, name] of Object.entries(live)) {
+    if (name || !kwantIds[ctx]) continue;
+    const n = nameOf(kwantIds[ctx]);
+    if (n) out.push([ctx, n]);
+  }
+  return out;
+}
+
+/**
+ * 0.8.1 F4: the order a page opened mid-turn names its live chats in. Each chat keeps the last name it
+ * is given, so queued turns go first and a running turn in the same chat names the strip, never a bot
+ * that is only waiting in line.
+ */
+export function liveNamingOrder<T extends { state?: string }>(turns: T[]): T[] {
+  return [...turns.filter((t) => t.state !== 'running'), ...turns.filter((t) => t.state === 'running')];
+}
