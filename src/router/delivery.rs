@@ -367,16 +367,31 @@ pub fn keyword_plan(prompt: &str, recent: &[&str]) -> DeliveryPlan {
 /// its own words say so, or for a bare "fix it" / "Fix differences!" or a follow-up ("again"),
 /// the person's last earlier message that asked for something.
 fn plan_kind(prompt: &str, recent: &[&str]) -> (Deliverable, bool) {
-    if super::team::is_small_talk(prompt) {
+    // "do it" is small talk to the router, but here it asks for the last ask again
+    if super::team::is_small_talk(prompt) && !asks_to_redo(prompt) {
         return (Deliverable::Other, false);
     }
     let Some(own) = without_acknowledgements(prompt) else { return (Deliverable::Other, false) };
+    let redo = asks_to_redo(&own);
     // "never mind", "no, stop": the person calls the last ask off, so nothing inherits it
-    if super::team::is_small_talk(&own) || calls_it_off(&own) {
+    if (super::team::is_small_talk(&own) && !redo) || calls_it_off(&own) {
         return (Deliverable::Other, false);
     }
     // The last earlier ask, and its words
-    let earlier = || recent.iter().rev().find_map(|m| without_acknowledgements(m).and_then(|t| classify(&t).map(|k| (k, t))));
+    let earlier_at =
+        || recent.iter().enumerate().rev().find_map(|(i, m)| without_acknowledgements(m).and_then(|t| classify(&t).map(|k| (i, k, t))));
+    let earlier = || earlier_at().map(|(_, k, t)| (k, t));
+    // The plan that ask had in its own turn, so a bare "fix it" made firm by what came before it
+    // stays firm when it's asked again
+    let inherited = || match earlier_at() {
+        Some((i, _, _)) => plan_kind(recent[i], &recent[..i]),
+        None => (Deliverable::Other, false),
+    };
+    // "try again", "do it", "redo": the last ask again, whatever its own words read as ("do" opens
+    // a question to `classify`, "redo" is a change verb)
+    if redo {
+        return inherited();
+    }
     match classify(&own) {
         Some(Deliverable::Change) => {
             let visible = names_something_visible(&own)
@@ -384,12 +399,28 @@ fn plan_kind(prompt: &str, recent: &[&str]) -> (Deliverable, bool) {
             (Deliverable::Change, visible)
         }
         Some(kind) => (kind, false),
-        None if super::team::reads_as_follow_up(&own) => match earlier() {
-            Some((kind, t)) => (kind, kind == Deliverable::Change && names_something_visible(&t)),
-            None => (Deliverable::Other, false),
-        },
+        None if super::team::reads_as_follow_up(&own) => inherited(),
         None => (Deliverable::Other, false),
     }
+}
+
+/// Words a message that only asks for the last ask again is made of ("try again", "retry", "do it",
+/// "go ahead and do it", "one more time"), with [`LEAD_IN`].
+const REDO_WORDS: &[&str] = &["try", "again", "retry", "redo", "rerun", "do", "it", "that", "one", "more", "once", "time"];
+
+/// Whether a short message only asks for the last ask again: [`REDO_WORDS`] and lead-ins, with
+/// "again", "retry", "redo", "rerun", "do it", "do that", "one more time" or "once more" in it.
+/// "do it" is small talk to the router, and "go ahead and do it" is too long to read as a
+/// follow-up, but both mean the work asked for before (0.8.1 F2). "ok go ahead" stays small talk.
+fn asks_to_redo(text: &str) -> bool {
+    let words = tokens(text);
+    if words.is_empty() || words.len() > 6 {
+        return false;
+    }
+    let joined = words.join(" ");
+    words.iter().all(|w| REDO_WORDS.contains(&w.as_str()) || LEAD_IN.contains(&w.as_str()))
+        && (any_in(&words, &["again", "retry", "redo", "rerun"])
+            || ["do it", "do that", "one more time", "once more"].iter().any(|p| joined.contains(p)))
 }
 
 /// Words that call the work off ("stop", "never mind", "forget it", "leave it as is").
@@ -400,7 +431,7 @@ const STOP_ASKS: &[&str] = &[
 /// Words that may stand around a [`STOP_ASKS`] word in a message that only calls the work off.
 const STOP_FILLER: &[&str] = &[
     "no", "never", "it", "that", "this", "on", "for", "the", "moment", "actually", "oh", "sorry", "thanks", "all",
-    "everything", "as", "is", "anymore", "there",
+    "everything", "as", "is", "anymore", "there", "do",
 ];
 
 /// Whether a short message only calls the work off: "stop", "never mind", "no, stop", "ok forget it",
@@ -1260,5 +1291,61 @@ mod tests {
         assert!(!calls_it_off("stop the header animation"));
         assert_eq!(keyword_plan("again", &["fix the header button"]).kind, Change);
         assert_eq!(keyword_plan("wait, fix the footer instead", &["fix the header button"]).kind, Change);
+    }
+
+    /// 0.8.1 F2 (Rigel's #469 note): after a firm Change, cancelled or not, a short "try again"
+    /// asks for the same work and inherits its firm plan; "stop", "never mind", "cancel" and "no"
+    /// call it off and inherit nothing. "do it" read as small talk before and planned nothing.
+    #[test]
+    fn a_short_retry_inherits_the_ask_and_a_stop_does_not() {
+        let other = DeliveryPlan { firm: false, ..DeliveryPlan::for_kind(Other, PlanSource::Keywords) };
+        // The earlier messages (oldest first) and which of them was the ask
+        let earlier: [(&[&str], usize); 3] = [
+            (&["Fix the login button colour"], 0),
+            (&["please update the README", "thanks"], 0),
+            (&["the button is not aligned with booktun.ing styling!!!!", "fix it"], 1),
+        ];
+        for (recent, at) in earlier {
+            let ask = keyword_plan(recent[at], &recent[..at]);
+            assert_eq!((ask.kind, ask.firm), (Change, true), "{recent:?}");
+            for msg in [
+                "try again",
+                "Try again!",
+                "again",
+                "retry",
+                "do it",
+                "Do it.",
+                "please try again",
+                "ok, retry",
+                "do it again",
+                "one more time",
+                "try once more",
+                "redo",
+                "go ahead and do it",
+            ] {
+                assert_eq!(keyword_plan(msg, recent), ask, "{msg} after {recent:?}");
+                assert_eq!(expected_kind(msg, recent), Change, "{msg} after {recent:?}");
+                let p = plan_for_turn(TurnPlanInput { person_message: Some(msg), recent, git_repo: true, ..Default::default() });
+                assert_eq!(p.as_ref(), Some(&ask), "{msg} after {recent:?}");
+            }
+            for msg in
+                ["stop", "never mind", "cancel", "no", "No.", "no thanks", "nope", "cancel it", "no, don't", "don't do it", "no, don't do that"]
+            {
+                assert_eq!(keyword_plan(msg, recent), other, "{msg} after {recent:?}");
+                assert_eq!(expected_kind(msg, recent), Other, "{msg} after {recent:?}");
+                let p = plan_for_turn(TurnPlanInput { person_message: Some(msg), recent, git_repo: true, ..Default::default() });
+                assert!(p.as_ref().is_none_or(|p| p.kind != Change && !p.firm), "{msg} after {recent:?}: {p:?}");
+            }
+        }
+        // With nothing asked before, a retry has nothing to inherit
+        assert_eq!(keyword_plan("try again", &[]).kind, Other);
+        assert_eq!(keyword_plan("do it", &[]).kind, Other);
+        // A go-ahead without a redo word stays small talk; "do it" is a redo, "don't do it" a stop
+        assert_eq!(keyword_plan("ok go ahead", &["Fix the login button colour"]).kind, Other);
+        assert!(asks_to_redo("do it") && asks_to_redo("go ahead and do it") && asks_to_redo("one more time"));
+        assert!(!asks_to_redo("ok go ahead") && !asks_to_redo("don't do it") && !asks_to_redo("do it for the footer"));
+        assert!(calls_it_off("don't do it") && !calls_it_off("do it"));
+        // The router's own small-talk check is unchanged: "do it" still stays with whoever spoke
+        assert!(super::super::team::is_small_talk("do it"));
     }
 }
