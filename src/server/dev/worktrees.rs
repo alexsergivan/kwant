@@ -881,6 +881,7 @@ fn bad(code: &str, msg: &str, status: StatusCode) -> Response {
 }
 
 /// The space, if Dev mode is on there (else 409 `off`).
+#[allow(clippy::result_large_err)]
 async fn guarded(state: &AppState, headers: &HeaderMap, space_id: &str) -> Result<SpaceId, Response> {
     let space = super::routes::guard(state, headers, space_id).await?;
     if state.db.dev_mode(space.as_str()).await.ok().flatten().is_none_or(|m| !m.on) {
@@ -1044,6 +1045,7 @@ pub async fn create_route(State(state): State<AppState>, headers: HeaderMap, Url
 }
 
 /// The row behind `/api/dev/worktrees/:id`, its space (Dev mode on) and its team's repo.
+#[allow(clippy::result_large_err)]
 async fn row_for(state: &AppState, headers: &HeaderMap, id: &str) -> Result<(WorktreeRow, SpaceId), Response> {
     let w = match state.db.worktree(id.trim()).await {
         Ok(Some(w)) => w,
