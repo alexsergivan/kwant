@@ -904,7 +904,7 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
 
       {/* Footer Status */}
       <div className="p-2.5 border-t border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] text-zinc-400">
-        <div className="flex items-center gap-1.5" data-browser-footer>
+        <div className="flex items-center gap-1.5 shrink-0" data-browser-footer>
           {isLocal ? (
             <Laptop size={12} className={browserReady || isWindow ? 'text-amber-300/80' : 'text-zinc-500'} />
           ) : (
@@ -913,9 +913,20 @@ export const VirtualMachinePane: React.FC<VirtualMachinePaneProps> = ({
           <span>{browserFooterLabel(computer.state.settings, browserReady)}</span>
         </div>
         {pointOn && point ? (
-          <span data-point-footer="" className="text-[11px] font-mono text-zinc-400 truncate">{footerText(point.picks)}</span>
+          <span data-point-footer="" className="min-w-0 flex-1 px-2 text-center leading-snug text-zinc-300 [overflow-wrap:anywhere]">
+            {/* Wraps only between "Pointing · n picked" and "· Esc to stop" in a narrow pane */}
+            {(() => {
+              const [state, count, keys] = footerText(point.picks).split(' · ');
+              return (
+                <>
+                  <span className="whitespace-nowrap">{`${state} · ${count}`}</span>{' '}
+                  <span className="whitespace-nowrap">{`· ${keys}`}</span>
+                </>
+              );
+            })()}
+          </span>
         ) : point && takeover && !isWindow ? (
-          <span data-point-footer="" className="text-zinc-400 truncate">{POINT_COPY.handBack}</span>
+          <span data-point-footer="" className="min-w-0 flex-1 px-2 text-center leading-snug text-zinc-400">{POINT_COPY.handBack}</span>
         ) : null}
         {onRestartVm && !isWindow && (
           <button
