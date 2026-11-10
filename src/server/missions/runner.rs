@@ -71,6 +71,8 @@ pub async fn tick(state: &AppState) {
         }
         let _ = run_mission(state, &m, 1).await;
     }
+    // Watched missions that stopped get their check (P1)
+    super::watch::tick(state).await;
 }
 
 /// Starts runner turns for up to `max` ready tasks of `mission` (one at a time, in the

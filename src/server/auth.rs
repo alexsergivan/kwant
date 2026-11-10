@@ -1036,6 +1036,12 @@ mod tests {
         assert!(!person_only(&get, "/api/tasks/t1/failures"));
         assert!(person_only(&post, "/api/missions/m1/graph/scan"));
         assert!(!person_only(&get, "/api/missions/m1/graph"));
+        // P1: only the person picks, removes or runs a mission's watcher; bots may read it
+        assert!(person_only(&Method::PUT, "/api/missions/m1/watch"));
+        assert!(person_only(&Method::DELETE, "/api/missions/m1/watch"));
+        assert!(person_only(&post, "/api/missions/m1/watch/check"));
+        assert!(!person_only(&get, "/api/missions/m1/watch"));
+        assert!(!person_only(&get, "/api/missions/m1/watch/checks"));
         assert!(!person_only(&get, "/api/tasks/t1/flags"));
         assert!(!person_only(&get, "/api/tasks"));
         assert!(!person_only(&get, "/api/missions/insights"));

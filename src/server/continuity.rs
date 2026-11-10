@@ -495,7 +495,9 @@ impl ToolApprover for SelfToolsApprover {
         }
         // Skill Foundry: a draft only stores a pending skill for the person to review, and is
         // offered only in kwant's own draft turn, so it never needs its own card
-        if req.server == SELF_SERVER_NAME && req.tool == super::missions::foundry::TOOL {
+        // A watch report only records what the watcher found, and runs only in kwant's own watch
+        // turn for its running check (P1); kwant applies it after the turn
+        if req.server == SELF_SERVER_NAME && (req.tool == super::missions::foundry::TOOL || req.tool == super::missions::watch::TOOL) {
             self.inner.note(&req, "allowed", None).await;
             return crate::mcp::ApprovalOutcome::Allowed;
         }
@@ -1105,6 +1107,8 @@ pub async fn self_endpoint(
         "tools/list" => {
             let mut tools = offered_tools(&state, &scope).await;
             super::fresh_eyes::filter_tools(scope.turn_id.as_deref(), &mut tools);
+            // P1: a watch turn sees its allowlist and watch_report; no other turn sees watch_report
+            super::missions::watch::filter_tools(&state, &scope, &mut tools);
             rpc_result(id, json!({ "tools": tools }))
         }
         "tools/call" => {
@@ -1113,6 +1117,10 @@ pub async fn self_endpoint(
             // B1: a fresh-eyes review reads nothing besides its prompt
             if super::fresh_eyes::refuses(scope.turn_id.as_deref(), name) {
                 return tool_text(id, super::fresh_eyes::REFUSED_TEXT, true);
+            }
+            // P1: a watch turn runs only its allowlist; watch_report runs only in a watch turn
+            if let Some(text) = super::missions::watch::refused(&state, &scope, name) {
+                return tool_text(id, text, true);
             }
             // A Dev mode brief turn: its four tools run, nothing else does (J7)
             if let Some(thread) = super::dev::tickets::tools::brief_thread(&state, &scope) {
@@ -1280,6 +1288,7 @@ async fn call_tool(
         super::rerouting::HAND_BACK => super::rerouting::tool_call(state, scope, args).await,
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         super::missions::foundry::TOOL => super::missions::foundry::call(state, scope, args).await,
+        super::missions::watch::TOOL => super::missions::watch::call(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
         super::human_steps::TOOL => super::human_steps::tool_request(state, scope, args).await,

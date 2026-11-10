@@ -27,6 +27,7 @@ pub mod routes;
 pub mod runner;
 pub mod tools;
 pub mod truth_ledger;
+pub mod watch;
 
 use super::AppState;
 use crate::db::missions::{Mission, NewCheck, NewTask, OutcomeCheck, Task, TaskChange};
@@ -142,6 +143,9 @@ pub enum Actor {
     Kwant,
     /// AutoFix, retrying a failed task (Phase B3): only `failed → ready`.
     AutoFix,
+    /// kwant applying a mission watcher's report (P1): only the four send-backs, review, failed
+    /// or needs_you → ready and blocked → backlog.
+    Watcher,
 }
 
 /// Whether `actor` may move a task from `from` to `to`. Conditions beyond the pair (live claim,
@@ -158,13 +162,13 @@ pub fn allowed(from: &str, to: &str, actor: Actor) -> bool {
         ("working", "needs_you") | ("needs_you", "working") => actor == Kwant,
         // A hand-off or routine run that failed or stopped
         ("working" | "needs_you", "failed") => actor == Kwant,
-        ("needs_you", "ready") => actor == Kwant,
+        ("needs_you", "ready") => matches!(actor, Kwant | Watcher),
         ("backlog" | "ready" | "working" | "needs_you", "blocked") => true,
-        ("blocked", "backlog") => matches!(actor, Owner | Person),
+        ("blocked", "backlog") => matches!(actor, Owner | Person | Watcher),
         ("review", "verified") => actor == Kwant,
-        ("review", "ready") => matches!(actor, Kwant | Person),
+        ("review", "ready") => matches!(actor, Kwant | Person | Watcher),
         ("review", "failed") => actor == Kwant,
-        ("failed", "ready") => matches!(actor, Person | AutoFix),
+        ("failed", "ready") => matches!(actor, Person | AutoFix | Watcher),
         (_, "cancelled") => open && matches!(actor, Person | Kwant),
         _ => false,
     }
@@ -686,6 +690,8 @@ pub async fn mission_json(state: &AppState, m: &Mission) -> Value {
         // The goal this mission restores (`goal` stays the mission's own text)
         let link = state.db.goal_link_of_mission(&m.id).await.ok().flatten();
         obj.insert("goal_link".into(), link.map_or(Value::Null, |(id, title)| json!({"id": id, "title": title})));
+        // Who watches the mission and what it found (P1)
+        obj.insert("watch".into(), watch::watch_json(state, m).await);
     }
     v
 }
@@ -729,9 +735,10 @@ pub async fn emit_mission(state: &AppState, mission_id: &str) {
 
 // Chat lines
 
-async fn post_line(state: &AppState, channel_id: Option<String>, direct_kwant_id: Option<String>, thread_id: Option<String>, sender: &str, text: String, meta: Value) {
+/// Posts `text` in the mission's chat; the saved message's id, or `None` when there's no chat.
+pub(super) async fn post_line(state: &AppState, channel_id: Option<String>, direct_kwant_id: Option<String>, thread_id: Option<String>, sender: &str, text: String, meta: Value) -> Option<String> {
     if channel_id.is_none() && direct_kwant_id.is_none() && thread_id.is_none() {
-        return;
+        return None;
     }
     let msg = NewMessage {
         channel_id: if thread_id.is_some() { None } else { channel_id },
@@ -744,11 +751,12 @@ async fn post_line(state: &AppState, channel_id: Option<String>, direct_kwant_id
         tokens_used: 0,
     };
     let extra = MessageExtra { thread_id: thread_id.clone(), meta: Some(meta) };
-    let Ok(saved) = state.db.insert_message_with(&msg, &extra).await else { return };
+    let Ok(saved) = state.db.insert_message_with(&msg, &extra).await else { return None };
     if let Some(t) = &thread_id {
         let _ = state.db.touch_thread(t).await;
     }
     let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or(Value::Null) });
+    Some(saved.id.clone())
 }
 
 /// A short line in the mission's chat (`meta.kind = "mission"`).
@@ -768,7 +776,7 @@ async fn task_chat_line(state: &AppState, t: &Task, m: Option<&Mission>) {
     match m {
         Some(m) => post_line(state, m.channel_id.clone(), m.direct_kwant_id.clone(), m.thread_id.clone(), &sender, text, meta).await,
         None => post_line(state, t.channel_id.clone(), t.direct_kwant_id.clone(), t.thread_id.clone(), &sender, text, meta).await,
-    }
+    };
 }
 
 // Plans: shared by the `mission_plan` tool and `POST /api/missions`
