@@ -43,6 +43,8 @@ const SLUG_MAX: usize = 60;
 /// P3 looks this deep into a worktree, and at this many folders at most.
 const WALK_DEPTH: usize = 12;
 const WALK_DIRS: usize = 20_000;
+/// At most this many `symlink`/`too_deep` entries in `kept`.
+const SKIPPED_MAX: usize = 50;
 
 // ---------------------------------------------------------------------------------------------
 // Names and folders
@@ -89,7 +91,12 @@ fn real_dirs(root: &Path, parts: &[&str]) -> Result<PathBuf, WtError> {
         match std::fs::symlink_metadata(&at) {
             Ok(m) if m.is_dir() => {}
             Ok(_) => return Err(WtError::FolderTaken),
-            Err(_) => std::fs::create_dir(&at).map_err(|_| WtError::Failed)?,
+            Err(_) => match std::fs::create_dir(&at) {
+                Ok(()) => {}
+                // Another create made it a moment ago: fine if it's a real folder
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir()) => {}
+                Err(_) => return Err(WtError::Failed),
+            },
         }
     }
     Ok(at)
@@ -430,6 +437,11 @@ pub async fn create(c: &CreateIn<'_>) -> Result<PathBuf, WtError> {
             return Err(WtError::BadBase);
         }
     }
+    // One create at a time per repo in this process, so a double-click's second call sees the
+    // first's branch and folder in the checks below (D2). Git run from outside kwant can still
+    // race; `after_failed_add` covers that.
+    let lock = repo_lock(c.common);
+    let _held = lock.lock().await;
     let g = Git::open(c.repo).await?;
     let exists = g.has_branch(c.branch).await?;
     match c.base {
@@ -460,7 +472,7 @@ pub async fn create(c: &CreateIn<'_>) -> Result<PathBuf, WtError> {
         None => g.run(&["worktree", "add", "--quiet", p, c.branch], WRITE_TIMEOUT, false).await?,
     };
     if !out.ok {
-        return Err(WtError::Failed);
+        return Err(after_failed_add(&g, c, &path).await);
     }
     // The folder git made must be the one we named, and point back into this repo
     if !points_into(&path, c.common) {
@@ -468,6 +480,39 @@ pub async fn create(c: &CreateIn<'_>) -> Result<PathBuf, WtError> {
         return Err(WtError::Failed);
     }
     Ok(path)
+}
+
+/// The create lock of the repo with git dir `common`.
+fn repo_lock(common: &Path) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut map = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    // Drop the locks nobody holds or waits on, so the map stays small
+    map.retain(|_, l| Arc::strong_count(l) > 1);
+    map.entry(common.to_path_buf()).or_default().clone()
+}
+
+/// Why `git worktree add` failed, asked again after it did: someone else made the branch or the
+/// folder in the meantime (a race, D2) is a refusal like the checks before it. `Failed` only when
+/// neither is there. A second look after a short wait covers a git that is still writing.
+async fn after_failed_add(g: &Git, c: &CreateIn<'_>, path: &Path) -> WtError {
+    for wait in [0u64, 250] {
+        if wait > 0 {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+        }
+        let new_branch = c.base.is_some();
+        if new_branch && g.has_branch(c.branch).await.unwrap_or(false) {
+            return WtError::BranchExists;
+        }
+        if !new_branch && g.listed_with_main().await.is_ok_and(|l| l.iter().any(|l| l.branch.as_deref() == Some(c.branch))) {
+            return WtError::BranchCheckedOut;
+        }
+        if std::fs::symlink_metadata(path).is_ok() {
+            return WtError::FolderTaken;
+        }
+    }
+    WtError::Failed
 }
 
 impl Git {
@@ -546,7 +591,8 @@ pub struct Cleaned {
     /// Folders removed, relative to the worktree, `/`-separated.
     pub removed: Vec<String>,
     pub bytes: u64,
-    /// Folders kept, with why: `tracked` (git tracks a file in it) or `not_ignored`.
+    /// Folders kept, with why: `tracked` (git tracks a file in it), `not_ignored`, `symlink`,
+    /// `too_deep` or `too_many_dirs` (see [`candidates`]).
     pub kept: Vec<Kept>,
 }
 
@@ -557,38 +603,55 @@ pub struct Kept {
 }
 
 /// The [`BUILD_DIRS`] folders in `wt`, relative: real folders only (never a symlink), never inside
-/// `.git`, and never inside a folder that is itself one (it goes whole).
-fn candidates(wt: &Path) -> Vec<PathBuf> {
+/// `.git`, and never inside a folder that is itself one (it goes whole). Also what the walk saw and
+/// won't clean, with why (N2): `symlink` (a symlink with a build folder's name), `too_deep` (a
+/// build folder more than [`WALK_DEPTH`] levels down) and `too_many_dirs` (the walk stopped after
+/// [`WALK_DIRS`] folders; `dir` is `.`).
+fn candidates(wt: &Path) -> (Vec<PathBuf>, Vec<Kept>) {
+    let text = |p: &Path| p.to_string_lossy().replace('\\', "/");
     let mut found = Vec::new();
+    let mut skipped = Vec::new();
     let mut todo = vec![(PathBuf::new(), 0usize)];
+    // Folders past WALK_DEPTH, walked after everything shallower (so they never use up the
+    // budget the cleanable ones need), only to name what is too deep
+    let mut deep = Vec::new();
     let mut seen = 0;
-    while let Some((rel, depth)) = todo.pop() {
+    while let Some((rel, depth)) = todo.pop().or_else(|| deep.pop()) {
         seen += 1;
         if seen > WALK_DIRS {
+            skipped.push(Kept { dir: ".".into(), why: "too_many_dirs" });
             break;
         }
         let Ok(rd) = std::fs::read_dir(wt.join(&rel)) else { continue };
         for e in rd.flatten() {
             // The entry's own type: a symlink is never followed
             let Ok(ft) = e.file_type() else { continue };
-            if !ft.is_dir() {
-                continue;
-            }
             let name = e.file_name();
             let Some(n) = name.to_str() else { continue };
-            if n == ".git" {
+            let build = BUILD_DIRS.contains(&n);
+            if ft.is_symlink() && build && skipped.len() < SKIPPED_MAX {
+                skipped.push(Kept { dir: text(&rel.join(n)), why: "symlink" });
+            }
+            if !ft.is_dir() || n == ".git" {
                 continue;
             }
             let child = rel.join(n);
-            if BUILD_DIRS.contains(&n) {
+            if build && depth < WALK_DEPTH {
                 found.push(child);
+            } else if build {
+                if skipped.len() < SKIPPED_MAX {
+                    skipped.push(Kept { dir: text(&child), why: "too_deep" });
+                }
             } else if depth + 1 < WALK_DEPTH {
                 todo.push((child, depth + 1));
+            } else {
+                deep.push((child, depth + 1));
             }
         }
     }
     found.sort();
-    found
+    skipped.sort_by(|a, b| a.dir.cmp(&b.dir));
+    (found, skipped)
 }
 
 /// Bytes of the files under `dir`, without following symlinks.
@@ -623,8 +686,8 @@ pub async fn clean(wt: &Path, common: &Path) -> Result<Cleaned, WtError> {
     }
     let g = Git::open(wt).await?;
     let dir = wt.to_path_buf();
-    let found = tokio::task::spawn_blocking(move || candidates(&dir)).await.map_err(|_| WtError::Failed)?;
-    let mut done = Cleaned::default();
+    let (found, skipped) = tokio::task::spawn_blocking(move || candidates(&dir)).await.map_err(|_| WtError::Failed)?;
+    let mut done = Cleaned { kept: skipped, ..Default::default() };
     for rel in found {
         let text = rel.to_string_lossy().replace('\\', "/");
         let Some(r) = rel.to_str() else { continue };
@@ -1069,6 +1132,11 @@ async fn row_for(state: &AppState, headers: &HeaderMap, id: &str) -> Result<(Wor
     Ok((w, space))
 }
 
+/// 404 `unknown_worktree` for a removed row: DELETE, done and keep answer alike (N1).
+fn removed_already() -> Response {
+    bad("unknown_worktree", "That worktree was removed already.", StatusCode::NOT_FOUND)
+}
+
 #[derive(Deserialize, Default)]
 pub struct RemoveQuery {
     #[serde(default)]
@@ -1082,7 +1150,7 @@ pub async fn remove_route(State(state): State<AppState>, headers: HeaderMap, Url
         Err(r) => return r,
     };
     if w.removed_at.is_some() {
-        return bad("unknown_worktree", "That worktree was removed already.", StatusCode::NOT_FOUND);
+        return removed_already();
     }
     if w.thread_id.as_deref().is_some_and(|t| state.turns.has_job(t)) {
         return WtError::Working.response();
@@ -1108,10 +1176,15 @@ pub async fn done_route(State(state): State<AppState>, headers: HeaderMap, UrlPa
         Ok(x) => x,
         Err(r) => return r,
     };
-    if let Err(e) = state.db.worktree_done(&w.id).await {
-        return super::routes::internal(e);
+    if w.removed_at.is_some() {
+        return removed_already();
     }
-    one(&state, &w.id).await
+    match state.db.worktree_done(&w.id).await {
+        Ok(true) => one(&state, &w.id).await,
+        // Removed between the read and the write
+        Ok(false) => removed_already(),
+        Err(e) => super::routes::internal(e),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1125,6 +1198,9 @@ pub async fn keep_route(State(state): State<AppState>, headers: HeaderMap, UrlPa
         Ok(x) => x,
         Err(r) => return r,
     };
+    if w.removed_at.is_some() {
+        return removed_already();
+    }
     if let Err(e) = state.db.worktree_keep_build(&w.id, b.keep).await {
         return super::routes::internal(e);
     }
@@ -1138,7 +1214,7 @@ pub async fn clean_route(State(state): State<AppState>, headers: HeaderMap, UrlP
         Err(r) => return r,
     };
     if w.removed_at.is_some() {
-        return bad("unknown_worktree", "That worktree was removed already.", StatusCode::NOT_FOUND);
+        return removed_already();
     }
     if w.thread_id.as_deref().is_some_and(|t| state.turns.has_job(t)) {
         return WtError::Working.response();
@@ -1293,6 +1369,65 @@ mod tests {
         // `lin-c` is taken now: another branch with the same slug is refused, not merged into it
         sh(&w, &["branch", "lin-c"]);
         assert_eq!(make(tmp.path(), &w, &common, "lin-c", None).await, Err(WtError::FolderTaken));
+    }
+
+    /// D2: when `git worktree add` fails, what is there now decides: the branch (or its checkout)
+    /// or the folder someone else made is a refusal; `Failed` only when neither is.
+    #[tokio::test]
+    async fn a_failed_add_is_named_by_what_is_there_now() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (w, common) = repo(tmp.path());
+        let root = real_dirs(&tmp.path().join("worktrees"), &["web"]).unwrap();
+        let g = Git::open(&w).await.unwrap();
+        let at = |b: &str| root.join(slug(b));
+        let c = |branch: &'static str, base: Option<&'static str>| (branch, base);
+        let ask = |(branch, base): (&'static str, Option<&'static str>)| CreateIn { repo: &w, common: &common, repo_root: &root, branch, base };
+
+        assert_eq!(after_failed_add(&g, &ask(c("lin/x", Some("main"))), &at("lin/x")).await, WtError::Failed, "nothing there");
+        sh(&w, &["branch", "lin/x"]);
+        assert_eq!(after_failed_add(&g, &ask(c("lin/x", Some("main"))), &at("lin/x")).await, WtError::BranchExists);
+        std::fs::create_dir_all(at("lin/y")).unwrap();
+        assert_eq!(after_failed_add(&g, &ask(c("lin/y", Some("main"))), &at("lin/y")).await, WtError::FolderTaken);
+        // An existing branch someone checked out meanwhile
+        let other = make(tmp.path(), &w, &common, "lin/x", None).await.unwrap();
+        assert_eq!(after_failed_add(&g, &ask(c("lin/x", None)), &tmp.path().join("elsewhere")).await, WtError::BranchCheckedOut);
+        assert!(other.exists());
+    }
+
+    /// D2 (Rigel's race, qa-486-493): 6 creates at once for one new branch, 8 rounds: one makes
+    /// it, the rest are refused as `branch_exists` or `folder_taken`, never `Failed`.
+    #[tokio::test]
+    async fn a_create_race_has_one_winner_and_only_refusals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (w, common) = repo(tmp.path());
+        for round in 0..8 {
+            let branch = format!("lin/race-{round}");
+            let all = futures::future::join_all((0..6).map(|_| make(tmp.path(), &w, &common, &branch, Some("main")))).await;
+            assert_eq!(all.iter().filter(|r| r.is_ok()).count(), 1, "round {round}: {all:?}");
+            assert!(all.iter().all(|r| matches!(r, Ok(_) | Err(WtError::BranchExists | WtError::FolderTaken))), "round {round}: {all:?}");
+        }
+    }
+
+    /// N2: what the walk won't clean is named in `kept`: a symlink with a build folder's name and
+    /// a build folder past WALK_DEPTH, and the walk past WALK_DEPTH never hides a shallow one.
+    #[test]
+    fn the_walk_names_what_it_skips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wt = tmp.path();
+        write(wt, "node_modules/a.js", "x");
+        let deep: String = (0..WALK_DEPTH).map(|i| format!("d{i}/")).collect();
+        write(wt, &format!("{deep}node_modules/b.js"), "x");
+        let edge: String = (0..WALK_DEPTH - 1).map(|i| format!("e{i}/")).collect();
+        write(wt, &format!("{edge}dist/c.js"), "x");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(tmp.path().join("node_modules"), wt.join("d0/target")).unwrap();
+        let (found, kept) = candidates(wt);
+        let edge_dist = PathBuf::from(format!("{edge}dist"));
+        assert_eq!(found, [edge_dist, PathBuf::from("node_modules")], "the last level still counts");
+        assert!(kept.contains(&Kept { dir: format!("{deep}node_modules"), why: "too_deep" }), "{kept:?}");
+        #[cfg(unix)]
+        assert!(kept.contains(&Kept { dir: "d0/target".into(), why: "symlink" }), "{kept:?}");
+        assert!(!kept.iter().any(|k| k.why == "too_many_dirs"));
     }
 
     /// A planted `filter.<x>.smudge` in the repo's own config never runs on create or on a read.

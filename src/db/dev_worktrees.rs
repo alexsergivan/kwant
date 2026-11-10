@@ -168,10 +168,10 @@ impl Database {
         Ok(())
     }
 
-    /// `POST …/done`: the first time stays.
-    pub async fn worktree_done(&self, id: &str) -> Result<(), DbError> {
-        sqlx::query("UPDATE dev_worktrees SET done_at = COALESCE(done_at, ?) WHERE id = ? AND removed_at IS NULL").bind(now_ms()).bind(id).execute(&self.pool).await?;
-        Ok(())
+    /// `POST …/done`: the first time stays. `false` when there's no live row (removed, or none).
+    pub async fn worktree_done(&self, id: &str) -> Result<bool, DbError> {
+        let r = sqlx::query("UPDATE dev_worktrees SET done_at = COALESCE(done_at, ?) WHERE id = ? AND removed_at IS NULL").bind(now_ms()).bind(id).execute(&self.pool).await?;
+        Ok(r.rows_affected() > 0)
     }
 
     pub async fn worktree_keep_build(&self, id: &str, keep: bool) -> Result<(), DbError> {
@@ -244,7 +244,7 @@ mod tests {
         assert!(db.insert_worktree(&new("/wt/web/a", Some("thr_2"))).await.unwrap().is_none(), "a second at the folder");
         assert_eq!(db.worktree_of_thread("thr_1").await.unwrap().map(|w| w.id), Some(a.id.clone()));
 
-        db.worktree_done(&a.id).await.unwrap();
+        assert!(db.worktree_done(&a.id).await.unwrap());
         let first = db.worktree(&a.id).await.unwrap().unwrap().done_at.unwrap();
         db.worktree_done(&a.id).await.unwrap();
         assert_eq!(db.worktree(&a.id).await.unwrap().unwrap().done_at, Some(first), "the first time stays");
@@ -260,6 +260,10 @@ mod tests {
         assert!(db.worktree(&a.id).await.unwrap().unwrap().keep_build);
 
         db.worktree_removed(&a.id).await.unwrap();
+        let before = db.worktree(&a.id).await.unwrap().unwrap().done_at;
+        assert!(!db.worktree_done(&a.id).await.unwrap(), "done on a removed row: no live row");
+        assert_eq!(db.worktree(&a.id).await.unwrap().unwrap().done_at, before, "and nothing stamped");
+        assert!(!db.worktree_done("wt_nope").await.unwrap());
         assert!(db.worktree_of_thread("thr_1").await.unwrap().is_none());
         assert!(db.live_worktrees().await.unwrap().is_empty());
         assert_eq!(db.worktrees_of_space("space_demo", true).await.unwrap().len(), 1);
