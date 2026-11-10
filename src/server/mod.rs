@@ -19,6 +19,7 @@ pub mod goals_remediation;
 pub mod model_usage;
 pub mod budget;
 pub mod spend_stop;
+pub mod bot_budget;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
@@ -428,6 +429,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/usage/daily", get(model_usage::get_daily))
         .route("/api/usage/today", get(spend_stop::get_today))
         .route("/api/usage/today/continue", post(spend_stop::continue_today))
+        // 0.9.0 G2: per-bot monthly budgets (writes are person-only, see `auth::person_only`)
+        .route("/api/kwants/:id/budget", get(bot_budget::get_budget).post(bot_budget::set_budget))
+        .route("/api/kwants/:id/budget/continue", post(bot_budget::continue_month).delete(bot_budget::pause_again))
+        .route("/api/usage/budgets", get(bot_budget::list_budgets))
         .route("/api/chains/:id/continue", post(budget::continue_chain))
         .route(
             "/api/kwants/:id/memories/:mid",

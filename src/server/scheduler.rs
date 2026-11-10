@@ -499,8 +499,26 @@ pub async fn run_now(State(state): State<AppState>, Path(id): Path<String>) -> R
 /// Records a run and starts it in the background, or records it as skipped when the routine is
 /// still running. `None` if the run couldn't be recorded.
 pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> Option<RoutineRun> {
+    start_run_noted(state, routine, trigger, None).await
+}
+
+/// [`start_run`], with a note for the run's history (G2: "Ran late: … was paused at its monthly
+/// budget." on the one run a routine gets after its bot's pause ends).
+pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &str, note: Option<&str>) -> Option<RoutineRun> {
     // Today's spending stop holds new turns: the run is skipped, not failed (no AutoFix retry)
     if let Some(why) = super::spend_stop::held(state, &routine.space_id).await {
+        let run = state.db.start_routine_run(&routine.id, trigger, "skipped", Some(&why)).await.ok()?;
+        send_run_event(state, &run);
+        return Some(run);
+    }
+    // Its bot is paused at its monthly budget (G2): held, and run once when the pause ends. Only
+    // the first held time goes in the history, so missed runs collapse into one late run
+    if let Some(why) = super::bot_budget::held(state, &routine.kwant_id).await {
+        // A scheduled time while it's already held adds nothing; Run now still gets its answer
+        let first = state.db.hold_budget_routine(&routine.id, &routine.kwant_id).await.unwrap_or(false);
+        if !first && trigger != "manual" {
+            return None;
+        }
         let run = state.db.start_routine_run(&routine.id, trigger, "skipped", Some(&why)).await.ok()?;
         send_run_event(state, &run);
         return Some(run);
@@ -536,6 +554,9 @@ pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> 
             return None;
         }
     };
+    if let Some(note) = note {
+        let _ = state.db.set_routine_run_note(&run.id, note).await;
+    }
     send_run_event(state, &run);
     let state = state.clone();
     let run_id = run.id.clone();
@@ -811,6 +832,8 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
         loop {
             tick(&state, Utc::now()).await;
             super::delegation::follow_ups(&state, Utc::now()).await;
+            // G2: bots whose budget pause ended on its own (a new month) start what they held
+            super::bot_budget::release_due(&state).await;
             super::parked::run_due(&state, Utc::now()).await;
             super::waiting::run_due(&state, Utc::now()).await;
             super::work_ahead::scan(&state, Utc::now(), false).await;

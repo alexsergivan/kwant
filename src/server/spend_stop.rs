@@ -108,7 +108,7 @@ pub fn day_at(tz: &str, at: DateTime<Utc>) -> (String, NaiveDate, DateTime<Utc>)
     (zone.to_string(), date, ends)
 }
 
-async fn timezone(state: &AppState) -> String {
+pub(super) async fn timezone(state: &AppState) -> String {
     state.db.get_setting(super::bot_actions::TIMEZONE_SETTING).await.ok().flatten().unwrap_or_default()
 }
 
@@ -146,9 +146,21 @@ pub async fn book(state: &AppState, fresh_tokens: u64, cost_usd: Option<f64>) {
     }
 }
 
-/// Whether a turn's error is the spending stop's (a skip, not a failure).
+/// Books one finished (or cancelled) turn of `kwant_id`: the same numbers go into today's
+/// spending (as [`book`]) and into the bot's month (G2, [`super::bot_budget::book`]), so a
+/// turn is counted once, the same way, for both. `reported`: the engine reported the usage (a
+/// Codex turn's estimate is not).
+pub async fn book_turn(state: &AppState, kwant_id: &str, fresh_tokens: u64, cost_usd: Option<f64>, reported: bool) {
+    book(state, fresh_tokens, cost_usd).await;
+    let usd = cost_usd.filter(|c| c.is_finite() && *c > 0.0).unwrap_or(0.0);
+    super::bot_budget::book(state, kwant_id, fresh_tokens, usd, reported).await;
+}
+
+/// Whether a turn's error is a spending hold, today's stop or a bot's monthly budget (G2): a
+/// skip, not a failure.
 pub fn is_stop_error(err: &str) -> bool {
-    err.trim_start().starts_with(REASON)
+    let e = err.trim_start();
+    e.starts_with(REASON) || super::bot_budget::is_budget_error(e)
 }
 
 /// Short token counts: 950, 12k, 1.2M.

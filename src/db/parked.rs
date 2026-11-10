@@ -22,7 +22,14 @@ pub struct ParkedTurn {
     /// "pending", "running", "done" or "dropped" (the chat moved on before the retry).
     pub status: String,
     pub created_at: DateTime<Utc>,
+    /// Why it waits: "usage_limit" (the engine's limit) or "bot_budget" (G2: the bot is paused
+    /// at its monthly budget; released early by Continue or a raise).
+    #[sqlx(default)]
+    pub reason: String,
 }
+
+/// A held prompt never grows past this; the oldest part goes first.
+const MAX_HELD_PROMPT: usize = 64 * 1024;
 
 pub struct NewParkedTurn {
     pub kwant_id: String,
@@ -33,6 +40,21 @@ pub struct NewParkedTurn {
     pub depth: i64,
     pub prompt: String,
     pub retry_at: DateTime<Utc>,
+    /// "usage_limit" or "bot_budget" (see [`ParkedTurn::reason`]).
+    pub reason: &'static str,
+}
+
+/// `held` with `more` after it, kept under [`MAX_HELD_PROMPT`] by dropping the oldest part.
+fn appended(held: &str, more: &str) -> String {
+    let mut s = format!("{held}\n\n[another message arrived while the bot was paused]\n\n{more}");
+    if s.len() > MAX_HELD_PROMPT {
+        let mut cut = s.len() - MAX_HELD_PROMPT;
+        while !s.is_char_boundary(cut) {
+            cut += 1;
+        }
+        s = s[cut..].to_string();
+    }
+    s
 }
 
 /// The chat a turn ran in, matched the way it was parked.
@@ -68,20 +90,34 @@ impl Database {
     /// time, so a chat gets at most one retry however many messages hit the limit).
     pub async fn park_turn(&self, t: &NewParkedTurn) -> Result<Option<ParkedTurn>, DbError> {
         let mut tx = self.begin_write().await?;
-        let waiting: Option<(String,)> = sqlx::query_as(&format!("SELECT id FROM parked_turns WHERE status = 'pending' AND {SAME_CHAT}"))
-            .bind(&t.kwant_id)
-            .bind(t.channel_id.as_deref().unwrap_or(""))
-            .bind(t.direct_kwant_id.as_deref().unwrap_or(""))
-            .bind(t.thread_id.as_deref().unwrap_or(""))
-            .fetch_optional(&mut *tx)
-            .await?;
-        if waiting.is_some() {
-            tx.rollback().await?;
+        let waiting: Option<(String, String, String, DateTime<Utc>)> = sqlx::query_as(&format!(
+            "SELECT id, prompt, reason, retry_at FROM parked_turns WHERE status = 'pending' AND {SAME_CHAT}"
+        ))
+        .bind(&t.kwant_id)
+        .bind(t.channel_id.as_deref().unwrap_or(""))
+        .bind(t.direct_kwant_id.as_deref().unwrap_or(""))
+        .bind(t.thread_id.as_deref().unwrap_or(""))
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((id, prompt, reason, retry_at)) = waiting {
+            // A budget hold keeps every message, oldest first (G2: held, not dropped); a usage-limit
+            // retry already waiting in that chat becomes a budget hold
+            if t.reason == "bot_budget" {
+                sqlx::query("UPDATE parked_turns SET prompt = ?, reason = 'bot_budget', retry_at = ? WHERE id = ?")
+                    .bind(appended(&prompt, &t.prompt))
+                    .bind(if reason == "bot_budget" { retry_at } else { retry_at.max(t.retry_at) })
+                    .bind(&id)
+                    .execute(&mut *tx)
+                    .await?;
+                tx.commit().await?;
+            } else {
+                tx.rollback().await?;
+            }
             return Ok(None);
         }
         let row = sqlx::query_as::<_, ParkedTurn>(
-            "INSERT INTO parked_turns (id, kwant_id, channel_id, direct_kwant_id, thread_id, delegation_id, depth, prompt, retry_at, status, created_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?) RETURNING *",
+            "INSERT INTO parked_turns (id, kwant_id, channel_id, direct_kwant_id, thread_id, delegation_id, depth, prompt, retry_at, status, created_at, reason) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?) RETURNING *",
         )
         .bind(Uuid::new_v4().to_string())
         .bind(&t.kwant_id)
@@ -93,6 +129,7 @@ impl Database {
         .bind(&t.prompt)
         .bind(t.retry_at)
         .bind(Utc::now())
+        .bind(t.reason)
         .fetch_one(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -101,7 +138,7 @@ impl Database {
 
     /// The parked turns due by `now`, each claimed (`running`) so it runs once.
     pub async fn take_due_parked(&self, now: DateTime<Utc>) -> Result<Vec<ParkedTurn>, DbError> {
-        let due = sqlx::query_as::<_, ParkedTurn>("SELECT * FROM parked_turns WHERE status = 'pending' AND retry_at <= ? ORDER BY retry_at")
+        let due = sqlx::query_as::<_, ParkedTurn>("SELECT * FROM parked_turns WHERE status = 'pending' AND retry_at <= ? ORDER BY retry_at, created_at")
             .bind(now)
             .fetch_all(&self.pool)
             .await?;
