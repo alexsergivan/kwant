@@ -1108,6 +1108,62 @@ async fn concurrent_forks_of_one_verification_step_the_owner_down_once() {
     assert!(e.state.db.stepped_down_for(&ids[0], "verified@other").await.unwrap());
 }
 
+/// #503 follow-up (Ada, Nov 11): the restore preview sends `verified_at`, the time of the approval
+/// a rollback would undo, the same approval the R8b step-down is keyed on: the task's `finished_at`
+/// when verified, else the passed `person` check's `finished_at`; null when it isn't approved. It
+/// stays set after that approval's one step-down was used.
+#[tokio::test]
+async fn the_restore_preview_says_when_the_approval_it_would_undo_was_given() {
+    let at = |v: &Value| v.as_str().map(|s| chrono::DateTime::parse_from_rfc3339(s).unwrap_or_else(|e| panic!("{s}: {e}")).with_timezone(&chrono::Utc));
+    let e = setup().await;
+
+    // Verified: the time it was verified
+    let plan = json!([{"title": "A", "owner": e.bot.id, "checks": [{"kind": "file_exists", "spec": {"path": "a.txt"}}]}]);
+    let (mid, ids) = mission(&e, &e.bot.id, plan).await;
+    run(&e, &mid, &ids[0], &[("a.txt", Some("v1"))]).await;
+    let t = task(&e, &ids[0]).await;
+    assert_eq!(t["task"]["state"], "verified", "{t}");
+    let verified = at(&t["task"]["finished_at"]).expect("a verified task has finished_at");
+    let cid = id(of_kind(&checkpoints(&e, &ids[0]).await, "before_run")[0]);
+    let p = preview(&e, &ids[0], &cid).await;
+    assert_eq!(at(&p["verified_at"]), Some(verified), "{p}");
+    assert!(!p["step_down"].is_null(), "{p}");
+
+    // After the approval's one step-down: no drop left, but it was still approved then
+    let uri = format!("/api/tasks/{}/fork", ids[0]);
+    let (s, r, _) = send(&e.app, "POST", &uri, None, Some("k-verified-at"), Some(json!({"from_checkpoint": cid, "preview_sha256": p["preview_sha256"]}))).await;
+    assert_eq!(s, StatusCode::OK, "{r}");
+    assert!(!r["stepped_down"].is_null(), "{r}");
+    let again = preview(&e, &ids[0], &cid).await;
+    assert!(again["step_down"].is_null(), "{again}");
+    assert_eq!(at(&again["verified_at"]), Some(verified), "{again}");
+
+    // Not approved: null
+    let (_mid, tid, _dir) = cli_mission(&e).await;
+    assert_ne!(state_of(&e, &tid).await, "verified");
+    let cid = id(of_kind(&checkpoints(&e, &tid).await, "before_run")[0]);
+    let p = preview(&e, &tid, &cid).await;
+    assert!(p.as_object().unwrap().contains_key("verified_at"), "sent, as null: {p}");
+    assert!(p["verified_at"].is_null(), "{p}");
+    assert!(p["step_down"].is_null(), "{p}");
+
+    // Approved by a passed person check: that check's time
+    let check = kwnt::db::missions::NewCheck {
+        task_id: tid.clone(),
+        kind: "person".into(),
+        spec: json!({}),
+        required: true,
+        approved: true,
+        requested_by: "person".into(),
+        approved_by: None,
+    };
+    let c = e.state.db.add_check(&check).await.unwrap();
+    e.state.db.finish_check(&c.id, "passed", None, "person", None).await.unwrap();
+    let checked = e.state.db.list_checks(&tid).await.unwrap().into_iter().find(|x| x.id == c.id).unwrap().finished_at.expect("a finished check has finished_at");
+    let p = preview(&e, &tid, &cid).await;
+    assert_eq!(at(&p["verified_at"]), Some(checked), "{p}");
+}
+
 // V2: the verifier is on unless the person saved "off", and a handed-in task waits in review on
 // its hold until a pass verdict or the person's Verify. Every other test here turns it off in
 // setup, because they are about checkpoints, not the verifier.
