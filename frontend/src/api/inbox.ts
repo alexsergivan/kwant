@@ -107,6 +107,11 @@ export interface ReviewFields {
   in_review_since: string;
   round: { n: number; max: number };
   verdict: InboxVerdict;
+  /**
+   * D7: a verifier hold is pending and there is no verdict yet (Lin, #504). Missing reads as false.
+   * Approve stays enabled in the pane; inline Approve and Approve all still leave it out.
+   */
+  being_checked?: boolean;
   risk: { level: RiskLevel | null; reasons: string[] };
   criteria: InboxCriterion[];
   criteria_summary: { met: number; total: number; not_met: number; not_checked: number };
@@ -207,6 +212,17 @@ export async function denyPendingHeld(item: Pick<ReviewFields, 'held_actions'>):
 
 /** The verdict word Mira's spec shows. */
 export const VERDICT_WORD: Record<VerdictResult, string> = { pass: 'Pass', fail: 'Fail', needs_you: 'Needs you', none: 'Not checked yet' };
+
+/** D7: true only while the verifier holds it and there is no verdict; a missing field is false. */
+export const isBeingChecked = (i: Pick<ReviewFields, 'verdict'> & { being_checked?: unknown }): boolean =>
+  i.being_checked === true && i.verdict.result === 'none';
+
+/** The status word for a review item: "Being checked" (D7) instead of "Not checked yet" while the verifier holds it. */
+export const reviewWord = (i: Pick<ReviewFields, 'verdict'> & { being_checked?: unknown }): string =>
+  isBeingChecked(i) ? 'Being checked' : VERDICT_WORD[i.verdict.result];
+
+/** The pane's line under "Being checked" (D7). */
+export const BEING_CHECKED_LINE = 'The verifier is checking this now. You can still approve it yourself.';
 
 /** "Pass · high" for the board card, or null with no verdict. */
 export function verdictShort(v: Pick<InboxVerdict, 'result' | 'confidence'> | null | undefined): string | null {
@@ -368,6 +384,17 @@ const notChecked = review({
   round: { n: 1, max: 2 },
 });
 
+/** D7: the same kind of item while the verifier holds it: "Being checked", Approve enabled, never one-tap or batched. */
+const beingChecked = review({
+  id: 'r-being', kwant_id: 'k-juno', kwant_name: 'Juno', title: 'Weekly digest email', group: 'to_review', sort_key: [3, 1, 4, 'Juno', 'r-being'],
+  verdict: { id: null, result: 'none', confidence: null, line: '2 of 2 required checks passed. The checker hasn’t looked at this one.', checker: null, checked_at: null, steps_run: null, steps_total: null },
+  being_checked: true,
+  risk: { level: null, reasons: [] },
+  criteria: [{ index: 1, text: 'Digest goes out on Mondays', status: 'not_checked', source: 'task', evidence: null, note: null, round_added: 1 }],
+  criteria_summary: { met: 0, total: 1, not_met: 0, not_checked: 1 },
+  round: { n: 1, max: 2 },
+});
+
 /** Pass · high, high risk, held refund still pending: To review, Approve disabled, not one-tap. */
 const passHeld = review({
   id: 'r-refund', kwant_id: 'k-vega', kwant_name: 'Vega', title: 'Refund the double charge', group: 'to_review', sort_key: [3, 0, 1, 'Vega', 'r-refund'],
@@ -439,7 +466,7 @@ const finished: InboxItem = {
 
 /** Every review state, one item each (for ReviewItemView stories and tests). */
 export const FIXTURE_REVIEW_ITEMS: Record<string, ReviewItem> = {
-  needsYou, failRoundLimit, notChecked, passHeld, heldAllowed, heldDenied, oneTap, stale, approveError, noRollback, batchFirst: FIXTURE_BATCH[0],
+  needsYou, failRoundLimit, notChecked, beingChecked, passHeld, heldAllowed, heldDenied, oneTap, stale, approveError, noRollback, batchFirst: FIXTURE_BATCH[0],
 };
 
 /** A full GET /api/inbox answer in H5 + V1 order, with the Low-risk card. */

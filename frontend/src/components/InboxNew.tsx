@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   CircleDashed,
+  Eye,
   Hand,
   Info,
   Layers,
@@ -26,7 +27,7 @@ import { ReviewDone, VERDICT_STYLE } from './ReviewItemStub';
 import { ReviewItemView } from './ReviewItemView';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import { ApprovalDecision, AwayError, AwayItem, actionFailureNotice, awayApi, awaySummary, itemLabel, windowLabel } from '../away';
-import { INBOX_GROUPS, InboxGroup, InboxItem, ReviewItem, VERDICT_WORD, groupItems, isReview } from '../api/inbox';
+import { INBOX_GROUPS, InboxGroup, InboxItem, ReviewItem, groupItems, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
 import {
   BatchRow,
   Crumb,
@@ -41,6 +42,7 @@ import {
   select,
   setCrumb,
   comeBack,
+  markHeld,
   findItem,
   setNotice,
   stopAfterThisOne,
@@ -103,11 +105,17 @@ const names = (xs: string[]): string => {
 
 // ---------- Rows ----------
 
+/** D7 "Being checked": the verifier holds it and there is no verdict yet. */
+const BEING_CHECKED_STYLE = { icon: Eye, text: 'text-zinc-200' } as const;
+
 const ReviewSubline: React.FC<{ item: ReviewItem }> = ({ item }) => {
   if (item.stale) return <span className="text-rose-300">{staleLine(item.stale.paths)}</span>;
   if (item.approve_error) return <span className="text-rose-300">{item.approve_error.message}</span>;
-  const v = VERDICT_STYLE[item.verdict.result];
+  const checking = isBeingChecked(item);
+  const v = checking ? BEING_CHECKED_STYLE : VERDICT_STYLE[item.verdict.result];
   const Icon = v.icon;
+  // V1-3: only held actions still waiting count; a denied or allowed one is done.
+  const heldOpen = pendingHeld(item).length;
   const lastRoundFail = item.verdict.result === 'fail' && item.round.n >= item.round.max;
   return (
     <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
@@ -116,9 +124,9 @@ const ReviewSubline: React.FC<{ item: ReviewItem }> = ({ item }) => {
           Round {item.round.n}
         </span>
       )}
-      <span className={`inline-flex items-center gap-1 font-semibold ${v.text}`}>
+      <span className={`inline-flex items-center gap-1 font-semibold ${v.text}`} data-verdict-word={checking ? 'being_checked' : item.verdict.result}>
         <Icon size={12} aria-hidden="true" />
-        {VERDICT_WORD[item.verdict.result]}
+        {reviewWord(item)}
       </span>
       {item.verdict.confidence && <span className="text-zinc-400">· {item.verdict.confidence}</span>}
       {lastRoundFail && (
@@ -128,7 +136,7 @@ const ReviewSubline: React.FC<{ item: ReviewItem }> = ({ item }) => {
       )}
       {item.risk.level === 'high' && <span className="px-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-200 text-[11px]">High risk</span>}
       {item.risk.level === 'low' && <span className="px-1.5 rounded-md border border-zinc-600 text-zinc-300 text-[11px]">Low risk</span>}
-      {item.held_actions.length > 0 && <span className="text-zinc-400">{item.held_actions.length} held</span>}
+      {heldOpen > 0 && <span className="text-zinc-400" data-held-count>{heldOpen} held</span>}
     </span>
   );
 };
@@ -160,7 +168,8 @@ interface RowProps {
 const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve }) => {
   const review = isReview(item) ? item : null;
   const title = rowTitle(item);
-  const oneTap = !!review && review.one_tap && !review.stale && !review.approve_error;
+  // The server decides one_tap; an item with no verdict (Not checked yet, Being checked) never gets inline Approve.
+  const oneTap = !!review && review.one_tap && !review.stale && !review.approve_error && review.verdict.result !== 'none' && !isBeingChecked(review);
   const stale = !!review?.stale;
   const disabled = busy !== null;
   const tint = selected ? 'border-violet-400/70 bg-violet-500/10' : GROUP_STYLE[item.group].row;
@@ -417,7 +426,8 @@ export const BatchPane: React.FC<{ wide: boolean; onOpenItem: (id: string) => vo
                       <span className="text-xs text-zinc-400"> · {r.kwant_name}{r.status !== 'came_back' && r.status !== 'error' ? ' · pass, high' : ''}</span>
                       {r.note && <span className="block text-[11px] text-rose-300">{r.note}</span>}
                     </span>
-                    <span className={`shrink-0 text-[11px] ${s.tone}`}>{back ? '' : s.word}</span>
+                    {/* V1-4: "Came back" is drawn; an error row's note already starts with "Couldn’t approve". */}
+                    <span className={`shrink-0 text-[11px] ${s.tone}`} data-batch-word>{r.status === 'error' ? '' : s.word}</span>
                   </button>
                 </li>
               );
@@ -628,6 +638,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
     const s = inboxStore.get();
     setNotice({ text: r.text, tone: r.kind === 'stale' ? 'error' : 'ok' });
     if (r.kind === 'stale') {
+      // r.text leaves out the paths: the row in Failed or stuck (and the pane) say what changed, once.
       const it = findItem(s.data, r.task_id) ?? findItem(s.data, s.selectedId);
       if (it) comeBack(it, r.paths ?? []);
       return;
@@ -762,7 +773,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({ onOpen, onCounts, onApproval
     selectedId === 'batch' && selValid ? (
       <BatchPane wide={wide} onOpenItem={openFromBatch} />
     ) : selItem && isReview(selItem) ? (
-      <ReviewItemView item={selItem} entry={crumb ?? 'inbox'} onDone={onDone} />
+      <ReviewItemView item={selItem} entry={crumb ?? 'inbox'} onDone={onDone} onHeldResolved={(approvalId, status) => markHeld(selItem.id, approvalId, status)} />
     ) : empty ? (
       <div className="h-full grid place-items-center text-center" data-pane-empty>
         <div className="space-y-1.5">

@@ -115,7 +115,7 @@ test('every fixture renders without throwing, with a verdict box', async () => {
   for (const [name, item] of Object.entries(FX)) {
     const { api } = fakeApi();
     const { q } = await mount(item, api);
-    assert.ok(q(`[data-verdict="${item.verdict.result}"]`), name);
+    assert.ok(q(`[data-verdict="${item.being_checked && item.verdict.result === 'none' ? 'being_checked' : item.verdict.result}"]`), name);
   }
 });
 
@@ -167,8 +167,60 @@ test('stale 409 on approve: onDone stale with the paths, nothing approved', asyn
   await click(q('[data-approve]'));
   assert.equal(done[0].kind, 'stale');
   assert.deepEqual(done[0].paths, ['README.md']);
-  assert.match(done[0].text, /README\.md changed after its check\. Nothing was approved\./);
-  assert.match(q('[data-review-status]').textContent, /Nothing was approved/);
+  assert.match(done[0].text, /back in Failed or stuck, and nothing was approved\./);
+  // V1-4: "changed after its check" is said once: in the stale box, not again in a notice or in the text the Inbox shows.
+  assert.doesNotMatch(done[0].text, /changed after its check/);
+  assert.match(q('[data-stale]').textContent, /README\.md changed after its check\./);
+  assert.equal(document.body.textContent.split('changed after its check').length - 1, 1);
+  assert.equal(q('[data-notice]'), null);
+  // When the Inbox hands back the item with `stale` set, it is still drawn once.
+  const { q: q2 } = await mount({ ...FX.oneTap, stale: { paths: ['README.md'], at: '2026-11-10T15:00:00Z' } }, api);
+  assert.equal(document.body.textContent.split('changed after its check').length - 1, 1);
+  assert.ok(q2('[data-check-again]'));
+});
+
+test('D7 Being checked: the word and line, Approve stays enabled and A sends verify with no verdict id', async () => {
+  const { api, calls } = fakeApi();
+  const { q, done } = await mount(FX.beingChecked, api);
+  assert.ok(q('[data-verdict="being_checked"]'));
+  assert.match(q('[data-verdict]').textContent, /Being checked/);
+  assert.doesNotMatch(q('[data-verdict]').textContent, /Not checked yet/);
+  assert.equal(q('[data-verdict-line]').textContent, 'The verifier is checking this now. You can still approve it yourself.');
+  assert.equal(q('[data-approve]').getAttribute('aria-disabled'), null);
+  assert.equal(q('[data-approve-blocked]'), null);
+  await key('a');
+  assert.deepEqual(calls, [['verify', 't-r-being', null]]);
+  assert.equal(done[0].kind, 'approved');
+});
+
+test('D7: no hold (field missing or false) stays "Not checked yet"; a verdict wins over the flag', async () => {
+  const { api } = fakeApi();
+  assert.equal(FX.notChecked.being_checked, undefined, 'the fixture has no field: missing reads as false');
+  const { q } = await mount(FX.notChecked, api);
+  assert.ok(q('[data-verdict="none"]'));
+  assert.match(q('[data-verdict]').textContent, /Not checked yet/);
+  assert.equal(q('[data-verdict-line]').textContent, FX.notChecked.verdict.line);
+  const { q: q2 } = await mount({ ...FX.beingChecked, being_checked: false }, api);
+  assert.match(q2('[data-verdict]').textContent, /Not checked yet/);
+  const { q: q3 } = await mount({ ...FX.oneTap, being_checked: true }, api);
+  assert.ok(q3('[data-verdict="pass"]'));
+  assert.equal(m.verdictWord('none'), 'Not checked yet');
+});
+
+test('V1-3: denying, allowing or finding a held action expired tells the list (onHeldResolved)', async () => {
+  const seen = [];
+  const { api } = fakeApi();
+  const { q } = await mount(FX.passHeld, api, { onHeldResolved: (id, st) => seen.push([id, st]) });
+  await click(q('[data-held-deny]'));
+  assert.deepEqual(seen, [['a-refund', 'denied']]);
+  const { api: gone } = fakeApi({ resolveHeld: async () => { throw new InboxError(404, 'gone'); } });
+  const { q: q2 } = await mount(FX.needsYou, gone, { onHeldResolved: (id, st) => seen.push([id, st]) });
+  await click(q2('[data-held-deny]'));
+  assert.deepEqual(seen[1], ['a-merge', 'expired']);
+  const { api: bad } = fakeApi({ resolveHeld: async () => { throw new InboxError(500, 'HTTP 500'); } });
+  const { q: q3 } = await mount(FX.needsYou, bad, { onHeldResolved: (id, st) => seen.push([id, st]) });
+  await click(q3('[data-held-deny]'));
+  assert.equal(seen.length, 2, 'a failed deny is not reported');
 });
 
 test('approve error that is not stale stays in the view; nothing reported done', async () => {

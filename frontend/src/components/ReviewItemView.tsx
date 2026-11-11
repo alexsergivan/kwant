@@ -31,7 +31,7 @@ import {
   XCircle,
   type LucideIcon,
 } from 'lucide-react';
-import { type InboxItem, type ReviewItem, type HeldAction, type InboxCriterion, InboxError, approveState, inboxApi } from '../api/inbox';
+import { type InboxItem, type ReviewItem, type HeldAction, type HeldStatus, type InboxCriterion, BEING_CHECKED_LINE, InboxError, approveState, inboxApi, isBeingChecked, reviewWord } from '../api/inbox';
 import { AwayError } from '../away';
 import { type Checkpoint, type RestorePreview, MissionError, RESTORE_ACTION_LABELS, conflictText, missionsApi, newIdempotencyKey, restoreErrorText } from '../missions';
 import { usePhoneLayout } from '../usePhoneLayout';
@@ -61,7 +61,6 @@ import {
   stepDownText,
   tailLines,
   validReviewItem,
-  verdictWord,
 } from '../reviewItem';
 
 export type { ReviewDone, ReviewEntry } from '../reviewItem';
@@ -100,6 +99,8 @@ export interface ReviewItemViewProps {
   onOpenBoard?: () => void;
   /** After a roll back after approval: open the copy. */
   onOpenTask?: (taskId: string) => void;
+  /** A held action was denied, allowed or found expired here, so the list can stop counting it (V1-3). */
+  onHeldResolved?: (approvalId: string, status: Exclude<HeldStatus, 'pending'>) => void;
   /** The phone page draws its own top bar with the title; the view then starts at the chips. */
   hideTitle?: boolean;
 }
@@ -171,6 +172,7 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   onOpenChat,
   onOpenBoard,
   onOpenTask,
+  onHeldResolved,
   hideTitle = false,
 }) => {
   const phone = usePhoneLayout();
@@ -182,6 +184,8 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   const [busy, setBusy] = useState<null | 'approve' | 'send' | 'check'>(null);
   const [notice, setNotice] = useState<{ text: string; tone: 'ok' | 'bad' | 'info'; undo?: string | null; copy?: string | null } | null>(null);
   const [done, setDone] = useState(false);
+  /** A stale 409 seen here, until the parent's copy of the item carries `stale` (drawn once either way, V1-4). */
+  const [staleHere, setStaleHere] = useState<string[] | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [note, setNote] = useState('');
   const [sendErr, setSendErr] = useState<string | null>(null);
@@ -203,7 +207,9 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   const finish = useCallback(
     (r: ReviewDone, tone: 'ok' | 'bad' | 'info', extra: { undo?: string | null; copy?: string | null } = {}) => {
       setDone(r.kind !== 'stale');
-      setNotice({ text: r.text, tone, ...extra });
+      // A stale approve is shown by the stale box below, not a second notice saying the same (V1-4).
+      if (r.kind === 'stale') setStaleHere(r.paths ?? []);
+      else setNotice({ text: r.text, tone, ...extra });
       onDone(r);
     },
     [onDone],
@@ -218,11 +224,13 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
       const o = r && typeof r === 'object' ? (r as Record<string, unknown>) : {};
       const ran = typeof o.result_line === 'string' ? o.result_line : typeof o.result === 'string' ? o.result : null;
       setHeld((s) => ({ ...s, [id]: { state: decision === 'deny' ? 'denied' : 'allowed', at: new Date().toISOString(), ran } }));
+      onHeldResolved?.(id, decision === 'deny' ? 'denied' : 'allowed');
       return true;
     } catch (e) {
       const status = e instanceof AwayError || e instanceof InboxError ? e.status : 0;
       if (status === 404 || status === 409) {
         setHeld((s) => ({ ...s, [id]: { state: 'expired' } }));
+        onHeldResolved?.(id, 'expired');
         return true;
       }
       setHeld((s) => ({ ...s, [id]: { ...s[id], busy: false, error: e instanceof Error ? e.message : 'Something went wrong.' } }));
@@ -253,8 +261,8 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
       finish({ kind: 'approved', text: `Approved: “${item.title}”.`, task_id: item.task_id }, 'ok');
     } catch (e) {
       if (e instanceof InboxError && e.stale) {
-        const what = e.paths.length ? `${e.paths.join(', ')} changed after its check` : 'The work changed after its check';
-        finish({ kind: 'stale', text: `Couldn’t approve: ${item.title}. ${what}. Nothing was approved.`, task_id: item.task_id, paths: e.paths }, 'bad');
+        // The paths go in the stale box and the list row, not in this text (the Inbox status line), V1-4.
+        finish({ kind: 'stale', text: `Couldn’t approve “${item.title}”. It’s back in Failed or stuck, and nothing was approved.`, task_id: item.task_id, paths: e.paths }, 'bad');
       } else {
         const why = e instanceof Error ? e.message.replace(/\.$/, '') : 'Something went wrong';
         setNotice({ text: `Couldn’t approve “${item.title}”. ${why}. Nothing was approved.`, tone: 'bad' });
@@ -345,7 +353,9 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
   }, [phone]);
 
   const v = item.verdict;
-  const tone = VERDICT_TONE[v.result];
+  const checking = isBeingChecked(item);
+  const tone = checking ? BEING_CHECKED_TONE : VERDICT_TONE[v.result];
+  const stalePaths = item.stale ? item.stale.paths : staleHere;
   const VIcon = tone.icon;
   const meta = checkerMeta(item);
   const conf = confidenceText(v);
@@ -401,13 +411,13 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
       </header>
 
       {/* Verdict */}
-      <div className={`rounded-2xl border px-4 py-3 space-y-1 ${tone.box}`} data-verdict={v.result}>
+      <div className={`rounded-2xl border px-4 py-3 space-y-1 ${tone.box}`} data-verdict={checking ? 'being_checked' : v.result}>
         <p className="text-[15px] font-semibold flex flex-wrap items-center gap-x-1.5">
           <VIcon size={17} className={tone.text} aria-hidden="true" />
-          <span className={tone.text}>{verdictWord(v.result)}</span>
+          <span className={tone.text}>{reviewWord(item)}</span>
           {conf && <span className="font-normal text-zinc-400">· {conf}</span>}
         </p>
-        <p className="text-body text-zinc-100 break-words">{v.line}</p>
+        <p className="text-body text-zinc-100 break-words" data-verdict-line>{checking ? BEING_CHECKED_LINE : v.line}</p>
         {meta && (
           <p className="flex items-start gap-1.5 text-meta text-zinc-400" data-checker-meta>
             <Eye size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -417,11 +427,11 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
       </div>
 
       {/* Stale and approve_error, from the server */}
-      {item.stale && (
+      {stalePaths && (
         <div className="rounded-xl border border-rose-400/30 bg-rose-500/[0.06] px-3 py-2 space-y-2" data-stale>
           <p className="text-body text-rose-200 break-words">
             <AlertTriangle size={14} className="inline -mt-0.5 mr-1" aria-hidden="true" />
-            Couldn’t approve: {item.title}. {item.stale.paths.length ? `${item.stale.paths.join(', ')} changed after its check.` : 'The work changed after its check.'}
+            Couldn’t approve: {item.title}. {stalePaths.length ? `${stalePaths.join(', ')} changed after its check.` : 'The work changed after its check.'}
           </p>
           <button type="button" onClick={() => void checkAgain()} disabled={lockAll} className={btnQuiet} data-check-again>
             {busy === 'check' ? <Loader2 size={14} className={spin} aria-hidden="true" /> : <RotateCcw size={14} aria-hidden="true" />} Check again
@@ -638,6 +648,9 @@ const ReviewBody: React.FC<ReviewItemViewProps & { item: ReviewItem }> = ({
     </section>
   );
 };
+
+/** D7 "Being checked": neutral, a still icon (nothing spins, so reduced motion needs nothing). */
+const BEING_CHECKED_TONE = { icon: Eye, text: 'text-zinc-200', box: 'border-hairline-strong bg-white/[0.02]' } as const;
 
 const VERDICT_TONE = {
   pass: { icon: CheckCircle2, text: 'text-ok', box: 'border-teal-400/25 bg-teal-400/[0.05]' },
