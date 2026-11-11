@@ -134,11 +134,13 @@ export interface ReviewFields {
   rollback_ok: boolean;
 }
 
-export type InboxItem = Omit<AwayItem, 'kind'> & {
+// `task_id` is a review's task (ReviewFields) or a watch item's (P1, null when none), so it takes both.
+export type InboxItem = Omit<AwayItem, 'kind' | 'task_id'> & {
   kind: InboxKind;
   group: InboxGroup;
   sort_key: (string | number)[];
-} & Partial<ReviewFields>;
+  task_id?: string | null;
+} & Partial<Omit<ReviewFields, 'task_id'>>;
 
 /** A review item, with every review field present. */
 export type ReviewItem = Omit<InboxItem, keyof ReviewFields> & ReviewFields & { kind: 'review' };
