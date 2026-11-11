@@ -245,8 +245,8 @@ const CREDIT_AFTER: [&str; 14] = [
 
 /// Whether every @mention of `name` in `text` only credits the teammate for what it did ("As @SEO
 /// found, …", "thanks to @Writer", "@Social suggested …"), so the mention asks nothing new. A
-/// mention without such words counts as an ask: this is deliberately narrow, and the per-teammate
-/// limit stops repeats it misses. `false` when `name` isn't mentioned at all.
+/// mention without such words counts as an ask: this is deliberately narrow, and the exact-repeat
+/// guard on hand-offs stops repeats it misses. `false` when `name` isn't mentioned at all.
 pub fn only_credited(text: &str, name: &str) -> bool {
     let lower = text.to_lowercase();
     let tag = format!("@{}", name.to_lowercase());
