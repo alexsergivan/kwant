@@ -68,6 +68,15 @@ pub struct Connection {
     /// The person marked it production (D10): in a Dev mode space every call through it gets the
     /// production floor's card. Only MCP servers (and Composio apps, by toolkit slug) can be.
     pub production: bool,
+    /// P5: open tool notes about this MCP server (`open`, and `broke`: "didn't work"); MCP rows only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<NoteCounts>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct NoteCounts {
+    pub open: i64,
+    pub broke: i64,
 }
 
 // Last MCP test results (POST /api/mcp/servers/:id/test), kept in memory
@@ -169,6 +178,7 @@ async fn mcp_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]) ->
                 logins_stored: if is_composio(s) { "composio" } else { "kwnt" },
                 manage: format!("/api/mcp/servers/{}", s.id),
                 production: false,
+                notes: None,
             }
         })
         .collect()
@@ -248,6 +258,7 @@ async fn account_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]
                 logins_stored: "kwnt",
                 manage: format!("/api/profiles/{}", p.id),
                 production: false,
+                notes: None,
             }
         })
         .collect()
@@ -291,6 +302,7 @@ async fn login_connections(state: &AppState, space: &SpaceId, kwants: &[Kwant]) 
                 logins_stored: "vault",
                 manage: format!("/api/sandbox/{owner}/passwords"),
                 production: false,
+                notes: None,
             });
         }
     }
@@ -346,6 +358,7 @@ async fn source_connections(state: &AppState, space: &SpaceId) -> Vec<Connection
                 logins_stored: "vault",
                 manage: format!("/api/zombie/sources/{}", s.id),
                 production: false,
+                notes: None,
             })
         })
         .collect()
@@ -406,8 +419,13 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap, Scope(space
     };
     connections.extend(source_connections(&state, &space).await);
     let marked = state.db.prod_connections(space.as_str()).await.unwrap_or_default();
+    let notes = super::tool_notes::counts_by_connection(&state, space.as_str()).await;
     for c in connections.iter_mut() {
         c.production = marked.contains(&c.id);
+        if c.kind == "mcp" {
+            let (open, broke) = notes.get(&c.name).copied().unwrap_or_default();
+            c.notes = Some(NoteCounts { open, broke });
+        }
     }
     let servers = state.db.list_mcp_servers(&space).await.unwrap_or_default();
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
