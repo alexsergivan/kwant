@@ -402,6 +402,42 @@ fn held_json(card: &OpenCard, parameters: Option<&str>) -> Value {
     })
 }
 
+/// D7: the verifier's hold (v2-v3-contract §3.4) on a task in review: a required `peer_review`
+/// check with `requested_by = "verifier"`, `status = pending` and `spec.verifier = true`, made at
+/// or after the task's last move to review. Read from the checks table, so it is the same with or
+/// without the verifier's code (#502).
+pub fn verifier_hold(checks: &[OutcomeCheck], in_review_since: DateTime<Utc>) -> Option<&OutcomeCheck> {
+    checks
+        .iter()
+        .filter(|c| {
+            c.kind == "peer_review"
+                && c.required
+                && c.requested_by == "verifier"
+                && c.status == "pending"
+                && c.spec_value()["verifier"] == json!(true)
+                && c.created_at >= in_review_since
+        })
+        .max_by_key(|c| c.created_at)
+}
+
+/// D7 "Being checked": the task is in review, the verifier's hold is pending, and no verdict has
+/// come in for it (none at all, or only one from before the hold was made: an earlier round's).
+pub fn being_checked(task_state: &str, checks: &[OutcomeCheck], in_review_since: DateTime<Utc>, latest: Option<&Value>) -> bool {
+    if task_state != "review" {
+        return false;
+    }
+    let Some(hold) = verifier_hold(checks, in_review_since) else { return false };
+    let verdict_at = latest
+        .filter(|v| v["verdict"].is_string())
+        .map(|v| v["created_at"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&Utc)));
+    match verdict_at {
+        None => true,
+        // A verdict we can't date is taken as this round's
+        Some(None) => false,
+        Some(Some(at)) => at < hold.created_at,
+    }
+}
+
 /// A review item, and the facts its group and buttons came from; `None` when it isn't listed.
 pub fn review_item(r: &ReviewInput, last_seen: Option<DateTime<Utc>>) -> Option<(Value, ReviewFacts)> {
     let t = &r.task;
@@ -502,6 +538,7 @@ pub fn review_item(r: &ReviewInput, last_seen: Option<DateTime<Utc>>) -> Option<
         "round": {"n": round_n, "max": MAX_ROUNDS},
         "send_backs": backs.len(),
         "verdict": verdict,
+        "being_checked": being_checked(&t.state, &r.checks, r.in_review_since, latest),
         "risk": {"level": risk, "reasons": reasons},
         "criteria": criteria,
         "criteria_summary": criteria_summary,
@@ -842,6 +879,50 @@ mod tests {
         assert_eq!(r["counts"]["waiting_on_you"], 2);
         assert_eq!(r["counts"]["finished"], 1);
         assert_eq!(r["batch"], Value::Null);
+    }
+
+    fn check(kind: &str, required: bool, by: &str, status: &str, spec: Value, at: DateTime<Utc>) -> OutcomeCheck {
+        OutcomeCheck {
+            id: format!("c-{kind}-{by}-{status}"),
+            task_id: "t".into(),
+            kind: kind.into(),
+            spec: spec.to_string(),
+            required,
+            approved: true,
+            status: status.into(),
+            output_excerpt: None,
+            checked_by: None,
+            requested_by: by.into(),
+            approved_by: Some("kwant".into()),
+            evidence_id: None,
+            created_at: at,
+            started_at: None,
+            finished_at: None,
+        }
+    }
+
+    /// D7: "Being checked" only for a pending verifier hold made in this review, with no verdict
+    /// for it yet.
+    #[test]
+    fn being_checked_needs_this_reviews_pending_hold_and_no_verdict() {
+        let since = Utc::now();
+        let at = since + Duration::seconds(1);
+        let hold = || check("peer_review", true, "verifier", "pending", json!({"verifier": true}), at);
+        assert!(being_checked("review", &[hold()], since, None));
+        assert!(!being_checked("review", &[], since, None), "no hold");
+        assert!(!being_checked("ready", &[hold()], since, None), "not in review");
+        assert!(!being_checked("review", &[check("peer_review", true, "verifier", "passed", json!({"verifier": true}), at)], since, None), "settled");
+        assert!(!being_checked("review", &[check("peer_review", true, "verifier", "pending", json!({"verifier": true}), since - Duration::seconds(1))], since, None), "from an earlier review");
+        assert!(!being_checked("review", &[check("peer_review", true, "k2", "pending", json!({}), at)], since, None), "a bot's peer review");
+        assert!(!being_checked("review", &[check("peer_review", true, "verifier", "pending", json!({}), at)], since, None), "no spec.verifier");
+        assert!(!being_checked("review", &[check("peer_review", false, "verifier", "pending", json!({"verifier": true}), at)], since, None), "optional");
+        assert!(!being_checked("review", &[check("command", true, "verifier", "pending", json!({"verifier": true}), at)], since, None), "not peer_review");
+        // Juno's verdicts (#502): an earlier round's doesn't count, this hold's does
+        let verdict = |t: DateTime<Utc>| json!({"verdict": "fail", "created_at": t.to_rfc3339()});
+        assert!(being_checked("review", &[hold()], since, Some(&verdict(since - Duration::minutes(5)))));
+        assert!(!being_checked("review", &[hold()], since, Some(&verdict(at + Duration::seconds(1)))));
+        assert!(!being_checked("review", &[hold()], since, Some(&json!({"verdict": "needs_you"}))), "an undated verdict counts");
+        assert!(being_checked("review", &[hold()], since, Some(&json!({"verdict": null}))), "not a verdict");
     }
 
     #[test]

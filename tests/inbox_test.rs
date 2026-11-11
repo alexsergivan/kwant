@@ -310,3 +310,78 @@ async fn inbox_joins_away_and_review_tasks_with_fallbacks() {
     let (s, body) = raw(&app, "GET", "/api/inbox?since=yesterday").await;
     assert_eq!(s, StatusCode::BAD_REQUEST, "{body}");
 }
+
+/// The verifier's hold on a task (v2-v3-contract §3.4), as #502 adds it at the move to review.
+async fn hold(state: &AppState, task_id: &str, requested_by: &str, spec: Value) -> String {
+    state
+        .db
+        .add_check(&NewCheck {
+            task_id: task_id.into(),
+            kind: "peer_review".into(),
+            spec,
+            required: true,
+            approved: true,
+            requested_by: requested_by.into(),
+            approved_by: Some("kwant".into()),
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+/// D7 "Being checked": a task in review whose verifier hold is pending, with no verdict, has
+/// `being_checked: true`; its verdict stays `none` and it is never one tap or batchable. A task
+/// with no hold, a hold from an earlier review, a bot's own peer review or a settled hold has
+/// `being_checked: false`.
+#[tokio::test]
+async fn being_checked_follows_the_verifiers_pending_hold() {
+    let (app, state, _tmp) = setup().await;
+    let space = SpaceId::default_space();
+    let kwants = state.db.list_kwants(&space).await.unwrap();
+    let (lead, spec) = (kwants[0].clone(), kwants[1].clone());
+    let chan = state
+        .db
+        .create_channel(&space, &NewChannel {
+            name: "ops".into(),
+            description: None,
+            lead_kwant_id: lead.id.clone(),
+            member_kwants: vec![lead.id.clone(), spec.id.clone()],
+            routing_mode: "auto".into(),
+        })
+        .await
+        .unwrap();
+
+    let held = review_task(&state, &spec.id, "Held by the verifier", "- Works", &chan.id, 0).await;
+    hold(&state, &held, "verifier", json!({"verifier": true})).await;
+    let plain = review_task(&state, &spec.id, "No hold", "- Works", &chan.id, 0).await;
+    let bots = review_task(&state, &spec.id, "A bot's peer review", "- Works", &chan.id, 0).await;
+    hold(&state, &bots, &lead.id, json!({})).await;
+    let settled = review_task(&state, &spec.id, "Hold settled", "- Works", &chan.id, 0).await;
+    let s = hold(&state, &settled, "verifier", json!({"verifier": true})).await;
+    state.db.finish_check(&s, "passed", Some("verified"), "kwant", None).await.unwrap();
+    // A hold from the first review; the task was sent back and is in review again
+    let again = review_task(&state, &lead.id, "In review again", "- Works", &chan.id, 0).await;
+    hold(&state, &again, "verifier", json!({"verifier": true})).await;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(state.db.move_task(&again, "review", "ready", "person", &change(Some("Also the edge case"))).await.unwrap());
+    state.db.claim_task(&again, &lead.id, None, None, 600_000, false, &lead.id).await.unwrap().unwrap();
+    assert!(state.db.move_task(&again, "working", "review", &lead.id, &change(Some("Edge case done"))).await.unwrap());
+
+    let v = get(&app, "/api/inbox").await;
+    let h = find(&v, &held);
+    assert_eq!(h["being_checked"], json!(true), "{h}");
+    assert_eq!(h["verdict"]["result"], "none");
+    assert_eq!((h["one_tap"].clone(), h["batchable"].clone()), (json!(false), json!(false)));
+    for id in [&plain, &bots, &again] {
+        assert_eq!(find(&v, id)["being_checked"], json!(false), "{id}: {}", find(&v, id));
+    }
+    // A passed hold may verify the task at once; if it is still listed, it isn't being checked
+    if has(&v, &settled) {
+        assert_eq!(find(&v, &settled)["being_checked"], json!(false));
+    }
+    // Every review item carries the field; away items don't
+    for i in v["items"].as_array().unwrap() {
+        assert_eq!(i["being_checked"].is_boolean(), i["kind"] == "review", "{i}");
+    }
+    assert_eq!(v["batch"], Value::Null, "nothing without a verdict is batched");
+}
