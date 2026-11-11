@@ -139,6 +139,7 @@ export type UnlockProblem =
   | { kind: 'needs-token' }
   | { kind: 'wrong-password' }
   | { kind: 'two-factor'; providers: Array<{ id: number; name: string; usable: boolean }> }
+  | { kind: 'code-rejected'; providers: Array<{ id: number; name: string; usable: boolean }> }
   | { kind: 'new-device-code' }
   | { kind: 'other-account' }
   | { kind: 'invalid'; message: string }
@@ -151,6 +152,8 @@ export function unlockProblemFor(status: number, body: unknown): UnlockProblem {
   const message = str(o.error) ?? '';
   if (status === 401 && isPersonOnlyBody(body)) return { kind: 'needs-token' };
   if (o.wrong_password === true) return { kind: 'wrong-password' };
+  if (o.needs === 'two_factor' && o.code_rejected === true)
+    return { kind: 'code-rejected', providers: twoFactorChoices(o.providers) };
   if (o.needs === 'two_factor') return { kind: 'two-factor', providers: twoFactorChoices(o.providers) };
   if (o.needs === 'new_device_otp') return { kind: 'new-device-code' };
   if (status === 409) return { kind: 'other-account' };
@@ -171,6 +174,8 @@ export function unlockProblemText(p: UnlockProblem): string {
       return p.providers.some((x) => x.usable)
         ? 'Your account uses two-step login. Enter the code to continue.'
         : `Your account’s two-step login (${p.providers.map((x) => x.name).join(', ') || 'unknown'}) can’t be done here. Use an API key instead.`;
+    case 'code-rejected':
+      return 'That code wasn’t accepted. Codes change every 30 seconds — enter the one showing now, and check the clock on your phone.';
     case 'new-device-code':
       return 'Bitwarden emailed you a code to confirm this new device. Enter it to continue.';
     case 'other-account':
