@@ -2872,8 +2872,9 @@ async fn run_kwant_turn_inner(
         } else {
             String::new()
         };
-        // P5: open notes about the tools this turn has, as hints written by bots
-        if with_tools && !opts.fresh_eyes {
+        // P5: open notes about the tools this turn has, as hints written by bots; D8: chat,
+        // routine and hand-off turns only (the same allow-list as `note_tool`)
+        if with_tools && !opts.fresh_eyes && super::tool_notes::wants(opts.purpose.as_deref()) {
             let servers: Vec<String> = mcp_ctx
                 .as_ref()
                 .map(|c| c.servers.iter().filter(|s| s.name != crate::mcp::SELF_SERVER_NAME).map(|s| s.name.clone()).collect())

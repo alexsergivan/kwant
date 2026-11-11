@@ -94,6 +94,9 @@ pub struct NewFiling<'a> {
     /// The start of the bot's day for the new-note limit, and the limit.
     pub day_start: i64,
     pub daily_new: i64,
+    /// Filings before this are dropped when a new note is saved (they no longer back the limit,
+    /// the hour or anything else).
+    pub filings_before: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +118,16 @@ pub struct NoteEdit {
     pub fixed: Option<bool>,
 }
 
+/// What became of a person's edit.
+#[derive(Debug)]
+pub enum Edited {
+    /// No such note.
+    Missing,
+    /// Another open note already has this tool and kind (its id); nothing changed.
+    Conflict(String),
+    Saved(Box<ToolNoteRow>),
+}
+
 impl Database {
     pub(super) async fn migrate_tool_notes(&self) -> Result<(), DbError> {
         for sql in TABLES {
@@ -125,10 +138,11 @@ impl Database {
 
     /// Files a bot's note, or repeats the open one of the same tool and kind (count + 1, the bot
     /// added to `bots`, `last_at` and `origin` moved; text and kind never change). One
-    /// transaction; the caller serializes filings so two at once can't both open a note.
+    /// transaction that holds the write lock from the start, so the dedupe and the daily limit
+    /// hold when filings, edits and turn writes run at once.
     pub async fn file_tool_note(&self, f: &NewFiling<'_>) -> Result<Filed, DbError> {
         let key = f.tool.to_lowercase();
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_write().await?;
         let open: Option<ToolNoteRow> = sqlx::query_as(&format!(
             "SELECT {COLS} FROM tool_notes WHERE space_id = ? AND tool_key = ? AND kind = ? AND state = 'open' AND last_at >= ?
              ORDER BY last_at DESC LIMIT 1"
@@ -147,6 +161,7 @@ impl Database {
                 .fetch_optional(&mut *tx)
                 .await?;
             if recent.is_some() {
+                tx.rollback().await?;
                 return Ok(Filed::AlreadyNoted(note));
             }
             let mut bots: Vec<serde_json::Value> = serde_json::from_str(&note.bots).unwrap_or_default();
@@ -178,6 +193,7 @@ impl Database {
             .fetch_one(&mut *tx)
             .await?;
         if today >= f.daily_new {
+            tx.rollback().await?;
             return Ok(Filed::Limit);
         }
         let id = format!("tn_{}", uuid::Uuid::new_v4().simple());
@@ -205,8 +221,7 @@ impl Database {
             .bind(f.now)
             .execute(&mut *tx)
             .await?;
-        // Filings older than two days are only kept for the limit and the hour, which they no longer touch
-        sqlx::query("DELETE FROM tool_note_filings WHERE at < ?").bind(f.day_start - 2 * 86_400_000).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM tool_note_filings WHERE at < ?").bind(f.filings_before).execute(&mut *tx).await?;
         let row: ToolNoteRow = sqlx::query_as(&format!("SELECT {COLS} FROM tool_notes WHERE id = ?")).bind(&id).fetch_one(&mut *tx).await?;
         tx.commit().await?;
         Ok(Filed::New(row))
@@ -265,12 +280,42 @@ impl Database {
         .await?)
     }
 
-    /// The person's edit. `Ok(None)`: no such note.
-    pub async fn edit_tool_note(&self, id: &str, edit: &NoteEdit, now: i64) -> Result<Option<ToolNoteRow>, DbError> {
-        let mut tx = self.pool.begin().await?;
-        let Some(_) = sqlx::query_as::<_, (String,)>("SELECT id FROM tool_notes WHERE id = ?").bind(id).fetch_optional(&mut *tx).await? else {
-            return Ok(None);
+    /// The person's edit, in one transaction that holds the write lock from the start. Refused,
+    /// with nothing changed, when it would leave two open notes of the same tool and kind
+    /// (reopening a fixed note, or changing the kind of an open one).
+    pub async fn edit_tool_note(&self, id: &str, edit: &NoteEdit, now: i64) -> Result<Edited, DbError> {
+        let mut tx = self.begin_write().await?;
+        let Some((space_id, tool_key, kind, state)) =
+            sqlx::query_as::<_, (String, String, String, String)>("SELECT space_id, tool_key, kind, state FROM tool_notes WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?
+        else {
+            tx.rollback().await?;
+            return Ok(Edited::Missing);
         };
+        let open_after = match edit.fixed {
+            Some(true) => false,
+            Some(false) => true,
+            None => state == "open",
+        };
+        let kind_after = edit.kind.clone().unwrap_or(kind.clone());
+        if open_after && (state != "open" || kind_after != kind) {
+            let other: Option<(String,)> = sqlx::query_as(
+                "SELECT id FROM tool_notes WHERE space_id = ? AND tool_key = ? AND kind = ? AND state = 'open' AND id != ?
+                 ORDER BY last_at DESC, id LIMIT 1",
+            )
+            .bind(&space_id)
+            .bind(&tool_key)
+            .bind(&kind_after)
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some((existing,)) = other {
+                tx.rollback().await?;
+                return Ok(Edited::Conflict(existing));
+            }
+        }
         if let Some(text) = &edit.person_text {
             sqlx::query("UPDATE tool_notes SET person_text = ?, updated_at = ? WHERE id = ?").bind(text).bind(now).bind(id).execute(&mut *tx).await?;
         }
@@ -295,9 +340,9 @@ impl Database {
             }
             None => {}
         }
-        let row = sqlx::query_as(&format!("SELECT {COLS} FROM tool_notes WHERE id = ?")).bind(id).fetch_optional(&mut *tx).await?;
+        let row: ToolNoteRow = sqlx::query_as(&format!("SELECT {COLS} FROM tool_notes WHERE id = ?")).bind(id).fetch_one(&mut *tx).await?;
         tx.commit().await?;
-        Ok(row)
+        Ok(Edited::Saved(Box::new(row)))
     }
 
     /// Where the note's latest file or repeat happened (the chat line's message).
@@ -312,17 +357,152 @@ impl Database {
     }
 
     /// Removes notes for good: fixed before `fixed_before`, and the listed ids (notes of a removed
-    /// connection past their 30 days).
-    pub async fn purge_tool_notes(&self, space_id: &str, fixed_before: i64, ids: &[String]) -> Result<u64, DbError> {
+    /// connection past their 30 days). Also drops filings older than `filings_before` (they only
+    /// back the daily limit and the same-bot hour). One write transaction.
+    pub async fn purge_tool_notes(&self, space_id: &str, fixed_before: i64, ids: &[String], filings_before: i64) -> Result<u64, DbError> {
+        let mut tx = self.begin_write().await?;
         let mut n = sqlx::query("DELETE FROM tool_notes WHERE space_id = ? AND state = 'fixed' AND fixed_at < ?")
             .bind(space_id)
             .bind(fixed_before)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
         for id in ids {
-            n += sqlx::query("DELETE FROM tool_notes WHERE space_id = ? AND id = ?").bind(space_id).bind(id).execute(&self.pool).await?.rows_affected();
+            n += sqlx::query("DELETE FROM tool_notes WHERE space_id = ? AND id = ?").bind(space_id).bind(id).execute(&mut *tx).await?.rows_affected();
         }
+        sqlx::query("DELETE FROM tool_note_filings WHERE at < ?").bind(filings_before).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn db() -> (Database, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        (Database::init(tmp.path()).await.unwrap(), tmp)
+    }
+
+    async fn file(db: &Database, tool: &str, kwant: &str, now: i64) -> Result<Filed, DbError> {
+        db.file_tool_note(&NewFiling {
+            space_id: "spc_default",
+            tool,
+            connection: None,
+            kind: "tip",
+            text: "a tip",
+            kwant_id: kwant,
+            kwant_name: kwant,
+            origin: None,
+            now,
+            repeat_since: now - 7 * 86_400_000,
+            same_bot_since: now - 3_600_000,
+            day_start: now - now.rem_euclid(86_400_000),
+            daily_new: 5,
+            filings_before: now - 7 * 86_400_000,
+        })
+        .await
+    }
+
+    /// QA #507 D1: eight new notes from one bot at once, straight to the database (no lock in
+    /// front): exactly five are saved, three hit the limit, none fails with "database is locked".
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn eight_parallel_new_notes_keep_the_daily_limit() {
+        let (db, _t) = db().await;
+        let now = chrono::Utc::now().timestamp_millis();
+        let runs: Vec<_> = (0..8)
+            .map(|i| {
+                let db = db.clone();
+                tokio::spawn(async move { file(&db, &format!("tool{i}"), "k1", now).await })
+            })
+            .collect();
+        let (mut new, mut limit) = (0, 0);
+        for r in runs {
+            match r.await.unwrap() {
+                Ok(Filed::New(_)) => new += 1,
+                Ok(Filed::Limit) => limit += 1,
+                other => panic!("unexpected: {other:?}"),
+            }
+        }
+        assert_eq!((new, limit), (5, 3));
+        assert_eq!(db.tool_notes_of_space("spc_default").await.unwrap().len(), 5);
+    }
+
+    /// QA #507 D1: the same tool filed by eight bots at once is one note ×8, never two notes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn eight_bots_filing_one_note_at_once_make_one_note() {
+        let (db, _t) = db().await;
+        let now = chrono::Utc::now().timestamp_millis();
+        let runs: Vec<_> = (0..8)
+            .map(|i| {
+                let db = db.clone();
+                tokio::spawn(async move { file(&db, "github · x", &format!("k{i}"), now).await })
+            })
+            .collect();
+        for r in runs {
+            assert!(matches!(r.await.unwrap(), Ok(Filed::New(_) | Filed::Repeat(_))));
+        }
+        let all = db.tool_notes_of_space("spc_default").await.unwrap();
+        assert_eq!(all.len(), 1, "{all:?}");
+        assert_eq!(all[0].count, 8);
+    }
+
+    /// QA #507 nit 8: filings past their 7 days go in the purge pass; newer ones stay.
+    #[tokio::test]
+    async fn the_purge_pass_drops_filings_older_than_seven_days() {
+        let (db, _t) = db().await;
+        let now = chrono::Utc::now().timestamp_millis();
+        let day = 86_400_000;
+        // Filed 9 and 8 days ago, and today (each a new note, so no prune at filing time)
+        for (tool, at) in [("a", now - 9 * day), ("b", now - 8 * day), ("c", now)] {
+            sqlx::query("INSERT INTO tool_note_filings (note_id, kwant_id, is_new, at) VALUES (?, 'k1', 1, ?)")
+                .bind(tool)
+                .bind(at)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        db.purge_tool_notes("spc_default", now - 30 * day, &[], now - 7 * day).await.unwrap();
+        let left: Vec<(String,)> = sqlx::query_as("SELECT note_id FROM tool_note_filings ORDER BY note_id").fetch_all(&db.pool).await.unwrap();
+        assert_eq!(left, vec![("c".to_string(),)]);
+    }
+
+    /// QA #507 D2/D3 (decision D11): an edit that would leave two open notes of one tool and kind
+    /// is refused with the other note's id, and changes nothing.
+    #[tokio::test]
+    async fn an_edit_never_leaves_two_open_notes_of_a_tool_and_kind() {
+        let (db, _t) = db().await;
+        let now = chrono::Utc::now().timestamp_millis();
+        let old = db.add_person_tool_note("spc_default", "X", None, "tip", "old tip", now).await.unwrap();
+        let fixed = NoteEdit { fixed: Some(true), ..Default::default() };
+        assert!(matches!(db.edit_tool_note(&old.id, &fixed, now).await.unwrap(), Edited::Saved(_)));
+        let open = db.add_person_tool_note("spc_default", "x", None, "tip", "new tip", now).await.unwrap();
+        // D2: reopening the fixed one
+        let reopen = NoteEdit { fixed: Some(false), person_text: Some("changed".into()), ..Default::default() };
+        match db.edit_tool_note(&old.id, &reopen, now + 1).await.unwrap() {
+            Edited::Conflict(id) => assert_eq!(id, open.id),
+            other => panic!("{other:?}"),
+        }
+        let after = db.tool_note(&old.id).await.unwrap().unwrap();
+        assert_eq!((after.state.as_str(), after.person_text.as_deref(), after.last_at), ("fixed", Some("old tip"), old.last_at), "nothing changed");
+        // D3: changing the kind of an open note to one the tool has open
+        let broke = db.add_person_tool_note("spc_default", "X", None, "broke", "broken", now).await.unwrap();
+        let rekind = NoteEdit { kind: Some("tip".into()), ..Default::default() };
+        match db.edit_tool_note(&broke.id, &rekind, now + 1).await.unwrap() {
+            Edited::Conflict(id) => assert_eq!(id, open.id),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(db.tool_note(&broke.id).await.unwrap().unwrap().kind, "broke");
+        // Allowed: a fixed note may change kind (it stays fixed); a kind no open note has; fixing
+        let fixed_rekind = NoteEdit { kind: Some("broke".into()), ..Default::default() };
+        assert!(matches!(db.edit_tool_note(&old.id, &fixed_rekind, now).await.unwrap(), Edited::Saved(_)));
+        let missing = NoteEdit { kind: Some("missing".into()), ..Default::default() };
+        assert!(matches!(db.edit_tool_note(&broke.id, &missing, now).await.unwrap(), Edited::Saved(_)));
+        // Reopening is fine once the other is fixed
+        assert!(matches!(db.edit_tool_note(&open.id, &fixed, now).await.unwrap(), Edited::Saved(_)));
+        let back = NoteEdit { fixed: Some(false), kind: Some("tip".into()), ..Default::default() };
+        assert!(matches!(db.edit_tool_note(&old.id, &back, now).await.unwrap(), Edited::Saved(_)));
+        assert!(matches!(db.edit_tool_note("tn_none", &back, now).await.unwrap(), Edited::Missing));
     }
 }

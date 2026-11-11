@@ -580,7 +580,7 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
         return Value::Array(super::dev::tickets::tools::tools());
     }
     let board = super::missions::enabled(state).await;
-    let mut tools = tool_list(scope, board);
+    let mut tools = tool_list(scope, board, super::tool_notes::offered(state, scope));
     if super::missions::truth_ledger::on(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::missions::truth_ledger::tools(board));
@@ -600,7 +600,7 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
         return super::dev::tickets::tools::TOOLS.iter().map(|t| t.to_string()).collect();
     }
     let board = super::missions::enabled(state).await;
-    let mut tools = tool_list(scope, board);
+    let mut tools = tool_list(scope, board, super::tool_notes::offered(state, scope));
     if super::missions::truth_ledger::on(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::missions::truth_ledger::tools(board));
@@ -609,7 +609,8 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     tools.as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()
 }
 
-fn tool_list(scope: &SelfScope, board: bool) -> Value {
+/// `notes`: the turn is offered `note_tool` (D8: chat, routine and hand-off turns only).
+fn tool_list(scope: &SelfScope, board: bool, notes: bool) -> Value {
     let mut tools = memory_tools();
     if let Some(list) = tools.as_array_mut() {
         if board {
@@ -622,7 +623,9 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
         list.extend(super::smart_results::present_result_tools());
         list.extend(super::mcp_suggest::tools());
         list.extend(super::page_source::tools());
-        list.push(super::tool_notes::tool());
+        if notes {
+            list.push(super::tool_notes::tool());
+        }
         list.extend(super::bot_actions::tools());
         list.extend(super::hires::tools());
         if scope.sandbox_target.is_some() {
@@ -2186,7 +2189,7 @@ mod tests {
     }
 
     fn names(scope: &SelfScope) -> Vec<String> {
-        tool_list(scope, false)
+        tool_list(scope, false, true)
             .as_array()
             .unwrap()
             .iter()
