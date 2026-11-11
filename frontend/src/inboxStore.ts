@@ -7,7 +7,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { AwayItem, AwayResponse, AwaySection, awayApi, sortAwaySection } from './away';
-import { InboxError, InboxGroup, InboxItem, InboxResponse, ReviewItem, cmpSortKey, inboxApi, isReview } from './api/inbox';
+import { HeldStatus, InboxError, InboxGroup, InboxItem, InboxResponse, ReviewItem, cmpSortKey, inboxApi, isBeingChecked, isReview } from './api/inbox';
 
 export type Crumb = 'board' | 'dev' | null;
 
@@ -226,7 +226,10 @@ export function reviewForTask(taskId: string): ReviewItem | null {
 export function batchItems(data: InboxResponse | null): InboxItem[] {
   if (!data?.batch) return [];
   const pool = [...(data.batch_items ?? []), ...data.items];
-  return data.batch.ids.map((id) => pool.find((i) => i.id === id)).filter((i): i is InboxItem => !!i);
+  return data.batch.ids
+    .map((id) => pool.find((i) => i.id === id))
+    .filter((i): i is InboxItem => !!i)
+    .filter((i) => !isReview(i) || (i.verdict.result !== 'none' && !isBeingChecked(i))); // no verdict, no batch (D7), even if the server sent it
 }
 
 // ---- Approve ----
@@ -235,6 +238,9 @@ function staleNote(paths: string[]): string {
   if (!paths.length) return 'Its files changed after its check';
   return `${paths[0]}${paths.length > 1 ? ` and ${paths.length - 1} more` : ''} changed after its check`;
 }
+
+/** The status line after a stale approve: no paths, the row says what changed (V1-4). */
+export const staleStatus = (title: string): string => `Couldn’t approve “${title}”. It’s back in Failed or stuck, and nothing was approved.`;
 
 /** Puts an item that failed freshness into Failed or stuck, locally, until the next load agrees. */
 export function comeBack(item: InboxItem, paths: string[]) {
@@ -248,6 +254,17 @@ export function comeBack(item: InboxItem, paths: string[]) {
   };
   cameBack.set(item.id, back);
   set((s) => (s.data ? { data: { ...s.data, items: [...s.data.items.filter((i) => i.id !== item.id), back].sort(cmpSortKey) } } : {}));
+}
+
+/**
+ * V1-3: a held action the pane just denied or allowed, written into the list's copy of the item so the row's
+ * "N held" drops at once instead of on the next load. The next load replaces it with the server's word.
+ */
+export function markHeld(itemId: string, approvalId: string, status: Exclude<HeldStatus, 'pending'>) {
+  const at = new Date().toISOString();
+  const patch = (i: InboxItem): InboxItem =>
+    i.id === itemId && isReview(i) ? { ...i, held_actions: i.held_actions.map((h) => (h.approval_id === approvalId ? { ...h, status, resolved_at: h.resolved_at ?? at } : h)) } : i;
+  set((s) => (s.data ? { data: { ...s.data, items: s.data.items.map(patch), batch_items: s.data.batch_items?.map(patch) } } : {}));
 }
 
 function dropItem(id: string) {
@@ -280,7 +297,8 @@ export async function approveOne(item: InboxItem): Promise<void> {
   } catch (e) {
     if (e instanceof InboxError && e.stale) {
       comeBack(item, e.paths);
-      set({ busy: null, notice: { text: `Couldn’t approve: ${title}. ${staleNote(e.paths)}, so nothing was approved.`, tone: 'error' } });
+      // V1-4: what changed is said once, on the item's own row in Failed or stuck; the status line doesn't repeat it.
+      set({ busy: null, notice: { text: staleStatus(title), tone: 'error' } });
     } else {
       const why = e instanceof Error ? e.message : 'Something went wrong';
       set({ busy: null, notice: { text: `Couldn’t approve “${title}”. ${why}. Nothing was approved.`, tone: 'error' } });
@@ -346,7 +364,7 @@ async function runBatch(items: ReviewItem[]) {
       if (e instanceof InboxError && e.stale) {
         comeBack(item, e.paths);
         patchRow(i, { status: 'came_back', note: `${staleNote(e.paths)} · back in Failed or stuck` });
-        announce(`“${item.title}” came back: ${staleNote(e.paths)}.`);
+        announce(`“${item.title}” came back to Failed or stuck. Nothing was approved.`);
         continue;
       }
       const status = e instanceof InboxError ? e.status : 0;
