@@ -369,6 +369,24 @@ test('roll back after approval (via fork): after-approval lines, step-down, fork
   assert.deepEqual(opened, ['t-copy']);
 });
 
+test('roll back by restore (in review, person check passed) still shows the step-down; none when step_down is null', async () => {
+  const base = fakeApi();
+  const { api, calls } = fakeApi({
+    restorePreview: async () => ({ ...base.preview, via: 'restore', step_down: { kwant_id: 'k-mira', class: 'copy changes', from: 'trusted', to: 'sandbox' } }),
+  });
+  const { q } = await mount(FX.oneTap, api);
+  await click(q('[data-roll-back]'));
+  assert.equal(q('[data-after-approval]'), null);
+  assert.match(q('[data-step-down]').textContent, /Mira moves down one Flight School tier for copy changes: trusted → sandbox/i);
+  await click(q('[data-rollback-confirm]'));
+  assert.ok(calls.some((c) => c[0] === 'restore'));
+  assert.equal(calls.some((c) => c[0] === 'forkFromCheckpoint'), false);
+  const { api: api2 } = fakeApi();
+  const { q: q2 } = await mount(FX.oneTap, api2);
+  await click(q2('[data-roll-back]'));
+  assert.equal(q2('[data-step-down]'), null);
+});
+
 test('no roll back button when rollback_ok is false; Escape closes the dialog', async () => {
   const { api } = fakeApi();
   const { q } = await mount(FX.noRollback, api);

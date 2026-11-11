@@ -1211,23 +1211,21 @@ const RollBackDialog: React.FC<{
               </p>
             )}
             {fork ? (
-              <>
-                <p className="text-zinc-200" data-after-approval>
-                  This was approved{approvedAt ? <> at <strong>{approvedAt}</strong></> : null}. The approved record stays. A copy of the task is made from{' '}
-                  <strong>before the run{cpTime ? ` · ${cpTime}` : ''}</strong> with the files put back, and the copy waits on hold until you press Run.
-                </p>
-                {step && (
-                  <p className="rounded-xl border border-amber-500/40 px-3 py-2 text-zinc-100" data-step-down>
-                    {item.kwant_name} moves down one Flight School tier for <strong>{step.cls}</strong>: <strong>{step.from} → {step.to}</strong>.
-                  </p>
-                )}
-              </>
+              <p className="text-zinc-200" data-after-approval>
+                This was approved{approvedAt ? <> at <strong>{approvedAt}</strong></> : null}. The approved record stays. A copy of the task is made from{' '}
+                <strong>before the run{cpTime ? ` · ${cpTime}` : ''}</strong> with the files put back, and the copy waits on hold until you press Run.
+              </p>
             ) : undoFrom ? (
               <p className="text-zinc-300">Puts the files back to how they were just before the roll back (the safety checkpoint{cpTime ? ` · ${cpTime}` : ''}).</p>
             ) : (
               <p className="text-zinc-300">
                 Puts this task’s files back to how they were before {item.kwant_name} started (checkpoint <strong className="text-zinc-100">before the run{cpTime ? ` · ${cpTime}` : ''}</strong>). Only files
                 this task changed are touched.
+              </p>
+            )}
+            {step && (
+              <p className="rounded-xl border border-amber-500/40 px-3 py-2 text-zinc-100" data-step-down>
+                {item.kwant_name} moves down one Flight School tier for <strong>{step.cls}</strong>: <strong>{step.from} → {step.to}</strong>.
               </p>
             )}
             <section aria-labelledby="rb-files" className="space-y-1.5">
