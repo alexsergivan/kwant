@@ -20,6 +20,7 @@ use crate::server::continuity::SelfScope;
 use crate::server::routes::{scope_for, turn_once, TurnOpts};
 use crate::server::spaces::Scope;
 use crate::server::AppState;
+use std::collections::{BTreeMap, BTreeSet};
 use axum::{
     extract::{Path, Query, RawQuery, State},
     response::{IntoResponse, Response},
@@ -209,6 +210,22 @@ pub fn decide(tier: &str, steps: &[Step], findings: &[Finding], reproduced_pass:
     }
 }
 
+/// The low-tier verdict (contract §3.2): decided by [`decide`] on contract and reproduce alone, so
+/// scope never holds a low-risk task. A changed path that a must_not_change entry names is then
+/// added as one `medium` finding per path, "Changed a path it must not change: <path>", so a pass
+/// with a scope violation isn't silent.
+pub fn decide_low(steps: &[Step], findings: &mut Vec<Finding>, reproduced_pass: bool, must_not_change: &[String], changed: &[String]) -> &'static str {
+    let verdict = decide("low", steps, findings, reproduced_pass);
+    let mut seen = BTreeSet::new();
+    for (entry, path) in contract::scope_violations(must_not_change, changed) {
+        if seen.insert(path.clone()) {
+            let repro = format!("diff of {path} between the run's before_run and after_run checkpoints (must_not_change: {entry})");
+            find(findings, "scope", "medium", format!("Changed a path it must not change: {path}"), repro);
+        }
+    }
+    verdict
+}
+
 /// `high` when nothing is in couldnt_verify, `medium` for one or two items, `low` for three or
 /// more or when the verifier ran on the author's model.
 pub fn confidence(couldnt_verify: usize, difference: &str) -> &'static str {
@@ -335,8 +352,11 @@ pub fn mutate_line(line: &str) -> Option<(&'static str, &'static str, String)> {
 }
 
 /// Up to [`MAX_MUTANTS`] mutants over `files` (path, text), one per file first, in path order.
-pub fn mutants(files: &[(String, String)]) -> Vec<Mutant> {
-    let mut per_file: Vec<Vec<Mutant>> = Vec::new();
+/// Lines the run changed come first (V10): a file listed in `changed_lines` offers only its
+/// changed lines, a file not listed offers every line. Only when no offered line can be mutated
+/// does it fall back to the first mutable lines of each file.
+pub fn mutants(files: &[(String, String)], changed_lines: &BTreeMap<String, BTreeSet<usize>>) -> Vec<Mutant> {
+    let mut all: Vec<Vec<Mutant>> = Vec::new();
     for (path, text) in files {
         let mut list = Vec::new();
         for (n, line) in text.lines().enumerate() {
@@ -350,8 +370,13 @@ pub fn mutants(files: &[(String, String)]) -> Vec<Mutant> {
                 list.push(Mutant { path: path.clone(), line: n + 1, from, to, text: body });
             }
         }
-        per_file.push(list);
+        all.push(list);
     }
+    let in_diff: Vec<Vec<Mutant>> = all
+        .iter()
+        .map(|l| l.iter().filter(|m| changed_lines.get(&m.path).is_none_or(|c| c.contains(&m.line))).cloned().collect())
+        .collect();
+    let per_file = if in_diff.iter().any(|l| !l.is_empty()) { in_diff } else { all };
     let mut out = Vec::new();
     let mut round = 0;
     while out.len() < MAX_MUTANTS && per_file.iter().any(|l| l.len() > round) {
@@ -814,7 +839,8 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
         }
     }
     if tier == "low" {
-        let verdict = decide(tier, &steps, &findings, reproduced_pass);
+        let changed = copy.as_ref().map(|c| c.changed.as_slice()).unwrap_or_default();
+        let verdict = decide_low(&steps, &mut findings, reproduced_pass, &mnc, changed);
         return Some(Outcome { verdict, tier, reasons, steps, findings, couldnt, difference: "none", criteria, scope, after_run, ..Default::default() });
     }
 
@@ -825,7 +851,8 @@ async fn verify(state: &AppState, task: &Task, check_id: &str, dir: &std::path::
             steps.push(step("mutation", "couldnt_run", "no approved command check to run against mutants"));
             couldnt.push(nv("the mutation probe", "no approved command check to run against mutants"));
         } else {
-            match tokio::time::timeout(PROBE_BUDGET, probe(dir, &changed, &commands)).await {
+            let lines = copy.as_ref().map(|c| c.changed_lines.clone()).unwrap_or_default();
+            match tokio::time::timeout(PROBE_BUDGET, probe(dir, &changed, &lines, &commands)).await {
                 Ok((tried, survived)) if tried > 0 => {
                     for m in &survived {
                         find(&mut findings, "mutation", "medium", format!("The tests didn't notice {} → {} in {} line {}", m.from.trim(), m.to.trim(), m.path, m.line), format!("{}:{} swap \"{}\" for \"{}\", then run the command checks", m.path, m.line, m.from.trim(), m.to.trim()));
@@ -884,7 +911,7 @@ fn first_line(s: &str) -> String {
 
 /// Runs each mutant in the copy against the command checks; returns how many ran and the ones
 /// that survived (every check still passed). Each file is put back after its mutant.
-async fn probe(dir: &std::path::Path, changed: &[String], commands: &[OutcomeCheck]) -> (usize, Vec<Mutant>) {
+async fn probe(dir: &std::path::Path, changed: &[String], lines: &BTreeMap<String, BTreeSet<usize>>, commands: &[OutcomeCheck]) -> (usize, Vec<Mutant>) {
     let mut files = Vec::new();
     for p in changed.iter().filter(|p| super::checkpoints::safe_rel(p)) {
         let path = dir.join(p);
@@ -896,7 +923,7 @@ async fn probe(dir: &std::path::Path, changed: &[String], commands: &[OutcomeChe
             files.push((p.clone(), text));
         }
     }
-    let list = mutants(&files);
+    let list = mutants(&files, lines);
     let mut survived = Vec::new();
     for m in &list {
         let path = dir.join(&m.path);
@@ -1309,9 +1336,50 @@ mod tests {
         assert!(mutate_line("let v: Vec<String> = untrue();").is_none(), "generics and words containing true are left alone");
         assert!(mutate_line("fn f() -> u8 {").is_none());
         let files = vec![("a.rs".to_string(), "x == y\nz && w\n".to_string()), ("b.rs".into(), "if n < 3 {\n".into())];
-        let m = mutants(&files);
+        let m = mutants(&files, &BTreeMap::new());
         assert_eq!(m.iter().map(|m| (m.path.as_str(), m.line)).collect::<Vec<_>>(), [("a.rs", 1), ("b.rs", 1), ("a.rs", 2)]);
         assert_eq!(m[1].text, "if n >= 3 {\n");
+    }
+
+    /// V10 (Rigel's v4.mjs/v5.mjs): a run adds a function late in a file whose earlier lines are
+    /// mutable. The probe mutates the added lines, not the file's first mutable lines.
+    #[test]
+    fn mutants_prefer_the_lines_the_run_changed() {
+        let before = "function f(x) {\n  if (x == 0) return 1;\n  return x + 1;\n}\nconst ok = true;\n";
+        let after = format!("{before}\nfunction extra(a) {{\n  return a > 1 && b;\n}}\n");
+        let lines = super::super::checkpoints::changed_lines_of(before, &after);
+        assert_eq!(lines.iter().copied().collect::<Vec<_>>(), [6, 7, 8, 9]);
+        let files = vec![("src.js".to_string(), after.clone()), ("other.js".to_string(), "let y = a == b;\n".to_string())];
+        let changed = BTreeMap::from([("src.js".to_string(), lines.clone())]);
+        let m = mutants(&files, &changed);
+        // src.js offers only line 8 (its one mutable added line); other.js has no diff, so all of it
+        assert_eq!(m.iter().map(|m| (m.path.as_str(), m.line)).collect::<Vec<_>>(), [("src.js", 8), ("other.js", 1)]);
+        assert!(m[0].text.contains("return a <= 1 && b;"), "{}", m[0].text);
+        // Without the diff the old order picks the first mutable lines and never reaches line 8
+        let old: Vec<usize> = mutants(&files[..1], &BTreeMap::new()).iter().map(|m| m.line).collect();
+        assert_eq!(old, [2, 3, 5]);
+        // Only the file with a diff: every mutant lands in the added function
+        assert!(mutants(&files[..1], &changed).iter().all(|m| lines.contains(&m.line)));
+    }
+
+    #[test]
+    fn mutants_fall_back_to_the_old_order_when_no_changed_line_is_mutable() {
+        let text = "if (a == b) {}\nconst ok = true;\n// note\n".to_string();
+        let files = vec![("a.js".to_string(), text)];
+        let changed = BTreeMap::from([("a.js".to_string(), BTreeSet::from([3]))]);
+        assert_eq!(mutants(&files, &changed).iter().map(|m| m.line).collect::<Vec<_>>(), [1, 2]);
+    }
+
+    #[test]
+    fn changed_lines_are_the_added_and_edited_lines() {
+        use super::super::checkpoints::changed_lines_of as cl;
+        let v = |s: BTreeSet<usize>| s.into_iter().collect::<Vec<_>>();
+        assert_eq!(v(cl("a\nb\nc\n", "a\nb\nc\n")), Vec::<usize>::new());
+        assert_eq!(v(cl("a\nb\nc\n", "a\nB\nc\n")), [2]);
+        assert_eq!(v(cl("a\nc\n", "a\nb\nc\nd\n")), [2, 4]);
+        assert_eq!(v(cl("a\nb\nc\n", "c\na\nb\n")), [1], "a moved line counts once");
+        assert_eq!(v(cl("", "x\ny\n")), [1, 2]);
+        assert_eq!(v(cl("a\nb\n", "a\n")), Vec::<usize>::new(), "a deletion adds no line");
     }
 
     #[test]
@@ -1334,6 +1402,32 @@ mod tests {
         assert!(couldnt.contains(&nv("the phone layout", MODEL_SAID)));
         assert_eq!(serde_json::to_value(&couldnt[0]).unwrap(), json!({"what": "open issue o2", "why": "the verifier didn't judge it"}));
         assert_eq!(decide("high", &steps, &findings, true), "fail");
+    }
+
+    /// Ada's call on Rigel's low-tier scope finding: no scope hold at tier 0-1, but a visible
+    /// medium finding per changed must_not_change path; the verdict stays what reproduce gave.
+    #[test]
+    fn a_low_tier_scope_violation_is_a_medium_finding_not_a_hold() {
+        let steps = vec![step("contract", "passed", "complete"), step("reproduce", "passed", "1 of 1 check(s) passed in a clean copy")];
+        let mnc: Vec<String> = vec!["src/db/".into(), "README.md".into(), "the public API".into()];
+        let changed: Vec<String> = vec!["src/db/a.rs".into(), "src/x.rs".into(), "README.md".into()];
+        let mut findings = Vec::new();
+        assert_eq!(decide_low(&steps, &mut findings, true, &mnc, &changed), "pass");
+        let texts: Vec<(&str, &str, &str)> = findings.iter().map(|f| (f.step.as_str(), f.severity.as_str(), f.text.as_str())).collect();
+        assert_eq!(
+            texts,
+            [("scope", "medium", "Changed a path it must not change: src/db/a.rs"), ("scope", "medium", "Changed a path it must not change: README.md")]
+        );
+        assert!(findings[0].repro.contains("src/db/"), "{:?}", findings[0]);
+        // Nothing changed that must not: no finding
+        let mut none = Vec::new();
+        assert_eq!(decide_low(&steps, &mut none, true, &mnc, &["src/x.rs".to_string()]), "pass");
+        assert!(none.is_empty());
+        // The scope finding never turns a fail or needs_you into something else
+        let mut f = vec![];
+        assert_eq!(decide_low(&steps, &mut f, false, &mnc, &changed), "needs_you");
+        // The same medium finding at high tier would hold it: that is the difference by design
+        assert_eq!(decide("high", &steps, &findings, true), "needs_you");
     }
 
     #[test]
