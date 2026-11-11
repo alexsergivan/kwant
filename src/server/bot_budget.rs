@@ -488,6 +488,15 @@ fn some_value<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<f6
     Option::<f64>::deserialize(d).map(Some)
 }
 
+/// The body as a [`BudgetBody`], only when it is a JSON object: serde would read an array like
+/// `[1]` as the struct's fields in order and save a 1-token budget (#495 S1).
+pub fn parse_body(v: Value) -> Option<BudgetBody> {
+    if !v.is_object() {
+        return None;
+    }
+    serde_json::from_value(v).ok()
+}
+
 /// The limits a body asks for, validated: (tokens, usd).
 pub fn validate(body: &BudgetBody, current: (u64, f64)) -> Result<(u64, f64), String> {
     let tokens = match body.budget_tokens {
@@ -511,9 +520,9 @@ pub fn validate(body: &BudgetBody, current: (u64, f64)) -> Result<(u64, f64), St
 pub async fn set_budget(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    body: Result<Json<BudgetBody>, axum::extract::rejection::JsonRejection>,
+    body: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
-    let Ok(Json(body)) = body else {
+    let Some(body) = body.ok().and_then(|Json(v)| parse_body(v)) else {
         return err(StatusCode::BAD_REQUEST, "expected {budget_tokens, budget_usd}");
     };
     let kwant = match kwant_or_404(&state, &id).await {
@@ -637,6 +646,17 @@ mod tests {
         assert_eq!(percent_of(2_040, 0.0, 2_000, 0.0).1, Some("tokens"));
         assert_eq!(percent_of(10, 20.0, 2_000, 20.0), (100.0, Some("usd")));
         assert_eq!(percent_of(99, 99.0, 0, 0.0), (0.0, None));
+    }
+
+    #[test]
+    fn only_an_object_is_a_budget_body() {
+        for bad in [json!([1]), json!([1000, 2.5]), json!(1), json!("x"), json!(null), json!(true)] {
+            assert!(parse_body(bad.clone()).is_none(), "{bad}");
+        }
+        let b = parse_body(json!({"budget_tokens": 5})).unwrap();
+        assert_eq!((b.budget_tokens, b.budget_usd), (Some(Some(5.0)), None));
+        assert!(parse_body(json!({})).is_some(), "an empty object changes nothing, as before");
+        assert!(parse_body(json!({"budget_tokens": "lots"})).is_none());
     }
 
     #[test]

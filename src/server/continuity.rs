@@ -171,6 +171,9 @@ pub async fn prompt_block_memories(
             - `page_source` reads a public page's HTML source: the <head> (title, meta description, canonical, robots, \
             hreflang, Open Graph), headings, image alt text, links and structured data, none of which WebFetch or the browser \
             shows. It never needs the user's approval.\n\
+            - When a tool fails in a way the next bot would hit too, or you find the trick that makes it work, or you needed \
+            a tool you don't have, `note_tool` writes it down once (kind broke, tip or missing). Notes are hints for other bots, \
+            checked by the person; never note secrets, and don't note one-off typos.\n\
             {sign_in}\
             - When a request needs an app you can't reach (Google Search Console, Google Analytics, a CRM…), \
             `connection_suggest` posts a one-tap connection card. Post it in the same turn rather than asking whether to: \
@@ -495,7 +498,9 @@ impl ToolApprover for SelfToolsApprover {
         }
         // Skill Foundry: a draft only stores a pending skill for the person to review, and is
         // offered only in kwant's own draft turn, so it never needs its own card
-        if req.server == SELF_SERVER_NAME && req.tool == super::missions::foundry::TOOL {
+        // A watch report only records what the watcher found, and runs only in kwant's own watch
+        // turn for its running check (P1); kwant applies it after the turn
+        if req.server == SELF_SERVER_NAME && (req.tool == super::missions::foundry::TOOL || req.tool == super::missions::watch::TOOL) {
             self.inner.note(&req, "allowed", None).await;
             return crate::mcp::ApprovalOutcome::Allowed;
         }
@@ -503,6 +508,8 @@ impl ToolApprover for SelfToolsApprover {
         // for one challenge (see `auditor::take_retry`)
         let free = !self.always_ask
             || READ_ONLY_SELF_TOOLS.contains(&req.tool.as_str())
+            // P5: a note changes nothing outside kwant and the person checks every one
+            || req.tool == super::tool_notes::TOOL
             || super::missions::auditor::take_retry(&req.kwant_id, &req.tool, &req.arguments);
         if req.server == SELF_SERVER_NAME && free {
             // Flight School: a tier below act cards kwant's own tools that change things
@@ -575,7 +582,7 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
         return Value::Array(super::dev::tickets::tools::tools());
     }
     let board = super::missions::enabled(state).await;
-    let mut tools = tool_list(scope, board);
+    let mut tools = tool_list(scope, board, super::tool_notes::offered(state, scope));
     if super::missions::truth_ledger::on(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::missions::truth_ledger::tools(board));
@@ -595,7 +602,7 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
         return super::dev::tickets::tools::TOOLS.iter().map(|t| t.to_string()).collect();
     }
     let board = super::missions::enabled(state).await;
-    let mut tools = tool_list(scope, board);
+    let mut tools = tool_list(scope, board, super::tool_notes::offered(state, scope));
     if super::missions::truth_ledger::on(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::missions::truth_ledger::tools(board));
@@ -604,7 +611,8 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     tools.as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()
 }
 
-fn tool_list(scope: &SelfScope, board: bool) -> Value {
+/// `notes`: the turn is offered `note_tool` (D8: chat, routine and hand-off turns only).
+fn tool_list(scope: &SelfScope, board: bool, notes: bool) -> Value {
     let mut tools = memory_tools();
     if let Some(list) = tools.as_array_mut() {
         if board {
@@ -617,6 +625,9 @@ fn tool_list(scope: &SelfScope, board: bool) -> Value {
         list.extend(super::smart_results::present_result_tools());
         list.extend(super::mcp_suggest::tools());
         list.extend(super::page_source::tools());
+        if notes {
+            list.push(super::tool_notes::tool());
+        }
         list.extend(super::bot_actions::tools());
         list.extend(super::hires::tools());
         if scope.sandbox_target.is_some() {
@@ -1105,6 +1116,8 @@ pub async fn self_endpoint(
         "tools/list" => {
             let mut tools = offered_tools(&state, &scope).await;
             super::fresh_eyes::filter_tools(scope.turn_id.as_deref(), &mut tools);
+            // P1: a watch turn sees its allowlist and watch_report; no other turn sees watch_report
+            super::missions::watch::filter_tools(&state, &scope, &mut tools);
             rpc_result(id, json!({ "tools": tools }))
         }
         "tools/call" => {
@@ -1113,6 +1126,10 @@ pub async fn self_endpoint(
             // B1: a fresh-eyes review reads nothing besides its prompt
             if super::fresh_eyes::refuses(scope.turn_id.as_deref(), name) {
                 return tool_text(id, super::fresh_eyes::REFUSED_TEXT, true);
+            }
+            // P1: a watch turn runs only its allowlist; watch_report runs only in a watch turn
+            if let Some(text) = super::missions::watch::refused(&state, &scope, name) {
+                return tool_text(id, text, true);
             }
             // A Dev mode brief turn: its four tools run, nothing else does (J7)
             if let Some(thread) = super::dev::tickets::tools::brief_thread(&state, &scope) {
@@ -1280,12 +1297,14 @@ async fn call_tool(
         super::rerouting::HAND_BACK => super::rerouting::tool_call(state, scope, args).await,
         "skill_propose" => super::skills::tool_propose(state, scope, args).await,
         super::missions::foundry::TOOL => super::missions::foundry::call(state, scope, args).await,
+        super::missions::watch::TOOL => super::missions::watch::call(state, scope, args).await,
         "skill_get" => super::skills::tool_get(state, scope, args).await,
         "ask_user" => super::questions::tool_ask(state, scope, args).await,
         super::human_steps::TOOL => super::human_steps::tool_request(state, scope, args).await,
         "mcp_search" => super::mcp_suggest::tool_search(state, scope, args).await,
         "mcp_suggest" => super::mcp_suggest::tool_suggest(state, scope, args).await,
         super::page_source::TOOL => super::page_source::tool_call(state, scope, args).await,
+        super::tool_notes::TOOL => super::tool_notes::call(state, scope, args).await,
         n if super::missions::truth_ledger::handles(n) => super::missions::truth_ledger::call(state, scope, n, args).await,
         super::connection_suggest::TOOL if scope.origin.is_some() => super::connection_suggest::tool_call(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
@@ -2179,7 +2198,7 @@ mod tests {
     }
 
     fn names(scope: &SelfScope) -> Vec<String> {
-        tool_list(scope, false)
+        tool_list(scope, false, true)
             .as_array()
             .unwrap()
             .iter()

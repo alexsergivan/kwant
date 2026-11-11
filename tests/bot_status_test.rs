@@ -126,3 +126,38 @@ async fn quiet_and_retry_routes_answer_for_the_person() {
     let (s, _) = call(&env.app, "POST", "/api/kwants/no-such-bot/status/retry", Some(json!({}))).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+/// S1 (Rigel's QA of #499): six parallel sends with one `client_message_id` in one chat. One is
+/// dispatched; every duplicate answers `already_delivered` with the first message's id (§7b),
+/// `pending` while the first was still saving, and exactly one message is saved under that id.
+#[tokio::test]
+async fn racing_duplicates_carry_the_first_messages_id() {
+    let env = setup().await;
+    let body = json!({"prompt": "race REPLYTAG:r1", "sender_id": "user", "kwant_id": env.b, "client_message_id": "cm-race.1"});
+    let sends = (0..6).map(|_| call(&env.app, "POST", "/api/chat/send", Some(body.clone())));
+    let replies = futures::future::join_all(sends).await;
+    for (s, v) in &replies {
+        assert_eq!(*s, StatusCode::OK, "{v}");
+    }
+    let firsts: Vec<&Value> = replies.iter().map(|(_, v)| v).filter(|v| v["status"] != "already_delivered").collect();
+    assert_eq!(firsts.len(), 1, "exactly one dispatched: {replies:?}");
+    let id = firsts[0]["user_message_id"].as_str().expect("the first send's message id").to_string();
+    let dups: Vec<&Value> = replies.iter().map(|(_, v)| v).filter(|v| v["status"] == "already_delivered").collect();
+    assert_eq!(dups.len(), 5, "{replies:?}");
+    for d in &dups {
+        assert_eq!(d["user_message_id"].as_str(), Some(id.as_str()), "a duplicate carries the first message's id: {d}");
+        assert_eq!(d["deduped"], true, "{d}");
+        assert!(d["pending"].is_boolean(), "{d}");
+    }
+    assert!(dups.iter().any(|d| d["pending"] == true), "at least one raced the first send while it was saving: {dups:?}");
+    let saved = env.state.db.get_message(&id).await.unwrap().expect("saved under the reserved id");
+    assert_eq!((saved.sender_role.as_str(), saved.text.as_str()), ("user", "race REPLYTAG:r1"));
+    wait_reply(&env, &env.b, "r1").await;
+    let mine: Vec<_> = messages(&env, &env.b).await.into_iter().filter(|m| m.sender_role == "user" && m.text == "race REPLYTAG:r1").collect();
+    assert_eq!(mine.len(), 1, "saved once");
+
+    // After the first was saved, a retry says so: not pending, same id
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(body)).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!((v["status"].as_str(), v["user_message_id"].as_str(), v["pending"].as_bool()), (Some("already_delivered"), Some(id.as_str()), Some(false)), "{v}");
+}

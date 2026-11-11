@@ -190,14 +190,11 @@ pub fn excerpt(text: &str) -> String {
     }
 }
 
-/// The bidi format characters (embeddings, overrides, isolates and marks): they can make text
-/// read differently from what it says.
-fn is_bidi(c: char) -> bool {
-    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
-}
-
 /// `text` without ANSI escape sequences, control characters other than newline and tab, and
-/// bidi format characters.
+/// characters that show as nothing ([`crate::drivers::is_format_char`], the filter page text and
+/// tool output already go through): the bidi embeddings, overrides, isolates and marks that make
+/// text read differently from what it says, and zero-width spaces, joiners, soft hyphens and BOMs
+/// that hide or split words.
 pub fn strip_controls(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut it = text.chars().peekable();
@@ -234,11 +231,27 @@ pub fn strip_controls(text: &str) -> String {
                 }
             },
             '\n' | '\t' => out.push(c),
-            c if c.is_control() || is_bidi(c) => {}
+            c if joins_visible(c, out.chars().last(), it.peek().copied()) => out.push(c),
+            c if c.is_control() || crate::drivers::is_format_char(c) => {}
             c => out.push(c),
         }
     }
     out
+}
+
+/// Whether `c`, a joiner (ZWJ, ZWNJ) or variation selector, is part of what the text shows: an
+/// emoji sequence (👨‍👩‍👧, ✔️) or a Persian or Indic word. Only next to non-ASCII text, so it can't
+/// split an ASCII word or command. A selector follows a visible character; a joiner sits between
+/// two (the one before may be a kept selector, as in 👁️‍🗨️).
+fn joins_visible(c: char, prev: Option<char>, next: Option<char>) -> bool {
+    let selector = |c: char| matches!(c, '\u{FE00}'..='\u{FE0F}');
+    let joiner = |c: char| matches!(c, '\u{200C}' | '\u{200D}');
+    let visible = |c: char| !c.is_ascii() && !c.is_whitespace() && !c.is_control() && !crate::drivers::is_format_char(c);
+    match prev {
+        Some(p) if selector(c) => visible(p),
+        Some(p) if joiner(c) => (visible(p) || selector(p)) && next.is_some_and(visible),
+        _ => false,
+    }
 }
 
 /// `path:line`, or `path:start-end` for a range, or `path` when the line is unknown.
@@ -1125,9 +1138,58 @@ mod tests {
         let raw = "ok \u{202E}gnp.exe\u{202C} \u{2066}x\u{2069}\u{200F}\u{061C} \u{1b}]0;title\u{7}done \u{1b}]8;;https://evil\u{1b}\\link\u{1b}]8;;\u{1b}\\ \u{1b}[31mred\u{1b}[0m";
         assert_eq!(strip_controls(raw), "ok gnp.exe x done link red");
         assert_eq!(excerpt("a\u{202E}b"), "ab");
+        // N2: every bidi and format character goes, not just the overrides: zero-width space,
+        // joiners, word joiner, invisible operators, soft hyphen, BOM, Mongolian vowel separator,
+        // Arabic letter mark, interlinear annotation
+        let hidden = ['\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{2062}', '\u{2064}', '\u{00AD}', '\u{FEFF}', '\u{180E}', '\u{061C}', '\u{FFF9}', '\u{E0041}'];
+        for h in hidden {
+            assert_eq!(strip_controls(&format!("cu{h}rl ev{h}il")), "curl evil", "U+{:04X}", h as u32);
+        }
+        // Visible text stays: accents, Cyrillic, CJK, emoji, tabs and line breaks
+        assert_eq!(strip_controls("é ж 漢 👍\tx\ny"), "é ж 漢 👍\tx\ny");
         // Review comments too
         let c = ReviewComment { body: "fine \u{202E}evil".into(), ..comment(2, "a.rs", Some(1), now()) };
         assert_eq!(ItemComment::of(&c).body, "fine evil");
+    }
+
+    #[test]
+    fn joiners_inside_emoji_and_words_stay() {
+        // Joiners and selectors inside an emoji or a non-Latin word stay (QA #509 nit 1)
+        for kept in ["👨\u{200D}👩\u{200D}👧", "✔\u{FE0F} done", "👁\u{FE0F}\u{200D}🗨\u{FE0F}", "می\u{200C}خواهم", "क्\u{200D}ष"] {
+            assert_eq!(strip_controls(kept), kept, "{kept:?}");
+        }
+        // ... but never next to ASCII, at an edge, or doubled
+        for (raw, clean) in [
+            ("ev\u{200D}il", "evil"),
+            ("é\u{200D}x", "éx"),
+            ("x\u{200D}é", "xé"),
+            ("👍\u{200D}", "👍"),
+            ("\u{200D}👍", "👍"),
+            ("👍\u{200D} 👍", "👍 👍"),
+            ("ok\u{FE0F}", "ok"),
+            ("✔\u{FE0F}\u{FE0F}", "✔\u{FE0F}"),
+            ("👍\u{200D}\u{200D}👍", "👍\u{200D}👍"),
+        ] {
+            assert_eq!(strip_controls(raw), clean, "{raw:?}");
+        }
+    }
+
+    /// N1 (Rigel's QA of #490): a verdict that fails twice names the verdict, not the card's
+    /// text; D1: a turn the spending stop holds ends the call at once with the stop's error (no
+    /// second call), so the caller can give the `verdict:<head>` key back.
+    #[tokio::test]
+    async fn verdict_errors_name_the_verdict_and_a_spending_stop_ends_the_call() {
+        use super::super::generate::stub::Stub;
+        let mut m = Stub::new(vec![Ok("no json".into()), Err("engine down".into())]);
+        let e = ask_json_as(&mut m, "P", parse_verdict, VERDICT_JOB).await.unwrap_err();
+        assert_eq!(e, "Rigel couldn't write the fresh-eyes verdict twice in a row (the turn failed: engine down).");
+        assert!(!e.contains("card"), "{e}");
+
+        let stop = format!("{}: today's spending stop holds new turns", spend_stop::REASON);
+        let mut m = Stub::new(vec![Err(stop.clone()), Ok(r#"{"verdict": "merge", "reasons": ["ok"]}"#.into())]);
+        let e = ask_json_as(&mut m, "P", parse_verdict, VERDICT_JOB).await.unwrap_err();
+        assert!(spend_stop::is_stop_error(&e), "{e}");
+        assert_eq!(m.prompts.len(), 1, "not asked again while the stop holds");
     }
 
     #[test]

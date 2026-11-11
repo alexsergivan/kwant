@@ -482,6 +482,12 @@ async fn validates_limits_and_turns_off() {
         json!({"budget_usd": -0.01}),
         json!({"budget_usd": 100_001}),
         json!({"budget_tokens": "lots"}),
+        // #495 S1: only an object is a budget; serde would read an array as the fields in order
+        json!([1]),
+        json!([1000, 2.5]),
+        json!(7),
+        json!("1000"),
+        json!(null),
     ] {
         let (s, v) = call(&env.app, "POST", &format!("/api/kwants/{}/budget", env.ann), Some(bad.clone())).await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {v}");

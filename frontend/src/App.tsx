@@ -366,6 +366,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     openAppSettings();
   };
   const openConnections = () => openSpaceSettings('connections');
+  // 0.9.0 P5: "See the note" in a chat opens Connections on that one note.
+  const [toolNoteFocus, setToolNoteFocus] = useState<string | null>(null);
+  const openToolNote = (noteId: string) => {
+    setToolNoteFocus(noteId);
+    openConnections();
+  };
   const openClaudeSignIn = () => {
     setClaudeSignInFocus(Date.now());
     setSettingsScope('space');
@@ -409,6 +415,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const contentRef = useRef<HTMLDivElement>(null);
   useSettingsCover(!!spaceSettingsTab, contentRef);
   const closeSpaceSettings = () => {
+    setToolNoteFocus(null);
     setSpaceSettingsTab(null);
     setSettingsFocusRow(null);
     setSettingsClosedCount((n) => n + 1);
@@ -3849,6 +3856,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onAddTool={() => { setMcpStartAdding(true); setIsMcpOpen(true); }}
       onOpenAccounts={openSettings}
       onOpenLooseEnds={() => showPage('inbox', 'loose')}
+      focusNote={toolNoteFocus}
+      onClearFocusNote={() => setToolNoteFocus(null)}
+      onOpenNoteWhere={(w) => {
+        if (spaceSettingsTab) closeSpaceSettings();
+        openPlace({ channel_id: w.channel_id, kwant_id: w.direct_kwant_id, thread_id: w.thread_id, card_id: w.message_id });
+      }}
     />
   );
   const missionNames = Object.fromEntries(kwants.map((k) => [k.id, k.name]));
@@ -4039,6 +4052,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           renderMcpSuggestion={renderMcpSuggestion}
           renderConnectionSuggestion={renderConnectionSuggestion}
           renderBotAction={renderBotAction}
+          onOpenToolNote={openToolNote}
           renderWatchReport={renderWatchReport}
           renderHire={renderHire}
           renderRouteChoice={renderRouteChoice}

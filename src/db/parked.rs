@@ -86,6 +86,22 @@ impl Database {
         Ok(())
     }
 
+    /// Whether a usage-limit retry or budget hold is still waiting for `kwant_id` in the chat with
+    /// that channel and thread (any direct chat of the bot when both are `None`). The P1 watcher
+    /// leaves a task alone while its bot has one waiting where the mission runs it (D9).
+    pub async fn parked_waiting_in(&self, kwant_id: &str, channel_id: Option<&str>, thread_id: Option<&str>) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM parked_turns WHERE status = 'pending' AND kwant_id = ? \
+             AND COALESCE(channel_id, '') = ? AND COALESCE(thread_id, '') = ?",
+        )
+        .bind(kwant_id)
+        .bind(channel_id.unwrap_or(""))
+        .bind(thread_id.unwrap_or(""))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
+    }
+
     /// Parks a turn; `None` when one is already waiting for that bot in that chat (it keeps its
     /// time, so a chat gets at most one retry however many messages hit the limit).
     pub async fn park_turn(&self, t: &NewParkedTurn) -> Result<Option<ParkedTurn>, DbError> {

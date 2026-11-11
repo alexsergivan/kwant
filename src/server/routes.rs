@@ -718,6 +718,10 @@ pub struct SendChatPayload {
     /// the same chat within 10 min is sent once (H3, `release-090/h4-contract.md` §7b).
     #[serde(default)]
     pub client_message_id: Option<String>,
+    /// The id the person's message is saved under: reserved by [`send_chat_inner`] with the
+    /// `client_message_id`, so a racing duplicate can answer with it. Set only by the server.
+    #[serde(skip)]
+    pub message_id: Option<String>,
 }
 
 async fn get_configured_key(db: &crate::db::Database, target_model: &str) -> Option<String> {
@@ -1896,6 +1900,9 @@ pub(super) struct TurnOpts {
     pub(super) unsaved: bool,
     /// A failed turn saves no `turn_failed` note (the caller posts something else).
     pub(super) quiet_failure: bool,
+    /// A result the engine flagged as an error (`TurnOutput::is_error`) ends the turn with `Err`
+    /// (its first line) instead of being the reply. Off for chats, which show it as the reply.
+    pub(super) error_result_fails: bool,
     /// The turn sends no `turn_finished` notification when it ends (the caller notifies, see
     /// [`super::missions::runner`]).
     pub(super) quiet_finish: bool,
@@ -2863,11 +2870,20 @@ async fn run_kwant_turn_inner(
             .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME));
         // C5: chat, routine and hand-off turns get the bot's lessons; a task turn has them in its
         // brief already (or is held out), and hidden purposes get none
-        let lessons = if opts.task.is_none() && !opts.fresh_eyes && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
+        let mut lessons = if opts.task.is_none() && !opts.fresh_eyes && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
             super::missions::lessons::for_turn(state, &target_kwant.id).await
         } else {
             String::new()
         };
+        // P5: open notes about the tools this turn has, as hints written by bots; D8: chat,
+        // routine and hand-off turns only (the same allow-list as `note_tool`)
+        if with_tools && !opts.fresh_eyes && super::tool_notes::wants(opts.purpose.as_deref()) {
+            let servers: Vec<String> = mcp_ctx
+                .as_ref()
+                .map(|c| c.servers.iter().filter(|s| s.name != crate::mcp::SELF_SERVER_NAME).map(|s| s.name.clone()).collect())
+                .unwrap_or_default();
+            lessons.push_str(&super::tool_notes::for_turn(state, &target_kwant.id, &servers).await);
+        }
         let continuity = super::continuity::prompt_block_memories(
             state,
             target_kwant,
@@ -3510,6 +3526,11 @@ async fn run_kwant_turn_inner(
             // (less what a task the bot handed in mid-turn already paid for)
             let booked = state.turns.take_booked(&tag.turn_id);
             super::missions::spend(state, &target_kwant.id, &scope.context_id(target_kwant), Some(&tag.turn_id), turn_started_ms, fresh, booked).await;
+            // (its spend is booked above either way)
+            if opts.error_result_fails && output.is_error {
+                let first = output.text.lines().map(str::trim).find(|l| !l.is_empty());
+                return Err(first.map_or_else(|| format!("the {target_model} turn ended with an error"), String::from));
+            }
 
             let mut reply_text = output.text.clone();
             let saved = match &opts.discussion {
@@ -3795,7 +3816,7 @@ fn merge_meta(meta: &mut Option<serde_json::Value>, extra: Option<&serde_json::V
 
 pub(crate) async fn send_chat_inner(
     state: AppState,
-    payload: SendChatPayload,
+    mut payload: SendChatPayload,
     from_person: bool,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let Some(client_id) = payload.client_message_id.clone() else {
@@ -3809,16 +3830,26 @@ pub(crate) async fn send_chat_inner(
         .find_map(|c| c.clone())
         .unwrap_or_default();
     let key = format!("{chat}|{client_id}");
-    if let Err(first) = state.turns.board(|b| b.reserve_send(&key, chrono::Utc::now())) {
+    // S1: the message's id is reserved with the client id, so a duplicate racing the first send
+    // (a double tap, two tabs) answers with it even before the first has finished saving
+    let reserved = uuid::Uuid::new_v4().to_string();
+    if let Err(first) = state.turns.board(|b| b.reserve_send(&key, chrono::Utc::now(), &reserved)) {
         return Ok(Json(json!({
             "status": "already_delivered",
             "deduped": true,
             "already_delivered_at": first.at,
             "user_message_id": first.message_id,
+            "pending": !first.saved,
         })));
     }
+    payload.message_id = Some(reserved.clone());
     let sent = send_chat_routed(state.clone(), payload, from_person).await;
-    state.turns.board(|b| match sent.as_ref().ok().and_then(|j| j.0["user_message_id"].as_str()) {
+    let saved = match sent.as_ref().ok().and_then(|j| j.0["user_message_id"].as_str()) {
+        Some(id) => Some(id.to_string()),
+        // A send that failed after saving the message still delivered it: keep the id taken
+        None => state.db.get_message(&reserved).await.ok().flatten().map(|m| m.id),
+    };
+    state.turns.board(|b| match &saved {
         Some(id) => b.send_saved(&key, id),
         None => b.release_send(&key),
     });
@@ -4053,7 +4084,7 @@ async fn send_chat_routed(
     let user_extra = MessageExtra { thread_id: None, meta: user_meta };
     let saved_user_msg = state
         .db
-        .insert_message_with(&user_msg, &user_extra)
+        .insert_message_as(payload.message_id.as_deref(), &user_msg, &user_extra)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if let Some(target) = &payload.reply_to_message_id {
@@ -4495,7 +4526,7 @@ async fn send_to_thread(
         meta.get_or_insert_with(|| json!({}))[SENT_BY_BOT] = json!(true);
     }
     let extra = MessageExtra { thread_id: Some(thread.id.clone()), meta };
-    let saved = state.db.insert_message_with(&user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let saved = state.db.insert_message_as(payload.message_id.as_deref(), &user_msg, &extra).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if let Some(target) = &payload.reply_to_message_id {
         state.db.set_reply_to(&saved.id, target).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
