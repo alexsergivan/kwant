@@ -47,6 +47,7 @@ pub mod hires;
 pub mod concierge;
 pub mod rerouting;
 pub mod import_routes;
+pub mod inbox;
 pub mod isolated_folders_routes;
 pub mod approval_modes;
 pub mod passwords;
@@ -578,6 +579,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/tool-notes", get(tool_notes::list).post(tool_notes::create))
         .route("/api/tool-notes/:id", axum::routing::patch(tool_notes::edit).delete(tool_notes::delete))
         .route("/api/away/seen", post(away::seen))
+        .route("/api/inbox", get(inbox::get))
         .route("/api/events", get(sse::sse_handler))
         .merge(show_once::routes::router())
         .fallback(crate::embedded::static_handler)
