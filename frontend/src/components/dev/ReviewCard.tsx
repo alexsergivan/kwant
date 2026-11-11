@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import { FreshEyesChip } from './FreshEyesChip';
 import { ChangesSection } from './LineNotes';
+import { verdictShort } from '../../api/inbox';
+import { inboxNav, openReview, reviewForPr, useInbox } from '../../inboxStore';
 import type { DevFinding, FindingAction, Forge, ReviewCard as Review, ReviewCardProps, Severity, TamperFlag } from '../../dev/types';
 import {
   clock,
@@ -421,6 +423,9 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
   const [tick, setTick] = useState(() => Date.now());
   useEffect(() => setCard(given), [given]);
   const now = fixedNow ?? tick;
+  // 0.9.0 V1: a PR that belongs to a kwant task in Review is decided in the Inbox; its button goes first.
+  useInbox();
+  const inboxItem = inboxNav.go && !sample ? reviewForPr(given.links.pr, given.pr) : null;
 
   // Tick once a second only while an Undo is on screen.
   const undoing =
@@ -721,6 +726,18 @@ export const ReviewCard: React.FC<ReviewCardProps> = ({ card: given, onFinding, 
 
       {card.cut && <p className="mt-3 text-2xs text-zinc-400">{card.cut}</p>}
 
+      {inboxItem && (
+        <div className="mt-4 flex flex-wrap items-center gap-2" data-review-in-inbox={inboxItem.task_id}>
+          <button
+            type="button"
+            onClick={() => openReview(inboxItem.task_id, 'dev')}
+            className="kw-focus inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 rounded-lg text-meta font-semibold bg-violet-500/80 text-white hover:bg-violet-500"
+          >
+            <ShieldCheck size={13} aria-hidden="true" /> Review in Inbox
+          </button>
+          {verdictShort(inboxItem.verdict) && <span className="text-2xs text-zinc-400">{verdictShort(inboxItem.verdict)}</span>}
+        </div>
+      )}
       {/* 7. Footer: Post to {Forge} (design §5.7) */}
       {branchCard ? (
         <footer data-review-footer data-post-state="no_forge" className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-hairline pt-3 text-[12.5px] text-zinc-400">

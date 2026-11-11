@@ -16,7 +16,8 @@ import { teamChannelOf } from '../teamChannel';
 import { layaRoutes } from '../channels';
 import { InstallAppButton } from './InstallAppButton';
 import { trapFocusTarget } from '../imports';
-import { type AttentionRow, type NeedsYouRow, workingIds, directIds, rollupLabel } from '../chatsTab';
+import { type AttentionRow, type NeedsYouRow, PINNED_RANK, workingIds, directIds, rollupLabel } from '../chatsTab';
+import type { InboxItem } from '../api/inbox';
 import { DevFlipNote, useDevMode } from './DevModeSwitch';
 import { SpaceControls } from './SpaceControls';
 import { DevOnToast } from './DevOnToast';
@@ -118,9 +119,11 @@ export interface SidebarProps {
   browserNeedsYou?: ReadonlySet<string>;
   /**
    * H5: every bot in the one attention order (`attentionRows`); undefined until the first status
-   * fetch lands. Desktop pins ranks 1–3 above Channels; the phone's Chats tab moves bots into sections.
+   * fetch lands. Desktop pins ranks 1–4 above Channels; the phone's Chats tab moves bots into sections.
    */
   attention?: AttentionRow<Kwant>[];
+  /** 0.9 V1: a row from a review item opens that item in Inbox › New. */
+  onOpenReview?: (item: InboxItem) => void;
   /** Opens a Needs-you row's chat on its card. */
   onOpenNeedsYou?: (row: NeedsYouRow) => void;
   onSelectKwant: (kwant: Kwant) => void;
@@ -277,7 +280,7 @@ const MoreMenu: React.FC<{
 export const PINNED_MAX = 5;
 
 /**
- * H5 desktop: "Needs attention · n", ranks 1–3 above Channels. Gone when empty. The count is announced
+ * H5 desktop: "Needs attention · n", ranks 1–4 above Channels. Gone when empty. The count is announced
  * politely, at most once per 10 s, from a live region holding only the heading's words.
  */
 const NeedsAttention: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<Kwant>) => React.ReactNode; onOpenInbox?: () => void }> = ({ rows, row, onOpenInbox }) => {
@@ -350,6 +353,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   browserNeedsYou,
   needsYouRows = [],
   attention,
+  onOpenReview,
   onOpenNeedsYou,
   onSelectKwant,
   onSelectChannel,
@@ -426,7 +430,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const lingering = useLingeringIds(busyNow.map((k) => k.id));
   const workingBots = chatsTab && lingering.size ? workingIds(kwants, { ...Object.fromEntries([...lingering].map((id) => [id, 'done'])), ...busyKwants }, needsIds) : busyNow;
   const directBotsOld = chatsTab ? directIds(kwants, new Set([...needsIds, ...workingBots.map((k) => k.id)])) : [];
-  // H5: with the attention order, the Chats tab has a section per rank 1–5 and bots move into them (no
+  // H5: with the attention order, the Chats tab has a section per rank 1–6 and bots move into them (no
   // copies); a bot that finished and is read goes back to Direct chats, so no lingering under Working.
   const attOn = !!attention;
   const byRank = (r: number) => (chatsTab && attention ? attention.filter((a) => a.rank === r) : []);
@@ -434,14 +438,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     ? ([
         { key: 'needs', head: 'Needs you', tone: '!text-[11px] !leading-4 !tracking-[0.06em] !text-warn', rows: byRank(1) },
         { key: 'stuck', head: 'Stuck', tone: '!text-rose-300', rows: byRank(2) },
-        { key: 'finished', head: 'Finished', tone: '', rows: byRank(3) },
-        { key: 'working', head: 'Working', tone: '', rows: byRank(4) },
-        { key: 'waiting', head: 'Waiting', tone: '', rows: byRank(5) },
+        { key: 'review', head: 'To review', tone: '!text-sky-300', rows: byRank(3) },
+        { key: 'finished', head: 'Finished', tone: '', rows: byRank(4) },
+        { key: 'working', head: 'Working', tone: '', rows: byRank(5) },
+        { key: 'waiting', head: 'Waiting', tone: '', rows: byRank(6) },
       ] as const)
     : [];
-  const directBots = chatsTab && attention ? directIds(kwants, new Set(attention.filter((a) => a.rank < 6).map((a) => a.kwant.id))) : directBotsOld;
-  // Desktop: ranks 1–3, pinned above Channels (copies: the team list below keeps every bot in place).
-  const pinned = !phone && attention ? attention.filter((a) => a.rank <= 3) : [];
+  const directBots = chatsTab && attention ? directIds(kwants, new Set(attention.filter((a) => a.rank < 7).map((a) => a.kwant.id))) : directBotsOld;
+  // Desktop: ranks 1–4 (0.9 V1 adds To review), pinned above Channels (copies: the team list below keeps every bot in place).
+  const pinned = !phone && attention ? attention.filter((a) => a.rank <= PINNED_RANK) : [];
   const rankOf = new Map((attention ?? []).map((a) => [a.kwant.id, a.rank]));
 
   const toggleTeam = (id: string) =>
@@ -547,8 +552,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const active = !phone && !isChannel && selectedId === k.id;
     const att = pin?.att ?? chat?.att;
     const asked = chat?.needs ?? (att?.rank === 1 ? att.needs : undefined);
-    // H5 ranks 2 and 3 say what broke or what finished, in rose or zinc-200
-    const attLine = att && (att.rank === 2 || att.rank === 3) ? att.line : undefined;
+    // H5 ranks 2–4 say what broke, what waits for review (0.9 V1) or what finished, in rose, sky or
+    // zinc-200; a review that needs you says so in amber
+    const attLine = att && (att.rank === 2 || att.rank === 3 || att.rank === 4 || (att.rank === 1 && att.review)) ? att.line : undefined;
+    const attTone = !att ? '' : att.rank === 1 ? 'text-warn' : att.rank === 2 ? 'text-rose-300' : att.rank === 3 ? 'text-[#7dd3fc]' : 'text-zinc-200';
+    const attDot = !att ? '' : att.rank === 1 ? 'kw-status-warn' : att.rank === 2 ? 'bg-rose-400' : att.rank === 3 ? 'bg-[#38bdf8]' : 'bg-teal-400';
     const status = asked ? 'needs_you' : statusOf(k.id, botStatus, canRun);
     const isLead = !!team && k.id === team.lead_kwant_id;
     const canRemove = !!team && !isLead && !!onUpdateTeamMembers;
@@ -568,8 +576,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ? 'Needs you in the browser'
         : busyKwants[k.id];
     // A stuck or finished row opens where that happened (its thread or chat), like its Inbox card
+    // A review row opens its item in the Inbox
     const open = asked && onOpenNeedsYou
       ? () => onOpenNeedsYou(asked)
+      : att?.review && onOpenReview
+        ? () => onOpenReview(att.review!)
       : attLine && att?.item && onOpenNeedsYou
         ? () => onOpenNeedsYou({ kwant_id: k.id, line: attLine, item: att.item })
         : () => onSelectKwant(k);
@@ -687,14 +698,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {busyLine ? (
             <p
               className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${
-                warn || asked ? 'text-warn' : attLine ? (att!.rank === 2 ? 'text-rose-300' : 'text-zinc-200') : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'
+                warn || asked ? 'text-warn' : attLine ? attTone : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'
               }`}
               title={busyLine}
               data-bot-busy
             >
               <span
                 className={`kw-status-dot !h-1.5 !w-1.5 ${
-                  warn || asked ? 'kw-status-warn' : attLine ? (att!.rank === 2 ? 'bg-rose-400' : 'bg-teal-400') : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'
+                  warn || asked ? 'kw-status-warn' : attLine ? attDot : status === 'queued' ? 'kw-status-idle' : 'bg-[#9d8fff] kw-pulse'
                 }`}
                 aria-hidden="true"
               />
@@ -729,19 +740,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
   };
 
-  // H5: a team header's rollup, one mini dot + count for each of ranks 1–3; else the working count.
+  // H5: a team header's rollup, one mini dot + count for each of ranks 1–4; else the working count.
   const teamRollup = (t: Team) => {
     if (!attention) return null;
-    const c = { needs: 0, stuck: 0, finished: 0, working: 0 };
+    const c = { needs: 0, stuck: 0, review: 0, finished: 0, working: 0 };
     for (const id of new Set(memberIdsOf(t))) {
       const r = rankOf.get(id);
       if (r === 1) c.needs++;
       else if (r === 2) c.stuck++;
-      else if (r === 3) c.finished++;
-      else if (r === 4) c.working++;
+      else if (r === 3) c.review++;
+      else if (r === 4) c.finished++;
+      else if (r === 5) c.working++;
     }
-    const dots: Array<[number, string]> = c.needs || c.stuck || c.finished
-      ? ([[c.needs, 'bg-amber-400'], [c.stuck, 'bg-rose-400'], [c.finished, 'bg-teal-400']] as Array<[number, string]>).filter(([n]) => n > 0)
+    const dots: Array<[number, string]> = c.needs || c.stuck || c.review || c.finished
+      ? ([[c.needs, 'bg-amber-400'], [c.stuck, 'bg-rose-400'], [c.review, 'bg-[#38bdf8]'], [c.finished, 'bg-teal-400']] as Array<[number, string]>).filter(([n]) => n > 0)
       : c.working
         ? [[c.working, 'bg-[#9d8fff]']]
         : [];
