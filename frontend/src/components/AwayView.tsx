@@ -68,12 +68,18 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
     const disabled = busy !== null;
     const title = awayTitle(item);
     return (
-      <li key={`${item.kind}:${item.id}`} className="rounded-xl border border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 transition-colors">
+      <li
+        key={`${item.kind}:${item.id}`}
+        data-away-kind={item.kind}
+        className={`rounded-xl border transition-colors ${
+          item.kind === 'watch' ? 'border-amber-400/30 bg-amber-400/[.06] hover:border-amber-400/50' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-700'
+        }`}
+      >
         <button
           type="button"
           onClick={() => onOpen(item)}
           className="w-full flex items-start gap-3 p-3 text-left rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-          aria-label={`${title}, ${label}, from ${item.kwant_name}, ${when}. Open the chat.`}
+          aria-label={`${title}, ${label}, from ${item.kwant_name}, ${when}. ${item.kind === 'watch' && item.mission_id ? 'Open the mission.' : 'Open the chat.'}`}
         >
           <ModernAvatar role={item.kwant_name} name={item.kwant_name} size={30} kwantId={item.kwant_id} />
           <div className="flex-1 min-w-0">

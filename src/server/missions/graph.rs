@@ -99,7 +99,7 @@ async fn flag_chat_line(state: &AppState, t: &Task, f: &TaskFlag) {
     match m {
         Some(m) => post_line(state, m.channel_id, m.direct_kwant_id, m.thread_id, &sender, text, meta).await,
         None => post_line(state, t.channel_id.clone(), t.direct_kwant_id.clone(), t.thread_id.clone(), &sender, text, meta).await,
-    }
+    };
 }
 
 // The drift scan

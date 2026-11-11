@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, Bot, ChevronLeft, ChevronRight, ExternalLink, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Search, Server, UserRound } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronLeft, ChevronRight, ExternalLink, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Search, Server, StickyNote, UserRound } from 'lucide-react';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { relativeTime } from '../away';
 import { quotaLine } from '../clock';
@@ -28,6 +28,9 @@ import {
 import { inDesktopApp } from '../externalLinks';
 import { editorProps } from '../escape';
 import { TelegramConnection } from './TelegramCard';
+import { ToolNotesSection, ToolNotesSectionProps } from './ToolNotesSection';
+import { notesChipText } from '../toolNotes';
+import { usePhoneLayout } from '../usePhoneLayout';
 
 const TONES: Record<Tone, string> = {
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
@@ -75,9 +78,11 @@ export interface ConnectionRowProps {
   /** Dev mode is on in this space: MCP servers and Composio apps get a Production mark (D10). */
   onProduction?: (c: Connection, production: boolean) => void;
   markingProduction?: boolean;
+  /** 0.9.0 P5: the "2 notes" chip filters Notes from bots to this connection. */
+  onNotes?: (name: string) => void;
 }
 
-export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(), checking = false, links = {}, onCheck, onProduction, markingProduction = false }) => {
+export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(), checking = false, links = {}, onCheck, onProduction, markingProduction = false, onNotes }) => {
   const id = useId();
   const badge = statusBadge(c.status);
   const manage = manageFor(c.kind, links);
@@ -100,6 +105,21 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
               <span className="inline-flex items-center px-1.5 py-px rounded border border-amber-400/40 bg-amber-500/10 text-[11px] font-medium text-amber-200" data-production-badge>
                 Production
               </span>
+            )}
+            {c.kind === 'mcp' && c.notes && c.notes.open > 0 && (
+              <button
+                type="button"
+                onClick={() => onNotes?.(c.name)}
+                disabled={!onNotes}
+                aria-label={`${notesChipText(c.notes.open)} about ${c.name}${c.notes.broke ? `, ${c.notes.broke} didn’t work` : ''}: show them`}
+                className={`inline-flex items-center gap-1 px-1.5 py-px rounded-md border text-[11px] font-medium hover:bg-zinc-800 disabled:hover:bg-transparent focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                  c.notes.broke > 0 ? 'border-rose-300/40 text-rose-200' : 'border-zinc-700 text-zinc-300'
+                }`}
+                data-notes-chip={c.notes.broke > 0 ? 'broke' : 'open'}
+              >
+                <StickyNote size={11} aria-hidden="true" />
+                {notesChipText(c.notes.open)}
+              </button>
             )}
           </div>
           {c.detail &&
@@ -562,6 +582,15 @@ export interface ConnectionsViewProps extends ManageLinks {
   composioOpen?: boolean;
   /** Tests and screenshots open the "+ Add connection" list. */
   addMenuOpen?: boolean;
+  /** 0.9.0 P5: "See the note" from a chat shows just that note. */
+  focusNote?: string | null;
+  onClearFocusNote?: () => void;
+  /** Refetches the connections so each row's note chip recounts. */
+  onNotesChanged?: () => void;
+  onOpenNoteWhere?: ToolNotesSectionProps['onOpenWhere'];
+  /** Tests and screenshots: the Notes from bots section's api and starting state. */
+  notes?: Partial<ToolNotesSectionProps>;
+  phone?: boolean;
 }
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
@@ -582,8 +611,24 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   marking = null,
   composioOpen = false,
   addMenuOpen = false,
+  focusNote = null,
+  onClearFocusNote,
+  onNotesChanged,
+  onOpenNoteWhere,
+  notes: notesProps = {},
+  phone,
   ...links
 }) => {
+  const phoneLayout = usePhoneLayout();
+  const [noteConnection, setNoteConnection] = useState<string | null>(notesProps.connection ?? null);
+  const [noteScroll, setNoteScroll] = useState(0);
+  const filterNotes = (name: string | null) => {
+    setNoteConnection(name);
+    if (name) {
+      onClearFocusNote?.();
+      setNoteScroll((n) => n + 1);
+    }
+  };
   const groups = data ? groupConnections(data.connections) : [];
   const vault = data?.vault;
   const [composioRequest, setComposioRequest] = useState(0);
@@ -679,6 +724,22 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
             </div>
           )}
 
+          {data && !needsToken && (
+            <ToolNotesSection
+              connections={data.connections.filter((c) => c.kind === 'mcp').map((c) => c.name)}
+              now={now}
+              phone={phone ?? phoneLayout}
+              onChanged={onNotesChanged}
+              onOpenWhere={onOpenNoteWhere}
+              focusNote={focusNote}
+              onClearFocus={onClearFocusNote}
+              scrollRequest={noteScroll}
+              {...notesProps}
+              connection={noteConnection}
+              onConnection={filterNotes}
+            />
+          )}
+
           {data &&
             groups.map((g) => {
               const lockedLogins = g.key === 'browser_login' && vault && vault.status !== 'ok';
@@ -690,7 +751,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   {g.items.length > 0 ? (
                     <ul className="rounded-xl border border-zinc-800 bg-zinc-900/60 divide-y divide-zinc-800">
                       {g.items.map((c) => (
-                        <ConnectionRow key={c.id} c={c} now={now} checking={checking === c.id} links={links} onCheck={onCheck} onProduction={onProduction} markingProduction={marking === c.id} />
+                        <ConnectionRow key={c.id} c={c} now={now} checking={checking === c.id} links={links} onCheck={onCheck} onProduction={onProduction} markingProduction={marking === c.id} onNotes={filterNotes} />
                       ))}
                     </ul>
                   ) : (
@@ -741,7 +802,16 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
 };
 
 /** The page: loads the list, checks MCP servers, unlocks the vault and adds Composio. */
-export const ConnectionsPage: React.FC<ManageLinks & { onBack?: () => void; embedded?: boolean }> = ({ onBack, embedded, ...links }) => {
+export interface ConnectionsPageProps extends ManageLinks {
+  onBack?: () => void;
+  embedded?: boolean;
+  /** 0.9.0 P5: open on one note ("See the note" in a chat). */
+  focusNote?: string | null;
+  onClearFocusNote?: () => void;
+  onOpenNoteWhere?: ToolNotesSectionProps['onOpenWhere'];
+}
+
+export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedded, focusNote, onClearFocusNote, onOpenNoteWhere, ...links }) => {
   const [data, setData] = useState<ConnectionsList | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -778,6 +848,11 @@ export const ConnectionsPage: React.FC<ManageLinks & { onBack?: () => void; embe
       window.removeEventListener(PERSON_SIGNED_IN_EVENT, load);
     };
   }, [load]);
+
+  // A note changed: recount the row chips without the page's loading state.
+  const quietLoad = useCallback(() => {
+    connectionsApi.list().then((r) => alive.current && setData(r), () => undefined);
+  }, []);
 
   const check = async (c: Connection) => {
     const sid = mcpServerId(c);
@@ -841,6 +916,10 @@ export const ConnectionsPage: React.FC<ManageLinks & { onBack?: () => void; embe
         embedded={embedded}
         onProduction={devOn ? markProduction : undefined}
         marking={marking}
+        focusNote={focusNote}
+        onClearFocusNote={onClearFocusNote}
+        onOpenNoteWhere={onOpenNoteWhere}
+        onNotesChanged={quietLoad}
         {...links}
       />
       {unlocking && (

@@ -67,6 +67,7 @@ fn self_tool_is_free(tool: &str) -> bool {
         || tool.starts_with("fact_")
         || tool.starts_with("task_")
         || matches!(tool, "mission_plan" | "tier_status" | "tier_propose" | "ask_user")
+        || tool == crate::server::tool_notes::TOOL
         || crate::server::continuity::READ_ONLY_SELF_TOOLS.contains(&tool)
 }
 

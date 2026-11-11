@@ -1900,6 +1900,9 @@ pub(super) struct TurnOpts {
     pub(super) unsaved: bool,
     /// A failed turn saves no `turn_failed` note (the caller posts something else).
     pub(super) quiet_failure: bool,
+    /// A result the engine flagged as an error (`TurnOutput::is_error`) ends the turn with `Err`
+    /// (its first line) instead of being the reply. Off for chats, which show it as the reply.
+    pub(super) error_result_fails: bool,
     /// The turn sends no `turn_finished` notification when it ends (the caller notifies, see
     /// [`super::missions::runner`]).
     pub(super) quiet_finish: bool,
@@ -2871,11 +2874,20 @@ async fn run_kwant_turn_inner(
             .is_some_and(|c| c.servers.iter().any(|s| s.name == crate::mcp::SELF_SERVER_NAME));
         // C5: chat, routine and hand-off turns get the bot's lessons; a task turn has them in its
         // brief already (or is held out), and hidden purposes get none
-        let lessons = if opts.task.is_none() && !opts.fresh_eyes && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
+        let mut lessons = if opts.task.is_none() && !opts.fresh_eyes && super::missions::lessons::wants_block(opts.purpose.as_deref()) {
             super::missions::lessons::for_turn(state, &target_kwant.id).await
         } else {
             String::new()
         };
+        // P5: open notes about the tools this turn has, as hints written by bots; D8: chat,
+        // routine and hand-off turns only (the same allow-list as `note_tool`)
+        if with_tools && !opts.fresh_eyes && super::tool_notes::wants(opts.purpose.as_deref()) {
+            let servers: Vec<String> = mcp_ctx
+                .as_ref()
+                .map(|c| c.servers.iter().filter(|s| s.name != crate::mcp::SELF_SERVER_NAME).map(|s| s.name.clone()).collect())
+                .unwrap_or_default();
+            lessons.push_str(&super::tool_notes::for_turn(state, &target_kwant.id, &servers).await);
+        }
         let continuity = super::continuity::prompt_block_memories(
             state,
             target_kwant,
@@ -3518,6 +3530,11 @@ async fn run_kwant_turn_inner(
             // (less what a task the bot handed in mid-turn already paid for)
             let booked = state.turns.take_booked(&tag.turn_id);
             super::missions::spend(state, &target_kwant.id, &scope.context_id(target_kwant), Some(&tag.turn_id), turn_started_ms, fresh, booked).await;
+            // (its spend is booked above either way)
+            if opts.error_result_fails && output.is_error {
+                let first = output.text.lines().map(str::trim).find(|l| !l.is_empty());
+                return Err(first.map_or_else(|| format!("the {target_model} turn ended with an error"), String::from));
+            }
 
             let mut reply_text = output.text.clone();
             let saved = match &opts.discussion {

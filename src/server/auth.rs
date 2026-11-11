@@ -336,6 +336,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // Folders isolated bots used (#446 item 6): forgetting one lets host CLIs load its files
         // again, so only the person reads or changes the list
         ["", "api", "isolated-folders", ..] => true,
+        // P5 tool notes: bots file them with `note_tool`; only the person reads, edits, fixes or
+        // deletes them, and their text is what every bot with the tool sees
+        ["", "api", "tool-notes", ..] => true,
         // Raw clicks by position are the person's live view: a bot clicking by coordinates would
         // skip the payment floor, which reads the element under a label (bots use /act)
         ["", "api", "sandbox", _, "interact"] => true,
@@ -923,6 +926,10 @@ mod tests {
     fn person_only_routes() {
         let (get, post, put, del) = (Method::GET, Method::POST, Method::PUT, Method::DELETE);
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
+        assert!(person_only(&get, "/api/tool-notes"));
+        assert!(person_only(&post, "/api/tool-notes"));
+        assert!(person_only(&Method::PATCH, "/api/tool-notes/n1"));
+        assert!(person_only(&del, "/api/tool-notes/n1/"));
         assert!(person_only(&post, "/api/engines/codex/login"));
         assert!(person_only(&get, "/api/engines/grok/login/login_1"));
         assert!(person_only(&post, "/api/engines/claude/login/login_1/code"));
@@ -1036,6 +1043,12 @@ mod tests {
         assert!(!person_only(&get, "/api/tasks/t1/failures"));
         assert!(person_only(&post, "/api/missions/m1/graph/scan"));
         assert!(!person_only(&get, "/api/missions/m1/graph"));
+        // P1: only the person picks, removes or runs a mission's watcher; bots may read it
+        assert!(person_only(&Method::PUT, "/api/missions/m1/watch"));
+        assert!(person_only(&Method::DELETE, "/api/missions/m1/watch"));
+        assert!(person_only(&post, "/api/missions/m1/watch/check"));
+        assert!(!person_only(&get, "/api/missions/m1/watch"));
+        assert!(!person_only(&get, "/api/missions/m1/watch/checks"));
         assert!(!person_only(&get, "/api/tasks/t1/flags"));
         assert!(!person_only(&get, "/api/tasks"));
         assert!(!person_only(&get, "/api/missions/insights"));
