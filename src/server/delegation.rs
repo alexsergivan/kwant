@@ -1051,7 +1051,9 @@ async fn result_of(state: &AppState, d: &Delegation) -> String {
 }
 
 /// Gives the lead one turn in the origin chat with every result of the batch, so it checks them
-/// and gives the user one answer. Tasks that didn't complete say what the lead should do about it.
+/// and keeps the person's request moving: it hands the next step on, asks the person, or ends with
+/// `Done: …` (see [`super::keep_going`], which steps in when it does none of these). Tasks that
+/// didn't complete say what the lead should do about it.
 async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], opening: Option<String>) {
     let Ok(Some(lead)) = state.db.get_kwant(&d.lead_kwant_id).await else {
         return;
@@ -1116,8 +1118,10 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     let prompt = format!(
         "{opening} The results are in the chat above, quoted here:\n\n{results}\
         Check each result against what the user asked. If something is missing or wrong, hand that teammate a concrete \
-        correction by @mention (below). Otherwise continue with the user's request and give them one answer \
-        that uses the results. If a task failed, was stopped or was cut short, say so plainly. Don't repeat the results in full.\n\n\
+        correction by @mention (below). If a task failed, was stopped or was cut short, say so plainly. Don't repeat the \
+        results in full. Then take the user's request to its next step: a draft or step on the way needs no approval \
+        unless the person asked to approve it, so show it, say what comes next and go on (they can say stop if they want \
+        changes).\n\n\
         {rules}",
         rules = handoff_rules(),
     );
@@ -1129,6 +1133,8 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
     let beside_running = lead_turn_runs(state, batch.iter().chain([d]));
     let mut opts = TurnOpts::default();
     opts.beside_running = beside_running;
+    let context = d.origin_context().unwrap_or(&lead.id).to_string();
+    let before = super::keep_going::snapshot(state, &context, &lead).await;
     let outcome = try_kwant_turn(&scope, &lead, prompt, opts).await;
     // The cards of the batch are reviewed in a turn of their own that sees only each brief and
     // result (fresh eyes), then the ones still waiting get one reminder (a failed turn counts too)
@@ -1147,9 +1153,12 @@ async fn continue_lead(state: &AppState, d: &Delegation, batch: &[Delegation], o
             .find(|m| m.sender_role == "user")
             .map(|m| m.text)
             .unwrap_or_else(|| d.task.clone());
-        super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply)], &user_prompt).await;
+        super::routes::run_handoffs_boxed(&scope, &spoken, &[(lead.clone(), reply.clone())], &user_prompt).await;
         // The chain may be over now: several open questions for the person become one list
         super::asks::consolidate(&scope).await;
+        // Nothing handed on, asked or marked done: the lead goes on (after the review above, so
+        // a review line isn't where the chat stops)
+        super::keep_going::after_lead_turn(&scope, &lead, before, reply).await;
     }
 }
 
@@ -1276,7 +1285,12 @@ pub fn handoff_rules() -> String {
     kwnt skips a mention, and tells you why under your reply, when it repeats exactly a task that teammate already finished \
     or was cancelled on for this user message (a failed task may be retried as it was), or when that teammate failed its last {streak} tasks in a row here: then do it yourself or give it \
     to someone else. Only after {ceiling} hand-offs for one user message does the person press Continue; then tell them \
-    what's waiting instead of claiming a handoff.",
+    what's waiting instead of claiming a handoff.\n\n\
+    End every reply in one of three ways: (1) hand the next step on by @mention, or do it yourself in this reply; \
+    (2) if only the person can give what's needed (a choice they asked to make, a sign-in, money, sending something), \
+    ask them with the question tool; (3) if the whole request is finished and you checked it, end with a last line \
+    `Done: <what you checked>`. A summary that hands nothing on, asks nothing and isn't done leaves the work \
+    stopped, so kwnt asks you to go on.",
     streak = super::routes::FAILURE_STREAK_LEN,
     ceiling = super::routes::MAX_DELEGATIONS_PER_REQUEST,
     )

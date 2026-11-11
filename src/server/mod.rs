@@ -23,6 +23,7 @@ pub mod bot_budget;
 pub mod scheduler;
 pub mod turns;
 pub mod delegation;
+pub mod keep_going;
 pub mod parked;
 pub mod attachments;
 pub mod picture_claims;

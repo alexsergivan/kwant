@@ -44,6 +44,8 @@ async fn setup() -> Env {
     let tmp = tempdir().unwrap();
     let data = tmp.path().join("data");
     let db = Database::init(&data).await.unwrap();
+    // These chains predate keep-going turns; a stalled lead isn't nudged here.
+    db.set_setting("keep_going_turns", "0").await.unwrap();
     let config = Config {
         data_dir: data.clone(),
         laya_url: "http://127.0.0.1:9".into(),
