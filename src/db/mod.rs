@@ -548,8 +548,14 @@ impl Database {
 
     /// [`Self::insert_message`] into a thread and/or with kwnt's own `meta`.
     pub async fn insert_message_with(&self, input: &NewMessage, extra: &MessageExtra) -> Result<Message, DbError> {
+        self.insert_message_as(None, input, extra).await
+    }
+
+    /// [`Self::insert_message_with`] under id `id` when given (one the caller reserved, e.g. a
+    /// send's id handed to its racing duplicates), else a new one.
+    pub async fn insert_message_as(&self, id: Option<&str>, input: &NewMessage, extra: &MessageExtra) -> Result<Message, DbError> {
         let mut conn = self.pool.acquire().await?;
-        insert_message_core(&mut conn, input, extra, Some(&self.data_dir.join("attachments"))).await
+        insert_message_core(&mut conn, id, input, extra, Some(&self.data_dir.join("attachments"))).await
     }
 
     pub async fn get_message(&self, id: &str) -> Result<Option<Message>, DbError> {
@@ -1171,18 +1177,19 @@ pub(crate) async fn insert_message_on(
     input: &NewMessage,
     extra: &MessageExtra,
 ) -> Result<Message, DbError> {
-    insert_message_core(conn, input, extra, None).await
+    insert_message_core(conn, None, input, extra, None).await
 }
 
 /// [`insert_message_on`] with the attachments directory, so a shared file's card can get a
 /// preview. Without it a file card has no block.
 async fn insert_message_core(
     conn: &mut sqlx::SqliteConnection,
+    id: Option<&str>,
     input: &NewMessage,
     extra: &MessageExtra,
     root: Option<&Path>,
 ) -> Result<Message, DbError> {
-    let id = Uuid::new_v4().to_string();
+    let id = id.map(str::to_string).unwrap_or_else(|| Uuid::new_v4().to_string());
     let tools_json = input
         .tool_calls
         .as_ref()

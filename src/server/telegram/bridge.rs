@@ -237,6 +237,7 @@ async fn person_message(state: &AppState, runner: &Runner, link: &TelegramLink, 
         source: Some("telegram".into()),
         meta: None,
         client_message_id: None,
+        message_id: None,
     };
     match crate::server::routes::send_chat_inner(state.clone(), payload, true).await {
         Ok(axum::Json(v)) => {
