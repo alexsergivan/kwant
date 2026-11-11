@@ -1136,6 +1136,9 @@ const RollBackDialog: React.FC<{
   }, [load]);
 
   const fork = preview?.via === 'fork';
+  // missionsApi.restorePreview marks a fork-path preview as refused 'fork_instead' for the Mission
+  // board's restore dialog. Here the fork is the roll back itself, so that refusal doesn't apply.
+  const refused = fork ? null : preview?.refused ?? null;
   const run = async () => {
     if (!cp || !preview || inFlight.current) return;
     inFlight.current = true;
@@ -1174,7 +1177,7 @@ const RollBackDialog: React.FC<{
   const step = preview ? stepDownText(preview.step_down ?? null) : null;
   const cpTime = clock(cp?.created_at);
   const approvedAt = clock(preview?.verified_at);
-  const canRun = !!preview && !preview.refused && preview.changes.length > 0 && !busy;
+  const canRun = !!preview && !refused && preview.changes.length > 0 && !busy;
 
   const footer = (
     <div className={phone ? 'grid grid-cols-2 gap-2' : 'flex justify-end gap-2'}>
@@ -1204,10 +1207,10 @@ const RollBackDialog: React.FC<{
         )}
         {preview && (
           <>
-            {preview.refused && (
-              <p className="flex items-start gap-1.5 rounded-xl border border-rose-400/30 bg-rose-500/[0.08] px-3 py-2 text-rose-200" data-rollback-refused={preview.refused}>
+            {refused && (
+              <p className="flex items-start gap-1.5 rounded-xl border border-rose-400/30 bg-rose-500/[0.08] px-3 py-2 text-rose-200" data-rollback-refused={refused}>
                 <AlertTriangle size={14} className="mt-1 shrink-0" aria-hidden="true" />
-                {preview.refused === 'running' ? 'A bot is working on it now. Roll back once it stops.' : restoreErrorText(new MissionError('', 409, preview.refused))}
+                {refused === 'running' ? 'A bot is working on it now. Roll back once it stops.' : restoreErrorText(new MissionError('', 409, refused))}
               </p>
             )}
             {fork ? (
