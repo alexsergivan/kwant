@@ -462,15 +462,32 @@ pub fn one_down(tier: &str) -> Option<&'static str> {
 /// owner down once per key, however many forks or restores undo that approval. Approved means
 /// verified, or a passed `person` check (contract §5.1); read it before a rollback moves the task.
 pub async fn approval(db: &Database, task: &Task) -> Option<String> {
+    approval_with_time(db, task).await.map(|(key, _)| key)
+}
+
+/// [`approval`]'s key with the time of that approval: the task's `finished_at` when verified, else
+/// the passed `person` check's `finished_at`. The restore preview sends the time as `verified_at`.
+pub async fn approval_with_time(db: &Database, task: &Task) -> Option<(String, Option<chrono::DateTime<chrono::Utc>>)> {
     if task.state == "verified" {
-        return Some(format!("verified@{}", task.finished_at.map(|t| t.to_rfc3339()).unwrap_or_default()));
+        let at = task.finished_at;
+        return Some((format!("verified@{}", at.map(|t| t.to_rfc3339()).unwrap_or_default()), at));
     }
     let checks = db.list_checks(&task.id).await.unwrap_or_default();
     checks
         .iter()
         .filter(|c| c.kind == "person" && c.status == "passed")
         .max_by_key(|c| c.finished_at)
-        .map(|c| format!("check:{}@{}", c.id, c.finished_at.map(|t| t.to_rfc3339()).unwrap_or_default()))
+        .map(|c| (format!("check:{}@{}", c.id, c.finished_at.map(|t| t.to_rfc3339()).unwrap_or_default()), c.finished_at))
+}
+
+/// When the approval a rollback of `task` would undo was given (the [`approval_with_time`] time),
+/// as the restore preview's `verified_at`; null when it isn't approved. It stays set after the
+/// approval's one step-down was used: the task was still approved at that time.
+pub async fn approved_at(db: &Database, task: &Task) -> Value {
+    match approval_with_time(db, task).await {
+        Some((_, Some(at))) => json!(at),
+        _ => Value::Null,
+    }
 }
 
 /// The owner, class and tiers a rollback of `task` would drop between, if it drops at all.
