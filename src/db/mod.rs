@@ -58,6 +58,7 @@ pub mod telegram;
 pub mod show_once;
 pub mod isolated_folders;
 pub mod tool_notes;
+pub mod mission_watch;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -225,6 +226,8 @@ impl Database {
         db.migrate_bot_budget().await?;
         // 0.9.0 P5: tool notes (add-only)
         db.migrate_tool_notes().await?;
+        // 0.9.0 P1: mission watches and their checks (add-only)
+        db.migrate_mission_watch().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;

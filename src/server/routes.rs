@@ -1900,6 +1900,9 @@ pub(super) struct TurnOpts {
     pub(super) unsaved: bool,
     /// A failed turn saves no `turn_failed` note (the caller posts something else).
     pub(super) quiet_failure: bool,
+    /// A result the engine flagged as an error (`TurnOutput::is_error`) ends the turn with `Err`
+    /// (its first line) instead of being the reply. Off for chats, which show it as the reply.
+    pub(super) error_result_fails: bool,
     /// The turn sends no `turn_finished` notification when it ends (the caller notifies, see
     /// [`super::missions::runner`]).
     pub(super) quiet_finish: bool,
@@ -3523,6 +3526,11 @@ async fn run_kwant_turn_inner(
             // (less what a task the bot handed in mid-turn already paid for)
             let booked = state.turns.take_booked(&tag.turn_id);
             super::missions::spend(state, &target_kwant.id, &scope.context_id(target_kwant), Some(&tag.turn_id), turn_started_ms, fresh, booked).await;
+            // (its spend is booked above either way)
+            if opts.error_result_fails && output.is_error {
+                let first = output.text.lines().map(str::trim).find(|l| !l.is_empty());
+                return Err(first.map_or_else(|| format!("the {target_model} turn ended with an error"), String::from));
+            }
 
             let mut reply_text = output.text.clone();
             let saved = match &opts.discussion {
