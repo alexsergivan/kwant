@@ -231,11 +231,27 @@ pub fn strip_controls(text: &str) -> String {
                 }
             },
             '\n' | '\t' => out.push(c),
+            c if joins_visible(c, out.chars().last(), it.peek().copied()) => out.push(c),
             c if c.is_control() || crate::drivers::is_format_char(c) => {}
             c => out.push(c),
         }
     }
     out
+}
+
+/// Whether `c`, a joiner (ZWJ, ZWNJ) or variation selector, is part of what the text shows: an
+/// emoji sequence (👨‍👩‍👧, ✔️) or a Persian or Indic word. Only next to non-ASCII text, so it can't
+/// split an ASCII word or command. A selector follows a visible character; a joiner sits between
+/// two (the one before may be a kept selector, as in 👁️‍🗨️).
+fn joins_visible(c: char, prev: Option<char>, next: Option<char>) -> bool {
+    let selector = |c: char| matches!(c, '\u{FE00}'..='\u{FE0F}');
+    let joiner = |c: char| matches!(c, '\u{200C}' | '\u{200D}');
+    let visible = |c: char| !c.is_ascii() && !c.is_whitespace() && !c.is_control() && !crate::drivers::is_format_char(c);
+    match prev {
+        Some(p) if selector(c) => visible(p),
+        Some(p) if joiner(c) => (visible(p) || selector(p)) && next.is_some_and(visible),
+        _ => false,
+    }
 }
 
 /// `path:line`, or `path:start-end` for a range, or `path` when the line is unknown.
@@ -1134,6 +1150,28 @@ mod tests {
         // Review comments too
         let c = ReviewComment { body: "fine \u{202E}evil".into(), ..comment(2, "a.rs", Some(1), now()) };
         assert_eq!(ItemComment::of(&c).body, "fine evil");
+    }
+
+    #[test]
+    fn joiners_inside_emoji_and_words_stay() {
+        // Joiners and selectors inside an emoji or a non-Latin word stay (QA #509 nit 1)
+        for kept in ["👨\u{200D}👩\u{200D}👧", "✔\u{FE0F} done", "👁\u{FE0F}\u{200D}🗨\u{FE0F}", "می\u{200C}خواهم", "क्\u{200D}ष"] {
+            assert_eq!(strip_controls(kept), kept, "{kept:?}");
+        }
+        // ... but never next to ASCII, at an edge, or doubled
+        for (raw, clean) in [
+            ("ev\u{200D}il", "evil"),
+            ("é\u{200D}x", "éx"),
+            ("x\u{200D}é", "xé"),
+            ("👍\u{200D}", "👍"),
+            ("\u{200D}👍", "👍"),
+            ("👍\u{200D} 👍", "👍 👍"),
+            ("ok\u{FE0F}", "ok"),
+            ("✔\u{FE0F}\u{FE0F}", "✔\u{FE0F}"),
+            ("👍\u{200D}\u{200D}👍", "👍\u{200D}👍"),
+        ] {
+            assert_eq!(strip_controls(raw), clean, "{raw:?}");
+        }
     }
 
     /// N1 (Rigel's QA of #490): a verdict that fails twice names the verdict, not the card's
