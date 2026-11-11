@@ -6,7 +6,7 @@ import { CheckCircle2, Hand, Loader2, MinusCircle, XCircle } from 'lucide-react'
 import { ModernAvatar } from './ModernAvatar';
 import { ReviewItem, VERDICT_WORD, approveState } from '../api/inbox';
 
-// Same shapes as Iris's reviewItem.ts (PR #503), so swapping ReviewItemSlot is one line.
+// Same shapes as Iris's reviewItem.ts (PR #503), so the inbox mounts ReviewItemView directly.
 export type ReviewEntry = 'inbox' | 'board' | 'dev';
 export interface ReviewDone {
   kind: 'approved' | 'sent_back' | 'rolled_back' | 'stale';
@@ -100,6 +100,3 @@ export const ReviewItemStub: React.FC<ReviewItemViewProps> = ({ item, onApprove,
     </div>
   );
 };
-
-/** The one item view every entry point mounts. Swap this for Iris's ReviewItemView when it lands. */
-export const ReviewItemSlot = ReviewItemStub;
