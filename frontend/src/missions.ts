@@ -1847,6 +1847,8 @@ export const missionsApi = {
   cancelAutofix: (id: string, aid: string) => call<AutofixAttempt>(`/api/tasks/${enc(id)}/autofix/${enc(aid)}/cancel`, 'POST', {}),
   workflowChanges: (status: WorkflowChangeStatus = 'proposed', taskId?: string) =>
     call<WorkflowChange[]>(`/api/workflow-changes?status=${status}${taskId ? `&task_id=${enc(taskId)}` : ''}`),
+  /** The verifier's verdicts on this task, newest first (raw: read them with scopeWarnings). */
+  verdicts: (id: string) => call<{ verdicts?: unknown }>(`/api/tasks/${enc(id)}/verdicts`).then((r) => r.verdicts),
   /** Swarm Auditor: the task's audits and their risks. */
   risks: (id: string) => call<TaskRisks>(`/api/tasks/${enc(id)}/risks`),
   /** The space's unresolved risks, for the board's badges. */
@@ -2319,4 +2321,33 @@ export function flushOnPageLeave(
     win.removeEventListener('pagehide', flush);
     doc.removeEventListener('visibilitychange', onHide);
   };
+}
+
+/** A path a small (low-tier) task changed although its contract said it must not, and the task was still approved. */
+export interface ScopeWarning {
+  id: string;
+  path: string;
+}
+
+const SCOPE_PREFIX = 'Changed a path it must not change: ';
+
+/**
+ * The scope findings of the newest verdict when it is a low-tier pass: the server records each
+ * changed must_not_change path as one medium `scope` finding ("Changed a path it must not change:
+ * <path>") and still approves the task. Anything else, or data of another shape, gives [].
+ */
+export function scopeWarnings(verdicts: unknown): ScopeWarning[] {
+  if (!Array.isArray(verdicts) || verdicts.length === 0) return [];
+  const v = verdicts[0] as Record<string, unknown> | null;
+  if (!v || typeof v !== 'object' || v.risk_tier !== 'low' || v.verdict !== 'pass' || v.overturned_at || !Array.isArray(v.findings)) return [];
+  const out: ScopeWarning[] = [];
+  for (const f of v.findings as Record<string, unknown>[]) {
+    if (!f || typeof f !== 'object') continue;
+    const kind = f.step ?? f.kind;
+    if (kind !== 'scope' || f.severity !== 'medium' || typeof f.text !== 'string' || !f.text.startsWith(SCOPE_PREFIX)) continue;
+    const path = f.text.slice(SCOPE_PREFIX.length).trim();
+    if (!path || out.some((w) => w.path === path)) continue;
+    out.push({ id: typeof f.id === 'string' && f.id ? f.id : path, path });
+  }
+  return out;
 }
