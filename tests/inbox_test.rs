@@ -14,6 +14,7 @@ use kwnt::{
         questions::QuestionPlace,
         spaces::SpaceId,
         threads::NewDelegation,
+        verifier::NewVerdict,
         Database,
     },
     router::LayaRouter,
@@ -384,4 +385,104 @@ async fn being_checked_follows_the_verifiers_pending_hold() {
         assert_eq!(i["being_checked"].is_boolean(), i["kind"] == "review", "{i}");
     }
     assert_eq!(v["batch"], Value::Null, "nothing without a verdict is batched");
+}
+
+/// The verifier's verdict on `task_id`, as `verifier::drive` saves it.
+async fn verdict(state: &AppState, task_id: &str, result: &str, confidence: &str, risk: &str, check_id: Option<&str>) -> String {
+    let next = match result {
+        "pass" => "counted",
+        "fail" => "sent_back",
+        _ => "held_for_you",
+    };
+    state
+        .db
+        .add_verdict(&NewVerdict {
+            task_id: task_id.into(),
+            attempt: 1,
+            round: 1,
+            verdict: result.into(),
+            confidence: confidence.into(),
+            risk_tier: risk.into(),
+            risk_reasons: json!([format!("{risk} because of the test")]),
+            steps: json!([{"status": "passed"}, {"status": "skipped"}]),
+            findings: json!([]),
+            couldnt_verify: json!([]),
+            model: Some("gpt-5.5".into()),
+            difference: "model".into(),
+            check_id: check_id.map(String::from),
+            next: next.into(),
+            summary: format!("The verifier says {result}."),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+/// M1: `/api/inbox` reads the verifier's verdict of this review round. A pass gives its result,
+/// risk and one tap; a held needs_you waits on the person and isn't being checked; a pending hold
+/// with no verdict still is; a pass from before a send-back is the last round's and doesn't count.
+#[tokio::test]
+async fn review_items_read_the_verifiers_verdict_of_this_round() {
+    let (app, state, _tmp) = setup().await;
+    let space = SpaceId::default_space();
+    let kwants = state.db.list_kwants(&space).await.unwrap();
+    let (lead, spec) = (kwants[0].clone(), kwants[1].clone());
+    let chan = state
+        .db
+        .create_channel(&space, &NewChannel {
+            name: "ops".into(),
+            description: None,
+            lead_kwant_id: lead.id.clone(),
+            member_kwants: vec![lead.id.clone(), spec.id.clone()],
+            routing_mode: "auto".into(),
+        })
+        .await
+        .unwrap();
+
+    let low = review_task(&state, &spec.id, "Low-risk pass", "- Works", &chan.id, 0).await;
+    let low_v = verdict(&state, &low, "pass", "high", "low", None).await;
+    let high = review_task(&state, &spec.id, "High-risk pass", "- Works", &chan.id, 0).await;
+    verdict(&state, &high, "pass", "high", "high", None).await;
+    let held = review_task(&state, &spec.id, "Held for you", "- Works", &chan.id, 0).await;
+    let h = hold(&state, &held, "verifier", json!({"verifier": true})).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let held_v = verdict(&state, &held, "needs_you", "high", "high", Some(&h)).await;
+    let checking = review_task(&state, &spec.id, "Being checked", "- Works", &chan.id, 0).await;
+    hold(&state, &checking, "verifier", json!({"verifier": true})).await;
+    // Passed in round 1, sent back by the person, in review again with no new verdict
+    let again = review_task(&state, &lead.id, "Back in review", "- Works", &chan.id, 0).await;
+    verdict(&state, &again, "pass", "high", "low", None).await;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert!(state.db.move_task(&again, "review", "ready", "person", &change(Some("Also the edge case"))).await.unwrap());
+    state.db.claim_task(&again, &lead.id, None, None, 600_000, false, &lead.id).await.unwrap().unwrap();
+    assert!(state.db.move_task(&again, "working", "review", &lead.id, &change(Some("Edge case done"))).await.unwrap());
+
+    let v = get(&app, "/api/inbox").await;
+    let l = find(&v, &low);
+    assert_eq!((l["group"].as_str(), l["verdict"]["result"].as_str(), l["verdict"]["id"].as_str()), (Some("to_review"), Some("pass"), Some(low_v.as_str())), "{l}");
+    assert_eq!((l["verdict"]["confidence"].as_str(), l["risk"]["level"].as_str()), (Some("high"), Some("low")));
+    assert_eq!(l["risk"]["reasons"], json!(["low because of the test"]));
+    assert_eq!(l["verdict"]["line"], "The verifier says pass.");
+    assert_eq!((l["verdict"]["steps_run"].as_i64(), l["verdict"]["steps_total"].as_i64()), (Some(1), Some(2)));
+    assert_eq!(l["verdict"]["checker"]["engine"], "Codex");
+    assert!(l["verdict"]["checked_at"].is_string());
+    assert_eq!((l["one_tap"].clone(), l["being_checked"].clone()), (json!(true), json!(false)), "{l}");
+    // Batching also needs every required check passed; this task has none
+    assert_eq!(l["batchable"], json!(false));
+    let hi = find(&v, &high);
+    assert_eq!((hi["risk"]["level"].as_str(), hi["one_tap"].clone(), hi["batchable"].clone()), (Some("high"), json!(false), json!(false)), "{hi}");
+
+    let n = find(&v, &held);
+    assert_eq!((n["group"].as_str(), n["verdict"]["result"].as_str(), n["verdict"]["id"].as_str()), (Some("waiting_on_you"), Some("needs_you"), Some(held_v.as_str())), "{n}");
+    assert_eq!((n["risk"]["level"].as_str(), n["being_checked"].clone()), (Some("high"), json!(false)), "{n}");
+    assert_eq!((n["one_tap"].clone(), n["batchable"].clone()), (json!(false), json!(false)));
+    assert!(v["counts"]["waiting_on_you"].as_i64().unwrap() >= 1, "{}", v["counts"]);
+
+    let c = find(&v, &checking);
+    assert_eq!((c["verdict"]["result"].as_str(), c["being_checked"].clone(), c["group"].as_str()), (Some("none"), json!(true), Some("to_review")), "{c}");
+
+    let a = find(&v, &again);
+    assert_eq!((a["verdict"]["result"].as_str(), a["verdict"]["id"].clone(), a["one_tap"].clone()), (Some("none"), Value::Null, json!(false)), "an earlier round's pass: {a}");
+    assert_eq!(a["risk"]["level"], Value::Null);
 }

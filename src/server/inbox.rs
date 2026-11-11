@@ -23,6 +23,7 @@ use crate::db::dev_mode::DevCardRow;
 use crate::db::dev_prepush::{BLOCKED, NEEDS_YOU_TRIES, PREPUSH_FAILED};
 use crate::db::missions::{Evidence, OpenCard, OutcomeCheck, Task, TaskEvent};
 use crate::db::spaces::SpaceId;
+use crate::db::verifier::TaskVerdict;
 use crate::db::DbError;
 use axum::{
     extract::{Query, State},
@@ -260,7 +261,7 @@ pub struct ReviewInput {
     /// Dev desk review card for the task's PR, and whether a landed card exists for it.
     pub dev_review: Option<DevCardRow>,
     pub landed: bool,
-    /// Juno's latest verdict as JSON, once V2 lands.
+    /// Juno's latest verdict of this review round as JSON ([`current_verdict`]).
     pub latest: Option<Value>,
 }
 
@@ -438,6 +439,32 @@ pub fn being_checked(task_state: &str, checks: &[OutcomeCheck], in_review_since:
     }
 }
 
+/// The task's newest verdict as the JSON [`verdict_of`] and [`review_item`] read (`verdict`,
+/// `confidence`, `risk_tier`, `risk_reasons`, `round`, `steps`, `couldnt_verify`, `difference`,
+/// `summary`, `created_at`, `id`, `model`), when it belongs to this review round: made since the
+/// task's last move to review and not overturned. An earlier round's pass must not offer Approve.
+pub fn current_verdict(v: &TaskVerdict, in_review_since: DateTime<Utc>) -> Option<Value> {
+    if v.created_at < in_review_since || v.overturned_at.is_some() {
+        return None;
+    }
+    serde_json::to_value(v).ok()
+}
+
+/// A watcher's open item (`watch::waiting_items`) in Waiting on you, keyed like the away items.
+fn watch_item(mut v: Value, last_seen: Option<DateTime<Utc>>) -> Value {
+    let at = v["timestamp"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&Utc));
+    let at_ms = at.map(|t| t.timestamp_millis()).unwrap_or(0);
+    let unread = match (last_seen, at) {
+        (Some(s), Some(a)) => a > s,
+        _ => true,
+    };
+    let name = v["kwant_name"].as_str().unwrap_or("").to_string();
+    let id = v["id"].as_str().unwrap_or("").to_string();
+    v["group"] = json!(Group::WaitingOnYou.key());
+    v["sort_key"] = sort_key(Group::WaitingOnYou, None, at_ms, unread, &name, &id);
+    v
+}
+
 /// A review item, and the facts its group and buttons came from; `None` when it isn't listed.
 pub fn review_item(r: &ReviewInput, last_seen: Option<DateTime<Utc>>) -> Option<(Value, ReviewFacts)> {
     let t = &r.task;
@@ -611,6 +638,8 @@ async fn gather(state: &AppState, space: &SpaceId) -> Result<Vec<ReviewInput>, D
     }
     let reviews = state.db.dev_cards(space.as_str(), "review", None, 100).await?;
     let landed = state.db.dev_cards(space.as_str(), "landed", None, 100).await?;
+    let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
+    let mut verdicts = state.db.latest_verdicts(&ids).await?;
     let mut out = Vec::with_capacity(tasks.len());
     for task in tasks {
         let events = state.db.task_events(&task.id, 500).await?;
@@ -639,8 +668,7 @@ async fn gather(state: &AppState, space: &SpaceId) -> Result<Vec<ReviewInput>, D
             events,
             dev_review,
             landed: is_landed,
-            // juno-090-verifier: state.db.latest_verdicts(&ids) as JSON
-            latest: None,
+            latest: verdicts.remove(&task.id).and_then(|v| current_verdict(&v, since)),
             task,
         });
     }
@@ -689,9 +717,13 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     let Ok((waiting, finished, failed, unseen_total, prepush_needs_you, reviews)) = result else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
+    // What a mission watcher left for the person (P1), listed and counted as on /api/away
+    let watch = super::missions::watch::waiting_items(&state, &space).await;
+    let unseen_total = unseen_total + watch.len() as i64;
 
     let mut items: Vec<Value> = Vec::new();
     items.extend(waiting.into_iter().map(|r| away_item(r, Group::WaitingOnYou, seen)));
+    items.extend(watch.into_iter().map(|v| watch_item(v, seen)));
     items.extend(failed.into_iter().map(|r| away_item(r, Group::FailedOrStuck, seen)));
     items.extend(finished.into_iter().map(|r| away_item(r, Group::Finished, seen)));
     items.extend(reviews.iter().filter_map(|r| review_item(r, seen)).map(|(v, _)| v));
@@ -1019,5 +1051,15 @@ mod tests {
         let pay = held_json(&card, Some(r#"{"payment_reason":"checkout","arguments":{}}"#));
         assert_eq!(pay["gate"], "payment");
         assert_eq!(held_json(&card, Some(r#"{"arguments":{"to":"x"}}"#))["gate"], "approval");
+    }
+
+    #[test]
+    fn a_watch_item_waits_on_you_keyed_like_the_away_items() {
+        let at = "2026-11-11T06:27:00Z";
+        let v = watch_item(json!({"kind": "watch", "id": "wc-1", "kwant_name": "Rigel", "timestamp": at}), None);
+        let ms = DateTime::parse_from_rfc3339(at).unwrap().timestamp_millis();
+        assert_eq!(v["group"], "waiting_on_you");
+        assert_eq!(v["sort_key"], sort_key(Group::WaitingOnYou, None, ms, true, "Rigel", "wc-1"));
+        assert_eq!(v["sort_key"][0], json!(1));
     }
 }
