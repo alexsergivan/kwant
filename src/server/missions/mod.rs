@@ -16,6 +16,7 @@ pub mod auditor;
 pub mod autofix;
 pub mod checkpoints;
 pub mod checks;
+pub mod contract;
 pub mod discovery;
 pub mod flight_school;
 pub mod foundry;
@@ -27,6 +28,8 @@ pub mod routes;
 pub mod runner;
 pub mod tools;
 pub mod truth_ledger;
+pub mod watch;
+pub mod verifier;
 
 use super::AppState;
 use crate::db::missions::{Mission, NewCheck, NewTask, OutcomeCheck, Task, TaskChange};
@@ -142,6 +145,9 @@ pub enum Actor {
     Kwant,
     /// AutoFix, retrying a failed task (Phase B3): only `failed → ready`.
     AutoFix,
+    /// kwant applying a mission watcher's report (P1): only the four send-backs, review, failed
+    /// or needs_you → ready and blocked → backlog.
+    Watcher,
 }
 
 /// Whether `actor` may move a task from `from` to `to`. Conditions beyond the pair (live claim,
@@ -149,6 +155,10 @@ pub enum Actor {
 /// SQLite triggers.
 pub fn allowed(from: &str, to: &str, actor: Actor) -> bool {
     use Actor::*;
+    // A watcher's report makes only its four send-backs, never a move open to any actor
+    if actor == Watcher {
+        return matches!((from, to), ("review" | "failed" | "needs_you", "ready") | ("blocked", "backlog"));
+    }
     let open = matches!(from, "backlog" | "ready" | "working" | "needs_you" | "review" | "blocked" | "failed");
     match (from, to) {
         ("backlog", "ready") => actor == Kwant,
@@ -249,6 +259,10 @@ async fn after_move(state: &AppState, task: &Task, to: &str) {
     // The Swarm Auditor challenges a high-impact or low-confidence task in review (on unless the person saved it off; capped per day)
     if to == "review" {
         auditor::on_review(state, task);
+        // The Verifier (V2) holds the task until its verdict; awaited, so the hold exists before evaluate
+        verifier::on_review(state, task).await;
+    } else {
+        verifier::on_leave(state, task, to).await;
     }
     autofix::settle(state, task, to).await;
     // A task parked for AutoFix isn't done failing: no "failed" line until it is
@@ -345,7 +359,8 @@ fn fresh(c: &OutcomeCheck, since: Option<chrono::DateTime<chrono::Utc>>) -> bool
     match (since, c.finished_at) {
         (Some(s), Some(f)) => f >= s,
         (None, _) => true,
-        (Some(_), None) => false,
+        // The verifier's hold (V2) gates from the moment it is added at the move to review
+        (Some(s), None) => verifier::is_hold(c) && c.created_at >= s,
     }
 }
 
@@ -639,6 +654,9 @@ pub async fn task_json(state: &AppState, task: &Task) -> Value {
         obj.insert("owner_tier".into(), flight_school::owner_tier(state, task).await);
         obj.insert("reviewer".into(), reviewer(state, task).await);
         obj.insert("closed_note".into(), closed_note(state, task).await);
+        // V3 hand-off contract and V2 verdict (null contract when none is stored)
+        obj.insert("contract".into(), contract::json_of(state, &task.id).await);
+        obj.insert("verifier".into(), verifier::json_of(state, task).await);
     }
     v
 }
@@ -686,6 +704,8 @@ pub async fn mission_json(state: &AppState, m: &Mission) -> Value {
         // The goal this mission restores (`goal` stays the mission's own text)
         let link = state.db.goal_link_of_mission(&m.id).await.ok().flatten();
         obj.insert("goal_link".into(), link.map_or(Value::Null, |(id, title)| json!({"id": id, "title": title})));
+        // Who watches the mission and what it found (P1)
+        obj.insert("watch".into(), watch::watch_json(state, m).await);
     }
     v
 }
@@ -729,9 +749,10 @@ pub async fn emit_mission(state: &AppState, mission_id: &str) {
 
 // Chat lines
 
-async fn post_line(state: &AppState, channel_id: Option<String>, direct_kwant_id: Option<String>, thread_id: Option<String>, sender: &str, text: String, meta: Value) {
+/// Posts `text` in the mission's chat; the saved message's id, or `None` when there's no chat.
+pub(super) async fn post_line(state: &AppState, channel_id: Option<String>, direct_kwant_id: Option<String>, thread_id: Option<String>, sender: &str, text: String, meta: Value) -> Option<String> {
     if channel_id.is_none() && direct_kwant_id.is_none() && thread_id.is_none() {
-        return;
+        return None;
     }
     let msg = NewMessage {
         channel_id: if thread_id.is_some() { None } else { channel_id },
@@ -744,11 +765,12 @@ async fn post_line(state: &AppState, channel_id: Option<String>, direct_kwant_id
         tokens_used: 0,
     };
     let extra = MessageExtra { thread_id: thread_id.clone(), meta: Some(meta) };
-    let Ok(saved) = state.db.insert_message_with(&msg, &extra).await else { return };
+    let Ok(saved) = state.db.insert_message_with(&msg, &extra).await else { return None };
     if let Some(t) = &thread_id {
         let _ = state.db.touch_thread(t).await;
     }
     let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or(Value::Null) });
+    Some(saved.id.clone())
 }
 
 /// A short line in the mission's chat (`meta.kind = "mission"`).
@@ -768,7 +790,7 @@ async fn task_chat_line(state: &AppState, t: &Task, m: Option<&Mission>) {
     match m {
         Some(m) => post_line(state, m.channel_id.clone(), m.direct_kwant_id.clone(), m.thread_id.clone(), &sender, text, meta).await,
         None => post_line(state, t.channel_id.clone(), t.direct_kwant_id.clone(), t.thread_id.clone(), &sender, text, meta).await,
-    }
+    };
 }
 
 // Plans: shared by the `mission_plan` tool and `POST /api/missions`

@@ -123,7 +123,7 @@ async fn a_task_verified_in_turn_pays_at_hand_in_and_the_turn_counts_once() {
     let served = app.clone();
     tokio::spawn(async move { axum::serve(listener, served).await.unwrap() });
 
-    ok(&app, "POST", "/api/settings", Some(json!({"mission_board": true}))).await;
+    ok(&app, "POST", "/api/settings", Some(json!({"mission_board": true, "verifier": "off"}))).await;
     let bot = json!({"name": "Ann", "title": "Ann the tester", "persona_prompt": "Test persona",
                      "avatar_sprite": "s", "driver_type": "cli", "preferred_model": "claude"});
     let ann = ok(&app, "POST", "/api/kwants", Some(bot)).await["id"].as_str().unwrap().to_string();

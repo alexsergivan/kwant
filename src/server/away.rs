@@ -273,7 +273,8 @@ pub(super) async fn last_seen(state: &AppState, space: &SpaceId) -> Result<Optio
 pub async fn unread_total(state: &AppState, space: &SpaceId) -> Result<i64, crate::db::DbError> {
     let now = Utc::now();
     let since = last_seen(state, space).await?.unwrap_or(now - Duration::days(DEFAULT_LOOKBACK_DAYS));
-    let waiting = state.db.away_count_open_questions(space).await? + waiting_approvals(state, space).await?.len() as i64;
+    let watch = crate::server::missions::watch::waiting_items(state, space).await.len() as i64;
+    let waiting = state.db.away_count_open_questions(space).await? + waiting_approvals(state, space).await?.len() as i64 + watch;
     let (finished, failed) = state.db.away_counts(space, since, now - Duration::minutes(STUCK_AFTER_MINUTES)).await?;
     Ok(waiting + finished + failed)
 }
@@ -353,12 +354,19 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     let Ok((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed)) = result else {
         return internal();
     };
+    // What a mission watcher left for the person (P1)
+    let watch = crate::server::missions::watch::waiting_items(&state, &space).await;
+    let waiting_count = waiting_count + watch.len() as i64;
+    let mut waiting: Vec<Value> = waiting.into_iter().map(item).collect();
+    waiting.extend(watch);
+    waiting.sort_by(|a, b| b["timestamp"].as_str().unwrap_or("").cmp(a["timestamp"].as_str().unwrap_or("")));
+    waiting.truncate(MAX_ITEMS as usize);
     Json(json!({
         "since": rfc3339(since),
         "last_seen": seen.map(rfc3339),
         "now": rfc3339(now),
         "stuck_after_minutes": STUCK_AFTER_MINUTES,
-        "waiting": waiting.into_iter().map(item).collect::<Vec<_>>(),
+        "waiting": waiting,
         "finished": finished.into_iter().map(item).collect::<Vec<_>>(),
         "failed": failed.into_iter().map(item).collect::<Vec<_>>(),
         "unseen": {

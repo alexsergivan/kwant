@@ -1,4 +1,5 @@
 import React, { Fragment, useState, useRef, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from 'react';
+import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
 import { queuedText } from '../claudeVm';
 import { QueuedBeside } from './QueuedBeside';
@@ -61,6 +62,8 @@ import { DropRecipient, FOLDER_NOTE, dragHasFiles, dropAnnouncement, dropCard, l
 import { DropBot, DropLayer, DropPhase } from './DropLayer';
 import { EarlierCopies, FileTiles, PointChip, UploadChip } from './Attachments';
 import { arrangeSharedFiles, botDisplayName, botOf, shareInfo } from '../sharedFiles';
+import { parseToolNoteMeta } from '../toolNotes';
+import { ToolNoteLine } from './ToolNoteLine';
 import { ranOnLabel } from '../engines';
 import { replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount, routingLine } from '../spaces';
@@ -290,6 +293,10 @@ export interface ChatViewProps {
   renderConnectionSuggestion?: (msg: ChatMessage, meta: ConnectionSuggestionMeta, flash: boolean) => React.ReactNode;
   /** A change a bot made in the app (message meta kind "bot_action"). */
   renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
+  /** 0.9.0 P5: a bot's tool-note line (meta kind "tool_note"); "See the note" opens it on Connections. */
+  onOpenToolNote?: (noteId: string) => void;
+  /** A mission watcher's check report (message meta kind "watch"). */
+  renderWatchReport?: (msg: ChatMessage, meta: WatchMeta, flash: boolean) => React.ReactNode;
   /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */
   renderHire?: (msg: ChatMessage, meta: HireMeta, flash: boolean) => React.ReactNode;
   /** Laya's "Who should answer this?" card (message meta kind "route_choice"); `question` is the
@@ -509,6 +516,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderMcpSuggestion,
   renderConnectionSuggestion,
   renderBotAction,
+  onOpenToolNote,
+  renderWatchReport,
   renderHire,
   renderRouteChoice,
   rerouteTargets = [],
@@ -1285,8 +1294,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const connection = msg.meta && renderConnectionSuggestion ? parseConnectionMeta(msg.meta) : null;
     if (connection && renderConnectionSuggestion)
       return <React.Fragment key={msg.id}>{renderConnectionSuggestion(msg, connection, flashId === msg.id)}</React.Fragment>;
+    const watch = msg.meta && renderWatchReport ? parseWatchMeta(msg.meta) : null;
+    if (watch && renderWatchReport) return <React.Fragment key={msg.id}>{renderWatchReport(msg, watch, flashId === msg.id)}</React.Fragment>;
     const botAction = msg.meta && renderBotAction ? parseBotActionMeta(msg.meta) : null;
     if (botAction && renderBotAction) return <React.Fragment key={msg.id}>{renderBotAction(msg, botAction, flashId === msg.id)}</React.Fragment>;
+    const toolNote = msg.meta ? parseToolNoteMeta(msg.meta) : null;
+    if (toolNote)
+      return (
+        <ToolNoteLine
+          key={msg.id}
+          meta={toolNote}
+          messageId={msg.id}
+          botName={botDisplayName(toolNote.kwant_id ?? msg.sender_id, knownBots)}
+          flash={flashId === msg.id}
+          onOpen={onOpenToolNote}
+        />
+      );
     const hire = msg.meta && renderHire ? parseHireMeta(msg.meta) : null;
     if (hire && renderHire) return <React.Fragment key={msg.id}>{renderHire(msg, hire, flashId === msg.id)}</React.Fragment>;
     const routeChoice = msg.meta && renderRouteChoice ? parseRouteChoiceMeta(msg.meta) : null;

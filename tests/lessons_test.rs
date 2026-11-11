@@ -121,8 +121,9 @@ async fn setup() -> Env {
     let general = state.db.list_channels(&space).await.unwrap().into_iter().find(|c| c.name == "general").unwrap().id;
     state.db.set_space_approvals(&space, "off").await.unwrap();
     let e = Env { app, state, general, _tmp: tmp };
-    // AutoFix off: a failing check fails the task once, with no retry turns
-    person(&e, "POST", "/api/settings", Some(json!({"mission_board": true, "autofix": "off"}))).await;
+    // AutoFix off: a failing check fails the task once, with no retry turns. Verifier off: these
+    // tests are about lessons and goals, not the V2 hold (tests/verifier_test.rs covers that).
+    person(&e, "POST", "/api/settings", Some(json!({"mission_board": true, "autofix": "off", "verifier": "off"}))).await;
     e
 }
 
@@ -400,7 +401,10 @@ async fn kept(e: &Env, bot: &Kwant, title: &str) -> kwnt::db::goals::Goal {
             break;
         }
         if t["state"] == "review" && e.state.db.list_checks(&tid).await.unwrap().iter().all(|c| c.status == "passed") {
-            person(e, "POST", &format!("/api/tasks/{tid}/verify"), Some(json!({}))).await;
+            // The task can reach verified on its own between the read above and this call (its
+            // checks all passed); a 409 is then fine, and wait_state below proves the state.
+            let (status, v) = send(&e.app, "POST", &format!("/api/tasks/{tid}/verify"), None, Some(json!({}))).await;
+            assert!(status.is_success() || status == StatusCode::CONFLICT, "verify: {status} {v}");
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

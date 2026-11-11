@@ -40,6 +40,7 @@ pub mod away;
 pub mod computer;
 pub mod mcp_suggest;
 pub mod page_source;
+pub mod tool_notes;
 pub mod connection_suggest;
 pub mod bot_actions;
 pub mod hires;
@@ -502,11 +503,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/missions/:id/run", post(missions::routes::run_mission))
         .route("/api/missions/:id/graph", get(missions::graph::mission_graph))
         .route("/api/missions/:id/graph/scan", post(missions::graph::scan))
+        .route("/api/missions/:id/watch", get(missions::watch::get_watch).put(missions::watch::put_watch).delete(missions::watch::delete_watch))
+        .route("/api/missions/:id/watch/check", post(missions::watch::check_now))
+        .route("/api/missions/:id/watch/checks", get(missions::watch::list_checks))
+        .route("/api/watch-checks/:id", get(missions::watch::get_check))
         .route("/api/graph", get(missions::graph::loose_graph))
         .route("/api/tasks", get(missions::routes::list_tasks).post(missions::routes::create_task))
         .route("/api/tasks/:id", get(missions::routes::get_task).patch(missions::routes::patch_task))
         .route("/api/tasks/:id/verify", post(missions::routes::verify_task))
         .route("/api/tasks/:id/reject", post(missions::routes::reject_task))
+        .route("/api/tasks/:id/contract", get(missions::verifier::get_contract).put(missions::verifier::put_contract))
+        .route("/api/tasks/:id/verdicts", get(missions::verifier::list_verdicts))
+        .route("/api/verifier/accuracy", get(missions::verifier::accuracy))
         .route("/api/tasks/:id/block", post(missions::routes::block_task))
         .route("/api/tasks/:id/unblock", post(missions::routes::unblock_task))
         .route("/api/tasks/:id/retry", post(missions::routes::retry_task))
@@ -568,6 +576,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/skills/:id/approve", post(skills::approve))
         .route("/api/skills/:id/reject", post(skills::reject))
         .route("/api/away", get(away::get))
+        .route("/api/tool-notes", get(tool_notes::list).post(tool_notes::create))
+        .route("/api/tool-notes/:id", axum::routing::patch(tool_notes::edit).delete(tool_notes::delete))
         .route("/api/away/seen", post(away::seen))
         .route("/api/inbox", get(inbox::get))
         .route("/api/events", get(sse::sse_handler))

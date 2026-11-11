@@ -743,10 +743,36 @@ pub async fn patch_task(State(state): State<AppState>, RawQuery(q): RawQuery, Pa
 pub struct Note {
     note: Option<String>,
     reason: Option<String>,
+    /// Verify only: the verdict the person saw (contract §9.5); refused as stale when it isn't
+    /// the task's latest, or the files it judged changed since.
+    verdict_id: Option<String>,
 }
 
 fn body(b: Option<Json<Note>>) -> Note {
     b.map(|b| b.0).unwrap_or_default()
+}
+
+fn stale(paths: Vec<String>, message: &str) -> Response {
+    (StatusCode::CONFLICT, Json(json!({"error": message, "code": "stale", "message": message, "paths": paths}))).into_response()
+}
+
+/// Contract §9.5: `verdict_id` is this task's latest verdict, and the run it judged is still what
+/// the folder holds. Checked before anything is written: a refusal verifies nothing, touches no
+/// hold and records no overturn.
+#[allow(clippy::result_large_err)]
+async fn fresh_verdict(state: &AppState, task_id: &str, verdict_id: &str) -> Result<(), Response> {
+    let verdicts = state.db.verdicts_of(task_id).await.map_err(internal)?;
+    let Some(v) = verdicts.iter().find(|v| v.id == verdict_id) else {
+        return Err((StatusCode::NOT_FOUND, Json(json!({"error": "no such verdict on this task", "code": "not_found"}))).into_response());
+    };
+    if verdicts.first().map(|l| l.id.as_str()) != Some(verdict_id) {
+        return Err(stale(vec![], "a newer verdict exists"));
+    }
+    let Some(cid) = v.after_run_checkpoint_id.as_deref() else { return Ok(()) };
+    match super::checkpoints::freshness(state, task_id, cid).await.map_err(internal)? {
+        super::checkpoints::Freshness::Fresh => Ok(()),
+        super::checkpoints::Freshness::Stale(paths, why) => Err(stale(paths, why)),
+    }
 }
 
 /// The person's Verify: runs the task's pending kwant checks, then records a passing `person` check.
@@ -759,7 +785,13 @@ pub async fn verify_task(State(state): State<AppState>, RawQuery(q): RawQuery, P
     if t.state != "review" {
         return conflict(format!("only a task in review can be verified; this one is {}", t.state));
     }
-    let note = body(b).note.unwrap_or_default();
+    let b = body(b);
+    if let Some(vid) = b.verdict_id.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        if let Err(r) = fresh_verdict(&state, &id, vid).await {
+            return r;
+        }
+    }
+    let note = b.note.unwrap_or_default();
     let c = NewCheck {
         task_id: id.clone(),
         kind: "person".into(),
@@ -776,6 +808,8 @@ pub async fn verify_task(State(state): State<AppState>, RawQuery(q): RawQuery, P
     if let Err(e) = state.db.finish_check(&check.id, "passed", Some(&note), "person", None).await {
         return internal(e);
     }
+    // The person decides over the verifier: its hold passes, and a fail or needs-you is recorded as overturned
+    super::verifier::person_verified(&state, &t).await;
     // Runs the approved kwant checks that haven't passed yet; evaluates
     let pending: Vec<_> = state.db.list_checks(&id).await.unwrap_or_default().into_iter().filter(|c| c.approved && c.status == "pending").collect();
     for c in &pending {
@@ -794,13 +828,19 @@ pub async fn verify_task(State(state): State<AppState>, RawQuery(q): RawQuery, P
 }
 
 pub async fn reject_task(State(state): State<AppState>, RawQuery(q): RawQuery, Path(id): Path<String>, b: Option<Json<Note>>) -> Response {
-    if let Err(r) = load_task(&state, q.as_deref(), &id).await {
-        return r;
-    }
+    let t = match load_task(&state, q.as_deref(), &id).await {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
     let b = body(b);
     let Some(reason) = b.reason.or(b.note).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
         return bad("reason is required");
     };
+    if t.state == "review" {
+        // V2: a pass the person sends back is overturned; V3: the note becomes a criterion
+        super::verifier::person_sent_back(&state, &t, &reason).await;
+        super::contract::add_send_back(&state, &t, &reason).await;
+    }
     let change = TaskChange { reason: Some(reason), attempt: true, ..Default::default() };
     match moved(transition(&state, &id, "review", "ready", Actor::Person, "person", change).await) {
         Ok(t) => task_out(&state, &t).await,

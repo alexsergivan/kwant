@@ -168,6 +168,9 @@ import {
 } from '../missions';
 import { DEFAULT_CLASS, ENGINE_CANT_SANDBOX, TIER_HINTS, classLabel, engineCantSandboxText, showsTier, tierLabel, toClass, validClass } from '../flightSchool';
 import { ScrollRow } from './ScrollRow';
+import { MissionWatchControls, WatchBoardContext, type WatchBoard } from './MissionWatch';
+import { watchApi, type WatchApi } from '../missionWatch';
+import { usePhoneLayout } from '../usePhoneLayout';
 
 const TONES: Record<Tone, string> = {
   emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
@@ -590,6 +593,8 @@ export const MissionSummary: React.FC<{
     .filter(([k]) => k !== 'cancelled')
     .reduce((n, [, v]) => n + v, 0);
   return (
+    <MissionWatchControls mission={m}>
+      {({ chip, report }) => (
     <section className={`${card} p-3 sm:p-4 space-y-2`} data-mission={m.id} aria-label={`Mission: ${m.title}`}>
       <div className="flex flex-wrap items-start gap-2">
         <Target size={16} className="mt-0.5 shrink-0 text-sky-400" aria-hidden="true" />
@@ -604,6 +609,7 @@ export const MissionSummary: React.FC<{
         </div>
         <Badge tone={st.tone}>{st.label}</Badge>
         {m.over_budget && <Badge tone="rose">Over its limit</Badge>}
+        {chip && <div className="basis-full sm:basis-auto min-w-0" data-watch-chip-slot>{chip}</div>}
       </div>
       <div className="space-y-1">
         <div className="flex flex-wrap justify-between gap-x-3 text-[11px] text-zinc-400">
@@ -623,6 +629,7 @@ export const MissionSummary: React.FC<{
         )}
       </div>
       {m.over_budget && <p className="text-[11px] text-rose-300">No new task starts until you raise or remove the mission’s token limit.</p>}
+      {report}
       {m.status === 'draft' && (
         <div className="flex flex-wrap items-center gap-2 pt-1">
           <p className="text-xs text-amber-200 flex-1 min-w-[12rem]">{m.lead_name ?? 'A bot'} planned this. Nothing runs until you approve it.</p>
@@ -635,6 +642,8 @@ export const MissionSummary: React.FC<{
         </div>
       )}
     </section>
+      )}
+    </MissionWatchControls>
   );
 };
 
@@ -3027,13 +3036,18 @@ export const MissionBoardPage: React.FC<{
   onOpenedTaskId?: () => void;
   /** A mission to select once the board has loaded (Open on board from an idea's take). */
   openMissionId?: string | null;
+  /** 0.9.0 P1: with `openMissionId`, also open that mission's watch report ("See the claims"). */
+  openWatchReport?: boolean;
+  /** 0.9.0 P1: the watch API; tests and the shots pass a fake. */
+  watchApi?: WatchApi;
   onOpenedMissionId?: () => void;
-}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace, openTaskId = null, onOpenedTaskId, openMissionId = null, onOpenedMissionId }) => {
+}> = ({ spaceId, names, avatars, onBack, onOpenChat, turns, teams = NO_TEAMS, rooms, threadTitles, onOpenPlace, openTaskId = null, onOpenedTaskId, openMissionId = null, onOpenedMissionId, openWatchReport = false, watchApi: watchClient = watchApi }) => {
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [missions, setMissions] = useState<Mission[]>([]);
   const [insights, setInsights] = useState<Insights | null>(null);
   const [refreshCount, setRefreshCount] = useState(0);
   const [missionId, setMissionId] = useState<string | null>(null);
+  const [watchReportFor, setWatchReportFor] = useState<string | null>(null);
   const [column, setColumn] = useState<Column>('ready');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -3253,6 +3267,7 @@ export const MissionBoardPage: React.FC<{
   useEffect(() => {
     if (!openMissionId || tasks === null) return;
     setMissionId(openMissionId);
+    setWatchReportFor(openWatchReport ? openMissionId : null);
     onOpenedMissionId?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openMissionId, tasks === null]);
@@ -3698,9 +3713,28 @@ export const MissionBoardPage: React.FC<{
 
   const tasksById = useMemo(() => Object.fromEntries((tasks ?? []).map((t) => [t.id, t])), [tasks]);
   const listed = openId ? tasksById[openId] : undefined;
+  const phone = usePhoneLayout();
+  const watchBoard = useMemo<WatchBoard>(
+    () => ({
+      api: watchClient,
+      phone,
+      onChanged: (id, w) => setMissions((list) => list.map((x) => (x.id === id ? ({ ...x, watch: w } as Mission) : x))),
+      onOpenChat: onOpenPlace
+        ? (m) => {
+            const kwantId = m.thread_id ? m.lead_kwant_id : m.channel_id ? null : m.direct_kwant_id ?? m.lead_kwant_id;
+            onOpenPlace({ channelId: m.thread_id ? null : m.channel_id, kwantId, threadId: m.thread_id });
+          }
+        : undefined,
+      onOpenTask: (id) => openTask(id),
+      openReportFor: watchReportFor,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [watchClient, phone, onOpenPlace, watchReportFor],
+  );
 
   return (
     <AvatarsContext.Provider value={avatars ?? NO_AVATARS}>
+      <WatchBoardContext.Provider value={watchBoard}>
       <MissionBoardView
         tasks={boardTasks}
         missions={missions}
@@ -3837,6 +3871,7 @@ export const MissionBoardPage: React.FC<{
           )}
         </TaskPanel>
       )}
+      </WatchBoardContext.Provider>
     </AvatarsContext.Provider>
   );
 };

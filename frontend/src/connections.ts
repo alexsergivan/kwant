@@ -31,6 +31,8 @@ export interface Connection {
   manage: string;
   /** Dev mode D10: marked as a production connection in this space (0.7 servers). */
   production?: boolean;
+  /** 0.9.0 P5: open bot notes about this MCP server's tools; `broke` of them are "Didn't work". MCP rows only. */
+  notes?: { open: number; broke: number };
 }
 
 export interface CatalogEntry {
@@ -91,7 +93,7 @@ const sentence = (s: string) => {
   return /[.!?]$/.test(up) ? up : `${up}.`;
 };
 
-async function call<T>(url: string, method = 'GET', body?: unknown): Promise<T> {
+async function call<T>(url: string, method = 'GET', body?: unknown, missing = 'This server doesn’t list connections yet. Update the app and try again.'): Promise<T> {
   let res: Response;
   try {
     res = await personFetch(url, {
@@ -108,13 +110,15 @@ async function call<T>(url: string, method = 'GET', body?: unknown): Promise<T> 
   if (res.ok) return answer as T;
   const err = answer && typeof answer === 'object' ? (answer as Record<string, unknown>).error : null;
   if (res.status === 403) throw new ConnectionsError('Only you can see and change connections.', 403);
-  if (res.status === 404 && !err) throw new ConnectionsError('This server doesn’t list connections yet. Update the app and try again.', 404);
+  if (res.status === 404 && !err) throw new ConnectionsError(missing, 404);
   throw new ConnectionsError(typeof err === 'string' && err.trim() ? sentence(err) : `Something went wrong (HTTP ${res.status}).`, res.status);
 }
 
 const enc = encodeURIComponent;
 
 export const connectionsApi = {
+  /** The same person-only call, for other Connections sections (0.9.0 P5 tool notes). */
+  raw: <T>(url: string, method = 'GET', body?: unknown, missing?: string) => call<T>(url, method, body, missing),
   list: () => call<ConnectionsList>('/api/connections'),
   addComposio: (body: ComposioBody) => call<{ connection_id: string; warning: string }>('/api/connections/composio', 'POST', body),
   /** Searches Composio's apps with the person's own Composio key (only once Composio is added). */
