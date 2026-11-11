@@ -136,12 +136,15 @@ export const FileTile: React.FC<{
  * closes it; focus starts on Close, Tab stays inside, the page behind doesn't scroll, and pinch-zoom
  * is left to the browser. It fades in over 150 ms, with no motion under reduced motion.
  */
-export const ImageViewer: React.FC<{ file: AttachmentRef; sharedBy?: string; at?: string | null; onClose: () => void }> = ({
-  file,
-  sharedBy,
-  at = null,
-  onClose,
-}) => {
+export const ImageViewer: React.FC<{
+  file: AttachmentRef;
+  sharedBy?: string;
+  at?: string | null;
+  onClose: () => void;
+  /** A picture that isn't a chat attachment (V1 review evidence): its own URL instead of the attachment's. */
+  src?: string;
+}> = ({ file, sharedBy, at = null, onClose, src }) => {
+  const url = src ?? attachmentUrl(file.id);
   const closeRef = useRef<HTMLButtonElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   // The chat re-renders on every streamed token: keep the latest onClose in a ref so the setup below
@@ -207,7 +210,7 @@ export const ImageViewer: React.FC<{ file: AttachmentRef; sharedBy?: string; at?
       </button>
       <div className="flex-1 min-h-0 flex items-center justify-center sm:p-6" style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 3.5rem)' }} onClick={closeOnScrim}>
         <img
-          src={attachmentUrl(file.id)}
+          src={url}
           alt={sharedBy ? `${file.name}, shared by ${sharedBy}` : file.name}
           className="block max-w-[100vw] max-h-full object-contain"
           style={{ touchAction: 'pinch-zoom' }}
@@ -228,7 +231,7 @@ export const ImageViewer: React.FC<{ file: AttachmentRef; sharedBy?: string; at?
           )}
         </p>
         <a
-          href={attachmentUrl(file.id)}
+          href={url}
           target="_blank"
           rel="noopener"
           className="inline-flex items-center gap-1.5 shrink-0 min-h-[44px] px-3 rounded-lg text-xs font-medium text-sky-300 hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400"

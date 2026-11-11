@@ -14,7 +14,7 @@ const m = await loadBundled(`
   export { default as React } from 'react';
   export { renderToStaticMarkup } from 'react-dom/server.browser';
   export * as store from './src/inboxStore';
-  export { inboxApi, InboxError, inboxBadge, verdictShort, INBOX_FIXTURE, INBOX_FIXTURE_EMPTY, FIXTURE_BATCH } from './src/api/inbox';
+  export { inboxApi, InboxError, inboxBadge, verdictShort, cmpSortKey, INBOX_FIXTURE, INBOX_FIXTURE_EMPTY, FIXTURE_BATCH, FIXTURE_REVIEW_ITEMS } from './src/api/inbox';
   export { attentionRows, attentionRank, PINNED_RANK, rollupLabel } from './src/chatsTab';
   export { InboxNew } from './src/components/InboxNew';
   export { TaskCard } from './src/components/MissionBoardView';
@@ -146,4 +146,94 @@ test('Mission board card in Review: one "Review" button (verdict under the title
   const old = card();
   assert.equal(old.querySelector('[data-card-review]'), null, 'without the Inbox the old buttons stay');
   assert.ok(old.querySelector('[data-card-action="verify"]'));
+});
+
+// ---- D7 Being checked, V1-3 held count, V1-4 stale notice once ----
+
+const withItems = (...extra) => {
+  const data = clone(m.INBOX_FIXTURE);
+  data.items = [...data.items.filter((i) => !extra.some((e) => e.id === i.id)), ...clone(extra)].sort(m.cmpSortKey);
+  return seed(data);
+};
+const rowOf = (d, id) => d.querySelector(`[data-row="${id}"]`);
+const wide = () => doc(html(React.createElement(m.InboxNew, { noLoad: true, wide: true, now: Date.parse(m.INBOX_FIXTURE.now) })));
+
+test('D7: the list row says "Being checked" while the verifier holds it, "Not checked yet" without a hold', () => {
+  const FX = m.FIXTURE_REVIEW_ITEMS;
+  withItems(FX.beingChecked, FX.notChecked);
+  const d = wide();
+  const being = rowOf(d, FX.beingChecked.id);
+  assert.equal(being.querySelector('[data-verdict-word]').getAttribute('data-verdict-word'), 'being_checked');
+  assert.match(being.textContent, /Being checked/);
+  assert.doesNotMatch(being.textContent, /Not checked yet/);
+  assert.match(rowOf(d, FX.notChecked.id).textContent, /Not checked yet/);
+  assert.equal(being.querySelector('[data-inline-approve]'), null);
+});
+
+test('D7: inline Approve and Approve all leave a Being checked item out, even if the server offers it', async () => {
+  const FX = m.FIXTURE_REVIEW_ITEMS;
+  const offered = { ...FX.beingChecked, one_tap: true, batchable: true };
+  const data = withItems(offered);
+  data.batch = { ...data.batch, ids: [...data.batch.ids.slice(0, 2), offered.id, ...data.batch.ids.slice(2)] };
+  s.inboxStore.patch({ data });
+  assert.equal(rowOf(wide(), offered.id).querySelector('[data-inline-approve]'), null, 'no inline Approve');
+  assert.equal(s.batchItems(data).some((i) => i.id === offered.id), false);
+  const calls = [];
+  inboxApi.verify = async (taskId) => calls.push(taskId);
+  await s.approveAll();
+  assert.deepEqual(calls, m.FIXTURE_BATCH.map((i) => i.task_id), 'only the five checked items');
+  assert.equal(calls.includes(offered.task_id), false);
+});
+
+test('V1-3: denying every held action drops "N held" from the row at once, without a refresh', () => {
+  const FX = m.FIXTURE_REVIEW_ITEMS;
+  const two = {
+    ...FX.passHeld,
+    held_actions: [FX.passHeld.held_actions[0], { ...FX.passHeld.held_actions[0], approval_id: 'a-refund-2', summary: 'create second refund' }],
+  };
+  withItems(two);
+  assert.equal(rowOf(wide(), two.id).querySelector('[data-held-count]').textContent, '2 held');
+  s.markHeld(two.id, 'a-refund', 'denied');
+  assert.equal(rowOf(wide(), two.id).querySelector('[data-held-count]').textContent, '1 held');
+  s.markHeld(two.id, 'a-refund-2', 'denied');
+  assert.equal(rowOf(wide(), two.id).querySelector('[data-held-count]'), null);
+  assert.doesNotMatch(rowOf(wide(), two.id).textContent, /held/);
+  // Resolved ones the server still lists (heldDenied: denied + expired) are not counted either.
+  withItems(FX.heldDenied);
+  assert.equal(rowOf(wide(), FX.heldDenied.id).querySelector('[data-held-count]'), null);
+});
+
+test('V1-4: a stale inline Approve says "changed after its check" once, on the row, not again in the status line', async () => {
+  const data = seed();
+  const one = data.items.find((i) => i.kind === 'review' && i.one_tap);
+  inboxApi.verify = async () => {
+    throw new InboxError(409, 'stale', 'stale', ['README.md']);
+  };
+  s.select(null);
+  await s.approveOne(one);
+  const st = s.inboxStore.get();
+  assert.doesNotMatch(st.notice.text, /changed after its check/);
+  assert.match(st.notice.text, /back in Failed or stuck, and nothing was approved/);
+  s.select(null);
+  const d = wide();
+  const row = rowOf(d, one.id);
+  assert.equal(row.getAttribute('data-group'), 'failed_or_stuck');
+  assert.match(row.textContent, /README\.md changed after its check/);
+  assert.doesNotMatch(d.querySelector('[data-inbox-status]').textContent, /changed after its check/);
+});
+
+test('V1-4: the batch row of an item that came back shows "Came back"', async () => {
+  seed();
+  inboxApi.verify = async (taskId) => {
+    if (taskId === m.FIXTURE_BATCH[1].task_id) throw new InboxError(409, 'stale', 'stale', ['src/a.ts']);
+  };
+  await s.approveAll();
+  s.select('batch');
+  const d = wide();
+  const row = d.querySelector(`[data-batch-row="${m.FIXTURE_BATCH[1].id}"]`);
+  assert.equal(row.getAttribute('data-status'), 'came_back');
+  assert.equal(row.querySelector('[data-batch-word]').textContent, 'Came back');
+  assert.match(row.textContent, /src\/a\.ts changed after its check/);
+  assert.doesNotMatch(s.inboxStore.get().notice.text, /changed after its check/);
+  assert.equal(d.querySelector(`[data-batch-row="${m.FIXTURE_BATCH[0].id}"] [data-batch-word]`).textContent, 'Approved');
 });
