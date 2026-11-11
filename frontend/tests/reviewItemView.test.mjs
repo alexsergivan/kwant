@@ -350,12 +350,15 @@ test('roll back with a held action denies it first; a stale preview reloads', as
 test('roll back after approval (via fork): after-approval lines, step-down, fork call, copy', async () => {
   const base = fakeApi();
   const { api, calls } = fakeApi({
-    restorePreview: async () => ({ ...base.preview, via: 'fork', verified_at: '2026-11-10T14:50:00Z', step_down: { kwant_id: 'k-mira', class: 'copy changes', from: 'trusted', to: 'sandbox' } }),
+    // As missionsApi.restorePreview returns it: a fork-path preview carries refused 'fork_instead'.
+    restorePreview: async () => ({ ...base.preview, via: 'fork', refused: 'fork_instead', verified_at: '2026-11-10T14:50:00Z', step_down: { kwant_id: 'k-mira', class: 'copy changes', from: 'trusted', to: 'sandbox' } }),
   });
   const opened = [];
   const { q, done } = await mount(FX.oneTap, api, { onOpenTask: (id) => opened.push(id) });
   await click(q('[data-roll-back]'));
   assert.ok(q('[data-after-approval]'));
+  assert.equal(q('[data-rollback-refused]'), null, 'the copy path is the roll back: no "isn\u2019t restored" warning');
+  assert.equal(q('[data-rollback-confirm]').disabled, false);
   assert.match(q('[data-step-down]').textContent, /Mira moves down one Flight School tier for copy changes/);
   await click(q('[data-rollback-confirm]'));
   const f = calls.find((c) => c[0] === 'forkFromCheckpoint');
