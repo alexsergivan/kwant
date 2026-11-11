@@ -698,6 +698,9 @@ pub fn parse_repo_zip(bytes: &[u8], subpath: Option<&str>) -> Result<(Bundle, Re
 /// to parse unread instead of refusing the whole import.
 pub(crate) fn from_entries(unzipped: archive::Unzipped, lenient: bool) -> Result<Bundle, ImportError> {
     let tree = formats::Tree::new(&unzipped.entries, &unzipped.skipped);
+    if let Some(b) = formats::pack(&tree) {
+        return b;
+    }
     if let Some(b) = formats::detect(&tree) {
         if b.bots.is_empty() && b.skills.is_empty() {
             return Err(ImportError::Unsupported("This folder has no bots or skills kwant can read.".into()));

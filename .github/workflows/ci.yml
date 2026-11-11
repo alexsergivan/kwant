@@ -98,6 +98,15 @@ jobs:
           key: fresh-machine
       - name: Build kwnt
         run: cargo build --locked --bin kwnt
+      # Every built-in business pack passes the same check a shared pack must (docs/teams-api.md §9)
+      - name: Check built-in packs
+        run: |
+          status=0
+          for p in packs/*/; do
+            echo "kwnt pack check $p"
+            target/debug/kwnt pack check "$p" || status=1
+          done
+          exit $status
       - uses: actions/setup-node@v4
         with:
           node-version: 20

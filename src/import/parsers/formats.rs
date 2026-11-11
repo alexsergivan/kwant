@@ -25,6 +25,7 @@ pub const HERMES: &str = "hermes";
 pub const CODEX: &str = "codex";
 pub const PAPERCLIP: &str = "paperclip";
 pub const AI_EMPLOYEES: &str = "ai-employees";
+pub const PACK: &str = "kwant-pack";
 
 /// The files of one folder, looked up without regard to case. `known` also holds the paths that
 /// were seen but not opened (a Codex `config.toml`), which only ever count as markers.
@@ -178,6 +179,82 @@ pub fn detect(t: &Tree) -> Option<Bundle> {
         return Some(codex(t, &roots));
     }
     None
+}
+
+// ── kwant business packs ──────────────────────────────────────────────────
+
+/// Folders holding a business pack's `pack.json` (`schema_version` and `bots`), outermost only.
+fn pack_roots(t: &Tree) -> Vec<String> {
+    outermost(
+        t.paths()
+            .filter_map(|p| root_of(p, "pack.json"))
+            .filter(|dir| t.files.get(&join(dir, "pack.json")).is_some_and(|(_, b)| crate::teams::packs::looks_like_pack(b)))
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// A business pack (`teams::packs`), checked exactly as `kwnt pack check` does: a pack with any
+/// problem is refused whole, with the problems in the message. A pack that passes becomes its
+/// bots, skills, paused routines and team; questions it asks are left unanswered, so the lines
+/// that need them are left out.
+pub fn pack(t: &Tree) -> Option<Result<Bundle, crate::import::ImportError>> {
+    let roots = pack_roots(t);
+    if roots.is_empty() {
+        return None;
+    }
+    let mut b = bundle(PACK, None);
+    let mut labels = Vec::new();
+    for root in &roots {
+        let prefix = if root.is_empty() { 0 } else { root.len() + 1 };
+        let files: BTreeMap<String, Vec<u8>> = t.under(root).filter_map(|(_, orig, bytes)| Some((orig.get(prefix..)?.to_string(), bytes.to_vec()))).collect();
+        let pack = match crate::teams::packs::check_files(&files) {
+            Ok(p) => p.filled(&Default::default()),
+            Err(problems) => {
+                let shown: Vec<&str> = problems.iter().take(5).map(String::as_str).collect();
+                let more = if problems.len() > 5 { format!(" (and {} more)", problems.len() - 5) } else { String::new() };
+                let at = if root.is_empty() { String::new() } else { format!(" at {root}") };
+                return Some(Err(crate::import::ImportError::Invalid(format!("This pack{at} can't be imported: {}{more}. Run kwnt pack check on it to see every problem.", shown.join("; ")))));
+            }
+        };
+        labels.push(format!("{} {}", pack.label, pack.version));
+        for bot in &pack.bots {
+            b.bots.push(BotSpec {
+                ref_: format!("{}:{}", pack.id, bot.name),
+                name: bot.name.clone(),
+                title: bot.title.clone(),
+                persona_prompt: bot.persona.clone(),
+                soul: bot.soul.clone(),
+                skills: pack.skills.iter().filter(|s| s.owner == bot.name).map(|s| SkillSpec { name: s.name.clone(), description: s.description.clone(), body: s.body.clone() }).collect(),
+                routines: pack
+                    .routines
+                    .iter()
+                    .filter(|r| r.bot == bot.name)
+                    .map(|r| RoutineSpec { name: r.name.clone(), instructions: r.prompt.clone(), schedule_text: Some(r.cron.clone()), ..RoutineSpec::default() })
+                    .collect(),
+                covers: bot.good_for.clone(),
+                avoids: bot.not_for.clone(),
+                ..BotSpec::default()
+            });
+        }
+        let lead = pack.lead();
+        b.teams.push(TeamSpec {
+            name: pack.handle.clone(),
+            lead: Some(format!("{}:{}", pack.id, lead.name)),
+            members: pack.bots.iter().filter(|x| !x.lead).map(|x| format!("{}:{}", pack.id, x.name)).collect(),
+            instructions: Some(pack.instructions.clone()),
+        });
+        if !pack.asks.is_empty() {
+            let asked: Vec<&str> = pack.asks.iter().map(|a| a.label.as_str()).collect();
+            b.omitted.push(cut(&format!("{}: an import doesn't ask {}; the lines that need an answer are left out.", pack.label, asked.join(" / ")), 200));
+        }
+        if !pack.needs.is_empty() {
+            let needs: Vec<&str> = pack.needs.iter().map(|n| n.label.as_str()).collect();
+            b.omitted.push(cut(&format!("{} starts with: {}. Set these up yourself.", pack.label, needs.join(", ")), 200));
+        }
+    }
+    b.source.label = Some(labels.join(", "));
+    Some(Ok(b))
 }
 
 /// A folder whose kind is already known (found on this computer), read from its root.
