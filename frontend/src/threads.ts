@@ -283,6 +283,29 @@ export function threadBadge(thread: Pick<Thread, 'id' | 'delegation'>, turns: Tu
 export const isOpenDelegation = (d: Pick<Delegation, 'status'> | null | undefined): boolean =>
   !!d && (d.status === 'queued' || d.status === 'running');
 
+/**
+ * After the live stream drops and comes back, the hand-offs whose cards may have missed an update:
+ * every open one held, plus ones a chat note named whose first fetch never landed. Sorted, no repeats.
+ */
+export function delegationsToRefresh(
+  held: Record<string, Pick<Delegation, 'status'> | undefined>,
+  named: Iterable<string> = [],
+): string[] {
+  const ids = new Set<string>();
+  for (const [id, d] of Object.entries(held)) if (isOpenDelegation(d)) ids.add(id);
+  // Array.from, not for…of or spread: the node tests transpile to ES5, where those skip a Set.
+  for (const id of Array.from(named)) if (!held[id]) ids.add(id);
+  return Array.from(ids).sort();
+}
+
+/**
+ * Whether a refetched record is older than a live update for the same hand-off. `seq` is one counter
+ * for both: a live update stores its number in `live[id]`, a fetch takes its own when it goes out.
+ * The record has no updated_at, and a resumed hand-off goes back to queued, so the status can't tell.
+ */
+export const isStaleDelegationFetch = (live: Record<string, number>, id: string, sentSeq: number): boolean =>
+  (live[id] ?? 0) > sentSeq;
+
 /** Visible threads: delegated ones first, then the person's, newest activity first within each. */
 export function sortThreads(threads: Thread[], includeArchived = false): Thread[] {
   return threads

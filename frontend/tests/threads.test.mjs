@@ -282,3 +282,45 @@ test('vm_busy (#446): its own line across bots, slots kept, cleared by the secon
   m = t.applyTurnEvent(m, ev('turn_queued', { turn_id: 'q4', kwant_id: 'c', context_id: 'c', reason: 'something_new' }));
   assert.equal(m.q4.reason, 'agent_busy', 'unknown reasons read as the bot being busy');
 });
+
+// ---------------------------------------------------------------------------
+// After a stream drop, open hand-off cards refetch their status
+
+test('delegationsToRefresh: open hand-offs and never-landed fetches, not finished ones', () => {
+  const held = {
+    q: { status: 'queued' },
+    r: { status: 'running' },
+    c: { status: 'completed' },
+    f: { status: 'failed' },
+    x: { status: 'cancelled' },
+    i: { status: 'interrupted' },
+  };
+  assert.deepEqual(t.delegationsToRefresh(held), ['q', 'r']);
+  // A note named "lost" but its first fetch failed (the drop itself): fetch it again. "c" is held and done.
+  assert.deepEqual(t.delegationsToRefresh(held, new Set(['lost', 'c', 'q'])), ['lost', 'q', 'r']);
+  assert.deepEqual(t.delegationsToRefresh({}), []);
+  assert.deepEqual(t.delegationsToRefresh({ gone: undefined }, ['gone']), ['gone']);
+});
+
+test('isStaleDelegationFetch: a live update after the fetch went out wins; one before it does not', () => {
+  // seq: live update #3 for "a", then the fetch goes out as #4: the fetch is newer.
+  assert.equal(t.isStaleDelegationFetch({ a: 3 }, 'a', 4), false);
+  // fetch #4 goes out, then live update #5 arrives before the fetch returns: keep the live one.
+  assert.equal(t.isStaleDelegationFetch({ a: 5 }, 'a', 4), true);
+  // No live update for this hand-off at all, or only for another one.
+  assert.equal(t.isStaleDelegationFetch({}, 'a', 1), false);
+  assert.equal(t.isStaleDelegationFetch({ b: 9 }, 'a', 1), false);
+});
+
+test('App refetches open hand-offs on a reconnect, and live updates and stops guard against older fetches', async () => {
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const onopen = app.slice(app.indexOf('sse.onopen'), app.indexOf('sse.onmessage'));
+  assert.match(onopen, /if \(dropped\) \{[^}]*refreshOpenDelegations\(\);/, 'only after a drop');
+  const refresh = app.slice(app.indexOf('const refreshOpenDelegations'), app.indexOf('// Connect to SSE stream'));
+  assert.match(refresh, /delegationsToRefresh\(delegationsRef\.current, delegationsFetchedRef\.current\)/);
+  assert.match(refresh, /isStaleDelegationFetch\(delegationSeqRef\.current\.live, d\.id, sent\)\) return;/);
+  assert.match(refresh, /applyDelegation\(/, 'the specialist thread list gets the record too');
+  const live = app.slice(app.indexOf("case 'DelegationUpdated'"), app.indexOf("case 'message_added'"));
+  assert.match(live, /noteLiveDelegation\(dl\.id\);/);
+  assert.equal(app.match(/noteLiveDelegation\(next\.id\);/g)?.length, 2, 'both Stop paths');
+});
