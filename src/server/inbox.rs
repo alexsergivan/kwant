@@ -12,10 +12,16 @@
 //! the last send-back's note with the bot's summary as `previous_round` (no flips, no diff).
 //! [`verdict_of`] already maps Juno's serialized `TaskVerdict` (D1) for when it does.
 //!
+//! "What done looks like" ([`criteria_of`]) reads the task's V3 contract when it has one: each
+//! criterion with the status this round's verdict froze for it (`criteria_status`, §9.4), or its
+//! live status without a verdict, then one row per must_not_change entry from `scope_status`.
+//! Acceptance lines as `not_checked` are only the fallback for a task with no stored contract.
+//!
 //! `POST /api/away/seen` only moves the marker for finished and failed items: review items stay
 //! listed until they are approved, sent back or rolled back.
 
 use super::away::{self, item, last_seen, rfc3339, waiting_approvals, DEFAULT_LOOKBACK_DAYS, MAX_ITEMS, STUCK_AFTER_MINUTES};
+use super::missions::contract::{self, Contract};
 use super::spaces::Scope;
 use super::AppState;
 use crate::db::checkpoints::Checkpoint;
@@ -263,6 +269,8 @@ pub struct ReviewInput {
     pub landed: bool,
     /// Juno's latest verdict of this review round as JSON ([`current_verdict`]).
     pub latest: Option<Value>,
+    /// The task's stored V3 contract, if it has one.
+    pub contract: Option<Contract>,
 }
 
 fn acceptance_lines(acceptance: &str) -> Vec<String> {
@@ -280,6 +288,72 @@ fn acceptance_lines(acceptance: &str) -> Vec<String> {
         .filter(|l| !l.is_empty())
         .map(String::from)
         .collect()
+}
+
+/// Mira's `source` for who wrote a criterion (V1 ENG, D1): the person's send-back note is
+/// `person_note`; the lead's, the owner's and the acceptance lines are the task's.
+fn source_of(by: &str) -> &'static str {
+    match by {
+        "person" => "person_note",
+        _ => "task",
+    }
+}
+
+/// The first of a criterion's evidence ids that is on the task, as `{kind, ref, label}`.
+fn criterion_evidence(ids: &[String], evidence: &[Evidence]) -> Value {
+    ids.iter()
+        .find_map(|id| evidence.iter().find(|e| &e.id == id))
+        .map(|e| json!({"kind": e.kind, "ref": away::mask_words(e.uri.as_deref().unwrap_or(&e.id)), "label": e.label}))
+        .unwrap_or(Value::Null)
+}
+
+/// "What done looks like" (Mira's `criteria`). With a stored contract: one row per criterion, its
+/// status from `latest` (this round's verdict) `criteria_status` so the list agrees with the
+/// verdict shown above it, or the contract's live status when there is no verdict (or it froze
+/// none); a `met` that is only a claim reads `claim_only`; a criterion the verdict didn't judge is
+/// `not_checked`. Then one `must_not_change` row per entry, from the verdict's `scope_status`.
+/// Without a contract, the acceptance lines, all `not_checked`.
+pub fn criteria_of(contract: Option<&Contract>, acceptance: &str, latest: Option<&Value>, evidence: &[Evidence]) -> Vec<Value> {
+    let row = |i: usize, text: &str, status: &str, source: &str, evidence: Value, round: i64| {
+        json!({"index": i + 1, "text": text, "status": status, "source": source, "evidence": evidence, "note": null, "round_added": round})
+    };
+    let Some(c) = contract else {
+        return acceptance_lines(acceptance).iter().enumerate().map(|(i, text)| row(i, text, "not_checked", "task", Value::Null, 1)).collect();
+    };
+    let on_task: Vec<String> = evidence.iter().map(|e| e.id.clone()).collect();
+    let judged = latest.and_then(|v| v["criteria_status"].as_array()).filter(|a| !a.is_empty());
+    let mut out: Vec<Value> = c
+        .criteria
+        .iter()
+        .map(|k| {
+            let (status, claim) = match judged {
+                Some(list) => match list.iter().find(|s| s["id"].as_str() == Some(k.id.as_str())) {
+                    Some(s) => (s["status"].as_str().unwrap_or("not_checked"), s["claim"].as_bool().unwrap_or_else(|| contract::is_claim(k, &on_task))),
+                    None => ("not_checked", false),
+                },
+                None => (k.status.as_str(), contract::is_claim(k, &on_task)),
+            };
+            let status = match status {
+                "met" if claim => "claim_only",
+                "met" => "met",
+                "not_met" => "not_met",
+                _ => "not_checked",
+            };
+            (k, status)
+        })
+        .enumerate()
+        .map(|(i, (k, status))| row(i, &k.text, status, source_of(&k.by), criterion_evidence(&k.evidence, evidence), k.round_added.max(1)))
+        .collect();
+    let scope = latest.and_then(|v| v["scope_status"].as_array());
+    for m in &c.must_not_change {
+        let status = scope
+            .and_then(|a| a.iter().find(|s| s["entry"].as_str() == Some(m.as_str())))
+            .and_then(|s| s["status"].as_str())
+            .filter(|s| matches!(*s, "met" | "not_met"))
+            .unwrap_or("not_checked");
+        out.push(row(out.len(), m, status, "must_not_change", Value::Null, 1));
+    }
+    out
 }
 
 /// A person's send-backs: review → ready by the person, oldest first.
@@ -509,11 +583,7 @@ pub fn review_item(r: &ReviewInput, last_seen: Option<DateTime<Utc>>) -> Option<
     };
     let group = group_of(&facts)?;
 
-    let criteria: Vec<Value> = acceptance_lines(&t.acceptance)
-        .into_iter()
-        .enumerate()
-        .map(|(i, text)| json!({"index": i + 1, "text": text, "status": "not_checked", "source": "task", "evidence": null, "note": null, "round_added": 1}))
-        .collect();
+    let criteria = criteria_of(r.contract.as_ref(), &t.acceptance, latest, &r.evidence);
     let count = |s: &str| criteria.iter().filter(|c| c["status"] == json!(s)).count();
     let criteria_summary = json!({
         "met": count("met") + count("claim_only"),
@@ -654,6 +724,7 @@ async fn gather(state: &AppState, space: &SpaceId) -> Result<Vec<ReviewInput>, D
             None => None,
         };
         let evidence = state.db.list_evidence(&task.id).await?;
+        let contract = state.db.get_contract(&task.id).await?.and_then(|row| serde_json::from_str::<Contract>(&row.body).ok());
         let pr = task_pr(&evidence);
         let dev_review = pr.as_ref().and_then(|(repo, n, url)| reviews.iter().find(|c| same_pr(c, repo, *n, url)).cloned());
         let is_landed = pr.as_ref().is_some_and(|(repo, n, url)| landed.iter().any(|c| same_pr(c, repo, *n, url)));
@@ -669,6 +740,7 @@ async fn gather(state: &AppState, space: &SpaceId) -> Result<Vec<ReviewInput>, D
             dev_review,
             landed: is_landed,
             latest: verdicts.remove(&task.id).and_then(|v| current_verdict(&v, since)),
+            contract,
             task,
         });
     }
@@ -1018,6 +1090,85 @@ mod tests {
     fn acceptance_lines_become_criteria_text() {
         assert_eq!(acceptance_lines("- one\n* two\n\n3. three\n10) ten\n  plain  "), ["one", "two", "three", "ten", "plain"]);
         assert!(acceptance_lines("  \n").is_empty());
+    }
+
+    fn criterion(id: &str, text: &str, status: &str, evidence: &[&str], by: &str, round: i64) -> contract::Criterion {
+        contract::Criterion { id: id.into(), text: text.into(), status: status.into(), evidence: evidence.iter().map(|e| e.to_string()).collect(), by: by.into(), round_added: round }
+    }
+
+    fn shot(id: &str) -> Evidence {
+        Evidence {
+            id: id.into(),
+            task_id: "t1".into(),
+            kind: "screenshot".into(),
+            label: "Form at 390px".into(),
+            uri: Some("https://example.com/shot.png".into()),
+            path: None,
+            sha256: None,
+            bytes: None,
+            excerpt: None,
+            captured_by: "k1".into(),
+            run_id: None,
+            captured_at: Utc::now(),
+        }
+    }
+
+    fn statuses(rows: &[Value]) -> Vec<(&str, &str)> {
+        rows.iter().map(|r| (r["status"].as_str().unwrap(), r["source"].as_str().unwrap())).collect()
+    }
+
+    /// M3: "What done looks like" reads the contract and this round's verdict, not "not checked"
+    /// for every acceptance line (Pixel's shot: "Pass · high confidence" over "0 of 3 met").
+    #[test]
+    fn criteria_take_the_verdicts_statuses_and_the_contracts_text() {
+        let c = Contract {
+            criteria: vec![
+                criterion("c1", "Error shows under the field", "met", &["ev1"], "acceptance", 1),
+                criterion("c2", "Works at 390px", "met", &[], "owner", 1),
+                criterion("c3", "Also the empty input", "not_met", &[], "person", 2),
+            ],
+            must_not_change: vec!["src/db/".into(), "the login flow".into()],
+            ..Default::default()
+        };
+        let ev = [shot("ev1")];
+        // The verdict froze c1 met with evidence, c2 met as a claim, c3 not met; the contract's
+        // live statuses have moved on since and must not show through
+        let mut live = c.clone();
+        live.criteria[2].status = "met".into();
+        let verdict = json!({
+            "verdict": "fail",
+            "criteria_status": [{"id": "c1", "status": "met", "claim": false}, {"id": "c2", "status": "met", "claim": true}, {"id": "c3", "status": "not_met", "claim": false}],
+            "scope_status": [{"entry": "src/db/", "status": "met"}, {"entry": "the login flow", "status": "not_checked"}],
+        });
+        let rows = criteria_of(Some(&live), "- ignored", Some(&verdict), &ev);
+        assert_eq!(
+            statuses(&rows),
+            [("met", "task"), ("claim_only", "task"), ("not_met", "person_note"), ("met", "must_not_change"), ("not_checked", "must_not_change")]
+        );
+        assert_eq!(rows[0], json!({"index": 1, "text": "Error shows under the field", "status": "met", "source": "task", "evidence": {"kind": "screenshot", "ref": "https://example.com/shot.png", "label": "Form at 390px"}, "note": null, "round_added": 1}));
+        assert_eq!((rows[1]["evidence"].clone(), rows[2]["round_added"].clone()), (Value::Null, json!(2)));
+        assert_eq!((rows[3]["text"].as_str(), rows[4]["index"].as_i64()), (Some("src/db/"), Some(5)));
+
+        // No verdict: the contract's live status; a met with no evidence on the task is a claim
+        let rows = criteria_of(Some(&c), "", None, &ev);
+        assert_eq!(statuses(&rows)[..3], [("met", "task"), ("claim_only", "task"), ("not_met", "person_note")]);
+        assert_eq!((rows[3]["status"].as_str(), rows[4]["status"].as_str()), (Some("not_checked"), Some("not_checked")));
+        // ev1 isn't on the task: c1 is a claim too
+        assert_eq!(criteria_of(Some(&c), "", None, &[])[0]["status"], "claim_only");
+
+        // A verdict that froze no criteria (stored before §9.4) falls back to the live statuses;
+        // a criterion the verdict didn't judge is not checked
+        let old = json!({"verdict": "pass", "criteria_status": []});
+        assert_eq!(criteria_of(Some(&c), "", Some(&old), &ev)[0]["status"], "met");
+        let partial = json!({"verdict": "pass", "criteria_status": [{"id": "c1", "status": "met", "claim": false}]});
+        assert_eq!(statuses(&criteria_of(Some(&c), "", Some(&partial), &ev))[..3], [("met", "task"), ("not_checked", "task"), ("not_checked", "person_note")]);
+
+        // No contract: the acceptance lines, all not checked
+        let rows = criteria_of(None, "- one\n- two", Some(&verdict), &ev);
+        assert_eq!(rows, [
+            json!({"index": 1, "text": "one", "status": "not_checked", "source": "task", "evidence": null, "note": null, "round_added": 1}),
+            json!({"index": 2, "text": "two", "status": "not_checked", "source": "task", "evidence": null, "note": null, "round_added": 1}),
+        ]);
     }
 
     #[test]
