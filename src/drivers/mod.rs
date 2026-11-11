@@ -885,6 +885,11 @@ pub struct TurnOutput {
     /// to another account or onto this computer (D1).
     #[serde(skip)]
     pub notice: Option<(String, serde_json::Value)>,
+    /// The engine flagged its result as an error (Claude's `is_error`) and it wasn't a refusal the
+    /// turn could move on from: `text` is the error, not a reply. Chats still show it as the reply;
+    /// a caller that opts in (`TurnOpts::error_result_fails`) gets it as the turn's error.
+    #[serde(skip)]
+    pub is_error: bool,
 }
 
 impl TurnOutput {

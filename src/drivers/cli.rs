@@ -1848,6 +1848,7 @@ impl Driver for CliDriver {
 
                 let mut tokens = None;
                 let mut usage = None;
+                let mut is_error = false;
                 let output_str = if let Some(ref out_file) = codex_out_file {
                     let content = tokio::fs::read_to_string(out_file)
                         .await
@@ -1876,6 +1877,7 @@ impl Driver for CliDriver {
                             }
                             tokens = result.tokens();
                             usage = result.split();
+                            is_error = result.is_error;
                             if let Some(u) = &usage {
                                 record_cli_usage(&input, result.main_model(), u).await;
                             }
@@ -1912,6 +1914,7 @@ impl Driver for CliDriver {
                     reasoning: Some(self.executed_via(effort)),
                     tokens_used: tokens,
                     usage,
+                    is_error,
                     ..Default::default()
                 })
             }
@@ -2682,6 +2685,18 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             fake.run(turn(false)).await.unwrap();
             let argv = fake.argv();
             assert!(!argv.iter().any(|a| a == "--tools" || a == "--disable-slash-commands"), "{argv:?}");
+        }
+
+        /// A result Claude flags as an error after it did something (so no refusal to move on
+        /// from) comes back as text, flagged: a caller can tell it from a reply (#513 S-2)
+        #[tokio::test]
+        async fn an_error_result_is_flagged() {
+            let failed = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":3,"result":"boom boom"}"#;
+            let fake = Fake::new("claude", &format!("echo '{failed}'"));
+            let out = fake.run(turn(false)).await.unwrap();
+            assert_eq!((out.text.as_str(), out.is_error), ("boom boom", true));
+            let fake = Fake::new("claude", &format!("echo '{CLAUDE_RESULT}'"));
+            assert!(!fake.run(turn(false)).await.unwrap().is_error);
         }
 
         #[tokio::test]

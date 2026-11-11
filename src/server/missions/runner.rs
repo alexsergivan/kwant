@@ -169,11 +169,12 @@ fn runner_of(m: &Mission, t: &Task) -> String {
 }
 
 /// "Due to retry" (P1 contract §3, D9): a retry of `t` is already coming, so nothing else should
-/// restart it. Any of: parked in `failed` for AutoFix; an AutoFix attempt scheduled (a stall retry,
-/// or a wait after a temporary error or rate limit, in whatever state the task is); or a turn of its
-/// bot parked where the mission runs it, until the usage limit resets or the bot's budget allows.
+/// restart it. Any of: `failed` and AutoFix will run it again ([`super::autofix::will_retry`]: not
+/// merely attempts left, #513 M2); an AutoFix attempt scheduled (a stall retry, or a wait after a
+/// temporary error or rate limit, in whatever state the task is); or a turn of its bot parked where
+/// the mission runs it, until the usage limit resets or the bot's budget allows.
 pub async fn due_to_retry(state: &AppState, m: &Mission, t: &Task) -> bool {
-    if super::autofix::parked(state, t).await || super::autofix::retry_scheduled(state, &t.id).await {
+    if super::autofix::will_retry(state, t).await || super::autofix::retry_scheduled(state, &t.id).await {
         return true;
     }
     let bot = runner_of(m, t);
