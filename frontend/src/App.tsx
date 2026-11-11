@@ -81,6 +81,8 @@ import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
 import { recentWork, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
+import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api, heldFromReply, heldLine, heldMessages, stillHeld } from './h4Status';
+import { HeldLine } from './components/HeldLine';
 import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
 import { LiveMissPage } from './components/WatchLive';
 import {
@@ -540,6 +542,27 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [awayDone, setAwayDone] = useState<{ failed: AwayItem[]; finished: AwayItem[] } | null>(null);
   /** H5: when the person last opened each bot's chat (a finished item older than that is read). */
   const [openedAt, setOpenedAt] = useState<Record<string, number>>({});
+  // H4 (#499): each bot's status from the server; null on an older server (today's lines stay).
+  const [h4Status, setH4Status] = useState<Record<string, H4Status> | null>(null);
+  // H3: messages the server held instead of starting a turn (a stuck bot, or one waiting on you).
+  const [heldSends, setHeldSends] = useState<HeldSend[]>([]);
+  useEffect(() => {
+    let live = true;
+    setH4Status(null);
+    setHeldSends([]);
+    h4Api.list(space.id).then((m) => live && setH4Status(m), () => {});
+    return () => {
+      live = false;
+    };
+  }, [space.id]);
+  // A held line goes once the bot's status no longer lists its message (the turn started).
+  useEffect(() => {
+    if (!h4Status) return;
+    setHeldSends((prev) => {
+      const next = prev.filter((h) => stillHeld(h, h4Status[h.kwantId]));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [h4Status]);
   const [pill, setPill] = useState<PillState>(EMPTY_PILL);
   const [nudgesOn, setNudgesOn] = useState(nudgesEnabled);
   const nudgesOnRef = useRef(nudgesOn);
@@ -1108,6 +1131,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           setRosterFresh(false);
           refreshRoster();
         }
+        if (event.type === 'bot_status') setH4Status((prev) => applyBotStatusEvent(prev ?? {}, event.data));
         switch (event.type) {
           case 'turn_queued':
           case 'TurnQueued':
@@ -1806,6 +1830,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         throw new Error(message);
       }
       const reply = await res.json().catch(() => null);
+      const held = heldFromReply(reply, tempId);
+      if (held) {
+        // H3: saved, but no turn starts yet, so no "thinking" for it; the line under the message says why.
+        if (turnsIn(turnsRef.current, targetId).length === 0) clearLive(targetId);
+        if (streamingContextIdRef.current === targetId) streamingContextIdRef.current = null;
+        setHeldSends((prev) => [...prev.filter((h) => h.messageId !== held.messageId), held]);
+        h4Api.list(space.id).then((m) => m && setH4Status(m), () => {});
+      }
       if (isAskingReply(reply)) {
         // A close call: Laya posted "Who should answer this?" and nothing runs until the person picks.
         if (turnsIn(turnsRef.current, targetId).length === 0) clearLive(targetId);
@@ -3740,9 +3772,32 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         busy: busyKwants,
         status: botStatus,
         reviews: reviewItems,
+        h4: h4Status ?? undefined,
         openedAt: page === 'chat' && !isChannel && selectedId ? { ...openedAt, [selectedId]: Date.now() } : openedAt,
       })
     : undefined;
+
+  // H3 + N3: the line under each held message of this space, keyed by the bubble's temp and saved ids.
+  const tryAgainFor = (kwantId: string, name: string) => async (): Promise<string | void> => {
+    haptic('tap');
+    try {
+      const out = await h4Api.retry(kwantId);
+      if (out.status) setH4Status((prev) => ({ ...(prev ?? {}), [kwantId]: out.status! }));
+      setHeldSends((prev) => afterRelease(prev, kwantId, out.status));
+      pushToast(out.released > 0 ? `Sent to ${name} again.` : `${name} can take messages again.`);
+    } catch {
+      haptic('warning');
+      return 'Couldn’t try again. Check your connection, then press it again.';
+    }
+  };
+  const heldNotes: Record<string, React.ReactNode> = {};
+  // The session's send replies plus every message the server still holds (reload, other device, earlier sends).
+  for (const h of heldMessages(heldSends, h4Status, (id) => kwants.find((k) => k.id === id)?.name)) {
+    const { text, tryAgain } = heldLine(h, h4Status?.[h.kwantId]);
+    const node = <HeldLine key={h.messageId} text={text} onTryAgain={tryAgain ? tryAgainFor(h.kwantId, h.name) : undefined} />;
+    heldNotes[h.tempId] = node;
+    heldNotes[h.messageId] = node;
+  }
 
   const sidebar = (section: 'all' | 'chats' | 'bots') => (
     <Sidebar
@@ -3930,6 +3985,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const inbox = <InboxPage tab={inboxTab} onTab={setInboxTab} count={inboxCount} onBack={backToList} newPage={away} loosePage={loose} />;
   const chat = (
         <ChatView
+          heldNotes={heldNotes}
           dropOff={!!spaceSettingsTab}
           title={chatTitle}
           subtitle={chatSubtitle}
@@ -4134,7 +4190,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
     />
   );
-  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title }))} defaultBotId={!isChannel ? selectedId : null} onOpenChat={(id, thread) => { if (thread) { openThread(id, thread); return; } if (!openTarget({ channel_id: null, kwant_id: id })) pushToast('That bot no longer exists.'); }} />;
+  const attentionRankOf = new Map((attention ?? []).map((a) => [a.kwant.id, a.rank]));
+  const devDeskPage = <DevDeskView key={space.id} spaceId={space.id} spaceName={space.name} onBack={backToList} onOpenLooseEnds={connectDevGitHub} teams={devTeamRefs(teams, kwants)} bots={kwants.map((k) => ({ id: k.id, name: k.name, role: k.title, rank: attentionRankOf.get(k.id) }))} defaultBotId={!isChannel ? selectedId : null} onOpenChat={(id, thread) => { if (thread) { openThread(id, thread); return; } if (!openTarget({ channel_id: null, kwant_id: id })) pushToast('That bot no longer exists.'); }} />;
   const mainPane = needsSetup ? setupChecklist : page === 'parallel' ? parallel : page === 'board' && missionBoard ? missionsPage : page === 'dev' && devOn ? devDeskPage : page === 'jar' ? jarPage : page === 'inbox' ? inbox : !loaded ? (
     <main className="flex-1 flex items-center justify-center text-xs text-zinc-500">
       <Loader2 size={14} className="mr-2 animate-spin motion-reduce:animate-none" aria-hidden="true" /> Opening {space.name}…

@@ -182,6 +182,8 @@ export interface RoutingState {
 }
 
 export interface ChatViewProps {
+  /** H3: a line under the person's held message ("Waiting for Juno: …", Try again), by message id. */
+  heldNotes?: Record<string, React.ReactNode>;
   /**
    * The chat is mounted but covered by a page (Settings): it isn't a drop target, so a file drag
    * shows the "Open a chat" pill instead of a layer nobody can see (#478 L4).
@@ -446,6 +448,7 @@ const useNarrow = () => {
 };
 
 export const ChatView: React.FC<ChatViewProps> = ({
+  heldNotes,
   dropOff = false,
   title,
   subtitle,
@@ -1537,6 +1540,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
           )}
           {files.length > 0 && <FileTiles files={files} align={isUser ? 'end' : 'start'} sharedBy={filesOnly && !isUser ? displayName : undefined} at={msg.created_at ?? null} />}
+          {isUser && heldNotes?.[msg.id]}
           {filesOnly && !isUser && files.length > 0 && shareInfo(msg.meta).auto && (
             // P4: kwnt posted the turn's last screenshot because the reply claimed a picture and none was shared
             <p data-shared-auto="" className="mt-1 text-[11px] text-zinc-500">
