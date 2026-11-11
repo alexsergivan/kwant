@@ -73,6 +73,7 @@ pub mod show_once;
 pub mod agents_connect;
 pub mod teams;
 pub mod telegram;
+pub mod bot_email;
 #[cfg(all(test, unix))]
 mod s8_readers_test;
 
@@ -399,6 +400,16 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/connections/telegram/unpair", post(telegram::routes::unpair))
         .route("/api/connections/telegram/unpair/undo", post(telegram::routes::undo_unpair))
         .route("/api/connections/telegram/test", post(telegram::routes::test))
+        .route(
+            "/api/connections/bot-email",
+            get(bot_email::routes::get).patch(bot_email::routes::patch).delete(bot_email::routes::delete),
+        )
+        .route("/api/connections/bot-email/providers", get(bot_email::routes::providers))
+        .route("/api/connections/bot-email/test", post(bot_email::routes::start_test).get(bot_email::routes::get_test))
+        .route("/api/connections/bot-email/reply-check", post(bot_email::routes::reply_check))
+        .route("/api/connections/bot-email/reply-check/skip", post(bot_email::routes::skip_reply_check))
+        .route("/api/connections/bot-email/bots/:kwant", get(bot_email::routes::get_bot).put(bot_email::routes::put_bot))
+        .route("/api/connections/bot-email/questions/:id", get(bot_email::routes::question))
         .route("/api/connections/composio", post(connections::add_composio))
         .route("/api/connections/composio/apps", get(connections::search_composio_apps))
         .route("/api/connections/composio/apps/:slug/connect", post(connections::connect_composio_app))

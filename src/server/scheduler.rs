@@ -883,5 +883,6 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::dev::worktrees::spawn(state.clone(), shutdown.clone());
     super::dev::tickets::pickup::spawn(state.clone(), shutdown.clone());
     super::telegram::spawn(state.clone(), shutdown.clone());
+    super::bot_email::spawn(state.clone(), shutdown.clone());
     spawn(state, shutdown);
 }

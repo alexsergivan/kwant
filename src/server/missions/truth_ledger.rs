@@ -104,7 +104,7 @@ const OUTSIDE_TOOLS: &[&str] = &[
 ];
 
 /// kwant's own tools that read outside text: a page, an attachment, another server's tools.
-const OUTSIDE_SELF_TOOLS: &[&str] = &["read_attachment", "mcp_search", crate::server::page_source::TOOL];
+const OUTSIDE_SELF_TOOLS: &[&str] = &["read_attachment", "mcp_search", crate::server::page_source::TOOL, crate::server::bot_email::TOOL_WAIT];
 
 fn outside_self_tool(tool: &str) -> bool {
     tool.starts_with("browser_") || OUTSIDE_SELF_TOOLS.contains(&tool)

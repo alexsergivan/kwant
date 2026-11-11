@@ -60,6 +60,7 @@ pub mod isolated_folders;
 pub mod tool_notes;
 pub mod mission_watch;
 pub mod verifier;
+pub mod bot_email;
 
 /// What a space's #general says about itself.
 pub const GENERAL_DESCRIPTION: &str = "Everyone in this space. Laya picks who answers.";
@@ -279,6 +280,8 @@ impl Database {
         db.migrate_isolated_folders().await?;
         // 0.9.0 wave 3: task contracts and verifier verdicts (add-only)
         db.migrate_verifier().await?;
+        // 0.10.0: bot email (add-only)
+        db.migrate_bot_email().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal
