@@ -486,3 +486,79 @@ async fn review_items_read_the_verifiers_verdict_of_this_round() {
     assert_eq!((a["verdict"]["result"].as_str(), a["verdict"]["id"].clone(), a["one_tap"].clone()), (Some("none"), Value::Null, json!(false)), "an earlier round's pass: {a}");
     assert_eq!(a["risk"]["level"], Value::Null);
 }
+
+/// M3: "What done looks like" reads the task's contract and this round's verdict. Pixel's shot had
+/// "Pass · high confidence" over "0 of 3 met · 3 not checked": every line was hardcoded not checked.
+#[tokio::test]
+async fn review_criteria_read_the_contract_and_the_verdict() {
+    let (app, state, _tmp) = setup().await;
+    let space = SpaceId::default_space();
+    let kwants = state.db.list_kwants(&space).await.unwrap();
+    let (lead, spec) = (kwants[0].clone(), kwants[1].clone());
+    let chan = state
+        .db
+        .create_channel(&space, &NewChannel {
+            name: "ops".into(),
+            description: None,
+            lead_kwant_id: lead.id.clone(),
+            member_kwants: vec![lead.id.clone(), spec.id.clone()],
+            routing_mode: "auto".into(),
+        })
+        .await
+        .unwrap();
+
+    let t = review_task(&state, &spec.id, "Form errors", "- Error under the field\n- Works at 390px\n- Empty input", &chan.id, 0).await;
+    let ev = state
+        .db
+        .add_evidence(&NewEvidence {
+            task_id: t.clone(),
+            kind: "screenshot".into(),
+            label: "Form at 390px".into(),
+            uri: Some("https://example.com/form.png".into()),
+            captured_by: spec.id.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let body = json!({"criteria": [
+        {"id": "c1", "text": "Error under the field", "status": "met", "evidence": [ev.id], "by": "acceptance", "round_added": 1},
+        {"id": "c2", "text": "Works at 390px", "status": "met", "evidence": [], "by": "acceptance", "round_added": 1},
+        {"id": "c3", "text": "Empty input", "status": "not_met", "evidence": [], "by": "acceptance", "round_added": 1},
+    ]});
+    state.db.put_contract(&t, &body, &spec.id, &json!({"by": "owner"})).await.unwrap();
+    state
+        .db
+        .add_verdict(&NewVerdict {
+            task_id: t.clone(),
+            attempt: 1,
+            round: 1,
+            verdict: "pass".into(),
+            confidence: "high".into(),
+            risk_tier: "low".into(),
+            steps: json!([{"status": "passed"}]),
+            next: "counted".into(),
+            summary: "Two of three met.".into(),
+            model: Some("gpt-5.5".into()),
+            difference: "model".into(),
+            criteria_status: json!([{"id": "c1", "status": "met", "claim": false}, {"id": "c2", "status": "met", "claim": true}, {"id": "c3", "status": "not_met", "claim": false}]),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    // No contract: the acceptance lines stay the fallback, not checked
+    let plain = review_task(&state, &spec.id, "No contract", "- One\n- Two", &chan.id, 0).await;
+
+    let v = get(&app, "/api/inbox").await;
+    let r = find(&v, &t);
+    assert_eq!(r["verdict"]["result"], "pass", "{r}");
+    let got: Vec<(&str, &str, &str)> =
+        r["criteria"].as_array().unwrap().iter().map(|c| (c["text"].as_str().unwrap(), c["status"].as_str().unwrap(), c["source"].as_str().unwrap())).collect();
+    assert_eq!(got, [("Error under the field", "met", "task"), ("Works at 390px", "claim_only", "task"), ("Empty input", "not_met", "task")]);
+    assert_eq!(r["criteria"][0]["evidence"], json!({"kind": "screenshot", "ref": "https://example.com/form.png", "label": "Form at 390px"}));
+    assert_eq!(r["criteria"][1]["evidence"], Value::Null);
+    assert_eq!(r["criteria_summary"], json!({"met": 2, "total": 3, "not_met": 1, "not_checked": 0}));
+
+    let p = find(&v, &plain);
+    assert_eq!(p["criteria"][1], json!({"index": 2, "text": "Two", "status": "not_checked", "source": "task", "evidence": null, "note": null, "round_added": 1}));
+    assert_eq!(p["criteria_summary"], json!({"met": 0, "total": 2, "not_met": 0, "not_checked": 2}));
+}
